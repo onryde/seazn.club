@@ -11,6 +11,8 @@
 // many nested stateful children is exactly the shape the harness cannot
 // walk (proved the hard way while building action-form.tsx's own list —
 // see that file's header). Hence: builders here, DOM assertions in e2e.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { LineupPair, SquadState } from "@seazn/engine/core";
 import { initSquads } from "@seazn/engine/core";
@@ -787,10 +789,30 @@ describe("resolvePadPhase", () => {
 
 // G5 (controller ruling, 2026-08-16): a pending context-strip override lives
 // only until the fold itself advances. `PadHostV3`'s own render-phase reset
-// (pad-host.tsx) clears `contextOverrides` to `{}` exactly when this
-// function reports `true` — proved here as a pure decision, independent of
+// (pad-host.tsx) clears `contextOverrides` to `{}` when this function reports
+// `true`, unless the skin's `contextOverridesSurvive` keeps them (S2-4,
+// `contextOverridesDropped`) — proved here as a pure decision, independent of
 // the React shell this file's own header says is untestable via the
 // node-only hook-harness.
+describe("PadHostV3's render-phase reset, audited at the source", () => {
+  // S2-4 (final review I3). The harness cannot mount a whole PadHostV3 (pad-host-band-storage.test.tsx says why), so the
+  // call is pinned here and driven for real by the T7 swap-then-change-bowler test in e2e/scorepad-v3-cricket.spec.ts.
+  // Comments are stripped first, so a comment naming the call cannot satisfy this.
+  const src = readFileSync(join(process.cwd(), "src/components/v2/scorepad/v3/pad-host.tsx"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
+
+  it("clears the picks only when the skin's hook does not keep them, and always moves on to the new fold", () => {
+    expect(src).toMatch(
+      /if \(contextOverridesStale\(overridesFor, pipeline\.state\)\) \{\s*if \(contextOverridesDropped\(overridesFor, pipeline\.state, props\.skin\.contextOverridesSurvive\)\) setContextOverrides\(\{\}\);\s*setOverridesFor\(pipeline\.state\);\s*\}/,
+    );
+  });
+
+  it("no other path clears the whole map", () => {
+    expect(src.match(/setContextOverrides\(\{\}\)/g)).toHaveLength(1);
+  });
+});
+
 describe("contextOverridesStale", () => {
   it("false when the state reference is unchanged — an override survives across renders with no new event", () => {
     const s = { runs: 12 };
@@ -1104,18 +1126,19 @@ describe("soft-commit inventory — HOLD only when dock has chips", () => {
   // *.clock never reaches this gate (publishClock → pipeline.submit).
   const t = (key: string): string => key;
 
-  it("cricket: plain / wide immediate; noball / bye hold", async () => {
+  // S2-4 Task 4 (gaps 3, 4): the no-ball, bye and leg bye ask their runs on a sheet before the ball is recorded, so no
+  // cricket ball holds. pad-rules-cricket.test.ts sweeps every payload the skin emits; this pins one of each shape.
+  it("cricket: nothing holds — plain, wide, no-ball, bye, leg bye, a super-over ball and the toss are all immediate", async () => {
     const { buildDock } = await import("../skins/cricket");
-    expect(usesSoftCommit(buildDock("cricket.ball", t, { runs: { bat: 1 } }))).toBe(false);
-    expect(usesSoftCommit(buildDock("cricket.ball", t, { runs: { bat: 0, extras: { kind: "wide", runs: 1 } } }))).toBe(
-      false,
-    );
-    expect(
-      usesSoftCommit(buildDock("cricket.ball", t, { runs: { bat: 0, extras: { kind: "noball", runs: 1 } } })),
-    ).toBe(true);
-    expect(
-      usesSoftCommit(buildDock("cricket.ball", t, { runs: { bat: 0, extras: { kind: "bye", runs: 1 } } })),
-    ).toBe(true);
+    const balls: [string, Record<string, unknown>][] = [
+      ["cricket.ball", { runs: { bat: 1 } }],
+      ["cricket.ball", { runs: { bat: 0, extras: { kind: "wide", runs: 1 } } }],
+      ["cricket.ball", { runs: { bat: 4, extras: { kind: "noball", runs: 1 } }, boundary: 4 }],
+      ["cricket.ball", { runs: { bat: 0, extras: { kind: "bye", runs: 2 } } }],
+      ["cricket.ball", { runs: { bat: 0, extras: { kind: "legbye", runs: 3 } } }],
+      ["cricket.superover.ball", { runs: { bat: 0, extras: { kind: "noball", runs: 1 } } }],
+    ];
+    for (const [type, payload] of balls) expect(usesSoftCommit(buildDock(type, t, payload)), JSON.stringify(payload)).toBe(false);
     expect(usesSoftCommit(buildDock("cricket.toss", t))).toBe(false);
   });
 

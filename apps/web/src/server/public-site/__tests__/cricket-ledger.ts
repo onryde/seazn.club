@@ -76,13 +76,17 @@ export type Delivery =
   // outcome: { kind: "tie" } }` — WITHOUT closing the super-over innings it
   // interrupted, which is the one state in which a `closed`-only live gate
   // still reports a scoreboard for a finished match.
-  | { abandon: true };
+  | { abandon: true }
+  // `cricket.bowler.change` (S2-4 Task 9; CK-BC-1, MCC Law 17.8): `bowler` completes the over in progress. Placed
+  // between that over's deliveries; the ones after it are bowled by the bowler the fold now has on
+  // (`fine.currentBowler`), never by the script's rotation, which would name the bowler who left.
+  | { changeBowler: string; reason?: "incapacitated" | "suspended" | "other" };
 
 /** The `Delivery` members that actually produce a `cricket.ball` — everything
  *  the four match-event variants above are not. */
 type BallDelivery = Exclude<
   Delivery,
-  { retire: true } | { revise: object } | { matchClose: true } | { abandon: true }
+  { retire: true } | { revise: object } | { matchClose: true } | { abandon: true } | { changeBowler: string }
 >;
 
 export interface Script {
@@ -244,7 +248,7 @@ export function scriptLedger(script: Script): ScriptLedger {
           record("core.abandon", { reason: "rain" });
           continue;
         }
-        if ("retire" in delivery || "revise" in delivery || "matchClose" in delivery) {
+        if ("retire" in delivery || "revise" in delivery || "matchClose" in delivery || "changeBowler" in delivery) {
           throw new Error("scriptLedger: only deliveries are supported in a super-over entry");
         }
         const soInnings = state.superOver?.innings[soAt];
@@ -291,6 +295,10 @@ export function scriptLedger(script: Script): ScriptLedger {
         record("core.abandon", { reason: "rain" });
         continue;
       }
+      if ("changeBowler" in delivery) {
+        record("cricket.bowler.change", { bowler: delivery.changeBowler, ...(delivery.reason === undefined ? {} : { reason: delivery.reason }) });
+        continue;
+      }
       const legalBalls = innings?.legalBalls ?? 0;
       const striker = fine?.striker ?? battingOrder[0];
       const nonStriker = fine?.nonStriker ?? battingOrder[1];
@@ -300,7 +308,9 @@ export function scriptLedger(script: Script): ScriptLedger {
       const over = Math.floor(legalBalls / bpo);
       const ballInOver = (legalBalls % bpo) + 1;
       const named = "bowler" in delivery ? delivery.bowler : undefined;
-      const bowler = named ?? inningsSpec.bowlers[over % inningsSpec.bowlers.length];
+      // Mid-over the over's bowler is the fold's own (`fine.currentBowler`): the rotation's, unless a
+      // `changeBowler` put someone else on. At an over's start the fold has none, and the rotation picks.
+      const bowler = named ?? fine?.currentBowler ?? inningsSpec.bowlers[over % inningsSpec.bowlers.length];
       if (bowler === undefined) throw new Error("scriptLedger: no bowlers given");
       const payload = buildBallPayload(delivery, { over, ballInOver, striker, nonStriker, bowler });
       // A named bowler who does not own this over is a strict-only refusal —
@@ -537,6 +547,40 @@ export const SUPER_OVER_SCRIPT: Script = {
       bowlers: ["a7"],
       deliveries: [{ bat: 1 }, { bat: 1 }, { bat: 1 }, { bat: 1 }, { bat: 1 }, { bat: 1 }],
       superOver: true,
+    },
+  ],
+};
+
+/**
+ * S2-4 Task 9 (CK-BC-1, MCC Law 17.8): one main innings whose first over is split. a7 bowls three balls (a single, a
+ * four, a dot), a8 completes the over (a two, a wicket, a dot), and a6 bowls over 2 (three singles; Law 17.7 bars
+ * both a7 and a8 from it), left open.
+ * Every number on the split over is distinct per bowler, so a reader that credits the first bowler alone, or the
+ * second alone, reads a different figure.
+ */
+export const SPLIT_OVER_SCRIPT: Script = {
+  cfg: { ballsPerInnings: 30, ballsPerOver: 6, playersPerSide: 8, minOversForResult: 1 },
+  home: HOME,
+  away: AWAY,
+  tossWonBy: "home",
+  elected: "bat",
+  innings: [
+    {
+      batting: "home",
+      bowlers: ["a7", "a6"],
+      deliveries: [
+        { bat: 1 },
+        { bat: 4 },
+        { bat: 0 },
+        { changeBowler: "a8", reason: "incapacitated" },
+        { bat: 2 },
+        { out: "bowled" },
+        { bat: 0 },
+        { bat: 1 },
+        { bat: 1 },
+        { bat: 1 },
+      ],
+      leaveOpen: true,
     },
   ],
 };

@@ -1,5 +1,5 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
-import { apiJson, fixturePath, seedRosteredFixture, TAG } from "./helpers";
+import { apiJson, fixturePath, pickCricketPeople, seedRosteredFixture, TAG } from "./helpers";
 
 // Activity "Void" is two-step: the first tap ARMS the row (Cancel + Confirm
 // void), only Confirm writes a core.void. Runs at three widths because the
@@ -33,6 +33,12 @@ for (const width of [320, 768, 1280]) {
     await page.goto(await fixturePath(page.request, fx.fixtureId));
     await expect(pad(page)).toBeVisible({ timeout: 20_000 });
     await page.getByRole("button", { name: "Start match", exact: true }).click();
+    // S2-4 Task 3: nothing is picked for the scorer, so the run tiles stay disabled until the openers and the bowler are.
+    await pickCricketPeople(page, {
+      striker: `VC Striker ${TAG}`,
+      nonStriker: `VC NonStriker ${TAG}`,
+      bowler: `VC Bowler ${TAG}`,
+    });
     for (const runs of ["1", "2"]) {
       await pad(page).getByRole("button", { name: runs, exact: true }).click();
     }

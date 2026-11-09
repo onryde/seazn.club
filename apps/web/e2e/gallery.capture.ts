@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   loginUi,
+  pickCricketPeople,
   seedRosteredFixture,
   setOrgPlanBySql,
   fixturePath,
@@ -1411,6 +1412,12 @@ const SPORTS: GallerySport[] = [
     // such rather than assumed to be the same bug.
     scoreOne: async (page, fx, tag) => {
       let before = await ledgerCount(page.request, fx.fixtureId);
+      // S2-4 Task 3: the pad picks nobody — the openers and the opening bowler are the scorer's picks before ball 1.
+      await pickCricketPeople(page, {
+        striker: `Gallery Cricket Striker ${tag}`,
+        nonStriker: `Gallery Cricket NonStriker ${tag}`,
+        bowler: `Gallery Cricket Bowler ${tag}`,
+      });
       for (let i = 0; i < 6; i++) {
         await pad(page).getByRole("button", { name: "0", exact: true }).click();
         await waitForLedgerGrowth(page.request, fx.fixtureId, before);
@@ -1418,8 +1425,8 @@ const SPORTS: GallerySport[] = [
       }
       const strip = pad(page).locator('[data-role="context-strip"]');
       // Chip accessible name is compound (`"Bowler: <name>"`, chipLabel in
-      // context-strip.tsx) the instant a bowler is resolved — which it always
-      // is here (resolvePeople's own bowlingOrder[0] default). A bare
+      // context-strip.tsx) the instant a bowler is resolved, and the bare
+      // label while none is (S2-4 Task 3: at an over's end nobody is). A bare
       // `exact: true` match on the label alone matches nothing and hangs for
       // this test's whole `test.setTimeout(180_000)` budget (R2 review
       // finding — the identical bug scorepad-v3-cricket.spec.ts's own
@@ -1429,10 +1436,10 @@ const SPORTS: GallerySport[] = [
       // Left unguarded by a `.catch(() => false)`, unlike every `openDock`
       // step below: `openDock` is genuinely optional per sport (a sport with
       // no distinct detail panel just returns false), but changing the
-      // bowler here is the one context-strip pick this flow cannot skip —
-      // the naive default for over 2 is over 1's own bowler, which the
-      // engine rejects outright as "cannot bowl consecutive overs" (this
-      // sport's own `scoreOne` header comment). A failure here means the
+      // bowler here is a context-strip pick this flow cannot skip — the ball
+      // tiles wait for over 2's bowler (S2-4 Task 3), and over 1's own bowler
+      // is greyed, since the engine rejects him as "cannot bowl consecutive
+      // overs" (this sport's own `scoreOne` header comment). A failure here means the
       // capture genuinely did not reach a valid "03-scored" state and should
       // fail loudly, the same posture every OTHER sport's unguarded
       // `scoreOne` already takes.

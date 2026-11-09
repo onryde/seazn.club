@@ -14,6 +14,7 @@ import {
   competitionPath,
   divisionPath,
   fixturePath,
+  pickCricketPeople,
   seedRosteredFixture,
   loginUi,
   claimProfileBySql,
@@ -2355,6 +2356,12 @@ test("cricket v3 pad: tiles + over-summary sheet + context strip hold the 44px f
   await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(sheet, "cancel must close the sheet without dispatching").not.toBeVisible({ timeout: 10_000 });
 
+  // S2-4 Task 3: the openers and the opening bowler are the scorer's picks before ball 1 (the tiles wait for them).
+  await pickCricketPeople(page, {
+    striker: `Mobile V3 Striker ${TAG}`,
+    nonStriker: `Mobile V3 NonStriker ${TAG}`,
+    bowler: `Mobile V3 Bowler ${TAG}`,
+  });
   await pad.getByRole("button", { name: "1", exact: true }).click();
   await expect
     .poll(
@@ -2370,13 +2377,13 @@ test("cricket v3 pad: tiles + over-summary sheet + context strip hold the 44px f
     .toBe(1);
 
   // Every chip, interactive or not. After the first ball the strip is
-  // ENTIRELY non-interactive by design: striker and non-striker are
-  // read-only because the engine refuses those overrides under a strict
+  // read-only but for the striker's swap (asserted below): the non-striker is
+  // read-only because the engine refuses any other pair under a strict
   // fold, and bowler is read-only until an over boundary (`currentBowler
   // === null`) because mid-over the same fold refuses it. Selecting on
-  // `button` therefore matched nothing here and the test failed at all
-  // seven widths — the 44px floor applies to the chip footprint, which is
-  // what a thumb meets, not to whether it happens to be a control.
+  // `button` would skip the read-only chips, and the 44px floor applies to
+  // every chip's footprint, which is what a thumb meets, not to whether it
+  // happens to be a control.
   const chips = pad.locator('[data-role="context-chip"]');
   await expect(chips.first(), "context strip must render once an innings exists").toBeVisible({ timeout: 20_000 });
   const chipCount = await chips.count();
@@ -2398,13 +2405,15 @@ test("cricket v3 pad: tiles + over-summary sheet + context strip hold the 44px f
   for (let i = 0; i < chipCount; i++) {
     await assertFloor(chips.nth(i), `context chip ${i}`);
   }
-  // Mid-over none of them may be a control: a chip that opens a picker the
-  // engine will refuse is the defect this wave fixed twice (G5, then the
-  // bowler's own mid-over case).
-  await expect(
-    pad.locator('[data-role="context-chip"][data-readonly="false"]'),
-    "mid-over every context chip is read-only",
-  ).toHaveCount(0);
+  // Mid-over no chip may open a picker the engine will refuse — the defect
+  // this wave fixed twice (G5, then the bowler's own mid-over case). Since
+  // S2-4 Task 7 (rulings 76, 84) the ONE control left is the striker's chip,
+  // whose picker offers only the swap of ends with the non-striker (the pair
+  // reversed, which the engine takes); the non-striker and the bowler stay
+  // read-only.
+  const liveChips = pad.locator('[data-role="context-chip"][data-readonly="false"]');
+  await expect(liveChips, "mid-over only the striker's chip is a control").toHaveCount(1);
+  await expect(liveChips).toHaveAccessibleName(/^Striker: /);
 
   await expectNoHorizontalScroll(page);
   await expectPhoneComposition(page, "T");

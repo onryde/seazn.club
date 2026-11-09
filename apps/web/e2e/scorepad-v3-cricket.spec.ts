@@ -1,12 +1,16 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
 import { HOLD_MS } from "../src/components/v2/scorepad/queue";
 import {
   activeOrg,
   apiJson,
   fixturePath,
+  pickCricketPeople,
   seedRosteredFixture,
   setDivisionConfigSql,
   TAG,
+  tapCricketExtra,
   type RosteredFixture,
 } from "./helpers";
 import { consentedAnonymousState, expectNoCookieBanner } from "./scorepad-a11y-kit";
@@ -196,10 +200,14 @@ test(
 
     await openLiveConsole(page, fx);
 
-    // buildContext now renders the opening strip BEFORE ball 1 so a scorer
-    // can change the opening pair and opening bowler. This test still scores
-    // over 1 on lineup defaults; the opening-pick proof is a dedicated test
-    // below. The strip's presence here is not under test.
+    // S2-4 Task 3: the pad picks nobody — the openers and the opening bowler
+    // are the scorer's picks before ball 1. The opening-pick proof (tiles
+    // disabled until then, and the strip saying why) is a dedicated test below.
+    await pickCricketPeople(page, {
+      striker: `V3 Striker ${TAG}`,
+      nonStriker: `V3 NonStriker ${TAG}`,
+      bowler: `V3 Bowler ${TAG}`,
+    });
     let delivered = 0;
     for (const runs of ["1", "0", "2", "0", "4"]) {
       await pad(page).getByRole("button", { name: runs, exact: true }).click();
@@ -242,17 +250,19 @@ test(
     // (cricket.ts's own per-over reset — the SAME `currentBowler === null`
     // branch that let ball 1's bowler be a free pick, re-armed) — over 2's
     // bowler is open again, gated only by "not `fine.prevOverBowler`" and
-    // "a real fielding-lineup member", never a lineup-order rule. The
-    // context strip's own DEFAULT for this slot (resolvePeople's
-    // `fine?.currentBowler ?? bowlingOrder[0]`) reads `bowlingOrder[0]` —
-    // "V3 Bowler" again, the SAME person who just bowled over 1 — which the
-    // fold would REJECT outright ("bowler cannot bowl consecutive overs").
-    // So this change is not merely SAFE, it is the one genuinely NECESSARY
-    // context-strip pick in this whole flow: without it, over 2's first
-    // ball 422s on the chassis's own naive default. G5's own regression was
-    // exactly this shape one level up — before the host held pending picks,
-    // a tap here would revert on the next render and every ball would
-    // silently keep carrying the (here, invalid) default forever.
+    // "a real fielding-lineup member", never a lineup-order rule. S2-4 Task 3:
+    // the strip proposes nobody here (an old default once proposed "V3
+    // Bowler" again, the SAME person who just bowled over 1, which the fold
+    // refuses: "bowler cannot bowl consecutive overs"), so every ball tile
+    // waits for this pick and the strip asks for over 2's bowler. G5's own
+    // regression was this shape one level up — before the host held pending
+    // picks, a tap here would revert on the next render and every ball would
+    // silently keep carrying the default forever.
+    await expect(
+      pad(page).locator('[data-role="context-slot-message"][data-slot-id="bowler"]'),
+      "at the over's end the strip asks for the next bowler",
+    ).toHaveText("Pick the bowler for over 2");
+    await expect(pad(page).locator('[data-tile-id="wicket"]')).toHaveAttribute("data-tile-disabled", "true");
     await setContextPerson(page, "Bowler", `V3 Fielder ${TAG}`);
 
     // A caught dismissal via the guided sheet (G2's conditional steps):
@@ -339,10 +349,34 @@ test(
     await expect(strip.getByRole("button", { name: /^Non-striker(:|$)/ })).toBeVisible();
     await expect(strip.getByRole("button", { name: /^Bowler(:|$)/ })).toBeVisible();
 
-    // Defaults are lineup[0]/[1] and first eligible bowler. Override all three.
+    // S2-4 Task 3 (gaps 1, 2): nobody is picked for the scorer. Every chip is
+    // unset ("Striker", no name), every ball tile is disabled, and the strip
+    // says what it is waiting for, with the over the bowler is for.
+    await expect(strip.getByRole("button", { name: "Striker", exact: true })).toBeVisible();
+    await expect(strip.getByRole("button", { name: "Non-striker", exact: true })).toBeVisible();
+    await expect(strip.getByRole("button", { name: "Bowler", exact: true })).toBeVisible();
+    for (const tileId of ["run0", "run1", "wide", "wicket", "extra-noball"]) {
+      await expect(pad(page).locator(`[data-tile-id="${tileId}"]`), `${tileId} waits for the picks`).toHaveAttribute(
+        "data-tile-disabled",
+        "true",
+      );
+    }
+    await expect(strip.locator('[data-role="context-slot-message"][data-slot-id="striker"]')).toHaveText(
+      "Pick the two openers",
+    );
+    await expect(strip.locator('[data-role="context-slot-message"][data-slot-id="bowler"]')).toHaveText(
+      "Pick the bowler for over 1",
+    );
+
+    // Not the lineup's first two, nor its first bowler: the picks are the scorer's.
     await setContextPerson(page, "Striker", `V3 OP Three ${TAG}`);
     await setContextPerson(page, "Non-striker", `V3 OP Four ${TAG}`);
     await setContextPerson(page, "Bowler", `V3 OP BowlB ${TAG}`);
+    await expect(pad(page).locator('[data-tile-id="run0"]'), "the three picked: the tiles open").toHaveAttribute(
+      "data-tile-disabled",
+      "false",
+    );
+    await expect(strip.locator('[data-role="context-slot-message"]')).toHaveCount(0);
 
     // Dot ball — an odd run would rotate strike, and Bowled then dismisses
     // the NEW striker rather than the named opener this test is pinning.
@@ -361,8 +395,17 @@ test(
     expect(first.payload.nonStriker).not.toBe(two);
     expect(first.payload.bowler).not.toBe(bowlA);
 
-    // Mid-over the crease is locked — tapping Striker must not find a button.
-    await expect(strip.getByRole("button", { name: /^Striker(:|$)/ })).toHaveCount(0);
+    // Mid-over only the striker's chip is a control (S2-4 T7, CK-SS-1: the hand strike swap), and its picker offers
+    // exactly the non-striker, tagged Swap ends. The non-striker and the bowler stay read-only.
+    await expect(strip.locator('button[data-role="context-chip"]'), "one live chip mid-over").toHaveCount(1);
+    const strikerChip = strip.getByRole("button", { name: /^Striker:/ });
+    await expect(strikerChip, "the live chip is the striker's").toHaveCount(1);
+    await strikerChip.click();
+    await expect(strip.locator("[data-candidate-id]"), "the swap is the only pick").toHaveCount(1);
+    const swapTo = strip.locator(`[data-candidate-id="${four}"]`);
+    await expect(swapTo, "the non-striker, tagged as the swap").toContainText("Swap ends");
+    await strikerChip.click();
+    await expect(strip.locator("[data-candidate-id]"), "the picker closed untouched").toHaveCount(0);
 
     await pad(page).getByRole("button", { name: "Wicket", exact: true }).click();
     const sheet = pad(page).locator('[data-role="v3-sheet"]');
@@ -406,51 +449,51 @@ test(
   },
 );
 
-test("cricket v3: undo INSIDE the soft-commit hold window drops silently, no core.void", async ({ page }) => {
-  // openLiveConsole's own two 20s-ceiling waits plus the 5s dock checks and a
-  // flat 7s post-hold wait land close to the 60s default under load —
-  // scoring.spec.ts's comparable undo conversion sets the same 120_000.
+// S2-4 Task 4 (gaps 3, 4): no cricket ball is held any more, so the "undo inside the hold window" case this test used to
+// make (a no-ball held by its dock, dropped by Take back) cannot arise for cricket; the chassis's held-drop path keeps its
+// coverage through the sports that still hold (football's goal, tennis's point). What a cricket scorer can do instead is
+// open an extras sheet and change their mind: Cancel must record nothing, and the tile must still work afterwards.
+test("S2-4 T4: an extras sheet cancelled records nothing; the same tile then records its ball at once", async ({ page }) => {
   test.setTimeout(120_000);
   const fx = await seedRosteredFixture(page.request, {
-    label: `V3 Cricket UndoHeld ${TAG}`,
+    label: `V3 Cricket ExtraCancel ${TAG}`,
     sportKey: "cricket",
     variantKey: "t20",
-    home: [{ fullName: `V3 UH Striker ${TAG}` }, { fullName: `V3 UH NonStriker ${TAG}` }],
-    away: [{ fullName: `V3 UH Bowler ${TAG}` }],
+    home: [{ fullName: `V3 XC Striker ${TAG}` }, { fullName: `V3 XC NonStriker ${TAG}` }],
+    away: [{ fullName: `V3 XC Bowler ${TAG}` }],
   });
   await openLiveConsole(page, fx);
-
-  // Plain runs submit immediately (no enrichment chips). Use a no-ball so the
-  // dock opens and the tap stays HELD — that is the only path where Take back
-  // can drop without a core.void.
-  await pad(page).locator('[data-tile-id="extra-noball"]').click();
-  const dock = pad(page).locator('[data-role="v3-dock"]');
-  await expect(dock).toBeVisible({ timeout: 5_000 });
-
-  // decideUndo (pad-host.tsx): `heldId === eventId` -> "drop", queue.ts's
-  // `dropHeld` — the event is removed from the LOCAL queue, never sent, no
-  // `core.void` (there is nothing on the server to void).
-  await pad(page).locator('[data-role="v3-ribbon"]').getByRole("button", { name: "Take back", exact: true }).click();
-  await expect(dock, "a dropped held tap clears `held` immediately, no network round trip needed").not.toBeVisible({
-    timeout: 5_000,
+  await pickCricketPeople(page, {
+    striker: `V3 XC Striker ${TAG}`,
+    nonStriker: `V3 XC NonStriker ${TAG}`,
+    bowler: `V3 XC Bowler ${TAG}`,
   });
 
-  // Positive proof, not merely "nothing happened yet": wait PAST queue.ts's
-  // HOLD_MS — the one deadline this mechanism has — then confirm the ledger
-  // never saw the tap at all. A plain `waitForTimeout` is usually the wrong
-  // tool here (AGENTS.md), but proving an ABSENCE past a KNOWN deadline is
-  // the one shape of claim a fixed wait is the right proof for: there is no
-  // earlier real signal to poll for the negative case.
-  //
-  // DERIVED from HOLD_MS, never a literal. This wait was `7_000` against a
-  // 6000ms window; when R6 took the window to 12000 the wait stopped passing
-  // the deadline and the assertion went vacuous — still green, and green for
-  // a reason that had nothing to do with the behaviour. A test that cannot
-  // fail is worse than one that is missing, because it is counted.
+  await pad(page).locator('[data-tile-id="extra-noball"]').click();
+  const sheet = sheetRoot(page);
+  await expect(sheet).toBeVisible({ timeout: 10_000 });
+  await expect(pad(page).locator('[data-role="v3-dock"]'), "the tap holds nothing").toHaveCount(0);
+  await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(sheet).toHaveCount(0, { timeout: 5_000 });
+
+  // Proving an absence: the only thing that could have written is the cancelled sheet, and it sends nothing. One HOLD_MS
+  // (the longest any tap can wait before it is sent) plus a second covers a tap the pad had wrongly held.
   await page.waitForTimeout(HOLD_MS + 1_000);
-  const rows = await ledger(page.request, fx.fixtureId);
-  expect(rows.filter((e) => e.type === "cricket.ball")).toHaveLength(0);
+  let rows = await ledger(page.request, fx.fixtureId);
+  expect(rows.filter((e) => e.type === "cricket.ball"), "a cancelled sheet records no ball").toHaveLength(0);
   expect(rows.filter((e) => e.type === "core.void")).toHaveLength(0);
+
+  await tapCricketExtra(page, "extra-noball", "ran:2");
+  await expect
+    .poll(async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length, {
+      timeout: 20_000,
+    })
+    .toBe(1);
+  rows = await ledger(page.request, fx.fixtureId);
+  expect(rows.find((e) => e.type === "cricket.ball")!.payload.runs, "a no-ball and 2 run: one no-ball extra of 3").toEqual({
+    bat: 0,
+    extras: { kind: "noball", runs: 3 },
+  });
 });
 
 test("cricket v3: undo AFTER send voids through core.void", async ({ page }) => {
@@ -467,6 +510,12 @@ test("cricket v3: undo AFTER send voids through core.void", async ({ page }) => 
     away: [{ fullName: `V3 US Bowler ${TAG}` }],
   });
   await openLiveConsole(page, fx);
+  // S2-4 Task 3: the openers and the opening bowler are the scorer's picks before ball 1.
+  await pickCricketPeople(page, {
+    striker: `V3 US Striker ${TAG}`,
+    nonStriker: `V3 US NonStriker ${TAG}`,
+    bowler: `V3 US Bowler ${TAG}`,
+  });
 
   await pad(page).getByRole("button", { name: "1", exact: true }).click();
   // Plain runs have no enrichment dock — they submit immediately. Once the
@@ -549,6 +598,12 @@ test("cricket v3: the device link (/score/[token]) renders the v3 pad, not the l
     await expect(v3Root).toBeVisible({ timeout: 20_000 });
     await expect(v3Root.locator('[data-role="v3-scorebug"]')).toBeVisible();
     await expect(v3Root.locator('[data-role="v3-tiles"]')).toBeVisible();
+    // S2-4 Task 3: nobody is picked for the scorer, so the device link needs the openers and the bowler too.
+    await pickCricketPeople(
+      dlPage,
+      { striker: `V3 DL Striker ${TAG}`, nonStriker: `V3 DL NonStriker ${TAG}`, bowler: `V3 DL Bowler ${TAG}` },
+      v3Root,
+    );
 
     const before = await ledger(page.request, fx.fixtureId);
     await v3Root.getByRole("button", { name: "1", exact: true }).click();
@@ -575,6 +630,12 @@ test("cricket v3: the activity panel lists every recorded ball, NOT just the lat
     away: [{ fullName: `V3 AC Bowler ${TAG}` }],
   });
   await openLiveConsole(page, fx);
+  // S2-4 Task 3: the openers and the opening bowler are the scorer's picks before ball 1.
+  await pickCricketPeople(page, {
+    striker: `V3 AC Striker ${TAG}`,
+    nonStriker: `V3 AC NonStriker ${TAG}`,
+    bowler: `V3 AC Bowler ${TAG}`,
+  });
 
   // Three balls, so "shows only the latest" (the v3 ribbon's behaviour, and
   // the regression) is distinguishable from "shows the history".
@@ -625,6 +686,12 @@ test("cricket v3: voiding an OLDER event from the activity panel writes core.voi
     away: [{ fullName: `V3 OV Bowler ${TAG}` }],
   });
   await openLiveConsole(page, fx);
+  // S2-4 Task 3: the openers and the opening bowler are the scorer's picks before ball 1.
+  await pickCricketPeople(page, {
+    striker: `V3 OV Striker ${TAG}`,
+    nonStriker: `V3 OV NonStriker ${TAG}`,
+    bowler: `V3 OV Bowler ${TAG}`,
+  });
 
   for (const runs of ["1", "2"]) {
     await pad(page).getByRole("button", { name: runs, exact: true }).click();
@@ -711,6 +778,12 @@ test("cricket v3: after a RELOAD, a per-row void addressed by the panel's own da
     away: [{ fullName: `V3 RV Bowler ${TAG}` }],
   });
   await openLiveConsole(page, fx);
+  // S2-4 Task 3: the openers and the opening bowler are the scorer's picks before ball 1.
+  await pickCricketPeople(page, {
+    striker: `V3 RV Striker ${TAG}`,
+    nonStriker: `V3 RV NonStriker ${TAG}`,
+    bowler: `V3 RV Bowler ${TAG}`,
+  });
 
   // Two balls, so the target is unambiguously ONE of them and a void that
   // silently hit "the last thing" would name the wrong id.
@@ -989,6 +1062,12 @@ test(
       away: [{ fullName: `V3 OGF Bowler ${TAG}` }],
     });
     await openLiveConsole(page, fx);
+    // S2-4 Task 3: the openers and the opening bowler are the scorer's picks before ball 1.
+    await pickCricketPeople(page, {
+      striker: `V3 OGF Striker ${TAG}`,
+      nonStriker: `V3 OGF NonStriker ${TAG}`,
+      bowler: `V3 OGF Bowler ${TAG}`,
+    });
 
     // Both lanes are legal before any ball — the mirror starting point of
     // the coarse-lane test above.
@@ -1017,68 +1096,90 @@ test(
   },
 );
 
+// S2-4 Task 4 (gaps 3, 4): the no-ball, the wide and the bye ask their runs on a sheet and record the ball on the answer,
+// with no dock and no hold. Replaces "a no-ball's dock offers bat-run chips", whose dock is gone.
 test(
-  "cricket v3: a no-ball's dock offers bat-run chips that preserve the noball extra; a wide's dock offers none",
+  "S2-4 T4: a no-ball's runs off the bat, a wide's runs run and a bye's runs come from their sheets, recorded at once",
   async ({ page }) => {
-    // Two dispatches, both flushed via "Send now" rather than the 6s hold —
-    // openLiveConsole's own two 20s-ceiling polls plus two fast confirms.
     test.setTimeout(90_000);
     const fx = await seedRosteredFixture(page.request, {
-      label: `V3 Cricket DockChips ${TAG}`,
+      label: `V3 Cricket ExtraSheets ${TAG}`,
       sportKey: "cricket",
       variantKey: "t20",
       home: [{ fullName: `V3 DC Striker ${TAG}` }, { fullName: `V3 DC NonStriker ${TAG}` }],
       away: [{ fullName: `V3 DC Bowler ${TAG}` }],
     });
     await openLiveConsole(page, fx);
-
-    // buildDock (skins/cricket.tsx): a no-ball's dock offers BAT_RUN_VALUES
-    // chips (a no-ball is batted normally) — tap "extra-noball", then the
-    // "+3" chip (label `pad.cricket.dock.batRun3`, en copy "3 runs") INSIDE
-    // the hold window. Wait for the chip's own `aria-pressed` before
-    // flushing: `tapChip` is async (it awaits `store.mutateHeld`), so
-    // sending immediately after the click risks flushing the UNMUTATED
-    // payload if the mutation hasn't landed in the local queue yet.
-    await pad(page).locator('[data-tile-id="extra-noball"]').click();
+    await pickCricketPeople(page, {
+      striker: `V3 DC Striker ${TAG}`,
+      nonStriker: `V3 DC NonStriker ${TAG}`,
+      bowler: `V3 DC Bowler ${TAG}`,
+    });
     const dock = pad(page).locator('[data-role="v3-dock"]');
-    await expect(dock).toBeVisible({ timeout: 5_000 });
-    const chip3 = dock.getByRole("button", { name: "3 runs", exact: true });
-    await chip3.click();
-    await expect(chip3, "tapChip must resolve before Send now, or the flush races the mutation").toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    await sendHeldNow(page);
-    await expect
-      .poll(
-        async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length,
-        { timeout: 20_000 },
-      )
-      .toBe(1);
-    const noball = (await ledger(page.request, fx.fixtureId)).find((e) => e.type === "cricket.ball")!;
-    // The no-ball's own 1-run extra survives the chip's mutation verbatim
-    // (batRunChip preserves `extras`, only ever touching `bat`).
-    expect(noball.payload.runs).toEqual({ bat: 3, extras: { kind: "noball", runs: 1 } });
+    const balls = async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball");
 
-    // A wide is ALSO an extra, but the engine refuses bat runs off one
-    // (cricket.ts:1229) — buildDock returns null, so the tap submits with no
-    // hold (owner ruling 2026-09-13: nothing to enrich → immediate).
-    await pad(page).locator('[data-tile-id="wide"]').click();
-    await expect(dock).not.toBeVisible({ timeout: 5_000 });
-    await expect
-      .poll(
-        async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length,
-        { timeout: 20_000 },
-      )
-      .toBe(2);
+    // A no-ball and 4 off the bat: bat 4, the no-ball's own run, and a boundary (W7, the same rule as the phone's).
+    await tapCricketExtra(page, "extra-noball", "bat:4");
+    await expect(dock, "the answer opens no dock").toHaveCount(0);
+    await expect.poll(async () => (await balls()).length, { timeout: 20_000 }).toBe(1);
+    const noBall = (await balls())[0]!;
+    expect(noBall.payload.runs).toEqual({ bat: 4, extras: { kind: "noball", runs: 1 } });
+    expect(noBall.payload.boundary, "4 off the bat is a boundary").toBe(4);
+
+    // A wide and 2 run: three wides (the engine counts the wide's own run, spec §4.2), never "a wide is one run".
+    await tapCricketExtra(page, "wide", "2");
+    await expect(dock).toHaveCount(0);
+    await expect.poll(async () => (await balls()).length, { timeout: 20_000 }).toBe(2);
+    expect((await balls())[1]!.payload.runs).toEqual({ bat: 0, extras: { kind: "wide", runs: 3 } });
+
+    // A bye of 3 into the extra's own runs.
+    await tapCricketExtra(page, "extra-bye", "3");
+    await expect.poll(async () => (await balls()).length, { timeout: 20_000 }).toBe(3);
+    expect((await balls())[2]!.payload.runs).toEqual({ bat: 0, extras: { kind: "bye", runs: 3 } });
+
+    // The scorebug adds them up: 1 + 4, 3, 3.
+    await expect(pad(page).locator('[data-role="v3-scorebug"]')).toContainText("11/0");
   },
 );
+
+// S2-4 Task 4, the four questions' "second call": a double tap on a sheet's runs answer. The first tap closes the sheet
+// and records the ball; the second must not record another (it lands on whatever the closed sheet left under the
+// pointer). Before Task 4 a no-ball was recorded on the TILE tap, so a second tap there was a second no-ball.
+test("S2-4 T4: a double tap on an extras sheet's runs answer records one ball, not two", async ({ page }) => {
+  test.setTimeout(90_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 Cricket ExtraDouble ${TAG}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [{ fullName: `V3 XD Striker ${TAG}` }, { fullName: `V3 XD NonStriker ${TAG}` }],
+    away: [{ fullName: `V3 XD Bowler ${TAG}` }],
+  });
+  await openLiveConsole(page, fx);
+  await pickCricketPeople(page, {
+    striker: `V3 XD Striker ${TAG}`,
+    nonStriker: `V3 XD NonStriker ${TAG}`,
+    bowler: `V3 XD Bowler ${TAG}`,
+  });
+  await pad(page).locator('[data-tile-id="wide"]').click();
+  const sheet = sheetRoot(page);
+  await sheet.locator('[data-choice-option-id="1"]').dblclick();
+  await expect
+    .poll(async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length, {
+      timeout: 20_000,
+    })
+    .toBe(1);
+  // Every cricket ball is sent on the tap (no hold), so a second ball would already be on its way; one HOLD_MS and a
+  // second covers it even if something held it.
+  await page.waitForTimeout(HOLD_MS + 1_000);
+  const rows = (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball");
+  expect(rows, "one wide, not two balls").toHaveLength(1);
+  expect(rows[0]!.payload.runs).toEqual({ bat: 0, extras: { kind: "wide", runs: 2 } });
+});
 
 test(
   "cricket v3: a free hit is indicated after a no-ball, survives a wide, and clears on the next legal ball",
   async ({ page }) => {
-    // Three dispatches, each flushed via "Send now" — comfortably under the
-    // 120_000 budget the single-real-hold tests elsewhere in this file need.
+    // Three dispatches, each sent on the tap or the sheet's answer (S2-4 Task 4: no cricket ball holds).
     test.setTimeout(120_000);
     const fx = await seedRosteredFixture(page.request, {
       label: `V3 Cricket FreeHit ${TAG}`,
@@ -1088,15 +1189,21 @@ test(
       away: [{ fullName: `V3 FH Bowler ${TAG}` }],
     });
     await openLiveConsole(page, fx);
+    // S2-4 Task 3: the openers and the opening bowler are the scorer's picks before ball 1.
+    await pickCricketPeople(page, {
+      striker: `V3 FH Striker ${TAG}`,
+      nonStriker: `V3 FH NonStriker ${TAG}`,
+      bowler: `V3 FH Bowler ${TAG}`,
+    });
 
     const freeHit = pad(page).locator('[data-strip-item-id="freeHit"]');
     const dock = pad(page).locator('[data-role="v3-dock"]');
     const ballCount = async () =>
       (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length;
 
-    await pad(page).locator('[data-tile-id="extra-noball"]').click();
-    await expect(dock).toBeVisible({ timeout: 5_000 });
-    await sendHeldNow(page);
+    // S2-4 Task 4: the no-ball asks its runs on its sheet and records the ball on the answer, with no dock.
+    await tapCricketExtra(page, "extra-noball", "bat:0");
+    await expect(dock).toHaveCount(0);
     await expect.poll(ballCount, { timeout: 20_000 }).toBe(1);
     await expect(freeHit, "a white-ball no-ball must arm the indicator").toBeVisible({ timeout: 10_000 });
 
@@ -1105,7 +1212,7 @@ test(
     // verbatim) — it must carry the flag forward, not consume it. Skipping
     // straight to a legal ball here could not tell this from "any next ball
     // clears it".
-    await pad(page).locator('[data-tile-id="wide"]').click();
+    await tapCricketExtra(page, "wide", "0");
     await expect(dock).not.toBeVisible({ timeout: 5_000 });
     await expect.poll(ballCount, { timeout: 20_000 }).toBe(2);
     await expect(freeHit, "a wide must NOT clear a pending free hit").toBeVisible({ timeout: 10_000 });
@@ -1230,6 +1337,16 @@ test(
     // is R2b's "visible, blocked, and REASONED — not removed" ruling applied
     // to a candidate list. Before C1 he was an ordinary tappable button and
     // the block was only caught after the tap, on the tiles.
+    // S2-4 Task 3: at the over's end nobody is proposed. Every ball tile waits and the strip asks for over 2's bowler.
+    for (const tileId of ["run0", "run1", "wicket"]) {
+      await expect(pad(page).locator(`[data-tile-id="${tileId}"]`), `${tileId} waits for the bowler`).toHaveAttribute(
+        "data-tile-disabled",
+        "true",
+      );
+    }
+    await expect(
+      pad(page).locator('[data-role="context-strip"] [data-role="context-slot-message"][data-slot-id="bowler"]'),
+    ).toHaveText("Pick the bowler for over 2");
     const strip = await openContextPicker(page, "Bowler");
 
     const blockedCandidate = strip.locator(`[data-candidate-id="${bowlerA}"]`);
@@ -1615,6 +1732,18 @@ test(
     await expect(strip.getByRole("button", { name: /^Striker(:|$)/ })).toBeVisible();
     await expect(strip.getByRole("button", { name: /^Bowler(:|$)/ })).toBeVisible();
     const run1 = pad(page).locator('[data-tile-id="run1"]');
+    // S2-4 Task 3: innings 2's openers and bowler are asked, not defaulted. The pickers offer the right sides: the
+    // batting side's names at the crease ends, never the side that just batted.
+    await expect(run1, "innings 2 waits for its openers and bowler").toHaveAttribute("data-tile-disabled", "true");
+    await strip.getByRole("button", { name: /^Striker(:|$)/ }).click();
+    await expect(strip.locator(`[data-candidate-id="${away1}"]`)).toBeVisible({ timeout: 10_000 });
+    await expect(strip.locator(`[data-candidate-id="${home1}"]`), "the side that just batted is not offered").toHaveCount(0);
+    await strip.getByRole("button", { name: /^Striker(:|$)/ }).click();
+    await pickCricketPeople(page, {
+      striker: `V3 IT Away1 ${TAG}`,
+      nonStriker: `V3 IT Away2 ${TAG}`,
+      bowler: `V3 IT Home1 ${TAG}`,
+    });
     await expect(run1).toBeEnabled();
     await run1.click();
     // Plain run — immediate submit, no enrichment dock.
@@ -1846,27 +1975,30 @@ test("cricket v3 (R2c/C3): a side with no reviews left cannot be picked, but an 
 // the top of a short viewport puts the grid's bottom — and therefore the dock —
 // below the fold. Without the reveal effect the dock opens off-screen and this
 // test fails; that was verified by reverting the effect, not assumed.
-test("cricket v3: the soft-commit dock is revealed on screen when it opens", async ({ page }) => {
+// S2-4 Task 4: cricket has no soft-commit dock any more (every cricket ball is sent on the tap or its sheet's answer),
+// so the chassis's dock-reveal wiring is proved on football's goal, whose dock still holds. Kept in this file so its
+// history stays with it; the measurement is the chassis's, not cricket's.
+test("chassis v3: the soft-commit dock is revealed on screen when it opens (football goal)", async ({ page }) => {
   test.setTimeout(120_000);
   const fx = await seedRosteredFixture(page.request, {
-    label: `V3 Cricket DockReveal ${TAG}`,
-    sportKey: "cricket",
-    variantKey: "t20",
-    home: [{ fullName: `V3 DR Striker ${TAG}` }, { fullName: `V3 DR NonStriker ${TAG}` }],
-    away: [{ fullName: `V3 DR Bowler ${TAG}` }],
+    label: `V3 Football DockReveal ${TAG}`,
+    sportKey: "football",
+    variantKey: "11-a-side",
+    home: [{ fullName: `V3 DR Home ${TAG}` }, { fullName: `V3 DR Home2 ${TAG}` }],
+    away: [{ fullName: `V3 DR Away ${TAG}` }],
   });
   await openLiveConsole(page, fx);
 
-  // Short viewport: the cricket tile grid is taller than this on its own, so
+  // Short viewport: the tile grid is taller than this on its own, so
   // whatever follows it starts below the fold.
   await page.setViewportSize({ width: 390, height: 560 });
   await pad(page)
     .locator('[data-role="v3-tiles"]')
     .evaluate((node) => node.scrollIntoView({ block: "start" }));
 
-  // No-ball opens an enrichment dock (plain runs submit immediately with no
-  // dock). The reveal-into-view effect is what this test measures.
-  const tile = pad(page).locator('[data-tile-id="extra-noball"]');
+  // A goal opens football's enrichment dock (the scorer and assist chips). The reveal-into-view effect is what this test
+  // measures.
+  const tile = pad(page).locator('[data-tile-id="goal-home"]');
   // `scrollIntoViewIfNeeded` on the tile itself would undo the setup; keep the
   // grid where we scrolled it and tap without recentering.
   await tile.click();
@@ -1888,4 +2020,379 @@ test("cricket v3: the soft-commit dock is revealed on screen when it opens", asy
     box!.y + box!.height,
     "the dock opened above the viewport — the reveal effect scrolled the wrong way",
   ).toBeGreaterThan(0);
+});
+
+// S2-4 Task 2 (cricket web pad fixes): the toss is a cricket scorer's first tap, before Start. It names the TEAMS (the
+// sheet asked "Home"/"Away" before), and in a division the organiser has not started yet (Draft) the scoring door refuses
+// it 422 WRONG_PHASE with reason division_not_started; the pad says so in its own words instead of the engine's generic
+// "doesn't apply at this point". Then the organiser starts the division and the same toss is recorded, so the refusal was
+// the gate's alone. Strings come from the shipped dictionary, never typed here.
+test("S2-4 T2: the toss names the teams, and a Draft division's refusal says the division hasn't started", async ({ page }) => {
+  test.setTimeout(120_000);
+  const EN = JSON.parse(
+    readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+  ) as Record<string, string>;
+  const label = `V3 Cricket Draft Toss ${TAG}`;
+  const fx = await seedRosteredFixture(page.request, {
+    label,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [{ fullName: `Draft H1 ${TAG}` }, { fullName: `Draft H2 ${TAG}` }],
+    away: [{ fullName: `Draft A1 ${TAG}` }, { fullName: `Draft A2 ${TAG}` }],
+    startDivision: false,
+  });
+  const homeName = `Home ${label}`;
+  const awayName = `Away ${label}`;
+
+  await openConsoleAlreadyLive(page, fx);
+  const tossOnce = async () => {
+    await pad(page).locator('[data-tile-id="toss"]').click();
+    const sheet = sheetRoot(page);
+    await expect(sheet.getByRole("button", { name: awayName, exact: true }), "the toss names the away team").toBeVisible();
+    await expect(sheet.getByRole("button", { name: EN["scorepad.attribution.home"]!, exact: true }), "not the bare side word").toHaveCount(0);
+    await sheet.getByRole("button", { name: homeName, exact: true }).click();
+    await sheet.getByRole("button", { name: EN["toss.bat"]!, exact: true }).click();
+    await sendHeldNow(page);
+  };
+
+  // 1. Draft: the tap is refused, in the scorer's words, and writes nothing.
+  await tossOnce();
+  const banner = pad(page).locator('[data-role="v3-rejection"]');
+  await expect(banner, "the refusal says the division hasn't started").toHaveText(
+    EN["engineErrorReason.WRONG_PHASE.division_not_started"]!,
+    { timeout: 20_000 },
+  );
+  await expect(banner).not.toHaveText(EN["engineError.WRONG_PHASE"]!);
+  expect(await ledger(page.request, fx.fixtureId), "a refused toss writes nothing").toEqual([]);
+
+  // 2. The organiser starts the division; the same toss is recorded, naming the home team's entrant.
+  const started = await apiJson(page.request, `/api/v1/divisions/${fx.divisionId}/start`, "POST");
+  expect(started.status, `start -> ${JSON.stringify(started.error)}`).toBe(200);
+  await page.reload();
+  await expect(pad(page)).toBeVisible({ timeout: 20_000 });
+  await tossOnce();
+  await expect
+    .poll(async () => (await ledger(page.request, fx.fixtureId)).map((e) => [e.type, e.payload.wonBy, e.payload.elected]), {
+      timeout: 20_000,
+    })
+    .toEqual([["cricket.toss", fx.homeEntrantId, "bat"]]);
+  await expect(banner, "no refusal once started").toHaveCount(0);
+});
+
+// S2-4 Task 5 (gaps 5, 6; preflight W4): a stumping asks the keeper and offers the keeper alone (the team sheet's
+// `wicketkeeper`), never the bowler or another fielder; a run out asks the runs completed, and 1 completed is 1 on the
+// score. Labels are the shipped English dictionary's ("Stumped", "Run out", "1 run" by option id).
+test("S2-4 T5: a stumping offers the keeper only, and a run out with 1 completed adds 1 to the score", async ({ page }) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 Cricket Keeper ${TAG}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [
+      { fullName: `V3 KP Striker ${TAG}` },
+      { fullName: `V3 KP NonStriker ${TAG}` },
+      { fullName: `V3 KP Three ${TAG}` },
+      { fullName: `V3 KP Four ${TAG}` },
+    ],
+    away: [
+      { fullName: `V3 KP Bowler ${TAG}` },
+      { fullName: `V3 KP Keeper ${TAG}`, roles: ["wicketkeeper"] },
+      { fullName: `V3 KP Fielder ${TAG}` },
+    ],
+    emitCoreStart: true,
+  });
+  const id = (name: string) => fx.personIds[`V3 KP ${name} ${TAG}`]!;
+  // A dot ball opens the innings with its people, so the sheet's candidates are the fold's, not pending picks.
+  await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+    over: 0,
+    ballInOver: 1,
+    striker: id("Striker"),
+    nonStriker: id("NonStriker"),
+    bowler: id("Bowler"),
+    runs: { bat: 0 },
+  });
+  await openConsoleAlreadyLive(page, fx);
+  const balls = async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball");
+
+  await pad(page).locator('[data-tile-id="wicket"]').click();
+  const sheet = sheetRoot(page);
+  await sheet.getByRole("button", { name: "Stumped", exact: true }).click();
+  await expect(sheet.locator(`[data-candidate-id="${id("Keeper")}"]`), "the keeper is offered").toBeVisible({ timeout: 10_000 });
+  await expect(sheet.locator(`[data-candidate-id="${id("Bowler")}"]`), "the bowler is not").toHaveCount(0);
+  await expect(sheet.locator(`[data-candidate-id="${id("Fielder")}"]`), "nor another fielder").toHaveCount(0);
+  await sheet.locator(`[data-candidate-id="${id("Keeper")}"]`).click();
+  await expect(sheet.getByText("Who walks in?")).toBeVisible({ timeout: 10_000 });
+  await sheet.locator(`[data-candidate-id="${id("Three")}"]`).click();
+  await expect.poll(async () => (await balls()).length, { timeout: 20_000 }).toBe(2);
+  expect((await balls())[1]!.payload.wicket).toMatchObject({ kind: "stumped", out: id("Striker"), fielder: id("Keeper") });
+
+  await pad(page).locator('[data-tile-id="wicket"]').click();
+  await sheet.getByRole("button", { name: "Run out", exact: true }).click();
+  await sheet.locator(`[data-candidate-id="${id("NonStriker")}"]`).click();
+  await sheet.locator(`[data-candidate-id="${id("Fielder")}"]`).click();
+  await sheet.locator('[data-choice-option-id="1"]').click();
+  await expect(sheet.getByText("Who walks in?")).toBeVisible({ timeout: 10_000 });
+  await sheet.locator(`[data-candidate-id="${id("Four")}"]`).click();
+  await expect.poll(async () => (await balls()).length, { timeout: 20_000 }).toBe(3);
+  const runOut = (await balls())[2]!;
+  expect(runOut.payload.runs, "the run completed is the batter's").toEqual({ bat: 1 });
+  expect(runOut.payload.wicket).toMatchObject({ kind: "runout", out: id("NonStriker"), fielder: id("Fielder") });
+  await expect(pad(page).locator('[data-role="v3-scorebug"]'), "one run, two wickets").toContainText("1/2");
+});
+
+// S2-4 Task 6 (preflight W4): "+ Out" off a wide asks the wicket with only the kinds the engine allows off a wide
+// (Stumped, Run out, Hit wicket, Obstructing the field: never Bowled or Caught), and records ONE ball carrying both the
+// wide's run and the wicket.
+test("S2-4 T6: + Out off a wide, a stumping, records one ball with the wide and the wicket", async ({ page }) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 Cricket WideOut ${TAG}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [{ fullName: `V3 WO Striker ${TAG}` }, { fullName: `V3 WO NonStriker ${TAG}` }, { fullName: `V3 WO Three ${TAG}` }],
+    away: [{ fullName: `V3 WO Bowler ${TAG}` }, { fullName: `V3 WO Keeper ${TAG}`, roles: ["wicketkeeper"] }],
+    emitCoreStart: true,
+  });
+  const id = (name: string) => fx.personIds[`V3 WO ${name} ${TAG}`]!;
+  await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+    over: 0,
+    ballInOver: 1,
+    striker: id("Striker"),
+    nonStriker: id("NonStriker"),
+    bowler: id("Bowler"),
+    runs: { bat: 0 },
+  });
+  await openConsoleAlreadyLive(page, fx);
+  const balls = async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball");
+
+  await tapCricketExtra(page, "wide", "out");
+  const sheet = sheetRoot(page);
+  await expect(sheet.getByRole("button", { name: "Stumped", exact: true })).toBeVisible({ timeout: 10_000 });
+  await expect(sheet.getByRole("button", { name: "Bowled", exact: true }), "a wide cannot be bowled").toHaveCount(0);
+  await expect(sheet.getByRole("button", { name: "Caught", exact: true }), "nor caught").toHaveCount(0);
+  await sheet.getByRole("button", { name: "Stumped", exact: true }).click();
+  await sheet.locator(`[data-candidate-id="${id("Keeper")}"]`).click();
+  await expect(sheet.getByText("Who walks in?")).toBeVisible({ timeout: 10_000 });
+  await sheet.locator(`[data-candidate-id="${id("Three")}"]`).click();
+
+  await expect.poll(async () => (await balls()).length, { timeout: 20_000 }).toBe(2);
+  await page.waitForTimeout(2_000); // a second ball would be on the wire already: every cricket ball is sent at once
+  const rows = await balls();
+  expect(rows, "one ball for the wide and the wicket").toHaveLength(2);
+  expect(rows[1]!.payload.runs, "the wide's own run").toEqual({ bat: 0, extras: { kind: "wide", runs: 1 } });
+  expect(rows[1]!.payload.wicket).toMatchObject({ kind: "stumped", out: id("Striker"), fielder: id("Keeper"), incoming: id("Three") });
+  await expect(pad(page).locator('[data-role="v3-scorebug"]'), "one wide, one wicket").toContainText("1/1");
+});
+
+// S2-4 Task 4's "second call", the brief's literal case (Batch B review I2; controller ruling: while a cricket sheet is
+// open the run and extra tiles are disabled). The scorer opens Wide, then double-taps the grid's "1" instead of the
+// sheet's "1 run": nothing is recorded by the grid, the sheet's answer records the one ball, and the tiles come back.
+test("S2-4 T4: a double tap on a run tile while the extras sheet is open records one ball only, from the sheet", async ({ page }) => {
+  test.setTimeout(90_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 Cricket SheetLock ${TAG}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [{ fullName: `V3 SL Striker ${TAG}` }, { fullName: `V3 SL NonStriker ${TAG}` }],
+    away: [{ fullName: `V3 SL Bowler ${TAG}` }],
+  });
+  await openLiveConsole(page, fx);
+  await pickCricketPeople(page, {
+    striker: `V3 SL Striker ${TAG}`,
+    nonStriker: `V3 SL NonStriker ${TAG}`,
+    bowler: `V3 SL Bowler ${TAG}`,
+  });
+  const balls = async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball");
+  const run1 = pad(page).locator('[data-tile-id="run1"]');
+
+  await pad(page).locator('[data-tile-id="wide"]').click();
+  const sheet = sheetRoot(page);
+  await expect(sheet).toBeVisible({ timeout: 10_000 });
+  await expect(run1, "the grid's run tiles are disabled while the sheet is open").toBeDisabled();
+  await expect(pad(page).locator('[data-tile-id="extra-noball"]')).toBeDisabled();
+  // `force` dispatches the double tap at the tile anyway, as a scorer's thumb would; a disabled <button> fires nothing.
+  await run1.dblclick({ force: true });
+  await page.waitForTimeout(2_000); // every cricket ball is sent on the tap, so a recorded one would be on the wire by now
+  expect(await balls(), "the double tap recorded nothing").toHaveLength(0);
+  await expect(sheet, "the sheet is still asking").toBeVisible();
+
+  await sheet.locator('[data-choice-option-id="1"]').click();
+  await expect.poll(async () => (await balls()).length, { timeout: 20_000 }).toBe(1);
+  await page.waitForTimeout(2_000);
+  const rows = await balls();
+  expect(rows, "one ball, the sheet's").toHaveLength(1);
+  expect(rows[0]!.payload.runs, "a wide and 1 run").toEqual({ bat: 0, extras: { kind: "wide", runs: 2 } });
+  await expect(run1, "the tiles are back once the sheet is answered").toBeEnabled();
+});
+
+// S2-4 Task 7 (CK-SS-1, ruling 76; preflight W4): the hand strike swap is a tap on the striker chip (owner, 2026-11-07,
+// "Keep them"). After a ball the chip offers the non-striker alone, tagged "Swap ends", never a third batter; the pick
+// moves both chips, the next ball names the pair reversed and the server folds it on the write path. Fix round 1 (review
+// I1): that ball is a single, so the engine crosses the batters back to the pre-swap order; the ball after it must name
+// THAT pair. A swap override that outlived its ball would match the fold's non-striker again and reverse a second ball
+// (ruling 76), which run0-then-run1 could not tell apart.
+test("S2-4 T7: a swap of ends from the striker chip, and the next ball folds", async ({ page }) => {
+  test.setTimeout(90_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 Cricket Swap ${TAG}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [{ fullName: `V3 SW Striker ${TAG}` }, { fullName: `V3 SW NonStriker ${TAG}` }, { fullName: `V3 SW Three ${TAG}` }],
+    away: [{ fullName: `V3 SW Bowler ${TAG}` }],
+    emitCoreStart: true,
+  });
+  const id = (name: string) => fx.personIds[`V3 SW ${name} ${TAG}`]!;
+  await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+    over: 0,
+    ballInOver: 1,
+    striker: id("Striker"),
+    nonStriker: id("NonStriker"),
+    bowler: id("Bowler"),
+    runs: { bat: 0 },
+  });
+  await openConsoleAlreadyLive(page, fx);
+  const balls = async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball");
+
+  const strip = await openContextPicker(page, "Striker");
+  const swap = strip.locator(`[data-candidate-id="${id("NonStriker")}"]`);
+  await expect(swap, "the striker chip offers the non-striker").toBeVisible({ timeout: 10_000 });
+  await expect(swap, "tagged as the swap").toContainText("Swap ends");
+  await expect(strip.locator(`[data-candidate-id="${id("Three")}"]`), "never a third batter").toHaveCount(0);
+  await swap.click();
+  await expect(strip.getByRole("button", { name: `Striker: V3 SW NonStriker ${TAG}`, exact: true })).toBeVisible({ timeout: 10_000 });
+  await expect(strip.getByText(`Non-striker: V3 SW Striker ${TAG}`, { exact: true }), "both ends moved").toBeVisible();
+
+  await pad(page).locator('[data-tile-id="run1"]').click();
+  await expect.poll(async () => (await balls()).length, { timeout: 20_000 }).toBe(2);
+  const swapped = (await balls())[1]!;
+  expect([swapped.payload.striker, swapped.payload.nonStriker], "the pair reversed").toEqual([id("NonStriker"), id("Striker")]);
+
+  // The single crossed them: the engine's pair is the pre-swap order again, and the next ball names it, not a second
+  // reversal.
+  await pad(page).locator('[data-tile-id="run0"]').click();
+  await expect.poll(async () => (await balls()).length, { timeout: 20_000 }).toBe(3);
+  const next = (await balls())[2]!;
+  expect([next.payload.striker, next.payload.nonStriker], "the pair the engine crossed to").toEqual([id("Striker"), id("NonStriker")]);
+  await expect(pad(page).locator('[data-role="v3-scorebug"]'), "one run").toContainText("1/0");
+});
+
+// S2-4 final review I3 (controller ruling): a pending swap survives a fold change that is not a ball. It was wiped by any
+// new fold, so a swap then a Change bowler left the tiles live and the next ball credited the fold's own pair, which the
+// engine accepts. The unit tests pin the rule (cricket.test.ts); this one runs it through the real host and the server.
+test("S2-4 T7: a swap, then a Change bowler, then a dot: the ball carries the reversed pair and the new bowler", async ({ page }) => {
+  test.setTimeout(90_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 Cricket SwapChange ${TAG}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [{ fullName: `V3 SC Striker ${TAG}` }, { fullName: `V3 SC NonStriker ${TAG}` }],
+    away: [{ fullName: `V3 SC BowlerA ${TAG}` }, { fullName: `V3 SC BowlerB ${TAG}` }],
+    emitCoreStart: true,
+  });
+  const id = (name: string) => fx.personIds[`V3 SC ${name} ${TAG}`]!;
+  await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+    over: 0,
+    ballInOver: 1,
+    striker: id("Striker"),
+    nonStriker: id("NonStriker"),
+    bowler: id("BowlerA"),
+    runs: { bat: 0 },
+  });
+  await openConsoleAlreadyLive(page, fx);
+  const events = async () => await ledger(page.request, fx.fixtureId);
+  const balls = async () => (await events()).filter((e) => e.type === "cricket.ball");
+
+  const strip = await openContextPicker(page, "Striker");
+  await strip.locator(`[data-candidate-id="${id("NonStriker")}"]`).click();
+  const swappedChip = strip.getByRole("button", { name: `Striker: V3 SC NonStriker ${TAG}`, exact: true });
+  await expect(swappedChip, "the swap is pending").toBeVisible({ timeout: 10_000 });
+
+  await pad(page).locator('[data-tile-id="more"]').click();
+  const sheet = sheetRoot(page);
+  await sheet.getByRole("button", { name: "Change bowler", exact: true }).click();
+  await sheet.locator(`[data-candidate-id="${id("BowlerB")}"]`).click();
+  await sheet.locator('[data-choice-option-id="incapacitated"]').click();
+  await expect
+    .poll(async () => (await events()).filter((e) => e.type === "cricket.bowler.change").length, { timeout: 20_000 })
+    .toBe(1);
+  await expect(strip.getByText(`Bowler: V3 SC BowlerB ${TAG}`, { exact: true }), "the change folded").toBeVisible({ timeout: 10_000 });
+  await expect(swappedChip, "the change kept the swap").toBeVisible();
+
+  await pad(page).locator('[data-tile-id="run0"]').click();
+  await expect.poll(async () => (await balls()).length, { timeout: 20_000 }).toBe(2);
+  const ball = (await balls())[1]!;
+  expect(
+    [ball.payload.striker, ball.payload.nonStriker, ball.payload.bowler],
+    "the reversed pair and the new bowler",
+  ).toEqual([id("NonStriker"), id("Striker"), id("BowlerB")]);
+});
+
+// S2-4 Task 8 (CK-BC-1, ruling 75; MCC Law 17.8; preflight W4): the mid-over bowler change lives in More (ruling 84: no
+// tile). More's "Change bowler" opens the skin's own sheet, which offers only who may complete the over (never the bowler
+// bowling it, never a batter); the change is recorded, the over's next balls name the new bowler, and at the over's end
+// the bowler picker greys BOTH bowlers of the split over for the previous over (Review Focus 4).
+test("S2-4 T8: a mid-over change from More, then the next over greys both bowlers", async ({ page }) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 Cricket BowlerChange ${TAG}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home: [{ fullName: `V3 BC Striker ${TAG}` }, { fullName: `V3 BC NonStriker ${TAG}` }],
+    away: [{ fullName: `V3 BC BowlerA ${TAG}` }, { fullName: `V3 BC BowlerB ${TAG}` }, { fullName: `V3 BC BowlerC ${TAG}` }],
+    emitCoreStart: true,
+  });
+  const id = (name: string) => fx.personIds[`V3 BC ${name} ${TAG}`]!;
+  for (let ball = 1; ball <= 3; ball++) {
+    await postEvent(page.request, fx.fixtureId, "cricket.ball", {
+      over: 0,
+      ballInOver: ball,
+      striker: id("Striker"),
+      nonStriker: id("NonStriker"),
+      bowler: id("BowlerA"),
+      runs: { bat: 0 },
+    });
+  }
+  await openConsoleAlreadyLive(page, fx);
+  const events = async () => await ledger(page.request, fx.fixtureId);
+  const balls = async () => (await events()).filter((e) => e.type === "cricket.ball");
+
+  await pad(page).locator('[data-tile-id="more"]').click();
+  const sheet = sheetRoot(page);
+  await sheet.getByRole("button", { name: "Change bowler", exact: true }).click();
+  await expect(sheet.getByText("Who completes the over?")).toBeVisible({ timeout: 10_000 });
+  await expect(sheet.locator(`[data-candidate-id="${id("BowlerA")}"]`), "not the bowler bowling the over").toHaveCount(0);
+  await expect(sheet.locator(`[data-candidate-id="${id("Striker")}"]`), "never a batter").toHaveCount(0);
+  await expect(sheet.locator(`[data-candidate-id="${id("BowlerC")}"]`)).toBeVisible();
+  await sheet.locator(`[data-candidate-id="${id("BowlerB")}"]`).click();
+  await sheet.locator('[data-choice-option-id="incapacitated"]').click();
+  await expect
+    .poll(async () => (await events()).filter((e) => e.type === "cricket.bowler.change").map((e) => e.payload), { timeout: 20_000 })
+    .toEqual([{ bowler: id("BowlerB"), reason: "incapacitated" }]);
+  await expect(
+    pad(page).locator('[data-role="context-strip"]').getByText(`Bowler: V3 BC BowlerB ${TAG}`, { exact: true }),
+    "the bowler chip names who completes the over",
+  ).toBeVisible({ timeout: 10_000 });
+
+  for (let n = 4; n <= 6; n++) {
+    await pad(page).locator('[data-tile-id="run0"]').click();
+    await expect.poll(async () => (await balls()).length, { timeout: 20_000 }).toBe(n);
+  }
+  expect((await balls()).slice(3).map((e) => e.payload.bowler), "the over's last three balls are the new bowler's").toEqual([
+    id("BowlerB"),
+    id("BowlerB"),
+    id("BowlerB"),
+  ]);
+
+  // Over 2: nobody is picked, and the picker greys both bowlers of the split over for the previous over.
+  await expect(pad(page).locator('[data-tile-id="run0"]'), "over 2 waits for its bowler").toHaveAttribute("data-tile-disabled", "true", {
+    timeout: 10_000,
+  });
+  const strip = await openContextPicker(page, "Bowler");
+  for (const bowler of ["BowlerA", "BowlerB"]) {
+    const candidate = strip.locator(`[data-candidate-id="${id(bowler)}"]`);
+    await expect(candidate, `${bowler} is greyed`).toHaveAttribute("data-blocked", "true", { timeout: 10_000 });
+    await expect(candidate).toBeDisabled();
+    await expect(candidate, `${bowler}: the previous over`).toContainText("Bowled the last over");
+  }
+  await expect(strip.locator(`[data-candidate-id="${id("BowlerC")}"]`)).not.toHaveAttribute("data-blocked", "true");
 });

@@ -125,7 +125,13 @@ export type OverlayClosedOver = {
   /** Team total after the over, e.g. `142/6`. */
   score: string;
   glyphs: BallGlyph[];
+  /** The over's first bowler. A split over (S2-4; CK-BC-1, MCC Law 17.8) also lists every bowler in `bowlers`. */
   bowler?: OverlayCricketBowler;
+  /** Every bowler of an over a mid-over change split, in the order they bowled, each with his own figures. A bowler
+   *  `nameOf` cannot name keeps his figures and loses his `name` (the crease's rule, `OverlayCricketBatter.name`):
+   *  dropping him would credit the over to the others (S2-4 Batch D). Present only for a split over (the engine's
+   *  `OverLog.bowlers`). */
+  bowlers?: OverlayCricketBowler[];
   batters: OverlayCricketBatter[];
 };
 
@@ -184,19 +190,23 @@ export function lastClosedOverFromScorecard(
   const over = completeOvers > 0 ? innings.overs[completeOvers - 1] : undefined;
   if (!over) return null;
 
-  const bowlLine =
-    over.bowler === null ? undefined : innings.bowling.find((b) => b.person === over.bowler);
-  const bowlerName = over.bowler === null ? undefined : nameOf(over.bowler);
-  const bowler: OverlayCricketBowler | undefined =
-    bowlLine === undefined || bowlerName === undefined
-      ? undefined
-      : {
-          name: bowlerName,
-          overs: bowlLine.overs,
-          maidens: bowlLine.maidens,
-          runs: bowlLine.runs,
-          wickets: bowlLine.wickets,
-        };
+  const figuresOf = (person: string | null): OverlayCricketBowler | undefined => {
+    const bowlLine = person === null ? undefined : innings.bowling.find((b) => b.person === person);
+    if (bowlLine === undefined) return undefined;
+    const bowlerName = person === null ? undefined : nameOf(person);
+    return {
+      ...(bowlerName === undefined ? {} : { name: bowlerName }),
+      overs: bowlLine.overs,
+      maidens: bowlLine.maidens,
+      runs: bowlLine.runs,
+      wickets: bowlLine.wickets,
+    };
+  };
+  // The whole over's bowler is named or absent, as before; a split over's list keeps a nameless bowler's figures.
+  const first = figuresOf(over.bowler);
+  const bowler = first?.name === undefined ? undefined : first;
+  // S2-4 (CK-BC-1): a split over credits every bowler who bowled it, never the first alone.
+  const bowlers = (over.bowlers ?? []).flatMap((person) => figuresOf(person) ?? []);
 
   // Crease figures at projection time (best available for the full card).
   const liveBlock = liveFromScorecard(scorecard, nameOf);
@@ -209,6 +219,7 @@ export function lastClosedOverFromScorecard(
     score: `${over.scoreAfter.runs}/${over.scoreAfter.wickets}`,
     glyphs: over.balls,
     ...(bowler === undefined ? {} : { bowler }),
+    ...(bowlers.length === 0 ? {} : { bowlers }),
     batters: liveBlock?.batters ?? [],
   };
 }

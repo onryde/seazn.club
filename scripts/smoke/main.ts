@@ -100,6 +100,7 @@ import { playerStatsSuite } from "./suites/playerStats.ts";
 import { scorePadV2AppendSuite } from "./suites/scorePadV2Append.ts";
 import { footballFidelityGateSuite } from "./suites/footballFidelityGate.ts";
 import { cricketBothLanesSuite } from "./suites/cricketBothLanes.ts";
+import { cricketTossDraftDivisionSuite } from "./suites/cricketTossDraftDivision.ts";
 import { emailOutboxCronSmoke } from "./suites/emailOutboxCronSmoke.ts";
 import { resendWebhookSmoke } from "./suites/resendWebhookSmoke.ts";
 import { externalPlayOtBSmoke } from "./suites/externalPlayOtBSmoke.ts";
@@ -822,6 +823,10 @@ export async function main() {
   // refusal in both directions, proving the exclusion rather than just
   // asserting each lane in isolation. ---
   await suite("cricketBothLanes", () => cricketBothLanesSuite(admin, org2.id));
+
+  // --- S2-4 Task 2: a toss in a Draft division is refused WRONG_PHASE with reason division_not_started, the same toss is
+  // accepted once the division starts, and the engine's own WRONG_PHASE carries no reason. ---
+  await suite("cricketTossDraftDivision", () => cricketTossDraftDivisionSuite(admin, org2.id));
 
   // --- v16 SPEC-3 marks & reports: rate an accepted, decided official (Pro
   // 204 + summary avg) and file/submit a report (free) on org2; mark PUT 402

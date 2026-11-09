@@ -986,7 +986,10 @@ export function resolvePadPhase(
  * contextOverrides` — a pending context-strip pick lives only until the
  * fold itself advances. `true` means "the fold has moved on since
  * `overridesFor` was captured, so every override is stale and must be
- * dropped", checked by REFERENCE: every module's own fold is an immutable
+ * dropped, unless the skin says otherwise" (`contextOverridesDropped`, below,
+ * and a skin's `contextOverridesSurvive`, S2-4: without the hook this is the
+ * whole rule, and the rest of this comment is that rule), checked by
+ * REFERENCE: every module's own fold is an immutable
  * update (a new object every time, never a mutated one in place — same
  * assumption `squadStateOf`/every `useMemo` dependency in this file already
  * makes), so `prevState !== nextState` is exactly "at least one new
@@ -1033,6 +1036,20 @@ export function resolvePadPhase(
  */
 export function contextOverridesStale(overridesFor: unknown, currentState: unknown): boolean {
   return overridesFor !== currentState;
+}
+
+/**
+ * S2-4 final fix wave I3 (controller ruling): whether the pending picks are DROPPED when the fold moves from
+ * `overridesFor` to `currentState`. The chassis rule above, unless the skin's `contextOverridesSurvive` says this change
+ * keeps them (a skin without the hook keeps today's behaviour exactly). Pure, so it is tested without a render.
+ */
+export function contextOverridesDropped(
+  overridesFor: unknown,
+  currentState: unknown,
+  survive: ((prev: unknown, next: unknown) => boolean) | undefined,
+): boolean {
+  if (!contextOverridesStale(overridesFor, currentState)) return false;
+  return !(survive?.(overridesFor, currentState) ?? false);
 }
 
 /**
@@ -2021,12 +2038,14 @@ export function PadHostV3(props: PadHostV3Props) {
   // state object the current `contextOverrides` were captured against;
   // once `pipeline.state` moves to a new object (a ball/event just landed),
   // the whole map resets to `{}` in the SAME render that notices it, never
-  // a stale value bleeding into this render's own `view`.
+  // a stale value bleeding into this render's own `view`, unless the skin
+  // keeps the picks across that change (`contextOverridesDropped`).
   const [contextOverrides, setContextOverrides] = useState<Record<string, string>>({});
   const [overridesFor, setOverridesFor] = useState<unknown>(pipeline.state);
   if (contextOverridesStale(overridesFor, pipeline.state)) {
+    // S2-4 final fix wave I3: the skin may keep the picks across a change that is not a ball (contextOverridesDropped).
+    if (contextOverridesDropped(overridesFor, pipeline.state, props.skin.contextOverridesSurvive)) setContextOverrides({});
     setOverridesFor(pipeline.state);
-    setContextOverrides({});
   }
 
   // R6/task A — the pad-local clock (owner ruling R6-4). `clock` is the whole
@@ -2104,8 +2123,10 @@ export function PadHostV3(props: PadHostV3Props) {
       stageKind: props.stageKind,
       canOrganise: props.canOrganise,
       entrantNames: props.entrantNames,
+      // S2-4 (cricket) review I2: see PadHostView.sheetOpen (types.ts).
+      sheetOpen: openSheet?.kind === "guided",
     }),
-    [cfg, props.stageKind, props.canOrganise, props.entrantNames, pipeline.state, pipeline.summary, phase, band, entitlements, personNames, squads, pipeline.events, contextOverrides, clockAt],
+    [cfg, props.stageKind, props.canOrganise, props.entrantNames, pipeline.state, pipeline.summary, phase, band, entitlements, personNames, squads, pipeline.events, openSheet, contextOverrides, clockAt],
   );
 
   // `sheets` is resolved BEFORE the tiles so the band filter below can read a
@@ -3155,6 +3176,12 @@ export function PadHostV3(props: PadHostV3Props) {
                   squads={squads}
                   lineups={props.lineups}
                   personNames={personNames}
+                  // S2-4 (cricket) Task 8: an entry the skin answers with its own sheet (SkinDefV3.moreSheet, types.ts).
+                  onOpenSheet={(type) => {
+                    const spec = props.skin.moreSheet?.(type, view) ?? null;
+                    if (spec !== null) setOpenSheet({ kind: "guided", spec });
+                    return spec !== null;
+                  }}
                 />
               </div>
             </div>

@@ -1,6 +1,6 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
 import { HOLD_MS } from "../src/components/v2/scorepad/queue";
-import { apiJson, expectNoHorizontalScroll, fixturePath, seedRosteredFixture, TAG } from "./helpers";
+import { apiJson, expectNoHorizontalScroll, fixturePath, pickCricketPeople, seedRosteredFixture, TAG, tapCricketExtra } from "./helpers";
 
 /**
  * Soft-commit inventory — browser proof of `usesSoftCommit` (HOLD iff dock
@@ -166,7 +166,9 @@ async function expectHeldThenFlush(
   await page.clock.resume();
 }
 
-test("inventory: cricket plain immediate; noball holds; wide immediate", async ({ page }) => {
+// S2-4 Task 4 (gaps 3, 4): no cricket ball holds. The no-ball and the wide open their sheet, the tap records nothing,
+// and the sheet's answer records the ball at once — no dock, inside the immediate budget.
+test("inventory: cricket plain immediate; no-ball through its sheet then immediate; wide through its sheet then immediate", async ({ page }) => {
   test.setTimeout(150_000);
   const fx = await seedRosteredFixture(page.request, {
     label: `SCI Cricket ${TAG}`,
@@ -176,6 +178,8 @@ test("inventory: cricket plain immediate; noball holds; wide immediate", async (
     away: [{ fullName: `SCI C Bowl ${TAG}` }],
   });
   await openLive(page, fx.fixtureId);
+  // S2-4 Task 3: the openers and the opening bowler are the scorer's picks before ball 1.
+  await pickCricketPeople(page, { striker: `SCI C Striker ${TAG}`, nonStriker: `SCI C Non ${TAG}`, bowler: `SCI C Bowl ${TAG}` });
 
   let before = (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length;
   await tile(page, "run1").click();
@@ -183,11 +187,21 @@ test("inventory: cricket plain immediate; noball holds; wide immediate", async (
 
   before = (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length;
   await tile(page, "extra-noball").click();
-  await expectHeldThenFlush(page, page.request, fx.fixtureId, "cricket.ball", before, "02-cricket-noball-hold");
+  await expect(sheet(page), "the no-ball tile opens its sheet").toBeVisible({ timeout: 10_000 });
+  await expect(dock(page), "the tap itself holds nothing").toHaveCount(0);
+  await shot(page, "02-cricket-noball-sheet");
+  expect(
+    (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length,
+    "the no-ball tile records nothing until the sheet is answered",
+  ).toBe(before);
+  await sheet(page).locator('[data-choice-option-id="bat:2"]').click();
+  await expectImmediate(page, page.request, fx.fixtureId, "cricket.ball", before, "03-cricket-noball-immediate");
+  const noBall = (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").at(-1)!;
+  expect(noBall.payload.runs, "2 off the bat and the no-ball's own run").toEqual({ bat: 2, extras: { kind: "noball", runs: 1 } });
 
   before = (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length;
-  await tile(page, "wide").click();
-  await expectImmediate(page, page.request, fx.fixtureId, "cricket.ball", before, "03-cricket-wide-immediate");
+  await tapCricketExtra(page, "wide", "0");
+  await expectImmediate(page, page.request, fx.fixtureId, "cricket.ball", before, "03b-cricket-wide-immediate");
 });
 
 test("inventory: football period immediate; goal holds; clock publishes immediately", async ({ page }) => {

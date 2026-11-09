@@ -87,7 +87,7 @@ import type { EventEnvelope } from "@seazn/engine/core";
 // narrow the bowler chip's candidates, not merely to test one name), which is
 // exactly what the engine's own filter already is, so the mirror is DELETED
 // and the rule imported. Same reasoning `nextBattingSide` was granted on.
-import { activeInnings, chaseTarget as engineChaseTarget, cricket as cricketModule, eligibleBowlers, eligibleIncomingBatters, nextBattingSide, reviewsRemaining, soBattingSideAt, soEligibleBatters, suggestedIncomingBatter } from "@seazn/engine/sports/cricket";
+import { activeInnings, chaseTarget as engineChaseTarget, cricket as cricketModule, CricketBowlerChange, type CricketState, eligibleBowlers, eligibleChangeBowlers, eligibleIncomingBatters, nextBattingSide, reviewsRemaining, soBattingSideAt, soEligibleBatters, suggestedIncomingBatter } from "@seazn/engine/sports/cricket";
 // Pad wave P2: every closed rule set this skin offers (dismissal modes, extras, who is credited, the free hit, toss/retire/
 // review/close options, the penalty and wide runs, balls per over) is the engine's own declaration, read here and never copied.
 import { cricketPadRules, POST_PHASES } from "@seazn/engine/pad";
@@ -97,9 +97,9 @@ import {
   type Blocked,
   MORE_SHEET_KEY,
   type ActivityDetailContext,
+  type ContextModeReserve,
   type ContextSlot,
   type ContextStripSpec,
-  type DockChip,
   type DockSpec,
   type GuidedSheetSpec,
   type GuidedSheetStep,
@@ -107,6 +107,7 @@ import {
   type PadPhase,
   type ScorebugSpec,
   type SkinDefV3,
+  type StepPredicate,
   type StripItem,
   type TileSpec,
 } from "../types";
@@ -120,6 +121,8 @@ import {
 // ---------------------------------------------------------------------------
 
 const BALL_EVENT_TYPES = new Set(["cricket.ball", "cricket.superover.ball"]);
+/** S2-4 Task 8 (CK-BC-1, ruling 278): the mid-over bowler change, offered in More (ruling 84). */
+const BOWLER_CHANGE = "cricket.bowler.change";
 
 // ---------------------------------------------------------------------------
 // Defensive shape probes — `view.cfg`/`view.state` are `unknown` by
@@ -172,6 +175,14 @@ interface CricketFineShape {
    *  and has not faced yet. That crease end stays editable, like a new-over
    *  bowler, until they face. */
   unfacedIncoming?: string;
+  /** S2-4 Task 8 (CK-BC-1, CK-BO-3, ruling 278) — mirrors `FineInnings`' split-over facts, read by the engine's own
+   *  `eligibleBowlers`/`eligibleChangeBowlers`/`oversUsed` and by `bowlerBlockReason`/`bowlerBlocked`: every bowler of
+   *  a previous over a mid-over change split (none of them bowls the next), the spells of the over in progress before
+   *  its change(s), and the part overs (each a whole over toward the quota) with their legal balls. */
+  prevOverBowlers?: string[];
+  overSpells?: { bowler: string; legalBalls: number }[];
+  partOvers?: Record<string, number>;
+  partOverBalls?: Record<string, number>;
 }
 interface CricketInningsShape {
   battingSide?: "home" | "away";
@@ -280,8 +291,10 @@ function opponentSide(side: "home" | "away"): "home" | "away" {
  * ball creates the innings). `undefined !== null` used to make that
  * no-innings window read-only, so the opening bowler could never be
  * changed. Mid-over (`currentBowler` a person id) and coarse fidelity
- * (`fine` absent) stay read-only: the fold refuses a mid-over swap, and a
- * summary innings cannot accept a ball.
+ * (`fine` absent) stay read-only: a ball naming another bowler mid-over is
+ * refused, and a summary innings cannot accept a ball. A mid-over change of
+ * bowler (S2-4 Task 8, MCC Law 17.8) is its own event, `cricket.bowler.change`,
+ * offered in More (`bowlerChangeOpen`, ruling 84), never a pick on this chip.
  */
 export function bowlerIsReadOnly(innings: CricketInningsShape | null): boolean {
   if (innings == null) return false;
@@ -290,12 +303,33 @@ export function bowlerIsReadOnly(innings: CricketInningsShape | null): boolean {
   return innings.fine.currentBowler != null;
 }
 
-function creaseEndLocked(scoring: CricketInningsShape | null, end: "striker" | "nonStriker"): boolean {
-  const id = scoring?.fine?.[end];
-  if (typeof id !== "string" || id.length === 0) return false;
-  // Same window as a new-over bowler: the incoming batter can be renamed
-  // until they face. The surviving partner stays locked even at 0 balls.
-  return scoring?.fine?.unfacedIncoming !== id;
+/**
+ * S2-4 Task 7 (CK-SS-1, ruling 277; S2-4 rulings 76, 84) — who a crease end's chip may name instead of the fold's batter.
+ *
+ * - `null`: the end is editable as before. An end the fold has not named (a super over's vacant end) or the incoming
+ *   batter who has not faced yet (`fine.unfacedIncoming`, the same window as a new-over bowler) takes any eligible
+ *   batter (`buildContext`'s incoming list).
+ * - `[otherEnd]`: a batter who has faced, in an open main innings, may only swap ends with his partner. The engine takes
+ *   a ball that names exactly the fold's pair reversed (the hand strike swap) and refuses any other pair, so the other
+ *   end's batter is the one name the fold accepts here; no third batter comes in by this door.
+ * - `[]`: read-only. A closed innings, and a super over: the engine takes any pair there (`cricket.ts:1603-1622`), but
+ *   ruling 76 scopes the swap to a main innings, so the pad offers none (preflight W9; the phone's F28).
+ *
+ * The swap is on the striker chip (owner, 2026-11-07, "Keep them"; spec §7.2's deviation note): `buildContext` reads
+ * this for both ends, but opens only the striker's for a swap.
+ */
+export function swapCandidates(
+  scoring: CricketInningsShape | null,
+  end: "striker" | "nonStriker",
+  phase: CricketStateShape["phase"],
+): string[] | null {
+  const fine = scoring?.fine;
+  const id = fine?.[end];
+  if (typeof id !== "string" || id.length === 0) return null;
+  if (fine?.unfacedIncoming === id) return null;
+  if (phase !== "live" || scoring?.closed === true) return [];
+  const other = fine?.[end === "striker" ? "nonStriker" : "striker"];
+  return typeof other === "string" && other.length > 0 ? [other] : [];
 }
 
 /**
@@ -333,6 +367,44 @@ function activeSuperOver(state: CricketStateShape): { list: readonly CricketInni
 export function currentInnings(state: CricketStateShape): CricketInningsShape | null {
   const { list } = activeSuperOver(state);
   return list.find((i) => !i.closed) ?? list[list.length - 1] ?? null;
+}
+
+/**
+ * S2-4 final fix wave I3 (controller ruling) — `SkinDefV3.contextOverridesSurvive` for cricket: the pending picks (the
+ * openers, the next bowler, a hand strike swap) survive a fold change that is not a ball, and are cleared when a ball
+ * folds. "A ball folded" is keyed to the innings' deliveries, legal and illegal, as the phone keys its swap
+ * (`swapKey`, the capture app's cricketPicks.ts): the fold carries no delivery count, but every delivery moves
+ * `legalBalls` (a legal ball) or `runs` (a wide or a no-ball: the engine's `CricketExtras.runs` is a positive integer,
+ * and the innings total counts it). Each of the two is the only witness of its kind of delivery; a wicket needs no field
+ * of its own (on a legal ball `legalBalls` moves, on a wide `runs` does, and a retirement moves the crease, below). So a
+ * bowler change, a review, a late ack or a realtime batch that repeats the same fold keeps the picks, and the next ball
+ * drops them.
+ *
+ * The crease is in the key too: a pick is read against the pair it was made for (`resolvePeople` applies the swap only
+ * while it names the fold's other end, and otherwise takes `overrides.striker` as it stands), so a change that moves
+ * either end (a retirement, a substitute at the crease) drops the picks rather than keep one naming a batter who is no
+ * longer there. A new innings, a super over or a change of phase drops them as well.
+ */
+export function cricketPicksSurvive(prev: unknown, next: unknown): boolean {
+  return picksKey(prev) === picksKey(next);
+}
+
+function picksKey(raw: unknown): string {
+  if (raw === null || typeof raw !== "object") return "none";
+  const state = raw as CricketStateShape;
+  const { list, inSuperOver } = activeSuperOver(state);
+  const innings = currentInnings(state);
+  const fine = innings?.fine ?? null;
+  return JSON.stringify([
+    state.phase ?? null,
+    inSuperOver,
+    list.length,
+    innings?.closed ?? null,
+    innings?.legalBalls ?? null,
+    innings?.runs ?? null,
+    fine?.striker ?? null,
+    fine?.nonStriker ?? null,
+  ]);
 }
 
 export type InningsFidelity = "unopened" | "coarse" | "fine";
@@ -513,43 +585,19 @@ export interface ResolvedPeople {
   bowler: string;
 }
 
-/** Striker/non-striker/bowler, fold-authoritative (`fine.*`) with the SAME
- *  default v2's `ThisOverGroup` used before any manual pick existed:
- *  `battingOrder[0]`/`[1]` for striker/non-striker — stateless here (no
- *  local component state available to a pure skin builder), so this default
- *  is recomputed fresh each call rather than remembered across renders.
- *  Empty string when even the order itself isn't populated yet (pre-lineup).
+/** Striker/non-striker/bowler: the fold's (`fine.*`), else the scorer's pending pick, else `""` (unpicked).
  *
- *  `overrides` (G5 — controller ruling 2026-08-16): `view.contextOverrides`,
- *  a slot id -> person id map of PENDING context-strip picks the HOST holds
- *  (types.ts's own doc on `PadHostView.contextOverrides`). Checked FIRST,
- *  ahead of `fine.*` and the order-derived default — an override represents
- *  a scorer's own just-tapped choice, which must win over both the last
- *  KNOWN fold value and the fallback default. Defaults to `{}` so every
- *  pre-G5 call site (none passed a second argument) keeps behaving
- *  identically.
+ *  `overrides` (G5 — controller ruling 2026-08-16): `view.contextOverrides`, a slot id -> person id map of PENDING
+ *  context-strip picks the HOST holds (types.ts's own doc on `PadHostView.contextOverrides`). A batter pick is checked
+ *  ahead of the fold's end (the incoming batter's chip is editable until they face). The bowler is the other way round:
+ *  mid-over (`fine.currentBowler` set) the fold's bowler wins, so a pick left over from an over end that a take-back
+ *  reopened is never sent (Review Focus 1); at an over boundary the pick is the bowler.
  *
- *  Bug fix (owner-reported, live data, 2026-08-17): the bowler default used
- *  to read `bowlingOrder[0]` unconditionally — at an over boundary
- *  (`fine.currentBowler === null`) with bowlingOrder[0] having just bowled
- *  the previous over or exhausted his quota, this proposed a bowler the
- *  engine would refuse outright, and the scorer could not start the next
- *  over at all (see this file's own test suite for the exact live
- *  reproduction). Now the first ELIGIBLE name in `bowlingOrder`
- *  (the engine's own `eligibleBowlers`) — `""` (never an illegal name) when
- *  nobody qualifies, forcing the scorer to choose via the context strip
- *  rather than silently shipping a payload the engine will reject. `cfg`
- *  (new 3rd param, defaulted to `{}`) is what this needs: every pre-fix call
- *  site either already had a `CricketCfgShape` in scope (updated below) or
- *  — for direct 2-arg test calls — gets `maxOversPerBowler: undefined` (no
- *  quota check) and `ballsPerOverOf({}) === 6`, which reproduces the OLD
- *  bowlingOrder[0]-always behaviour exactly whenever `fine.prevOverBowler`/
- *  `.bowlerBalls` are absent too (every pre-fix fixture), so no existing
- *  caller's behaviour silently changes underneath it. This does NOT touch
- *  the mid-over branch (`fine?.currentBowler`, checked first) or the
- *  `overrides.bowler` branch (checked first of all) — a manual pick is never
- *  second-guessed, and the fold's own strict mid-over refusal
- *  (cricket.ts:1173-1178) is untouched. */
+ *  S2-4 Task 3 (gaps 1, 2): there is no default from the order any more. The openers and every bowler at an over
+ *  boundary are asked (`""` here; `bowlerBlockReason` "unpicked" and `buildContext`'s messages say so), because a
+ *  default the scorer never saw recorded the wrong people silently. The super over keeps ONE default, the replacement
+ *  for the single end a wicket left vacant (below). `cfg` defaults to `{}` (no quota, 6-ball overs) for the 2-argument
+ *  test calls. */
 export function resolvePeople(
   state: CricketStateShape,
   overrides: Readonly<Record<string, string>> = {},
@@ -575,9 +623,7 @@ export function resolvePeople(
   const battingSide = due ?? innings?.battingSide ?? state.battingFirst ?? "home";
   const bowlingSide = opponentSide(battingSide);
   const battingOrder = state.orders?.[battingSide] ?? [];
-  const bowlingOrder = state.orders?.[bowlingSide] ?? [];
   const fine = innings?.fine ?? null;
-  const bpo = ballsPerOverOf(cfg);
   // R3.5 F1 (review finding, BLOCKER) — `fine.striker`/`.nonStriker` land as
   // an explicit `null` ("awaiting replacement") the instant a super-over
   // wicket falls: unlike the main innings (`strictOrder: true`, the fold
@@ -605,16 +651,6 @@ export function resolvePeople(
   // `so.dismissed`, never reset); `fine.dismissed` is read too, matching
   // the fold's own OR verbatim rather than trusting one is always a
   // superset of the other.
-  //
-  // A sequential `nextEligible()` cursor, not two independent lookups: the
-  // only OTHER reachable null-both case (a fresh super-over innings, before
-  // its first ball) must not hand the SAME eligible name to both ends —
-  // advancing past whichever name the striker's own resolution just
-  // consumed is what stops that. For every case this fix does not touch
-  // (fine null/coarse; both ends already real) `dismissed`/`soIneligible`/
-  // `crease` are all empty and `eligible` equals `battingOrder` outright, so
-  // `nextEligible()` reproduces the OLD `battingOrder[0]`/`[1]` reads
-  // exactly — this is additive, not a rewrite of the ordinary path.
   const soCrease = [fine?.striker, fine?.nonStriker].filter((p): p is string => typeof p === "string");
   const soEligible = soEligibleBatters(
     battingOrder,
@@ -622,45 +658,56 @@ export function resolvePeople(
     state.superOver?.dismissed?.[battingSide] ?? [],
     soCrease,
   );
-  let soNextIdx = 0;
-  const nextEligible = (): string => soEligible[soNextIdx++] ?? "";
-  // Super-over null ends still walk a sequential eligible cursor so both
-  // vacant crease slots cannot be handed the same name. Ordinary unopened
-  // innings must NOT share that cursor: an override of only striker used
-  // to skip the first nextEligible() call, so non-striker fell to
-  // battingOrder[0] and silently replaced the default other-end batter.
-  // Stable defaults are order[0]/order[1]; a single-end override keeps
-  // the other default unless that would put the same person at both ends
-  // (striker tapped onto the default non-striker → the pair swaps).
-  const defStriker = battingOrder[0] ?? "";
-  const defNonStriker = battingOrder[1] ?? "";
+  // S2-4 Task 3 (gaps 1, 2; owner, "no silent picks"): nobody is picked FOR the scorer. An end the fold has not filled
+  // and the scorer has not picked is `""` (unpicked), and so is a bowler at an over boundary: the openers, the opening
+  // bowler and every next bowler are asked (`bowlerBlockReason` "unpicked", `buildContext`'s messages), never taken from
+  // the order. The one default left is the super over's single vacant end: after a wicket the fold leaves that end
+  // null and the next ball must name the replacement, and the first eligible name in the order is offered there, as
+  // before (only one end is vacant, so one name is ever drawn). A FRESH super-over innings (both ends vacant) asks for
+  // both, like any other innings.
   const soMode = state.phase === "super_over";
-  const striker = soMode
-    ? (overrides.striker ?? fine?.striker ?? nextEligible())
-    : (overrides.striker ?? (typeof fine?.striker === "string" ? fine.striker : defStriker));
-  let nonStriker = soMode
-    ? (overrides.nonStriker ?? fine?.nonStriker ?? nextEligible())
-    : (overrides.nonStriker ?? (typeof fine?.nonStriker === "string" ? fine.nonStriker : defNonStriker));
-  if (!soMode && striker !== "" && nonStriker === striker) {
-    nonStriker = striker === defStriker ? defNonStriker : defStriker;
-    if (nonStriker === striker) {
-      nonStriker = battingOrder.find((id) => id !== striker) ?? "";
+  const foldStriker = typeof fine?.striker === "string" ? fine.striker : null;
+  const foldNonStriker = typeof fine?.nonStriker === "string" ? fine.nonStriker : null;
+  const vacantEnd =
+    soMode && fine !== null && (foldStriker === null) !== (foldNonStriker === null)
+      ? foldStriker === null
+        ? "striker"
+        : "nonStriker"
+      : null;
+  const replacement = soEligible[0] ?? "";
+  // Review Focus 1: mid-over the fold's bowler wins over a pending pick. After a take-back reopens an over, a pick made
+  // at its end is stale, and a ball naming it would be a second bowler mid-over, which the fold refuses.
+  const bowler = fine?.currentBowler ?? overrides.bowler ?? "";
+  // S2-4 Task 7 (CK-SS-1, ruling 76): the hand strike swap. A pick naming the fold's OTHER end at a main-innings end
+  // puts the fold's striker and non-striker at each other's ends: the pair reversed and nothing else (the one other
+  // pair the engine accepts on the write path). `swapCandidates` offers it on the striker chip only.
+  if (!soMode && foldStriker !== null && foldNonStriker !== null) {
+    if (overrides.striker === foldNonStriker || overrides.nonStriker === foldStriker) {
+      return { battingSide, bowlingSide, striker: foldNonStriker, nonStriker: foldStriker, bowler };
     }
   }
+  const striker = overrides.striker ?? foldStriker ?? (vacantEnd === "striker" ? replacement : "");
+  let nonStriker = overrides.nonStriker ?? foldNonStriker ?? (vacantEnd === "nonStriker" ? replacement : "");
+  // One person never stands at both ends: the picker greys the other end's batter, so this is defence only, and it asks
+  // again rather than guessing which end the scorer meant.
+  if (striker !== "" && nonStriker === striker) nonStriker = "";
   return {
     battingSide,
     bowlingSide,
     striker,
     nonStriker,
-    bowler:
-      overrides.bowler ??
-      fine?.currentBowler ??
-      eligibleBowlers(bowlingOrder, fine, cfg.maxOversPerBowler, bpo)[0] ??
-      "",
+    bowler,
   };
 }
 
-export type BowlerBlockReason = "prevOver" | "notInLineup" | "quota" | "noEligible";
+export type BowlerBlockReason = "prevOver" | "notInLineup" | "quota" | "noEligible" | "unpicked";
+
+/** S2-4 Task 8 (Law 17.7, 17.8; Review Focus 4): whether `bowler` bowled the previous over, in whole or in part. After
+ *  a split over every one of its bowlers is barred from the next (`fine.prevOverBowlers`), not only the last
+ *  (`prevOverBowler`), the same two facts the engine's `eligibleBowlers` reads. */
+function bowledPrevOver(fine: CricketFineShape | null, bowler: string): boolean {
+  return bowler === (fine?.prevOverBowler ?? null) || fine?.prevOverBowlers?.includes(bowler) === true;
+}
 
 /**
  * R2b live bug PART 2 (owner-reported, reproduced against real data,
@@ -724,11 +771,15 @@ export function bowlerBlockReason(
   const innings = scoringInnings(state, cfg);
   const fine = innings?.fine ?? null;
   if ((fine?.currentBowler ?? null) !== null) return null;
-  if (people.bowler === "") return "noEligible";
-  if (people.bowler === (fine?.prevOverBowler ?? null)) return "prevOver";
   const bowlingOrder = state.orders?.[people.bowlingSide] ?? [];
-  if (!bowlingOrder.includes(people.bowler)) return "notInLineup";
   const bpo = ballsPerOverOf(cfg);
+  // S2-4 Task 3: nobody is picked for the scorer, so an empty bowler is "pick one" while anyone may bowl the over, and
+  // "nobody can" only when the engine's own filter leaves nobody.
+  if (people.bowler === "") {
+    return eligibleBowlers(bowlingOrder, fine, cfg.maxOversPerBowler, bpo).length > 0 ? "unpicked" : "noEligible";
+  }
+  if (bowledPrevOver(fine, people.bowler)) return "prevOver";
+  if (!bowlingOrder.includes(people.bowler)) return "notInLineup";
   // Consecutive-over and lineup membership are both already ruled out above,
   // so the engine filter rejecting this name can only mean the quota.
   return eligibleBowlers([people.bowler], fine, cfg.maxOversPerBowler, bpo).length > 0 ? null : "quota";
@@ -758,11 +809,31 @@ function runPayload(base: Record<string, unknown>, runs: number): Record<string,
   return { ...base, runs: { bat: runs }, ...(boundary !== undefined ? { boundary } : {}) };
 }
 
-/** `runs` defaults to the single a bye or a leg bye opens with (the dock
- *  raises it). The wide, no-ball and penalty tiles pass the engine's own runs
- *  (`cricketPadRules.wideDefaultRuns` / `.noBallDefaultRuns` / `.penaltyRuns`). */
-function extraPayload(base: Record<string, unknown>, kind: string, runs = 1): Record<string, unknown> {
+/** A ball whose only runs are one extra's: the penalty tile (`cricketPadRules.penaltyRuns`) and the extras sheets'
+ *  runs-run answers (`extraSheet`). */
+function extraPayload(base: Record<string, unknown>, kind: string, runs: number): Record<string, unknown> {
   return { ...base, runs: { bat: 0, extras: { kind, runs } } };
+}
+
+/**
+ * S2-4 Task 4 (spec §4.2): the payload an extras sheet's `runs` answer records. The wide's and the no-ball's own run is
+ * the engine's (`wideDefaultRuns`, `noBallDefaultRuns`), and the runs run are added to it, since a ball carries one
+ * extra. A no-ball's runs off the bat go in `runs.bat`, the no-ball's own run stays its extra, and a 4 or a 6 off the
+ * bat sends `boundary`, the same rule as the run tiles (preflight W7; the phone's F13). Answer ids: the wide `"0"`-`"4"`,
+ * the no-ball `"bat:n"` or `"ran:n"`, the bye and leg bye `"1"`-`"4"`.
+ */
+function extraRunsPayload(base: Record<string, unknown>, kind: SheetExtra, answer: string): Record<string, unknown> {
+  if (kind === "wide") return extraPayload(base, kind, cricketPadRules.wideDefaultRuns + Number(answer));
+  if (kind !== "noball") return extraPayload(base, kind, Number(answer));
+  const [how, n] = answer.split(":");
+  if (how === "ran") return extraPayload(base, kind, cricketPadRules.noBallDefaultRuns + Number(n));
+  const bat = Number(n);
+  const boundary = cricketPadRules.boundaryValues.includes(bat) ? bat : undefined;
+  return {
+    ...base,
+    runs: { bat, extras: { kind, runs: cricketPadRules.noBallDefaultRuns } },
+    ...(boundary !== undefined ? { boundary } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1008,6 +1079,12 @@ export function foldFreeHitPending(state: CricketStateShape): boolean {
  */
 export function cricketBallDetail(ctx: ActivityDetailContext): string | undefined {
   const { t, eventType, payload, history, cfg, personNames } = ctx;
+  // S2-4 Task 8: a mid-over change row names who completes the over (the bowler who came on).
+  if (eventType === BOWLER_CHANGE) {
+    const bowler = (payload as { bowler?: unknown }).bowler;
+    const name = typeof bowler === "string" ? personNames?.[bowler] : undefined;
+    return t("pad.cricket.activity.bowlerChange", { name: name ?? t("eventCopy.unknownPerson") });
+  }
   if (!BALL_EVENT_TYPES.has(eventType)) return undefined;
   const p = payload as {
     wicket?: { kind?: string };
@@ -1299,8 +1376,17 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
   // `buildContext`'s own gate) so a stray pending flag can never survive
   // into a finished match's display. `id: "freeHit"` is the stable,
   // i18n-independent Playwright hook (`StripItem.id`, types.ts).
-  if ((state.phase === "live" || state.phase === "super_over") && foldFreeHitPending(state)) {
-    strip.push({ id: "freeHit", value: t("scorepad.skin.cricket.header.freeHit"), accent: true });
+  //
+  // S2-4 Task 10 (gap 8): the slot is HELD while the match is live (`StripItem.reserved`), so the free hit's coming
+  // and going after a no ball never re-centres the strip. A held slot prints nothing and carries no id: the `freeHit`
+  // locator still counts zero while no free hit is pending.
+  if (state.phase === "live" || state.phase === "super_over") {
+    const freeHit = t("scorepad.skin.cricket.header.freeHit");
+    strip.push(
+      foldFreeHitPending(state)
+        ? { id: "freeHit", value: freeHit, accent: true, reserve: [freeHit] }
+        : { value: "", accent: true, reserved: true, reserve: [freeHit] },
+    );
   }
 
   return {
@@ -1311,6 +1397,11 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
       { who: [{ name: t("scorepad.skin.cricket.scorebug.overs") }], big: oversText(legalBalls, bpo) },
     ],
     strip,
+    // S2-4 Task 10 (CI run 42456030519): the strip's width moves with play, by a ball's symbol (`overDots`), a new
+    // batter's name or the next bowler's, so where its row wraps depends on the names and the platform's fonts. At 768
+    // on CI "• 4 wd3 nb1" took it onto a second line and pushed everything below down 20 px; the same run fits on a Mac.
+    // So the band holds both lines at `md` and up. A width reserve for the over would not do: it cannot hold the names.
+    stripLines: 2,
   };
 }
 
@@ -1332,6 +1423,14 @@ const PRIMARY_RUNS = new Set<number>([0, 1]);
  *  `standard` tile of its own). Every one is a `cricketPadRules.extraKinds`
  *  member (pinned by pad-rules-cricket.test.ts). */
 const MINOR_EXTRA_KINDS: readonly string[] = ["noball", "bye", "legbye", "penalty"];
+
+/** S2-4 Task 4: the extras that open a sheet asking their runs (every extra but the penalty). Each is a
+ *  `cricketPadRules.extraKinds` member (pinned by pad-rules-cricket.test.ts). */
+type SheetExtra = "wide" | "noball" | "bye" | "legbye";
+const SHEET_EXTRAS: readonly SheetExtra[] = ["wide", "noball", "bye", "legbye"];
+function isSheetExtra(kind: string): kind is SheetExtra {
+  return (SHEET_EXTRAS as readonly string[]).includes(kind);
+}
 
 /**
  * R2b (owner sign-off finding, single-line label fix): the over-summary
@@ -1437,7 +1536,12 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
     // gets set in this function; non-ball tiles (review/retire/
     // inningsClose/declare/overSummary/more, pushed further down, outside
     // this branch) are untouched.
-    const ballTile = (spec: TileSpec): TileSpec => (bowlerBlocked || blockedByClosure ? { ...spec, disabled: true } : spec);
+    // S2-4 Task 3: also while either batter is unpicked (the openers, before the first ball).
+    const battersUnpicked = people.striker === "" || people.nonStriker === "";
+    // S2-4 Batch B review I2 (controller ruling): and while a sheet is open (an extra's, the wicket's, "+ Out"), so a
+    // stray tap on the grid cannot record a ball beside the one the sheet is asking about.
+    const ballTile = (spec: TileSpec): TileSpec =>
+      bowlerBlocked || blockedByClosure || battersUnpicked || view.sheetOpen === true ? { ...spec, disabled: true } : spec;
 
     for (const r of RUN_VALUES) {
       tiles.push(ballTile({
@@ -1449,12 +1553,14 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
       }));
     }
 
+    // S2-4 Task 4 (gaps 3, 4): the wide asks its runs run on a sheet (`extraSheet`), so a wide and two run records
+    // `wideDefaultRuns + 2`, and nothing waits on a timer.
     tiles.push(ballTile({
       id: "wide",
       label: requiredVocabKey("kind", "wide"),
       kind: "standard",
       phases: ["live"],
-      action: { event: { type, payload: extraPayload(base, "wide", cricketPadRules.wideDefaultRuns) } },
+      action: { sheet: "wide" },
     }));
 
     tiles.push(ballTile({
@@ -1467,19 +1573,18 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
     }));
 
     for (const kind of MINOR_EXTRA_KINDS) {
-      // R2b task 4 (`_INDEX.md`, owner ruling): penalty runs default to one
-      // Law 41 award (`cricketPadRules.penaltyRuns`, five), not the ordinary
-      // single every OTHER minor extra opens with — a real, deliberate
-      // exception, not an oversight. A no ball opens at its ICC 21.15
-      // penalty (`noBallDefaultRuns`); a bye and a leg bye keep
-      // `extraPayload`'s own single.
-      const runs = kind === "penalty" ? cricketPadRules.penaltyRuns : kind === "noball" ? cricketPadRules.noBallDefaultRuns : undefined;
+      // R2b task 4 (`_INDEX.md`, owner ruling): penalty runs are one Law 41 award (`cricketPadRules.penaltyRuns`, five),
+      // recorded on the tap. S2-4 Task 4 (gaps 3, 4): the no ball, the bye and the leg bye open their sheet
+      // (`extraSheet`), which asks the runs before anything is recorded.
+      const action: TileSpec["action"] = isSheetExtra(kind)
+        ? { sheet: kind }
+        : { event: { type, payload: extraPayload(base, kind, cricketPadRules.penaltyRuns) } };
       tiles.push(ballTile({
         id: `extra-${kind}`,
         label: requiredVocabKey("kind", kind),
         kind: "minor",
         phases: ["live"],
-        action: { event: { type, payload: extraPayload(base, kind, runs) } },
+        action,
       }));
     }
   }
@@ -1527,10 +1632,11 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
   // R2b (Q1 owner ruling): the over-by-over entry point — hidden once this
   // innings is ball-level, where the fold refuses `cricket.innings.summary`
   // just as firmly (cricket.ts:1402-1404), the mirror image of the guard
-  // above. `primary`/span-2 even when it co-occurs with run0/run1 (innings
+  // above. `primary` even when it co-occurs with run0/run1 (innings
   // unopened): a genuine, first-tap fork in how the WHOLE innings gets
   // scored earns the same weight as the two most-common ball outcomes, not
-  // less — `assertTileHierarchy`'s ">2 primaries" convention (tile-grid.tsx)
+  // less (one column since S2-4 Task 10, see `span` below) —
+  // `assertTileHierarchy`'s ">2 primaries" convention (tile-grid.tsx)
   // is advisory only and not wired to any skin's real output yet (R1 fix
   // round 1's own note), so this is a deliberate exception, not a defect.
   if (fidelity !== "fine") {
@@ -1562,7 +1668,11 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
       // from the closed innings' own final legalBalls.
       labelText: t(overLabel, { over: nextOverNumber(scoring, bpo) }),
       kind: "primary",
-      span: 2,
+      // S2-4 Task 10 (gap 8): one column, not two. The tile goes the moment the innings' first ball locks it to
+      // ball-by-ball; at two columns it took a desktop row of its own beside the empty fourth column of Review /
+      // Retire / Close innings, so that first ball pulled every tile row below it up by one. At one column it fills
+      // that fourth column, and on a phone it still shares its row with Close innings as a half (`SPAN_CLASS`).
+      span: 1,
       phases: ["live"],
       action: { sheet: "overSummary" },
     })));
@@ -1614,116 +1724,103 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
  * gate is added anyway ... it must not silently start passing a live tap
  * through if that cfg exclusivity ever changes").
  */
+/** S2-4 Task 8: the mid-over bowler change is refused exactly when it is not open (`bowlerChangeOpen`): one condition,
+ *  two readers, so More lists it exactly when the fold would take it. */
 export function refusedEventTypes(view: PadHostView): string[] {
   const state = asState(view.state);
-  if (state.phase !== "super_over") return [];
+  const changeRefused = bowlerChangeOpen(state, asCfg(view.cfg)) ? [] : [BOWLER_CHANGE];
+  if (state.phase !== "super_over") return changeRefused;
   // Pad wave P2 (review, trace c): every cricket.* type the fold refuses in a
   // super over, read off the engine (`superOverEventTypes`: its own balls and
   // a player line pass; every other type's handler refuses it on phase). The
   // hand list it replaces named five and missed New ball, Powerplay,
   // Interruption and Revise, each a live refusal in the More sheet.
   const accepted = cricketPadRules.superOverEventTypes;
-  return Object.keys(cricketPadRules.eventBands).filter((type) => !accepted.includes(type));
+  const refused = Object.keys(cricketPadRules.eventBands).filter((type) => !accepted.includes(type));
+  return [...refused, ...changeRefused.filter((type) => !refused.includes(type))];
 }
 
-// ---------------------------------------------------------------------------
-// dock() — needs `t` for DockSpec.title (this file's header).
-//
-// R2b (owner ruling, live-tile audit, 2026-08-17): this dock USED TO offer a
-// `freeHit` chip unconditionally on every ball — "shot type" (design doc
-// §3's cricket row) has no home in `CricketBall`'s `z.strictObject` schema,
-// so `freeHit` (the one genuinely optional `CricketBall` field) was what it
-// always offered instead. That chip is GONE. It was never gated on whether a
-// free hit was actually pending (by dock-render time the optimistic fold has
-// already advanced past the just-tapped ball, so `view.state`'s own
-// `freeHitPending` already reflects AFTER this ball, not before it — there
-// was no cheap way to gate it correctly from here), so tapping it on an
-// ordinary ball surfaced as a bare rejected-submission error (the fold's own
-// `"freeHit flagged but no free hit is pending"` check) — the owner hit this
-// live. `payload.freeHit` was also never load-bearing: the server derives
-// `freeHitPending` purely from the preceding no-ball
-// (`finishDelivery`/`freeHitPending`, cricket.ts), and the free-hit
-// dismissal restriction reads `fine.freeHitPending`, never the payload flag
-// — so the flag was validated but never consumed; its only possible effect
-// was an error. Replaced by a READ-ONLY indicator (`buildScorebug`, above)
-// and an activity-log note (`cricketBallDetail`, above) — the scorer no
-// longer declares what the fold already knows, and the client never sends
-// `freeHit: true` at all any more.
-//
-// `buildDock` returns null when there is nothing to enrich (plain run / wide /
-// penalty). Soft-commit only holds when chips exist (`usesSoftCommit`); an
-// empty dock used to HOLD for undo-proxy e2e only and delayed the overlay for
-// no enrichment (owner ruling 2026-09-13). Undo of an immediate ball goes
-// through `core.void` after send, same as any settled event.
-//
-// R2b task 4 (`_INDEX.md`, owner ruling): `heldPayload`, the optional 3rd
-// argument (the widened chassis contract, `SkinDefV3.dock`, ../types.ts),
-// is what lets THIS dock tell a no-ball apart from a plain single — both
-// dispatch the identical `cricket.ball` event TYPE, so `eventType` alone
-// can never answer "which tile was actually tapped". A no-ball's dock
-// offers bat-run chips (+1/+2/+3/+4/+6 — a no-ball is batted normally, so
-// this is legal; a WIDE is deliberately excluded even though it is also an
-// extra, because the engine refuses any bat run off one, cricket.ts:1229 —
-// "bat runs are impossible off a wide"). A bye/leg-bye's dock offers
-// extra-run chips (2/3/4) that raise the EXTRA's own `runs`, never `bat`.
-// Every other case — a plain run tap, a wide, a penalty, or the pre-existing
-// 2-arg call with no payload at all — returns null (nothing to hold for).
-// ---------------------------------------------------------------------------
+/**
+ * S2-4 Task 8 (CK-BC-1, ruling 278; MCC Law 17.8) — whether a mid-over bowler change is open: a main innings in play
+ * (`phase === "live"`, so never a super over), scored ball by ball (a summary innings has no bowler), with an over in
+ * progress (`fine.currentBowler` set: before an over's first ball the next bowler is simply named on it), and someone
+ * left who may complete it (the engine's own `eligibleChangeBowlers`). The engine refuses the change in each other
+ * case, so More lists it only here (`refusedEventTypes`) and its sheet offers exactly that list (`bowlerChangeSheet`).
+ */
+export function bowlerChangeOpen(state: CricketStateShape, cfg: CricketCfgShape): boolean {
+  if (state.phase !== "live") return false;
+  const innings = scoringInnings(state, cfg);
+  const fine = innings?.fine ?? null;
+  if (innings === null || innings.closed === true || fine === null || fine.currentBowler == null) return false;
+  return changeCandidates(state, innings, cfg).length > 0;
+}
 
-const BAT_RUN_VALUES = [1, 2, 3, 4, 6] as const;
-const EXTRA_RUN_VALUES = [2, 3, 4] as const;
+/** Who may complete the over in progress: the engine's `eligibleChangeBowlers` over the fielding side's order. */
+function changeCandidates(state: CricketStateShape, innings: CricketInningsShape, cfg: CricketCfgShape): string[] {
+  const order = state.orders?.[opponentSide(innings.battingSide ?? "home")] ?? [];
+  return eligibleChangeBowlers(order, innings.fine ?? null, cfg.maxOversPerBowler, ballsPerOverOf(cfg));
+}
 
-/** A no-ball's dock chip that sets `runs.bat` to `n`, preserving the
- *  no-ball's own `runs.extras` verbatim (never dropped, never re-kinded) —
- *  and, for `n` in {4, 6}, also stamps `boundary`, mirroring `runPayload`'s
- *  own convention for the plain run4/run6 tiles exactly: the same two
- *  literal values, the same "boundary present only for 4 or 6" shape. */
-function batRunChip(n: (typeof BAT_RUN_VALUES)[number]): DockChip {
-  const boundary = cricketPadRules.boundaryValues.includes(n) ? n : undefined;
+/**
+ * S2-4 Task 8 — the bowler change's sheet, opened from More (`moreSheet`; ruling 84: no tile). Who comes on is the
+ * engine's `eligibleChangeBowlers` (never anyone who has bowled in this over, so a second change in the same over never
+ * offers the bowler who just left, nor the previous over's bowlers, nor one at quota), and why is the event's own schema
+ * enum (`CricketBowlerChange.reason`), never a typed list.
+ */
+export function bowlerChangeSheet(view: PadHostView): GuidedSheetSpec {
+  const state = asState(view.state);
+  const cfg = asCfg(view.cfg);
+  const innings = scoringInnings(state, cfg);
+  const side = opponentSide(innings?.battingSide ?? "home");
   return {
-    id: `batRun${n}`,
-    label: `pad.cricket.dock.batRun${n}`,
-    mutate: (payload) => {
-      const extras = (payload.runs as { extras?: unknown } | undefined)?.extras;
-      return {
-        ...payload,
-        runs: { bat: n, ...(extras !== undefined ? { extras } : {}) },
-        ...(boundary !== undefined ? { boundary } : {}),
-      };
-    },
+    event: BOWLER_CHANGE,
+    steps: [
+      {
+        id: "bowler",
+        kind: "person",
+        title: "pad.cricket.sheet.bowlerChange.bowler.title",
+        pool: "onfield",
+        side,
+        candidates: innings === null ? [] : changeCandidates(state, innings, cfg),
+      },
+      {
+        id: "reason",
+        kind: "choice",
+        title: "pad.cricket.sheet.bowlerChange.reason.title",
+        options: BOWLER_CHANGE_REASONS.map((id) => ({ id, label: requiredVocabKey("reason", id) })),
+      },
+    ],
+    buildPayload: (answers) => ({ bowler: answers.bowler, reason: answers.reason }),
   };
 }
 
-/** A bye/leg-bye's dock chip that raises the EXTRA's own `runs` to `n`.
- *  `bat` is read from (never assumed on top of) the current payload — it is
- *  always 0 for a real bye/leg-bye, but a chip should never silently touch
- *  a field it was not asked to change — and `extras.kind` is preserved
- *  verbatim so a leg-bye can never mutate into a bye or vice versa. */
-function extraRunChip(n: (typeof EXTRA_RUN_VALUES)[number]): DockChip {
-  return {
-    id: `extraRun${n}`,
-    label: `pad.cricket.dock.extraRun${n}`,
-    mutate: (payload) => {
-      const runs = payload.runs as { bat?: number; extras?: { kind?: string } } | undefined;
-      return { ...payload, runs: { bat: runs?.bat ?? 0, extras: { kind: runs?.extras?.kind, runs: n } } };
-    },
-  };
+/** `CricketBowlerChange.reason`'s values, read off the event's own schema (Law 17.8's two causes, or another). */
+const BOWLER_CHANGE_REASONS: readonly string[] = CricketBowlerChange.shape.reason.unwrap().options;
+
+/** `SkinDefV3.moreSheet`: More's bowler change opens `bowlerChangeSheet`, narrowed to who may come on, instead of the
+ *  generic form (which offers both whole sides). Null for every other More action, and while the change is not open. */
+export function moreSheet(eventType: string, view: PadHostView): GuidedSheetSpec | null {
+  if (eventType !== BOWLER_CHANGE) return null;
+  return bowlerChangeOpen(asState(view.state), asCfg(view.cfg)) ? bowlerChangeSheet(view) : null;
 }
 
-export function buildDock(eventType: string, t: TFn, heldPayload?: Record<string, unknown>): DockSpec | null {
-  if (!BALL_EVENT_TYPES.has(eventType)) return null;
-  const chips: DockChip[] = [];
-  const extraKind = (heldPayload?.runs as { extras?: { kind?: string } } | undefined)?.extras?.kind;
-  if (extraKind === "noball") {
-    for (const n of BAT_RUN_VALUES) chips.push(batRunChip(n));
-  } else if (extraKind === "bye" || extraKind === "legbye") {
-    for (const n of EXTRA_RUN_VALUES) chips.push(extraRunChip(n));
-  }
-  if (chips.length === 0) return null;
-  return { title: t("pad.cricket.dock.title"), chips };
+// ---------------------------------------------------------------------------
+// dock() — S2-4 Task 4 (gaps 3, 4): cricket has no dock. Every ball is recorded on the tap or the sheet answer that
+// makes it, and the chassis holds a tap for its soft-commit window only when the dock offers chips (`usesSoftCommit`),
+// so no cricket ball waits on a timer. The no-ball's bat-run chips and the bye and leg bye's extra-run chips are now
+// those sheets' first step (`extraSheet`), asked before the ball is recorded instead of offered while it is held.
+// Before them, R2b removed the `freeHit` chip: the fold derives a pending free hit from the preceding no-ball, and the
+// flag could only ever be refused (live-tile audit, 2026-08-17). Undo of any ball is `core.void` after the send.
+// ---------------------------------------------------------------------------
+
+// The chassis's `SkinDefV3.dock` signature, kept so the soft-commit sweep (pad-rules-cricket.test.ts) can ask it about
+// every payload the skin emits; nothing in it is read.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function buildDock(_eventType: string, _t: TFn, _heldPayload?: Record<string, unknown>): DockSpec | null {
+  return null;
 }
 
-const BOWLER_BLOCK_MESSAGE_KEY: Record<Exclude<BowlerBlockReason, "noEligible">, MessageKey> = {
+const BOWLER_BLOCK_MESSAGE_KEY: Record<Exclude<BowlerBlockReason, "noEligible" | "unpicked">, MessageKey> = {
   prevOver: "pad.cricket.context.bowler.blocked.prevOver",
   notInLineup: "pad.cricket.context.bowler.blocked.notInLineup",
   quota: "pad.cricket.context.bowler.blocked.quota",
@@ -1761,8 +1858,11 @@ function bowlerBlockMessage(
   bowlerId: string,
   personNames: Readonly<Record<string, string>>,
   cfg: CricketCfgShape,
+  over: number,
 ): string {
   if (reason === "noEligible") return t("pad.cricket.context.bowler.blocked.noEligible");
+  // S2-4 Task 3: nobody is at fault — the over (1-indexed, `nextOverNumber`) is waiting for its bowler.
+  if (reason === "unpicked") return t("pad.cricket.context.bowler.unpicked", { over });
   const name = personNames[bowlerId] ?? t("eventCopy.unknownPerson");
   if (reason === "quota") {
     const quota = cfg.maxOversPerBowler;
@@ -1850,7 +1950,7 @@ export function bowlerBlocked(
   const out: Record<string, string> = {};
   for (const id of bowlingOrder) {
     if (eligible.has(id)) continue;
-    const reason = id === (fine?.prevOverBowler ?? null) ? ("prevOver" as const) : ("quota" as const);
+    const reason = bowledPrevOver(fine, id) ? ("prevOver" as const) : ("quota" as const);
     out[id] = bowlerBlockShortMessage(t, reason, cfg);
   }
   return out;
@@ -1898,6 +1998,9 @@ export function bowlerBlocked(
 // until they face. ContextSlot.readOnly, ../types.ts. The two names
 // stay in the strip regardless: they are real, useful information
 // (who is on strike right now) even when a scorer cannot reassign them.
+// S2-4 Task 7 (CK-SS-1): the engine now takes one other pair, the fold's
+// pair reversed, so a faced striker's chip opens on the non-striker alone
+// (the hand strike swap, `swapCandidates`); any other pick is still refused.
 //
 // DEFECT 3 (found by a later review, 2026-08-16, same plan doc): blocker 2's
 // own bowler comment left the chip unconditionally tappable and flagged,
@@ -2037,6 +2140,18 @@ function modeSlot(innings: CricketInningsShape | null, t: TFn): ContextSlot | nu
   };
 }
 
+/** S2-4 Task 10 (gap 8): the room the strip holds for the innings' mode statement, both lanes worded as `modeSlot` words
+ *  them, so the line the innings' first ball (or first over summary) brings never makes the strip taller. */
+function modeReserve(t: TFn): ContextModeReserve[] {
+  return Object.values(MODE_COPY).map((copy) => ({ label: copy.label, message: t(copy.message) }));
+}
+
+/** S2-4 Task 10 (gap 8): the bowler's prompt the strip holds a line for while the lane asks for picks, for this over
+ *  and the next, so the line is already there when an over ends and "Pick the bowler for over N" arrives. */
+function bowlerPromptReserve(t: TFn, over: number): string[] {
+  return [over, over + 1].map((n) => t("pad.cricket.context.bowler.unpicked", { over: n }));
+}
+
 export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextStripSpec | null {
   const state = asState(view.state);
   if (state.phase !== "live" && state.phase !== "super_over") return null;
@@ -2045,6 +2160,9 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
   const scoring = scoringInnings(state, cfg);
   const people = resolvePeople(state, view.contextOverrides, cfg);
   const battingOrder = state.orders?.[people.battingSide] ?? [];
+  // S2-4 Task 10 (gap 8): each chip holds the width of every person it may name (`ContextSlot.chipReserve`), so a
+  // chip that empties at an over's end, or names a new batter, never reflows the strip's chip row at a desktop width.
+  const bowlingOrder = state.orders?.[people.bowlingSide] ?? [];
   const soDismissed = state.superOver?.dismissed?.[people.battingSide] ?? [];
   const batterCandidates =
     state.phase === "super_over"
@@ -2055,10 +2173,16 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
       : battingOrder;
   const otherEndBlock = (otherId: string): Blocked =>
     otherId === "" ? {} : { [otherId]: t("pad.cricket.context.batter.blocked.otherEnd") };
+  // S2-4 Task 3: why the ball tiles wait (`buildTiles`' `battersUnpicked`): the openers are asked, never defaulted.
+  const openersMessage =
+    people.striker === "" || people.nonStriker === "" ? t("pad.cricket.context.openers.unpicked") : undefined;
+  const nextOver = nextOverNumber(scoring, ballsPerOverOf(cfg));
 
   // Unopened innings (before ball 1 of innings 1 or 2, or a super-over gap):
   // the strip used to be absent, so opening pair/bowler could never be
-  // changed. Show it, chips editable, no mode slot (nothing has locked in).
+  // changed. Show it, chips editable, no mode slot (nothing has locked in);
+  // its room is held (`modeReserve`, S2-4 Task 10), so the first ball's mode
+  // line does not push the strip taller.
   if (scoring === null) {
     const blockReason = bowlerBlockReason(state, people, cfg);
     return {
@@ -2070,8 +2194,10 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
           personId: people.striker || undefined,
           pool: "onfield",
           required: true,
+          chipReserve: battingOrder,
           candidates: batterCandidates,
           blocked: otherEndBlock(people.nonStriker),
+          message: openersMessage,
         },
         {
           id: "nonStriker",
@@ -2079,6 +2205,7 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
           personId: people.nonStriker || undefined,
           pool: "onfield",
           required: true,
+          chipReserve: battingOrder,
           candidates: batterCandidates,
           blocked: otherEndBlock(people.striker),
         },
@@ -2088,12 +2215,15 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
           personId: people.bowler || undefined,
           pool: "onfield",
           required: true,
+          chipReserve: bowlingOrder,
           candidates: state.orders?.[people.bowlingSide] ?? [],
           blocked: bowlerBlocked(t, state, people, cfg),
           readOnly: bowlerIsReadOnly(null) ? true : undefined,
-          message: blockReason ? bowlerBlockMessage(t, blockReason, people.bowler, view.personNames, cfg) : undefined,
+          message: blockReason ? bowlerBlockMessage(t, blockReason, people.bowler, view.personNames, cfg, nextOver) : undefined,
+          messageReserve: bowlerPromptReserve(t, nextOver),
         },
       ],
+      modeReserve: modeReserve(t),
     };
   }
 
@@ -2101,13 +2231,28 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
   const bowlerReadOnly = bowlerIsReadOnly(innings);
   const inningsClosed = innings.closed === true;
   const closedMessage = inningsClosed ? t("pad.cricket.context.innings.closed") : undefined;
-  const blockReason = inningsClosed ? null : bowlerBlockReason(state, people, cfg);
+  // S2-4 fix round 1 (review I3): an over-by-over innings (`fine == null`) is scored by summary, its chips are
+  // read-only and it has no ball tiles, so it asks for no picks: "Pick the two openers" and "Pick the bowler for
+  // over N" would tell the scorer to do what the lane neither needs nor allows.
+  const asksForPicks = innings.fine != null;
+  const reason = inningsClosed ? null : bowlerBlockReason(state, people, cfg);
+  const blockReason = reason === "unpicked" && !asksForPicks ? null : reason;
   const mode = modeSlot(innings, t);
-  const strikerLocked = inningsClosed || creaseEndLocked(innings, "striker");
-  const nonStrikerLocked = inningsClosed || creaseEndLocked(innings, "nonStriker");
+  // S2-4 Task 7: a faced striker's chip swaps ends with the non-striker (`swapCandidates`). The non-striker's chip stays
+  // read-only once he has faced, because the swap is on the striker chip (owner, 2026-11-07, "Keep them"), and while a
+  // swap is pending, so the one pick that moved both ends is the only one in play.
+  const strikerSwap = inningsClosed ? [] : swapCandidates(innings, "striker", state.phase);
+  const strikerLocked = strikerSwap !== null && strikerSwap.length === 0;
+  const swapPending = strikerSwap !== null && strikerSwap.length > 0 && people.striker !== innings.fine?.striker;
+  const nonStrikerLocked = inningsClosed || swapPending || swapCandidates(innings, "nonStriker", state.phase) !== null;
+  // After a pending swap the chip already names the fold's other end, so its one candidate is the batter it displaced:
+  // picking him swaps back (`resolvePeople`).
+  const swapTo = (strikerSwap ?? []).map((id) => (id === people.striker ? people.nonStriker : id));
   const dismissed = innings.fine?.dismissed ?? [];
   const unlockedIncoming = (otherEnd: string): string[] =>
     eligibleIncomingBatters(battingOrder, dismissed, [otherEnd]);
+  const strikerCandidates = strikerLocked ? undefined : strikerSwap === null ? unlockedIncoming(people.nonStriker) : swapTo;
+  const swapHint = t("pad.cricket.context.batter.swap");
   return {
     slots: [
       ...(superOverSlot ? [superOverSlot] : []),
@@ -2117,10 +2262,15 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
         personId: people.striker || undefined,
         pool: "onfield",
         required: true,
+        chipReserve: battingOrder,
         readOnly: strikerLocked ? true : undefined,
-        candidates: strikerLocked ? undefined : unlockedIncoming(people.nonStriker),
-        blocked: strikerLocked ? undefined : otherEndBlock(people.nonStriker),
-        message: closedMessage,
+        candidates: strikerCandidates,
+        // The swap's one candidate IS the other end's batter, so he is not greyed as "at the other end": he carries the
+        // swap hint instead.
+        blocked: strikerLocked || strikerSwap !== null ? undefined : otherEndBlock(people.nonStriker),
+        candidateMeta:
+          strikerLocked || strikerSwap === null ? undefined : Object.fromEntries(swapTo.map((id) => [id, { tag: swapHint }])),
+        message: closedMessage ?? (asksForPicks ? openersMessage : undefined),
       },
       {
         id: "nonStriker",
@@ -2128,6 +2278,7 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
         personId: people.nonStriker || undefined,
         pool: "onfield",
         required: true,
+        chipReserve: battingOrder,
         readOnly: nonStrikerLocked ? true : undefined,
         candidates: nonStrikerLocked ? undefined : unlockedIncoming(people.striker),
         blocked: nonStrikerLocked ? undefined : otherEndBlock(people.striker),
@@ -2139,13 +2290,17 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
         personId: people.bowler || undefined,
         pool: "onfield",
         required: true,
+        chipReserve: bowlingOrder,
         candidates: state.orders?.[people.bowlingSide] ?? [],
         blocked: inningsClosed ? {} : bowlerBlocked(t, state, people, cfg),
         readOnly: inningsClosed || bowlerReadOnly ? true : undefined,
-        message: closedMessage ?? (blockReason ? bowlerBlockMessage(t, blockReason, people.bowler, view.personNames, cfg) : undefined),
+        message: closedMessage ?? (blockReason ? bowlerBlockMessage(t, blockReason, people.bowler, view.personNames, cfg, nextOver) : undefined),
+        // S2-4 Task 10 (gap 8): held only where the prompt can come — an over-by-over innings never asks for a bowler.
+        messageReserve: asksForPicks ? bowlerPromptReserve(t, nextOver) : undefined,
       },
       ...(mode ? [mode] : []),
     ],
+    modeReserve: modeReserve(t),
   };
 }
 
@@ -2248,9 +2403,33 @@ function incomingPersonStep(
  */
 function wicketSheet(view: PadHostView): GuidedSheetSpec {
   const state = asState(view.state);
+  const base = basePayload(state, asCfg(view.cfg), view.contextOverrides);
+  return {
+    event: ballEventType(state),
+    steps: wicketSteps(view, "fair", ALWAYS),
+    buildPayload: (answers) => wicketPayload(view, "fair", answers, base),
+  };
+}
+
+/** The delivery a wicket falls on: a fair ball (the Wicket tile's sheet), or a wide or a no-ball (their sheets' "+ Out",
+ *  S2-4 Task 6). */
+export type WicketDelivery = "fair" | "wide" | "noball";
+
+const ALWAYS: StepPredicate = () => true;
+
+/**
+ * S2-4 Task 5 (gaps 5, 6, 7): the wicket's steps, every one gated by `gate` (always, on the Wicket tile's own sheet; the
+ * extras sheets' "+ Out" answer, Task 6). Kind -> who is out (either-batter modes only) -> fielder (caught, run out) or
+ * the keeper (stumped) -> the optional fielder (obstructed) -> the runs completed (run out) -> who walks in, asked only
+ * when the innings goes on after this ball (`wicketEndsInnings`).
+ */
+export function wicketSteps(view: PadHostView, delivery: WicketDelivery, gate: StepPredicate): GuidedSheetStep[] {
+  const state = asState(view.state);
   const cfg = asCfg(view.cfg);
   const people = resolvePeople(state, view.contextOverrides, cfg);
   const base = basePayload(state, cfg, view.contextOverrides);
+  const and = (when: StepPredicate): StepPredicate => (answers) => gate(answers) && when(answers);
+  const kindIs = (kind: string): StepPredicate => (answers) => answers.kind === kind;
   // G6: exactly the two batters who can be run out — never an empty-string
   // placeholder (resolvePeople's own "order not populated yet" fallback) —
   // so a not-yet-populated crease offers zero candidates rather than a
@@ -2261,26 +2440,14 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
   // never disagree with the scorebug strip, nor with the engine after a
   // take-back or in a super over.
   const freeHit = foldFreeHitPending(state);
-  // R2b-over (review finding — the fourth instance of "the pad must never
-  // offer what the engine will refuse", `_INDEX.md`): while a free hit is
-  // pending the fold refuses every mode outside its free-hit set
-  // (`cricketPadRules.freeHitDismissalKinds`, the engine's
-  // FREE_HIT_DISMISSAL_KINDS), so the kind step narrows to it. Filtering the
-  // engine's mode list keeps its order.
-  const { wicketKinds, freeHitDismissalKinds, variableOutKinds, fielderCreditedKinds, fielderOptionalKinds, bowlerCreditedKinds } = cricketPadRules;
-  const fielderRequired = (kind: string) => fielderCreditedKinds.includes(kind) && !fielderOptionalKinds.includes(kind);
-  const fielderOptional = (kind: string) => fielderCreditedKinds.includes(kind) && fielderOptionalKinds.includes(kind);
-  const kindOptions = (freeHit ? wicketKinds.filter((k) => freeHitDismissalKinds.includes(k)) : wicketKinds).map((k) => ({
-    id: k,
-    label: requiredVocabKey("kind", k),
-  }));
+  const { variableOutKinds } = cricketPadRules;
 
   const steps: GuidedSheetStep[] = [
     {
       id: "kind",
       kind: "choice",
       title: "pad.cricket.sheet.wicket.kind.title",
-      options: kindOptions,
+      options: wicketKindsFor(delivery, freeHit).map((k) => ({ id: k, label: requiredVocabKey("kind", k) })),
       // Owner ruling (this task's own brief): never leave a silently
       // shortened list unexplained — a scorer expecting "bowled" and not
       // finding it needs to know why. `SheetChoiceStep.hintKey`'s own doc
@@ -2289,6 +2456,7 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
       // renamed from `hint` — R2b-cricket-over follow-up, hint-field
       // naming pass, 2026-08-17.)
       hintKey: freeHit ? "pad.cricket.sheet.wicket.kind.freeHitHint" : undefined,
+      when: gate,
     },
     {
       id: "out",
@@ -2301,7 +2469,7 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
       // (Law 37.1.1) or retired (Law 25.4.1): ask (ruling 242, CK-WK-3).
       // Every other mode is the striker's, and asking would be the wasted
       // tap D-15 exists to remove.
-      when: (answers) => variableOutKinds.includes(answers.kind ?? ""),
+      when: and((answers) => variableOutKinds.includes(answers.kind ?? "")),
     },
     {
       id: "fielder",
@@ -2310,8 +2478,19 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
       pool: "onfield",
       side: people.bowlingSide,
       // The modes the fold credits a named fielder for (FIELDER_CREDIT_COLUMN)
-      // and the Laws name one for: caught, stumped, run out.
-      when: (answers) => fielderRequired(answers.kind ?? ""),
+      // and the Laws name one for: caught and run out here; stumped asks for
+      // the keeper instead (next step).
+      when: and((answers) => fielderRequired(answers.kind ?? "") && answers.kind !== STUMPED),
+    },
+    {
+      // S2-4 Task 5 (gap 5): a stumping is the keeper's (Law 39), so the step offers the keeper alone, never the side.
+      id: "keeper",
+      kind: "person",
+      title: "pad.cricket.sheet.wicket.keeper.title",
+      pool: "onfield",
+      side: people.bowlingSide,
+      candidates: keeperCandidates(view, people.bowlingSide, people.bowler),
+      when: and(kindIs(STUMPED)),
     },
     {
       // Ruling 242 (CK-WK-2): obstructing the field credits a fielder when one
@@ -2326,32 +2505,136 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
       side: people.bowlingSide,
       optional: true,
       noneLabel: "pad.cricket.sheet.wicket.fielder.none",
-      when: (answers) => fielderOptional(answers.kind ?? ""),
+      when: and((answers) => fielderOptional(answers.kind ?? "")),
+    },
+    {
+      // S2-4 Task 5 (gap 6): the runs the batters completed before the run out count (Law 38.2.1).
+      id: "completed",
+      kind: "choice",
+      title: "pad.cricket.sheet.wicket.completed.title",
+      options: RUN_OUT_COMPLETED.map((n) => ({ id: String(n), label: `pad.cricket.sheet.wicket.completed.${n}` })),
+      when: and(kindIs(RUN_OUT)),
     },
   ];
   const incoming = incomingPersonStep(state, cfg, people, "pad.cricket.sheet.wicket.incoming.title");
-  if (incoming) steps.push(incoming);
+  // S2-4 Task 5 (gap 7): nobody walks in when this wicket ends the innings (its last legal ball, all out, the super
+  // over's second wicket, or a run out whose runs win the chase).
+  if (incoming) steps.push({ ...incoming, when: and((answers) => !wicketEndsInnings(view, wicketPayload(view, delivery, answers, base))) });
+  return steps;
+}
 
+/** The modes a wicket off `delivery` may be (the engine's `wicketKinds`, in its order): off a wide or a no-ball only the
+ *  engine's `wideDismissalKinds` or `noBallDismissalKinds`, and while a free hit is pending only `freeHitDismissalKinds`
+ *  as well (R2b-over: the pad never offers what the engine will refuse). */
+function wicketKindsFor(delivery: WicketDelivery, freeHit: boolean): readonly string[] {
+  const { wicketKinds, wideDismissalKinds, noBallDismissalKinds, freeHitDismissalKinds } = cricketPadRules;
+  // S2-4 Task 6: off a wide or a no-ball the engine allows only its own sets (CK-WD-1, CK-NB-1).
+  const allowed = delivery === "wide" ? wideDismissalKinds : delivery === "noball" ? noBallDismissalKinds : wicketKinds;
+  return wicketKinds.filter((k) => allowed.includes(k) && (!freeHit || freeHitDismissalKinds.includes(k)));
+}
+
+const STUMPED = "stumped";
+const RUN_OUT = "runout";
+/** Presentation: the runs completed a run out may carry. */
+const RUN_OUT_COMPLETED = [0, 1, 2, 3] as const;
+
+function fielderRequired(kind: string): boolean {
+  const { fielderCreditedKinds, fielderOptionalKinds } = cricketPadRules;
+  return fielderCreditedKinds.includes(kind) && !fielderOptionalKinds.includes(kind);
+}
+function fielderOptional(kind: string): boolean {
+  const { fielderCreditedKinds, fielderOptionalKinds } = cricketPadRules;
+  return fielderCreditedKinds.includes(kind) && fielderOptionalKinds.includes(kind);
+}
+
+/**
+ * The ball a wicket sheet's answers record. A stumping credits the keeper as its fielder. A run out's runs completed go
+ * to the batter on a fair ball, and off a wide or a no-ball into that extra's own runs, after its own run (spec §4.3
+ * item 4, §11; S2-4 Task 6).
+ */
+export function wicketPayload(
+  view: PadHostView,
+  delivery: WicketDelivery,
+  answers: Readonly<Record<string, string>>,
+  base: Record<string, unknown>,
+): Record<string, unknown> {
+  const { variableOutKinds, bowlerCreditedKinds } = cricketPadRules;
+  const people = resolvePeople(asState(view.state), view.contextOverrides, asCfg(view.cfg));
+  const kind = answers.kind ?? "";
+  const out = variableOutKinds.includes(kind) ? answers.out : people.striker;
+  const fielder =
+    kind === STUMPED ? answers.keeper
+    : fielderRequired(kind) ? answers.fielder
+    : fielderOptional(kind) ? answers.fielderOptional
+    : undefined;
+  const completed = kind === RUN_OUT ? Number(answers.completed ?? 0) : 0;
+  const ownRun = delivery === "wide" ? cricketPadRules.wideDefaultRuns : cricketPadRules.noBallDefaultRuns;
   return {
-    event: ballEventType(state),
-    steps,
-    buildPayload: (answers) => {
-      const kind = answers.kind ?? "";
-      const out = variableOutKinds.includes(kind) ? answers.out : people.striker;
-      const fielder = fielderRequired(kind) ? answers.fielder : fielderOptional(kind) ? answers.fielderOptional : undefined;
-      return {
-        ...base,
-        runs: { bat: 0 },
-        wicket: {
-          kind,
-          out,
-          ...(fielder ? { fielder } : {}),
-          ...(answers.incoming ? { incoming: answers.incoming } : {}),
-          bowlerCredited: bowlerCreditedKinds.includes(kind),
-        },
-      };
+    ...base,
+    runs: delivery === "fair" ? { bat: completed } : { bat: 0, extras: { kind: delivery, runs: ownRun + completed } },
+    wicket: {
+      kind,
+      out,
+      ...(fielder ? { fielder } : {}),
+      ...(answers.incoming ? { incoming: answers.incoming } : {}),
+      bowlerCredited: bowlerCreditedKinds.includes(kind),
     },
   };
+}
+
+/** The keeper's catalog keys (`cricket.positions`: the `wicketkeeper` role and the `WK` group), pinned against the
+ *  engine's catalog by pad-rules-cricket.test.ts (preflight W10). */
+export const KEEPER_ROLE = "wicketkeeper";
+export const KEEPER_POSITION = "WK";
+
+/**
+ * S2-4 Task 5 (gap 5): who can have made a stumping. The fielding side's on-field members whose roles hold the keeper's;
+ * else whose position is the keeper's; else, when the team sheet names no keeper, the fielding side on the field without
+ * the bowler (who cannot keep to their own bowling).
+ */
+export function keeperCandidates(view: PadHostView, side: "home" | "away", bowler: string): string[] {
+  const onField = (view.squads[side]?.members ?? []).filter((m) => m.onField);
+  const byRole = onField.filter((m) => m.roles?.includes(KEEPER_ROLE));
+  if (byRole.length > 0) return byRole.map((m) => m.personId);
+  const byPosition = onField.filter((m) => m.positionKey === KEEPER_POSITION);
+  if (byPosition.length > 0) return byPosition.map((m) => m.personId);
+  return onField.map((m) => m.personId).filter((id) => id !== bowler);
+}
+
+/**
+ * S2-4 Task 5 (gap 7): whether recording `payload` closes the innings being scored. A trial of the engine's own fold
+ * (`cricket.apply`, strict, as the server folds it) on the pad's state, with an envelope shaped as the pad's optimistic
+ * ones (`pendingToEnvelope`). True when that innings is closed afterwards, or the phase moves. The phase clause is the
+ * one that decides a wicket tying the chase into a super over: the main innings closes, but `activeInnings` then reads
+ * the super over's list, which is empty (Batch B review I1, mutation m5e). A refusal reads false, so the scorer is still
+ * asked. The phone's `endsInnings` states the same rule (preflight D5).
+ */
+export function wicketEndsInnings(view: PadHostView, payload: Record<string, unknown>): boolean {
+  const last = view.events.at(-1);
+  const envelope: EventEnvelope = {
+    id: "pad-trial",
+    fixtureId: last?.fixtureId ?? "",
+    seq: (last?.seq ?? 0) + 1,
+    type: ballEventType(asState(view.state)),
+    payload,
+    recordedAt: last?.recordedAt ?? new Date(0).toISOString(),
+    recordedBy: last?.recordedBy ?? null,
+  };
+  try {
+    // `view.state` is the fold's own state (PadHostView's contract types it `unknown`); a state that is not one makes
+    // the engine throw, which reads as "not known to end", below.
+    const state = view.state as CricketState;
+    // The innings this ball is in: the open one, or, when the last is closed (or none has begun), the one it opens.
+    const { list } = activeInnings(state);
+    const index = list.length > 0 && list.at(-1)?.closed !== true ? list.length - 1 : list.length;
+    // `apply` parses the payload itself (`parsePayload`, as the server's fold does), so the envelope's payload type is
+    // the module's to check, not this caller's.
+    const after = cricketModule.apply(state, envelope as Parameters<typeof cricketModule.apply>[1], { strict: true, squads: view.squads });
+    if (after.phase !== state.phase) return true;
+    return activeInnings(after).list[index]?.closed === true;
+  } catch {
+    return false;
+  }
 }
 
 /** Who won -> elected to. `CricketToss` requires both (`wonBy: EntrantId`,
@@ -2366,10 +2649,12 @@ function tossSheet(view: PadHostView): GuidedSheetSpec {
         id: "wonBy",
         kind: "choice",
         title: "pad.cricket.sheet.toss.wonBy.title",
-        options: [
-          { id: squads.home.entrantId, label: "scorepad.attribution.home" },
-          { id: squads.away.entrantId, label: "scorepad.attribution.away" },
-        ],
+        // S2-4 Task 2: the team names; the key stays as the label for a side with no name.
+        options: (["home", "away"] as const).map((side) => ({
+          id: squads[side].entrantId,
+          label: side === "home" ? "scorepad.attribution.home" : "scorepad.attribution.away",
+          ...(view.entrantNames[side] ? { labelText: view.entrantNames[side] } : {}),
+        })),
       },
       {
         id: "elected",
@@ -2635,8 +2920,63 @@ function overSummarySheet(view: PadHostView): GuidedSheetSpec {
   };
 }
 
+/** Presentation: each extras sheet's title. */
+const EXTRA_SHEET_TITLE: Readonly<Record<SheetExtra, MessageKey>> = {
+  wide: "pad.cricket.sheet.wide.title",
+  noball: "pad.cricket.sheet.noball.title",
+  bye: "pad.cricket.sheet.bye.title",
+  legbye: "pad.cricket.sheet.legbye.title",
+};
+/** Presentation: the runs-run choices. A wide may run none (`wideDefaultRuns` alone); a no-ball's "ran 0" is its "0 off
+ *  the bat", so it starts at 1 (the phone's F25); a bye or a leg bye is at least one run. */
+const WIDE_RAN = [0, 1, 2, 3, 4] as const;
+const EXTRA_RAN = [1, 2, 3, 4] as const;
+const ranOption = (n: number, id: string = String(n)) => ({ id, label: `pad.cricket.sheet.extra.ran.${n}` });
+
+/** The `runs` step's options (spec §4.2; ids in `extraRunsPayload`'s doc). The no-ball's runs off the bat are the run
+ *  tiles' own values (`RUN_VALUES`, 0, 1, 2, 3, 4, 6). */
+function extraRunOptions(kind: SheetExtra): { id: string; label: string }[] {
+  if (kind === "wide") return [...WIDE_RAN.map((n) => ranOption(n)), OUT_OPTION];
+  if (kind !== "noball") return EXTRA_RAN.map((n) => ranOption(n));
+  return [
+    ...RUN_VALUES.map((n) => ({ id: `bat:${n}`, label: `pad.cricket.sheet.extra.bat.${n}` })),
+    ...EXTRA_RAN.map((n) => ranOption(n, `ran:${n}`)),
+    OUT_OPTION,
+  ];
+}
+
+/** S2-4 Task 6: the wide's and the no-ball's "+ Out", which goes on to the wicket's steps (the Bye and Leg-bye sheets
+ *  have none: owner 2026-11-07, "Keep them"; preflight W6). */
+const OUT = "out";
+const OUT_OPTION = { id: OUT, label: "pad.cricket.sheet.extra.out" };
+const isOut: StepPredicate = (answers) => answers.runs === OUT;
+
+/**
+ * S2-4 Task 4 (gaps 3, 4; spec §4.2): Wide, No-ball, Bye and Leg-bye each open a sheet that stays until a choice is
+ * made or it is cancelled, and the choice records the ball at once. Before it, a wide was one run always, and the
+ * no-ball, bye and leg bye were recorded on the tap and held for the soft-commit window while a dock offered their runs.
+ */
+function extraSheet(view: PadHostView, kind: SheetExtra): GuidedSheetSpec {
+  const state = asState(view.state);
+  const base = basePayload(state, asCfg(view.cfg), view.contextOverrides);
+  const runs: GuidedSheetStep = { id: "runs", kind: "choice", title: EXTRA_SHEET_TITLE[kind], options: extraRunOptions(kind) };
+  if (kind !== "wide" && kind !== "noball") {
+    return { event: ballEventType(state), steps: [runs], buildPayload: (answers) => extraRunsPayload(base, kind, answers.runs ?? "") };
+  }
+  // S2-4 Task 6: "+ Out" asks the wicket's steps, with the kinds the engine allows off this delivery.
+  return {
+    event: ballEventType(state),
+    steps: [runs, ...wicketSteps(view, kind, isOut)],
+    buildPayload: (answers) => (isOut(answers) ? wicketPayload(view, kind, answers, base) : extraRunsPayload(base, kind, answers.runs ?? "")),
+  };
+}
+
 export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedSheetSpec> {
   return {
+    wide: extraSheet(view, "wide"),
+    noball: extraSheet(view, "noball"),
+    bye: extraSheet(view, "bye"),
+    legbye: extraSheet(view, "legbye"),
     wicket: wicketSheet(view),
     toss: tossSheet(view),
     retire: retireSheet(view),
@@ -2672,6 +3012,7 @@ export function cricketSkinV3(t: TFn): SkinDefV3<PadHostView> {
     key: "cricket",
     tapModel: "T",
     phase: resolvePhase,
+    contextOverridesSurvive: cricketPicksSurvive,
     /** R7/D follow-up, extended by the R7 follow-ups doc item 1 — cricket
      *  KEEPS the result bar, with one exception: the whole FIRST innings,
      *  including the screen a scorer opens before a ball is bowled.
@@ -2723,6 +3064,7 @@ export function cricketSkinV3(t: TFn): SkinDefV3<PadHostView> {
     // sheet re-offer review/retire/inningsClose/declare/overSummary as
     // dead-end taps during a super over (this function's own doc, above).
     refusedEventTypes,
+    moreSheet,
     // D2 (R2 sign-off): the skin supplies per-ball detail so the activity
     // panel's rows differ from one another. Declared HERE rather than the
     // chassis importing `cricketBallDetail` directly — sport vocabulary stays

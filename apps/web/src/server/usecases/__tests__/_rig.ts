@@ -204,9 +204,11 @@ async function seedCricketCatalog(): Promise<void> {
  *  entrant guard, so `runStream` actually reaches the entitlement check). No
  *  lineups are seeded: the entitlement check (design doc §4 step 3) runs
  *  BEFORE the dry-run fold that would need them, so a stream that never
- *  reaches the fold does not need one either. */
+ *  reaches the fold does not need one either. `start: false` leaves it in
+ *  setup (S2-4 Task 2: the division gate's refusal), as `divisionRig`'s does. */
 export async function startedCricketDivisionWithFixture(
   auth: AuthCtx,
+  opts: { start?: boolean } = {},
 ): Promise<{ divisionId: string; fixtureId: string }> {
   await seedCricketCatalog();
   const competition = await createCompetition(auth, {
@@ -222,7 +224,7 @@ export async function startedCricketDivisionWithFixture(
   ]);
   const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "L1", config: {} });
   const { fixtures } = await generateStageFixtures(auth, stage.id);
-  await startDivision(auth, division.id);
+  if (opts.start !== false) await startDivision(auth, division.id);
   return { divisionId: division.id, fixtureId: fixtures[0]!.id };
 }
 

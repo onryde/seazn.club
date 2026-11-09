@@ -41,6 +41,11 @@ import { NIGHT_TILE_CLASSES, SCORE_TEXT_SIZE_CLASS } from "./tokens";
  *  the meta strip's `overflow-x` itself is gated on below. */
 const PHONE_QUERY = "not all and (min-width: 48rem)";
 
+/** `ScorebugSpec.stripLines: 2`: two `text-xs` lines (16 px each), the row's `gap-y-1` (4 px) and its `py-1.5` (12 px),
+ *  48 px. A row of one line is centred in it, `items-center` over a stretched line. Only from `md`: below it the row
+ *  never wraps. */
+const STRIP_TWO_LINES_CLASS = "md:min-h-12";
+
 /** Why this exists at all: `useIsPhone` below decides whether the strip
  *  should be `tabIndex`-focusable, and `tabIndex` is an HTML ATTRIBUTE — it
  *  cannot be conditioned by a CSS media query the way a class can. Making it
@@ -436,7 +441,8 @@ export function Scorebug({ spec, t, onTap, onOpenSheet, inert = false }: Scorebu
               on `<div class="…` immediately after `<div class="relative">`, and
               React emits attributes in JSX order. */}
           <div
-            className={`flex flex-wrap items-center justify-center gap-x-4 gap-y-1 ${NIGHT_TILE_CLASSES.bandBg} px-3 py-1.5 max-md:min-h-11 max-md:flex-nowrap max-md:justify-start max-md:gap-x-3 max-md:overflow-x-auto max-md:[scrollbar-width:none]`}
+            className={`flex flex-wrap items-center justify-center gap-x-4 gap-y-1 ${NIGHT_TILE_CLASSES.bandBg} px-3 py-1.5 max-md:min-h-11 max-md:flex-nowrap max-md:justify-start max-md:gap-x-3 max-md:overflow-x-auto max-md:[scrollbar-width:none] ${spec.stripLines === 2 ? STRIP_TWO_LINES_CLASS : ""}`}
+            data-role="v3-scorebug-strip"
             {...(isPhone ? { role: "group", tabIndex: 0, "aria-label": t("pad.scorebug.strip.label") } : {})}
           >
           {spec.strip.map((item, i) => {

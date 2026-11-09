@@ -199,6 +199,17 @@ describe("endOfOverMoment", () => {
     expect(isFullEndOfOver(bowlerOnly)).toBe(true);
   });
 
+  it("S2-4: full when a split over's only named bowler is its second (the first masked)", () => {
+    const secondOnly: OverlayClosedOver = {
+      ...closed,
+      batters: closed.batters.map((b) => ({ ...b, name: undefined })),
+      bowler: undefined,
+      bowlers: [{ name: "Siraj", overs: "0.3", maidens: 0, runs: 4, wickets: 0 }],
+    };
+    expect(isFullEndOfOver(secondOnly)).toBe(true);
+    expect(isFullEndOfOver({ ...secondOnly, bowlers: [{ ...secondOnly.bowlers![0]!, name: undefined }] })).toBe(false);
+  });
+
   it("fires innings-2 over 1 after an OBS mid-innings-1 baseline (bare over would silence it)", () => {
     const chaseFirst: OverlayClosedOver = {
       ...closed,

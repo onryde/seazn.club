@@ -167,6 +167,28 @@ describe("scorebug phone classes", () => {
   });
 });
 
+// CI run 42456030519: a skin's strip whose width moves with play holds two lines from md, so a row that wraps moves nothing
+// under it. Opt-in: any other strip is as tall as its lines, as it always was.
+describe("scorebug strip: the lines it holds (S2-4 Task 10)", () => {
+  const stripClass = (html: string) => {
+    const m = /<div class="([^"]*)"[^>]*data-role="v3-scorebug-strip"/.exec(html);
+    expect(m, "the strip's row is on the page").not.toBeNull();
+    return m![1]!.split(/\s+/);
+  };
+
+  it("stripLines: 2 holds 48 px from md (two 16 px lines, a 4 px gap, 12 px of padding), and the phone's floor stays", () => {
+    const classes = stripClass(renderToStaticMarkup(<Scorebug spec={{ ...spec, stripLines: 2 }} t={t} />));
+    expect(classes).toContain("md:min-h-12");
+    expect(classes).toContain("max-md:min-h-11");
+  });
+
+  it("without it the band holds nothing beyond its lines", () => {
+    const classes = stripClass(renderToStaticMarkup(<Scorebug spec={spec} t={t} />));
+    expect(classes).not.toContain("md:min-h-12");
+    expect(classes).toContain("max-md:min-h-11");
+  });
+});
+
 // Owner review (2026-09-02), NEEDS WORK for football/hockey/ice hockey:
 // "just names are coming out of circle" — a person chip (kind !== "flag")
 // was forced into the same max-md:grid-cols-2 half-width cell as a short
