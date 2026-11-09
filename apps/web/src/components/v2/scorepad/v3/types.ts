@@ -205,6 +205,13 @@ export interface ScorebugSpec {
   phase: PadPhase;
   halves: [ScorebugHalf, ScorebugHalf];
   strip: StripItem[];
+  /**
+   * S2-4 Task 10 (CI run 42456030519): the room the strip band holds at `md` and up, where its row wraps
+   * (`flex-wrap`, scorebug.tsx). Absent is the chassis as it was: the band is as tall as its lines. `2` holds two lines
+   * whether the row fills them or not, for a skin whose strip changes width with play: a line that wraps then moves
+   * nothing under it. Below `md` the row is one scrolling line and this does nothing.
+   */
+  stripLines?: 2;
 }
 
 export type TileKind = "primary" | "standard" | "destructive" | "minor";

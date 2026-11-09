@@ -178,3 +178,46 @@ test("the tile grid and the context strip do not move across a dot, a 4, a wide 
   expect(samples, "every width sampled every event: zero is a failure (preflight W15)").toBe(WIDTHS.length * EVENT_COUNT);
   expect(moved, "no region moved").toEqual([]);
 });
+
+// CI run 42456030519: at 768 on CI's fonts "• 4 wd3 nb1" took the strip's row onto a second line, and everything under it
+// came down 20 px, while the same run fitted on one line on a Mac. Where a row wraps depends on the names and the fonts,
+// so the test above cannot force it on every platform. This one does: the row is widened until it wraps, whatever the
+// fonts, and nothing below may notice. It only forces a wrap that play could bring; the band's height is what is tested.
+test("the scorebug strip holds two lines from md: a row that wraps moves nothing below it", async ({ page }) => {
+  test.setTimeout(2 * BUDGET_PER_WIDTH_MS);
+  for (const size of WIDTHS.filter((w) => w.width >= 768)) {
+    await page.setViewportSize(size);
+    const names = { one: `V3 SW Bat One ${TAG}`, two: `V3 SW Bat Two ${TAG}`, bowler: `V3 SW Bowl One ${TAG}` };
+    const fx = await seedRosteredFixture(page.request, {
+      label: `V3 Cricket Strip Wrap ${size.width} ${TAG}`,
+      sportKey: "cricket",
+      variantKey: "t20",
+      home: [{ fullName: names.one }, { fullName: names.two }],
+      away: [{ fullName: names.bowler }],
+    });
+    await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
+    await expect(pad(page)).toBeVisible({ timeout: 20_000 });
+    await startMatch(page, fx.fixtureId);
+    await pickCricketPeople(page, { striker: names.one, nonStriker: names.two, bowler: names.bowler });
+    await page.evaluate(() => document.fonts.ready.then(() => undefined));
+    const lines = () =>
+      page.evaluate(() => {
+        const row = document.querySelector('[data-testid="score-pad"] [data-role="v3-scorebug-strip"]');
+        if (!row) throw new Error('steady layout: [data-role="v3-scorebug-strip"] is not on the page');
+        return new Set([...row.children].map((item) => Math.round(item.getBoundingClientRect().top))).size;
+      });
+
+    expect(await lines(), `${size.width}px, premise: the row starts on one line`).toBe(1);
+    const baseline = await measure(page);
+    await page.addStyleTag({ content: '[data-role="v3-scorebug-strip"] > * { min-width: 30%; }' });
+    await expect.poll(lines, { message: `${size.width}px, premise: the row wrapped to two lines` }).toBe(2);
+    const now = await measure(page);
+    for (const region of REGIONS) {
+      for (const metric of ["top", "height"] as const) {
+        expect(Math.abs(now[region][metric] - baseline[region][metric]), `${size.width}px ${region} ${metric}`).toBeLessThanOrEqual(
+          TOLERANCE_PX,
+        );
+      }
+    }
+  }
+});

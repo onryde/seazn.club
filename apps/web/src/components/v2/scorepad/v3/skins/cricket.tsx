@@ -1378,8 +1378,8 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
   // i18n-independent Playwright hook (`StripItem.id`, types.ts).
   //
   // S2-4 Task 10 (gap 8): the slot is HELD while the match is live (`StripItem.reserved`), so the free hit's coming
-  // and going after a no ball never re-centres the strip or wraps it onto a second line at a desktop width. A held slot
-  // prints nothing and carries no id: the `freeHit` locator still counts zero while no free hit is pending.
+  // and going after a no ball never re-centres the strip. A held slot prints nothing and carries no id: the `freeHit`
+  // locator still counts zero while no free hit is pending.
   if (state.phase === "live" || state.phase === "super_over") {
     const freeHit = t("scorepad.skin.cricket.header.freeHit");
     strip.push(
@@ -1397,6 +1397,11 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
       { who: [{ name: t("scorepad.skin.cricket.scorebug.overs") }], big: oversText(legalBalls, bpo) },
     ],
     strip,
+    // S2-4 Task 10 (CI run 42456030519): the strip's width moves with play, by a ball's symbol (`overDots`), a new
+    // batter's name or the next bowler's, so where its row wraps depends on the names and the platform's fonts. At 768
+    // on CI "• 4 wd3 nb1" took it onto a second line and pushed everything below down 20 px; the same run fits on a Mac.
+    // So the band holds both lines at `md` and up. A width reserve for the over would not do: it cannot hold the names.
+    stripLines: 2,
   };
 }
 

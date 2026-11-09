@@ -879,6 +879,11 @@ describe("resolvePhase", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildScorebug", () => {
+  it("holds the strip's two lines (CI run 42456030519: a ball's symbol wrapped it at 768 and moved the pad 20 px)", () => {
+    expect(buildScorebug(view(), t).stripLines).toBe(2);
+    expect(buildScorebug(view({ state: state({ innings: [] }) }), t).stripLines, "before the first ball too").toBe(2);
+  });
+
   it("renders the batting score and overs halves, both passive", () => {
     const spec = buildScorebug(view(), t);
     expect(spec.halves[0]!.big).toBe("12/1");
