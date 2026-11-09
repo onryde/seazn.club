@@ -544,7 +544,8 @@ export async function createEntrants(
       // W3 T9 (ruling 250): an organiser's "Add late player", one entrant at a time in creation order and each before
       // the next is inserted — a re-pair (case (a)) reads the active field, and a batch-mate not yet admitted must not
       // be seated in it as if from round 1. Null before Start or with no running Swiss; a refusal rolls the batch back.
-      // W4 T10: or its drawn root knockout — the bye, a withdrawn slot, or KO_LATE_ENTRY_NO_SLOT (X-LE-3…X-LE-6). A division's
+      // W4 T10: or its drawn root knockout — the bye, a withdrawn slot, or no slot (X-LE-3…X-LE-6): unstarted, the entrant is
+      // kept waiting and the answer is `rebuild_offered` (RB4-L6); started, KO_LATE_ENTRY_NO_SLOT refuses. A division's
       // entry stage is one or the other, so at most one of the two answers.
       const late =
         (await admitSwissLateEntrant(tx, auth, divisionId, row.id, "organiser")) ??
