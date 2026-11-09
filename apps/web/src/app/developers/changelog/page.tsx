@@ -7,6 +7,14 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
     date: "2026-11-09",
+    title: "A page playoff the field cannot fill is refused up front; a frozen late entry says why it waits",
+    lines: [
+      "A league or Swiss that feeds a page playoff needs at least 4 active entrants, the page playoff's four seats. Below that, POST /divisions/{id}/start, POST /stages/{id}/rebuild and, before start, POST /stages/{id}/generate on the league or Swiss answer 422 PAGE_PLAYOFF_TOO_FEW with the bound in `min`.",
+      "A knockout late entry placed while the division's schedule is frozen is left without a time and court, as before, and its answer now also carries `schedule_frozen: true` beside `scheduled: false`.",
+    ],
+  },
+  {
+    date: "2026-11-09",
     title: "A knockout format the field cannot play is refused up front",
     lines: [
       "A root knockout that feeds a plate needs at least 4 active entrants, and one that feeds a main draw needs enough to fill the cut. Below that, POST /divisions/{id}/start, POST /stages/{id}/generate and POST /stages/{id}/rebuild answer 422 KO_PLATE_TOO_FEW or QUALIFYING_MAIN_TOO_FEW with the bound in `min`. A bracket already drawn and started is left alone by start and generate; rebuild below the minimum is still refused after start.",
