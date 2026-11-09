@@ -16,8 +16,13 @@ import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { isUnscheduledFixture } from "@/lib/division-phase";
+import { t as tRuntime, plural as pluralRuntime } from "@/lib/i18n-runtime";
+import { lateEntryNotice, lateEntryNoticeText } from "@/lib/swiss-late-entry-notice";
 import { rb4L4ExpectedLine, type StoredByeLine } from "@/lib/__tests__/rb4-l4-oracle";
+import en from "@/dictionaries/en/ui.json";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import type { KnockoutLateEntryResult } from "@/server/api-v1/schemas";
 import { ByeLineSurgeryError, reverseWithdrawnWalkover } from "../bracket-lines";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -547,6 +552,83 @@ describe.skipIf(!HAS_DB)("W4 T10: Add late player on a drawn knockout", () => {
       checked++;
     }
     expect(checked).toBe(2);
+  });
+
+  // T26c (controller ruling 2026-11-09, re-review): a FROZEN timetable takes no new time or court from a late entry. The
+  // placed match is left unscheduled and flagged - X-LE-12's own fallback - because round 1's next free slot answers none
+  // while the division's schedule is frozen (`nextFreeRoundSlot`, read under the add's `division:` lock). Each case below
+  // holds a free (time, court) pair the unfrozen twin TAKES, so "unscheduled" is the freeze's doing and not a full board.
+  // The notice is X-LE-12's own sentence (the approved English, typed here).
+  const UNSCHEDULED_NOTICE = { text: "1 new match is unscheduled.", tone: "todo" };
+  const EN = {
+    t: (key: string, vars?: Record<string, string | number>) => tRuntime(en, key, vars),
+    plural: (key: string, count: number, vars?: Record<string, string | number>) => pluralRuntime(en, key, count, "en", vars),
+  };
+  const noticeOf = (result: KnockoutLateEntryResult) =>
+    lateEntryNotice([result], {}, { locale: "en" }).map((line) => ({ text: lateEntryNoticeText(line, EN), tone: line.tone }));
+  const fixtureOf = (late: { late_entry?: unknown }): string => (late.late_entry as KnockoutLateEntryResult).fixture_id!;
+
+  it("X-LE-12 frozen: case (1) is placed and left unscheduled, flagged, the notice says so; unfrozen, the next newcomer takes the free slot", async () => {
+    // Six in eight: two byes, so two newcomers are each placed by case (1). Round 1's two matches hold courts 1 and 2 at
+    // `at`; court 3 at `at` is free throughout.
+    const r = await rig({ n: 6 });
+    const { courts, at } = await placeRoundOne(r, 3, 3);
+    await setDivisionLocks(r.auth, r.divisionId, { schedule_locked: true });
+    const frozen = await addLate(r, "Late 1");
+    expect(frozen.late_entry, "frozen: placed by case (1), unscheduled").toMatchObject({ case: "bye", scheduled: false });
+    const line = await rowById(fixtureOf(frozen));
+    expect({ at: line.scheduled_at, court: line.court_id, status: line.status }, "no time or court written").toEqual({ at: null, court: null, status: "scheduled" });
+    expect(isUnscheduledFixture({ status: line.status, scheduledAt: null }), "the desk's unscheduled flag").toBe(true);
+    expect(noticeOf(frozen.late_entry as KnockoutLateEntryResult), "the notice").toContainEqual(UNSCHEDULED_NOTICE);
+
+    await setDivisionLocks(r.auth, r.divisionId, { schedule_locked: false });
+    const thawed = await addLate(r, "Late 2");
+    expect(thawed.late_entry, "unfrozen: the second bye, scheduled").toMatchObject({ case: "bye", scheduled: true });
+    const line2 = await rowById(fixtureOf(thawed));
+    expect({ at: line2.scheduled_at?.toISOString(), court: line2.court_id }, "round 1's next free slot").toEqual({ at, court: courts[2] });
+    expect(noticeOf(thawed.late_entry as KnockoutLateEntryResult), "no unscheduled line when it has a slot").not.toContainEqual(UNSCHEDULED_NOTICE);
+  });
+
+  it("X-LE-12 frozen: case (2) on a match its organiser took off the timetable stays off it; unfrozen, the same match takes the free slot", async () => {
+    // Eight, round 1 on four courts at `at`; line 3's withdrawn player's match is moved off the timetable (unscheduled), so
+    // its court at `at` is the one free pair. A match still holding its OWN slot keeps it frozen or not - nothing is written
+    // (the X-LE-12 case (2) test above) - so this case is the one the freeze decides.
+    let checked = 0;
+    for (const frozenSchedule of [true, false]) {
+      const r = await rig({ n: 8 });
+      const { courts, at } = await placeRoundOne(r, 4, 4);
+      const m = (await rowsOf(r.stageId)).find((x) => x.round_no === 1 && x.seq_in_round === 3)!;
+      await sql`update fixtures set scheduled_at = null, court_id = null, venue_id = null where id = ${m.id}`;
+      await withdrawEntrantCascade(r.auth, m.away_entrant_id!);
+      if (frozenSchedule) await setDivisionLocks(r.auth, r.divisionId, { schedule_locked: true });
+      const late = await addLate(r);
+      expect(late.late_entry, `frozen=${frozenSchedule}`).toMatchObject({ case: "withdrawn_slot", fixture_id: m.id, scheduled: !frozenSchedule });
+      const line = await rowById(m.id);
+      expect({ at: line.scheduled_at?.toISOString() ?? null, court: line.court_id }, `frozen=${frozenSchedule}`).toEqual(
+        frozenSchedule ? { at: null, court: null } : { at, court: courts[2] },
+      );
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("X-LE-12 frozen: the waiting strip's tap places the waiting newcomer and leaves the match unscheduled", async () => {
+    // Eight, nothing started: the organiser's add is offered Rebuild and kept waiting (RB4-L6). A withdrawal then opens line
+    // 3, whose match was taken off the timetable - its court at `at` is free - and the schedule is frozen before the tap.
+    const r = await rig({ n: 8 });
+    await placeRoundOne(r, 4, 4);
+    const late = await addLate(r);
+    expect(late.late_entry, "premise: kept waiting").toMatchObject({ case: "rebuild_offered" });
+    const m = (await rowsOf(r.stageId)).find((x) => x.round_no === 1 && x.seq_in_round === 3)!;
+    await sql`update fixtures set scheduled_at = null, court_id = null, venue_id = null where id = ${m.id}`;
+    await withdrawEntrantCascade(r.auth, m.away_entrant_id!);
+    await setDivisionLocks(r.auth, r.divisionId, { schedule_locked: true });
+    const placed = await placeWaitingKnockoutEntrant(r.auth, r.stageId, late.id);
+    expect(placed, "the tap places them, unscheduled").toMatchObject({ case: "withdrawn_slot", fixture_id: m.id, scheduled: false });
+    const line = await rowById(m.id);
+    expect({ at: line.scheduled_at, court: line.court_id }, "no time or court written").toEqual({ at: null, court: null });
+    expect(isUnscheduledFixture({ status: line.status, scheduledAt: null }), "flagged").toBe(true);
+    expect(await waitingOn(late.id), "placed: the marker clears").toBeNull();
   });
 
   it("the reversal surgery refuses by name: a round-2 line, a bye, a seat not departed, a line played before the withdrawal", async () => {
