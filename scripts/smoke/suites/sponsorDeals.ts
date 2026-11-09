@@ -96,7 +96,7 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
                 25000, 'gbp', 'pending', 'awaiting_payment', 'online', 'on_payment', 'partner', false, 'Partner board', ${null})
         returning id`;
       await db`update sponsors set status = 'inactive' where id = ${webhookSponsor}`;
-      dealId = row!.id;
+      dealId = row?.id ?? "";
     } finally {
       await db.end();
     }

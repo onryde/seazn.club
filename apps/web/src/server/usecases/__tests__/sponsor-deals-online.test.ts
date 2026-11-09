@@ -707,6 +707,28 @@ describe.skipIf(!HAS_DB)("Mark as paid, End now, refund and delete apply the ses
     expect(checked).toBe(2);
   });
 
+  it("delete: a link a racing send stored while the delete closed the old one is still payable — 409 sponsor_has_open_checkout under the lock, nothing deleted", async () => {
+    const d = await onlineDeal();
+    const old = (await stored(d.id)).checkout_session_id!;
+    const racing = `cs_race_${randomUUID().slice(0, 8)}`;
+    // A concurrent Send invoice stores its new session between the delete's read and its locked re-check: here, as the delete
+    // closes the old one at Stripe. The delete's compare-and-clear forgets only the session it closed.
+    stripe.expire.mockImplementation(async (sid: string) => {
+      await sql`
+        update sponsor_orders
+           set checkout_session_id = ${racing}, checkout_url = ${`https://checkout.stripe.test/${racing}`},
+               checkout_expires_at = now() + interval '1 day'
+         where id = ${d.id}`;
+      return { id: sid, status: "expired" };
+    });
+
+    expect(await refusal(() => deleteSponsor(d.o.auth, d.sponsorId))).toEqual({ http: true, status: 409, code: "sponsor_has_open_checkout" });
+
+    expect(stripe.expire.mock.calls.map((c) => c[0]), "premise: the old link was closed").toEqual([old]);
+    expect(await sql`select 1 from sponsors where id = ${d.sponsorId}`, "the sponsor stays").toHaveLength(1);
+    expect((await stored(d.id)).checkout_session_id, "the racing link stays stored, payable").toBe(racing);
+  });
+
   it("review I1 (a): a delete refused on a session paid at Stripe expires NOTHING — whichever of the sponsor's two links Stripe calls complete (counted)", async () => {
     let checked = 0;
     for (const completeIsFirstMade of [true, false]) {

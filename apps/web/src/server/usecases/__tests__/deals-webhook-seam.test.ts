@@ -683,6 +683,35 @@ describe.skipIf(!HAS_DB)("F18: a legacy order's refund and dispute flip its mone
     expect(await sponsorBytes(legacySponsor), "the legacy-activated sponsor is untouched").toBe(before);
   });
 
+  it("a legacy row WITH a sponsor: a formal dispute never parks it and its loss never ends it — deal columns and the sponsor byte-equal", async () => {
+    const o = await org();
+    const p = await pkg(o);
+    const [{ id: legacySponsor }] = await sql<{ id: string }[]>`
+      insert into sponsors (org_id, name, tier, status) values (${o.orgId}, 'Old Co', 'gold', 'active') returning id`;
+    const intent = newIntent();
+    const [{ id: legacyId }] = await sql<{ id: string }[]>`
+      insert into sponsor_orders (org_id, package_id, sponsor_id, sponsor_name, sponsor_email, amount_cents, currency, status,
+                                  payment_intent_id, paid_at, deal_status, ended_reason, ended_at, payment_method, go_live,
+                                  tier, includes_on_stream, package_name)
+      values (${o.orgId}, ${p}, ${legacySponsor}, 'Old Co', 'old@test.local', 25000, 'gbp', 'paid',
+              ${intent}, now() - interval '30 days', 'ended', 'legacy', now() - interval '30 days', 'online', 'on_payment',
+              'gold', false, 'Old package')
+      returning id`;
+    const shape = await dealShape(legacyId!);
+    const before = await sponsorBytes(legacySponsor!);
+    const d = newDispute();
+
+    expect(await runEvent(disputed("created", d, intent, "needs_response")), "created answered").toBe(true);
+    expect((await dealRow(legacyId!)).disputed_at, "the dispute is recorded").not.toBeNull();
+    expect(await dealShape(legacyId!), "created: not parked (F18)").toEqual(shape);
+    expect(await sponsorBytes(legacySponsor!)).toBe(before);
+
+    expect(await runEvent(disputed("closed", d, intent, "lost")), "lost answered").toBe(true);
+    expect((await dealRow(legacyId!)).status, "its money is written off").toBe("refunded");
+    expect(await dealShape(legacyId!), "lost: still a legacy row, never dispute_lost (F18)").toEqual(shape);
+    expect(await sponsorBytes(legacySponsor!), "the sponsor is not taken down").toBe(before);
+  });
+
   it("payments on legacy rows: a pre-deals order still unpaid is paid (money only, ended stays, the owner alerted); a second payment on a sponsor-less one cannot carry a row and alerts — every event answered", async () => {
     const o = await org();
     const p = await pkg(o);
