@@ -190,6 +190,9 @@ const REST = [
   "src/server/public-site/__tests__/standings-swiss-cut1.test.ts",
   "src/server/public-site/__tests__/standings-view-swiss-display.test.ts",
   "src/server/public-site/__tests__/swiss-row-facts.test.ts",
+  // W4 knockout App A (T23, ST-G26): a division's standings read in stage order, then pool order. Begins with "s", so it
+  // belongs here rather than in C_GLOBBED; the final whole-branch review caught this gate red on it.
+  "src/server/public-site/__tests__/standings-order.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 
