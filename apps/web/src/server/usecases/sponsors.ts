@@ -43,12 +43,23 @@ import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
 import { placementNeedsTiers } from "@/lib/sponsor-deal-policy";
 import { assertPlacementAllowed } from "@/server/sponsors/deal-gates";
 import { ensureOrgStreamSettings } from "@/server/sponsors/stream-settings";
+import type { DealStatus } from "@/lib/sponsor-deals";
+import {
+  assertSponsorPatchAllowed,
+  lockSponsorAndDeals,
+  readOrgDeals,
+  sponsorDealSummary,
+  type ServerDeal,
+  type SponsorDealSummary,
+} from "@/server/sponsors/deal-apply";
 
 // The tier list lives in the client-safe lib (R4 F10: this module imports the email outbox, so the planner and the
 // overlay cannot import it). Re-exported, never re-declared — one authority.
 export { SPONSOR_TIERS, type SponsorTier };
 
-export interface SponsorRow {
+/** A sponsor row. Its deal summary (sponsor deals D8/D9: `deal`, `locked_by_deal`, `has_open_deal`, `last_billing_email`)
+ *  rides on every read and write answer, computed by `sponsorDealSummary` from the sponsor's deals. */
+export interface SponsorRow extends SponsorDealSummary {
   id: string;
   competition_id: string | null;
   name: string;
@@ -172,7 +183,8 @@ function bustPublicSponsors(orgId: string): void {
  *  paid_order_id links a placement back to the package order that bought
  *  it, so the manager can mark it and guard its deletion. */
 export async function listSponsorRows(orgId: string): Promise<SponsorRow[]> {
-  return withTenant(orgId, (tx) => tx<SponsorRow[]>`
+  return withTenant(orgId, async (tx) => {
+    const rows = await tx<Omit<SponsorRow, keyof SponsorDealSummary>[]>`
     select ${tx(COLS)},
            (select o.id from sponsor_orders o
             where o.sponsor_id = sponsors.id and o.status = 'paid'
@@ -186,7 +198,16 @@ export async function listSponsorRows(orgId: string): Promise<SponsorRow[]> {
                     and o.dispute_id is not null) as dispute_lost
     from sponsors
     order by array_position(${[...SPONSOR_TIERS]}::text[], tier),
-             display_order, created_at, id`);
+             display_order, created_at, id`;
+    // The deal summary is computed in TS from the deals themselves (pickRowDeal), never a SQL copy of the selection.
+    const bySponsor = new Map<string, ServerDeal[]>();
+    for (const d of await readOrgDeals(tx, orgId)) {
+      const list = bySponsor.get(d.sponsor_id!) ?? [];
+      list.push(d);
+      bySponsor.set(d.sponsor_id!, list);
+    }
+    return rows.map((r) => ({ ...r, ...sponsorDealSummary(bySponsor.get(r.id) ?? []) }));
+  });
 }
 
 export async function listSponsors(auth: AuthCtx): Promise<SponsorRow[]> {
@@ -213,7 +234,7 @@ export async function createSponsor(
                  and tier = ${input.tier}),
               ${input.status})
       returning ${tx(COLS)}`;
-    return row!;
+    return { ...row!, ...sponsorDealSummary([]) };
   }).then(async (row) => {
     await expirePublicSponsors(auth.orgId, "sponsor.create");
     return row;
@@ -249,8 +270,15 @@ export async function patchSponsor(
       : patch.tier && patch.tier !== "partner"
         ? await sponsorCompetitionId(auth.orgId, id)
         : undefined;
+  // The plan gate runs FIRST, before the transaction: on a plan without `sponsors.tiers` a tier or scope PATCH answers 402
+  // before any deal lock is consulted (sponsor deals F16).
   await assertTierAllowed(auth.orgId, patch.tier, scope);
   return withTenant(auth.orgId, async (tx) => {
+    // ONE unconditional sponsor lock, for every patch (sponsor deals F16), in the one order every deal writer takes (F2):
+    // the sponsor, then its deals. Every deal writer holds this lock while it moves a deal, so the deals read under it are
+    // current — a deal another transaction made live while this PATCH waited is seen, and locks the patch below.
+    const locked = await lockSponsorAndDeals(tx, id);
+    if (!locked) throw new HttpError(404, "sponsor not found");
     // A placement parked by an open dispute (its paid order is flagged and
     // the handler took it down to 'pending') stays down until the dispute
     // closes — reactivating it by hand would put a charged-back sponsor
@@ -258,39 +286,63 @@ export async function patchSponsor(
     // just `active`: switched to `inactive` it would no longer read as
     // parked, and `active` would then pass. An inquiry flags the order but
     // leaves the placement live, so the organiser manages it as normal.
-    // The row lock orders this against the webhook's park.
+    // Checked before the deal lock, so a parked placement keeps saying why.
     if (patch.status !== undefined && patch.status !== "pending") {
-      const [cur] = await tx<{ status: string; open_dispute: boolean }[]>`
-        select s.status,
-               exists(select 1 from sponsor_orders o
-                      where o.sponsor_id = s.id and o.status = 'paid'
-                        and o.disputed_at is not null) as open_dispute
-        from sponsors s where s.id = ${id} for update of s`;
-      if (cur?.status === "pending" && cur.open_dispute) {
+      const openDispute = locked.deals.some((o) => o.payment_status === "paid" && o.disputed_at !== null);
+      if (locked.sponsor.status === "pending" && openDispute) {
         throw new HttpError(
           409,
           "this placement is parked by an open payment dispute — it comes back automatically if the dispute is won",
         );
       }
     }
-    const [row] = await tx<SponsorRow[]>`
+    // D9: a live deal owns tier, scope, stream and status; a deal waiting to go live holds status.
+    assertSponsorPatchAllowed(locked.deals, cols);
+    const [row] = await tx<Omit<SponsorRow, keyof SponsorDealSummary>[]>`
       update sponsors set ${tx(patch as never, ...(cols as never[]))}
       where id = ${id} returning ${tx(COLS)}`;
-    if (!row) throw new HttpError(404, "sponsor not found");
     // R12: the first tick turns the org's rotation on. After the update (a refused tick leaves no row), in its transaction.
     if (patch.on_stream === true) await ensureOrgStreamSettings(tx, auth.orgId, auth.userId);
-    return row;
+    return { ...row!, ...sponsorDealSummary(locked.deals) };
   }).then(async (row) => {
     await expirePublicSponsors(auth.orgId, "sponsor.patch");
     return row;
   });
 }
 
+/** The deal states a sponsor can be deleted with: none of them ever showed the sponsor or took its money. */
+const DELETABLE_DEAL_STATES: ReadonlySet<DealStatus> = new Set<DealStatus>(["draft", "awaiting_payment", "awaiting_approval"]);
+
+/** A deal that is history, so its sponsor stays (sponsor deals D6, F16): money moved or was asked for (a money status past
+ *  `pending`, a payment intent), a dispute, a state past waiting (live, scheduled or ended — a legacy order is ended), or a
+ *  stored Checkout session, which is still a payable link (F3). The tenant's prune policy (V300) fences the same money
+ *  columns and the RESTRICT key (V493) backs all of it, so the answer is this 409, never a 23503. */
+function dealHoldsHistory(d: ServerDeal): boolean {
+  return (
+    d.payment_status !== "pending" ||
+    d.payment_intent_id !== null ||
+    d.disputed_at !== null ||
+    !DELETABLE_DEAL_STATES.has(d.deal_status) ||
+    // TODO(Task 7, F3): expire the open session (outside any transaction), then delete; 409 only when it cannot be expired.
+    d.checkout_session_id !== null
+  );
+}
+
 export async function deleteSponsor(auth: AuthCtx, id: string): Promise<void> {
   return withTenant(auth.orgId, async (tx) => {
-    const [row] = await tx<{ id: string }[]>`
-      delete from sponsors where id = ${id} returning id`;
-    if (!row) throw new HttpError(404, "sponsor not found");
+    // The one lock order (F2): the sponsor, then its deals — legacy rows included, since the RESTRICT key covers them.
+    const locked = await lockSponsorAndDeals(tx, id);
+    if (!locked) throw new HttpError(404, "sponsor not found");
+    if (locked.deals.some(dealHoldsHistory)) {
+      throw new HttpError(
+        409,
+        "this sponsor has deal history (a payment, a dispute, or a deal that went live or ended) — end its deals instead",
+        "sponsor_has_deal_history",
+      );
+    }
+    // Deals that never got past waiting go with their sponsor, in this transaction.
+    if (locked.deals.length > 0) await tx`delete from sponsor_orders where sponsor_id = ${id}`;
+    await tx`delete from sponsors where id = ${id}`;
   }).then(() => expirePublicSponsors(auth.orgId, "sponsor.delete"));
 }
 

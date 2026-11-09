@@ -70480,6 +70480,320 @@
                           },
                           "dispute_lost": {
                             "type": "boolean"
+                          },
+                          "deal": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "sponsor_id": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "package_id": {
+                                    "type": "string"
+                                  },
+                                  "deal_status": {
+                                    "type": "string",
+                                    "enum": [
+                                      "draft",
+                                      "awaiting_payment",
+                                      "awaiting_approval",
+                                      "scheduled",
+                                      "live",
+                                      "ended"
+                                    ]
+                                  },
+                                  "payment_status": {
+                                    "type": "string",
+                                    "enum": [
+                                      "pending",
+                                      "paid",
+                                      "failed",
+                                      "refunded",
+                                      "none"
+                                    ]
+                                  },
+                                  "payment_method": {
+                                    "type": "string",
+                                    "enum": [
+                                      "online",
+                                      "offline",
+                                      "complimentary"
+                                    ]
+                                  },
+                                  "go_live": {
+                                    "type": "string",
+                                    "enum": [
+                                      "on_payment",
+                                      "immediate",
+                                      "on_approval"
+                                    ]
+                                  },
+                                  "package_name": {
+                                    "type": "string"
+                                  },
+                                  "tier": {
+                                    "type": "string",
+                                    "enum": [
+                                      "title",
+                                      "gold",
+                                      "silver",
+                                      "partner"
+                                    ]
+                                  },
+                                  "includes_on_stream": {
+                                    "type": "boolean"
+                                  },
+                                  "competition_id": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "amount_cents": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "currency": {
+                                    "type": "string"
+                                  },
+                                  "sponsor_name": {
+                                    "type": "string"
+                                  },
+                                  "sponsor_email": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "ends_at": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "created_at": {
+                                    "type": "string"
+                                  },
+                                  "created_by": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "invoice_sent_at": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "paid_at": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "marked_paid_by": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "approved_at": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "approved_by": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "live_at": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "ended_at": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "ended_reason": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "refunded",
+                                          "dispute_lost",
+                                          "ended_now",
+                                          "expired",
+                                          "competition_finished",
+                                          "legacy",
+                                          "duplicate_payment"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "parked_at": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "disputed_at": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "dispute_id": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "invoice_number": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "sponsor_id",
+                                  "package_id",
+                                  "deal_status",
+                                  "payment_status",
+                                  "payment_method",
+                                  "go_live",
+                                  "package_name",
+                                  "tier",
+                                  "includes_on_stream",
+                                  "competition_id",
+                                  "amount_cents",
+                                  "currency",
+                                  "sponsor_name",
+                                  "sponsor_email",
+                                  "ends_at",
+                                  "created_at",
+                                  "created_by",
+                                  "invoice_sent_at",
+                                  "paid_at",
+                                  "marked_paid_by",
+                                  "approved_at",
+                                  "approved_by",
+                                  "live_at",
+                                  "ended_at",
+                                  "ended_reason",
+                                  "parked_at",
+                                  "disputed_at",
+                                  "dispute_id",
+                                  "invoice_number"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "locked_by_deal": {
+                            "type": "boolean"
+                          },
+                          "has_open_deal": {
+                            "type": "boolean"
+                          },
+                          "last_billing_email": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -70493,7 +70807,11 @@
                           "status",
                           "click_count",
                           "created_at",
-                          "on_stream"
+                          "on_stream",
+                          "deal",
+                          "locked_by_deal",
+                          "has_open_deal",
+                          "last_billing_email"
                         ],
                         "additionalProperties": false
                       }
@@ -70518,7 +70836,42 @@
                       "status": "active",
                       "click_count": -9007199254740991,
                       "created_at": "example",
-                      "on_stream": true
+                      "on_stream": true,
+                      "deal": {
+                        "id": "example",
+                        "sponsor_id": "example",
+                        "package_id": "example",
+                        "deal_status": "draft",
+                        "payment_status": "pending",
+                        "payment_method": "online",
+                        "go_live": "on_payment",
+                        "package_name": "example",
+                        "tier": "title",
+                        "includes_on_stream": true,
+                        "competition_id": "example",
+                        "amount_cents": -9007199254740991,
+                        "currency": "example",
+                        "sponsor_name": "example",
+                        "sponsor_email": "example",
+                        "ends_at": "example",
+                        "created_at": "example",
+                        "created_by": "example",
+                        "invoice_sent_at": "example",
+                        "paid_at": "example",
+                        "marked_paid_by": "example",
+                        "approved_at": "example",
+                        "approved_by": "example",
+                        "live_at": "example",
+                        "ended_at": "example",
+                        "ended_reason": "refunded",
+                        "parked_at": "example",
+                        "disputed_at": "example",
+                        "dispute_id": "example",
+                        "invoice_number": -9007199254740991
+                      },
+                      "locked_by_deal": true,
+                      "has_open_deal": true,
+                      "last_billing_email": "example"
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -70872,6 +71225,320 @@
                         },
                         "dispute_lost": {
                           "type": "boolean"
+                        },
+                        "deal": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "sponsor_id": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "package_id": {
+                                  "type": "string"
+                                },
+                                "deal_status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "draft",
+                                    "awaiting_payment",
+                                    "awaiting_approval",
+                                    "scheduled",
+                                    "live",
+                                    "ended"
+                                  ]
+                                },
+                                "payment_status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "pending",
+                                    "paid",
+                                    "failed",
+                                    "refunded",
+                                    "none"
+                                  ]
+                                },
+                                "payment_method": {
+                                  "type": "string",
+                                  "enum": [
+                                    "online",
+                                    "offline",
+                                    "complimentary"
+                                  ]
+                                },
+                                "go_live": {
+                                  "type": "string",
+                                  "enum": [
+                                    "on_payment",
+                                    "immediate",
+                                    "on_approval"
+                                  ]
+                                },
+                                "package_name": {
+                                  "type": "string"
+                                },
+                                "tier": {
+                                  "type": "string",
+                                  "enum": [
+                                    "title",
+                                    "gold",
+                                    "silver",
+                                    "partner"
+                                  ]
+                                },
+                                "includes_on_stream": {
+                                  "type": "boolean"
+                                },
+                                "competition_id": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "amount_cents": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "currency": {
+                                  "type": "string"
+                                },
+                                "sponsor_name": {
+                                  "type": "string"
+                                },
+                                "sponsor_email": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "ends_at": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "created_at": {
+                                  "type": "string"
+                                },
+                                "created_by": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "invoice_sent_at": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "paid_at": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "marked_paid_by": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "approved_at": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "approved_by": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "live_at": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "ended_at": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "ended_reason": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "refunded",
+                                        "dispute_lost",
+                                        "ended_now",
+                                        "expired",
+                                        "competition_finished",
+                                        "legacy",
+                                        "duplicate_payment"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "parked_at": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "disputed_at": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "dispute_id": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "invoice_number": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "sponsor_id",
+                                "package_id",
+                                "deal_status",
+                                "payment_status",
+                                "payment_method",
+                                "go_live",
+                                "package_name",
+                                "tier",
+                                "includes_on_stream",
+                                "competition_id",
+                                "amount_cents",
+                                "currency",
+                                "sponsor_name",
+                                "sponsor_email",
+                                "ends_at",
+                                "created_at",
+                                "created_by",
+                                "invoice_sent_at",
+                                "paid_at",
+                                "marked_paid_by",
+                                "approved_at",
+                                "approved_by",
+                                "live_at",
+                                "ended_at",
+                                "ended_reason",
+                                "parked_at",
+                                "disputed_at",
+                                "dispute_id",
+                                "invoice_number"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "locked_by_deal": {
+                          "type": "boolean"
+                        },
+                        "has_open_deal": {
+                          "type": "boolean"
+                        },
+                        "last_billing_email": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -70885,7 +71552,11 @@
                         "status",
                         "click_count",
                         "created_at",
-                        "on_stream"
+                        "on_stream",
+                        "deal",
+                        "locked_by_deal",
+                        "has_open_deal",
+                        "last_billing_email"
                       ],
                       "additionalProperties": false
                     },
@@ -70908,7 +71579,42 @@
                     "status": "active",
                     "click_count": -9007199254740991,
                     "created_at": "example",
-                    "on_stream": true
+                    "on_stream": true,
+                    "deal": {
+                      "id": "example",
+                      "sponsor_id": "example",
+                      "package_id": "example",
+                      "deal_status": "draft",
+                      "payment_status": "pending",
+                      "payment_method": "online",
+                      "go_live": "on_payment",
+                      "package_name": "example",
+                      "tier": "title",
+                      "includes_on_stream": true,
+                      "competition_id": "example",
+                      "amount_cents": -9007199254740991,
+                      "currency": "example",
+                      "sponsor_name": "example",
+                      "sponsor_email": "example",
+                      "ends_at": "example",
+                      "created_at": "example",
+                      "created_by": "example",
+                      "invoice_sent_at": "example",
+                      "paid_at": "example",
+                      "marked_paid_by": "example",
+                      "approved_at": "example",
+                      "approved_by": "example",
+                      "live_at": "example",
+                      "ended_at": "example",
+                      "ended_reason": "refunded",
+                      "parked_at": "example",
+                      "disputed_at": "example",
+                      "dispute_id": "example",
+                      "invoice_number": -9007199254740991
+                    },
+                    "locked_by_deal": true,
+                    "has_open_deal": true,
+                    "last_billing_email": "example"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -71104,7 +71810,7 @@
     },
     "/api/v1/orgs/{id}/sponsors/{sponsorId}": {
       "patch": {
-        "summary": "Update a sponsor (promoting tier / scoping is Pro `sponsors.tiers`)",
+        "summary": "Update a sponsor (promoting tier / scoping is Pro `sponsors.tiers`). While a deal is live, its tier, competition, stream tick and status come from the deal: a PATCH of any of them is 409 `sponsor_locked_by_deal`; while a deal waits to go live, a status PATCH is 409 `sponsor_has_open_deal`. Name, url and logo are always editable",
         "tags": [
           "sponsors"
         ],
@@ -71311,6 +72017,320 @@
                         },
                         "dispute_lost": {
                           "type": "boolean"
+                        },
+                        "deal": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "sponsor_id": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "package_id": {
+                                  "type": "string"
+                                },
+                                "deal_status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "draft",
+                                    "awaiting_payment",
+                                    "awaiting_approval",
+                                    "scheduled",
+                                    "live",
+                                    "ended"
+                                  ]
+                                },
+                                "payment_status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "pending",
+                                    "paid",
+                                    "failed",
+                                    "refunded",
+                                    "none"
+                                  ]
+                                },
+                                "payment_method": {
+                                  "type": "string",
+                                  "enum": [
+                                    "online",
+                                    "offline",
+                                    "complimentary"
+                                  ]
+                                },
+                                "go_live": {
+                                  "type": "string",
+                                  "enum": [
+                                    "on_payment",
+                                    "immediate",
+                                    "on_approval"
+                                  ]
+                                },
+                                "package_name": {
+                                  "type": "string"
+                                },
+                                "tier": {
+                                  "type": "string",
+                                  "enum": [
+                                    "title",
+                                    "gold",
+                                    "silver",
+                                    "partner"
+                                  ]
+                                },
+                                "includes_on_stream": {
+                                  "type": "boolean"
+                                },
+                                "competition_id": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "amount_cents": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "currency": {
+                                  "type": "string"
+                                },
+                                "sponsor_name": {
+                                  "type": "string"
+                                },
+                                "sponsor_email": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "ends_at": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "created_at": {
+                                  "type": "string"
+                                },
+                                "created_by": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "invoice_sent_at": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "paid_at": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "marked_paid_by": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "approved_at": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "approved_by": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "live_at": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "ended_at": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "ended_reason": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "refunded",
+                                        "dispute_lost",
+                                        "ended_now",
+                                        "expired",
+                                        "competition_finished",
+                                        "legacy",
+                                        "duplicate_payment"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "parked_at": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "disputed_at": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "dispute_id": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "invoice_number": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "sponsor_id",
+                                "package_id",
+                                "deal_status",
+                                "payment_status",
+                                "payment_method",
+                                "go_live",
+                                "package_name",
+                                "tier",
+                                "includes_on_stream",
+                                "competition_id",
+                                "amount_cents",
+                                "currency",
+                                "sponsor_name",
+                                "sponsor_email",
+                                "ends_at",
+                                "created_at",
+                                "created_by",
+                                "invoice_sent_at",
+                                "paid_at",
+                                "marked_paid_by",
+                                "approved_at",
+                                "approved_by",
+                                "live_at",
+                                "ended_at",
+                                "ended_reason",
+                                "parked_at",
+                                "disputed_at",
+                                "dispute_id",
+                                "invoice_number"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "locked_by_deal": {
+                          "type": "boolean"
+                        },
+                        "has_open_deal": {
+                          "type": "boolean"
+                        },
+                        "last_billing_email": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -71324,7 +72344,11 @@
                         "status",
                         "click_count",
                         "created_at",
-                        "on_stream"
+                        "on_stream",
+                        "deal",
+                        "locked_by_deal",
+                        "has_open_deal",
+                        "last_billing_email"
                       ],
                       "additionalProperties": false
                     },
@@ -71347,7 +72371,42 @@
                     "status": "active",
                     "click_count": -9007199254740991,
                     "created_at": "example",
-                    "on_stream": true
+                    "on_stream": true,
+                    "deal": {
+                      "id": "example",
+                      "sponsor_id": "example",
+                      "package_id": "example",
+                      "deal_status": "draft",
+                      "payment_status": "pending",
+                      "payment_method": "online",
+                      "go_live": "on_payment",
+                      "package_name": "example",
+                      "tier": "title",
+                      "includes_on_stream": true,
+                      "competition_id": "example",
+                      "amount_cents": -9007199254740991,
+                      "currency": "example",
+                      "sponsor_name": "example",
+                      "sponsor_email": "example",
+                      "ends_at": "example",
+                      "created_at": "example",
+                      "created_by": "example",
+                      "invoice_sent_at": "example",
+                      "paid_at": "example",
+                      "marked_paid_by": "example",
+                      "approved_at": "example",
+                      "approved_by": "example",
+                      "live_at": "example",
+                      "ended_at": "example",
+                      "ended_reason": "refunded",
+                      "parked_at": "example",
+                      "disputed_at": "example",
+                      "dispute_id": "example",
+                      "invoice_number": -9007199254740991
+                    },
+                    "locked_by_deal": true,
+                    "has_open_deal": true,
+                    "last_billing_email": "example"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -71529,6 +72588,50 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
@@ -71541,7 +72644,7 @@
         ]
       },
       "delete": {
-        "summary": "Delete a sponsor",
+        "summary": "Delete a sponsor, with any deals that never got past waiting. A sponsor whose deals hold history (a payment, a dispute, a deal that went live or ended, an open Checkout link) is 409 `sponsor_has_deal_history`",
         "tags": [
           "sponsors"
         ],
@@ -71687,6 +72790,50 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {

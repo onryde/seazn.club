@@ -235,7 +235,7 @@ describe.skipIf(!HAS_DB)("applyDealsToSponsor — the one owner of a deal's effe
   it("every open status hides its sponsor: draft, awaiting payment, awaiting approval (count reported)", async () => {
     const w = await world();
     // D2's lifecycle, minus live, ended and scheduled (a scheduled deal is promoted, below).
-    const OPEN = [
+    const OPEN: Deal[] = [
       { deal_status: "draft" },
       { deal_status: "awaiting_payment", payment_method: "offline" },
       { deal_status: "awaiting_approval", status: "paid", paid_at: T0, go_live: "on_approval" },

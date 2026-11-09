@@ -30,6 +30,8 @@ import { PointsRule } from "@seazn/engine/competition";
 import { isValidCutoffDay, REASON_MIN, REASON_MAX } from "../../lib/registration-rules.ts";
 import { isRedirectableUrl, SPONSOR_URL_HTTP_ONLY } from "../../lib/sponsor-clicks.ts";
 import { SPONSOR_FREQUENCIES } from "../../lib/sponsor-frequencies.ts";
+// The sponsor deal domain's value sets (strip-types-safe: its only import is `import type`).
+import { DEAL_STATUSES, END_REASONS, GO_LIVE_RULES, PAYMENT_METHODS, PAYMENT_STATUSES } from "../../lib/sponsor-deals.ts";
 import { FIXTURE_STATUSES } from "../../lib/fixture-status.ts";
 // W3 T18 (RB3-7(c)): the sentence a requested half/zero bye is refused with — the table's own constant (client-safe and
 // strip-types-safe: its only import is `import type`), so this schema, `http.ts`'s reader and the table row say one thing.
@@ -5219,6 +5221,46 @@ export const PatchOfficial = patchOf(CreateOfficial);
 export const SponsorTier = z.enum(["title", "gold", "silver", "partner"]);
 export const SponsorStatus = z.enum(["active", "pending", "inactive"]);
 
+/** Sponsor deals (plan 2026-11-07-sponsor-deals D2/D4): one deal as the console reads it — lib/sponsor-deals.ts's
+ *  SponsorDeal, its value sets the domain's own (each mirrors a sponsor_orders CHECK). `payment_status` is the money column
+ *  `status`; the snapshot (tier, includes_on_stream, package_name, competition_id, amount) is taken when the deal is made. */
+export const SponsorDeal = z.object({
+  id: z.string(),
+  /** Null only on a legacy order, which is never a sponsor's shown deal. */
+  sponsor_id: z.string().nullable(),
+  package_id: z.string(),
+  deal_status: z.enum(DEAL_STATUSES),
+  payment_status: z.enum(PAYMENT_STATUSES),
+  payment_method: z.enum(PAYMENT_METHODS),
+  go_live: z.enum(GO_LIVE_RULES),
+  package_name: z.string(),
+  tier: SponsorTier,
+  includes_on_stream: z.boolean(),
+  /** The deal's scope; null is the whole organisation. */
+  competition_id: z.string().nullable(),
+  amount_cents: z.number().int(),
+  currency: z.string(),
+  sponsor_name: z.string(),
+  sponsor_email: z.string().nullable(),
+  ends_at: z.string().nullable(),
+  created_at: z.string(),
+  created_by: z.string().nullable(),
+  invoice_sent_at: z.string().nullable(),
+  paid_at: z.string().nullable(),
+  marked_paid_by: z.string().nullable(),
+  approved_at: z.string().nullable(),
+  approved_by: z.string().nullable(),
+  live_at: z.string().nullable(),
+  ended_at: z.string().nullable(),
+  ended_reason: z.enum(END_REASONS).nullable(),
+  /** Set while an open dispute parks a live deal: its sponsor is hidden until the dispute is resolved. */
+  parked_at: z.string().nullable(),
+  disputed_at: z.string().nullable(),
+  dispute_id: z.string().nullable(),
+  /** Always null until invoices are numbered. */
+  invoice_number: z.number().int().nullable(),
+});
+
 export const Sponsor = z.object({
   id: z.string(),
   competition_id: z.string().nullable(),
@@ -5242,6 +5284,16 @@ export const Sponsor = z.object({
   /** List reads: a lost dispute wrote the activating order off — the
    *  placement stays down and this explains why. */
   dispute_lost: z.boolean().optional(),
+  /** Sponsor deals: the deal this sponsor's row shows (a live one first, then one waiting to go live, then the latest
+   *  ended), or null when it has none. */
+  deal: SponsorDeal.nullable(),
+  /** A live deal sets this sponsor's tier, scope, stream and status: a PATCH of any of them answers 409
+   *  `sponsor_locked_by_deal`. */
+  locked_by_deal: z.boolean(),
+  /** A deal waits to go live: the sponsor is hidden until it does, and a status PATCH answers 409 `sponsor_has_open_deal`. */
+  has_open_deal: z.boolean(),
+  /** The billing email of this sponsor's latest deal that has one (what a new deal's form opens at). */
+  last_billing_email: z.string().nullable(),
 });
 
 export const CreateSponsor = z.object({

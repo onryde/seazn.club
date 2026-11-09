@@ -76,7 +76,8 @@ const rowBytes = async (id: string): Promise<string | null> =>
 const dealCount = async (sponsorId: string): Promise<number> =>
   (await sql<{ n: number }[]>`select count(*)::int as n from sponsor_orders where sponsor_id = ${sponsorId}`)[0]!.n;
 
-/** What a call refused with: the HttpError's status and code (a DB error's code is its SQLSTATE). */
+/** What a call refused with: the HttpError's status and code (a DB error's code is its SQLSTATE). A call that succeeded
+ *  answers `no_refusal`, so the caller's labelled expect names which case let it through. */
 async function refusal(fn: () => Promise<unknown>): Promise<{ status: number | undefined; code: string | undefined }> {
   try {
     await fn();
@@ -84,7 +85,7 @@ async function refusal(fn: () => Promise<unknown>): Promise<{ status: number | u
     const e = err as { status?: number; code?: string };
     return { status: e.status, code: e.code };
   }
-  throw new Error("expected a refusal, the call succeeded");
+  return { status: undefined, code: "no_refusal" };
 }
 
 /** The backends waiting on a lock held by backend `pid` (exact: a wait on anything else is not counted). */
