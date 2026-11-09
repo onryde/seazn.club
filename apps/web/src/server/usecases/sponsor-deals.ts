@@ -45,6 +45,8 @@ import {
 } from "@/server/sponsors/deal-apply";
 import { assertOnlineAllowed, assertPlacementAllowed } from "@/server/sponsors/deal-gates";
 import { assertOutboxCanQueue, dispatchNow } from "@/server/email-outbox";
+import { log } from "@/server/logger";
+import { fireOrgRevalidate } from "@/server/public-site/revalidate";
 import {
   ensureDealCheckout,
   expirePublicSponsors,
@@ -54,6 +56,7 @@ import {
   retireDealSession,
   type DealCheckoutOrg,
 } from "./sponsors";
+import { competitionPhase, getCompetitionDesk } from "./competition-desk";
 
 /** The Add deal body (strict): the API schema itself, so the documented body and the enforced one cannot drift. */
 export const CreateDealInput = CreateSponsorDeal;
@@ -135,7 +138,11 @@ const dealChanged = () => new HttpError(409, "this deal changed while it was bei
  * session the deal should still hold under the lock: the completed one carried on over, else null — anything else is a
  * session stored since, which this rule never saw (409 `deal_changed`).
  */
-async function retireBefore(orgId: string, deal: ServerDeal, onComplete: "refuse" | "carry_on"): Promise<string | null> {
+async function retireBefore(
+  orgId: string,
+  deal: Pick<ServerDeal, "id" | "checkout_session_id">,
+  onComplete: "refuse" | "carry_on",
+): Promise<string | null> {
   const outcome = await retireDealSession(orgId, deal);
   if (outcome === "complete") {
     if (onComplete === "refuse") throw paidOnline();
@@ -448,4 +455,162 @@ export async function getDeal(auth: AuthCtx, dealId: string): Promise<SponsorDea
   const deal = await withTenant(auth.orgId, (tx) => readDeal(tx, dealId));
   if (!deal) throw new HttpError(404, "deal not found");
   return clientDeal(deal);
+}
+
+/** What one run of the sweep did. `checked`: the live AND open deals examined; `expired` / `finished`: deals it ended, by their
+ *  own `ends_at` / by their competition finishing; `promoted`: scheduled deals it put live; `failed`: deals it could not move,
+ *  left as they were for the next run (the cron Worker alerts on this one). */
+export interface SweepResult {
+  checked: number;
+  expired: number;
+  finished: number;
+  promoted: number;
+  failed: number;
+}
+
+/** The sweep's view of one live or open deal: just what deciding whether it is due needs, read without a lock. */
+interface SweepRow {
+  id: string;
+  org_id: string;
+  deal_status: DealStatus;
+  competition_id: string | null;
+  ends_at: Date | null;
+  checkout_session_id: string | null;
+}
+
+type SweepReason = "expired" | "competition_finished";
+
+/**
+ * The hourly sweep (plan D20, F19; spec §5.2, §8a): every live or open deal (draft, awaiting payment or approval, scheduled) is
+ * examined, on the privileged connection and one transaction per deal, and ended when it is due:
+ *  - `ends_at` has passed (`<=`, so `ends_at = now` is due): ended `expired`. A deal still waiting to go live is ended too, and
+ *    a scheduled deal past its OWN end is never promoted — it is ended `expired` instead (F19);
+ *  - a live deal with a competition and no `ends_at`, once that competition's derived phase is `finished`: ended
+ *    `competition_finished`. The PHASE decides, never the competition's stored date, so moving its dates moves the end with
+ *    them; a competition with no divisions is `setting_up` forever and its deal never ends this way (End now still works).
+ * Then `applyDealsToSponsor` promotes the sponsor's next scheduled deal in the same transaction.
+ *
+ * Order and locks. Deals still waiting go first and live ones last, so a past-end scheduled deal has left the queue before
+ * the live deal ahead of it ends and promotes. Each transaction takes the one lock order (F2: the sponsor, then its deals by
+ * (created_at, id), then re-checks that the deal is still due); a deal another writer got to first is left alone. A promotion
+ * of a deal whose own end has passed is a guard, not a path: the transaction is rolled back (`failed`) and both deals are tried
+ * again next run, never leaving a past-end deal live.
+ *
+ * Stripe, outside any transaction (D14, F3): a deal being ended that holds a stored Checkout session retires it first
+ * (`retireBefore`: retrieve, expire only when open, a completed one carried on over). A session that cannot be read or
+ * expired is a `failed` deal, left as it was. A competition's desk is read before any transaction (it opens its own).
+ *
+ * A deal that throws is counted in `failed`, logged, and the sweep moves on. The public pages of the orgs that changed are
+ * revalidated as tail work (`deferred`, F1: nobody reads a sweep back at once).
+ *
+ * `now` is injectable (the end date is proven against it). `orgIds` scopes the run to those orgs — the test seam for a shared
+ * database (the route never passes it); an empty list examines nothing.
+ */
+export async function sweepSponsorDeals(now: Date = new Date(), opts: { orgIds?: readonly string[] } = {}): Promise<SweepResult> {
+  const scope = opts.orgIds === undefined ? sql`` : sql`and org_id = any(${[...opts.orgIds]}::uuid[])`;
+  const rows = await sql<SweepRow[]>`
+    select id, org_id, deal_status, competition_id, ends_at, checkout_session_id
+      from sponsor_orders
+     where deal_status <> 'ended' ${scope}
+     order by created_at, id`;
+  const result: SweepResult = { checked: rows.length, expired: 0, finished: 0, promoted: 0, failed: 0 };
+
+  // Decide who is due. A competition's phase is asked once per (org, competition), before any transaction.
+  const due: { row: SweepRow; reason: SweepReason }[] = [];
+  const phases = new Map<string, Promise<"finished" | "not_finished" | "unreadable">>();
+  for (const row of rows) {
+    if (isPastEnd(row.ends_at, now)) {
+      due.push({ row, reason: "expired" });
+      continue;
+    }
+    if (row.deal_status !== "live" || row.ends_at !== null || row.competition_id === null) continue;
+    const key = `${row.org_id}/${row.competition_id}`;
+    let phase = phases.get(key);
+    if (!phase) {
+      phase = competitionPhaseOf(row.org_id, row.competition_id, now);
+      phases.set(key, phase);
+    }
+    const verdict = await phase;
+    if (verdict === "finished") due.push({ row, reason: "competition_finished" });
+    else if (verdict === "unreadable") {
+      result.failed++;
+      log.error({ dealId: row.id, competitionId: row.competition_id }, "sponsor deals sweep: the competition's phase could not be read");
+    }
+  }
+  // Deals still waiting before live ones (a stable sort: oldest first within each).
+  due.sort((a, b) => Number(a.row.deal_status === "live") - Number(b.row.deal_status === "live"));
+
+  const changedOrgs = new Set<string>();
+  for (const { row, reason } of due) {
+    try {
+      const out = await endDueDeal(row, reason, now);
+      if (out === null) continue; // another writer got there first: nothing to do
+      if (reason === "expired") result.expired++;
+      else result.finished++;
+      if (out.promoted) result.promoted++;
+      changedOrgs.add(row.org_id);
+    } catch (err) {
+      result.failed++;
+      log.error({ err, dealId: row.id, reason }, "sponsor deals sweep: a deal could not be ended; it is left for the next run");
+    }
+  }
+
+  // F1: the sweep is not a console path (nobody reads it back), so the bust is tail work, after its own slug read.
+  for (const orgId of changedOrgs) {
+    deferred(async () => {
+      const [org] = await sql<{ slug: string }[]>`select slug from organizations where id = ${orgId}`;
+      if (org) fireOrgRevalidate(org.slug);
+    });
+  }
+  return result;
+}
+
+const isPastEnd = (endsAt: Date | string | null, now: Date): boolean => endsAt !== null && new Date(endsAt).getTime() <= now.getTime();
+
+/** A competition's derived phase, read as an org's viewer (the context this repo synthesizes elsewhere). A read that throws is
+ *  `unreadable` — never `finished`. */
+async function competitionPhaseOf(orgId: string, competitionId: string, now: Date): Promise<"finished" | "not_finished" | "unreadable"> {
+  try {
+    const desk = await getCompetitionDesk({ orgId, via: "session", userId: null, role: "viewer", keyId: null }, competitionId, now);
+    return competitionPhase(desk).kind === "finished" ? "finished" : "not_finished";
+  } catch (err) {
+    log.error({ err, orgId, competitionId }, "sponsor deals sweep: the competition desk could not be read");
+    return "unreadable";
+  }
+}
+
+/**
+ * End ONE due deal. Stripe first (outside any transaction), then one transaction in the one lock order: lock the sponsor and
+ * its deals, re-check that this deal is still due (null: it is not — ended by another writer, or its dates moved), end it,
+ * and apply. Answers whether apply promoted a scheduled deal, or null when the deal was not ended.
+ */
+async function endDueDeal(row: SweepRow, reason: SweepReason, now: Date): Promise<{ promoted: boolean } | null> {
+  const expected = row.checkout_session_id === null ? null : await retireBefore(row.org_id, row, "carry_on");
+  return sql.begin(async (tx) => {
+    const locked = await lockDealAndSponsor(tx, row.id);
+    if (!locked || locked.sponsorId === null) return null;
+    const { deal, deals } = locked;
+    const stillDue =
+      deal.deal_status !== "ended" &&
+      (reason === "expired"
+        ? isPastEnd(deal.ends_at, now)
+        : deal.deal_status === "live" && deal.ends_at === null && deal.competition_id === row.competition_id);
+    if (!stillDue) return null;
+    if (deal.checkout_session_id !== expected) throw dealChanged();
+
+    await tx`update sponsor_orders set deal_status = 'ended', ended_at = ${now}, ended_reason = ${reason} where id = ${deal.id}`;
+    // F7: the sponsor is reset only when this step ended the LAST live or open deal.
+    const last = !deals.some((d) => d.id !== deal.id && !isLegacyDeal(d) && d.deal_status !== "ended");
+    const applied = await applyDealsToSponsor(tx, locked.sponsorId, null, { now, endedDealId: last ? deal.id : null });
+    if (applied.promotedDealId !== null) {
+      // F19, as a guard: a scheduled deal whose own end has passed is ended by its own step, never promoted. Reached only when
+      // that step could not run (its session was unreadable): roll this one back too, rather than leave a past-end deal live.
+      const promoted = deals.find((d) => d.id === applied.promotedDealId);
+      if (!promoted) throw new Error(`sponsor deals sweep: promoted deal ${applied.promotedDealId} is not among the locked deals`);
+      if (isPastEnd(promoted.ends_at, now)) {
+        throw new Error(`sponsor deals sweep: deal ${promoted.id} is past its end and would have been promoted; left for the next run`);
+      }
+    }
+    return { promoted: applied.promotedDealId !== null };
+  });
 }

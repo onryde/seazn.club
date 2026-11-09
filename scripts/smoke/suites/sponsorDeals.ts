@@ -1,5 +1,6 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP/DB helpers, tag): see the header of that file.
 import {
+  BASE,
   type Session,
   call,
   check,
@@ -147,4 +148,21 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
     "sd viewer cannot mark paid (403)",
     refused?.status === 403 && read?.status === 200 && v1data<Deal>(read).payment_status === "pending",
   );
+
+  // --- T9, the hourly sweep's route (D20): the cron secret guards it, and the right one answers the sweep's counts. CI sets
+  // CRON_SECRET for the smoke job and its server alike (ci.yml), so a wrong secret is exactly a 401.
+  const wrongCron = await fetch(`${BASE}/api/cron/sponsor-deals`, { method: "POST", headers: { "x-cron-secret": "definitely-wrong-sponsor-deals" } });
+  check("sd cron route refuses a wrong secret (401)", wrongCron.status === 401);
+  const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret) {
+    check("sd cron route right-secret shape skipped (no CRON_SECRET in smoke env)", true);
+  } else {
+    const rightCron = await fetch(`${BASE}/api/cron/sponsor-deals`, { method: "POST", headers: { "x-cron-secret": cronSecret } });
+    const cron = (await rightCron.json().catch(() => ({}))) as { ok?: boolean; data?: Record<string, unknown> };
+    const KEYS = ["checked", "expired", "finished", "promoted", "failed"] as const;
+    check(
+      "sd cron route answers counts (200)",
+      rightCron.status === 200 && cron.ok === true && KEYS.every((k) => typeof cron.data?.[k] === "number"),
+    );
+  }
 }

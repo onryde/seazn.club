@@ -21,7 +21,7 @@ const at = (iso: string) => new Date(iso);
 const ENVS: readonly EnvName[] = ["stg", "prod"];
 const ids = (d: Date, cron = TRIGGER_CRON, env: string = "prod", jobs: readonly Job[] = JOBS) =>
   dueJobs(d, cron, env, jobs).map((j) => j.id);
-const HOURLY = ["registrations", "billing-events", "funnel-remind"];
+const HOURLY = ["registrations", "billing-events", "funnel-remind", "sponsor-deals"];
 /** Capture QR v2 §6.11 (W22): the stream-tick trigger, every 5 minutes. Typed from the spec, never read from JOBS. */
 const EVERY_5 = "*/5 * * * *";
 /** The 2026-10-20 owner ruling: prod's fast trigger is the minute one (the email outbox's worker runs every minute there). */
@@ -76,6 +76,7 @@ describe("dueJobs on the hourly trigger", () => {
       registrations: 168,
       "billing-events": 168,
       "funnel-remind": 168,
+      "sponsor-deals": 168,
       "ai-previews": 7,
       "relay-sweep": 7,
       "billing-quantity": 7,
@@ -416,6 +417,9 @@ describe("JOBS table", () => {
       // The outbox worker's OutboxTickReport.failed — rows whose attempt threw in our own code, or a tick that could not
       // run (role check). `deferred` is NOT a failure (the next minute reaches those rows).
       "email-outbox": ["data.failed"],
+      // Sponsor deals T9 (D20): the sweep's SweepResult.failed — deals it could not move (a Stripe session it could not close,
+      // a competition it could not read), each left for the next run.
+      "sponsor-deals": ["data.failed"],
     });
   });
 });

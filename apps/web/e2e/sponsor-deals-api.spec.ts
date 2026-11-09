@@ -11,6 +11,9 @@
 // Each test seeds its OWN community org (the plan this programme says must be able to record a sponsorship it was paid in
 // cash: anti-goal 4) with a public competition, so no row here touches the shared Pro org.
 //
+// Task 9 — seam S3 through a real server: the hourly sweep's route, POSTed with the cron secret, takes a deal whose end date
+// has passed off the public page (seed `ends_at` in SQL: the end-date INPUT is proven in Task 16).
+//
 // Task 8 — seam S1 through a real server: a SIGNED payment_intent.succeeded posted to the real webhook route
 // (/api/webhooks/stripe → runEvent → the payment handler) puts the deal's OWN sponsor on the public page, and adds no sponsor.
 import { expect, test, type APIRequestContext } from "@playwright/test";
@@ -168,4 +171,38 @@ test("community creates a partner package (201) and is refused a gold one (402)"
     name: "Gold", price_cents: 1_000, currency: "gbp", tier: "gold",
   });
   expect(gold.status).toBe(402);
+});
+
+test("an org-wide deal whose end date has passed comes off the public page after the cron route runs", async ({ request }) => {
+  const cronSecret = process.env.CRON_SECRET;
+  expect(cronSecret, "the e2e job must set CRON_SECRET (one value for the server and this runner)").toBeTruthy();
+  const s = await setup(request, "sweep-expiry");
+  const made = await createDeal(request, s.org.orgId, s.sponsorId, { package_id: s.packageId, payment_method: "complimentary", go_live: "immediate" });
+  expect(made.status, JSON.stringify(made.error)).toBe(201);
+  const dealId = made.data!.deal.id;
+  expect(await publicPage(request, s.org.slug, s.comp.slug), "premise: the live deal's sponsor is on the page").toContain(`/s/${s.sponsorId}`);
+
+  // An unauthenticated run changes nothing: the deal is still live and still shown.
+  const refused = await request.post("/api/cron/sponsor-deals", { headers: { "x-cron-secret": "definitely-wrong" } });
+  expect(refused.status()).toBe(401);
+
+  await withDb(async (sql) => {
+    await sql`update sponsor_orders set ends_at = now() - interval '1 minute' where id = ${dealId}`;
+  });
+  const run = await request.post("/api/cron/sponsor-deals", { headers: { "x-cron-secret": cronSecret! } });
+  expect(run.status()).toBe(200);
+  const counts = ((await run.json()) as { data: { checked: number; expired: number; failed: number } }).data;
+  expect(counts.checked, "the sweep examined deals (anti-vacuity)").toBeGreaterThanOrEqual(1);
+  expect(counts.expired, "and ended this one").toBeGreaterThanOrEqual(1);
+  expect(counts.failed).toBe(0);
+
+  const deal = await apiJson<Deal & { ended_reason: string | null }>(request, `/api/v1/orgs/${s.org.orgId}/sponsor-deals/${dealId}`);
+  expect(deal.status, JSON.stringify(deal.error)).toBe(200);
+  expect(deal.data!).toMatchObject({ deal_status: "ended", ended_reason: "expired" });
+  // The sweep's bust is tail work (F1: nobody reads a sweep back at once), so the page is polled, not read once.
+  await expect
+    .poll(async () => (await request.get(`/live/${s.org.slug}/${s.comp.slug}`)).text(), { timeout: 40_000, intervals: [500, 1_000, 2_000, 3_000, 5_000] })
+    .not.toContain(`/s/${s.sponsorId}`);
+  const after = await sponsors(request, s.org.orgId);
+  expect(after.find((x) => x.id === s.sponsorId)?.status).toBe("inactive");
 });
