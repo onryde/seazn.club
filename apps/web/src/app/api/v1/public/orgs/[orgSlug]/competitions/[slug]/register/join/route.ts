@@ -1,18 +1,11 @@
 import { v1, parseBody, reply } from "@/server/api-v1/http";
 import { rateLimit } from "@/lib/rate-limit";
+import { clientIp } from "@/lib/client-ip";
 import { PublicJoinRequest } from "@/server/api-v1/schemas";
 import { joinTeamEntry, previewJoinEntry } from "@/server/usecases/registration-submit";
 import { getCurrentUser } from "@/lib/auth";
 
 type Ctx = { params: Promise<{ orgSlug: string; slug: string }> };
-
-function clientIp(req: Request): string {
-  return (
-    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-    req.headers.get("x-real-ip") ??
-    "unknown"
-  );
-}
 
 /**
  * Join-link preview — the join page's first read, before it asks anyone to
@@ -24,7 +17,7 @@ function clientIp(req: Request): string {
  */
 export async function GET(req: Request, { params }: Ctx) {
   return v1(async () => {
-    await rateLimit(`regjoinpreview:${clientIp(req)}`, { max: 5, windowSeconds: 300 });
+    await rateLimit(`regjoinpreview:${clientIp(req.headers)}`, { max: 5, windowSeconds: 300 });
     // orgSlug/slug unused — see the POST handler's own comment below.
     await params;
     const url = new URL(req.url);
@@ -46,7 +39,7 @@ export async function GET(req: Request, { params }: Ctx) {
  */
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
-    await rateLimit(`regjoin:${clientIp(req)}`, { max: 5, windowSeconds: 300 });
+    await rateLimit(`regjoin:${clientIp(req.headers)}`, { max: 5, windowSeconds: 300 });
     // orgSlug/slug are unused: joinTeamEntry needs no org/competition scoping
     // (see above). Still awaited so this route honours the same dynamic-
     // segment contract as its sibling /register.

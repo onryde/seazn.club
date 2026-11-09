@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { handler } from "@/lib/http";
 import { rateLimit, type RateLimitConfig } from "@/lib/rate-limit";
+import { clientIp } from "@/lib/client-ip";
 import {
   MARKETING_FORMATS,
   marketingPreview,
@@ -23,7 +24,7 @@ const cache = new Map<string, { phases: ReturnType<typeof marketingPreview> }>()
 
 export async function POST(req: Request) {
   return handler(async () => {
-    const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+    const ip = clientIp(req.headers);
     await rateLimit(`format-preview:${ip}`, PREVIEW_LIMIT);
 
     const { format, entrants } = schema.parse(await req.json());

@@ -11,21 +11,37 @@
 //
 // Every limiter that keys on it moves with it: capture's failed-401 budget (`clientIpOf`, its route pin is
 // limits-route.test.ts), the public read limiters (`publicClientIp`), and the /s/ redirect's miss budget and click dedupe.
+// The auth, registration, device-link, consent, funnel and format-preview limiters are pinned in client-ip-limiters.test.ts,
+// and client-ip-readers.test.ts fails any other source file that reads one of these headers itself.
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The limiters' own call, recorded: the wiring `describe` reads which bucket each limiter keyed on.
 vi.mock("@/lib/rate-limit", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/rate-limit")>();
   return { ...actual, rateLimit: vi.fn(async () => undefined) };
 });
+// A stamp mismatch's one-per-process Sentry warning, recorded (the origin-stamp describes read it).
+vi.mock("@sentry/nextjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@sentry/nextjs")>()),
+  captureMessage: vi.fn(),
+}));
 
+import * as Sentry from "@sentry/nextjs";
 import { rateLimit } from "@/lib/rate-limit";
-import { clientIp, CLOUDFLARE_IPV4_RANGES, CLOUDFLARE_IPV6_RANGES, isCloudflarePeer } from "../client-ip";
+import { log } from "@/server/logger";
+import {
+  __resetOriginStampReportForTests,
+  clientIp,
+  CLOUDFLARE_IPV4_RANGES,
+  CLOUDFLARE_IPV6_RANGES,
+  isCloudflarePeer,
+} from "../client-ip";
 import { clientIpOf } from "@/server/api-v1/capture-http";
 import { publicPollRateLimit, publicRateLimit } from "@/server/usecases/public";
 import { GET as sponsorLink } from "@/app/s/[key]/route";
+import { scrubSentryEvent } from "../scrub-score-url";
 
 /** A Cloudflare edge, as Fly's proxy sees it (162.158.0.0/15). */
 const CF_EDGE = "162.158.12.34";
@@ -39,6 +55,14 @@ const DIRECT = "198.51.100.60";
 const XFF_FIRST = "192.0.2.7";
 const REAL = "192.0.2.99";
 const h = (o: Record<string, string>) => new Headers(o);
+/** The origin stamp's header: the brief's name (README "Deploy step - client IP behind Cloudflare"), typed ONCE here and
+ *  used by every test below, the reader/scrub cross-pin included - never read from either module. */
+const STAMP_HEADER = "x-seazn-origin-secret";
+
+// Every test outside the origin-stamp describe runs with the secret UNSET - today's deployment - whatever a developer's
+// .env.local (vitest.config.ts loads it) holds; that describe sets it per test. Unstubbed after each.
+beforeEach(() => vi.stubEnv("CF_ORIGIN_SECRET", undefined));
+afterEach(() => vi.unstubAllEnvs());
 
 describe("Cloudflare's published ranges (fetched 2026-11-01)", () => {
   it("are the published lists: 15 IPv4 and 7 IPv6 CIDRs, each a valid network of its family (count reported)", () => {
@@ -163,6 +187,335 @@ describe("clientIp", () => {
       checked++;
     }
     expect(checked).toBe(cases.length);
+  });
+});
+
+// The origin stamp (owner OK 2026-11-07). Anyone with a Cloudflare zone of their own can send requests to the fly.dev origin
+// THROUGH Cloudflare's network: the peer is a genuine Cloudflare edge, there is no `cf-worker`, and `CF-Connecting-IP` says
+// whatever they chose. Only OUR zone's Transform Rule stamps `x-seazn-origin-secret` with the value held in the
+// `CF_ORIGIN_SECRET` Fly secret, so with the secret set, Cloudflare's header is believed only on a request that carries that
+// exact stamp. A missing or wrong stamp falls back to Fly's peer - never a refusal. Unset, nothing changes. The header name and
+// the fallback are the brief's (README "Deploy step - client IP behind Cloudflare"), typed here, not read from the module.
+// The name carries `secret` so Sentry's own deny list masks it (fix round 1, I1; scrub-score-url.test.ts holds that proof).
+describe("the origin stamp: CF_ORIGIN_SECRET and x-seazn-origin-secret", () => {
+  /** A 64-character hex value, the shape `openssl rand -hex 32` gives the runbook. */
+  const SECRET = "0123456789abcdef".repeat(4);
+  /** A visitor named by ANOTHER Cloudflare zone's request to our origin - any value its owner picked. */
+  const FORGED = "192.0.2.200";
+  const stamped = (o: Record<string, string>, stamp = SECRET) => h({ ...o, [STAMP_HEADER]: stamp });
+  // A mismatch is reported (the next describe owns that): silenced here, with the per-process state reset per test.
+  let warn: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    __resetOriginStampReportForTests();
+    warn = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
+  });
+  afterEach(() => warn.mockRestore());
+  const run = (cases: Array<[Headers, string, string]>): number => {
+    let checked = 0;
+    for (const [headers, want, label] of cases) {
+      expect(clientIp(headers), label).toBe(want);
+      checked++;
+    }
+    return checked;
+  };
+
+  it("set, and the stamp matches: Cloudflare's visitor, IPv4 and IPv6, a forged X-Forwarded-For hop beside it (count reported)", () => {
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    const cases: Array<[Headers, string, string]> = [
+      [stamped({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR }), VISITOR, "v4 peer, v4 visitor"],
+      [stamped({ "fly-client-ip": CF_EDGE6, "cf-connecting-ip": VISITOR6 }), VISITOR6, "v6 peer, v6 visitor"],
+      [stamped({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR, "x-forwarded-for": `${XFF_FIRST}, ${CF_EDGE}` }), VISITOR, "XFF beside it"],
+    ];
+    expect(run(cases)).toBe(3);
+  });
+
+  it("set, and the stamp is missing, wrong at the same length, or another length: Fly's peer, and none of them throws (count reported)", () => {
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    const base = { "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR };
+    const cases: Array<[Headers, string, string]> = [
+      [h(base), CF_EDGE, "missing"],
+      [stamped(base, `${SECRET.slice(0, -1)}0`), CF_EDGE, "same length, last character wrong"],
+      [stamped(base, `f${SECRET.slice(1)}`), CF_EDGE, "same length, first character wrong"],
+      [stamped(base, SECRET.toUpperCase()), CF_EDGE, "same length, another case"],
+      [stamped(base, SECRET.slice(0, -1)), CF_EDGE, "one character short"],
+      [stamped(base, `${SECRET}0`), CF_EDGE, "one character long"],
+      [stamped(base, SECRET.slice(0, 32)), CF_EDGE, "a prefix"],
+      [stamped(base, SECRET + SECRET), CF_EDGE, "the secret twice"],
+      [stamped(base, ""), CF_EDGE, "empty"],
+      // The pre-rename name (6c336f65c9): a rule built from that README revision stamps a header web no longer reads.
+      [h({ ...base, "x-seazn-origin": SECRET }), CF_EDGE, "the right value under the pre-rename name x-seazn-origin"],
+    ];
+    expect(SECRET.toUpperCase(), "premise: the case-flipped stamp differs").not.toBe(SECRET);
+    expect(run(cases)).toBe(10);
+  });
+
+  it("a CF-Connecting-IP forged through ANOTHER zone (a Cloudflare-range peer, no cf-worker, no stamp): Fly's peer once the secret is set - and the forged value while it is not, the gap this closes", () => {
+    const fromAnotherZone = [
+      h({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": FORGED }),
+      h({ "fly-client-ip": CF_EDGE6, "cf-connecting-ip": FORGED }),
+    ];
+    expect(fromAnotherZone.map(clientIp), "unset: today's behaviour believes it").toEqual([FORGED, FORGED]);
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    expect(fromAnotherZone.map(clientIp), "set: Fly's peer").toEqual([CF_EDGE, CF_EDGE6]);
+  });
+
+  it("is in ADDITION to the existing checks: a matching stamp never rescues a non-Cloudflare peer, a Worker subrequest or a non-address (count reported)", () => {
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    const cases: Array<[Headers, string, string]> = [
+      [stamped({ "fly-client-ip": DIRECT, "cf-connecting-ip": VISITOR }), DIRECT, "peer outside Cloudflare"],
+      [stamped({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR, "cf-worker": "attacker.example" }), CF_EDGE, "a Worker subrequest"],
+      [stamped({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": "evil" }), CF_EDGE, "not an address"],
+      [stamped({ "fly-client-ip": CF_EDGE }), CF_EDGE, "no CF header at all"],
+    ];
+    expect(run(cases)).toBe(4);
+  });
+
+  it("with no Fly header (local, CI) the secret changes nothing: X-Forwarded-For, then X-Real-IP, then \"unknown\"; a stamped CF header with no Fly peer is still ignored (count reported)", () => {
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    const cases: Array<[Headers, string, string]> = [
+      [h({ "x-forwarded-for": `${XFF_FIRST}, 10.0.0.1` }), XFF_FIRST, "XFF"],
+      [h({ "x-real-ip": REAL }), REAL, "X-Real-IP"],
+      [stamped({ "cf-connecting-ip": VISITOR, "x-forwarded-for": XFF_FIRST }), XFF_FIRST, "stamped CF, no Fly peer"],
+      [stamped({ "cf-connecting-ip": VISITOR }), "unknown", "stamped CF alone"],
+    ];
+    expect(run(cases)).toBe(4);
+  });
+
+  it("unset or empty, the stamp is not required and a stamp of any value changes nothing - today's behaviour (count reported)", () => {
+    const base = { "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR };
+    let checked = 0;
+    for (const secret of [undefined, ""]) {
+      vi.stubEnv("CF_ORIGIN_SECRET", secret);
+      checked += run([
+        [h(base), VISITOR, `${JSON.stringify(secret)}: no stamp`],
+        [stamped(base, "anything"), VISITOR, `${JSON.stringify(secret)}: a stamp`],
+        [stamped(base, ""), VISITOR, `${JSON.stringify(secret)}: an empty stamp`],
+      ]);
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("is read per request, not at module load: the same request moves as the secret is set, unset and set to another value", () => {
+    const req = stamped({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR });
+    const seen: string[] = [];
+    seen.push(clientIp(req));
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    seen.push(clientIp(req));
+    vi.stubEnv("CF_ORIGIN_SECRET", "another-secret-of-another-environment");
+    seen.push(clientIp(req));
+    vi.stubEnv("CF_ORIGIN_SECRET", undefined);
+    seen.push(clientIp(req));
+    expect(seen).toEqual([VISITOR, VISITOR, CF_EDGE, VISITOR]);
+  });
+
+  // Fix round 2, I-a: lib/client-ip.ts (node-only) and lib/scrub-score-url.ts (browser-bundled) each spell the header, so a
+  // rename of one alone would believe a header the scrub no longer redacts - the secret back in Sentry in clear. One name,
+  // STAMP_HEADER, through BOTH real functions: the reader must believe it, the scrub must redact it.
+  it("the reader and the Sentry scrub agree on the header: a request carrying STAMP_HEADER with the secret is believed, and an event carrying the same header loses its value", () => {
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    expect(clientIp(stamped({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR })), "the reader believes STAMP_HEADER").toBe(VISITOR);
+    const out = scrubSentryEvent({
+      event_id: "x1",
+      request: { method: "GET", url: "https://seazn.club/live/club", headers: { [STAMP_HEADER]: SECRET, "user-agent": "ua/1" } },
+    });
+    expect(JSON.stringify(out), "the scrub redacts STAMP_HEADER").not.toContain(SECRET);
+    expect(out.request?.headers?.[STAMP_HEADER]).toBe("[redacted]");
+    expect(out.request?.headers?.["user-agent"], "positive pair: another header is kept").toBe("ua/1");
+  });
+});
+
+// Fix round 1, I2: a mismatch must not be silent. With the secret set, a Cloudflare peer carrying CF-Connecting-IP and no
+// cf-worker but without our stamp keys on the EDGE, so a misconfigured rule (another host, a typo, a rotation half done) puts
+// every visitor of a colo in ONE bucket - sign-in first (magic-link, verify-email, claim-signin and the AUTH routes). It is
+// reported: one `log.warn` at most once a minute per process, and one Sentry warning per process, each carrying the reason
+// code `origin_stamp_mismatch` and no secret or stamp value. Fix round 2 (M-b) adds two non-secret discriminators: `stamp`,
+// "absent" or "wrong", and the request's `host` (lower-cased; "none" when missing, "invalid" when it is not a host name), so
+// forgery through another zone (absent, a host not ours) reads apart from misconfiguration (wrong, or absent on our host).
+// The interval, the code and the discriminators are the controller's rulings, typed here. The fallback is unchanged.
+describe("a stamp mismatch is reported: per kind, a throttled log.warn and one Sentry warning per process", () => {
+  const SECRET = "fedcba9876543210".repeat(4);
+  const WRONG = "0000000000000000".repeat(4);
+  const MINUTE = 60_000;
+  const capture = vi.mocked(Sentry.captureMessage);
+  let warn: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    __resetOriginStampReportForTests();
+    warn = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
+    capture.mockClear();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-08T12:00:00Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    warn.mockRestore();
+  });
+  const mismatch = (stamp?: string, host: string | null = "seazn.club") =>
+    h({
+      "fly-client-ip": CF_EDGE,
+      "cf-connecting-ip": VISITOR,
+      ...(host === null ? {} : { host }),
+      ...(stamp === undefined ? {} : { [STAMP_HEADER]: stamp }),
+    });
+
+  it("never fires where no stamp is owed or none is checked: the secret unset, a matching stamp, a non-Cloudflare peer, a Worker, no or a bad CF header, no Fly peer (count reported)", () => {
+    const unset: Headers[] = [mismatch(), mismatch(WRONG), h({ "fly-client-ip": CF_EDGE6, "cf-connecting-ip": VISITOR6 })];
+    for (const req of unset) expect(clientIp(req)).toBe(req.get("cf-connecting-ip"));
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    const set: Headers[] = [
+      mismatch(SECRET),
+      h({ "fly-client-ip": DIRECT, "cf-connecting-ip": VISITOR }),
+      h({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR, "cf-worker": "attacker.example" }),
+      h({ "fly-client-ip": CF_EDGE }),
+      h({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": "evil" }),
+      h({ "cf-connecting-ip": VISITOR, "x-forwarded-for": XFF_FIRST }),
+    ];
+    for (const req of set) clientIp(req);
+    expect(unset.length + set.length).toBe(9);
+    expect(warn, "no warn").not.toHaveBeenCalled();
+    expect(capture, "no Sentry message").not.toHaveBeenCalled();
+  });
+
+  it("each kind alone, missing then wrong: the first is warned and sent to Sentry; then one warn a minute (60s after the last, to the millisecond) and never a second Sentry message (fake clock, steps reported)", () => {
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    // [ms after the walk's start, warns so far]
+    const walk: Array<[number, number]> = [
+      [0, 1],
+      [1_000, 1],
+      [MINUTE - 1, 1],
+      [MINUTE, 2],
+      [MINUTE + 1, 2],
+      [2 * MINUTE - 1, 2],
+      [2 * MINUTE, 3],
+      [10 * MINUTE, 4],
+    ];
+    let checked = 0;
+    for (const stamp of [undefined, WRONG]) {
+      __resetOriginStampReportForTests();
+      warn.mockClear();
+      capture.mockClear();
+      const t0 = Date.now();
+      for (const [at, warns] of walk) {
+        vi.setSystemTime(t0 + at);
+        expect(clientIp(mismatch(stamp)), `${stamp ? "wrong" : "absent"} +${at}ms: still Fly's peer`).toBe(CF_EDGE);
+        expect(warn, `${stamp ? "wrong" : "absent"} +${at}ms`).toHaveBeenCalledTimes(warns);
+        expect(capture, `${stamp ? "wrong" : "absent"} +${at}ms: one Sentry message per process`).toHaveBeenCalledTimes(1);
+        checked++;
+      }
+    }
+    expect(checked).toBe(16);
+  });
+
+  // Fix round 2 ruling: the throttle and the Sentry flag are kept PER KIND. Forged `absent` stamps through another zone are
+  // expected noise; they must never use up the minute or the process's one Sentry message that a real `wrong` (our rule
+  // sending another value: a misconfiguration) needs.
+  it("a flood of absent never hides a wrong, nor the other way round: absent, absent, then wrong inside the minute still warns AND still reaches Sentry (fake clock)", () => {
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    const kinds = () => warn.mock.calls.map((c: unknown[]) => (c[0] as { stamp: string }).stamp);
+    const sent = () => capture.mock.calls.map((c) => (c[1] as { tags: { stamp: string } }).tags.stamp);
+    const t0 = Date.now();
+    clientIp(mismatch(undefined, "attacker.example"));
+    vi.setSystemTime(t0 + 1_000);
+    for (let i = 0; i < 50; i++) clientIp(mismatch(undefined, "attacker.example"));
+    expect([kinds(), sent()], "the flood: one warn, one Sentry message").toEqual([["absent"], ["absent"]]);
+    vi.setSystemTime(t0 + 2_000);
+    clientIp(mismatch(WRONG));
+    expect([kinds(), sent()], "the wrong inside the absent's minute").toEqual([["absent", "wrong"], ["absent", "wrong"]]);
+    vi.setSystemTime(t0 + 3_000);
+    clientIp(mismatch(WRONG));
+    clientIp(mismatch());
+    expect([kinds(), sent()], "each kind is still throttled on its own").toEqual([["absent", "wrong"], ["absent", "wrong"]]);
+    // Each kind's minute runs from ITS last warn: absent's at +60s, wrong's at +62s.
+    vi.setSystemTime(t0 + MINUTE);
+    clientIp(mismatch(WRONG));
+    clientIp(mismatch());
+    expect(kinds(), "+60s: absent's minute is up, wrong's is not").toEqual(["absent", "wrong", "absent"]);
+    vi.setSystemTime(t0 + MINUTE + 2_000);
+    clientIp(mismatch(WRONG));
+    expect(kinds(), "+62s: wrong's minute is up").toEqual(["absent", "wrong", "absent", "wrong"]);
+    expect(sent(), "still one Sentry message per kind").toEqual(["absent", "wrong"]);
+
+    // The other way round (fix round 3): a fresh process, wrong first, then absent inside wrong's minute - both warn and
+    // both reach Sentry.
+    __resetOriginStampReportForTests();
+    warn.mockClear();
+    capture.mockClear();
+    clientIp(mismatch(WRONG));
+    vi.setSystemTime(t0 + MINUTE + 3_000);
+    clientIp(mismatch());
+    expect([kinds(), sent()], "wrong, then absent inside its minute").toEqual([["wrong", "absent"], ["wrong", "absent"]]);
+  });
+
+  it("a matching request between two mismatches of a kind neither warns nor restarts that kind's minute", () => {
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    const t0 = Date.now();
+    clientIp(mismatch());
+    vi.setSystemTime(t0 + 30_000);
+    expect(clientIp(mismatch(SECRET))).toBe(VISITOR);
+    vi.setSystemTime(t0 + MINUTE - 1);
+    clientIp(mismatch());
+    expect(warn, "+59.999s: still inside the minute").toHaveBeenCalledTimes(1);
+    vi.setSystemTime(t0 + MINUTE);
+    clientIp(mismatch());
+    expect(warn, "+60s: the minute ran from the first mismatch, not the match").toHaveBeenCalledTimes(2);
+  });
+
+  it("carries the reason code, the stamp's kind and the host, and nothing else: no stamp, no secret, no address from any header, in the warn or the Sentry message", () => {
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    clientIp(mismatch(WRONG));
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [fields, message] = warn.mock.calls[0]! as [unknown, unknown];
+    expect(fields).toEqual({ reason: "origin_stamp_mismatch", stamp: "wrong", host: "seazn.club" });
+    expect(typeof message).toBe("string");
+    expect(capture.mock.calls).toEqual([
+      ["origin_stamp_mismatch", { level: "warning", tags: { stamp: "wrong", host: "seazn.club" } }],
+    ]);
+    const said = JSON.stringify([warn.mock.calls, capture.mock.calls]);
+    let checked = 0;
+    for (const value of [SECRET, WRONG, VISITOR, CF_EDGE]) {
+      expect(said, "never logged or sent").not.toContain(value);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("names the stamp absent or wrong (an empty one is wrong), and the host as sent, lower-cased, or none / invalid - in the warn and the Sentry tags (count reported)", () => {
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    const cases: Array<[string | undefined, string | null, "absent" | "wrong", string]> = [
+      [undefined, "seazn.club", "absent", "seazn.club"],
+      [WRONG, "seazn.club", "wrong", "seazn.club"],
+      ["", "stg.seazn.club", "wrong", "stg.seazn.club"],
+      [SECRET.slice(1), "STG.Seazn.Club", "wrong", "stg.seazn.club"],
+      [undefined, "seazn-club-prod.fly.dev", "absent", "seazn-club-prod.fly.dev"],
+      [undefined, "seazn.club:443", "absent", "seazn.club:443"],
+      [undefined, null, "absent", "none"],
+      [undefined, "evil.example/<script>", "absent", "invalid"],
+      [WRONG, `${"a".repeat(250)}.example`, "wrong", "invalid"],
+      // Sentry drops a tag value over 200 characters (fix round 3): 200 is echoed, 201 is not.
+      [undefined, `${"a".repeat(192)}.example`, "absent", `${"a".repeat(192)}.example`],
+      [undefined, `${"a".repeat(193)}.example`, "absent", "invalid"],
+    ];
+    expect([cases[9]![1]!.length, cases[10]![1]!.length], "premise: the two lengths").toEqual([200, 201]);
+    let checked = 0;
+    for (const [stamp, host, kind, named] of cases) {
+      __resetOriginStampReportForTests();
+      warn.mockClear();
+      capture.mockClear();
+      expect(clientIp(mismatch(stamp, host))).toBe(CF_EDGE);
+      expect(warn.mock.calls[0]?.[0], `${kind} ${host}`).toEqual({ reason: "origin_stamp_mismatch", stamp: kind, host: named });
+      expect(capture.mock.calls, `${kind} ${host}`).toEqual([["origin_stamp_mismatch", { level: "warning", tags: { stamp: kind, host: named } }]]);
+      checked++;
+    }
+    expect(checked).toBe(11);
+  });
+
+  it("another process (the state reset) reports again: one more warn and one more Sentry message", () => {
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET);
+    clientIp(mismatch());
+    clientIp(mismatch());
+    __resetOriginStampReportForTests();
+    clientIp(mismatch());
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(capture).toHaveBeenCalledTimes(2);
   });
 });
 

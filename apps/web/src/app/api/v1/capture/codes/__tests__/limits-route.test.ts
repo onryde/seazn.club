@@ -14,7 +14,7 @@
 // The budgets are the spec's numbers (§10.4), never read back from rate-limit.ts.
 //
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): no limit reads a sport.
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes } from "node:crypto";
 import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import { CaptureBeat, CaptureRefusal } from "@/server/api-v1/capture-schemas";
@@ -56,6 +56,10 @@ afterAll(async () => {
   await client?.end();
 });
 afterEach(() => __setRateLimitCounterForTests(null));
+// The Cloudflare cases below are today's deployment (no origin stamp required), whatever a developer's .env.local holds: with
+// CF_ORIGIN_SECRET set, an unstamped Cloudflare peer keys on the edge (lib/__tests__/client-ip.test.ts owns the stamp).
+beforeEach(() => vi.stubEnv("CF_ORIGIN_SECRET", undefined));
+afterEach(() => vi.unstubAllEnvs());
 
 /** A fixed-window counter with the Lua's semantics: INCR, EXPIRE on the first hit, PTTL in the same answer. It records
  *  every key it was asked to spend, so a test can say which bucket a request touched. */

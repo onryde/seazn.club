@@ -531,6 +531,50 @@ function scrubJoinCodeKeys<E extends Event>(event: E): E {
   return hit.n ? { ...event, request: { ...event.request, query_string: scrubbed } } : event;
 }
 
+/** OUR Cloudflare zone's origin stamp: lib/client-ip.ts reads `x-seazn-origin-secret`, and this module (bundled for the
+ *  browser, so it cannot import that node-only one) redacts every header whose name STARTS with this prefix, any case - so a
+ *  rule whose name is mistyped (and so escapes the SDK's `secret` deny list) still never reaches Sentry in clear.
+ *  client-ip.test.ts drives one header name through both modules. Its value is the CF_ORIGIN_SECRET; every server event
+ *  carries its request's headers, and @sentry/nextjs copies them onto the root span. */
+const ORIGIN_STAMP_PREFIX = "x-seazn-origin";
+/** The root span attributes the SDK writes such a header into (`httpHeadersToSpanAttributes`: lower-cased, `-` → `_`). */
+const ORIGIN_STAMP_ATTRIBUTE_PREFIX = `http.request.header.${ORIGIN_STAMP_PREFIX.replace(/-/g, "_")}`;
+const STAMP_REDACTED = "[redacted]";
+
+/** A key as the prefix check reads it: lower-cased, `_` as `-` (so `x_seazn_origin_secret` is the same header). */
+const stampKey = (k: string): string => k.toLowerCase().replace(/_/g, "-");
+
+/** `record` with every key that starts (any case, `_` or `-`) with `prefix` redacted - a copy - or `undefined` when none. */
+function redactPrefixed<T extends Record<string, unknown>>(record: T, prefix: string): T | undefined {
+  const want = stampKey(prefix);
+  let copy: T | undefined;
+  for (const k of Object.keys(record)) {
+    if (stampKey(k).startsWith(want)) (copy ??= { ...record })[k as keyof T] = STAMP_REDACTED as T[keyof T];
+  }
+  return copy;
+}
+
+/**
+ * Any event loses the origin stamp's VALUE wherever the SDK puts it: `request.headers`, and its `http.request.header.*`
+ * attribute in the trace context's data and in every span's data (the SDK's deny list masks the right name; this does not
+ * depend on it). The key stays, as "[redacted]". A copy: the input is never mutated.
+ */
+function dropOriginStamp<E extends Event>(event: E): E {
+  let next: E = event;
+  const headers = event.request?.headers ? redactPrefixed(event.request.headers, ORIGIN_STAMP_PREFIX) : undefined;
+  if (headers) next = { ...next, request: { ...next.request, headers } };
+  const trace = next.contexts?.trace;
+  const traceData = trace && isData(trace.data) ? redactPrefixed(trace.data, ORIGIN_STAMP_ATTRIBUTE_PREFIX) : undefined;
+  if (trace && traceData) next = { ...next, contexts: { ...next.contexts, trace: { ...trace, data: traceData } } };
+  let spans: typeof event.spans;
+  next.spans?.forEach((span, i) => {
+    const data = isData(span.data) ? redactPrefixed(span.data, ORIGIN_STAMP_ATTRIBUTE_PREFIX) : undefined;
+    if (data) (spans ??= next.spans!.slice())[i] = { ...span, data };
+  });
+  if (spans) next = { ...next, spans };
+  return next;
+}
+
 /**
  * Sentry `beforeSend` / `beforeSendTransaction`: scrubs the request URL and
  * headers (the Bearer secret), the transaction name, breadcrumbs, tags, stack
@@ -538,7 +582,7 @@ function scrubJoinCodeKeys<E extends Event>(event: E): E {
  * request body (A18); a one-time-token route's event also loses the token in
  * its bare `request.query_string`; the event of a route that takes a credential
  * in its body (`BODY_CREDENTIAL_ROUTES`: a token or a join code) or in its path
- * loses `request.data`.
+ * loses `request.data`. Every event loses the origin stamp's value.
  */
 export function scrubSentryEvent<E extends Event>(event: E): E {
   const oneTime = isOneTimeTokenEvent(event);
@@ -547,7 +591,7 @@ export function scrubSentryEvent<E extends Event>(event: E): E {
   const safe = isCaptureEvent(event) ? dropCaptureSecrets(scrubbed) : scrubbed;
   const queryScrubbed = oneTime ? dropOneTimeToken(safe) : safe;
   const withSpans = scrubSpans(scrubJoinCodeKeys(queryScrubbed), oneTime, body);
-  return body ? dropRequestBody(withSpans) : withSpans;
+  return dropOriginStamp(body ? dropRequestBody(withSpans) : withSpans);
 }
 
 /**

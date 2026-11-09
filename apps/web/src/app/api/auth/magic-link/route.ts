@@ -22,6 +22,7 @@ import { z } from "zod";
 import { NEXT_PATH_MAX_LENGTH } from "@/lib/types";
 import { rateLimit, EMAIL_LIMIT } from "@/lib/rate-limit";
 import { headers } from "next/headers";
+import { clientIp } from "@/lib/client-ip";
 
 /** The body of any unexpected failure, exactly as `handler()` words it when the thrown value is not an Error
  *  (lib/http.ts). The route builds the same response itself for the two outbox refusals, whose own messages name an
@@ -52,7 +53,7 @@ const schema = z
  *  response is identical whether or not the account already existed. */
 export async function POST(req: Request) {
   return handler(async () => {
-    const ip = (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+    const ip = clientIp(await headers());
     await rateLimit(`magic-link:${ip}`, EMAIL_LIMIT);
 
     const body = schema.parse(await req.json());

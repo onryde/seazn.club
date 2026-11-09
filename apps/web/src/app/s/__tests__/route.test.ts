@@ -61,8 +61,11 @@ beforeEach(() => {
   redis.on = false;
   redis.counts.clear();
   redis.keys.length = 0;
+  // Today's deployment (no origin stamp required) whatever a developer's .env.local holds (lib/__tests__/client-ip.test.ts).
+  vi.stubEnv("CF_ORIGIN_SECRET", undefined);
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   expect(sentry.captureError, "no click write failed").not.toHaveBeenCalled();
 });
 
