@@ -249,6 +249,9 @@ export async function applyKnockoutLateDecision(
     opponentId = r.opponentId;
   }
   const scheduled = await scheduleLine(tx, ctx.divisionId, stage.id, fixtureId, ctx.now ?? new Date());
+  // T26c fix round 1 (I2): unscheduled BECAUSE the schedule is frozen (round 1's next free slot answers none while it is) -
+  // said apart from a full board, so the organiser knows the match waits on the unfreeze, not on a free court.
+  const frozenOff = !scheduled && (await scheduleFrozen(tx, ctx.divisionId));
   await appendUndoBarrierRow(
     tx,
     ctx.divisionId,
@@ -265,6 +268,7 @@ export async function applyKnockoutLateDecision(
     opponent_id: opponentId,
     ...(withdrawnId !== undefined ? { withdrawn_id: withdrawnId } : {}),
     scheduled,
+    ...(frozenOff ? { schedule_frozen: true as const } : {}),
   };
 }
 

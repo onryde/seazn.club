@@ -560,6 +560,9 @@ describe.skipIf(!HAS_DB)("W4 T10: Add late player on a drawn knockout", () => {
   // holds a free (time, court) pair the unfrozen twin TAKES, so "unscheduled" is the freeze's doing and not a full board.
   // The notice is X-LE-12's own sentence (the approved English, typed here).
   const UNSCHEDULED_NOTICE = { text: "1 new match is unscheduled.", tone: "todo" };
+  // T26c fix round 1 (I2): beside it, a frozen schedule's own line - the English catalogue's sentence, read from the
+  // dictionary - saying what the match waits on.
+  const FROZEN_NOTICE = { text: en["knockout.lateEntry.unscheduledFrozen"], tone: "todo" };
   const EN = {
     t: (key: string, vars?: Record<string, string | number>) => tRuntime(en, key, vars),
     plural: (key: string, count: number, vars?: Record<string, string | number>) => pluralRuntime(en, key, count, "en", vars),
@@ -575,11 +578,13 @@ describe.skipIf(!HAS_DB)("W4 T10: Add late player on a drawn knockout", () => {
     const { courts, at } = await placeRoundOne(r, 3, 3);
     await setDivisionLocks(r.auth, r.divisionId, { schedule_locked: true });
     const frozen = await addLate(r, "Late 1");
-    expect(frozen.late_entry, "frozen: placed by case (1), unscheduled").toMatchObject({ case: "bye", scheduled: false });
+    expect(frozen.late_entry, "frozen: placed by case (1), unscheduled").toMatchObject({ case: "bye", scheduled: false, schedule_frozen: true });
     const line = await rowById(fixtureOf(frozen));
     expect({ at: line.scheduled_at, court: line.court_id, status: line.status }, "no time or court written").toEqual({ at: null, court: null, status: "scheduled" });
     expect(isUnscheduledFixture({ status: line.status, scheduledAt: null }), "the desk's unscheduled flag").toBe(true);
     expect(noticeOf(frozen.late_entry as KnockoutLateEntryResult), "the notice").toContainEqual(UNSCHEDULED_NOTICE);
+    expect(FROZEN_NOTICE.text, "premise: the frozen sentence is in the English catalogue").toEqual(expect.stringContaining("frozen"));
+    expect(noticeOf(frozen.late_entry as KnockoutLateEntryResult), "the notice says the freeze is why").toContainEqual(FROZEN_NOTICE);
 
     await setDivisionLocks(r.auth, r.divisionId, { schedule_locked: false });
     const thawed = await addLate(r, "Late 2");
@@ -587,6 +592,8 @@ describe.skipIf(!HAS_DB)("W4 T10: Add late player on a drawn knockout", () => {
     const line2 = await rowById(fixtureOf(thawed));
     expect({ at: line2.scheduled_at?.toISOString(), court: line2.court_id }, "round 1's next free slot").toEqual({ at, court: courts[2] });
     expect(noticeOf(thawed.late_entry as KnockoutLateEntryResult), "no unscheduled line when it has a slot").not.toContainEqual(UNSCHEDULED_NOTICE);
+    expect(thawed.late_entry, "unfrozen: no frozen flag").not.toHaveProperty("schedule_frozen");
+    expect(noticeOf(thawed.late_entry as KnockoutLateEntryResult), "no frozen line when unfrozen").not.toContainEqual(FROZEN_NOTICE);
   });
 
   it("X-LE-12 frozen: case (2) on a match its organiser took off the timetable stays off it; unfrozen, the same match takes the free slot", async () => {
@@ -603,6 +610,11 @@ describe.skipIf(!HAS_DB)("W4 T10: Add late player on a drawn knockout", () => {
       if (frozenSchedule) await setDivisionLocks(r.auth, r.divisionId, { schedule_locked: true });
       const late = await addLate(r);
       expect(late.late_entry, `frozen=${frozenSchedule}`).toMatchObject({ case: "withdrawn_slot", fixture_id: m.id, scheduled: !frozenSchedule });
+      // I2: the frozen flag rides only the frozen answer, and with it the notice's frozen line.
+      expect((late.late_entry as KnockoutLateEntryResult).schedule_frozen, `frozen=${frozenSchedule}: the flag`).toBe(frozenSchedule ? true : undefined);
+      const notice = noticeOf(late.late_entry as KnockoutLateEntryResult);
+      if (frozenSchedule) expect(notice, "frozen: both lines").toEqual(expect.arrayContaining([UNSCHEDULED_NOTICE, FROZEN_NOTICE]));
+      else expect(notice, "unfrozen: no frozen line").not.toContainEqual(FROZEN_NOTICE);
       const line = await rowById(m.id);
       expect({ at: line.scheduled_at?.toISOString() ?? null, court: line.court_id }, `frozen=${frozenSchedule}`).toEqual(
         frozenSchedule ? { at: null, court: null } : { at, court: courts[2] },
@@ -624,7 +636,7 @@ describe.skipIf(!HAS_DB)("W4 T10: Add late player on a drawn knockout", () => {
     await withdrawEntrantCascade(r.auth, m.away_entrant_id!);
     await setDivisionLocks(r.auth, r.divisionId, { schedule_locked: true });
     const placed = await placeWaitingKnockoutEntrant(r.auth, r.stageId, late.id);
-    expect(placed, "the tap places them, unscheduled").toMatchObject({ case: "withdrawn_slot", fixture_id: m.id, scheduled: false });
+    expect(placed, "the tap places them, unscheduled").toMatchObject({ case: "withdrawn_slot", fixture_id: m.id, scheduled: false, schedule_frozen: true });
     const line = await rowById(m.id);
     expect({ at: line.scheduled_at, court: line.court_id }, "no time or court written").toEqual({ at: null, court: null });
     expect(isUnscheduledFixture({ status: line.status, scheduledAt: null }), "flagged").toBe(true);

@@ -827,6 +827,10 @@ export const KnockoutLateEntryResult = z.object({
    *  own walkover was reversed. The desk's notice names them ("… takes {withdrawn}'s place against {opponent}"). */
   withdrawn_id: Uuid.optional(),
   scheduled: z.boolean().optional(),
+  /** T26c fix round 1 (I2): set (true) only with `scheduled: false` when the division's schedule is frozen - a frozen
+   *  timetable gives a late entry no time or court, so the match waits for one until the schedule is unfrozen, and the
+   *  notice says so (`knockout.lateEntry.unscheduledFrozen`). Absent otherwise. */
+  schedule_frozen: z.literal(true).optional(),
   /** `refused` / `rebuild_offered`: why — KO_LATE_ENTRY_NO_SLOT (round 1 has no slot left), KO_LATE_ENTRY_SCHEDULE_FROZEN (no
    *  slot, nothing started, but the division's schedule is frozen: Rebuild refuses a frozen schedule, so none is offered and
    *  the player waits until it is unfrozen — final review m1), or KO_LATE_ENTRY_PLAYED_ON (a reinstated player whose place in

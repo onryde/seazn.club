@@ -60,6 +60,8 @@ describe("X-LE-10 knockout late-entry notice: one notice per case (R24 pick 2B)"
     expect(lateEntryNotice([], NAMES, { locale: "en" })).toEqual([]);
   });
 
+  /** T26c I2: the frozen line's approved English, typed. */
+  const FROZEN_LINE = "The schedule is frozen, so the new match needs a time and court once you unfreeze it on the Schedule page.";
   const TABLE: { name: string; results: LateEntryResult[]; expected: Rendered[] }[] = [
     {
       name: "bye: the late player plays the holder of the bye",
@@ -75,6 +77,16 @@ describe("X-LE-10 knockout late-entry notice: one notice per case (R24 pick 2B)"
       ],
     },
     {
+      // T26c fix round 1 (I2): unscheduled because the schedule is FROZEN - the unscheduled line, then what it waits on.
+      name: "bye, unscheduled by a frozen schedule: the unscheduled line and the freeze's own line",
+      results: [ko({ case: "bye", fixture_id: "f1", opponent_id: ARJUN, scheduled: false, schedule_frozen: true })],
+      expected: [
+        { text: "Oliver Grant plays Arjun Menon, who had a bye.", tone: "done" },
+        { text: "1 new match is unscheduled.", tone: "todo" },
+        { text: FROZEN_LINE, tone: "todo" },
+      ],
+    },
+    {
       name: "withdrawn_slot: the late player takes the withdrawn player's place, against the opponent",
       results: [ko({ case: "withdrawn_slot", fixture_id: "f2", opponent_id: RASMUS, withdrawn_id: FARHAN, scheduled: true })],
       expected: [{ text: "Oliver Grant takes Farhan Iqbal's place against Rasmus Holm.", tone: "done" }],
@@ -85,6 +97,15 @@ describe("X-LE-10 knockout late-entry notice: one notice per case (R24 pick 2B)"
       expected: [
         { text: "Oliver Grant takes Farhan Iqbal's place against Rasmus Holm.", tone: "done" },
         { text: "1 new match is unscheduled.", tone: "todo" },
+      ],
+    },
+    {
+      name: "withdrawn_slot unscheduled by a frozen schedule",
+      results: [ko({ case: "withdrawn_slot", fixture_id: "f2", opponent_id: RASMUS, withdrawn_id: FARHAN, scheduled: false, schedule_frozen: true })],
+      expected: [
+        { text: "Oliver Grant takes Farhan Iqbal's place against Rasmus Holm.", tone: "done" },
+        { text: "1 new match is unscheduled.", tone: "todo" },
+        { text: FROZEN_LINE, tone: "todo" },
       ],
     },
     {
@@ -168,6 +189,9 @@ describe("X-LE-10 knockout late-entry notice: one notice per case (R24 pick 2B)"
       ["withdrawn_slot without the opponent", ko({ case: "withdrawn_slot", fixture_id: "f2", withdrawn_id: FARHAN })],
       ["refused without a reason", ko({ case: "refused" })],
       ["refused with an unknown reason", ko({ case: "refused", reason: "SOMETHING_ELSE" })],
+      // T26c I2: the frozen flag rides `scheduled: false` only - frozen off the timetable yet holding a slot is a contradiction.
+      ["frozen yet scheduled", ko({ case: "bye", fixture_id: "f1", opponent_id: ARJUN, scheduled: true, schedule_frozen: true })],
+      ["frozen with no schedule answer", ko({ case: "bye", fixture_id: "f1", opponent_id: ARJUN, schedule_frozen: true })],
     ];
     let checked = 0;
     for (const [why, r] of bad) {
@@ -192,9 +216,9 @@ describe("X-LE-10 knockout late-entry notice: one notice per case (R24 pick 2B)"
         checked++;
       }
     }
-    // 8 knockout message keys (the five cases' lines, the played-on one, the lucky loser's, m1's unfreeze-first) + 1 plural
-    // base (two forms) × 4 locales.
-    expect(checked).toBe((8 + 2) * 4);
+    // 9 knockout message keys (the five cases' lines, the played-on one, the lucky loser's, m1's unfreeze-first, T26c I2's
+    // unscheduled-by-a-frozen-schedule) + 1 plural base (two forms) × 4 locales.
+    expect(checked).toBe((9 + 2) * 4);
   });
 });
 

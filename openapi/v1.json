@@ -11122,6 +11122,10 @@
                                     "scheduled": {
                                       "type": "boolean"
                                     },
+                                    "schedule_frozen": {
+                                      "type": "boolean",
+                                      "const": true
+                                    },
                                     "reason": {
                                       "type": "string"
                                     }
@@ -11363,6 +11367,10 @@
                                       },
                                       "scheduled": {
                                         "type": "boolean"
+                                      },
+                                      "schedule_frozen": {
+                                        "type": "boolean",
+                                        "const": true
                                       },
                                       "reason": {
                                         "type": "string"
@@ -12420,6 +12428,10 @@
                                 },
                                 "scheduled": {
                                   "type": "boolean"
+                                },
+                                "schedule_frozen": {
+                                  "type": "boolean",
+                                  "const": true
                                 },
                                 "reason": {
                                   "type": "string"
@@ -29025,6 +29037,10 @@
                         },
                         "scheduled": {
                           "type": "boolean"
+                        },
+                        "schedule_frozen": {
+                          "type": "boolean",
+                          "const": true
                         },
                         "reason": {
                           "type": "string"

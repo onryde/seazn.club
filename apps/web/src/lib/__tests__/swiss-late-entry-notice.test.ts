@@ -371,9 +371,9 @@ describe("swiss late-entry copy in all four locales", () => {
         checked += 1;
       }
     }
-    // 7 Swiss + 8 knockout (W4 T19: tookBye, tookWithdrawnSlot, backInPlace, rebuildOffered, playedOn, luckyLoser, the no-slot refusal;
-    // final review m1: unfreezeFirst) plain keys, 3 Swiss + 1 knockout plural bases × 2 forms, × 4 locales.
-    expect(checked).toBe((7 + 8 + (3 + 1) * 2) * 4);
+    // 7 Swiss + 9 knockout (W4 T19: tookBye, tookWithdrawnSlot, backInPlace, rebuildOffered, playedOn, luckyLoser, the no-slot refusal;
+    // final review m1: unfreezeFirst; T26c I2: unscheduledFrozen) plain keys, 3 Swiss + 1 knockout plural bases × 2 forms, × 4 locales.
+    expect(checked).toBe((7 + 9 + (3 + 1) * 2) * 4);
   });
 });
 
@@ -385,6 +385,7 @@ describe("swiss late-entry copy in all four locales", () => {
 describe("swiss late-entry notice: a knockout result is not a Swiss one", () => {
   const KNOCKOUT_RESULTS: LateEntryResult[] = [
     { format: "knockout", entrant_id: BEN, stage_id: STAGE, case: "bye", opponent_id: ANA, scheduled: false },
+    { format: "knockout", entrant_id: BEN, stage_id: STAGE, case: "bye", opponent_id: ANA, scheduled: false, schedule_frozen: true },
     { format: "knockout", entrant_id: BEN, stage_id: STAGE, case: "withdrawn_slot", opponent_id: ANA, withdrawn_id: CAI, scheduled: false },
     { format: "knockout", entrant_id: BEN, stage_id: STAGE, case: "waiting" },
     { format: "knockout", entrant_id: BEN, stage_id: STAGE, case: "refused", reason: "KO_LATE_ENTRY_NO_SLOT" },

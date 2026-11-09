@@ -2574,6 +2574,7 @@
   "knockout.lateEntry.backInPlace": "{name} is back in their place against {opponent}.",
   "knockout.lateEntry.rebuildOffered": "No slot is left, but nothing has started: use Rebuild fixtures to add {name}.",
   "knockout.lateEntry.unfreezeFirst": "No slot is left, and the schedule is frozen: unfreeze it on the Schedule page, then use Rebuild fixtures to add {name}.",
+  "knockout.lateEntry.unscheduledFrozen": "The schedule is frozen, so the new match needs a time and court once you unfreeze it on the Schedule page.",
   "knockout.lateEntry.playedOn": "{name} is back on the list, but their place in the bracket has been played on.",
   "knockout.waiting.title": "Waiting to join the bracket",
   "knockout.waiting.sub": "Joined after the draw. Not in the bracket yet.",

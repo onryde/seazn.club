@@ -46,6 +46,8 @@ export const LATE_ENTRY_MESSAGE_KEYS = [
   "knockout.refusal.KO_LATE_ENTRY_NO_SLOT",
   // Final review m1 (owner ruling 2026-11-09): no slot, nothing started, but the schedule is frozen — unfreeze first.
   "knockout.lateEntry.unfreezeFirst",
+  // T26c fix round 1 (I2): placed, but left unscheduled because the schedule is frozen.
+  "knockout.lateEntry.unscheduledFrozen",
 ] as const satisfies readonly MessageKey[];
 export type LateEntryMessageKey = (typeof LATE_ENTRY_MESSAGE_KEYS)[number];
 
@@ -165,8 +167,16 @@ export function lateEntryNotice(
 function knockoutLines(r: KnockoutLateEntryResult, nameOf: (id: string) => string): LateEntryNoticeLine[] {
   const name = nameOf(r.entrant_id);
   const refuse = (why: string) => new Error(`knockout late entry ${r.case} ${why}`);
+  // T26c fix round 1 (I2): a match left unscheduled by a FROZEN schedule says what it waits on. The flag is only ever set
+  // beside `scheduled: false`; with a slot it is a contradiction, refused by name rather than said.
+  if (r.schedule_frozen === true && r.scheduled !== false) throw refuse("frozen off the timetable yet scheduled");
   const unscheduled: LateEntryNoticeLine[] =
-    r.scheduled === false ? [{ key: "swiss.lateEntry.newMatchUnscheduled", params: {}, tone: "todo" }] : [];
+    r.scheduled === false
+      ? [
+          { key: "swiss.lateEntry.newMatchUnscheduled", params: {}, tone: "todo" },
+          ...(r.schedule_frozen === true ? [{ key: "knockout.lateEntry.unscheduledFrozen" as const, params: {}, tone: "todo" as const }] : []),
+        ]
+      : [];
   switch (r.case) {
     case "bye":
       if (r.opponent_id === undefined) throw refuse("without the bye's holder");
