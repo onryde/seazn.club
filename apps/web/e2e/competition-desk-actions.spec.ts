@@ -436,8 +436,9 @@ const ROWS: Row[] = [
   {
     // W4 T11 (X-LE-10, R24 pick 1A): a reinstated player waits to join a started knockout — the automatic arrival the app
     // never places. Eight Started through the real doors, one withdrawn (the walkover) and reinstated through PATCH.
-    // "Open bracket" lands on the division's Fixtures tab, on the knockout's stage card. T19 adds the "Add to bracket"
-    // control there; until then the landing proves the tab and the stage, and T19 owes this row its press.
+    // "Open bracket" lands on the division's Fixtures tab, on the knockout's stage card, where the waiting strip's "Add to
+    // bracket" is PRESSED (W4 T19, b6a merge gate): the reinstated player's tap gives back their own walked-over seat, the
+    // answer is said and the strip goes — a row that only proved the landing signed off a control nobody had built.
     id: "late_players_waiting",
     kind: "late_players_waiting",
     label: en["knockout.lateWaiting.action"],
@@ -465,6 +466,22 @@ const ROWS: Row[] = [
     },
     land: async (page) => {
       await expect(page).toHaveURL(/tab=fixtures/);
+      const strip = page.locator('[data-testid="knockout-waiting"]');
+      await expect(strip, "the stage card lists the waiting player").toBeVisible();
+      await expect(strip).toContainText(en["knockout.waiting.title"]!);
+      const tap = strip.getByTestId("knockout-waiting-place");
+      await expect(tap, "the named control is there").toHaveText(en["knockout.addToBracket"]!);
+      // Hit-testable, not merely measured: nothing sits over the button (and only an element in view can be hit).
+      await tap.scrollIntoViewIfNeeded();
+      expect(await tap.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === el
+          || el.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2));
+      }), "the button is hit-testable").toBe(true);
+      await tap.click();
+      // The answer is said in the panel's notice line (the strip has gone by then) and the strip is gone.
+      await expect(page.getByText(/is back in their place against/), "the tap says what it did").toBeVisible({ timeout: 20_000 });
+      await expect(page.locator('[data-testid="knockout-waiting"]'), "the waiting strip goes once they are placed").toHaveCount(0, { timeout: 20_000 });
     },
   },
 ];

@@ -42,6 +42,7 @@ export const LATE_ENTRY_MESSAGE_KEYS = [
   "knockout.lateEntry.backInPlace",
   "knockout.lateEntry.rebuildOffered",
   "knockout.lateEntry.playedOn",
+  "knockout.lateEntry.luckyLoser",
   "knockout.refusal.KO_LATE_ENTRY_NO_SLOT",
 ] as const satisfies readonly MessageKey[];
 export type LateEntryMessageKey = (typeof LATE_ENTRY_MESSAGE_KEYS)[number];
@@ -188,6 +189,23 @@ function knockoutLines(r: KnockoutLateEntryResult, nameOf: (id: string) => strin
     case "waiting":
       throw refuse("is counted by the caller, never said one by one");
   }
+}
+
+/**
+ * W4 T13 (RB4-V2, X-LL-1; review #4, b6a carry): the line a WITHDRAWAL or DISQUALIFICATION says when a lucky loser took the
+ * departed qualifier's main-draw seat — the cascade report's `lucky_loser` (`WithdrawCascadeReport`). Said in the same block
+ * and tones as a late entry's (green: it happened). Nothing when no lucky loser took a seat (the line walked over as before,
+ * or the reply is from a server that predates the field): a line for a thing that did not happen would be the false one.
+ * `departedName` is the withdrawn player's (the caller holds it; the lucky loser's is looked up in `names`).
+ */
+export function luckyLoserNotice(
+  cascade: { lucky_loser?: { entrant_id: string; fixture_id: string } | null } | null | undefined,
+  departedName: string,
+  names: Readonly<Record<string, string>>,
+): LateEntryNoticeLine[] {
+  const lucky = cascade?.lucky_loser;
+  if (!lucky) return [];
+  return [{ key: "knockout.lateEntry.luckyLoser", params: { lucky: names[lucky.entrant_id] ?? "?", name: departedName }, tone: "done" }];
 }
 
 export interface SwissLatecomerCounts {

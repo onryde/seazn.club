@@ -371,8 +371,9 @@ describe("swiss late-entry copy in all four locales", () => {
         checked += 1;
       }
     }
-    // 7 Swiss + 6 knockout (W4 T19) plain keys, 3 Swiss + 1 knockout plural bases × 2 forms, × 4 locales.
-    expect(checked).toBe((7 + 6 + (3 + 1) * 2) * 4);
+    // 7 Swiss + 7 knockout (W4 T19: tookBye, tookWithdrawnSlot, backInPlace, rebuildOffered, playedOn, luckyLoser, the no-slot refusal)
+    // plain keys, 3 Swiss + 1 knockout plural bases × 2 forms, × 4 locales.
+    expect(checked).toBe((7 + 7 + (3 + 1) * 2) * 4);
   });
 });
 

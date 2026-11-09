@@ -212,7 +212,10 @@ describe("ProgressionPanel — draft table structure", () => {
 // lock is never a surprise. The sentence is typed here (the ruling's), never read back from the panel.
 describe("ProgressionPanel — Confirm warns that a confirmed draw can't be undone (M11)", () => {
   const KEY = "progression.confirmFinal";
-  const SENTENCE = "Once confirmed, this draw can't be undone.";
+  // W4 T19 (T13-14 review m3, b6a carry): the first wording promised a draw "can't be undone" — true of Undo (it stops at a
+  // confirm) but not of the draw: a result it was drawn from, corrected before play starts, makes a confirmed draw stale and
+  // it can be recomputed (T13). Typed here, the truthful sentence; never read back from the panel.
+  const SENTENCE = "Once confirmed, Undo can't take this draw back. If a result it was drawn from is corrected before play starts, you can recompute it.";
   const noTies: SeedProposal = { ...DRAFT, computed: { ...DRAFT.computed, ties: [] } };
 
   it("the empty cases first: no proposal, a draft with nobody in it, a stale one and a confirmed one carry no warning (none has Confirm)", () => {
@@ -238,7 +241,7 @@ describe("ProgressionPanel — Confirm warns that a confirmed draw can't be undo
     for (const proposal of [noTies, DRAFT]) {
       const html = renderToStaticMarkup(<ProgressionPanel {...baseProps({ proposal })} />);
       const warn = html.match(/<p[^>]*data-testid="progression-confirm-final"[^>]*>([^<]*)<\/p>/);
-      expect(warn?.[1], "the warning is the ruling's sentence").toBe(SENTENCE.replace("'", "&#x27;"));
+      expect(warn?.[1], "the warning is the ruling's sentence").toBe(SENTENCE.replaceAll("'", "&#x27;"));
       expect(html.indexOf('data-testid="progression-confirm-final"'), "said before the Confirm button").toBeLessThan(
         html.search(/<button[^>]*>\s*Confirm proposal\s*<\/button>/),
       );

@@ -11,7 +11,14 @@
 //
 // Single-sport by nature: the notice reads a result's case, ids and reason — no sport field reaches it.
 import { describe, expect, it } from "vitest";
-import { LATE_ENTRY_MESSAGE_KEYS, LATE_ENTRY_PLURAL_KEYS, lateEntryNotice, lateEntryNoticeText, type LateEntryNoticeLine } from "@/lib/swiss-late-entry-notice";
+import {
+  LATE_ENTRY_MESSAGE_KEYS,
+  LATE_ENTRY_PLURAL_KEYS,
+  lateEntryNotice,
+  lateEntryNoticeText,
+  luckyLoserNotice,
+  type LateEntryNoticeLine,
+} from "@/lib/swiss-late-entry-notice";
 import type { KnockoutLateEntryResult, LateEntryResult } from "@/server/api-v1/schemas";
 import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
@@ -174,7 +181,37 @@ describe("X-LE-10 knockout late-entry notice: one notice per case (R24 pick 2B)"
         checked++;
       }
     }
-    // 6 knockout message keys + 1 plural base (two forms) × 4 locales.
-    expect(checked).toBe((6 + 2) * 4);
+    // 7 knockout message keys (the five cases' lines, the played-on one, the lucky loser's) + 1 plural base (two forms) × 4 locales.
+    expect(checked).toBe((7 + 2) * 4);
+  });
+});
+
+// T13 review #4 (b6a carry): withdrawing (or disqualifying) a qualifier whose round-1 seat a lucky loser took says WHO took it —
+// the cascade's `lucky_loser` (T13), read by no component before. No lucky loser (the line walked over, or the reply is from
+// a server that does not send the field) says nothing: a notice for a thing that did not happen would be the false line.
+describe("X-LL-1 the withdrawal notice names the lucky loser who took the seat", () => {
+  it("the empty cases first: no cascade, no field, and a null lucky loser say nothing", () => {
+    expect(luckyLoserNotice(undefined, "Farhan Iqbal", NAMES)).toEqual([]);
+    expect(luckyLoserNotice({}, "Farhan Iqbal", NAMES)).toEqual([]);
+    expect(luckyLoserNotice({ lucky_loser: null }, "Farhan Iqbal", NAMES)).toEqual([]);
+  });
+
+  it("a lucky loser: who takes whose place, done", () => {
+    const lines = luckyLoserNotice({ lucky_loser: { entrant_id: NORA, fixture_id: "f9" } }, "Farhan Iqbal", NAMES);
+    expect(render(lines)).toEqual([{ text: "Nora Lind takes Farhan Iqbal's place in round 1, as the best loser.", tone: "done" }]);
+  });
+
+  it("said in the reader's language: all four dictionaries carry the sentence with its two placeholders", () => {
+    const dicts = { en, es, fr, nl } as Record<string, Record<string, string>>;
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(dicts)) {
+      const v = dict["knockout.lateEntry.luckyLoser"];
+      expect(v, `${locale} has the key`).toBeTruthy();
+      expect(v).toContain("{lucky}");
+      expect(v).toContain("{name}");
+      if (locale !== "en") expect(v, `${locale} is translated`).not.toBe(dicts.en!["knockout.lateEntry.luckyLoser"]);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 });

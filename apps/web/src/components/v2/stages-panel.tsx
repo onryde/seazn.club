@@ -152,6 +152,8 @@ import { OnlineGameExistsNotice } from "@/components/v2/online-game-exists-notic
 // action controls (Generate/Complete/Delete). See stage-rail.tsx's own
 // header for why it stays presentational (props only, no data hook).
 import { StageRail, stageRailActions } from "@/components/v2/desk/stage-rail";
+import { KnockoutWaitingStrip } from "@/components/v2/desk/knockout-waiting-strip";
+import type { KnockoutWaitingEntrant } from "@/server/usecases/knockout-desk";
 import type { SwissRoundsRefusal } from "@/components/v2/desk/swiss-rounds-dialog";
 import type { SwissRoundControl } from "@/lib/swiss-rounds-edit";
 
@@ -493,6 +495,10 @@ interface Props {
   /** Match Day C2: the Division rules strip at the top of the tab (the division's match format, points and tie-break order).
    *  Built by the page, which reads what it needs; absent, no strip. */
   rulesStrip?: DivisionRulesStripProps;
+  /** W4 T19 (X-LE-10; R24 pick 1A) — the players waiting to join a started root knockout (`listKnockoutWaiting`, read by the
+   *  division page for an organiser on this tab): each stage card lists its own in a "Waiting to join the bracket" strip with
+   *  one "Add to bracket" tap. Optional: absent ⇒ no strip (a viewer; the pre-existing panel tests). */
+  knockoutWaiting?: readonly KnockoutWaitingEntrant[];
 }
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
@@ -610,7 +616,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, knockoutWaiting = [] }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1548,6 +1554,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // `attentionStageIds` is built from too, so the card that has the notice is the card that starts open.
         const cutDrift = swissCutDriftOf(stage, canEdit, swissCutDrift);
         const knockoutDrift = knockoutCutDriftOf(stage, canEdit, knockoutCutDrift);
+        // W4 T19: this card's waiting players (`listKnockoutWaiting` already leaves out a finished stage and a departed player).
+        const waitingHere = knockoutWaiting.filter((w) => w.stageId === stage.id);
         // F3 Task 5 (5a) — only ever non-empty for the one stage
         // getStageRosterDrift finds eligible (usecases/stages.ts); every
         // other stage's entry is absent or both arrays empty, so this is a
@@ -1643,6 +1651,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     divisionStatus,
                     roundSeated: latestSwissRoundWithAnySeat(swissShellFixtures) !== null,
                     href: `${routes.division(orgSlug, compSlug, divSlug, "entrants")}#add-entrant`,
+                    // W4 T19 (X-LE-3): the division's stages, so a started ROOT knockout offers the same item as "Add to bracket".
+                    division: stages,
                   }
             }
             swissRounds={swissRoundsRail}
@@ -1798,6 +1808,23 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     card is folded: the run sheet inside keeps its filter and its round toggles, and the panels keep their drafts. Not indented
                     with the blocks it holds, to keep this change to two lines of a file other branches are editing. */}
                 <div id={stageBodyId} hidden={folded}>
+                {/* W4 T19 (X-LE-10; R24 pick 1A): the players who arrived after the draw and wait to join this knockout, each with
+                    one "Add to bracket". An organiser's strip, drawn only while someone waits here; a tap that seats them says so in
+                    the panel's own notice line (it outlives the strip), one that cannot leaves its reason and exits in the row. */}
+                {canEdit && waitingHere.length > 0 && (
+                  <KnockoutWaitingStrip
+                    stageId={stage.id}
+                    waiting={waitingHere}
+                    names={entrantNames}
+                    registrationsHref={routes.competitionRegistration(orgSlug, compSlug, "registrants", divisionId)}
+                    onRebuild={() => void rebuildStage(stage.id)}
+                    onPlaced={(said) => {
+                      setError(null);
+                      setNotice(said.done.length > 0 ? said.done.join(" ") : null);
+                      setWarning(said.todo.length > 0 ? said.todo.join(" ") : null);
+                    }}
+                  />
+                )}
                 {/* W3 T17 (RB3-19, X-SW-25) — a result of this Swiss was corrected after its knockout began: the bracket
                     stands (no seat moves), and the desk says who today's table would have cut instead. The house amber
                     notice (the roster-drift banner's treatment), polite (role="status"), never a dialog. The sentence and

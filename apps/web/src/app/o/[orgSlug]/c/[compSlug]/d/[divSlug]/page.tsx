@@ -28,6 +28,7 @@ import { divisionQualification, qualificationFixtures } from "@/server/public-si
 import { formatLockedStageIds } from "@/server/usecases/stage-rules";
 import { listSwissRoundControls } from "@/server/usecases/swiss-rounds-admin";
 import { getSwissCutDrift } from "@/server/usecases/swiss-cut-drift";
+import { listKnockoutWaiting } from "@/server/usecases/knockout-desk";
 import { swissCutDriftStageIds } from "@/lib/swiss-cut-drift";
 import { getKnockoutCutDrift } from "@/server/usecases/knockout-cut-drift";
 import { knockoutCutDriftStageIds } from "@/lib/knockout-cut-drift";
@@ -84,7 +85,7 @@ import { redirect } from "next/navigation";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { EntrantsPanel } from "@/components/v2/entrants-panel";
 import { EntrantKindsSettings } from "@/components/v2/entrant-kinds-settings";
-import { divisionTakesSwissLateEntry, entrantListLocked } from "@/lib/open-entry-stages";
+import { ROOT_KNOCKOUT_KINDS, divisionTakesKnockoutLateEntry, divisionTakesSwissLateEntry, entrantListLocked } from "@/lib/open-entry-stages";
 import { roundOpensOfDivisions } from "@/server/external-play/round-open";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { ArbiterEntryCard } from "@/components/v2/arbiter-entry-card";
@@ -410,6 +411,12 @@ export default async function DivisionPage({
         ).flatMap(([stageId, drift]) => (drift === null ? [] : [[stageId, drift] as const]))
       : [],
   );
+  // W4 T19 (X-LE-10; R24 pick 1A): the players who arrived after a knockout's draw and wait to join it — the stage card's
+  // "Waiting to join the bracket" strip. An organiser's control, read on this tab only, and only when the division holds a
+  // knockout kind a late player can wait on (`ROOT_KNOCKOUT_KINDS` is the server's own gate; the read itself answers none
+  // for a division nobody waits in).
+  const knockoutWaiting =
+    tab === "fixtures" && editable && stages.some((s) => ROOT_KNOCKOUT_KINDS.includes(s.kind)) ? await listKnockoutWaiting(auth, id) : [];
   // W2d final review I1: the points each PINNED table stage pays - its pin's, which a division points save after generate
   // never reaches (`rule-locks.ts` lets that save through). The stage points card says these, never `division.config`.
   // Read for the stages the card is mounted on (`stageTakesPoints`), for an organiser and a viewer alike (both see it).
@@ -615,6 +622,9 @@ export default async function DivisionPage({
           openOnlineRounds: division.sport_key === "boardgame" ? [...(await roundOpensOfDivisions(sql, [id])).keys()] : [],
         }
       : null;
+  // W4 T19 (X-LE-3): and on a started division whose entry stage is a root knockout still running, an add takes a free place
+  // in round 1 or is refused by name — the same form says so (`divisionTakesKnockoutLateEntry`, the rail's own rule).
+  const knockoutLateEntry = tab === "entrants" && editable && divisionTakesKnockoutLateEntry(division.status, stages);
   // T20: the controls that START online chess (turning it on, the camera policy) render only while the club is
   // offered it (the PostHog flag `online-chess`). Asked only where one of them can render: a chess division's settings
   // here, and (above) the fixtures tab's entry into the panel of a division that plays online.
@@ -921,6 +931,7 @@ export default async function DivisionPage({
               viewerPlan={viewerPlan}
               divisionStatus={division.status}
               swissLateEntry={swissLateEntry}
+              knockoutLateEntry={knockoutLateEntry}
             />
           </div>
         )}
@@ -1058,6 +1069,7 @@ export default async function DivisionPage({
               divisionStatus={division.status}
               swissRoundControls={swissRoundControls}
               swissCutDrift={swissCutDrift}
+              knockoutWaiting={knockoutWaiting}
               knockoutCutDrift={knockoutCutDrift}
               // Match Day PB1 x W3 T17: a COMPLETED stage's card starts as one line, and the cut-drift warning lives on a completed
               // Swiss (W4 T14: or knockout) - so the cards that carry it are listed here and start open. Each list reads the SAME
