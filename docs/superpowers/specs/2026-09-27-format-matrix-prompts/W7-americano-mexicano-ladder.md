@@ -81,6 +81,27 @@ previously ✅/⛔ red anywhere; §10.5 gates; the denied-state case (no
 5. **A ladder newcomer is `LADDER_ENTRANT_FOREIGN`** (FX-G6): `ladder_order`
    is written once. Test the late joiner as both challenger and challenged.
 
+## Carried from W4 (2026-11-09)
+
+Owner ruling 2026-11-09: americano, mexicano and ladder are W7's. W4 app PR A's
+all-format placement sweep (`apps/web/src/server/usecases/__tests__/template-placement-sweep.test.ts`,
+T26c) excludes all three BY KEY, naming W7, with the exclusion's size pinned
+(`EXCLUDED_COUNT`). Each owes its placement proof here — generated, then
+Auto-schedule BUILD + apply, then every played row holds a time AND a court
+(never `holdsSlot`'s OR) and nothing that is not played holds either:
+
+- **americano** — every round is seated at Generate (`stages.ts` americano
+  branch), so it takes the league's path: every row both, a sit-out is no row.
+- **mexicano** — ONE round a press, only once every earlier row is decided
+  (lazy by design: pairings need scores). Prove it per round: each press's
+  round placed, no later round exists to place.
+- **ladder** — no rows at Generate; a row exists only when a challenge makes
+  one (Jul3/08 §6). Prove zero rows at Generate and that a challenge's row is
+  placeable like any match.
+
+When a format is proven, remove its key from the sweep's `EXCLUDED` and lower
+`EXCLUDED_COUNT` in the same commit.
+
 ## Output and handoff
 
 Update the W7 row, decision log and "False premises found" in `_INDEX.md` as
