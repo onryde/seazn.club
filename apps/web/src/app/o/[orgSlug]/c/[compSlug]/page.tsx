@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 import Link from "@/components/ui/console-link";
 import { CalendarRange, Radio, Settings } from "lucide-react";
 import { requireCompetitionPage } from "@/server/page-auth";
-import { getCompetition } from "@/server/usecases/competitions";
+import { getCompetition, openStagesOf } from "@/server/usecases/competitions";
 import { listDivisions } from "@/server/usecases/divisions";
 import { listDivisionCardStats, formatLabel } from "@/server/usecases/card-stats";
 import { CardMenu } from "@/components/ui/card-menu";
@@ -23,7 +23,7 @@ import { getDictionary, t, plural } from "@/lib/i18n";
 import { sql } from "@/lib/db";
 import { checkoutTrialDays } from "@/lib/billing";
 import { getCompetitionDesk, competitionPhase } from "@/server/usecases/competition-desk";
-import { statusLine, nextDateLabel } from "@/lib/division-status-line";
+import { finalDecidedStageName, statusLine, nextDateLabel } from "@/lib/division-status-line";
 import { ledgerRank, leadingAttention } from "@/lib/division-phase";
 import { ledgerQueryOf } from "@/lib/ledger-page";
 import { PhasePill, AttentionChip } from "@/components/v2/desk/phase-pill";
@@ -78,6 +78,17 @@ export default async function CompetitionPage({
       where o.id = ${page.org.id}`,
   ]);
   const trialAvailable = checkoutTrialDays(subRow) > 0;
+  // W4 T21 review I1 (ruling 273): the wrap-up prompt's "Mark completed" is a second door to `completed`, for the
+  // organisers who never open settings — so it lists the open stages exactly as the settings select does. Read only
+  // when the prompt shows (it is rare, and the read is not free). Like the desk summary above, a failed read never
+  // blanks the page: the prompt shows without its warning.
+  const wrapUp = canEdit && needsWrapUp(competition.status, competition.ends_on);
+  const wrapUpOpenStages = wrapUp
+    ? await openStagesOf(auth, id).catch((err: unknown) => {
+        log.error({ event: "wrapup_open_stages_failed", competitionId: id, err }, "wrapup_open_stages_failed");
+        return [];
+      })
+    : [];
   const compPhase = desk ? competitionPhase(desk) : null;
   // F5 fix: DivisionLedger's own "is this kick-off past?" check (its
   // nextLine) needs a fixed instant, never `Date.now()` read inside its own
@@ -121,6 +132,8 @@ export default async function CompetitionPage({
         entrants: dd.entrants,
         next: dd.next ? { scheduledAt: dd.next.scheduled_at, home: dd.next.home, away: dd.next.away } : null,
         needsDrawStageName: dd.needs_draw_stage?.name ?? null, locale, displayTz: dd.display_tz,
+        // W4 T21 review M2: a decided final whose stage is still open never reads "· complete" beside its red pill.
+        finalDecidedStageName: finalDecidedStageName(dd.attention),
         // G1 fix (fix round D, Critical): this consumer had no `now` at
         // all before — the SAME `now` every division's phase in this render
         // was already resolved against (see the `const now =` derivation
@@ -504,7 +517,7 @@ export default async function CompetitionPage({
               `ends_on` is a DATE, so it formats in UTC: the local-zone reading
               of a bare date is a day off for half the world, and this sentence
               quotes the same boundary the lock arm judges. */}
-          {canEdit && needsWrapUp(competition.status, competition.ends_on) && (
+          {wrapUp && (
             <CompetitionWrapUpPrompt
               competitionId={competition.id}
               endedOnLabel={fmtDate(UTC, competition.ends_on, {
@@ -513,6 +526,8 @@ export default async function CompetitionPage({
                 year: "numeric",
               })}
               settingsHref={routes.competitionSettings(orgSlug, compSlug)}
+              openStages={wrapUpOpenStages}
+              canCompleteStages={!competition.frozen}
             />
           )}
 

@@ -72,6 +72,7 @@ import { resolveModuleClient } from "@/components/v2/scorepad/module-client";
 // letting this one OUTLIVE the pad — it unmounts the moment a fixture is
 // decided, and a finalized fixture must still show what happened.
 import { ActivityPanel, type ActivityDetailResolver, type ActivityEvent } from "@/components/v2/scorepad/v3/activity";
+import { disqualifiedForfeiters } from "@/components/v2/scorepad/v3/ribbon";
 import { resolvePad } from "@/components/v2/scorepad/v3/registry";
 import { cricketHasNoInnings } from "@/components/v2/scorepad/v3/skins/cricket";
 import { genericHasNoResult } from "@/components/v2/scorepad/v3/skins/generic";
@@ -1098,9 +1099,8 @@ export function FixtureConsole({
   const seatsOf = { outcome: live.outcome, home_entrant_id: home?.id ?? null, away_entrant_id: away?.id ?? null };
   // W3 T15 ruling 2: each seated side's status — a DISQUALIFIED side's cascade walkover is never worded as a withdrawal.
   const sideStatuses = Object.fromEntries([home, away].flatMap((s) => (s?.status === undefined ? [] : [[s.id, s.status]])));
-  const disqualifiedSides = new Set(
-    (["home", "away"] as const).filter((seat) => (seat === "home" ? home : away)?.status === "disqualified"),
-  );
+  // W4 T18 (K12): keyed by ENTRANT id, as the cascade's `core.forfeit.by` is — a seat-keyed set never matched one.
+  const disqualifiedEntrants = disqualifiedForfeiters([home, away]);
   const seatWithdrew = (seat: "home" | "away") =>
     (seat === "home" ? fixture.home_unseated_name : fixture.away_unseated_name) != null && unseatedWithdrew(seatsOf, seat);
   const withdrawnSeat = seatWithdrew("home") || seatWithdrew("away");
@@ -1593,7 +1593,7 @@ export function FixtureConsole({
         t={msg}
         authority
         collapsible
-        disqualifiedSides={disqualifiedSides}
+        disqualifiedEntrants={disqualifiedEntrants}
         resolveDetail={activityDetail}
         // R7-46. Reads through the ref at call time rather than closing over a
         // value, so the panel does not need to re-render when the pad's view

@@ -30,6 +30,7 @@ import { isWaitingByeLine } from "@/lib/bye-line";
 import { rowAwaitsSettle, hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { awaitsWalkoverSql } from "@/server/engine-db/system-bye-sql";
 import { kickoffsOf } from "@/server/engine-db/kickoff";
+import { bracketAwaitsCompletion } from "@/server/engine-db/stage-finals";
 import type { ProgressionSpec } from "@seazn/engine/competition";
 import { cardStatsCountsPlayed, listDivisionCardStats, type NextFixture } from "./card-stats";
 import { DEPARTED_STATUSES } from "./entrants";
@@ -191,7 +192,8 @@ export async function listFixturesAwaitingSettle(auth: AuthCtx, divisionId: stri
 type StageRaw = {
   id: string;
   division_id: string;
-  /** W2a: read only to tell a bracket stage (whose recorded abandon awaits a settle) from a table one. */
+  /** W2a: read only to tell a bracket stage (whose recorded abandon awaits a settle) from a table one; W4 T21: and to
+   *  ask whether a bracket's final is decided (`bracketAwaitsCompletion`). */
   kind: string;
   name: string;
   seq: number;
@@ -589,6 +591,9 @@ export async function getCompetitionDesk(
               )
             : false,
         proposal: (x.proposal_status ?? "none") as SeedProposalState,
+        // W4 T21 (AN-1, X-CH-8): every match of this bracket settled, so its final is decided and only Complete stage
+        // is left — asked of this stage's own rows, by the ONE rule the settings warning reads too (stage-finals.ts).
+        finalDecided: bracketAwaitsCompletion(x.kind, fixtures.filter((f) => f.stage_id === x.id)),
       }));
     const rows = fixtures.filter((x) => x.division_id === d.id);
     // W3 T3 (X-SW-29), W4 B1a review #1 (X-SD-5): a bye line nobody has settled yet — an unseated Swiss bye shell, a

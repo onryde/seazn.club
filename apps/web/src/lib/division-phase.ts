@@ -53,6 +53,10 @@ export interface PhaseStage {
   sourceReady: boolean;
   /** @see SeedProposalState — the action LABEL only, never the phase. */
   proposal: SeedProposalState;
+  /** W4 T21 (AN-1, X-CH-8): a BRACKET stage whose matches are all settled, so its final is decided and the one action
+   *  left is Complete stage (`bracketAwaitsCompletion`, server/engine-db/stage-finals.ts). Resolved by the caller from
+   *  the stage's own rows, like `sourceReady`, so this module stays pure. False for every other stage kind. */
+  finalDecided: boolean;
 }
 
 export interface PhaseFixture {
@@ -271,6 +275,9 @@ export type Attention =
   // W2a (addendum 9): held fixtures — a level bracket result or a recorded abandon that decided nobody — each owed
   // the organiser's settle. Aggregated per division like `result_missing`; `fixtureIds` deep-links a single one.
   | { kind: "needs_decision"; count: number; fixtureIds: string[] }
+  // W4 T21 (AN-1, X-CH-8): a bracket whose final is decided and nothing else owed, its stage still open — auto-advance
+  // off, so nothing completes it and nobody is ranked. ONE per division, naming the lowest such open stage.
+  | { kind: "final_decided"; stageName: string }
   | { kind: "registrations_waiting"; count: number }
   // Discipline (owner-approved 3A): pending bans the organiser has not reviewed. Raised in every division status — a
   // manual ban can be recorded before Start, a card's after the season ends — and only ever as a prompt: a pending ban
@@ -293,6 +300,9 @@ export const ATTENTION_SEVERITY: Record<Attention["kind"], Severity> = {
   // Red for the same reason as the two above: the bracket cannot finish — no later round seats its winner, and the
   // stage cannot complete — until the organiser settles it, and nothing else on the desk asks.
   needs_decision: "red",
+  // Red for `needs_decision`'s reason: the bracket never ranks until the organiser acts, and nothing else on the desk
+  // asks — alone, the phase reads Finished (the AN-1 desk).
+  final_decided: "red",
   no_scorer: "red",
   // AMBER, not red, and the grace period is why. `no_scorer` is red because
   // nobody is even nominated: the organiser must act or the match goes
@@ -384,6 +394,8 @@ const KIND_ORDER: Attention["kind"][] = [
   "needs_fixtures",
   // W2a: beside the two stage-blocking rows, for the same reason — the bracket stops here until the organiser acts.
   "needs_decision",
+  // W4 T21: the last of the stage-level reds — the stage is played out, only its completion is owed.
+  "final_decided",
   "no_scorer",
   // Directly after `no_scorer`, and the position is the MEANING, not a
   // formatting choice: the two describe the same failure — a live match going
@@ -991,6 +1003,11 @@ export function resolveAttention(input: PhaseInput): Attention[] {
   // a held fixture is never `in_play` or `scheduled`, so no fixture can raise both this and a recording row.
   const held = input.fixtures.filter(isHeldFixture).map((f) => f.id);
   if (held.length > 0) out.push({ kind: "needs_decision", count: held.length, fixtureIds: held });
+  // W4 T21 (AN-1, X-CH-8): the lowest OPEN stage whose final is decided (the caller's `finalDecided`). Empty case
+  // first: no open stage, or none decided, finds nothing and raises nothing. Not gated by divisionStatus: a decided
+  // final means a played match, which a `setup` division cannot hold.
+  const decided = openStages(input.stages).find((s) => s.finalDecided);
+  if (decided) out.push({ kind: "final_decided", stageName: decided.name });
   if (input.awaitingRegistrations > 0) {
     out.push({ kind: "registrations_waiting", count: input.awaitingRegistrations });
   }

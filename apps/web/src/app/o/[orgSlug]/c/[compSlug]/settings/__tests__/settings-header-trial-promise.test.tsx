@@ -27,6 +27,8 @@ vi.mock("@/server/page-auth", () => ({
 }));
 
 vi.mock("@/server/usecases/competitions", () => ({
+  // W4 T21: the settings page reads the open stages its Complete-competition warning lists.
+  openStagesOf: async () => [],
   getCompetition: async () => ({
     id: "comp-1",
     org_id: "org-1",

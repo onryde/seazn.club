@@ -1,6 +1,6 @@
 import { plural, t } from "@/lib/i18n";
 import type { Dict, Locale } from "@/lib/i18n-constants";
-import type { DivisionPhase } from "@/lib/division-phase";
+import type { Attention, DivisionPhase } from "@/lib/division-phase";
 
 export interface StatusLineInput {
   phase: DivisionPhase;
@@ -11,6 +11,10 @@ export interface StatusLineInput {
   entrants: number;
   next: { scheduledAt: string | null; home: string | null; away: string | null } | null;
   needsDrawStageName: string | null;
+  /** W4 T21 review M2: the stage whose final is decided but which was never completed (`final_decided`, read off the
+   *  division's attention by `finalDecidedStageName`). Without it a finished row read "3 of 3 played · complete" beside
+   *  its red "Final decided" pill. */
+  finalDecidedStageName: string | null;
   locale: Locale;
   /** Display zone (`schedule_settings.tz` resolved through `resolveVenueTz`)
    *  — the venue's zone, and the ONE zone this row uses for everything (G2
@@ -89,6 +93,12 @@ export function nextDateLabel(iso: string, locale: string, tz: string): string {
   return `${get("weekday")} ${get("day")} ${get("month")}`;
 }
 
+/** The stage a division's `final_decided` attention names, or null — the ONE read the page and its tests share. */
+export function finalDecidedStageName(attention: readonly Attention[]): string | null {
+  const a = attention.find((x): x is Extract<Attention, { kind: "final_decided" }> => x.kind === "final_decided");
+  return a ? a.stageName : null;
+}
+
 export function statusLine(dict: Dict, i: StatusLineInput): string {
   const base = { played: i.played, total: i.total };
   let line: string;
@@ -111,7 +121,14 @@ export function statusLine(dict: Dict, i: StatusLineInput): string {
     i.needsDrawStageName !== null && i.inPlay === 0
       ? t(dict, "desk.status.needsDraw", { ...base, stage: i.needsDrawStageName })
       : null;
+  // W4 T21 review M2: a played-out bracket whose stage was never completed names that stage, on the same terms as a
+  // pending draw (a live match outranks it), and after it — `needs_draw` comes first in KIND_ORDER.
+  const finalLine =
+    i.finalDecidedStageName !== null && i.inPlay === 0
+      ? t(dict, "desk.status.finalDecided", { ...base, stage: i.finalDecidedStageName })
+      : null;
   if (drawLine !== null) line = drawLine;
+  else if (finalLine !== null) line = finalLine;
   else switch (i.phase) {
     case "finished":
       line = t(dict, "desk.status.finished", base);
