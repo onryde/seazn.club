@@ -62,7 +62,11 @@ const OPEN_ENTRY_STAGES = "apps/web/src/lib/open-entry-stages.ts";
 // names its codes (`SwissRefusalCode`, lib/scenarios/common.ts) so a judged refusal is one the product can send, never a typed
 // copy. TYPE-ONLY from shipped modules (pinned below): the table itself imports `@/lib/messages`, which plain node cannot resolve.
 const SWISS_REFUSALS = "apps/web/src/lib/swiss-refusals.ts";
-const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", `${MATCH_RULES_DIR}/index.ts`, ORGANISER_ONLY_EVENTS, BRACKET_NEXT_MATCH, FORFEIT_PHASE_REFUSAL, STAGE_DECIDER_OFF, CHESS_INDIVIDUAL_ONLY_RULE, OPEN_ENTRY_STAGES, SWISS_REFUSALS]);
+// W4 app-A T16 (X-SP-6, ruling 269): stage-standalone.ts is the PRODUCT's "a stepladder or page playoff needs a table to
+// seed from" predicate (standaloneStageRefusal) the stage create refuses by; catalogue.ts's refusedCell reads it rather
+// than keep a list of the 22 refused cells. Import-free (pinned below), so plain node loads it with no alias.
+const STAGE_STANDALONE = "apps/web/src/lib/stage-standalone.ts";
+const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", `${MATCH_RULES_DIR}/index.ts`, ORGANISER_ONLY_EVENTS, BRACKET_NEXT_MATCH, FORFEIT_PHASE_REFUSAL, STAGE_DECIDER_OFF, CHESS_INDIVIDUAL_ONLY_RULE, OPEN_ENTRY_STAGES, SWISS_REFUSALS, STAGE_STANDALONE]);
 const FORBIDDEN = ["run-suite", "pack-schema", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
 const TYPE_ONLY = new Set(["lib/invariants.ts", "lib/observed.ts"]);
 // The bench is also the @seazn/bench workspace (2026-10-04). A bare
@@ -170,6 +174,17 @@ describe("tools/matrix import boundary", () => {
     const edge = importsOf(templates).filter((i) => !i.typeOnly && i.spec.startsWith(".") && relative(REPO, resolve(dirname(templates), i.spec)) === CHESS_INDIVIDUAL_ONLY_RULE);
     expect(edge.map((i) => i.spec)).toEqual(["./chess-individual-only-rule.ts"]);
     expect(importsOf(templates).filter((i) => !i.typeOnly && i.spec.startsWith("@/")), "format-templates.ts value-imports no `@/` alias").toEqual([]);
+  });
+
+  it("the product's standalone-stage predicate is a file plain node can load: it exists and imports nothing, and only catalogue.ts names it, by a value import", () => {
+    const file = join(REPO, STAGE_STANDALONE);
+    expect(existsSync(file), STAGE_STANDALONE).toBe(true);
+    expect(importsOf(file), `${STAGE_STANDALONE} must stay import-free`).toEqual([]);
+    const naming = MODULES.filter((m) => importsOf(m).some((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === STAGE_STANDALONE)).map((m) => relative(MATRIX, m));
+    expect(naming).toEqual(["lib/catalogue.ts"]);
+    // A value import (not `import type`): refusedCell calls the predicate, so the file really is loaded under plain node.
+    const edge = importsOf(join(MATRIX, "lib/catalogue.ts")).filter((i) => i.spec.endsWith("/stage-standalone.ts"));
+    expect(edge.map((i) => [i.typeOnly, i.dynamic])).toEqual([[false, false]]);
   });
 
   it("the product's next-match predicate is a file plain node can load: it exists and imports nothing, and only its two readers name it — the W2b checks' feed graph and the oracle's next line (the model reads it through the checks)", () => {

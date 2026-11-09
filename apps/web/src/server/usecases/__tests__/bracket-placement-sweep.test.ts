@@ -24,6 +24,13 @@
 // (`_legacy-standalone-stage.ts`, pre-flight C5) and goes on asking the real generator about every size. The refusal itself is proven in
 // standalone-stage-refusal.test.ts.
 //
+// W4 T24 (FX-G14's sweep half; premise 2: the allowlist stays): the SEEDED pass used to ask a Plate and a Qualifying + Main draw about two
+// fields only (5 and 8). It now seeds every field the builder offers them - from each format's own bound (PLATE_MIN, QUALIFYING_MAIN_MIN: 4)
+// to 19, then 33-35 - which crosses every bracket size (4, 8, 16, 32, 64) and every count of round-1 matches a bye-bearing bracket can have
+// (1, 2 and 3 real matches in a bracket of 8, 16, 32 and 64: 5-7, 9-11, 17-19, 33-35; and 4 itself, two). Each field is counted (zero asked =
+// failure) and the named ones - 5, 6, 7, 9, 17 - are asserted by name. What the Plate refuses is judged against the rule's arithmetic
+// (`round1Matches`), field by field, and not against the usecase's own text.
+//
 // Real Postgres required; skipped without DATABASE_URL (the house convention of the sibling usecase suites).
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -34,6 +41,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { bracketPlacement, type BracketPlacement } from "@/lib/bracket-view";
 import { BRACKET_STAGE_KINDS } from "@/lib/run-sheet-groups";
 import { STAGE_TEMPLATES, buildTemplateStages, type StageDraft, type TemplateKnobs } from "@/lib/format-templates";
+import { PLATE_MIN, QUALIFYING_MAIN_MIN } from "@/lib/format-size-gates";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -123,6 +131,27 @@ afterAll(async () => {
 /** Every field size a standalone bracket is asked at: 2..33 (the byes of every non-power-of-two, and 32 -> 33 crossing a round). */
 const STANDALONE_SIZES = Array.from({ length: 32 }, (_, i) => i + 2);
 
+/** W4 T24: the templates whose SEEDED pass is wide, and the smallest field each is offered - its own gate's constant (format-size-gates.ts),
+ *  never a typed 4. Every other template keeps the two fields it always had (5 and 8). */
+const WIDE_FROM: Readonly<Record<string, number>> = { ko_plate: PLATE_MIN, qualifying_main: QUALIFYING_MAIN_MIN };
+/** The fields a wide template is seeded at: its bound..19 (bracket sizes 4, 8, 16 and every bye count between) then 33..35 (the same
+ *  three byte counts again on a bracket of 64, past the point a round crosses). */
+const wideFields = (from: number): number[] => [...Array.from({ length: 19 - from + 1 }, (_, i) => from + i), 33, 34, 35];
+/** The fields the owner and the brief name: one real round-1 match (5), two (6), three (7) in a bracket of 8, and the same on 16 (9) and 32 (17). */
+const NAMED_FIELDS = [5, 6, 7, 9, 17];
+/** The cut sizes the seeded pass asks (a Plate's round-1 loser count; a Qualifying + Main draw's cut). */
+const SEEDED_QS = [3, 4];
+/** A single-elimination bracket of `n` rounds up to the next power of two P and plays n - P/2 lines of round 1 for real (the rest are byes;
+ *  a power of two plays P/2) - the arithmetic of the rule, not a read of the generator. Each real line has one loser. */
+const round1Matches = (n: number): number => n - 2 ** Math.ceil(Math.log2(n)) / 2;
+/** The (n, q) a Plate cannot be seeded for until PR B's first-loss feed (owed: W4 PR B first-loss feed, FX-G14 close): the Plate takes the
+ *  round-1 losers of the Main draw, q of them, and the Main draw plays fewer round-1 lines than that. */
+const plateUnfilled = (fields: readonly number[]): Array<{ n: number; q: number }> =>
+  fields.flatMap((n) => SEEDED_QS.filter((q) => round1Matches(n) < q).map((q) => ({ n, q })));
+const PLATE_FIELDS = wideFields(WIDE_FROM.ko_plate!);
+const PLATE_UNFILLED = plateUnfilled(PLATE_FIELDS);
+const PLATE_UNFILLED_FIELDS = [...new Set(PLATE_UNFILLED.map((u) => u.n))];
+
 /** A refusal is the usecase saying no to an impossible request, not a stage that lost its bracket. Each known one is tied to the cases it
  *  covers - a label pattern AND an exact count - so a new refusing size or template fails instead of matching a loose regex. */
 const KNOWN_REFUSALS: Array<{ re: RegExp; expected: number; why: string }> = [
@@ -137,9 +166,9 @@ const KNOWN_REFUSALS: Array<{ re: RegExp; expected: number; why: string }> = [
     why: "a Swiss feeder asked for more rounds than two entrants can play (swiss_playoff q=4; swiss_knockout q=2 with and without third place)",
   },
   {
-    re: /^ko_plate n=5 q=[34] third=false: seeding knockout from knockout refused \(bracket round 1 has no loser at position 2 \(found 1\)\)$/,
-    expected: 2,
-    why: "a Plate asked for the round-1 loser at position 2 of a bye-padded 5-entrant Main draw, which has one real round-1 match (q=3 and q=4)",
+    re: new RegExp(`^ko_plate n=(${PLATE_UNFILLED_FIELDS.join("|")}) q=[34] third=false: seeding knockout from knockout refused \\(bracket round 1 has no loser at position \\d+ \\(found \\d+\\)\\)$`),
+    expected: PLATE_UNFILLED.length,
+    why: "owed: W4 PR B first-loss feed (FX-G14 close) - a Plate asked for the round-1 loser at a position the Main draw does not play: fewer real round-1 matches than the q losers it takes (fields 4-7, 9-11, 17-19 and 33-35: at q=3 where there are fewer than 3, at q=4 where there are fewer than 4)",
   },
   {
     re: /^ko_plate n=2 q=\d+ pools=\d+ third=(true|false): generate knockout refused \(Knockout \+ Plate needs at least 4 entrants\.\)$/,
@@ -148,8 +177,8 @@ const KNOWN_REFUSALS: Array<{ re: RegExp; expected: number; why: string }> = [
   },
   {
     re: /^qualifying_main n=\d+ q=(3( pools=\d+)? third=false|[56]( pools=\d+)? third=(true|false)): createStages refused \(From a knockout, qualify a whole round: 1, 2, 4, 8 …\)$/,
-    expected: 18,
-    why: "X-QM-2 (RB4-Q2): a cut of 1-5 or 1-6 from a knockout ends inside a finishing band, and so does 1-3 unless the source plays a third-place match. Day one 16 (n=4 at q=3; n=9, 17 and 33 at q=3 and, with and without third place, q=5 and 6) and seeded 2",
+    expected: 16 + wideFields(WIDE_FROM.qualifying_main!).length,
+    why: "X-QM-2 (RB4-Q2): a cut of 1-5 or 1-6 from a knockout ends inside a finishing band, and so does 1-3 unless the source plays a third-place match. Day one 16 (n=4 at q=3; n=9, 17 and 33 at q=3 and, with and without third place, q=5 and 6) and seeded one per wide field (q=3 without third place, 19 fields)",
   },
 ];
 
@@ -182,6 +211,8 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
   /** Every bracket stage the sweep asked about (about to generate / about to seed), and how many of those the usecase refused. */
   let enumerated = 0;
   let refusedBracket = 0;
+  /** W4 T24: every (wide template, field, q, third) the seeded pass asked, so a field cannot drop out of the widened sweep unnoticed. */
+  const wideAsked: Array<{ key: string; n: number; q: number; third: boolean }> = [];
 
   /** Create `drafts` as the division's stages, generate them in order, and record every bracket-kind stage's placement. */
   async function dayOne(label: string, n: number, drafts: StageDraft[]) {
@@ -287,16 +318,27 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
     // the same code). 5 has a bye in every single-elimination round it feeds; 8 does not; both a pool split and an uneven one are reached.
     for (const t of BRACKET_TEMPLATES) {
       if (!t.build(KNOBS(4)).some((s) => s.progression !== null)) continue;
-      for (const n of [5, 8]) {
-        for (const q of usesQualified(t) ? [3, 4] : [4]) {
+      const from = WIDE_FROM[t.key];
+      for (const n of from === undefined ? [5, 8] : wideFields(from)) {
+        for (const q of usesQualified(t) ? SEEDED_QS : [4]) {
           for (const third of n === 8 ? [false, true] : [false]) {
             const base = buildTemplateStages(t.key, KNOBS(q));
+            if (from !== undefined) wideAsked.push({ key: t.key, n, q, third });
             await seeded(`${t.key} n=${n} q=${q} third=${third}`, n, third ? withThirdPlace(base) : base);
           }
         }
       }
     }
     expect(seen.filter((s) => s.phase === "seeded").length, "anti-vacuity: seeded cases recorded").toBeGreaterThan(20);
+    // W4 T24: the widened pass asked every field of every wide template (counted - zero asked is a failure), the named ones included.
+    for (const [key, from] of Object.entries(WIDE_FROM)) {
+      expect(BRACKET_TEMPLATES.some((t) => t.key === key), `${key} is a bracket template with a progression`).toBe(true);
+      const asked = [...new Set(wideAsked.filter((a) => a.key === key).map((a) => a.n))].sort((a, b) => a - b);
+      expect(asked, `${key}: the fields the seeded pass asked`).toEqual(wideFields(from));
+      expect(asked.length, `${key}: counted`).toBe(19 - from + 1 + 3);
+      for (const n of NAMED_FIELDS) expect(asked, `${key}: the named field ${n}`).toContain(n);
+      expect(wideAsked.filter((a) => a.key === key).length, `${key}: every (field, q, third) asked`).toBe(asked.length * SEEDED_QS.length + SEEDED_QS.length);
+    }
   }, 900_000);
 
   it("no bracket stage came back without a bracket; every kind, template, placement and phase was reached; every refusal is a known one", () => {
@@ -321,6 +363,24 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
     expect(new Set(seen.map((c) => c.placement)), "both placements are reached (card and page)").toEqual(new Set(["card", "page"]));
     expect(BRACKET_TEMPLATES.length, "the owner's ten bracket templates are all in the catalogue").toBeGreaterThanOrEqual(10);
 
+    // W4 T24: what the widened seeded pass MET, field by field, against the rule's arithmetic (round1Matches), never against the usecase's own text.
+    for (const n of wideFields(WIDE_FROM.ko_plate!)) {
+      for (const q of SEEDED_QS) {
+        const label = `ko_plate n=${n} q=${q} third=false`;
+        const refusedHere = refused.some((r) => r.startsWith(`${label}: seeding knockout from knockout refused`));
+        const recordedHere = seen.some((c) => c.phase === "seeded" && c.label === `${label} / Plate`);
+        const owed = PLATE_UNFILLED.some((u) => u.n === n && u.q === q);
+        expect(refusedHere, `${label}: refused iff the Main draw plays fewer than ${q} round-1 matches (${round1Matches(n)} here)`).toBe(owed);
+        expect(recordedHere, `${label}: the Plate is drawn iff it was not refused`).toBe(!owed);
+      }
+    }
+    expect(PLATE_UNFILLED.length, "the named fields refuse at the builder's cut (4), which is where the rule bites").toBeGreaterThan(0);
+    for (const n of NAMED_FIELDS) expect(PLATE_UNFILLED.some((u) => u.n === n && u.q === 4), `ko_plate n=${n} is owed at q=4`).toBe(true);
+    for (const n of wideFields(WIDE_FROM.qualifying_main!)) {
+      expect(seen.some((c) => c.phase === "seeded" && c.label === `qualifying_main n=${n} q=4 third=false / Main draw`), `qualifying_main n=${n} q=4: the Main draw is drawn`).toBe(true);
+      expect(refused.some((r) => r.startsWith(`qualifying_main n=${n} q=3 third=false: createStages refused`)), `qualifying_main n=${n} q=3 without a third-place match: a cut of 1-3 is no whole band`).toBe(true);
+    }
+
     // A refusal is the usecase saying no to an impossible request, not a stage that lost its bracket (see `auditRefusals`).
     const audit = auditRefusals(refused);
     expect(audit.problems, `refusals: ${refused.length} read`).toEqual([]);
@@ -332,7 +392,8 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
 describe("the sweep's refusal audit (no database)", () => {
   const PP = (n: number) => `page_playoff n=${n}: generate page_playoff refused (page playoffs need exactly 4 entrants, got ${n})`;
   const SW = (name: string, q: number, third: boolean) => `${name} n=2 q=${q} pools=2 third=${third}: generate swiss refused (That is more rounds than this field can pair.)`;
-  const PL = (q: number) => `ko_plate n=5 q=${q} third=false: seeding knockout from knockout refused (bracket round 1 has no loser at position 2 (found 1))`;
+  // The Plate asks for the loser at the position after the last real round-1 line, and finds as many as the Main draw plays.
+  const PL = (n: number, q: number) => `ko_plate n=${n} q=${q} third=false: seeding knockout from knockout refused (bracket round 1 has no loser at position ${round1Matches(n) + 1} (found ${round1Matches(n)}))`;
   const SMALL_PLATE = (third: boolean) => `ko_plate n=2 q=2 pools=2 third=${third}: generate knockout refused (Knockout + Plate needs at least 4 entrants.)`;
   const CUT = (n: number, q: number, third: boolean, pools = " pools=2") => `qualifying_main n=${n} q=${q}${pools} third=${third}: createStages refused (From a knockout, qualify a whole round: 1, 2, 4, 8 …)`;
   const THIRDS = [false, true];
@@ -340,22 +401,24 @@ describe("the sweep's refusal audit (no database)", () => {
   const CUTS = [
     CUT(4, 3, false),
     ...[9, 17, 33].flatMap((n) => [CUT(n, 3, false), ...[5, 6].flatMap((q) => THIRDS.map((t) => CUT(n, q, t)))]),
-    CUT(5, 3, false, ""),
-    CUT(8, 3, false, ""),
+    ...wideFields(WIDE_FROM.qualifying_main!).map((n) => CUT(n, 3, false, "")),
   ];
   const today = (): string[] => [
     ...STANDALONE_SIZES.filter((n) => n !== 4).map(PP),
     SW("swiss_playoff", 4, false),
     SW("swiss_knockout", 2, false),
     SW("swiss_knockout", 2, true),
-    PL(3),
-    PL(4),
+    ...PLATE_UNFILLED.map(({ n, q }) => PL(n, q)),
     ...THIRDS.map(SMALL_PLATE),
     ...CUTS,
   ];
 
-  it("accepts exactly what the sweep meets today (56 refusals: 31 + 3 + 2 + 2 + 18)", () => {
-    expect(today().length).toBe(56);
+  it("accepts exactly what the sweep meets today (93 refusals: 31 + 3 + 22 + 2 + 35)", () => {
+    // 22 Plate refusals: 13 fields at q=4 (4-7, 9-11, 17-19, 33-35) and 9 at q=3 (4-6, 9-10, 17-18, 33-34); 35 cuts: 16 day one + 19 seeded.
+    expect(PLATE_UNFILLED.length).toBe(22);
+    expect(PLATE_UNFILLED_FIELDS).toEqual([4, 5, 6, 7, 9, 10, 11, 17, 18, 19, 33, 34, 35]);
+    expect(CUTS.length).toBe(35);
+    expect(today().length).toBe(93);
     expect(auditRefusals(today()).problems).toEqual([]);
   });
 
@@ -365,16 +428,19 @@ describe("the sweep's refusal audit (no database)", () => {
       ["one page_playoff size no longer refuses", today().filter((r) => r !== PP(7))],
       ["a Swiss refusal at a size the rule does not name", [...today(), SW("swiss_knockout", 2, true).replace("n=2", "n=3")]],
       ["a fourth Swiss refusal", [...today(), SW("swiss_playoff", 2, true)]],
-      ["the Plate refusal at another size", [...today(), PL(3).replace("n=5", "n=6")]],
-      ["the Plate refusal MOVED to another size (same count, so only the label pattern can see it)", [...today().filter((r) => r !== PL(3)), PL(3).replace("n=5", "n=6")]],
+      ["a Plate refusal at a field whose Main draw plays enough round-1 matches (8 plays 4)", [...today(), PL(8, 4)]],
+      ["one Plate field no longer refuses (7 plays 3 round-1 matches, under the builder's 4)", today().filter((r) => r !== PL(7, 4))],
+      ["the Plate refusal MOVED to another size (same count, so only the label pattern can see it)", [...today().filter((r) => r !== PL(5, 3)), PL(8, 3)]],
       ["a Swiss refusal MOVED to another template (same count)", [...today().filter((r) => r !== SW("swiss_playoff", 4, false)), SW("swiss_other", 4, false)]],
-      ["the Plate refusal at another q", [...today().filter((r) => r !== PL(4)), PL(5)]],
+      ["the Plate refusal at another q", [...today().filter((r) => r !== PL(5, 4)), PL(5, 5)]],
       ["a refusal text nobody has read", [...today(), "ko_plate n=8 q=4 third=false: seeding knockout from knockout refused (something new)"]],
       ["the plate refused at a field the bound allows", [...today(), SMALL_PLATE(false).replace("n=2", "n=4")]],
       ["one small plate no longer refused", today().filter((r) => r !== SMALL_PLATE(true))],
       ["a whole-round cut refused (q=4 is one)", [...today().filter((r) => r !== CUT(9, 3, false)), CUT(9, 4, false)]],
       ["a cut of 1-3 refused where the source plays a third-place match (it is whole there)", [...today().filter((r) => r !== CUT(9, 3, false)), CUT(9, 3, true)]],
       ["another template refused for its cut", [...today(), CUT(9, 3, false).replace("qualifying_main", "ko_plate")]],
+      ["a wide field's seeded cut no longer refused (q=3 without a third-place match is no whole band)", today().filter((r) => r !== CUT(12, 3, false, ""))],
+      ["a seeded cut refused WITH a third-place match (a cut of 1-3 is whole there)", [...today().filter((r) => r !== CUT(12, 3, false, "")), CUT(12, 3, true, "")]],
     ];
     let rejected = 0;
     for (const [what, list] of cases) {

@@ -20,19 +20,22 @@ import { slugRunId } from "../lib/run-id.ts";
 import { offlineVariantOrder } from "../lib/variants.ts";
 import { runSlice, type RunDeps } from "../run.ts";
 import { deps, fakeBrowserRun } from "./run-deps.ts";
+import { isRefusedCell } from "./refused-cells.ts";
 import { SPAWN_MS, SpawnMeter } from "./spawn-budget.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const TR = join(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs");
 const scripts = (JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
 
-/** L3 is `--set w1-driving`: the 905 grid cases (231 cells x 4 scripts - 11 F1 page_playoff_only - 8 chess americano/mexicano; w1-driving-set.test.ts
+/** L3 is `--set w1-driving`: the 828 grid cases (231 cells x 4 scripts - the 24 refused cells x 4: chess americano/mexicano and, since W4 T16, the 22
+ *  standalone stepladder/page playoff cells, whose 11 F1 drops it subsumes; w1-driving-set.test.ts
  *  derives the same figure from the drop list) plus cricket's `test` variant cases, which the COMMITTED variants.json holds. Their count is READ from
  *  that file, not typed: a catalogue regen moves it (24 -> 25 at T36a, 29378e40ad, when T28's two cricket factors joined the pairwise cover and a
  *  typed L3 total of 929 went stale in three places). The file is read directly, not through the planner this total is checked against. */
-const L3_GRID = 905;
-const L3_TEST_CASES = (JSON.parse(readFileSync(resolve(REPO, "tools/matrix/catalogue/variants.json"), "utf8")) as { sports: { sport: string; cases: { preset: string }[] }[] })
-  .sports.find((s) => s.sport === "cricket")!.cases.filter((c) => c.preset === "test").length;
+const L3_GRID = 828;
+// A `test` case on a cell the product refuses is held, not planned (W4 T24: option A keeps the refused rows as variant levels).
+const L3_TEST_CASES = (JSON.parse(readFileSync(resolve(REPO, "tools/matrix/catalogue/variants.json"), "utf8")) as { sports: { sport: string; cases: { preset: string; row: string }[] }[] })
+  .sports.find((s) => s.sport === "cricket")!.cases.filter((c) => c.preset === "test" && !isRefusedCell(`${c.row}|cricket`)).length;
 const L3_PLAN = L3_GRID + L3_TEST_CASES;
 
 const flags = (n: number, driven = n): boolean[] => Array.from({ length: n }, (_, i) => i < driven);
@@ -404,12 +407,14 @@ describe("drivenInPlanOrder (lib/expected-plan.ts): the plan's items in the orde
     // The sizes the brief gives, by plan: 6 / 231 / 68 / 1,729 / 937 / 33 (L2 was 1,731 before X-DR-1; layers-grid.test.ts:183),
     // less the chess americano/mexicano cells the product refuses since the follow-up to #1027 (owner ruling 2026-10-26):
     // 2 cells off the L1 grid (231 -> 229), and their 4 scripts each off the w1-driving set (937 -> 929); the w1-driving total then
-    // moves with the committed cricket `test` cases (L3_PLAN: 929 with 24, 930 with 25).
+    // moves with the committed cricket `test` cases (L3_PLAN: 929 with 24, 930 with 25). W4 T16 (ruling 269) takes the 22 standalone
+    // stepladder / page playoff cells off too: L1 grid 229 -> 207, L2 grid 1,729 -> 1,589, w1-driving 930 -> 851 (the grid 905 -> 828;
+    // the two cricket `test` cases on those rows are held, 25 -> 23).
     expect(drivenInPlanOrder("--layer L1").length).toBe(6);
-    expect(drivenInPlanOrder("--layer L1 --scope grid").length).toBe(229);
+    expect(drivenInPlanOrder("--layer L1 --scope grid").length).toBe(207);
     expect(drivenInPlanOrder("--layer L2").length).toBe(68);
     expect(drivenInPlanOrder("--layer L2").filter(Boolean).length).toBe(3);
-    expect(drivenInPlanOrder("--layer L2 --scope grid").length).toBe(1729);
+    expect(drivenInPlanOrder("--layer L2 --scope grid").length).toBe(1589);
     expect(L3_TEST_CASES, "the committed variants.json holds cricket `test` cases (zero would make L3_PLAN the grid alone)").toBeGreaterThan(0);
     expect(drivenInPlanOrder("--set w1-driving").length).toBe(L3_PLAN);
     expect(drivenInPlanOrder("--set pr-sample --rows none").length).toBe(33);
@@ -424,7 +429,8 @@ describe("drivenInPlanOrder (lib/expected-plan.ts): the plan's items in the orde
       expect(v.reason.length, key).toBeGreaterThan(0);
       states.add(v.state);
     }
-    expect([...states].sort()).toEqual(["no_path", "not_run"]);
+    // 🚫 and ░, and (W4 T24) the settled atoms: ⛔ refused (Q4b, D4b) and ⏳ later (D4a, the clubs follow-up).
+    expect([...states].sort()).toEqual(["later", "no_path", "not_run", "refused"]);
   });
 
   it("an unknown plan is refused like livePlan's", () => {
@@ -479,7 +485,7 @@ describe("the seam, through the REAL runner (class 1: a fixture on both ends pro
       const r = runs.get(j.layer)![j.k - 1];
       const workers = j.args.includes("--workers 4") ? 4 : 1;
       // L2's plan size is the regenerated 1,729 (X-DR-1, W2a; was 1,731 - layers-grid.test.ts:183).
-      expect(r.shard, `${j.layer} ${j.k}/${j.of}`).toEqual({ index: j.k, of: j.of, planSize: { L1: 229, L2: 1729, L3: L3_PLAN }[j.layer] });
+      expect(r.shard, `${j.layer} ${j.k}/${j.of}`).toEqual({ index: j.k, of: j.of, planSize: { L1: 207, L2: 1589, L3: L3_PLAN }[j.layer] });
       expect(r.cases.length).toBeGreaterThan(0);
       // The budget basis: the cases the stripe DROVE (no `planned` marker), counted from the evidence the runner wrote.
       const drivenReal = r.cases.filter((c) => c.planned !== true).length;
@@ -495,13 +501,13 @@ describe("the seam, through the REAL runner (class 1: a fixture on both ends pro
     expect(runs.get("L2")![0].plan).toBe("--layer L2 --scope grid");
     expect(runs.get("L3")![0].plan).toBe("--set w1-driving");
     expect(runs.get("L1")![0].scope).toBe("L1 (grid)");
-    // Non-vacuity: the stripes differ in how much they drove (the L2 grid's 56 driven items do not split evenly across any 8).
+    // Non-vacuity: the stripes differ in how much they drove (the L2 grid's 51 driven items do not split evenly across any 8).
     // Match Day C9 review I5, option 2: the ten cells the builder does not offer are 🚫 (L1 176 -> 166 driven, L2 62 -> 56;
     // layers-grid.test.ts).
     const l1 = runs.get("L1")!.map((r) => r.cases.filter((c) => c.planned !== true).length);
     expect(l1.reduce((a, b) => a + b, 0)).toBe(166);
     expect(new Set(l1).size).toBeGreaterThan(1);
-    expect(runs.get("L2")!.map((r) => r.cases.filter((c) => c.planned !== true).length).reduce((a, b) => a + b, 0)).toBe(56);
+    expect(runs.get("L2")!.map((r) => r.cases.filter((c) => c.planned !== true).length).reduce((a, b) => a + b, 0)).toBe(51);
   });
 
   it("the full scope's shards of each layer merge into the layer's plan: right count, right order, identity clean against the planner (the judge's own check)", { timeout: 300_000 }, async () => {
@@ -513,7 +519,7 @@ describe("the seam, through the REAL runner (class 1: a fixture on both ends pro
       const m = mergeShards(inputs, `ci-1-1-${l.toLowerCase()}`);
       expect(m.merged.shards, l).toBe(shards.length);
       // L2 checks the regenerated 1,729 (X-DR-1, W2a; was 1,731 - layers-grid.test.ts:183).
-      expect(m.checked, l).toBe({ L1: 229, L2: 1729, L3: L3_PLAN }[l]);
+      expect(m.checked, l).toBe({ L1: 207, L2: 1589, L3: L3_PLAN }[l]);
       expect(matchPlanIds(m.merged).compared, l).toBe(m.checked);
       merged++;
     }
@@ -579,7 +585,7 @@ describe("shard-matrix.ts the CLI: matrix=<json> for $GITHUB_OUTPUT (exit 0), or
     expect(m.include.map((j) => j.id)).toEqual(["l1-s1", "l1-s2", "l1-s3", "l1-s4", "l1-s5", "l1-s6", "l1-s7", "l1-s8", "l2-s1", "l2-s2", "l3-s1", "l3-s2"]);
     expect(m.include.every((j) => Object.keys(j).sort().join() === "args,id,k,layer,of,timeout")).toBe(true);
     expect(m.include.every((j) => j.timeout <= 300)).toBe(true);
-    expect(io.err).toMatch(/L1.*229.*166/);
+    expect(io.err).toMatch(/L1.*207.*166/);
   });
 
   it("--scope smoke is 6 jobs; --scope pr-sample --rows <r> is one; and --rows beside full or smoke is ignored", () => {

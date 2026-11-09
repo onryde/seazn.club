@@ -16,6 +16,7 @@ import { SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, planSliceCases } from "../lib/
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { planW1Driving, readVariantsFile } from "../lib/w1-driving-set.ts";
 import { REPO } from "./committed-plans.ts";
+import { isRefusedCell } from "./refused-cells.ts";
 
 const ids = (cs: readonly { caseId: string }[]): string[] => cs.map((c) => c.caseId);
 const dedupe = (xs: readonly string[]): string[] => [...new Set(xs)];
@@ -227,9 +228,13 @@ describe("planPrSample", () => {
 
   it("w1-driving's cricket test cases ride with THEIR row, overrides intact (the plan is more than ids)", () => {
     // The committed variants say which rows hold cricket test cases and how many; the plan follows them row by row.
-    const committed = readVariantsFile().sports.find((x) => x.sport === "cricket")!.cases.filter((c) => c.preset === "test");
+    // A case on a refused row (the standalone stepladder / page playoff, ruling 269) is held in variants.json and never planned (W4 T24,
+    // option A): a row declared there adds no case, so the oracle leaves the refused rows out - and counts that it did (the held ones).
+    const all = readVariantsFile().sports.find((x) => x.sport === "cricket")!.cases.filter((c) => c.preset === "test");
+    const committed = all.filter((c) => !isRefusedCell(`${c.row}|cricket`));
+    expect(all.length - committed.length, "the held cricket test cases on a refused row").toBe(2);
     const rowsWithTests = [...new Set(committed.map((c) => c.row))];
-    expect(committed.length).toBeGreaterThan(0);
+    expect(committed.length).toBe(23);
     expect(rowsWithTests).toContain("league");
     let checked = 0;
     for (const row of ROW_KEYS) {

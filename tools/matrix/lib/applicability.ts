@@ -391,11 +391,12 @@ export interface Decision {
  *  score, else dropped. A case under the rule's harness gap is never planned,
  *  and nothing is planned on a cell the product refuses (refusedCell): asked
  *  first, so neither L3 (planL3) nor L2 (pairs.ts owed) ever plans one. */
-export function decide(r: Rule, row: RowKey, sport: string, variants: readonly SportVariants[]): Decision {
+export function decide(r: Rule, row: RowKey, sport: string, variants: readonly SportVariants[], refusal: string | null = refusedCell(row, sport)): Decision {
   const def = offlineBuilderDefault(sport);
   const unscorable: string[] = [];
   const gapped: string[] = [];
-  const refused = refusedCell(row, sport);
+  // `refusal` is the cell's refusal, asked by every caller; only pairs.ts passes another (null: it HOLDS the slot a standalone-refused pick had, W4 T24 option A).
+  const refused = refusal;
   if (refused !== null) return { applies: false, bound: null, preset: def, unscorable, gapped, refused };
   const atDefault = cellFacts(row, sport, def);
   if (r.when(atDefault)) {

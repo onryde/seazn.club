@@ -11,7 +11,7 @@
     834
   ],
   "targets": {
-    "rowScenario": 1650,
+    "rowScenario": 1510,
     "sportScenario": 945
   },
   "runs": [
@@ -268,32 +268,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 430,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 20,
-      "scenario": "R1",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 768,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 21,
-      "scenario": "R1",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 834,
       "covers": [
         "row"
       ],
@@ -558,32 +532,6 @@
       "l3Gap": null
     },
     {
-      "n": 41,
-      "scenario": "R2",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 42,
-      "scenario": "R2",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 43,
       "scenario": "R3",
       "row": "league",
@@ -842,32 +790,6 @@
       "l3Gap": null
     },
     {
-      "n": 62,
-      "scenario": "R3",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 63,
-      "scenario": "R3",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 360,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 64,
       "scenario": "R4a",
       "row": "league",
@@ -1120,32 +1042,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 83,
-      "scenario": "R4a",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 360,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 84,
-      "scenario": "R4a",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 375,
       "covers": [
         "row"
       ],
@@ -1561,32 +1457,6 @@
       "l3Gap": null
     },
     {
-      "n": 115,
-      "scenario": "R4c",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 116,
-      "scenario": "R4c",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 117,
       "scenario": "R5",
       "row": "league",
@@ -1839,32 +1709,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 136,
-      "scenario": "R5",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 137,
-      "scenario": "R5",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 360,
       "covers": [
         "row"
       ],
@@ -2281,32 +2125,6 @@
       "l3Gap": null
     },
     {
-      "n": 168,
-      "scenario": "R7",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 768,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 169,
-      "scenario": "R7",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 170,
       "scenario": "R8",
       "row": "league",
@@ -2559,32 +2377,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 768,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 189,
-      "scenario": "R8",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 190,
-      "scenario": "R8",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 320,
       "covers": [
         "row"
       ],
@@ -2848,32 +2640,6 @@
       "l3Gap": null
     },
     {
-      "n": 210,
-      "scenario": "R9a",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 211,
-      "scenario": "R9a",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 360,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 212,
       "scenario": "R9b",
       "row": "league",
@@ -3121,32 +2887,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 231,
-      "scenario": "R9b",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 360,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 232,
-      "scenario": "R9b",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 375,
       "covers": [
         "row"
       ],
@@ -3411,32 +3151,6 @@
       "l3Gap": null
     },
     {
-      "n": 252,
-      "scenario": "R10",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 375,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 253,
-      "scenario": "R10",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 390,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 254,
       "scenario": "R11a",
       "row": "league",
@@ -3689,32 +3403,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 375,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 273,
-      "scenario": "R11a",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 390,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 274,
-      "scenario": "R11a",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 430,
       "covers": [
         "row"
       ],
@@ -3974,32 +3662,6 @@
       "l3Gap": null
     },
     {
-      "n": 294,
-      "scenario": "R11b",
-      "row": "page_playoff_only",
-      "sport": "carrom",
-      "preset": "club-29",
-      "bound": null,
-      "width": 430,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 295,
-      "scenario": "R11b",
-      "row": "stepladder_only",
-      "sport": "carrom",
-      "preset": "club-29",
-      "bound": null,
-      "width": 768,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 296,
       "scenario": "R12a",
       "row": "league",
@@ -4253,32 +3915,6 @@
       "l3Gap": null
     },
     {
-      "n": 315,
-      "scenario": "R12a",
-      "row": "page_playoff_only",
-      "sport": "carrom",
-      "preset": "club-29",
-      "bound": null,
-      "width": 768,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 316,
-      "scenario": "R12a",
-      "row": "stepladder_only",
-      "sport": "carrom",
-      "preset": "club-29",
-      "bound": null,
-      "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 317,
       "scenario": "R12b",
       "row": "league",
@@ -4526,32 +4162,6 @@
       "preset": "club-29",
       "bound": null,
       "width": 768,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 336,
-      "scenario": "R12b",
-      "row": "page_playoff_only",
-      "sport": "carrom",
-      "preset": "club-29",
-      "bound": null,
-      "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 337,
-      "scenario": "R12b",
-      "row": "stepladder_only",
-      "sport": "carrom",
-      "preset": "club-29",
-      "bound": null,
-      "width": 320,
       "covers": [
         "row"
       ],
@@ -4816,32 +4426,6 @@
       "l3Gap": null
     },
     {
-      "n": 357,
-      "scenario": "R13",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 358,
-      "scenario": "R13",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 360,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 359,
       "scenario": "R14",
       "row": "league",
@@ -5055,19 +4639,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 375,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 375,
-      "scenario": "R14",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 390,
       "covers": [
         "row"
       ],
@@ -5475,32 +5046,6 @@
       "l3Gap": null
     },
     {
-      "n": 406,
-      "scenario": "R16",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 360,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 407,
-      "scenario": "R16",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 375,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 408,
       "scenario": "M1",
       "row": "league",
@@ -5753,32 +5298,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 360,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 427,
-      "scenario": "M1",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 375,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 428,
-      "scenario": "M1",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 390,
       "covers": [
         "row"
       ],
@@ -6043,32 +5562,6 @@
       "l3Gap": null
     },
     {
-      "n": 448,
-      "scenario": "M2",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 390,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 449,
-      "scenario": "M2",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 430,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 450,
       "scenario": "M3",
       "row": "league",
@@ -6321,32 +5814,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 390,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 469,
-      "scenario": "M3",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 430,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 470,
-      "scenario": "M3",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 768,
       "covers": [
         "row"
       ],
@@ -6611,32 +6078,6 @@
       "l3Gap": null
     },
     {
-      "n": 490,
-      "scenario": "M4a",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 768,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 491,
-      "scenario": "M4a",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 492,
       "scenario": "M4b",
       "row": "league",
@@ -6888,32 +6329,6 @@
       "l3Gap": null
     },
     {
-      "n": 511,
-      "scenario": "M4b",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "mini-soccer",
-      "bound": "football#002",
-      "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 512,
-      "scenario": "M4b",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "mini-soccer",
-      "bound": "football#002",
-      "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 513,
       "scenario": "M5",
       "row": "league_ko",
@@ -7084,32 +6499,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 526,
-      "scenario": "M5",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 527,
-      "scenario": "M5",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 360,
       "covers": [
         "row"
       ],
@@ -7362,32 +6751,6 @@
       "preset": "11-a-side",
       "bound": "football#001",
       "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 547,
-      "scenario": "M6",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": "football#001",
-      "width": 360,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 548,
-      "scenario": "M6",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": "football#001",
-      "width": 375,
       "covers": [
         "row"
       ],
@@ -7652,32 +7015,6 @@
       "l3Gap": null
     },
     {
-      "n": 568,
-      "scenario": "M7a",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 375,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 569,
-      "scenario": "M7a",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 390,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 570,
       "scenario": "M7b",
       "row": "league",
@@ -7930,32 +7267,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 375,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 589,
-      "scenario": "M7b",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 390,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 590,
-      "scenario": "M7b",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 430,
       "covers": [
         "row"
       ],
@@ -8220,32 +7531,6 @@
       "l3Gap": null
     },
     {
-      "n": 610,
-      "scenario": "M8a",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 430,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 611,
-      "scenario": "M8a",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 768,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 612,
       "scenario": "M8b",
       "row": "league",
@@ -8498,32 +7783,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 430,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 631,
-      "scenario": "M8b",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 768,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 632,
-      "scenario": "M8b",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 834,
       "covers": [
         "row"
       ],
@@ -8788,32 +8047,6 @@
       "l3Gap": null
     },
     {
-      "n": 652,
-      "scenario": "M9a",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 653,
-      "scenario": "M9a",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 654,
       "scenario": "M9b",
       "row": "league",
@@ -9066,32 +8299,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 673,
-      "scenario": "M9b",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 674,
-      "scenario": "M9b",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 360,
       "covers": [
         "row"
       ],
@@ -9356,32 +8563,6 @@
       "l3Gap": null
     },
     {
-      "n": 694,
-      "scenario": "M10",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 360,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 695,
-      "scenario": "M10",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 375,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 696,
       "scenario": "M11",
       "row": "league",
@@ -9634,32 +8815,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 360,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 715,
-      "scenario": "M11",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 375,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 716,
-      "scenario": "M11",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 390,
       "covers": [
         "row"
       ],
@@ -9919,32 +9074,6 @@
       "l3Gap": null
     },
     {
-      "n": 736,
-      "scenario": "M12a",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 390,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 737,
-      "scenario": "M12a",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 430,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 738,
       "scenario": "M12b",
       "row": "league",
@@ -10198,32 +9327,6 @@
       "l3Gap": null
     },
     {
-      "n": 757,
-      "scenario": "M12b",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 430,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 758,
-      "scenario": "M12b",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 768,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 759,
       "scenario": "M12c",
       "row": "league",
@@ -10466,32 +9569,6 @@
       "preset": "t20",
       "bound": null,
       "width": 430,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 778,
-      "scenario": "M12c",
-      "row": "page_playoff_only",
-      "sport": "cricket",
-      "preset": "t20",
-      "bound": null,
-      "width": 768,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 779,
-      "scenario": "M12c",
-      "row": "stepladder_only",
-      "sport": "cricket",
-      "preset": "t20",
-      "bound": null,
-      "width": 834,
       "covers": [
         "row"
       ],
@@ -10756,19 +9833,6 @@
       "l3Gap": null
     },
     {
-      "n": 799,
-      "scenario": "F1",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 800,
       "scenario": "F2",
       "row": "league",
@@ -11021,32 +10085,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 430,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 819,
-      "scenario": "F2",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 768,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 820,
-      "scenario": "F2",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 834,
       "covers": [
         "row"
       ],
@@ -12264,32 +11302,6 @@
       "l3Gap": null
     },
     {
-      "n": 909,
-      "scenario": "F8",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 768,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 910,
-      "scenario": "F8",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 911,
       "scenario": "D1",
       "row": "league",
@@ -12542,32 +11554,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 430,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 930,
-      "scenario": "D1",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 768,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 931,
-      "scenario": "D1",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 834,
       "covers": [
         "row"
       ],
@@ -12832,32 +11818,6 @@
       "l3Gap": null
     },
     {
-      "n": 951,
-      "scenario": "D2",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 952,
-      "scenario": "D2",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 953,
       "scenario": "D3",
       "row": "league",
@@ -13110,32 +12070,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 972,
-      "scenario": "D3",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 973,
-      "scenario": "D3",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 360,
       "covers": [
         "row"
       ],
@@ -13400,32 +12334,6 @@
       "l3Gap": null
     },
     {
-      "n": 993,
-      "scenario": "D4a",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 360,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 994,
-      "scenario": "D4a",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 375,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 995,
       "scenario": "D4b",
       "row": "league",
@@ -13678,32 +12586,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 360,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1014,
-      "scenario": "D4b",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 375,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1015,
-      "scenario": "D4b",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 390,
       "covers": [
         "row"
       ],
@@ -13968,32 +12850,6 @@
       "l3Gap": null
     },
     {
-      "n": 1035,
-      "scenario": "D5a",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 390,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1036,
-      "scenario": "D5a",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 430,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 1037,
       "scenario": "D5b",
       "row": "league",
@@ -14246,32 +13102,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 390,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1056,
-      "scenario": "D5b",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 430,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1057,
-      "scenario": "D5b",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 768,
       "covers": [
         "row"
       ],
@@ -14536,32 +13366,6 @@
       "l3Gap": null
     },
     {
-      "n": 1077,
-      "scenario": "D6",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 768,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1078,
-      "scenario": "D6",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 1079,
       "scenario": "D7",
       "row": "league",
@@ -14820,32 +13624,6 @@
       "l3Gap": null
     },
     {
-      "n": 1098,
-      "scenario": "D7",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1099,
-      "scenario": "D7",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 1100,
       "scenario": "P1",
       "row": "league",
@@ -15098,32 +13876,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1119,
-      "scenario": "P1",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1120,
-      "scenario": "P1",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 360,
       "covers": [
         "row"
       ],
@@ -15538,32 +14290,6 @@
       "l3Gap": null
     },
     {
-      "n": 1151,
-      "scenario": "P3",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 768,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1152,
-      "scenario": "P3",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 1153,
       "scenario": "P4",
       "row": "league",
@@ -15822,32 +14548,6 @@
       "l3Gap": null
     },
     {
-      "n": 1172,
-      "scenario": "P4",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1173,
-      "scenario": "P4",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 1174,
       "scenario": "P5a",
       "row": "league",
@@ -16100,32 +14800,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1193,
-      "scenario": "P5a",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1194,
-      "scenario": "P5a",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 360,
       "covers": [
         "row"
       ],
@@ -16523,32 +15197,6 @@
       "preset": "beach",
       "bound": null,
       "width": 430,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1225,
-      "scenario": "P6",
-      "row": "page_playoff_only",
-      "sport": "volleyball",
-      "preset": "beach",
-      "bound": null,
-      "width": 768,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1226,
-      "scenario": "P6",
-      "row": "stepladder_only",
-      "sport": "volleyball",
-      "preset": "beach",
-      "bound": null,
-      "width": 834,
       "covers": [
         "row"
       ],
@@ -17509,32 +16157,6 @@
       "l3Gap": null
     },
     {
-      "n": 1297,
-      "scenario": "Q4a",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 375,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1298,
-      "scenario": "Q4a",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 390,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 1299,
       "scenario": "Q4b",
       "row": "league_ko",
@@ -18231,32 +16853,6 @@
       "l3Gap": null
     },
     {
-      "n": 1351,
-      "scenario": "X1a",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 360,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1352,
-      "scenario": "X1a",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 375,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 1353,
       "scenario": "X1b",
       "row": "league",
@@ -18509,32 +17105,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 360,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1372,
-      "scenario": "X1b",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 375,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1373,
-      "scenario": "X1b",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 390,
       "covers": [
         "row"
       ],
@@ -18992,32 +17562,6 @@
       "l3Gap": null
     },
     {
-      "n": 1407,
-      "scenario": "X3",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 430,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1408,
-      "scenario": "X3",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 768,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 1409,
       "scenario": "X4a",
       "row": "league",
@@ -19270,32 +17814,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 430,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1428,
-      "scenario": "X4a",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 768,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1429,
-      "scenario": "X4a",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 834,
       "covers": [
         "row"
       ],
@@ -19560,32 +18078,6 @@
       "l3Gap": null
     },
     {
-      "n": 1449,
-      "scenario": "X4b",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1450,
-      "scenario": "X4b",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 1451,
       "scenario": "X4c",
       "row": "league",
@@ -19838,32 +18330,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1470,
-      "scenario": "X4c",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1471,
-      "scenario": "X4c",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 360,
       "covers": [
         "row"
       ],
@@ -20128,32 +18594,6 @@
       "l3Gap": null
     },
     {
-      "n": 1491,
-      "scenario": "C1",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 360,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1492,
-      "scenario": "C1",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 375,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 1493,
       "scenario": "C2",
       "row": "league",
@@ -20406,32 +18846,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 360,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1512,
-      "scenario": "C2",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 375,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1513,
-      "scenario": "C2",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 390,
       "covers": [
         "row"
       ],
@@ -20696,32 +19110,6 @@
       "l3Gap": null
     },
     {
-      "n": 1533,
-      "scenario": "C3a",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 390,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1534,
-      "scenario": "C3a",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 430,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 1535,
       "scenario": "C3b",
       "row": "league",
@@ -20974,32 +19362,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 390,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1554,
-      "scenario": "C3b",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 430,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1555,
-      "scenario": "C3b",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 768,
       "covers": [
         "row"
       ],
@@ -21637,32 +19999,6 @@
       "l3Gap": null
     },
     {
-      "n": 1602,
-      "scenario": "C6a",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 768,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1603,
-      "scenario": "C6a",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 1604,
       "scenario": "C6b",
       "row": "league",
@@ -21915,32 +20251,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 768,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1623,
-      "scenario": "C6b",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 834,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1624,
-      "scenario": "C6b",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 320,
       "covers": [
         "row"
       ],
@@ -22205,32 +20515,6 @@
       "l3Gap": null
     },
     {
-      "n": 1644,
-      "scenario": "C7",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 320,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1645,
-      "scenario": "C7",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 360,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 1646,
       "scenario": "E1",
       "row": "league",
@@ -22489,32 +20773,6 @@
       "l3Gap": null
     },
     {
-      "n": 1665,
-      "scenario": "E1",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 360,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1666,
-      "scenario": "E1",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 375,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 1667,
       "scenario": "E3",
       "row": "league",
@@ -22759,32 +21017,6 @@
       "preset": "beach",
       "bound": "volleyball#001",
       "width": 360,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1686,
-      "scenario": "E3",
-      "row": "page_playoff_only",
-      "sport": "volleyball",
-      "preset": "beach",
-      "bound": "volleyball#001",
-      "width": 375,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1687,
-      "scenario": "E3",
-      "row": "stepladder_only",
-      "sport": "volleyball",
-      "preset": "beach",
-      "bound": "volleyball#001",
-      "width": 390,
       "covers": [
         "row"
       ],
@@ -23049,32 +21281,6 @@
       "l3Gap": null
     },
     {
-      "n": 1707,
-      "scenario": "E4a",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 390,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1708,
-      "scenario": "E4a",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 430,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
       "n": 1709,
       "scenario": "E4b",
       "row": "league",
@@ -23327,32 +21533,6 @@
       "preset": "11-a-side",
       "bound": null,
       "width": 390,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1728,
-      "scenario": "E4b",
-      "row": "page_playoff_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 430,
-      "covers": [
-        "row"
-      ],
-      "l3Gap": null
-    },
-    {
-      "n": 1729,
-      "scenario": "E4b",
-      "row": "stepladder_only",
-      "sport": "football",
-      "preset": "11-a-side",
-      "bound": null,
-      "width": 768,
       "covers": [
         "row"
       ],

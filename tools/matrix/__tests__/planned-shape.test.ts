@@ -1,5 +1,5 @@
 // W1d ruling T2-PRED: ONE predicate for "this case has the shape recordPlanned
-// writes" (state 🚫 or ░, and no check), exported from results.ts and used by
+// writes" (state 🚫, ░, or a settled atom's ⛔ / ⏳, and no check), exported from results.ts and used by
 // every reader that must tell a planned case from a driven one — parity.ts,
 // committed-plans.ts and merge.ts today, judge.ts and the summary after.
 // Its expected values come from the engine's own declaration of what a planned
@@ -18,16 +18,19 @@ const MATRIX = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 afterEach(() => { vi.restoreAllMocks(); });
 
-/** The states decideState gives a case that is planned (🚫: the cell has no path; ░: planned, never run). */
+/** The states decideState gives a case that is planned (🚫: the cell has no path; ░: planned, never run; and, since W4 T24, the
+ *  ⛔ and ⏳ a settled atom carries). */
 const PLANNED: ReadonlySet<CaseState> = new Set([
   decideState({ checks: [], deferred: null, error: null, noPath: { wave: "W4", reason: "no path" } }).state,
   decideState({ checks: [], deferred: null, error: null, notRun: "no script yet" }).state,
+  decideState({ checks: [], deferred: null, error: null, settled: { state: "refused", reason: "refused" } }).state,
+  decideState({ checks: [], deferred: null, error: null, settled: { state: "later", reason: "later" } }).state,
 ]);
 const check: CheckResult = { id: "I1", kind: "invariant", verdict: "pass", checked: 1, reason: "", evidence: [] };
 
 describe("isPlannedShape", () => {
-  it("the planned states are two and distinct (the sweep below would pass vacuously on an empty or single set)", () => {
-    expect(PLANNED.size).toBe(2);
+  it("the planned states are four and distinct (the sweep below would pass vacuously on an empty or single set)", () => {
+    expect(PLANNED.size).toBe(4);
   });
 
   it("every state x {no check, one check}: planned exactly when the state is one decideState gives a planned case AND there is no check", () => {
@@ -39,7 +42,7 @@ describe("isPlannedShape", () => {
       }
     }
     expect(checked).toBe(CASE_STATES.length * 2);
-    expect(CASE_STATES.filter((s) => PLANNED.has(s))).toHaveLength(2);
+    expect(CASE_STATES.filter((s) => PLANNED.has(s))).toHaveLength(4);
   });
 
   it("the empty case first: a case with no check in a driven state is NOT planned (the empty check list does not make a case planned)", () => {
@@ -73,11 +76,12 @@ describe("one predicate, not copies (T2-PRED)", () => {
   const tsIn = (rel: string): string[] => readdirSync(join(MATRIX, rel), { withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith(".ts")).map((e) => `${rel}/${e.name}`);
   const files = [...tsIn("lib"), ...tsIn("."), "__tests__/committed-plans.ts"];
   // The set of planned states, written as a literal anywhere is a second predicate.
-  const COPY = /new Set(?:<[^>]*>)?\(\s*\[\s*"(?:no_path|not_run)"\s*,\s*"(?:no_path|not_run)"\s*\]\s*\)/;
+  const COPY = /new Set(?:<[^>]*>)?\(\s*\[\s*"(?:no_path|not_run|refused|later)"(?:\s*,\s*"(?:no_path|not_run|refused|later)")+\s*\]\s*\)/;
 
   it("the planned-state set is written once, in results.ts (the scan saw the files, and finds its own positive control)", () => {
     expect(files.length).toBeGreaterThan(20);
-    expect(COPY.test('const X = new Set<CaseState>(["no_path", "not_run"]);')).toBe(true);
+    expect(COPY.test('const X = new Set<CaseState>(["no_path", "not_run", "refused", "later"]);')).toBe(true);
+    expect(COPY.test('const X = new Set<CaseState>(["no_path", "not_run"]);')).toBe(true); // the older two-state form is a copy too
     expect(files.filter((f) => COPY.test(read(f)))).toEqual(["lib/results.ts"]);
   });
 

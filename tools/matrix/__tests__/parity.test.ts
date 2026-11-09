@@ -212,7 +212,8 @@ describe("compareRuns", () => {
   // The scope ruling's exemption: a browser case is "planned, not driven" only
   // when all three hold — it maps to no harness script, its state is 🚫 or ░,
   // and it carries no check (run.ts recordPlanned's exact shape).
-  const PLANNED = ["no_path", "not_run"] as const;
+  // The planned shapes (results.ts PLANNED_STATES): 🚫 and ░, and (T24) a settled atom - ⛔ refused (Q4b, D4b) and ⏳ later (D4a) - which, with no check, were never asked.
+  const PLANNED = ["no_path", "not_run", "refused", "later"] as const;
   it("an unmapped browser case is 'not driven' only when 🚫/░ with no check; in any other state it stays `missing` (a PADPROOF run fed to parity)", () => {
     const atom = (n: number) => `swiss|generic|score|X${n}`;
     let checked = 0;

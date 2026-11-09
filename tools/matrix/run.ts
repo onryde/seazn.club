@@ -697,7 +697,8 @@ function parseCli(argv: string[]): Cli | { usage: string } {
 export function summariseRun(cases: readonly CaseResult[], refusals: ReadonlyMap<string, CallRefusal>): RunSummary {
   const isErrorRed = (c: CaseResult) => c.reason.startsWith("error:");
   // W1c Task 12: ░ not_run is a planned case no script runs yet — honest, not vacuous.
-  const deferred = (c: CaseResult) => c.state === "later" || c.state === "no_path" || c.state === "not_run";
+  // W4 app PR A Task 24: so is a planned settled atom's ⛔ (a planned case carries no check by construction).
+  const deferred = (c: CaseResult) => c.state === "later" || c.state === "no_path" || c.state === "not_run" || (c.state === "refused" && c.planned === true);
   return {
     vacuous: cases.filter((c) => !deferred(c) && !isErrorRed(c) && !c.checks.some((k) => k.verdict !== "abstain" && k.checked > 0)).map((c) => c.caseId),
     errorReds: cases.filter(isErrorRed).map((c) => ({ caseId: c.caseId, error: c.reason.replace(/^error: ?/, ""), refusal: refusals.get(c.caseId) ?? null })),
@@ -863,7 +864,7 @@ async function runCase(deps: RunDeps, run: RunCtx, item: DrivenCase, i: number):
  *  and MATRIX.md and is never dropped (R13). */
 function recordPlanned(c: PlannedLayerCase): CaseResult {
   const id = identityOf(c);
-  const { state, reason } = decideState({ checks: [], deferred: null, error: null, noPath: c.noPath, notRun: c.notRun });
+  const { state, reason } = decideState({ checks: [], deferred: null, error: null, noPath: c.noPath, notRun: c.notRun, settled: c.settled ?? null });
   return {
     caseId: layerCaseId(c), row: id.row, sport: id.sport, variant: id.variant, scenario: id.scenario, canary: false,
     state, reason: redact(reason), checks: [], counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0, notes: [],

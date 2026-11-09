@@ -27,7 +27,7 @@ import { main } from "../judge.ts";
 import { planOf, runSlice, scopeOf } from "../run.ts";
 import { REPO, TRUTH_RUNS, livePlan } from "./committed-plans.ts";
 import { deps, fakeBrowserRun } from "./run-deps.ts";
-import { REFUSED_CELLS, isRefusedCell } from "./refused-cells.ts";
+import { CHESS_REFUSED_CELLS, REFUSED_CELLS, STANDALONE_REFUSED_CELLS, isRefusedCell } from "./refused-cells.ts";
 
 // --- builders -----------------------------------------------------------------------------------------------
 
@@ -37,7 +37,8 @@ const chk = (): CheckResult => ({ id: "k1", kind: "invariant", verdict: "pass", 
 function kase(caseId: string, state: CaseState = "works", reason = "", over: Partial<CaseResult> = {}): CaseResult {
   return {
     caseId, row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false, state, reason,
-    checks: state === "works" || state === "refused" ? [chk()] : [], counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0, notes: [],
+    // A planned ⛔ (a settled atom, T24: Q4b / D4b) carries no check, like every planned shape; a mandated refusal that RAN carries one.
+    checks: state === "works" || (state === "refused" && over.planned !== true) ? [chk()] : [], counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0, notes: [],
     layer: "L3", driver: "http", width: null, ...over,
   };
 }
@@ -66,7 +67,7 @@ function layeredRun(layer: "L1" | "L2", over: Partial<RunResults> = {}): RunResu
     const id = identityOf(c);
     const base = { caseId: atWidth(id.caseId, c.width), row: id.row, sport: id.sport, variant: id.variant, scenario: id.scenario, layer: c.layer, driver: "browser" as const, width: c.width };
     if (c.spec !== null) return kase(base.caseId, "works", "", { ...base, durationMs: 10 });
-    const d = decideState({ checks: [], deferred: null, error: null, noPath: c.noPath, notRun: c.notRun });
+    const d = decideState({ checks: [], deferred: null, error: null, noPath: c.noPath, notRun: c.notRun, settled: c.settled ?? null });
     return kase(base.caseId, d.state, d.reason, { ...base, planned: true });
   });
   return run(cases, { layer, driver: "browser", plan: `--layer ${layer}`, scope: `${layer} (slice)`, ...over });
@@ -312,28 +313,37 @@ describe("matchPlanIds (T4-IDS): the run's case ids are exactly the planner's fo
     // the chess individual-only refusal) to the current evidence, which is the run a planner change is judged against.
     const real = parseResults(JSON.parse(readFileSync(join(REPO, TRUTH_RUNS, "w2e-final", "ci", "L3", "results.json"), "utf8")));
     expect("plan" in real ? real.plan : undefined).toBe("--set w1-driving");
-    // The current evidence holds no case on a cell today's planner refuses (chess americano/mexicano): nothing to set aside.
-    expect(real.cases.filter((c) => isRefusedCell(`${c.row}|${c.sport}`))).toEqual([]);
+    // W4 T16 (ruling 269): the committed evidence ran the four scripts on the standalone stepladder and page playoff cells, which today's
+    // planner refuses (22 cells, 79 cases): set aside, counted - NOT re-baselined, the evidence file is untouched. Chess holds none.
+    const onRefused = real.cases.filter((c) => isRefusedCell(`${c.row}|${c.sport}`));
+    expect(onRefused.length).toBe(79);
+    expect([...new Set(onRefused.map((c) => `${c.row}|${c.sport}`))].sort()).toEqual([...STANDALONE_REFUSED_CELLS].sort());
+    const kept = real.cases.filter((c) => !isRefusedCell(`${c.row}|${c.sport}`));
     const plan = livePlan("--set w1-driving");
-    const asRun = { ...real, plan: "--set w1-driving" } as unknown as RunResults;
-    // Two independent sources agree: the planner (derived from the registry) and the committed evidence.
-    expect(plan.driven.size + plan.planned.size).toBe(real.cases.length);
-    expect(matchPlanIds(asRun).compared).toBe(real.cases.length);
-    expect(real.cases.length).toBeGreaterThan(900);
-    // …and it is a real check: one case dropped from the committed run is refused.
+    const asRun = { ...real, plan: "--set w1-driving", cases: kept } as unknown as RunResults;
+    // Two independent sources agree: the planner (derived from the registry) and the committed evidence less the set-aside.
+    expect(plan.driven.size + plan.planned.size).toBe(kept.length);
+    expect(matchPlanIds(asRun).compared).toBe(kept.length);
+    expect(kept.length + onRefused.length).toBe(real.cases.length);
+    expect(kept.length).toBeGreaterThan(800);
+    // …and it is a real check: one case dropped is refused, and so is the set-aside put back (extras).
     expect(() => matchPlanIds({ ...asRun, cases: asRun.cases.slice(1) })).toThrow(expect.objectContaining({ name: "PlanIdsMismatch" }));
+    expect(() => matchPlanIds({ ...asRun, cases: real.cases } as unknown as RunResults)).toThrow(expect.objectContaining({ name: "PlanIdsMismatch", message: expect.stringContaining(`extra ${onRefused.length}`) }));
   });
 
   it("the OLDER w1drv L3 run is what the planner no longer makes: it ran the four scripts on the refused chess americano/mexicano cells (set aside, counted), and put back into the current evidence they are refused as extras", () => {
     // The w1drv evidence predates the follow-up to #1027 (chess is individual-only, owner ruling 2026-10-26): it ran the four
     // scripts on chess americano/mexicano too, cells today's planner refuses.
     const old = parseResults(JSON.parse(readFileSync(join(REPO, TRUTH_RUNS, "w1drv-l3", "results.json"), "utf8")));
+    // W4 T16 adds the 22 standalone stepladder / page playoff cells to the refused set: 24 cells, 87 cases (8 chess, 79 standalone).
     const onRefused = old.cases.filter((c) => isRefusedCell(`${c.row}|${c.sport}`));
-    expect(onRefused.length).toBe(REFUSED_CELLS.length * 4);
+    expect(onRefused.length).toBe(87);
+    expect(onRefused.filter((c) => CHESS_REFUSED_CELLS.includes(`${c.row}|${c.sport}`)).length).toBe(CHESS_REFUSED_CELLS.length * 4);
     expect([...new Set(onRefused.map((c) => `${c.row}|${c.sport}`))].sort()).toEqual([...REFUSED_CELLS].sort());
     const current = parseResults(JSON.parse(readFileSync(join(REPO, TRUTH_RUNS, "w2e-final", "ci", "L3", "results.json"), "utf8")));
+    const kept = current.cases.filter((c) => !isRefusedCell(`${c.row}|${c.sport}`));
     const asRun = { ...current, plan: "--set w1-driving" } as unknown as RunResults;
-    expect(() => matchPlanIds({ ...asRun, cases: [...current.cases, ...onRefused] } as unknown as RunResults)).toThrow(expect.objectContaining({ name: "PlanIdsMismatch", message: expect.stringContaining(`extra ${onRefused.length}`) }));
+    expect(() => matchPlanIds({ ...asRun, cases: [...kept, ...onRefused] } as unknown as RunResults)).toThrow(expect.objectContaining({ name: "PlanIdsMismatch", message: expect.stringContaining(`extra ${onRefused.length}`) }));
   });
 
   it("a case dropped (one id missing) is refused PlanIdsMismatch, naming it and the count", () => {
@@ -1003,17 +1013,17 @@ describe("the seam, end to end: runSlice's own shards, through the real merge, i
     expect(r.cases).toHaveLength(PLAN_IDS.length);
   }, 120_000);
 
-  it("L1 --scope grid, unsharded: 229 cases (the 231 cells less chess americano/mexicano, refused), scope 'L1 (grid)', identity clean against the GRID planner", async () => {
+  it("L1 --scope grid, unsharded: 207 cases (the 231 cells less chess americano/mexicano and the 22 standalone stepladder/page playoff cells, refused), scope 'L1 (grid)', identity clean against the GRID planner", async () => {
     const reportDir = mkdtempSync(join(tmpdir(), "w1d-judge-grid-"));
     const d = deps({ openBrowserRun: async () => fakeBrowserRun().run });
     const live = { ...d, openDb: async () => ({ ...(await d.openDb()), variantKeysInBuilderOrder: async (s: string) => [...(await import("../lib/variants.ts")).offlineVariantOrder(s)] }) };
     expect(await runSlice(live, ["--driver", "browser", "--layer", "L1", "--scope", "grid", "--run-id", "seamg", "--report-dir", reportDir])).toBe(0);
     const r = parseResults(JSON.parse(readFileSync(join(reportDir, "seamg", "results.json"), "utf8"))) as RunResults;
     expect(r.cases).toHaveLength(ROW_KEYS.length * SPORT_KEYS.length - REFUSED_CELLS.length);
-    expect(r.cases).toHaveLength(229);
+    expect(r.cases).toHaveLength(207);
     expect(r.cases.filter((c) => isRefusedCell(`${c.row}|${c.sport}`))).toEqual([]);
     expect(r.scope).toBe("L1 (grid)");
-    expect(matchPlanIds(r).compared).toBe(229);
+    expect(matchPlanIds(r).compared).toBe(207);
     expect(judgeCli(["faults", f(r)])).not.toBe(2);
   }, 180_000);
 });

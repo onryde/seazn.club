@@ -19,11 +19,13 @@ import { PR_SAMPLE_SET, PrSampleNeedsRows, parseRows, prSamplePlanner } from "./
 import { planCanaryCase, planSliceCases } from "./slice.ts";
 import { W1_DRIVING_SET, w1DrivingPlanner } from "./w1-driving-set.ts";
 
+/** The states a planned (never driven) case is recorded in: 🚫, ░, and a settled atom's ⛔ and ⏳ (W4 app PR A Task 24). */
+export type PlannedState = "no_path" | "not_run" | "refused" | "later";
 export interface ExpectedPlan {
   readonly plan: string;
   readonly layered: boolean;
   readonly driven: ReadonlySet<string>;
-  readonly planned: ReadonlyMap<string, { readonly state: "no_path" | "not_run"; readonly reason: string }>;
+  readonly planned: ReadonlyMap<string, { readonly state: PlannedState; readonly reason: string }>;
 }
 export const noVariant = (caseId: string): string => caseId.split("|").filter((_, i) => i !== 2).join("|");
 export const noWidth = (caseId: string): string => caseId.replace(/@\d+$/, "");
@@ -33,7 +35,7 @@ const anyVariant = (sport: string): string => sport;
 /** One plan item in the order the planner lists it: its variant-free key, and null when it is DRIVEN or the planner's own
  *  🚫/░ when it is only planned. run.ts stripes the plan in exactly this order (`runItems`), so a consumer that must know
  *  which stripe holds which item (the CI shard matrix, D4) reads the order from here, never from a Set. */
-type OrderedItem = { readonly key: string; readonly planned: { readonly state: "no_path" | "not_run"; readonly reason: string } | null };
+type OrderedItem = { readonly key: string; readonly planned: { readonly state: PlannedState; readonly reason: string } | null };
 interface Ordered { readonly plan: string; readonly layered: boolean; readonly items: readonly OrderedItem[] }
 
 function fromLayered(plan: string, cases: readonly LayerCase[]): Ordered {
@@ -41,8 +43,8 @@ function fromLayered(plan: string, cases: readonly LayerCase[]): Ordered {
     const key = noVariant(layerCaseId(c));
     if (c.spec !== null) return { key, planned: null };
     // The stored reason is what decideState makes of the planner's own 🚫/░ (run.ts recordPlanned).
-    const d = decideState({ checks: [], deferred: null, error: null, noPath: c.noPath, notRun: c.notRun });
-    return { key, planned: { state: d.state as "no_path" | "not_run", reason: d.reason } };
+    const d = decideState({ checks: [], deferred: null, error: null, noPath: c.noPath, notRun: c.notRun, settled: c.settled ?? null });
+    return { key, planned: { state: d.state as PlannedState, reason: d.reason } };
   });
   return { plan, layered: true, items };
 }
@@ -53,7 +55,7 @@ const fromSpecs = (plan: string, ids: readonly string[]): Ordered =>
 export function livePlan(plan: string): ExpectedPlan {
   const o = orderedPlan(plan);
   const driven = new Set<string>();
-  const planned = new Map<string, { state: "no_path" | "not_run"; reason: string }>();
+  const planned = new Map<string, { state: PlannedState; reason: string }>();
   for (const it of o.items) {
     if (it.planned === null) driven.add(it.key);
     else planned.set(it.key, { ...it.planned });

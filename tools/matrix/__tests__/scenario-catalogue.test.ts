@@ -220,13 +220,34 @@ describe("atomic cases", () => {
     for (const m of text.matchAll(/((?:[RMFDPQXCE]\d{1,2}(?:, )?)+) in (W\d+)/g)) {
       for (const id of m[1]!.split(/,\s*/).filter((s) => s.length > 0)) owner.set(id, m[2]!);
     }
-    const marked = new Set(ATOMIC.filter((a) => a.knownNoPath !== null).map((a) => a.parent));
+    // W4 app PR A, Task 24: three of the listed atoms were SETTLED by the W4 rulebook (§14: Q4b "🚫 → ⛔", D4b "🚫 → ⛔", D4a "🚫 → ⏳"),
+    // so they are no longer known-🚫 atoms; their parents stay listed by the design (the design text is the 2026-09 design, not
+    // rewritten). Every other atom of a listed parent keeps its owner: Q4a stays 🚫 -> W4 (no path for a joint-winner outcome).
+    const SETTLED_BY_RULEBOOK = new Map([["Q4b", "refused"], ["D4a", "later"], ["D4b", "refused"]]);
+    const marked = new Set(ATOMIC.filter((a) => a.knownNoPath !== null || a.settled !== null).map((a) => a.parent));
     expect(listed.size).toBeGreaterThan(0);
     expect(new Set(owner.keys())).toEqual(listed);
     expect(marked).toEqual(listed);
     let judged = 0;
     for (const a of ATOMIC.filter((x) => x.knownNoPath !== null)) { judged++; expect(a.knownNoPath, a.id).toBe(owner.get(a.parent)); }
-    expect(judged).toBeGreaterThanOrEqual(listed.size);
+    expect(judged).toBeGreaterThanOrEqual(listed.size - 1); // D4 has no 🚫 atom left
+    // The cells moved off 🚫, counted by id: exactly the rulebook's three, in the rulebook's states, none of them also 🚫 or a UI-only gap.
+    const settledNow = ATOMIC.filter((a) => a.settled !== null);
+    expect(Object.fromEntries(settledNow.map((a) => [a.id, a.settled!.state]))).toEqual(Object.fromEntries(SETTLED_BY_RULEBOOK));
+    expect(settledNow.length).toBe(3);
+    for (const a of settledNow) {
+      expect(a.knownNoPath, a.id).toBeNull();
+      expect(a.l2NoPath, a.id).toBeNull();
+      expect(a.settled!.reason.length, a.id).toBeGreaterThan(20);
+    }
+    // The reasons quote the brief / rulebook: Q4b names X-CH-5, D4b X-SD-10, D4a ruling 272 and the clubs follow-up (no programme wave).
+    const byId = new Map(settledNow.map((a) => [a.id, a.settled!]));
+    expect(byId.get("Q4b")!.reason).toBe("an unplayed final is never decided by seed or table automatically (X-CH-5)");
+    expect(byId.get("D4b")!.reason).toContain("(X-SD-10)");
+    expect(byId.get("D4a")!.reason).toContain("ruling 272");
+    expect(byId.get("D4a")!.reason.startsWith("clubs follow-up: ")).toBe(true);
+    // The siblings that were NOT settled keep their route: Q4a is still 🚫 -> W4.
+    expect(ATOMIC.find((a) => a.id === "Q4a")).toMatchObject({ knownNoPath: "W4", settled: null });
   });
   it("ruling 30: the design's UI-only 🚫 atoms carry l2NoPath with the named wave, and stay in both layers", () => {
     const from = design.slice(design.indexOf("**Known UI-only 🚫"));

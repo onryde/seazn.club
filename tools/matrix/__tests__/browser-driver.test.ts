@@ -23,7 +23,7 @@ import { Evidence, type EvidenceFs } from "../lib/browser/evidence.ts";
 import { navBudget, type DivisionWhere, type PageCtx } from "../lib/browser/pages/ctx.ts";
 import type { StageOut } from "../lib/browser/pages/division-builder.ts";
 import type { EntrantIn } from "../lib/browser/pages/entrants.ts";
-import { API_ONLY_UI_WAVE } from "../lib/api-only-ui.ts";
+import { API_ONLY_UI_WAVE, RefusedApiOnlyRow } from "../lib/api-only-ui.ts";
 import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS, refusedCell, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import {
   BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, FORFEIT_DIALOG_ROUTE, NEITHER_WITHHELD_ROUTE, NeitherWithheldButAccepted, NoOrganiserRoute, ORGANISER_TABLE_KINDS, FINISH_SWISS_ROUTE, OVERRIDE_ROUTE, OrganiserWriteUnproven, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
@@ -625,7 +625,22 @@ describe("BrowserDriver — API-only rows (D7)", () => {
     expect(cells).toEqual({ "group_only|badminton": "box-league", "group_group_ko|cricket": "t20-super8" });
     let checked = 0;
     let refused = 0;
+    let refusedRows = 0;
     for (const row of API_ONLY_ROWS) {
+      // W4 T16 (ruling 269): a row the product refuses on every sport (the standalone stepladder and page playoff) has no wave
+      // that owes it a control (api-only-ui.ts) and no layer plans it; the driver, handed one, refuses it by name and builds nothing.
+      if (SPORT_KEYS.every((s) => refusedCell(row, s) !== null)) {
+        for (const sport of SPORT_KEYS) {
+          const http = stubHttp({ createDivision: async () => { throw new Error("a refused row must build nothing"); } });
+          const { driver, pageCalls } = make({ http, spec: spec(row, sport) });
+          const e = await built(driver, spec(row, sport)).catch((x: unknown) => x);
+          expect(e, `${row}|${sport}`).toBeInstanceOf(RefusedApiOnlyRow);
+          expect([pageCalls, http.calls], `${row}|${sport}`).toEqual([[], []]);
+          refusedRows++;
+          checked++;
+        }
+        continue;
+      }
       const wave = waveFor(row, scopes);
       for (const sport of SPORT_KEYS) {
         const http = stubHttp({ createDivision: async (...a: never[]) => {
@@ -653,7 +668,7 @@ describe("BrowserDriver — API-only rows (D7)", () => {
         expect(http.calls, `${row}|${sport}`).toEqual(["createDivision"]);
         expect(only(driver, "organiser-ui-path"), `${row}|${sport}`).toMatchObject({ verdict: "fail", checked: 1, evidence: [`no organiser control builds ${row} → ${wave}`] });
         // The exemption is the row's route (api-only-ui.ts): design §8's wave for the row.
-        const route = API_ONLY_UI_WAVE[row];
+        const route = API_ONLY_UI_WAVE[row]!;
         expect(route.wave, `${row}|${sport}`).toBe(wave);
         expect(only(driver, "mixed-driver-coverage"), `${row}|${sport}`).toMatchObject({ verdict: "pass", checked: 2, evidence: [`createDivision: exempt — → ${route.wave}: ${route.why}`] });
         // The http-built division is the one every later page object acts in.
@@ -666,6 +681,8 @@ describe("BrowserDriver — API-only rows (D7)", () => {
     expect(checked).toBe(API_ONLY_ROWS.length * SPORT_KEYS.length);
     expect(checked).toBeGreaterThan(0);
     expect(refused).toBe(Object.keys(cells).length);
+    expect(refusedRows).toBe(2 * SPORT_KEYS.length); // stepladder_only and page_playoff_only, every sport (22 cells)
+    expect(Object.keys(API_ONLY_UI_WAVE).length + 2).toBe(API_ONLY_ROWS.length); // the other API-only rows each keep a route
   });
 
   it("the §8 lookup has teeth: W4's scope names the knockout family's shapes and not the group's", () => {

@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { ROW_KEYS, SPORT_KEYS, type RowKey } from "../lib/catalogue.ts";
 import { MissingRule, RULES, decide, gapReason, type Rule } from "../lib/applicability.ts";
-import { GapUnbound, L2_WIDTHS, UnknownL2Scenario, VariantsIncomplete, planL2, type L2Run } from "../lib/pairs.ts";
+import { GapUnbound, HeldPickCoversSport, L2_WIDTHS, UnknownL2Scenario, VariantsIncomplete, planL2, type L2Run } from "../lib/pairs.ts";
 import { routeTo } from "../lib/routing.ts";
 import { l2Atomic, l3Atomic } from "../lib/scenario-catalogue.ts";
 import { buildSportVariants, offlineBuilderDefault } from "../lib/variants.ts";
@@ -136,8 +136,12 @@ describe("L2 pair file", () => {
     const one = SPORT_KEYS[SPORT_KEYS.length - 1]!;
     const gapped: Rule = { when: (f) => f.sport === one, reason: "only one sport", variantDependent: false, witness: null, gap: { when: () => true, route: routeTo("W1-driving", "synthetic L3 gap") } };
     const p = planL2({ variants, rules: { ...RULES, [id]: gapped }, only: [id] });
-    expect(p.runs.length).toBe(ROW_KEYS.length); // one per row, all on the one sport
-    expect(p.targets).toEqual({ rowScenario: ROW_KEYS.length, sportScenario: 1 });
+    // One per row the sport is OFFERED, all on the one sport: the two standalone rows are refused (W4 T16) and hold their slots.
+    const offered = offeredRows(ROW_KEYS, one);
+    expect(offered.length).toBe(ROW_KEYS.length - 2);
+    expect(p.runs.length).toBe(offered.length);
+    expect(p.held).toBe(2);
+    expect(p.targets).toEqual({ rowScenario: offered.length, sportScenario: 1 });
     for (const x of p.runs) {
       expect(x.sport).toBe(one);
       // The committed text: the why, then the wave it is routed to (l2-pairs.json's shape).
@@ -236,12 +240,57 @@ describe("L2 pair file", () => {
     console.info(`pairs: ${L2_IDS.length} scenarios, runs per scenario min ${Math.min(...counts)} max ${Math.max(...counts)}`);
   });
 
-  it("widths rotate: each width's share differs from another's by at most one; n is 1..runs", () => {
+  it("widths rotate: n is strictly increasing and skips exactly the held slots; a run's width follows its slot, so each width's share differs by at most the held picks", () => {
     const by = L2_WIDTHS.map((w) => plan.runs.filter((r) => r.width === w).length);
-    expect(Math.max(...by) - Math.min(...by)).toBeLessThanOrEqual(1);
     expect(by.reduce((a, b) => a + b, 0)).toBe(plan.runs.length);
-    expect(plan.runs.map((r) => r.n)).toEqual(plan.runs.map((_, i) => i + 1));
-    console.info(`pairs: runs per width ${L2_WIDTHS.map((w, i) => `${w}:${by[i]}`).join(" ")}`);
+    // W4 T24 (option A): a standalone-refused pick keeps its slot, so n is 1..(runs + held) with the held slots missing - the
+    // committed rotation did not move for any other run. Counted: the held picks and the gaps in n are the same number.
+    expect(plan.held).toBeGreaterThan(0);
+    const ns = plan.runs.map((r) => r.n);
+    expect(ns.every((n, i) => i === 0 || n > ns[i - 1]!)).toBe(true);
+    const gaps = ns.at(-1)! - ns.length; // slots below the last run that no run holds
+    expect(gaps).toBeGreaterThan(0);
+    expect(gaps).toBeLessThanOrEqual(plan.held);
+    expect(plan.held - gaps, "held slots after the last run").toBeGreaterThanOrEqual(0);
+    // Within a scenario the width advances one step per SLOT, a held slot included (consecutive widths).
+    let checked = 0;
+    for (const id of L2_IDS) {
+      const runs = plan.runs.filter((x) => x.scenario === id);
+      for (let i = 1; i < runs.length; i++) {
+        const step = runs[i]!.n - runs[i - 1]!.n;
+        expect(L2_WIDTHS.indexOf(runs[i]!.width), `${id} run ${runs[i]!.n}`).toBe((L2_WIDTHS.indexOf(runs[i - 1]!.width) + step) % L2_WIDTHS.length);
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+    console.info(`pairs: runs per width ${L2_WIDTHS.map((w, i) => `${w}:${by[i]}`).join(" ")}; ${plan.held} held slots, ${gaps} of them below the last run`);
+  });
+
+  it("W4 T24 option A, a synthetic: a held pick (a standalone-refused cell) keeps its slot and writes no run - the next scenario's first run takes the n after it", () => {
+    // single-sport: football only. M1 owes group_only (offered) and page_playoff_only (refused, held); M2 owes group_only again.
+    // The held pick is M1's last (API_ONLY_ROWS order: group_only ... page_playoff_only), so M2's run must come out as slot 3, not 2.
+    const owes = (...cells: string[]): Rule => ({ when: (f) => f.sport === "football" && cells.includes(f.row), reason: "football cells", variantDependent: false, witness: null });
+    const rules = { ...RULES, M1: owes("group_only", "page_playoff_only"), M2: owes("group_only") };
+    const p = planL2({ variants, rules, only: ["M1", "M2"] });
+    expect(p.held).toBe(1);
+    expect(p.runs.map((r) => [r.scenario, r.n, r.row])).toEqual([["M1", 1, "group_only"], ["M2", 3, "group_only"]]);
+    expect(p.perScenario).toEqual({ M1: 1, M2: 1 });
+    // The row targets omit the all-held row: nothing is emitted for it, so nothing owes it a cover (M1: group_only; M2: group_only).
+    expect(p.targets.rowScenario).toBe(2);
+    // Without the held cell the same two scenarios number 1, 2: the held slot is the whole difference.
+    const without = planL2({ variants, rules: { ...rules, M1: owes("group_only") }, only: ["M1", "M2"] });
+    expect(without.held).toBe(0);
+    expect(without.runs.map((r) => r.n)).toEqual([1, 2]);
+    // The empty case: a scenario that owes nothing holds nothing and writes nothing.
+    const none = planL2({ variants, rules: { ...RULES, M1: owes("never") }, only: ["M1"] });
+    expect(none).toMatchObject({ runs: [], held: 0 });
+  });
+
+  it("a held pick that would be a sport's only cover is refused by name (never silently under-covered)", () => {
+    const id = "M1";
+    const lone: Rule = { when: (f) => f.row === "stepladder_only" && f.sport === "hockey", reason: "one refused cell", variantDependent: false, witness: null };
+    expect(() => planL2({ variants, rules: { ...RULES, [id]: lone }, only: [id] })).toThrow(HeldPickCoversSport);
+    expect(() => planL2({ variants, rules: { ...RULES, [id]: lone }, only: [id] })).toThrow(/stepladder_only\|hockey/);
   });
 
   it("widths rotate within a scenario: consecutive runs change width, and k runs see min(k, 7) widths", () => {
@@ -274,13 +323,16 @@ describe("L2 pair file", () => {
       }
       return { checked, min, skipped };
     };
-    const rows = spread("row", ROW_KEYS, (x) => x.row);
+    // A row refused on every sport (the standalone two, W4 T16) has no run to spread: it is judged held, not skipped.
+    const offeredRowKeys = ROW_KEYS.filter((r) => SPORT_KEYS.some((s) => offeredRows([r], s).length > 0));
+    expect(offeredRowKeys.length).toBe(ROW_KEYS.length - 2);
+    const rows = spread("row", offeredRowKeys, (x) => x.row);
     const sports = spread("sport", SPORT_KEYS, (x) => x.sport);
     // R-M1 (T7 re-review): the ruling is every row and every sport, so the
     // counts are exact — ROW_KEYS × widths and SPORT_KEYS × widths.
     expect(rows.skipped, "rows with fewer runs than widths").toEqual([]);
     expect(sports.skipped, "sports with fewer runs than widths").toEqual([]);
-    expect(rows.checked).toBe(ROW_KEYS.length * L2_WIDTHS.length);
+    expect(rows.checked).toBe(offeredRowKeys.length * L2_WIDTHS.length);
     expect(sports.checked).toBe(SPORT_KEYS.length * L2_WIDTHS.length);
     expect(rows.checked).toBeGreaterThan(0);
     expect(sports.checked).toBeGreaterThan(0);

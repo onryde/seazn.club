@@ -31,7 +31,7 @@
 // browser-budget.test.ts scans this file for a flat timeout).
 import type { GeneratePath } from "../generate-path.ts";
 import type { LedgerRow } from "../../../bench/lib/ledger.ts";
-import { API_ONLY_UI_WAVE, apiOnlyUiPath } from "../api-only-ui.ts";
+import { apiOnlyUiPath, apiOnlyUiRoute } from "../api-only-ui.ts";
 import { API_ONLY_ROWS, type ApiOnlyRowKey, type StagePostBody } from "../catalogue.ts";
 import { SLACK_MS, budgetMs } from "../browser/budget.ts";
 import { createCompetitionUi, createFromTemplateUi } from "../browser/pages/competition.ts";
@@ -678,7 +678,7 @@ export class BrowserDriver implements OrganiserDriver {
       this.#uiPathJudged = true;
       this.#checks.push(assertion("organiser-ui-path", [{ ok: false, note: `${path.reason} → ${path.wave}` }]));
     }
-    return API_ONLY_UI_WAVE[row];
+    return apiOnlyUiRoute(row);
   }
 
   async createDivision(competitionId: string, input: { name: string; slug: string; sportKey: string; variantKey: string; config?: Record<string, unknown> }): Promise<DivisionRef> {

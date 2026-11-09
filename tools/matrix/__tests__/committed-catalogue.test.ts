@@ -30,7 +30,7 @@ import { EngineError, StageKind, forbidsLevelResult } from "@seazn/engine/core";
 import { writeConfigIssues } from "@seazn/engine/sport";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
-import { REFUSED_CELLS, REFUSED_REASON } from "./refused-cells.ts";
+import { CHESS_REFUSED_CELLS, REFUSED_CELLS, REFUSED_REASON, STANDALONE_REASON, STANDALONE_REFUSED_CELLS, isRefusedCell, offeredCells } from "./refused-cells.ts";
 import { RULES, decide, gapReason, planL3 } from "../lib/applicability.ts";
 import { UnscorableUnclassified, computeCounts } from "../lib/counts.ts";
 import { foldStream } from "../lib/fold.ts";
@@ -68,7 +68,7 @@ interface CountsFile {
   l2: { formula: string; value: number; pairTargets: number; l3GapRuns: number };
   l3: { formula: string; lifecycle: number; atomicApplicable: number; bound: number; variantCasesScorable: number; variantCasesUnscorable: number; denied: number; regressions: number; value: number };
   drops: { total: number; harnessGap: number; unscorableOnly: number; byScenario: Record<string, number> };
-  variants: { perSport: Record<string, number>; cases: number; scorable: number; unscorable: number; engineUnscorable: CaseList; generatorUnsupported: CaseList; noOp: CaseList; uncoverablePairs: number };
+  variants: { perSport: Record<string, number>; cases: number; scorable: number; unscorable: number; engineUnscorable: CaseList; generatorUnsupported: CaseList; noOp: CaseList; uncoverablePairs: number; heldOnRefusedCells: number };
 }
 interface VariantsFile { sports: { sport: string; defaultPreset: string; cases: VariantCase[]; uncoverable: unknown[] }[] }
 interface L2File { widths: number[]; targets: { rowScenario: number; sportScenario: number }; runs: { l3Gap: string | null }[] }
@@ -235,7 +235,10 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
 
   it("floors: every row, every L3 scenario and every L2 scenario has a floor above zero — keyed by the catalogue, in registry order", () => {
     const floors = parsed<Floors>("floors.json");
-    expect(Object.keys(floors.perRow)).toEqual([...ROW_KEYS]);
+    // W4 T16 (ruling 269): a row refused on every sport (the standalone stepladder and page playoff) plans nothing and owes no floor.
+    const owing = ROW_KEYS.filter((r) => offeredCells([r], SPORT_KEYS).length > 0);
+    expect(owing.length).toBe(ROW_KEYS.length - 2);
+    expect(Object.keys(floors.perRow)).toEqual([...owing]);
     expect(Object.keys(floors.perScenarioL3)).toEqual(L3_IDS);
     expect(Object.keys(floors.perScenarioL2)).toEqual(L2_IDS);
     let checked = 0;
@@ -243,7 +246,7 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
       expect(v, k).toBeGreaterThan(0);
       checked++;
     }
-    expect(checked).toBe(ROW_KEYS.length + L3_IDS.length + L2_IDS.length);
+    expect(checked).toBe(owing.length + L3_IDS.length + L2_IDS.length);
   });
 
   it("registry order, never sorted: variants by SPORT_KEYS, drop cells by ROW_KEYS then SPORT_KEYS", () => {
@@ -283,7 +286,7 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     // Ruling 39: L1 runs at 1280 only, so a cell is one case — never the 462 (cells × 2) this file once froze. A cell the
     // product refuses (chess americano/mexicano, follow-up to #1027) has none.
     expect(c.l1).toEqual({ formula: "offered cells (cells − refused) × 1 width (1280; ruling 39)", value: OFFERED });
-    expect(c.l1.value).toBe(229);
+    expect(c.l1.value).toBe(207);
     expect(c.l2.value).toBe(l2.runs.length);
     expect(c.l2.pairTargets).toBe(l2.targets.rowScenario + l2.targets.sportScenario);
     expect(c.l2.l3GapRuns).toBe(l2.runs.filter((r) => r.l3Gap !== null).length);
@@ -304,14 +307,20 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     // Since the write door joined resolveSportCfg (W2e Task 24) the generator builds no combination the product refuses, so none of
     // the committed cases is unscorable: the two totals are EQUAL, and a case that is not scorable is a regression to be named.
     expect(scorable).toBe(allCases.length);
-    expect(c.l3.variantCasesScorable).toBe(scorable);
+    // W4 T24 (option A): a refused row stays a variant level, so the file holds cases on cells the product refuses; they are held,
+    // not run, and are not L3 cases. Counted from the file's own row/sport fields against the oracle's refused cells.
+    const heldCases = allCases.filter((x) => isRefusedCell(`${x.row}|${x.sport}`));
+    expect(heldCases.length).toBeGreaterThan(0);
+    expect(new Set(heldCases.map((x) => x.row))).toEqual(new Set(STANDALONE_REFUSED_CELLS.map((x) => x.split("|")[0])));
+    expect(c.variants.heldOnRefusedCells).toBe(heldCases.length);
+    expect(c.l3.variantCasesScorable).toBe(scorable - heldCases.filter((x) => x.scorable === null).length);
     expect(c.l3.variantCasesUnscorable).toBe(allCases.length - scorable);
     // Q-B / ruling 29: one denied case per gated row (the product's format gate, text-pinned copy).
     const gated = ROW_KEYS.filter((r) => expectedGate(stagesForRow(r)) !== null);
     expect(gated.length).toBeGreaterThan(0);
     expect(c.l3.denied).toBe(gated.length);
     expect(c.l3.regressions).toBe(loadRegressions(REPO).length);
-    expect(c.l3.value).toBe(OFFERED + c.l3.atomicApplicable + scorable + gated.length + loadRegressions(REPO).length);
+    expect(c.l3.value).toBe(OFFERED + c.l3.atomicApplicable + c.l3.variantCasesScorable + gated.length + loadRegressions(REPO).length);
     // M-5: the fields drift alone used to protect.
     const bound = PLAN.cases.filter((x) => x.bound !== null);
     expect(c.l3.bound).toBe(bound.length);
@@ -332,15 +341,18 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     expect(Object.values(c.drops.byScenario).reduce((a, b) => a + b, 0)).toBe(c.drops.total);
     for (const id of L3_IDS) expect(c.drops.byScenario[id]! + floors.perScenarioL3[id]!, id).toBe(CELLS);
     // Every scenario drops on each refused cell, for the refusal (the drop list's own groups, recounted).
-    const refusedGroups = d.groups.filter((g) => REFUSED_REASON.test(g.reason));
-    expect(refusedGroups.map((g) => g.scenario).sort()).toEqual([...L3_IDS].sort());
+    // Two refusals, each with its own reason (chess individual-only; the standalone stepladder / page playoff, ruling 269).
     let refusedDrops = 0;
-    for (const g of refusedGroups) {
-      expect(g.kind, g.scenario).toBe("inapplicable");
-      const cells = Object.entries(g.cells).flatMap(([row, sports]) => sports.map((s) => `${row}|${s}`)).sort();
-      expect(cells, g.scenario).toEqual([...REFUSED_CELLS].sort());
-      expect(g.count, g.scenario).toBe(REFUSED_CELLS.length);
-      refusedDrops += g.count;
+    for (const [reason, want] of [[REFUSED_REASON, CHESS_REFUSED_CELLS], [STANDALONE_REASON, STANDALONE_REFUSED_CELLS]] as const) {
+      const refusedGroups = d.groups.filter((g) => reason.test(g.reason));
+      expect(refusedGroups.map((g) => g.scenario).sort(), String(reason)).toEqual([...L3_IDS].sort());
+      for (const g of refusedGroups) {
+        expect(g.kind, g.scenario).toBe("inapplicable");
+        const cells = Object.entries(g.cells).flatMap(([row, sports]) => sports.map((s) => `${row}|${s}`)).sort();
+        expect(cells, g.scenario).toEqual([...want].sort());
+        expect(g.count, g.scenario).toBe(want.length);
+        refusedDrops += g.count;
+      }
     }
     expect(refusedDrops).toBe(REFUSED_CELLS.length * L3_IDS.length);
     expect(c.drops.byScenario[LIFECYCLE_ID]).toBe(REFUSED_CELLS.length);
@@ -421,7 +433,7 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     // counts.json alone cannot kill a counts.ts regression (CI's matrix:catalogue check is the only other witness), so the generator is run here.
     const out = computeCounts({ l3: PLAN, l2: planL2({ variants: VARIANTS }), variants: VARIANTS, regressions: [] });
     expect(out.l1).toEqual({ formula: "offered cells (cells − refused) × 1 width (1280; ruling 39)", value: OFFERED });
-    expect(out.l1.value).toBe(229);
+    expect(out.l1.value).toBe(207);
     expect(out.l1).toEqual(parsed<CountsFile>("counts.json").l1);
     expect(out.l1.value).not.toBe(CELLS * 2);
   });

@@ -190,6 +190,11 @@ export class Recorder {
    *  `live`: how many leading events of its generated stream are still live in the ledger; `voidedType`: the type
    *  of the event that was voided, which must be the next one the stream sends. */
   readonly resumed = new Map<string, Resumed>();
+  /** W4 T24 (R10): fixture -> how many events the PRODUCT itself wrote to its ledger before the harness posted anything - a withdrawal's
+   *  walkover and the void a Reinstate's tap reverses it with. A script that has counted them (and pinned the number in its own check)
+   *  registers them here, so decideFixture does not read them as foreign writes: the fold the harness holds is of its own events, and the
+   *  product's outcome must still equal it. Absent for every other fixture, so nothing else changes. */
+  readonly productWrote = new Map<string, number>();
   readonly notes: string[] = [];
   /** W1-driving Task 4: fixture → the sides ensureLineups has PUT a lineup
    *  for — once per SIDE, since a second PUT is a replacement nobody meant.
@@ -698,7 +703,7 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   if (asked.kind === "tiebreak") rec.tiebreaksPosted++;
   // A driver that answered nothing leaves no status, and judgeDrive judges no such drive: no play to read.
   if (forbidsLevelResult(stage.kind)) await bracketDrive({ status: posted.at(-1)?.status ?? null, outcome: productOutcome, live: posted.length === 0 ? null : liveEvents(whole), refusal: null });
-  const foreign = state.last_seq - prior.length;
+  const foreign = state.last_seq - prior.length - (rec.productWrote.get(f.id) ?? 0);
   if (foreign !== 0) {
     rec.parity.push({ fixtureId: f.id, local: null, product: productOutcome, foreign, finishedBefore: null, request: null });
     rec.notes.push(`${f.id}: product held ${state.last_seq} event(s), the harness had posted ${prior.length}`);

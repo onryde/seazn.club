@@ -18,7 +18,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { ROW_KEYS, SPORT_KEYS } from "./lib/catalogue.ts";
+import { SPORT_KEYS, rowsOwingFloors } from "./lib/catalogue.ts";
 import { planL3, rowCounts, scenarioCounts, type DropKind } from "./lib/applicability.ts";
 import { computeCounts } from "./lib/counts.ts";
 import { isMainModule } from "../../scripts/lib/main-module.ts";
@@ -66,7 +66,8 @@ export function generateCatalogue(repoRoot: string): Record<Generated, string> {
   const perScenario = scenarioCounts(l3.cases);
   const floors: Floors = {
     schemaVersion: 1,
-    perRow: Object.fromEntries(ROW_KEYS.map((r) => [r, perRow[r] ?? 0])),
+    // A row every sport refuses owes no floor (catalogue.ts rowsOwingFloors, W4 T16); every other row's zero is refused.
+    perRow: Object.fromEntries(rowsOwingFloors().map((r) => [r, perRow[r] ?? 0])),
     perScenarioL3: Object.fromEntries([LIFECYCLE_ID, ...l3Atomic().map((a) => a.id)].map((id) => [id, perScenario[id] ?? 0])),
     perScenarioL2: Object.fromEntries(l2Atomic().map((a) => [a.id, l2.perScenario[a.id] ?? 0])),
   };

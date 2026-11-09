@@ -32,6 +32,7 @@ import { ExpectRefused, judgeExpectation, parseExpect, parseRekeys, type Rekey }
 import type { CaseResult, CaseState, CheckResult, RunResults } from "../lib/results.ts";
 import { main } from "../w2a-expect.ts";
 import { REPO, TRUTH_RUNS } from "./committed-plans.ts";
+import { isRefusedCell } from "./refused-cells.ts";
 
 const REPRO = `${TRUTH_RUNS}/w2a-repro`;
 const readJson = (rel: string): unknown => JSON.parse(readFileSync(join(REPO, rel), "utf8"));
@@ -105,9 +106,16 @@ describe("expect-77.json - every id is a current plan id (R-2)", () => {
       plans++;
     }
     expect(plans).toBe(3);
+    // W4 T24 (ruling 269): the standalone stepladder / page playoff cells left every plan, and 7 of the 77 SC-O1/SC-O2 reds sat on them (the
+    // boardgame and generic cells of page_playoff_only, and stepladder_only|boardgame). The expectation file is committed evidence and is NOT
+    // re-baselined (ruling 1, option A); those ids are set aside, counted, and each is on a cell the product refuses - oracle: refused-cells.ts,
+    // never the planner. Every OTHER id must still be in a current plan, and no id on an offered cell may be missing.
     const missing = WANT.filter((id) => !planned.has(noVariant(id)));
-    expect(missing, "ids no current plan holds").toEqual([]);
-    expect(WANT.length - missing.length).toBe(77);
+    const cellOf = (id: string): string => id.split("|").slice(0, 2).join("|");
+    expect(missing.length, "ids no current plan holds").toBe(7);
+    expect(missing.filter((id) => !isRefusedCell(cellOf(id))), "an id on an OFFERED cell that no plan holds").toEqual([]);
+    expect(WANT.filter((id) => isRefusedCell(cellOf(id))), "every id on a refused cell is among the missing").toEqual(missing);
+    expect(WANT.length - missing.length).toBe(70);
   });
 
   it("the id the plan re-widthed is keyed to the width the plan has now (league_ko|boardgame|blitz|F1: @430, not @834), and the other 14 layered ids keep theirs", () => {

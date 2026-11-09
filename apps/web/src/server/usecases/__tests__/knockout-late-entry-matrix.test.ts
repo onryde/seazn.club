@@ -858,6 +858,19 @@ describe.runIf(HAS_DB)("X-LE-3 X-LE-4 X-LE-5 X-LE-6 X-LE-7 X-LE-10 X-LE-11 X-LE-
     expect(Object.keys(N_OF).sort(), "a field per case").toEqual([...CASES].sort());
   });
 
+  // T12 review carry: the literal title above is what the proof checker reads, and RULES_OF is what the cells prove. This `it` reads
+  // the title the runner is RUNNING under (`currentTestName` is "<describe title> <this title>") and requires its X-LE ids to be
+  // exactly the union of RULES_OF, so neither can drift from the other. This `it`'s own title carries no id.
+  it("the ids in the describe title are exactly the union of the ids the cases answer", () => {
+    const ID = /X-LE-\d+/g;
+    const inTitle = new Set(expect.getState().currentTestName?.match(ID) ?? []);
+    const proved = new Set(Object.values(RULES_OF).flatMap((ids) => ids.match(ID) ?? []));
+    expect(Object.keys(RULES_OF).sort(), "an id list per case").toEqual([...CASES].sort());
+    expect(proved.size, "ids the cases answer").toBeGreaterThan(0);
+    expect(inTitle.size, "ids in the title").toBeGreaterThan(0);
+    expect([...inTitle].sort(), `title ids (${inTitle.size}) = RULES_OF ids (${proved.size})`).toEqual([...proved].sort());
+  });
+
   const checked = new Set<string>();
   for (const template of ENTRY_TEMPLATES) {
     for (const kind of KINDS) {
