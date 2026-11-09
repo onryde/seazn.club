@@ -544,7 +544,8 @@ describe("the needs_draw action names a button the seed-proposal panel is showin
       <ProgressionPanel stageId="ko1" stageName="Finals" proposal={PANEL_PROPOSAL[door]} sourceReady
         fixtures={[{ id: "f1", home_slot_label: { key: "slot.winner_group", params: { g: "A" } },
                      away_slot_label: { key: "slot.winner_group", params: { g: "B" } } }]}
-        entrantNames={{ e1: "Alice", e2: "Bob" }} stageNames={{ grp: "Groups" }} departedEntrantIds={[]} locale="en" canEdit />,
+        entrantNames={{ e1: "Alice", e2: "Bob" }} stageNames={{ grp: "Groups" }} departedEntrantIds={[]}
+        confirmedDrawReopens={false} locale="en" canEdit />,
     );
     const buttons = [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g)]
       .map((m) => m[1]!.replace(/<[^>]*>/g, "").trim())
