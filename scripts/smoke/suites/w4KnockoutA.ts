@@ -1,5 +1,6 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP helpers, tag): see the header of that file.
 import { type Session, appendScoreEvent, check, counts, newSession, setPlan, signIn, tag, v1, v1data } from "../harness.ts";
+import { buildTemplateStages } from "../../../apps/web/src/lib/format-templates.ts";
 import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swiss-draw.ts";
 import { w4KnockoutAB5PagePlayoffWalkover, w4KnockoutAB5StandaloneRefusal } from "./w4KnockoutA-b5.ts";
 import { w4KnockoutAB6aSuite } from "./w4KnockoutA-b6a.ts";
@@ -60,6 +61,21 @@ import { w4KnockoutAPublicStandingsOrderSmoke } from "./w4KnockoutA-public-check
  * T15 (X-PL-1, X-QM-2; FX-G14's gate, QM-2): Knockout + Plate on a field of 3 is refused by name at Generate and at Start, and a
  * fourth entrant lets it through. A rank cut of 3 from a knockout is refused at the write and leaves no stage; the cut of 4 is taken.
  *
+ * T25 (T8-f; RB4-Q1/Q3/Q6, RB4-S1/S2/S7): the three formats whose final stage is a bracket fed by a stage before it, driven
+ * through the builder's own stage drafts (`buildTemplateStages`, the catalogue the builder sends) and played out with
+ * UPSETS, so a right answer differs from "the better seed". qualifying_main: three entrants are refused by name at Generate
+ * and at Start, eight qualify four (the quarter-final winners, ranked by the qualifying final's own result) who are seated
+ * into the main draw rank 1 v 4 and 2 v 3, and the main draw completes the division. group_stepladder (generic, a league of
+ * six into a top five): the rungs seat RB4-S1's lowest two seeds first and one climber per rung, and the stage ranks every
+ * qualifier once (RB4-R1: a permutation of the five; the sixth finisher in none). group_playoffs
+ * (badminton, a league of five into a top four): Q1 = 1 v 2, E = 3 v 4, Q2 = Q1's loser v E's winner, Final = Q1's winner
+ * v Q2's winner, and the stage ranks the four qualifiers once. In all three a second Complete is a no-op that emits no second
+ * `stage_completed`, and the entrant that did not qualify is ranked in no finals. Ranks are read from the Complete answer (the
+ * one place `finalRanks` crosses the wire) and from the stage's standings, which must cover the same entrants. The rank ORDER of
+ * a stepladder or a page playoff is NOT asserted (controller ruling: rank proofs beyond seating are app-B's, carry C19); the
+ * qualifying stage's order of the top four IS, because the main draw is seated from it. No withdrawal here: the finals'
+ * withdrawals are T17's (check lane B5) and the walkthrough's.
+ *
  * The lanes folded at the lane merge (merge-lanes-1, 2026-11-09) keep their checks in their own files and are counted
  * here by the harness checks each one made (`laneChecks`): B-desk's T18 (K12: a disqualification walkover says so, 6)
  * and T21 (X-CH-8: a decided final asks to complete its stage, completing the competition warns, 6), B6b's T23 (ST-G26:
@@ -79,9 +95,11 @@ export async function w4KnockoutASuite(): Promise<void> {
   // once). T10: 2 (a late player takes the lowest-seeded holder's bye and Undo refuses; no slot keeps the player and offers Rebuild, then a
   // withdrawn seat is taken). T11: 1 (a reinstated player waits, and one tap gives their seat back). T13: 1 (a departed
   // qualifier's seat takes the best loser below the cut). T14: 1 (a correction empties a confirmed draw's seats and re-proposes).
-  // T15: 2 (a plate on 3 is refused, then starts on 4; a cut of 3 from a knockout leaves no stage). The lanes folded at
-  // merge-lanes-1, counted by `laneChecks`: T18 6, T21 6, T23 4, T16 2, T17 1, and B6a's T19 3 (2 + its own count) — 22.
-  const EXPECTED_CHECKS = 15 + 22;
+  // T15: 2 (a plate on 3 is refused, then starts on 4; a cut of 3 from a knockout leaves no stage). T25: 3 (qualifying_main
+  // eight → four; a league into a stepladder ranks every qualifier; a league into a page playoff seats Q1, E, Q2, Final).
+  // The lanes folded at merge-lanes-1, counted by `laneChecks`: T18 6, T21 6, T23 4, T16 2, T17 1, and B6a's T19 3 (2 + its
+  // own count) — 22.
+  const EXPECTED_CHECKS = 15 + 3 + 22;
   let checked = 0;
   const w4Check = (label: string, cond: boolean) => {
     checked++;
@@ -845,6 +863,315 @@ export async function w4KnockoutASuite(): Promise<void> {
         (cutOk ? "" : ` — 3: ${cutOf3.status} ${errorCode(cutOf3)}, stages ${stagesAfter3}; 4: ${cutOf4.status} ${errorCode(cutOf4)}`),
       cutOk,
     );
+  }
+
+  // Checks 16, 17 and 18 (T25, T8-f; see the header): the three formats whose last stage is a bracket fed from a stage before it.
+  // Each division is built from the builder's own stage drafts, played with upsets and completed; the expected seats and ranks
+  // are read off the played lines' outcomes and the rulebook's shapes (RB4-S1, RB4-S2), never off the answer under test.
+  {
+    type Line = {
+      id: string;
+      stage_id: string;
+      round_no: number;
+      seq_in_round: number;
+      status: string;
+      home_entrant_id: string | null;
+      away_entrant_id: string | null;
+      outcome: { kind?: string; winner?: string; loser?: string } | null;
+    };
+    type Sport = "badminton" | "generic";
+    type Done = { completed?: boolean; events?: { type: string; finalRanks?: string[] }[]; division_completed?: boolean };
+    const errorCode = (r: { json?: unknown }) => (r.json as { error?: { code?: string } } | undefined)?.error?.code;
+    const pairKey = (a: string | null | undefined, b: string | null | undefined) => [a ?? "-", b ?? "-"].sort().join("|");
+    const holds = (f: Line, id: string | undefined) => id !== undefined && (f.home_entrant_id === id || f.away_entrant_id === id);
+    const isOpen = (f: Line) =>
+      f.home_entrant_id !== null && f.away_entrant_id !== null && !["decided", "finalized", "forfeited", "void", "abandoned"].includes(f.status);
+
+    /** Every line of a stage in play order. */
+    const linesOf = async (divId: string | undefined, stageId: string | undefined): Promise<Line[]> =>
+      (v1data<Line[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? [])
+        .filter((f) => f.stage_id === stageId)
+        .sort((a, b) => a.round_no - b.round_no || a.seq_in_round - b.seq_in_round);
+    /** A division of `n` individuals seeded 1..n; entrant ids come back in seed order. */
+    const division = async (label: string, sport: Sport, n: number) => {
+      const body =
+        sport === "generic"
+          ? { name: label, sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false } }
+          : { name: label, sport_key: "badminton", variant_key: "bwf", config: {} };
+      const divId = v1data<{ id: string } | undefined>(await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", body))?.id;
+      const added =
+        v1data<{ id: string }[] | undefined>(
+          await v1(
+            owner,
+            `/api/v1/divisions/${divId}/entrants`,
+            "POST",
+            Array.from({ length: n }, (_, i) => ({ kind: "individual", display_name: `${label} P${i + 1} ${tag}`, seed: i + 1 })),
+          ),
+        ) ?? [];
+      return { divId, ids: added.map((e) => e.id) };
+    };
+    /** The format's stage drafts exactly as the builder sends them (`buildTemplateStages`), created in one call. */
+    const build = async (divId: string | undefined, template: string, qualified: number) => {
+      const res = await v1(
+        owner,
+        `/api/v1/divisions/${divId}/stages`,
+        "POST",
+        buildTemplateStages(template, { qualified, swissRounds: 5, poolCount: 2, legs: 1 }).map((s, i) => ({ ...s, seq: i + 1 })),
+      );
+      return { status: res.status, ids: (v1data<{ id: string }[] | undefined>(res) ?? []).map((s) => s.id) };
+    };
+    /** The scorer's result: `winner` takes the line (badminton two games to none, generic 2-0). */
+    const win = async (sport: Sport, f: Line, winner: string) => {
+      const home = f.home_entrant_id === winner;
+      if (sport === "generic") {
+        await appendScoreEvent(owner, f.id, "generic.result", home ? { p1Score: 2, p2Score: 0 } : { p1Score: 0, p2Score: 2 });
+        return;
+      }
+      await appendScoreEvent(owner, f.id, "core.start", {});
+      for (const [won, lost] of [[21, 10], [21, 12]] as const) {
+        await appendScoreEvent(owner, f.id, "badminton.game.summary", home ? { home: won, away: lost } : { home: lost, away: won });
+      }
+    };
+    /** Plays the stage's seated, open lines (those `only` admits) — each won by the side `pick` names — until none is left. A pick
+     *  that is not on its line plays nothing and is counted, so the check fails on a rig error rather than scoring the wrong side. */
+    const playOut = async (sport: Sport, divId: string | undefined, stageId: string | undefined, pick: (f: Line) => string, only: (f: Line) => boolean = () => true) => {
+      let played = 0;
+      let missed = 0;
+      for (let guard = 0; guard < 8; guard++) {
+        const todo = (await linesOf(divId, stageId)).filter((f) => isOpen(f) && only(f));
+        if (todo.length === 0) break;
+        missed = 0;
+        for (const f of todo) {
+          const winner = pick(f);
+          if (!holds(f, winner)) {
+            missed++;
+            continue;
+          }
+          await win(sport, f, winner);
+          played++;
+        }
+        if (missed > 0) break;
+      }
+      return { played, missed };
+    };
+    /** Compute the stage's proposal and confirm it as it stands (a tie would need a pick: the leagues here have none). */
+    const seatFrom = async (stageId: string | undefined) => {
+      const proposal = v1data<{ id: string; computed: { ties: unknown[] } } | undefined>(await v1(owner, `/api/v1/stages/${stageId}/seed-proposal`, "POST"));
+      const confirmed = proposal ? await v1(owner, `/api/v1/stages/${stageId}/seed-proposal/confirm`, "POST", { proposalId: proposal.id }) : undefined;
+      return { ties: proposal?.computed.ties.length ?? -1, status: confirmed?.status };
+    };
+    /** Complete a stage: the status, the stage_completed event's finalRanks (the one place they cross the wire), the events emitted. */
+    const complete = async (stageId: string | undefined) => {
+      const res = await v1(owner, `/api/v1/stages/${stageId}/complete`, "POST");
+      const data = v1data<Done | undefined>(res);
+      return {
+        status: res.status,
+        completed: data?.completed === true,
+        ranks: data?.events?.find((e) => e.type === "stage_completed")?.finalRanks ?? [],
+        events: data?.events?.length ?? -1,
+        divisionCompleted: data?.division_completed === true,
+      };
+    };
+    /** The entrants of a stage's standings, best rank first (what a customer reads; it must agree with the Complete answer). */
+    const standingsOrder = async (stageId: string | undefined): Promise<string[]> =>
+      (v1data<{ rows: { entrantId: string; rank?: number }[] } | undefined>(await v1(owner, `/api/v1/stages/${stageId}/standings`))?.rows ?? [])
+        .filter((r) => r.rank !== undefined)
+        .sort((a, b) => a.rank! - b.rank!)
+        .map((r) => r.entrantId);
+    const stageStatus = async (divId: string | undefined, stageId: string | undefined) =>
+      v1data<{ id: string; status: string }[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/stages`))?.find((s) => s.id === stageId)?.status;
+    const betterSeed = (seedOf: ReadonlyMap<string, number>) => (f: Line) =>
+      (seedOf.get(f.home_entrant_id ?? "") ?? 99) < (seedOf.get(f.away_entrant_id ?? "") ?? 99) ? f.home_entrant_id! : f.away_entrant_id!;
+
+    // Check 16 (T25; RB4-Q1, RB4-Q3, RB4-Q6): qualifying_main. A field of 3 is refused by name at the root Generate and at Start and
+    // writes no line; a field of 8 qualifies 4. Seed 7 is the upset (it takes its first two lines, then loses the final to seed 1),
+    // so the four who go through are not the four best seeds. Expected: the qualifiers are the four quarter-final winners, ranked
+    // by the qualifying final (winner, loser) and the semi-final losers (the tie between those two is the engine's own); the main
+    // draw is seated by that rank, 1 v 4 and 2 v 3, and none of the four who lost in round 1 is seated; the main draw's rank-4
+    // qualifier is scripted to win it, and completing it completes the division with the four ranked once; a second Complete changes
+    // nothing.
+    {
+      const small = await division("QM three", "badminton", 3);
+      const smallStages = await build(small.divId, "qualifying_main", 4);
+      const refusedGenerate = await v1(owner, `/api/v1/stages/${smallStages.ids[0]}/generate`, "POST");
+      const refusedStart = await v1(owner, `/api/v1/divisions/${small.divId}/start`, "POST");
+      const smallLines = (await linesOf(small.divId, smallStages.ids[0])).length;
+
+      const { divId, ids } = await division("QM eight", "badminton", 8);
+      const seedOf = new Map(ids.map((id, i) => [id, i + 1]));
+      const stages = await build(divId, "qualifying_main", 4);
+      const [qualId, mainId] = stages.ids;
+      const generated = [await v1(owner, `/api/v1/stages/${qualId}/generate`, "POST"), await v1(owner, `/api/v1/stages/${mainId}/generate`, "POST")];
+      const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+      const mainDayOne = await linesOf(divId, mainId);
+      const upset = ids[6];
+      const better = betterSeed(seedOf);
+      const qualPlayed = await playOut("badminton", divId, qualId, (f) => (f.round_no <= 2 && holds(f, upset) ? upset! : better(f)));
+      const qLines = await linesOf(divId, qualId);
+      const quarters = qLines.filter((f) => f.round_no === 1);
+      const semis = qLines.filter((f) => f.round_no === 2);
+      const qFinal = qLines.find((f) => f.round_no === 3);
+      const doneQual = await complete(qualId);
+      const ranks = doneQual.ranks;
+      const confirmed = await seatFrom(mainId);
+      const mainLines = await linesOf(divId, mainId);
+      const mainOne = mainLines.filter((f) => f.round_no === 1);
+      const seatedInMain = new Set(mainLines.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((x): x is string => x !== null));
+      const champion = ranks[3];
+      const mainPlayed = await playOut("badminton", divId, mainId, (f) =>
+        holds(f, champion) ? champion! : ranks.indexOf(f.home_entrant_id ?? "") < ranks.indexOf(f.away_entrant_id ?? "") ? f.home_entrant_id! : f.away_entrant_id!,
+      );
+      const doneMain = await complete(mainId);
+      const again = await complete(mainId);
+      const ok =
+        // the bound: refused by name, nothing written; the premise that the stages were made
+        smallStages.status === 201 && refusedGenerate.status === 422 && errorCode(refusedGenerate) === "QUALIFYING_MAIN_TOO_FEW" &&
+        refusedStart.status === 422 && errorCode(refusedStart) === "QUALIFYING_MAIN_TOO_FEW" && smallLines === 0 &&
+        // the premise: eight made it to a played bracket of seven lines, the main draw a day-one shell of three, nobody seated yet
+        stages.status === 201 && generated.every((g) => g.status === 200) && started.status === 200 && mainDayOne.length === 3 &&
+        mainDayOne.every((f) => f.home_entrant_id === null && f.away_entrant_id === null) &&
+        qualPlayed.played === 7 && qualPlayed.missed === 0 && quarters.length === 4 && semis.length === 2 && qFinal !== undefined &&
+        qFinal.outcome?.winner === ids[0] && qFinal.outcome?.loser === upset && doneQual.status === 200 && doneQual.completed &&
+        // the qualifiers: the four quarter-final winners, final winner and loser first, the semi-final losers after
+        ranks.length === 8 && new Set(ranks).size === 8 &&
+        [...ranks.slice(0, 4)].sort().join() === quarters.map((f) => f.outcome?.winner ?? "-").sort().join() &&
+        ranks[0] === qFinal.outcome?.winner && ranks[1] === qFinal.outcome?.loser &&
+        [...ranks.slice(2, 4)].sort().join() === semis.map((f) => f.outcome?.loser ?? "-").sort().join() &&
+        [...(await standingsOrder(qualId))].sort().join() === [...ranks].sort().join() &&
+        // seated by rank: 1 v 4 and 2 v 3, four seated, the round-1 losers nowhere
+        confirmed.ties === 0 && confirmed.status === 200 && mainOne.length === 2 &&
+        mainOne.map((f) => pairKey(f.home_entrant_id, f.away_entrant_id)).sort().join() === [pairKey(ranks[0], ranks[3]), pairKey(ranks[1], ranks[2])].sort().join() &&
+        seatedInMain.size === 4 && ranks.slice(0, 4).every((id) => seatedInMain.has(id)) &&
+        quarters.every((f) => !seatedInMain.has(f.outcome?.loser ?? "-")) &&
+        // played out and completed: the rank-4 qualifier wins the main draw over the rank-2, and the division completes
+        mainPlayed.played === 3 && mainPlayed.missed === 0 && doneMain.status === 200 && doneMain.completed && doneMain.divisionCompleted &&
+        doneMain.ranks.length === 4 && new Set(doneMain.ranks).size === 4 && doneMain.ranks.every((id) => seatedInMain.has(id)) &&
+        [...(await standingsOrder(mainId))].sort().join() === [...doneMain.ranks].sort().join() &&
+        (await stageStatus(divId, qualId)) === "complete" && (await stageStatus(divId, mainId)) === "complete" &&
+        // the second call: nothing more is emitted
+        again.status === 200 && again.completed && again.events === 0;
+      w4Check(
+        "w4a T25 qualifying_main: three are refused by name; eight qualify four by their qualifying rank, seated 1 v 4 and 2 v 3, and the main draw completes the division" +
+          (ok ? "" : ` — small ${smallStages.status}/${refusedGenerate.status} ${errorCode(refusedGenerate)}/${refusedStart.status} ${errorCode(refusedStart)}/${smallLines} lines; stages ${stages.status}, gen ${generated.map((g) => g.status)}, start ${started.status}, day-one ${mainDayOne.length}; qualifying played ${qualPlayed.played}/${qualPlayed.missed}, quarters ${quarters.length}, semis ${semis.length}, final ${qFinal?.outcome?.winner === ids[0]}/${qFinal?.outcome?.loser === upset}; complete ${doneQual.status} ranks ${ranks.map((id) => seedOf.get(id))}; confirm ${confirmed.status}/${confirmed.ties}; main round 1 ${mainOne.map((f) => `${seedOf.get(f.home_entrant_id ?? "")}v${seedOf.get(f.away_entrant_id ?? "")}`)}, seated ${seatedInMain.size}; main played ${mainPlayed.played}/${mainPlayed.missed}, complete ${doneMain.status} ${doneMain.ranks.map((id) => seedOf.get(id))} division ${doneMain.divisionCompleted}; again ${again.status}/${again.events}`),
+        ok,
+      );
+    }
+
+    // Check 17 (T25; RB4-S1, RB4-S7): a league of six into a stepladder of the top five, on generic scoring. Seeds are the league
+    // table's order (the better seed wins every league line: asserted from the league's own ranks, not assumed). RB4-S1: the lowest
+    // two seeds (4, 5) play the first rung, and each later rung holds one fixed seed, 3, 2, 1, waiting for the climber. Seed 5
+    // climbs two rungs (an upset), seed 2 stops it, seed 1 wins the ladder. The stage's ranks are asserted as COVERAGE only (RB4-R1:
+    // every one of the five once, the sixth finisher in none); their ORDER is app-B's (carry C19).
+    {
+      const k = 5;
+      const { divId, ids } = await division("Stepladder finals", "generic", 6);
+      const seedOf = new Map(ids.map((id, i) => [id, i + 1]));
+      const stages = await build(divId, "group_stepladder", k);
+      const [leagueId, ladderId] = stages.ids;
+      const generated = [await v1(owner, `/api/v1/stages/${leagueId}/generate`, "POST"), await v1(owner, `/api/v1/stages/${ladderId}/generate`, "POST")];
+      const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+      const leaguePlayed = await playOut("generic", divId, leagueId, betterSeed(seedOf));
+      const doneLeague = await complete(leagueId);
+      const confirmed = await seatFrom(ladderId);
+      const rungs = await linesOf(divId, ladderId);
+      const climber = ids[k - 1];
+      const ladderPlayed = await playOut("generic", divId, ladderId, (f) => (f.round_no <= 2 ? climber! : betterSeed(seedOf)(f)));
+      const played = await linesOf(divId, ladderId);
+      const last = played[played.length - 1];
+      const doneLadder = await complete(ladderId);
+      const again = await complete(ladderId);
+      const ok =
+        stages.status === 201 && generated.every((g) => g.status === 200) && started.status === 200 &&
+        // the premise: the league's table is the seed order (no tie to pick), all fifteen lines played
+        leaguePlayed.played === 15 && leaguePlayed.missed === 0 && doneLeague.status === 200 && doneLeague.completed && doneLeague.ranks.join() === ids.join() &&
+        confirmed.ties === 0 && confirmed.status === 200 &&
+        // RB4-S1 seated: k - 1 rungs, one a round; rung 1 = the two lowest seeds, every later rung one fixed seed (k-1, ... 1) waiting
+        rungs.length === k - 1 && rungs.every((f, i) => f.round_no === i + 1) &&
+        pairKey(rungs[0]?.home_entrant_id, rungs[0]?.away_entrant_id) === pairKey(ids[k - 2], ids[k - 1]) &&
+        rungs.slice(1).every((f, i) => pairKey(f.home_entrant_id, f.away_entrant_id) === pairKey(ids[k - 2 - i - 1], null)) &&
+        // played with the upset and completed: each rung's seats are the climber's and the fixed seed's
+        ladderPlayed.played === k - 1 && ladderPlayed.missed === 0 && played.every((f) => f.status === "decided") &&
+        pairKey(played[1]?.home_entrant_id, played[1]?.away_entrant_id) === pairKey(ids[2], climber) &&
+        pairKey(played[2]?.home_entrant_id, played[2]?.away_entrant_id) === pairKey(ids[1], climber) &&
+        pairKey(played[3]?.home_entrant_id, played[3]?.away_entrant_id) === pairKey(ids[0], ids[1]) &&
+        // the premise that the rig played what it meant to: seed 1 won the last rung against seed 2, the climber lost to seed 2
+        last?.outcome?.winner === ids[0] && last.outcome.loser === ids[1] && played[2]?.outcome?.winner === ids[1] && played[2].outcome.loser === climber &&
+        // every qualifier ranked once (RB4-R1), the sixth finisher in none, and the standings cover the same five
+        doneLadder.status === 200 && doneLadder.completed && doneLadder.divisionCompleted &&
+        doneLadder.ranks.length === k && new Set(doneLadder.ranks).size === k && doneLadder.ranks.every((id) => ids.slice(0, k).includes(id)) &&
+        !doneLadder.ranks.includes(ids[5]!) &&
+        [...(await standingsOrder(ladderId))].sort().join() === [...doneLadder.ranks].sort().join() &&
+        (await stageStatus(divId, ladderId)) === "complete" &&
+        again.status === 200 && again.completed && again.events === 0;
+      w4Check(
+        "w4a T25 stepladder: a league of six into a top five seats the lowest two seeds first and one climber a rung, and the stage ranks every qualifier once" +
+          (ok ? "" : ` — stages ${stages.status}, gen ${generated.map((g) => g.status)}, start ${started.status}; league ${leaguePlayed.played}/${leaguePlayed.missed} complete ${doneLeague.status} ranks ${doneLeague.ranks.map((id) => seedOf.get(id))}; confirm ${confirmed.status}/${confirmed.ties}; rungs ${rungs.map((f) => `${seedOf.get(f.home_entrant_id ?? "")}v${seedOf.get(f.away_entrant_id ?? "")}`)}; ladder ${ladderPlayed.played}/${ladderPlayed.missed}, played ${played.map((f) => `${f.status} ${seedOf.get(f.home_entrant_id ?? "")}v${seedOf.get(f.away_entrant_id ?? "")}`)}; complete ${doneLadder.status} ${doneLadder.ranks.map((id) => seedOf.get(id))} division ${doneLadder.divisionCompleted}; again ${again.status}/${again.events}`),
+        ok,
+      );
+    }
+
+    // Check 18 (T25; RB4-S2, RB4-S7): a league of five into a page playoff of the top four, on badminton. RB4-S2: Q1 = 1 v 2, E = 3 v 4,
+    // Q2 = Q1's loser v E's winner, Final = Q1's winner v Q2's winner. Seed 2 takes Q1 and seed 4 takes E, Q2 and the final (every
+    // result an upset), so a Q2 built from Q1's winner, or a final from E's, would seat the wrong pair. Expected seats are read off the
+    // played lines' outcomes; ranks are asserted as COVERAGE only (the four once each, the fifth finisher in none): their ORDER is
+    // app-B's (carry C19).
+    {
+      const { divId, ids } = await division("Page playoff finals", "badminton", 5);
+      const seedOf = new Map(ids.map((id, i) => [id, i + 1]));
+      const stages = await build(divId, "group_playoffs", 4);
+      const [leagueId, pageId] = stages.ids;
+      const generated = [await v1(owner, `/api/v1/stages/${leagueId}/generate`, "POST"), await v1(owner, `/api/v1/stages/${pageId}/generate`, "POST")];
+      const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+      const leaguePlayed = await playOut("badminton", divId, leagueId, betterSeed(seedOf));
+      const doneLeague = await complete(leagueId);
+      const confirmed = await seatFrom(pageId);
+      const seated = await linesOf(divId, pageId);
+      const q1Seated = seated.find((f) => holds(f, ids[0]));
+      const eSeated = seated.find((f) => holds(f, ids[2]));
+      const roundOne = await playOut("badminton", divId, pageId, (f) => (holds(f, ids[0]) ? ids[1]! : ids[3]!), (f) => f.round_no === 1);
+      const afterOne = await linesOf(divId, pageId);
+      const q1 = afterOne.find((f) => f.id === q1Seated?.id);
+      const e = afterOne.find((f) => f.id === eSeated?.id);
+      const q2Seated = afterOne.find((f) => f.round_no === 2);
+      const finalWaiting = afterOne.find((f) => f.round_no === 3);
+      const rest = await playOut("badminton", divId, pageId, () => ids[3]!);
+      const played = await linesOf(divId, pageId);
+      const q2 = played.find((f) => f.round_no === 2);
+      const final = played.find((f) => f.round_no === 3);
+      const doneFinals = await complete(pageId);
+      const again = await complete(pageId);
+      const ok =
+        stages.status === 201 && generated.every((g) => g.status === 200) && started.status === 200 &&
+        leaguePlayed.played === 10 && leaguePlayed.missed === 0 && doneLeague.status === 200 && doneLeague.completed && doneLeague.ranks.join() === ids.join() &&
+        confirmed.ties === 0 && confirmed.status === 200 &&
+        // RB4-S2 seated: four lines — Q1 = 1 v 2 and E = 3 v 4 in round 1, Q2 and the Final empty until their feeders are played
+        seated.length === 4 && seated.filter((f) => f.round_no === 1).length === 2 && q1Seated !== undefined && eSeated !== undefined && q1Seated.id !== eSeated.id &&
+        pairKey(q1Seated.home_entrant_id, q1Seated.away_entrant_id) === pairKey(ids[0], ids[1]) &&
+        pairKey(eSeated.home_entrant_id, eSeated.away_entrant_id) === pairKey(ids[2], ids[3]) &&
+        seated.filter((f) => f.round_no > 1).every((f) => f.home_entrant_id === null && f.away_entrant_id === null) &&
+        // after Q1 (seed 2 wins) and E (seed 4 wins): Q2 = Q1's loser v E's winner, the Final holds Q1's winner and waits
+        roundOne.played === 2 && roundOne.missed === 0 && q1?.outcome?.winner === ids[1] && q1.outcome.loser === ids[0] && e?.outcome?.winner === ids[3] && e.outcome.loser === ids[2] &&
+        pairKey(q2Seated?.home_entrant_id, q2Seated?.away_entrant_id) === pairKey(q1.outcome.loser, e.outcome.winner) &&
+        pairKey(q2Seated?.home_entrant_id, q2Seated?.away_entrant_id) === pairKey(ids[0], ids[3]) &&
+        pairKey(finalWaiting?.home_entrant_id, finalWaiting?.away_entrant_id) === pairKey(q1.outcome.winner, null) &&
+        // Q2 and the Final played: the Final = Q1's winner v Q2's winner
+        rest.played === 2 && rest.missed === 0 && q2?.outcome?.winner === ids[3] && final?.outcome?.winner === ids[3] &&
+        pairKey(final?.home_entrant_id, final?.away_entrant_id) === pairKey(q1.outcome.winner, q2.outcome.winner) &&
+        pairKey(final?.home_entrant_id, final?.away_entrant_id) === pairKey(ids[1], ids[3]) &&
+        played.every((f) => f.status === "decided") &&
+        // ranks: the four qualifiers once each and the fifth finisher in none; the standings cover the same four
+        doneFinals.status === 200 && doneFinals.completed && doneFinals.divisionCompleted &&
+        doneFinals.ranks.length === 4 && new Set(doneFinals.ranks).size === 4 && doneFinals.ranks.every((id) => ids.slice(0, 4).includes(id)) &&
+        !doneFinals.ranks.includes(ids[4]!) &&
+        [...(await standingsOrder(pageId))].sort().join() === [...doneFinals.ranks].sort().join() &&
+        (await stageStatus(divId, pageId)) === "complete" &&
+        again.status === 200 && again.completed && again.events === 0;
+      w4Check(
+        "w4a T25 page playoff: a league of five into a top four seats Q1 = 1 v 2 and E = 3 v 4, then Q2 = Q1's loser v E's winner and the Final = Q1's winner v Q2's winner, and ranks the four once" +
+          (ok ? "" : ` — stages ${stages.status}, gen ${generated.map((g) => g.status)}, start ${started.status}; league ${leaguePlayed.played}/${leaguePlayed.missed} complete ${doneLeague.status} ranks ${doneLeague.ranks.map((id) => seedOf.get(id))}; confirm ${confirmed.status}/${confirmed.ties}; seated ${seated.map((f) => `r${f.round_no} ${seedOf.get(f.home_entrant_id ?? "")}v${seedOf.get(f.away_entrant_id ?? "")}`)}; round one ${roundOne.played}/${roundOne.missed}, Q2 ${seedOf.get(q2Seated?.home_entrant_id ?? "")}v${seedOf.get(q2Seated?.away_entrant_id ?? "")}, final waits ${seedOf.get(finalWaiting?.home_entrant_id ?? "")}v${seedOf.get(finalWaiting?.away_entrant_id ?? "")}; rest ${rest.played}/${rest.missed}, final ${seedOf.get(final?.home_entrant_id ?? "")}v${seedOf.get(final?.away_entrant_id ?? "")}; complete ${doneFinals.status} ${doneFinals.ranks.map((id) => seedOf.get(id))} division ${doneFinals.divisionCompleted}; again ${again.status}/${again.events}`),
+        ok,
+      );
+    }
   }
 
   // The lanes folded at merge-lanes-1 (see the header): each export builds its own competition.
