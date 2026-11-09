@@ -29,6 +29,7 @@ import type { ScheduleCopy } from "./schedule";
 import { ForfeitTagChip } from "./forfeit-tag-chip";
 import { unseatedForfeitLoser, type ForfeitCopy, type ForfeitWords } from "@/lib/forfeit-tag";
 import { bracketForfeitWords } from "@/lib/bracket-forfeit-words";
+import { bracketSeatFallbackKey, isSettledBye } from "@/lib/bracket-bye-seat";
 
 interface Props {
   kind: "knockout" | "double_elim" | "stepladder" | "page_playoff";
@@ -99,13 +100,16 @@ function sideLabel(
   slotLabel: SlotLabel | null,
   lookup: SlotLabelLookup,
   slotText: PublicRoundNamer["slot"],
+  /** N-1 (rulings 116/117): `bracket.tbd`, or the bye's own word on a settled bye's empty seat (`bracketSeatFallbackKey`). */
+  fallbackKey: ReturnType<typeof bracketSeatFallbackKey>,
 ): string {
   if (entrantId) return names[entrantId] ?? "?";
   // A side with no label keeps this surface's own "to be decided"
   // (`bracket.tbd`): the namer falls back to `schedule.tbd`, which is a
   // different string in es, fr and nl. Every labelled side reads through the
-  // public namer, looked up in the side's own stage.
-  return slotLabel === null ? lookup("bracket.tbd") : slotText(stageId, slotLabel);
+  // public namer, looked up in the side's own stage. A settled bye's empty
+  // seat is empty for good, so it reads the bye's word instead (N-1).
+  return slotLabel === null ? lookup(fallbackKey) : slotText(stageId, slotLabel);
 }
 
 function FixtureCard({
@@ -139,7 +143,7 @@ function FixtureCard({
     // `id` is who the seat NAMES; `seated` who sits in it (a badge, and the winner's weight, belong to a seated side).
     const id = seated ?? unseatedForfeitLoser(fixture, seat);
     const badge = seated ? entrantLogos?.[seated] : null;
-    const label = sideLabel(id, entrantNames, fixture.stage_id, slotLabel, lookup, slotText);
+    const label = sideLabel(id, entrantNames, fixture.stage_id, slotLabel, lookup, slotText, bracketSeatFallbackKey(fixture, seat));
     return (
       <span className="flex min-w-0 items-center gap-1.5">
         {badge ? (
@@ -212,6 +216,11 @@ function FixtureCard({
           <span className="font-display text-sm font-semibold tabular-nums text-accent-strong">
             {fixture.summary.headline}
           </span>
+        ) : isSettledBye(fixture) ? (
+          // N-1 (W4 app A Task 22; rulings 116/117): a settled bye has no score and needs no time — it was never a
+          // match. It fell through to the no-time word, so a finished bye tile read "TBD" under its winner (truth run
+          // r116, the final). Its empty seat already says "Bye"; the footer says nothing.
+          null
         ) : fixture.scheduled_at ? (
           // The org's locale (owner ruling 2026-09-16, English day-month — the
           // B1 "en-GB formatting move" question, answered), on the venue's

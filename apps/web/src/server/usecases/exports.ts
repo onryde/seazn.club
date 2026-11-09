@@ -27,6 +27,7 @@ import {
 } from "@seazn/engine/exports";
 import { isLevelTable, roundRole, type StandingsRow } from "@seazn/engine/competition";
 import { roundRoleLabel } from "@/lib/round-role-label";
+import { bracketSeatFallbackKey } from "@/lib/bracket-bye-seat";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
@@ -704,12 +705,13 @@ export async function buildDivisionDocModel(
             // (entrant_id set but the name lookup somehow missed) is left as
             // a bare null on purpose — that is a data-integrity edge case,
             // not a day-one placeholder, and out of this scope.
+            // N-1 (rulings 116/117): a settled bye's unlabelled empty seat prints the bye's word, never "to be decided".
             home: homeId
               ? (nameById.get(homeId) ?? null)
-              : resolveSlotLabel(f.home_slot_label, slotLookup, "bracket.tbd"),
+              : resolveSlotLabel(f.home_slot_label, slotLookup, bracketSeatFallbackKey(f, "home")),
             away: awayId
               ? (nameById.get(awayId) ?? null)
-              : resolveSlotLabel(f.away_slot_label, slotLookup, "bracket.tbd"),
+              : resolveSlotLabel(f.away_slot_label, slotLookup, bracketSeatFallbackKey(f, "away")),
             // Design review M-1 (audit 3.1): a double walkover credits nobody — its stored "0 — 0" would print as an
             // unplayed match, so the node prints the tag (the live bracket's word) in the score's place.
             headline: creditsNobody(f.outcome) ? slotLookup("forfeit.tag.doubleWalkover") : f.headline,

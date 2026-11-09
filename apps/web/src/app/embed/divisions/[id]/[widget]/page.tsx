@@ -144,6 +144,32 @@ export default async function EmbedWidgetPage({ params }: Props) {
   // its plate); the round view heads those groups with the stage as well.
   const stageNames = Object.fromEntries(stages.map((s) => [s.id, s.name]));
 
+  // One bracket, drawn the same way by the bracket widget and by the standings widget (ST-G7).
+  const bracketOf = (stage: (typeof stages)[number]) => (
+    <Bracket
+      kind={stage.kind as "knockout" | "double_elim" | "stepladder" | "page_playoff"}
+      // See the shared division page: the bracket owns its own "TBD" word,
+      // so it takes the seat's real LABEL (stored, else the feed edge) and
+      // resolves it itself.
+      fixtures={fixtures
+        .filter((f) => f.stage_id === stage.id)
+        .map((f) => ({
+          ...f,
+          home_slot_label: namer.seatLabelOf(f.id, "home", f.home_slot_label),
+          away_slot_label: namer.seatLabelOf(f.id, "away", f.away_slot_label),
+        }))}
+      entrantNames={entrantNames}
+      entrantStatuses={entrantStatuses}
+      entrantLogos={entrantLogos}
+      fixtureHref={(fixtureId) => `${publicPath}/fixtures/${fixtureId}`}
+      lookup={lookup}
+      slotText={namer.slot}
+      copy={scheduleCopy}
+      tz={tz}
+      locale={orgLocale}
+    />
+  );
+
   let body: React.ReactNode;
   if (widget === "schedule") {
     body = (
@@ -164,28 +190,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
   } else if (widget === "bracket") {
     const stage = stages.find((s) => BRACKET_KINDS.has(s.kind));
     body = stage ? (
-      <Bracket
-        kind={stage.kind as "knockout" | "double_elim" | "stepladder" | "page_playoff"}
-        // See the shared division page: the bracket owns its own "TBD" word,
-        // so it takes the seat's real LABEL (stored, else the feed edge) and
-        // resolves it itself.
-        fixtures={fixtures
-          .filter((f) => f.stage_id === stage.id)
-          .map((f) => ({
-            ...f,
-            home_slot_label: namer.seatLabelOf(f.id, "home", f.home_slot_label),
-            away_slot_label: namer.seatLabelOf(f.id, "away", f.away_slot_label),
-          }))}
-        entrantNames={entrantNames}
-        entrantStatuses={entrantStatuses}
-        entrantLogos={entrantLogos}
-        fixtureHref={(fixtureId) => `${publicPath}/fixtures/${fixtureId}`}
-        lookup={lookup}
-        slotText={namer.slot}
-        copy={scheduleCopy}
-        tz={tz}
-        locale={orgLocale}
-      />
+      bracketOf(stage)
     ) : (
       <p className="p-2 text-sm text-zinc-500">{t(dict, "division.bracketEmpty")}</p>
     );
@@ -207,6 +212,18 @@ export default async function EmbedWidgetPage({ params }: Props) {
     body = (
       <div className="space-y-5">
         {stages.map((stage) => {
+          // ST-G7 (W4 app A Task 23): a bracket stage is drawn as its bracket, as the division page's table tab draws
+          // it — never as a table. A finished bracket's snapshot is its placement table (rank only, every count zero),
+          // which reached a club's website as an all-zero "table".
+          if (BRACKET_KINDS.has(stage.kind)) {
+            if (!fixtures.some((f) => f.stage_id === stage.id)) return null;
+            return (
+              <section key={stage.id}>
+                <h3 className="mb-3 font-display text-lg font-semibold text-ink">{stage.name}</h3>
+                {bracketOf(stage)}
+              </section>
+            );
+          }
           // Pool A above Pool B (the same order the division page draws);
           // the query hands them over in no particular order.
           const snaps = standings.filter((s) => s.stage_id === stage.id).sort(byPoolOrder(pools));

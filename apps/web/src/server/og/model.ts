@@ -70,9 +70,39 @@ export interface StandingsCardModel {
    * as `PostCardModel.eyebrowKey`). Both templates take `{brand}`.
    */
   fallbackKey: StandingsFallbackKey | null;
+  /**
+   * ST-G26 (W4 app A Task 23; owner pick R24 item 6, option A): a division that is only a bracket has no table to
+   * show — its one standings snapshot is the placement table the bracket wrote on completion, every count zero. Once
+   * crowned, its card names the champion instead, large, beside a trophy. Null: draw the table (or the fallback line).
+   * Never set where the youth rule holds: a youth individual's name is no more printable as a champion than in a row.
+   */
+  champion: ChampionCardName | null;
+}
+
+export interface ChampionCardName {
+  name: string;
+  /** The name's font size in px (`championNameSize`): as large as the mock's 104 where it fits, smaller for a long one. */
+  size: number;
 }
 
 export type StandingsFallbackKey = "og.standings.youth" | "og.standings.empty";
+
+/** The champion line's width on the 1200px card: the frame's 56px gutters, less the 120px trophy and its 30px gap. */
+export const CHAMPION_NAME_WIDTH = 1200 - 2 * 56 - 120 - 30;
+/** A bold sans glyph's average advance, in em — generous, so an estimate errs toward a smaller size, never a clip. */
+const CHAMPION_GLYPH_EM = 0.62;
+
+/**
+ * The champion name's size: the mock's 104px when the name fits on one line at that size; a name too long for one
+ * line at a readable size (64px) wraps onto two, sized so two lines hold it (with slack for where the words break),
+ * floored at 44px. A 43-character club name prints whole on two lines.
+ */
+export function championNameSize(name: string): number {
+  const glyphs = Math.max(1, [...name].length);
+  const oneLine = Math.floor(CHAMPION_NAME_WIDTH / (glyphs * CHAMPION_GLYPH_EM));
+  if (oneLine >= 64) return Math.min(104, oneLine);
+  return Math.max(44, Math.min(72, Math.floor((1.8 * CHAMPION_NAME_WIDTH) / (glyphs * CHAMPION_GLYPH_EM))));
+}
 
 interface StandingsInput {
   orgName: string;
@@ -86,6 +116,8 @@ interface StandingsInput {
   names: Record<string, string>;
   /** W2d T17: the stage's loaded rules (`PublicStage.table_rules`) — how its points print. Null: none (whole points). */
   rules: TableRulesLike | null;
+  /** ST-G26: the crowned champion's entrant id when the division is only a bracket (`divisionChampion`); else null. */
+  championId?: string | null;
 }
 
 export function standingsCardModel(input: StandingsInput): StandingsCardModel {
@@ -101,7 +133,13 @@ export function standingsCardModel(input: StandingsInput): StandingsCardModel {
   // division of individuals or pairs never prints entrant names at all.
   // Team names are fine (they name a side, not a child).
   if (input.youth && input.entrantKind !== "team") {
-    return { ...base, rows: [], fallbackKey: "og.standings.youth" };
+    return { ...base, rows: [], fallbackKey: "og.standings.youth", champion: null };
+  }
+  // ST-G26: a crowned bracket-only division names its champion. An id the public entrant list does not carry falls
+  // through to the table (or its fallback line) rather than printing a crown over a blank name.
+  const championName = input.championId ? input.names[input.championId] : undefined;
+  if (championName !== undefined) {
+    return { ...base, rows: [], fallbackKey: null, champion: { name: championName, size: championNameSize(championName) } };
   }
   // W2d T17 (RB2B-17, X-TB-6): the public table's own helpers — its unit, its level test, its rank text.
   const unit = tableLayoutFor(input.rules).unit;
@@ -122,6 +160,7 @@ export function standingsCardModel(input: StandingsInput): StandingsCardModel {
     ...base,
     rows,
     fallbackKey: rows.length === 0 ? "og.standings.empty" : null,
+    champion: null,
   };
 }
 
