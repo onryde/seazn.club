@@ -134,8 +134,11 @@ alter table sponsor_orders
   -- and a CHECK passes on NULL, so every open or live deal could then have no sponsor.
   add constraint sponsor_orders_sponsor_or_legacy
     check (sponsor_id is not null or (deal_status = 'ended' and ended_reason is not distinct from 'legacy')),
+  -- A deal is ended IFF it has BOTH its end time and its reason. Two equalities, so every mixed shape (a reason without a
+  -- time, or a time without a reason, on any state) is refused; one equality against the pair let a live deal carry a
+  -- reason and no time. deal_status is NOT NULL and `is not null` is never null, so this never evaluates to NULL.
   add constraint sponsor_orders_ended_shape
-    check ((deal_status = 'ended') = (ended_at is not null and ended_reason is not null));
+    check (((deal_status = 'ended') = (ended_at is not null)) and ((deal_status = 'ended') = (ended_reason is not null)));
 
 -- A deal is history: its sponsor and its competition cannot be deleted from under it. Its actors can.
 alter table sponsor_orders

@@ -352,20 +352,49 @@ describe.skipIf(!HAS_DB)("sponsor deals schema — the constraints are real", ()
     await expect(insertDeal(deal(w, null, LIVE))).rejects.toMatchObject(refusedBy("23514", "sponsor_orders_sponsor_or_legacy"));
     await expect(insertDeal(deal(w, null))).rejects.toMatchObject(refusedBy("23514", "sponsor_orders_sponsor_or_legacy"));
     await expect(insertDeal(deal(w, null, ended("refunded")))).rejects.toMatchObject(refusedBy("23514", "sponsor_orders_sponsor_or_legacy"));
-    // A legacy REASON on a deal that has not ended is no excuse (ended_shape lets a reason without a stamp through).
-    await expect(insertDeal(deal(w, null, { ...LIVE, ended_reason: "legacy" })))
-      .rejects.toMatchObject(refusedBy("23514", "sponsor_orders_sponsor_or_legacy"));
+    // A legacy REASON on a deal that has not ended is no excuse. ended_shape refuses that row too, and first (CHECKs run in
+    // name order), so the two guards would cover for each other: the sponsor rule's own `deal_status = 'ended'` half is
+    // proven ALONE, with ended_shape lifted inside a rolled-back transaction.
+    const mixed = deal(w, null, { ...LIVE, ended_reason: "legacy" });
+    await expect(insertDeal(mixed)).rejects.toMatchObject(refusedBy("23514", "sponsor_orders_ended_shape"));
+    const ROLLBACK = new Error("rolled back on purpose");
+    let alone: unknown = "not reached";
+    await expect(sql.begin(async (tx) => {
+      await tx`set local lock_timeout = '5s'`;
+      await tx`alter table sponsor_orders drop constraint sponsor_orders_ended_shape`;
+      alone = await tx`insert into sponsor_orders ${tx(mixed as Record<string, never>)} returning id`.then(() => "accepted", (e: unknown) => e);
+      throw ROLLBACK;
+    })).rejects.toBe(ROLLBACK);
+    expect(alone).toMatchObject(refusedBy("23514", "sponsor_orders_sponsor_or_legacy"));
   });
 
-  it("ended_shape: an ended deal has both its stamp and its reason; a deal that has not ended has neither stamp", async () => {
+  it("ended_shape: a deal is ended IFF it has both its end time and its reason — every mixed shape refused by name (count reported; MUTATE: the one-sided `= (ended_at is not null and ended_reason is not null)`)", async () => {
     const w = await world();
+    // Accepted: ended with both; not ended with neither (each of the five other lifecycle states).
     await expect(insertDeal(deal(w, await sponsor(w), ended("expired")))).resolves.toBeTruthy();
-    await expect(insertDeal(deal(w, await sponsor(w), { ...ended("expired"), ended_at: null })))
-      .rejects.toMatchObject(refusedBy("23514", "sponsor_orders_ended_shape"));
-    await expect(insertDeal(deal(w, await sponsor(w), { ...ended("expired"), ended_reason: null })))
-      .rejects.toMatchObject(refusedBy("23514", "sponsor_orders_ended_shape"));
-    await expect(insertDeal(deal(w, await sponsor(w), { ...LIVE, ended_at: new Date(), ended_reason: "expired" })))
-      .rejects.toMatchObject(refusedBy("23514", "sponsor_orders_ended_shape"));
+    let accepted = 0;
+    for (const s of DEAL_STATUSES.filter((x) => x !== "ended")) {
+      await expect(insertDeal(deal(w, await sponsor(w), s === "live" ? LIVE : { deal_status: s })), s).resolves.toBeTruthy();
+      accepted++;
+    }
+    expect(accepted, "not-ended states accepted with neither").toBe(5);
+    // Refused: every mixed shape (controller ruling 2026-11-09), on a live deal and on an open one.
+    const MIXED: readonly [string, Deal][] = [
+      ["ended, no end time", { ...ended("expired"), ended_at: null }],
+      ["ended, no reason", { ...ended("expired"), ended_reason: null }],
+      ["ended, neither", { ...ended("expired"), ended_at: null, ended_reason: null }],
+      ["live, a reason and no end time", { ...LIVE, ended_reason: "expired" }],
+      ["live, an end time and no reason", { ...LIVE, ended_at: new Date() }],
+      ["live, both", { ...LIVE, ended_at: new Date(), ended_reason: "expired" }],
+      ["awaiting payment, a reason and no end time", { ended_reason: "refunded" }],
+      ["awaiting payment, an end time and no reason", { ended_at: new Date() }],
+    ];
+    let refused = 0;
+    for (const [label, shape] of MIXED) {
+      await expect(insertDeal(deal(w, await sponsor(w), shape)), label).rejects.toMatchObject(refusedBy("23514", "sponsor_orders_ended_shape"));
+      refused++;
+    }
+    expect(refused, "mixed shapes refused").toBe(8);
   });
 
   it("one live deal per sponsor: a second live deal is refused by name; live beside ended, scheduled, or another sponsor's live is accepted (MUTATE: drop the index)", async () => {
