@@ -131,6 +131,23 @@ export async function readOrgDeals(tx: Tx, orgId: string): Promise<ServerDeal[]>
   return rows.map(toServerDeal);
 }
 
+/** One deal of the tenant's org (legacy rows included), unlocked; null when there is none — or, under a tenant, it is another
+ *  org's. The read a deal writer answers with after its write, inside its transaction. */
+export async function readDeal(tx: Tx, dealId: string): Promise<ServerDeal | null> {
+  const [row] = await tx<DealRow[]>`select ${tx(DEAL_ROW_COLS)} from sponsor_orders where id = ${dealId}`;
+  return row ? toServerDeal(row) : null;
+}
+
+/** The tenant org's deals, newest first (created_at, then id) — one sponsor's when `sponsorId` is given. Legacy rows are
+ *  included, a sponsor-less one too (D6: the money history of a pre-deals order). The console's deal list. */
+export async function readDeals(tx: Tx, opts: { sponsorId?: string } = {}): Promise<ServerDeal[]> {
+  const rows = await tx<DealRow[]>`
+    select ${tx(DEAL_ROW_COLS)} from sponsor_orders
+     ${opts.sponsorId === undefined ? tx`` : tx`where sponsor_id = ${opts.sponsorId}`}
+     order by created_at desc, id desc`;
+  return rows.map(toServerDeal);
+}
+
 /** What a sponsor's console row says about its deals. */
 export interface SponsorDealSummary {
   /** The deal the row shows: `pickRowDeal` over the sponsor's deals (legacy rows are never shown). */
@@ -163,7 +180,7 @@ export function sponsorDealSummary(deals: readonly ServerDeal[]): SponsorDealSum
 }
 
 /** A ServerDeal without its money handles: the shape the console and the API carry. */
-function clientDeal(d: ServerDeal): SponsorDeal {
+export function clientDeal(d: ServerDeal): SponsorDeal {
   const { payment_intent_id: _intent, checkout_session_id: _session, ...deal } = d;
   return deal;
 }

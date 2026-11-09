@@ -164,8 +164,9 @@ async function sponsorCompetitionId(orgId: string, id: string): Promise<string |
  *  request (Next applies a request's revalidations when its handler finishes) and never rejects, the write having
  *  committed. Never `bustPublicSponsors` here: its `deferred` is Next's `after()`, which runs once the response has gone
  *  and fires its tags only when every tail task is done - smoke job 128625643038 read a free org's public page 3 ms after
- *  the 201 and was served the cached page without the new partner sponsor. */
-async function expirePublicSponsors(orgId: string, op: string): Promise<void> {
+ *  the 201 and was served the cached page without the new partner sponsor. Exported for the deal usecases (sponsor deals F1):
+ *  every console deal action awaits it after its commit. */
+export async function expirePublicSponsors(orgId: string, op: string): Promise<void> {
   await expireCompetitionShell(orgId, { op });
 }
 

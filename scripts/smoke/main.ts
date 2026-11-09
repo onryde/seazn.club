@@ -80,6 +80,7 @@ import { marketingSuite } from "./suites/marketing.ts";
 import { funnelSuite } from "./suites/funnel.ts";
 import { funnelReminderSuite } from "./suites/funnelReminder.ts";
 import { sponsorsSuite } from "./suites/sponsors.ts";
+import { sponsorDealsSuite } from "./suites/sponsorDeals.ts";
 import { venuesSuite } from "./suites/venues.ts";
 import { importCapAtCommitSuite } from "./suites/importCapAtCommit.ts";
 import { courtHoursSuite } from "./suites/courtHours.ts";
@@ -742,6 +743,10 @@ export async function main() {
   // --- v10 sponsor CRM: tiers + placement + tracked clicks + Connect rail
   // on the pro org; flat free strip + 402 gates on a fresh community owner.
   await suite("sponsors", () => sponsorsSuite(admin, org2.id, renamed.slug));
+
+  // --- Sponsor deals (Task 6): offline, complimentary and approval deals on a fresh community owner, read off the public
+  // page; online refused on community; a viewer of the Pro org (`org`, which the viewer joined) cannot mark a deal paid.
+  await suite("sponsorDeals", () => sponsorDealsSuite(admin, org.id, viewer));
 
   // --- D5/P8 venues & courts: CRUD + calendar PUT on the pro org, plus the
   // VENUE_NOT_EMPTY and (DB-gated) COURT_IN_USE 409s.

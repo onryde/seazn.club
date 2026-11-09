@@ -50,6 +50,7 @@ import {
   reorderSponsors,
   startSponsorCheckout,
 } from "../sponsors";
+import { approveDeal, createDeal, endDealNow, markDealPaid, refundDeal } from "../sponsor-deals";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -128,6 +129,60 @@ describe.skipIf(!HAS_DB)("an organiser's sponsor write expires the public pages 
     if (!auth) return;
     await sql`delete from sponsors where org_id = ${auth.orgId}`;
     await sql`delete from organizations where id = ${auth.orgId}`;
+  });
+});
+
+// Sponsor deals F1 (plan 2026-11-07-sponsor-deals, Task 6): every console deal action is an organiser write the organiser
+// reads back on the public page, so each one expires the org tag in the request, and leaves no bust to after().
+describe.skipIf(!HAS_DB)("a console deal action expires the public pages before it resolves (F1)", () => {
+  let dealOrgId = "";
+
+  beforeEach(() => {
+    h.tails.length = 0;
+    h.tags.length = 0;
+  });
+
+  it("create, mark paid, approve, end and offline refund - each has fired the org tag by the time it resolves, and left nothing to after() (5 actions)", async () => {
+    const s = `spd-${randomUUID().slice(0, 8)}`;
+    const [{ id: orgId }] = await sql<{ id: string }[]>`insert into organizations (name, slug) values (${`Spd ${s}`}, ${s}) returning id`;
+    dealOrgId = orgId;
+    await invalidateOrgEntitlements(orgId);
+    const auth: AuthCtx = { orgId, via: "session", userId: null, role: "owner", keyId: null };
+    const want = { tag: orgTag(s), profile: { expire: 0 } };
+    const pkgId = (await createSponsorPackage(auth, { name: "Partner", price_cents: 5_000, currency: "gbp", tier: "partner", includes_on_stream: false })).id;
+    const sponsorId = (await createSponsor(auth, { name: "Deal Co", tier: "partner", status: "active" })).id;
+    const offline = { package_id: pkgId, competition_id: null, payment_method: "offline", sponsor_email: null, ends_on: null, end_current: false } as const;
+    let approvalId = "";
+    let paidId = "";
+    const actions: [string, () => Promise<unknown>][] = [
+      ["create", async () => (approvalId = (await createDeal(auth, sponsorId, { ...offline, go_live: "on_approval" }, "https://app.test")).deal.id)],
+      ["mark paid", () => markDealPaid(auth, approvalId)],
+      ["approve", () => approveDeal(auth, approvalId)],
+      ["end", () => endDealNow(auth, approvalId)],
+      ["offline refund", async () => {
+        paidId = (await createDeal(auth, sponsorId, { ...offline, go_live: "immediate" }, "https://app.test")).deal.id;
+        await markDealPaid(auth, paidId);
+        h.tags.length = 0;
+        h.tails.length = 0;
+        return refundDeal(auth, paidId);
+      }],
+    ];
+    let checked = 0;
+    for (const [what, act] of actions) {
+      h.tags.length = 0;
+      h.tails.length = 0;
+      await act();
+      expect(h.tags, `${what}: the org's public tag expired before the action resolved`).toContainEqual(want);
+      expect(h.tails, `${what}: no sponsor bust left to after()`).toEqual([]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every console deal action was checked").toBe(5);
+  });
+
+  afterAll(async () => {
+    if (!dealOrgId) return;
+    await sql`delete from sponsor_orders where org_id = ${dealOrgId}`;
+    await sql`delete from organizations where id = ${dealOrgId}`;
   });
 });
 

@@ -5261,6 +5261,29 @@ export const SponsorDeal = z.object({
   invoice_number: z.number().int().nullable(),
 });
 
+/** Sponsor deals, Task 6 (plan 2026-11-07-sponsor-deals D16; spec §5.1, §5.2): the Add deal body. STRICT — an unknown key
+ *  is a 400, never silently dropped. The usecase reuses this very object (`CreateDealInput`), so the documented body and the
+ *  enforced one are one schema. `competition_id` null is the whole organisation; `ends_on` is a date in the org's timezone
+ *  (stored as the start of the next day there); `end_current` ends the sponsor's live deal in the same transaction. */
+export const CreateSponsorDeal = z
+  .object({
+    package_id: Uuid,
+    competition_id: Uuid.nullable(),
+    payment_method: z.enum(PAYMENT_METHODS),
+    go_live: z.enum(GO_LIVE_RULES),
+    sponsor_email: z.string().email().max(320).nullish(),
+    ends_on: z.iso.date().nullish(),
+    end_current: z.boolean().default(false),
+  })
+  .strict();
+
+/** F11: the create answers the deal and, for an online deal, the Checkout url its invoice carries (null otherwise). The url
+ *  rides beside the deal, never on it: SponsorDeal stays url-free. */
+export const SponsorDealCreated = z.object({
+  deal: SponsorDeal,
+  checkout_url: z.string().nullable(),
+});
+
 export const Sponsor = z.object({
   id: z.string(),
   competition_id: z.string().nullable(),
