@@ -69,6 +69,22 @@ export async function p72Suite(): Promise<void> {
     delSpon.status === 409 && delMsg(delSpon).includes("sponsorship payment records"),
   );
 
+  // Guard 4 — a sponsor DEAL scoped to the comp (sponsor deals D18): a complimentary deal moved no money, so no money guard sees
+  // it, yet the RESTRICT keys would turn the delete into a 500. Made through the real API, deleted through the real route.
+  const dealComp = await makeComp("P72 Deal Cup");
+  const dealPkg = v1data<{ id: string }>(
+    await v1(owner, `/api/v1/orgs/${orgId}/sponsor-packages`, "POST", { name: `P72 Deal Package ${tag}`, price_cents: 1_000, currency: "gbp", tier: "partner" }),
+  );
+  const dealSponsor = v1data<{ id: string }>(await v1(owner, `/api/v1/orgs/${orgId}/sponsors`, "POST", { name: `P72 Deal Sponsor ${tag}` }));
+  const madeDeal = await v1(owner, `/api/v1/orgs/${orgId}/sponsors/${dealSponsor.id}/deals`, "POST", {
+    package_id: dealPkg.id, competition_id: dealComp.id, payment_method: "complimentary", go_live: "immediate",
+  });
+  const delDeal = await v1(owner, `/api/v1/competitions/${dealComp.id}`, "DELETE");
+  check(
+    "p72: delete blocked by a sponsor deal (409)",
+    madeDeal.status === 201 && delDeal.status === 409 && delMsg(delDeal).includes("sponsor deals") && delMsg(delDeal).includes("archive it instead"),
+  );
+
   // === KEY AUTH: DELETE /competitions/:id is never key-accessible → 403 for
   // ANY scope (the route is absent from the allowlist, so it default-denies).
   // A read key is enough to prove the door, and — unlike a write-capable key,

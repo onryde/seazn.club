@@ -14,6 +14,8 @@
 // Task 9 — seam S3 through a real server: the hourly sweep's route, POSTed with the cron secret, takes a deal whose end date
 // has passed off the public page (seed `ends_at` in SQL: the end-date INPUT is proven in Task 16).
 //
+// Task 10 — deleting a competition a deal is scoped to answers 409 with the archive hint (D18), never the 500 the RESTRICT keys gave.
+//
 // Task 8 — seam S1 through a real server: a SIGNED payment_intent.succeeded posted to the real webhook route
 // (/api/webhooks/stripe → runEvent → the payment handler) puts the deal's OWN sponsor on the public page, and adds no sponsor.
 import { expect, test, type APIRequestContext } from "@playwright/test";
@@ -205,4 +207,34 @@ test("an org-wide deal whose end date has passed comes off the public page after
     .not.toContain(`/s/${s.sponsorId}`);
   const after = await sponsors(request, s.org.orgId);
   expect(after.find((x) => x.id === s.sponsorId)?.status).toBe("inactive");
+});
+
+test("deleting a competition a deal is scoped to answers 409 with the archive hint", async ({ request }) => {
+  // A competition scope is a Pro placement (`sponsors.tiers`), so this one org is Pro.
+  const org = await seedSettingsOrg(request, { plan: "pro", label: "delete-guard" });
+  seeded.push(org);
+  const comp = await seedCompetition(request, org.orgId, { name: "Deals delete-guard", visibility: "public" });
+  const spare = await seedCompetition(request, org.orgId, { name: "Deals delete-guard spare", visibility: "public" });
+  const pkg = await apiJson<{ id: string }>(request, `/api/v1/orgs/${org.orgId}/sponsor-packages`, "POST", {
+    name: "Partner board", price_cents: 25_000, currency: "gbp", tier: "partner",
+  });
+  expect(pkg.status, JSON.stringify(pkg.error)).toBe(201);
+  const sp = await apiJson<{ id: string }>(request, `/api/v1/orgs/${org.orgId}/sponsors`, "POST", { name: `Harbourside delete ${Math.random().toString(36).slice(2, 6)}` });
+  expect(sp.status, JSON.stringify(sp.error)).toBe(201);
+  const made = await createDeal(request, org.orgId, sp.data!.id, {
+    package_id: pkg.data!.id, competition_id: comp.id, payment_method: "complimentary", go_live: "immediate",
+  });
+  expect(made.status, JSON.stringify(made.error)).toBe(201);
+
+  const refused = await apiJson(request, `/api/v1/competitions/${comp.id}`, "DELETE");
+  expect(refused.status, "a refusal in words, not a 500").toBe(409);
+  expect(refused.error?.message ?? "").toContain("sponsor deals");
+  expect(refused.error?.message ?? "").toContain("archive it instead");
+  const deal = await apiJson<Deal>(request, `/api/v1/orgs/${org.orgId}/sponsor-deals/${made.data!.deal.id}`);
+  expect(deal.status, JSON.stringify(deal.error)).toBe(200);
+  expect(deal.data!.deal_status, "the refused delete changed nothing").toBe("live");
+
+  // Its positive pair: a competition of the same org with no deal deletes.
+  const deleted = await apiJson(request, `/api/v1/competitions/${spare.id}`, "DELETE");
+  expect(deleted.status, JSON.stringify(deleted.error)).toBe(200);
 });
