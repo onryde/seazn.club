@@ -305,7 +305,9 @@ or `fixture-console.tsx` at a phone width. Not derivable from the code:
 
 - **Touching `apps/web/src/server`, or any file over ~1500 lines?** Read
   `apps/web/src/server/MODULARIZATION.md` first. Splits are verbatim moves
-  behind an identical barrel; no behaviour change rides along.
+  behind an identical barrel; no behaviour change rides along. To work in a
+  split folder, grep its `index.ts` (it maps each module), then read the ONE
+  module you need, never the whole folder.
 
 - **Reach for the standard design pattern when a real, present need matches
   one** (not a hypothetical future one) — e.g. a strategy/lookup table over a

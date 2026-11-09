@@ -33,6 +33,19 @@ usecases/foo/
   `foo/index.ts`. **No importer edits in a split commit.**
 - `schemas.ts`-style files: one file per resource group, barrel re-exports
   every schema and inferred type.
+- **The barrel is the map.** `index.ts` opens with a short comment listing
+  each module and what it owns, one line each. An agent greps the barrel,
+  then reads the ONE module it needs, never the whole folder. That is the
+  point of the split: a 500-line read instead of a 3-7k line one.
+- Helpers a sibling needs get an `export` in their module but are NOT
+  re-exported from the barrel. The barrel carries the original public
+  surface only.
+- Barrels are deliberate here. The capture repo bans them (path-based
+  `eslint-plugin-boundaries`, Metro without tree-shaking) and moves code with
+  a codemod that rewrites importers instead. seazn.club has no such lint
+  rule, and the codemod route would touch 50-130 importers per big file,
+  which collides with every open branch. Do not copy the capture convention
+  here, or ours there.
 
 ## Rules
 
@@ -51,6 +64,13 @@ usecases/foo/
 6. **One file per commit**, split commit separate from any follow-up.
 7. **Type-only imports stay type-only** (`import type`). Client components
    must not start importing server modules through a new barrel.
+8. **Sweep for the old filename before committing.** `grep -a -r "foo\.ts"`
+   across `apps/web` and `tools`. Source-text tests that `readFile` the old
+   path (copy-truth, status-vocabulary, freeze-guard ledgers, repair scans)
+   fail or, worse, pass vacuously. Repoint them to the module that now holds
+   the text, keep the assertion, and add an anti-vacuity count of files
+   scanned. Comments citing `foo.ts:LINE` go stale; fix them in a separate
+   comment-only commit, not the split.
 
 ## Verify (scoped only — never the full suite)
 
