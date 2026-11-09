@@ -959,7 +959,8 @@ export async function deleteCompetition(auth: AuthCtx, id: string): Promise<void
     // cascade can no longer sweep abandoned checkouts implicitly. The
     // sponsor_orders_prune policy (V300, widened by the sponsor-deals delta)
     // fences this delete: never money paid or refunded, a stored Checkout
-    // session or a legacy order.
+    // session, or a legacy order other than an abandoned checkout (pending,
+    // intent-less, undisputed: V300's own admission, swept here).
     await tx`
       delete from sponsor_orders o
       using sponsor_packages p

@@ -33,6 +33,10 @@
 -- one (money `none`), live or ended, are deletable by their own org; paid and refunded rows stay undeletable for tenants,
 -- as V300 meant. The app answers 409 for the rest (deleteSponsor), so this fence is never what a user meets. The invoice
 -- numbering adds `and invoice_number is null` (a numbered invoice is a document).
+-- One legacy row stays deletable: V300's own admission, an abandoned checkout (pending, no payment intent, never disputed).
+-- deleteCompetition sweeps those through the package join before its packages go (V299 made package_id RESTRICT), so
+-- fencing them would turn that delete into a 23503. They never collide with deleteSponsor's legacy refusal: before deals
+-- an order got its sponsor only when it was paid (`set status = 'paid', …, sponsor_id = …`), so an abandoned one has none.
 --
 -- sponsor_packages gains includes_on_stream (default false). sponsor_packages.competition_id IS NULL now means "any
 -- competition (the deal picks)", where it used to mean "org-wide". That is a superset of the old meaning: no package row
@@ -163,13 +167,14 @@ alter table sponsor_orders
     foreign key (approved_by) references users(id) on delete set null;
 
 -- The widened delete fence (header). `is distinct from`, not `<>`: an open or live deal's ended_reason is NULL, and a
--- policy expression that is NULL refuses the row.
+-- policy expression that is NULL refuses the row. A legacy row passes only as V300 admitted it: an abandoned checkout.
 drop policy sponsor_orders_prune on sponsor_orders;
 create policy sponsor_orders_prune on sponsor_orders for delete to app_user
   using (org_id = current_org_id()
          and status not in ('paid', 'refunded')
          and checkout_session_id is null
-         and ended_reason is distinct from 'legacy');
+         and (ended_reason is distinct from 'legacy'
+              or (status = 'pending' and payment_intent_id is null and disputed_at is null)));
 
 -- D3: at most one live deal per sponsor.
 create unique index sponsor_orders_one_live_per_sponsor on sponsor_orders (sponsor_id) where deal_status = 'live';
