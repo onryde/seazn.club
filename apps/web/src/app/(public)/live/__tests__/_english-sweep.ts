@@ -256,9 +256,11 @@ export function dictionaryIndex(locale: Locale): LocaleIndex {
 
 // --------------------------------------------------------------------- data
 
-/** The words `Intl` writes dates, times, zones and relative times with in a
- *  locale: months, weekdays, day periods, zone names, and the literal words
- *  between fields ("de", "à", "om"). Derived per locale, never typed. */
+/** The words `Intl` writes dates, times, zones, relative times and durations
+ *  with in a locale: months, weekdays, day periods, zone names, the literal
+ *  words between fields ("de", "à", "om"), and the hour/minute/second units of
+ *  a unit-style number ("1 uur 2 min 5 sec", the sponsor report's time on
+ *  screen). Derived per locale, never typed. */
 const dateWordCache = new Map<string, RegExp>();
 
 function dateWordsRe(locale: Locale): RegExp {
@@ -266,7 +268,7 @@ function dateWordsRe(locale: Locale): RegExp {
   if (hit) return hit;
   const tag = intlLocaleFor(locale);
   const words = new Set<string>();
-  const take = (parts: Intl.DateTimeFormatPart[] | Intl.RelativeTimeFormatPart[]) => {
+  const take = (parts: Intl.DateTimeFormatPart[] | Intl.RelativeTimeFormatPart[] | Intl.NumberFormatPart[]) => {
     for (const p of parts) if (p.type !== "integer" && hasLetters(p.value)) words.add(norm(p.value).toLowerCase());
   };
   const zones = ["UTC", "Europe/London", "Europe/Madrid", "Europe/Paris", "Europe/Amsterdam", "America/Los_Angeles", "America/New_York", "Asia/Kolkata", "Pacific/Auckland"];
@@ -305,6 +307,12 @@ function dateWordsRe(locale: Locale): RegExp {
     const rtf = new Intl.RelativeTimeFormat(tag, { numeric });
     for (const unit of ["second", "minute", "hour", "day", "week", "month", "year"] as const) {
       for (const v of [-2, -1, 0, 1, 2, 5]) take(rtf.formatToParts(v, unit));
+    }
+  }
+  for (const unitDisplay of ["short", "long", "narrow"] as const) {
+    for (const unit of ["second", "minute", "hour"] as const) {
+      const nf = new Intl.NumberFormat(tag, { style: "unit", unit, unitDisplay });
+      for (const v of [0, 1, 2, 5]) take(nf.formatToParts(v));
     }
   }
   const alternation = [...words].sort((a, b) => b.length - a.length).map(escapeRe).join("|");

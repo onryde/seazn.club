@@ -3,6 +3,7 @@ import { publicPollRateLimit } from "@/server/usecases/public";
 import { loadOverlayLiveData } from "@/server/overlay/load";
 import { relayPageAccess, relayParamsOf, type RelayPageAccess } from "@/server/overlay/relay-access";
 import { log } from "@/server/logger";
+import { OVERLAY_PREVIEW_PARAM, OVERLAY_PREVIEW_VALUE } from "@/lib/overlay-preview";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -56,7 +57,10 @@ export async function GET(req: Request, { params }: Ctx) {
       const body = access.programmePhase ? { ...data, programmePhase: access.programmePhase } : data;
       return reply(200, body, { "Cache-Control": RELAY_CACHE_CONTROL });
     }
-    const data = await loadOverlayLiveData(id);
+    // R4 S5 fix round 1 (m6): `?preview=1` is the console preview's read-only door — the same answer, but its sponsor
+    // plan writes no assignment and mints no short code. Every other poll (OBS, a third-party poller) plans AND writes (P3).
+    const readOnly = single(new URL(req.url), OVERLAY_PREVIEW_PARAM) === OVERLAY_PREVIEW_VALUE;
+    const data = await loadOverlayLiveData(id, { readOnly });
     return reply(200, data, { "Cache-Control": LIVE_CACHE_CONTROL });
   });
 }

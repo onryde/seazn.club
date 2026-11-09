@@ -21,11 +21,13 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test, expect, type Browser, type Locator, type Page } from "@playwright/test";
+import { builtinModules } from "@seazn/engine/sports";
 import {
   apiJson,
   expectNoHorizontalScroll,
   invalidateOrgEntitlements,
   setBoolEntitlementOverrideSql,
+  withDb,
 } from "./helpers";
 import {
   OVERLAY_MOMENT_FOLD_MS,
@@ -33,6 +35,9 @@ import {
 } from "../src/components/overlay/moment-timing";
 import { OVERLAY_SCENES } from "../src/components/overlay/overlay-scenes";
 import { END_OF_OVER_HOLD_MS } from "../src/lib/overlay-end-of-over";
+import { SPONSOR_COOLDOWN_MS, SPONSOR_STYLE_BY_SIZE } from "../src/lib/sponsor-plan";
+import { SPONSOR_TIER_WEIGHTS } from "../src/lib/sponsor-tiers";
+import { sponsorShortLinkText } from "../src/lib/sponsor-clicks";
 import { POLL_MS, SETTLED_POLL_MS } from "../src/components/public-site/match-centre/use-live-fixture";
 import { OVERLAY_REALTIME_PURPOSE, realtimeTokenPath } from "../src/components/public-site/live-score-data";
 import { OVERLAY_KEY_PARAM } from "../src/lib/realtime-purpose";
@@ -1982,6 +1987,292 @@ test.describe("cricket end-of-over card (EOO)", () => {
     } finally {
       await anon.context().close();
       await anonBug.context().close();
+      await owner.close();
+    }
+  });
+});
+
+/**
+ * R4 sponsors on stream, S15 — the break card on OBS (no `host`: F4, the overlay every OBS user adds), driven by the
+ * real ledger and the real served plan. Expectations are DECLARATIONS: the break's size is the engine module's own
+ * `naturalBreaks`, its style and hold `SPONSOR_STYLE_BY_SIZE[size]`, the first card the heavier tier by
+ * `SPONSOR_TIER_WEIGHTS` (P7), the cooldown `SPONSOR_COOLDOWN_MS`.
+ *
+ * TIME: OBS polls (`POLL_MS`), and the cooldown is judged on the EVENTS' server time (`sponsor-plan.ts`, the planner
+ * compares the breaks' `at`), so `page.clock` cannot move it — the page's clock is not the planner's. The second over is
+ * bowled at once, so it lands inside the cooldown by construction (asserted, not assumed); the positive pair (a break
+ * past the cooldown gets a card) is the planner's unit tests', where the clock is the test's.
+ *
+ * "A score cuts the card" runs on the PAGE's clock (`page.clock`, installed before the page loads, paused once it has):
+ * the poll interval and every queue timer are fake, so the test steps time and nothing moves between steps. A score
+ * sent during the hold reaches the page on the next poll, and with the clock paused the only way the card can leave
+ * `hold` is that poll's data. The hold cannot run out on its own. The seam drives the same cut through the real
+ * reducer (`server/sponsors/__tests__/seam.test.ts`).
+ */
+test.describe("R4 sponsors: the break card on OBS", () => {
+  const CYCLE_MS = OVERLAY_MOMENT_FOLD_MS * 2 + OVERLAY_MOMENT_HOLD_MS;
+  // The end-of-over card double-beats at its own hold (the EOO describe above).
+  const EOO_CYCLE_MS = (OVERLAY_MOMENT_FOLD_MS * 2 + END_OF_OVER_HOLD_MS) * 2;
+  /** A card's whole showing: fold in, its hold, fold out. */
+  const cardCycle = (holdMs: number) => OVERLAY_MOMENT_FOLD_MS * 2 + holdMs;
+  /** What a rig's seed and one browser cost before the first ball (the EOO describe's own allowance). */
+  const SEED_MS = 180_000;
+  /** Review Focus 5's realistic sponsor name: 43 characters. */
+  const LONG_NAME = "Harbourside Building Supplies and Timber Co";
+
+  /** The size the sport's engine module DECLARES for a break kind. */
+  function sizeOf(sport: string, kind: string): "minor" | "major" {
+    const declared = builtinModules.find((m) => m.key === sport)?.naturalBreaks?.kinds.find((k) => k.kind === kind);
+    if (declared === undefined) throw new Error(`${sport} declares no "${kind}" break`);
+    return declared.size;
+  }
+
+  type ServedPlan = {
+    cards: { id: string; tier: string; shortCode: string | null }[];
+    airings: { momentId: string; cardId: string; style: string; breakKind: string }[];
+  };
+  /** The plan the overlay route serves (S5): the page's own source. */
+  async function servedPlan(page: Page, fixtureId: string): Promise<ServedPlan> {
+    const res = await apiJson<{ sponsorPlan: ServedPlan | null }>(page.request, `/api/v1/public/fixtures/${fixtureId}/overlay`);
+    expect(res.status, "the overlay route answers").toBe(200);
+    expect(res.data?.sponsorPlan, "the overlay serves a sponsor plan").toBeTruthy();
+    return res.data!.sponsorPlan!;
+  }
+
+  /** The organiser's writes (S12, S11): each sponsor created OFF the stream, then ticked; then the dial. */
+  async function sponsorsOn(page: Page, orgId: string, sponsors: { name: string; tier: string; url: string }[]): Promise<string[]> {
+    const ids: string[] = [];
+    for (const s of sponsors) {
+      const made = await apiJson<{ id: string; on_stream: boolean }>(page.request, `/api/v1/orgs/${orgId}/sponsors`, "POST", s);
+      expect(made.status, `create ${s.name}: ${JSON.stringify(made.error)}`).toBe(201);
+      expect(made.data!.on_stream, "a created sponsor starts off the stream").toBe(false);
+      const ticked = await apiJson<{ on_stream: boolean }>(page.request, `/api/v1/orgs/${orgId}/sponsors/${made.data!.id}`, "PATCH", { on_stream: true });
+      expect(ticked.data?.on_stream, `tick ${s.name}`).toBe(true);
+      ids.push(made.data!.id);
+    }
+    const dial = await apiJson(page.request, `/api/v1/orgs/${orgId}/sponsor-stream-settings`, "PUT", { competitionId: null, enabled: true, frequency: "busy" });
+    expect(dial.status, "the dial to Busy").toBe(200);
+    return ids;
+  }
+
+  test("cricket, Busy: the over's break airs the heavier tier as a lower third AFTER the end-of-over card; a second over inside the cooldown airs its end-of-over card and no sponsor card", async ({
+    browser,
+  }) => {
+    const look = SPONSOR_STYLE_BY_SIZE[sizeOf("cricket", "over_end")];
+    // Two overs, each: a poll to reach the page, the end-of-over card's two beats, and a card's showing.
+    const OVER_MS = POLL_MS + EOO_CYCLE_MS + cardCycle(look.holdMs);
+    test.setTimeout(SEED_MS + 2 * OVER_MS + 60_000);
+    // Empty storage: see the EOO describe (a bare context inherits the shared Pro session and its requests 401).
+    const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    const ownerPage = await owner.newPage();
+    const { rig, striker, nonStriker, bowler } = await seedCricketOverlayFreshOver(ownerPage);
+    // Law 17.6: a bowler never bowls two overs running — the second over's is another of the fielding side.
+    const [other] = await withDb((sql) => sql<{ person_id: string }[]>`
+      select person_id from entrant_members where entrant_id = ${rig.awayEntrantId} and person_id <> ${bowler} order by person_id limit 1`);
+    expect(other, "premise: the fielding side has a second bowler").toBeTruthy();
+    await sponsorsOn(ownerPage, rig.orgId, [
+      { name: LONG_NAME, tier: "title", url: "https://harbourside.example/" },
+      { name: `Ridge Gold ${rig.fixtureId.slice(0, 6)}`, tier: "gold", url: "https://ridge-gold.example/" },
+    ]);
+    expect(SPONSOR_TIER_WEIGHTS.title, "premise (D9): the tiers are not tied").not.toBe(SPONSOR_TIER_WEIGHTS.gold);
+    const heavier = SPONSOR_TIER_WEIGHTS.title > SPONSOR_TIER_WEIGHTS.gold ? "title" : "gold";
+
+    const anon = await anonPage(browser);
+    try {
+      await anon.goto(`/overlay/fixtures/${rig.fixtureId}?style=bar`);
+      await expect(anon.locator('[data-testid="ovl-side-home"]')).toBeVisible({ timeout: 30_000 });
+      const card = anon.getByTestId("ovl-sponsor-card");
+      const eoo = anon.getByTestId("ovl-end-of-over");
+      expect(await card.count(), "no card before the first break").toBe(0);
+
+      const over = async (n: number, pair: [string, string], by: string) => {
+        for (let ballInOver = 1; ballInOver <= 6; ballInOver += 1) {
+          await sendEvent(ownerPage.request, rig.fixtureId, "cricket.ball", {
+            over: n, ballInOver, striker: pair[0], nonStriker: pair[1], bowler: by, runs: { bat: 0 },
+          });
+        }
+        return Date.now();
+      };
+
+      // --- Over 1: the end-of-over card, then the sponsor's.
+      const firstBreakAt = await over(0, [striker, nonStriker], bowler);
+      await expect(eoo, "the end-of-over card goes first (spec §3.4)").toHaveAttribute("data-phase", "hold", { timeout: POLL_MS + 15_000 });
+      expect(await card.count(), "never beside it").toBe(0);
+      await expect(card, "the break card follows it").toHaveAttribute("data-phase", "hold", {
+        timeout: EOO_CYCLE_MS + OVERLAY_MOMENT_FOLD_MS + 5_000,
+      });
+      await expect(eoo, "and the end-of-over card is gone by then").toHaveCount(0);
+      await expect(card, "in the style its break's size declares").toHaveAttribute("data-style", look.style);
+      await expect(anon.getByTestId("ovl-sponsor-slot")).toHaveAttribute("data-slot", look.style);
+      await expect(card, "the heavier tier airs first (D9 weights)").toHaveAttribute("data-tier", heavier);
+      const plan = await servedPlan(anon, rig.fixtureId);
+      const aired = plan.cards.find((c) => c.tier === heavier);
+      expect(plan.airings, "the served plan airs that break with that card").toEqual([
+        { momentId: expect.stringMatching(/:sponsor\.over_end$/), seq: expect.any(Number), cardId: aired?.id, style: look.style, holdMs: look.holdMs, breakKind: "over_end" },
+      ]);
+      await expect(anon.getByTestId("ovl-sponsor-link"), "the card prints its short link").toHaveText(sponsorShortLinkText(aired?.shortCode)!);
+      await expect(card, "it leaves after its hold").toHaveCount(0, { timeout: cardCycle(look.holdMs) + 5_000 });
+
+      // --- Over 2, at once: the batters changed ends (Law 17.1), another bowler. Inside the cooldown.
+      const secondBreakAt = await over(1, [nonStriker, striker], other!.person_id);
+      expect(secondBreakAt - firstBreakAt, "premise: the second break is inside the cooldown").toBeLessThan(SPONSOR_COOLDOWN_MS);
+      await expect(eoo, "premise: the page DID see the second over").toHaveAttribute("data-phase", "hold", { timeout: POLL_MS + 15_000 });
+      // Watch both of its beats and the slot a card would take after them.
+      const watchUntil = Date.now() + EOO_CYCLE_MS + cardCycle(look.holdMs);
+      let watched = 0;
+      while (Date.now() < watchUntil) {
+        expect(await card.count(), "the cooldown: no card for the second over").toBe(0);
+        watched += 1;
+        await anon.waitForTimeout(250);
+      }
+      console.log(`cooldown watch: ${watched} checks`);
+      expect(watched, "anti-vacuity: the watch ran").toBeGreaterThan(0);
+      expect((await servedPlan(anon, rig.fixtureId)).airings.map((a) => a.momentId), "and the served plan still airs only the first").toEqual(
+        plan.airings.map((a) => a.momentId),
+      );
+    } finally {
+      await anon.context().close();
+      await owner.close();
+    }
+  });
+
+  test("cricket, page clock: a six during the card's hold cuts it — the card folds out on the poll that brings the six, with no time passing", async ({
+    browser,
+  }) => {
+    const look = SPONSOR_STYLE_BY_SIZE[sizeOf("cricket", "over_end")];
+    // One step is a FIFTH of the fold, the shortest phase, so every queue timer is re-armed (React's effect, real
+    // time) before its own deadline comes up: no phase is skipped and no deadline drifts.
+    const STEP_MS = OVERLAY_MOMENT_FOLD_MS / 5;
+    // The card holds from (the poll that brought the over) + the end-of-over card's two beats + its own fold in. The
+    // NEXT poll must land inside that hold, or the score cannot reach the card in time. These are the declared constants.
+    const holdFrom = EOO_CYCLE_MS + OVERLAY_MOMENT_FOLD_MS;
+    expect(POLL_MS, "premise: the next poll lands after the card's hold begins").toBeGreaterThan(holdFrom + 2 * STEP_MS);
+    expect(POLL_MS, "premise: and before the hold runs out").toBeLessThan(holdFrom + look.holdMs - 2 * STEP_MS);
+    // Real time is the seed and the steps' round trips (fake time costs nothing): a bounded number of steps, each one
+    // CDP round trip, plus the waits for two fetches to render.
+    const MAX_STEPS = Math.ceil((2 * POLL_MS) / STEP_MS) + 20;
+    test.setTimeout(SEED_MS + MAX_STEPS * 250 + 60_000);
+    const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    const ownerPage = await owner.newPage();
+    const { rig, striker, nonStriker, bowler } = await seedCricketOverlayFreshOver(ownerPage);
+    const [other] = await withDb((sql) => sql<{ person_id: string }[]>`
+      select person_id from entrant_members where entrant_id = ${rig.awayEntrantId} and person_id <> ${bowler} order by person_id limit 1`);
+    expect(other, "premise: the fielding side has a second bowler").toBeTruthy();
+    await sponsorsOn(ownerPage, rig.orgId, [{ name: LONG_NAME, tier: "title", url: "https://harbourside.example/" }]);
+
+    const anon = await anonPage(browser);
+    try {
+      // Counts the stage's poll requests in the page, so a step knows at once whether its timers fired a poll.
+      // `window.fetch` is wrapped before any app code runs. The count is read in the page, never off a network event
+      // that could arrive after the step.
+      const pollPath = `/api/v1/public/fixtures/${rig.fixtureId}/overlay`;
+      await anon.addInitScript((path: string) => {
+        const w = window as unknown as { __ovlPolls: number; fetch: typeof fetch };
+        w.__ovlPolls = 0;
+        const real = w.fetch.bind(window);
+        w.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+          if (new URL(url, location.href).pathname === path) w.__ovlPolls += 1;
+          return real(input, init);
+        };
+      }, pollPath);
+      const polls = () => anon.evaluate(() => (window as unknown as { __ovlPolls: number }).__ovlPolls);
+      const fakeNow = () => anon.evaluate(() => Date.now());
+      await anon.clock.install();
+      await anon.goto(`/overlay/fixtures/${rig.fixtureId}?style=bar`);
+      await expect(anon.locator('[data-testid="ovl-side-home"]')).toBeVisible({ timeout: 30_000 });
+      await anon.clock.pauseAt((await fakeNow()) + 1_000);
+      const card = anon.getByTestId("ovl-sponsor-card");
+      const eoo = anon.getByTestId("ovl-end-of-over");
+      const phaseOf = async (l: Locator) => ((await l.count()) === 0 ? null : l.getAttribute("data-phase"));
+      let steps = 0;
+      const step = async () => {
+        expect(++steps, "the step budget").toBeLessThanOrEqual(MAX_STEPS);
+        await anon.clock.runFor(STEP_MS);
+      };
+
+      // --- The over, bowled with the page's clock stopped; the next poll brings it.
+      for (let ballInOver = 1; ballInOver <= 6; ballInOver += 1) {
+        await sendEvent(ownerPage.request, rig.fixtureId, "cricket.ball", {
+          over: 0, ballInOver, striker, nonStriker, bowler, runs: { bat: 0 },
+        });
+      }
+      const beforeOver = await polls();
+      while ((await polls()) === beforeOver) await step();
+      await expect(eoo, "the poll brings the over: its end-of-over card folds in, the clock still stopped").toHaveAttribute("data-phase", "in", { timeout: 15_000 });
+      expect(await card.count(), "no card beside the end-of-over card").toBe(0);
+
+      // --- Step through the end-of-over card's beats to the sponsor card's hold.
+      while ((await phaseOf(card)) !== "hold") await step();
+      const holdSeenAt = await fakeNow();
+      await expect(card, "the card on air is the over's (its declared style)").toHaveAttribute("data-style", look.style);
+
+      // --- A six off the next over's first ball (Law 17.1: the batters changed ends; Law 17.6: another bowler).
+      // `sendEvent` throws on anything but a 201 with an event id.
+      await sendEvent(ownerPage.request, rig.fixtureId, "cricket.ball", {
+        over: 1, ballInOver: 1, striker: nonStriker, nonStriker: striker, bowler: other!.person_id, runs: { bat: 6 }, boundary: 6,
+      });
+      const beforeSix = await polls();
+      let held = 0;
+      while ((await polls()) === beforeSix) {
+        expect(await phaseOf(card), "premise: the card is still holding when the next poll fires").toBe("hold");
+        held += 1;
+        await step();
+      }
+      console.log(`score-cut: ${held} held steps before the poll`);
+      expect(held, "anti-vacuity: the card held across steps before the poll").toBeGreaterThan(0);
+      const cutAt = await fakeNow();
+      expect(cutAt - holdSeenAt, "the poll fired inside the card's declared hold").toBeLessThan(look.holdMs - STEP_MS);
+
+      // --- With the clock stopped, the poll's data alone folds the card out. No timer can.
+      await expect(card, "the score cuts the card: it folds out on the poll's data").toHaveAttribute("data-phase", "out", { timeout: 15_000 });
+      expect(await fakeNow(), "and no page time passed: the fold is the data's doing, not the hold running out").toBe(cutAt);
+      // Final review S15 m2: the fold out is STEPPED like every phase above (one jump of a whole fold could pass the
+      // fold's deadline before React re-armed its timer), until the card is gone: never before its fold, and within a
+      // fold plus two steps (the step the deadline lands in, and one for the render to land). Re-review N3: the loop is
+      // capped at that many steps, so a card that never leaves fails HERE, on its own count, not on the step budget.
+      const FOLD_STEPS_MAX = Math.ceil(OVERLAY_MOMENT_FOLD_MS / STEP_MS) + 2;
+      let folding = 0;
+      while (folding < FOLD_STEPS_MAX && (await card.count()) > 0) {
+        folding += 1;
+        await step();
+      }
+      await expect(card, `gone within ${FOLD_STEPS_MAX} steps of the cut`).toHaveCount(0, { timeout: 2_000 });
+      expect(folding, "anti-vacuity: the fold took steps").toBeGreaterThan(0);
+      const goneAfter = (await fakeNow()) - cutAt;
+      expect(goneAfter, "the card stayed for its whole fold").toBeGreaterThanOrEqual(OVERLAY_MOMENT_FOLD_MS);
+      expect(goneAfter, "and was gone one fold later").toBeLessThanOrEqual(OVERLAY_MOMENT_FOLD_MS + 2 * STEP_MS);
+    } finally {
+      await anon.context().close();
+      await owner.close();
+    }
+  });
+
+  test("volleyball, Busy: a set's end airs a banner", async ({ browser }) => {
+    const look = SPONSOR_STYLE_BY_SIZE[sizeOf("volleyball", "set_end")];
+    // A poll to reach the page; the set's own score moments (a double beat at most each) ahead of the card; the card.
+    test.setTimeout(SEED_MS + POLL_MS + 4 * CYCLE_MS + cardCycle(look.holdMs) + 60_000);
+    const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    const ownerPage = await owner.newPage();
+    const rig = await seedUndoOverlayFixture(ownerPage, { sportKey: "volleyball", variantKey: "indoor", entrantKind: "team", prefix: "ovlspvb" });
+    const [goldId] = await sponsorsOn(ownerPage, rig.orgId, [{ name: `Net Gold ${rig.fixtureId.slice(0, 6)}`, tier: "gold", url: "https://net-gold.example/" }]);
+    const anon = await anonPage(browser);
+    try {
+      await anon.goto(`/overlay/fixtures/${rig.fixtureId}?style=bar`);
+      await expect(anon.locator('[data-testid="ovl-side-home"]')).toBeVisible({ timeout: 30_000 });
+      const card = anon.getByTestId("ovl-sponsor-card");
+      expect(await card.count(), "no card before the set ends").toBe(0);
+      // Indoor set 1 is to 25 (setbased/volleyball.ts): one summary closes it, and the closed set opens set_end.
+      await sendEvent(ownerPage.request, rig.fixtureId, "volleyball.set.summary", { home: 25, away: 20 });
+      await expect(card, "the set's end airs the card").toHaveAttribute("data-phase", "hold", {
+        timeout: POLL_MS + 4 * CYCLE_MS + OVERLAY_MOMENT_FOLD_MS + 5_000,
+      });
+      await expect(card, "a major break's style").toHaveAttribute("data-style", look.style);
+      await expect(anon.getByTestId("ovl-sponsor-slot")).toHaveAttribute("data-slot", look.style);
+      const plan = await servedPlan(anon, rig.fixtureId);
+      expect(plan.airings.map((a) => [a.breakKind, a.cardId, a.style])).toEqual([["set_end", goldId, look.style]]);
+    } finally {
+      await anon.context().close();
       await owner.close();
     }
   });

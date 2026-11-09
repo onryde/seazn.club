@@ -14,7 +14,7 @@ export default function TermsPage() {
       <MarketingNav />
       <main className="mx-auto max-w-3xl px-4 py-16">
         <h1 className="mb-2 text-3xl font-bold text-purple-900">Terms of Service</h1>
-        <p className="mb-8 text-sm text-slate-400">Last updated: 29 October 2026</p>
+        <p className="mb-8 text-sm text-slate-400">Last updated: 8 November 2026</p>
         <div className="space-y-6 text-sm text-slate-700">
 
           <section>

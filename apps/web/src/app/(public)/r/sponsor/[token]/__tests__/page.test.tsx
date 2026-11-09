@@ -1,0 +1,347 @@
+// R4 sponsors on stream, S14 - the public sponsor report page, /r/sponsor/[token] (spec 2026-10-27 §5.2, §7).
+// renderToStaticMarkup (apps/web vitest is `environment: "node"`, no DOM). The SEAM is real end to end: S13's createReportLink
+// mints the link, the real page renders it through the real `sponsorReport` and the real database, S13's revokeReportLink
+// revokes it, and the same page then answers the opaque 404. Only the storage SIGNING boundary is a stub (no Supabase locally),
+// plus the request context Next would supply (locale, headers, cookies) and `notFound`, which Next turns into the 404.
+//
+// What the page must do (brief + controller addenda 2026-11-01):
+//   - open with no login: it reads no session, so no cookie is needed;
+//   - noindex (robots), and no referrer;
+//   - an unknown, a revoked and a malformed token: notFound() - the ONE opaque 404, the same for all three;
+//   - rate-limited by `publicRateLimit` (the client's own IP bucket), checked BEFORE the lookup: a throttled visit gets the
+//     throttled screen and never the report, and spends no database statement (no oracle). A page cannot answer 429 (Next's
+//     HTTP fallbacks are 401/403/404 only), so the throttled screen is the page's form of it - see task-S14-report.md D1;
+//   - every figure under its spec §5.2 label; viewers the "Coming soon" legend (owner ruling 2026-11-01: PR B deferred);
+//     each showing's frame a SIGNED url, never the path, or a
+//     neutral placeholder;
+//   - every string from the dictionary (here: the fr dictionary, so a hard-coded English string cannot pass);
+//   - long names truncate: `min-w-0` on every box from the showing card down to the name.
+//
+// Killers: P1 (rate limit removed) -> "a throttled visit"; P2 (lookup before the limit) -> its statement count;
+//          P3 (frame path rendered instead of the signed url) -> "frames"; P4 (robots dropped) -> "metadata".
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import { randomBytes, randomUUID } from "node:crypto";
+
+const ctx = vi.hoisted(() => ({ locale: "fr" as "en" | "es" | "fr" | "nl", ip: "203.0.113.7", cookieReads: [] as string[] }));
+vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => ctx.locale }));
+vi.mock("next/headers", () => ({
+  cookies: async () => ({
+    get: (name: string) => {
+      ctx.cookieReads.push(name);
+      return undefined;
+    },
+    getAll: () => [],
+    has: () => false,
+    set: () => {},
+    delete: () => {},
+  }),
+  headers: async () => new Headers({ "x-forwarded-for": `${ctx.ip}, 10.0.0.1`, "accept-language": "fr" }),
+}));
+vi.mock("next/navigation", () => ({
+  notFound: () => {
+    throw new Error("NOT_FOUND");
+  },
+  useRouter: () => ({ push: () => {}, refresh: () => {} }),
+}));
+const signs = vi.hoisted(() => ({ calls: [] as { orgId: string; path: string; ttl: number }[] }));
+vi.mock("@/lib/supabase-storage", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/supabase-storage")>()),
+  signedReadUrls: vi.fn(async (orgId: string, paths: readonly string[], ttl: number) =>
+    paths.map((path) => {
+      signs.calls.push({ orgId, path, ttl });
+      return `https://storage.test/signed/${signs.calls.length}?sig=${randomBytes(6).toString("hex")}`;
+    })),
+}));
+
+import { sql, statementCount } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
+import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
+import { getDictionary, t, plural } from "@/lib/i18n";
+import { fmtIsoDay, fmtOnScreen } from "@/lib/sponsor-report";
+import { fmtNumber } from "@/lib/format";
+import { seedOrg } from "@/server/usecases/__tests__/_seed";
+import { divisionRig } from "@/server/usecases/__tests__/_rig";
+import { rigTarget, rigUser } from "@/server/relay/__tests__/_session-rig";
+import { airingFramePath } from "@/server/sponsors/airings";
+import { createReportLink, revokeReportLink } from "@/server/sponsors/report";
+import SponsorReportPage, { generateMetadata } from "../page";
+import { matchLines } from "@/components/sponsors/report-view";
+import SponsorReportNotFound, { generateMetadata as notFoundMetadata } from "../not-found";
+
+const HAS_DB = !!process.env.DATABASE_URL;
+const LONG = "Harbourside Building Supplies and Timber Co"; // 43 characters (Review Focus 5)
+const fr = await getDictionary("fr", "ui");
+
+/** The limiter's counter, per key, as Redis would keep it: the test decides the count. */
+const counted = new Map<string, number>();
+let overLimit = false;
+beforeEach(() => {
+  counted.clear();
+  overLimit = false;
+  signs.calls = [];
+  ctx.locale = "fr";
+  ctx.ip = `203.0.113.${Math.floor(Math.random() * 200) + 1}`;
+  ctx.cookieReads = [];
+  __setRateLimitCounterForTests(async (key) => {
+    const n = (counted.get(key) ?? 0) + 1;
+    counted.set(key, n);
+    return { count: overLimit ? 61 : n, ttlMs: 30_000 };
+  });
+});
+afterEach(() => __setRateLimitCounterForTests(null));
+afterAll(async () => {
+  if (!HAS_DB) return;
+  const g = globalThis as { _sql?: { end(): Promise<void> } };
+  const c = g._sql;
+  g._sql = undefined;
+  await c?.end();
+});
+
+/** React's own text escaping, so an expected string compares with the markup it renders to. */
+const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
+const render = async (token: string) => renderToStaticMarkup(await SponsorReportPage({ params: Promise.resolve({ token }) }));
+const notFoundOf = async (token: string) => {
+  await expect(render(token)).rejects.toThrow("NOT_FOUND");
+};
+
+describe("metadata", () => {
+  it("is noindex, nofollow and no-referrer, with a localised title and description - read from the locale alone, no database", async () => {
+    const before = statementCount();
+    const meta = await generateMetadata();
+    expect(statementCount() - before, "the title needs no lookup").toBe(0);
+    expect(meta.robots).toEqual({ index: false, follow: false });
+    expect(meta.referrer).toBe("no-referrer");
+    expect(meta.title).toBe(t(fr, "sponsorReport.meta.title"));
+    // Its own: left out, the page inherits the ROOT layout's English site description (the /live english sweep found it).
+    expect(meta.description).toBe(t(fr, "sponsorReport.meta.description"));
+  });
+
+  it("the 404's head is its own: on notFound() Next skips the page's generateMetadata, so the not-found declares the same noindex, nofollow and no-referrer, with a localised title and description", async () => {
+    const before = statementCount();
+    const meta = await notFoundMetadata();
+    expect(statementCount() - before, "it reads no token and no row").toBe(0);
+    expect(meta.robots).toEqual({ index: false, follow: false });
+    expect(meta.referrer).toBe("no-referrer");
+    expect(meta.title).toBe(t(fr, "sponsorReport.notFound.title"));
+    expect(meta.description).toBe(t(fr, "sponsorReport.notFound.body"));
+  });
+});
+
+describe("a throttled visit", () => {
+  it("gets the throttled screen, never the report or the 404, and spends no statement; the client's own IP is the bucket", async () => {
+    // A token that would open nothing: if the limiter ran AFTER the lookup this would be a 404 (and a statement).
+    overLimit = true;
+    const before = statementCount();
+    const html = await render(randomBytes(32).toString("base64url"));
+    expect(statementCount() - before, "checked before the lookup").toBe(0);
+    expect(html).toContain(esc(t(fr, "sponsorReport.throttled.title")));
+    expect(html).toContain(esc(t(fr, "sponsorReport.throttled.body")));
+    expect(html).toContain('data-testid="sponsor-report-throttled"');
+    expect(html).not.toContain('data-testid="sponsor-report"');
+    expect([...counted.keys()], "the bucket is the client's first forwarded address").toEqual([`rl:pubv1:${ctx.ip}`]);
+  });
+});
+
+// Final review S14 m4: only the limiter's 429 is the throttled screen. Any other failure of the limiter is a real error and
+// reaches Next's error boundary - never the throttled screen (that would hide an outage) and never the report (no limit run).
+describe("a limiter that fails", () => {
+  it("rethrows anything but its 429 - a plain Error and an HttpError of another status - spending no statement (count reported)", async () => {
+    const failures: Error[] = [new Error("limiter exploded"), new HttpError(503, "limiter unavailable")];
+    let checked = 0;
+    for (const failure of failures) {
+      __setRateLimitCounterForTests(async () => {
+        throw failure;
+      });
+      const before = statementCount();
+      await expect(render(randomBytes(32).toString("base64url")), failure.message).rejects.toBe(failure);
+      expect(statementCount() - before, "the lookup never ran").toBe(0);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
+describe.skipIf(!HAS_DB)("the seam: S13's real link, the real page, the real revoke", () => {
+  it("opens with no session, shows the figures under their labels, then 404s after the revoke - and again", async () => {
+    const { auth } = await seedOrg("pro");
+    const rig = await divisionRig(auth, { entrants: 2 });
+    const [{ name: orgName }] = await sql<{ name: string }[]>`select name from organizations where id = ${auth.orgId}`;
+    const [sponsor] = await sql<{ id: string }[]>`
+      insert into sponsors (org_id, name, tier, logo_path) values (${auth.orgId}, ${LONG}, 'gold', 'https://cdn.example/logo.png') returning id`;
+    const targetId = await rigTarget(auth.orgId);
+    const createdBy = await rigUser();
+    const [session] = await sql<{ id: string }[]>`
+      insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, sport_key, competition_id, division_id, entitlement_via_override)
+      select f.id, ${auth.orgId}, 'passthrough', 'completed', ${targetId}, ${createdBy}, d.sport_key, d.competition_id, f.division_id, true
+        from fixtures f join divisions d on d.id = f.division_id where f.id = ${rig.fixtureIds[0]!}
+      returning id`;
+    // Two closed showings (8 s with a frame, 15 s without) and two stream visits, one site visit (not counted).
+    const air = async (momentId: string, start: string, ms: number) => {
+      const [r] = await sql<{ id: string }[]>`
+        insert into sponsor_airings (org_id, sponsor_id, sponsor_name, fixture_id, session_id, moment_id, source, break_kind, style, started_at, ended_at)
+        values (${auth.orgId}, ${sponsor!.id}, ${LONG}, ${rig.fixtureIds[0]!}, ${session!.id}, ${momentId}, 'rotation', 'over_end', 'lower_third',
+                ${new Date(start)}, ${new Date(new Date(start).getTime() + ms)}) returning id`;
+      return r!.id;
+    };
+    await air("1:sponsor.over_end", "2026-06-02T10:00:00.000Z", 8_000);
+    await air("2:sponsor.over_end", "2026-06-02T11:00:00.000Z", 15_000);
+    const path = airingFramePath(auth.orgId, session!.id, "1:sponsor.over_end");
+    await sql`insert into sponsor_airing_frames (session_id, moment_id, org_id, path) values (${session!.id}, '1:sponsor.over_end', ${auth.orgId}, ${path})`;
+    for (const source of ["stream", "stream", "site"]) {
+      await sql`insert into sponsor_clicks (org_id, sponsor_id, fixture_id, source, at) values (${auth.orgId}, ${sponsor!.id}, ${rig.fixtureIds[0]!}, ${source}, '2026-06-02T10:01:00Z')`;
+    }
+    const link = await createReportLink(auth, auth.orgId, { sponsorId: sponsor!.id, competitionId: null, from: "2026-06-01", to: "2026-06-30" });
+    const token = link.url.split("/").at(-1)!;
+    expect(link.url, "premise: S13's shape").toBe(`/r/sponsor/${token}`);
+
+    const html = await render(token);
+    expect(ctx.cookieReads.filter((name) => /session|auth|sid/i.test(name)), "no session is read").toEqual([]);
+    expect(html).toContain('data-testid="sponsor-report"');
+    // The figures, each under its label, typed from what was seeded: 23 s on screen across 2 showings; 2 stream visits.
+    expect(html).toContain(esc(t(fr, "sponsorReport.heading", { sponsor: LONG, org: orgName! })));
+    expect(html).toContain(fmtOnScreen("fr", 23_000));
+    expect(html).toContain(esc(plural(fr, "sponsorReport.stat.onScreen", 2, "fr", { count: fmtNumber("fr", 2) })));
+    expect(html).toMatch(new RegExp(`data-testid="report-stream-visits"[^>]*>${fmtNumber("fr", 2)}<`));
+    expect(html).toContain(esc(plural(fr, "sponsorReport.stat.visits", 2, "fr")));
+    expect(html, "viewers: the Coming soon legend, real text a screen reader reads").toMatch(
+      new RegExp(`data-testid="report-viewers"[^>]*><span data-testid="viewers-coming-soon"[^>]*>${esc(t(fr, "sponsors.viewers.comingSoon"))}</span></dd>`),
+    );
+    expect(html).toContain(esc(t(fr, "sponsorReport.viewersNote")));
+    expect(html).toContain(fmtIsoDay("fr", "2026-06-01"));
+    expect(html).toContain(fmtIsoDay("fr", "2026-06-30"));
+    expect(html).toContain('src="https://cdn.example/logo.png"');
+
+    // Frames: one signed (TTL at most an hour, never the path), one placeholder.
+    expect(signs.calls).toHaveLength(1);
+    expect(signs.calls[0]).toMatchObject({ orgId: auth.orgId, path });
+    expect(signs.calls[0]!.ttl).toBeLessThanOrEqual(3600);
+    expect(html).toContain('src="https://storage.test/signed/1?sig=');
+    expect(html).not.toContain(path);
+    expect(html).not.toContain(path.split("/").at(-1)!);
+    expect((html.match(/data-testid="report-showing"/g) ?? []).length).toBe(2);
+    expect((html.match(/data-testid="report-frame-missing"/g) ?? []).length).toBe(1);
+    expect(html).toContain(esc(t(fr, "sponsorReport.frame.missing")));
+    expect(html).toContain(esc(t(fr, "sponsors.onStream.break.over_end")));
+    expect(html).toContain(esc(t(fr, "sponsorReport.match.sides", { home: "A", away: "B" })));
+    expect(html, "the token is not printed on the page").not.toContain(token);
+    // Print: the button is chrome, and print hides it.
+    expect(html).toMatch(/<button[^>]*class="[^"]*\bprint:hidden\b[^"]*"[^>]*>[^<]*<\/button>/);
+    expect(html).toContain(esc(t(fr, "sponsorReport.print")));
+
+    await revokeReportLink(auth, auth.orgId, link.id);
+    await notFoundOf(token);
+    await notFoundOf(token);
+  });
+
+  it("an unknown, a malformed and a revoked token are each the 404 (the positive pair: a live one opens)", async () => {
+    const { auth } = await seedOrg("pro");
+    const [sponsor] = await sql<{ id: string }[]>`insert into sponsors (org_id, name, tier) values (${auth.orgId}, 'Pair Co', 'partner') returning id`;
+    const live = await createReportLink(auth, auth.orgId, { sponsorId: sponsor!.id, competitionId: null, from: "2026-06-01", to: "2026-06-30" });
+    const gone = await createReportLink(auth, auth.orgId, { sponsorId: sponsor!.id, competitionId: null, from: "2026-06-01", to: "2026-06-30" });
+    await revokeReportLink(auth, auth.orgId, gone.id);
+    let checked = 0;
+    // Final review S14 m8: a URL carrying a broken escape (`/r/sponsor/%E0%A4%A`) never reaches this page - Next answers 400
+    // first - so the case here is the LITERAL string with percent signs a token could still be handed, named as such.
+    const cases: Array<[string, string]> = [
+      ["unknown (well-formed, never minted)", randomBytes(32).toString("base64url")],
+      ["literal percent signs (not an escape: Next 400s a broken one before the page)", "%E0%A4%A"],
+      ["a path", "../../etc"],
+      ["empty", ""],
+      ["revoked", gone.url.split("/").at(-1)!],
+    ];
+    for (const [what, token] of cases) {
+      await expect(render(token), what).rejects.toThrow("NOT_FOUND");
+      checked++;
+    }
+    expect(checked).toBe(5);
+    const html = await render(live.url.split("/").at(-1)!);
+    expect(html).toContain("Pair Co");
+    // The empty period: zero figures, the empty-list sentence, no showing card.
+    expect(html).toContain(esc(t(fr, "sponsorReport.showings.empty")));
+    expect(html).not.toContain('data-testid="report-showing"');
+  });
+
+  it("a deleted sponsor's link is the 404 (its links cascade with it)", async () => {
+    const { auth } = await seedOrg("pro");
+    const [sponsor] = await sql<{ id: string }[]>`insert into sponsors (org_id, name, tier) values (${auth.orgId}, 'Gone Co', 'partner') returning id`;
+    const link = await createReportLink(auth, auth.orgId, { sponsorId: sponsor!.id, competitionId: null, from: "2026-06-01", to: "2026-06-30" });
+    expect(await render(link.url.split("/").at(-1)!)).toContain("Gone Co");
+    await sql`delete from sponsors where id = ${sponsor!.id}`;
+    await notFoundOf(link.url.split("/").at(-1)!);
+  });
+
+  it("every locale renders its own copy, never English in another locale (counted)", async () => {
+    const { auth } = await seedOrg("pro");
+    const [sponsor] = await sql<{ id: string }[]>`insert into sponsors (org_id, name, tier) values (${auth.orgId}, ${`Locale Co ${randomUUID().slice(0, 4)}`}, 'partner') returning id`;
+    const link = await createReportLink(auth, auth.orgId, { sponsorId: sponsor!.id, competitionId: null, from: "2026-06-01", to: "2026-06-30" });
+    const en = await getDictionary("en", "ui");
+    let checked = 0;
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      ctx.locale = locale;
+      const dict = await getDictionary(locale, "ui");
+      const html = await render(link.url.split("/").at(-1)!);
+      for (const key of [
+        "sponsorReport.showings.title",
+        "sponsorReport.footnote",
+        "sponsorReport.print",
+        "sponsorReport.stat.viewers",
+        "sponsors.viewers.comingSoon",
+        "sponsorReport.viewersNote",
+      ] as const) {
+        expect(html, `${locale} ${key}`).toContain(esc(t(dict, key)));
+        if (locale !== "en") expect(t(dict, key), `${locale} ${key} is translated`).not.toBe(t(en, key));
+        checked++;
+      }
+    }
+    expect(checked).toBe(24);
+  });
+});
+
+describe.skipIf(!HAS_DB)("long names", () => {
+  it("a 43-character side name truncates: min-w-0 on every box from the showing card to EACH of the match's two lines, and each line carries truncate (final review S14 m2: the away side is its own line)", async () => {
+    const { auth } = await seedOrg("pro");
+    const rig = await divisionRig(auth, { entrants: 2 });
+    await sql`update entrants set display_name = ${LONG} where division_id = ${rig.divisionId}`;
+    const [sponsor] = await sql<{ id: string }[]>`insert into sponsors (org_id, name, tier) values (${auth.orgId}, ${LONG}, 'gold') returning id`;
+    await sql`
+      insert into sponsor_airings (org_id, sponsor_id, sponsor_name, fixture_id, moment_id, source, break_kind, style, started_at, ended_at)
+      values (${auth.orgId}, ${sponsor!.id}, ${LONG}, ${rig.fixtureIds[0]!}, '1:sponsor.set_end', 'rotation', 'set_end', 'lower_third',
+              '2026-06-02T10:00:00Z', '2026-06-02T10:00:08Z')`;
+    const link = await createReportLink(auth, auth.orgId, { sponsorId: sponsor!.id, competitionId: null, from: "2026-06-01", to: "2026-06-30" });
+    const html = await render(link.url.split("/").at(-1)!);
+    const card = html.slice(html.lastIndexOf("<li", html.indexOf('data-testid="report-showing"')));
+    const name = t(fr, "sponsorReport.match.sides", { home: LONG, away: LONG });
+    expect(card, "the full name is still there for a hover").toContain(`title="${esc(name)}"`);
+    let lines = 0;
+    for (const line of matchLines(fr, { home: LONG, away: LONG })!) {
+      // The line as TEXT.
+      const at = card.indexOf(`>${esc(line)}<`) + 1;
+      expect(at, `premise: the line is in the card: ${line}`).toBeGreaterThan(0);
+      // Every element still OPEN at the line, from the card down, must be min-w-0 (an `<img>` is void and closes itself)
+      // - the line's own box excepted, which is a block that truncates.
+      const open: string[] = [];
+      for (const m of card.slice(0, at).matchAll(/<(\/?)([a-z]+)([^>]*)>/g)) {
+        if (m[2] === "img") continue;
+        if (m[1] === "/") open.pop();
+        else open.push(`<${m[2]}${m[3]}>`);
+      }
+      expect(open.length, "the chain was walked").toBeGreaterThanOrEqual(4);
+      for (const tag of open.slice(0, -1)) expect(tag, "each box on the chain").toMatch(/class="[^"]*\bmin-w-0\b/);
+      expect(open.at(-1), "the line itself truncates").toMatch(/\btruncate\b/);
+      lines++;
+    }
+    expect(lines).toBe(2);
+  });
+});
+
+describe("the 404", () => {
+  // Final review S14 m7: "the same whatever the token" is structural (the component takes no props); rendering it twice
+  // and comparing proved nothing, so what is pinned is the reader's-locale copy.
+  it("is the reader's-locale copy and nothing about the token", async () => {
+    const one = renderToStaticMarkup(await SponsorReportNotFound());
+    expect(one).toContain(esc(t(fr, "sponsorReport.notFound.title")));
+    expect(one).toContain(esc(t(fr, "sponsorReport.notFound.body")));
+    expect(one).toContain('data-testid="sponsor-report-not-found"');
+  });
+});

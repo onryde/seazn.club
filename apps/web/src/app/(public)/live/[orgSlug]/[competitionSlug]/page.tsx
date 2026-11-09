@@ -61,6 +61,7 @@ import { getDictionary, plural, t } from "@/lib/i18n";
 import { hubDict } from "@/lib/hub-dict";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { SponsorsBoard, SponsorsHeroTitle } from "@/components/public-site/sponsors-board";
+import type { BoardClickTag } from "@/lib/sponsor-clicks";
 import { CompetitionLanding } from "@/components/public-site/matches-hub/competition-landing";
 // ONE producer for the competition's date line, shared with the Info tab that
 // renders the same two dates a tab away. Two implementations of "1 September
@@ -71,6 +72,9 @@ import { ShareBar } from "@/components/share-bar";
 import { shareLabels } from "@/components/public-site/share-labels";
 import { linkOnlyRobots } from "@/lib/competition-listing";
 import { routes } from "@/lib/routes";
+
+/** R4 S10: every sponsor link on this page counts as a `site` click (the match page tags its own fixture). */
+const SITE_CLICK_TAG: BoardClickTag = { source: "site" };
 
 export const revalidate = 30;
 
@@ -86,7 +90,6 @@ interface Branding {
   logo?: string;
   banner?: string;
   colors?: { primary?: string };
-  sponsors?: { name: string; url?: string; logo?: string }[];
 }
 
 /** Slab chip — the hero's counters. */
@@ -156,9 +159,9 @@ export default async function CompetitionHomePage({ params }: Props) {
   const locale = toLocale(hub.locale);
   const dict = await getDictionary(locale, "public");
 
-  // Sponsors (v10 PROMPT-56): table rows via the resolver (blob shim only for
-  // un-backfilled orgs). Tier grouping is Pro `sponsors.tiers` — without it
-  // every row collapses to the free flat partner strip.
+  // Sponsors (v10 PROMPT-56): the sponsors table's rows via the resolver, its
+  // only source. Tier grouping is Pro `sponsors.tiers` — without it every row
+  // collapses to the free flat partner strip.
   const tiered = await hasFeature(org.id, "sponsors.tiers", competition.id);
   const sponsors = await resolveSponsors(org.id, competition.id, { tiered });
 
@@ -299,7 +302,7 @@ export default async function CompetitionHomePage({ params }: Props) {
                   construction — so no predicate is needed here and an absent
                   sponsor costs no space. The rest of the board is below the
                   tabs; `sponsors-board.tsx`'s header carries the reasoning. */}
-              <SponsorsHeroTitle sponsors={sponsors} tiered={tiered} dict={dict} />
+              <SponsorsHeroTitle sponsors={sponsors} tiered={tiered} dict={dict} clickTag={SITE_CLICK_TAG} />
               <div className="mt-4 flex flex-wrap items-center gap-3">
                 <ShareBar path={sharePath} title={hub.name} labels={shareBarLabels} />
                 {/* v13 (PROMPT-64): kiosk mode — cast this URL to any screen.
@@ -412,7 +415,7 @@ export default async function CompetitionHomePage({ params }: Props) {
           Mounted unconditionally: it returns `null` when it has nothing to draw
           — no sponsors at all, or a tiered org whose only sponsor is the title
           tier now rendered in the hero. */}
-      <SponsorsBoard sponsors={sponsors} tiered={tiered} dict={dict} />
+      <SponsorsBoard sponsors={sponsors} tiered={tiered} dict={dict} clickTag={SITE_CLICK_TAG} />
     </div>
   );
 }

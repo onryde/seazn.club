@@ -270,7 +270,15 @@ export class FlyRunner implements RunnerProvider {
           auto_destroy: true,
           restart: { policy: "on-failure", max_retries: RUNNER_INPLACE_RESTARTS },
           stop_config: PLATFORM_STOP_CONFIG,
-          env: { SESSION_ID: spec.sessionId, JOB_TOKEN: spec.jobToken, APP_URL: spec.appUrl, RELAY_DEADLINE_AT: spec.deadlineAt.toISOString() },
+          // R4: RELAY_AIRINGS=1 switches the compositor's sponsor airings and proof frames on. Web is the only host that builds
+          // this env, so the switch rides from web's own; only "1" turns it on (deploy order: README "Cloudflare Stream").
+          env: {
+            SESSION_ID: spec.sessionId,
+            JOB_TOKEN: spec.jobToken,
+            APP_URL: spec.appUrl,
+            RELAY_DEADLINE_AT: spec.deadlineAt.toISOString(),
+            ...(process.env.RELAY_AIRINGS === "1" ? { RELAY_AIRINGS: "1" } : {}),
+          },
           metadata: { [SESSION_METADATA_KEY]: spec.sessionId, [ENV_METADATA_KEY]: spec.environment },
         },
       });

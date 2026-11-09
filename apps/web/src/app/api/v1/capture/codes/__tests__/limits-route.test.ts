@@ -155,7 +155,8 @@ describe.skipIf(!HAS_DB)("the phone routes' rate limits (§10.4, R4)", () => {
     let valid = 0;
     expect((await beat(r, A, "new", { tok: r.tok })).status).toBe(200);
     valid++;
-    const forged = (i: number) => ({ "cf-connecting-ip": `198.51.${Math.floor(i / 250)}.${i % 250}` });
+    // Each guess from its own address, as Fly's proxy names it (lib/client-ip.ts: the header the limiter keys on).
+    const forged = (i: number) => ({ "fly-client-ip": `198.51.${Math.floor(i / 250)}.${i % 250}` });
     // The flood: more requests than the code's whole budget, each a different guess from its own address.
     const flood = SPEC.code.max + 5;
     const seen = new Map<number, number>();
@@ -226,12 +227,17 @@ describe.skipIf(!HAS_DB)("the phone routes' rate limits (§10.4, R4)", () => {
     expect((await get(r.code, { tok: "guess-z", ip: shared })).status, "recovered: a failure is a 401 again").toBe(401);
   });
 
-  it("the failure budget's IP prefers the PROXY's header: CF-Connecting-IP, then Fly-Client-IP, then the first X-Forwarded-For hop", async () => {
+  // R4 final review (S10 M1; re-review N1): the shared reader, lib/client-ip.ts. The public hosts are behind Cloudflare, so a
+  // Fly peer inside Cloudflare's published ranges vouches for CF-Connecting-IP (each visitor their own bucket, never the edge's);
+  // a peer outside them - a client at the fly.dev origin - is itself, whatever CF header it wrote (lib/__tests__/client-ip.test.ts).
+  it("the failure budget's IP is the VISITOR behind a Cloudflare peer, and Fly's peer otherwise; a forged CF-Connecting-IP never picks the bucket", async () => {
     const redis = windowedRedis();
     const r = await captureRig();
     const cases: [Opts["extra"], string][] = [
-      [{ "cf-connecting-ip": "203.0.113.50", "fly-client-ip": "198.51.100.60" }, "capture-fail:203.0.113.50"],
+      [{ "cf-connecting-ip": "203.0.113.50", "fly-client-ip": "162.158.12.34" }, "capture-fail:203.0.113.50"],   // through Cloudflare
+      [{ "cf-connecting-ip": "203.0.113.50", "fly-client-ip": "198.51.100.60" }, "capture-fail:198.51.100.60"],   // forged at the origin
       [{ "fly-client-ip": "198.51.100.60" }, "capture-fail:198.51.100.60"],
+      [{ "cf-connecting-ip": "203.0.113.50" }, "capture-fail:203.0.113.7"],   // CF with no Fly peer to vouch: the XFF hop, not CF
       [{}, "capture-fail:203.0.113.7"],   // headersOf's default first XFF hop
     ];
     let checked = 0;

@@ -182,6 +182,37 @@ call that needs the value (a composed start's Machine, the daily sweep), not at 
 deploy missing one starts and serves until then. The relay block of the root
 [`.env.example`](.env.example) documents each one.
 
+**Deploy step — sponsors on stream (R4).** Sponsor airings and proof frames stay off until
+web's `RELAY_AIRINGS=1`, which web copies into every composed Machine's env
+(`server/relay/runner-fly.ts`). Set it as a Fly secret on the **web** app only after, in this
+order:
+
+1. R4 PR A (web) is deployed.
+2. The **private** Supabase Storage bucket `sponsor-frames` exists.
+3. The compositor carrying R4 PR C is deployed and named by `RELAY_IMAGE`.
+4. **Prod only:** the frame grab's CPU cost has been measured on stg, where `RELAY_AIRINGS=1`
+   is already set: the composed Machine's CPU p95 on a stream with a ticked sponsor, against
+   the same stream without one. Any measurable p95 rise goes to the owner before prod is set
+   (spec §3.6.3).
+5. **Prod only:** the frame path has been proven on stg, on a real composed stream with a
+   ticked sponsor, after `RELAY_AIRINGS=1` is set there (not before: without it no frame is
+   grabbed, so there is nothing to check):
+   - an object lands in the private `sponsor-frames` bucket for the airing;
+   - `/r/sponsor/<token>` (a report link made in the Sponsors hub) renders it through a
+     signed URL, and the bare object URL is refused;
+   - the daily sweep's `relay sweep` log line carries `framesBucketPublic: false`;
+   - an orphan purge removes an object: delete that airing row (stg data is test data), wait
+     until its session ended more than 24 h ago (`ORPHAN_FRAME_GRACE_MS`), and the next sweep's
+     line shows `framesPurged` of at least 1 and the object is gone from the bucket.
+
+Before that, leave it unset — a Machine without it sends no airings and grabs no frames, so the
+report's "Times shown" stays 0. Streams already running keep the env they booted with.
+
+**Rollback step.** Before rolling web back past R4 PR A, unset `RELAY_AIRINGS` on web and let the composed streams
+running with it end. An older web refuses a beat that carries airings. The compositor turns airings off after one refused
+count-only beat, but when airing lines arrive first it takes the second refused beat: about 10 s at the 5 s cadence,
+close to web's 15 s composed stale window.
+
 Two facts worth knowing before reading the design:
 
 - `stream.liveInputs.create()` returns `{ uid, rtmps, srt, webRTC }` from a single call,

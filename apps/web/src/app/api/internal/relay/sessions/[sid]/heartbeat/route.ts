@@ -3,13 +3,16 @@ import { baseUrl } from "@/lib/oauth";
 import { parseBody } from "@/server/api-v1/http";
 import { RelayHeartbeat } from "@/server/api-v1/schemas";
 import { bearerOf } from "@/server/relay/bearer";
+import { verifyRelayToken } from "@/server/relay/tokens";
 import { defaultDeps, heartbeat } from "@/server/usecases/stream-sessions";
 
 type Ctx = { params: Promise<{ sid: string }> };
 
 /** POST …/heartbeat — the control channel (design §6.4): the Machine reports, the reply carries `{ desiredState }`. A
- *  Machine takes no inbound traffic, so this reply is the only way a stop reaches it. The bearer's PRESENCE is checked
- *  before the body is read; the token itself is verified by the usecase before anything is written. The body is
+ *  Machine takes no inbound traffic, so this reply is the only way a stop reaches it. The bearer's PRESENCE is checked,
+ *  then the token is VERIFIED, both before the body is read (final review 2, m8: `verifyRelayToken` reads no database, so
+ *  a refused credential is the one 401 whatever it posted, never a 400 describing a body it was not allowed to send); the
+ *  usecase verifies it again as its own first check, before anything is written. The body is
  *  `RelayHeartbeat` (strict). Its final beat may carry the Machine's own exit reason (`exitReason`/`exitDetail`, owner
  *  2026-10-15), kept in the two beat stores — never the runner's exit columns (A5: those are persisted from its observed
  *  exit, and a beat must not be able to overwrite them). R2003: on a COMPOSED session the reason also decides what the
@@ -18,6 +21,7 @@ export async function POST(req: Request, { params }: Ctx) {
   return handler(async () => {
     const { sid } = await params;
     const token = bearerOf(req);
+    await verifyRelayToken(token, { sid, scope: "relay-job" });
     const body = await parseBody(req, RelayHeartbeat);
     return heartbeat(sid, token, body, defaultDeps(baseUrl(req)));
   });

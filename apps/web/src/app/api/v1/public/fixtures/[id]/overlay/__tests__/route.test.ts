@@ -280,3 +280,21 @@ describe.skipIf(!HAS_DB)("GET /public/fixtures/{id}/overlay", () => {
     expect((await read(await GET(req(unknown, "/overlay"), ctx(unknown)))).status).toBe(404);
   });
 });
+
+// Final review D8 (S5): the document names EVERY reason `sponsorPlan` is null - not just "no sponsors on stream" - so an
+// integrator reading a null knows it is not always the organisation's choice. The causes are loadFixtureSponsorPlan's own
+// null returns (server/sponsors/assign.ts) and sponsorPlanOrNull's catch (server/overlay/load.ts).
+describe("the overlay route's OpenAPI summary (no DB)", () => {
+  it("names every null cause of sponsorPlan: no ticked sponsor, rotation off, a planner refusal, a read failure (count reported)", async () => {
+    const { buildOpenApiDocument } = await import("@/server/api-v1/openapi");
+    const doc = buildOpenApiDocument() as unknown as { paths: Record<string, Record<string, { summary?: string }>> };
+    const summary = doc.paths["/api/v1/public/fixtures/{id}/overlay"]?.get?.summary ?? "";
+    expect(summary, "the operation exists").toContain("sponsorPlan");
+    let named = 0;
+    for (const cause of ["no sponsor is ticked", "the rotation is off", "the planner refused", "could not be read"]) {
+      expect(summary, cause).toContain(cause);
+      named++;
+    }
+    expect(named).toBe(4);
+  });
+});

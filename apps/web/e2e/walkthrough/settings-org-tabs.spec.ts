@@ -5,14 +5,16 @@ import {
   seedSettingsOrg,
   releaseSettingsOrg,
   settingsUrl,
+  sponsorsUrl,
   type SeededOrg,
 } from "../settings-support";
 import { apiJson, TAG } from "../helpers";
 import { BRAND_PALETTE } from "../../src/lib/brand-palette";
 
 /**
- * W2 of the settings walkthrough programme — the organisation, news and
- * sponsor-CRUD tabs of `/o/{org}/settings`, driven the way an organiser drives
+ * W2 of the settings walkthrough programme — the organisation and news tabs of
+ * `/o/{org}/settings` and the sponsor-CRUD tab (moved to the Sponsors hub,
+ * `/o/{org}/sponsors?tab=sponsors`, by R4 S11), driven the way an organiser drives
  * them and then read back through an API that is not the writer's own echo.
  *
  * This surface had NO behavioural e2e before this file: `tab=sponsors` appeared
@@ -454,7 +456,7 @@ test("news tab: compose a draft, publish it, archive it, then delete only it", a
 // SPONSORS (CRUD half)
 // ---------------------------------------------------------------------------
 
-test("sponsors tab: add three, reorder, edit tier and scope, delete only one", async ({ page }) => {
+test("Sponsors hub, Sponsors tab: add three, reorder, edit tier and scope, delete only one", async ({ page }) => {
   test.setTimeout(budget(2, 6));
 
   const A = `Alpha Tools ${TAG}`;
@@ -462,12 +464,14 @@ test("sponsors tab: add three, reorder, edit tier and scope, delete only one", a
   const C = `Charlie Cycles ${TAG}`;
   const B2 = `Bravo Bakery & Co ${TAG}`;
 
-  await page.goto(settingsUrl(org.slug, "sponsors"));
+  // The Sponsors hub (R4 sponsors-on-stream S11): the tab left Settings. This is the hub's Sponsors tab, which mounts
+  // OrgSponsors alone - SponsorPackages is its own "Packages and orders" tab now.
+  await page.goto(sponsorsUrl(org.slug, "sponsors"));
 
   // DOM order on this tab is: OrgSponsors' add form, then its rows (each of
-  // which becomes an edit form in place), then SponsorPackages. So `.first()`
-  // on a field is always the add form — including while a row is being edited,
-  // where the edit form is the SECOND match and the packages form the third.
+  // which becomes an edit form in place). So `.first()` on a field is always
+  // the add form — including while a row is being edited, where the edit form
+  // is the SECOND match.
   const addName = field(page, L.sponsorName).first();
   const addLink = field(page, L.sponsorLink).first();
   // The tier select is the one offering "gold"; the scope select is the one

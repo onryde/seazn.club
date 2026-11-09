@@ -205,6 +205,33 @@ describe("FlyRunner", () => {
     expect(RUNNER_INPLACE_RESTARTS, "ADR 0004: on-failure, max_retries 2").toBe(2);
   });
 
+  // R4 final review I1: the compositor sends sponsor airings and grabs proof frames ONLY when its Machine carries
+  // RELAY_AIRINGS=1, and web is the only host that builds that Machine's env. So the switch rides from web's own env, and
+  // only its one "on" spelling: unset (the default until PR C and the sponsor-frames bucket are deployed) and any other value
+  // leave the env exactly the four ADR-0007 keys.
+  it("RELAY_AIRINGS rides into the Machine env only when web's own env says exactly \"1\"; unset (and any other value) adds nothing", async () => {
+    const BASE = { SESSION_ID: SPEC.sessionId, JOB_TOKEN: "jwt-SECRET", APP_URL: "https://seazn.club", RELAY_DEADLINE_AT: "2026-09-14T15:00:00.000Z" };
+    const envOf = async (): Promise<Record<string, string>> => {
+      const s = scripted(() => ({ status: 200, body: { id: "m_123", name: NAME, state: "created" } }));
+      await new FlyRunner({ client: s.client, image: "registry.fly.io/seazn-relay:abc" }).create(SPEC);
+      return (JSON.parse(String(s.calls[0]!.init.body)) as { config: { env: Record<string, string> } }).config.env;
+    };
+    let checked = 0;
+    try {
+      vi.stubEnv("RELAY_AIRINGS", "1");
+      expect(await envOf(), "set: on").toEqual({ ...BASE, RELAY_AIRINGS: "1" });
+      checked++;
+      for (const off of [undefined, "", "0", "true"]) {
+        vi.stubEnv("RELAY_AIRINGS", off);
+        expect(await envOf(), `RELAY_AIRINGS=${String(off)}: off`).toEqual(BASE);
+        checked++;
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(checked).toBe(5);
+  });
+
   // R2003: what an in-place restart looks like from web. Fly reports the restarting Machine as `restarting`; the adapter
   // says `pending`, and the domain keeps the runner it has — same attempt, same name, no effect, no signal. The restart
   // is invisible to the lifecycle; only a beat that stays away for the composed window makes it a lost runner.

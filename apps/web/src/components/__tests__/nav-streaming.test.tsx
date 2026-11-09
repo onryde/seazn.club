@@ -74,7 +74,8 @@ describe("Nav › Streaming item", () => {
     expect(at('href="/directory"')).toBeGreaterThan(-1);
     expect(at('href="/directory"'), "after Directory").toBeLessThan(at('data-testid="nav-streaming"'));
     expect(at('data-testid="nav-streaming"'), "before Settings").toBeLessThan(at('href="/o/riverside/settings"'));
-    // The label collapses to the icon below `md`, exactly like Dashboard / Directory / Settings (the 4-link dual-role case uses `lg`).
+    // The label collapses to the icon below `md`, exactly like Dashboard / Directory / Sponsors (the dual-role case uses `lg`). Settings is
+    // its icon alone at every width (owner 2026-11-01), so the org nav's labelled links are four again and main's rung holds.
     const label = html.slice(at('data-testid="nav-streaming"')).match(/<span class="([^"]*)">Streaming<\/span>/);
     expect(label?.[1]).toBe("hidden md:inline");
   });
@@ -233,14 +234,26 @@ describe("Nav › the width budget", () => {
     const nav = html.match(/<nav class="[^"]*">([\s\S]*?)<\/nav>/)?.[1] ?? "";
     return [...nav.matchAll(/<a\b[^>]*\bclass="([^"]*)"/g)].map((x) => tokens(x[1]));
   };
-  const labelClasses = (html: string): string[][] => {
+  /** Each nav link's OWN label-span class tokens, in order, or null for a link with no label (Settings, owner 2026-11-01). Parsed per
+   *  `<a>…</a>`, so a link without a span can never borrow the next link's. */
+  const labelClasses = (html: string): (string[] | null)[] => {
     const nav = html.match(/<nav class="[^"]*">([\s\S]*?)<\/nav>/)?.[1] ?? "";
-    return [...nav.matchAll(/<a\b[^>]*>[\s\S]*?<span class="([^"]*)">/g)].map((x) => tokens(x[1]));
+    return [...nav.matchAll(/<a\b[^>]*>([\s\S]*?)<\/a>/g)].map((x) => {
+      const cls = x[1]!.match(/<span class="([^"]*)">/)?.[1];
+      return cls === undefined ? null : tokens(cls);
+    });
+  };
+  /** The index of the Settings link in the nav (the one link with no label). */
+  const settingsIndex = (html: string): number => {
+    const nav = html.match(/<nav class="[^"]*">([\s\S]*?)<\/nav>/)?.[1] ?? "";
+    return [...nav.matchAll(/<a\b([^>]*)>/g)].findIndex((x) => /\bdata-testid="nav-settings"/.test(x[1]!));
   };
   /** The Sign-out button as the NAV renders it: its attributes and its label span's classes. */
   const signOut = (html: string) => {
     const b = html.match(/<button\b([^>]*)>([\s\S]*?)<\/button>/);
     return {
+      found: b !== null,
+      inner: b?.[2] ?? "",
       aria: b?.[1]?.match(/\baria-label="([^"]*)"/)?.[1],
       title: b?.[1]?.match(/\btitle="([^"]*)"/)?.[1],
       labelClass: tokens(b?.[2]?.match(/<span class="([^"]*)">/)?.[1]),
@@ -249,21 +262,19 @@ describe("Nav › the width budget", () => {
   };
   const dicts = { en: dictEn, es: dictEs, fr: dictFr, nl: dictNl } as Record<string, Record<string, string>>;
 
-  it("Sign-out shows its ICON only below lg: the label span is `hidden` and appears at `lg:` — and the accessible name is the translated Sign out in all four locales", async () => {
+  it("Sign-out is its ICON alone at every width (owner 2026-11-01): no label span at all, named by aria-label with the same words as its title tooltip, in all four locales", async () => {
     let checked = 0;
     for (const locale of LOCALES) {
       m.locale.value = locale;
       const expected = dicts[locale]!["nav.signOut"];
       expect(typeof expected, locale).toBe("string");
       const so = signOut(await render());
-      expect(so.labelClass, `${locale}: hidden until lg`).toContain("hidden");
-      expect(so.labelClass, `${locale}: the label returns at lg`).toContain("lg:inline");
-      // Token checks: `sm:inline` would show the label from 640, `max-lg:`/`md:` variants would be a different rule altogether.
-      expect(so.labelClass, `${locale}: not from sm (that is the 640-1023 band that overflowed)`).not.toContain("sm:inline");
-      expect(so.labelClass, `${locale}: exactly the two tokens`).toEqual(["hidden", "lg:inline"]);
+      expect(so.found, `${locale}: the gantry renders its Sign-out button`).toBe(true);
+      expect(so.labelClass, `${locale}: no label span, hidden or shown, at any width`).toEqual([]);
+      expect(so.labelText, `${locale}: no painted words`).toBeUndefined();
+      expect(so.inner, `${locale}: the words appear nowhere inside the button`).not.toContain(expected!);
       expect(so.aria, `${locale}: the icon-only button is still named`).toBe(expected);
-      expect(so.title, `${locale}: and still has its tooltip`).toBe(expected);
-      expect(so.labelText, `${locale}: the visible label is the same words`).toBe(expected);
+      expect(so.title, `${locale}: and the tooltip says the same`).toBe(expected);
       checked++;
     }
     expect(checked).toBe(LOCALES.length);
@@ -279,13 +290,26 @@ describe("Nav › the width budget", () => {
     expect(names.has(""), "none missing").toBe(false);
   });
 
-  it("phones: every nav link takes 6px of side padding (px-1.5) until sm, and the links touch (gap-0) until sm — the 4-link org nav and the 5-link dual-role nav (nine links checked)", async () => {
+  /** The org shapes the bar takes: Streaming offered or not x a claimed player or not (the Sponsors link, R4 S11, is in all of them). */
+  const SHAPES = [
+    { streaming: false, claimed: false, links: 4 },
+    { streaming: true, claimed: false, links: 5 },
+    { streaming: false, claimed: true, links: 5 },
+    { streaming: true, claimed: true, links: 6 },
+  ] as const;
+  async function renderShape(shape: { streaming: boolean; claimed: boolean }): Promise<string> {
+    m.hasFeature.mockReset().mockResolvedValue(true);
+    setRelayDriversForTest(shape.streaming ? { ingest: new FakeIngest(), runner: new FakeRunner() } : disabledRelayDrivers());
+    m.hasClaimedProfile.mockResolvedValue(shape.claimed);
+    return render();
+  }
+
+  it("phones: every nav link takes 6px of side padding (px-1.5) until sm, and the links touch (gap-0) until sm — all four org shapes, 4 + 5 + 5 + 6 = twenty links checked", async () => {
     let checked = 0;
-    for (const claimed of [false, true]) {
-      m.hasClaimedProfile.mockResolvedValue(claimed);
-      const html = await render();
+    for (const shape of SHAPES) {
+      const html = await renderShape(shape);
       const links = linkClasses(html);
-      expect(links.length, `claimed=${claimed}: 4 links, or 5 with Player home`).toBe(claimed ? 5 : 4);
+      expect(links.length, `${JSON.stringify(shape)}: Dashboard, Directory, Sponsors, Settings + Streaming / Player home where they apply`).toBe(shape.links);
       for (const l of links) {
         expect(l, "tightened on phones").toContain("px-1.5");
         expect(l, "not the old 8px").not.toContain("px-2");
@@ -297,46 +321,59 @@ describe("Nav › the width budget", () => {
       expect(navTokens, "the old 2px gap returns at sm").toContain("sm:gap-0.5");
       expect(navTokens, "the bare old gap is gone").not.toContain("gap-0.5");
     }
-    expect(checked, "anti-vacuity: nine links looked at").toBe(9);
+    expect(checked, "anti-vacuity: twenty links looked at").toBe(20);
   });
 
-  it("md..lg: where the labels are ON (the 4-link org nav) the links take 4px of side padding (md:px-1) and get 12px back at lg (lg:px-3), so the org chip keeps room for the club name; the icon-only dual-role links keep their 12px with no md override", async () => {
+  it("md..lg: where the labels are ON (the org nav) the labelled links take 4px of side padding (md:px-1) and get 12px back at lg (lg:px-3), so the org chip keeps room for the club name; the dual-role nav is icon-only at md, keeps its 12px and has no md override", async () => {
     // B3 (CI e2e: the chip showed 37px of a 38-character club name at 768, 8 characters needing 64). Measured in a browser: 8px and 6px
-    // leave fr/nl at 768 short of 8 characters, 4px clears every width x locale cell (the report's table).
+    // leave fr/nl at 768 short of 8 characters, 4px clears every width x locale cell (the report's table). Settings has no label (owner
+    // 2026-11-01) and its own padding rule (nav-sponsors.test.tsx); it is skipped here BY INDEX and counted, never silently.
     let checked = 0;
-    for (const claimed of [false, true]) {
-      m.hasClaimedProfile.mockResolvedValue(claimed);
-      const html = await render();
+    let labelsOnAtMd = 0;
+    let settingsSkipped = 0;
+    for (const shape of SHAPES) {
+      const html = await renderShape(shape);
       const links = linkClasses(html);
       const labels = labelClasses(html);
-      expect(links.length, `claimed=${claimed}`).toBe(labels.length);
+      expect(links.length, JSON.stringify(shape)).toBe(labels.length);
+      const skip = settingsIndex(html);
+      expect(skip, `${JSON.stringify(shape)}: the Settings link is found`).toBeGreaterThan(-1);
       for (let i = 0; i < links.length; i++) {
-        const labelsOnAtMd = labels[i]!.includes("md:inline");
         const l = links[i]!;
-        if (labelsOnAtMd) {
+        if (i === skip) { expect(labels[i], "Settings has no label").toBeNull(); settingsSkipped++; continue; }
+        expect(labels[i], `${JSON.stringify(shape)} link ${i}: every other link is labelled`).not.toBeNull();
+        if (labels[i]!.includes("md:inline")) {
+          labelsOnAtMd++;
           expect(l, `link ${i}: labels on at md, so tight padding there`).toContain("md:px-1");
           expect(l, `link ${i}: 12px returns at lg`).toContain("lg:px-3");
           // Not the 8px / 6px that measurement showed too wide for fr and nl at 768.
           expect(l, `link ${i}: not md:px-2`).not.toContain("md:px-2");
           expect(l, `link ${i}: not md:px-1.5`).not.toContain("md:px-1.5");
         } else {
-          expect(l.filter((t) => /^md:px-/.test(t)), `link ${i}: icon-only at md, no padding override`).toEqual([]);
+          expect(l.filter((t) => /^md:px-/.test(t)), `${JSON.stringify(shape)} link ${i}: icon-only at md, no padding override`).toEqual([]);
           expect(l, `link ${i}: keeps sm:px-3`).toContain("sm:px-3");
         }
         checked++;
       }
     }
-    expect(checked, "anti-vacuity: nine links looked at").toBe(9);
+    expect(checked, "anti-vacuity: sixteen labelled links looked at (twenty links less the four Settings icons)").toBe(16);
+    expect(settingsSkipped, "anti-vacuity: one Settings icon per shape, skipped by name").toBe(SHAPES.length);
+    expect(labelsOnAtMd, "anti-vacuity: the md branch ran - the labelled links of the two org-nav shapes (3 + 4)").toBe(7);
   });
 
-  it("tablets KEEP their labels: md..lg shows every label in the org nav (4), and the dual-role nav's five wait for lg (owner: no label dropped)", async () => {
-    m.hasClaimedProfile.mockResolvedValue(false);
-    const org = labelClasses(await render());
-    expect(org.length).toBe(4);
-    for (const l of org) expect(l).toEqual(["hidden", "md:inline"]);
-    m.hasClaimedProfile.mockResolvedValue(true);
-    const dual = labelClasses(await render());
-    expect(dual.length).toBe(5);
-    for (const l of dual) expect(l).toEqual(["hidden", "lg:inline"]);
+  it("tablets KEEP their labels (owner 2026-10-28): md..lg shows every label of the org nav, and the dual-role nav's wait for lg - Settings, its icon alone, has none to show (owner 2026-11-01)", async () => {
+    let checked = 0;
+    for (const shape of SHAPES) {
+      const html = await renderShape(shape);
+      const labels = labelClasses(html);
+      expect(labels.length, JSON.stringify(shape)).toBe(shape.links);
+      const skip = settingsIndex(html);
+      labels.forEach((l, i) => {
+        if (i === skip) expect(l, `${JSON.stringify(shape)}: Settings`).toBeNull();
+        else expect(l, JSON.stringify(shape)).toEqual(["hidden", shape.claimed ? "lg:inline" : "md:inline"]);
+      });
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 });

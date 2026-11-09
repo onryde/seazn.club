@@ -10,6 +10,8 @@ import type * as RegistryModule from "../template-registry";
 
 const H = vi.hoisted(() => ({
   probeBox: { x: 1380, y: 54, width: 480, height: 600 },
+  // R4 S7: every entry declares its two sponsor slots (spec 2026-10-27 §3.5) — here clear of the probe's box, left side.
+  probeSlots: { lower_third: { x: 60, y: 810, width: 1000, height: 120 }, banner: { x: 96, y: 228, width: 560, height: 480 } },
 }));
 
 vi.mock("../template-registry", async (importOriginal) => {
@@ -22,6 +24,7 @@ vi.mock("../template-registry", async (importOriginal) => {
     component: OverlayBug,
     slabPlacement: "bug",
     sceneCardSafeArea: H.probeBox,
+    sponsorSlots: H.probeSlots,
   };
   return { ...orig, OVERLAY_TEMPLATES: { ...orig.OVERLAY_TEMPLATES, probe } };
 });
@@ -50,6 +53,7 @@ beforeAll(async () => {
     // Its own box (top-right), so the test can prove a new template moves the cards with no other edit.
     slabPlacement: "bug",
     sceneCardSafeArea: H.probeBox,
+    sponsorSlots: H.probeSlots,
   };
   REG = { ...A.OVERLAY_TEMPLATES, probe: PROBE };
   RETIRED = { ...REG, gone: { ...PROBE, id: "gone", retired: { replacedBy: "probe" } } };
@@ -65,20 +69,30 @@ describe("a throwaway template reaches every reader with no other edit", () => {
   });
 
   it("the gallery's cell source: exactly the declared probe cells, all badminton", async () => {
-    const { galleryCells, GALLERY_MOMENT_SAMPLES, GALLERY_SNAPSHOT_KINDS } = await import("../gallery-matrix");
-    const { OVERLAY_SCENES } = await import("../overlay-scenes");
+    const { galleryCells, GALLERY_CAROUSEL_SPORTS, GALLERY_MOMENT_SAMPLES, GALLERY_SNAPSHOT_KINDS, GALLERY_SPONSOR_FACE_SPORTS, GALLERY_SPONSOR_CARDS } =
+      await import("../gallery-matrix");
+    const { OVERLAY_SCENES, SPONSOR_CAROUSEL_SCENES } = await import("../overlay-scenes");
     const cells = galleryCells(REG, VARIANTS).filter((c) => c.templateId === "probe");
     const firing = OVERLAY_SCENES.filter((s) => s.momentsFire).length;
     const badmintonSamples = GALLERY_MOMENT_SAMPLES.filter((s) => s.sportKey === "badminton").length;
-    const plain = cells.filter((c) => c.momentSampleId === null && c.resultStatus === null);
+    const plain = cells.filter((c) => c.momentSampleId === null && c.resultStatus === null && c.sponsorSlot === null && !c.carousel);
     const moment = cells.filter((c) => c.momentSampleId !== null);
     const variant = cells.filter((c) => c.resultStatus !== null);
+    // R4 S7: the probe's own declared slots, and the carousel when badminton is a carousel sport.
+    const sponsor = cells.filter((c) => c.sponsorSlot !== null);
+    const carousel = cells.filter((c) => c.carousel);
+    const carouselScenes = OVERLAY_SCENES.filter((s) => SPONSOR_CAROUSEL_SCENES.includes(s.id)).length;
     expect(plain).toHaveLength(OVERLAY_SCENES.length * GALLERY_SNAPSHOT_KINDS.length);
     expect(moment).toHaveLength(badmintonSamples * firing);
     expect(variant).toHaveLength(VARIANTS.length);
+    const faces = (GALLERY_SPONSOR_FACE_SPORTS as readonly string[]).includes("badminton") ? GALLERY_SPONSOR_CARDS.length : 1;
+    expect(sponsor.map((c) => c.sponsorSlot).sort()).toEqual(Object.keys(H.probeSlots).flatMap((k) => Array(faces).fill(k)).sort());
+    expect(carousel).toHaveLength((GALLERY_CAROUSEL_SPORTS as readonly string[]).includes("badminton") ? carouselScenes : 0);
     expect(badmintonSamples * firing, "anti-vacuity: badminton has firing moment samples").toBeGreaterThan(0);
     for (const c of cells) expect(c.sportKey, c.key).toBe("badminton");
-    console.log(`probe cells: ${cells.length} (plain ${plain.length}, moment ${moment.length}, variant ${variant.length})`);
+    console.log(
+      `probe cells: ${cells.length} (plain ${plain.length}, moment ${moment.length}, variant ${variant.length}, sponsor ${sponsor.length}, carousel ${carousel.length})`,
+    );
   });
 
   it("…and without the entry, no probe cell (the cell source reads its ARGUMENT, not the module's registry)", async () => {

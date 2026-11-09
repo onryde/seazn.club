@@ -13,15 +13,15 @@ Captured scenario this fulfils: `2026-09-05-stream-overlay-prompts/_SCENARIO-202
 | D2 | Where does Sponsors live? | "Better to move out the Sponsor tab from the setting and redesign along with that" → **A: top-level Sponsors with tabs** (Overview · Sponsors · On stream · Packages and orders), opens on Overview. |
 | D3 | How does a club choose what plays? | **C: rotation by default, a per-sponsor deal where one was sold.** The MVP cut ships the **rotation and the dial only**; deals are **Later** (§10), and §2 keeps them additive. |
 | D4 | How does the sponsor get the numbers? | A **shareable link (no login)** in the MVP. PDF and the monthly email are **Later**. |
-| D5 | Report contents | The mock (`overview-report.html`): times shown, time on screen, live viewers when shown, link clicks, a frame from the broadcast per showing with "watch this moment". |
-| D6 | Sponsor playback | "Watch this moment" opens the YouTube VOD at the showing. |
+| D5 | Report contents | The mock (`overview-report.html`): times shown, time on screen, live viewers when shown, link clicks, a frame from the broadcast per showing with "watch this moment". *2026-11-01 (owner): PR B deferred; live viewers show as "Coming soon" (§5.2 note).* |
+| D6 | Sponsor playback | "Watch this moment" opens the YouTube VOD at the showing. *2026-11-01 (owner): deferred with PR B (Y2); PR A's report has no "watch this moment" link.* |
 | D7 | Scope | "I need a working MVP" → this cut ("yes"). Mocks are **layout only**; the build uses the house theme. |
 | D8 | Gate? | **No new gate** — rotation and the report wherever streaming is (stream credits are the meter). Confirmed. |
 | D9 | Tier weights | **title 3 · gold 2 · silver 1 · partner 1.** Confirmed. |
 | D10 | OBS streams in the report | **Not counted in the MVP** (an OBS page is public, its beacon forgeable); the report says "composed streams". Confirmed. |
-| D11 | Viewer wording | **"Viewer impressions"** (live viewers at each showing, added up) with **peak live viewers** beside it. Confirmed. |
+| D11 | Viewer wording | **"Viewer impressions"** (live viewers at each showing, added up) with **peak live viewers** beside it. Confirmed. *2026-11-01 (owner): the labels stay; the values show "Coming soon" until viewer counts ship (§5.2 note).* |
 | D12 | Default dial | **Normal** for a newly ticked sponsor. Confirmed. |
-| D13 | Ship before YouTube Connect? | **No: build in parallel, release together** with YouTube Connect, so viewers and "watch this moment" are live on day one. |
+| D13 | Ship before YouTube Connect? | **No: build in parallel, release together** with YouTube Connect, so viewers and "watch this moment" are live on day one. *2026-11-01 (owner): PR B (Y1–Y3: viewer counts, "watch this moment", paid placement) is deferred, so neither viewers nor "watch this moment" are live on day one; viewers show "Coming soon" (§5.2 note).* |
 | D14 | Rotation continuity | **One rotation per org across all its matches** (a per-org cursor), so on Light a T20's single innings break does not always go to the first title sponsor. |
 | D15 | Match-page sponsor links | **"a": the sponsor board also shows on the public match page**, links tagged with that fixture (`src=match`), so clicks count per match. |
 
@@ -58,8 +58,8 @@ declarations, mutate each guard once), frontend-design skill in every UI dispatc
    modules (`packages/engine/src/sports/index.ts`: football, cricket, boardgame, carrom, generic, volleyball, badminton,
    tabletennis, tennis, icehockey, hockey), **0** declare a break today; `sport/module.ts` has no break vocabulary.
    §3.1 adds it.
-2. *"Viewer counts fall back to match-page views"* (mock caption) — no page-view counter exists. Without YouTube
-   Connect the viewers column shows a dash; the MVP builds no counter.
+2. *"Viewer counts fall back to match-page views"* (mock caption) — no page-view counter exists. In PR A, with or
+   without YouTube Connect, the viewers column shows "Coming soon" (*2026-11-01, §5.2 note*: PR B deferred), never a dash; the MVP builds no counter.
 3. *A 4th top-bar link fits* — `components/nav.tsx` (#516) measured 4 icons overflowing below ~340 px. §6.1.
 
 ## 2. Extensibility requirements → where each lands
@@ -98,10 +98,14 @@ naturalBreaks?: {
   get sponsors through the scene carousel, §3.4).
 - Starting kinds for the builder to **verify against each sport's own events and laws** (they are a hypothesis, not a
   table to copy into code or tests): cricket `over_end` (minor), `innings_break` (major) · football `half_time`,
-  `period_end` (major), `after_goal` (minor) · hockey `quarter_end` / `half_time` (major), `after_goal` (minor) · ice
-  hockey `period_end` (major), `after_goal` (minor) · tennis `changeover` (minor), `set_end` (major) · badminton
-  `interval` (minor), `game_end` (major) · table tennis `timeout` (minor), `game_end` (major) · volleyball `timeout`
-  (minor), `set_end` (major).
+  `period_end`, `shootout_break` (major), `after_goal` (minor) · hockey `quarter_end` / `half_time` /
+  `shootout_break` (major), `after_goal` (minor) · ice hockey `period_end`, `shootout_break` (major), `after_goal`
+  (minor) · tennis `changeover` (minor), `set_end` (major) · badminton `interval` (minor), `game_end` (major) · table
+  tennis `timeout` (minor), `game_end` (major) · volleyball `timeout` (minor), `set_end` (major).
+- *As built (engine 1.1.0, verified by S5 against `builtinModules`):* the list above is exactly what the eight modules
+  declare (21 sport/kind pairs). `shootout_break` is ONE kind shared by football, hockey and ice hockey — the pause
+  before a shoot-out, a major (PO ruling, S1/S2). S5's replay sweep over generated streams reached 17 of the 21 pairs;
+  hockey's shoot-out break is pinned by a real FIH shoot-out ledger instead.
 - Lives in each sport's own file (no value import from `competition/`; gate `engine:boundary`).
 - Tests: a sweep over `builtinModules` asserts every declared kind is reachable by a real event sequence and reports
   its counts (modules with breaks, kinds reached; 0 = fail); `opensAt` returns `[]` on an undo-restored state; a
@@ -177,6 +181,8 @@ MVP implementation reads `sponsors` (active, `on_stream = true`, `resolveSponsor
 - Scene layers (compositor Starting soon / Reconnecting, and the console's Break and Full time) carry a **sponsor
   carousel**: ticked sponsors, title and gold first, 10 s each, logged `source = "scene"`. This is how the three
   break-less sports reach sponsors.
+- **Every carousel showing is a `banner`** (§3.2's bigger card, logged `style = "banner"`): a scene is a full-screen
+  layer, so it never takes the lower third.
 
 ### 3.5 Slots
 
@@ -194,24 +200,34 @@ Counted from **composed streams only** in the MVP (D10):
    `seazn:sponsor:end {"momentId","at","cutShort"}` (same channel as `seazn:ready`).
 2. **Compositor:** the console reader validates both (bounded JSON ≤ 512 bytes, known keys), buffers ≤ 64 (overflow
    drops oldest, counts `airingsDropped`), sends them on the next heartbeat as `airings: [...]` (additive; contract
-   bump in `relay-job.v1.json`, vendored to web). Cleared only on a 2xx reply; the final beat flushes.
+   bump in `relay-job.v1.json`, published by web at `docs/contracts/relay-job.v1.json` and vendored into the compositor,
+   `contracts/VENDORED.json` *(amended 2026-11-01, preflight F5: the direction is web → compositor)*). Cleared on a 2xx reply; a 400/422 drops what the beat carried, counted
+   in `airingsDropped`; every other reply keeps it - a 5xx, a transport error, a 410, and a 401/403/404/429 *(amended
+   2026-11-01, S8 m2)*. The final beat flushes.
 3. **Frame grab (compositor):** 1.5 s after a `start` line, grab one programme frame, JPEG 640×360 q≈75, off the
    streaming thread, ≤ 1 per 20 s; `POST /api/internal/relay/sessions/[sid]/airings/[momentId]/frame` with the session
-   token. A failure logs once and is dropped; it never blocks the pipeline. CPU cost measured on stg before merge; a
-   measurable p95 rise goes to the owner.
+   token. A failure logs once and is dropped; it never blocks the pipeline. CPU cost measured on stg before
+   `RELAY_AIRINGS=1` on prod (not before merge: a Machine without it grabs no frame, so there is nothing to measure until
+   stg sets it); a measurable p95 rise goes to the owner *(amended 2026-11-08, final review 2 m4)*.
 4. **Web:** `heartbeat` upserts `sponsor_airings` on `(session_id, moment_id)`. Times > 10 min from server time are
    refused. An airing with no `end` by session end closes at the last beat and is flagged `ended_estimated`.
 5. **Viewers:** on `start`, if the broadcast came from YouTube Connect (r2-youtube's table), read
    `videos.list?part=liveStreamingDetails` → `concurrentViewers` once (1 quota unit). No connection, hidden count or
-   error ⇒ `viewers = null` (shown as a dash). Never retried in a loop. The YouTube data kept on the airing (`viewers`,
-   `video_id`) is bound by the retention rule in §6.3.
+   error ⇒ no viewer count (shown as a dash). Never retried in a loop. *(Amended 2026-11-01, preflight F6:)* the count
+   is kept in Y1's own table keyed to `youtube_broadcasts` (`on delete cascade`), never on the airing, and the video id
+   is read through that join, never copied; §6.3.
 
 ### 3.7 Click attribution
 
-`/s/[sponsorId]` accepts `?f=<fixtureId>&src=<match|stream|site>` (fixture must be in the sponsor's org, `src` an
-enum, else `unknown`). It still bumps `click_count` and also inserts a `sponsor_clicks` row (deferred, as today).
-Tagged links: the public match page's sponsor strip (`src=match`) and the `/s/` link shown on screen with the card
-(`src=stream`). **No sponsor links in the YouTube description** *(coordinator's call 2026-10-27, not an owner ruling)*: the YouTube Connect spec
+`/s/[key]` serves two shapes. A sponsor id accepts `?f=<fixtureId>&src=<match|site>` (the fixture must be in the
+sponsor's org — and, for a competition-scoped sponsor, in that competition — and `src` one of the two, else `unknown`).
+A short code (owner ruling R7) is its own tag: that sponsor, that fixture, `stream`; it is matched in any case.
+**Stream clicks come only through `/s/<code>`** *(owner ruling R7 "a", 2026-10-31)*: a sponsor-id link claiming
+`src=stream` is recorded as `unknown` (it still redirects and still counts). Each click still bumps `click_count` and
+also inserts a `sponsor_clicks` row (deferred, as today), in one statement. Only a person's GET counts: a HEAD or a
+link unfurler / crawler is redirected but not counted, and one IP's repeat tap on one link within 30 s counts once.
+Tagged links: the competition page's board (`src=site`), the public match page's sponsor board (`src=match`) and the
+short code shown on screen with the card (`stream`). **No sponsor links in the YouTube description** *(coordinator's call 2026-10-27, not an owner ruling)*: the YouTube Connect spec
 (§6.5) rules the description to one line plus the match link, so clicks come through the on-screen `/s/` link and
 the match page only.
 
@@ -222,14 +238,18 @@ the match page only.
   `(org_id, competition_id)`; a competition row overrides the org row. RLS org-scoped as V283.
 - `sponsor_airings (id, org_id, sponsor_id → set null, sponsor_name snapshot, fixture_id, session_id, moment_id,
   source ∈ rotation|scene|operator, break_kind null, style, started_at, ended_at null, cut_short, skipped (operator "Skip this card"), ended_estimated,
-  viewers int null, video_id null, youtube_refreshed_at null, frame_path null)`, unique `(session_id, moment_id)`, index
-  `(org_id, sponsor_id, started_at)`. The name snapshot keeps a report readable after a sponsor is deleted. `viewers`
-  and `video_id` are YouTube API data and follow §6.3 (refreshed daily, purged on disconnect) *(coordinator's call 2026-10-27, not an owner ruling)*.
+  frame_path null)`, unique `(session_id, moment_id)`, index
+  `(org_id, sponsor_id, started_at)`. The name snapshot keeps the club's Overview listing a deleted sponsor's airings
+  under its name *(amended 2026-11-08, PO ruling: deleting a sponsor ENDS its share links, so a report link answers 404;
+  the Overview keeps the airings by name)*. *(Amended
+  2026-11-01, preflight F6:)* no `viewers`, `video_id` or `youtube_refreshed_at` columns: YouTube API data lives in Y1's
+  table keyed to `youtube_broadcasts` (`on delete cascade`), so Connect's own purge removes it (§6.3).
   `skipped` is set by the web from the operator log (console spec §3.4), not by the compositor. (`source` is text with a check, so a Later `deal`
   value is one check change.)
 - `sponsor_clicks (id, org_id, sponsor_id → cascade, fixture_id null, source, at)`, index `(sponsor_id, at)`.
-- `sponsor_report_links (id, org_id, sponsor_id, competition_id null, from_date, to_date, token_hash, created_by,
+- `sponsor_report_links (id, org_id, sponsor_id → cascade, competition_id null, from_date, to_date, token_hash, created_by,
   created_at, revoked_at null)`. Token: 32 random bytes, stored hashed, shown once as a URL. Revoke sets `revoked_at`.
+  Deleting the sponsor deletes its links, so a shared report ends with the sponsor *(amended 2026-11-08, PO ruling)*.
 - Migration: next free `V` at build time (V477 is latest on main today). Greenfield: no backfill; existing sponsors
   start with `on_stream = false`.
 
@@ -238,7 +258,7 @@ the match page only.
 ### 5.1 Sponsors hub (`/o/[orgSlug]/sponsors?tab=…`)
 
 - **Overview** (default): period picker (this year / last 30 days / one competition); per sponsor: times shown, on
-  screen (Σ `ended_at − started_at`), viewer impressions (Σ `viewers`, dash when none), link clicks (`sponsor_clicks`
+  screen (Σ `ended_at − started_at`), viewer impressions (Σ `viewers`; "Coming soon" when none, 2026-11-01 — §5.2 note), link clicks (`sponsor_clicks`
   in period), "Share report". Phone: one card per sponsor (mock).
 - **Sponsors:** today's `OrgSponsors` list and form, moved, behaviour unchanged.
 - **On stream:** the rotation checklist (tier shown), the Light / Normal / Busy dial, "Where" as text (short breaks →
@@ -260,14 +280,57 @@ and no "watch this moment".
 Footnote: "composed streams", "viewer numbers from YouTube". `noindex`, rate-limited like other public reads, opaque
 404 on a revoked or unknown token. Mobile bar applies. The browser's print works; a built PDF is Later.
 
+**Note, 2026-11-01 (owner ruling: "Skip for now PR B and show, coming soon as a legend").** PR B (YouTube viewer
+counts, Y1–Y3) is deferred. In PR A every viewer figure shows a **"Coming soon"** legend instead of a dash: the
+report's viewers tile and the Overview's Viewer impressions column (key `sponsors.viewers.comingSoon`, real text, not
+`aria-hidden`, printed). The footnote above no longer promises YouTube; it reads "Viewer numbers are coming soon."
+Presentation only: `viewerImpressions`, `peakViewers` and a showing's `viewers` stay `null` in the API and the OpenAPI
+is unchanged. When viewer counts return, the brainstormed shape (owner 2026-11-01, not yet designed) is: **extendable
+viewer sources** (YouTube, Cloudflare, …; the report counts from whichever source produced the number), **one
+destination per stream**, and the **peak while the card is on screen**. That needs a spec amendment before any build.
+
 ## 6. Constraints the builder must meet
 
-### 6.1 The top bar at 320 *(my call, per the coordinator; not an owner ruling)*
+### 6.1 The top bar at 320 *(owner ruling 2026-10-31, "a"; amended by owner ruling 2026-11-01)*
 
 `nav.tsx` holds Dashboard / Directory / Settings (+ Player home for dual-role); a 4th icon overflows below ~340 px. The
 Sponsors link is `hidden min-[350px]:flex` (the Player-home precedent) and the org Dashboard carries a Sponsors entry
 at every width. At ≥ 350 the dual-role 5-link case is measured; if it overflows, Player home folds first. Proven by the
 seven-width `mobile.spec.ts` scan.
+
+**Amended, owner ruling 2026-11-01** ("instead of putting sponsor icon, can we put setting as a icon all time"). The
+2026-10-31 build added Sponsors as a sixth *labelled* link; every org has Streaming, so every org's bar grew, and at 1280
+the org chip truncated a 38-character club name (`nav-org-chip-overflow.spec.ts`, red on CI). Now:
+
+- **Settings is its icon alone at every width.** It keeps `aria-label` (its accessible name) and gains a `title` tooltip
+  with the same words. It sits last in the bar, beside the other icon controls (help and Sign out).
+- **Sign out is its icon alone at every width too** (a second owner ruling the same day). It keeps its translated
+  `aria-label` and has a `title` tooltip with the same words. It is still the same button, and its keyboard focus ring is
+  unchanged. In Chromium a `title` that repeats the `aria-label` can be announced a second time as the description. This
+  was accepted, as it already was for `logout-button.tsx` below `lg`.
+- **Sponsors is an ordinary labelled link** on the same label rung as Dashboard, Directory and Streaming. The width
+  Settings' label gave back pays for it, so main's rung holds unchanged: the org nav's labels from `md`, the dual-role
+  nav's from `lg` (the 2026-10-28 tablet-label ruling). The `xl` rung the 2026-10-31 build introduced is gone.
+- **Phones keep the 2026-10-31 folds for an org without a logo.** Below 350 px Sponsors is hidden (the Dashboard entry is
+  the way in). Player home, on a bar with Streaming, still folds first until 390 px.
+- **An org with a logo folds one step later.** The logo puts 38 px more in the row, and the four links that never fold
+  already overrun 320–353 px with it (main did too: 34 px at 320). So Sponsors shows from 390 px for a logo org, and
+  Player home from 430 px with Streaming (390 without). Measured: five links fit from 382 px, six from 410.
+- **Where the bar has an org, the links give back the extra link's width in their own spacing.** The bar still carries
+  one link more than main, and the org chip's club name is the only thing in the row that shrinks. So from `md` the
+  links touch, and the org nav's labelled links use a 4 px icon-to-word gap in the `md` band. Settings is 28 px wide from
+  the rung where its bar's labels come on (`md` for the org nav, `lg` for the dual-role nav), and 40 px like the other
+  icons below it. From `lg` the labelled links have main's 12 px side padding; the words Sign out no longer paints pay
+  for it. A bar with no org has no chip, so it keeps main's spacing exactly.
+- **Every gantry control is one 32 px box** (`min-h-8`), whether it shows words or not. Before this, the 28 px icon-only
+  Settings sat 2 px lower than its labelled neighbours, and the gantry probe read that as a wrap.
+- **Measured in a browser** (local Chromium, signed-in owner, Streaming on, en/es/fr/nl, the 38-character club name).
+  At 1280 the club name shows whole in all four locales. At 768, en shows 93 px of the name against the 61 px its first
+  eight characters need (main: 114). For an org without a logo the gantry row never overflows from 320 to 1280: no
+  link or Sign out ends past the viewport, and `body` never scrolls sideways. (`html` and `body` are
+  `overflow-x: clip`, so the document's own scroll width cannot show this.) A logo org overruns at 320–353, exactly as
+  on main, and nowhere else. Spanish pays most at 768: "Patrocinadores" is a long word, so the chip shows 102 px against
+  main's 166.
 
 ### 6.2 YouTube paid promotion
 
@@ -276,6 +339,14 @@ the Data API exposes it (`videos.paidProductPlacementDetails`). If it does, r2-y
 tab shows a one-line reminder linking the channel setting.
 
 ### 6.3 YouTube data retention *(coordinator's call 2026-10-27, not an owner ruling)*
+
+> **Amended 2026-11-01 (preflight F6, a premise change from the YouTube Connect session):** Connect stores no viewer
+> counts, and its own retention hooks (`server/youtube/daily.ts`, the 30-day refresh; `server/youtube/disconnect.ts`,
+> the purge) DELETE `youtube_broadcasts` rows. So the R4 refresh/purge job below is **dropped**, and so are the
+> `viewers`, `video_id` and `youtube_refreshed_at` columns on `sponsor_airings` (§4). Viewer counts live in Y1's table
+> with `broadcast_id → youtube_broadcasts(id) on delete cascade`, and Connect's purge covers the 7-day and 30-day
+> rules. The text below is the original plan, kept for the record; the residual question (a count read while live
+> outliving 30 days) is Y1 Step 0's.
 
 YouTube's developer policies (Connect spec `2026-10-27-youtube-connect-design.md` §3, DP III.E.4, on
 `feat/youtube-connect`) allow stored YouTube API data (video ids, viewer counts) for **30 days at most unless
@@ -304,11 +375,11 @@ refreshed**, and require it deleted **within 7 days** of an in-app disconnect.
   sponsor card and the sponsor card never overlaps it. Mutate the pre-empt guard once; a test must die.
 - **Seam, driven for real (failure class 1):** the planner's real output through the real page into a real heartbeat
   body, through the real `heartbeat` usecase, then read the `sponsor_airings` row back.
-- **Compositor (cargo):** line parser (bad JSON, oversize, unknown key refused); buffer bound and drop count; clear only
-  on 2xx; final-beat flush; frame-grab rate limit; a failing upload never stalls the pipeline.
+- **Compositor (cargo):** line parser (bad JSON, oversize, unknown key refused); buffer bound and drop count; clear on a
+  2xx, drop and count on a 400/422, keep on every other reply - a 5xx, a transport error, a 410, a 401/403/404/429 (§3.6.2; amended 2026-11-01, S8 m1/m2); final-beat flush; frame-grab rate limit; a failing upload never stalls the pipeline.
 - **E2E (CI dispatch):** hub at 320 / 768 / 1280, no horizontal scroll; report opens without login, 404s after revoke;
   overlay at `host=obs` shows a lower third after a cricket over, cooldown honoured.
-- **Retention job (usecase):** a connected channel's refresh sets `youtube_refreshed_at`; after a disconnect the next
+- **Retention job (usecase)** *(dropped 2026-11-01 with §6.3's job, preflight F6; Y1 owns viewer retention)*: a connected channel's refresh sets `youtube_refreshed_at`; after a disconnect the next
   run clears `viewers` and `video_id` (counts reported, 0 = fail) while times shown, time on screen and clicks are
   unchanged; a row refreshed > 30 days ago is purged; the report then shows a dash and no "watch this moment". Sequence:
   disconnect → reconnect → the purged rows stay purged.

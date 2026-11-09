@@ -6,13 +6,13 @@
 //   - `lib/__tests__/pass-scoping-guard.test.ts`, which proves the competition
 //     id is THREADED into the resolver call, not that anything behaves
 //     differently; and
-//   - `app/o/[orgSlug]/settings/__tests__/pass-scope-sponsors.test.tsx`, which
-//     renders the AFFORDANCE (the tab asks `hasFeatureOnAnyPass`, an org-wide
-//     question) and then checks `hasFeature(...)` — the resolver again.
+//   - `app/o/[orgSlug]/sponsors/__tests__/pass-scope-sponsors.test.tsx`, which
+//     renders the AFFORDANCE (the hub's tabs ask `hasFeatureOnAnyPass`, an
+//     org-wide question) and then checks `hasFeature(...)` — the resolver again.
 //
 // Neither runs `createSponsor` or `createSponsorPackage`, and those are the two
 // functions that decide whether a pass holder can actually sell anything. That
-// gap matters more here than for the other pass keys, because the settings tab
+// gap matters more here than for the other pass keys, because the Sponsors hub
 // deliberately shows these controls to a pass holder ORG-WIDE while enforcement
 // stays per-competition: the widened affordance is only honest if the write path
 // really does allow the passed competition and really does refuse its sibling.
