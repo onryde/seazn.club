@@ -293,9 +293,23 @@ describe("mergeShards (Review Focus 1)", () => {
     const planned = all(3);
     Object.assign(asRun(planned[1]).cases[0], { planned: true, state: "not_run", reason: "no script", checks: [] });
     expect(refusedAs(planned), "planned: true in the planned shape (░, no check)").toBeNull();
-    const wrongState = all(3);
-    Object.assign(asRun(wrongState[1]).cases[0], { planned: true, state: "later", reason: "W9: later", checks: [] });
-    expect(refusedAs(wrongState), "planned: true on a ⏳ case").toBe("ShardInvalid");
+    // W4 app PR A Task 24: recordPlanned also writes a SETTLED atom's ⛔ and ⏳ (decideState's `settled`), so those, check-free,
+    // are the planned shape too. The states it never writes - ✅, ❌ and ⬜ - stay refused even with no check. Both lists are
+    // the run's own declarations (run.ts recordPlanned via decideState), typed here, never read off isPlannedShape.
+    let checked = 0;
+    for (const [state, glyph] of [["refused", "⛔"], ["later", "⏳"]] as const) {
+      const ok = all(3);
+      Object.assign(asRun(ok[1]).cases[0], { planned: true, state, reason: `settled: ${state}`, checks: [] });
+      expect(refusedAs(ok), `planned: true on a settled atom's ${glyph}, no check`).toBeNull();
+      checked++;
+    }
+    for (const [state, glyph] of [["works", "✅"], ["red", "❌"], ["needs_ruling", "⬜"]] as const) {
+      const wrongState = all(3);
+      Object.assign(asRun(wrongState[1]).cases[0], { planned: true, state, reason: "never planned", checks: [] });
+      expect(refusedAs(wrongState), `planned: true on a ${glyph} case, no check`).toBe("ShardInvalid");
+      checked++;
+    }
+    expect(checked, "anti-vacuity: the two settled states and the three never-planned states asked").toBe(5);
   });
 
   it("another layer: an L2 grid shard set merges with planned ░ cases kept planned, the scope carried, and every planned case in the planned shape", () => {
