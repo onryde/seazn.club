@@ -518,6 +518,11 @@ describe.skipIf(!HAS_DB)("W4 T10: Add late player on a drawn knockout", () => {
     await placeRoundOne(r, 2, 2);
     const late = await addLate(r);
     expect(late.late_entry).toMatchObject({ case: "bye", scheduled: false });
+    // T26c fix round 1 (re-review N1): unscheduled by a FULL board, not a freeze - no frozen flag, and the notice says only
+    // that the match is unscheduled, never that it waits on an unfreeze (the dictionary's sentence).
+    expect(late.late_entry, "a full board is no freeze").not.toHaveProperty("schedule_frozen");
+    expect(noticeOf(late.late_entry as KnockoutLateEntryResult), "unscheduled, said").toContainEqual(UNSCHEDULED_NOTICE);
+    expect(noticeOf(late.late_entry as KnockoutLateEntryResult), "no frozen line").not.toContainEqual(FROZEN_NOTICE);
     const line = await rowById(late.late_entry!.format === "knockout" ? late.late_entry!.fixture_id! : "");
     expect({ at: line.scheduled_at, court: line.court_id, status: line.status }).toEqual({ at: null, court: null, status: "scheduled" });
   });
@@ -528,6 +533,7 @@ describe.skipIf(!HAS_DB)("W4 T10: Add late player on a drawn knockout", () => {
     await placeRoundOne(r, 3, 3, "2020-06-01T10:00:00.000Z");
     const late = await addLate(r);
     expect(late.late_entry).toMatchObject({ case: "bye", scheduled: false });
+    expect(late.late_entry, "a gone time is no freeze (N1)").not.toHaveProperty("schedule_frozen");
     const line = await rowById(late.late_entry!.format === "knockout" ? late.late_entry!.fixture_id! : "");
     expect({ at: line.scheduled_at, court: line.court_id }).toEqual({ at: null, court: null });
   });
