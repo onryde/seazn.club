@@ -15,7 +15,7 @@ import { type Session, appendScoreEvent, check, newSession, signIn, tag, v1, v1d
  *    desk's "Waiting to join the bracket" strip never lists a player the tap can only refuse, and a tap is 409
  *    KO_LATE_ENTRY_NOT_WAITING.
  *
- * T20 (X-SD-7) is a page line ("Draw #…" under the stage header) read from the ledger on the division page; no v1 route
+ * T20 (X-SD-7) is a page line ("Random draw · #…" under the stage header) read from the ledger on the division page; no v1 route
  * serves it, so it has no HTTP check here (unit: `knockout-late-entry-wiring.test.tsx`; e2e: `w4-knockout-app-a-b6a.spec.ts`).
  */
 export async function w4KnockoutAB6aSuite(): Promise<void> {

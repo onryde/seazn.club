@@ -1,4 +1,6 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { TAG, apiJson, competitionPath, divisionPath, withDb } from "./helpers";
 import { showAllFixtures, stageFixtures, type Fx } from "./support/swiss-app-a-kit";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
@@ -454,12 +456,19 @@ test.describe("X-LL-1 the desk names the lucky loser who took the seat", () => {
   });
 });
 
-// X-SD-7 (W4 T20, K5 "shown"; R24 pick 3A): the stage's draw seed is said on its card — "Draw #<seed>", a muted line under the
+/** The English catalog the page renders (read as JSON: a JSON `import` needs an import attribute Playwright's loader lacks). */
+const en: Record<string, string> = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+);
+/** The draw-seed line's words for `seed` (owner option B, 2026-11-09: "Random draw · #<seed>"), off the catalog. */
+const drawSeedLine = (seed: number) => en["knockout.drawSeed"]!.replace("{seed}", String(seed));
+
+// X-SD-7 (W4 T20, K5 "shown"; R24 pick 3A): the stage's draw seed is said on its card — "Random draw · #<seed>", a muted line under the
 // header — so an organiser can tell which draw they are looking at (RB4-D4: the same field and seed draw the same bracket). The
 // seed is the stage's own (`swissDrawSeed(stage id)`, the draw's declared function — `lib/swiss-draw.ts`), recorded on the
 // Generate's ledger row; a Rebuild reuses it, so the line does not move. A wholly SEEDED bracket draws nothing, so shows none.
 test.describe("X-SD-7 the stage shows its draw seed", () => {
-  test("six unseeded players: the card says Draw #<the stage's seed>, and a Rebuild keeps it; a seeded bracket says nothing", async ({ page, request }) => {
+  test("six unseeded players: the card says Random draw · #<the stage's seed>, and a Rebuild keeps it; a seeded bracket says nothing", async ({ page, request }) => {
     test.setTimeout(150_000);
     const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `Seed cup ${TAG}`, visibility: "private" });
     expect(comp.status, JSON.stringify(comp.error)).toBe(201);
@@ -487,14 +496,15 @@ test.describe("X-SD-7 the stage shows its draw seed", () => {
     const want = swissDrawSeed(stageId);
     await page.reload();
     await expect(seedLine).toHaveCount(1, { timeout: 30_000 });
-    await expect(seedLine).toHaveText(`Draw #${want}`);
+    await expect(seedLine).toHaveText(drawSeedLine(want));
     await expect(seedLine, "the attribute carries the bare number").toHaveAttribute("data-draw-seed", String(want));
+    await expect(page.getByTestId("stage-draw-seed-hint"), "the hint is shown with it").toHaveText(en["knockout.drawSeedHint"]!);
 
     // A Rebuild reuses the stage's seed (RB4-D5): the same line.
     const rebuilt = await apiJson(request, `/api/v1/stages/${stageId}/rebuild`, "POST");
     expect(rebuilt.status, JSON.stringify(rebuilt.error)).toBe(200);
     await page.reload();
-    await expect(seedLine).toHaveText(`Draw #${want}`, { timeout: 30_000 });
+    await expect(seedLine).toHaveText(drawSeedLine(want), { timeout: 30_000 });
 
     // A wholly seeded bracket draws nothing: its card has no line (the positive pair above proves the line renders at all).
     const seeded = await startedKnockout(request, "Seeded cup", ["Ana", "Ben", "Cas", "Dee"].map((n) => `Seeded ${n} ${TAG}`));

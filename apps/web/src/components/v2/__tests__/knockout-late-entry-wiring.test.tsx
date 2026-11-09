@@ -10,6 +10,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import type { KnockoutWaitingEntrant } from "@/server/usecases/knockout-desk";
+import en from "@/dictionaries/en/ui.json";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
@@ -162,22 +163,31 @@ describe("X-LE-10 the waiting strip reaches the card the player waits on", () =>
 describe("X-SD-7 the stage card shows its draw seed", () => {
   const SEED = 4040404040;
   const lineOf = (html: string) => /data-testid="stage-draw-seed"[^>]*data-draw-seed="(\d+)"[^>]*>([^<]*)</.exec(html);
+  const hintOf = (html: string) => /data-testid="stage-draw-seed-hint"[^>]*>([^<]*)</.exec(html)?.[1];
+  // Owner option B (2026-11-09): the label and its hint, read off the English catalog the panel renders (never the panel).
+  const label = (seed: number) => en["knockout.drawSeed"].replace("{seed}", String(seed));
+  const HINT = en["knockout.drawSeedHint"];
 
-  it("a drawn knockout shows 'Draw #<seed>' under its header, for an organiser and a viewer alike", () => {
+  it("a drawn knockout shows the draw label under its header, with its hint, for an organiser and a viewer alike", () => {
+    expect(label(SEED), "premise: the label names the seed").toContain(String(SEED));
+    expect(HINT.trim(), "premise: the hint has words").not.toBe("");
     for (const canEdit of [true, false]) {
       const html = cardOf(render({ stages: [stage("k1", 1)], drawSeeds: { k1: SEED }, canEdit }), "k1");
       const m = lineOf(html);
       expect(m, `canEdit=${canEdit}: the line rendered`).not.toBeNull();
       expect(m![1]).toBe(String(SEED));
-      expect(m![2]).toBe(`Draw #${SEED}`);
-      // under the header, above the card's body
-      expect(html.indexOf('data-testid="stage-draw-seed"')).toBeLessThan(html.indexOf('id="stage-body-k1"'));
+      expect(m![2]).toBe(label(SEED));
+      expect(hintOf(html), `canEdit=${canEdit}: the hint is shown with it`).toBe(HINT);
+      // under the header, above the card's body; the hint right under the label
+      expect(html.indexOf('data-testid="stage-draw-seed"')).toBeLessThan(html.indexOf('data-testid="stage-draw-seed-hint"'));
+      expect(html.indexOf('data-testid="stage-draw-seed-hint"')).toBeLessThan(html.indexOf('id="stage-body-k1"'));
     }
   });
 
   it("the empty case first: no seed supplied, none for this stage, or a seed for another card: no line", () => {
     const stages = [stage("k1", 1), stage("k2", 2)];
     expect(render({ stages })).not.toContain('data-testid="stage-draw-seed"');
+    expect(render({ stages }), "no seed, no hint").not.toContain('data-testid="stage-draw-seed-hint"');
     expect(render({ stages, drawSeeds: {} })).not.toContain('data-testid="stage-draw-seed"');
     const html = render({ stages, drawSeeds: { k2: SEED } });
     expect(cardOf(html, "k1")).not.toContain('data-testid="stage-draw-seed"');
@@ -199,9 +209,9 @@ describe("X-SD-7 the stage card shows its draw seed", () => {
     expect(render({ stages: [stage("k1", 1)], drawSeeds: { k1: SEED } })).toContain('data-testid="stage-draw-seed"');
   });
 
-  it("seed 0 is a seed: it shows 'Draw #0', not nothing (a falsy value is not an absent one)", () => {
+  it("seed 0 is a seed: it shows the label for #0, not nothing (a falsy value is not an absent one)", () => {
     const m = lineOf(cardOf(render({ stages: [stage("k1", 1)], drawSeeds: { k1: 0 } }), "k1"));
     expect(m, "the line rendered").not.toBeNull();
-    expect([m![1], m![2]]).toEqual(["0", "Draw #0"]);
+    expect([m![1], m![2]]).toEqual(["0", label(0)]);
   });
 });

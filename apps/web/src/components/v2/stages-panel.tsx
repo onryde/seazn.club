@@ -1810,10 +1810,17 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   {/* W4 T20 (K5 "shown"; R24 pick 3A): the draw's seed, one muted line under the header like the legend - the number
                       that replays this bracket (RB4-D4), so an organiser can say which draw they are looking at. Information, not an
                       action: both viewers see it. Only a knockout that DREW at random has one (a seeded or fed bracket has none). */}
+                  {/* Owner option B (2026-11-09): "Random draw · #…", with what the number means beside it as a second muted line -
+                      plain text, always shown (no tooltip to reach by hover or keyboard), wrapping at any width. */}
                   {!folded && drawSeed !== undefined && (
-                    <p data-testid="stage-draw-seed" data-draw-seed={drawSeed} className="w-full min-w-0 text-xs text-slate-500">
-                      {msg("knockout.drawSeed", { seed: drawSeed })}
-                    </p>
+                    <>
+                      <p data-testid="stage-draw-seed" data-draw-seed={drawSeed} className="w-full min-w-0 text-xs text-slate-500">
+                        {msg("knockout.drawSeed", { seed: drawSeed })}
+                      </p>
+                      <p data-testid="stage-draw-seed-hint" className="w-full min-w-0 text-xs text-slate-500">
+                        {msg("knockout.drawSeedHint")}
+                      </p>
+                    </>
                   )}
                 </header>
 

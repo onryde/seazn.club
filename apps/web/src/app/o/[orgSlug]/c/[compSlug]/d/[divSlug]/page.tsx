@@ -423,7 +423,7 @@ export default async function DivisionPage({
   // for a division nobody waits in).
   const knockoutWaiting =
     tab === "fixtures" && editable && stages.some((s) => ROOT_KNOCKOUT_KINDS.includes(s.kind)) ? await listKnockoutWaiting(auth, id) : [];
-  // W4 T20 (K5 "shown"; R24 pick 3A): the seed each knockout stage's newest Generate drew with, shown under its header as "Draw #…".
+  // W4 T20 (K5 "shown"; R24 pick 3A): the seed each knockout stage's newest Generate drew with, shown under its header as "Random draw · #…".
   // Information, so read for a viewer as well as an organiser; this tab only, and only where a knockout-family stage exists.
   const drawSeeds =
     tab === "fixtures" && stages.some((s) => ROOT_KNOCKOUT_KINDS.includes(s.kind)) ? await listStageDrawSeeds(auth, id) : {};

@@ -3670,6 +3670,7 @@ export type DictionaryKey =
   | "knockout.cutDrift.warning.other"
   | "knockout.drawLabel"
   | "knockout.drawSeed"
+  | "knockout.drawSeedHint"
   | "knockout.feederLoser"
   | "knockout.feederLoserOnly"
   | "knockout.feederWinner"

@@ -8,7 +8,7 @@ import "server-only";
 //   (`competition-desk.ts`: the marker, on a stage that is not complete, an entrant still in the field), so the row's
 //   "Open bracket" always lands on a card that lists someone to add.
 // - `listStageDrawSeeds` (T20, K5 "shown"; R24 pick 3A): the seed each stage's newest Generate drew with
-//   (`readStageDrawSeed`, the ONE reader of that ledger field) — shown under the stage header as "Draw #…".
+//   (`readStageDrawSeed`, the ONE reader of that ledger field) — shown under the stage header as "Random draw · #…".
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { withTenant } from "@/lib/db";
 import { DEPARTED_STATUSES } from "./entrants";
