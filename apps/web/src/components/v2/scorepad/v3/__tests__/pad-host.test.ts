@@ -11,6 +11,8 @@
 // many nested stateful children is exactly the shape the harness cannot
 // walk (proved the hard way while building action-form.tsx's own list —
 // see that file's header). Hence: builders here, DOM assertions in e2e.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { LineupPair, SquadState } from "@seazn/engine/core";
 import { initSquads } from "@seazn/engine/core";
@@ -787,10 +789,30 @@ describe("resolvePadPhase", () => {
 
 // G5 (controller ruling, 2026-08-16): a pending context-strip override lives
 // only until the fold itself advances. `PadHostV3`'s own render-phase reset
-// (pad-host.tsx) clears `contextOverrides` to `{}` exactly when this
-// function reports `true` — proved here as a pure decision, independent of
+// (pad-host.tsx) clears `contextOverrides` to `{}` when this function reports
+// `true`, unless the skin's `contextOverridesSurvive` keeps them (S2-4,
+// `contextOverridesDropped`) — proved here as a pure decision, independent of
 // the React shell this file's own header says is untestable via the
 // node-only hook-harness.
+describe("PadHostV3's render-phase reset, audited at the source", () => {
+  // S2-4 (final review I3). The harness cannot mount a whole PadHostV3 (pad-host-band-storage.test.tsx says why), so the
+  // call is pinned here and driven for real by the T7 swap-then-change-bowler test in e2e/scorepad-v3-cricket.spec.ts.
+  // Comments are stripped first, so a comment naming the call cannot satisfy this.
+  const src = readFileSync(join(process.cwd(), "src/components/v2/scorepad/v3/pad-host.tsx"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
+
+  it("clears the picks only when the skin's hook does not keep them, and always moves on to the new fold", () => {
+    expect(src).toMatch(
+      /if \(contextOverridesStale\(overridesFor, pipeline\.state\)\) \{\s*if \(contextOverridesDropped\(overridesFor, pipeline\.state, props\.skin\.contextOverridesSurvive\)\) setContextOverrides\(\{\}\);\s*setOverridesFor\(pipeline\.state\);\s*\}/,
+    );
+  });
+
+  it("no other path clears the whole map", () => {
+    expect(src.match(/setContextOverrides\(\{\}\)/g)).toHaveLength(1);
+  });
+});
+
 describe("contextOverridesStale", () => {
   it("false when the state reference is unchanged — an override survives across renders with no new event", () => {
     const s = { runs: 12 };
