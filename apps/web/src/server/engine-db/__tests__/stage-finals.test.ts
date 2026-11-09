@@ -174,6 +174,7 @@ describe("openStageState (W4 T21) — what the Complete-competition warning says
     for (const s of BYE_LINE_SHAPES) {
       const shape: OpenStageFixtureRow = { ...fx(), ...rowOf(s, { H: "h", A: "a" }) };
       const waits = s.expected && s.status === "scheduled";
+      // The non-waiting rows' expected value uses `unsettledCount`, which has its own tests (above); only the waiting / not-waiting split is derived independently here, from the rules table.
       const owed = waits ? 0 : unsettledCount("league", [shape]);
       expect(openStageState("league", [wonFx(), shape]).matchesLeft, s.name).toBe(owed);
       if (waits) waiting++;

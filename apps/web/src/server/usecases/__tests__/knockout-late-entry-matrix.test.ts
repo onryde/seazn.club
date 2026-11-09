@@ -622,8 +622,8 @@ async function cellWithdrawnSlot(rig: Rig): Promise<void> {
   await expectNotUndoable(rig);
 
   // The second call: the seat is taken and no bye is left — refused by name, nothing written. Still a 409 after RB4-L6's
-  // "kept, Rebuild offered" (B6a fix round 1): the withdrawal's walkover left its evidence on the line (voided, it still
-  // counts: `fixtureEvidenceSql` reads monotonically), so the stage has started (`fixtureStartedSql`) and Rebuild is not offered.
+  // "kept, Rebuild offered" (B6a fix round 1): RB4-L9 — a withdrawal's forfeit is a score event, so the stage has started
+  // and Rebuild is not offered (`can_rebuild: false`).
   const snap = await snapshot(rig);
   const err = await refusal(addLate(rig, "Late 2"));
   expect(err).toMatchObject({ status: 409, code: "KO_LATE_ENTRY_NO_SLOT", message: NO_SLOT });
