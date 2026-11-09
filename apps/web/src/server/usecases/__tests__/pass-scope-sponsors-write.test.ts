@@ -153,6 +153,7 @@ describe.skipIf(!HAS_DB)("sponsor writes resolve their pass keys against the com
       price_cents: 25_000,
       currency: "gbp",
       tier: "gold",
+      includes_on_stream: false,
       competition_id: rig.passedId,
     });
     expect(pkg.price_cents).toBe(25_000);
@@ -164,6 +165,7 @@ describe.skipIf(!HAS_DB)("sponsor writes resolve their pass keys against the com
         price_cents: 25_000,
         currency: "gbp",
         tier: "gold",
+        includes_on_stream: false,
         competition_id: rig.plainId,
       }),
     ).rejects.toMatchObject({ status: 402 });

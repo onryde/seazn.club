@@ -368,9 +368,12 @@ export async function passGrantsSuite(): Promise<void> {
     "pass grants/sponsors: a priced package saves on the passed competition (201)",
     passPackage.status === 201,
   );
+  // Sponsor deals Task 4 (F8): a package no longer reads `sponsors.monetize` (packages are on every plan). A GOLD package
+  // is a tiered placement, so the sibling refuses it on `sponsors.tiers`, the key the pass lifts on its own competition
+  // only — the same plan-scoping split as the sponsor rows above.
   check(
-    "pass grants/sponsors: the sibling refuses the same package (402 sponsors.monetize)",
-    plainPackage.status === 402 && featureKey(plainPackage) === "sponsors.monetize",
+    "pass grants/sponsors: the sibling refuses the same gold package (402 sponsors.tiers)",
+    plainPackage.status === 402 && featureKey(plainPackage) === "sponsors.tiers",
   );
 
   // === officials.auto — community false, pass true (V393) =================

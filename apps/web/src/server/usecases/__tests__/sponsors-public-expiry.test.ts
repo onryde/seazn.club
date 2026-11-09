@@ -105,7 +105,7 @@ describe.skipIf(!HAS_DB)("an organiser's sponsor write expires the public pages 
     await setOrgPlan(orgId, "pro");
     await invalidateOrgEntitlements(orgId);
     const pro: AuthCtx = { orgId, via: "session", userId: null, role: "owner", keyId: null };
-    const pkg = await createSponsorPackage(pro, { name: "Silver package", price_cents: 8_000, currency: "gbp", tier: "silver" });
+    const pkg = await createSponsorPackage(pro, { name: "Silver package", price_cents: 8_000, currency: "gbp", tier: "silver", includes_on_stream: false });
     const { order } = await startSponsorCheckout(pro, { package_id: pkg.id, sponsor_name: "Refundable Ltd", sponsor_email: "r@ref.test" }, "https://app.test");
     await handleSponsorPaymentSucceeded({
       id: `pi_${suffix}`,

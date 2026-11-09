@@ -41,6 +41,7 @@ import { orgOwnerRecipient } from "./org-owner";
 import { routes } from "@/lib/routes";
 import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
 import { placementNeedsTiers } from "@/lib/sponsor-deal-policy";
+import { assertPlacementAllowed } from "@/server/sponsors/deal-gates";
 import { ensureOrgStreamSettings } from "@/server/sponsors/stream-settings";
 
 // The tier list lives in the client-safe lib (R4 F10: this module imports the email outbox, so the planner and the
@@ -378,11 +379,12 @@ export async function resolveSponsors(
 }
 
 // ---------------------------------------------------------------------------
-// Monetization (Pro `sponsors.monetize`) — packages + Connect checkout
+// Packages (every plan; a placement, so the placement gate) + Connect checkout (Pro `sponsors.monetize`)
 // ---------------------------------------------------------------------------
 
 export interface SponsorPackageRow {
   id: string;
+  /** Null: any competition (the deal picks), V493. */
   competition_id: string | null;
   name: string;
   description: string | null;
@@ -391,12 +393,23 @@ export interface SponsorPackageRow {
   tier: SponsorTier;
   active: boolean;
   created_at: string;
+  /** A deal on this package puts its sponsor on the stream too (V493; snapshotted onto the deal, D4). */
+  includes_on_stream: boolean;
+  /** How many DISTINCT sponsors hold an open (non-ended, non-legacy) deal on this package. */
+  used_by: number;
 }
 
 const PKG_COLS = [
   "id", "competition_id", "name", "description", "price_cents",
-  "currency", "tier", "active", "created_at",
+  "currency", "tier", "active", "created_at", "includes_on_stream",
 ] as const;
+
+/** `used_by`, read beside a package row (select or returning). Non-ended is non-legacy too: V493 rewrote every pre-deals
+ *  order as an ENDED deal, and `sponsor_orders_ended_shape` keeps a non-ended deal reason-free. */
+function packageUsedBy(tx: Tx) {
+  return tx`(select count(distinct o.sponsor_id)::int from sponsor_orders o
+              where o.package_id = sponsor_packages.id and o.deal_status <> 'ended') as used_by`;
+}
 
 export const CreateSponsorPackageInput = z.object({
   name: z.string().min(1).max(120),
@@ -405,6 +418,7 @@ export const CreateSponsorPackageInput = z.object({
   currency: z.string().length(3).toLowerCase().default("gbp"),
   tier: z.enum(SPONSOR_TIERS).default("partner"),
   competition_id: z.string().uuid().nullish(),
+  includes_on_stream: z.boolean().default(false),
 });
 export type CreateSponsorPackageInput = z.infer<typeof CreateSponsorPackageInput>;
 
@@ -415,11 +429,14 @@ export const StartSponsorCheckoutInput = z.object({
 });
 export type StartSponsorCheckoutInput = z.infer<typeof StartSponsorCheckoutInput>;
 
+/** A package is a placement, so every plan may create one (spec §8) and it passes the ONE placement gate (D17, F14):
+ *  a tier other than partner, or a competition, needs `sponsors.tiers`. Selling it online is `sponsors.monetize`'s,
+ *  asked when an online deal is made, never here. */
 export async function createSponsorPackage(
   auth: AuthCtx,
   input: CreateSponsorPackageInput,
 ): Promise<SponsorPackageRow> {
-  await requireFeature(auth.orgId, "sponsors.monetize", input.competition_id ?? undefined);
+  await assertPlacementAllowed(auth.orgId, input.tier, input.competition_id ?? null);
   return withTenant(auth.orgId, async (tx) => {
     if (input.competition_id) {
       const [comp] = await tx`select 1 from competitions where id = ${input.competition_id}`;
@@ -427,18 +444,18 @@ export async function createSponsorPackage(
     }
     const [row] = await tx<SponsorPackageRow[]>`
       insert into sponsor_packages (org_id, competition_id, name, description,
-                                    price_cents, currency, tier)
+                                    price_cents, currency, tier, includes_on_stream)
       values (${auth.orgId}, ${input.competition_id ?? null}, ${input.name},
               ${input.description ?? null}, ${input.price_cents},
-              ${input.currency}, ${input.tier})
-      returning ${tx(PKG_COLS)}`;
+              ${input.currency}, ${input.tier}, ${input.includes_on_stream})
+      returning ${tx(PKG_COLS)}, ${packageUsedBy(tx)}`;
     return row!;
   });
 }
 
 export async function listSponsorPackages(auth: AuthCtx): Promise<SponsorPackageRow[]> {
   return withTenant(auth.orgId, (tx) => tx<SponsorPackageRow[]>`
-    select ${tx(PKG_COLS)} from sponsor_packages
+    select ${tx(PKG_COLS)}, ${packageUsedBy(tx)} from sponsor_packages
     order by active desc, created_at desc, id`);
 }
 
@@ -450,7 +467,7 @@ export async function deactivateSponsorPackage(
   return withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<SponsorPackageRow[]>`
       update sponsor_packages set active = false
-      where id = ${id} returning ${tx(PKG_COLS)}`;
+      where id = ${id} returning ${tx(PKG_COLS)}, ${packageUsedBy(tx)}`;
     if (!row) throw new HttpError(404, "package not found");
     return row;
   });
@@ -507,7 +524,7 @@ export async function startSponsorCheckout(
   origin: string,
 ): Promise<{ order: SponsorOrderRow; checkout_url: string }> {
   const pkg = await withTenant(auth.orgId, async (tx) => {
-    const [row] = await tx<SponsorPackageRow[]>`
+    const [row] = await tx<Omit<SponsorPackageRow, "used_by">[]>`
       select ${tx(PKG_COLS)} from sponsor_packages where id = ${input.package_id}`;
     if (!row) throw new HttpError(404, "package not found");
     if (!row.active) throw new HttpError(422, "This package is no longer on sale");

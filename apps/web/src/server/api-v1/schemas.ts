@@ -5297,6 +5297,10 @@ export const SponsorPackage = z.object({
   tier: SponsorTier,
   active: z.boolean(),
   created_at: z.string(),
+  /** A deal on this package puts its sponsor on the stream too. */
+  includes_on_stream: z.boolean(),
+  /** How many distinct sponsors hold an open (non-ended) deal on this package. */
+  used_by: z.number().int().nonnegative(),
 });
 
 export const CreateSponsorPackage = z.object({
@@ -5306,6 +5310,7 @@ export const CreateSponsorPackage = z.object({
   currency: z.string().length(3).toLowerCase().default("gbp"),
   tier: SponsorTier.default("partner"),
   competition_id: Uuid.nullish(),
+  includes_on_stream: z.boolean().default(false),
 });
 
 export const SponsorOrder = z.object({

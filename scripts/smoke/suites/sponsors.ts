@@ -399,7 +399,7 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
     hubSignedOut.status >= 300 && hubSignedOut.status < 400 && (hubSignedOut.location ?? "").includes("/login"),
   );
 
-  // --- Free path: flat partner strip stays free; tiers + packages are 402.
+  // --- Free path: flat partner strip and partner packages stay free; tiers are 402.
   const free = newSession();
   const freeVer = await signIn(free, `delivered+sponsor_free_${tag}@resend.dev`);
   const freeOrgs = (await call(free, "/api/orgs")) as {
@@ -430,13 +430,31 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
       freeShared.body.includes(`Corner Shop ${tag}`) &&
       !freeShared.body.includes("Presented by"),
   );
+  // Sponsor deals Task 4 (spec §8, D17): packages are on every plan — a DELIBERATE flip of the old "sp free packages
+  // gated (402)" row. A partner package for any competition is a free placement; a gold one is tiered, so it is refused
+  // on `sponsors.tiers` (the placement gate), never `sponsors.monetize`.
   const freePkg = await v1(free, `/api/v1/orgs/${freeOrg.id}/sponsor-packages`, "POST", {
-    name: "Blocked Package",
+    name: "Partner Package",
     price_cents: 1_000,
     currency: "gbp",
     tier: "partner",
   });
-  check("sp free packages gated (402)", freePkg.status === 402);
+  const freePkgRow = freePkg.status === 201 ? v1data<{ includes_on_stream: boolean; used_by: number }>(freePkg) : null;
+  check(
+    "sp free creates a partner package (201)",
+    freePkg.status === 201 && freePkgRow?.includes_on_stream === false && freePkgRow?.used_by === 0,
+  );
+  const freeGoldPkg = await v1(free, `/api/v1/orgs/${freeOrg.id}/sponsor-packages`, "POST", {
+    name: "Blocked Gold Package",
+    price_cents: 1_000,
+    currency: "gbp",
+    tier: "gold",
+  });
+  check(
+    "sp free gold package gated (402)",
+    freeGoldPkg.status === 402 &&
+      (freeGoldPkg.json.error as { feature_key?: string } | undefined)?.feature_key === "sponsors.tiers",
+  );
   // The hub is not itself gated: a free-plan owner reaches it, and its Packages tab (the upsell) renders rather than 402/404.
   const freeHub = await html(free, `/o/${freeOrg.slug}/sponsors?tab=packages`);
   check(

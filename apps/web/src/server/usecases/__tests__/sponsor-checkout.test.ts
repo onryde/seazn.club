@@ -88,7 +88,9 @@ beforeEach(() => {
 });
 
 describe.skipIf(!HAS_DB)("sponsor monetization", () => {
-  it("packages are Pro sponsors.monetize; deactivate is a soft flip", async () => {
+  // Sponsor deals Task 4: packages are on every plan; a GOLD package is a tiered placement, so community is refused it on
+  // `sponsors.tiers` (the placement gate), never `sponsors.monetize`. sponsor-packages-plans.test.ts owns the plan sweep.
+  it("a gold package needs sponsors.tiers (community 402, Pro created); deactivate is a soft flip", async () => {
     const { auth: free } = await seedOrg("community");
     await expect(
       createSponsorPackage(free, {
@@ -96,8 +98,9 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
         price_cents: 10_000,
         currency: "gbp",
         tier: "gold",
+        includes_on_stream: false,
       }),
-    ).rejects.toMatchObject({ status: 402 });
+    ).rejects.toMatchObject({ status: 402, featureKey: "sponsors.tiers" });
 
     const { auth: pro } = await seedOrg("pro");
     const pkg = await createSponsorPackage(pro, {
@@ -105,6 +108,7 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
       price_cents: 10_000,
       currency: "gbp",
       tier: "gold",
+      includes_on_stream: false,
     });
     const retired = await deactivateSponsorPackage(pro, pkg.id);
     expect(retired.active).toBe(false);
@@ -117,6 +121,7 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
       price_cents: 5_000,
       currency: "gbp",
       tier: "silver",
+      includes_on_stream: false,
     });
     await expect(
       startSponsorCheckout(
@@ -149,11 +154,11 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
    * (`settings-sponsor-monetize.spec.ts`) is a Pro happy path whose only
    * override sets the key to TRUE.
    *
-   * The deny has to be written AFTER the package exists: a community org
-   * cannot create a package at all (`createSponsorPackage`'s own
-   * `sponsors.monetize` gate at `:380`, proven by the first test in this file),
-   * so the state this gate exists for is the org that sold a package and then
-   * LOST the key — a staff deny for abuse or chargeback risk, or a downgrade.
+   * The deny is written AFTER the package exists: the state this gate exists
+   * for is the org that sold a package and then LOST the key (since sponsor
+   * deals Task 4 a package itself never reads `sponsors.monetize`, so the
+   * checkout is the only gate between such an org and a Checkout Session) —
+   * a staff deny for abuse or chargeback risk, or a downgrade.
    * If it regressed, that org would keep minting real Checkout Sessions.
    *
    * The org is deliberately Connect-live, so the 409 Connect refusal one line
@@ -168,6 +173,7 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
       price_cents: 12_000,
       currency: "gbp",
       tier: "gold",
+      includes_on_stream: false,
     });
 
     await sql`
@@ -237,6 +243,7 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
       price_cents: 50_000,
       currency: "gbp",
       tier: "title",
+      includes_on_stream: false,
     });
 
     let orderExistedAtCreate = false;
@@ -316,6 +323,7 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
       price_cents: 20_000,
       currency: "gbp",
       tier: "gold",
+      includes_on_stream: false,
     });
     const { order } = await startSponsorCheckout(
       auth,
@@ -409,6 +417,7 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
       price_cents: 8_000,
       currency: "gbp",
       tier: "silver",
+      includes_on_stream: false,
     });
     const { order } = await startSponsorCheckout(
       auth,
@@ -478,6 +487,7 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
       price_cents: 3_000,
       currency: "gbp",
       tier: "partner",
+      includes_on_stream: false,
     });
     const { order } = await startSponsorCheckout(
       auth,

@@ -72980,6 +72980,14 @@
                           },
                           "created_at": {
                             "type": "string"
+                          },
+                          "includes_on_stream": {
+                            "type": "boolean"
+                          },
+                          "used_by": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
                           }
                         },
                         "required": [
@@ -72991,7 +72999,9 @@
                           "currency",
                           "tier",
                           "active",
-                          "created_at"
+                          "created_at",
+                          "includes_on_stream",
+                          "used_by"
                         ],
                         "additionalProperties": false
                       }
@@ -73014,7 +73024,9 @@
                       "currency": "example",
                       "tier": "title",
                       "active": true,
-                      "created_at": "example"
+                      "created_at": "example",
+                      "includes_on_stream": true,
+                      "used_by": 0
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -73165,7 +73177,7 @@
         ]
       },
       "post": {
-        "summary": "Create a priced sponsorship package (Pro `sponsors.monetize`)",
+        "summary": "Create a priced sponsorship package (a tier above partner, or a competition, needs `sponsors.tiers`)",
         "tags": [
           "sponsors"
         ],
@@ -73236,13 +73248,18 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "includes_on_stream": {
+                    "default": false,
+                    "type": "boolean"
                   }
                 },
                 "required": [
                   "name",
                   "price_cents",
                   "currency",
-                  "tier"
+                  "tier",
+                  "includes_on_stream"
                 ],
                 "additionalProperties": false
               },
@@ -73251,7 +73268,8 @@
                 "description": "example",
                 "price_cents": 1,
                 "currency": "gbp",
-                "tier": "title"
+                "tier": "title",
+                "includes_on_stream": true
               }
             }
           }
@@ -73323,6 +73341,14 @@
                         },
                         "created_at": {
                           "type": "string"
+                        },
+                        "includes_on_stream": {
+                          "type": "boolean"
+                        },
+                        "used_by": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
@@ -73334,7 +73360,9 @@
                         "currency",
                         "tier",
                         "active",
-                        "created_at"
+                        "created_at",
+                        "includes_on_stream",
+                        "used_by"
                       ],
                       "additionalProperties": false
                     },
@@ -73355,7 +73383,9 @@
                     "currency": "example",
                     "tier": "title",
                     "active": true,
-                    "created_at": "example"
+                    "created_at": "example",
+                    "includes_on_stream": true,
+                    "used_by": 0
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -73643,6 +73673,14 @@
                         },
                         "created_at": {
                           "type": "string"
+                        },
+                        "includes_on_stream": {
+                          "type": "boolean"
+                        },
+                        "used_by": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
@@ -73654,7 +73692,9 @@
                         "currency",
                         "tier",
                         "active",
-                        "created_at"
+                        "created_at",
+                        "includes_on_stream",
+                        "used_by"
                       ],
                       "additionalProperties": false
                     },
@@ -73675,7 +73715,9 @@
                     "currency": "example",
                     "tier": "title",
                     "active": true,
-                    "created_at": "example"
+                    "created_at": "example",
+                    "includes_on_stream": true,
+                    "used_by": 0
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

@@ -14,7 +14,12 @@ import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { createSponsorPackage, listSponsorPackages, type SponsorPackageRow } from "../sponsors";
+import {
+  CreateSponsorPackageInput,
+  createSponsorPackage,
+  listSponsorPackages,
+  type SponsorPackageRow,
+} from "../sponsors";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
@@ -156,7 +161,12 @@ describe.skipIf(!HAS_DB)("used_by — distinct sponsors with an open (non-ended,
 describe.skipIf(!HAS_DB)("package create on every plan (D17: the placement gate, never sponsors.monetize)", () => {
   it("community: a partner package for any competition is created, includes_on_stream false by default and true when sent", async () => {
     const rig = await seedRig("community");
-    const plain = await createSponsorPackage(rig.auth, pkg({ name: "Partner pack" }));
+    // "By default" is the route's parse (POST /sponsor-packages runs parseBody with CreateSponsorPackageInput): a body
+    // that never names includes_on_stream, through the same schema, so the default itself is what is tested.
+    const plain = await createSponsorPackage(
+      rig.auth,
+      CreateSponsorPackageInput.parse({ name: "Partner pack", price_cents: 50_000, tier: "partner" }),
+    );
     expect(plain.tier).toBe("partner");
     expect(plain.competition_id).toBeNull();
     expect(plain.includes_on_stream).toBe(false);
