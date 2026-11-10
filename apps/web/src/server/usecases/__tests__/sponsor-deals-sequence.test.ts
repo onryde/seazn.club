@@ -27,7 +27,10 @@
 //     packages this test declared (PACKAGES), so I8 compares the deal against a value the code under test did not produce.
 //
 // Invariants after every step (the brief's I1–I8, F7 and F36 folded in):
-//   I1 at most one live deal per sponsor;
+//   I1 at most one live deal per sponsor. The schema already enforces it (V493's partial unique index
+//      `sponsor_orders_one_live_per_sponsor`), so I1 can never fail on committed state: a code path that tried a second live
+//      deal surfaces as a 23505 — a non-HTTP error, which M1 fails as a 500 (or, inside a webhook, `deliver` fails as a throw
+//      Stripe would retry forever). I1 stays as the statement of the rule; the index is its enforcement;
 //   I2 a sponsor with a live or open deal is `active` ⇔ it has a live, unparked deal. A sponsor whose deals have ALL ended (or
 //      that has none) is under manual control (spec §10 Q3): a step that keeps it there leaves its row byte-equal unless the step
 //      was an accepted patchSponsor on it; the step that moves it INTO all-ended writes the D8 reset (inactive, partner, whole
@@ -42,10 +45,13 @@
 //   M1 the accept / refuse verdict, the refusal's HTTP status (and code where the plan names one), and a refused step leaves the
 //      sponsor tables (`sponsors`, `sponsor_orders`, `sponsor_packages`, `sponsor_stream_settings`) byte-equal (the billing
 //      ledger is outside: runEvent writes it, F36);
-//   M2 every deal's lifecycle, money, end reason, park, dispute flag, approval, intent, stored session, scope, method, rule and
-//      end date; M3 every sponsor's status, tier, scope and on_stream; M4 the org's stream-settings row;
+//   M2 every deal's lifecycle, money, end reason, park, dispute flag, approval, intent, stored session, scope, method, rule,
+//      end date, amount and currency (the package's price; a second payment's row: the intent's own sum); M3 every sponsor's
+//      status, tier, scope and on_stream; M4 the org's stream-settings row;
 //   M5 Stripe: every session's status is the model's; no deal holds two open sessions; no ended or deleted deal holds an open
-//      one (two payable sessions never coexist, D14);
+//      one (two payable sessions never coexist, D14); the refunds a step sends are exactly the ones it owes — one, for the
+//      deal's own intent, on an accepted console refund of a charge; none for money marked paid by hand, a webhook, or any
+//      other step (and the stub refuses a charge that is not paid, as Stripe does);
 //   M6 the owner alerts a payment raises (deal_ended, duplicate_payment), and the sweep's counts.
 //
 // Commands: createDeal (every method × rule, sponsor 0/1, the three packages, whole org or C, an end date or none, end_current
@@ -57,13 +63,18 @@
 // packages and sponsors are made on Pro first: the state a downgrade leaves), and C is either never finished (no divisions)
 // or finished (its derived phase).
 //
-// Anti-vacuity: the property reports its runs, the steps it checked (≥ 100, else a failure), and a count per command kind
-// (executed, accepted, refused, skipped); a kind executed zero times is a failure. The named scenarios below drive the cases
-// the brief names (late payment on an ended deal, a duplicate intent, end_current, the queue, the sweep, delete, every plan)
-// through the same runner, and each asserts the counters it exists to reach. They are not optional: the random sequences reach
-// a promotion in about 1 run in 80, and two chains almost never — F7's (the last deal ends → the hand switch-back-on → a late
-// event on that sponsor) and F19's (a queued deal past its own end when the live one ends). 2000 random runs broke neither
-// chain's mutant; the scenarios kill both. The seed is pinned (CI reproducibility); `SPONSOR_DEALS_MODEL_RUNS` / `SPONSOR_DEALS_MODEL_SEED=random` run a larger local sample.
+// Two macros aim chains a uniform generator almost never strings together (2000 uniform runs never did): `f7` (a paid deal, its
+// sponsor's last open one, ends → the hand switch-back-on → a late refund or dispute on it) and `f19` (time passes until the
+// deal queued behind a live one is past its own end → the live one ends; or the live one ends at once and the queue promotes).
+// Each macro step is an ordinary checked step, resolved against the model when it runs.
+//
+// Anti-vacuity: the property reports its runs and the steps it checked (≥ 100, else a failure). The named scenarios drive the
+// cases the brief names (late payment on an ended deal, a duplicate intent, end_current, the queue, the sweep, delete, every
+// plan, the money path) through the same runner, and each asserts the counters it exists to reach. A last test judges the
+// whole file at once (scenarios + property): every command kind executed; send, markPaid, approve, endNow, refund, patch and
+// delete each ACCEPTED at least once; a resend reused its open link (F32); both refund paths ran; every invariant met a
+// subject (I1–I8 count what they judged); both macros ran to their end. The seed is pinned (CI reproducibility);
+// `SPONSOR_DEALS_MODEL_RUNS` / `SPONSOR_DEALS_MODEL_SEED=random` run a larger local sample.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { randomUUID } from "node:crypto";
@@ -71,11 +82,15 @@ import { writeFileSync } from "node:fs";
 
 // Stripe, as a small stateful world: a Checkout session is open until the code expires it or the sponsor completes it here.
 // Idempotency keys behave as Stripe's do (the same key answers the same session), so a re-mint under an old key is visible.
+// A charge is Stripe's record of an intent's money: paid, disputed, charged back (lost) or refunded. A refund is refused (it
+// throws, as Stripe answers an error) unless the charge is paid; every refund call is recorded for the step's check (I1 money).
 const W = vi.hoisted(() => ({
   sessions: new Map<string, { deal: string; org: string; status: "open" | "complete" | "expired" }>(),
   byKey: new Map<string, string>(),
   tails: [] as (() => Promise<unknown>)[],
   alerts: [] as { reason: string; dealId: string }[],
+  charges: new Map<string, "paid" | "disputed" | "lost" | "refunded">(),
+  refunds: [] as { payment_intent: string | null; key: string | undefined }[],
 }));
 vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({
@@ -104,7 +119,16 @@ vi.mock("@/lib/stripe", () => ({
         },
       },
     },
-    refunds: { create: async () => ({ id: `re_model_${crypto.randomUUID()}` }) },
+    refunds: {
+      create: async (params: { payment_intent?: string | null }, opts?: { idempotencyKey?: string }) => {
+        const pi = params.payment_intent ?? null;
+        W.refunds.push({ payment_intent: pi, key: opts?.idempotencyKey });
+        const charge = pi === null ? undefined : W.charges.get(pi);
+        if (charge !== "paid") throw new Error(`stripe stub: intent ${pi} cannot be refunded (${charge ?? "no such charge"})`);
+        W.charges.set(pi!, "refunded");
+        return { id: `re_model_${crypto.randomUUID()}`, payment_intent: pi, status: "succeeded" };
+      },
+    },
   }),
 }));
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: vi.fn(async () => ({ ok: true, providerId: `re_model_${crypto.randomUUID()}` })) }));
@@ -206,13 +230,16 @@ afterAll(async () => {
 
 type Plan = "pro" | "community" | "event_pass";
 
-/** The three packages of every world (the brief): one includes On stream, one is scoped to competition C. Distinct tiers, so a
- *  deal that carried the wrong package's snapshot cannot match by accident. */
-const PACKAGES: readonly { tier: SponsorTier; scopedToC: boolean; onStream: boolean }[] = [
-  { tier: "partner", scopedToC: false, onStream: false },
-  { tier: "gold", scopedToC: false, onStream: true },
-  { tier: "silver", scopedToC: true, onStream: false },
+/** The three packages of every world (the brief): one includes On stream, one is scoped to competition C. Distinct tiers, prices
+ *  and (for silver) currency, so a deal that carried the wrong package's snapshot or price cannot match by accident. */
+const PACKAGES: readonly { tier: SponsorTier; scopedToC: boolean; onStream: boolean; priceCents: number; currency: string }[] = [
+  { tier: "partner", scopedToC: false, onStream: false, priceCents: 15_000, currency: "gbp" },
+  { tier: "gold", scopedToC: false, onStream: true, priceCents: 40_000, currency: "gbp" },
+  { tier: "silver", scopedToC: true, onStream: false, priceCents: 25_000, currency: "eur" },
 ];
+/** A second, different payment (F3) is for a different sum than the deal's — an old link, a changed price — so the duplicate
+ *  row's amount can only be right if it is read from the intent. */
+const SECOND_PAYMENT_EXTRA_CENTS = 777;
 
 /** Spec §5.2: "Complimentary: No payment states. 'When paid' is not offered." Online and offline offer all three rules. */
 const SPEC_RULES: Readonly<Record<PaymentMethod, readonly GoLiveRule[]>> = {
@@ -267,7 +294,8 @@ const PATCHES: Readonly<Record<PatchKind, PatchSponsorInput>> = {
   streamOff: { on_stream: false },
 };
 
-type Cmd =
+/** A primitive command: one step, one usecase or one webhook (or one world change), checked on its own. */
+type Prim =
   | { k: "create"; s: number; p: number; scoped: boolean; m: PaymentMethod; r: GoLiveRule; ends: number | null; endCurrent: boolean }
   | { k: "send"; d: number }
   | { k: "markPaid"; d: number }
@@ -283,11 +311,24 @@ type Cmd =
   | { k: "age"; days: number }
   | { k: "delete"; s: number }
   | { k: "downgrade" };
-type Kind = Cmd["k"];
+/**
+ * A macro: a chain of primitive steps aimed, at run time, at a target the chain needs (T11 review I3: two chains a uniform
+ * generator almost never strings together). Each of its steps is checked like any other.
+ *  - `f7`: a paid deal that is its sponsor's last open one ends by hand → the sponsor is switched back on by hand → a late event
+ *    on that deal (`refunded`: charge.refunded; `dispute`: charge.dispute.created). F7: the late event must not rewrite the
+ *    hand-set row.
+ *  - `f19`: a live deal with a deal queued behind it; `past`: time passes until the queued deal's own end has gone, with no
+ *    sweep; then the live deal ends by hand. F19: a past-end queued deal is never promoted; otherwise the queue promotes it.
+ */
+type Macro = { k: "f7"; d: number; late: "refunded" | "dispute" } | { k: "f19"; d: number; past: boolean };
+type Cmd = Prim | Macro;
+type Kind = Prim["k"];
 const KINDS: readonly Kind[] = [
   "create", "send", "markPaid", "approve", "endNow", "refund", "patch", "checkout", "paid", "refunded", "dispute", "sweep",
   "age", "delete", "downgrade",
 ];
+const MACROS: readonly Macro["k"][] = ["f7", "f19"];
+const isMacro = (c: Cmd): c is Macro => c.k === "f7" || c.k === "f19";
 
 const ix = fc.nat({ max: 23 });
 const createArb: fc.Arbitrary<Cmd> = fc.record({
@@ -327,6 +368,8 @@ const cmdArb: fc.Arbitrary<Cmd> = fc.oneof(
   { weight: 1, arbitrary: fc.record({ k: fc.constant("age" as const), days: fc.constantFrom(2, 4, 9) }) },
   { weight: 1, arbitrary: fc.record({ k: fc.constant("delete" as const), s: fc.constantFrom(0, 1) }) },
   { weight: 1, arbitrary: fc.record({ k: fc.constant("downgrade" as const) }) },
+  { weight: 4, arbitrary: fc.record({ k: fc.constant("f7" as const), d: ix, late: fc.constantFrom<"refunded" | "dispute">("refunded", "dispute") }) },
+  { weight: 4, arbitrary: fc.record({ k: fc.constant("f19" as const), d: ix, past: fc.boolean() }) },
 );
 
 /** 1–14 commands (the brief): 1–4 deals made first, so the actions after them have deals to act on (a command with no target
@@ -385,6 +428,9 @@ interface MDeal {
   session: string | null;
   endsAt: number | null;
   email: string | null;
+  /** The package's price at createDeal; a duplicate row's is the second intent's. */
+  amount: number;
+  currency: string;
   /** F36: the package's tier and On-stream flag at the moment of createDeal, recorded by the model. */
   snapshot: { tier: SponsorTier; on_stream: boolean };
   /** The one dispute a charge can carry (Stripe). */
@@ -448,8 +494,20 @@ const cover = {
   refused422: 0,
   paidOnlineRefusal: 0,
   sessionCarriedOver: 0,
+  /** F32: an accepted send on a deal whose open session is stored reuses it (no second payable link). */
+  sendReusedSession: 0,
+  /** A console refund that went through Stripe (one refunds.create for the deal's intent), and one recorded by hand. */
+  stripeRefund: 0,
+  handRefund: 0,
+  /** The macros (I3 of the T11 review): the F7 chain run to its end, and F19's two halves. */
+  f7Chain: 0,
+  f19PastEnd: 0,
+  f19Promotion: 0,
 };
 type Cover = keyof typeof cover;
+
+/** How many subjects each invariant judged (anti-vacuity per invariant: an invariant that never met its subject proved nothing). */
+const subjects = { I1: 0, I2: 0, I2manual: 0, I3: 0, I5: 0, I6: 0, I7: 0, I8: 0 };
 
 /**
  * D8, typed (the order matters): no deal → nothing; no live deal → the earliest scheduled deal whose own end has not passed goes
@@ -583,14 +641,16 @@ async function buildWorld(spec: WorldSpec): Promise<{ w: World; m: Model }> {
   for (const p of PACKAGES) {
     const row = await createSponsorPackage(auth, {
       name: `Pkg ${p.tier} ${uniq()}`,
-      price_cents: 25_000,
-      currency: "gbp",
+      price_cents: p.priceCents,
+      currency: p.currency,
       tier: p.tier,
       competition_id: p.scopedToC ? compId : null,
       includes_on_stream: p.onStream,
     });
-    // Premise: the package holds what this test declared (the model's snapshot source, F36).
-    if (row.tier !== p.tier || row.includes_on_stream !== p.onStream) throw new Error(`rig premise: package ${row.id} is not ${JSON.stringify(p)}`);
+    // Premise: the package holds what this test declared (the model's snapshot and price source, F36).
+    if (row.tier !== p.tier || row.includes_on_stream !== p.onStream || row.price_cents !== p.priceCents || row.currency !== p.currency) {
+      throw new Error(`rig premise: package ${row.id} is not ${JSON.stringify(p)}`);
+    }
     packageIds.push(row.id);
   }
   const sponsorIds: string[] = [];
@@ -650,6 +710,8 @@ interface DealDb {
   payment_intent_id: string | null;
   checkout_session_id: string | null;
   ends_at: Date | null;
+  amount_cents: number;
+  currency: string;
 }
 interface SponsorDb extends SponsorFields {
   id: string;
@@ -667,7 +729,7 @@ async function snapshot(orgId: string): Promise<Snap> {
   const deals = await sql<DealDb[]>`
     select id, sponsor_id, deal_status, status, payment_method, go_live, tier, includes_on_stream, competition_id, ended_reason,
            parked_at is not null as parked, disputed_at is not null as disputed, approved_at is not null as approved,
-           payment_intent_id, checkout_session_id, ends_at
+           payment_intent_id, checkout_session_id, ends_at, amount_cents, currency
       from sponsor_orders where org_id = ${orgId} order by created_at, id`;
   const sponsors = await sql<SponsorDb[]>`
     select id, status, tier, competition_id, on_stream, to_jsonb(s)::text as bytes from sponsors s where s.org_id = ${orgId}`;
@@ -770,14 +832,30 @@ interface Step {
   /** The sponsors whose deals this step moved or received an event on. */
   touched: Set<string>;
   sweep?: { want: SweepResult; got: SweepResult };
+  /** The Stripe refunds this step owes: one for the deal's intent on an accepted console refund of a charge, else none. */
+  refundsWant: string[];
 }
 
 function dealTarget(m: Model, d: number, pool: MDeal[] = m.deals): MDeal | null {
   return pool.length === 0 ? null : pool[d % pool.length]!;
 }
 
-async function exec(w: World, m: Model, c: Cmd, label: string): Promise<Step> {
-  const step: Step = { ran: true, refused: false, patched: null, touched: new Set() };
+/** The deals each Stripe-side command can act on (a command with an empty pool is skipped). */
+const checkoutPool = (m: Model): MDeal[] =>
+  m.deals.filter((d) => d.method === "online" && !d.duplicate && d.pendingIntent === null && d.session !== null && m.sessions.get(d.session) === "open");
+const paidPool = (m: Model): MDeal[] =>
+  m.deals.filter(
+    (d) =>
+      d.method === "online" &&
+      !d.duplicate &&
+      (d.pendingIntent !== null || (unpaid(d) && d.session !== null && m.sessions.get(d.session) === "open") || !unpaid(d)),
+  );
+const chargedPool = (m: Model): MDeal[] => m.deals.filter((x) => x.intent !== null);
+const disputePool = (m: Model, phase: "created" | "won" | "lost"): MDeal[] =>
+  m.deals.filter((x) => x.intent !== null && !(phase === "created" && x.dispute !== null && x.dispute.state !== "open"));
+
+async function exec(w: World, m: Model, c: Prim, label: string): Promise<Step> {
+  const step: Step = { ran: true, refused: false, patched: null, touched: new Set(), refundsWant: [] };
   const now = Date.now();
   const skip = (): Step => ({ ...step, ran: false });
   switch (c.k) {
@@ -839,6 +917,8 @@ async function exec(w: World, m: Model, c: Cmd, label: string): Promise<Step> {
         session: null,
         endsAt: endsOn === null ? null : Date.parse(`${endsOn}T00:00:00Z`) + DAY,
         email,
+        amount: pkg.priceCents,
+        currency: pkg.currency,
         snapshot: { tier: pkg.tier, on_stream: pkg.onStream },
         dispute: null,
         pendingIntent: null,
@@ -866,8 +946,10 @@ async function exec(w: World, m: Model, c: Cmd, label: string): Promise<Step> {
       const res = await attempt(() => sendDealInvoice(w.auth, d.id, ORIGIN));
       if (verdict(label, res, refusals)) return { ...step, refused: true };
       step.touched.add(m.sponsors[d.sponsor]!.id);
-      // The stored session is reused while Stripe calls it open (F32); with none stored, one is minted.
+      // The stored session is reused while Stripe calls it open (F32); with none stored, one is minted. (A stored session is open
+      // here: the model forgets one the code expires, and a completed one refused above.)
       if (d.session === null) adoptMinted(m, d, label);
+      else cover.sendReusedSession++;
       d.status = specAfterSend(d.status);
       modelApply(m, d.sponsor, now, null);
       return step;
@@ -926,6 +1008,14 @@ async function exec(w: World, m: Model, c: Cmd, label: string): Promise<Step> {
       const res = await attempt(() => refundDeal(w.auth, d.id));
       if (verdict(label, res, refusals)) return { ...step, refused: true };
       step.touched.add(m.sponsors[d.sponsor]!.id);
+      // Spec §5.2 / refundDeal's contract: money a charge paid goes back through Stripe, once, for THAT intent (transfer reversed,
+      // fee returned); money recorded by hand (offline, or online marked paid: T2-I1) is written down only — no Stripe call.
+      if (d.intent !== null) {
+        step.refundsWant = [d.intent];
+        cover.stripeRefund++;
+      } else {
+        cover.handRefund++;
+      }
       modelRefundFlip(m, d, now);
       return step;
     }
@@ -963,26 +1053,21 @@ async function exec(w: World, m: Model, c: Cmd, label: string): Promise<Step> {
     }
     case "checkout": {
       // The sponsor completes Checkout at Stripe. No usecase runs: the webhook is still on its way (Review Focus 1's window).
-      const pool = m.deals.filter((d) => d.method === "online" && !d.duplicate && d.pendingIntent === null && d.session !== null && m.sessions.get(d.session) === "open");
-      const d = dealTarget(m, c.d, pool);
+      const d = dealTarget(m, c.d, checkoutPool(m));
       if (!d) return skip();
       W.sessions.get(d.session!)!.status = "complete";
       m.sessions.set(d.session!, "complete");
       d.pendingIntent = newIntent();
+      W.charges.set(d.pendingIntent, "paid"); // Stripe holds the charge; the webhook has not told the code yet
       return step;
     }
     case "paid": {
       // payment_intent.succeeded. The in-flight payment if the sponsor completed Checkout; else, on an unpaid deal with an open
       // session, the sponsor pays now; on a paid (or refunded) deal, a redelivery of its intent or a second intent (F3).
-      const pool = m.deals.filter(
-        (d) =>
-          d.method === "online" &&
-          !d.duplicate &&
-          (d.pendingIntent !== null || (unpaid(d) && d.session !== null && m.sessions.get(d.session) === "open") || !unpaid(d)),
-      );
-      const d = dealTarget(m, c.d, pool);
+      const d = dealTarget(m, c.d, paidPool(m));
       if (!d) return skip();
       let intent: string;
+      let amount = d.amount;
       if (d.pendingIntent !== null) {
         intent = d.pendingIntent;
         d.pendingIntent = null;
@@ -990,9 +1075,13 @@ async function exec(w: World, m: Model, c: Cmd, label: string): Promise<Step> {
         W.sessions.get(d.session!)!.status = "complete";
         m.sessions.set(d.session!, "complete");
         intent = newIntent();
+      } else if (c.again && d.intent !== null) {
+        intent = d.intent;
       } else {
-        intent = c.again && d.intent !== null ? d.intent : newIntent();
+        intent = newIntent();
+        amount = d.amount + SECOND_PAYMENT_EXTRA_CENTS;
       }
+      if (!W.charges.has(intent)) W.charges.set(intent, "paid");
       step.touched.add(m.sponsors[d.sponsor]!.id);
       if (!unpaid(d)) {
         if (dealsOf(m, d.sponsor).some((x) => x.intent === intent)) {
@@ -1014,6 +1103,9 @@ async function exec(w: World, m: Model, c: Cmd, label: string): Promise<Step> {
             intent,
             session: null,
             endsAt: null,
+            // The intent's own sum and currency (sponsors.ts recordDuplicatePayment), never the deal's.
+            amount,
+            currency: d.currency,
             snapshot: { ...d.snapshot },
             dispute: null,
             pendingIntent: null,
@@ -1041,9 +1133,9 @@ async function exec(w: World, m: Model, c: Cmd, label: string): Promise<Step> {
         ev("payment_intent.succeeded", {
           id: intent,
           object: "payment_intent",
-          amount: 25_000,
-          amount_received: 25_000,
-          currency: "gbp",
+          amount,
+          amount_received: amount,
+          currency: d.currency,
           status: "succeeded",
           metadata: { kind: "sponsor", order_id: d.id, org_id: m.orgId },
         }),
@@ -1057,18 +1149,21 @@ async function exec(w: World, m: Model, c: Cmd, label: string): Promise<Step> {
     }
     case "refunded": {
       // charge.refunded (a refund made in the Stripe dashboard): only a PAID row on that intent flips.
-      const d = dealTarget(m, c.d, m.deals.filter((x) => x.intent !== null));
+      const d = dealTarget(m, c.d, chargedPool(m));
       if (!d) return skip();
       step.touched.add(m.sponsors[d.sponsor]!.id);
       if (d.payment === "paid") modelRefundFlip(m, d, now);
-      await deliver(label, ev("charge.refunded", { id: `ch_${uniq()}`, object: "charge", payment_intent: d.intent, refunded: true, amount: 25_000, amount_refunded: 25_000 }));
+      if (W.charges.get(d.intent!) === "paid") W.charges.set(d.intent!, "refunded"); // the dashboard refunded it at Stripe
+      await deliver(
+        label,
+        ev("charge.refunded", { id: `ch_${uniq()}`, object: "charge", payment_intent: d.intent, refunded: true, amount: d.amount, amount_refunded: d.amount, currency: d.currency }),
+      );
       return step;
     }
     case "dispute": {
       // One dispute per charge (Stripe): created → closed won | lost. A closed dispute is only ever redelivered as its outcome;
       // a `created` after the close is out-of-order delivery, out of this model's scope (skipped).
-      const pool = m.deals.filter((x) => x.intent !== null && !(c.phase === "created" && x.dispute !== null && x.dispute.state !== "open"));
-      const d = dealTarget(m, c.d, pool);
+      const d = dealTarget(m, c.d, disputePool(m, c.phase));
       if (!d) return skip();
       step.touched.add(m.sponsors[d.sponsor]!.id);
       const phase = d.dispute !== null && d.dispute.state !== "open" ? d.dispute.state : c.phase;
@@ -1098,13 +1193,17 @@ async function exec(w: World, m: Model, c: Cmd, label: string): Promise<Step> {
         modelApply(m, d.sponsor, now, wasOpen ? d : null);
       }
       const status = phase === "created" ? "needs_response" : phase;
+      // Stripe's side of the charge: disputed while open; back to paid if won; charged back if lost.
+      const charge = W.charges.get(d.intent!);
+      if (charge !== "refunded" && charge !== "lost") W.charges.set(d.intent!, phase === "created" ? "disputed" : phase === "won" ? "paid" : "lost");
       await deliver(
         label,
         ev(phase === "created" ? "charge.dispute.created" : "charge.dispute.closed", {
           id: disputeId,
           object: "dispute",
           payment_intent: d.intent,
-          amount: 25_000,
+          amount: d.amount,
+          currency: d.currency,
           status,
         }),
       );
@@ -1146,8 +1245,12 @@ async function exec(w: World, m: Model, c: Cmd, label: string): Promise<Step> {
       // clock IS the clock moving on. A world step, like Checkout: no usecase runs. It is what makes F19 reachable by a console
       // writer — a scheduled deal past its own end is never promoted, whoever ends the live deal ahead of it.
       // Whole 24-hour days, never `days =>`: Postgres applies a day interval to the session zone's wall clock, so a step across a
-      // DST change would move the date 23 or 25 hours while the model moves it k × 24 h (the regression case below).
-      await sql`update sponsor_orders set ends_at = ends_at - make_interval(hours => ${c.days * 24}) where org_id = ${m.orgId} and ends_at is not null`;
+      // DST change would move the date 23 or 25 hours while the model moves it k × 24 h (the regression case below). The
+      // statement runs in a zone that keeps DST whatever the database's own (CI's is UTC), so that regression can fail anywhere.
+      await sql.begin(async (tx) => {
+        await tx`set local time zone 'Europe/London'`;
+        await tx`update sponsor_orders set ends_at = ends_at - make_interval(hours => ${c.days * 24}) where org_id = ${m.orgId} and ends_at is not null`;
+      });
       for (const d of m.deals) if (d.endsAt !== null) d.endsAt -= c.days * DAY;
       return step;
     }
@@ -1195,13 +1298,16 @@ function check(label: string, m: Model, before: Snap, after: Snap, step: Step | 
   for (const [sid, row] of after.sponsors) {
     const deals = bySponsor.get(sid) ?? [];
     const lives = deals.filter((d) => d.deal_status === "live");
+    if (lives.length > 0) subjects.I1++;
     if (lives.length > 1) f(`I1: sponsor ${sid} has ${lives.length} live deals`);
     const governed = deals.some((d) => d.deal_status !== "ended");
     if (governed) {
+      subjects.I2++;
       const shown = lives.some((d) => !d.parked);
       if ((row.status === "active") !== shown) f(`I2: sponsor ${sid} is ${row.status} but ${shown ? "has" : "has no"} live unparked deal`);
     }
     const live = lives[0];
+    if (live) subjects.I3++;
     if (live && (row.tier !== live.tier || row.competition_id !== live.competition_id || row.on_stream !== live.includes_on_stream)) {
       f(`I3: sponsor ${sid} shows ${row.tier}/${row.competition_id}/${row.on_stream}; its live deal is ${live.tier}/${live.competition_id}/${live.includes_on_stream}`);
     }
@@ -1210,12 +1316,16 @@ function check(label: string, m: Model, before: Snap, after: Snap, step: Step | 
   if (after.sponsors.size !== 2 - m.deletes) f(`I4: the org has ${after.sponsors.size} sponsor rows; 2 made, ${m.deletes} deleted`);
   if (alive !== 2 - m.deletes) f(`model: ${alive} sponsors alive, ${m.deletes} deleted`);
   for (const d of after.deals) {
+    if (d.deal_status === "live" && d.go_live === "on_approval") subjects.I5++;
     if (d.deal_status === "live" && d.go_live === "on_approval" && !d.approved) f(`I5: deal ${d.id} is live on After-I-approve and was never approved`);
+    if (d.deal_status === "live" && d.go_live === "on_payment") subjects.I6++;
     if (d.deal_status === "live" && d.go_live === "on_payment" && (d.status === "pending" || d.status === "failed")) {
       f(`I6: deal ${d.id} is live on When-paid with its money ${d.status}`);
     }
+    if (d.status === "refunded") subjects.I7++;
     if (d.status === "refunded" && d.deal_status !== "ended") f(`I7: deal ${d.id} is refunded but ${d.deal_status}`);
     const md = m.deals.find((x) => x.id === d.id);
+    if (md) subjects.I8++;
     if (md && (d.tier !== md.snapshot.tier || d.includes_on_stream !== md.snapshot.on_stream)) {
       f(`I8: deal ${d.id} carries ${d.tier}/${d.includes_on_stream}; its package was ${md.snapshot.tier}/${md.snapshot.on_stream} at creation`);
     }
@@ -1244,6 +1354,8 @@ function check(label: string, m: Model, before: Snap, after: Snap, step: Step | 
       payment_method: md.method,
       go_live: md.rule,
       ends_at: md.endsAt,
+      amount_cents: md.amount,
+      currency: md.currency,
     };
     const got = { ...d, ends_at: d.ends_at === null ? null : new Date(d.ends_at).getTime() };
     for (const key of Object.keys(want) as (keyof typeof want)[]) {
@@ -1282,6 +1394,10 @@ function check(label: string, m: Model, before: Snap, after: Snap, step: Step | 
     if (!db) f(`M5: deal ${deal} is gone but its Checkout session is still open (a later payment would record nothing)`);
     else if (db.deal_status === "ended") f(`M5: deal ${deal} has ended but its Checkout session is still open`);
   }
+  // The money path: the refunds this step sent to Stripe are exactly the ones it owes (none, or one for the refunded intent).
+  const refundsGot = JSON.stringify(W.refunds.map((r) => r.payment_intent));
+  const refundsWant = JSON.stringify(step?.refundsWant ?? []);
+  if (refundsGot !== refundsWant) f(`M5: Stripe refunds this step ${refundsGot}; the model says ${refundsWant}`);
 
   // --- M6: owner alerts ------------------------------------------------------------------------------------------------------------
   const got = W.alerts.map((a) => `${a.reason}:${a.dealId}`).sort();
@@ -1301,6 +1417,7 @@ function check(label: string, m: Model, before: Snap, after: Snap, step: Step | 
       const manualBefore = !governedIn(before, sid);
       const manualAfter = !governedIn(after, sid);
       if (manualBefore && manualAfter) {
+        if (after.deals.some((d) => d.sponsor_id === sid)) subjects.I2manual++;
         if (step.patched !== sid && prev.bytes !== row.bytes) f(`I2: sponsor ${sid} is under manual control and a step that is not a patch rewrote it: ${prev.bytes} → ${row.bytes}`);
         else if (step.touched.has(sid) && after.deals.some((d) => d.sponsor_id === sid)) cover.manualHeldOnLateEvent++;
       } else if (!manualBefore && manualAfter) {
@@ -1321,18 +1438,112 @@ const drain = async (): Promise<void> => {
   }
 };
 
+const macroStats = Object.fromEntries(MACROS.map((k) => [k, { completed: 0, broken: 0, noTarget: 0 }])) as Record<
+  Macro["k"],
+  { completed: number; broken: number; noTarget: number }
+>;
+
+/** The head of a sponsor's queue (§8a: the earliest scheduled deal). */
+const queueHead = (m: Model, sp: number): MDeal | undefined => dealsOf(m, sp).find((x) => x.status === "scheduled");
+
+/**
+ * A macro's steps, each resolved against the model as it stands when that step runs (a null step: the chain broke). The chain
+ * aims at a target that already exists; with none, it makes one through createDeal first (the macro's own steps, checked like
+ * the rest), and with no way to make one (every sponsor gone; f7 on a plan that cannot sell online) it answers null.
+ */
+type MacroStep = () => Prim | null;
+function planMacro(m: Model, c: Macro): MacroStep[] | null {
+  const created = (): MDeal => m.deals[m.deals.length - 1]!;
+  if (c.k === "f7") {
+    // A paid (by a charge) deal that is its sponsor's last open one.
+    const pool = m.deals.filter(
+      (d) =>
+        !d.duplicate &&
+        d.intent !== null &&
+        d.status !== "ended" &&
+        m.sponsors[d.sponsor]!.alive &&
+        offered(d).includes("end_now") &&
+        dealsOf(m, d.sponsor).every((x) => x === d || x.status === "ended"),
+    );
+    let t = dealTarget(m, c.d, pool);
+    const tail: MacroStep[] = [
+      () => ({ k: "endNow", d: m.deals.indexOf(t!) }),
+      () => ({ k: "patch", s: t!.sponsor, f: "on" }),
+      () => {
+        const late = c.late === "refunded" ? chargedPool(m) : disputePool(m, "created");
+        const i = late.indexOf(t!);
+        if (i < 0) return null;
+        return c.late === "refunded" ? { k: "refunded", d: i } : { k: "dispute", d: i, phase: "created" };
+      },
+    ];
+    if (t) return tail;
+    // None: sell one. The partner package, online, When paid — org-wide on Pro, on C with an Event Pass — to a sponsor with no
+    // open deal; the sponsor pays it at Stripe; then the chain.
+    if (m.plan === "community") return null;
+    const sp = [c.d % 2, 1 - (c.d % 2)].find((i) => m.sponsors[i]!.alive && dealsOf(m, i).every((x) => x.status === "ended"));
+    if (sp === undefined) return null;
+    return [
+      () => ({ k: "create", s: sp, p: 0, scoped: m.plan === "event_pass", m: "online", r: "on_payment", ends: null, endCurrent: false }),
+      () => {
+        t = created();
+        const i = paidPool(m).indexOf(t);
+        return i < 0 ? null : { k: "paid", d: i, again: false };
+      },
+      ...tail,
+    ];
+  }
+  // f19: a live deal with a deal queued behind it (one with an end date, for `past`).
+  const pool = m.deals.filter((d) => {
+    if (d.status !== "live" || !m.sponsors[d.sponsor]!.alive || !offered(d).includes("end_now")) return false;
+    const head = queueHead(m, d.sponsor);
+    return head !== undefined && (!c.past || head.endsAt !== null);
+  });
+  const target = dealTarget(m, c.d, pool);
+  // The live deal and the head of its queue, read when the age and the end run (after any deals this macro made).
+  let sp: number;
+  const plan: MacroStep[] = [];
+  if (target) {
+    sp = target.sponsor;
+  } else {
+    // None: build the queue on a sponsor with no queue — a complimentary partner deal live at once if it has no live deal, then
+    // one queued behind it that ends in a day (both allowed on every plan).
+    const pick = [c.d % 2, 1 - (c.d % 2)].find((i) => m.sponsors[i]!.alive && queueHead(m, i) === undefined);
+    if (pick === undefined) return null;
+    sp = pick;
+    const make = (ends: number | null): MacroStep => () => ({ k: "create", s: sp, p: 0, scoped: false, m: "complimentary", r: "immediate", ends, endCurrent: false });
+    if (!dealsOf(m, sp).some((x) => x.status === "live")) plan.push(make(null));
+    plan.push(make(1));
+  }
+  const liveOf = (): MDeal | undefined => dealsOf(m, sp).find((x) => x.status === "live");
+  if (c.past) {
+    // Exactly enough days with no sweep for the queued deal's own end to pass (at least one).
+    plan.push(() => {
+      const head = queueHead(m, sp);
+      return head?.endsAt == null ? null : { k: "age", days: Math.max(1, Math.ceil((head.endsAt - Date.now()) / DAY)) };
+    });
+  }
+  plan.push(() => {
+    const live = liveOf();
+    return live === undefined || queueHead(m, sp) === undefined ? null : { k: "endNow", d: m.deals.indexOf(live) };
+  });
+  return plan;
+}
+
 /** Build a world, then run the commands through the real code, checking everything after every step. */
 async function runSequence(spec: WorldSpec, cmds: readonly Cmd[]): Promise<number> {
   stats.runs++;
   const { w, m } = await buildWorld(spec);
   W.alerts.length = 0;
+  W.refunds.length = 0;
+  const world = `[${spec.plan}${spec.finished ? ", C finished" : ""}]`;
   let before = await snapshot(w.orgId);
-  check(`[${spec.plan}${spec.finished ? ", C finished" : ""}] step 0 (the world)`, m, before, before, null);
+  check(`${world} step 0 (the world)`, m, before, before, null);
   const trace: string[] = [];
   let checked = 0;
-  for (const [i, c] of cmds.entries()) {
-    const label = `[${spec.plan}${spec.finished ? ", C finished" : ""}] step ${i + 1} ${JSON.stringify(c)}`;
+  /** One primitive step: run it, drain its tail work, read the database back, check everything. */
+  const runStep = async (c: Prim, label: string): Promise<Step> => {
     W.alerts.length = 0;
+    W.refunds.length = 0;
     m.alerts = [];
     let step: Step;
     try {
@@ -1349,20 +1560,56 @@ async function runSequence(spec: WorldSpec, cmds: readonly Cmd[]): Promise<numbe
     if (!step.ran) {
       k.skipped++;
       trace.push(`${c.k}(skipped)`);
-      continue;
+      return step;
     }
     k.executed++;
     if (step.refused) k.refused++;
     else k.accepted++;
     checked++;
     trace.push(`${c.k}${step.refused ? "(refused)" : ""}`);
+    return step;
+  };
+  for (const [i, c] of cmds.entries()) {
+    const label = `${world} step ${i + 1} ${JSON.stringify(c)}`;
+    if (!isMacro(c)) {
+      await runStep(c, label);
+      continue;
+    }
+    const plan = planMacro(m, c);
+    const ms = macroStats[c.k];
+    if (plan === null) {
+      ms.noTarget++;
+      trace.push(`${c.k}(no target)`);
+      continue;
+    }
+    let done = true;
+    for (const [j, next] of plan.entries()) {
+      const p = next();
+      if (p === null) {
+        done = false;
+        break;
+      }
+      const step = await runStep(p, `${label} ⟨${j + 1}/${plan.length} ${JSON.stringify(p)}⟩`);
+      if (!step.ran || step.refused) {
+        done = false;
+        break;
+      }
+    }
+    if (!done) {
+      ms.broken++;
+      continue;
+    }
+    ms.completed++;
+    if (c.k === "f7") cover.f7Chain++;
+    else if (c.past) cover.f19PastEnd++;
+    else cover.f19Promotion++;
   }
   stats.stepsChecked += checked;
   return checked;
 }
 
-/** Run one hand-written sequence and assert the coverage counters it exists to reach moved. */
-async function scenario(spec: WorldSpec, cmds: readonly Cmd[], reaches: readonly Cover[]): Promise<void> {
+/** Run one hand-written sequence (primitives only) and assert the coverage counters it exists to reach moved. */
+async function scenario(spec: WorldSpec, cmds: readonly Prim[], reaches: readonly Cover[]): Promise<void> {
   const at = { ...cover };
   const steps = await runSequence(spec, cmds);
   expect(steps, "anti-vacuity: the scenario executed every step").toBe(cmds.length);
@@ -1373,7 +1620,7 @@ async function scenario(spec: WorldSpec, cmds: readonly Cmd[], reaches: readonly
 // Named scenarios: the cases the brief names, through the same runner and the same checks
 // =================================================================================================================================
 
-const C = (over: Partial<Extract<Cmd, { k: "create" }>> = {}): Cmd => ({
+const C = (over: Partial<Extract<Prim, { k: "create" }>> = {}): Prim => ({
   k: "create", s: 0, p: 0, scoped: false, m: "offline", r: "on_payment", ends: null, endCurrent: false, ...over,
 });
 
@@ -1418,7 +1665,7 @@ describe.skipIf(!HAS_DB)("sponsor deals, model-based: named scenarios (DB)", () 
     );
   }, 120_000);
 
-  it("the sweep: ends a finished competition's deal, then an expired live one (no promotion of a past-end deal), then the last open one", async () => {
+  it("the sweep: ends the queued deal on a finished competition first, then the expired live one (nothing left to promote), then the last open one; a second call does nothing", async () => {
     await scenario(
       { plan: "pro", finished: true },
       [
@@ -1538,6 +1785,27 @@ describe.skipIf(!HAS_DB)("sponsor deals, model-based: named scenarios (DB)", () 
       ["transitionReset", "refused409"],
     );
   }, 120_000);
+
+  it("the money path: a resend reuses the open link (F32); a charge is refunded through Stripe once, for its own intent; money marked paid by hand is refunded by hand; a second payment's row carries its own sum", async () => {
+    await scenario(
+      { plan: "pro", finished: false },
+      [
+        C({ m: "online" }), // 0: an open link, awaiting payment
+        { k: "send", d: 0 }, // resend: the open session is reused, no second link (F32)
+        { k: "paid", d: 0, again: false }, // live, paid by charge pi_1
+        { k: "refund", d: 0 }, // one Stripe refund, for pi_1; ended refunded: the reset
+        { k: "refunded", d: 0 }, // Stripe's own event for that refund: no second refund, nothing moves
+        C({ s: 1, m: "online", r: "immediate" }), // 1: live at once, awaiting payment
+        { k: "markPaid", d: 1 }, // paid by hand (T2-I1): no intent; the link is closed
+        { k: "refund", d: 1 }, // recorded only: no Stripe call
+        C({ p: 1, m: "online" }), // 2: gold, an open link
+        { k: "paid", d: 2, again: false }, // live, paid by charge pi_2
+        { k: "paid", d: 2, again: false }, // 3: a second charge for another sum: its own row, that sum
+        { k: "refund", d: 3 }, // that row refunds through Stripe, for ITS intent
+      ],
+      ["sendReusedSession", "stripeRefund", "handRefund", "transitionReset", "duplicatePayment"],
+    );
+  }, 120_000);
 });
 
 // =================================================================================================================================
@@ -1550,13 +1818,13 @@ describe.skipIf(!HAS_DB)("sponsor deals, model-based: regression cases (DB)", ()
   // create(ends in a day) → age 9 → age 9, the second age crossing 2026-10-25 (BST ends). `age` moved ends_at by
   // `make_interval(days => k)`, which Postgres applies in the SESSION time zone's wall clock, so a step across a DST change moved
   // it 23 or 25 hours; the model moves it k × 24 h. A harness defect, not the code's: the usecases never shift an end date. The
-  // walk below is 225 days of outage, longer than any gap between DST changes in a zone that keeps DST (Europe/London's longest
-  // is ~217 days), so it crosses at least one from any start date on such a database (the seazn-env DBs run Europe/London); on
-  // a UTC database it has nothing to cross and checks the same arithmetic.
+  // walk below is 225 days of outage, longer than any gap between DST changes in Europe/London (the longest is ~217 days), and
+  // `age` runs its statement under `set local time zone 'Europe/London'`, so the walk crosses at least one change from any start
+  // date on any database, CI's UTC one included.
   it("regression: `age` moves an end date by whole 24-hour days, so an outage that crosses a DST change agrees with the model", async () => {
     await scenario(
       { plan: "pro", finished: false },
-      [C({ m: "online", ends: 1 }), ...Array.from({ length: 25 }, (): Cmd => ({ k: "age", days: 9 }))],
+      [C({ m: "online", ends: 1 }), ...Array.from({ length: 25 }, (): Prim => ({ k: "age", days: 9 }))],
       [],
     );
   }, 120_000);
@@ -1566,9 +1834,25 @@ describe.skipIf(!HAS_DB)("sponsor deals, model-based: regression cases (DB)", ()
 // The property
 // =================================================================================================================================
 
+/** The property's own counts, then the whole file's (written to SPONSOR_DEALS_MODEL_REPORT: console.log is swallowed under the
+ *  JSON reporter). */
+let property: Record<string, unknown> | null = null;
+function report(aggregate?: Record<string, unknown>): void {
+  const out = JSON.stringify({ ...(property ?? {}), ...(aggregate ? { aggregate } : {}) });
+  console.log(`[sponsor-deals-model] ${out}`);
+  if (process.env.SPONSOR_DEALS_MODEL_REPORT) writeFileSync(process.env.SPONSOR_DEALS_MODEL_REPORT, out);
+}
+
 describe.skipIf(!HAS_DB)("sponsor deals, model-based: random sequences (DB)", () => {
   it(`${RUNS} random worlds × 1–14 commands: I1–I8 and the model hold after every step`, async () => {
-    const at = { runs: stats.runs, steps: stats.stepsChecked, kinds: structuredClone(stats.kinds), cover: { ...cover } };
+    const at = {
+      runs: stats.runs,
+      steps: stats.stepsChecked,
+      kinds: structuredClone(stats.kinds),
+      cover: { ...cover },
+      subjects: { ...subjects },
+      macros: structuredClone(macroStats),
+    };
     await fc.assert(
       fc.asyncProperty(worldArb, seqArb, async (spec, cmds) => {
         await runSequence(spec, cmds);
@@ -1589,12 +1873,47 @@ describe.skipIf(!HAS_DB)("sponsor deals, model-based: random sequences (DB)", ()
       ]),
     );
     const reached = Object.fromEntries((Object.keys(cover) as Cover[]).map((c) => [c, cover[c] - at.cover[c]]));
-    const report = JSON.stringify({ seed: SEED, runs, stepsChecked: steps, kinds, cover: reached });
-    console.log(`[sponsor-deals-model] ${report}`);
-    if (process.env.SPONSOR_DEALS_MODEL_REPORT) writeFileSync(process.env.SPONSOR_DEALS_MODEL_REPORT, report);
-    // Anti-vacuity: the property ran, checked enough steps, and executed every command kind.
+    const judged = Object.fromEntries((Object.keys(subjects) as (keyof typeof subjects)[]).map((s) => [s, subjects[s] - at.subjects[s]]));
+    const macros = Object.fromEntries(
+      MACROS.map((k) => [
+        k,
+        {
+          completed: macroStats[k].completed - at.macros[k].completed,
+          broken: macroStats[k].broken - at.macros[k].broken,
+          noTarget: macroStats[k].noTarget - at.macros[k].noTarget,
+        },
+      ]),
+    );
+    property = { seed: SEED, runs, stepsChecked: steps, kinds, macros, subjects: judged, cover: reached };
+    report();
+    // Anti-vacuity of the property itself: it ran, and it checked enough steps. The per-kind and per-invariant floors are the
+    // aggregate's (below): a kind the pinned seed rarely draws is no reason for the suite to depend on that seed (T11 m4).
     expect(runs, "every run was a property run").toBe(RUNS);
     expect(steps, "stepsChecked across the run").toBeGreaterThanOrEqual(RUNS >= 30 ? 100 : 1);
-    for (const k of KINDS) expect(kinds[k]!.executed, `command kind ${k} executed`).toBeGreaterThan(0);
   }, 900_000);
+});
+
+// =================================================================================================================================
+// Anti-vacuity over the whole file: the scenarios, the regression case and the property together (T11 review I2, m4)
+// =================================================================================================================================
+
+describe.skipIf(!HAS_DB)("sponsor deals, model-based: anti-vacuity over every sequence run (DB)", () => {
+  it("every command kind ran; every console action was ACCEPTED at least once; a resend reused its link; both refund paths ran; every invariant judged a subject; both macros completed", () => {
+    report({ runs: stats.runs, stepsChecked: stats.stepsChecked, kinds: stats.kinds, macros: macroStats, subjects, cover });
+    expect(stats.runs, "sequences run (scenarios, regression, property)").toBeGreaterThan(RUNS);
+    for (const k of KINDS) expect(stats.kinds[k].executed, `command kind ${k} executed`).toBeGreaterThan(0);
+    // A console action that only ever answered 409 proved its refusal, never its effect.
+    for (const k of ["send", "markPaid", "approve", "endNow", "refund", "patch", "delete"] as const) {
+      expect(stats.kinds[k].accepted, `${k} accepted at least once`).toBeGreaterThan(0);
+    }
+    expect(cover.sendReusedSession, "an accepted send reused the stored open session (F32)").toBeGreaterThan(0);
+    expect(cover.stripeRefund, "a console refund went through Stripe").toBeGreaterThan(0);
+    expect(cover.handRefund, "a console refund was recorded by hand").toBeGreaterThan(0);
+    for (const s of Object.keys(subjects) as (keyof typeof subjects)[]) {
+      expect(subjects[s], `invariant ${s} judged at least one subject`).toBeGreaterThan(0);
+    }
+    for (const k of MACROS) expect(macroStats[k].completed, `macro ${k} ran to its end`).toBeGreaterThan(0);
+    expect(cover.f19PastEnd, "f19 past its end").toBeGreaterThan(0);
+    expect(cover.f19Promotion, "f19 with the queue promoting").toBeGreaterThan(0);
+  });
 });
