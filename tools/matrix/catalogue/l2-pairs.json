@@ -11,7 +11,7 @@
     834
   ],
   "targets": {
-    "rowScenario": 1510,
+    "rowScenario": 1511,
     "sportScenario": 945
   },
   "runs": [
@@ -15848,7 +15848,7 @@
     {
       "n": 1274,
       "scenario": "Q3",
-      "row": "knockout_third_place",
+      "row": "knockout",
       "sport": "football",
       "preset": "11-a-side",
       "bound": null,
@@ -15868,6 +15868,7 @@
       "bound": null,
       "width": 320,
       "covers": [
+        "row",
         "sport"
       ],
       "l3Gap": null
@@ -15875,7 +15876,7 @@
     {
       "n": 1276,
       "scenario": "Q3",
-      "row": "knockout_third_place",
+      "row": "knockout",
       "sport": "boardgame",
       "preset": "blitz",
       "bound": null,
@@ -15888,7 +15889,7 @@
     {
       "n": 1277,
       "scenario": "Q3",
-      "row": "knockout_third_place",
+      "row": "knockout",
       "sport": "carrom",
       "preset": "club-29",
       "bound": null,
@@ -15901,7 +15902,7 @@
     {
       "n": 1278,
       "scenario": "Q3",
-      "row": "knockout_third_place",
+      "row": "knockout",
       "sport": "generic",
       "preset": "score",
       "bound": null,
@@ -15914,7 +15915,7 @@
     {
       "n": 1279,
       "scenario": "Q3",
-      "row": "knockout_third_place",
+      "row": "knockout",
       "sport": "volleyball",
       "preset": "beach",
       "bound": null,
@@ -15927,7 +15928,7 @@
     {
       "n": 1280,
       "scenario": "Q3",
-      "row": "knockout_third_place",
+      "row": "knockout",
       "sport": "badminton",
       "preset": "bwf-3x15",
       "bound": null,
@@ -15940,7 +15941,7 @@
     {
       "n": 1281,
       "scenario": "Q3",
-      "row": "knockout_third_place",
+      "row": "knockout",
       "sport": "tabletennis",
       "preset": "bo5",
       "bound": null,
@@ -15953,7 +15954,7 @@
     {
       "n": 1282,
       "scenario": "Q3",
-      "row": "knockout_third_place",
+      "row": "knockout",
       "sport": "tennis",
       "preset": "tour",
       "bound": null,
@@ -15966,7 +15967,7 @@
     {
       "n": 1283,
       "scenario": "Q3",
-      "row": "knockout_third_place",
+      "row": "knockout",
       "sport": "icehockey",
       "preset": "iihf",
       "bound": null,
@@ -15979,7 +15980,7 @@
     {
       "n": 1284,
       "scenario": "Q3",
-      "row": "knockout_third_place",
+      "row": "knockout",
       "sport": "hockey",
       "preset": "fih-outdoor",
       "bound": null,

@@ -6,6 +6,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { stagesSource } from "./stages-source.ts";
+import { thirdPlaceFlagOf } from "../../../apps/web/src/lib/third-place.ts";
 import { STAGE_TEMPLATES, buildTemplateStages } from "../../../apps/web/src/lib/format-templates.ts";
 import { deciderKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
@@ -36,7 +37,8 @@ const super8 = JSON.parse(readFileSync(resolve(REPO, "apps/web/src/server/templa
 /** The product's own template build at the builder's defaults — the expected
  *  side of every API-only derivation, so no expected value is read back from
  *  catalogue.ts (TEST-STRATEGY: never derive from the code under test). */
-const product = (key: string) => buildTemplateStages(key, BUILDER_DEFAULT_KNOBS);
+// B4 T10 (format-choice.ts formatStagesFor): the builder writes the Third place choice on EVERY knockout stage, Shared as an explicit `false`.
+const product = (key: string) => buildTemplateStages(key, BUILDER_DEFAULT_KNOBS).map((d) => (d.kind === "knockout" ? { ...d, config: { ...d.config, thirdPlace: thirdPlaceFlagOf("shared") } } : d));
 
 /** Parses the PREFERRED_VARIANT literal (lib/preferred-variant.ts). Fails LOUDLY when an entry
  *  cannot be parsed (a computed key, a duplicate, an unquoted value) instead of
@@ -454,7 +456,7 @@ describe("catalogue — builder parity (text pins; a builder change reds here)",
   // Match Day D1: the builder clamps against FORMAT_BOUNDS (apps/web/src/lib/format-bounds.ts), the one set of bounds it
   // shares with Settings and the validator, so the pin reads the builder's calls by NAME and the mirror by VALUE.
   it("clamp bounds match the builder's drafts' clampKnob calls (format-choice.ts formatStagesFor, FMT5)", () => {
-    expect(BUILDER).toContain("return formatStagesFor(template, { qualified, swissRounds, poolCount, legs, standingsCarry });");
+    expect(BUILDER).toContain("return formatStagesFor(template, { qualified, swissRounds, poolCount, legs, standingsCarry, thirdPlace }, planEntrantCount);");
     expect(CHOICE).toContain("clampKnob(knobs.qualified, FORMAT_BOUNDS.qualify.min, FORMAT_BOUNDS.qualify.max)");
     expect(CHOICE).toContain("clampKnob(knobs.poolCount, FORMAT_BOUNDS.pools.min, FORMAT_BOUNDS.pools.max)");
     expect(BUILDER_KNOB_BOUNDS).toEqual({ qualified: FORMAT_BOUNDS.qualify, poolCount: FORMAT_BOUNDS.pools });

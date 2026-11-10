@@ -178,7 +178,10 @@ const bracket = hasKind(...BRACKET_STAGE_KINDS);
 const tableFed: Predicate = (f) => f.stages.some((s) => s.sources.some((src) => src.take.length > 0 && TABLE_KINDS.includes(f.stages[src.from]?.kind ?? "")));
 /** A plate: a stage fed by a bracket's losers — `firstLosses` (X-PL-6, what the template writes) or the legacy `roundLosers`. */
 const plate: Predicate = (f) => f.stages.some((s) => s.takes.includes("roundLosers") || s.takes.includes("firstLosses"));
-const thirdPlace: Predicate = (f) => f.stages.some((s) => s.kind === "knockout" && s.config.thirdPlace === true);
+/** W4 T15 (X-TP-2, ruling 270): a LONE knockout stage - the row whose one stage owes the Third place choice its whole result. Q3 reads
+ *  it in BOTH settings: Shared (the `knockout` row, `config.thirdPlace` false) ends on two 3rds, Play-off (the `knockout_third_place`
+ *  row, `true`) on a 3rd and 4th. It was `thirdPlace === true` alone while only the Play-off row could be built. */
+const loneKnockout: Predicate = (f) => f.stages.length === 1 && f.stages[0].kind === "knockout";
 const losersContinue = or(hasKind(...TABLE_KINDS, "ladder", "double_elim", "page_playoff"), plate);
 const ALL_KINDS: readonly string[] = StageKind.options;
 const drawIn = (f: CellFacts, kind: string): boolean => drawsAllowed(f.sport, f.cfg, kind as StageKind);
@@ -357,7 +360,7 @@ export const RULES: Readonly<Record<string, Rule>> = Object.freeze({
   Q1a: rule(tableFed, "no later stage fed by a points table: no qualifier is decided by lots", "groups_ko|generic", "ko_plate|generic"),
   Q1b: rule(tableFed, "no later stage fed by a points table: no qualifier is decided by the organiser", "groups_ko|generic", KO),
   Q2: rule(tableFed, "no later stage fed by a points table: nobody qualifies from a group or table", "groups_ko|generic", "qualifying_main|generic"),
-  Q3: rule(thirdPlace, "no third-place match in this row (knockout config.thirdPlace)", "knockout_third_place|generic", KO),
+  Q3: rule(loneKnockout, "no lone knockout stage in this row: no single bracket whose 3rd place the Third place choice settles", [KO, "knockout_third_place|generic"], T),
   Q4a: rule(bracket, "no final in this row: league/swiss/rotation/ladder formats end on a table or order", KO, T),
   Q4b: rule(and(bracket, tableFed), "no table to fall back on: the final is not fed by a points-table stage", "league_ko|generic", "qualifying_main|generic"),
   Q5a: rule(plate, "no plate stage in this row", "ko_plate|generic", KO),

@@ -135,8 +135,20 @@ export function builderStages(row: TemplateRowKey, knobs: TemplateKnobs = BUILDE
     qualified: clampKnob(knobs.qualified, BUILDER_KNOB_BOUNDS.qualified.min, BUILDER_KNOB_BOUNDS.qualified.max),
     poolCount: clampKnob(knobs.poolCount, BUILDER_KNOB_BOUNDS.poolCount.min, BUILDER_KNOB_BOUNDS.poolCount.max),
   };
-  return applyStandingsCarry(buildTemplateStages(row, clamped), "none");
+  // W4 B4 T10 (X-TP-2; format-choice.ts formatStagesFor): the builder writes the Third place choice on EVERY knockout stage, explicitly
+  // (Shared is `false`, never an absent key) - the stage the organiser's Create posts, so the mirror carries it too or every
+  // builder-posted-as-harness check on a knockout-bearing row would differ on `thirdPlace`. The Play-off row overrides it (below).
+  return applyStandingsCarry(buildTemplateStages(row, clamped), "none").map((d) => (d.kind === "knockout" ? { ...d, config: { ...d.config, thirdPlace: false } } : d));
 }
+
+/** W4 T15: an API-only row the division builder now BUILDS, through a control on a template rather than a template of its own - the
+ *  Third place control's Play-off segment on the knockout template (B4 T10; third-place-choice.tsx). Its stage body is the template's plus
+ *  the knob; the browser layer drives the control, so the row is no longer 🚫 in L1 (api-only-ui.ts). */
+export const KNOB_ROWS = Object.freeze({
+  knockout_third_place: Object.freeze({ template: "knockout", thirdPlace: "playoff" }),
+} as const satisfies Readonly<Record<string, { template: TemplateRowKey; thirdPlace: "playoff" }>>);
+export type KnobRowKey = keyof typeof KNOB_ROWS;
+export const isKnobRow = (row: string): row is KnobRowKey => Object.hasOwn(KNOB_ROWS, row);
 
 /** apps/web/src/server/templates/catalog/t20-super8.json — the product's one
  *  group → group → knockout shape. Pinned field by field by catalogue.test.ts. */
@@ -165,7 +177,7 @@ function apiOnlyStages(row: ApiOnlyRowKey, knobs: TemplateKnobs): StageDraft[] {
       ];
     }
     case "knockout_third_place": {
-      const ko = builderStages("knockout", knobs)[0];
+      const ko = builderStages(KNOB_ROWS.knockout_third_place.template, knobs)[0];
       return [{ ...ko, config: { ...ko.config, thirdPlace: true } }];
     }
     case "page_playoff_only":

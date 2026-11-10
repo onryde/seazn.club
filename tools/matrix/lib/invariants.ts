@@ -9,7 +9,7 @@
 import type { CheckResult } from "./results.ts";
 import type { CaseFact, InvariantResult, ObservedFixture, ObservedRun, ObservedStage } from "./observed.ts";
 import type { BracketKind } from "./scenarios/terminal-finals.ts";
-import { cascadeWrote, isBye, isNamedRefusal, isTerminal, sameOutcome, sameResult, twoSided, winnerOf } from "./observed.ts";
+import { cascadeWrote, crownOf, isBye, isNamedRefusal, isTerminal, sameOutcome, sameResult, twoSided, winnerOf } from "./observed.ts";
 
 export interface InvariantSpec {
   readonly id: string;
@@ -156,8 +156,19 @@ const I2: InvariantSpec = {
       // T6 carry: every entrant would red "not ranked" on top of the real
       // seeding failure, which the advance check owns. Skipped by name.
       if (seedingFailed(s)) { unread.push(`stage seq ${s.seq}`); continue; }
-      const ranks = s.complete?.finalRanks ?? [];
+      // W4 T15 (Task 3): the completion's `places` is the ranking with its ranks (a shared place is two entries on one rank); where it was read, the
+      // permutation is judged on IT, and its entrants must be `finalRanks` in the same order (two lists, one answer). A completion that served none
+      // (a fake, a seeding failure) is judged on `finalRanks` as before.
+      const places = s.complete?.places ?? null;
+      const ranks = places !== null ? places.map((p) => p.entrantId) : (s.complete?.finalRanks ?? []);
       checked += rankItems(ranks, s.field, new Set(), "not in the field", fails);
+      if (places !== null && s.complete?.finalRanks != null) {
+        checked++;
+        if (JSON.stringify(s.complete.finalRanks) !== JSON.stringify(ranks)) fails.push(`stage seq ${s.seq}: finalRanks ${s.complete.finalRanks.join(",")} are not the places' entrants in order ${ranks.join(",")}`);
+      }
+      // Who holds 1st: the places' rank-1 entrants where read (a joint title has two, a vacant one none), else the head of the list.
+      const rankOnes = places !== null ? places.filter((p) => p.rank === 1).map((p) => p.entrantId) : ranks.slice(0, 1);
+      const crown = crownOf(s.complete);
       if (s.kind === "knockout" && s.field.length > 0) {
         checked++;
         // Ruling R16-5: a withdrawn case is judged on the departures the product stored, so a run that never read them
@@ -182,8 +193,18 @@ const I2: InvariantSpec = {
         for (const e of gone) lost.add(e);
         if (gone.length > 0) notes.push(`${gone.length} departed entrant(s) counted eliminated (stored status): ${gone.join(",")}`);
         const unbeaten = s.field.filter((e) => !lost.has(e));
-        if (unbeaten.length !== 1) fails.push(`${unbeaten.length} unbeaten entrants: ${unbeaten.join(",")}`);
-        else if (ranks[0] !== unbeaten[0]) fails.push(`rank 1 is ${ranks[0] ?? "nobody"}, unbeaten is ${unbeaten[0]}`);
+        // W4 T15 (RB4-C3, RB4-C4): a JOINT final has no loser, so both finalists are unbeaten and BOTH hold 1st - a joint title satisfies "rank 1" with either of
+        // them; a VACANT title has no champion at all (both finalists departed, counted eliminated), so nobody may hold 1st. Anything else is one champion.
+        if (crown.kind === "joint") {
+          const winners = [...crown.ids];
+          if (unbeaten.length !== 2 || !winners.every((w) => unbeaten.includes(w))) fails.push(`a joint title (${winners.join(",")}) but ${unbeaten.length} unbeaten entrants: ${unbeaten.join(",")}`);
+          else if (!winners.every((w) => rankOnes.includes(w)) || (places !== null && rankOnes.length !== 2)) fails.push(`a joint title (${winners.join(",")}) but rank 1 is held by ${rankOnes.join(",") || "nobody"}`);
+        } else if (crown.kind === "vacant") {
+          if (unbeaten.length !== 0) fails.push(`a vacant title but ${unbeaten.length} unbeaten entrants: ${unbeaten.join(",")}`);
+          else if (places !== null && rankOnes.length > 0) fails.push(`a vacant title but ${rankOnes.join(",")} hold rank 1 - nobody is champion`);
+        } else if (unbeaten.length !== 1) fails.push(`${unbeaten.length} unbeaten entrants: ${unbeaten.join(",")}`);
+        else if (rankOnes[0] !== unbeaten[0] || (places !== null && rankOnes.length !== 1)) fails.push(`rank 1 is ${rankOnes.join(",") || "nobody"}, unbeaten is ${unbeaten[0]}`);
+        else if (crown.kind === "champion" && crown.ids[0] !== unbeaten[0]) fails.push(`the title crowns ${crown.ids[0]}, unbeaten is ${unbeaten[0]}`);
       }
       if (s.kind !== "knockout" && s.field.length > 0) {
         checked++;

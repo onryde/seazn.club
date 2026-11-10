@@ -23,8 +23,8 @@ import { Evidence, type EvidenceFs } from "../lib/browser/evidence.ts";
 import { navBudget, type DivisionWhere, type PageCtx } from "../lib/browser/pages/ctx.ts";
 import type { StageOut } from "../lib/browser/pages/division-builder.ts";
 import type { EntrantIn } from "../lib/browser/pages/entrants.ts";
-import { API_ONLY_UI_WAVE, RefusedApiOnlyRow } from "../lib/api-only-ui.ts";
-import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS, refusedCell, stagesForRow, type RowKey } from "../lib/catalogue.ts";
+import { API_ONLY_UI_WAVE, NotApiOnlyRow, RefusedApiOnlyRow, apiOnlyUiRoute } from "../lib/api-only-ui.ts";
+import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS, isKnobRow, refusedCell, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import {
   BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, FORFEIT_DIALOG_ROUTE, NEITHER_WITHHELD_ROUTE, NeitherWithheldButAccepted, NoOrganiserRoute, ORGANISER_TABLE_KINDS, FINISH_SWISS_ROUTE, OVERRIDE_ROUTE, OrganiserWriteUnproven, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
   compareTables, publicFreshnessMs, type BrowserPages, type Clock, type HttpSide, type PadRegistry, type Replay,
@@ -626,7 +626,17 @@ describe("BrowserDriver — API-only rows (D7)", () => {
     let checked = 0;
     let refused = 0;
     let refusedRows = 0;
+    let knobRows = 0;
     for (const row of API_ONLY_ROWS) {
+      // W4 T15: a knob row (knockout_third_place) is a BUILDER path now - the template card plus the Third place control - so it has no API-only
+      // route and the driver never creates it over http (browser-driver.ts isApiOnly; the L1 grid drives it).
+      if (isKnobRow(row)) {
+        expect(API_ONLY_UI_WAVE[row], row).toBeUndefined();
+        expect(() => apiOnlyUiRoute(row), row).toThrow(NotApiOnlyRow);
+        knobRows += SPORT_KEYS.length;
+        checked += SPORT_KEYS.length;
+        continue;
+      }
       // W4 T16 (ruling 269): a row the product refuses on every sport (the standalone stepladder and page playoff) has no wave
       // that owes it a control (api-only-ui.ts) and no layer plans it; the driver, handed one, refuses it by name and builds nothing.
       if (SPORT_KEYS.every((s) => refusedCell(row, s) !== null)) {
@@ -682,7 +692,8 @@ describe("BrowserDriver — API-only rows (D7)", () => {
     expect(checked).toBeGreaterThan(0);
     expect(refused).toBe(Object.keys(cells).length);
     expect(refusedRows).toBe(2 * SPORT_KEYS.length); // stepladder_only and page_playoff_only, every sport (22 cells)
-    expect(Object.keys(API_ONLY_UI_WAVE).length + 2).toBe(API_ONLY_ROWS.length); // the other API-only rows each keep a route
+    expect(knobRows).toBe(SPORT_KEYS.length); // knockout_third_place alone, every sport
+    expect(Object.keys(API_ONLY_UI_WAVE).length + 2 + 1).toBe(API_ONLY_ROWS.length); // the other API-only rows each keep a route
   });
 
   it("the §8 lookup has teeth: W4's scope names the knockout family's shapes and not the group's", () => {

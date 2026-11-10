@@ -7,8 +7,8 @@
     "harness-gap": "the scenario APPLIES in the cell, but the L3 generator cannot drive it yet (the rule's harness gap); L2 still owes the pair and marks its run l3Gap",
     "unscorable-only": "only committed variants the harness cannot score (variants.json scorable ≠ null) would enable the scenario in the cell — it may apply once they can be scored; the reason names them"
   },
-  "total": 6189,
-  "inapplicable": 6189,
+  "total": 6178,
+  "inapplicable": 6178,
   "harnessGap": 0,
   "unscorableOnly": 0,
   "groups": [
@@ -7441,8 +7441,8 @@
     {
       "scenario": "Q3",
       "kind": "inapplicable",
-      "reason": "no third-place match in this row (knockout config.thirdPlace)",
-      "count": 196,
+      "reason": "no lone knockout stage in this row: no single bracket whose 3rd place the Third place choice settles",
+      "count": 185,
       "cells": {
         "league": [
           "football",
@@ -7549,19 +7549,6 @@
           "hockey"
         ],
         "swiss_knockout": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "knockout": [
           "football",
           "cricket",
           "boardgame",
