@@ -30,6 +30,7 @@ import { ForfeitTagChip } from "./forfeit-tag-chip";
 import { unseatedForfeitLoser, type ForfeitCopy, type ForfeitWords } from "@/lib/forfeit-tag";
 import { bracketForfeitWords } from "@/lib/bracket-forfeit-words";
 import { bracketSeatFallbackKey, isSettledBye } from "@/lib/bracket-bye-seat";
+import { finalTitleTag } from "@/lib/final-title-tag";
 
 interface Props {
   kind: "knockout" | "double_elim" | "stepladder" | "page_playoff";
@@ -138,6 +139,8 @@ function FixtureCard({
   // nobody is ALSO held, but it is stored `abandoned` — this status test does not see it, and its card reads abandoned.)
   const held = fixture.status === "needs_decision";
   const winner = held ? undefined : fixture.outcome?.winner;
+  // W4 B5b (pick 3A): a joint final has no winner, so neither name is weighted - unless BOTH are, which is the point.
+  const jointTitle = finalTitleTag(fixture) === "joint";
   const side = (seated: string | null, slotLabel: SlotLabel | null, seat: "home" | "away") => {
     // R116-1: an empty seat a walkover was won over (a withdrawn winner's, ruling 116) names her, never its bye label.
     // `id` is who the seat NAMES; `seated` who sits in it (a badge, and the winner's weight, belong to a seated side).
@@ -153,7 +156,7 @@ function FixtureCard({
         <span
           title={label}
           className={
-            id && id === winner
+            (id && id === winner) || (jointTitle && seated !== null)
               ? "truncate font-semibold text-ink"
               : winner
                 ? "truncate text-ink-muted"
@@ -167,6 +170,9 @@ function FixtureCard({
   };
   const live = fixture.status === "in_play";
   const forfeit = copy.forfeitWords?.get(fixture.id) ?? null;
+  // W4 B5b (owner pick 3A): a deciding final ruled JOINT WINNERS reads that under ONE trophy (both seats above are the pair);
+  // a VACANT title (both finalists walked from it) is a muted line with no trophy. Either takes the footer's one row.
+  const titleTag = finalTitleTag(fixture);
   return (
     <Link
       href={href}
@@ -174,7 +180,7 @@ function FixtureCard({
         live ? "border-emerald-300 hover:border-emerald-400" : "border-zinc-200/80 hover:border-accent-line"
       }`}
     >
-      {winner ? <span aria-hidden className="absolute inset-y-0 left-0 w-0.5 bg-accent" /> : null}
+      {winner || jointTitle ? <span aria-hidden className="absolute inset-y-0 left-0 w-0.5 bg-accent" /> : null}
       {live ? <span aria-hidden className="absolute inset-y-0 left-0 w-0.5 bg-emerald-400" /> : null}
       {held ? <span aria-hidden className="absolute inset-y-0 left-0 w-0.5 bg-amber-400" /> : null}
       <div className="flex flex-col gap-0.5">
@@ -188,6 +194,13 @@ function FixtureCard({
             <span className="animate-live-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
             {copy.live}
           </span>
+        ) : titleTag === "joint" ? (
+          <span data-testid="bracket-title-joint" className="flex min-w-0 items-center gap-1.5 font-semibold text-amber-700">
+            <span aria-hidden className="shrink-0">🏆</span>
+            <span className="min-w-0 truncate">{lookup("bracket.jointWinners")}</span>
+          </span>
+        ) : titleTag === "vacant" ? (
+          <span data-testid="bracket-title-vacant" className="block min-w-0 truncate">{lookup("bracket.titleVacant")}</span>
         ) : forfeit ? (
           // W2b Task 13 (UI-2 option A): the credited score and its tag on ONE row that never wraps — a 188px tile at
           // 320 has no room for a second line. The sentence is the tag's tooltip and accessible name. A double walkover

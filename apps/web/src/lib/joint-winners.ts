@@ -21,6 +21,10 @@ export interface JointWinnersFixture {
   /** A double-elimination reset (`gf-reset`): owed only when the losers' champion wins the grand final - never a final to
    *  rule on. Optional: absent reads as not conditional. */
   conditional?: boolean;
+  /** The fixture's stage kind. A double-elimination grand final feeds its own reset, which a joint grand final would leave
+   *  owed for good (C32, parked), so only the kinds with ONE deciding final take a ruling. Optional: absent reads as a
+   *  kind that does. REQUIRED (null = unknown stage) so a new caller cannot leave it out and read as offerable. */
+  stage_kind: string | null;
 }
 
 export function jointWinnersOffered(f: JointWinnersFixture): boolean {
@@ -28,6 +32,7 @@ export function jointWinnersOffered(f: JointWinnersFixture): boolean {
     f.is_final &&
     !f.third_place &&
     f.conditional !== true &&
+    f.stage_kind !== "double_elim" &&
     f.joint_winners_at === null &&
     JOINT_WINNERS_OPEN_STATUSES.has(f.status) &&
     f.home_entrant_id !== null &&

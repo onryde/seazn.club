@@ -66,6 +66,7 @@
 // convention the dismissal `Msg` contract already establishes — and this is
 // flagged for whoever owns the scorecard fold (Tasks 1-4/17) as a possible
 // follow-up if per-ball striker identity is ever needed.
+import { finalTitleTag } from "@/lib/final-title-tag";
 import type { EventEnvelope, LineupPair, Lineup, ScoreSummary } from "@seazn/engine/core";
 import type { AnySportModule, FidelityBand } from "@seazn/engine/sport";
 import {
@@ -1059,6 +1060,9 @@ function buildHeader(
       sportKey,
       locale,
     );
+    // W4 B5b (owner pick 3A): a final the organiser ruled JOINT WINNERS is decided with NO outcome, so `resultMsg` names no
+    // winner and the line was empty. It says "Joint winners" (the division banner's own `title.joint`).
+    if (finalTitleTag(fixture) === "joint") statusLine = { key: "title.joint" };
   } else if (status === "other") {
     statusLine = { key: `matchCentre.status.${fixture.status}` };
   } else if (status === "in_play" && card?.live) {
