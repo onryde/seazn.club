@@ -51,6 +51,9 @@ export const BRACKET_KINDS: ReadonlySet<string> = new Set([
 export interface StageFeed {
   stageId: string;
   side: "winners" | "losers";
+  /** True when the take includes the source's RANK 1 (a top-N cut, `rankRange` from 1, the whole table): the edge to
+   *  the Cup, never to a Bowl that takes ranks 5-8. Read only to tell two winners'-side terminals apart (B2a m5). */
+  top?: boolean;
 }
 
 export interface ChampionStage {
@@ -140,7 +143,8 @@ export type BracketTitleRead = DivisionTitle & { fixtureId: string };
  * owed exactly when that grand final's winner is not its home entrant — the same test the engine's own harness voids
  * the reset on (`testkit/simulation.ts`). Nothing in production writes that void, so "owed" is read off the RESULT,
  * never off the reset's row. A later final that is not conditional is always owed. A vacant or joint grand final has no
- * winner, so it never owes a reset's absence: it is itself the deciding final.
+ * winner, so a scheduled reset behind it cannot be proven unnecessary: the title is WITHHELD while that reset row is
+ * unsettled (the engine's rule too — an unsettled final makes `bracketTitle` undefined).
  */
 export function bracketTitleOf(fixtures: readonly ChampionFixture[]): BracketTitleRead | null {
   const settled = (f: ChampionFixture): boolean => BRACKET_SETTLED.has(f.status);
@@ -192,6 +196,25 @@ export interface StageProgressionRow {
   progression: unknown;
 }
 
+/** Does a take list include the source's rank 1? No take array is the whole table (yes). */
+function takesRankOne(take: readonly { kind?: unknown; from?: unknown; nth?: unknown; picks?: unknown }[]): boolean {
+  if (take.length === 0) return true;
+  return take.some((t) => {
+    switch (t?.kind) {
+      case "rankRange":
+        return typeof t.from === "number" && t.from <= 1;
+      case "topNPerGroup":
+        return true;
+      case "bestNth":
+        return typeof t.nth === "number" && t.nth <= 1;
+      case "picks":
+        return Array.isArray(t.picks) && t.picks.some((p) => (p as { rank?: unknown })?.rank === 1);
+      default:
+        return false;
+    }
+  });
+}
+
 const LOSER_TAKES: ReadonlySet<string> = new Set(["roundLosers", "firstLosses"]);
 
 /**
@@ -220,7 +243,7 @@ export function stageFeedsOf(rows: readonly StageProgressionRow[]): Map<string, 
       if (stageId === undefined || !known.has(stageId) || stageId === row.id) continue;
       const take = Array.isArray(src.take) ? (src.take as { kind?: unknown }[]) : [];
       const losers = take.length > 0 && take.every((t) => typeof t?.kind === "string" && LOSER_TAKES.has(t.kind));
-      feeds.push({ stageId, side: losers ? "losers" : "winners" });
+      feeds.push({ stageId, side: losers ? "losers" : "winners", ...(!losers && takesRankOne(take) ? { top: true } : {}) });
     }
     if (feeds.length > 0) out.set(row.id, feeds);
   }
@@ -245,7 +268,13 @@ export function decisiveStageOf<S extends ChampionStage>(stages: readonly S[]): 
     return feeds.length > 0 && feeds.every((f) => f.side === "losers");
   };
   const candidates = stages.filter((s) => !feeder.has(s.id) && !consolation(s));
-  const pool = candidates.length > 0 ? candidates : stages; // a malformed graph (a cycle) falls back to seq
+  let pool = candidates.length > 0 ? candidates : stages; // a malformed graph (a cycle) falls back to seq
+  // Two winners'-side terminals (a group feeding a Cup and a Bowl): the Cup is the one whose take includes the
+  // source's rank 1 (PO ruling, B2a m5). Only if that is still ambiguous does the highest seq decide.
+  if (pool.length > 1) {
+    const cups = pool.filter((s) => (s.feeds_from ?? []).some((f) => f.top === true));
+    if (cups.length > 0) pool = cups;
+  }
   return [...pool].sort((a, b) => b.seq - a.seq)[0];
 }
 

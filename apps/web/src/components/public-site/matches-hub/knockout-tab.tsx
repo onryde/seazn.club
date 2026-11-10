@@ -459,7 +459,8 @@ function vacantBanner(view: KnockoutViewT, dict: PublicDict): ReactNode {
 }
 
 function championBanner(view: KnockoutViewT, matches: MatchIndex, dict: PublicDict): ReactNode {
-  if (view.championFixtureId === null || view.title === null) return null;
+  // `== null`: a hub document cached before W4 has no `title` at all (undefined), and must read as "no banner".
+  if (view.championFixtureId === null || view.title == null) return null;
   const final = matches.get(view.championFixtureId);
   if (final === undefined) return null;
   // W4 (X-CH-1): the deciding final can end in joint winners or in a vacant title; neither has a winner side.

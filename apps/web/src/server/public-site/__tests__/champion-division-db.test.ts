@@ -44,7 +44,7 @@ interface Rig {
   entrantIds: string[];
 }
 
-async function rig(templateKey: string, n = 8): Promise<Rig> {
+async function rig(templateKey: string, n = 8, drafts?: ReturnType<typeof buildTemplateStages>): Promise<Rig> {
   const { auth } = await seedOrg("pro");
   const [{ slug: orgSlug }] = await sql<{ slug: string }[]>`select slug from organizations where id = ${auth.orgId}`;
   const comp = await createCompetition(auth, {
@@ -71,7 +71,7 @@ async function rig(templateKey: string, n = 8): Promise<Rig> {
     })),
   );
   const stageIds: string[] = [];
-  for (const [i, d] of buildTemplateStages(templateKey, KNOBS).entries()) {
+  for (const [i, d] of (drafts ?? buildTemplateStages(templateKey, KNOBS)).entries()) {
     const [stage] = await createStages(
       auth,
       division.id,
@@ -148,12 +148,41 @@ describe.skipIf(!HAS_DB)("C16 the division title through the real read", () => {
       expect(divisionTitle(detail.stages, detail.fixtures, detail.standings), key).toEqual({ kind: "champion", champion: winner });
       if (key === "league_ko") {
         expect(detail.stages[1]!.feeds_from, "the knockout is fed from the league's winners' side").toEqual([
-          { stageId: r.stageIds[0]!, side: "winners" },
+          { stageId: r.stageIds[0]!, side: "winners", top: true },
         ]);
       }
       checked++;
     }
     expect(checked).toBe(2);
+  });
+
+  it("m5 (PO ruling): a league feeding a Cup (ranks 1-4) AND a Bowl (ranks 5-8, stored last) is titled by the CUP", async () => {
+    const cut = (from: number, to: number) => ({
+      sources: [{ stage: "previous", take: [{ kind: "rankRange", from, to }] }],
+      placement: "rank_order",
+      timing: "setup",
+    });
+    // The Bowl is created seeded from "previous" (the Cup) and re-pointed at the league below: a stored progression
+    // names its source stage by id, which exists only after the league is created.
+    const r = await rig("league_ko", 8, [
+      { kind: "league", name: "League", config: { legs: 1 }, progression: null },
+      { kind: "knockout", name: "Cup", config: {}, progression: cut(1, 4) },
+      { kind: "knockout", name: "Bowl", config: {}, progression: cut(5, 8) },
+    ] as ReturnType<typeof buildTemplateStages>);
+    const [league, cup, bowl] = r.stageIds as [string, string, string];
+    await sql`update stages set progression = jsonb_set(progression, '{sources,0,stage}', ${sql.json({ stageId: league })}) where id = ${bowl}`;
+    const [cupWinner, bowlWinner] = [r.entrantIds[0]!, r.entrantIds[7]!];
+    await decideFinal(cup, cupWinner, r.entrantIds[1]!, league);
+    await decideFinal(bowl, bowlWinner, r.entrantIds[6]!, league);
+    const detail = (await getPublicDivision(r.orgSlug, r.compSlug, r.divSlug))!;
+    const byId = new Map(detail.stages.map((s) => [s.id, s]));
+    expect(byId.get(cup)!.feeds_from).toEqual([{ stageId: league, side: "winners", top: true }]);
+    expect(byId.get(bowl)!.feeds_from).toEqual([{ stageId: league, side: "winners" }]);
+    expect(decisiveStageOf(detail.stages)!.id).toBe(cup);
+    expect(divisionTitle(detail.stages, detail.fixtures, detail.standings)).toEqual({ kind: "champion", champion: cupWinner });
+    // The differential: with the graph's rank-1 hint removed, the highest seq (the Bowl) is crowned.
+    const flat = detail.stages.map((s) => ({ ...s, feeds_from: s.feeds_from?.map((f) => ({ stageId: f.stageId, side: f.side })) }));
+    expect(divisionTitle(flat, detail.fixtures, detail.standings)).toEqual({ kind: "champion", champion: bowlWinner });
   });
 
   it("a stored double-walkover final reaches the hub as a VACANT title with the fixture, and the document parses", async () => {
