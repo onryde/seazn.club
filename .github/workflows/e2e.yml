@@ -1381,7 +1381,7 @@ jobs:
 
       # Sponsor deals PR 2 (Batch J), the same shape as the sponsor captures above: opt-in (`sponsor_deals_captures`), the same
       # leg, its own artifact name. The step is longer than the sponsor one (its seed makes six sponsors, five deals and three
-      # packages before the first shot, and the spec asks for 33 pictures), hence the room. The spec's own last test refuses a
+      # packages before the first shot, and the spec asks for 34 pictures), hence the room. The spec's own last test refuses a
       # missing, non-PNG or byte-identical capture (AGENTS.md class 10); the count below refuses an empty directory.
       - name: Sponsor deals captures (opt-in)
         id: sponsor_deals_captures
