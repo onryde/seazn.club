@@ -30,7 +30,8 @@
 //      conflict — and every fixture this pack pinned — comes back at
 //      EXACTLY the slot `board` (the caller's own record) had it at,
 //      regardless of what `buildSchedule` itself reports: its FALLBACK exits
-//      (`already_optimal`, a proved tie, `verifier_rejected`, `not_searched`)
+//      (`already_optimal`, a proved tie that does not disturb `current` less
+//      — engine 6.0.2 —, `verifier_rejected`, `not_searched`)
 //      report the plain unpinned greedy seed, which has no idea a
 //      `current`-only frozen id is supposed to stay put (the same C4 finding
 //      `reflowExisting` guards against — see its doc comment).
@@ -150,7 +151,8 @@ export type RepairEngine = "none" | "optimized" | "llm";
  *     longer blocking.
  *   * `partial` — some moved, at least one violator is still blocking.
  *   * `unrepaired` — nothing moved: `buildSchedule` could not improve on
- *     the frozen board (`already_optimal`, a proved tie, `infeasible`,
+ *     the frozen board (`already_optimal`, a proved tie that does not disturb `current`
+ *     less (engine 6.0.2), `infeasible`,
  *     `not_searched`, `verifier_rejected`) or was unreachable
  *     (`solver_unavailable`, `solver_busy`).
  *   * `clean` — never produced by this module (it is only ever asked once a
