@@ -1688,3 +1688,104 @@ test.describe("W2a — the public match page and bracket (Task 13)", () => {
     expect(shots).toBe(6);
   });
 });
+
+// W4 app B, B5b Task 13 (X-CH-4, X-CH-6; owner picks 3A/4A): the organiser rules a rained-off final JOINT WINNERS from the
+// match console, the public pages say so, and the Undo opens the final again. Whole file, never a -g slice (AGENTS.md rule 21).
+test.describe("W4 B5b - joint winners on a final (X-CH-4)", () => {
+  test("X-CH-4 the organiser declares joint winners on a rained-off final and undoes it", async ({ page, request }) => {
+    test.setTimeout(180_000);
+    const org = await activeOrg(page);
+    const names = ["Harbourside Shuttlers Badminton Club Ladies", "W4 Ben", "W4 Cy", "W4 Di"]; // the first is a 43-character name
+    const ko = await knockout(request, "football", "11-a-side", names, "public");
+    // Both semi-finals decided (an organiser's settle on an abandon - the rig the held tests use), so the final is seated and unplayed.
+    for (const sf of ko.ready) {
+      await post(request, sf.id, "core.start");
+      await post(request, sf.id, "core.abandon", { reason: "floodlights" });
+      await post(request, sf.id, "core.settle", { winner: sf.home_entrant_id, method: "organiser" });
+    }
+    const finalId = await withDb(async (sql) => {
+      const rows = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${ko.stageId} and is_final and not third_place`;
+      expect(rows, "exactly one deciding final").toHaveLength(1);
+      return rows[0]!.id;
+    });
+    const before = await read(request, finalId);
+    expect(before.status).toBe("scheduled");
+    expect([before.home_entrant_id, before.away_entrant_id].every((x) => x !== null), "both finalists seated").toBe(true);
+    const home = ko.nameOf.get(before.home_entrant_id!)!;
+    const away = ko.nameOf.get(before.away_entrant_id!)!;
+
+    // The console: the action is offered (4A), nothing is sent until the sheet is confirmed, and the sheet names BOTH finalists.
+    const path = await fixturePath(request, finalId);
+    await page.goto(path);
+    const offer = page.getByTestId("joint-winners-open");
+    await expect(offer).toBeVisible();
+    await expect(offer).toHaveText(ui("jointWinners.action"));
+    let widths = 0;
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await expectNoHorizontalScroll(page);
+      // Hit-test: the point at the button's centre IS the button (nothing paints over it, it is not clipped off-screen).
+      const hit = await offer.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+        return { ok: at !== null && el.contains(at), h: r.height };
+      });
+      expect(hit.ok, `${w}: the action is what a tap lands on`).toBe(true);
+      expect(hit.h, `${w}: a 44px tap target`).toBeGreaterThanOrEqual(44);
+      await crop(page.getByTestId("joint-winners-offer"), "joint-offer", w);
+      widths++;
+    }
+    expect(widths).toBe(3);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await offer.click();
+    const sheet = page.getByTestId("joint-winners-sheet");
+    await expect(sheet).toBeVisible();
+    await expect(page.getByTestId("joint-winners-confirm-text")).toHaveText(ui("jointWinners.confirm", { a: home, b: away }));
+    expect((await read(request, finalId)).status, "opening the sheet writes nothing").toBe("scheduled");
+    await page.getByTestId("joint-winners-confirm").click();
+
+    // The console now shows the declaration and the Undo - and no pad, Settle or offer.
+    await expect(page.getByTestId("joint-winners-declared")).toBeVisible();
+    await expect(page.getByTestId("joint-winners-undo")).toHaveText(ui("jointWinners.undo"));
+    await expect(page.getByTestId("joint-winners-open")).toHaveCount(0);
+    await expect(page.getByTestId("score-pad")).toHaveCount(0);
+    await expect(page.getByTestId("settle-open")).toHaveCount(0);
+    const declared = (await apiJson<{ status: string; outcome: unknown; joint_winners_at: string | null }>(request, `/api/v1/fixtures/${finalId}`)).data!;
+    expect([declared.status, declared.outcome]).toEqual(["decided", null]);
+    expect(declared.joint_winners_at, "the wire carries the ruling").toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await expectNoHorizontalScroll(page);
+      await crop(page.getByTestId("joint-winners-declared"), "joint-declared", w);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    // The public pages: the division banner, the bracket tile and the match page all say "Joint winners".
+    const base = `/live/${org.slug}/${ko.compSlug}/${ko.divSlug}`;
+    await page.goto(`${base}?tab=standings`);
+    await dismissCookieBanner(page);
+    await expect(page.getByTestId("division-title-joint")).toBeVisible();
+    const tile = page.getByTestId("bracket-title-joint");
+    await expect(tile).toHaveCount(1);
+    await expect(tile).toContainText(say("title.joint"));
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await expectNoHorizontalScroll(page);
+      await crop(page.getByTestId("division-title-joint"), "joint-public-banner", w);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`${base}/fixtures/${finalId}`);
+    await expect(page.getByTestId("mc-status-line")).toHaveText(say("title.joint"));
+
+    // Undo: the final is open again, the offer is back, the public title is gone.
+    await page.goto(path);
+    await page.getByTestId("joint-winners-undo").click();
+    await expect(page.getByTestId("joint-winners-open")).toBeVisible();
+    await expect(page.getByTestId("joint-winners-declared")).toHaveCount(0);
+    const undone = (await apiJson<{ status: string; joint_winners_at: string | null }>(request, `/api/v1/fixtures/${finalId}`)).data!;
+    expect([undone.status, undone.joint_winners_at]).toEqual(["scheduled", null]);
+    await page.goto(`${base}?tab=standings`);
+    await expect(page.getByTestId("division-title-joint")).toHaveCount(0);
+    await expect(page.getByTestId("bracket-title-joint")).toHaveCount(0);
+  });
+});
