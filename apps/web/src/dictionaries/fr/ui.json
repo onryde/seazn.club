@@ -2602,8 +2602,6 @@
   "thirdPlace.tooFewCount": "Cette phase compte {count} participants, et un match pour la troisième place en exige au moins 4.",
   "thirdPlace.dropped": "Match pour la 3e place abandonné : moins de 2 demi-finales",
   "thirdPlace.saved": "Troisième place : {mode}.",
-  "jointWinners.title": "La finale ne peut pas être jouée ?",
-  "jointWinners.body": "Si la finale ne peut pas être jouée, les deux finalistes peuvent partager le titre.",
   "jointWinners.action": "Déclarer les vainqueurs ex aequo",
   "jointWinners.confirmTitle": "Déclarer les vainqueurs ex aequo ?",
   "jointWinners.confirm": "{a} et {b} seront tous deux champions. Vous pouvez annuler.",

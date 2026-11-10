@@ -82,10 +82,10 @@ export async function declareJointWinners(auth: AuthCtx, fixtureId: string): Pro
   const { f } = await withTenant(auth.orgId, async (tx) => {
     const f = await lockedFinal(tx, fixtureId);
     if (f.joint_winners_at !== null) throw knockoutRefusal("JOINT_WINNERS_FINAL_DECIDED");
-    // Is it a final that can take one at all? A double-elimination grand final feeds its own reset, which a joint grand final
-    // would leave owed for good (C32, parked): only the kinds with one deciding final take it. Asked BEFORE the result, so a
-    // decided semi-final answers "not a final", not "this final already has a result".
-    if (f.stage_kind === "double_elim" || !f.is_final || f.third_place || f.conditional || f.home_entrant_id === null || f.away_entrant_id === null) {
+    // Is it a final that can take one at all? Asked BEFORE the result, so a decided semi-final answers "not a final", not
+    // "this final already has a result". (A double-elimination grand final is refused by the shared predicate below, which
+    // owns that rule alone - C32, parked.)
+    if (!f.is_final || f.third_place || f.conditional || f.home_entrant_id === null || f.away_entrant_id === null) {
       throw knockoutRefusal("JOINT_WINNERS_NOT_A_FINAL");
     }
     // A result already stands: never hidden by this declaration.

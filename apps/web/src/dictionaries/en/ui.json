@@ -2602,8 +2602,6 @@
   "thirdPlace.tooFewCount": "This stage has {count} entrants, and a third-place match needs at least 4.",
   "thirdPlace.dropped": "Third-place match dropped: fewer than 2 semi-finals",
   "thirdPlace.saved": "Third place set to {mode}.",
-  "jointWinners.title": "Can't play the final?",
-  "jointWinners.body": "If the final can't be played, both finalists can share the title.",
   "jointWinners.action": "Declare joint winners",
   "jointWinners.confirmTitle": "Declare joint winners?",
   "jointWinners.confirm": "{a} and {b} will both be champions. You can undo this.",
