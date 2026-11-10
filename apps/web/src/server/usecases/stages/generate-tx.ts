@@ -125,12 +125,19 @@ async function reconcileKnockoutGenerate(
     }
   }
   const started = (await divisionHasStarted(tx, stage.division_id)) || (await stageHasStarted(tx, stage.id));
-  const fresh = generateForStage(stage.id, stage.kind, stage.config, entrants, poolIds).map((g) => ({
-    pool_id: g.poolId ?? null,
-    round_no: g.roundNo,
-    seq_in_round: g.seqInRound,
-    ext_key: g.extKey,
-  }));
+  // The lines a fresh draw of the CURRENT field would make - needed only to plan a change BEFORE Start. After Start a Generate never
+  // reshapes (`reconcileRootBracket` answers a no-op or refuses by name from the seats alone), so it is not drawn: a drawn,
+  // started Play-off whose withdrawals left under four is settled by its own rules (RB4-T6: both sides of the third-place match
+  // out ends it 4,4), and drawing it again would refuse "A third-place match needs at least 4 entrants. Use Shared" (X-TP-1,
+  // which gates DRAWING) and offer the one thing that would delete its -3p line mid-event (matrix W4B_Q3_OUT).
+  const fresh = started
+    ? []
+    : generateForStage(stage.id, stage.kind, stage.config, entrants, poolIds).map((g) => ({
+        pool_id: g.poolId ?? null,
+        round_no: g.roundNo,
+        seq_in_round: g.seqInRound,
+        ext_key: g.extKey,
+      }));
   const decision = await reconcileRootBracket(tx, { stageId: stage.id, started, active: entrants, fresh });
   if (decision.kind === "regenerate") {
     // B2 fix round 2 (item 2): Start reconciles in place only. A redraw deletes every line — the slots move, printed
