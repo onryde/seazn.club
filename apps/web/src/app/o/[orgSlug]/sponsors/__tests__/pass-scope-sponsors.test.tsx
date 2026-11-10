@@ -230,8 +230,14 @@ describe.skipIf(!HAS_DB)("the Sponsors tab reads the org's deals, packages, plan
     expect(await renderSponsorsTab(noPass, "packages")).toContain("sponsor-monetize-false");
   });
 
-  it("reads whether Stripe takes charges from the org row: off by default, on once the account is ready", async () => {
+  it("reads whether Stripe takes charges from the org row: off by default, and on only with a connected account AND charges enabled (review M4)", async () => {
     const rig = await seedOrg({ withPass: false });
+    expect(field(await renderSponsorsTab(rig, "sponsors"), "charges")).toBe("false");
+    // The flag alone is not charge-ready: the server's checkoutOrg also needs the account (409 connect_required without it).
+    await sql`update organizations set stripe_charges_enabled = true where id = ${rig.orgId}`;
+    expect(field(await renderSponsorsTab(rig, "sponsors"), "charges")).toBe("false");
+    // The account alone is not either.
+    await sql`update organizations set stripe_charges_enabled = false, stripe_account_id = ${`acct_t14_${rig.orgId}`} where id = ${rig.orgId}`;
     expect(field(await renderSponsorsTab(rig, "sponsors"), "charges")).toBe("false");
     await sql`update organizations set stripe_charges_enabled = true where id = ${rig.orgId}`;
     expect(field(await renderSponsorsTab(rig, "sponsors"), "charges")).toBe("true");

@@ -230,7 +230,7 @@ describe("dealTimeline: each step's time and detail", () => {
     expect(stepOf(open, "ends").at).toBeNull();
   });
 
-  it("the mockup's Quay Fisheries deal (online, paid by card, waiting for approval): invoice to the sponsor's email, £300 paid online, Ends 31 Aug 2027", () => {
+  it("the mockup's Quay Fisheries deal (online, paid by card, waiting for approval): the model carries the invoice email, the raw payment (method online, 30000 gbp cents) and its own ISO end instant - the £300 and the date are the screen's formatting", () => {
     const steps = dealTimeline({ ...quay, ends_at: T_ENDS_AT }, NO_END);
     expect(stepOf(steps, "invoice_sent").detail).toEqual({ to: "accounts@quayfisheries.co.uk" });
     expect(stepOf(steps, "paid").detail).toEqual({ method: "online", amountCents: "30000", currency: "gbp" });

@@ -26,7 +26,7 @@ import type { ReactElement } from "react";
 const confirmMock = vi.hoisted(() => vi.fn<(opts?: unknown) => Promise<boolean>>(async () => true));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMock }));
 
-import { OrgSponsors, SponsorForm } from "@/components/org-sponsors";
+import { OrgSponsors, SponsorForm, type SponsorItem, type SponsorsHubData } from "@/components/org-sponsors";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
@@ -41,7 +41,7 @@ const ORG = "org-1";
 const LONG_NAME = "Harbourside Building Supplies and Timber Co";
 const COMPETITIONS = [{ id: "c1", name: "Spring Cup" }];
 
-const row = (over: Record<string, unknown> & { id: string }) => ({
+const row = (over: Partial<SponsorItem> & { id: string }): SponsorItem => ({
   competition_id: null,
   name: `Sponsor ${over.id}`,
   url: null,
@@ -154,15 +154,30 @@ const flush = async () => {
   for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0));
 };
 
-function mount(rows: ReturnType<typeof row>[], opts: { canEdit?: boolean } = {}) {
-  const island = renderIsland(OrgSponsors, {
+/** What the hub page hands the island (Task 13). Typed, so a prop the island starts reading cannot be missing here without tsc
+ *  saying so (review M6: a cast hid `hub` from the type-check). */
+const HUB: SponsorsHubData = {
+  orgSlug: "harbour-vale",
+  deals: [],
+  packages: [],
+  hasMonetize: true,
+  chargesEnabled: true,
+  sponsorId: null,
+  dealId: null,
+  reportLinks: [],
+};
+
+function mount(rows: SponsorItem[], opts: { canEdit?: boolean } = {}) {
+  const props: Parameters<typeof OrgSponsors>[0] = {
     orgId: ORG,
     initialSponsors: rows,
     competitions: COMPETITIONS,
     hasTiers: true,
     billingHref: "/billing",
     canEdit: opts.canEdit ?? true,
-  } as Parameters<typeof OrgSponsors>[0]);
+    hub: HUB,
+  };
+  const island = renderIsland(OrgSponsors, props);
   const byLabel = (key: MessageKey, name: string): ReactElement => {
     const label = msg(key, { name });
     const el = island.tree().find((e) => propsOf(e)["aria-label"] === label);
@@ -372,7 +387,7 @@ describe("Show on site again: a hidden sponsor whose deals have all ended is swi
   // as for a sponsor with no deal." The server's rule for `PATCH { status }` (server/usecases/sponsors.ts `patchSponsor`): a
   // live deal refuses it (409 sponsor_locked_by_deal), a deal waiting to go live refuses it (409 sponsor_has_open_deal), and a
   // dispute-parked (`pending`) placement refuses it. Typed here from that rule, never read from the component.
-  const CASES: [string, Record<string, unknown>, boolean, boolean][] = [
+  const CASES: [string, Partial<SponsorItem>, boolean, boolean][] = [
     ["inactive, its deals all ended", { status: "inactive", deal: { id: "d1", payment_status: "pending" } }, true, true],
     ["inactive, no deal at all", { status: "inactive" }, true, true],
     ["active", { status: "active" }, true, false],

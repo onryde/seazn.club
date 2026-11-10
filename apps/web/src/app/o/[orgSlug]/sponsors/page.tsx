@@ -51,12 +51,14 @@ async function orgCompetitions(orgId: string): Promise<{ id: string; name: strin
     order by created_at desc limit 100`;
 }
 
-/** Does the org's Stripe account take charges? The Add deal sheet offers Send invoice only if it does. An org the read cannot
- *  find is not charge-ready. */
+/** Can the org take card charges? The Add deal sheet offers Send invoice only if it can. The server's `checkoutOrg`
+ *  (usecases/sponsor-deals.ts) refuses a deal's Checkout with 409 `connect_required` unless the org has a connected Stripe
+ *  account AND that account takes charges, so this asks for both: the flag alone would offer Send invoice to an org whose
+ *  Checkout the server refuses (review M4). An org the read cannot find is not charge-ready. */
 async function orgChargesEnabled(orgId: string): Promise<boolean> {
-  const [org] = await sql<{ stripe_charges_enabled: boolean }[]>`
-    select stripe_charges_enabled from organizations where id = ${orgId}`;
-  return org?.stripe_charges_enabled === true;
+  const [org] = await sql<{ stripe_account_id: string | null; stripe_charges_enabled: boolean }[]>`
+    select stripe_account_id, stripe_charges_enabled from organizations where id = ${orgId}`;
+  return Boolean(org?.stripe_account_id) && org?.stripe_charges_enabled === true;
 }
 
 export default async function SponsorsHubPage({

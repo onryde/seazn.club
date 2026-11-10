@@ -262,7 +262,7 @@ beforeEach(() => {
   // answer both the same way, so it answers by the query's own text.
   h.sql.mockImplementation(async (strings: TemplateStringsArray) =>
     strings.join("?").includes("stripe_charges_enabled")
-      ? [{ stripe_charges_enabled: true }]
+      ? [{ stripe_account_id: "acct_1", stripe_charges_enabled: true }]
       : [
           { id: "c1", name: "Spring Cup", ends_on: "2027-08-31" },
           { id: "c2", name: "Autumn Cup", ends_on: null },
@@ -511,15 +511,29 @@ describe("the Sponsors tab loads what the sponsor and deal screens read (sponsor
     expect(attr(html, "org-sponsors", "data-hub-packages")).toBe("");
   });
 
-  it("whether the org's Stripe account takes charges is read from the org, granted AND denied", async () => {
-    expect(attr(await render("sponsors"), "org-sponsors", "data-hub-charges")).toBe("true");
-    h.sql.mockImplementation(async (strings: TemplateStringsArray) =>
-      strings.join("?").includes("stripe_charges_enabled") ? [{ stripe_charges_enabled: false }] : [],
-    );
-    expect(attr(await render("sponsors"), "org-sponsors", "data-hub-charges")).toBe("false");
-    // An org row the read cannot find is NOT charge-ready.
-    h.sql.mockImplementation(async () => []);
-    expect(attr(await render("sponsors"), "org-sponsors", "data-hub-charges")).toBe("false");
+  it("whether the org can take charges is read from the org: a connected account AND charges enabled, each denied on its own (review M4)", async () => {
+    // The server's checkoutOrg refuses a deal's Checkout unless the org has BOTH a Stripe account and charges enabled
+    // (`!org.stripe_account_id || !org.stripe_charges_enabled` -> 409 connect_required), so the Add deal sheet's Send invoice
+    // must be offered on exactly that, not on the flag alone.
+    const CASES: [string, Record<string, unknown>[], string][] = [
+      ["connected and charges enabled", [{ stripe_account_id: "acct_1", stripe_charges_enabled: true }], "true"],
+      ["connected, charges not enabled yet", [{ stripe_account_id: "acct_1", stripe_charges_enabled: false }], "false"],
+      ["charges flag set but NO connected account", [{ stripe_account_id: null, stripe_charges_enabled: true }], "false"],
+      ["no account and no charges", [{ stripe_account_id: null, stripe_charges_enabled: false }], "false"],
+      ["an org row the read cannot find", [], "false"],
+    ];
+    let checked = 0;
+    for (const [label, rows, expected] of CASES) {
+      h.sql.mockImplementation(async (strings: TemplateStringsArray) =>
+        strings.join("?").includes("stripe_charges_enabled") ? rows : [],
+      );
+      expect(attr(await render("sponsors"), "org-sponsors", "data-hub-charges"), label).toBe(expected);
+      checked++;
+    }
+    expect(checked).toBe(5);
+    // The read names BOTH columns (a query that selected only the flag could never answer the second case).
+    const read = h.sql.mock.calls.map((c) => (c[0] as TemplateStringsArray).join("?")).find((t) => t.includes("stripe_charges_enabled"));
+    expect(read).toMatch(/stripe_account_id/);
   });
 
   it("asks for THIS org's charges and competitions only (the org id is bound into both reads)", async () => {

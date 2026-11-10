@@ -150,12 +150,14 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
   );
 
   // --- PR 2 Task 13: the hub's ?sponsor= is trusted for nothing. A REAL sponsor id of another org (the Pro org's, made above) on this
-  // org's hub is no selection: the page answers 200 with the Sponsors tab's list - this org's sponsor in it, the foreign one nowhere
-  // - and never the sponsor page (its marker, `sponsor-sheet`, arrives with Task 15; until then the absence is a floor, and the
-  // list and the missing foreign name are the live assertions).
+  // org's hub answers 200 with the Sponsors tab's list - this org's sponsor in it, the foreign one's name nowhere. That is ALL this
+  // row proves: nothing reads `hub.sponsorId` until the sponsor page (Task 15) renders it, so a page that ACCEPTED the foreign id
+  // would pass too (review M1). The row is named for its floor; the foreign-id refusal itself is pinned by sponsors-hub.test.ts
+  // (`resolveSponsorParam`) and page.test.tsx / pass-scope-sponsors.test.tsx (the id handed to the island), and Task 15 owns the
+  // sponsor-sheet assertion (`data-testid="sponsor-sheet"` present for the OWN id, absent for the foreign one).
   const foreignHub = await html(free, `/o/${org.slug}/sponsors?tab=sponsors&sponsor=${viewerSponsor}`);
   check(
-    "sd hub ?sponsor=<foreign> falls back to the list",
+    "sd hub ?sponsor=<foreign> answers the list and leaks no foreign name (floor until the sponsor page)",
     foreignHub.status === 200 &&
       foreignHub.body.includes('data-testid="sponsors-tab-sponsors"') &&
       foreignHub.body.includes(paidName) &&
