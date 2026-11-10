@@ -14,7 +14,7 @@ import { declaredPoints, envelopes, foldStream, lineupsFor, unplayedBoard } from
 import { redact } from "../redact.ts";
 import { routeTo } from "../routing.ts";
 import {
-  DEPARTED_STATUSES, isNamedRefusal, isTerminal, snap, toObservedOutcome,
+  DEPARTED_STATUSES, isNamedRefusal, isTerminal, placesAndTitle, snap, toObservedOutcome,
   type CaseFact, type CompleteObs, type ConfigEditObs, type FinishObs, type GenerateObs, type LoopExit, type ObservedDeclared, type ObservedFixture,
   type ObservedOutcome, type ObservedRun, type ObservedStage, type PairRoundObs, type WithdrawalObs,
 } from "../observed.ts";
@@ -827,7 +827,7 @@ async function finishSwiss(ctx: ScenarioContext, rec: Recorder, stageId: string,
     // A 2xx that did not complete the stage committed no completion (the driver would let /complete be asked), so it is not kept.
     if (!f.completed) return false;
     const done = f.events.find((e) => e.type === "stage_completed");
-    track.finishCompleted = { status: 200, code: null, completed: true, finalRanks: done?.finalRanks ?? null, seedProposal: f.seed_proposal ?? null };
+    track.finishCompleted = { status: 200, code: null, completed: true, finalRanks: done?.finalRanks ?? null, ...placesAndTitle(done), seedProposal: f.seed_proposal ?? null };
     return true;
   } catch (e) {
     if (!(e instanceof RefusedCall)) throw e;
@@ -1056,7 +1056,7 @@ export async function finishStage(ctx: ScenarioContext, rec: Recorder, stageId: 
   try {
     const c = await ctx.driver.completeStage(stageId);
     const done = c.events.find((e) => e.type === "stage_completed");
-    return { status: 200, code: null, completed: c.completed, finalRanks: done?.finalRanks ?? null, seedProposal: c.seed_proposal ?? null };
+    return { status: 200, code: null, completed: c.completed, finalRanks: done?.finalRanks ?? null, ...placesAndTitle(done), seedProposal: c.seed_proposal ?? null };
   } catch (e) {
     if (!(e instanceof RefusedCall)) throw e;
     if (e.code === SEEDING_FAILED_AFTER_COMMIT) {

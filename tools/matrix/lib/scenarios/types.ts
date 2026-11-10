@@ -44,7 +44,14 @@ export const W2E_SCENARIO_PATHS: Readonly<Record<W2eScenarioKey, readonly Decidi
 export const W4A_SCENARIO_KEYS = ["W4A_R2", "W4A_R10", "W4A_R6"] as const;
 export type W4aScenarioKey = (typeof W4A_SCENARIO_KEYS)[number];
 
-export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED" | "PADPROOF" | "VOIDPROOF" | W2aScenarioKey | W2bScenarioKey | W2eScenarioKey | W4aScenarioKey;
+/** W4 app PR B (Task 15, T8-c): the opt-in third-place, joint-winners and plate scripts - Q3 (Shared / Play-off, and the Play-off whose two sides are both
+ *  out), Q4a (Declare joint winners and its Undo) and Q5a / Q5b (a plate entrant withdraws; a main-draw loser declines the plate). Planned ONLY by
+ *  `--set w1-driving --scenario <key>`, as W2a's, W2b's, W2e's and W4A's are; q3-third-place.ts, q4a-joint-winners.ts and q5-plate.ts hold them and
+ *  w4b-cells.ts their rows. */
+export const W4B_SCENARIO_KEYS = ["W4B_Q3", "W4B_Q3_OUT", "W4B_Q4A", "W4B_Q5A", "W4B_Q5B"] as const;
+export type W4bScenarioKey = (typeof W4B_SCENARIO_KEYS)[number];
+
+export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED" | "PADPROOF" | "VOIDPROOF" | W2aScenarioKey | W2bScenarioKey | W2eScenarioKey | W4aScenarioKey | W4bScenarioKey;
 
 /** W2c Task 12 fix round 1 (R-T12-3): the scenarios whose premise is "a level knockout is HELD for the organiser"
  *  (BRACKET_SETTLE_LEVEL's level settle, WD-CASC's held line). Since Task 12 a new bracket stage plays its sport's

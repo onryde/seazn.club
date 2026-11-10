@@ -16,7 +16,7 @@
 //    with the stage array; a schedule-settings PUT (non-fatal); then router.push(routes.division(org, comp, slug,
 //    "fixtures")) - the division's page on its Fixtures tab (the path is the division's; the tab is the query).
 import type { Page } from "playwright";
-import type { TemplateRowKey } from "../../catalogue.ts";
+import { KNOB_ROWS, isKnobRow, type KnobRowKey, type TemplateRowKey } from "../../catalogue.ts";
 import { actAndAwait } from "../respond.ts";
 import { DATA, NAME, TESTID, templateLabel } from "../selectors.ts";
 import { actBudget, attrEquals, awaitScreen, exactPath, navBudget, selectorValue, shoot, visit, type PageCtx } from "./ctx.ts";
@@ -76,7 +76,7 @@ export function assertBuiltAsAsked(division: Pick<DivisionOut, "sport_key" | "va
 
 /** Builds the division as the organiser would: name and sport (Who plays), the template row (Format), the variant
  *  (Division rules), the defaults for everything else; Create on Review. */
-export async function createDivisionUi(c: PageCtx, compSlug: string, compId: string, input: { name: string; sportKey: string; variantKey: string; row: TemplateRowKey }): Promise<{ division: DivisionOut; stages: StageOut[] }> {
+export async function createDivisionUi(c: PageCtx, compSlug: string, compId: string, input: { name: string; sportKey: string; variantKey: string; row: TemplateRowKey | KnobRowKey }): Promise<{ division: DivisionOut; stages: StageOut[] }> {
   const { page } = c;
   const t = actBudget(c, 1);
   const name = page.getByTestId(TESTID.builderName.id);
@@ -96,7 +96,17 @@ export async function createDivisionUi(c: PageCtx, compSlug: string, compId: str
   const showAll = page.getByTestId(TESTID.builderShowAll.id);
   if ((await showAll.count()) > 0 && (await showAll.getAttribute("aria-expanded", { timeout: t })) !== "true") await showAll.click({ timeout: t });
   // check() on the template's <label> checks its sr-only radio and throws unless it ends checked.
-  await page.locator("label").filter({ has: page.locator(DATA.templateRadio.selector) }).filter({ has: page.getByText(templateLabel(input.row), { exact: true }) }).check({ timeout: t });
+  // A knob row (catalogue.ts KNOB_ROWS) ticks its TEMPLATE's card, then sets the knob on it.
+  const knob = isKnobRow(input.row) ? KNOB_ROWS[input.row] : null;
+  await page.locator("label").filter({ has: page.locator(DATA.templateRadio.selector) }).filter({ has: page.getByText(templateLabel(knob === null ? (input.row as TemplateRowKey) : knob.template), { exact: true }) }).check({ timeout: t });
+  if (knob !== null) {
+    // W4 T15 (B4 T10, X-TP-2): Third place is ONE two-segment control, Shared by default; the row is its Play-off segment. A
+    // segment the field cannot play is DISABLED (owner pick 1A), so the check() throws rather than ticking nothing, and the
+    // fieldset's own `data-third-place` is read back: a pick that never reached the page's state reads as the default.
+    const choice = page.getByTestId(TESTID.thirdPlaceChoice.id);
+    await choice.locator(attrEquals(DATA.thirdPlaceOption.selector, "third place mode", knob.thirdPlace)).check({ timeout: t });
+    await awaitScreen(() => page.locator(`${attrEquals('[data-testid]', "test id", TESTID.thirdPlaceChoice.id)}${attrEquals("[data-third-place]", "third place mode", knob.thirdPlace)}`).waitFor({ state: "attached", timeout: t }), `the Third place control reads ${knob.thirdPlace}`, t);
+  }
   const format = await shoot(c, "02-builder-format", basics);
   // On to Division rules, where the sport's own variant list is.
   await page.getByTestId(TESTID.builderNext.id).click({ timeout: t });

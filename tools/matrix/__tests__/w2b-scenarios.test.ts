@@ -719,11 +719,21 @@ describe("WD-CASC's checks (X-WD-1..3, X-DW-2, Review Focus 1)", () => {
   it(`${FINAL_VACANT_TITLE}: each check passes on the rule's rows and reds on every other shape`, () => {
     expect(withdrawalsWalkOver(vr, vacant)).toMatchObject({ verdict: "pass", checked: 7 });
     expect(tbdSeatWalksOver(vr, vacant)).toMatchObject({ verdict: "pass", checked: 5 });
-    expect(bothSeatsDead(vr, vacant, null), "the final is finalVacant's, so finalRanks are not read").toMatchObject({ verdict: "pass", checked: 2 });
+    // W4 T15 (B5a): the vacant half reads the completion's TITLE - both finalists withdrew, so it is vacant and crowns nobody (RB4-C5).
+    const vacantTitle = { title: { kind: "vacant", finalists: [a2, "z"] } } as const;
+    expect(bothSeatsDead(vr, vacant, null, vacantTitle), "a vacant title: the three items, finalRanks not read").toMatchObject({ verdict: "pass", checked: 3 });
+    for (const [name, c] of [["a champion", { title: { kind: "champion", champion: a2 } }], ["a joint title", { title: { kind: "joint", winners: [a2, "z"] } }], ["no title served", null]] as const) {
+      const got = bothSeatsDead(vr, vacant, [a2], c);
+      expect(got, name).toMatchObject({ verdict: "fail", checked: 3 });
+      expect(got.evidence.join(" | "), name).toMatch(/wanted vacant: both finalists withdrew/);
+    }
+    // The crowned half: a champion title is the crown (finalRanks[0] is only the fallback when none is served), a joint or vacant one is not a crown for a2.
+    expect(bothSeatsDead(r, good, ["other"], { title: { kind: "champion", champion: a2 } }), "the title, not finalRanks[0]").toMatchObject({ verdict: "pass", checked: 4 });
+    expect(bothSeatsDead(r, good, [a2], { title: { kind: "vacant", finalists: [] } }).verdict, "a vacant title is no crown").toBe("fail");
     // W4's defect: under a vacant title the product ranks a first-round loser 1st. No rank order moves the vacant half's
     // verdict — a pin would freeze the defect (class 4); the crowned half's rank-1 item is the only one read.
     const rankOrders = [["a first-round loser", vr.a2!], [vr.a2!], []];
-    for (const ranks of rankOrders) expect(bothSeatsDead(vr, vacant, ranks), JSON.stringify(ranks)).toMatchObject({ verdict: "pass", checked: 2 });
+    for (const ranks of rankOrders) expect(bothSeatsDead(vr, vacant, ranks, vacantTitle), JSON.stringify(ranks)).toMatchObject({ verdict: "pass", checked: 3 });
     expect(rankOrders.length).toBe(3);
     expect(finalVacant(vr, vacant)).toMatchObject({ verdict: "pass", checked: 2 });
     // The crowned half's rows are not the vacant half's: its bye-crowned final reds both items, and its void would red
@@ -1137,7 +1147,7 @@ describe("WD-CASC end to end on the single-elimination fake (review I-6, re-pinn
       // the double walkover and SF2's void, plus the crowned final's bye and crown; the vacant final's void and crown.
       const want: Record<string, number> = half === "crowned"
         ? { "w2b-withdrawal-walks-over": 2 + 4, "w2b-withdrawal-tbd-seat": 1 + 2 + 1, "w2b-withdrawal-both-seats-dead": 2 + 2 }
-        : { "w2b-withdrawal-walks-over": 2 + 5, "w2b-withdrawal-tbd-seat": 1 + 3 + 1, "w2b-withdrawal-both-seats-dead": 2, "w2b-withdrawal-final-vacant": 2 };
+        : { "w2b-withdrawal-walks-over": 2 + 5, "w2b-withdrawal-tbd-seat": 1 + 3 + 1, "w2b-withdrawal-both-seats-dead": 3, "w2b-withdrawal-final-vacant": 2 };
       for (const [id, n] of Object.entries(want)) {
         const c = out.assertions.find((x) => x.id === id);
         expect(c, `${sport} ${id}`).toBeDefined();
@@ -1158,8 +1168,10 @@ describe("WD-CASC end to end on the single-elimination fake (review I-6, re-pinn
         expect(i2, `${sport}: I2`).toMatchObject({ verdict: "pass", checked: 9, evidence: [expect.stringMatching(/^2 departed entrant\(s\) counted eliminated \(stored status\): /)] });
         i2Passed++;
       } else {
-        expect(i2.verdict, `${sport}: I2`).toBe("fail");
-        expect(i2.evidence.filter((e) => /unbeaten|rank 1|not ranked/.test(e)), sport).toEqual(["0 unbeaten entrants: "]);
+        // W4 T15: the completion serves a VACANT title (both finalists withdrew), which I2 now judges as such - no unbeaten entrant and
+        // no rank 1 is exactly right - where it once failed on "0 unbeaten entrants" for want of a champion to compare.
+        expect(i2.verdict, `${sport}: I2`).toBe("pass");
+        expect(i2.checked, `${sport}: I2 counted`).toBeGreaterThan(0);
       }
     }
     expect(i2Passed, "I2 judged the crowned half").toBe(halves.crowned);
@@ -1167,7 +1179,7 @@ describe("WD-CASC end to end on the single-elimination fake (review I-6, re-pinn
     expect(halves.crowned, "the crowned half ran").toBeGreaterThan(0);
     expect(halves.vacant, "the vacant half ran").toBeGreaterThan(0);
     expect(halves.crowned + halves.vacant).toBe(cells.length);
-    expect(judged).toBe(halves.crowned * (6 + 4 + 4) + halves.vacant * (7 + 5 + 2 + 2));
+    expect(judged).toBe(halves.crowned * (6 + 4 + 4) + halves.vacant * (7 + 5 + 3 + 2));
   });
 });
 

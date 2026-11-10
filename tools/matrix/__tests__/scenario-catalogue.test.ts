@@ -227,10 +227,13 @@ describe("atomic cases", () => {
     const marked = new Set(ATOMIC.filter((a) => a.knownNoPath !== null || a.settled !== null).map((a) => a.parent));
     expect(listed.size).toBeGreaterThan(0);
     expect(new Set(owner.keys())).toEqual(listed);
+    // W4 app PR B, Task 15: Q4a now has a harness script (W4B_Q4A), so its parent Q4 - listed by the design text - holds no 🚫 atom either.
+    // Q4 stays marked, by Q4b (settled ⛔), but holds no known-🚫 atom.
     expect(marked).toEqual(listed);
+    expect(ATOMIC.filter((a) => a.parent === "Q4").map((a) => a.knownNoPath)).toEqual([null, null]);
     let judged = 0;
     for (const a of ATOMIC.filter((x) => x.knownNoPath !== null)) { judged++; expect(a.knownNoPath, a.id).toBe(owner.get(a.parent)); }
-    expect(judged).toBeGreaterThanOrEqual(listed.size - 1); // D4 has no 🚫 atom left
+    expect(judged).toBeGreaterThanOrEqual(listed.size - 2); // D4 and Q4 have no 🚫 atom left
     // The cells moved off 🚫, counted by id: exactly the rulebook's three, in the rulebook's states, none of them also 🚫 or a UI-only gap.
     const settledNow = ATOMIC.filter((a) => a.settled !== null);
     expect(Object.fromEntries(settledNow.map((a) => [a.id, a.settled!.state]))).toEqual(Object.fromEntries(SETTLED_BY_RULEBOOK));
@@ -246,8 +249,8 @@ describe("atomic cases", () => {
     expect(byId.get("D4b")!.reason).toContain("(X-SD-10)");
     expect(byId.get("D4a")!.reason).toContain("ruling 272");
     expect(byId.get("D4a")!.reason.startsWith("clubs follow-up: ")).toBe(true);
-    // The siblings that were NOT settled keep their route: Q4a is still 🚫 -> W4.
-    expect(ATOMIC.find((a) => a.id === "Q4a")).toMatchObject({ knownNoPath: "W4", settled: null });
+    // W4 app PR B, Task 15: Q4a is neither settled nor 🚫 now - the W4B_Q4A script drives its path (joint winners, B5a).
+    expect(ATOMIC.find((a) => a.id === "Q4a")).toMatchObject({ knownNoPath: null, settled: null });
   });
   it("ruling 30: the design's UI-only 🚫 atoms carry l2NoPath with the named wave, and stay in both layers", () => {
     const from = design.slice(design.indexOf("**Known UI-only 🚫"));

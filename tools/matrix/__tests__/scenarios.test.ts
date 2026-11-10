@@ -33,7 +33,7 @@ import { cascadeItems, expectedPolicy, policyFamilyFor, skippedItem } from "../l
 import { SIDE_SIZE_ROUTE, entrantName, rosterSize } from "../lib/scenarios/rosters.ts";
 import { entrantInput } from "../lib/model/state.ts";
 import { BRACKET_KINDS, BRACKET_OF, STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "../lib/scenarios/terminal-finals.ts";
-import { W2A_SCENARIO_KEYS, W2B_SCENARIO_KEYS, W2E_SCENARIO_KEYS, W4A_SCENARIO_KEYS } from "../lib/scenarios/types.ts";
+import { W2A_SCENARIO_KEYS, W2B_SCENARIO_KEYS, W2E_SCENARIO_KEYS, W4A_SCENARIO_KEYS, W4B_SCENARIO_KEYS } from "../lib/scenarios/types.ts";
 import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
 import { START } from "../lib/streams/types.ts";
 import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "../lib/variants.ts";
@@ -82,7 +82,7 @@ const failed = (checks: { id: string; verdict: string }[]) => checks.filter((c) 
  *  void-proof.test.ts is its suite. */
 // The slice's scripts: not the gated ones, and not the W2a bracket-finish or W2b forfeit-credit scenarios (opt-in:
 // w2a-scenarios.test.ts, w2b-scenarios.test.ts).
-const OPT_IN: readonly string[] = [...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS, ...W2E_SCENARIO_KEYS, ...W4A_SCENARIO_KEYS];
+const OPT_IN: readonly string[] = [...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS, ...W2E_SCENARIO_KEYS, ...W4A_SCENARIO_KEYS, ...W4B_SCENARIO_KEYS];
 const SCENARIO_KEYS = (Object.keys(SCENARIOS) as ScenarioKey[]).filter((k) => k !== "DENIED" && k !== "PADPROOF" && k !== "VOIDPROOF" && !OPT_IN.includes(k));
 
 describe("assertion helper — empty first (R25)", () => {
@@ -590,7 +590,7 @@ describe("final review I-2 on the fakes: a product that builds something other t
     const r = await runOn(new SilentLeague(), k, { row: "knockout" });
     expect(r.state.state).toBe("red");
     expect(failed(r.checks)).toContain("life-built-as-posted");
-    expect(r.checks.find((c) => c.id === "life-built-as-posted")!.evidence).toEqual(["stage 1: built league, posted knockout"]);
+    expect(r.checks.find((c) => c.id === "life-built-as-posted")!.evidence).toEqual(["stage 1: built league, posted knockout", "stage 1 config.thirdPlace: built undefined, posted false"]);
   });
   // F1 posts 7, not 8: its twin is the next test.
   it.each(SCENARIO_KEYS.filter((k) => k !== "F1"))("%s: 7 of 8 stored, or 8 stored and 7 seated, reds life-built-as-posted", async (k) => {
@@ -790,7 +790,7 @@ describe("knockout_third_place: the third-place match is BUILT, not only stored 
   it("the row posts a knockout with config.thirdPlace true; the plain knockout does not", () => {
     expect(tp.kind).toBe("knockout");
     expect(tp.config.thirdPlace).toBe(true);
-    expect(ko.config.thirdPlace).toBeUndefined();
+    expect(ko.config.thirdPlace, "Shared is written explicitly (B4 T10), never an absent key").toBe(false);
   });
   it("exactly one fixture flagged third place passes; none or two fail, naming the count", () => {
     const one = builtAsPosted(readback(tp), observed([fx({}), fx({ id: "f2", thirdPlace: true })]));
@@ -1054,7 +1054,7 @@ describe("pilots on the fake league", () => {
     expect(r.checks.find((c) => c.id === "f1-everyone-drawn")).toMatchObject({ verdict: "fail", checked: 7, evidence: [`${driver.entrants.at(-1)!.id} appears in no fixture`] });
   });
   it("every scenario is registered under its own key and the three pilots name their canary check", () => {
-    expect(Object.keys(SCENARIOS).sort()).toEqual(["DENIED", "F1", "LIFECYCLE", "M1", "PADPROOF", "R4", "VOIDPROOF", ...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS, ...W2E_SCENARIO_KEYS, ...W4A_SCENARIO_KEYS].sort());
+    expect(Object.keys(SCENARIOS).sort()).toEqual(["DENIED", "F1", "LIFECYCLE", "M1", "PADPROOF", "R4", "VOIDPROOF", ...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS, ...W2E_SCENARIO_KEYS, ...W4A_SCENARIO_KEYS, ...W4B_SCENARIO_KEYS].sort());
     expect(SCENARIO_KEYS.sort()).toEqual(["F1", "LIFECYCLE", "M1", "R4"]);
     for (const k of Object.keys(SCENARIOS) as ScenarioKey[]) expect(SCENARIOS[k].key).toBe(k);
     expect(SCENARIOS.LIFECYCLE.canaryCheck).toBeNull();
@@ -1799,10 +1799,10 @@ describe("setup, generate and complete — refusals are recorded, crashes propag
     driver.completeStage = async () => { throw new RefusedCall("POST", "/api/v1/stages/s1/complete", 409, "STAGE_INCOMPLETE", "open fixtures"); };
     expect(await finishStage(ctx, new Recorder(), setup.stage.id)).toEqual({ status: 409, code: "STAGE_INCOMPLETE", completed: false, finalRanks: null, seedProposal: null });
     driver.completeStage = async () => ({ completed: true, events: [{ type: "stage_opened" }, { type: "stage_completed", finalRanks: ["e2", "e1"] }] });
-    expect(await finishStage(ctx, new Recorder(), setup.stage.id)).toEqual({ status: 200, code: null, completed: true, finalRanks: ["e2", "e1"], seedProposal: null });
+    expect(await finishStage(ctx, new Recorder(), setup.stage.id)).toEqual({ status: 200, code: null, completed: true, finalRanks: ["e2", "e1"], seedProposal: null, places: null, title: null });
     // W1-driving T6: the next stage's draft proposal /complete minted rides on the observation.
     driver.completeStage = async () => ({ completed: true, events: [], seed_proposal: { id: "sp-2-1", status: "draft" } });
-    expect(await finishStage(ctx, new Recorder(), setup.stage.id)).toEqual({ status: 200, code: null, completed: true, finalRanks: null, seedProposal: { id: "sp-2-1", status: "draft" } });
+    expect(await finishStage(ctx, new Recorder(), setup.stage.id)).toEqual({ status: 200, code: null, completed: true, finalRanks: null, seedProposal: { id: "sp-2-1", status: "draft" }, places: null, title: null });
     driver.completeStage = async () => { throw new TypeError("boom"); };
     await expect(finishStage(ctx, new Recorder(), setup.stage.id)).rejects.toThrow("boom");
   });
