@@ -6,7 +6,7 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 // and dated; this page IS the versioning promise (v3/08 §3).
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
-    date: "2026-11-09",
+    date: "2026-11-10",
     title: "Breaking: sponsor orders become sponsor deals; /sponsor-orders is removed",
     lines: [
       "Removed: GET and POST /orgs/{id}/sponsor-orders, POST /orgs/{id}/sponsor-orders/{orderId}/refund and GET /orgs/{id}/sponsor-orders/{orderId}/evidence. Each now answers 404.",
