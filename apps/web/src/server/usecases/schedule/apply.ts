@@ -378,7 +378,7 @@ export async function applySchedule(
  *  null now — v17 Phase 2 Task 5 (V322) retired the plan-graded per-division
  *  cap it used to resolve, replaced by the AI credit wallet, which meters
  *  spend rather than a per-division count (see `spendCredit` in
- *  schedule-ai.ts). Read-gated at route. */
+ *  schedule-ai/). Read-gated at route. */
 export async function lastAiApply(
   auth: AuthCtx,
   divisionId: string,

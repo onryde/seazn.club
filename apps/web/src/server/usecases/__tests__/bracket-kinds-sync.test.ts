@@ -1,7 +1,7 @@
 // B (round-4 review, "smaller, still real"): BRACKET_STAGE_KINDS
 // (packages/engine/src/competition/progression.ts) is a THIRD hand-copied
 // literal of the same 4 strings as apps/web's two BRACKET_KINDS constants
-// (usecases/stages.ts, server/engine-db/competition.ts) — independent
+// (usecases/stages/, server/engine-db/competition.ts) — independent
 // lists that must stay identical by hand, no shared source. Both
 // placeDescriptors' ruling-13 bracket-target guard (progression.ts) and
 // completeStageIfReady's kind dispatch (engine-db/competition.ts) fail OPEN

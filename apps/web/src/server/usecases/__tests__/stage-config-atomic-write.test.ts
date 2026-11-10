@@ -162,7 +162,7 @@ describe.skipIf(!HAS_DB)("stage config writes merge server-side (design §T2)", 
   // (`config - '…'`), never re-write a spread of a value read into JS.
   // Deleting a site is fine; turning one back into a spread is not.
   //
-  // Reviewed 2026-09-18. It used to name `stages.ts` and `scoring.ts` and scan
+  // Reviewed 2026-09-18. It used to name `stages/` and `scoring.ts` and scan
   // LINE BY LINE, which failed twice over: a seventh writer in a third file was
   // invisible to it (`templates.ts` and `stage-rules.ts` both write this column
   // now), and this repo's SQL is routinely wrapped across lines, so the

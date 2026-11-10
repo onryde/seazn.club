@@ -1,6 +1,6 @@
 // F1 follow-up (2026-08-17, payload-budget regression — PR #606 CI,
 // board-v3.spec.ts:228 "gap 15" reds: expect flightBytes-dictBytes <
-// 250000, got 279043/279419 across a retry). FIXTURE_COLS (stages.ts)
+// 250000, got 279043/279419 across a retry). FIXTURE_COLS (stages/types.ts)
 // grew five columns for the bracket round-role work — ext_key, lane,
 // is_final, third_place, conditional — and listDivisionFixtures, shared by
 // the schedule board pages AND the division page's bracket/stages panel,
@@ -9,7 +9,7 @@
 // ~29KB over budget at a 5-division x 66-fixture board.
 //
 // listDivisionFixturesForBoard (fixtures.ts) is the board-only projection
-// that drops them via BOARD_FIXTURE_COLS (stages.ts); listDivisionFixtures
+// that drops them via BOARD_FIXTURE_COLS (stages/types.ts); listDivisionFixtures
 // keeps the full set for the bracket panel, which genuinely reads all
 // four round-role fields (stages-panel.tsx, bracket-panel.tsx). ext_key is
 // excluded from the board on independent grounds too: board/settings-

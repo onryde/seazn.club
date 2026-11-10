@@ -2,7 +2,7 @@
 // court. A `timing: "setup"` progression draws its bracket before anyone qualifies, so its bye line sits `scheduled`
 // with no outcome and the bye slot label on its phantom side until the seed confirm awards it (`awardSeededByes`). To
 // every placement writer it looked like one more movable match: the auto pass placed it, the board let a drag drop it on
-// a court, and the award flipped it to `forfeited` WITH the slot (`forfeited` occupies — schedule.ts `OCCUPYING`), so a
+// a court, and the award flipped it to `forfeited` WITH the slot (`forfeited` occupies — schedule/board.ts `OCCUPYING`), so a
 // court was held all day by a match nobody plays. A plain bracket's SYSTEM bye (baked `forfeited` at generation) took a
 // quick Start's rolling time the same way. A bye is not played; it takes no court and no time (W3 spec §4, X-SW-29).
 //
@@ -493,7 +493,7 @@ describe.runIf(HAS_DB)("W4 T3 K2 a bracket bye line never takes or keeps a court
   }, 180_000);
 
   it("X-SD-5 a frozen, fully placed knockout still starts: its unplaced bye owes the rolling sweep nothing", async () => {
-    // Starting an already-built frozen board is the intended path (schedule.ts: the sweep refuses a frozen board only
+    // Starting an already-built frozen board is the intended path (schedule/: the sweep refuses a frozen board only
     // when it has something to write). Every real line holds its slot; the bye line holds none — it never may — so
     // counting it as a round still to time refused the Start with SCHEDULE_LOCKED.
     const o = await orgDivision("KO frozen start");

@@ -124,7 +124,7 @@ const CLASH_OFFSET_FROM_INDEX = 2;
  * C1 gap B — forces the canned plan to violate round order.
  *
  * `pack.draft` is `.sort(byAssignment)`-ordered on `scheduled_at`
- * (schedule-ai.ts), and the greedy placer fills a round-robin division's
+ * (usecases/schedule-ai/pack.ts), and the greedy placer fills a round-robin division's
  * EARLIEST rounds into the EARLIEST slots first, so for a clean draft the
  * first entry is (chronologically, and therefore also by round) the
  * earliest-round fixture and the last entry is the latest-round one. Swaps
@@ -136,7 +136,7 @@ const CLASH_OFFSET_FROM_INDEX = 2;
  *
  * A REAL violation for the same reason `FIXTURE_CLASH` is: it proves the
  * runner's own verify seam (`toEngineAssignments` → `validateAssignments`,
- * apps/web/src/server/usecases/schedule-ai.ts) actually detects the round
+ * apps/web/src/server/usecases/schedule-ai/verify.ts) actually detects the round
  * order the model proposed, over real HTTP, through the real pack the
  * runner built — not a hand-written conflict report. Whether a repair round
  * subsequently resolves it is a `repair.ts`/z3 question this fixture takes

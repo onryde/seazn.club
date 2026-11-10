@@ -79,7 +79,7 @@ interface AutoResult {
 // Two traps make the obvious version of this test vacuous — both measured
 // against this real division, not guessed:
 //
-//  1. `applyWindow` (usecases/schedule.ts) derives the solver's universe from
+//  1. `applyWindow` (usecases/schedule/engine-inputs.ts) derives the solver's universe from
 //     `startAt`'s DAY at local midnight on the ORG clock, not from `startAt`
 //     itself. A window placed later in the day leaves the solver free to pack
 //     the whole board into the untouched hours before it and dodge the window
@@ -253,7 +253,7 @@ test.describe("blackout window constrains the board (case a)", () => {
 // Case (b): removing a court with an unmovable fixture is refused, clearly.
 // ---------------------------------------------------------------------------
 //
-// The guard itself (usecases/schedule.ts putScheduleSettings, "date/time UX
+// The guard itself (usecases/schedule/settings.ts putScheduleSettings, "date/time UX
 // P08") is already exhaustively unit-tested (usecases/__tests__/schedule.test.ts)
 // for both refusal reasons and their combination. What only e2e can prove is
 // the WIRING: the real PUT route, the real transaction, the real 409 and

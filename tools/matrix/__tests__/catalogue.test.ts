@@ -176,7 +176,7 @@ function fnBody(src: string, header: string): string {
   return src.slice(at, end);
 }
 
-/** The `case "<kind>":` arm of stages.ts's generate() — what the product's
+/** The `case "<kind>":` arm of usecases/stages/generators.ts's generate() — what the product's
  *  Generate builds per stage kind. A missing function, closer or arm throws,
  *  so the pin cannot pass on text it never found. */
 function generateArm(kind: string, src: string = STAGES_TS()): string {

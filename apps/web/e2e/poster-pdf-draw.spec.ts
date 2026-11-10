@@ -19,7 +19,7 @@ import { TAG, apiJson, addEntrantsViaApi, createStageAndGenerate, loginUi, type 
 // Fixture: the SAME 4-entrant knockout shape calendar-ics.spec.ts already
 // established — generate() writes the final's home/away as
 // `{key: "slot.winner_match", …}` labels (no entrant, no scheduled_at)
-// before either semi is played (stages.ts:1117-1155).
+// before either semi is played (usecases/stages/).
 //
 // A pdfkit PDF's content stream is FlateDecode-compressed by default, so
 // this reuses the SAME two decode techniques the route's own unit test

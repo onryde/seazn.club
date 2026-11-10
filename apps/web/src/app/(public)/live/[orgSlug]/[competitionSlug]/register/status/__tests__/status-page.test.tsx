@@ -76,7 +76,7 @@ const BASE_ENTRY = {
   // see resolveMoneyState's own doc comment (view-model.ts).
   payment_method: "stripe" as const,
   // RS008: this entry's own division youth/player_name_display policy —
-  // threaded onto GroupEntryView (buildGroupStatusView, registrations.ts).
+  // threaded onto GroupEntryView (buildGroupStatusView, usecases/registrations/group-status.ts).
   division_youth: false,
   division_player_name_display: null as string | null,
   players: [] as {
@@ -104,7 +104,7 @@ const BASE_VIEW = {
   charges_enabled: true,
   payment_instructions: null as string | null,
   // RS007 review fix #13(a): the org's own timezone, threaded onto
-  // GroupStatusView (buildGroupStatusView, registrations.ts).
+  // GroupStatusView (buildGroupStatusView, usecases/registrations/group-status.ts).
   org_timezone: "UTC",
   entries: [
     BASE_ENTRY,
@@ -399,8 +399,8 @@ describe("register status page (RS007 rebuild)", () => {
       const html = await render({ rid: "g1", token: "tok" });
       const subtotalMatch = html.match(/<span class="text-lg font-bold text-ink">([^<]*)<\/span>/);
       expect(subtotalMatch, "subtotal span not found").not.toBeNull();
-      // withdrawCore (registrations.ts), the rejection path
-      // (registration-approval.ts), and the expiry sweep (registrations.ts)
+      // withdrawCore (usecases/registrations/withdraw.ts), the rejection path
+      // (registration-approval.ts), and the expiry sweep (usecases/registrations/)
       // all touch ONLY status/timestamps — none ever clears amount_cents —
       // so reg-2's stale 1000 must NOT be folded into the live subtotal.
       expect(subtotalMatch![1]).toContain("25");
@@ -448,7 +448,7 @@ describe("register status page (RS007 rebuild)", () => {
 
     // Bug (2026-08-27 review, FIX 3): refund_policy now carries a `reason`
     // ("no_deadline") when a refund is fail-closed-declined because no
-    // deadline is knowable at all (resolveRefundPolicy, registrations.ts),
+    // deadline is knowable at all (resolveRefundPolicy, usecases/registrations/refunds.ts),
     // but nothing rendered it — a registrant saw a refusal with no
     // explanation. Plain-English copy, not the computed reason code.
     it("explains a fail-closed 'no_deadline' refund decline in plain English near the Cancel control", async () => {

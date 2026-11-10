@@ -2071,7 +2071,7 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
   });
 
   it("R2-2, the guard: a meeting made for ANOTHER pairing that a game IS or MAY BE on file behind is never replaced and never joined — refused by name, each evidence arm; a stale claim is no game, and is replaced — counted", async () => {
-    // Cannot happen through the product: M-10's lock (stages.ts lockBoardsRefusingOnlineGames) refuses a re-pair
+    // Cannot happen through the product: M-10's lock (stages/swiss-boards.ts lockBoardsRefusingOnlineGames) refuses a re-pair
     // over a game. The stamp is moved by hand to reach the refusal.
     type Arm = { label: string; set: (fixtureId: string) => Promise<unknown>; refused: boolean };
     const ARMS: Arm[] = [

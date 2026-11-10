@@ -146,7 +146,7 @@ export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promi
 }
 
 /** A ROOT knockout — no progression and no fed `config.qualified` list: the bracket drawn straight from the roster, the
- *  one `reconcileRootBracket` reconciles and Start's `roster_drift` read covers (schedule.ts). */
+ *  one `reconcileRootBracket` reconciles and Start's `roster_drift` read covers (schedule/). */
 function isRootKnockout(stage: { kind: string; progression: unknown; config: unknown }): boolean {
   if (stage.kind !== "knockout" || stage.progression !== null) return false;
   const config = stage.config;
@@ -155,7 +155,7 @@ function isRootKnockout(stage: { kind: string; progression: unknown; config: unk
 
 /** W4 B2 fix round 2 (item 1): `StageRosterDrift.vacantLines` — the first-round lines with an empty place: a match still to
  *  be played with a seat nobody is on, or a bye with nobody on it. The same two shapes Start's `roster_drift` read names
- *  (schedule.ts), which is what makes Start refuse; this is what lets the desk show the remedy. */
+ *  (schedule/), which is what makes Start refuse; this is what lets the desk show the remedy. */
 async function vacantFirstRoundLines(tx: Tx, stageId: string): Promise<number> {
   const [row] = await tx<{ n: number }[]>`
     select count(*)::int as n from fixtures f

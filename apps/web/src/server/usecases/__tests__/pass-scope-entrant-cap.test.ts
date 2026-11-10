@@ -1,7 +1,7 @@
 // Phase 2 pass-scoping sweep — `entrants.per_division.max` resolved against
 // the competition being entered, not the org as a whole.
 //
-// Originally pinned through usecases/registrations.ts `submitRegistration`,
+// Originally pinned through usecases/registrations/ `submitRegistration`,
 // which bounded PUBLIC intake by the plan's entrant quota so it never
 // accepted money for a spot the plan could not materialise. It resolved that
 // quota ORG-WIDE (`getLimit(ctx.org_id, …)`) twelve lines after using

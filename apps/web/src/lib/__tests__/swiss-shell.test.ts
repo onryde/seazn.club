@@ -317,7 +317,7 @@ describe("seating / readiness helpers", () => {
 
   it("abandoned blocks Unpair", () => {
     // A match that was PLAYED and stopped — match-reports.ts accepts a report
-    // on exactly this status (same hole stages.ts's rebuild guard names).
+    // on exactly this status (same hole usecases/stages/ folder's rebuild guard names).
     expect(
       swissRoundHasPlayedResult(
         [

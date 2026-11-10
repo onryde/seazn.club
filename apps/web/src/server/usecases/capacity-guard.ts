@@ -24,7 +24,7 @@ import { CAPACITY_REPORT_KEY } from "@/server/api-v1/schemas";
 import { capacityInputForFixtures, type CapacityConfigInput, type CapacityFixtureInput } from "@/lib/capacity-input";
 import { CAPACITY_PRECHECK_MAX_COURTS, CAPACITY_PRECHECK_MAX_FIXTURES } from "@/lib/capacity-bounds";
 // P10 §4: the ONE resolver for a division's candidate courts' real
-// calendars — already used by schedule.ts's verifyConfigForDivision. Reused
+// calendars — already used by schedule/engine-inputs.ts's verifyConfigForDivision. Reused
 // here rather than a second DB query shape, same reasoning as resolveVenueTz
 // above.
 import { courtCalendarsForDivision } from "./court-candidates";
@@ -33,8 +33,8 @@ export { capacityInputForFixtures, type CapacityConfigInput, type CapacityFixtur
 export { CAPACITY_REPORT_KEY } from "@/server/api-v1/schemas";
 
 /**
- * The ONE typed code both capacity-guard call sites throw — `schedule.ts`'s
- * stage guard (via `guardCapacity` below) and `competition-schedule-ai.ts`'s
+ * The ONE typed code both capacity-guard call sites throw — `schedule/` folder's
+ * stage guard (via `guardCapacity` below) and `competition-schedule-ai/` folder's
  * per-division aggregation (which cannot use `guardCapacity` directly: it
  * must assess every kept division before throwing ONE combined 422 naming
  * all of them, not refuse on the first). A literal string at each throw
@@ -202,7 +202,7 @@ export type CapacityPrecheckInput = z.infer<typeof CapacityPrecheckInput>;
  * Tenant scoping IS the security boundary here — `divisionId` arrives from
  * the client on every call, not just this one's first hop through the route.
  * The lookup below follows `getScheduleSettings`'s own convention
- * (schedule.ts) rather than inventing a second one: `withTenant` activates
+ * (schedule/settings.ts) rather than inventing a second one: `withTenant` activates
  * `app_user` + `app.current_org` (RLS) for the whole callback, so a plain
  * `where d.id = ${divisionId}` already cannot see a division belonging to
  * another org — proven directly by a usecase-level test that calls this
@@ -224,7 +224,7 @@ export async function assessCapacityForDivision(
       join organizations o on o.id = d.org_id
       where d.id = ${divisionId}`;
     if (!row) throw new HttpError(404, "division not found");
-    // Same leaf resolveVenueTz precedence loadSettings (schedule.ts) uses for
+    // Same leaf resolveVenueTz precedence loadSettings (schedule/settings.ts) uses for
     // its own `orgTz` — reused, not re-derived, so this path cannot drift
     // from the governing-clock rule (#397) the rest of scheduling follows.
     // Deliberately `resolveVenueTz(null, …)`, never the division's own `tz`

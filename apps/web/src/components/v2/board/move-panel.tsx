@@ -90,7 +90,7 @@ export function MovePanel({
   );
   // P9 scope item 5: seeded from `court_id`, never `court_label` — the
   // latter is FROZEN and stays null on anything scheduled since the
-  // cutover (schedule.ts stopped writing it). `court_id` is what every
+  // cutover (usecases/schedule/ stopped writing it). `court_id` is what every
   // write path (`moveFixture`'s own `PatchFixture`, `.strict()`) actually
   // reads back, so seeding from it is what keeps the reopened panel's
   // preselected court in sync with reality.

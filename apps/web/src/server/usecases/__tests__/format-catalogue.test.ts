@@ -75,7 +75,7 @@ describe("format catalogue — shape regression (F1 Task 5)", () => {
     // (2026-08-18): this comment used to say qualifierCount falls back to
     // its `|| 4` default for a topNPerGroup-only take (progressionSize's own
     // deliberate 0 for that kind) — that was true before commit 6351fd2ce's
-    // same-session follow-up fix (stages.ts's qualifierCount now expands a
+    // same-session follow-up fix (stages/preview.ts's qualifierCount now expands a
     // topNPerGroup take against the PREVIOUS stage's real shape via
     // expandTake + previewSourceShape) and is no longer what the code does.
     // Re-verified against the CURRENT code (F3 Tasks 1-2: setup timing +

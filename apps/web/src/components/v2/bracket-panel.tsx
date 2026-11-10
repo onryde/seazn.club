@@ -101,7 +101,7 @@ interface Props {
    *
    *  Required, not optional, and deliberately separate from `fixtures`.
    *  `feedLabels()` needs both ends of an edge in one row list
-   *  (`!byId.has(target)`), and `wireCrossFeeds` (usecases/stages.ts) writes
+   *  (`!byId.has(target)`), and `wireCrossFeeds` (usecases/stages/generate-tx.ts) writes
    *  edges whose SOURCE and DEST sit in different stages, from a stage's
    *  `cross_feeds` config. A per-stage slice drops those edges, so the map
    *  this tree draws from would not carry them.

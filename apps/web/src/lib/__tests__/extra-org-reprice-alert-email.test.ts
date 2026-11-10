@@ -1,6 +1,6 @@
 // Body copy for the staff alert queued when an extra-organisation rider could
 // not be moved onto its group's current price (`extraOrgRepriceFailedAlertEmail`,
-// rendered by `maybeAlertOrgRepriceFailed` in billing-events.ts and queued on the
+// rendered by `maybeAlertOrgRepriceFailed` in usecases/billing-events/staff-alerts.ts and queued on the
 // email outbox as kind `staff_extra_org_reprice_failed`).
 //
 // The copy this file pins used to explain the fault as a TIER ARBITRAGE: "the

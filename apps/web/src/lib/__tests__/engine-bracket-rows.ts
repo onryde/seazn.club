@@ -1,5 +1,5 @@
 // W4 app-A Task 4 (K3, X-RB-1): the engine's own single-elimination bracket (`generateSingleElim` declares the shape —
-// pre-flight R9), stored the way the app stores it (stages.ts `bracketToGen`: `round_no` = the engine's round + 1,
+// pre-flight R9), stored the way the app stores it (usecases/stages/generators.ts `bracketToGen`: `round_no` = the engine's round + 1,
 // `seq_in_round` counted per round in emission order, `ext_key` = the engine's id). Each row also carries what the
 // ENGINE says about it, so a test's expected values come from the engine, never from the role key under test:
 //   - `isFinal` / `thirdPlace` — the engine's flags;

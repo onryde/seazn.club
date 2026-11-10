@@ -18,7 +18,7 @@ import type { AiChatRequest, AiTurn } from "./provider";
  *  `messages.2.content: Invalid input` (HTTP 400). When an assistant turn's
  *  content IS that raw message shape, use it directly as the wire message
  *  instead of re-wrapping it. A plain user turn's content is always a string
- *  (schedule-ai.ts sends `JSON.stringify(...)`), so it is untouched here. */
+ *  (usecases/schedule-ai/ sends `JSON.stringify(...)`), so it is untouched here. */
 function toWireMessage(turn: AiTurn): unknown {
   if (
     turn.role === "assistant" &&
@@ -55,7 +55,7 @@ function toWireMessage(turn: AiTurn): unknown {
  *  through this adapter failed before this fix, for every model, independent
  *  of which candidate was being tested. Strip the whole bound-keyword family
  *  recursively rather than changing the zod schemas themselves:
- *  `AiSchedulePlan.safeParse()` in schedule-ai.ts still enforces every bound
+ *  `AiSchedulePlan.safeParse()` in usecases/schedule-ai/ still enforces every bound
  *  on the response, so this only drops a wire-level hint the vendor can't
  *  accept, not the enforcement. */
 const UNSUPPORTED_BOUND_KEYS = new Set([

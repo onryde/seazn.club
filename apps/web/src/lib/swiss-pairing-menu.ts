@@ -80,7 +80,7 @@ export type { EntrantSwissFirstRounds };
  * every k — otherwise the hint would name a wrong seed, which is worse than
  * naming none.
  *
- * The order mirrors `generateStageFixturesWrite` (usecases/stages.ts):
+ * The order mirrors `generateStageFixturesWrite` (usecases/stages/generate.ts):
  *  - a stage carrying `config.qualified` draws the qualifiers still in the
  *    field, IN QUALIFICATION ORDER, and ranks them by that position — so the
  *    check is positional, and the same seeds in another order fail it;
@@ -112,7 +112,7 @@ export function swissFieldSeedsNumbered(
 }
 
 /**
- * X-SW-22 (W3 T8) — does round 1 draw an unseeded entrant? Mirrors `swissGen` (usecases/stages.ts): round 1 orders an
+ * X-SW-22 (W3 T8) — does round 1 draw an unseeded entrant? Mirrors `swissGen` (usecases/stages/swiss-gen.ts): round 1 orders an
  * unseeded entrant by the stage's seeded random draw (`lib/swiss-draw.ts`) whenever the field it pairs holds one. A stage
  * carrying `config.qualified` ranks its qualifiers by qualification order, so it is never drawn. A missing seed reads as
  * unseeded, as in `swissFieldSeedsNumbered`.
@@ -141,7 +141,7 @@ export function swissPairingMenuFor(args: {
   activeEntrantIds: readonly string[] | undefined;
   entrantSeeds: EntrantSeeds | undefined;
   /** W3 T9 (T8 review m8): the stage this menu is for and each entrant's stored first round. The round's field is the
-   *  server's — `swissFieldForRound` (usecases/stages.ts) over the same two predicates (`swissFirstRoundIn`,
+   *  server's — `swissFieldForRound` (usecases/stages/swiss-gen.ts) over the same two predicates (`swissFirstRoundIn`,
    *  `inSwissRoundField`) — so a late player whose first round is still ahead neither draws round 1 here nor counts in
    *  it. Absent: everyone plays from round 1, as before any late entry. */
   stageId?: string;

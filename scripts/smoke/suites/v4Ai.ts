@@ -433,7 +433,7 @@ export async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: st
       check(
         // v17 Phase 2 Task 5 (V322) retired the per-division run cap `runs.max`
         // used to resolve (pro_plus 50); the AI credit wallet meters spend
-        // instead, so `runs.max` is now always null (lastAiApply, schedule.ts) —
+        // instead, so `runs.max` is now always null (lastAiApply, usecases/schedule/apply.ts) —
         // `runs.used` still counts the same schedule.ai_generated rows.
         "v4 AI/paid: ai-last reports 1 run used and no per-division max (wallet-metered now)",
         lastData?.runs?.used === 1 && lastData?.runs?.max === null,
@@ -566,7 +566,7 @@ export async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: st
       // could still reach it ----
       //
       // `refine`, not `generate`, on purpose. Refine takes the organiser's own
-      // prior as the draft (schedule-ai.ts), the fixture model echoes it back,
+      // prior as the draft (usecases/schedule-ai/), the fixture model echoes it back,
       // and person_overlap is a WARNING rather than a blocker — so nothing
       // between here and the response is free to move the two cards apart. The
       // board handed over deliberately plays the final and the third-place

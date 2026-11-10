@@ -7,7 +7,7 @@
 // different files:
 //
 //   * a SCORE write        → `invalidatePublicCache` (usecases/scoring.ts)
-//   * a SCHEDULE write     → `afterScheduleWrite`    (usecases/schedule.ts)
+//   * a SCHEDULE write     → `afterScheduleWrite`    (usecases/schedule/after-write.ts)
 //
 // The second is the one a first draft missed: the task's own file list named
 // only the scoring path, so a reschedule would have left the hub advertising a

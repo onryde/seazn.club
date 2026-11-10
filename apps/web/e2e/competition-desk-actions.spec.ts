@@ -212,8 +212,8 @@ async function assertUsable(page: Page, selector: string, why: string) {
 /** e2e-unreachable cases, each naming where it IS pinned instead. */
 const E2E_UNREACHABLE: Record<string, string> = {
   // A stale proposal needs a confirm attempt to find the source standings
-  // moved under an existing draft (stages.ts:2956) or the dependent-stage
-  // sweep to mark it (stages.ts:3143) — several API round trips past the
+  // moved under an existing draft (usecases/stages/) or the dependent-stage
+  // sweep to mark it (usecases/stages/) — several API round trips past the
   // point this file is testing. Pinned instead, against a real database, by
   // competition-desk.test.ts's "a STALE proposal makes the action point at
   // the panel's 'recompute' door".
@@ -283,7 +283,7 @@ const ROWS: Row[] = [
       expect((await apiJson(request, `/api/v1/divisions/${rig.div.id}/start`, "POST")).status).toBe(200);
       await scoreInSeedOrder(request, rig.fixtures, rig.entrantIds);
       // Generate first, then complete: `completeStage` auto-computes the next
-      // setup-timing stage's proposal (stages.ts:2297), so the panel is
+      // setup-timing stage's proposal (usecases/stages/), so the panel is
       // already in `draft` and its button reads "Confirm proposal". Verified
       // live at 12:16Z on 2026-09-03 — states ["draft"], compute 0, confirm 1.
       const finals = await addStage(request, rig.div.id, P_SETUP);

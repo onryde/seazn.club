@@ -1,6 +1,6 @@
 // A stage added with "Add stage" (AddStageForm) is an `on_complete`
 // progression stage: it has no fixtures until the stage before it completes,
-// and the server refuses Generate until then (stages.ts
+// and the server refuses Generate until then (usecases/stages/
 // generateStageFixtures' pre-flight, STAGE_NOT_READY reason
 // "previous_stage_incomplete"). Two screens used to tell the organiser the
 // wrong thing about it:

@@ -299,7 +299,7 @@ describe("I1 group_playoffs and swiss_playoff below the page playoff's size (bui
     expect(checked).toBe(2);
   });
 
-  // The server's Generate pre-flight (stages.ts generateStageFixturesWrite) runs the size gate on a NON-knockout root only
+  // The server's Generate pre-flight (usecases/stages/generate.ts generateStageFixturesWrite) runs the size gate on a NON-knockout root only
   // when its division holds a fed page playoff, so a root of any other division pays no round trip for it
   // (generate-roundtrips.test.ts). That rests on an assumption, held here as a guard: every graph the gate refuses whose
   // roots hold no knockout contains a fed page playoff. A new gate on a league or Swiss root breaks it here first.

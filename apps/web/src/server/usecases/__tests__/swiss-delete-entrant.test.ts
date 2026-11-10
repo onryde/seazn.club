@@ -17,7 +17,7 @@
 //
 // There is a SECOND shape the original report did not name, and on an odd
 // field it is the likelier one. The bye row is written `home = winner,
-// away = null, status = 'forfeited', outcome = {award, winner}` (stages.ts
+// away = null, status = 'forfeited', outcome = {award, winner}` (stages/
 // :1179). Delete the BYE RECIPIENT and the FK leaves an award outcome with NO
 // seat on either side — an orphan. `isSwissBoardSeated` calls it seated (it is
 // an award), so the round reads as complete and Generate walks past it to

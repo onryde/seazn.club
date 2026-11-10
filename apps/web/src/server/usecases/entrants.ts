@@ -23,7 +23,7 @@ import type {
 } from "@/server/api-v1/schemas";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { gateRosterEligibility, type EligibilityIssue } from "./registration-eligibility";
-// One-way edge (stages.ts does not import this module): a status flip has to
+// One-way edge (stages/ does not import this module): a status flip has to
 // reach the seed proposals that were computed over the old field, and a
 // pre-Start DELETE has to leave the swiss rounds it was seated in coherent.
 import { markFieldChangeSeedProposalsStale, refoldStageTable, unseatSwissRoundsSeatingEntrant } from "./stages";
@@ -208,7 +208,7 @@ export interface HeldMembershipRow {
  *  write would refuse, nor hides one it would take.
  *
  *  A departed entrant (withdrawn, disqualified) holds no one. An americano division's `pair` entrants hold no one either:
- *  its stage mints a pair per rotation from the individuals (`pairEntrantsFor` in stages.ts), so every player there is on
+ *  its stage mints a pair per rotation from the individuals (`pairEntrantsFor` in stages/generators.ts), so every player there is on
  *  many pairs by design, and those are not teams anyone entered. */
 export function heldMemberships(tx: Tx, divisionId: string, personIds?: string[]) {
   return tx<HeldMembershipRow[]>`
@@ -634,7 +634,7 @@ export async function deleteEntrant(auth: AuthCtx, id: string): Promise<void> {
     if (!row) throw new HttpError(404, "entrant not found");
     // This is now a FIXTURE write as well as a roster one, so it takes the
     // same division lock `generateStageFixturesWrite` and `unpairSwissRound`
-    // take — stages.ts's stated convention is that a destructive swiss write
+    // take — stages/ folder's stated convention is that a destructive swiss write
     // reads `existing` UNDER the lock. Taken before the status read so a
     // concurrent Start cannot slip between the guard and the write. Same key
     // and the same acquire-then-write order as the sibling paths, so there is
@@ -978,7 +978,7 @@ export async function patchEntrant(
   if (patch.status === "disqualified") {
     const [current] = await withTenant(auth.orgId, (tx) => tx<{ status: string }[]>`select status from entrants where id = ${id}`);
     if (current !== undefined && !DEPARTED_STATUSES.has(current.status)) {
-      // A dynamic import: withdrawal.ts imports this module (scoring.ts → stages.ts's `completeStage` is the precedent).
+      // A dynamic import: withdrawal.ts imports this module (scoring.ts → stages/completion.ts's `completeStage` is the precedent).
       const { withdrawEntrantCascade } = await import("./withdrawal");
       const rest: PatchEntrant = { ...patch };
       delete rest.status; // written by the cascade

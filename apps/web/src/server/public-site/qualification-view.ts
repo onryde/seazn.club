@@ -520,7 +520,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   // with the full per-match [min, max] like any row's (the organiser may also
   // score them). Once they are walked over or voided it is 0. In Swiss that is
   // the boards it already sits on, never the rounds formula: pairing seats
-  // only the field (usecases/stages.ts generateStageFixturesWrite's `active`
+  // only the field (usecases/stages/generate.ts generateStageFixturesWrite's `active`
   // read), so no later round will seat it.
   const unplayed = (id: string): number => tableFx.filter((f) => !settled(f) && seats(f, id)).length;
   // W3 app-B final review I1 (ruling R17, progress.md:8; app-A final review m3: a badge may arrive early, never false): a
@@ -560,7 +560,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   // Out counts them among the entrants already beyond a row (final review
   // M3). That rests on a product rule decided elsewhere: a departed qualifier
   // still takes her place above the line — her seat is left empty and nobody
-  // below is promoted into it (usecases/stages.ts computeSeedProposal, the
+  // below is promoted into it (usecases/stages/seed-proposal.ts computeSeedProposal, the
   // departed filter). For a kind outside the set below that is still the rule.
   //
   // In a SWISS table it is not (W3 T15 Carry A, controller ruling 2026-11-02:

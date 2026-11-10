@@ -36,7 +36,7 @@ import { STREAM_CREDIT_AUDIT_ACTIONS } from "@/server/usecases/stream-credits";
  *    day of ordinary detaches otherwise renders as staff activity, drowning the
  *    unusual staff behaviour the panel exists to surface). Listing them here
  *    re-introduces precisely the noise that gap removed.
- *  - `platform_dispute` (billing-events.ts, notifyStaffDispute). Written by a
+ *  - `platform_dispute` (billing-events/staff-alerts.ts, notifyStaffDispute). Written by a
  *    STRIPE WEBHOOK, not by a person. `staff_audit_log.actor_id` is NOT NULL, so
  *    the row is attributed to whichever superadmin `order by created_at limit 1`
  *    returns — an accountability placeholder, not an actor. Its target IS the

@@ -57,7 +57,7 @@ export function mayHoldBearerCredential(role: OrgRole | null): boolean {
  * Redis for 120s and what `GET /api/orgs`, a nav endpoint, returns to every
  * member. The two places that genuinely need those columns read them
  * themselves, scoped to the one org being edited or paid:
- * `o/[orgSlug]/settings/connect/page.tsx` and `usecases/registrations.ts`.
+ * `o/[orgSlug]/settings/connect/page.tsx` and `usecases/registrations/`.
  */
 export interface OrgSummary {
   id: string;

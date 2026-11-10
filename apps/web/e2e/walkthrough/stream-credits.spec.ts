@@ -929,7 +929,7 @@ test("B5 · an Event Pass grants its rung's declared credits into the bought buc
     object: "checkout.session",
     mode: "payment",
     status: "complete",
-    // A 100%-off promotion code settles with nothing to collect and NO payment intent (billing-events.ts).
+    // A 100%-off promotion code settles with nothing to collect and NO payment intent (usecases/billing-events/).
     payment_status: paymentIntent ? "paid" : "no_payment_required",
     payment_intent: paymentIntent,
     customer: null,

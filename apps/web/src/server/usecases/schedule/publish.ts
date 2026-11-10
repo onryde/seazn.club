@@ -332,7 +332,7 @@ export async function startDivision(
     // W4 B2 fix round 1 (G1): a pre-Start withdrawal is a status flip only (withdrawal.ts) and an arrival seats nobody,
     // so a root knockout drawn before them still names a withdrawn player on a match, or leaves a newcomer out. Start is
     // the last moment before play: when the first round no longer matches the field (`roster_drift`, read above) it runs
-    // the reconcile Generate does (stages.ts `reconcileKnockoutGenerate`) — IN PLACE ONLY (fix round 2, item 2): a
+    // the reconcile Generate does (stages/generate-tx.ts `reconcileKnockoutGenerate`) — IN PLACE ONLY (fix round 2, item 2): a
     // newcomer into a bye, a departed entrant's match to a bye. A change that needs the bracket drawn again is refused by
     // name, KO_START_NEEDS_UPDATE_DRAW, and the start with it, before any write: the redraw is Update draw's, whose notice
     // says what moved. So Start deletes no fixture, and its one publish below names every fixture there is. A frozen
@@ -418,7 +418,7 @@ export async function startDivision(
     // wrapped-up competition must not reopen it.
     //
     // The guard is the `where`, not a read-then-write in JS, so a concurrent
-    // PATCH cannot lose a race with it — the house idiom (stages.ts's
+    // PATCH cannot lose a race with it — the house idiom (stages/ folder's
     // `update divisions set status = 'active' where id = … and status =
     // 'completed'` reopen, and fillSlot's `… and home_entrant_id is null
     // returning id`). `returning` reports whether THIS call made the

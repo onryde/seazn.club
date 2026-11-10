@@ -50,7 +50,7 @@ const L = {
 
 /**
  * The WIRE shape of GET/PUT `/api/v1/divisions/{id}/schedule-settings`
- * (`toWire`, `usecases/schedule.ts:165-172`, pinned by
+ * (`toWire`, `usecases/schedule/settings.ts`, pinned by
  * `schedule-settings-wire.test.ts`): `{ division_id, config, tz, updated_at }`
  * — `tz` here is the RESOLVED display zone (division override -> org tz ->
  * 'UTC'), never the raw stored column.

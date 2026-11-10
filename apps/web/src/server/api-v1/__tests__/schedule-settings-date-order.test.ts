@@ -7,8 +7,8 @@
 //
 // The guard is on `PutScheduleSettings`, the write wrapper, and these tests pin
 // WHY it is not on `ScheduleConfig` itself. `ScheduleConfig` is also the READ
-// path — `schedule.ts:296` runs `.parse` over the stored `schedule_settings`
-// jsonb and `.parse` throws, and `competition-schedule-ai.ts:2429` `safeParse`s
+// path — `usecases/schedule/` runs `.parse` over the stored `schedule_settings`
+// jsonb and `.parse` throws, and `usecases/competition-schedule-ai/` `safeParse`s
 // the same rows. Refining it would take every division that ALREADY holds a
 // reversed range and turn its schedule page into a 500. The last test here is
 // the one that keeps that distinction from being "tidied away".
@@ -149,7 +149,7 @@ describe("PutScheduleSettings — a reversed range is refused on the way in", ()
 describe("ScheduleConfig itself stays permissive — it is the READ path", () => {
   // Load-bearing. If someone moves the refine onto `ScheduleConfig` to "cover
   // more callers", every division already holding a reversed range stops
-  // loading: `schedule.ts:296` parses the stored jsonb with `.parse`, which
+  // loading: `usecases/schedule/` parses the stored jsonb with `.parse`, which
   // throws. This test is the tripwire for that specific well-intentioned edit.
   it("still parses a stored config whose range is reversed", () => {
     const parsed = ScheduleConfig.safeParse({ ...BASE, startAt: AUG_22, endAt: AUG_11 });

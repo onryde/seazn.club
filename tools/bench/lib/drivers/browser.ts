@@ -603,7 +603,7 @@ async function payViaCheckout(session: RegistrationBrowserSession, base: string,
     // The BODY, not just the status. `resumeRegistrationCheckout` refuses for
     // six distinct reasons (wrong status, non-stripe payment method, zero
     // amount, passed deadline, charges not enabled, no connected account —
-    // usecases/registrations.ts:4350-4387) and every one of them is a 422.
+    // usecases/registrations/) and every one of them is a 422.
     // A bare "HTTP 422" names none of them and sends the next reader to read
     // the usecase and guess; the error code is right there in the response.
     const detail = await mint.text().catch(() => "<unreadable>");
@@ -621,7 +621,7 @@ async function payViaCheckout(session: RegistrationBrowserSession, base: string,
 /** Polls the public status endpoint until the entry reads paid/confirmed.
  *  `reconcile=1` makes the read fetch the Checkout session from Stripe and
  *  settle the row synchronously, so this does not depend on the webhook
- *  having been delivered first (`reconcileRegistration`, registrations.ts:3242
+ *  having been delivered first (`reconcileRegistration`, usecases/registrations/checkout-completion.ts
  *  — documented as never throwing, precisely so a slow webhook cannot wedge
  *  a read). */
 async function pollPaid(session: RegistrationBrowserSession, base: string, entryId: string, token: string): Promise<void> {
@@ -637,7 +637,7 @@ async function pollPaid(session: RegistrationBrowserSession, base: string, entry
     // reading `.status` off the top level yields `undefined` — which
     // `pollUntilPaid` then reports as a state that never settles, blaming the
     // registration for the reader's own mistake. `PublicStatusView.status`
-    // lives one level down (usecases/registrations.ts:3375).
+    // lives one level down (usecases/registrations/).
     const body = (await res.json()) as { data?: { status?: string } };
     const status = body.data?.status;
     if (status === undefined) {
@@ -656,7 +656,7 @@ export function browserCaptain(session: RegistrationBrowserSession, base: string
   // calls `pay()` the money has moved and the row is settled — minting a
   // second session there is not merely wasteful, it is a 422
   // (`resumeRegistrationCheckout` requires `reg.status === "pending"`,
-  // registrations.ts:4350). `pay()` still has real work in that case: proving
+  // usecases/registrations/). `pay()` still has real work in that case: proving
   // the entry actually reached paid/confirmed rather than assuming it.
   let paidDuringEnter = false;
   return {

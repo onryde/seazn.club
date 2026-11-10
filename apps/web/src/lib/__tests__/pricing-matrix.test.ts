@@ -554,7 +554,7 @@ describe.skipIf(!HAS_DB)("V310 packaging: logos + paid entry for everyone", () =
   });
 
   // The community row must EXIST and be > 0. `feePercentFor`
-  // (server/usecases/registrations.ts) falls back to platformFeeDefault() when
+  // (server/usecases/registrations/) falls back to platformFeeDefault() when
   // getLimit returns null OR <= 0. Without a real row the pass would discount
   // nothing.
   //

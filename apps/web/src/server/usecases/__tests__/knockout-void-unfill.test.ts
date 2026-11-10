@@ -454,7 +454,7 @@ describe.skipIf(!HAS_DB)("voiding a decided knockout result takes back the name 
   });
 
   // The status clause on its own. Nothing in the product writes 'cancelled'
-  // (stages.ts `feederIsDead` says so), but it is a valid value an import can
+  // (stages/bracket-seats.ts `feederIsDead` says so), but it is a valid value an import can
   // carry, so the only way to reach it is raw SQL — the point of the test, not
   // a shortcut. A cancelled next match has no outcome and no events: only the
   // `status !== 'scheduled'` clause sees it.

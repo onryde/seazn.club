@@ -509,7 +509,7 @@ describe.skipIf(!HAS_DB)("rejectRegistration — RS012 `/code-review high` findi
 });
 
 // ---------------------------------------------------------------------------
-// RS002 W5 whole-branch review MAJOR: ruling B (registrations.ts,
+// RS002 W5 whole-branch review MAJOR: ruling B (registrations/,
 // confirmPaidRegistration) can leave a Stripe-paid manual-approval entry at
 // exactly 'paid' awaiting review. Before this, that state could be approved
 // but never declined.
@@ -640,7 +640,7 @@ describe.skipIf(!HAS_DB)("reject/approve on a paid-awaiting-approval entry", () 
     await sql`update registration_groups set payment_intent_id = 'pi_test_fake2' where id = ${submitted.group_id}`;
 
     // An organiser refunds it via the normal refund flow — which does NOT
-    // itself change `status` (registrations.ts's refundRegistration).
+    // itself change `status` (registrations/organiser-actions.ts's refundRegistration).
     await refundRegistration(owner, regId, undefined);
     const [refunded] = await sql<{ status: string; refunded_cents: number }[]>`
       select status, refunded_cents from registrations where id = ${regId}`;

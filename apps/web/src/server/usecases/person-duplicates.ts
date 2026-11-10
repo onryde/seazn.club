@@ -70,7 +70,7 @@ export async function listDuplicateCandidates(
   const limit = Math.min(Math.max(opts.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
   const rows = await withTenant(auth.orgId, async (tx) => {
     // The name key must fold exactly as `personKeyResolver` does
-    // (schedule-ai.ts:152 — trim().toLowerCase().replace(/\s+/g," ")), or the
+    // (schedule-ai/ — trim().toLowerCase().replace(/\s+/g," ")), or the
     // queue and the scheduling identity guard disagree on what "same name"
     // means. `[[:space:]]` rather than `\s` so no backslash has to survive a JS
     // template literal on its way into SQL. Blank names fold to '' and are

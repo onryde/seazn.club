@@ -43,7 +43,7 @@ export interface ConflictDetailCtx {
    *
    *  The `personIds` this formatter resolves name `entrant_members` rows
    *  (roster/squad members — see `peopleByEntrant`/`peopleOf` in
-   *  `server/usecases/schedule.ts`, which is what feeds the engine's
+   *  `server/usecases/schedule/board.ts`, which is what feeds the engine's
    *  `Assignment.people`), not officials. Populating this for real would
    *  need a NEW query joining `entrant_members` to `persons` on the
    *  board/joint-schedule pages (none load one today) and threading the
@@ -55,7 +55,7 @@ export interface ConflictDetailCtx {
 }
 
 /** A synthetic collapsed-person key minted by `personKeyResolver`
- *  (`apps/web/src/server/usecases/schedule-ai.ts:202`) when a joint AI pack
+ *  (`apps/web/src/server/usecases/schedule-ai/identity.ts`) when a joint AI pack
  *  finds two person rows sharing a display name: `name:${normalizedName}`.
  *  It already CARRIES its name — slicing it to 8 chars the way a genuine
  *  opaque id is shortened would print `name:ali`, worse than the raw id. */
@@ -207,7 +207,7 @@ export function formatConflictDetail(d: ConflictDetail, ctx: ConflictDetailCtx):
       // archived or deleted out from under an already-placed fixture), not a
       // clash with another card, so no otherFixtureId branch. `courtLabel`
       // resolves through the same server-enriched `courtName` every other
-      // court-carrying kind uses (`withCourtNames`, schedule.ts — keyed on
+      // court-carrying kind uses (`withCourtNames`, usecases/schedule/conflicts.ts — keyed on
       // `details.court` presence, not a kind list, so it already covers this
       // kind with no changes there) and degrades to the shared "Unknown
       // court" string on a miss, same as its siblings — never the raw uuid.
@@ -300,7 +300,7 @@ export function formatConflictDetail(d: ConflictDetail, ctx: ConflictDetailCtx):
 
 /** Snake_case wire shape (`BoardConflict.details`, types.ts) -> the engine's
  *  own camelCase `ConflictDetail`. A plain rename, nothing derived — the
- *  inverse of `toWireConflictDetail` in usecases/schedule.ts. Conditional
+ *  inverse of `toWireConflictDetail` in usecases/schedule/conflicts.ts. Conditional
  *  spreads throughout so an absent field stays ABSENT rather than a present
  *  `undefined`, matching that function's own idiom. */
 export function fromBoardConflictDetail(d: BoardConflictDetail): ConflictDetail {

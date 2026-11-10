@@ -217,7 +217,7 @@ export async function publicCompetition(
  *  on the org home, the sitemap, discovery or another competition's player
  *  card — so a spec that reads one of those publishes what it expects to see.
  *  Call it AFTER `leagueFixtures`: starting a division promotes a PUBLISHED
- *  competition to `live` (schedule.ts), which would change its chip and tier. */
+ *  competition to `live` (usecases/schedule/), which would change its chip and tier. */
 export async function publishCompetition(request: APIRequestContext, competitionId: string): Promise<void> {
   const res = await apiJson<{ status: string }>(request, `/api/v1/competitions/${competitionId}`, "PATCH", {
     status: "published",

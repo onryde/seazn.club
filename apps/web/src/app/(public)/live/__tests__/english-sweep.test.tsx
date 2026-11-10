@@ -507,7 +507,7 @@ function divisionBDetail(mode: HubMode) {
   // A page names a pool from its KEY through the locale's `table.poolLabel`
   // (`lib/pool-label.ts`), so the key is the DATA a reader sees and carries
   // the marker. The stored name is the generator's only spelling, the English
-  // "Pool " + key (`usecases/stages.ts`): seeded as it really is, so a page
+  // "Pool " + key (`usecases/stages/`): seeded as it really is, so a page
   // that printed it again would put "Pool …" in front of an es/fr/nl reader
   // and red this sweep.
   const pools = [

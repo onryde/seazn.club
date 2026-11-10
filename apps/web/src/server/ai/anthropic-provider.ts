@@ -1,5 +1,5 @@
 // Anthropic adapter — the shipped default. Behaviour must match the inline call
-// this replaced (schedule-ai.ts:929 before the seam landed); the parity tests
+// this replaced (usecases/schedule-ai/ before the seam landed); the parity tests
 // exist to keep it that way.
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";

@@ -203,7 +203,7 @@ test.describe("RS003 public registration API", () => {
     expect(rows).toHaveLength(1);
   });
 
-  // B2 review findings: registrationIcs (usecases/registrations.ts) had ZERO
+  // B2 review findings: registrationIcs (usecases/registrations/csv-ics.ts) had ZERO
   // e2e/smoke coverage before this — the DB-integration suite pins the exact
   // VALUE correctness (folding, localized DESCRIPTION), this proves the real
   // route serves it over HTTP with the fix's new CALSCALE/METHOD lines.

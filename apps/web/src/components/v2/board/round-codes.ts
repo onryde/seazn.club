@@ -114,7 +114,7 @@ const PAGE_PLAYOFF_KEYS: ReadonlySet<string> = new Set(["pp-q1", "pp-elim", "pp-
  * is indistinguishable from its final (a second "F") and a double
  * elimination's three lanes collapse into one (its opening round an "R512").
  * The discriminator is `is_final`: NOT NULL DEFAULT FALSE, and set by every
- * bracket writer since (stages.ts `bracketToGen`) on the single-elimination
+ * bracket writer since (usecases/stages/generators.ts `bracketToGen`) on the single-elimination
  * final, the grand-final games and a stepladder's last game — so a stage with
  * no `is_final` row is legacy or history-restored. For a stepladder that flag
  * is the only evidence on its rows that its final is among them at all.

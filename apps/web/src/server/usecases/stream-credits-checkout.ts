@@ -2,13 +2,13 @@ import "server-only";
 // Fulfilling a MATCH-credit Checkout Session (streaming R1, design §5.2) — the one home for both paths that learn a pack
 // was paid for:
 //
-//   * the webhook — billing-events.ts `handleCheckoutCompleted`, reached from `checkout.session.completed` and from
+//   * the webhook — billing-events/checkout.ts `handleCheckoutCompleted`, reached from `checkout.session.completed` and from
 //     `checkout.session.async_payment_succeeded` (a delayed method's only carrier of the outcome);
 //   * reconcile-on-return — the division page, when the embedded checkout sends the buyer back to
 //     `?checkout=success&session_id=…` (Task 14 fix round 1, G1). Without it, a return render that beats the webhook
 //     shows the club that has just paid the "Buy match credits" card again. The billing, upgrade and registration pages
 //     already reconcile on return (lib/billing.ts reconcileCheckout / reconcilePassCheckout,
-//     registrations.ts reconcileRegistrationBySession); this is the same contract for this ledger.
+//     registrations/checkout-completion.ts reconcileRegistrationBySession); this is the same contract for this ledger.
 //
 // The two CONVERGE ON ONE LEDGER ROW because both write through `recordPurchase`, idempotent on
 // org_stream_credits.stripe_event_id = the Checkout Session id — the one id every delivery of this purchase, and every
@@ -128,7 +128,7 @@ async function fulfilStreamCreditsOutcome(
           );
           // ACKed means Stripe stops asking, so the log line is the ONLY
           // remaining trail — page a human, exactly as the donor branches do
-          // (billing-events.ts's credit_pack, pass and size_pack limbs). The buyer was
+          // (billing-events/ folder's credit_pack, pass and size_pack limbs). The buyer was
           // charged and holds nothing; only a manual grant fixes it.
           if (alertStaff) {
             await alertStreamCreditGrantFailed({

@@ -3,7 +3,7 @@ import { newSession, check, signIn, tag, v1, v1data } from "../harness.ts";
 
 /**
  * Date/time UX programme, Prompt 09 — the court-removal guard
- * (`putScheduleSettings`, "date/time UX P08", usecases/schedule.ts): dropping
+ * (`putScheduleSettings`, "date/time UX P08", usecases/schedule/settings.ts): dropping
  * a court that still holds a PINNED fixture is refused (409, naming the court
  * and the reason); the identically-shaped save is allowed once that fixture
  * is unpinned. The guard's reasoning matrix (both refusal reasons, the

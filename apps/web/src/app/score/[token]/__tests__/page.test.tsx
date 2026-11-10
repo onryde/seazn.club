@@ -604,7 +604,7 @@ describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
   });
 
   // Task 6 review round 2 (item 3): a seat fed from ANOTHER stage.
-  // `wireCrossFeeds` (usecases/stages.ts) writes only the source row's link,
+  // `wireCrossFeeds` (usecases/stages/generate-tx.ts) writes only the source row's link,
   // so the seat's name comes from the feed edge, and the board builds its feed
   // map from the whole division's rows. Waiting used to pass no feed map at
   // all, so it fell through to the seat's stored label while the board card

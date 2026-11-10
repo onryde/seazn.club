@@ -307,7 +307,7 @@ export async function validateScheduleIn(
   // the board actually looked like — a round-robin division could publish or
   // start with a genuine round-order violation and nothing would show it.
   // Wired the same way `autoSchedule`/`applySchedule`/`reverifyBoards`
-  // already are (`schedule.ts`'s own reference wiring; `person-merge.ts`).
+  // already are (`schedule/` folder's own reference wiring; `person-merge.ts`).
   const roundRobin = await roundRobinStageIds(tx, divisionId, settings);
   const assignments = all
     .filter((f) => f.scheduled_at !== null && f.court_id !== null)

@@ -23,7 +23,7 @@ vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({ checkout: { sessions: { create: stripeMock.checkoutCreate } } }),
 }));
 
-// RS005 W4 — the route sends the cart confirmation post-submit (notifySubmitted, registrations.ts). Since phase 3 wave 1 that mail is
+// RS005 W4 — the route sends the cart confirmation post-submit (notifySubmitted, usecases/registrations/mail.ts). Since phase 3 wave 1 that mail is
 // QUEUED on the email outbox (kind `registration_confirmation`, ref `registration_group/<group id>`) and attempted after the response.
 // Only the outbox's network seam is replaced: this file proves the route's WIRING (what was queued, for whom, with what body, and what
 // the 201 does when the mail goes wrong); the queue itself is registration-confirmation-outbox.test.ts's and the template's is

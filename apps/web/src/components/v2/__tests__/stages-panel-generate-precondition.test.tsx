@@ -59,12 +59,12 @@ describe("generatePreconditionMessage — StagesPanel generate-click classifier"
   // to fall through to the PLAIN path's tooFewEntrants copy ("add at least 2
   // entrants to this stage first"). That advice cannot be followed: a
   // `.seeding` stage's entrants are synthetic slot:N seeds minted from
-  // seeding.take rules (stages.ts:1399-1403), not rows a user can add. This
+  // seeding.take rules (usecases/stages/), not rows a user can add. This
   // must render seeded-specific, actionable copy instead.
   //
   // NOTE: an earlier version of this comment also claimed "a group-kind stage
   // left at pools.count's default of 1" reaches this branch. That is FALSE and
-  // was disproven by reading the generators: with one pool stages.ts:655-656
+  // was disproven by reading the generators: with one pool usecases/stages/
   // runs a full-field round robin, which strands nobody, so stranding requires
   // count > 1 and that forces the groups > 1 branch. This case is a shape
   // tripwire for a future generator regression, not a live user path.

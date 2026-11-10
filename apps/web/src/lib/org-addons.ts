@@ -84,7 +84,7 @@ const LOOKUP_KEYS = new Set(ORG_ADDONS.map((e) => e.lookupKey));
  * Matched on the price `lookup_key` (the durable identity, stable across price
  * replacements via transfer_lookup_key), falling back to the item metadata
  * marker the usecase stamps for the case a payload arrives without the price
- * expanded. Used by the webhook (billing-events.ts) to pick org-addon items
+ * expanded. Used by the webhook (usecases/billing-events/) to pick org-addon items
  * out of a subscription that may also carry the plan item and seat items.
  *
  * The metadata fallback is checked only when the lookup_key does NOT identify a

@@ -295,7 +295,7 @@ export async function ensureBridgeRow(
   const basis = await bridgeBasis(f, opts);
   // Minted only while the fixture still seats the entrants `f` was read
   // with, under a SHARE lock on the fixture row. A Swiss seat clear
-  // (stages.ts `clearSwissFixtureSeats`) locks the fixture rows FOR UPDATE
+  // (stages/swiss-boards.ts `clearSwissFixtureSeats`) locks the fixture rows FOR UPDATE
   // before it checks for games, so a mint racing it waits, then re-reads
   // the seats it cleared and writes nothing: no row — hence no claim, no
   // marker, no game — can appear behind a check that never saw one

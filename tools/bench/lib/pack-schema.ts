@@ -475,7 +475,7 @@ export const PackStage = z.strictObject({
    *  DOCUMENTATION, NOT WIRING — read this before relying on it (B06b). No
    *  code in `tools/bench` reads this field: `seed.ts` does not forward it,
    *  and the product derives its own order from each entrant's `seed` column
-   *  (`usecases/stages.ts:782` builds the seeds map from `entrants[].seed`,
+   *  (`usecases/stages/` builds the seeds map from `entrants[].seed`,
    *  and `roundrobin.ts:62`'s `seedOrder` sorts by it). What this field DOES
    *  buy is validation — `PackSchema`'s ref walk refuses a seeding that names
    *  an unknown entrant or one from another division — plus a written record
@@ -1217,7 +1217,7 @@ export const PackExpectedChampion = z.strictObject({
  * knockout and whose B05 oracle list names `finalRanks` by that name.
  *
  * The product does snapshot one for every stage kind — a bracket/ladder writes
- * a single `placementTable`-wrapped row (`usecases/stages.ts:2400-2401`, via
+ * a single `placementTable`-wrapped row (`usecases/stages/`, via
  * `engine-db/competition.ts:487-499`, rows from `competition/progression.ts:
  * 716-730` with the rank set and all stats zeroed) — so this is a real product
  * fact a pack can be held to, not an invented one.
@@ -1547,7 +1547,7 @@ export const PackRegistrationBlock = z.strictObject({
    *
    *  This is not cosmetic and it is not inferrable. `resumeRegistrationCheckout`
    *  refuses to mint a Checkout session unless the division's method is
-   *  "stripe" (usecases/registrations.ts:4365), so a pack that declares
+   *  "stripe" (usecases/registrations/), so a pack that declares
    *  `feeCents > 0` and `pay: true` but leaves this at "offline" configures a
    *  division that takes money by bank transfer and then asks Stripe to charge
    *  a card for it. Before this field existed the bench had no way to say

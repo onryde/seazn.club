@@ -70,7 +70,7 @@ export interface RawDivisionRow {
    *  the fee that promoting any of them re-prices at whatever fee is LIVE
    *  at promotion time, not what they saw when they joined (waitlisted rows
    *  hold `amount_cents = 0`, so there is no earlier quote to honour — see
-   *  `promoteWaitlistedRow`, registrations.ts). Counted by its OWN
+   *  `promoteWaitlistedRow`, usecases/registrations/waitlist.ts). Counted by its OWN
    *  subquery, deliberately never folded into `taken`'s SPOT_HOLDERS set —
    *  a waitlisted entry holds no spot. */
   waitlisted: number;
@@ -433,7 +433,7 @@ export interface PoolSummaryRow {
   waiting: number;
   free_slots: number;
   /** coalesce(place_by_at, closes_at) — the SAME fallback the Stage 2 sweep
-   *  (registrations.ts's duePool query) and the Stage 3b status page
+   *  (usecases/registrations/ folder's duePool query) and the Stage 3b status page
    *  (poolPlaceByDate) both already use. Null only if the division has
    *  neither set (nothing enforces a deadline yet). */
   place_by_at: string | null;
@@ -460,7 +460,7 @@ export interface PoolSummaryRow {
  *     non-free-agent) teams in those SAME divisions — deliberately the SAME
  *     population `listAssignTargets` (registration-assign.ts) already
  *     computes per-solo-sign-up when an organiser opens the assign picker,
- *     using the SAME `rosterCapExpr` (registrations.ts) every roster-cap
+ *     using the SAME `rosterCapExpr` (usecases/registrations/list.ts) every roster-cap
  *     display in this codebase reads off. This is NOT `soloPoolIsFull`'s
  *     abstract `capacity × roster_cap` admission bound — an organiser
  *     asking "do my existing teams have room?" wants the former, and
@@ -540,7 +540,7 @@ export async function fetchPoolSummary(
         waiting: w.waiting,
         free_slots: slotsByDivision.get(w.division_id) ?? 0,
         // RS012 `/code-review high` finding 2 — the ONE effectivePoolDeadline
-        // copy (registrations.ts, beside rosterCapExpr); the cast narrows
+        // copy (usecases/registrations/list.ts, beside rosterCapExpr); the cast narrows
         // its Date | string | null return back to Date | null (m's own
         // column types) for the `.toISOString()` call.
         place_by_at:
@@ -556,7 +556,7 @@ export async function fetchPoolSummary(
 // ---------------------------------------------------------------------------
 
 /** `registration_players.consent_status` (V363 CHECK constraint) — declared
- *  locally rather than imported off `RegistrationPlayerRow` (registrations.ts),
+ *  locally rather than imported off `RegistrationPlayerRow` (usecases/registrations/types.ts),
  *  same convention `RegistrantEntrantKind` above already uses: this tab's own
  *  types stay self-contained rather than pulling in that row's full shape for
  *  one field. */

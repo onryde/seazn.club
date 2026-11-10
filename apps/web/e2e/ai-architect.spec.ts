@@ -1047,7 +1047,7 @@ test("a model refusal surfaces the AI_PLAN_FAILED copy (and proves the model was
   await openConsole(page);
 
   // The magic instruction makes the fixture server answer stop_reason:"refusal"
-  // with empty content, which schedule-ai.ts maps to 422 AI_PLAN_FAILED.
+  // with empty content, which usecases/schedule-ai/ maps to 422 AI_PLAN_FAILED.
   await page.locator("#ai-instruction").fill(`${FIXTURE_REFUSE} — do the impossible.`);
   const dock = consoleDock(page);
 

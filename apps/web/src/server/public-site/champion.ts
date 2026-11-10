@@ -67,7 +67,7 @@ export interface ChampionFixture {
 
 /**
  * The fixture statuses that SETTLE a bracket game, in the DB's vocabulary: the
- * repo's own settled set (`usecases/stages.ts`'s `DECIDED`), and the DB side of
+ * repo's own settled set (`usecases/stages/swiss-gen.ts`'s `DECIDED`), and the DB side of
  * the engine's `SETTLED` (`packages/engine/src/competition/stage.ts`) —
  * `decided`/`finalized` read as the engine's `decided`, `forfeited` as its
  * `walkover` (`lib/fixture-engine-status.ts` `engineFixtureStatus`; stage completion reads it through
@@ -76,7 +76,7 @@ export interface ChampionFixture {
  * carries no winner, so it could never pass the winner test anyway - and a
  * recorded abandon still held for the organiser's settle reads `in_play` to
  * completion, so it is not settled either. The suite
- * reads `stages.ts` to keep the two sets equal.
+ * reads `usecases/stages/` to keep the two sets equal.
  */
 export const BRACKET_SETTLED: ReadonlySet<string> = new Set(["decided", "finalized", "forfeited"]);
 

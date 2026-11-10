@@ -241,7 +241,7 @@ describe("generate: the run-sheet row that proves the screen", () => {
   const fx = (fixture_no: number | null) => ({ fixture_no, ext_key: null, home_entrant_id: "e-h", away_entrant_id: "e-a" });
 
   // CI run 42418390209, swiss|badminton|bwf-3x15|F1@360: an odd field's Swiss Pair answers EVERY row of the stage
-  // (stages.ts readStageFixtureRows), the later rounds' unseated bye shells included, and the run sheet draws no row for
+  // (usecases/stages/generate-tx.ts readStageFixtureRows), the later rounds' unseated bye shells included, and the run sheet draws no row for
   // one (run-sheet-groups.ts, W3 T3 X-SW-29: "no one to name"). The highest number was round 4's bye shell, so the wait
   // for its row could never end. The rows here are the product's own plan (swiss-shell.ts planSwissShells), numbered in
   // mint order, round 1 seated as Pair seats it (its bye an award to one side).

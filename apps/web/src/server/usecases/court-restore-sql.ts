@@ -10,7 +10,7 @@ type Tx = postgres.TransactionSql;
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The venue a court sits in: the ONE rule every fixture write derives
- *  `venue_id` by (schedule.ts `courtVenueIds`, moveFixture's "#5 fix") — a
+ *  `venue_id` by (schedule/board.ts `courtVenueIds`, moveFixture's "#5 fix") — a
  *  court belongs to a venue, so a fixture's venue is its court's, and no court
  *  means no venue. Every history write that sets `court_id` sets `venue_id`
  *  from it in the same statement; one that left it alone kept a cross-venue

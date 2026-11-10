@@ -6,7 +6,7 @@
 // Suspected product reds are RECORDED (→ W7), never fixed.
 //
 // Mexicano is `{ kind: "americano", config.mode: "mexicano" }`
-// (format-templates.ts:261, stages.ts:756), never a kind of its own: every
+// (format-templates.ts:261, usecases/stages/), never a kind of its own: every
 // mexicano branch here keys on BOTH (review 3 I-1).
 import { generateAmericano, pairMexicanoRound } from "@seazn/engine/scheduling";
 import type { FixtureRow, StageRef } from "../driver/types.ts";
@@ -38,7 +38,7 @@ const placeholders = (n: number): string[] => Array.from({ length: n }, (_, i) =
  *  players on the stage's courtCount (generateAmericano; mexicano's round
  *  planner, pairMexicanoRound, quartets the same way). null when the stage
  *  declares no courtCount: the product's default then hangs on the live
- *  player count (stages.ts:757-758), and F1 abstains by name. */
+ *  player count (usecases/stages/), and F1 abstains by name. */
 export function americanoRoundSize(config: Readonly<Record<string, unknown>>, n: number): number | null {
   const courtCount = config.courtCount;
   if (typeof courtCount !== "number") return null;
@@ -51,17 +51,17 @@ export function americanoRoundSize(config: Readonly<Record<string, unknown>>, n:
 /** T8-R2: the rounds Start must plan for an americano over a field of n — the
  *  ENGINE's planner (generateAmericano, the source F1's round size reads) run
  *  over n placeholders on the stage's courts (declared, else the product's own
- *  default, stages.ts:757-758) for config.rounds, counting only the rounds that
+ *  default, usecases/stages/) for config.rounds, counting only the rounds that
  *  seat a match (the product writes nothing for an empty one). A field under
  *  4 never reaches the planner — Start refuses it STAGE_NOT_READY
- *  (stages.ts:751-755) — so under 4 this answers 0 for a Start the product
+ *  (usecases/stages/) — so under 4 this answers 0 for a Start the product
  *  would not accept. Never config.rounds alone. */
 export function americanoPlannedRounds(config: Readonly<Record<string, unknown>>, rounds: number, n: number): number {
   const courtCount = typeof config.courtCount === "number" ? config.courtCount : Math.max(1, Math.floor(n / 4));
   return generateAmericano(placeholders(n), { mode: "americano", courtCount, rounds }).filter((r) => r.matches.length > 0).length;
 }
 
-/** The mode the stage is played in, read as the product reads it (stages.ts:756). */
+/** The mode the stage is played in, read as the product reads it (usecases/stages/). */
 export const modeOf = (stage: Pick<StageRef, "kind" | "config">): Mode | null =>
   (stage.kind !== "americano" ? null : stage.config.mode === "mexicano" ? "mexicano" : "americano");
 
@@ -76,7 +76,7 @@ export class AmericanoModeMismatch extends Error {
 
 /** config.rounds is the loop's bound; one the stage does not declare is
  *  refused by name, never guessed (the product's own default depends on the
- *  player count, stages.ts:759). */
+ *  player count, usecases/stages/). */
 function roundsOf(stage: StageRef): number {
   const rounds = stage.config.rounds;
   if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 1) {
@@ -152,7 +152,7 @@ export async function playMexicano(ctx: ScenarioContext, rec: Recorder, setup: D
     track.exit = rec.exit = played >= rounds ? "drained" : "stalled_rounds";
     if (played < rounds) {
       // False premise 14: the product waits on ANY non-"decided" fixture
-      // (stages.ts:769) — a forfeited walkover, a void, a finalized row. Named
+      // (usecases/stages/) — a forfeited walkover, a void, a finalized row. Named
       // so triage can route it without a harness hunt. Never cut_short: a stall
       // is the product refusing to go on, not the harness's cap.
       const blocking = (await ctx.driver.listFixtures(setup.division.id)).filter((f) => f.stage_id === stage.id && f.status !== "decided");

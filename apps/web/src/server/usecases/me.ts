@@ -30,7 +30,7 @@ import { msgFor } from "@/lib/messages-i18n";
 import { playerLinkId } from "@/lib/name-display";
 // #14: this read is a SUPERUSER, cross-org query (no `withTenant`/RLS — a
 // claimed player is usually not an org member) — `courtLabelsByOrg` is the
-// cross-org twin of schedule.ts's `courtNamesById` (which needs a
+// cross-org twin of schedule/board.ts's `courtNamesById` (which needs a
 // single-org tenant tx this file never opens); see that helper's own doc
 // comment.
 import { courtLabelsByOrg } from "./cross-org-court-labels";

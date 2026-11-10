@@ -422,7 +422,7 @@ describe.skipIf(!HAS_DB)("X-LE-9 a called match is started", () => {
   });
 });
 
-// W4 app-A Task 4 (gap K3; X-RB-1). A knockout's `round_no` counts from its FIRST round (stages.ts `bracketToGen`), so a
+// W4 app-A Task 4 (gap K3; X-RB-1). A knockout's `round_no` counts from its FIRST round (stages/generators.ts `bracketToGen`), so a
 // Rebuild that carried slots by position handed an 8-bracket's final slot to a 16-bracket's semi-final, and a line that
 // became a bye inherited a court. Rebuild now carries a knockout's slots by bracket ROLE (`bracketRoleKey`), and a bye
 // line (`isByeLine`) neither gives nor takes a slot. Roles are read off what the engine stored — `is_final`, and the

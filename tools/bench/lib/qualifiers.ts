@@ -32,7 +32,7 @@
 // `select key from pools where stage_id = ... order by key`
 // (apps/web/src/server/usecases/stage-seeding.ts:134), and when no pool rows
 // exist yet it falls back to `POOL_KEYS.slice(0, count).split("")` over
-// `"ABCDEFGHIJKLMNOPQRSTUVWXYZ"` (usecases/stages.ts:745). Both are ascending
+// `"ABCDEFGHIJKLMNOPQRSTUVWXYZ"` (usecases/stages/). Both are ascending
 // by key, which is what sorting on `poolKey` below mirrors. A pack's
 // DECLARATION order therefore cannot move a seat.
 //

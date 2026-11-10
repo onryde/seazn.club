@@ -30,7 +30,7 @@ const en: Record<string, string> = JSON.parse(
 /**
  * THE SOLVE BUDGET, derived from the solver's own declared wall.
  *
- * `autoSolverWallMs()` (server/usecases/schedule.ts:1992) resolves the ask as
+ * `autoSolverWallMs()` (server/usecases/schedule/solver-tuning.ts) resolves the ask as
  * `PLACEMENT_WALL_SECONDS`, or a documented default of 10 seconds; the service
  * then applies its own independent `min()` ceiling, so the caller's ask is
  * always an UPPER bound on what a board is actually granted. Measured against
@@ -805,7 +805,7 @@ test("the organiser sets up, schedules, saves, clears, restores, freezes and pub
   // said out loud here because the step reads like an oversight otherwise.
   //
   // Step 13 froze this division and nothing thaws it. Neither
-  // `publishSchedule` (usecases/schedule.ts:3552) nor `startDivision` (:3621)
+  // `publishSchedule` (usecases/schedule/publish.ts) nor `startDivision`
   // consults `divisions.schedule_locked`; both check only `assertNotFrozen`,
   // which is the BILLING freeze on an over-quota org and an unrelated thing
   // wearing the same word (the design doc names all three senses of "frozen"

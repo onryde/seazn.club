@@ -195,7 +195,7 @@ export async function markFieldChangeSeedProposalsStale(orgId: string, divisionI
   });
   // An orgId, not an AuthCtx (review finding F3, 2026-09-21): the entrant
   // status flip that triggers this does NOT always come from a route with one
-  // — `withdrawCore` (registrations.ts) reaches it from the PUBLIC
+  // — `withdrawCore` (registrations/withdraw.ts) reaches it from the PUBLIC
   // self-cancel, which has a token and an org, no session. Safe because
   // `computeSeedProposal` reads exactly one field off its `auth`, `orgId`
   // (verified by reading its body: `withTenant(auth.orgId, …)` and the

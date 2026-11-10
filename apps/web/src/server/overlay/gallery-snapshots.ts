@@ -287,7 +287,7 @@ export const GALLERY_RESULT_STATUSES = ["finalized", "forfeited", "abandoned", "
 /**
  * How each variant is produced. `derived` variants come out of the write path's status rule over real events; the
  * `stated` ones are statuses no event writes for the sport, so the row carries them over a real fold:
- *  - `cancelled` is written by the organiser and the import path, never by an event (`stages.ts`);
+ *  - `cancelled` is written by the organiser and the import path, never by an event (`usecases/stages/`);
  *  - `needs_decision` is a LEVEL result in a bracket (ruling 79), and badminton cannot finish level; it is stated for
  *    both sports so the two cards are drawn over the same in-play fold.
  * `abandoned` runs in a knockout stage: a cricket abandon with no result folds to a level no-result (CK-AB-2), which

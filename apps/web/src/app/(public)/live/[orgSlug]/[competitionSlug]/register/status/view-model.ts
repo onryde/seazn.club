@@ -21,7 +21,7 @@ export type EntryStatus =
  * out of the waitlist, else the cart's shared deadline. Two different
  * columns on the server (registrations.promotion_expires_at vs
  * registration_groups.expires_at) because a promotion mints a checkout for
- * ONE entry — see promoteWaitlistedRow's doc comment in registrations.ts —
+ * ONE entry — see promoteWaitlistedRow's doc comment in usecases/registrations/waitlist.ts —
  * so the cart's shared clock cannot govern it without also moving every
  * sibling's own deadline.
  */
@@ -49,7 +49,7 @@ export type MoneyState =
    *  folded into stripe_due/offline_due) so the page can never render a
    *  live "Pay now" button, or offline instructions under a "Pay by" date,
    *  that names a window already closed — resumeRegistrationCheckout
-   *  carries the matching server-side re-check (registrations.ts), since a
+   *  carries the matching server-side re-check (usecases/registrations/checkout.ts), since a
    *  stale tab or a direct POST could otherwise still mint a real session
    *  in the exact window this state exists to close off. */
   | { kind: "window_closed" };
@@ -71,7 +71,7 @@ export function resolveMoneyState(
      *  that column when no OTHER entry in the cart is still 'pending' (see
      *  its own doc comment), so it can stay null/stale forever past a
      *  promotion whose own division genuinely charges. buildGroupStatusView
-     *  (registrations.ts) resolves this per entry now. */
+     *  (usecases/registrations/group-status.ts) resolves this per entry now. */
     payment_method: "offline" | "stripe";
   },
   cart: {
@@ -96,7 +96,7 @@ export function resolveMoneyState(
 
 /**
  * Gates the Cancel control. Mirrors withdrawCore's own write-side rules
- * (registrations.ts) rather than the looser `status !== "withdrawn"` some
+ * (usecases/registrations/withdraw.ts) rather than the looser `status !== "withdrawn"` some
  * older public reads use: 'rejected' always 422s there ("This registration
  * was rejected and cannot be withdrawn"), and 'expired' already freed its
  * spot with nothing left to cancel — offering the button on either would be
@@ -123,8 +123,8 @@ export function canCancelEntry(status: EntryStatus): boolean {
  *    in that same write). Excluded here defensively rather than relied
  *    upon to always be zero.
  *  - `withdrawn` / `rejected` / `expired` — `withdrawCore`'s update
- *    (registrations.ts), the rejection path (registration-approval.ts),
- *    and the expiry sweep (registrations.ts) all touch ONLY `status` and
+ *    (usecases/registrations/withdraw.ts), the rejection path (registration-approval.ts),
+ *    and the expiry sweep (usecases/registrations/) all touch ONLY `status` and
  *    timestamp columns — NONE of them ever clears `amount_cents` — so a
  *    cancelled entry's `amount_cents` keeps naming its PRE-cancellation
  *    fee forever after. Folding that into a "what's live right now" total
@@ -155,7 +155,7 @@ export function entryCountsTowardTotal(status: EntryStatus): boolean {
  *
  * Coincides with `canCancelEntry`'s own three-status gate today, but is
  * its OWN rule sourced from a different backend contract
- * (registration-submit.ts, not withdrawCore/registrations.ts) — kept as a
+ * (registration-submit.ts, not `withdrawCore` in usecases/registrations/withdraw.ts) — kept as a
  * separate function rather than a call-through so the two can diverge
  * safely if either backend gate ever does.
  */
@@ -322,7 +322,7 @@ export function claimHref(
  * files, verified directly), and 409 does not mean the same thing on every
  * surface either — see `resumeRegistrationCheckout`'s own
  * `REGISTRATION_CHECKOUT_CONFLICT` (a losing compare-and-swap on a
- * concurrent checkout mint — registrations.ts) vs. withdraw/resend, which
+ * concurrent checkout mint — usecases/registrations/) vs. withdraw/resend, which
  * never emit a 409 at all today (only 404/422/503). One shared function
  * rather than three copies since all three write actions need the exact
  * same four-way split; each caller supplies its own action-specific copy
@@ -372,7 +372,7 @@ export function classifyStatusActionFailure(status: number | undefined): StatusA
 // SAME string the button actually fetches, not a hand-typed lookalike.
 // ---------------------------------------------------------------------------
 
-/** withdrawRegistrationPublic (registrations.ts) — actorId is always null on
+/** withdrawRegistrationPublic (usecases/registrations/public-status.ts) — actorId is always null on
  *  this path, unlike /api/v1/registrations/{id}/withdraw
  *  (withdrawRegistrationOrganiser, session-authenticated). The `/public/`
  *  segment is the entire difference and the entire risk. */

@@ -55,7 +55,7 @@ type AbandonTagKind = "abandoned_dls" | "abandoned_no_result" | "abandoned";
 /** W3 T15 review I4 (controller ruling 2026-11-02, under owner ruling 116's scope note): the withdrawal cascade's award
  *  (reason `withdrew`) over an entrant who was DISQUALIFIED — a DQ runs the withdrawal cascade since T15 (RB3-17) — is
  *  never worded as a withdrawal. Ruling 116 words only a withdrawal ("a DISQUALIFIED winner is no 'withdrew'",
- *  stages.ts `awardSeededByes`) and prescribes no DQ copy, so it reads as a plain walkover: the walkover's tag, and a
+ *  usecases/stages/bracket-seats.ts `awardSeededByes`) and prescribes no DQ copy, so it reads as a plain walkover: the walkover's tag, and a
  *  sentence that names her and says nothing about why she left. */
 type PlainWalkoverKind = "walkover_plain";
 /** Every tag the reader can answer. A bye is not one: it keeps today's copy. */

@@ -28,7 +28,7 @@
 // still spelled out literally at least here:
 //
 //   - SQL, as the live complement `status not in ('withdrawn','disqualified')`
-//     — `server/usecases/schedule-ai.ts` and `server/usecases/divisions.ts`;
+//     — `server/usecases/schedule-ai/` and `server/usecases/divisions.ts`;
 //     and as the departed set itself, `status in ('withdrawn','disqualified')`
 //     — `server/usecases/officials.ts`;
 //   - TS, as a bare `=== "withdrawn"` READ plus three writes —

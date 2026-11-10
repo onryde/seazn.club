@@ -437,7 +437,7 @@ describe.skipIf(!HAS_DB)("round order is part of the delta gate too (C1 fix-loop
     const rounds = await roundsOf(board);
     const laterRound = board.fixtures.find((f) => (rounds.get(f.id) ?? 0) > 1)!;
     // Manufacture a fixture with NO current slot, so `moveFixture`'s
-    // `currentSlot` ternary (schedule.ts:2232-2235) takes its `[]` branch —
+    // `currentSlot` ternary (schedule/) takes its `[]` branch —
     // baseline gets nothing from the moved fixture itself, only from the
     // widened siblings. The other unit tests above/below all move an
     // already-placed fixture, which takes the ternary's other branch.
@@ -700,7 +700,7 @@ describe.skipIf(!HAS_DB)("putScheduleSettings refuses to remove a court still ho
 
   it("carries anyPinned true AND anyFixed true when a pin on ONE court and a completed fixture on a DIFFERENT court are removed in the same save", async () => {
     // Review coverage gap: the two-reasons-same-court case above doesn't
-    // prove the OR-reduction across `blocked` (schedule.ts's `blocked.some`)
+    // prove the OR-reduction across `blocked` (schedule/ folder's `blocked.some`)
     // is actually cross-court, only that it's cross-fixture. This moves the
     // second fixture onto board.courts[1] before finalizing it, so the two
     // reasons genuinely sit on two different court rows in `blocked`.

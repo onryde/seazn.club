@@ -1,5 +1,5 @@
 // FMT5 (owner-approved mock, 2026-11-03): the division's format is changed from the Fixtures tab's Division rules card,
-// freely until the first result exists. `replaceStages` (server/usecases/stages.ts) is the one writer; this file is the
+// freely until the first result exists. `replaceStages` (server/usecases/stages/stage-graph.ts) is the one writer; this file is the
 // wire it speaks, client-safe so the Format dialog reads the same codes and the same preview shape the server writes.
 //
 //  - No fixture in the division: the PUT replaces the stages, as it always has.

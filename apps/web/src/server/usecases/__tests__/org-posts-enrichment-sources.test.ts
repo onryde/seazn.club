@@ -350,7 +350,7 @@ describe.skipIf(!HAS_DB)("P3 review finding 3 — genuine-throw fail-open, per s
   });
 
   // Final-review finding (2026-08-19): the test above (and its officials.ts/
-  // schedule.ts siblings) only ever asserted "en" output, so a hardcoded
+  // schedule/ siblings) only ever asserted "en" output, so a hardcoded
   // "en" swapped in for the real `toLocale(org.default_locale)` call at the
   // production call sites would leave all three green — the locale THREADING
   // itself was never pinned. This one drives the real production path

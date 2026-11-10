@@ -19,7 +19,7 @@ import { systemByeSql } from "./system-bye-sql";
 //    the live resolution a division save moves) — and is not a reader of either fact.
 
 /** PLAYED, as a predicate over the fixtures row aliased `on`. W3 T3 (SW-M7, X-SW-5): a SYSTEM bye freezes its cfg at
- *  award (the Swiss bye seat, stages.ts) and is not play, so its snapshot does not count (`systemByeSql`, the same
+ *  award (the Swiss bye seat, usecases/stages/) and is not play, so its snapshot does not count (`systemByeSql`, the same
  *  exemption `fixtureEvidenceSql` makes) — else an odd-field Pair would lock the stage's and the division's format. */
 export function playedSql(tx: postgres.Sql | Tx, on = "f") {
   const f = tx(on);

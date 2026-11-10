@@ -70,7 +70,7 @@ import type {
 
 /**
  * POST /competitions/{id}/schedule/ai-plan orchestrator — the joint twin of
- * `aiPlanForDivision` (schedule-ai.ts:1585).
+ * `aiPlanForDivision` (schedule-ai/orchestrator.ts).
  *
  * GATE ORDER, and why each step sits where it does:
  *
@@ -148,7 +148,7 @@ async function planForCompetition(
 
   // A competition frozen by competitions.max_active (a downgrade left more
   // active competitions than the plan allows) is read-only: applySchedule
-  // refuses with a 402 (schedule.ts:496). Exactly the argument the
+  // refuses with a 402 (schedule/). Exactly the argument the
   // schedule_locked 409 below makes — planning one spends credits and tokens
   // on a proposal the organiser is then blocked from applying — except a
   // joint run's charge is N times larger, so it is checked here rather than
@@ -263,7 +263,7 @@ async function planForCompetition(
     const [org] = await tx<{ timezone: string | null }[]>`select timezone from organizations where id = ${auth.orgId}`;
     const orgTz = resolveVenueTz(null, org?.timezone ?? null);
     // id/ext_key/winner_to_fixture (same three columns rowToRuleFixture
-    // renames, schedule.ts) are what let this guard's forcedDemand floor
+    // renames, schedule/) are what let this guard's forcedDemand floor
     // (fixture_on_date/fixture_on_weekday) resolve at all — without them
     // capacityInputForFixtures still runs, just with no fixture identity to
     // resolve a selector against (see CapacityFixtureInput's own comment).

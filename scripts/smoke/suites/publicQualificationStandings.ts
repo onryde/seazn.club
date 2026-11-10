@@ -168,7 +168,7 @@ export async function publicQualificationStandingsSuite(): Promise<void> {
   );
 
   // --- Pool label in the org's locale (2026-10-06). `pools.name` is stored
-  // once, as the English "Pool " + key (usecases/stages.ts), and the public
+  // once, as the English "Pool " + key (usecases/stages/), and the public
   // surfaces used to print it, so a Spanish org's pools read "Pool A". The hub
   // document's table captions and the division page's <caption> text nodes must
   // be `table.poolLabel` over the pool's KEY, read from es/public.json on disk,

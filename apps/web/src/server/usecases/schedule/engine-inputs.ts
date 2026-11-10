@@ -60,9 +60,9 @@ import { roundFieldsOf } from "./rounds";
  *  keeps the pre-C1 behaviour, and round order is inert on that call. The
  *  board paths pass it (autoSchedule, applySchedule, moveFixture,
  *  validateScheduleIn, `competition-schedule-apply.ts`, `person-merge.ts`;
- *  `schedule-ai.ts` gates its pack's `roundNos` on the same set). Two calls
+ *  `schedule-ai/` gates its pack's `roundNos` on the same set). Two calls
  *  do not, on purpose: `siblingAssignments` (other divisions' cards, in no
- *  round sequence of this one) and `schedule-ai.ts`'s obstacle list (a court
+ *  round sequence of this one) and `schedule-ai/` folder's obstacle list (a court
  *  booking with no ids, which orders nothing).
  *
  *  A Swiss bye row never carries `roundNo`, even on a round-sequence stage

@@ -565,7 +565,7 @@ describe("rule 10 — the required sequences, every step checked", () => {
   });
 
   /** Re-review round 2, item 3: the model fake's double walkover kills the seat it feeds (fake-driver.ts feed/killSlot,
-   *  stages.ts resolveBracketSeats). Expected values from the rules: C-5's bye award beside a dead seat, Review Focus 1's
+   *  usecases/stages/bracket-seats.ts resolveBracketSeats). Expected values from the rules: C-5's bye award beside a dead seat, Review Focus 1's
    *  void when both seats are dead and not both departed, and its revive when the double walkover is voided. */
   const DW: StreamEvent[] = [{ type: "core.forfeit", payload: { by: "both", reason: "walkover" } }];
   const bye = (winner: string | null) => ({ status: "forfeited", outcome: { kind: "award", winner, loser: null, reason: "bye" } });

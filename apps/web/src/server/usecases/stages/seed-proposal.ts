@@ -697,7 +697,7 @@ export async function confirmSeedProposal(
 
   // Step 5 — post-commit: re-run schedule validation so newly-real person
   // clashes surface as warnings, run not blocked (design's Fill algorithm;
-  // crossPersonClash already skips TBD slots — usecases/schedule.ts
+  // crossPersonClash already skips TBD slots — usecases/schedule/
   // peopleOf()). Best-effort: a validation hiccup must not undo a fill that
   // already committed.
   try {

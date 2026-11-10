@@ -822,7 +822,7 @@ describe.skipIf(!HAS_DB)("createFromTemplate — seeding persistence (P7/D1b T3)
     // stage-seeding.ts's validateStageProgression/sourceShapeOf do at save
     // time for a manually-built stage graph — instantiateTemplate must run
     // the SAME check, not merely persist the mismatch for a later 422 at
-    // generate time (stages.ts's generateProgressionSetupFixtures).
+    // generate time (stages/setup-fixtures.ts's generateProgressionSetupFixtures).
     const template: CompetitionTemplate = {
       key: "test-shape-mismatch",
       version: 1,

@@ -201,7 +201,7 @@ export interface PlanSql {
    * Bench-only shortcut for `lib/dls-gate.ts`'s probe: forces a division
    * straight to `status = 'active'` without driving the real publish/start
    * gate (`POST /divisions/{id}/start` — courts, `schedule-settings`,
-   * `schedule/auto`, `schedule/apply`, then start; `usecases/schedule.ts`'s
+   * `schedule/auto`, `schedule/apply`, then start; `usecases/schedule/publish.ts`'s
    * `startDivision`, "THE GATE"). That gate is a whole product feature this
    * task is not chartered to re-implement a second time (`lib/suites/
    * tiny.ts`'s `runTinySuite` already drives it, for `_tiny`'s own
@@ -248,8 +248,8 @@ export interface PlanSql {
    *
    * Why this has to exist at all: `resumeRegistrationCheckout` refuses to mint
    * a Checkout session unless the division's org has BOTH a non-null
-   * `organizations.stripe_account_id` (usecases/registrations.ts:2325) and
-   * `stripe_charges_enabled` (`:4387`). A bench org is auto-provisioned by the
+   * `organizations.stripe_account_id` (usecases/registrations/) and
+   * `stripe_charges_enabled`. A bench org is auto-provisioned by the
    * run's own first sign-in and has neither, so without this the entire paid
    * funnel is unreachable no matter what a pack declares.
    *

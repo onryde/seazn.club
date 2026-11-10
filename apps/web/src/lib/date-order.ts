@@ -67,7 +67,7 @@ const dayOrUndefined = (ymd: string | null): string | undefined => (ymd === null
  * The bounds a DIVISION's schedule start may be picked within: its
  * competition's own window.
  *
- * Mirrors the server's CONTAINMENT GUARD (`schedule.ts`) — which rejects a
+ * Mirrors the server's CONTAINMENT GUARD (`usecases/schedule/`) — which rejects a
  * changed range starting before `competitions.starts_on` or ending after
  * `ends_on` with a 422 — so the picker refuses exactly what the save would,
  * and the organiser learns it before the request rather than after it.
@@ -121,7 +121,7 @@ export function divisionEndBounds(
  * `Date.parse`, never string order — see the header. `>=` rather than `>`
  * because a zero-length window accepts nobody: it is a control that silently
  * does not work, not a very narrow one. Matches the server's own test in
- * `registrations.ts` exactly, so the two layers cannot disagree about which
+ * `usecases/registrations/` exactly, so the two layers cannot disagree about which
  * windows are legal.
  *
  * An unparseable value is NOT reported as backwards: the schema is what

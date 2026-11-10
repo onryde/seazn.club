@@ -1,6 +1,6 @@
 // SCHEDULE_OUTSIDE_COMPETITION -> localized organiser copy.
 //
-// The containment guard in `server/usecases/schedule.ts` refuses a division
+// The containment guard in `server/usecases/schedule/` refuses a division
 // whose schedule range falls outside its competition's own dates. Its 422
 // message is composed English prose, and the board rendered it verbatim
 // (`schedule-board.tsx`: `err instanceof Error ? err.message : …`), so an
@@ -88,7 +88,7 @@ export function scheduleWindowErrorMessage(
 }
 
 /** The wire code thrown by `putScheduleSettings`'s court-removal guard
- *  (`server/usecases/schedule.ts`) when a dropped court still holds a fixture
+ *  (`server/usecases/schedule/settings.ts`) when a dropped court still holds a fixture
  *  the schedule cannot relocate. Deliberately NOT `venues.ts`'s
  *  `COURT_IN_USE` — same shape of problem, different guard, different
  *  remedy set (that one blocks archiving; this one blocks removing a court

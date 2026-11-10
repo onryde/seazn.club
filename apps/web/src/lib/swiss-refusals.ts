@@ -5,7 +5,7 @@
 // status and the English cannot drift apart between the throw site and the screen.
 //
 // Status: 422 when the request can never succeed as sent (re-sending it changes nothing), 409 when it is a state of the
-// stage the organiser resolves another way (the copy says which) — the split `usecases/stages.ts` already makes:
+// stage the organiser resolves another way (the copy says which) — the split `usecases/stages/` already makes:
 // `assertFormatUnlocked`'s FORMAT_LOCKED is a 409, and a refusal of the stage's KIND is a 422 (`unpairSwissRound`'s
 // "unpair only exists on swiss stages", SWISS_PAIRING_NOT_SWISS). 400 for a refusal raised at the BODY door, from a zod
 // issue, before any usecase runs (W3 T18's SWISS_REQUESTED_BYES_DEFERRED: `api-v1/http.ts` reads the key's never-schema

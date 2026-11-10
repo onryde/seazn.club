@@ -54,7 +54,7 @@ const withRngSeed = (config: Record<string, unknown>): Record<string, unknown> =
  *  (`replaceStages` rolls its delete back). Any other sport stores what it sends. Here, beside `withRngSeed`, because this is the one door
  *  every create path shares (`createStages` and `replaceStages` through `stageConfigsAtCreate`, and a template's stages
  *  through `instantiateTemplate` — the boardgame `swiss11` template among them), so there is one default, never a second.
- *  Pair does not read this default back: `swissPairsInColour` (stages.ts; UI5 fix round 1, ruling I1) pairs a chess
+ *  Pair does not read this default back: `swissPairsInColour` (stages/swiss-gen.ts; UI5 fix round 1, ruling I1) pairs a chess
  *  Swiss in colour until its round 1 is paired, whatever is stored, so a stage stored before this default is coloured
  *  too (read-side, never rewritten). */
 const withSwissChessDefault = (sportKey: string, kind: StageKind, config: Record<string, unknown>): Record<string, unknown> => {

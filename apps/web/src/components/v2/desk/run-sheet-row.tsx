@@ -55,7 +55,7 @@ export const SCHEDULE_ERROR_FALLBACK_KEY = "schedule.error.failed" satisfies Mes
  * own English sentence — into a console that ships in en/es/fr/nl. Driving a
  * double-booked court through the editor put "schedule change hits a blocking
  * conflict" on screen verbatim (the `EngineError` raised by
- * `assertNoNewBlocking`, server/usecases/schedule.ts). The message is now never
+ * `assertNoNewBlocking`, server/usecases/schedule/conflicts.ts). The message is now never
  * read; only `ApiV1Error.code` is, which is a first-class readonly field on it
  * (lib/client-v1.ts) — the same branch six other v2 islands already make on
  * `PAYMENT_REQUIRED`.
@@ -65,7 +65,7 @@ export const SCHEDULE_ERROR_FALLBACK_KEY = "schedule.error.failed" satisfies Mes
  * and deliberately left to the fallback:
  *
  *   SEQ_CONFLICT   — unreachable HERE. `assertFreshSeq` returns immediately
- *                    when `expected_seq` is undefined (schedule.ts), and this
+ *                    when `expected_seq` is undefined (usecases/schedule/board.ts), and this
  *                    editor never sends one. `use-board-actions.ts`'s
  *                    `autoRun` does (Schedule page auto-schedule), and
  *                    handles it itself.
@@ -993,7 +993,7 @@ export function RunSheetRow({
                 //
                 // `venue_id` is deliberately NOT sent, unlike FixtureLine's
                 // version. `moveFixture` DERIVES it from `courts.venue_id` and
-                // never reads `patch.venue_id` (schedule.ts:3069 — "intentionally
+                // never reads `patch.venue_id` (usecases/schedule/ — "intentionally
                 // never read"), so sending it is a second authority for a fact
                 // the server owns, and FixtureLine only sent it to keep an
                 // optimistic local row in step. This row has no optimistic

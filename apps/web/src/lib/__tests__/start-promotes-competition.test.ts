@@ -1,6 +1,6 @@
 // The Start-tournament dialog says the competition moves published -> live —
 // and must not say it when the server would leave the competition alone. The
-// server's rule lives in ONE SQL `where` literal in `usecases/schedule.ts`;
+// server's rule lives in ONE SQL `where` literal in `usecases/schedule/`;
 // this file is the only thing keeping the client mirror honest, so it reads
 // that literal rather than restating it. Same shape as
 // `open-entry-stages.test.ts`, which does this for the entrants line.

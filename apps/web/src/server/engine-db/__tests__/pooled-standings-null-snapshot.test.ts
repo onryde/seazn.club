@@ -4,7 +4,7 @@
 // `recomputeStandings` used to pick its target with
 // `tables.pools.find(...) ?? tables.pools[0]` and then write whatever it
 // landed on under `poolId ?? null` — the ARGUMENT, never the table's own key.
-// So any caller that passes no pool (usecases/stages.ts `overrideStandings`,
+// So any caller that passes no pool (usecases/stages/completion.ts `overrideStandings`,
 // which does it unconditionally; `getStandings` — and therefore
 // `GET /api/v1/stages/{id}/standings` with no `pool_id` query param) minted a
 // phantom "overall" row on a pooled stage that was a byte copy of the FIRST

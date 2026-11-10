@@ -1,9 +1,9 @@
 // RS003 W5c — branch coverage for createRegistrationCheckout's early-return
-// and error guards (registrations.ts ~1265-1408), reached exclusively
+// and error guards (registrations/), reached exclusively
 // through its two live callers, mintGroupCheckout and (where noted)
 // sweepRegistrations. Real Postgres required; skipped without DATABASE_URL.
 //
-// Two of the guards below (:1277 empty entries, :1280 subtotal<=0) turned
+// Two of the guards below (empty entries, subtotal<=0) turned
 // out to be UNREACHABLE via a single, non-concurrent call to
 // mintGroupCheckout or resumeRegistrationCheckout: both callers re-derive
 // the exact id list/amount they hand down from a FRESH read taken moments
@@ -148,7 +148,7 @@ describe.skipIf(!HAS_DB)("createRegistrationCheckout — guards reachable via or
     ).rejects.toMatchObject({ status: 502, message: "Stripe did not return a checkout URL" });
   });
 
-  // RS007 review fix (registrations.ts's mintOrTranslate): a non-
+  // RS007 review fix (registrations/checkout.ts's mintOrTranslate): a non-
   // amount_too_small Stripe failure is now sanitized into a generic 502
   // instead of rethrown untouched — assert on the sanitized shape, not the
   // raw Stripe message this test never actually cared about (its own point

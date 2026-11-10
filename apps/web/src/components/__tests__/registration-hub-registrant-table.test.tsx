@@ -259,7 +259,7 @@ describe("RegistrationHubRegistrantRow — the expand mechanism (task 1)", () =>
   // W2c task 4 (hardening finding carried over from the W2a review):
   // join_code is a REAL field on RegistrationListRow (unlike
   // access_token_hash above, which the type deliberately omits — see
-  // RegistrationListRow's own Omit<...> in server/usecases/registrations.ts
+  // RegistrationListRow's own Omit<...> in server/usecases/registrations/list.ts
   // — so this needs no "widened type" cast to set it). The owner ruled it
   // hidden from viewers because it's a bearer secret that grants roster
   // WRITES; today it's safe only because the summary's columns are a

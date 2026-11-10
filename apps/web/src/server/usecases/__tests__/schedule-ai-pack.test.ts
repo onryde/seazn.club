@@ -1472,7 +1472,7 @@ describe.skipIf(!HAS_DB)("buildSchedulePack on an elimination bracket (#396)", (
   // from this column alone), so a knockout stage's own bracket-round
   // numbering rode along as if it meant round-robin order, the design doc's own
   // motivating symptom, reachable from the AI-plan path even after
-  // `toAssignment`'s own callers were gated in task 1 (schedule.ts). Spies
+  // `toAssignment`'s own callers were gated in task 1 (schedule/engine-inputs.ts). Spies
   // on the engine's own `slotFixtures` — the one function `schedulable`
   // is built for — to inspect exactly what this caller hands it, the
   // most direct proof available that the gate is wired here and not just

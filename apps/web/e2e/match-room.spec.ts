@@ -1412,7 +1412,7 @@ test("T17B fix 2, D10: the organiser's No result before any game, then its void 
   }
   expect(checked).toBe(2);
   expect(posts, "nothing claimed or sent on a closed board").toEqual([]);
-  // A Swiss re-pair deletes the closed row (stages.ts clearSwissFixtureSeats, M-10); the room reads on and opens it.
+  // A Swiss re-pair deletes the closed row (usecases/stages/swiss-boards.ts clearSwissFixtureSeats, M-10); the room reads on and opens it.
   await withDb((sql) => sql`delete from fixture_external_play where fixture_id = ${room.fixtureId}`);
   await expect.poll(() => screenOf(pages[0]!), { timeout: 25_000, message: "re-paired: the check-in again" }).toBe("checkin");
   await ctx.close();

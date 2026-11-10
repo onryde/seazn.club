@@ -8,7 +8,7 @@ import "server-only";
 // Determinism is binding (a golden snapshot asserts two builds are byte-identical):
 // every array is sorted, fixtures order by (round_no, seq_in_round, ext_key), officials
 // by (display_name, id), and every timestamp is an ISO-8601 string carrying the division
-// timezone offset. DB reads reuse the schedule.ts / officials.ts loaders — no SQL is
+// timezone offset. DB reads reuse the schedule/ / officials.ts loaders — no SQL is
 // re-derived here.
 import { withTenant } from "@/lib/db";
 // P9 pass 4d: the court-name disambiguation rule, lifted to a client-safe
@@ -44,7 +44,7 @@ import {
 // P9 (stage court tags) -> #622 (round-scoped court tags): the per-FIXTURE
 // pair too. buildSchedulePack used to resolve only the DIVISION's
 // candidateCourtIds — the same gap review finding #11 closed in
-// validateScheduleIn (schedule.ts) — so a stage's own required_court_tags was
+// validateScheduleIn (schedule/conflicts.ts) — so a stage's own required_court_tags was
 // invisible to the model; #622 added a round-role scope that a per-stage
 // resolve cannot express at all. See buildSchedulePack's
 // fixtureCandidateCourts.
@@ -94,7 +94,7 @@ import type {
 } from "./types";
 
 /** Label stamped on a sibling division's placements. `siblingAssignments`
- *  (schedule.ts:271) returns bare engine assignments carrying no division
+ *  (schedule/engine-inputs.ts) returns bare engine assignments carrying no division
  *  metadata, so every other division in the competition flattens to this one
  *  string — deliberately, since a rival's roster must never leak into the pack.
  *
@@ -115,7 +115,7 @@ export const OTHER_DIVISION_LABEL = "Other division";
  *  imported at this file's top) so the schedule board could reuse the exact
  *  same "Name (Venue)" rule for its column headers/swap button/captions
  *  instead of a second implementation. Re-exported here so every
- *  pre-existing import from "./schedule-ai" (competition-schedule-ai.ts,
+ *  pre-existing import from "./schedule-ai" (competition-schedule-ai/,
  *  both golden-pack tests, schedule-ai-court-directory.test.ts) keeps
  *  working unchanged. See the lib module for the disambiguation rule's own
  *  doc comment. */
@@ -167,7 +167,7 @@ export interface BuildPackOptions {
   /** Extra court occupancy handed to the greedy draft solver, on top of this
    *  division's own fixed fixtures and its siblings' persisted board.
    *
-   *  Added for the #350 joint pack (competition-schedule-ai.ts): several
+   *  Added for the #350 joint pack (competition-schedule-ai/): several
    *  divisions of one competition are drafted in sequence, and each must see
    *  the slots the divisions before it have just taken. `siblingAssignments`
    *  only covers what is already PERSISTED, so without this the joint draft
@@ -178,7 +178,7 @@ export interface BuildPackOptions {
    *  only mode that solves a draft, so no current caller is affected. */
   extraExisting?: Assignment[];
   /** Divisions of the same competition to leave OUT of the sibling sweep, on
-   *  top of this one — see `siblingAssignments` (schedule.ts:271). #350: the
+   *  top of this one — see `siblingAssignments` (schedule/engine-inputs.ts). #350: the
    *  rest of a joint run is not fixed court occupancy, it is being re-planned in
    *  the same pass, and sibling obstacles carry no division identity, so
    *  anything surviving the sweep must be provably from outside the run.
@@ -331,7 +331,7 @@ export async function buildSchedulePack(
     // P9 pass 3b: the candidate court set for this AI draft — the division's
     // configured courts, filtered to non-archived courts carrying every
     // required tag, through the ONE engine filter `autoSchedule`/
-    // `validateScheduleIn` also go through (schedule.ts's own reference
+    // `validateScheduleIn` also go through (schedule/conflicts.ts's own reference
     // wiring). No stage component: this pack spans the whole division's
     // movable set, the same reasoning `validateScheduleIn` documents for its
     // own call. Everything the model is SHOWN and everything the draft
@@ -511,7 +511,7 @@ export async function buildSchedulePack(
     // unconditionally (never the raw configured list) — this is the ONE
     // config the draft placer's `toSlotConfig` call below reads, so an
     // archived or tag-mismatched court must never reach it. Mirrors
-    // `autoSchedule`'s own `settingsForEngine` (schedule.ts) exactly.
+    // `autoSchedule`'s own `settingsForEngine` (schedule/auto.ts) exactly.
     const guardedSettings: ScheduleSettingsOut = {
       ...settings,
       config: {
@@ -544,7 +544,7 @@ export async function buildSchedulePack(
     // which is a COURT BOOKING shape carrying no ids at all — the pack cannot
     // express a sibling's rule identity, and the AI verify seam builds its
     // `ruleFixtures` from `pack.fixtures.movable` instead. The board paths in
-    // `schedule.ts` are the ones that both hold siblings AND build the config
+    // `schedule/` are the ones that both hold siblings AND build the config
     // from rows, and they are the ones changed.
     const siblingsRaw = (
       await siblingAssignments(

@@ -278,7 +278,7 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5a) — getStageRosterDrift", () => {
   });
 
   // W4 B2 fix round 2 (item 1): `vacantLines` is a ROOT KNOCKOUT's count. A Swiss whose round one went back to shells (an
-  // entrant deleted before Start clears the round, stages.ts) has first-round rows with nobody on them by design: counted,
+  // entrant deleted before Start clears the round, stages/) has first-round rows with nobody on them by design: counted,
   // they would add a false "empty place" line to the Swiss banner.
   it("a Swiss whose round one went back to shells reports no empty first-round place — that count is a root knockout's", async () => {
     const { auth } = await seedOrg();

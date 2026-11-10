@@ -42,7 +42,7 @@ export const SEAT_ADDON: SeatAddonCatalogEntry = {
  * `lookup_key` (the durable identity, stable across price replacements via
  * transfer_lookup_key), falling back to the item metadata marker the route
  * stamps for the case a payload arrives without the price expanded. Used by the
- * webhook (billing-events.ts) to pick seat items out of a subscription that may
+ * webhook (usecases/billing-events/) to pick seat items out of a subscription that may
  * also carry the plan item (and, later, other add-on items).
  */
 export function isSeatAddonItem(item: Stripe.SubscriptionItem): boolean {

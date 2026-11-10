@@ -15,13 +15,13 @@ import type { AiPlanResult, SchedulePack } from "./types";
 
 // A verifier conflict blocks when it makes the schedule physically impossible —
 // a court double-booking, or a direct feed scheduled before its source ends.
-// Same taxonomy as the drag-drop board (schedule.ts mapConflicts). Rest,
+// Same taxonomy as the drag-drop board (schedule/conflicts.ts mapConflicts). Rest,
 // blackout, session-window, person-overlap and indirect order land in warnings.
 // Exported so the #350 joint runner classifies a joint conflict report with the
 // SAME taxonomy — a cross-division court clash must block exactly as a
 // within-division one does.
 // #399 moved the answer itself into the engine, beside the reasons: the board's
-// persistence gates need it too, and `schedule.ts` cannot import this module
+// persistence gates need it too, and `schedule/` cannot import this module
 // (the dependency runs the other way). Re-exported under the name every call
 // site already uses.
 export const isBlocking = isBlockingConflict;
@@ -225,7 +225,7 @@ export function toSchedulableFixtures(pack: SchedulePack): SchedulableFixture[] 
  *  parameter that lets a `fixtures` row reach the one builder (#447).
  *
  *  Named after what it is rather than where it comes from: `PackFixture`
- *  satisfies it structurally, and `rowToRuleFixture` in `schedule.ts` builds one
+ *  satisfies it structurally, and `rowToRuleFixture` in `schedule/engine-inputs.ts` builds one
  *  by renaming a DB row's columns. Keeping it this narrow is the point — a
  *  parameter that demanded the whole `PackFixture` would have forced the board
  *  to grow a RuleFixture literal of its own. */
@@ -238,7 +238,7 @@ export interface RuleFixtureSource {
 
 /**
  * THE one place a `RuleFixture` is built — for the single-division pack here,
- * for both joint producers in `competition-schedule-ai.ts` (#443), and for the
+ * for both joint producers in `competition-schedule-ai/` (#443), and for the
  * board paths via `rowToRuleFixture` (#447).
  *
  * It is one function rather than three literals because of what #443 was: two
@@ -260,7 +260,7 @@ export interface RuleFixtureSource {
  * pack from each fixture's own `division_id`.
  *
  * The parameter is `RuleFixtureSource`, not `PackFixture`, since #447: the board
- * paths (`schedule.ts`) hold the same five facts on a `fixtures` ROW under
+ * paths (`schedule/`) hold the same five facts on a `fixtures` ROW under
  * different column names, and they need a `RuleFixture` too. Widening the
  * parameter to exactly the fields this function reads lets `rowToRuleFixture`
  * rename its columns and delegate here, so there is still ONE assignment of
@@ -351,7 +351,7 @@ export function windowBounds(window: { start: string; end: string }): { from: nu
   return { from: toMs(window.start), to: toMs(window.end) + 1000 };
 }
 
-/** feeds.after are direct winner/loser feeds (schedule.ts feedDependencies);
+/** feeds.after are direct winner/loser feeds (schedule/engine-inputs.ts feedDependencies);
  *  an order violation on one blocks. Deps whose source isn't placed are ignored
  *  by validateAssignments. */
 export function packFeedDependencies(pack: SchedulePack): OrderDependency[] {

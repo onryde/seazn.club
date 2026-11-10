@@ -1,5 +1,5 @@
 // The builder's match counts are a CLIENT estimate of the draw the server generates. The oracle is the real draw:
-// `previewDivisionFixtures` (usecases/stages.ts) runs the engine's own generators over placeholder entrants, and the
+// `previewDivisionFixtures` (usecases/stages/preview.ts) runs the engine's own generators over placeholder entrants, and the
 // engine's `generateAmericano` builds an americano rotation. Where a format is score-dependent (Swiss, ladder) the
 // oracle is the rulebook, stated here, never the estimator's own arithmetic.
 import { describe, expect, it, vi } from "vitest";

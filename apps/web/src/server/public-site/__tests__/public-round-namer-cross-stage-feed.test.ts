@@ -2,7 +2,7 @@
 //
 // A feed label carries `{round, seq}` and nothing else, and the namer resolves
 // those two numbers inside the SEAT's own stage. `wireCrossFeeds`
-// (`usecases/stages.ts`) writes edges that cross stages — a league's match
+// (`usecases/stages/`) writes edges that cross stages — a league's match
 // feeds a knockout's seat — so a division-wide feed map hands a knockout seat
 // a coordinate that means something in the LEAGUE, and the knockout resolves
 // it against itself.

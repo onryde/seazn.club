@@ -25,7 +25,7 @@ import { log } from "@/server/logger";
 import { staffAlertDrops, staffRows } from "./_money-fixtures";
 
 // The staff alert is the only thing that tells a HUMAN a customer paid and
-// holds nothing — every other paid-but-ungranted branch in billing-events.ts
+// holds nothing — every other paid-but-ungranted branch in billing-events/
 // pairs its `log.error` with one. It is queued on the email outbox (phase 3
 // wave 5, kind `staff_stream_credit_grant_failed`, once per Checkout Session)
 // to this suite's own STAFF_ALERT_EMAIL, so the tests read its row

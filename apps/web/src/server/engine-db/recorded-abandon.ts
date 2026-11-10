@@ -15,7 +15,7 @@ type Tx = postgres.TransactionSql;
  * cascade write their voids with no event at all. A `core.abandon` that a `core.void` targets is gone — the match
  * is live again — so only an ACTIVE one counts.
  *
- * Read by the bracket cascade (`resolveBracketSeats`, usecases/stages.ts — a recorded abandon is not a dead feeder)
+ * Read by the bracket cascade (`resolveBracketSeats`, usecases/stages/bracket-seats.ts — a recorded abandon is not a dead feeder)
  * and by stage completion (`loadStageInputs`, competition.ts — a recorded abandon that decided nobody is not settled).
  *
  * As SQL: `on` names the `fixtures` row in the enclosing query (an alias, or the table itself). Gated on the status

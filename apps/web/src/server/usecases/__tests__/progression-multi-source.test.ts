@@ -285,14 +285,14 @@ describe.skipIf(!HAS_DB)("multi-source progression (F2 Decision 4 / Finding 1)",
   // A4 (round-4 review, MAJOR) — the SAME two cases as the two on_complete
   // tests above (F2 Task 6 review, finding 1, and this file's earlier
   // QUALIFICATION_INVALID test), but for the `timing: "setup"` branch in
-  // completeStage (stages.ts): computeSeedProposal, not seedNextStage. That
+  // completeStage (stages/completion.ts): computeSeedProposal, not seedNextStage. That
   // branch used to be a bare `catch { return result }` — no narrowing, no
   // logging — despite its OWN comment already claiming "best-effort, same
   // spirit as the on_complete path" below it. So a genuine
   // QUALIFICATION_INVALID (or A1's SEEDING_BESTNTH_UNEQUAL_POOLS, or
   // anything else) reached an organiser as "nothing happened": the stage
   // completed, no seed_proposal, no error anywhere. Narrowed the same way
-  // seedNextStage's call is narrowed a few lines below it in stages.ts.
+  // seedNextStage's call is narrowed a few lines below it in stages/carry-over.ts.
   it("timing:setup — an entrant qualifying through two sources REJECTS the completion, not swallowed (A4 fix — was silently absorbed pre-fix)", async () => {
     const { auth } = await seedOrg();
     const { division, entrants, a, b } = await seedDivisionWithTwoLeagues(auth);
@@ -394,7 +394,7 @@ describe.skipIf(!HAS_DB)("multi-source progression (F2 Decision 4 / Finding 1)",
   // A and B are given DISJOINT 2-entrant rosters via an explicit
   // config.qualified on each (the same "a seeded stage draws from
   // config.qualified, not the whole division" mechanism generateStageFixtures
-  // already uses for any downstream stage — stages.ts's plain-generation
+  // already uses for any downstream stage — stages/ folder's plain-generation
   // path) — sharing ONE 4-entrant roster across both stages (as
   // seedDivisionWithTwoLeagues does above) would leave every qualifier with
   // a SECOND, non-qualifying row in the other source's own table (everyone

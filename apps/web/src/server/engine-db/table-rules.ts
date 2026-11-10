@@ -8,7 +8,7 @@ import "server-only";
 //
 //   pending stage  → the live layers: own ?? division ?? sport, under the merged cfg (division ⊕ stage rules).
 //   active/complete → its pin, written in the same transaction that activated it (`pinStageTableRules`, called by the
-//                     two activation writers in usecases/stages.ts). Division defaults, sport defaults and engine
+//                     two activation writers in usecases/stages/). Division defaults, sport defaults and engine
 //                     releases stop reaching it. A started stage with no pin is refused, never read live (the guard).
 import type postgres from "postgres";
 import { z } from "zod";

@@ -2,7 +2,7 @@ import "server-only";
 import { STAGE_TEMPLATES, buildTemplateStages } from "@/lib/format-templates";
 // Shared stage-format entitlement gates (doc 10 §1, Jul3/08 §8) — the single
 // definition of "does this stage kind/config need formats.double_elim /
-// formats.advanced". Split out of usecases/stages.ts because `withTenant`
+// formats.advanced". Split out of usecases/stages/ because `withTenant`
 // does not nest (lib/db.ts's pool-nesting guard forbids it): createFromTemplate
 // (usecases/templates.ts, D1a) opens its OWN transaction and cannot call
 // createStages to reuse its gate, so the gate condition itself has to be the
@@ -10,7 +10,7 @@ import { STAGE_TEMPLATES, buildTemplateStages } from "@/lib/format-templates";
 //
 // A P4 portfolio review (2026-08-13) found the template path had silently
 // forked its own byte-copy of this exact condition (templates.ts's
-// `stageNeedsAdvancedFormatsGate`, hand-typed against stages.ts's inline
+// `stageNeedsAdvancedFormatsGate`, hand-typed against stages/ folder's inline
 // `.some()` check) — "byte-identical today, locked by no test," the review
 // called it: the same placer/verifier fork this repo keeps paying for
 // elsewhere. If either condition ever needs to change, there is now exactly

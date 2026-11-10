@@ -2176,7 +2176,7 @@ jobs:
           echo "integration suite ran against the live service: $passed passed, 0 skipped"
 
   # -------------------------------------------------------------------------
-  # R27 (W1d D13): a PR touching the engine or stages.ts declares its matrix
+  # R27 (W1d D13): a PR touching the engine or usecases/stages/ declares its matrix
   # rows; the sample runs them + a fixed 33 against the committed baseline.
   # Since engine split 2b the engine is a registry package, so "touching the
   # engine" is a version change of @onryde/seazn-engine in pnpm-lock.yaml

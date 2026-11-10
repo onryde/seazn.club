@@ -483,7 +483,7 @@ export type AutoAssignInput = z.infer<typeof AutoAssignInput>;
  *  inside a pinned tenant transaction asks the pool for a second connection while
  *  the first is still held — the self-deadlock lib/db.ts guards against (see
  *  `assertWithinLimit`'s header in lib/entitlements.ts). Same shape as
- *  `createStages`' `divComp` lookup in usecases/stages.ts.
+ *  `createStages`' `divComp` lookup in usecases/stages/stage-graph.ts.
  *
  *  A missing row yields `undefined`, which resolves the gate org-wide — the
  *  pre-V393 behaviour — and the 404 for the vanished division/stage is then

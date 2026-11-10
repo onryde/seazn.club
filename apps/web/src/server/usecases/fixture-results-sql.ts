@@ -10,17 +10,17 @@
 //       clear and the pool clear, and Undo of Pair next's refusal over the
 //       round it would unseat (W3 T5, SWISS_UNDO_ROUND_STARTED)
 //     - schedule-plus.ts: the rain-delay shift
-//     - stages.ts: `rebuildStageFixtures`
+//     - stages/generate.ts: `rebuildStageFixtures`
 //     - the board writes, through `isMovable`/`heldInPlace` over
-//       `playedFixtureIds`: `autoSchedule` and `applySchedule` (schedule.ts),
+//       `playedFixtureIds`: `autoSchedule` and `applySchedule` (schedule/apply.ts),
 //       the joint apply (competition-schedule-apply.ts) and the AI pack
-//       (schedule-ai.ts)
-//     - `moveFixture` (schedule.ts) reads it directly, on its one row, to
+//       (schedule-ai/)
+//     - `moveFixture` (schedule/move.ts) reads it directly, on its one row, to
 //       refuse a drag or a pin
-//     - `movableFixtureSql` (schedule.ts, the SQL twin of `isMovable`): the
-//       counts that price, drop and size an AI run (competition-schedule-ai.ts,
+//     - `movableFixtureSql` (schedule/board.ts, the SQL twin of `isMovable`): the
+//       counts that price, drop and size an AI run (competition-schedule-ai/,
 //       schedule-ai-preview.ts)
-//     - the joint builder's fixed occupancy (competition-schedule-ai.ts)
+//     - the joint builder's fixed occupancy (competition-schedule-ai/)
 //     - the board read's `held` flag (`listDivisionFixturesForBoard`,
 //       fixtures.ts)
 //     - fixture-started-sql.ts (W4 T2, X-LE-9): inside `fixtureStartedSql`,
@@ -39,11 +39,11 @@
 //       a complete Swiss that holds a result, on every Fixtures-tab render for an organiser and on GET /stages/{id}/swiss-cut.
 //       The evidence half is monotonic, so taking a knockout result back does not un-begin the bracket (the warning stays)
 //   `fixtureHoldsStandingResultSql` (FMT5 fix round 1, controller ruling I2: the format's lock)
-//     - stages.ts: `formatResultSql`, which `replaceStages` refuses FORMAT_LOCKED on and the Division rules card's
+//     - stages/stage-graph.ts: `formatResultSql`, which `replaceStages` refuses FORMAT_LOCKED on and the Division rules card's
 //       Format button reads (`divisionFormatLocked`). It is NOT the played set above, on purpose: a board whose only
 //       events a void took back is no result here (the format opens again), where history and rebuild still hold it
 //   `fixtureEvidenceSql` alone, beside the caller's own status clause
-//     - stages.ts: the Swiss shell reconcile, unseat and Unpair
+//     - stages/: the Swiss shell reconcile, unseat and Unpair
 //   `systemByeSql` (W3 T3; defined in engine-db/system-bye-sql.ts, below every
 //     reader): the snapshot exemption inside `fixtureEvidenceSql` and `playedSql`
 //     (engine-db/format-standing.ts)
@@ -52,11 +52,11 @@
 //     fixture-started-sql.ts, and `byeLineSql`
 //   `byeLineSql` (W4 T3, K2, X-SD-5; engine-db/system-bye-sql.ts — the Swiss
 //     shell, the system bye and the pre-award bye line): `movableFixtureSql` and
-//     the quick Start's rolling times (schedule.ts), history.ts's placement
+//     the quick Start's rolling times (schedule/), history.ts's placement
 //     replays (`slotTaker`), the board read's `bye_line` flag (fixtures.ts,
 //     B1a review #1), and V493's shape
 //   NEITHER, a status list only
-//     - stages.ts: `deleteStage` refuses `in_play`/`decided`/`finalized` and
+//     - stages/stage-graph.ts: `deleteStage` refuses `in_play`/`decided`/`finalized` and
 //       deletes every other row with its evidence, an abandoned match or a
 //       start taken back included
 import type postgres from "postgres";
@@ -90,7 +90,7 @@ type Tx = postgres.TransactionSql;
  * a dead seat writes the same kind of row with HER SEAT EMPTY (`awardSeededByes`); that one stays evidence, held on
  * the board as any walkover is (R116-3). Every other row — a seq-0 row beside no award included — still is evidence.
  *
- * W3 T3 (SW-M7, X-SW-5): a SYSTEM bye freezes its cfg when it is awarded (the Swiss bye seat, stages.ts), so its
+ * W3 T3 (SW-M7, X-SW-5): a SYSTEM bye freezes its cfg when it is awarded (the Swiss bye seat, stages/), so its
  * snapshot is not play — `systemByeSql` exempts it from the snapshot clause, and from that clause ONLY. Every other
  * table still speaks for it, and ruling 116's walkover over a dead seat (a loser, `reason` not `bye`) is untouched.
  */
@@ -122,7 +122,7 @@ export { swissByeShellSql } from "@/server/engine-db/system-bye-sql";
  * ruling). One recorded in play posts `core.forfeit`, a score event. The
  * generator's own lines carry none: a bye, and the F14 walkover it writes for
  * a qualifier who departed before the draw (`walkoverDepartedQualifiers`,
- * stages.ts) — both seats filled, `forfeited`, an award, and nothing played.
+ * stages/generators.ts) — both seats filled, `forfeited`, an award, and nothing played.
  * Counting that one refused Undo of the generation and Rebuild with "started
  * or finished" copy that was false, leaving Delete stage as the only exit.
  *

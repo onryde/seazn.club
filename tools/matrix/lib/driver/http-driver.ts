@@ -4,9 +4,9 @@
 //
 // Why never repeat /complete: on an already-complete stage the product answers
 // `{completed:true, events:[]}` again (engine-db/competition.ts:575) and then
-// re-runs the next-stage progression (usecases/stages.ts:4140 completeStage →
+// re-runs the next-stage progression (usecases/stages/completion.ts completeStage →
 // progressCompletedStage), which computes a NEW draft seed proposal and marks
-// the previous draft stale (stages.ts:4942-4944).
+// the previous draft stale (usecases/stages/).
 import { newSession, raw as benchRaw, type RawResult, type Session } from "../../../bench/lib/http.ts";
 import { fetchFixtureLedger, type LedgerRow } from "../../../bench/lib/ledger.ts";
 import type { StagePostBody } from "../catalogue.ts";
@@ -367,7 +367,7 @@ export class HttpDriver implements OrganiserDriver {
       throw new DriverMisuse(`driver: stage ${stageId} already completed, or its ${first} ended unknown (5xx or no answer) — ${what} is never sent after it (design §6.4)`);
     }
     // Parked Task 6 (a): completeStage COMMITS the completion and then runs
-    // progressCompletedStage (usecases/stages.ts:4140-4170), which can throw —
+    // progressCompletedStage (usecases/stages/completion.ts), which can throw —
     // so a 5xx, or a request that never answered, may follow a committed
     // completion. Its outcome is unknown, and a repeat would re-run the
     // progression; it is recorded like a completion. A 4xx (a named
@@ -402,14 +402,14 @@ export class HttpDriver implements OrganiserDriver {
 
   /** W1-driving T6 (D1): Recompute — a fresh draft, the previous one stale.
    *  The route answers 201 with the slate under `computed`
-   *  (usecases/stages.ts computeSeedProposal). */
+   *  (usecases/stages/seed-proposal.ts computeSeedProposal). */
   async recomputeSeedProposal(stageId: string): Promise<SeedProposalOut> {
     const p = await this.#call<{ id: string; status: string; computed: { qualifiers: SeedProposalOut["qualifiers"]; ties: SeedProposalOut["ties"] } }>(`/api/v1/stages/${stageId}/seed-proposal`, "POST", {});
     return { id: p.id, status: p.status, qualifiers: p.computed.qualifiers, ties: p.computed.ties };
   }
 
   /** W1-driving T7 (D8): a ladder challenge (route stages/[id]/challenges,
-   *  body `{challenger_id, opponent_id}` → 201 usecases/stages.ts
+   *  body `{challenger_id, opponent_id}` → 201 usecases/stages/ad-hoc.ts
    *  issueChallenge). The answer's ladder_order is the order at issue; a
    *  refusal (LADDER_*, a non-ladder 422) is the product's RefusedCall. */
   async challenge(stageId: string, challengerId: string, opponentId: string): Promise<ChallengeOut> {
@@ -424,7 +424,7 @@ export class HttpDriver implements OrganiserDriver {
   }
 
   async rebuild(stageId: string): Promise<void> {
-    // usecases/stages.ts rebuildStageFixtures: refuses whole (409
+    // usecases/stages/generate.ts rebuildStageFixtures: refuses whole (409
     // STAGE_HAS_RESULTS) once any fixture carries a result or a score event,
     // 422 STAGE_NOT_ROOT for a stage fed by another. The answer's counts are
     // not read: the model re-lists the fixtures after it.

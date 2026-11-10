@@ -5,7 +5,7 @@ import "server-only";
 // context, per their own header comments: a claimed player/scorer/official
 // is usually not an org member, so the tenant door never opens for them).
 //
-// `courtNamesById` (schedule.ts) is the equivalent for a single-org
+// `courtNamesById` (schedule/board.ts) is the equivalent for a single-org
 // `withTenant` transaction and cannot be reused as-is here: it needs a
 // tenant `tx` (RLS pinned to ONE org) to run inside, and one cross-org call
 // here spans however many different orgs the caller's own fixtures touch.

@@ -10,8 +10,8 @@
 // fixture it re-parses the wire response with today's zod, re-projects the plan,
 // re-runs the structural gate the runner runs before the engine, and re-runs the
 // engine verifier itself with the pack's own config — the same four calls
-// `runAiPlan` (schedule-ai.ts:1993) and `aiPlanForCompetition`
-// (competition-schedule-ai.ts:1953) make on a live run. When tomorrow's schema
+// `runAiPlan` (usecases/schedule-ai/run.ts) and `aiPlanForCompetition`
+// (usecases/competition-schedule-ai/) make on a live run. When tomorrow's schema
 // or tomorrow's verifier rejects a committed run, this goes red HERE rather than
 // on the marketing page.
 //
@@ -23,7 +23,7 @@
 //
 //   * warning PARITY. `pack.parsed` is empty by construction on every committed
 //     fixture — `buildSchedulePack` takes the `opts.resolved ?? resolveParsed(…)`
-//     path (schedule-ai.ts:908) and never compiles the instruction — so the
+//     path (usecases/schedule-ai/) and never compiles the instruction — so the
 //     warn-only conflict set can legitimately differ between capture time and
 //     guard time. Only BLOCKING is asserted (the runner's own `isBlocking`).
 //   * the board row `code`. The capture derives `F{fixture_no}`; production's
@@ -317,7 +317,7 @@ describe.each([
     const parsed = AiPlanResponse.parse(fixture.response);
     const plan = planFrom(parsed);
     const pack = fixture.pack as SchedulePack;
-    // The runner's own four-argument call (schedule-ai.ts:1993) — one assembly,
+    // The runner's own four-argument call (usecases/schedule-ai/) — one assembly,
     // not a second opinion, or the guard and the product drift apart.
     const conflicts: Conflict[] = validateAssignments(
       toEngineAssignments(plan, pack),

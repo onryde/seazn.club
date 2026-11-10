@@ -6,8 +6,8 @@ import "server-only";
 // verbatim via `materialise`).
 //
 // Module topology (RS002 `_INDEX.md`, kept on purpose): `registration-
-// eligibility.ts` imports nothing from `registrations.ts`. This file imports
-// from BOTH. Never add an edge back from `registrations.ts` to this file —
+// eligibility.ts` imports nothing from `registrations/`. This file imports
+// from BOTH. Never add an edge back from `registrations/` to this file —
 // that is the cycle the split exists to avoid.
 //
 // `submitRegistration` (single-entry, pre-redesign) was deleted by RS001. Its
@@ -253,7 +253,7 @@ function mintRegistrationToken(): string {
 }
 
 /** Bare `extends`, no redeclared fields — `approval`/`allow_free_agents`
- *  now live on the base `RegistrationSettingsRow` itself (registrations.ts,
+ *  now live on the base `RegistrationSettingsRow` itself (registrations/types.ts,
  *  RS004 wave 1's SETTINGS_COLS extension), so retyping them here would
  *  only add a hazard: a redeclared literal union does NOT inherit a future
  *  widening of the base, so this file could silently drift out of sync
@@ -261,7 +261,7 @@ function mintRegistrationToken(): string {
  *  name, rather than using `RegistrationSettingsRow` directly, because
  *  `loadSubmitSettings` below hand-writes its own SELECT instead of
  *  calling the shared `loadSettings` — this wave's file ownership still
- *  keeps `registrations.ts` to export-only edits. An alias of
+ *  keeps `registrations/` to export-only edits. An alias of
  *  `RegistrationSettingsRow`, so it satisfies `windowOpen`'s
  *  parameter type unchanged. */
 type SubmitSettingsRow = RegistrationSettingsRow;
@@ -277,9 +277,9 @@ async function loadSubmitSettings(divisionId: string): Promise<SubmitSettingsRow
 }
 
 /** Division + competition + org context for ONE entry. A local shape rather
- *  than extending `registrations.ts`'s `DivisionCtx` (not exported, and that
+ *  than extending `registrations/types.ts`'s `DivisionCtx` (not exported, and that
  *  file's own comment earmarks the org-currency reader for RS002/RS003 to
- *  add — but this wave's ownership keeps `registrations.ts` to export-only
+ *  add — but this wave's ownership keeps `registrations/` to export-only
  *  edits, so it is read here instead). */
 interface EntryDivisionCtx {
   id: string;
@@ -298,7 +298,7 @@ interface EntryDivisionCtx {
   /** division_name/comp_name/org_name added for `previewJoinEntry`'s
    *  "division and competition/org context" read — the same bundle
    *  `publicRegistrationStatus`/`publicRegistrationStatusByRef`
-   *  (registrations.ts) already return for every other public context
+   *  (registrations/public-status.ts) already return for every other public context
    *  view, reused here for consistency rather than inventing a second
    *  shape. Purely additive; every existing caller ignores them. */
   division_name: string;
@@ -440,7 +440,7 @@ interface PreparedEntry {
  * returning a plain `SubmitGroupResult` for the caller to act on. RS003
  * built the checkout minting on top (`mintGroupCheckout`, called by the
  * public register route); RS005 W4 wires the confirmation email the same
- * way, from that same route, via `registrations.ts`'s `notifySubmitted` —
+ * way, from that same route, via `registrations/mail.ts`'s `notifySubmitted` —
  * it is no longer unimplemented, just still not this function's concern.
  */
 export async function submitRegistrationGroup(
@@ -570,7 +570,7 @@ export async function submitRegistrationGroup(
     // T20: the Lichess link is demanded only while the club is offered online chess (the PostHog flag
     // `online-chess`): with it off, nobody is asked to link an account for a feature they cannot see.
     // M7 (T16 fix round 1): asked AS THE CLUB (`userId: null`), exactly as the entries step's public read
-    // (registrations.ts publicRegistrationInfo) asked when it told this registrant a link is needed — so the notice
+    // (registrations/settings.ts publicRegistrationInfo) asked when it told this registrant a link is needed — so the notice
     // and this demand cannot disagree. The person is still the one whose link is checked.
     if (divisionPlaysOnline(divCtx) && (await onlineChessOffered({ orgId: divCtx.org_id, userId: null }))) {
       if (!entry.registering_self) {
@@ -963,7 +963,7 @@ export async function submitRegistrationGroup(
 
   // RS008 gap (code-review fix, 2026-08-30): fire-and-forget, strictly AFTER
   // the transaction above has committed — see confirmRegistration's
-  // identical wiring (registrations.ts) for why. One call per auto-confirmed
+  // identical wiring (registrations/) for why. One call per auto-confirmed
   // entry: a cart can hold more than one free/auto-approval division at
   // once, each materialising its own entrant.
   for (const entrantId of txResult.autoConfirmedEntrantIds) {
@@ -1004,14 +1004,14 @@ export async function submitRegistrationGroup(
 
 /** Roster headcount vs the sport's configured cap (design "squad-size config
  *  where defined, else unlimited") — `sports.position_catalog.lineup.size +
- *  .benchMax` via the shared `rosterCapExpr` (registrations.ts; RS005 W1b
+ *  .benchMax` via the shared `rosterCapExpr` (registrations/list.ts; RS005 W1b
  *  re-pointed the squad-cap check at it — one source instead of two hand-
  *  copies). `null` cap reads as unlimited. Shared by `previewJoinEntry`'s
  *  `allow_new_player` and `joinTeamEntry`'s insert path so the two can never
  *  drift apart (this repo's parallel-vocab-lookup trap).
  *
  *  Parameterised on the connection (matching `divisionCtx`/`rosterCapExpr`
- *  themselves, registrations.ts) — RS007: `joinTeamEntry`'s insert path
+ *  themselves, registrations/list.ts) — RS007: `joinTeamEntry`'s insert path
  *  calls this a SECOND time from inside its own `sql.begin`, on `tx`, as the
  *  authoritative re-check right before the INSERT it guards. */
 async function rosterAtCap(db: Tx | typeof sql, divisionId: string, registrationId: string): Promise<boolean> {
@@ -1304,7 +1304,7 @@ export async function joinTeamEntry(
   // Everything above is a cheap pre-check (fast-fail before the eligibility
   // work runs at all) — never authoritative on its own. Two windows lived
   // between it and the write below: a concurrent withdraw (withdrawCore,
-  // registrations.ts) landing after this read but before the claim UPDATE,
+  // registrations/) landing after this read but before the claim UPDATE,
   // and rosterAtCap's own pre-check above being a plain SELECT-count ahead
   // of an unguarded INSERT. Both close the same way withdrawCore closes its
   // own: lock the row, re-read it LIVE, then write — inside one short

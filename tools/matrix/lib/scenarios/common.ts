@@ -60,7 +60,7 @@ export interface DivisionSetup {
   kind: EntrantKind;
   /** The ids addEntrants answered: the division's own entrants. A fixture
    *  side outside it is one the product minted (an americano pair entrant,
-   *  stages.ts pairEntrantsFor). */
+   *  usecases/stages/generators.ts pairEntrantsFor). */
   entrantIds: ReadonlySet<string>;
   /** PADPROOF's rosterless team entrants (SetUpOptions.rosterlessTeams, D3):
    *  no members posted, no lineup PUT. */
@@ -254,7 +254,7 @@ export class Recorder {
 export const TEMPLATE_ENDS_ON = "2030-12-31";
 /** T12-R1: the product's withdraw-first guard (divisions.ts:857-871) refuses
  *  an entrants model that drops a kind an ACTIVE entrant holds, and an
- *  americano or mexicano stage MINTS pair entrants (stages.ts pairEntrantsFor)
+ *  americano or mexicano stage MINTS pair entrants (usecases/stages/generators.ts pairEntrantsFor)
  *  that the organiser never registered and cannot withdraw. A predicted
  *  product finding, written as a note: the signature words are verbatim, for
  *  Task 15's triage rule. */
@@ -309,7 +309,7 @@ export function withPostedRules(spec: CaseSpec, bodies: readonly StagePostBody[]
 }
 
 /** W1-driving Task 5: the product plays the PERSONS behind an americano
- *  stage's entrants (stages.ts americanoGen: one linked person per entrant, at
+ *  stage's entrants (usecases/stages/generators.ts americanoGen: one linked person per entrant, at
  *  least 4, else STAGE_NOT_READY). Americano and mexicano are one stage kind;
  *  the stage's mode decides. */
 export function personsNeeded(bodies: readonly StagePostBody[]): boolean {
@@ -470,7 +470,7 @@ export class LineupWarned extends Error {
  *  the caller just read (decideFixture's fixtureState).
  *  Plan review 1 I-1: gated on TEAM kind AND the side being one of the
  *  division's own entrants. An americano/mexicano fixture seats ephemeral
- *  PAIR entrants the product minted (stages.ts pairEntrantsFor), which are in
+ *  PAIR entrants the product minted (usecases/stages/generators.ts pairEntrantsFor), which are in
  *  no roster; such a side is skipped with a named note — once per stage
  *  (PF-5) — never PUT. A side outside the division on any OTHER stage kind
  *  is thrown by name (T45-R3): nothing else mints entrants. A DIVISION entrant with no recorded
@@ -794,7 +794,7 @@ export function drawsDeclaredOnReached(ctx: ScenarioContext, plays: readonly Sta
 
 /** The Swiss Pair refusals that stop the loop AND offer the organiser's recovery, Finish (typed against the product's own refusal
  *  table, so a rename there is a compile error here):
- *   - SWISS_NO_LEGAL_PAIRING: no round is left that repeats nobody (stages.ts swissGen); its body carries `finishAfter`, `canFinish`.
+ *   - SWISS_NO_LEGAL_PAIRING: no round is left that repeats nobody (usecases/stages/swiss-gen.ts swissGen); its body carries `finishAfter`, `canFinish`.
  *   - SWISS_ROUNDS_ABOVE_MAX: a running Swiss whose field a withdrawal shrank under the target round (judgeSwissPairAt, T6 review
  *     m2); its body is `{ rounds, field, hardMax, canFinish, finish?: { after, rounds } }` - `canFinish` again, no `finishAfter`.
  *  Both answer 409 when Finish is on offer and 422 when it is not (the table rows' `resolvableStatus`), and both carry `canFinish`,
@@ -846,11 +846,11 @@ async function finishSwiss(ctx: ScenarioContext, rec: Recorder, stageId: string,
 /** Plays one stage to its loop exit. `stage` (W1-driving Task 6) defaults to
  *  the root; the exit lands on the stage's own track and on the run alike. */
 export async function playStage(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, hooks: RoundHooks = {}, stage: StageRef = setup.stage): Promise<void> {
-  // W1-driving Task 7 (D8): a ladder generates nothing (stages.ts ladder gen
+  // W1-driving Task 7 (D8): a ladder generates nothing (usecases/stages/ ladder gen
   // is []); it is driven through challenges.
   if (stage.kind === "ladder") return playLadder(ctx, rec, setup, stage, hooks);
   // W1-driving Task 8 (D9): americano and mexicano are ONE stage kind; the
-  // stage's config.mode decides, read as the product reads it (stages.ts:756).
+  // stage's config.mode decides, read as the product reads it (usecases/stages/).
   if (stage.kind === "americano") return stage.config.mode === "mexicano" ? playMexicano(ctx, rec, setup, stage, hooks) : playAmericano(ctx, rec, setup, stage, hooks);
   const track = rec.track(stage.id);
   const exit = (e: LoopExit) => { track.exit = e; rec.exit = e; };
@@ -927,7 +927,7 @@ const worstExit = (exits: readonly (LoopExit | null)[]): LoopExit | null => {
  *  not, as W1a's root always was (scenarios.test.ts "I-1": I4 judges the
  *  answer; life-loop-bounded reds the early stop). That is still "once": a
  *  stage that is not ready answers `completed: false` and commits nothing
- *  (stages.ts completeStageIfReady), and the drivers refuse a repeat only
+ *  (usecases/stages/ completeStageIfReady), and the drivers refuse a repeat only
  *  after a commit. */
 export async function playDivision(
   ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup,
@@ -1033,8 +1033,8 @@ export async function configProbe(ctx: ScenarioContext, rec: Recorder, setup: Di
  *  W1-driving Task 6: takes the stage id (any stage), and carries the next
  *  stage's draft proposal /complete minted — the only place its id is
  *  served. A 409 STAGE_COMPLETED_SEEDING_FAILED is the product saying the
- *  stage COMMITTED and only the next stage's seeding failed (stages.ts
- *  :4239-4252): recorded complete, with no proposal and a named note
+ *  stage COMMITTED and only the next stage's seeding failed (usecases/stages/):
+ *  recorded complete, with no proposal and a named note
  *  (fix round 1, m-7; advance-seeded-as-declared fails on it). Its body
  *  carries no events, so finalRanks stay null. The driver never repeats it
  *  (FP-3). */
@@ -1090,7 +1090,7 @@ export function byeDeclared(sport: string, cfg: unknown, stageKind: string, f: O
 
 /** W1-driving Task 9: a ladder's `ladder_order` is the raw stored order — the
  *  product writes it at the first challenge and on every decided swap
- *  (stages.ts:5538-5551, scoring.ts:774-786) and never prunes it; it is NOT
+ *  (usecases/stages/, scoring.ts:774-786) and never prunes it; it is NOT
  *  ruling 53's "live" (pruned) order. The StageRef a play carries is the
  *  setup-time copy, which predates both writes. I9 compares finalRanks with
  *  the raw stored order as the product holds it at the end of the run, so it
@@ -1111,7 +1111,7 @@ async function storedLadderOrders(ctx: ScenarioContext, setup: DivisionSetup, pl
 /** W1-driving Task 9 (ruling 45): the terminal final keys of a structural
  *  bracket, sized as the product laid it out. A root stage is Start's over
  *  its field; a setup-timing later stage was generated over its DECLARED
- *  slots (stages.ts generateProgressionSetupFixtures), and a withdrawn
+ *  slots (usecases/stages/setup-fixtures.ts generateProgressionSetupFixtures), and a withdrawn
  *  qualifier's seat stays empty (FP-2), so the seeded field can be smaller
  *  than the bracket. The ids are placeholders: only the size shapes the keys.
  *  null off the structural kinds, and for a stage with no field observed. A

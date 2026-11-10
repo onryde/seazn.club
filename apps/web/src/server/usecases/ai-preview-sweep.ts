@@ -27,7 +27,7 @@ const SPENT_RETENTION_DAYS = 30;
  *
  * Deliberately not tenant-scoped: this is a cron-driven housekeeping job with no
  * request org, and it follows the same plain-client pattern as the billing
- * webhook sweeps (billing-events.ts) which already write to force-RLS tables.
+ * webhook sweeps (billing-events/) which already write to force-RLS tables.
  */
 export async function sweepExpiredPreviews(): Promise<{ expired: number; spent: number }> {
   const expired = await sql<{ id: string }[]>`

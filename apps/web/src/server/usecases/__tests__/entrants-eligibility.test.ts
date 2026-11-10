@@ -594,7 +594,7 @@ describe.skipIf(!HAS_DB)("RS011 — organiser-side eligibility gates", () => {
           (registration_id, full_name, dob, gender, source)
         values (${reg!.id}, 'Too Old', '2000-01-01', null, 'captain_entered')`;
 
-      // This is the SAME `materialise` (registrations.ts) the Stripe webhook
+      // This is the SAME `materialise` (registrations/materialise.ts) the Stripe webhook
       // fulfilment path and the free/auto-confirm submit path call — never
       // touched by RS011's scope, and never should be: payment (or the
       // free-entry equivalent) is already taken by this point.

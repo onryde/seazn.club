@@ -79,7 +79,7 @@ import { ENDS_BEFORE_STARTS, WINDOW_ENDS_BEFORE_STARTS } from "../../src/server/
  * because every division below is freshly seeded and single-purpose: a
  * successful write with an omitted field does not PRESERVE that field's
  * previously-stored value, it RESETS it to the schema default — this is not
- * PATCH semantics. `putScheduleSettings` (`usecases/schedule.ts:420-426`)
+ * PATCH semantics. `putScheduleSettings` (`usecases/schedule/settings.ts`)
  * writes `input.config` as a whole JSON document on every accepted PUT.
  */
 test.describe.configure({ mode: "default" });
@@ -183,7 +183,7 @@ test("case #16: gapMinutes/perEntrantMinRest/constraints.restMin negative are re
     // engine (distinct from `perEntrantMinRest` alone), `constraints-
     // panel.tsx` renders it as its own draft-then-commit field with its own
     // dictionary copy (`constraints.restMin.label/hint/unit`), and
-    // `capacity-input.ts`/`engine-constraints.ts`/`schedule-ai.ts` all read
+    // `capacity-input.ts`/`engine-constraints.ts`/`usecases/schedule-ai/` all read
     // `config.constraints.restMin` independently of `perEntrantMinRest`.
     const constraintsRestNeg = await putConfig(request, div.id, {
       constraints: { restMin: -1 },
@@ -266,7 +266,7 @@ test("case #22: 51 courts is refused, 50 is accepted", async ({ request }) => {
   const div = await seedDivision(request, comp.id);
   try {
     // `CourtId = Uuid` has no existence check at the schema level, and
-    // `putScheduleSettings` (`usecases/schedule.ts:342-345`) only ever reads
+    // `putScheduleSettings` (`usecases/schedule/settings.ts`) only ever reads
     // `stored.config.courts` to find courts being REMOVED (a guard against
     // orphaning a pinned/in-play fixture) — a freshly seeded division has no
     // stored courts, so nothing is removed here, and there is no ownership/

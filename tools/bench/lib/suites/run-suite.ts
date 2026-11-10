@@ -484,7 +484,7 @@ export function expectedQualifierOrder(
 // driver's daily floor", design §9) — never through `seedSuite`'s normal
 // create-then-generate walk (see build-packs/_tiny.ts's own comment on
 // `d-registration` for why: it has no admin-equivalent seed data, and
-// `usecases/stages.ts:1141` refuses to /generate a stage with fewer than two
+// `usecases/stages/` refuses to /generate a stage with fewer than two
 // real entrants, which this division's real entrant count never reaches
 // until the funnel itself has run).
 // ---------------------------------------------------------------------------
@@ -1121,7 +1121,7 @@ interface CompetitionListPage {
  * Is this stage kind generated as a round robin?
  *
  * `league` and `group` are the two, and they are read off the product's own
- * generator switch (`apps/web/src/server/usecases/stages.ts:752-753` — both
+ * generator switch (`apps/web/src/server/usecases/stages/` — both
  * cases fall into `roundRobinGen`; `group` differs only by splitting into
  * pools that each play their own). Every other kind is a bracket or a ladder.
  *
@@ -5391,7 +5391,7 @@ export async function runPackSuite(
     // hold the shared Connect test account BEFORE the first division is
     // configured: `resumeRegistrationCheckout` reads
     // `organizations.stripe_account_id` + `stripe_charges_enabled` and refuses
-    // otherwise (usecases/registrations.ts:2325, :4387), and a bench org is
+    // otherwise (usecases/registrations/), and a bench org is
     // auto-provisioned by this run's own sign-in with neither set. Claimed once
     // around the whole loop rather than per division — the account belongs to
     // the ORG, so a per-division claim would be the same write repeated.

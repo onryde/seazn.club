@@ -10,7 +10,7 @@ import { matchName } from "./fixture-override-guards";
 
 // W2c batch-3 I1 (ruling, under the owner's standing instruction) — a walkover no event records keeps its score in
 // ONE place: the `match_states` row `writeAwardedMatchState` wrote when the award landed (F14's departed qualifier at
-// Generate, `stages.ts`; ruling 116's arriving side over a dead seat, `fed-seats.ts`). No read path refolds it, and
+// Generate, `stages/`; ruling 116's arriving side over a dead seat, `fed-seats.ts`). No read path refolds it, and
 // neither the stage lock nor the division lock counts it as play (`rule-locks.ts`: a frozen cfg or a recorded event),
 // so a stage-rules save or a division save can move the format it resolves to — `bestOf` on a set sport, football's
 // `awardScore` (a table key no knockout table guards), a variant. Such a save RE-WRITES those walkovers' score in its

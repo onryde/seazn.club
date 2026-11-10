@@ -368,18 +368,18 @@ export interface FunnelEntryOutcome {
 /**
  * One row of `GET /api/v1/divisions/{id}/registrations`
  * (`listRegistrations` / `RegistrationListRow`,
- * `apps/web/src/server/usecases/registrations.ts:5515`), narrowed to
+ * `apps/web/src/server/usecases/registrations/list.ts`), narrowed to
  * exactly what the oracle needs — read back AFTER every organiser action in
  * the division has run, so it reflects the FINAL state.
  *
  * `amountCents`/`paymentIntentId` are the ENTRY's own columns
  * (`registrations.amount_cents`, `registrations.payment_intent_id` —
- * exposed on the list row as `entry_payment_intent_id`, registrations.ts:
- * 467-477) — NEVER `registration_groups.amount_cents`. That column is a
+ * exposed on the list row as `entry_payment_intent_id`, usecases/registrations/) — NEVER
+ * `registration_groups.amount_cents`. That column is a
  * submit-time cart snapshot `confirmPaidRegistration`
- * (`usecases/registrations.ts:2762`) never writes to on payment — only
+ * (`usecases/registrations/checkout-completion.ts`) never writes to on payment — only
  * `registrations.status`, `charged_at` and `payment_intent_id` change, plus
- * the group's OWN `payment_intent_id` (`:2894-2905`). Summing the group's
+ * the group's OWN `payment_intent_id`. Summing the group's
  * snapshot would count money that was never paid, and would read GREENEST
  * exactly when payment is broken (B03r-repins-2026-09-03.md, FP6).
  */

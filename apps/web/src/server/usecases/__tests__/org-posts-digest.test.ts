@@ -4,7 +4,7 @@
 // (auto-drafts) — this file is scoped to the NEW digest kind specifically,
 // matching this repo's convention of splitting a large usecase's tests
 // across several files once one feature within it grows its own fixture
-// shape (e.g. competition-schedule-*.test.ts for schedule-ai.ts).
+// shape (e.g. competition-schedule-*.test.ts for schedule-ai/).
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";

@@ -15,8 +15,8 @@ const FEE_KEY = "platform_fee_percent";
 // otherwise keep serving a 0% cut for the full 300s TTL AFTER the fix
 // deployed. That window is not merely cosmetic — the first paid entry in it
 // runs `update competitions set fee_percent = <0> where fee_percent is null`
-// (registrations.ts:2918, first-wins and the only writer), and
-// effectiveFeePercentFor treats a locked 0 as "not locked" (`> 0`, :103), so
+// (usecases/registrations/, first-wins and the only writer), and
+// effectiveFeePercentFor treats a locked 0 as "not locked" (`> 0`), so
 // the row is non-null forever and that competition can never lock a rate
 // again. Bumping the key makes the fix take effect on deploy instead of 300s
 // later.

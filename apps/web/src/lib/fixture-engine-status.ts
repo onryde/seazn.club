@@ -1,6 +1,6 @@
 // DB fixtures.status → the engine's FixtureStatus (spec 05 §1). ONE mapping for
 // the standings fold (server/engine-db/competition.ts), the completed-bracket
-// rebuild (server/usecases/stages.ts) and the qualification builder
+// rebuild (server/usecases/stages/) and the qualification builder
 // (server/public-site/qualification-view.ts): a second copy would let the table
 // and its status disagree about whether a match counts as played.
 //

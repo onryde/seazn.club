@@ -68,7 +68,7 @@ const conflictDetailSuffix = (c: Conflict): string =>
   conflictKey(c).slice(`${c.fixtureId}|${c.reason}|`.length);
 
 /** One division's verifier config — the per-division mirror of `verifyConfig`
- *  (schedule-ai.ts:914), reading `division.settings` instead of `pack.settings`.
+ *  (schedule-ai/verify.ts), reading `division.settings` instead of `pack.settings`.
  *
  *    startWindows       CONVERTED, not dropped. The single-division mirror
  *                        drops these on the grounds that the pack carries ISO
@@ -78,7 +78,7 @@ const conflictDetailSuffix = (c: Conflict): string =>
  *                        The drop made `start_window` a conflict class the whole
  *                        joint product was blind to, at plan time AND apply
  *                        time, while the per-stage apply reports it through
- *                        `toSlotConfig` (schedule.ts:337-341).
+ *                        `toSlotConfig` (schedule/engine-inputs.ts).
  *                        The engine matches a `kind: "division"` window on the
  *                        assignment's `divisionId`, which the joint path is the
  *                        only one that stamps — so these govern per division
@@ -143,7 +143,7 @@ export function verifyConfigFor(
    *  the priority is spelled out rather than left to argument order.
    *
    *  Sourced from `settings.orgTz`, never `settings.displayTz`/`.tz` — same
-   *  ruling `applyWindow` and `toVerifyConfig` (schedule.ts) already follow:
+   *  ruling `applyWindow` and `toVerifyConfig` (schedule/engine-inputs.ts) already follow:
    *  the org zone governs every temporal boundary (#397), a division's
    *  display override must not move which calendar day a fixture is judged
    *  on, and two divisions of one competition must agree on that day. */
@@ -180,7 +180,7 @@ export function verifyConfigFor(
     // than left to be discovered: this function feeds `verifyJoint`, whose
     // non-blocking conflicts become `result.warnings`, which `planIsAcceptable`
     // divides by the movable count against SCHEDULING_AI_ESCALATE_WARN_RATIO
-    // (schedule-ai.ts). So `start_window` violations count toward ladder
+    // (schedule-ai/). So `start_window` violations count toward ladder
     // escalation, and a joint plan that used to look acceptable can escalate a
     // rung.
     //
@@ -476,7 +476,7 @@ export function verifyJoint(plan: AiSchedulePlan, pack: CompetitionPack): Confli
     }
   }
   // Sort on DOMAIN keys, never on the fixture UUID (the determinism contract at
-  // schedule-ai.ts:1-12). Division order is the pack's own (name, slug) order, so
+  // schedule-ai/). Division order is the pack's own (name, slug) order, so
   // the report also arrives grouped by division and then in playing order, which
   // is how the model reads it back on a repair round.
   const rank = new Map<string, [number, number, number, string]>();
@@ -515,7 +515,7 @@ export function verifyJoint(plan: AiSchedulePlan, pack: CompetitionPack): Confli
 }
 
 /** Structural gate run before the engine verifier — the joint mirror of
- *  `structuralCheck` (schedule-ai.ts:841). One rule changes: a fixture's
+ *  `structuralCheck` (schedule-ai/verify.ts). One rule changes: a fixture's
  *  `court_label` must appear in ITS OWN division's `settings.courts`, not merely
  *  in `pack.courts`. The union is a rendering convenience for the board; using
  *  it as the gate would let the model place an Alpha fixture on a court only
@@ -530,7 +530,7 @@ export function jointStructuralCheck(
   const divisionById = new Map(pack.divisions.map((d) => [d.id, d]));
   const pinned = new Map(pack.fixtures.movable.filter((f) => f.pinned).map((f) => [f.id, f]));
   // #622 review: the joint mirror of `structuralCheck`'s own `narrowedCourts`
-  // (schedule-ai.ts) — `CompetitionPackFixture` extends `PackFixture` and
+  // (schedule-ai/) — `CompetitionPackFixture` extends `PackFixture` and
   // inherits its `courts` field unchanged from the per-division sub-pack
   // (`buildJointPack`'s `movable` spread), so the data was always here; only
   // this check never read it, letting a joint AI plan relocate a round-tagged
@@ -581,7 +581,7 @@ export function jointStructuralCheck(
   for (const id of movableIds) {
     if (!seen.has(id)) return `movable fixture ${id} is missing from the plan`;
   }
-  // UNREACHABLE BY CONSTRUCTION, kept because schedule-ai.ts:870 keeps it and
+  // UNREACHABLE BY CONSTRUCTION, kept because schedule-ai/ keeps it and
   // the two must not drift. Every pinned movable id has already been accounted
   // for above: absent from both lists → "is missing from the plan"; in
   // `unschedulable` → "cannot be marked unschedulable"; in `assignments` →

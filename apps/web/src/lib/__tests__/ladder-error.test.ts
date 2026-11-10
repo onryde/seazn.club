@@ -1,7 +1,7 @@
 // LADDER_* error-code -> organiser copy. The ladder console rendered
 // `err.message` — the server's own English prose — for every challenge
 // refusal, in all four locales. These are the wire codes `issueChallenge`
-// (server/usecases/stages.ts) throws; this module is the ONE place a code
+// (server/usecases/stages/) throws; this module is the ONE place a code
 // becomes display text. Mirrors seeding-error.test.ts, deliberately.
 import { describe, expect, it } from "vitest";
 import { ladderErrorMessage, LADDER_ERROR_CODES, type LadderErrorCode } from "@/lib/ladder-error";

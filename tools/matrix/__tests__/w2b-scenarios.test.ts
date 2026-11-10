@@ -1113,7 +1113,7 @@ describe("each table scenario, run on the league fake", () => {
 });
 
 // ---------------------------------------------------------------------------------------------------------------
-// Review I-6: WD-CASC driven end to end. WD-CASC through the scenario on the single-elimination fake, which plays loop F's cascade (withdrawal.ts, stages.ts
+// Review I-6: WD-CASC driven end to end. WD-CASC through the scenario on the single-elimination fake, which plays loop F's cascade (withdrawal.ts, usecases/stages/
 // resolveBracketSeats): a TBD seat dies and the arriving opponent walks over by bye; a dead seat beside a RECORDED double
 // walkover is a void (Review Focus 1), and the seat that void feeds walks its opponent over.
 describe("WD-CASC end to end on the single-elimination fake (review I-6, re-pinned to loop F's cascade)", () => {
@@ -1176,7 +1176,7 @@ describe("WD-CASC end to end on the single-elimination fake (review I-6, re-pinn
 const MS_ROWS: readonly (readonly [RowKey, string])[] = [["groups_ko", "knockout"], ["group_playoffs", "page_playoff"]];
 
 // ---------------------------------------------------------------------------------------------------------------
-// Post-F re-checks 2–5: loop F's bracket withdrawal (withdrawal.ts) and seat resolver (stages.ts resolveBracketSeats),
+// Post-F re-checks 2–5: loop F's bracket withdrawal (withdrawal.ts) and seat resolver (usecases/stages/bracket-seats.ts resolveBracketSeats),
 // read from the product where a fake mirrors them, and the single-elimination fake played through each state the
 // cascade distinguishes. Expected values come from the plan's rows (C-2's three former holds, C-5's bye, D17, X-WD-1..4,
 // X-DW-2, Review Focus 1, the plan's N1's walked_over_held), never from the fake.

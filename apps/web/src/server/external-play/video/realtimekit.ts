@@ -307,7 +307,7 @@ function meetingEnded(fixtureId: string): HttpError {
 }
 
 /** R2-2: a meeting made for another pairing with a game behind it. Cannot happen through the product — M-10's lock
- *  (stages.ts lockBoardsRefusingOnlineGames) refuses a re-pair over a game — so it is refused by name: the meeting
+ *  (usecases/stages/swiss-boards.ts lockBoardsRefusingOnlineGames) refuses a re-pair over a game — so it is refused by name: the meeting
  *  is that game's camera evidence, never replaced and never joined by a new pairing. */
 function pairingChanged(fixtureId: string): HttpError {
   return new HttpError(409, `the video meeting for fixture ${fixtureId} belongs to an earlier pairing's game`, "VIDEO_MEETING_PAIRING_CHANGED");

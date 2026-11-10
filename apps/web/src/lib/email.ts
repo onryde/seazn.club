@@ -361,7 +361,7 @@ export async function externalPlayInviteEmail(
   return externalPlayInviteTemplate(args, dict);
 }
 
-/** A match the official is assigned to changed time/venue, RENDERED and not sent. `moveFixture` (schedule.ts) queues what this returns on
+/** A match the official is assigned to changed time/venue, RENDERED and not sent. `moveFixture` (usecases/schedule/move.ts) queues what this returns on
  *  the email outbox (kind `official_assignment_changed`, transactional), in the move's transaction, one per assignment role, in the
  *  official's language. Nothing sends it directly. */
 export async function officialAssignmentChangedEmail(
@@ -504,7 +504,7 @@ export async function groupOrgLeftEmail(
 }
 
 /** The registration confirmation, RENDERED and not sent — it carries the offline (cash/bank) payment instructions for paid entries.
- *  The producers (`notifySubmitted`, the organiser's and the registrant's resend in `server/usecases/registrations.ts`) queue what
+ *  The producers (`notifySubmitted`, the organiser's and the registrant's resend in `server/usecases/registrations/mail.ts`) queue what
  *  this returns on the email outbox (kind `registration_confirmation`) and send it after commit; there is no direct sender for it
  *  any more (a second path would skip the outbox's replace rule and its retry). The address is not part of the content, so it is not
  *  an argument here. `locale` is the language the mail is written in: the producer resolves it (`recipientLocale`, D4) and passes it. */
@@ -514,7 +514,7 @@ export async function registrationEmail(args: RegistrationEmailArgs, locale: Loc
 }
 
 /** The payment reminder for an unpaid entry fee (offline nudge or card T-24h), RENDERED and not sent. The producers (the registration
- *  sweep's two reminder passes and the organiser's manual reminder, `server/usecases/registrations.ts`) queue what this returns on the
+ *  sweep's two reminder passes and the organiser's manual reminder, `server/usecases/registrations/`) queue what this returns on the
  *  email outbox (kind `payment_reminder`); there is no direct sender for it any more (a second path would skip the outbox's retry and
  *  its once-key, which is what stops a failed send minting a new Checkout session on every sweep). The address is not part of the
  *  content, so it is not an argument here. `locale` is the language the mail is written in: the producer resolves it (`recipientLocale`). */
@@ -524,7 +524,7 @@ export async function paymentReminderEmail(args: PaymentReminderArgs, locale: Lo
 }
 
 /** The waitlist promotion (spec §2: a spot opened — pay window / instructions), RENDERED and not sent. The producer (`notifyPromoted` in
- *  `server/usecases/registrations.ts`) queues what this returns on the email outbox (kind `registration_promoted`); there is no direct
+ *  `server/usecases/registrations/waitlist.ts`) queues what this returns on the email outbox (kind `registration_promoted`); there is no direct
  *  sender for it any more (a second path would skip the outbox's retry and its once-key). The address is not part of the content, so it
  *  is not an argument here. `locale` is the language the mail is written in: the producer resolves it (`recipientLocale`). */
 export async function registrationPromotedEmail(args: RegistrationPromotedArgs, locale: Locale): Promise<EmailContent> {
@@ -543,14 +543,14 @@ export async function soloSignUpAssignedEmail(args: SoloSignUpAssignedArgs, loca
 }
 
 /** Registrant receipt for any refund (auto, manual, late, duplicate): the subject and body in the registrant's language. It is queued on the
- *  email outbox by `queueRefundReceipt` (registrations.ts), in the transaction that records the refund; nothing sends it directly. */
+ *  email outbox by `queueRefundReceipt` (usecases/registrations/refunds.ts), in the transaction that records the refund; nothing sends it directly. */
 export async function refundIssuedEmail(args: RefundIssuedArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
   return refundIssuedTemplate(args, dict);
 }
 
 /** Organiser alert: an entry-fee payment was disputed (spec issue #5), in the owner's language. It is queued on the email outbox by
- *  `handleRegistrationDispute` (registrations.ts, kind `registration_dispute_alert`) in the transaction that records the dispute; nothing
+ *  `handleRegistrationDispute` (usecases/registrations/disputes.ts, kind `registration_dispute_alert`) in the transaction that records the dispute; nothing
  *  sends it directly. */
 export async function disputeAlertEmail(args: DisputeAlertArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
@@ -558,7 +558,7 @@ export async function disputeAlertEmail(args: DisputeAlertArgs, locale: Locale):
 }
 
 /** Organiser outcome mail: a chargeback closed lost — states the write-off and the balance recovery (PROMPT-55), in the owner's language.
- *  It is queued on the email outbox by `handleRegistrationDispute` (registrations.ts, kind `registration_dispute_lost`) after the recovery;
+ *  It is queued on the email outbox by `handleRegistrationDispute` (usecases/registrations/disputes.ts, kind `registration_dispute_lost`) after the recovery;
  *  nothing sends it directly. */
 export async function disputeLostEmail(args: DisputeLostArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
@@ -613,7 +613,7 @@ export async function sponsorDisputeWonEmail(args: SponsorDisputeWonArgs, locale
 }
 
 /** Owner notice when an Event Pass is refunded (P0-3a): the pass is revoked and the competition returns to the plan's active-competition
- *  allowance, in the owner's language. It is queued on the email outbox by `queuePassRevokedEmail` (billing-events.ts, kind
+ *  allowance, in the owner's language. It is queued on the email outbox by `queuePassRevokedEmail` (usecases/billing-events/refunds.ts, kind
  *  `pass_revoked`) in the transaction that deletes the pass; nothing sends it directly. */
 export async function passRevokedEmail(args: PassRevokedArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
@@ -622,7 +622,7 @@ export async function passRevokedEmail(args: PassRevokedArgs, locale: Locale): P
 
 /** Internal staff alert (payments-hardening Task 7): a PLATFORM charge — a subscription invoice, a match-credit pack or an Event Pass —
  *  was disputed. RENDERED here, in the platform locale (en) unless a caller says otherwise; it is queued on the email outbox by
- *  `notifyStaffDispute` (billing-events.ts, kind `staff_dispute_alert`, transactional: staff must always receive it), once per dispute
+ *  `notifyStaffDispute` (usecases/billing-events/staff-alerts.ts, kind `staff_dispute_alert`, transactional: staff must always receive it), once per dispute
  *  phase; nothing sends it directly. */
 export async function staffDisputeAlertEmail(args: StaffDisputeAlertArgs, locale: Locale = "en"): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
@@ -642,7 +642,7 @@ export interface StuckEventsAlertEmail {
  *  attempts and never re-selects it, so a human must inspect and replay it from
  *  /admin/billing-events. Platform-locale (en) and built inline — this is an
  *  ops-only alert with no user-facing i18n. RENDERED here; it is queued on the
- *  email outbox by `alertStuckEventParked` (billing-events.ts, kind
+ *  email outbox by `alertStuckEventParked` (usecases/billing-events/staff-alerts.ts, kind
  *  `staff_stuck_events`, transactional), once per event, by the sweep pass
  *  whose park moved it; nothing sends it directly. */
 export function stuckEventsAlertEmail(opts: StuckEventsAlertEmail): EmailContent {
@@ -680,7 +680,7 @@ export interface CreditPackGrantFailedAlertEmail {
  *  wrong amount. A human must inspect and grant manually. Built inline, no
  *  user-facing i18n — same ops-only pattern as `stuckEventsAlertEmail`.
  *
- *  RENDERED and not sent: `alertCreditPackGrantFailed` (billing-events.ts) queues what this returns on the email outbox through
+ *  RENDERED and not sent: `alertCreditPackGrantFailed` (usecases/billing-events/staff-alerts.ts) queues what this returns on the email outbox through
  *  `queueStaffAlert` (kind `staff_credit_pack_grant_failed`), once per session or charge. Nothing sends it directly. */
 export function creditPackGrantFailedAlertEmail(opts: CreditPackGrantFailedAlertEmail): EmailContent {
   const subject = `Credit pack purchase could not be granted: ${opts.sessionId}`;
@@ -720,7 +720,7 @@ export interface SizePackGrantFailedAlertEmail {
  *  rather than risking a wrong lift. A human must inspect and grant manually.
  *  Ops-only, no user-facing i18n (mirrors creditPackGrantFailedAlertEmail).
  *
- *  RENDERED and not sent: `alertSizePackGrantFailed` (billing-events.ts) queues what this returns on the email outbox through
+ *  RENDERED and not sent: `alertSizePackGrantFailed` (usecases/billing-events/staff-alerts.ts) queues what this returns on the email outbox through
  *  `queueStaffAlert` (kind `staff_size_pack_grant_failed`), once per Checkout Session. Nothing sends it directly. */
 export function sizePackGrantFailedAlertEmail(opts: SizePackGrantFailedAlertEmail): EmailContent {
   const subject = `Size pack purchase could not be granted: ${opts.sessionId}`;
@@ -834,7 +834,7 @@ export interface StreamCreditClawbackAlertEmail {
  *
  *  Ops-only, no user-facing i18n (mirrors the builders above).
  *
- *  RENDERED and not sent: `alertStreamClawback` (billing-events.ts) queues what this returns on the email outbox through
+ *  RENDERED and not sent: `alertStreamClawback` (usecases/billing-events/staff-alerts.ts) queues what this returns on the email outbox through
  *  `queueStaffAlert` (kind `staff_stream_credit_clawback`), once per incident — `<charge>:partial:<amount refunded>`,
  *  `<charge>:short`, `<charge>:ungranted` or `<dispute>:lost` — and never throws, so it can never block the webhook ACK.
  *  Nothing sends it directly. */
@@ -1395,7 +1395,7 @@ export interface ExtraOrgRepriceFailedAlertEmail {
  * Never blocks the webhook; queued on the outbox, whose worker delivers and retries it.
  * Ops-only, no user-facing i18n (mirrors extraOrgAllowanceAlertEmail).
  *
- * RENDERED and not sent: `maybeAlertOrgRepriceFailed` (billing-events.ts) queues what this returns on the email outbox through
+ * RENDERED and not sent: `maybeAlertOrgRepriceFailed` (usecases/billing-events/staff-alerts.ts) queues what this returns on the email outbox through
  * `queueStaffAlert` (kind `staff_extra_org_reprice_failed`), once per rider per UTC day. Nothing sends it directly.
  */
 export function extraOrgRepriceFailedAlertEmail(opts: ExtraOrgRepriceFailedAlertEmail): EmailContent {
@@ -1462,7 +1462,7 @@ export interface RegistrationRefundFailedAlertEmail {
  *
  * Ops-only, no user-facing i18n (mirrors extraOrgRepriceFailedAlertEmail).
  *
- * RENDERED and not sent: `maybeAlertRegistrationRefundFailed` (registrations.ts) queues what this returns on the email outbox through
+ * RENDERED and not sent: `maybeAlertRegistrationRefundFailed` (usecases/registrations/refunds.ts) queues what this returns on the email outbox through
  * `queueStaffAlert` (kind `staff_registration_refund_failed`), once per registration, mode and amount. Nothing sends it directly.
  */
 export function registrationRefundFailedAlertEmail(opts: RegistrationRefundFailedAlertEmail): EmailContent {
@@ -1509,7 +1509,7 @@ export interface TrialEndingEmailArgs {
 
 /**
  * Stripe's 3-day trial warning (V411, `customer.subscription.trial_will_end`), in the payer's language, with the link to the billing
- * page. It is queued on the email outbox by `handleTrialWillEnd` (billing-events.ts, kind `trial_ending`), TRANSACTIONAL: it is the only
+ * page. It is queued on the email outbox by `handleTrialWillEnd` (usecases/billing-events/subscriptions.ts, kind `trial_ending`), TRANSACTIONAL: it is the only
  * notice before a no-card trial CANCELS or a card-on-file trial CHARGES, so a group that unsubscribed from product mail still gets to hear
  * that their money is about to move. Nothing sends it directly.
  */
@@ -1542,7 +1542,7 @@ export interface ConnectBankAlertEmail {
  *  piling up on a club's connected balance is something a human may have to
  *  chase. Platform-locale (en) and built inline — ops-only, no user-facing
  *  i18n, same convention as `stuckEventsAlertEmail`. RENDERED here; it is
- *  queued on the email outbox by `alertConnectBankRemoved` (billing-events.ts,
+ *  queued on the email outbox by `alertConnectBankRemoved` (usecases/billing-events/staff-alerts.ts,
  *  kind `staff_connect_bank_changed`), once per Stripe event, and only for
  *  `.deleted` (`.updated` is too chatty to page anyone with); nothing sends it
  *  directly. */

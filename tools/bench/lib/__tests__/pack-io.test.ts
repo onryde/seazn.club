@@ -189,7 +189,7 @@ describe("stage 0 cross-checks a league stage's stream count against its own dec
   });
 
   it("stays silent past the product's own leg clamp rather than warning a wrong number", () => {
-    // The product clamps legs to 8 (`usecases/stages.ts:756`), so at 9 the
+    // The product clamps legs to 8 (`usecases/stages/`), so at 9 the
     // implied count is NOT the count the generator would mint and a warning
     // built from it would be wrong rather than merely unhelpful. Refusing to
     // answer beats answering wrongly; `expectedFixtureCount` refuses out loud

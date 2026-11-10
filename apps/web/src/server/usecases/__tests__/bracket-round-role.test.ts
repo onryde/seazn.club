@@ -111,9 +111,9 @@ async function seedKnockoutStage(entrantCount: number, config: Record<string, un
   return { auth, divisionId: division.id, stageId: stage!.id };
 }
 
-// Review finding #2 (against Tasks 1-2): stages.ts has TWO insert sites —
+// Review finding #2 (against Tasks 1-2): stages/ has TWO insert sites —
 // generateStageFixtures' plain path (covered above via a real DE) and
-// generateSeededStageFixtures' `.seeding` path (stages.ts ~1550-1571,
+// generateSeededStageFixtures' `.seeding` path (stages/,
 // reached whenever a stage declares `seeding` — generateStageFixtures
 // short-circuits into it, see its own `.seeding` branch). Only the first was
 // covered; a mutation dropping the F1 role columns from the SECOND insert's
@@ -214,7 +214,7 @@ describe.skipIf(!HAS_DB)("generateStageFixtures — persists bracket round role 
   });
 
   // Post-merge code review, defect 1: the fix for "a bye renders TBD" only
-  // ever reached previewDivisionFixtures (stages.ts:886, the wizard's
+  // ever reached previewDivisionFixtures (stages/preview.ts, the wizard's
   // in-memory preview) — the REAL insert path persisted away_slot_label =
   // NULL for a bye's phantom side, so every real renderer (public bracket,
   // stages-panel, bracket-panel, ~15 more) fell through resolveSlotLabel's

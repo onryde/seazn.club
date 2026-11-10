@@ -6,7 +6,7 @@
 //   2. the Start-tournament confirmation and the four consequences it states
 //      (design 2026-09-20);
 //   3. `startDivision`'s promotion of the parent competition published → live
-//      (`server/usecases/schedule.ts`, inside the status transaction);
+//      (`server/usecases/schedule/`, inside the status transaction);
 //   4. what a SPECTATOR then reads of those rules (brief 2026-09-24): the
 //      public match page labels a league fixture with the league stage's own
 //      format, not the division's preset name, and the hub and division page

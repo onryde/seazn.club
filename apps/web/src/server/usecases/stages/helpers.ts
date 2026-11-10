@@ -105,7 +105,7 @@ export async function refoldStageTable(
  *  generateStageFixturesWrite's `active` read and issueChallenge's
  *  ladder_order initialisation both use. Same spelling as the two sites that
  *  already ask this question directly (usecases/officials.ts's `withdrawn`
- *  read, usecases/schedule-ai.ts's `entrantRows`), not a third one.
+ *  read, usecases/schedule-ai/ folder's `entrantRows`), not a third one.
  *
  *  Why this question needs asking at all: a withdrawal is a STATUS FLIP, not
  *  a delete. The row survives, and the standings SNAPSHOT deliberately keeps

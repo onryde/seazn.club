@@ -9,7 +9,7 @@
 // task 9b: a Swiss stage's rows now carry `roundBarrier: "end"` (+ the division's rest and per-player cap), proved in
 // `schedule-swiss-round-barrier.test.ts`. The end barrier implies this start floor, so everything below still holds.
 //
-// Before this task the rule's stage gate (`roundRobinStageIds`, schedule.ts) answered `kind in ('league', 'group')`, so
+// Before this task the rule's stage gate (`roundRobinStageIds`, schedule/rounds.ts) answered `kind in ('league', 'group')`, so
 // a Swiss row never carried its round to the placer, the solver or the verifier. A Swiss stage mints every round as a
 // TBD-v-TBD shell at Generate, so nothing else (no entrant, no rest) orders round 2 after round 1 either: the auto pass
 // laid boards down in fixture-ID order.

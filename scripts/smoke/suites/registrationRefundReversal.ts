@@ -6,7 +6,7 @@ import {
 
 /**
  * RS006 money-hardening leg 2/2: `stripeRefund` passes `reverse_transfer:
- * true, refund_application_fee: true` (registrations.ts) — refunding a paid
+ * true, refund_application_fee: true` (usecases/registrations/) — refunding a paid
  * registration must pull the money back off the CONNECTED account (reverse
  * the transfer) and hand back the PLATFORM's own cut (refund the
  * application fee), not just refund the card. A stub can return any canned

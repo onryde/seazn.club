@@ -110,7 +110,7 @@ const normalizeStandings = (s: PublicStandings): PublicStandings => ({
  * `withCourtVenueName`'s single-fixture form still disambiguates correctly
  * with nothing else in its "batch" to compare against. This file reads a
  * SUPERUSER connection (no `current_org_id()` RLS context — unlike
- * `usecases/schedule.ts`'s `courtNamesById`, which can rely on RLS for its
+ * `usecases/schedule/board.ts`'s `courtNamesById`, which can rely on RLS for its
  * org scope), so the `org_id` filter below is a hard tenant-isolation
  * requirement, not an optimization: dropping it would leak every OTHER
  * org's court/venue names into this org's disambiguation. Do not write a
@@ -1700,7 +1700,7 @@ export async function getPublicPlayer(
       // Freshness. A division POLICY change is immediate: this entry carries
       // `orgTag`, and `patchDivision` expires it (`fireOrgRevalidate`) when a
       // division's stored `youth` or `player_name_display` changes. ROSTER
-      // writes (entrants.ts, registrations.ts, stages.ts, imports.ts,
+      // writes (entrants.ts, usecases/registrations/, usecases/stages/, imports.ts,
       // person-merge.ts) stay bounded: busting the org's whole public tree on
       // every roster edit costs too much, so a new youth roster reaches the
       // card within REVALIDATE_SLOW plus the page's 300s ISR, plus one stale

@@ -211,7 +211,7 @@ export interface AiCompetitionPlanRequest {
  * The model emits them in the ENGINE shape — `startWindows[].notBefore/notAfter`
  * are epoch ms — and the single-division endpoint renders them to
  * ISO-with-offset in that division's timezone before answering
- * (`isoConstraintSuggestions`, schedule-ai.ts:1275). A joint run has no single
+ * (`isoConstraintSuggestions`, schedule-ai/orchestrator.ts). A joint run has no single
  * timezone to render in (ruling R8), and a suggestion is a durable rule for ONE
  * division's settings. So there is no correct joint answer here — only a choice
  * between shipping raw epoch numbers into a field clients parse as ISO, and

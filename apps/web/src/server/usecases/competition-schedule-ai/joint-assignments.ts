@@ -16,7 +16,7 @@ import type { CompetitionPack } from "./types";
 export const JOINT_ASSIGNMENT_UNKNOWN = "AI_PLAN_INVALID_ASSIGNMENT";
 
 /** Map the LLM proposal onto engine assignments. Three things differ from the
- *  single-division `toEngineAssignments` (schedule-ai.ts:878):
+ *  single-division `toEngineAssignments` (schedule-ai/verify.ts):
  *
  *  * `endAt` uses EACH fixture's own division's matchMinutes. A shared duration
  *    is the single easiest way to make this whole module wrong — a 30-minute
@@ -93,7 +93,7 @@ export function toJointEngineAssignments(plan: AiSchedulePlan, pack: Competition
       // `fixtures.movable`), `roundNo` gated on `pack.roundNos` (round-robin
       // only — already filtered per-division at pack-build time, see its
       // own doc comment). Same reasoning as the single-division
-      // `toEngineAssignments` (schedule-ai.ts) — without these, no joint
+      // `toEngineAssignments` (schedule-ai/verify.ts) — without these, no joint
       // AI-plan assignment ever entered `calendar.ts`'s round-order
       // `bySequence` grouping, so the joint planning path could not
       // evaluate round order at all.
@@ -111,7 +111,7 @@ export function toJointEngineAssignments(plan: AiSchedulePlan, pack: Competition
  *
  *  The synthetic ids are division-scoped (`obstacle:${divisionIndex}:${i}`,
  *  with `x` standing for an obstacle from outside the run) rather than the
- *  per-division `obstacle:${i}` of schedule-ai.ts:904. That id is only unique
+ *  per-division `obstacle:${i}` of schedule-ai/. That id is only unique
  *  within ONE division's list, and a duplicate id on the joint board is not
  *  inert: `validateAssignments` builds a `byId` map over `existing` +
  *  `assignments` for feed-order resolution, where a collision silently drops an
@@ -148,7 +148,7 @@ export function toJointObstacleAssignments(pack: CompetitionPack): Assignment[] 
 
 /** The FULL movable set as `SchedulableFixture`s, for a `buildSchedule` call
  *  over this pack (#401, C5 z3 retirement stage B) — the joint twin of
- *  `schedule-ai.ts`'s `toSchedulableFixtures`, and the metadata twin of
+ *  `schedule-ai/verify.ts`'s `toSchedulableFixtures`, and the metadata twin of
  *  `toJointEngineAssignments` just above (which builds the model's PROPOSED
  *  positions; this builds what a fixture IS regardless of where the model put
  *  it). Every field mirrors `toJointEngineAssignments`'s own derivation
@@ -174,7 +174,7 @@ export function toJointSchedulableFixtures(pack: CompetitionPack): SchedulableFi
 }
 
 /** Direct winner/loser feeds across the whole union — the joint mirror of
- *  `packFeedDependencies` (schedule-ai.ts:957). Feeds are within-division in
+ *  `packFeedDependencies` (schedule-ai/verify.ts). Feeds are within-division in
  *  practice, but the dependency list is resolved against the whole board by the
  *  engine, so it is built over the whole board here too. */
 export function jointFeedDependencies(pack: CompetitionPack): OrderDependency[] {

@@ -111,7 +111,7 @@ const TINY_VENUES: NonNullable<PackInput["venues"]> = [
 /** The instant both scheduled divisions start at.
  *
  *  INSIDE the competition's own window (`2099-01-01`..`2099-01-03`):
- *  `usecases/schedule.ts` refuses a division whose schedule starts before its
+ *  `usecases/schedule/` refuses a division whose schedule starts before its
  *  competition opens (`SCHEDULE_OUTSIDE_COMPETITION`), and the first live
  *  `_tiny` run ever made 422'd on exactly that with a wall-clock `Date.now() +
  *  24h`. Written as a literal here rather than derived from
@@ -880,7 +880,7 @@ const BADMINTON_TABLE: NonNullable<PackInput["expected"]["tables"]>[number] = {
 //      (`register.ts`'s `runRegistrationDivision`), driven separately. A live
 //      run therefore creates the division and its TWO registration entries,
 //      but never POSTs these two shadow rows to `/entrants` at all.
-//   2. `usecases/stages.ts:1141` refuses to `/generate` a stage with fewer
+//   2. `usecases/stages/` refuses to `/generate` a stage with fewer
 //      than two entrants — and this division's REAL entrant count is only
 //      known once the funnel completes, long after `seedSuite`'s
 //      create-then-generate walk would have already tried and failed. So

@@ -97,7 +97,7 @@ export function doubleWalkoverRefusedAtTheEnd(probes: readonly RefusalProbe[], a
 
 // ---------------------------------------------------------------------------------------------------------------
 // The feed graph: where the engine's bracket wires each fixture's winner and loser (homeFrom/awayFrom), keyed by the
-// product's ext_key (stages.ts bracketToGen stores the generator's fixture id). Trusted only when the keys the
+// product's ext_key (usecases/stages/generators.ts bracketToGen stores the generator's fixture id). Trusted only when the keys the
 // generator lays out are exactly the keys the product stored — reference-bracket.ts loserSeatOf's rule.
 
 export interface FeedEdge { readonly target: string; readonly slot: "home" | "away" }
@@ -163,7 +163,7 @@ export const hasNoNextMatch = (g: FeedGraph, key: string): boolean =>
 
 /** X-DW-2, simulated on the feed graph: a double walkover at `dwKey` kills both seats it feeds; a fixture left with
  *  ONE dead seat is walked over (its winner line carries the live side, its loser line a dead seat); one left with TWO
- *  is a void (loop F, stages.ts resolveBracketSeats: no seat of a recorded double walkover's chain departed), and both
+ *  is a void (loop F, usecases/stages/bracket-seats.ts resolveBracketSeats: no seat of a recorded double walkover's chain departed), and both
  *  its lines are dead. Answers each fixture's dead-seat count — the expectation the
  *  run is judged by, from the rule and the engine's wiring alone. */
 export function deadSeats(g: FeedGraph, dwKey: string): ReadonlyMap<string, number> {

@@ -5,7 +5,7 @@
  * ONE key the pass lifts is deliberately absent: `registration.fee_percent`
  * (Free's rate → the pass's, 5% → 4% since V398). It is a deduction RATE read
  * through `getLimit`
- * (server/usecases/registrations.ts) and never throws PaymentRequiredError, so
+ * (server/usecases/registrations/) and never throws PaymentRequiredError, so
  * no paywall can ever render for it — listing it would be dead weight, not a
  * lost sale.
  *

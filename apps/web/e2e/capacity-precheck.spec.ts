@@ -14,7 +14,7 @@ import { apiJson, TAG, divisionPath, seedVenueWithCourts } from "./helpers";
 // it reds.
 //
 // Deliberately avoids `constraints`/`sessionWindows`/multi-court knobs, all
-// of which flip `usesConstraints()` (schedule.ts) and gate the PUT behind
+// of which flip `usesConstraints()` (usecases/schedule/settings.ts) and gate the PUT behind
 // Pro — this spec stays on the free tier by making 1 court + a single
 // UNRESTRICTED day (no sessionWindows: "empty = unrestricted", the same
 // rule the placer applies) arithmetically too small for an 8-entrant round

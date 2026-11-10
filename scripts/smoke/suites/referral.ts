@@ -10,7 +10,7 @@ import { newSession, check, signIn, tag, walletIdForOrg, smokeDb, v1, v1data } f
  *  with a division, so this suite proves both halves: nothing at signup, both
  *  grants after publish. The referrer's own
  *  +20-on-the-referred-org's-first-paid-competition side needs a full Stripe
- *  checkout fixture and is already covered by `registrations.ts`'s unit tests
+ *  checkout fixture and is already covered by `usecases/registrations/` folder's unit tests
  *  — not re-proven here. Own fresh orgs; keyless-safe, no AI tokens spent. */
 export async function referralSuite(): Promise<void> {
   const referrerEmail = `delivered+referrer_${tag}@resend.dev`;

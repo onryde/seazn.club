@@ -108,7 +108,7 @@ test("an organiser watches the desk go Setting up → Scheduled → Today (a mat
   const stage = { data: stages.data[0] };
   // No GET /api/v1/divisions/{id}/fixtures route exists (checked against
   // src/app/api/v1/divisions/[id]/* — no fixtures subroute) — the generate
-  // response itself carries the created fixtures (FixtureRow[], stages.ts),
+  // response itself carries the created fixtures (FixtureRow[], usecases/stages/types.ts),
   // id + fixture_no included, so read the ids from there instead.
   const gen = await apiJson<{ fixtures: { id: string; fixture_no: number }[] }>(request, `/api/v1/stages/${stage.data!.id}/generate`, "POST");
   if (!gen.data) throw new Error(`generate failed: ${gen.status} ${JSON.stringify(gen.error)}`);

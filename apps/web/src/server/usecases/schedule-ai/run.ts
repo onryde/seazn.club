@@ -109,7 +109,7 @@ async function callModel(
  *  behaviour before this pass exactly for any caller with no directory to
  *  offer.
  *
- *  Exported: `runCompetitionAiPlan` (competition-schedule-ai.ts) needs the
+ *  Exported: `runCompetitionAiPlan` (competition-schedule-ai/joint-run.ts) needs the
  *  identical step for the joint plan — `AiSchedulePlan.assignments` is the
  *  same shape either way, only the pack around it differs. */
 export function resolveModelCourtLabels(
@@ -357,7 +357,7 @@ export async function runAiPlan(
       // every non-violator is what keeps this round from reshuffling a board
       // the LLM conversation, and the organiser, have already seen (the same
       // ruling C4 applied to REFLOW — see `reflowExisting`'s own doc
-      // comment, `schedule.ts`).
+      // comment, `schedule/`).
       const violatorIds = new Set<string>();
       for (const c of blocking) {
         violatorIds.add(c.fixtureId);

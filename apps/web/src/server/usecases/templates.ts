@@ -133,7 +133,7 @@ export async function instantiateTemplate(
   // correctly for good, rather than omitted and silently unfixable later.
   //
   // `stageNeedsDoubleElimGate`/`stageNeedsAdvancedFormatsGate` are the SAME
-  // shared predicates createStages (usecases/stages.ts) gates on — imported
+  // shared predicates createStages (usecases/stages/stage-graph.ts) gates on — imported
   // from usecases/format-gates.ts, not a local retype (P4 review finding 5:
   // an earlier draft hand-duplicated this exact condition, "byte-identical
   // today, locked by no test").
@@ -169,7 +169,7 @@ export async function instantiateTemplate(
   //
   // `assertWithinLimit`/`getLimit` are the exact same exported primitives
   // createDivision/restoreDivision (usecases/divisions.ts) and createStages
-  // (usecases/stages.ts) call — reused, not restated, so a manual create and
+  // (usecases/stages/) call — reused, not restated, so a manual create and
   // a templated one can never disagree about where the boundary is.
   const divisionCap = await getLimit(auth.orgId, "divisions.per_competition.max", competitionId);
   assertWithinLimit(divisionCap, "divisions.per_competition.max", template.divisions.length);
@@ -294,7 +294,7 @@ export async function instantiateTemplate(
         for (let si = 0; si < templateDivision.stages.length; si++) {
           stageIndexInProgress = si;
           const templateStage = templateDivision.stages[si]!;
-          // Same validation createStages runs on config.points (stages.ts,
+          // Same validation createStages runs on config.points (stages/stage-graph.ts,
           // @seazn/engine/competition's validatePointsRule): a rule naming a
           // metric the sport doesn't emit must never reach play (P4 review
           // finding 3 — an earlier draft wrote `stage.points` straight into
@@ -378,13 +378,13 @@ export async function instantiateTemplate(
           // Progression rules ARE persisted here (T3, D4a/P5's
           // ProgressionSchema) — the row above carries
           // `templateStage.progression` verbatim, same column/shape/
-          // serialisation `createStages` uses (usecases/stages.ts).
+          // serialisation `createStages` uses (usecases/stages/stage-graph.ts).
           // Fixtures are still NOT generated at instantiation time, by
           // design: entrants don't exist yet (design doc §UI — "wizard
           // routes into the entrant-add step with placeholder counts... no
           // fake entrants created"), so generateStageFixtures never runs
           // here — a `timing: "setup"` stage's TBD fixtures come later from
-          // the existing Generate action (stages.ts's
+          // the existing Generate action (stages/ folder's
           // generateProgressionSetupFixtures, which already handles them).
           // This split matters, not just defers work: a fixture row
           // anywhere in the division turns a format change into a

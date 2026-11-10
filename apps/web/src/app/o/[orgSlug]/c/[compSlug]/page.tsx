@@ -217,7 +217,7 @@ export default async function CompetitionPage({
   //
   // W2b review finding 1: `totalRegistered` used to sum `stats.get(d.id)
   // ?.entrants`, but an `entrants` row only exists once an entry is
-  // MATERIALISED (registrations.ts's materialise(), at submit for a
+  // MATERIALISED (usecases/registrations/materialise.ts's materialise(), at submit for a
   // free/auto/non-waitlisted entry, or at organiser approval otherwise) —
   // so a paid entry still awaiting manual approval, and every waitlisted
   // entry, read as zero, undercounting exactly what this pill exists so an

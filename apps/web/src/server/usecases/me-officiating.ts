@@ -12,7 +12,7 @@ import { acceptResolvedClaim, resolveClaimById } from "./person-claims";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 // #14: this read is a SUPERUSER, cross-org query (no `withTenant`/RLS — an
 // official is usually not an org member) — `courtLabelsByOrg` is the
-// cross-org twin of schedule.ts's `courtNamesById`; see that helper's own
+// cross-org twin of schedule/board.ts's `courtNamesById`; see that helper's own
 // doc comment.
 import { courtLabelsByOrg } from "./cross-org-court-labels";
 import { omit } from "@/lib/omit";
