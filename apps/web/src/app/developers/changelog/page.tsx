@@ -6,6 +6,26 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 // and dated; this page IS the versioning promise (v3/08 §3).
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
+    date: "2026-11-10",
+    title: "Breaking: sponsor orders become sponsor deals; /sponsor-orders is removed",
+    lines: [
+      "Removed: GET and POST /orgs/{id}/sponsor-orders, POST /orgs/{id}/sponsor-orders/{orderId}/refund and GET /orgs/{id}/sponsor-orders/{orderId}/evidence. Each now answers 404.",
+      "A sponsorship is a deal on a sponsor: POST /orgs/{id}/sponsors/{sponsorId}/deals creates one (a package, a scope, payment online, offline or complimentary, and when it goes live), and answers { deal, checkout_url }. An online deal sends its invoice at once; the url is null for an offline or complimentary deal.",
+      "The rest of the surface: GET /orgs/{id}/sponsor-deals (?sponsor_id= for one sponsor), GET /orgs/{id}/sponsor-deals/{dealId}, and POST /orgs/{id}/sponsor-deals/{dealId}/send-invoice, /mark-paid, /approve, /end and /refund, plus GET /orgs/{id}/sponsor-deals/{dealId}/evidence for the dispute evidence pack.",
+      "sponsor_email is now the deal's billing email, where the invoice goes; a deal reports its money as payment_status (none, pending, paid, failed, refunded) and its life as deal_status, where an order had one status.",
+      "Every sponsor-deals path, like the sponsor-orders paths before it, is console-only: an API key gets 403. This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-11-10",
+    title: "Breaking: a cricket wicket can be voided only while it is the latest ball",
+    lines: [
+      "POST /fixtures/{id}/events with type core.void, naming a cricket.ball or cricket.superover.ball that carries a wicket while a later ball is still active, now answers 409 UNDO_WICKET_NOT_LATEST and writes nothing. Voiding an older wicket used to be accepted, and the fold then replayed the ledger without it: the over boundaries moved, the bowler rules were not re-checked, and the incoming batter kept batting because later balls name him.",
+      "To go back past a wicket, void the entries after it first, newest first, then the wicket. A later ball that is itself voided does not count, and neither does a non-ball entry (a bowler change, a powerplay). Every other entry, and every other sport, keeps today's rule.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
     date: "2026-11-09",
     title: "A page playoff the field cannot fill is refused up front; a frozen late entry says why it waits",
     lines: [

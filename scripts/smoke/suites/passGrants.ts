@@ -337,7 +337,7 @@ export async function passGrantsSuite(): Promise<void> {
   const junkMatches = await v1(newSession(), matchesPath(passComp.slug, "not-a-person"));
   check("pass grants/profiles: a non-uuid person on the player-matches API is a 404", junkMatches.status === 404);
 
-  // === sponsors.tiers + sponsors.monetize — community false, pass true ====
+  // === sponsors.tiers (sponsors, packages) + sponsors.monetize (an online deal) — community false, pass true ====
   const tierOn = async (competitionId: string, label: string) =>
     v1(s, `/api/v1/orgs/${orgId}/sponsors`, "POST", {
       name: `Grants Sponsor ${label} ${tag}`,
@@ -368,9 +368,40 @@ export async function passGrantsSuite(): Promise<void> {
     "pass grants/sponsors: a priced package saves on the passed competition (201)",
     passPackage.status === 201,
   );
+  // Sponsor deals Task 4 (F8): a package no longer reads `sponsors.monetize` (packages are on every plan). A GOLD package
+  // is a tiered placement, so the sibling refuses it on `sponsors.tiers`, the key the pass lifts on its own competition
+  // only — the same plan-scoping split as the sponsor rows above.
   check(
-    "pass grants/sponsors: the sibling refuses the same package (402 sponsors.monetize)",
-    plainPackage.status === 402 && featureKey(plainPackage) === "sponsors.monetize",
+    "pass grants/sponsors: the sibling refuses the same gold package (402 sponsors.tiers)",
+    plainPackage.status === 402 && featureKey(plainPackage) === "sponsors.tiers",
+  );
+  // Sponsor deals Task 7: selling online is `sponsors.monetize`, asked when an ONLINE DEAL is made. The pass lifts it on its
+  // own competition: there the deal passes both plan gates and the next refusal is this org's missing Connect account (409),
+  // never a plan's. Org-wide it is community's answer (402 sponsors.monetize). The sibling competition cannot witness it:
+  // a scoped deal asks the placement gate first, which answers `sponsors.tiers`. Each deal row has its OWN sponsor (F33).
+  const dealSponsor = async (label: string) =>
+    v1data<{ id: string }>(await v1(s, `/api/v1/orgs/${orgId}/sponsors`, "POST", { name: `Grants Deal ${label} ${tag}`, tier: "partner" })).id;
+  const orgWidePackage = v1data<{ id: string }>(
+    await v1(s, `/api/v1/orgs/${orgId}/sponsor-packages`, "POST", { name: "Grants Partner", price_cents: 5000, currency: "gbp", tier: "partner" }),
+  );
+  const onlineDeal = async (label: string, packageId: string, competitionId: string | null) =>
+    v1(s, `/api/v1/orgs/${orgId}/sponsors/${await dealSponsor(label)}/deals`, "POST", {
+      package_id: packageId,
+      competition_id: competitionId,
+      payment_method: "online",
+      go_live: "on_payment",
+      sponsor_email: `delivered+grants_deal_${tag}@resend.dev`,
+    });
+  const passOnline = passPackage.status === 201 ? await onlineDeal("pass", v1data<{ id: string }>(passPackage).id, passComp.id) : null;
+  const errorCode = (r: V1Res | null) => r?.json.error?.code;
+  check(
+    "pass grants/sponsors: an online deal on the passed competition passes both plan gates (409 connect_required, not 402)",
+    passOnline?.status === 409 && errorCode(passOnline) === "connect_required",
+  );
+  const orgWideOnline = await onlineDeal("org-wide", orgWidePackage.id, null);
+  check(
+    "pass grants/sponsors: an org-wide online deal is refused (402 sponsors.monetize)",
+    orgWideOnline.status === 402 && featureKey(orgWideOnline) === "sponsors.monetize",
   );
 
   // === officials.auto — community false, pass true (V393) =================

@@ -13,7 +13,7 @@
 // every progression-bearing writer here now sets `timing: "setup"`. The
 // whole draw, final included, is generated with placeholder
 // home/away_slot_label the moment the division is created
-// (generateProgressionSetupFixtures, stages.ts) — the picker no longer
+// (generateProgressionSetupFixtures, usecases/stages/setup-fixtures.ts) — the picker no longer
 // waits for the source stage to complete before a later stage's fixtures
 // exist. `stages-panel.tsx`'s ad-hoc AddStageForm and the seed scripts
 // still default to "on_complete" (R4 scoped the flip to this file plus
@@ -126,7 +126,7 @@ export const STAGE_TEMPLATES: {
       const take: TakeRule[] = [];
       if (n > 0) take.push({ kind: "topNPerGroup", n });
       // normaliseUnequalPools:true (round-4 review, MAJOR — A1): pools are
-      // built by snakeDistribute (stages.ts), which produces unequal-sized
+      // built by snakeDistribute (usecases/stages/generators.ts), which produces unequal-sized
       // pools whenever entrants don't divide evenly by poolCount — the
       // common case, not an edge case. Without this flag, bestNth's
       // cross-pool compare throws SEEDING_BESTNTH_UNEQUAL_POOLS the moment
@@ -254,7 +254,7 @@ export const STAGE_TEMPLATES: {
   {
     // Retired from the offer (owner ruling 2026-11-01, Match Day D1 legs Option A): the builder and Settings offer legs 1
     // or 2 only, and through the builder this template never built its three legs anyway (buildTemplateStages stamps
-    // the legs knob on every league stage). The server still takes legs up to 8 (Jul3/08, usecases/stages.ts), and a
+    // the legs knob on every league stage). The server still takes legs up to 8 (Jul3/08, usecases/stages/), and a
     // division stored as one still shows it in Settings (detectTemplate, templatesForSport `current`). Kept rather than
     // deleted: the seeds, the format matrix catalogue and stored divisions read it.
     key: "triple_rr",

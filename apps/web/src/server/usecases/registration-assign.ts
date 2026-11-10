@@ -9,7 +9,7 @@ import "server-only";
 // will assign you to a team once one has space" — this is that promise's
 // implementation.
 //
-// A separate module rather than more of `registrations.ts` on purpose. That
+// A separate module rather than more of `registrations/` on purpose. That
 // file is where this programme's lanes keep colliding (its index records
 // two waves serialised behind exactly that), and everything here is reached
 // through paths it already exports — `joinExistingEntrant`, `rosterCapExpr`,

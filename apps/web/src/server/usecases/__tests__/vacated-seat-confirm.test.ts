@@ -253,7 +253,7 @@ describe.skipIf(!HAS_DB)("the hook that keeps a draft fresh", () => {
   it("F3: the PUBLIC self-cancel refreshes the draft too - patchEntrant is not the only writer", async () => {
     // Review finding F3 (2026-09-21): the hook was hung off `patchEntrant`
     // and described there as "the single status funnel". It is not.
-    // `withdrawCore` (registrations.ts) flips `entrants.status` in raw SQL,
+    // `withdrawCore` (registrations/withdraw.ts) flips `entrants.status` in raw SQL,
     // and it is reached by three shipped routes including the registrant's
     // OWN cancel link - the highest-volume withdrawal there is. Without a
     // second call site, that cancel left the organiser looking at a draft

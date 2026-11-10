@@ -1,4 +1,4 @@
-// W2d concern 2 review m4: the generate's table refold runs AFTER the fixtures committed (usecases/stages.ts
+// W2d concern 2 review m4: the generate's table refold runs AFTER the fixtures committed (usecases/stages/
 // `refoldStageTable`). A refold that throws — a rank-time refusal, anti-goal 2 — must not turn the committed generate
 // into a failed one: the caller would retry, create 0 and see success, with the event and the page refresh skipped the
 // first time. The refold is logged and the table is left to the next refold. Real Postgres; skipped without DATABASE_URL.

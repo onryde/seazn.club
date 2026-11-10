@@ -3,7 +3,7 @@
 //
 // The house rule is that a new or changed user-facing string ships in all
 // four locale dictionaries and is never hardcoded English. `issueChallenge`
-// (server/usecases/stages.ts) broke it four times over: its refusals were
+// (server/usecases/stages/) broke it four times over: its refusals were
 // composed English prose with no wire code, and `ladder-panel.tsx` rendered
 // `err.message` verbatim, so a Dutch organiser met an English sentence for
 // every one of the four things they are most likely to get wrong.

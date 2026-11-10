@@ -36,7 +36,7 @@ export const DIVISION_PHASES = ["setting_up", "scheduled", "match_day", "finishe
 export type DivisionPhase = (typeof DIVISION_PHASES)[number];
 
 /** The latest `stage_seed_proposals` row's status for a stage, mirroring
- *  `getSeedProposal` (stages.ts — "latest by created_at desc, id desc, ANY
+ *  `getSeedProposal` (usecases/stages/seed-proposal.ts — "latest by created_at desc, id desc, ANY
  *  status"), with `"none"` for a stage that has never had one.
  *
  *  M1 (fix round I, Critical — instance TWELVE). Read for exactly ONE thing:
@@ -133,7 +133,7 @@ export function isHeldFixture(f: { status: string; awaitsSettle: boolean }): boo
  *  old `tbd` conflated them, so a knockout whose draw was CONFIRMED went on
  *  showing red "Needs draw · Compute proposal" for the rest of its life:
  *
- *  - **Seed-fed** — `generateProgressionSetupFixtures` (stages.ts) stamps a
+ *  - **Seed-fed** — `generateProgressionSetupFixtures` (usecases/stages/setup-fixtures.ts) stamps a
  *    `{key, params, seed}` descriptor into `home_slot_label`/`away_slot_label`
  *    for every synthetic seed slot, and `fillSlot` CLEARS it when the
  *    confirmed proposal fills that seat (V360). A label still sitting beside
@@ -141,7 +141,7 @@ export function isHeldFixture(f: { status: string; awaitsSettle: boolean }): boo
  *    stage's draw" — the only state the panel's door can act on.
  *  - **Sibling-fed** — round 2+ of the same bracket. Those slots carry NO
  *    label, UNLESS their feeder is a bye line: the setup generator's third
- *    pass (stages.ts) stamps the bye's own `awardLabel` onto the winner-feed
+ *    pass (usecases/stages/) stamps the bye's own `awardLabel` onto the winner-feed
  *    TARGET slot, so seed 1's place in the next round is named rather than
  *    blank. That label carries a `seed`, which is what makes it a
  *    destination `destinationSlotsBySeed` fills and `fillSlot` clears at
@@ -613,7 +613,7 @@ function stageOwesWork(s: PhaseStage, fixtures: readonly PhaseFixture[]): boolea
  * K3's predicate was `status === "pending" && timing === "setup" &&
  * !hasFixtures`, and every conjunct of that is right except the last, which
  * is the exact OPPOSITE of the truth. `computeSeedProposal`
- * (server/usecases/stages.ts) resolves the proposal against the stage's
+ * (server/usecases/stages/seed-proposal.ts) resolves the proposal against the stage's
  * GENERATED TBD fixtures and 422s `SEEDING_RULES_MISSING` — "this stage has
  * no generated TBD fixtures yet — generate its fixtures first" — when there
  * are none. So `needs_draw` was raised in exactly, and only, the states
@@ -701,7 +701,7 @@ export function resolvePhase(input: PhaseInput): DivisionPhase {
   if (input.divisionStatus === "setup") return "setting_up";
   // 1b. setting_up: no stage graph at all — reachable even when
   // divisionStatus is NOT "setup". Final review's "open question": deleteStage
-  // (stages.ts) lets an organiser remove the sole, last, UNPLAYED stage of an
+  // (usecases/stages/) lets an organiser remove the sole, last, UNPLAYED stage of an
   // already-`active` division — fixtures.stage_id FK-cascades, so the fixture
   // list empties with it, but divisionStatus is untouched. Confirmed reachable
   // against a live "active" division with 6 unplayed "scheduled" fixtures and
@@ -879,7 +879,7 @@ export function resolveAttention(input: PhaseInput): Attention[] {
   // G3 fix (fix round D, Important), CORRECTED by H2 (final review round 3,
   // Important): G3's gate was `divisionStatus === "active"`, which also
   // excludes `scheduled` — but `scheduled` is exactly what the ordinary
-  // Publish action sets (schedule.ts's `publishSchedule`), not a state
+  // Publish action sets (usecases/schedule/publish.ts's `publishSchedule`), not a state
   // reserved for "not yet real". Live: six fixtures dated YESTERDAY on a
   // published (`scheduled`), never-started division produced NO "Needs you"
   // section at all — an organiser who published a timetable and never

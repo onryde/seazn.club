@@ -7,8 +7,8 @@
 // show is anything the product decides that the engine does not: a live
 // smoke owns that (Task 12 Step 7).
 //
-// The shape it mirrors (usecases/stages.ts, pinned at ebf7ec040):
-//  - Start draws stage 1 only (schedule.ts:3857-3888). Stage 1 is a league or
+// The shape it mirrors (usecases/stages/, pinned at ebf7ec040):
+//  - Start draws stage 1 only (usecases/schedule/). Stage 1 is a league or
 //    a group; a later stage is a knockout, group, stepladder or page playoff
 //    body with `progression.timing: "setup"`.
 //  - A later stage's generate draws TBD rows over synthetic `slot:k` seeds
@@ -77,19 +77,19 @@ export interface FakeMultiStageOptions {
   readonly refuseConfirm?: string;
   /** The stage at this seq commits on /complete and then answers 409
    *  STAGE_COMPLETED_SEEDING_FAILED, as a failed compute does after the
-   *  commit (stages.ts:4239-4252; fix round 1, m-7). */
+   *  commit (usecases/stages/; fix round 1, m-7). */
   readonly failSeedingOnComplete?: number;
 }
 
 type Side = "home" | "away";
 const SIDES: readonly Side[] = ["home", "away"];
 const KEY: Readonly<Record<Side, "home_entrant_id" | "away_entrant_id">> = { home: "home_entrant_id", away: "away_entrant_id" };
-// stages.ts POOL_KEYS.
+// usecases/stages/generators.ts POOL_KEYS.
 const POOL_KEYS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const TABLE = new Set(["league", "group"]);
 const LATER = new Set(["knockout", "group", "stepladder", "page_playoff"]);
 const BRACKETS = new Set(["knockout", "stepladder", "page_playoff"]);
-// withdrawal.ts WITHDRAWAL_WALKOVER_KINDS (stages.ts BRACKET_WALKOVER_KINDS and, since W2b X-WD-2, page_playoff), the
+// withdrawal.ts WITHDRAWAL_WALKOVER_KINDS (usecases/stages/generators.ts BRACKET_WALKOVER_KINDS and, since W2b X-WD-2, page_playoff), the
 // part of it this fake draws.
 const BRACKET_WALKOVER = new Set(["knockout", "stepladder", ...X_WD_2_KINDS.filter((k) => BRACKETS.has(k))]);
 const PENDING = new Set(["scheduled", "in_play"]);
@@ -100,7 +100,7 @@ interface MultiStage extends StageRef { body: StagePostBody; poolKeys: string[] 
 interface Offered { seed: number; entrantId: string }
 interface Proposal { id: string; seq: number; status: "draft" | "stale" | "confirmed"; offered: Offered[]; ties: SeedTie[] }
 
-/** Seeded snake (stages.ts:1579 snakeDistribute): 1..N, then N..1. */
+/** Seeded snake (usecases/stages/generators.ts snakeDistribute): 1..N, then N..1. */
 function snake<T>(ordered: readonly T[], count: number): T[][] {
   const pools: T[][] = Array.from({ length: count }, () => []);
   for (const [i, x] of ordered.entries()) {
@@ -131,7 +131,7 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
   readonly proposals: Proposal[] = [];
   readonly completedStages = new Set<string>();
   /** Every /complete that COMMITTED, in order (a not-ready one answers
-   *  `completed: false` and commits nothing, stages.ts completeStageIfReady). */
+   *  `completed: false` and commits nothing, usecases/stages/ completeStageIfReady). */
   readonly commits: string[] = [];
   /** target seq → the entrants confirm seated, in row order. */
   readonly seated = new Map<number, string[]>();
@@ -207,7 +207,7 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
   }
 
   /** A table stage's rows: snake into pools by seed, a round robin per pool
-   *  (stages.ts generate :1632-1646, roundRobinGen). `tbd`: the seeds are
+   *  (usecases/stages/generators.ts generate, roundRobinGen). `tbd`: the seeds are
    *  synthetic `slot:k` ids, so the rows wait for confirm. */
   #tableRows(stage: MultiStage, seeded: readonly { id: string; seed: number }[], tbd: boolean): void {
     const ordered = [...seeded].sort((a, b) => a.seed - b.seed);
@@ -226,8 +226,8 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
       }
     });
   }
-  /** A bracket stage's TBD rows from the engine's generator (stages.ts
-   *  generate :1648-1675); its round r is round_no r + 1. */
+  /** A bracket stage's TBD rows from the engine's generator (usecases/stages/
+   *  generate); its round r is round_no r + 1. */
   #bracketRows(stage: MultiStage, seeded: readonly { id: string; seed: number }[]): void {
     const ids = seeded.map((s) => s.id);
     const seeds = new Map(seeded.map((s) => [s.id, s.seed]));
@@ -301,7 +301,7 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
   }
 
   /** The members of a stage's pool: stage 1 as drawn (withdrawn ones kept —
-   *  the product's tables still carry a departed entrant, stages.ts
+   *  the product's tables still carry a departed entrant, usecases/stages/helpers.ts
    *  departedEntrantIds), a later stage as confirm seated it. */
   #members(stage: MultiStage, poolId: string | null): string[] {
     if (stage.seq === 1) return this.members2.get(`${stage.id}:${poolId ?? ""}`) ?? [];
@@ -630,9 +630,9 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
 
 // --- W1-driving Task 7: a single LADDER stage (D8, D14) ---------------------------------------------
 //
-// The shape it mirrors (usecases/stages.ts, pinned at 88b233484):
+// The shape it mirrors (usecases/stages/, pinned at 88b233484):
 //  - Start and generate create NOTHING: a ladder's generator is `gen = []`
-//    (stages.ts:2397-2398). Its fixtures come from challenges only.
+//    (usecases/stages/). Its fixtures come from challenges only.
 //  - issueChallenge (:5503-5657), in its order: 404 an unknown stage; 422
 //    (codeless) a non-ladder stage; on first use `ladder_order` is written
 //    from the field (status registered/confirmed) by seed (:5538-5551) and is
@@ -666,7 +666,7 @@ const LADDER_CODE = ((): Readonly<Record<"foreign" | "withdrawn" | "notUpward" |
 })();
 
 export interface FakeLadderOptions {
-  /** The reach the fake ENFORCES, in place of the stage config's (stages.ts
+  /** The reach the fake ENFORCES, in place of the stage config's (usecases/stages/ad-hoc.ts
    *  reads config.challengeRange ?? DEFAULT_LADDER_CHALLENGE_RANGE). A test
    *  seam: 1 makes every non-adjacent challenge refuse. */
   readonly challengeRange?: number;
@@ -719,7 +719,7 @@ export class FakeLadderDriver extends FakeLeagueDriver {
   }
   override acceptsStage(kind: string): boolean { return kind === "ladder"; }
   override refuseStages(): never { throw new Error("fake: ladder only"); }
-  /** stages.ts:2397-2398: a ladder's start draws nothing. */
+  /** usecases/stages/: a ladder's start draws nothing. */
   override start(): Promise<StartOut> {
     return settle(() => {
       this.log("start");
@@ -871,8 +871,8 @@ export class FakeLadderDriver extends FakeLeagueDriver {
 
 // ---------------------------------------------------------------------------
 // FakeAmericanoDriver (W1-driving Task 8, D9): ONE americano stage, shaped like
-// the product's (usecases/stages.ts americanoGen :734-811 and pairEntrantsFor
-// :681-732, pinned at ebf7ec040; Task 8 Step 0 in task-8-report.md):
+// the product's (usecases/stages/generators.ts americanoGen and pairEntrantsFor,
+// pinned at ebf7ec040; Task 8 Step 0 in task-8-report.md):
 //  - The stage is `{ kind: "americano", config: { mode, courtCount, rounds } }`.
 //    Mexicano is the SAME kind with config.mode "mexicano"
 //    (format-templates.ts:261); the product reads anything else as americano
@@ -887,7 +887,7 @@ export class FakeLadderDriver extends FakeLeagueDriver {
 //    order, a pair's two persons sorted ascending as :722-728 inserts them —
 //    so a pair reads as its HIGHER person id. Fewer than 4 players is 422
 //    STAGE_NOT_READY.
-//  - americano: the first generate (Start's, schedule.ts:3888) plans every
+//  - americano: the first generate (Start's, usecases/schedule/) plans every
 //    round (generateAmericano). A later one plans again over the players of
 //    that moment and inserts only the fixtures whose ext_key is new (:2436).
 //  - mexicano: each generate plans ONE round (pairMexicanoRound, points then
@@ -912,14 +912,14 @@ export class FakeLadderDriver extends FakeLeagueDriver {
 //  - The entrant list carries every entrant, the minted pairs included
 //    (entrants.ts listEntrants has no kind filter), each with its `kind`.
 
-/** stages.ts:769 — the mexicano wait: a fixture in any other status blocks the next round. */
+/** usecases/stages/ — the mexicano wait: a fixture in any other status blocks the next round. */
 export const WAIT_UNLESS = "decided";
-/** stages.ts:2290-2293 — the active read has no kind filter, so from mexicano
+/** usecases/stages/ — the active read has no kind filter, so from mexicano
  *  round 2 the pair entrants an earlier round minted are players too (false
  *  premise 17). The fake's default IS that shape; `individualsOnly` models
  *  the corrected product, and the default is derived from this constant. */
 export const FAKE_COUNTS_PAIR_ENTRANTS_AS_PLAYERS_BY_DEFAULT = true;
-/** stages.ts:2292 — the statuses the active read keeps. */
+/** usecases/stages/ — the statuses the active read keeps. */
 const AMERICANO_ACTIVE = new Set(["registered", "confirmed"]);
 
 export interface FakeAmericanoOptions {
@@ -942,7 +942,7 @@ export interface FakeAmericanoOptions {
   /** Person ids sort in SEED order (e1's person first). The default is the
    *  reverse (m-e, adversarial). The product's ids are UUIDs, so which order
    *  holds live is chance — and with it whether a withdrawn player's person
-   *  is the row a round-1 pair is read as (stages.ts:744-747): a test that
+   *  is the row a round-1 pair is read as (usecases/stages/): a test that
    *  needs one outcome names the order that gives it. */
   readonly seedOrderedPersons?: boolean;
 }
@@ -975,7 +975,7 @@ export class FakeAmericanoDriver extends FakeLeagueDriver {
       return out;
     });
   }
-  /** The product's reading of the stage's mode (stages.ts:756). */
+  /** The product's reading of the stage's mode (usecases/stages/). */
   get mode(): "americano" | "mexicano" { return this.stage?.config.mode === "mexicano" ? "mexicano" : "americano"; }
   /** m-e (adversarial): by default person ids sort in REVERSE seed order —
    *  entrant e1's person sorts last — so nothing can pass by reading a
@@ -1017,7 +1017,7 @@ export class FakeAmericanoDriver extends FakeLeagueDriver {
   #withdrawnPersons(): Set<string> {
     return new Set(this.entrants.filter((e) => e.status === "withdrawn").flatMap((e) => this.#rows(e.id)));
   }
-  /** stages.ts:2290-2293 then :744-750: the players, one per active entrant. */
+  /** usecases/stages/: the players, one per active entrant. */
   players(): string[] {
     const individuals = this.entrants.filter((e) => AMERICANO_ACTIVE.has(e.status))
       .sort((a, b) => (a.seed ?? Number.MAX_SAFE_INTEGER) - (b.seed ?? Number.MAX_SAFE_INTEGER) || (a.id < b.id ? -1 : 1)).map((e) => e.id);
@@ -1034,7 +1034,7 @@ export class FakeAmericanoDriver extends FakeLeagueDriver {
     const v = this.stage!.config[key];
     return typeof v === "number" ? v : fallback;
   }
-  /** stages.ts:774-783: a person's points over the stage's DECIDED fixtures —
+  /** usecases/stages/swiss-gen.ts: a person's points over the stage's DECIDED fixtures —
    *  each member row of a side takes that side's score (the home score when
    *  the row's entrant is the home side), a missing score counting nothing. */
   personalPoints(): Map<string, number> {

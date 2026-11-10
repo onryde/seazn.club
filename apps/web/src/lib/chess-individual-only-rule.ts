@@ -25,7 +25,7 @@ export function isChessSport(sportKey: string | null | undefined): boolean {
 
 /** The stage kinds that MINT pair entrants: an americano stage rotates its
  *  individual players into a new `pair` entrant for every pairing
- *  (usecases/stages.ts americanoGen -> pairEntrantsFor). Mexicano is the same
+ *  (usecases/stages/generators.ts americanoGen -> pairEntrantsFor). Mexicano is the same
  *  kind (`config.mode: "mexicano"`), so this one entry covers both formats. */
 export const PAIR_MINTING_STAGE_KINDS: readonly string[] = Object.freeze(["americano"]);
 

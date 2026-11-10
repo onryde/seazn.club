@@ -87,7 +87,7 @@ export function judgeLineupWarnings(div: Pick<LineupDivision, "sport" | "variant
  *  loadLineupPair).
  *  - Past scheduled: no PUT (the product locks a lineup), the sink's `locked`.
  *  - A side that is not a division entrant: on an americano stage, a
- *    product-minted pair entrant (stages.ts pairEntrantsFor), skipped through
+ *    product-minted pair entrant (usecases/stages/generators.ts pairEntrantsFor), skipped through
  *    the sink; on any other kind, refused by name (T45-R3) — nothing else
  *    mints entrants.
  *  - A division entrant with no recorded roster: refused by name.

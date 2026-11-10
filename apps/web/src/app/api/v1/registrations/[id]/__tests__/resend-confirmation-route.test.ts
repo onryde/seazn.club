@@ -1,5 +1,5 @@
 // RS005 W4 — POST /registrations/:id/resend-confirmation. HTTP wiring over
-// registrations.ts's resendRegistrationConfirmation: routing/authz here
+// usecases/registrations/mail.ts's resendRegistrationConfirmation: routing/authz here
 // (same harness approval-routes.test.ts established), the cart-shaped mail
 // content itself is email-builders.test.ts's job.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";

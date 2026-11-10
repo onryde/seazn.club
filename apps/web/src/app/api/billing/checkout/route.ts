@@ -68,7 +68,7 @@ export async function POST(req: Request) {
     // Pass-to-Pro (v3/07, D12/D13; grant timing moved 2026-07-26, see
     // docs/superpowers/specs/2026-07-26-pass-credit-redemption-design.md §1).
     // The credit itself is no longer minted here — it now hangs off learning a
-    // subscription actually STARTED (billing-events.ts handleSubscriptionChanged
+    // subscription actually STARTED (usecases/billing-events/subscriptions.ts handleSubscriptionChanged
     // and lib/billing.ts reconcileCheckout), not off a checkout merely being
     // opened, so an abandoned checkout mints nothing and the group's one
     // lifetime credit cannot stack.

@@ -46,7 +46,7 @@ export interface SwissRoundFixture {
  *
  * Then, over the LATEST round with a board:
  *  - the stage is complete -> `final` (the stage's own verdict is the authority, not the boards);
- *  - every board decided (`decided`, `finalized`, `forfeited`: usecases/stages.ts's DECIDED) -> `complete`;
+ *  - every board decided (`decided`, `finalized`, `forfeited`: usecases/stages/swiss-gen.ts's DECIDED) -> `complete`;
  *  - every board still `scheduled` -> `paired`;
  *  - otherwise -> `in_play`: a board is under way or has a result while another is open, or one was abandoned/cancelled
  *    (it holds no result, so the round is not complete either).

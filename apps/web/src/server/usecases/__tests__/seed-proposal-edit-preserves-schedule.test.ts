@@ -6,7 +6,7 @@
 // edit-in-place path (`edits[]`) — P5's own suite never sends an edit, so it
 // cannot see a confirm that both reassigns AND reschedules in one call. Real
 // Postgres, full pipeline; does not modify stage-progression.test.ts or any
-// P5 server file — read-only consumer of confirmSeedProposal/stages.ts.
+// P5 server file — read-only consumer of confirmSeedProposal (usecases/stages/seed-proposal.ts).
 import { describe, expect, it, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";

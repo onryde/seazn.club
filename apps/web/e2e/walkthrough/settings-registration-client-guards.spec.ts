@@ -71,7 +71,7 @@ const L = {
    *  registration-hub-config-panel.tsx:94-95, keyed off
    *  `validateConfigState`'s "cardFeeMinimum" issue). Deliberately NOT the
    *  server's own 422 string ("Card entry fees must be at least 1.00 (or 0
-   *  for free)", registrations.ts) — those two are different sentences, and
+   *  for free)", usecases/registrations/) — those two are different sentences, and
    *  telling them apart is exactly what makes case #20's assertion able to
    *  witness a client gate that has stopped firing. */
   cardFeeMinimum: ui("reg.hub.config.cardFeeMinimumError"),
@@ -79,7 +79,7 @@ const L = {
 
 /**
  * The server's plan-limit refusal (`putRegistrationSettings`,
- * `usecases/registrations.ts`) — a bare `HttpError(422, ...)` message string,
+ * `usecases/registrations/settings.ts`) — a bare `HttpError(422, ...)` message string,
  * not a dictionary key, rendered verbatim by the panel because `mapSaveError`
  * routes it to the `capacity` field with its own message. The LIMIT is
  * interpolated, so it is read from the live plan matrix at run time rather

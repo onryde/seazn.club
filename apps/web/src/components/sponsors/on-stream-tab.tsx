@@ -54,6 +54,9 @@ export interface OnStreamSponsor {
   status: string;
   competition_id: string | null;
   on_stream: boolean;
+  /** A live deal owns this sponsor's stream flag (`includes_on_stream`, sponsor deals D9): a PATCH of `on_stream` answers 409
+   *  `sponsor_locked_by_deal`, so the tick is not offered. */
+  locked_by_deal: boolean;
 }
 
 export interface OnStreamTabProps {
@@ -135,6 +138,9 @@ export function OnStreamTab(props: OnStreamTabProps) {
   }
 
   function tick(sponsor: OnStreamSponsor, next: boolean) {
+    // The tick is disabled for a locked sponsor; this is the same rule at the handler, so a stale control can never send a write
+    // the server is certain to refuse (409 `sponsor_locked_by_deal`).
+    if (sponsor.locked_by_deal) return;
     setTicks((t) => ({ ...t, [sponsor.id]: next }));
     void write(
       async () => {
@@ -287,6 +293,7 @@ export function OnStreamTab(props: OnStreamTabProps) {
             <ul className="grid min-w-0 divide-y divide-slate-100 rounded-xl border border-slate-200">
               {inScope.map((s) => {
                 const parked = s.status !== "active";
+                const lockedId = `on-stream-locked-${s.id}`;
                 return (
                   <li key={s.id} data-testid={`on-stream-sponsor-${s.id}`} className="min-w-0">
                     <label className="flex min-h-11 min-w-0 cursor-pointer items-center gap-3 px-3 py-2">
@@ -296,10 +303,20 @@ export function OnStreamTab(props: OnStreamTabProps) {
                         data-testid={`on-stream-tick-${s.id}`}
                         aria-label={msg("sponsors.onStream.tickLabel", { name: s.name })}
                         checked={s.on_stream}
-                        disabled={busy || (parked && !s.on_stream)}
+                        disabled={busy || (parked && !s.on_stream) || s.locked_by_deal}
+                        aria-describedby={s.locked_by_deal ? lockedId : undefined}
                         onChange={(e) => tick(s, e.target.checked)}
                       />
-                      <span className="min-w-0 flex-1 truncate text-sm text-slate-800">{s.name}</span>
+                      {/* The reason sits UNDER the name, not beside it: at 320 a long club name plus a note plus the tier badge
+                          would squeeze the name to nothing, and the name is what the row is for. */}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm text-slate-800">{s.name}</span>
+                        {s.locked_by_deal && (
+                          <span id={lockedId} data-testid={lockedId} className="block text-xs text-slate-500">
+                            {msg("sponsors.deal.lockedNote")}
+                          </span>
+                        )}
+                      </span>
                       {parked && <span className="shrink-0 text-xs text-slate-500">{msg("sponsors.onStream.notActive")}</span>}
                       {hasTiers && (
                         <span

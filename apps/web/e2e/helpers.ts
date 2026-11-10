@@ -883,7 +883,7 @@ export async function linkPersonToUserBySql(personId: string, userId: string): P
 
 /**
  * Seed N prior AI-generation ledger rows for a division (v4 Task 17 quota path).
- * Mirrors the exact shape schedule-ai.ts counts against the per-division run cap:
+ * Mirrors the exact shape usecases/schedule-ai/ counts against the per-division run cap:
  * competition_events of type 'schedule.ai_generated' whose payload.division_id
  * matches. Inserted as the superuser (RLS-bypassing) with an explicit org_id.
  */
@@ -1283,7 +1283,7 @@ export async function orgTimezoneSql(orgId: string): Promise<string | null> {
 
 /**
  * Force a division's registration_settings into (entrant_kind, allow_free_
- * agents) combo the app itself refuses to write — registrations.ts's
+ * agents) combo the app itself refuses to write — usecases/registrations/settings.ts's
  * putRegistrationSettings 422s "allow_free_agents requires entrant_kind
  * 'team'" (RS004 decision 1), and the config panel's own entrant_kind
  * <select> onChange clears allow_free_agents the instant it leaves "team",

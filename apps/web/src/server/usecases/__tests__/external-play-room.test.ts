@@ -1028,7 +1028,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room - the opponent's camera p
     vi.stubEnv("REALTIMEKIT_PLAYER_PRESET", "seazn_chess_player");
     vi.stubEnv("REALTIMEKIT_ARBITER_PRESET", "seazn_chess_arbiter");
     // The spy is installed BEFORE the boards are seeded, and seeding a started division pushes a Supabase realtime broadcast
-    // (schedule.ts afterScheduleWrite -> realtime.ts) whenever BOTH of these are set - as a dev `.env.local` sets them and CI does
+    // (schedule/after-write.ts afterScheduleWrite -> realtime.ts) whenever BOTH of these are set - as a dev `.env.local` sets them and CI does
     // not. Blank them so the watch sees only what a ROOM READ sends: 10 broadcasts from seeding once read as "10 vendor calls".
     vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "");
     vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "");
@@ -1548,7 +1548,7 @@ describe.skipIf(!process.env.DATABASE_URL)("room — Lichess's word on the viewe
 // and the room reads on), never the room's one 404 (which stops it for good). The answer is given only where it can
 // name nobody — a board whose WHOLE round is unpaired — and only to a caller tied to the board without a seat on it.
 describe.skipIf(!process.env.DATABASE_URL)("match room — a board being re-paired (fix round 4b)", () => {
-  /** What Unpair leaves (stages.ts clearSwissFixtureSeats, the whole round at once); the e2e drives the real one. */
+  /** What Unpair leaves (stages/swiss-boards.ts clearSwissFixtureSeats, the whole round at once); the e2e drives the real one. */
   async function unpair(s: SeedOnlineChessFixtureResult) {
     await sql`delete from fixture_external_play where fixture_id = ${s.fixtureId}`;
     await sql`
@@ -1790,7 +1790,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — a board the organiser
     await closedSources[0]![1](s);
     await voidLast(s);
     expect((await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps())).boardClosed, "premise: closed").toBe(true);
-    // What Unpair then Pair leave (stages.ts clearSwissFixtureSeats deletes a finished, game-less row; the re-pair
+    // What Unpair then Pair leave (stages/swiss-boards.ts clearSwissFixtureSeats deletes a finished, game-less row; the re-pair
     // seats the board again) — as the fix-round-4b suite above stands for it.
     await sql`delete from fixture_external_play where fixture_id = ${s.fixtureId}`;
     const snap = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());

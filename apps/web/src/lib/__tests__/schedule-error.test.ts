@@ -1,6 +1,6 @@
 // SCHEDULE_OUTSIDE_COMPETITION -> localized organiser copy.
 //
-// Before this, the containment refusal from `server/usecases/schedule.ts`
+// Before this, the containment refusal from `server/usecases/schedule/`
 // reached the organiser as the server's raw English sentence in all four
 // locales — the board rendered `err.message` verbatim. These tests pin the
 // resolver's whole contract: the right variant for the bounds that were

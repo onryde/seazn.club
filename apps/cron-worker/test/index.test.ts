@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import type { Env } from "../src/run";
 import { FAST_TRIGGER, FIVE_MINUTES, TRIGGER_CRON } from "../src/schedule";
+import { HOURLY_EVERY_ROWS } from "./hourly-rows";
 
 // The Worker entry is the seam between Cloudflare (controller.cron / scheduledTime) and runDue.
 // A pure runDue test cannot see it, so this drives the real default export.
@@ -9,6 +10,9 @@ const MONDAY_0817 = Date.parse("2026-09-28T08:17:00Z");
 const env: Env = { ENV_NAME: "stg", BASE_URL: "https://stg.seazn.club", ACTIVE: "true", CRON_SECRET: "s" };
 const controller = (cron: string, scheduledTime: number) => ({ cron, scheduledTime, noRetry() {} }) as unknown as ScheduledController;
 const OK = JSON.stringify({ ok: true, data: { failed: 0, alerted: 0 } });
+/** The routes an ordinary hourly firing POSTs, in table order: the every-firing rows, read from the table's own declarations
+ *  (./hourly-rows); schedule.test.ts pins WHICH rows they are, typed from the spec. */
+const HOURLY_PATHS = HOURLY_EVERY_ROWS.map((j) => j.path);
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -34,21 +38,19 @@ describe("worker.scheduled", () => {
   it("I-2: does not resolve until EVERY due job has finished (it awaits the run, never fire-and-forget)", async () => {
     const net = stubNetwork(15);
     await worker.scheduled!(controller(TRIGGER_CRON, MONDAY_0817), env);
-    // Monday 08:17: the three every-firing rows plus the weekly digest. Each fetch takes 15 ms, so a
+    // Monday 08:17: the every-firing rows plus the weekly digest. Each fetch takes 15 ms, so a
     // handler that returned early would leave all but the first still in flight.
-    expect(net.done).toEqual(["/api/cron/registrations", "/api/cron/billing-events", "/api/funnel/remind", "/api/cron/news-digest"]);
-    expect(net.lines.at(-1)).toMatchObject({ event: "run", jobs: 4, cron: TRIGGER_CRON, scheduledTime: "2026-09-28T08:17:00.000Z" });
+    expect(HOURLY_PATHS.length, "every-firing rows checked").toBeGreaterThan(0);
+    expect(net.done).toEqual([...HOURLY_PATHS, "/api/cron/news-digest"]);
+    expect(net.lines.at(-1)).toMatchObject({ event: "run", jobs: HOURLY_PATHS.length + 1, cron: TRIGGER_CRON, scheduledTime: "2026-09-28T08:17:00.000Z" });
   });
 
   it("passes the firing's own trigger and scheduled time through (not the wall clock, not swapped)", async () => {
     const net = stubNetwork(0);
     await worker.scheduled!(controller(TRIGGER_CRON, Date.parse("2026-09-29T14:17:00Z")), env);
-    expect(net.done, "a Tuesday 14:17 slot runs the three every-firing rows only").toEqual([
-      "/api/cron/registrations",
-      "/api/cron/billing-events",
-      "/api/funnel/remind",
-    ]);
-    expect(net.lines.filter((l) => l.event === "job").map((l) => l.scheduledTime)).toEqual(Array(3).fill("2026-09-29T14:17:00.000Z"));
+    expect(HOURLY_PATHS.length, "every-firing rows checked").toBeGreaterThan(0);
+    expect(net.done, "a Tuesday 14:17 slot runs the every-firing rows only").toEqual(HOURLY_PATHS);
+    expect(net.lines.filter((l) => l.event === "job").map((l) => l.scheduledTime)).toEqual(Array(HOURLY_PATHS.length).fill("2026-09-29T14:17:00.000Z"));
   });
 
   it("the env decides the fast trigger: stg's */5 slot runs the three fast rows; prod's minute trigger runs the stream tick and the outbox every minute and external-play only on a multiple of five", async () => {

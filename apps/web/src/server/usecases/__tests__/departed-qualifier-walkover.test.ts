@@ -79,7 +79,7 @@ interface Rig {
 
 /** A division of `field` entrants whose single `kind` stage draws from a
  *  frozen `config.qualified` list — the persisted shape `seedNextStage`
- *  writes when an `on_complete` progression resolves (stages.ts ~line 3504),
+ *  writes when an `on_complete` progression resolves (stages/carry-over.ts),
  *  written directly here so the test drives the generation branch under
  *  change rather than a league play-out that only reaches it incidentally. */
 async function seedQualifiedStage(

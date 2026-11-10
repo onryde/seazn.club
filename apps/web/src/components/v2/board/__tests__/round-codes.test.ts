@@ -467,7 +467,7 @@ describe("roundLegendEntries", () => {
 const entrants = (k: number) => Array.from({ length: k }, (_, i) => `e${i + 1}`);
 
 /** A real engine bracket as `listDivisionFixturesForBoard` delivers it after
- *  `bracketToGen` (stages.ts) persisted it: one lane, so round_no = round + 1,
+ *  `bracketToGen` (usecases/stages/generators.ts) persisted it: one lane, so round_no = round + 1,
  *  and seq_in_round counts the round's fixtures in emission order; `is_final`
  *  and `third_place` only where the generator set them; `ext_key` only on a
  *  page-playoff id. A seat fed by another match starts empty. */

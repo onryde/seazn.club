@@ -589,7 +589,7 @@ export function ConstraintsPanel({
   const courtNames = useMemo(() => resolveCourtNames(venues), [venues]);
   // The whole block is Pro: the page hands down `canEdit && !frozen &&
   // scheduling.constraints`, mirroring the server's `usesConstraints()` gate
-  // (schedule.ts), which trips on a non-empty `blackouts`. Windows already
+  // (usecases/schedule/), which trips on a non-empty `blackouts`. Windows already
   // stored stay visible read-only so a downgrade never hides data.
   const showBlackouts = canEdit || blackouts.length > 0;
 

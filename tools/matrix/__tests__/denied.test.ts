@@ -1,7 +1,7 @@
 // ⛔ denied (ruling 24). The fake product's gate table is read from the
 // PRODUCT's own source — each gate function's `kind === "…"` terms
 // (usecases/format-gates.ts) keyed by the feature the stage batch requires after
-// it, in the batch's order (usecases/stages.ts `assertStageBatchGates`, which
+// it, in the batch's order (usecases/stages/stage-graph.ts `assertStageBatchGates`, which
 // createStages, replaceStages and previewReplaceStages all reach, the PUT pair
 // through one delegate: the scan FOLLOWS that call, see
 // product-gates-source.ts) — never from expectedGate, the copy the scenario

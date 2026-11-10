@@ -198,7 +198,7 @@ describe("the opening format (owner Q5) and the kinds it is picked for (Q3): the
 
 
 // C9 review 2, N1 (with the owner's n3 "yes"): the Format step reads the DIVISION's kinds, not only the sport's. Americano
-// and Mexicano rotate individual players into pairs (stages.ts americanoGen plays one person per entrant), so a division
+// and Mexicano rotate individual players into pairs (usecases/stages/generators.ts americanoGen plays one person per entrant), so a division
 // that takes no individual players - narrowed to Pairs or Teams on Who plays - is not offered them.
 describe("what a division narrowed on Who plays is offered (N1: the partner-rotation formats need individual players)", () => {
   // The oracle restates the rule from the stage kinds the server mints pairs for, never from the module under test.

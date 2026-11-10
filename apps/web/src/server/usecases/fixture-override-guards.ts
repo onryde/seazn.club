@@ -12,8 +12,8 @@ import { configWriteIssueList } from "./stage-rules-merge";
 
 // W2c Task 14 — the two guards that keep a match's own format (`fixtures.rules_override`, written only by
 // `fixture-rules.ts` `writeFixtureRulesOverride`) from being lost or invalidated by a write elsewhere. Their own module,
-// with no usecase import, because their callers (`stages.ts`, `history.ts`, `divisions.ts`) sit UNDER the writer's own
-// imports (`scoring.ts` imports `stages.ts`): putting them beside the writer would close an import cycle.
+// with no usecase import, because their callers (`stages/`, `history.ts`, `divisions.ts`) sit UNDER the writer's own
+// imports (`scoring.ts` imports `stages/`): putting them beside the writer would close an import cycle.
 
 /** The match as the board names it. */
 export const matchName = (fixtureNo: number | null): string => (fixtureNo === null ? "This match" : `Match ${fixtureNo}`);
@@ -41,7 +41,7 @@ export function ownFormatLoss(hit: { id: string; fixture_no: number | null }): H
 }
 
 /**
- * Task 10 review gap — a rebuild, an Undo of a generation, a pool clear and a Swiss reshape (`stages.ts`
+ * Task 10 review gap — a rebuild, an Undo of a generation, a pool clear and a Swiss reshape (`stages/swiss-reconcile.ts`
  * `reconcileSwissRoundShells`, fix round 1) DELETE unplayed fixtures (regenerated from the stage, restored from a
  * snapshot that does not carry `rules_override`, or surplus shells of a shrunk field), so a match's own format would
  * vanish with its row and nothing would say so. Refused by name instead (`FIXTURE_HAS_OWN_FORMAT`): the organiser sets

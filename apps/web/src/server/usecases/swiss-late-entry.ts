@@ -223,7 +223,7 @@ export async function nextFreeRoundSlot(
 /**
  * Append one undo-barrier ledger row (history.ts `UNDO_BARRIER_TYPES`) — the ONE writer of such a row (W4 pre-flight
  * drift R4: exported once rather than copied): an organiser's late entry here, and since W4 T5 (K1) a seed confirm
- * (`seed_confirmed`, stages.ts `confirmSeedProposal`).
+ * (`seed_confirmed`, stages/seed-proposal.ts `confirmSeedProposal`).
  */
 export async function appendUndoBarrierRow(
   tx: Tx,
@@ -286,7 +286,7 @@ export async function admitSwissLateEntrant(
   }
 
   // The latest seated round's boards take the scoring append lock BEFORE "started" is read (the one lock order:
-  // `division:` → `fixture:`, stages.ts `lockSwissBoardAppends`): a first event in flight either commits first and is
+  // `division:` → `fixture:`, stages/swiss-boards.ts `lockSwissBoardAppends`): a first event in flight either commits first and is
   // seen below, or waits and finds the round already re-paired.
   // An automatic arrival never reads "started" (it takes (c) whatever the round), so it waits on no scorer.
   const plain = await stageRows(tx, stage.id);
@@ -473,7 +473,7 @@ async function repairRound(tx: Tx, ctx: ApplyCtx): Promise<SwissLateEntryResult>
       source: ctx.source,
       changed_entrant_ids: changed,
       seated_fixture_ids: gen.seatedIds,
-      // The Pair's own audit pair (stages.ts `swissAudit`): a later re-pair of round 1 replays an override from here.
+      // The Pair's own audit pair (stages/ `swissAudit`): a later re-pair of round 1 replays an override from here.
       ...(gen.pairing !== null ? { pairing: gen.pairing, override: override !== undefined && override !== gen.defaultPairing } : {}),
       // A re-pair of round 1 re-draws it with the newcomer in the field (T8 review n1): later rounds read this order.
       ...(gen.drawSeed !== null ? { draw_seed: gen.drawSeed } : {}),

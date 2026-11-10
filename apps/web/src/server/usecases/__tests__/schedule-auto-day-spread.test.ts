@@ -3,7 +3,7 @@
 // used first, every rung shift-invariant), so with no day cap it piles every
 // fixture onto ONE day (any one day has capacity for all 15), not necessarily
 // the first (W3 T11; see `withDefaultDaySpread`'s doc), and leaves the other
-// two empty. `withDefaultDaySpread` (schedule.ts)
+// two empty. `withDefaultDaySpread` (schedule/solver-tuning.ts)
 // injects a `max_fixtures_per_day` hard rule sized to the window whenever the
 // organiser set none of their own, so the auto pass spreads by default.
 //

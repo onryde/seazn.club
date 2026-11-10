@@ -1,5 +1,5 @@
 // Pure unit tests for the shared stage-format gates (P4 review 2026-08-13,
-// finding 5) — the ONE definition createStages (usecases/stages.ts) and
+// finding 5) — the ONE definition createStages (usecases/stages/stage-graph.ts) and
 // createFromTemplate (usecases/templates.ts, D1a) both call. This file pins
 // every branch directly; templates.test.ts additionally exercises the
 // template path end-to-end (config.placements, free since V471, beside a

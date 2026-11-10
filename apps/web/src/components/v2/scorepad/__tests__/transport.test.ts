@@ -416,7 +416,7 @@ describe("409 classification", () => {
     error: { code, message: "nope", ...extra },
   });
 
-  it.each(["UNDO_NOOP", "UNDO_TARGET_MISSING", "UNDO_ALREADY_VOIDED", "UNDO_NOT_UNDOABLE"])(
+  it.each(["UNDO_NOOP", "UNDO_TARGET_MISSING", "UNDO_ALREADY_VOIDED", "UNDO_NOT_UNDOABLE", "UNDO_WICKET_NOT_LATEST"])(
     "%s is terminal, not renegotiable",
     async (code) => {
       const { fn } = fakeFetch(() => fakeResponse(409, body(code)));

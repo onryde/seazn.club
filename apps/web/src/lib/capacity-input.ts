@@ -53,7 +53,7 @@ export {
 
 /** Everything `capacityInputForFixtures` reads off a solved config. Plain
  *  epoch-ms/string fields — the same shape `SlotConfig & VerifyConfig`
- *  satisfies server-side (schedule.ts's plan), and the shape a client
+ *  satisfies server-side (usecases/schedule/ folder's plan), and the shape a client
  *  component builds from its own live form state (see capacity-card.tsx). */
 export interface CapacityConfigInput {
   courts: string[];
@@ -172,7 +172,7 @@ function calendarDays(window: { from: number; to: number }, tz: string): { ymd: 
  *  "still call this module directly with no `courtCalendars`". They do not —
  *  the same change that added the param removed both of those calls, and
  *  every remaining caller is server-side (`capacity-guard.ts`,
- *  `competition-schedule-ai.ts`, `schedule.ts`), so `courtCalendars` is in
+ *  `usecases/competition-schedule-ai/`, `usecases/schedule/`), so `courtCalendars` is in
  *  practice always supplied now. The panels obtain their numbers over the
  *  precheck endpoint instead. Left as a correction rather than a deletion
  *  because the "absent court defaults to open all day" behaviour below is

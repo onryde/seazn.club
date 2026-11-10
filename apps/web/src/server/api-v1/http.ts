@@ -256,7 +256,7 @@ async function v1Inner<T>(
       // F2a (P7 follow-up): the SEEDED-path analogue of the block above — a
       // `.seeding` group stage whose placed seeds can't fill its configured
       // pools throws STAGE_NOT_READY with reason
-      // "seeded_pool_too_few_qualifiers" (stages.ts
+      // "seeded_pool_too_few_qualifiers" (usecases/stages/
       // generateSeededStageFixtures). Forward it the same way so the client
       // can render an actionable message instead of the dead-end
       // SEEDING_RULES_MISSING loop this guard exists to prevent from ever
@@ -275,7 +275,7 @@ async function v1Inner<T>(
         };
       }
       // An `on_complete` progression stage whose source stage has not
-      // finished (stages.ts generateStageFixtures' pre-flight). The desk names
+      // finished (usecases/stages/generate.ts generateStageFixtures' pre-flight). The desk names
       // both stages in an amber notice instead of showing this English
       // `message` in a red banner, so it needs both ids on the wire.
       if (

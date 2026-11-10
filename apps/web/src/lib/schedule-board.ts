@@ -16,7 +16,7 @@ import {
 // ---------------------------------------------------------------------------
 // Conflict taxonomy (doc 12 §2) — engine verifier reason tokens → API conflict
 // codes. The single source of truth for the mapping, lifted here (isomorphic,
-// no server-only) so both sides share ONE table: usecases/schedule.ts maps
+// no server-only) so both sides share ONE table: usecases/schedule/ maps
 // drag-drop conflicts through it on the server, and the AI diff panel maps a
 // blocking row's engine reason through it on the client to reach the shared
 // `board.conflict.*` labels the conflicts panel already localizes (v4 Task 13).
@@ -92,7 +92,7 @@ export interface FeedLabelPair {
  * cardTitle()), so a card's short code and this feed's rendered text can't
  * drift onto two ref formats.
  *
- * A CROSS-stage edge (`wireCrossFeeds`, usecases/stages.ts) also carries
+ * A CROSS-stage edge (`wireCrossFeeds`, usecases/stages/generate-tx.ts) also carries
  * `params.stage` — the SOURCE stage — when both rows say which stage they are
  * in. `{round, seq}` only names a fixture within one stage, and the seat's
  * own stage can hold a different fixture at the same coordinates; the
@@ -148,7 +148,7 @@ export function feedLabels(rows: readonly FeedRow[]): Record<string, FeedLabelPa
  *
  * STORED WINS OVER FEED, deliberately, and this is the mainline bye shape
  * rather than a theoretical one. `generateProgressionSetupFixtures`' third
- * pass (`usecases/stages.ts` ~2812) stamps a bye's award label onto the
+ * pass (`usecases/stages/setup-fixtures.ts2) stamps a bye's award label onto the
  * WINNER-FEED TARGET's seat, so that seat carries a stored "Rank 1" AND an
  * inbound edge from the bye line at the same time. Stored is right: the bye
  * means seed 1 is already through, and "Winner of R1·1" would tell the

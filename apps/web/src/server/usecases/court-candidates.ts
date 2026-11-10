@@ -50,7 +50,7 @@ export const NO_MATCHING_COURT_CODE = "NO_MATCHING_COURT";
  * pool at 5 connections, so 5 concurrent requests reaching a nested
  * `withTenant` pin every slot and hang the process permanently, with no
  * queue-wait timeout to recover). `autoSchedule`'s three-phase transaction
- * boundary (`schedule.ts`'s own doc comment on `AutoSchedulePlan`) is exactly
+ * boundary (`schedule/auto.ts`'s own doc comment on `AutoSchedulePlan`) is exactly
  * the discipline this avoids breaking.
  *
  * Ordered (`sort, name, id` — `venues.ts`'s own listing convention) so the
@@ -113,8 +113,8 @@ export function unionRequiredCourtTags(
  * first settings PUT) falls back to the org's own courts here rather than
  * resolving to zero candidates and 422ing NO_MATCHING_COURT for an org that
  * has simply never configured anything yet. Deliberately in THIS function,
- * not at each of its three call sites (schedule.ts's build and validate
- * paths, schedule-ai.ts's buildSchedulePack) — the whole point of routing
+ * not at each of its three call sites (schedule/ folder's build and validate
+ * paths, schedule-ai/pack.ts's buildSchedulePack) — the whole point of routing
  * everything through one resolver is that those callers cannot diverge on
  * what "no courts configured" means. The fallback set still goes through
  * `candidateCourts` exactly like an explicit list would: archived courts and
@@ -316,7 +316,7 @@ export async function strandedCourtIdsForDivision(
  * function, different inputs. A second `orgCourtMetas` round trip (this
  * path is a read/report, never a hot loop) beats reshaping
  * `resolveCandidateCourts`'s own return value and disturbing its three
- * existing callers (autoSchedule, validateScheduleIn, schedule-ai.ts's
+ * existing callers (autoSchedule, validateScheduleIn, schedule-ai/pack.ts's
  * buildSchedulePack) for a question only ONE of them needs to ask.
  *
  * No `configuredCourtIds`/empty-means-unconstrained parameter, unlike

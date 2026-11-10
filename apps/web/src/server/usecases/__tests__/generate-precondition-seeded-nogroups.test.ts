@@ -1,5 +1,5 @@
 // P7 fix round (Major, whole-branch review of F2a): server-side coverage for
-// the seeded-stage precondition guard's groups<=1 branch (stages.ts:1456-
+// the seeded-stage precondition guard's groups<=1 branch (stages/-
 // 1471) — the counterpart to the client classifier test added in
 // stages-panel-generate-precondition.test.tsx.
 //
@@ -29,8 +29,8 @@
 // hazard on this same follow-up: a defensive guard for a failure mode this
 // repo's OWN generators don't currently produce, not a reachable user path
 // today. To verify the guard ITSELF — not just its current unreachability —
-// without touching stages.ts, this mocks ONLY generateSingleElim (the
-// "knockout" case in stages.ts' generate() dispatcher) to return a bracket
+// without touching stages/, this mocks ONLY generateSingleElim (the
+// "knockout" case in stages/generators.ts' generate() dispatcher) to return a bracket
 // that drops one entrant, i.e. simulates exactly the engine regression this
 // guard exists to catch, and confirms generateStageFixtures still throws
 // the right STAGE_NOT_READY shape instead of committing a partial fill.

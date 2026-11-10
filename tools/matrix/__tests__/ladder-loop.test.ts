@@ -40,7 +40,7 @@ const REPO = resolve(HERE, "..", "..", "..");
 const R4_CANARY_BEFORE = resolve(HERE, "fixtures", "r4-canary-before.json");
 /** lib/table-withdrawal.ts WITHDRAWAL_PENDING_STATUSES, read as text (plan review 2 m-3). */
 const PENDING: ReadonlySet<string> = new Set(withdrawalPendingText());
-/** withdrawal.ts:37 TABLE_KINDS and stages.ts:880-884 BRACKET_WALKOVER_KINDS, read as text. */
+/** withdrawal.ts:37 TABLE_KINDS and usecases/stages/generators.ts BRACKET_WALKOVER_KINDS, read as text. */
 const TABLE_KINDS_PINNED: ReadonlySet<string> = new Set(withdrawalTableKindsText());
 const BRACKET_KINDS_PINNED: ReadonlySet<string> = new Set(bracketWalkoverKindsText());
 const variantFor = offlineBuilderDefault;
@@ -441,7 +441,7 @@ describe("R4 on the ladder — D14 (rulings 51, 53)", () => {
     const seed3 = driver.entrantsBySeed()[2]!;
     const heldAt = driver.rawOrderAtWithdrawal().indexOf(seed3);      // the fake's raw order the moment withdraw() answered
     expect(heldAt).toBeGreaterThanOrEqual(0);
-    expect(driver.ladderOrder().indexOf(seed3)).toBe(heldAt);         // raw: never pruned (stages.ts:5562-5572)
+    expect(driver.ladderOrder().indexOf(seed3)).toBe(heldAt);         // raw: never pruned (usecases/stages/)
     expect(driver.ladderOrder().filter((e) => !driver.withdrawnIds().has(e))).not.toContain(seed3);
     const later = checks.find((c) => c.id === "r4-not-challenged-later")!;
     expect(later.verdict).toBe("pass");

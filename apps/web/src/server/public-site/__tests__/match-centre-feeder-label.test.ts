@@ -3,7 +3,7 @@
 //
 // A knockout final generated with both semi-finals unplayed stores each side's
 // slot label as `{ key: "slot.winner_match", params: { round, seq } }` — the
-// FEEDER's `round_no` / `seq_in_round` (`usecases/stages.ts`, `matchSlotLabel`).
+// FEEDER's `round_no` / `seq_in_round` (`usecases/stages/generate-tx.ts`, `matchSlotLabel`).
 // The organiser board renders that as "Winner of R1·2" (`lib/slot-label.ts`,
 // `matchRef`), a short code that means nothing on a public page. The match
 // centre must read "Winner of Semi-finals, match 2": the round name from the

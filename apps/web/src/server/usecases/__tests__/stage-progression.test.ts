@@ -696,7 +696,7 @@ describe.skipIf(!HAS_DB)("D4a/P5 — a bye seed owns TWO destination slots (#554
 
 describe.skipIf(!HAS_DB)("D4a/P5 — bye-award bulk UPDATE guards against stranding a slot_label", () => {
   it("refuses rather than silently stranding a slot_label if a root bracket's line ever carries a progression's", async () => {
-    // Since W4 T8 a second Generate of a root knockout is the reconcile (stages.ts), which never reaches the bulk update this
+    // Since W4 T8 a second Generate of a root knockout is the reconcile (stages/), which never reaches the bulk update this
     // was written against; the guard moved to its door, before any write. Its own bye and feeder labels pass: the next test.
     // Review finding: generateStageFixtures' bye-award-into-winner-feed pass
     // (the PLAIN, non-`.seeding` path, unlike generateSeededStageFixtures'

@@ -213,7 +213,7 @@ describe("model commands — preconditions", () => {
     expect(now.filter((id) => first.includes(id))).toEqual([]);
     expect([...m.fixtures.values()].every((f) => f.ledger !== null && f.ledger.length === 0)).toBe(true);
     expect(m.counts.Rebuild).toEqual(counts(2, { accepted: 2 }));
-    // stages.ts rebuildStageFixtures blocks on any score event (fixtureHasResultSql), not only on an outcome.
+    // usecases/stages/generate.ts rebuildStageFixtures blocks on any score event (fixtureHasResultSql), not only on an outcome.
     await play(m, d, [["Score", 0, 0], ["Void", 0], ["Void", 0], ["Rebuild", 0]]);
     expect([...m.fixtures.values()].some((f) => f.status !== "scheduled")).toBe(false);
     expect(m.counts.Rebuild).toEqual(counts(3, { accepted: 2, refused: 1 }));
@@ -699,7 +699,7 @@ describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk 
     }
     expect(checked).toBe(3);
   });
-  // B2 fix round 2 (item 2): Start reconciles IN PLACE only (schedule.ts startDivision). It seats newcomers in the bracket's
+  // B2 fix round 2 (item 2): Start reconciles IN PLACE only (usecases/schedule/publish.ts startDivision). It seats newcomers in the bracket's
   // first-round byes; when they outnumber the byes the bracket would have to be drawn again, and Start refuses by name
   // (KO_START_NEEDS_UPDATE_DRAW) — the late entry then waits for a Generate (Update draw) or a Rebuild. Expected values from
   // the product's rule as the rulings state it: newcomers > byes, a bye being a first-round line with one seat, forfeited.
@@ -756,7 +756,7 @@ describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk 
     }
     expect(checked).toBe(3);
   });
-  // B2 fix round 1 (G1): Start reconciles a root knockout that already has lines (schedule.ts startDivision), so an entrant
+  // B2 fix round 1 (G1): Start reconciles a root knockout that already has lines (usecases/schedule/publish.ts startDivision), so an entrant
   // added before Start and seated by it in place spends the late entry, and a Generate after Start is the named no-op, not
   // refused. A league's Start draws nothing over existing lines (#879's fence still reads its late entry).
   it("G1: Start spends a knockout's late entry when the stage already has lines — never a league's", async () => {
@@ -878,7 +878,7 @@ describe("model commands — each fault is caught at the step that causes it", (
 });
 
 // W1b Task 15, fix round 1 (a): live, both swiss cells died at their first
-// step — Start mints the swiss stage's rounds as UNPAIRED shells (stages.ts),
+// step — Start mints the swiss stage's rounds as UNPAIRED shells (usecases/stages/),
 // so I6 had no two-sided fixture to judge and R25 turned its pass into a
 // failure. A step invariant with nothing to judge yet abstains for that step;
 // the per-cell R25 (vacuityOf) still fails a cell where it abstained every time.
@@ -893,7 +893,7 @@ describe("swiss: a step invariant with nothing to judge yet abstains for that st
   };
   const vacuity = (m: ModelState) => vacuityOf({ counts: m.counts, stepChecks: Object.fromEntries(m.stepChecks), foldParity: m.foldParity, informative: informativeSteps(m).checked, stageKind: m.stageKind, entrantKind: m.kind });
   const i6Line = `step invariant ${I6} checked zero items`;
-  /** 4 entrants → 2 boards a round, no bye (stages.ts: floor(n/2) boards, a bye shell when n is odd). */
+  /** 4 entrants → 2 boards a round, no bye (usecases/stages/: floor(n/2) boards, a bye shell when n is odd). */
   const BOARDS = 2;
 
   it("empty case first: Start mints unpaired shells — I6 has nothing to judge, so the step abstains with 0 items, never fails", async () => {
@@ -1023,7 +1023,7 @@ describe("I-1: a refusal of a command the model holds legal is an unexpected-ref
 describe("RR-1: a knockout take-back whose next match has started is refused BY NAME (fed-seats.ts) — an expected refusal, never an unexpected one", () => {
   const next = nextMatchStartedText();
   /** A bracket on the fake: its fixtures seated before Start (Start then
-   *  seats nothing — schedule.ts startDivision), its winner edges fed; the
+   *  seats nothing — usecases/schedule/publish.ts startDivision), its winner edges fed; the
    *  fake's stage reads as `kind`, as the product reads stages.kind. */
   async function bracket(kind: string, entrants: number, build: (d: ModelFakeDriver, e: string[]) => void, opts: ModelFakeOpts = {}, driver?: ModelFakeDriver): Promise<{ m: ModelState; d: ModelFakeDriver }> {
     const { m: base, d } = await fresh(opts, { entrants }, driver);

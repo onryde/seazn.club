@@ -8,7 +8,7 @@
 // already listed it; nothing read it).
 //
 // The codes in SEEDING_ERROR_CODES below are HttpError codes thrown by
-// computeSeedProposal / confirmSeedProposal (server/usecases/stages.ts) and
+// computeSeedProposal / confirmSeedProposal (server/usecases/stages/seed-proposal.ts) and
 // resolveQualifiers (server/usecases/stage-seeding.ts) — ALL_CAPS_SNAKE wire
 // codes by repo convention (schemas.ts:3024-3029's comment), never i18n keys
 // themselves. Read the count off that array, never off this comment: the "13"
@@ -47,7 +47,7 @@ const BY_LOCALE: Record<Locale, Dict> = { en, es, fr, nl };
  *  MAP_SOURCE_AMBIGUOUS is no longer one of them (F3 round-3 review,
  *  2026-08-18): `placeDescriptors` (packages/engine/src/competition/
  *  progression.ts) now throws it directly from generateProgressionSetupFixtures
- *  (usecases/stages.ts) — the day-one/setup fixture-generation path, not just
+ *  (usecases/stages/setup-fixtures.ts) — the day-one/setup fixture-generation path, not just
  *  validateStageProgression's save-time check — so it has a real call site
  *  today, independent of any rules-editor UI.
  *
@@ -68,7 +68,7 @@ const BY_LOCALE: Record<Locale, Dict> = { en, es, fr, nl };
  *  owner-approved 2026-09-15) — NOT a re-opening of the scope note above.
  *  computeSeedProposal throws it when `progression.carry` names a source that
  *  offers a downstream stage a finishing order rather than a points table —
- *  every kind outside REAL_TABLE_KINDS (usecases/stages.ts), whose comment
+ *  every kind outside REAL_TABLE_KINDS (usecases/stages/types.ts), whose comment
  *  carries the per-kind detail. It needed a code of its own rather than
  *  SEEDING_RULES_MISSING's: that copy tells the organiser to add rules or
  *  regenerate fixtures, and neither would fix this.

@@ -7,7 +7,7 @@ import { newSession, call, check, signIn, tag, html, v1, v1data } from "../harne
  * standing rule that every new feature updates the smoke script.
  *
  * NOT plan-gated: RS012 shipped no new entitlement (checked —
- * registration-submit.ts's pool refusal and registrations.ts's
+ * registration-submit.ts's pool refusal and usecases/registrations/list.ts's
  * soloPoolIsFull carry no requireFeature/requirePlan beyond the
  * "registration.enabled" every division already needs), so this is ONE
  * suite on a single org rather than the pro-then-downgrade-to-community

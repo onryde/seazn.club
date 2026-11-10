@@ -18,7 +18,7 @@ const HAS_DB = !!process.env.DATABASE_URL;
 // The onDecided witness (spec §5.4.4: "onDecided is not called for needs_decision"). A held row seats nobody even
 // if onDecided DID run (advancingSides reads no side from a level outcome), so the seat alone cannot see the gate.
 // onDecided's first act on a row is assertNoLevelSeat with the row's status — a passthrough spy (real behaviour,
-// every caller: scoring.ts, competition.ts, stages.ts) records who reached seating, and with which status.
+// every caller: scoring.ts, competition.ts, usecases/stages/) records who reached seating, and with which status.
 vi.mock("@/server/engine-db/level-seat", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/engine-db/level-seat")>();
   return { ...actual, assertNoLevelSeat: vi.fn(actual.assertNoLevelSeat) };

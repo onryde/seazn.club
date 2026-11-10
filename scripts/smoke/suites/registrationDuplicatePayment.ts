@@ -6,7 +6,7 @@ import {
 
 /**
  * RS006 money-hardening leg 1/2: `confirmPaidRegistration`'s duplicate-
- * payment branch (registrations.ts — the `reg.status === "confirmed" ||
+ * payment branch (usecases/registrations/checkout-completion.ts — the `reg.status === "confirmed" ||
  * reg.status === "paid"` check, just above its own "two open checkout tabs"
  * comment) — the registrant-reopened-the-pay-link scenario that comment
  * names, where two distinct real payments land for the same still-pending

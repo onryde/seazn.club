@@ -84,7 +84,7 @@ describe("LiveScoreBody — localisation actually applies (not just wired to an 
 });
 
 // Review round 2 — NEW IMPORTANT B: the DB's `fixtures.status` vocabulary
-// (server/usecases/stages.ts:2142-2156) carries values beyond in_play/
+// (server/usecases/stages/) carries values beyond in_play/
 // decided/finalized/scheduled — abandoned, cancelled, forfeited, postponed,
 // walkover — each of which used to collapse into the generic
 // `matchCentre.status.other` ("Not played") on the legacy fixture page.

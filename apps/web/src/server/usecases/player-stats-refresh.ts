@@ -13,7 +13,7 @@ import "server-only";
 // Which writes schedule one: a scoring write that leaves a fixture decided, and
 // every undo (`scoring.ts` `refreshesPlayerStats`); an import that appended
 // events; a history undo or a stage delete that removed a fixture carrying
-// events (`history.ts`, `stages.ts`); a staff config re-snapshot
+// events (`history.ts`, `stages/`); a staff config re-snapshot
 // (`admin-fixture-config.ts`); a stats read that finds the snapshot behind a
 // result (see NOT DURABLE below). A person merge and unmerge refold inline in
 // their own transaction, then schedule one per refolded division to clear the

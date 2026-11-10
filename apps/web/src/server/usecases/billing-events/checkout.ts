@@ -55,7 +55,7 @@ export async function handleCheckoutCompleted(session: Stripe.Checkout.Session) 
     // buyer redeem a valid code and granted nothing: no org_addons row, no
     // log, no alert. Written as two comparisons, not a shared `isSettled`
     // helper: the same gate is duplicated in the credit_pack limb below and
-    // in registrations.ts, and a concurrent branch is editing one of these
+    // in registrations/, and a concurrent branch is editing one of these
     // limbs — folding them onto one predicate would turn that merge into
     // "one side refactored, the other edited". The duplication is a choice.
     if (
@@ -266,7 +266,7 @@ export async function handleCheckoutCompleted(session: Stripe.Checkout.Session) 
         // here. Buying an Event Pass is not the same as an org taking a paid
         // registration, and stacking +10 onto the pass's +25 credits was wrong.
         // The earn now fires on the first genuinely-confirmed paid registration
-        // (confirmPaidRegistration in registrations.ts); the pass keeps only +25.
+        // (confirmPaidRegistration in registrations/checkout-completion.ts); the pass keeps only +25.
       }
     }
     return;

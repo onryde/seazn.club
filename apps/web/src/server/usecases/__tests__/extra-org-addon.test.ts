@@ -94,7 +94,7 @@ vi.mock("@/lib/stripe", () => ({
 vi.mock("@/server/usecases/billing-manage", () => ({
   requireBillingOwner: requireBillingOwnerMock,
 }));
-// Partial mock: billing-events.ts imports a dozen other builders from this
+// Partial mock: billing-events/ imports a dozen other builders from this
 // module, so only the ones under test are replaced. The re-price alert and
 // the allowance alert are queued on the email outbox (phase 3 wave 5, kinds
 // `staff_extra_org_reprice_failed`, once per rider per UTC day, and
@@ -256,7 +256,7 @@ const proEntry = ORG_ADDONS.find((e) => e.planKey === "pro")!;
  * `resolveOrgAddonPriceId("pro")` currently resolves to — i.e. a rider
  * stranded on a superseded rate. `convergeOrgAddonPrices` and its callers
  * compare `item.price.id` against the resolved target id, never the tier
- * that produced the old id (see `billing-events.ts`'s
+ * that produced the old id (see `billing-events/` folder's
  * `item.price?.id === expectedPriceId` check), so this literal exercises the
  * identical "needs re-pricing" branch a genuine Pro <-> Pro Plus mismatch
  * used to. Never resolved by `pricesListSpy` — only ever compared against by
@@ -1017,7 +1017,7 @@ describe.skipIf(!HAS_DB)("extra-org usage floor — you cannot cancel what you a
    *  fully green until this row existed.
    *
    *  Column for column what the webhook writes — the single writer of
-   *  Stripe-paid rows (billing-events.ts, `ORG_ADDON_FEATURE_KEY` /
+   *  Stripe-paid rows (billing-events/, `ORG_ADDON_FEATURE_KEY` /
    *  `ORG_ADDON_DELTA_EACH`, `target_org_id` null, status 'active'). */
   async function groupInUse(total: number, extras: number) {
     const { orgId, walletId, stripeSubId } = await makeBilledGroupOrg("pro");

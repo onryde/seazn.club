@@ -10,7 +10,7 @@ import type {
 } from "./types";
 import { loadSettings } from "./settings";
 
-/** The stage kinds `stages.ts` generates as a ROUND ROBIN (`generate()`'s
+/** The stage kinds `stages/generators.ts` generates as a ROUND ROBIN (`generate()`'s
  *  league/group branch): 1-based rounds, one sequence per stage or per pool.
  *  Read as text by the format matrix's model (tools/matrix product-text.ts,
  *  #879's positional reconcile), so keep it one array literal. */
@@ -28,7 +28,7 @@ export const ROUND_SEQUENCE_STAGE_KINDS: readonly string[] = [...ROUND_ROBIN_STA
  * 2026-10-31) and was kept because every placement path imports it; read it
  * as "round-sequence stage ids".
  *
- * `league`/`group` are `stages.ts`'s own round-robin `generate()` branch
+ * `league`/`group` are `stages/generators.ts`'s own round-robin `generate()` branch
  * (a pooled group is one sequence per pool — the order key carries the pool).
  * `swiss` is round-sequenced the same way: a Swiss stage mints every round as
  * a TBD-v-TBD shell at Generate, and round r+1 cannot be paired until round r

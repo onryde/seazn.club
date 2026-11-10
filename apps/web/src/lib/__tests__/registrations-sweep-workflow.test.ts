@@ -5,7 +5,7 @@
 // proves it ever calls sweepRegistrations. Before registrations-sweep.yml
 // existed, NOTHING called POST /api/cron/registrations in either
 // environment — see sweepRegistrations' own doc comment
-// (apps/web/src/server/usecases/registrations.ts) — so this pins the
+// (apps/web/src/server/usecases/registrations/) — so this pins the
 // properties that keep that fixed rather than trusting the file's own prose.
 //
 // Same shape and reasoning as its siblings — db-suite-ci-wiring.test.ts,

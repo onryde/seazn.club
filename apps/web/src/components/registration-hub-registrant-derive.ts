@@ -136,7 +136,7 @@ export type RegistrantPaymentState =
  * RS005 F2 finding 1: this used to read `offline_marked_paid_at`, which
  * V363/V364 moved onto `registration_groups` — CART-level, shared by every
  * entry in the cart. Marking ONE entry paid (markRegistrationPaidOffline,
- * registrations.ts, stamps that column for the whole cart while confirming
+ * usecases/registrations/organiser-actions.ts, stamps that column for the whole cart while confirming
  * only the one entry it was called for) made every OTHER still-pending
  * sibling in the same cart read "Paid offline" too. Fixed by reading
  * `payment_intent_id` instead, gated behind `status` — genuinely per-entry
@@ -299,8 +299,8 @@ export interface RegistrantActionFlags {
  * is exactly the point, and gating reject the same way approve is gated
  * would remove a capability the server still grants.
  *
- * canMarkPaid: `markRegistrationPaidOffline`'s own rule (registrations.ts,
- * the checks at ~3102-3114) — status must still be `pending` ("Only pending
+ * canMarkPaid: `markRegistrationPaidOffline`'s own rule (usecases/registrations/organiser-actions.ts,
+ * its checks) — status must still be `pending` ("Only pending
  * registrations can be marked paid" refuses every other status, including
  * `paid`), no `payment_intent_id` on file (a card payment refunds on the
  * payments trail instead), and a real fee owed (same `amount_cents` proxy
@@ -323,12 +323,12 @@ export interface RegistrantActionFlags {
  * canResend: legal for any NON-terminal status — the SAME rule as withdraw,
  * sharing the SAME source (`isTerminalRegistrationStatus`,
  * @/lib/registration-status — dependency-free, so this client island can
- * import it without dragging registrations.ts's Stripe/email clients into
+ * import it without dragging usecases/registrations/ folder's Stripe/email clients into
  * the bundle) rather than a second hand-kept list. RS005 R1 second-wave
  * finding: observed live, a WITHDRAWN entry rendered Resend and the send
  * succeeded — the mail is cart-shaped, so it told someone who had pulled
  * out that they were still registered and re-stated their cart's siblings
- * alongside it. `resendRegistrationConfirmation` (registrations.ts:1071)
+ * alongside it. `resendRegistrationConfirmation` (usecases/registrations/mail.ts)
  * now refuses the same three statuses server-side
  * (`isTerminalRegistrationStatus`) — this is the button-level courtesy, not
  * the enforcement boundary.
@@ -337,7 +337,7 @@ export interface RegistrantActionFlags {
  * nothing to promote FROM.
  *
  * canRefund (RS007 finding #16): mirrors `refundRegistration`'s own two
- * refusals (registrations.ts) exactly — "No payment to refund" when there is
+ * refusals (usecases/registrations/organiser-actions.ts) exactly — "No payment to refund" when there is
  * no `payment_intent_id`, and "Already fully refunded" when
  * `amount_cents - refunded_cents <= 0`. Deliberately NOT gated on status:
  * the usecase is not either, and the case that matters most is a WITHDRAWN

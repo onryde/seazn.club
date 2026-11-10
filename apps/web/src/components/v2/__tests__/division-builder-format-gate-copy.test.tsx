@@ -154,7 +154,7 @@ describe("division-builder's Pro gate names the actual gated format (hand-built 
     apiV1Mock.mockReset();
     // First call: create the division (succeeds). Second call: create its
     // stages — this is the one that 402s on formats.double_elim, exactly as
-    // createStages (usecases/stages.ts) does for a real page_playoff stage.
+    // createStages (usecases/stages/stage-graph.ts) does for a real page_playoff stage.
     apiV1Mock
       .mockResolvedValueOnce({ id: "d1", slug: "open" })
       .mockRejectedValueOnce(paymentRequired("formats.double_elim"));

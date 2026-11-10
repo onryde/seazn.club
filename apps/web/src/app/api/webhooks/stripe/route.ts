@@ -5,7 +5,7 @@ import { log } from "@/server/logger";
 import { runEvent } from "@/server/usecases/billing-events";
 
 // Signed Stripe webhook. The dispatch table lives in
-// server/usecases/billing-events.ts, shared with the staff console's
+// server/usecases/billing-events/, shared with the staff console's
 // "process now" replay — this route only owns signature verification.
 export async function POST(req: Request) {
   const rawBody = await req.text();

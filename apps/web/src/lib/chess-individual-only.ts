@@ -66,7 +66,7 @@ export function assertChessKindIndividual(sportKey: string | null | undefined, k
 
 /** Throw the chess refusal when this sport is chess and any of these stage
  *  kinds mints pairs (americano, and mexicano, its `mode`). The stage writers
- *  ask it of a whole batch before anything is written (usecases/stages.ts
+ *  ask it of a whole batch before anything is written (usecases/stages/stage-graph.ts
  *  assertStageBatchGates), so an organiser is never left holding a stage that
  *  Start would refuse. */
 export function assertStageKindsAllowed(sportKey: string | null | undefined, kinds: readonly string[]): void {

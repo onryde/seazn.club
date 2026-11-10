@@ -2,7 +2,7 @@
 // see docs/superpowers/specs/2026-07-26-pass-credit-redemption-design.md §1).
 // reconcileCheckout is the path server/settings/billing/page.tsx calls when the
 // browser returns from Checkout and no webhook has arrived yet; it is now the
-// other half of "learn a subscription started", alongside billing-events.ts
+// other half of "learn a subscription started", alongside usecases/billing-events/
 // handleSubscriptionChanged (own test file).
 //
 // creditPassTowardSubscription's own decisions are pinned in

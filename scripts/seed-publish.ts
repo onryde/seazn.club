@@ -10,7 +10,7 @@
  * player card — so a demo that never publishes shows an empty org home.
  *
  * Call it LAST. Starting a division promotes a PUBLISHED competition to
- * `live` (schedule.ts) and never a draft, and the seed starts divisions in
+ * `live` (usecases/schedule/) and never a draft, and the seed starts divisions in
  * every step before this one (the PLAN loop, `seedAdvancedFormats`,
  * `seedArchivedSlotHolder`). Publishing after them leaves each competition
  * `published` — the same "Upcoming" chip the draft showed on the org home

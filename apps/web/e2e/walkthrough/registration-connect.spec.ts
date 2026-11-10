@@ -178,7 +178,7 @@ test("RS006 — organiser settings, team entry, Stripe Connect payment", async (
     // registrant" was submitting as the signed-in e2e organiser — and a
     // signed-in submitter registering THEMSELVES with an adult dob links the
     // entry to that account's own `(org_id, user_id, 'player')` person
-    // (`deriveLinkUserId`, registrations.ts). That upsert keeps the EXISTING
+    // (`deriveLinkUserId`, usecases/registrations/helpers.ts). That upsert keeps the EXISTING
     // name (`do update set full_name = persons.full_name`), so this spec was
     // naming the shared e2e account's player person "Priya Raman" for every
     // OTHER walkthrough in the same job — which is precisely how it broke

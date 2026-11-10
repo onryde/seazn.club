@@ -1,7 +1,7 @@
 // W1-driving Task 8 (D9, D14; rulings 51, 52): americano plans every round at
 // Start and is never re-generated; mexicano is `{ kind: "americano",
 // config.mode: "mexicano" }` and generates one round per decided round. The
-// expected values come from the RULE (stages.ts americanoGen, read as text),
+// expected values come from the RULE (usecases/stages/generators.ts americanoGen, read as text),
 // from the engine's declarations (americano.ts quartets: min(floor(n/4),
 // courtCount) per round) or from the fake's OWN rows (its members, the
 // oracle) — never from americano-loop.ts or the hooks under test.
@@ -118,7 +118,7 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(modeOf(stage("mexicano", { mode: "mexicano" }))).toBeNull();
     expect(modeOf(stage("americano", {}))).toBe("americano");
     expect(modeOf(stage("americano", { mode: "mexicano" }))).toBe("mexicano");
-    // A shapeless mode reads as americano, as stages.ts:756 does.
+    // A shapeless mode reads as americano, as usecases/stages/ does.
     expect(modeOf(stage("americano", { mode: "MEXICANO" }))).toBe("americano");
   });
 
@@ -481,7 +481,7 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     // Canary: the same violation on ANOTHER table's key — a sibling `_pkey`, as
     // a duplicate pair entrant row would raise — is NOT the cause (the regex is not over-broad).
     for (const other of ["entrants_pkey", "em_pk"]) expect(SELF_PAIR_CAUSE.test(pk.violation.replace(pk.name, other)), other).toBe(false);
-    // The member insert has no ON CONFLICT, so a duplicate (entrant, person) row raises (stages.ts pairEntrantsFor).
+    // The member insert has no ON CONFLICT, so a duplicate (entrant, person) row raises (usecases/stages/generators.ts pairEntrantsFor).
     const pairs = sliceFunction(stagesText(), "pairEntrantsFor");
     expect(pairs).toContain("await tx`insert into entrant_members ${tx(memberRows)}`;");
     expect(pairs).not.toMatch(/on conflict/i);
@@ -520,7 +520,7 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
 
   it("T8-R1: a mexicano 5xx whose message is NOT the self-pair's cause stays unsigned — the same 500 with the product's cause is signed", async () => {
     // After round 1, the round-2 generate answers 500 INTERNAL with a cause of
-    // its own (the points query's numeric cast, stages.ts:774-783, say).
+    // its own (the points query's numeric cast, usecases/stages/, say).
     class Other500 extends FakeAmericanoDriver {
       override async generate(stageId = "s1"): Promise<GenerateOut> {
         this.log("generate", stageId);

@@ -104,7 +104,7 @@ function allCourtRows(
  * id -> display name for EVERY court across `venues`, including archived
  * venues and archived courts, venue-qualified ("Name (Venue)") wherever the
  * bare name collides with another court's — active or archived alike.
- * REUSES `buildCourtDirectory` (schedule-ai.ts's AI-pack rule, lifted to the
+ * REUSES `buildCourtDirectory` (usecases/schedule-ai/ folder's AI-pack rule, lifted to the
  * client-safe `@/lib/court-directory` in P9 pass 4d) rather than a second
  * "is this name ambiguous" implementation.
  *

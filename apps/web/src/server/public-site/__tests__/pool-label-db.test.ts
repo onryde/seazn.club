@@ -2,7 +2,7 @@
 // producer and the real readers.
 //
 // The defect: `pools.name` is only ever written by the generator as the
-// English "Pool " + key (`usecases/stages.ts`), and the public surfaces printed
+// English "Pool " + key (`usecases/stages/`), and the public surfaces printed
 // that stored name, so a Spanish, French or Dutch spectator read "Pool A". The
 // unit suites beside the surfaces hand-build their pools; only a database can
 // show that the pools the GENERATOR writes reach each read model with the key

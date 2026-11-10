@@ -87,7 +87,7 @@ export type PostSubmitNavigation = { kind: "checkout"; url: string } | { kind: "
  * (free / offline) → straight to the status ref." The status URL uses
  * `?rid=<group_id>&token=<access_token>`, NOT `?ref=` — the same convention
  * `buildCartMail`'s statusUrl and `createRegistrationCheckout`'s Stripe
- * success/cancel URLs already mint (registrations.ts), and the one
+ * success/cancel URLs already mint (usecases/registrations/checkout.ts), and the one
  * `status/page.tsx` actually reads (via `groupById`): `ref_code` is
  * nullable on the schema, `group_id` never is.
  */
@@ -114,7 +114,7 @@ export function resolvePostSubmitNavigation(
  *
  * `"retry"` — a 409 (a concurrent checkout-mint race losing the
  * compare-and-swap in `createRegistrationCheckout`,
- * `REGISTRATION_CHECKOUT_CONFLICT`, `registrations.ts`) or any 5xx: the
+ * `REGISTRATION_CHECKOUT_CONFLICT`, `usecases/registrations/checkout.ts`) or any 5xx: the
  * failure is about TIMING/availability, not about what was submitted, so
  * the exact same request is expected to succeed on retry. Absent status
  * (no response reached the client at all — a dropped connection) is also

@@ -1,7 +1,7 @@
 // W4 app-A Task 13 (K9; rules X-LL-1…X-LL-5; rulebook RB4-V1…V6, RB4-E7; pre-flight C2, D10, R7) — a departed
 // qualifier's main-draw seat takes a LUCKY LOSER, driven through the real doors on a real database: the catalogue's own
 // templates (`buildTemplateStages`), Start, the scorer (`scoreEvent`), Complete, the seed proposal and its confirm, and the
-// withdrawal cascade (`withdrawEntrantCascade`). Main walked the opponent over (stages.ts F14; the cascade).
+// withdrawal cascade (`withdrawEntrantCascade`). Main walked the opponent over (stages/ F14; the cascade).
 //
 // Expected values: the rulebook's — the best loser below the cut (RB4-V2) is the qualifying bracket's latest-round loser,
 // by seed (C2), read here off the rows (who lost which quarter-final) and the qualifying stage's own final ranks (the

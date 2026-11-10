@@ -1800,7 +1800,7 @@ const row = (
 // Which pool a fixture sat in is a FIXTURE-row fact in the product, and a pack
 // declares no fixtures — so every pooled table used to be skipped. It is
 // recoverable from the ext KEY: the product prefixes a pooled round robin's
-// generated ids with `p{key}-` (`usecases/stages.ts:797` wrapping
+// generated ids with `p{key}-` (`usecases/stages/` wrapping
 // `roundrobin.ts:140`'s `rr-r{round}-c{court}`).
 // ===========================================================================
 

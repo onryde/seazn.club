@@ -591,7 +591,7 @@ function crossCheckSettings(
  *  of writing the comparison positionally. A reordered court list is not the
  *  same fact as an unchanged one: `ScheduleConfig.courts` is `z.array(CourtId)`
  *  and `putScheduleSettings` stores the parsed config as jsonb VERBATIM
- *  (`usecases/schedule.ts` — `tx.json(input.config)`), so zod preserves the
+ *  (`usecases/schedule/settings.ts` — `tx.json(input.config)`), so zod preserves the
  *  order and jsonb preserves it again. A well-behaved product therefore CANNOT
  *  produce a reorder, which means treating one as a divergence costs no false
  *  reds at all, while treating it as equality would silently accept a product
@@ -996,7 +996,7 @@ async function runDivision(
     };
     // B06b — a fixture the GENERATOR already settled was never scheduled and
     // never will be: a bracket bye is born `forfeited` with an award
-    // (`stages.ts:1351`). Counting those as unplaced redded suite 11 with
+    // (`usecases/stages/`). Counting those as unplaced redded suite 11 with
     // "unplaced fixtures = 32" (Div A's byes) and "= 17" (Div B's) on a board
     // where every real fixture was placed. The exemption is POSITIVE — the
     // fixture must actually carry a settled status — so a genuinely unplaced
@@ -1263,7 +1263,7 @@ export async function readEngineArtifacts(
  *  precedent — same file already does this for `ScheduleConfig`), so a value
  *  renamed on the wire reds there rather than silently going stale.
  *
- *  `startDivision` (`apps/web/src/server/usecases/schedule.ts`) transitions a
+ *  `startDivision` (`apps/web/src/server/usecases/schedule/publish.ts`) transitions a
  *  division to exactly `"active"` — the one value the RE-READ assertion below
  *  (D9's "assert the status actually flipped") pins against. Never a bare
  *  string literal typed a second time into a test: every assertion in this

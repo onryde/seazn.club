@@ -3,12 +3,12 @@
 // Stage-progression proposal panel (P6/D4b task B, scope item 1). Renders on
 // a `.seeding`-declared stage's fixtures tab, fed getSeedProposal's read-only
 // result as a server prop (no route — stage_seed_proposals has no GET;
-// server/usecases/stages.ts's getSeedProposal docstring). Destination slots
+// server/usecases/stages/seed-proposal.ts's getSeedProposal docstring). Destination slots
 // resolve through task A's resolveSlotLabel (lib/slot-label.ts) — never a
 // re-implementation.
 //
 // A tie is resolved PURELY through edits[], never tiePicks[]: the server
-// accepts both as independent mechanisms (confirmSeedProposal, stages.ts),
+// accepts both as independent mechanisms (confirmSeedProposal, usecases/stages/seed-proposal.ts),
 // but every tie's slot(s) can equally be satisfied by an ordinary
 // edit-in-place entry (its `coveredByEdit` check), so this panel sends only
 // `edits[]` — one interaction pattern for the organiser (every entrant cell
@@ -71,7 +71,7 @@ interface FixtureLabelRow {
 
 /** Every tie's every slot must carry an explicit edit before confirm is
  *  allowed. Mirrors confirmSeedProposal's own `coveredByEdit` check
- *  (stages.ts) — this is a UI convenience gate, not the safety net; the
+ *  (usecases/stages/seed-proposal.ts) — this is a UI convenience gate, not the safety net; the
  *  server re-validates and 422s SEEDING_TIE_UNRESOLVED regardless. */
 export function allTiesResolved(ties: readonly TieOut[], editsBySlot: ReadonlyMap<string, string>): boolean {
   return ties.every((t) => t.slots.every((s) => Boolean(editsBySlot.get(s))));

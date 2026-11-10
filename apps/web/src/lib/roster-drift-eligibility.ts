@@ -1,7 +1,7 @@
 // Which stages can have a drifted board — the ONE definition.
 //
 // Deliberately its own module, and deliberately free of `server-only` and of
-// any DB import: `usecases/stages.ts` (which owns getStageRosterDrift and
+// any DB import: `usecases/stages/roster-drift.ts` (which owns getStageRosterDrift and
 // rebuildStageFixtures) is server-only, so every test that renders the
 // division page mocks it wholesale. When this rule lived there, the page's
 // three test files each had to restate it in their mock — three copies of a

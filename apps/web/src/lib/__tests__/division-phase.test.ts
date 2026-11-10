@@ -83,7 +83,7 @@ describe("resolvePhase — rule order", () => {
   //
   // Reachable in production, and driven end to end through the real API
   // before this fix (fix-round-f-report.md): a knockout carrying a
-  // third-place playoff (`config.thirdPlace`, stages.ts:772) completes on its
+  // third-place playoff (`config.thirdPlace`, usecases/stages/) completes on its
   // FINAL alone — `isBracketStageComplete` (packages/engine, stage.ts:134)
   // only requires the `isFinal` fixtures — so `POST /stages/{id}/complete`
   // returns 200 with `division_completed: true` while the playoff is still
@@ -157,7 +157,7 @@ describe("resolvePhase — rule order", () => {
   // rule 2's "no pending/active stage AND no live fixture" is vacuously true
   // of an empty stage array exactly the way rule 1's own comment describes —
   // this used to read "finished" here. Reachable in production: deleteStage
-  // (stages.ts) lets an organiser remove the sole, last, UNPLAYED stage of
+  // (usecases/stages/) lets an organiser remove the sole, last, UNPLAYED stage of
   // an already-`active` division; fixtures.stage_id cascades, so the fixture
   // list empties with it, but divisionStatus stays whatever it was.
   // Confirmed reachable against a live "active" division with 6 unplayed
@@ -866,7 +866,7 @@ describe("resolveAttention", () => {
   // Alpha FC v Delta FC" directly above the SAME division's own "Setting
   // up" row. G3's fix gated on `divisionStatus === "active"`, which ALSO
   // excluded `scheduled` — but `scheduled` is exactly what the ordinary
-  // Publish action sets (schedule.ts's `publishSchedule`), not a "not yet
+  // Publish action sets (usecases/schedule/publish.ts's `publishSchedule`), not a "not yet
   // real" state. Live: six fixtures dated YESTERDAY on a published,
   // never-started division produced NO "Needs you" section at all — an
   // organiser who published a timetable and never pressed Start got no
@@ -1176,7 +1176,7 @@ describe("fixtureAwaitsSeedDraw — an unfilled SEED slot, not just an empty sid
     home_entrant_id: null, away_entrant_id: null,
     home_slot_label: null, away_slot_label: null, outcome: null, ...o,
   });
-  // The two label shapes stages.ts writes for a setup-timing stage: a seed
+  // The two label shapes usecases/stages/ writes for a setup-timing stage: a seed
   // destination descriptor (`{key, params, seed}`) and the bye marker. Only
   // their PRESENCE is read here, so the exact keys are not load-bearing at
   // this layer — competition-desk.test.ts drives the real generator and the
@@ -1195,7 +1195,7 @@ describe("fixtureAwaitsSeedDraw — an unfilled SEED slot, not just an empty sid
       row({ home_slot_label: seedLabel(1), away_slot_label: seedLabel(8) }), true],
     // A sibling-fed slot carries no label — UNLESS its feeder is a bye line,
     // in which case the setup generator's third pass stamps the bye's own
-    // seed descriptor there (stages.ts). That one is a real seed destination:
+    // seed descriptor there (usecases/stages/). That one is a real seed destination:
     // it carries a `seed`, and the same confirm fills and clears it. The row
     // below it in this table is that shape, and it is deliberately `true`.
     ["THE DEFECT: an ordinary sibling-fed slot has no label — round 2+ of a DRAWN bracket",
@@ -1315,7 +1315,7 @@ describe("fixtureAwaitsSeedDraw — an unfilled SEED slot, not just an empty sid
     // After confirm, in the one transaction: fillSlot seats the qualifier and
     // clears its label, then awardSeededByes writes status 'forfeited' +
     // {kind: "award", winner} — and LEAVES the bye marker on the empty side
-    // (stages.ts:2481). That leftover label is why the outcome term is the
+    // (usecases/stages/). That leftover label is why the outcome term is the
     // thing that retires the row, and why byes need no special case here.
     const afterConfirm = [
       bracketFx("sf1", row({ home_entrant_id: "e1", away_slot_label: byeLabel,

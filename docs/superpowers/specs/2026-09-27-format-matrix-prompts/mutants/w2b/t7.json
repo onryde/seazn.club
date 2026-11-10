@@ -142,7 +142,7 @@
   },
   {
     "id": "dead-clause-winner",
-    "file": "apps/web/src/server/usecases/stages.ts",
+    "file": "apps/web/src/server/usecases/stages/bracket-seats.ts",
     "find": "  if (advancesNobody(f.outcome as MatchOutcome | null)) return true;\n",
     "replace": "",
     "killers": [
@@ -157,7 +157,7 @@
   },
   {
     "id": "dead-clause-loser",
-    "file": "apps/web/src/server/usecases/stages.ts",
+    "file": "apps/web/src/server/usecases/stages/bracket-seats.ts",
     "find": "  if (feederIsDead(f)) return true;\n  // W2b X-WD-5",
     "replace": "  if (f.status === \"cancelled\" || (f.status === \"abandoned\" && f.outcome === null && !f.has_active_abandon)) return true;\n  // W2b X-WD-5",
     "killers": [
@@ -172,7 +172,7 @@
   },
   {
     "id": "loser-dead-legacy-off",
-    "file": "apps/web/src/server/usecases/stages.ts",
+    "file": "apps/web/src/server/usecases/stages/bracket-seats.ts",
     "find": "  return killsLoserEdge(f.outcome);\n",
     "replace": "  return f.outcome?.kind === \"award\";\n",
     "killers": [
@@ -232,7 +232,7 @@
   },
   {
     "id": "seat-assert-rebuild-off",
-    "file": "apps/web/src/server/usecases/stages.ts",
+    "file": "apps/web/src/server/usecases/stages/carry-over.ts",
     "find": "    assertAdvancingSeat({\n      fixtureId: f.id,\n",
     "replace": "    void ({\n      fixtureId: f.id,\n",
     "killers": [
@@ -373,7 +373,7 @@
   },
   {
     "id": "bye-reason-walkover",
-    "file": "apps/web/src/server/usecases/stages.ts",
+    "file": "apps/web/src/server/usecases/stages/bracket-seats.ts",
     "find": "'reason', case when lines.withdrawn is null then 'bye' else 'withdrew' end)",
     "replace": "'reason', case when lines.withdrawn is null then 'walkover' else 'withdrew' end)",
     "killers": [
@@ -410,7 +410,7 @@
   },
   {
     "id": "generated-departed-is-bye",
-    "file": "apps/web/src/server/usecases/stages.ts",
+    "file": "apps/web/src/server/usecases/stages/generators.ts",
     "find": "  return other === null ? byeAward(winner) : { kind: \"award\", winner, loser: other, reason: \"withdrew\" };",
     "replace": "  return byeAward(winner);",
     "killers": [

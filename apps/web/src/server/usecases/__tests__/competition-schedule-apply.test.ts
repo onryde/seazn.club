@@ -1469,7 +1469,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
   // never passed one (ruling #399 — apply-time blocking must not extend
   // to the typed-rule families). `verifyConfigFor` now also accepts a
   // bare `tz`, independent of `rules`, and these call sites supply the
-  // competition's own org zone. See competition-schedule-ai.ts's
+  // competition's own org zone. See competition-schedule-ai/ folder's
   // `verifyConfigFor` for the full argument.
   // ---------------------------------------------------------------------
 
@@ -1639,7 +1639,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
 
   // ---------------------------------------------------------------------
   // Final-review fix (4th instance of the same bug class G2/moveFixture and
-  // G2/applySchedule already fixed — see schedule.ts's
+  // G2/applySchedule already fixed — see schedule/ folder's
   // `roundRobinSequenceSiblings`). Every test above submits the FULL
   // per-division fixture list, so `mine` (the checked side of the delta)
   // always already contains every round-robin sibling and the pairwise scan

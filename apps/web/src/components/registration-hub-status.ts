@@ -2,7 +2,7 @@
 // Pure and dependency-free (matches registration-hub-tab.ts's convention) so
 // every boundary is unit-testable without a DB row or a clock mock.
 //
-// Deliberately NOT `registrations.ts`'s `windowOpen` (a boolean): that helper
+// Deliberately NOT `usecases/registrations/lookups.ts`'s `windowOpen` (a boolean): that helper
 // answers "can a submission land right now", collapsing "not yet open" and
 // "closed" into the same false. An organiser's row needs the three-way
 // distinction — open|scheduled|closed — so this is its own small derivation,

@@ -408,7 +408,7 @@ describe.skipIf(!HAS_DB)("publish validates the board it is about to publish (#2
 //   * the read moved INSIDE the lock, so the decision is made on the row this
 //     transaction is actually holding;
 //   * an `active` division is refused outright (owner ruling — see the guard's
-//     own comment in `schedule.ts`).
+//     own comment in `schedule/`).
 //
 // The race is driven for real, not stubbed: a second connection takes publish's
 // own advisory lock first, so the usecase parks on `pg_advisory_xact_lock` — the

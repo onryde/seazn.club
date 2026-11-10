@@ -88,7 +88,7 @@ async function scene(opts: Parameters<typeof tableScene>[0]): Promise<Scene> {
 
 const groupStage = (pools: number) => ({ seq: 1, kind: "group" as const, name: GROUPS, config: { pools: { count: pools } } });
 
-/** The stage's stored pools in the generator's order — it creates the i-th pool as key "A", "B", … (`stages.ts`). */
+/** The stage's stored pools in the generator's order — it creates the i-th pool as key "A", "B", … (`stages/`). */
 const poolsOf = (stageId: string) => sql<{ id: string; key: string }[]>`select id, key from pools where stage_id = ${stageId} order by key`;
 
 /** The first seated fixture of a pool: its home and away entrant. */

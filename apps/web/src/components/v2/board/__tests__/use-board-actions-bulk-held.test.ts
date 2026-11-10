@@ -1,7 +1,7 @@
 // Review 4 of #857 (Major). The board's bulk tools — shift a day ±15m, swap
 // two courts — run one PATCH per card. A start taken back leaves its card
 // `scheduled`, so the loop sent it too; the server refuses it as played
-// (schedule.ts `moveFixture`), and the loop ended right there: the cards
+// (usecases/schedule/move.ts `moveFixture`), and the loop ended right there: the cards
 // before it moved (each its own ledger step), the ones after it did not, the
 // board was never re-read, and all it said was the refusal.
 //

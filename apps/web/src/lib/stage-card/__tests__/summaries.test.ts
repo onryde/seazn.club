@@ -571,7 +571,7 @@ describe("stageActions", () => {
   });
 
   // M1: "started" is stated here as a RULE, not copied from the code. Spec §12 item 8 hides Generate once the stage has
-  // started; `generateStageFixtures` (server/usecases/stages.ts) is what moves a stage pending -> active, so a stage has
+  // started; `generateStageFixtures` (server/usecases/stages/generate.ts) is what moves a stage pending -> active, so a stage has
   // started exactly when its status is no longer pending - and a match with a result or under way is proof of it whatever the
   // status says (contradictory input is read as started, so Generate never offers to rebuild under a result). Hand-written
   // truth table of whether Generate is offered (no round to pair, so Pair next cannot stand in for it).

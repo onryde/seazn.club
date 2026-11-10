@@ -155,7 +155,7 @@ describe.skipIf(!HAS_DB)("loadSheetCandidates / listSheetDays (scorer sheets §4
 
   it("the day is on the ORG clock, never the division's own zone", async () => {
     // Controller ruling 2026-09-24: calendar-day math wants `orgTz` (repo rule,
-    // schedule.ts `ScheduleSettingsOut`), so a printed sheet does not depend on
+    // schedule/types.ts `ScheduleSettingsOut`), so a printed sheet does not depend on
     // the device that prints it. The board's day tabs are the VIEWER's clock
     // (ruling R8), a different clock this test does not assert. A differential:
     // the division's Auckland override, the org's Los Angeles and UTC each put
@@ -246,7 +246,7 @@ describe.skipIf(!HAS_DB)("loadSheetCandidates / listSheetDays (scorer sheets §4
     await sql`update fixtures set court_label = 'Court 7' where id = ${legacy!.id}`;
     // Another pre-P9 shape: V374 backfilled `venue_id` from free text with no
     // court. The venue comes through the COURT (every writer since derives it
-    // from one, schedule.ts moveFixture), so this row is simply courtless and
+    // from one, schedule/move.ts moveFixture), so this row is simply courtless and
     // keeps its place by time under Unassigned.
     await sql`update fixtures set venue_id = ${hallB.id} where id = ${venueOnly!.id}`;
     for (const f of [x!, y!, z!, legacy!]) await at(f.id, "2026-09-23T09:00:00Z");
@@ -282,7 +282,7 @@ describe.skipIf(!HAS_DB)("loadSheetCandidates / listSheetDays (scorer sheets §4
     const BYE = sql.json({ key: "bracket.slot.bye", params: {} });
     // The state a seeded bye line holds until its draw lands: one side empty
     // and stamped `bracket.slot.bye`, status still `scheduled`, no outcome
-    // (division-phase.ts `fixtureAwaitsSeedDraw`; stages.ts `awardSeededByes`
+    // (division-phase.ts `fixtureAwaitsSeedDraw`; stages/bracket-seats.ts `awardSeededByes`
     // settles it). No rig path stops there, so the stamp is written by hand.
     await sql`update fixtures set away_entrant_id = null, away_slot_label = ${BYE} where id = ${awayBye!.id}`;
     await sql`update fixtures set home_entrant_id = null, home_slot_label = ${BYE} where id = ${homeBye!.id}`;

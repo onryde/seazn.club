@@ -34,7 +34,7 @@
 // Its row is the third in fixtures.ts; its case drives the real entry on a fixture with an override and holds its line to the
 // block's own `effectiveLine` for the same match.
 //
-// W3 T3 (SW-M7, X-SW-5): the 19th site, `usecases/stages.ts` `swissGen`'s bye seat. W3 and Match Day each added one site while
+// W3 T3 (SW-M7, X-SW-5): the 19th site, `usecases/stages/swiss-gen.ts` `swissGen`'s bye seat. W3 and Match Day each added one site while
 // the ledger stood at 17, so the merge (91cd747724) kept both rows under the literal 18: the total is 19.
 //
 // stg cfg-defaults fix (2026-11-03): the 20th, a third call in `append-event.ts` — the first event's freeze reads the

@@ -1,6 +1,6 @@
 /**
  * The AUTO pass and a declared rest, against the live placement solver (#452 flake). Two layers, owner-approved
- * together; `autoBuildSchedule` is the one entry both auto-pass call sites in `schedule.ts` use.
+ * together; `autoBuildSchedule` is the one entry both auto-pass call sites in `schedule/` use.
  *
  * LAYER 1 — the request carries every pool's rest. A rest reaches the solver ONLY as a `RuleGroup` (the wire has no
  * other field for it), and the engine builds those per DIVISION: `build.ts` `restByDivisionForWire` asks `restFloor`

@@ -42,7 +42,7 @@ const BUSY_BACKOFF_MS = 4_000;
  *  auto-schedule.spec.ts's own seedBoard uses, trimmed to just what this
  *  file needs. `createStageAndGenerate`'s default `kind: "league"` is what
  *  makes this board's rounds a round SEQUENCE at all — `roundRobinStageIds`
- *  (schedule.ts) is `ROUND_SEQUENCE_STAGE_KINDS`: league, group and (W3 T3b)
+ *  (usecases/schedule/rounds.ts) is `ROUND_SEQUENCE_STAGE_KINDS`: league, group and (W3 T3b)
  *  swiss. */
 async function seedRoundRobinBoard(
   request: Parameters<typeof apiJson>[0],
@@ -375,7 +375,7 @@ const PROBE_COURT_ID = "00000000-0000-4000-8000-000000000000";
 
 /** #350's `expected_seq` has no GET endpoint, and a freshly-seeded division is
  *  NOT reliably seq 0 — `divisions.seq` is a general-purpose event counter
- *  (stages.ts bumps it on stage creation too, ahead of any scheduling),
+ *  (usecases/stages/ bumps it on stage creation too, ahead of any scheduling),
  *  confirmed directly rather than assumed (a `0` guess here 409s
  *  SEQ_CONFLICT with `current_seq: 1` on this exact seed flow). Every real
  *  client either tracks its own last write or learns the token from a

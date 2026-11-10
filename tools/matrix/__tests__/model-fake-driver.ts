@@ -14,8 +14,8 @@
 //    (withdrawal.ts applyUpdate — no START first, so a sport that refuses a
 //    forfeit before core.start refuses it here too: F1);
 //  - Generate works before Start, and Start generates only an empty stage
-//    (schedule.ts startDivision); rebuild refuses once any fixture has a
-//    score event or a result (stages.ts rebuildStageFixtures);
+//    (usecases/schedule/publish.ts startDivision); rebuild refuses once any fixture has a
+//    score event or a result (usecases/stages/generate.ts rebuildStageFixtures);
 //  - the roster locks at Start exactly as entrants.ts's TEXT says (read by
 //    product-text.ts, never typed): statuses, open-window kinds, status,
 //    message, and the code api-v1 puts on the wire;
@@ -35,7 +35,7 @@
 //
 // W1-driving Task 14 (FP-T14-1): a single SWISS stage too, so the model's
 // Swiss bias is witnessed on a swiss-shaped product. Its rules are the
-// product's (stages.ts swissGen, swiss-shell.ts), each cited at its method,
+// product's (usecases/stages/swiss-gen.ts swissGen, swiss-shell.ts), each cited at its method,
 // and its pairings are the ENGINE's own pairRound (scheduling/swiss.ts) — the
 // one the product calls. The ledger, the fold, the withdrawal cascade and the
 // feeds stay the league path's: only Start, Generate, Rebuild and the
@@ -116,7 +116,7 @@ const REASON = withdrawalReason();
 
 const pairKey = (a: string, b: string) => (a < b ? `${a}~${b}` : `${b}~${a}`);
 
-/** stages.ts DECIDED: a swiss board the next round's gate counts as finished. */
+/** usecases/stages/swiss-gen.ts DECIDED: a swiss board the next round's gate counts as finished. */
 const SWISS_DECIDED = new Set(["decided", "finalized", "forfeited"]);
 /** fixture-results-sql.ts fixtureHasResultSql's status clause: what a rebuild refuses over (with evidence, or abandoned with an outcome).
  *  A HELD bracket match (needs_decision, X-BR-2) is a played match: it carries its level result's events, and loop F's Task 7 adds it
@@ -139,7 +139,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
   readonly feeds = new Map<string, { target: string; slot: 1 | 2 }>();
   /** A swiss stage's bye shells (the product's `sw-r<n>-bye` ext_key). Reset per division. */
   readonly byeShells = new Set<string>();
-  /** `<fixture id>:<slot>`: a bracket seat no entrant will reach (stages.ts resolveBracketSeats' dead seat) — one whose
+  /** `<fixture id>:<slot>`: a bracket seat no entrant will reach (usecases/stages/bracket-seats.ts resolveBracketSeats' dead seat) — one whose
    *  withdrawn entrant's opponent was still TBD (X-WD-3, plan Task 8), or one a double walkover or a void feeds (X-DW-2,
    *  Review Focus 1). The opponent who arrives beside it is walked over by bye. Reset per division. */
   readonly deadSeats = new Set<string>();
@@ -261,7 +261,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     return generateRoundRobin({ entrants: active, config: { legs } }).fixtures.map((f) =>
       this.opts.unmirroredLegs === true && f.leg % 2 === 0 ? { round: f.roundNo, home: f.away, away: f.home } : { round: f.roundNo, home: f.home, away: f.away });
   }
-  /** schedule.ts startDivision: generates only when the first stage has no fixtures. */
+  /** usecases/schedule/publish.ts startDivision: generates only when the first stage has no fixtures. */
   override start(): Promise<StartOut> {
     return Promise.resolve().then(() => {
       this.log("start");
@@ -279,7 +279,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     return Promise.resolve().then(() => {
       this.log("generate");
       if (this.stage === null) throw new Error("fake: generate before postStages");
-      // stages.ts: a pending stage goes active on its first generate, Start or not.
+      // usecases/stages/: a pending stage goes active on its first generate, Start or not.
       if (this.stage.status === "pending") this.stage.status = "active";
       if (this.opts.emptyGenerate === true) return { created: 0, existing: 0, fixtures: [] };
       if (this.#swiss) return this.#swissGenerate();
@@ -373,7 +373,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       throw new RefusedCall("POST", path, engineHttpStatus("DOUBLE_WALKOVER_NO_NEXT_MATCH"), "DOUBLE_WALKOVER_NO_NEXT_MATCH", "a double walkover needs a next match — reschedule, record a walkover if one side turned up, or settle");
     }
   }
-  /** A test hook for a bracket feed edge (stages.ts generate's second pass:
+  /** A test hook for a bracket feed edge (usecases/stages/ generate's second pass:
    *  a target's homeFrom/awayFrom becomes the source's winner_to_fixture/slot). */
   feed(source: string, target: string, slot: 1 | 2): void {
     this.feeds.set(source, { target, slot });
@@ -443,7 +443,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       this.#fill(t);
     }
   }
-  /** stages.ts resolveBracketSeats (loop F) on one seat that just died — a withdrawal's emptied seat (departed) or the
+  /** usecases/stages/bracket-seats.ts resolveBracketSeats (loop F) on one seat that just died — a withdrawal's emptied seat (departed) or the
    *  seat a double walkover or a void feeds (dead, not departed), as fake-driver.ts killSlot plays it:
    *  - an entrant waiting opposite walks over at once: `forfeited` + the bye award, no event (W2b C-5), and goes on;
    *  - the other seat still on its way: nothing yet (the arrival is #fill's bye);
@@ -545,7 +545,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     return Promise.resolve().then(() => {
       this.log("rebuild");
       if (this.#swiss) {
-        // stages.ts rebuildStageFixtures: refused while any fixture holds a
+        // usecases/stages/generate.ts rebuildStageFixtures: refused while any fixture holds a
         // result (fixtureHasResultSql — a result status, an abandoned row with
         // an outcome, or score events); a generation-time bye holds none. Then
         // every fixture goes and the regenerate is swissGen's first press.
@@ -593,7 +593,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
    *  shell on an odd one — nobody seated. Returns the rows minted. */
   #mintSwissShells(): number {
     const rounds = this.stage?.config.rounds;
-    // stages.ts swissGen: CONFIG_INVALID without a whole config.rounds >= 1.
+    // usecases/stages/swiss-gen.ts swissGen: CONFIG_INVALID without a whole config.rounds >= 1.
     if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 1) throw new RefusedCall("POST", "/api/v1/stages/s1/generate", engineHttpStatus("CONFIG_INVALID"), "CONFIG_INVALID", "swiss stage requires config.rounds >= 1");
     const { boards, bye } = this.#shape();
     const before = this.fixtures.length;
@@ -608,7 +608,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     const rounds = [...new Set(this.fixtures.map((f) => f.round_no ?? 0))].sort((a, b) => a - b);
     return rounds.find((r) => this.#roundOf(r).some((f) => !swissSeated(f))) ?? null;
   }
-  /** stages.ts reconcileSwissRoundShells: round `r` reshaped to the active
+  /** usecases/stages/swiss-reconcile.ts reconcileSwissRoundShells: round `r` reshaped to the active
    *  field — surplus board shells dropped from the tail, a bye shell minted or
    *  dropped. Only an unseated round with no recorded data reshapes; otherwise
    *  the target round refuses (STAGE_NOT_READY) and a later one is skipped. */
@@ -630,7 +630,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     for (let b = boards.length; b < want.boards; b++) this.#mintBoard(r);
     if (want.bye && byeRow === undefined) this.#mintBye(r);
   }
-  /** stages.ts swissGen: the first press mints shells; each later press seats
+  /** usecases/stages/swiss-gen.ts swissGen: the first press mints shells; each later press seats
    *  the next unseated round onto its shells (an UPDATE: `created` stays 0),
    *  refused STAGE_NOT_READY while the round before it has an undecided seated
    *  board. Before Start every later unseated round is reshaped too (eager,
@@ -701,7 +701,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     const round = pairRound(standings, { played, byes }, { chess: cfg.chess === true, ...(cfg.pairing === "rank_adjacent" ? { pairing: "rank_adjacent" as const } : {}) });
     // W3 (engine 2.0.0): `pairRound` answers a round or a refusal VALUE; the product's Pair answers a refusal with the named
     // SWISS_NO_LEGAL_PAIRING and seats nobody. The twin refuses before it touches a shell, as the product does. The status and
-    // the body are swissGen's (stages.ts, W3 app-B T4): 409 when Finish is the way out, else 422 (the table row's
+    // the body are swissGen's (usecases/stages/swiss-gen.ts, W3 app-B T4): 409 when Finish is the way out, else 422 (the table row's
     // `resolvableStatus`), and the five fields `{ round, reason, field, finishAfter, canFinish }` - `finishAfter` and `canFinish`
     // read from THE Finish predicate (swiss-finish-twin.ts), the one `finishSwiss` below judges by.
     if (!round.ok) {
@@ -766,7 +766,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     return { ...complete, finished_after: k, shells_removed: doomed.size, slots_freed: 0 };
   }
 
-  /** A test hook for stages.ts addFixture (PROMPT-66): an ad-hoc match on a
+  /** A test hook for usecases/stages/ad-hoc.ts addFixture (PROMPT-66): an ad-hoc match on a
    *  running league — "a replay, a friendly, a manual tie-breaker or a missing
    *  match". Not a model command: COMMAND_KINDS has no AddMatch. */
   addFixture(home: string, away: string): FakeFixture {

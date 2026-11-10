@@ -563,7 +563,7 @@ describe.skipIf(!HAS_DB)("W2d concern 2 fix round 1 — the stored table follows
     let checked = 0;
     for (const kind of StageKind.options.filter((k) => !tableKinds.includes(k))) {
       const s = await scene({ entrants: 4, stages: { seq: 1, kind, name: kind, config: CONFIG[kind] ?? {} } as CreateStages });
-      // americano pairs the PERSONS behind the individual entrants (stages.ts americanoGen): give each one.
+      // americano pairs the PERSONS behind the individual entrants (stages/generators.ts americanoGen): give each one.
       if (kind === "americano")
         for (const [i, id] of s.entrants.entries()) {
           const person = await createPerson(s.auth, { full_name: `P${i + 1}`, consent: {}, dob: null, gender: null, external_ref: null });

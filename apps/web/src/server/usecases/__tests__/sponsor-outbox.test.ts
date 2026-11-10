@@ -1,7 +1,7 @@
 // Phase 3 wave 2, Batch B: the sponsor's money mail goes through the email outbox.
-//   - Email 3, `sponsor_invoice`: a checkout queues the pay-now invoice to the sponsor contact (a literal address), ref
-//     `sponsor_order/<order id>`, once-key the order id, in the org's language. The request makes the first attempt, after the Checkout
-//     session is minted.
+//   - Email 3, `sponsor_invoice`: an online deal's invoice (sponsor deals Task 7: `createDeal` online sends the first, Send invoice
+//     the next) is queued to the sponsor's billing email (a literal address), ref `sponsor_order/<deal id>`, once-key
+//     `<deal id>:<send count>`, in the org's language. The request makes the first attempt, after the Checkout session is minted.
 //   - Email 4, `sponsor_receipt`: the payment webhook queues the receipt to the sponsor contact in the transaction that activates the
 //     placement, once per payment intent (once-key the intent id), in the org's language; the worker makes the first attempt. The
 //     dispute evidence pack quotes that receipt in the language it was sent in.
@@ -22,7 +22,13 @@ import { randomUUID } from "node:crypto";
 const stripeMock = vi.hoisted(() => {
   const checkoutCreate = vi.fn();
   const refundCreate = vi.fn();
-  return { checkoutCreate, refundCreate, stripe: { checkout: { sessions: { create: checkoutCreate } }, refunds: { create: refundCreate } } };
+  const retrieve = vi.fn(async (id: string) => ({ id, status: "open" }));
+  const expire = vi.fn(async (id: string) => ({ id, status: "expired" }));
+  return {
+    checkoutCreate,
+    refundCreate,
+    stripe: { checkout: { sessions: { create: checkoutCreate, retrieve, expire } }, refunds: { create: refundCreate } },
+  };
 });
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
@@ -49,8 +55,8 @@ import {
   queueSponsorReceipt,
   queueSponsorRefundReceipt,
   refundSponsorOrder,
-  startSponsorCheckout,
 } from "../sponsors";
+import { createDeal } from "../sponsor-deals";
 import { stubOutboxEnv } from "./_invite-mail";
 import { cleanUpSponsorOrgs, seedSponsorOrder, seedSponsorOrg } from "./_money-fixtures";
 
@@ -72,7 +78,9 @@ beforeEach(() => {
   stubOutboxEnv();
   vi.mocked(enqueueEmailOnce).mockClear();
   deliverMock.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_sp_${randomUUID()}` }));
-  stripeMock.checkoutCreate.mockReset().mockImplementation(async () => ({ id: `cs_sp_${randomUUID().slice(0, 8)}`, url: CHECKOUT_URL }));
+  stripeMock.checkoutCreate
+    .mockReset()
+    .mockImplementation(async () => ({ id: `cs_sp_${randomUUID().slice(0, 8)}`, url: CHECKOUT_URL, expires_at: Math.floor(Date.now() / 1000) + 86_400 }));
   stripeMock.refundCreate.mockReset().mockImplementation(async () => ({ id: `re_sp_${randomUUID().slice(0, 8)}` }));
 });
 
@@ -95,6 +103,19 @@ async function sponsorOrder(opts: Parameters<typeof seedSponsorOrder>[0]) {
   made.orgIds.push(o.orgId);
   made.userIds.push(o.ownerId);
   return o;
+}
+
+/** Sell the org's package online to a new sponsor billed at `to` (sponsor deals Task 7): the deal, its first invoice sent. */
+async function sellOnline(s: { auth: AuthCtx; orgId: string; packageId: string }, to: string) {
+  const [sp] = await sql<{ id: string }[]>`
+    insert into sponsors (org_id, name, tier, status) values (${s.orgId}, 'Acme Corp', 'partner', 'active') returning id`;
+  const out = await createDeal(
+    s.auth,
+    sp!.id,
+    { package_id: s.packageId, competition_id: null, payment_method: "online", go_live: "on_payment", sponsor_email: to, ends_on: null },
+    "https://app.test",
+  );
+  return { order: out.deal, checkout_url: out.checkout_url, sponsorId: sp!.id };
 }
 
 const ownerAuth = (o: { orgId: string; ownerId: string }): AuthCtx => ({ orgId: o.orgId, via: "session", userId: o.ownerId, role: "owner", keyId: null });
@@ -184,11 +205,7 @@ describe.skipIf(!HAS_DB)("a sponsor checkout sends its invoice through the outbo
     const s = await sponsorOrg("fr");
     const to = address("invoice");
 
-    const { order, checkout_url } = await startSponsorCheckout(
-      s.auth,
-      { package_id: s.packageId, sponsor_name: "Acme Corp", sponsor_email: to },
-      "https://app.test",
-    );
+    const { order, checkout_url } = await sellOnline(s, to);
     expect(checkout_url, "premise: the Stripe mock's session URL").toBe(CHECKOUT_URL);
 
     const [row] = await settled(INVOICE, [order.id], 1);
@@ -196,7 +213,7 @@ describe.skipIf(!HAS_DB)("a sponsor checkout sends its invoice through the outbo
       kind: INVOICE,
       ref_type: "sponsor_order",
       ref_id: order.id,
-      dedupe_key: order.id,
+      dedupe_key: `${order.id}:1`,
       org_id: s.orgId,
       recipient: to,
       recipient_user_id: null,
@@ -214,12 +231,12 @@ describe.skipIf(!HAS_DB)("a sponsor checkout sends its invoice through the outbo
     expect(calls[0]!.text).toContain(CHECKOUT_URL);
   });
 
-  it("two checkouts for one package are two invoices, and neither replaces the other", async () => {
+  it("two online deals for one package are two invoices, and neither replaces the other", async () => {
     const s = await sponsorOrg("fr");
     const to = address("twice");
 
-    const first = await startSponsorCheckout(s.auth, { package_id: s.packageId, sponsor_name: "Acme Corp", sponsor_email: to }, "https://app.test");
-    const second = await startSponsorCheckout(s.auth, { package_id: s.packageId, sponsor_name: "Acme Corp", sponsor_email: to }, "https://app.test");
+    const first = await sellOnline(s, to);
+    const second = await sellOnline(s, to);
     expect(first.order.id, "premise: two orders").not.toBe(second.order.id);
 
     const rows = await settled(INVOICE, [first.order.id, second.order.id], 2);
@@ -233,9 +250,7 @@ describe.skipIf(!HAS_DB)("a sponsor checkout sends its invoice through the outbo
     await deactivateSponsorPackage(s.auth, s.packageId);
     const to = address("inactive");
 
-    await expect(
-      startSponsorCheckout(s.auth, { package_id: s.packageId, sponsor_name: "Acme Corp", sponsor_email: to }, "https://app.test"),
-    ).rejects.toMatchObject({ status: 422 });
+    await expect(sellOnline(s, to)).rejects.toMatchObject({ status: 422, code: "package_retired" });
 
     const orders = await sql<{ id: string }[]>`select id from sponsor_orders where org_id = ${s.orgId}`;
     expect(orders, "no order was opened").toHaveLength(0);
@@ -287,12 +302,16 @@ describe.skipIf(!HAS_DB)("a paid sponsor order queues its receipt on the outbox 
     const o = await sponsorOrder({ status: "pending", defaultLocale: "nl" });
 
     await processStripeEvent(succeeded(o.intent, o.orderId));
+    const placements = await sponsorsIn(o.orgId);
     await processStripeEvent(succeeded(o.intent, o.orderId)); // Stripe's retry, or an /admin/billing-events replay
 
     expect(await rowsOf(RECEIPT, [o.orderId])).toHaveLength(1);
     // Asked once: the second delivery finds the order paid and never reaches the once-key.
     expect(enqueueCalls(RECEIPT, o.orderId)).toHaveLength(1);
-    expect(await sponsorsIn(o.orgId), "and activated one placement").toBe(1);
+    // The redelivery activated nothing more, and the deal's placement is live (whichever sponsor row the first delivery put
+    // there: the webhook inserts one today, and moves the deal's own from sponsor deals Task 8).
+    expect(await sponsorsIn(o.orgId), "the redelivery activated nothing more").toBe(placements);
+    expect(await orderState(o.orderId)).toEqual({ status: "paid", sponsor_status: "active" });
   });
 
   it("the receipt's once-key alone: two transactions for one payment intent queue one receipt", async () => {
@@ -324,10 +343,29 @@ describe.skipIf(!HAS_DB)("a paid sponsor order queues its receipt on the outbox 
     expect(pack.html).not.toContain(en);
   });
 
+  it("T8 review m3: the evidence pack quotes the receipt the webhook SENT — the deal's package name — after the package is renamed", async () => {
+    const o = await sponsorOrder({ status: "pending" });
+    await processStripeEvent(succeeded(o.intent, o.orderId));
+    const [sent] = enqueueCalls(RECEIPT, o.orderId);
+    expect(sent, "premise: the webhook queued the receipt").toBeDefined();
+    const renamed = `Renamed package ${randomUUID().slice(0, 8)}`;
+    await sql`update sponsor_packages set name = ${renamed} where id = (select package_id from sponsor_orders where id = ${o.orderId})`;
+    await sql`update sponsor_orders set disputed_at = now(), dispute_id = ${`dp_ev_${randomUUID().slice(0, 8)}`} where id = ${o.orderId}`;
+
+    const pack = await buildSponsorDisputeEvidence(ownerAuth(o), o.orderId, "https://ev.test");
+
+    const asSent = dictionarySubject("en", "sponsorReceipt.textLine", { packageName: o.packageName, orgName: o.orgName });
+    const asRenamed = dictionarySubject("en", "sponsorReceipt.textLine", { packageName: renamed, orgName: o.orgName });
+    expect(asSent, "premise: the rename changes the line").not.toBe(asRenamed);
+    expect((sent![1] as { text: string }).text, "premise: the sent receipt carries the deal's name").toContain(asSent);
+    expect(pack.html, "the pack quotes the line the sponsor received").toContain(asSent);
+    expect(pack.html).not.toContain(asRenamed);
+  });
+
   it("the invoice row survives the receipt: one order's invoice and receipt are two rows", async () => {
     const s = await sponsorOrg("en");
     const to = address("both");
-    const { order } = await startSponsorCheckout(s.auth, { package_id: s.packageId, sponsor_name: "Acme Corp", sponsor_email: to }, "https://app.test");
+    const { order } = await sellOnline(s, to);
     const [invoice] = await settled(INVOICE, [order.id], 1);
     expect(invoice!.status, "premise: the request sent the invoice").toBe("sent");
 
@@ -366,34 +404,37 @@ describe.skipIf(!HAS_DB)("a paid sponsor order queues its receipt on the outbox 
     expect(enqueueCalls(RECEIPT, o.orderId)).toHaveLength(0);
   });
 
-  it("a redelivered success after the organiser deleted the sponsor queues no second receipt", async () => {
+  // Sponsor deals Task 5: a paid deal is money history, so its sponsor cannot be deleted (409 `sponsor_has_deal_history`; the
+  // RESTRICT key and the prune policy back it). The redelivery then finds the order paid, and queues nothing.
+  it("a redelivered success after the organiser tried to delete the sponsor queues no second receipt (the delete is refused: money history)", async () => {
     const o = await sponsorOrder({ status: "pending", defaultLocale: "en" });
     await processStripeEvent(succeeded(o.intent, o.orderId));
     expect(await rowsOf(RECEIPT, [o.orderId]), "premise: the first delivery queued the receipt").toHaveLength(1);
     const [paid] = await sql<{ sponsor_id: string | null }[]>`select sponsor_id from sponsor_orders where id = ${o.orderId}`;
 
-    // The organiser deletes the placement: the order keeps its money record, `sponsor_id` is set null (V283's foreign key).
-    await deleteSponsor(ownerAuth(o), paid!.sponsor_id!);
+    await expect(deleteSponsor(ownerAuth(o), paid!.sponsor_id!)).rejects.toMatchObject({ status: 409, code: "sponsor_has_deal_history" });
     const [after] = await sql<{ status: string; sponsor_id: string | null }[]>`select status, sponsor_id from sponsor_orders where id = ${o.orderId}`;
-    expect(after, "premise: still paid, with no placement").toMatchObject({ status: "paid", sponsor_id: null });
+    expect(after, "still paid, on its placement").toEqual({ status: "paid", sponsor_id: paid!.sponsor_id });
+    const placements = await sponsorsIn(o.orgId);
 
     await processStripeEvent(succeeded(o.intent, o.orderId));
 
-    expect(await sponsorsIn(o.orgId), "no placement was re-created").toBe(0);
+    expect(await sponsorsIn(o.orgId), "no placement was created by the redelivery").toBe(placements);
     expect(await rowsOf(RECEIPT, [o.orderId])).toHaveLength(1);
     expect(enqueueCalls(RECEIPT, o.orderId), "asked once in total").toHaveLength(1);
   });
 
-  it("a payment success re-run on a refunded order whose sponsor was deleted creates no sponsor and leaves the order refunded", async () => {
+  it("a payment success re-run on a refunded order creates no sponsor and leaves the order refunded (its sponsor cannot be deleted: money history)", async () => {
     // Only an order that has not been paid activates: `pending`, or `failed` (Stripe lets a failed intent succeed on a retry). Every
-    // other status the database allows is non-activating, named here: `paid` (the test above) and `refunded` (this one). A new status
-    // added to the column must be placed on one side or the other, so the set is read from the column's own check constraint.
+    // other status the database allows is non-activating, named here: `paid` (the test above), `refunded` (this one) and `none` (a
+    // complimentary deal has no payment: sponsor deals V495). A new status added to the column must be placed on one side or the
+    // other, so the set is read from the column's own check constraint, by name (V495 named it beside the deal-status CHECK).
     const ACTIVATING = ["failed", "pending"];
-    const NON_ACTIVATING = ["paid", "refunded"];
+    const NON_ACTIVATING = ["none", "paid", "refunded"];
     const [{ def }] = await sql<{ def: string }[]>`
       select pg_get_constraintdef(c.oid) as def
         from pg_constraint c
-       where c.conrelid = 'sponsor_orders'::regclass and c.contype = 'c' and pg_get_constraintdef(c.oid) like '%status%'`;
+       where c.conrelid = 'sponsor_orders'::regclass and c.conname = 'sponsor_orders_payment_status_check'`;
     const declared = [...def.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]!).sort();
     expect(declared, "every order status is named as activating or not").toEqual([...ACTIVATING, ...NON_ACTIVATING].sort());
 
@@ -403,17 +444,19 @@ describe.skipIf(!HAS_DB)("a paid sponsor order queues its receipt on the outbox 
     const [refunded] = await sql<{ status: string; sponsor_id: string | null }[]>`select status, sponsor_id from sponsor_orders where id = ${o.orderId}`;
     expect(refunded!.status, "premise: the refund landed").toBe("refunded");
     expect(refunded!.sponsor_id, "premise: on the placement the payment bought").not.toBeNull();
-    // The organiser deletes the dead placement: `sponsor_id` is set null (V283's foreign key), so the order names no placement.
-    await deleteSponsor(ownerAuth(o), refunded!.sponsor_id!);
-    const [before] = await sql<{ status: string; sponsor_id: string | null }[]>`select status, sponsor_id from sponsor_orders where id = ${o.orderId}`;
-    expect(before, "premise: refunded, with no placement").toEqual({ status: "refunded", sponsor_id: null });
-    expect(await sponsorsIn(o.orgId), "premise: the org has no placement").toBe(0);
+    // A refunded deal is money history: the organiser cannot delete its placement (sponsor deals Task 5), so it stays named.
+    await expect(deleteSponsor(ownerAuth(o), refunded!.sponsor_id!)).rejects.toMatchObject({ status: 409, code: "sponsor_has_deal_history" });
+    const placements = await sponsorsIn(o.orgId);
+    const [down] = await sql<{ status: string }[]>`select status from sponsors where id = ${refunded!.sponsor_id}`;
+    expect(down!.status, "premise: the refunded placement is down").not.toBe("active");
 
     await processStripeEvent(succeeded(o.intent, o.orderId)); // the success event again: a crash re-claim, or an /admin replay
 
     const [after] = await sql<{ status: string; sponsor_id: string | null }[]>`select status, sponsor_id from sponsor_orders where id = ${o.orderId}`;
-    expect(after, "the order stays refunded and names no placement").toEqual({ status: "refunded", sponsor_id: null });
-    expect(await sponsorsIn(o.orgId), "no placement was created: a refunded sponsor never goes back on the boards").toBe(0);
+    expect(after, "the order stays refunded, on the same placement").toEqual({ status: "refunded", sponsor_id: refunded!.sponsor_id });
+    expect(await sponsorsIn(o.orgId), "no placement was created: a refunded sponsor never goes back on the boards").toBe(placements);
+    const [still] = await sql<{ status: string }[]>`select status from sponsors where id = ${refunded!.sponsor_id}`;
+    expect(still!.status, "and the refunded placement stays down").toBe(down!.status);
     expect(await rowsOf(RECEIPT, [o.orderId]), "no new receipt: only the first payment's").toHaveLength(1);
     expect(enqueueCalls(RECEIPT, o.orderId), "asked once in total: the re-run never reached the receipt").toHaveLength(1);
   });

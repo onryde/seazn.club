@@ -48,7 +48,7 @@ import { newSession, check, signIn, tag, v1, v1data, setPlan } from "../harness.
  *
  * BOUNDED BY THE INSTANCE, NOT BY A WALL — and that is a deviation worth naming.
  * The brief asked for an explicit short wall, but `AUTO_SOLVER_WALL_MS` is a
- * module constant in `usecases/schedule.ts` and the auto endpoint's body accepts
+ * module constant in `usecases/schedule/` and the auto endpoint's body accepts
  * only `only_unlocked` and `mode`, so no wall can be passed over HTTP. The
  * instance is kept tiny instead: 4 entrants, 6 fixtures, 2 courts, well inside
  * the R18 size gate, so each solve returns far short of the 8 s ceiling. Every

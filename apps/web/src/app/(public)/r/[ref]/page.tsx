@@ -43,7 +43,7 @@ export default async function RefStatusPage({ params, searchParams }: Props) {
   const refCode = decodeURIComponent(ref);
 
   // Token-free checkout return (email-minted sessions —
-  // registrations.ts's own createRegistrationCheckout mints
+  // usecases/registrations/checkout.ts's own createRegistrationCheckout mints
   // `/r/{ref}?src=email` as returnBase, then appends exactly
   // `&checkout=success&session_id={CHECKOUT_SESSION_ID}` on success):
   // reconcile BEFORE the read so a paid cart shows confirmed even ahead of

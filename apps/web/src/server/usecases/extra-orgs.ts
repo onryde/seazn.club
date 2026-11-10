@@ -56,7 +56,7 @@ export const ORG_ALLOWANCE_ALERT_THRESHOLD = 25;
  * (one invoice, one billing cycle, Stripe-native proration) — never a second
  * subscription. This mutates STRIPE ONLY: the org_addons row is written by the
  * customer.subscription.updated webhook (syncOrgAddonsForSubscription,
- * billing-events.ts), the single writer, so Stripe and the DB can never
+ * billing-events/addon-sync.ts), the single writer, so Stripe and the DB can never
  * diverge. Do NOT write org_addons here.
  *
  * Group-payer gated (`requireBillingOwner`, the same gate extra-seat and the

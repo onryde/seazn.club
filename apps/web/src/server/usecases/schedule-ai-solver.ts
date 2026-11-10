@@ -9,7 +9,7 @@
 // credits, no SDK call.
 //
 // C5 replaced the z3 `repairDecomposed` call this module used to wrap with a
-// direct `buildSchedule` call — see `reflowExisting` (`schedule.ts`) for the
+// direct `buildSchedule` call — see `reflowExisting` (`schedule/reflow.ts`) for the
 // identical pattern REFLOW already uses (`frozen`/`current` anchoring, the
 // fallback-exit reconciliation) and
 // `docs/superpowers/specs/2026-08-12-z3-retirement-design.md` stage B for the
@@ -63,7 +63,7 @@
 // bookkeeping (`solverBudgetLeft`, `SOLVER_MIN_BUDGET_MS`) is a target, not a
 // hard ceiling this module itself enforces — same as it already is for
 // BUILD/POLISH/REFLOW. BUILD/POLISH/REFLOW add no serialising or admission
-// wrapper of their own for exactly this reason (`schedule.ts`'s R17 ruling: a
+// wrapper of their own for exactly this reason (`schedule/` folder's R17 ruling: a
 // redundant wrapper here is not neutral, it is the same mistake
 // `withZ3Teardown` was — see that ruling's own comment for the measured
 // latency cost of layering a second serialisation on top of one that already
@@ -179,12 +179,12 @@ export type SolverFallback =
   | "error"
   /** The solver answered, but the caller's own verifier did not agree the board
    *  was better, so its moves were discarded. Set by the CALLER, never by
-   *  this module — see `schedule-ai.ts`/`competition-schedule-ai.ts`'s own
+   *  this module — see `schedule-ai/`/`competition-schedule-ai/` folder's own
    *  adoption gate. */
   | "not_adopted"
   /** Joint runs only: the divisions in this run share no court, so there is no
    *  placement the solver could offer that is legal for all of them. Set by
-   *  the CALLER (`competition-schedule-ai.ts`), never by this module. */
+   *  the CALLER (`competition-schedule-ai/`), never by this module. */
   | "court_split";
 
 /** Everything one solver attempt observed. `engine` is stamped by the caller,
@@ -319,7 +319,7 @@ export async function solveBoard(input: SolveBoardInput): Promise<SolveBoardOutc
   const violatorIds = input.fixtures.map((f) => f.id).filter((id) => !frozen.has(id));
 
   if (violatorIds.length === 0) {
-    // Mirrors `reflowExisting`'s identical guard (schedule.ts): the placement
+    // Mirrors `reflowExisting`'s identical guard (schedule/reflow.ts): the placement
     // service's wire refuses a request naming zero movable fixtures
     // ("fixtures must not be empty", `schema.py` — no log call on that
     // branch, unlike its siblings). Reachable whenever every fixture a

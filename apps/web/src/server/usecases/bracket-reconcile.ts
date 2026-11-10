@@ -1,5 +1,5 @@
 // W4 app-A Task 8 (FX-G2, MB-004/005; spec 2026-11-04 §6.5): the DRIVER of a root knockout's reconcile — what a Generate
-// does when the bracket already has lines. Called from `generateStageFixturesTx` (stages.ts), in its transaction, under
+// does when the bracket already has lines. Called from `generateStageFixturesTx` (stages/generate-tx.ts), in its transaction, under
 // its division lock. The planner is lib/bracket-reconcile.ts; the surgeries are ./bracket-lines.ts.
 //
 //   - after Start: Generate never reshapes. An ARRIVAL since the draw (or a seat whose entrant was deleted) is refused by

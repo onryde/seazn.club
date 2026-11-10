@@ -52,7 +52,7 @@ export async function seedOrg(): Promise<{ auth: AuthCtx }> {
  *  test needs its two same-valued-ext_key fixtures in DIFFERENT stages or
  *  the setup itself throws a duplicate-key violation before import ever
  *  runs. `generateStageFixtures` draws every ACTIVE DIVISION entrant
- *  (stages.ts:1121-1124, `select id, seed from entrants where division_id =
+ *  (stages/generate.ts, `select id, seed from entrants where division_id =
  *  ... and status in ('registered', 'confirmed')`), not a stage-scoped
  *  subset, so N stages sharing the SAME 2
  *  entrants each independently round-robin those 2 into exactly 1 fixture —

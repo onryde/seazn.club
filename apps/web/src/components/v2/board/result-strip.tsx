@@ -188,7 +188,7 @@ export function ScheduleResultStrip({
   const lost = solver.lost ?? 0;
   /**
    * How many of THIS stage's fixtures the run held fixed because they were
-   * locked (#pins-ui) — always present on a current server (`schedule.ts`
+   * locked (#pins-ui) — always present on a current server (`usecases/schedule/`
    * sends a real number on every mode, never `undefined`), `?? 0` only for one
    * a deploy behind.
    *

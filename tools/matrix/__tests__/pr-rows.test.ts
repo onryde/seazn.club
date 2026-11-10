@@ -1,4 +1,4 @@
-// W1d Task 7 (R27, D13): the PR's matrix declaration. A PR that touches packages/engine or stages.ts
+// W1d Task 7 (R27, D13): the PR's matrix declaration. A PR that touches packages/engine or usecases/stages/
 // declares `Matrix rows: <rows>` in its body; ci/pr-rows.ts reads it (live, from the body file the job
 // fetched) beside the changed files and prints `rows=<csv|all|none>` for $GITHUB_OUTPUT.
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

@@ -6,7 +6,7 @@
 // branches on. `metadata.credits` SNAPSHOTS the grant amount at checkout-
 // creation time (P3 T1 review fix) so the webhook grants exactly what was
 // sold even if the live CREDIT_PACKS catalog changes or drops the `pack_key`
-// before the session is paid — see credit-packs.ts and billing-events.ts.
+// before the session is paid — see credit-packs.ts and usecases/billing-events/.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Only `createCreditPackCheckout` reaches Stripe; every pure-builder claim below is untouched by this mock.

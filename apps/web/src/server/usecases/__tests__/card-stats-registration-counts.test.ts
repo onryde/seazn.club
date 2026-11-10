@@ -1,6 +1,6 @@
 // RS004 W2b review finding 1: the competition overview's Registration pill
 // derived its "total registered" count from `entrants`, and an `entrants`
-// row only exists once an entry is MATERIALISED (registrations.ts's
+// row only exists once an entry is MATERIALISED (registrations/ folder's
 // materialise(), called at submit for a free/auto/non-waitlisted entry, or
 // at organiser approval otherwise). A paid entry awaiting manual approval,
 // and every waitlisted entry, therefore read zero — undercounting exactly

@@ -55,7 +55,7 @@ interface JointApply {
  * ONE reader for both jobs below — the initial read and the per-division
  * recheck — so the two cannot drift into answering different questions about
  * the same rows. The ordering matches `lastCompetitionAiApply`
- * (competition-schedule-ai.ts) for the same reason: competition_events has no
+ * (competition-schedule-ai/last-apply.ts) for the same reason: competition_events has no
  * seq column, so a created_at tie is broken by the id and by nothing else, and
  * two readers that break it differently would disagree about which apply is the
  * restorable one.

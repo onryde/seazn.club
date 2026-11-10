@@ -6,7 +6,7 @@
 //       the rounds lock, Finish and the desk's controls read this one predicate
 //     - `stageHasStarted` below (swiss-rounds-admin.ts' rounds lock and controls; later W4 tasks)
 //   `fixtureCalledSql` (its call arm, on its own)
-//     - stages.ts `rebuildStageFixtures`: Rebuild's result guard refuses a stage with a live call (X-LE-9). Only the call
+//     - stages/generate.ts `rebuildStageFixtures`: Rebuild's result guard refuses a stage with a live call (X-LE-9). Only the call
 //       arm, beside the guard's own `fixtureHasResultSql`: the predicate's other two arms would refuse rows two owner
 //       rulings say Rebuild redraws — the generator's F14 walkover (review 3 of #857, N2: a walkover counts only through
 //       its evidence) and an online-game bridge row with no game (open-round.test.ts M-10, refused by name instead as

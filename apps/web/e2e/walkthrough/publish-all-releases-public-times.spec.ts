@@ -26,7 +26,7 @@
 // day its fixture does not fall on, which `validateAssignments` reports as a
 // `window` conflict and `isBlockingConflict` (calendar.ts:339) treats as
 // blocking. The narrowing is a SETTINGS write, and deliberately so: the write
-// gate `assertNoNewBlocking` (schedule.ts) refuses what a BOARD change
+// gate `assertNoNewBlocking` (usecases/schedule/conflicts.ts) refuses what a BOARD change
 // introduces, so reaching for a double-booked court or a reversed feed order
 // would mean asking a fixture PATCH to store the very thing that gate exists to
 // refuse. `putScheduleSettings` runs no such gate — and `publishSchedule`'s own

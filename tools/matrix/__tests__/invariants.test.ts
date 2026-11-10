@@ -1137,7 +1137,7 @@ describe("I8 — every Generate answer is fixtures or a named refusal", () => {
     expect(evaluateInvariant(I8, run([stage({ generates: [g(201, null, 0)] })]))).toMatchObject({ verdict: "fail", evidence: ["stage 1: empty generate (R13)"] });
   });
   // The product's Generate answers EVERY fixture of the stage, not only the new
-  // ones (server/usecases/stages.ts generate's return), so a repeat call has
+  // ones (server/usecases/stages/ generate's return), so a repeat call has
   // total > 0 and created 0. Keying R13 on `created` would red every re-Generate.
   it("a repeat Generate (the stage's full list, nothing new created) passes — no false red on a second call", () => {
     expect(evaluateInvariant(I8, run([stage({ generates: [g(200, null, 6, 6), g(200, null, 6, 0)] })]))).toMatchObject({ verdict: "pass", checked: 2 });
@@ -1180,7 +1180,7 @@ it("evaluateStepInvariants reports each step-safe spec exactly as evaluateInvari
 
 // W1-driving Task 9. The product's ladder finalRanks is the RAW
 // config.ladder_order (engine-db/competition.ts:606), written on the first
-// challenge and on every decided swap, never pruned (stages.ts:5538-5551,
+// challenge and on every decided swap, never pruned (usecases/stages/,
 // scoring.ts:774-786). T7 carry r1-b: a permutation, not membership.
 describe("I9 ladder", () => {
   const I9 = spec("I9-ladder-order-is-the-field");
@@ -1237,7 +1237,7 @@ describe("I9 ladder", () => {
     expect(noRanks.evidence.filter((e) => / not ranked$/.test(e))).toHaveLength(4);
   });
   it("the PRODUCT shape (review 2 m-4, ruling 53): a withdrawn entrant stays ranked at its held rung, since finalRanks = raw ladder_order — pass, and the rung is a W7 note", () => {
-    // competition.ts:606 snapshots the raw ladder_order, which stages.ts:5562-5572 never prunes; D8 leaves policy "none".
+    // competition.ts:606 snapshots the raw ladder_order, which usecases/stages/ never prunes; D8 leaves policy "none".
     const r = evaluateInvariant(I9, run([ladder(["a", "c", "b", "d"], ["a", "c", "b", "d"])], { withdrawal: withdrawn("c") }));
     expect(r.verdict).toBe("pass");                                 // "ranked but withdrawn" is NOT an I9 failure (W7's question)
     expect(r.checked).toBe(4);

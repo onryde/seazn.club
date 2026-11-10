@@ -74,7 +74,7 @@ export function hasLiveSubscription(
  * carries it (lib/billing.ts, #375).
  *
  * One definition, two callers phrasing it opposite ways: `isLiveStripeStatus` in
- * usecases/billing-events.ts (the webhook write guard) and `sweepOrphanGroups`
+ * usecases/billing-events/group-resolution.ts (the webhook write guard) and `sweepOrphanGroups`
  * in usecases/billing-groups.ts ("did Stripe finish this off?"). They cannot
  * import each other — billing-events already imports billing-groups — so it
  * lives in this leaf module, which is also what stops the two from keeping

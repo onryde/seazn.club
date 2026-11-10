@@ -159,7 +159,7 @@ export const BRACKET_STAGE_KINDS = new Set(["knockout", "double_elim", "stepladd
 
 /** Stage kinds whose fixtures run in numbered ROUNDS a person reads in turn - the kinds a stage card draws a bar per round for
  *  (Match Day E1). Every other kind is a bracket (named rounds, `BRACKET_STAGE_KINDS`) or the ladder, which stores each
- *  challenge as a round of its own (`stages.ts`, `issueChallenge`): a bar per challenge says nothing, so a ladder is one flat list.
+ *  challenge as a round of its own (`usecases/stages/ad-hoc.ts`, `issueChallenge`): a bar per challenge says nothing, so a ladder is one flat list.
  *
  *  A literal beside `BRACKET_STAGE_KINDS` because no client-safe set answers this question: the engine's `DRAW_KINDS` is the
  *  kinds a level result may occur in (the same four today, a different fact), and the `TABLE_KINDS` copies are server-private and

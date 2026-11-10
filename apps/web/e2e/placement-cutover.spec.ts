@@ -392,8 +392,8 @@ test("a court-scoped blackout reaches the OPTIMISER instead of switching it off"
         // exact shape that used to be refused before ever reaching placement.
         //
         // `blackouts[].court` (ScheduleConfig, schemas.ts) is still a plain
-        // `z.string()` post-P9 — NOT narrowed to CourtId — but schedule.ts's
-        // own builder (~line 846-847) forwards it verbatim alongside `courts`
+        // `z.string()` post-P9 — NOT narrowed to CourtId — but usecases/schedule/ folder's
+        // own builder forwards it verbatim alongside `courts`
         // (now real ids) with no separate name resolution, so a blackout
         // scoped by NAME here would silently never match. Using the real id
         // is the only reading consistent with the rest of this config.
@@ -441,13 +441,13 @@ test("a court-scoped blackout reaches the OPTIMISER instead of switching it off"
 //
 // NOT the undecided-knockout-slot shape the brief leads with, and that
 // deviation is itself a finding, recorded here rather than silently swapped
-// in. `schedule.ts`'s plain Auto-schedule button — this file's own subject —
-// resolves a fixture's `people` through `peopleOf` (schedule.ts:576-581),
+// in. `usecases/schedule/` folder's plain Auto-schedule button — this file's own subject —
+// resolves a fixture's `people` through `peopleOf` (usecases/schedule/board.ts),
 // which is UNCONDITIONALLY empty for a TBD (null-sided) fixture by design
 // ("D4a (P5)", that function's own comment: "a TBD/seeded fixture's null
 // side(s) contribute NO people here... Person-level constraints... skip TBD
 // slots until filled — recorded limitation"). That is a real, pre-existing,
-// deliberate gap in THIS caller specifically — `schedule-ai.ts`'s
+// deliberate gap in THIS caller specifically — `usecases/schedule-ai/` folder's
 // `participants[f.id] ?? []` (#396) resolves the SAME question recursively
 // through the bracket's feed graph and does not share it — and it means a
 // knockout-final board proves nothing about C10 through this button: the

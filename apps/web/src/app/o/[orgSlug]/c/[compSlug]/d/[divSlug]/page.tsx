@@ -352,7 +352,7 @@ export default async function DivisionPage({
   // F3 Task 5 (5a) — the roster-drift banner StagesPanel renders per stage.
   // Only the ROOT stage (no progression source) draws fixtures directly from
   // the live active roster (getStageRosterDrift's own doc comment,
-  // usecases/stages.ts) — every other stage either reads a frozen qualified
+  // usecases/stages/) — every other stage either reads a frozen qualified
   // list or is structurally insulated from entrant churn, so there is at
   // most one stage worth asking. Same conditional-fetch shape as
   // seedProposals just above: organiser-only, fixtures-tab-only.
@@ -378,7 +378,7 @@ export default async function DivisionPage({
   // a format write on, so the panel's row can decline to OFFER the editor
   // instead of letting the organiser discover the 409 after pressing Save. The
   // panel cannot derive this: `FIXTURE_COLS` does not carry `config_snapshot`
-  // (a payload-budget ruling, stages.ts:147-162) and `score_events` reaches no
+  // (a payload-budget ruling, usecases/stages/) and `score_events` reaches no
   // prop, leaving only the non-monotonic `fixtures.status`. Same per-stage
   // shape as `rosterDrift` above. W2c Task 11: every sport has a stage rules row
   // now, so the lock is read for every sport (the page skips it only where the
@@ -669,7 +669,7 @@ export default async function DivisionPage({
       name: st.name,
       kind: st.kind,
       config: (st.config ?? null) as Record<string, unknown> | null,
-      // StageRow.progression is untyped JSONB; asserted into the picker's shape at this DB-read boundary (stages.ts's own
+      // StageRow.progression is untyped JSONB; asserted into the picker's shape at this DB-read boundary (usecases/stages/ folder's own
       // `as unknown as ProgressionSpec` precedent).
       progression: (st.progression ?? null) as unknown as StageDraft["progression"],
     }));

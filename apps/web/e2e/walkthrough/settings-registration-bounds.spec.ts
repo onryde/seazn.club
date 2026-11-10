@@ -56,7 +56,7 @@ test.describe.configure({ mode: "default" });
 // Server sentences with no exported constant to import.
 //
 // Both are bare `new HttpError(422, "...")` literals inside
-// `putRegistrationSettings` (`src/server/usecases/registrations.ts`) — not
+// `putRegistrationSettings` (`src/server/usecases/registrations/settings.ts`) — not
 // dictionary keys, not exported strings — so unlike the two AGE_CUTOFF_*
 // constants above there is nothing to bind to and the text is mirrored here,
 // each beside a pointer to its single source.
@@ -597,7 +597,7 @@ test("a cutoff with no age band is accepted and stored on its own", async ({ req
  * W8/F14 (option a). `free_agent_fee_cents` carries its OWN copy of the card
  * minimum, and — unlike `fee_cents`' copy asserted in the next test — it sits
  * AHEAD of the Connect gate: a standalone
- * `if (method === "stripe" && … > 0 && … < 100)` at `registrations.ts`, above
+ * `if (method === "stripe" && … > 0 && … < 100)` at `usecases/registrations/`, above
  * the `if (method === "stripe") { … }` block that holds `!charges_enabled`,
  * `requireFeature("registration.paid")` and the `fee_cents` minimum. So it
  * fires for an org with no Connect account and no paid entitlement, which is

@@ -191,7 +191,7 @@ describe("JOINT_RULES (issue #350)", () => {
   });
 
   it("does not sell a warn-only check as a rejection", () => {
-    // `isBlocking` (schedule-ai.ts) blocks on `court` and direct `order` and
+    // `isBlocking` (schedule-ai/verify.ts) blocks on `court` and direct `order` and
     // nothing else. J3's blackouts / session windows / perEntrantMinRest surface
     // as `blackout` and `rest`, and J7 as `person_overlap` — all warnings. A
     // joint plan whose only flaw is a fixture sitting inside a division's
@@ -272,7 +272,7 @@ describe("JOINT_RULES (issue #350)", () => {
   it("J7 promises nothing the server does not deliver", () => {
     // The prompt must not claim a rejection the pipeline cannot produce.
     // person_overlap is a WARN (calendar.ts:102) and isBlocking covers only
-    // `court` and direct `order` (schedule-ai.ts:831-833), so a plan whose sole
+    // `court` and direct `order` (schedule-ai/), so a plan whose sole
     // flaw is a person clash returns clean and never triggers a repair round.
     // Promising a rejection would be a lie the model then reasons from.
     const j7 = tail("J7.");
@@ -296,7 +296,7 @@ describe("JOINT_RULES (issue #350)", () => {
     expect(j5).toContain("draftPlaced");
     expect(j5).toMatch(/partial/i);
     // J5 is labelled a GOAL, but "place the remainder yourself" is not tradeable
-    // against S2/S3: structuralCheck (schedule-ai.ts:865-867) rejects any plan
+    // against S2/S3: structuralCheck (schedule-ai/verify.ts) rejects any plan
     // missing a movable id, so those fixtures must still be accounted for.
     expect(j5).toMatch(/still (has to|have to|must)|OUTPUT accounting|accounted for/i);
   });

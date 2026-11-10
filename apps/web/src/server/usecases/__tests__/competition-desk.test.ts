@@ -185,7 +185,7 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     });
     await generateStageFixtures(auth, stage!.id);
     // `scheduled` is exactly what the ordinary Publish action sets
-    // (schedule.ts's publishSchedule) — an organiser who published a
+    // (schedule/publish.ts's publishSchedule) — an organiser who published a
     // timetable and never pressed Start.
     await sql`update divisions set status = 'scheduled' where id = ${divisionId}`;
     await sql`update fixtures set scheduled_at = now() - interval '1 day'
@@ -667,7 +667,7 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
 
   // H2 fix (final review round 3, Important — corrected ruling): G3's gate
   // (`divisionStatus === "active"`) also excluded `scheduled` — exactly what
-  // the ordinary Publish action sets (schedule.ts's `publishSchedule`). Live:
+  // the ordinary Publish action sets (schedule/publish.ts's `publishSchedule`). Live:
   // six fixtures dated YESTERDAY on a published, never-started division
   // produced NO "Needs you" section at all. Proven end to end through the
   // real usecase (not just division-phase.test.ts's pure resolver coverage):
@@ -824,7 +824,7 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
      * covering for each other are each untested — mutate them one at a time,
      * which needs a row labelled on ONE side only.
      *
-     * That row is real, not contrived: `fillSlot` (stages.ts:2451) fills one
+     * That row is real, not contrived: `fillSlot` (stages/bracket-seats.ts) fills one
      * seat at a time and clears only that seat's label, and a bye line is a
      * filled seat beside a labelled one by construction.
      */
@@ -866,9 +866,9 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
       await generateStageFixtures(auth, finalsId);
       await sql`update stages set status = 'complete' where id = ${leagueId}`;
       // Reachable in production: confirmSeedProposal re-derives the
-      // standings hash and marks the row stale (stages.ts:2956) when the
+      // standings hash and marks the row stale (stages/) when the
       // source standings moved under a draft, and the dependent-stage sweep
-      // (stages.ts:3143) does the same. The panel then renders "Recompute".
+      // (stages/) does the same. The panel then renders "Recompute".
       await sql`insert into stage_seed_proposals (org_id, stage_id, computed, status)
                 select org_id, ${finalsId}, '{}'::jsonb, 'stale' from stages where id = ${finalsId}`;
       const desk = await getCompetitionDesk(auth, competitionId);
@@ -936,7 +936,7 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
         "round 1's empty seats must carry their seed descriptors",
       ).toBe(true);
 
-      // Confirm the draw exactly as `fillSlot` (stages.ts:2451) does it —
+      // Confirm the draw exactly as `fillSlot` (stages/bracket-seats.ts) does it —
       // seat the entrant and NULL the label, in one statement, and ONLY for
       // slots that HAVE a label. That last part is the whole point: the
       // later round is never touched by a confirm, and stays null v null.
@@ -969,7 +969,7 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
      * entrants and a power-of-two field has no bye.
      *
      * Two things only this shape can witness. First, `awardSeededByes`
-     * (stages.ts:2481) leaves the `bracket.slot.bye` marker sitting on the
+     * (stages/bracket-seats.ts) leaves the `bracket.slot.bye` marker sitting on the
      * empty seat and writes `{kind: "award", winner}` instead — so the
      * OUTCOME term is the entire mechanism that retires that row, and
      * without it the red "Needs draw" comes back forever for exactly these

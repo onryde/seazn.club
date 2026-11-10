@@ -1,14 +1,14 @@
 // RS003 W5d — real two-actor concurrency coverage for registration paths
 // that take a row lock (or a savepoint+retry, or a compare-and-swap) and had
 // no interleaved test before this file:
-//   1. promoteOldestWaitlisted's `for update skip locked` (registrations.ts:793)
-//   2. confirmPaidRegistration's `for update`             (registrations.ts:1536)
-//   3. sweepRegistrations' overdue `for update`            (registrations.ts:2525),
+//   1. promoteOldestWaitlisted's `for update skip locked` (registrations/waitlist.ts)
+//   2. confirmPaidRegistration's `for update`             (registrations/checkout-completion.ts)
+//   3. sweepRegistrations' overdue `for update`            (registrations/sweep.ts),
 //      whose comment at :2454-2456 claims a specific ordering-dependent
 //      outcome — verified below in BOTH orders, not just read.
 //   4. submitRegistrationGroup's ref_code savepoint+retry (registration-submit.ts:485-508)
 //   5. createRegistrationCheckout's checkout_session_id compare-and-swap
-//      (registrations.ts, the stamp inside createRegistrationCheckout) — see
+//      (registrations/checkout.ts, the stamp inside createRegistrationCheckout) — see
 //      its own section below for why this one is staged differently from 1-4.
 //   6. joinTeamEntry's claim CAS + roster-cap insert (registration-submit.ts,
 //      RS007) — closes two windows a reading pass found: the entry's
@@ -37,8 +37,8 @@
 // stage two real calls behind, deterministically, in a chosen order. Nor is
 // there a cross-module hook to pause either mid-transaction: the calls each
 // makes between acquiring the lock and committing (materialise, audit) are
-// SAME-MODULE calls inside registrations.ts, so a `vi.mock` of that module
-// from this file would be inert for registrations.ts's own internal calls to
+// SAME-MODULE calls inside registrations/, so a `vi.mock` of that module
+// from this file would be inert for registrations/ folder's own internal calls to
 // its own exports (the well-known ESM same-module-call gotcha — confirmed
 // against this exact file's imports below, not assumed). So each of the two
 // sweep-vs-webhook orderings uses ONE real function (the one whose locking
@@ -154,7 +154,7 @@ beforeEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// 1. promoteOldestWaitlisted — for update skip locked (registrations.ts:793)
+// 1. promoteOldestWaitlisted — for update skip locked (registrations/)
 // ---------------------------------------------------------------------------
 
 describe.skipIf(!HAS_DB)("promoteOldestWaitlisted — concurrent promotions (genuine concurrency)", () => {
@@ -221,7 +221,7 @@ describe.skipIf(!HAS_DB)("promoteOldestWaitlisted — concurrent promotions (gen
 });
 
 // ---------------------------------------------------------------------------
-// 2. confirmPaidRegistration — for update (registrations.ts:1536)
+// 2. confirmPaidRegistration — for update (registrations/)
 // ---------------------------------------------------------------------------
 
 describe.skipIf(!HAS_DB)("confirmPaidRegistration — concurrent confirmations of the SAME registration (genuine concurrency)", () => {
@@ -285,7 +285,7 @@ describe.skipIf(!HAS_DB)("confirmPaidRegistration — concurrent confirmations o
 
 // ---------------------------------------------------------------------------
 // 3. sweepRegistrations vs confirmPaidRegistration — for update
-//    (registrations.ts:2525 / :1536), verifying the comment at :2454-2456
+//    (registrations/checkout-completion.ts), verifying the comment at :2454-2456
 // ---------------------------------------------------------------------------
 
 describe.skipIf(!HAS_DB)("sweepRegistrations vs a racing webhook — both orders of registrations.ts:2454-2456's claim", () => {
@@ -448,7 +448,7 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup — ref_code collision retry (
 
 // ---------------------------------------------------------------------------
 // 5. createRegistrationCheckout — checkout_session_id compare-and-swap
-//    (registrations.ts, the conditional `update registration_groups set
+//    (registrations/, the conditional `update registration_groups set
 //    checkout_session_id = ...` inside createRegistrationCheckout)
 //
 // Staged differently from races 1-4 above, for a specific reason: the fix
@@ -532,14 +532,14 @@ describe.skipIf(!HAS_DB)(
 //    round-trips before ever writing — no `sql.begin` anywhere in the
 //    function. Two real windows:
 //      (a) the claim UPDATE's WHERE names only registration_players columns,
-//          so a concurrent withdraw (withdrawCore, registrations.ts — status
+//          so a concurrent withdraw (withdrawCore, registrations/withdraw.ts — status
 //          flips to 'withdrawn'; join_code is deliberately left alone) could
 //          land a claim on a roster that no longer exists.
 //      (b) the insert path's cap check (rosterAtCap) was a plain
 //          SELECT-count ahead of an unguarded INSERT, so two joiners racing
 //          the last open spot could both pass and both insert.
 //
-// withdrawCore is reached only through its own `sql.begin` (registrations.ts)
+// withdrawCore is reached only through its own `sql.begin` (registrations/withdraw.ts)
 // with no external-tx hook to pause mid-flight — same situation the file
 // header's race 3 describes — so (a)'s holder performs ONLY the single
 // column withdrawCore's own commit would have written (status), never

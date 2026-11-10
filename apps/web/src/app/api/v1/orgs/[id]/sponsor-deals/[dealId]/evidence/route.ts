@@ -3,18 +3,17 @@ import { buildSponsorDisputeEvidence } from "@/server/usecases/sponsors";
 import { baseUrl } from "@/lib/oauth";
 import { AuthError, HttpError } from "@/lib/errors";
 
-type Ctx = { params: Promise<{ id: string; orderId: string }> };
+type Ctx = { params: Promise<{ id: string; dealId: string }> };
 
-/** Organiser: download the dispute evidence pack for a sponsor order as a
- *  printable HTML document. Raw Response (an attachment), so this skips the
- *  v1 JSON envelope — auth is still the v1 org door. */
+/** Organiser: download the dispute evidence pack for a sponsor deal as a printable HTML document. Raw Response (an
+ *  attachment), so this skips the v1 JSON envelope — auth is still the v1 org door. Console-only. */
 export async function GET(req: Request, { params }: Ctx) {
-  const { id, orderId } = await params;
+  const { id, dealId } = await params;
   try {
     assertUuid(id, "organization");
-    assertUuid(orderId, "order");
+    assertUuid(dealId, "deal");
     const auth = await requireOrgAuth(req, id, "write");
-    const pack = await buildSponsorDisputeEvidence(auth, orderId, baseUrl(req));
+    const pack = await buildSponsorDisputeEvidence(auth, dealId, baseUrl(req));
     return new Response(pack.html, {
       headers: {
         "Content-Type": "text/html; charset=utf-8",

@@ -88,7 +88,7 @@ describe("seedingSourceReady", () => {
 
 // W4 B6a fix round 1 (review #1): the Confirm warning promises "you can recompute it" only where a confirmed draw CAN be
 // reopened. The server's one gate is scoring.ts: a correction inside a COMPLETED stage of kind "knockout" calls
-// markDependentSeedProposalsStale({ includeConfirmed: true }); a table source's correction does not (stages.ts
+// markDependentSeedProposalsStale({ includeConfirmed: true }); a table source's correction does not (usecases/stages/
 // computeSeedProposal refuses a confirmed stage with SEEDING_ALREADY_CONFIRMED for good). Expected values are that gate's
 // verdict per stage kind, typed here - never read back from the predicate.
 describe("confirmedDrawReopens - may the Confirm warning promise a recompute?", () => {

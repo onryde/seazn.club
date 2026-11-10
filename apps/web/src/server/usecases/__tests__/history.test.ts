@@ -547,7 +547,7 @@ describe.skipIf(!HAS_DB)("schedule undo & versioning (Jul3/03)", () => {
     // threw unconditionally cannot pass this test by refusing everything.
     //
     // It says nothing about placement relative to the existence check, and no
-    // test here can: `divisionLockState` (`usecases/schedule.ts:537`) returns
+    // test here can: `divisionLockState` (`usecases/schedule/board.ts`) returns
     // `frozen: row?.schedule_locked ?? false`, so a MISSING division reads as
     // UNFROZEN, falls through the guard wherever it sits, and 404s later
     // either way. There is no mutant to kill, so the claim is withdrawn

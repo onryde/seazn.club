@@ -80,7 +80,7 @@ interface LiveScoreBodyProps {
 }
 
 // Task 11 review round 2 (NEW IMPORTANT B) — the DB's `fixtures.status`
-// vocabulary (apps/web/src/server/usecases/stages.ts:2142-2156) carries
+// vocabulary (apps/web/src/server/usecases/stages/) carries
 // several values beyond in_play/decided/finalized/scheduled: abandoned,
 // cancelled, forfeited, postponed, walkover. Round 1's fallback collapsed
 // every one of these into the generic `matchCentre.status.other` ("Not

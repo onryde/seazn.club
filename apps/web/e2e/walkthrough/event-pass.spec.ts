@@ -852,7 +852,7 @@ for (const vp of VIEWPORTS) {
 
       // The checkout call above only OPENS a Checkout session — it mints
       // nothing. Task 2 (2d1d7885) moved the actual grant off this route and
-      // onto the subscription-created path (billing-events.ts
+      // onto the subscription-created path (usecases/billing-events/
       // handleSubscriptionChanged) / reconcile-on-return, neither of which a
       // bare session-create reaches. Stripe has no public endpoint to deliver
       // `customer.subscription.created` to on localhost, so — same technique

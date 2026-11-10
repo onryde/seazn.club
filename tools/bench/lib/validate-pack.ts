@@ -119,7 +119,7 @@
 //
 //    A POOL is bound through the fixture EXT KEY, and no pack field was
 //    invented for it. The product keys a pooled round robin's fixtures
-//    `p{key}-rr-r{round}-c{court}` (`usecases/stages.ts:797` prefixing
+//    `p{key}-rr-r{round}-c{court}` (`usecases/stages/` prefixing
 //    `roundrobin.ts:140`), so a table scoped to a pool is derived from exactly
 //    the streams whose ext key carries that prefix, and a poolKey no stream
 //    carries is an error (`standings.pool_has_no_streams`) rather than a
@@ -132,7 +132,7 @@
 //    SWISS table's ledger reads each counted fixture's round (the engine
 //    throws without one), and the only carrier a pack has is the ext key, as
 //    for a pool — the product keys a Swiss board `sw-r{round}-b{board}`
-//    (`usecases/stages.ts`, `mintSwissBoardExtKeys`). A Swiss stream whose
+//    (`usecases/stages/`, `mintSwissBoardExtKeys`). A Swiss stream whose
 //    key does not follow that convention is reported, not guessed at.
 //
 // ---------------------------------------------------------------------------
@@ -341,14 +341,14 @@ const TABLE_STAGE_KINDS: ReadonlySet<string> = new Set([
  * disagree where two cannot.
  *
  * The product prefixes a pooled round robin's generated ids with `p{key}-`
- * (`usecases/stages.ts:797` wrapping `roundrobin.ts:140`'s
+ * (`usecases/stages/` wrapping `roundrobin.ts:140`'s
  * `rr-r{round}-c{court}`). `poolPrefixOf` is the forward direction, used to
  * bind a DECLARED `poolKey` to its streams and to tag the fixtures;
  * `poolKeyOfExtKey` is the inverse, used to enumerate the pools that actually
  * played so a pool nobody declared can be named.
  *
  * The alphabet is the product's own: `POOL_KEYS` is `"A".."Z"`
- * (`usecases/stages.ts:745`), sliced to the pool count, so a generated key is
+ * (`usecases/stages/generators.ts`), sliced to the pool count, so a generated key is
  * always UPPERCASE. That is what keeps an ordinary lowercase ext key out —
  * `playoff-1` and `po-f1` are not pools — and `{1,10}` is
  * `PackExpectedTable.poolKey`'s own length bound (`pack-schema.ts:1150`), so a
@@ -988,7 +988,7 @@ function checkPayRequiresFee(
  *
  *  `resumeRegistrationCheckout` refuses to mint a Checkout session for any
  *  division whose `registration_settings.payment_method` is not "stripe"
- *  (usecases/registrations.ts:4365), so an entry declaring `pay: true` against
+ *  (usecases/registrations/), so an entry declaring `pay: true` against
  *  an "offline" division cannot pay by construction — the run would configure
  *  a bank-transfer division and then drive a card through it.
  *
@@ -1931,7 +1931,7 @@ export function validatePack(
       if (stage.kind !== "league") continue; // a bracket's count is a bracket shape; a group's is per pool
       const legs = stage.config["legs"];
       // Skip rather than guess when the pack's own legs are unusable. The
-      // product clamps to 8 (usecases/stages.ts:756), so past that the implied
+      // product clamps to 8 (usecases/stages/), so past that the implied
       // count is not the count the generator would mint and a warning built
       // from it would be wrong rather than merely unhelpful.
       if (!(

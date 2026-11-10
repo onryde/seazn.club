@@ -135,7 +135,7 @@ export interface ModelState {
 
 /** The fixture statuses the product reads as VOID — not a meeting, dropped
  *  from the table (lib/fixture-engine-status.ts engineFixtureStatus; pinned by
- *  model-core.test.ts). A void fixture's ad-hoc replay (stages.ts addFixture:
+ *  model-core.test.ts). A void fixture's ad-hoc replay (usecases/stages/ad-hoc.ts addFixture:
  *  "a replay, a friendly, …") is then the pair's one meeting (carry d). */
 export const VOID_STATUSES: readonly string[] = Object.freeze(["abandoned", "cancelled"]);
 
@@ -272,7 +272,7 @@ export const NEXT_MATCH_LOCK: {
 /** The fixtures a take-back of `f` could be refused over. The model sees no
  *  feed edges, so it takes the structural superset: on a bracket kind, every
  *  fixture in a LATER round (every feed runs to a later round_no — engine
- *  bracket.ts through stages.ts bracketToGen, pinned) that seats one of f's
+ *  bracket.ts through usecases/stages/generators.ts bracketToGen, pinned) that seats one of f's
  *  entrants. Whether any of them has STARTED is judged on the driver's
  *  answer when the refusal comes (fedMatchStarted), never on the model's
  *  memory. Empty on a round robin: there the take-back must be accepted.

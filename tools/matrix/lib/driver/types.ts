@@ -82,7 +82,7 @@ export interface FixtureRow { id: string; stage_id: string; pool_id: string | nu
 export interface GenerateOut { created: number; existing: number; fixtures: FixtureRow[] }
 export interface StartOut { division_id: string; status: string; started: boolean; generated: number }
 /** The next stage's DRAFT seed proposal a /complete minted
- *  (usecases/stages.ts progressCompletedStage `seed_proposal`). There is no GET:
+ *  (usecases/stages/completion.ts progressCompletedStage `seed_proposal`). There is no GET:
  *  /complete's answer is the only place the harness learns its id. */
 export interface SeedProposalRef { readonly id: string; readonly status: string }
 export interface CompleteOut { completed: boolean; events: { type: string; finalRanks?: string[] }[]; division_completed?: boolean; seed_proposal?: SeedProposalRef | null }
@@ -96,11 +96,11 @@ export interface SeedTie { readonly slots: readonly string[]; readonly entrantId
 /** A recomputed draft (POST /stages/:id/seed-proposal → 201 `computed`). */
 export interface SeedProposalOut { readonly id: string; readonly status: string; readonly qualifiers: readonly { rank: number; entrantId: string; destinationSlot: string }[]; readonly ties: readonly SeedTie[] }
 /** confirmSeedProposal's answer: `filled` counts SLOTS (a bye seed owns two),
- *  and `fixtures` is the WHOLE target stage (stages.ts, `where f.stage_id`). */
+ *  and `fixtures` is the WHOLE target stage (usecases/stages/, `where f.stage_id`). */
 export interface SeedConfirmOut { readonly proposalId: string; readonly filled: number; readonly fixtures: readonly FixtureRow[] }
 /** W1-driving T6 (FP-3): the 409 a /complete answers when the stage's
  *  completion COMMITTED and only the next stage's seed proposal failed
- *  (usecases/stages.ts progressCompletedStage). A repeat of that /complete
+ *  (usecases/stages/completion.ts progressCompletedStage). A repeat of that /complete
  *  would re-run the progression, so the drivers record it as a completion.
  *  Pinned against the product's text by http-driver.test.ts. */
 export const SEEDING_FAILED_AFTER_COMMIT = "STAGE_COMPLETED_SEEDING_FAILED";
@@ -109,7 +109,7 @@ export interface WithdrawOut { entrant_id: string; status: string; policy: "none
    *  result, a tie-break owed, an active abandon — each of which used to wait for the organiser's settle. */
   walked_over_held: number }
 /** W1-driving T7 (D8): a ladder challenge's answer (route stages/[id]/challenges
- *  → 201 usecases/stages.ts issueChallenge). `ladder_order` is the RAW order
+ *  → 201 usecases/stages/ad-hoc.ts issueChallenge). `ladder_order` is the RAW order
  *  as it stood when the challenge was ISSUED — before its result lands, and
  *  never pruned of a departed entrant. */
 export interface ChallengeOut { readonly fixture_id: string; readonly ladder_order: readonly string[] }
@@ -260,7 +260,7 @@ export interface OrganiserDriver {
   recomputeSeedProposal(stageId: string): Promise<SeedProposalOut>;
   /** Replaces a root stage's fixtures wholesale (POST /stages/:id/rebuild).
    *  Throws RefusedCall on a refusal — 409 STAGE_HAS_RESULTS once any fixture
-   *  carries a result (usecases/stages.ts rebuildStageFixtures). */
+   *  carries a result (usecases/stages/generate.ts rebuildStageFixtures). */
   rebuild(stageId: string): Promise<void>;
   /** Issues a ladder challenge (POST /stages/:id/challenges, body
    *  `{challenger_id, opponent_id}`): the product inserts ONE scheduled

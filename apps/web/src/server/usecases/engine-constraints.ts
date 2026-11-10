@@ -2,9 +2,9 @@ import "server-only";
 // ONE builder for the engine's `constraints` block (#458).
 //
 // Three call sites used to build this object as independent literals over the
-// same shape — `toSlotConfig` (schedule.ts, board + apply + solver),
-// `verifyConfig` (schedule-ai.ts, single-division AI) and `verifyConfigFor`
-// (competition-schedule-ai.ts, joint AI) — and having three producers is the
+// same shape — `toSlotConfig` (schedule/engine-inputs.ts, board + apply + solver),
+// `verifyConfig` (schedule-ai/verify.ts, single-division AI) and `verifyConfigFor`
+// (competition-schedule-ai/, joint AI) — and having three producers is the
 // bug class, not the symptom. They had already drifted three ways:
 //
 //   - the board site mapped EVERY start window through;
@@ -21,7 +21,7 @@ import "server-only";
 // row has drifted from the enum. Dropping it is the honest answer, and it is
 // the only one that cannot be mistaken for a rule that binds.
 //
-// This module is deliberately the sibling of `toRuleFixture` (schedule-ai.ts):
+// This module is deliberately the sibling of `toRuleFixture` (schedule-ai/verify.ts):
 // one derivation, one place to guard, no fourth copy.
 import type { HardConstraint, SchedulingConstraints, StartWindow } from "@seazn/engine/scheduling";
 
@@ -128,7 +128,7 @@ const ms = (iso: string): number => new Date(iso).getTime();
 
 /** ISO → epoch ms, dropping any window the engine's enum does not recognise.
  *
- *  Exported because the joint SOLVER config (`competition-schedule-ai.ts`)
+ *  Exported because the joint SOLVER config (`competition-schedule-ai/`)
  *  unions several divisions' windows and so has no single `constraints` source
  *  to hand `buildEngineConstraints` — but it needs the identical per-window
  *  transform, and a fourth hand-written copy of the filter is the thing this

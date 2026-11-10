@@ -29,7 +29,7 @@
 //
 // Two sports, one per entrant kind the registry DECLARES as a default (a team sport and an individual one - different
 // scoring, different entrant model), each the registry's first that is offered every in-scope template. The placement
-// reads no sport field (schedule.ts never reads the module); two sports prove that rather than assume it.
+// reads no sport field (schedule/ never reads the module); two sports prove that rather than assume it.
 //
 // BUILD runs as the product runs it, solver or not. Locally, without PLACEMENT_SERVICE_HOST, it falls back to greedy
 // (day-one-fixtures-survive-build.test.ts explains the logged solveBuild failure). On CI this file runs in

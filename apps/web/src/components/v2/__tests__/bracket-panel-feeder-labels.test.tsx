@@ -17,7 +17,7 @@
 //   PagePlayoffPanel            bracket.ts:392  loserOf(q1), winnerOf(elim)…
 // None of the four is explained away: the engine emits `homeFrom`/`awayFrom`
 // for every one of them, and `generateStageFixtures`' second pass turns those
-// into `winner_to_*`/`loser_to_*` rows (usecases/stages.ts ~1997).
+// into `winner_to_*`/`loser_to_*` rows (usecases/stages/).
 //
 // This file does NOT mock the dict provider. `useMsg()` falls back to the
 // English catalog outside a `<DictProvider>` (dict-provider.tsx:131-137), so
@@ -353,7 +353,7 @@ describe("BracketPanel — page playoff", () => {
 // SCOPE — the tree's feed map is built from the WHOLE DIVISION, like the draw
 // list's and the schedule board's, not from the stage slice it draws.
 //
-// `wireCrossFeeds` (usecases/stages.ts:2514) writes edges whose SOURCE and
+// `wireCrossFeeds` (usecases/stages/generate-tx.ts) writes edges whose SOURCE and
 // DEST sit in DIFFERENT stages, from a stage's `cross_feeds` config (a real,
 // Pro-gated API setting). `feedLabels()` needs both ends in one row list, so a
 // per-stage map drops those silently — the tree would say TBD where the list

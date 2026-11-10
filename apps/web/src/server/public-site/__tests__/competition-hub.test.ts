@@ -1087,7 +1087,7 @@ describe("loadCompetitionHub — the document", () => {
 
   it("Round 2b: a BYE side is flagged from the STORED slot label (never the name), and the builder's own output draws it as the empty box on the real card while a pending side keeps '?'", async () => {
     const ko: PublicStage = { ...STAGE, id: "ko", kind: "knockout", name: "Knockout" };
-    // How the tree writes a bye (`usecases/stages.ts`, `byeSlotLabel`): the
+    // How the tree writes a bye (`usecases/stages/generate-tx.ts`, `byeSlotLabel`): the
     // fixture carries the award, the phantom side has no entrant and the slot
     // label `{ key: "bracket.slot.bye" }`, and the status is `forfeited`.
     const bye = F({
@@ -1378,7 +1378,7 @@ describe("loadCompetitionHub — divisions, tables and teams", () => {
   });
 
   // Pool label i18n (2026-10-06). `pools.name` is only ever written as the
-  // English "Pool " + key (`usecases/stages.ts`), so a caption read off it put
+  // English "Pool " + key (`usecases/stages/`), so a caption read off it put
   // English in front of every es/fr/nl spectator. The pools below carry
   // exactly that stored name; the caption must be the org-locale dictionary's
   // `table.poolLabel` over the pool's KEY. Expected text is read out of the
@@ -2129,7 +2129,7 @@ describe("loadCompetitionHub — N1: a slot waiting on a match names that match'
   /** A whole single-elimination draw of `size`: round one seeded, every later
    *  slot waiting on the round before it. Round r's fixture j is fed on side s
    *  by round r-1's fixture 2j-1+s, as its winner — `generateSingleElim`'s
-   *  wiring, stored the way `stages.ts` `matchSlotLabel` stores it: the
+   *  wiring, stored the way `usecases/stages/generate-tx.ts` `matchSlotLabel` stores it: the
    *  FEEDER's `{round, seq}`, as numbers. */
   const draw = (size: number, stage_id = "ko"): PublicFixture[] => {
     const rounds = Math.log2(size);

@@ -1,6 +1,6 @@
 // Idempotent Stripe Connect fixture for the registration entry-fee card path
 // (RS006). `createRegistrationCheckout` (apps/web/src/server/usecases/
-// registrations.ts) mints a DESTINATION charge — payment_intent_data.
+// usecases/registrations/) mints a DESTINATION charge — payment_intent_data.
 // transfer_data.destination = organizations.stripe_account_id — and Stripe
 // rejects a destination that is not a real connected account with an ACTIVE
 // transfers capability. Locally (and in CI unless a secret is supplied) no

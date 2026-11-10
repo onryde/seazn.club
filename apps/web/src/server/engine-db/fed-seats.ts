@@ -17,7 +17,7 @@ import { clearAwardedMatchState } from "./awarded-state";
 // back the names that decision advanced.
 //
 // A decided fixture seats its winner (and, on a `loser_to` edge, its loser) in
-// the fixture it feeds, through `fillSlot` (usecases/stages.ts), which only
+// the fixture it feeds, through `fillSlot` (usecases/stages/bracket-seats.ts), which only
 // ever writes a NULL seat. Nothing emptied one: a void that erased the result
 // left the old winner standing in the next round, and re-scoring the match the
 // other way ran a fill that touched no row. This is the missing inverse. The
@@ -116,7 +116,7 @@ export function isLegacyForfeitWin(o: { kind?: string; method?: string } | null 
 /** W2b X-DE-1: a decision that KILLS its loser edge — it names a loser, but that loser forfeited and is out of the
  *  tournament: an `award` (a walkover, retirement, disqualification or withdrawal; a bye names no loser at all), or a
  *  legacy forfeit win. `advancingSides` sends nobody down that edge, and the cascade reads the edge as a dead feeder
- *  (usecases/stages.ts `loserFeederIsDead`, which reads this). */
+ *  (usecases/stages/bracket-seats.ts `loserFeederIsDead`, which reads this). */
 export function killsLoserEdge(outcome: unknown): boolean {
   const o = outcome as { kind?: string; method?: string } | null | undefined;
   return o?.kind === "award" || isLegacyForfeitWin(o);
@@ -180,7 +180,7 @@ function isCascadeWalkover(t: Node): boolean {
   return t.status === "forfeited" && (t.outcome as { kind?: string } | null)?.kind === "award" && t.live_events === 0;
 }
 
-/** The bye label the cascade stamps on a dead seat (usecases/stages.ts BYE_SLOT_LABEL — one string, read here). */
+/** The bye label the cascade stamps on a dead seat (usecases/stages/ BYE_SLOT_LABEL — one string, read here). */
 const BYE_KEY = "bracket.slot.bye";
 
 /** A line the cascade VOIDED because both its feeders died: `abandoned`, no outcome, no seat, no event. */

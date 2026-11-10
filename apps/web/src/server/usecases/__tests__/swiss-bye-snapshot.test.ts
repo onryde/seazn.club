@@ -277,7 +277,7 @@ describe.runIf(HAS_DB)("W3 T3 the system-bye exemption is the snapshot's alone",
     const shell = rows.find((r) => r.round_no === 2)!;
     expectSeatedFrozenBye(bye);
     const cfg = bye.config_snapshot;
-    // An `awardSeededByes`-shaped walkover over a dead seat (ruling 116, stages.ts): one seat, the absent side the
+    // An `awardSeededByes`-shaped walkover over a dead seat (ruling 116, stages/bracket-seats.ts): one seat, the absent side the
     // LOSER, `reason: "withdrew"` — frozen, with no event (the snapshot is its only mark).
     const winner = board!.home_entrant_id!;
     const loser = board!.away_entrant_id!;

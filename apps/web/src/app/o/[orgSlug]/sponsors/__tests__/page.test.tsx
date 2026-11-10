@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
   requireOrgPage: vi.fn(),
   resolveLocale: vi.fn(),
   listSponsorRows: vi.fn(),
+  finishedPackageCompetitions: vi.fn(),
   hasFeatureOnAnyPass: vi.fn(),
   sql: vi.fn(),
   loadOnStreamScope: vi.fn(),
@@ -33,6 +34,7 @@ const h = vi.hoisted(() => ({
 vi.mock("@/server/page-auth", () => ({ requireOrgPage: h.requireOrgPage }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: h.resolveLocale }));
 vi.mock("@/server/usecases/sponsors", () => ({ listSponsorRows: h.listSponsorRows }));
+vi.mock("@/server/usecases/sponsor-deals", () => ({ finishedPackageCompetitions: h.finishedPackageCompetitions }));
 vi.mock("@/lib/entitlements", () => ({ hasFeatureOnAnyPass: h.hasFeatureOnAnyPass }));
 vi.mock("@/lib/db", () => ({ sql: h.sql }));
 vi.mock("@/server/sponsors/on-stream", () => ({ loadOnStreamScope: h.loadOnStreamScope }));
@@ -66,7 +68,7 @@ vi.mock("@/components/sponsors/on-stream-tab", () => ({
   OnStreamTab: (p: {
     orgId: string;
     orgSlug: string;
-    sponsors: { id: string; on_stream: boolean }[];
+    sponsors: { id: string; on_stream: boolean; locked_by_deal: boolean }[];
     competitions: unknown[];
     scope: string | null;
     hasTiers: boolean;
@@ -79,6 +81,8 @@ vi.mock("@/components/sponsors/on-stream-tab", () => ({
       data-org={p.orgId}
       data-slug={p.orgSlug}
       data-sponsors={p.sponsors.map((s) => `${s.id}:${s.on_stream}`).join(",")}
+      data-locked={p.sponsors.filter((s) => s.locked_by_deal).map((s) => s.id).join(",")}
+      data-locked-flags={p.sponsors.map((s) => String(s.locked_by_deal)).join(",")}
       data-competitions={p.competitions.length}
       data-scope={p.scope ?? "org"}
       data-has-tiers={String(p.hasTiers)}
@@ -115,8 +119,24 @@ vi.mock("@/components/sponsors/overview-tab", () => ({
   ),
 }));
 vi.mock("@/components/sponsor-packages", () => ({
-  SponsorPackages: (p: { orgId: string; competitions: unknown[]; hasMonetize: boolean; billingHref: string }) => (
-    <div data-testid="sponsor-packages-island" data-org={p.orgId} data-has-monetize={String(p.hasMonetize)} data-competitions={p.competitions.length} />
+  SponsorPackages: (p: {
+    orgId: string;
+    competitions: unknown[];
+    sponsors: { id: string; name: string; display_order: number }[];
+    hasMonetize: boolean;
+    billingHref: string;
+    sponsorsHref: string;
+    finishedCompetitionIds?: readonly string[];
+  }) => (
+    <div
+      data-testid="sponsor-packages-island"
+      data-org={p.orgId}
+      data-finished={p.finishedCompetitionIds === undefined ? "<absent>" : p.finishedCompetitionIds.join("|")}
+      data-has-monetize={String(p.hasMonetize)}
+      data-competitions={p.competitions.length}
+      data-pick={p.sponsors.map((s) => `${s.id}:${s.name}:${s.display_order}`).join("|")}
+      data-sponsors-href={p.sponsorsHref}
+    />
   ),
 }));
 
@@ -185,9 +205,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.resolveLocale.mockResolvedValue("en");
   h.listSponsorRows.mockResolvedValue([
-    { id: "s1", name: "Harbour", tier: "gold", status: "active", competition_id: null, on_stream: true },
-    { id: "s2", name: "Ridge", tier: "partner", status: "active", competition_id: "c1", on_stream: false },
+    { id: "s1", name: "Harbour", tier: "gold", status: "active", competition_id: null, on_stream: true, display_order: 3, locked_by_deal: false },
+    { id: "s2", name: "Ridge", tier: "partner", status: "active", competition_id: "c1", on_stream: false, display_order: 0, locked_by_deal: true },
   ]);
+  h.finishedPackageCompetitions.mockResolvedValue(["c2"]);
   h.loadOnStreamScope.mockResolvedValue({ settings: { enabled: true, frequency: "busy" }, ownRow: true, sports: [{ sportKey: "cricket", kinds: [], sample: null, sampleCompetitionId: null }] });
   h.hasFeatureOnAnyPass.mockResolvedValue(true);
   h.sql.mockResolvedValue([{ id: "c1", name: "Spring Cup" }, { id: "c2", name: "Autumn Cup" }, { id: "c3", name: "Cup 3" }]);
@@ -350,6 +371,59 @@ describe("the Packages tab keeps Settings' gate: sponsors.monetize, granted AND 
   });
 });
 
+describe("the Packages tab hands the invoice form its sponsor picker (sponsor deals T12)", () => {
+  it("passes every sponsor row as { id, name, display_order } - the picker's whole input - and the Sponsors tab's URL for the empty case", async () => {
+    const html = await render("packages");
+    expect(attr(html, "sponsor-packages-island", "data-pick")).toBe("s1:Harbour:3|s2:Ridge:0");
+    expect(attr(html, "sponsor-packages-island", "data-sponsors-href")).toBe(sponsorsHref(ORG.slug, "sponsors"));
+  });
+
+  it("a plan WITHOUT sponsors.monetize sees the upsell and reads no sponsors; the granted pair does read them", async () => {
+    h.hasFeatureOnAnyPass.mockImplementation(async (_org: string, key: string) => key !== "sponsors.monetize");
+    const denied = await render("packages");
+    expect(attr(denied, "sponsor-packages-island", "data-has-monetize")).toBe("false");
+    expect(attr(denied, "sponsor-packages-island", "data-pick")).toBe("");
+    expect(h.listSponsorRows, "denied: nothing read").not.toHaveBeenCalled();
+    h.hasFeatureOnAnyPass.mockResolvedValue(true);
+    await render("packages");
+    expect(h.listSponsorRows, "granted: the picker's sponsors are read").toHaveBeenCalledTimes(1);
+  });
+
+  it("an org with no sponsors hands an EMPTY picker (the form then says Add a sponsor first), not a missing one", async () => {
+    h.listSponsorRows.mockResolvedValue([]);
+    const html = await render("packages");
+    expect(html).toContain('data-testid="sponsor-packages-island"');
+    expect(attr(html, "sponsor-packages-island", "data-pick")).toBe("");
+  });
+});
+
+describe("the Packages tab hands over which packages' competitions have finished (batch F review m4)", () => {
+  // The client hides Send invoice on those packages; createDeal refuses them anyway (409 competition_finished). The ids are the
+  // usecase's answer, handed over as they are.
+  it("granted: asks finishedPackageCompetitions for THIS org and hands its answer over as it is", async () => {
+    const html = await render("packages");
+    expect(h.finishedPackageCompetitions).toHaveBeenCalledWith(ORG.id);
+    expect(attr(html, "sponsor-packages-island", "data-finished")).toBe("c2");
+  });
+
+  it("nothing finished: an EMPTY list, not a missing one", async () => {
+    h.finishedPackageCompetitions.mockResolvedValue([]);
+    expect(attr(await render("packages"), "sponsor-packages-island", "data-finished")).toBe("");
+  });
+
+  it("a plan WITHOUT sponsors.monetize asks nothing (it sees the upsell, no packages)", async () => {
+    h.hasFeatureOnAnyPass.mockImplementation(async (_org: string, key: string) => key !== "sponsors.monetize");
+    expect(attr(await render("packages"), "sponsor-packages-island", "data-finished")).toBe("");
+    expect(h.finishedPackageCompetitions).not.toHaveBeenCalled();
+  });
+
+  it("another tab never asks (the page loads only what its tab shows)", async () => {
+    await render("sponsors");
+    await render("on_stream");
+    expect(h.finishedPackageCompetitions).not.toHaveBeenCalled();
+  });
+});
+
 describe("a non-editor gets the same read-only view Settings gave - canEdit false, no Packages (R19; Settings never refused)", () => {
   beforeEach(() => asMember("viewer", false));
 
@@ -417,7 +491,8 @@ describe("the page loads only what the tab it shows needs, and nothing is carrie
     h.listSponsorRows.mockClear();
     await render("packages");
     expect(h.hasFeatureOnAnyPass.mock.calls.map((c) => c[1])).toEqual(["sponsors.monetize"]);
-    expect(h.listSponsorRows).not.toHaveBeenCalled();
+    expect(h.listSponsorRows, "the Packages tab reads the org's sponsors once, for its picker").toHaveBeenCalledTimes(1);
+    expect(h.listSponsorRows).toHaveBeenCalledWith(ORG.id);
   });
 
   it("authorises from the URL (requireOrgPage with the hub's rename tail), before anything is read", async () => {
@@ -440,6 +515,9 @@ describe("the On stream tab (S12)", () => {
     expect(attr(html, "on-stream-island", "data-org")).toBe(ORG.id);
     expect(attr(html, "on-stream-island", "data-slug")).toBe(ORG.slug);
     expect(attr(html, "on-stream-island", "data-sponsors")).toBe("s1:true,s2:false");
+    // F24: the page maps the tab's fields ONE BY ONE, so a field it does not name never reaches the tick.
+    expect(attr(html, "on-stream-island", "data-locked-flags"), "locked_by_deal crosses the page's map, per sponsor").toBe("false,true");
+    expect(attr(html, "on-stream-island", "data-locked")).toBe("s2");
     expect(attr(html, "on-stream-island", "data-competitions")).toBe("3");
     expect(attr(html, "on-stream-island", "data-has-tiers")).toBe("true");
     expect(attr(html, "on-stream-island", "data-settings")).toBe("true/busy");

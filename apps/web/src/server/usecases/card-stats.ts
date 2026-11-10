@@ -22,7 +22,7 @@ export interface NextFixture {
  *  once a `courtNames` map is in hand. */
 type NextFixtureRaw = Omit<NextFixture, "court_label"> & { court_id: string | null };
 
-/** #14: same fallback convention as FixtureRow's own doc comment (stages.ts)
+/** #14: same fallback convention as FixtureRow's own doc comment (stages/types.ts)
  *  — fall back to the id itself on a miss (should not happen; FK-restricted
  *  from `fixtures.court_id`). Shared by both card queries below. */
 function resolveNextCourtLabel(
@@ -60,7 +60,7 @@ export interface DivisionCardStats {
    *  this division — pending, paid, confirmed, waitlisted. Rejected,
    *  withdrawn and expired are excluded (terminal, can never re-open).
    *  Deliberately distinct from `entrants` above: an `entrants` row exists
-   *  only once an entry is MATERIALISED (registrations.ts's materialise(),
+   *  only once an entry is MATERIALISED (registrations/materialise.ts's materialise(),
    *  which runs at submit for a free/auto/non-waitlisted entry, or at
    *  organiser approval otherwise) — so `entrants` alone reads zero for a
    *  paid entry still awaiting manual approval, or any waitlisted entry.
@@ -107,7 +107,7 @@ export function cardStatsCountsPlayed(f: { status: string; home_entrant_id: stri
 }
 
 // RS004 W2b review finding 1 — declared locally, NOT imported from
-// registrations.ts (which has its own, slightly different-purposed
+// registrations/ (which has its own, slightly different-purposed
 // SPOT_HOLDERS: "holds a capacity spot", pending|paid|confirmed, no
 // waitlisted) or registration-approval.ts: those modules pull in
 // Stripe/email clients this read-only, RLS-scoped file has no business
@@ -118,7 +118,7 @@ export function cardStatsCountsPlayed(f: { status: string; home_entrant_id: stri
 // still, in some sense, "in the system".
 const REGISTERED_STATUSES = ["pending", "paid", "confirmed", "waitlisted"] as const;
 // Not yet confirmed — no entrant has been materialised for these. 'paid'
-// belongs here deliberately: RULING B (registrations.ts's
+// belongs here deliberately: RULING B (registrations/ folder's
 // confirmPaidRegistration) leaves a Stripe-paid manual-approval entry
 // sitting at exactly 'paid' — money has moved, but a human still has to
 // approve it, the same "needs the organiser's attention" bucket
@@ -131,7 +131,7 @@ const AWAITING_CONFIRMATION_STATUSES = ["pending", "paid", "waitlisted"] as cons
 type Tx = Parameters<Parameters<typeof withTenant>[1]>[0];
 /** A division's registration window is open: intake on, opened, not yet closed - over `registration_settings rs`. ONE
  *  predicate for the competition page's per-division Registration count and the org dashboard's chip (UI5 item 6), so the
- *  two never disagree. (`windowOpen` in registrations.ts is the submit path's twin over a fetched row.) */
+ *  two never disagree. (`windowOpen` in registrations/lookups.ts is the submit path's twin over a fetched row.) */
 const registrationWindowOpen = (tx: Tx) => tx`
   coalesce(rs.enabled, false)
     and (rs.opens_at is null or rs.opens_at <= now())

@@ -98,7 +98,7 @@ export function bracketWithdrawalPolicy(prior: WithdrawOut["policy"], inStage: n
   if (prior !== "none") return prior;
   return (BRACKET_POLICY === "acted" ? acted : inStage) > 0 ? "walkover" : "none";
 }
-// stages.ts:979 — what the swiss gate counts as a finished board.
+// usecases/stages/ — what the swiss gate counts as a finished board.
 const DECIDED = new Set(["decided", "finalized", "forfeited"]);
 /** The code the product's structural lineup refusals reach the wire with:
  *  fixtures.ts throws them as codeless HttpError(422), so http.ts's status
@@ -543,7 +543,7 @@ export class FakeLeagueDriver implements OrganiserDriver {
       throw new RefusedCall("POST", `/api/v1/stages/${stageId}/seed-proposal/confirm`, 404, wireCodeFor(404), "seed proposal not found");
     });
   }
-  /** W1-driving T7: challenges exist on ladder stages only — stages.ts
+  /** W1-driving T7: challenges exist on ladder stages only — usecases/stages/ad-hoc.ts
    *  issueChallenge throws a CODELESS 422, so the wire code is http.ts's
    *  default for the status (read from the product). FakeLadderDriver
    *  (fake-formats-driver.ts) models a ladder. */
@@ -685,7 +685,7 @@ export class FakeLeagueDriver implements OrganiserDriver {
   #f(id: string): FakeFixture { const f = this.fixtures.find((x) => x.id === id); if (!f) throw new Error(`fake: no fixture ${id}`); return f; }
 }
 
-/** A single swiss stage, shaped like the product's (stages.ts swissGen):
+/** A single swiss stage, shaped like the product's (usecases/stages/swiss-gen.ts swissGen):
  *  - Start's Generate mints an EMPTY shell per board, plus a bye shell on an
  *    odd field, for every round of the budget, and seats nobody
  *    (swiss-shell.ts planSwissShells);
@@ -730,7 +730,7 @@ export class FakeSwissDriver extends FakeLeagueDriver {
     }
     const active = this.entrants.length - out.size;
     const want = { boards: Math.floor(active / 2), bye: active % 2 === 1 };
-    // stages.ts: "swiss shell count mismatch for pairing" (CONFIG_INVALID).
+    // usecases/stages/: "swiss shell count mismatch for pairing" (CONFIG_INVALID).
     if (boards.length !== want.boards || byes.length !== (want.bye ? 1 : 0)) throw new Error(`fake: round ${r} pairs ${boards.length}+${byes.length}, the active field wants ${want.boards}+${want.bye ? 1 : 0}`);
     const shells = this.fixtures.filter((f) => f.round_no === r);
     const boardShells = shells.filter((f) => !this.byeShells.has(f.id));
@@ -770,12 +770,12 @@ export class FakeSwissDriver extends FakeLeagueDriver {
   }
 }
 
-/** A single knockout stage (stages.ts knockout generation), kept small: Start
+/** A single knockout stage (usecases/stages/ knockout generation), kept small: Start
  *  mints the whole bracket — round 1 seeded top-vs-bottom over the next power
  *  of two, later rounds with both seats TBD — and a missing opponent makes a
  *  one-sided forfeited AWARD row whose winner is fed forward at generation
- *  (stages.ts:2614+). Deciding a fixture fills its winner into the next
- *  round's slot (scoring.ts:729 → fillSlot, stages.ts:3567). Complete emits
+ *  (usecases/stages/+). Deciding a fixture fills its winner into the next
+ *  round's slot (scoring.ts:729 → fillSlot, usecases/stages/bracket-seats.ts). Complete emits
  *  stage_completed with finalRanks: the champion, then losers by the round
  *  they went out in, later first, seed order within a round. Standings are
  *  the table fake's, and so is a knockout's withdraw.
@@ -786,7 +786,7 @@ export class FakeSwissDriver extends FakeLeagueDriver {
  *  refuses any field but the engine's as the product's Start does (an
  *  EngineError → its status). A pp-q1 LOSER feeds pp-q2 as well as its
  *  winner feeding the final. page_playoff is not a bracket-walkover kind
- *  (stages.ts BRACKET_WALKOVER_KINDS), so withdraw takes the product's
+ *  (usecases/stages/generators.ts BRACKET_WALKOVER_KINDS), so withdraw takes the product's
  *  open-format branch (withdrawal.ts:213-217): every pending fixture of the
  *  withdrawn entrant is voided (abandoned), nothing is forfeited, and the
  *  policy reads "walkover" once anything was voided, "none" otherwise.
@@ -802,7 +802,7 @@ export class FakeSwissDriver extends FakeLeagueDriver {
  *  one-sided forfeited AWARD row whose winner is fed forward, as the
  *  knockout's are; a slot fed by a bye line's LOSER never fills, so a
  *  fixture whose other slot is filled is awarded through (the product's
- *  bye award at generation, stages.ts:2614+). Two such dead slots on one
+ *  bye award at generation, usecases/stages/+). Two such dead slots on one
  *  fixture are out of this fake's scope and thrown by name. */
 /*  `thirdPlace: true` (W2b review I-1) makes it the knockout_third_place row's knockout ON THE ENGINE's single elim
  *  (generateSingleElim, thirdPlace), keyed as the product keys it (ext_key, is_final, third_place), so the harness's
@@ -844,12 +844,12 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
   readonly singleElim: boolean;
   /** `<row id>:<slot>`: a slot fed by a bye line's loser, which never fills (doubleElim). */
   readonly deadSlots = new Set<string>();
-  /** singleElim: the dead slots that died THROUGH DEPARTURE (stages.ts seatDeparted) — a seat its withdrawn entrant left
+  /** singleElim: the dead slots that died THROUGH DEPARTURE (usecases/stages/bracket-seats.ts seatDeparted) — a seat its withdrawn entrant left
    *  (the bye stamp, X-WD-3) or one a departure double walkover feeds. Any other dead slot (a recorded double walkover's,
    *  a void's) is dead but not departed. */
   readonly departedSlots = new Set<string>();
   /** `<row id>:<slot>` → the entrant who WITHDREW from that seat while it was a winner edge's (owner ruling 116,
-   *  stages.ts `awardSeededByes`): the arriving side walks over her, and the award names her, reason "withdrew". */
+   *  usecases/stages/bracket-seats.ts `awardSeededByes`): the arriving side walks over her, and the award names her, reason "withdrew". */
   readonly withdrawnFrom = new Map<string, string>();
   /** The engine's fixture id (pp-q1, …) → the fake's row id, in the engine's order. */
   readonly extIds = new Map<string, string>();
@@ -884,7 +884,7 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
       throw new RefusedCall("POST", "/api/v1/divisions/d1/start", engineHttpStatus(e.code), e.code, e.message);
     }
     // Each row carries the engine's id and final flag, as the product's rows do
-    // (stages.ts bracketToGen `extKey: f.id`; fixtures.ts listDivisionFixtures
+    // (usecases/stages/generators.ts bracketToGen `extKey: f.id`; fixtures.ts listDivisionFixtures
     // serves ext_key and is_final) — I2 reads a page playoff's champion off them.
     for (const g of bracket.fixtures) {
       const tags = { ext_key: g.id, is_final: g.isFinal === true, ...(g.thirdPlace === true ? { third_place: true } : {}) };
@@ -973,12 +973,12 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
     Object.assign(target, { status: "forfeited", outcome: { kind: "award", winner, loser, reason: loser === null ? "bye" : "withdrew" } });
     this.feed(target);
   }
-  /** A slot a WINNER edge fills (stages.ts `awardSeededByes` reads the winner edge only: a loser edge's dead seat,
+  /** A slot a WINNER edge fills (usecases/stages/bracket-seats.ts `awardSeededByes` reads the winner edge only: a loser edge's dead seat,
    *  X-WD-5, stays a bye). */
   winnerFed(id: string, slot: Slot): boolean {
     return [...this.feeds.values()].some((edge) => edge.to === id && edge.slot === slot);
   }
-  /** singleElim, stages.ts resolveBracketSeats (loop F): a slot no entrant will reach (D17, X-WD-3, X-DW-2) is dead.
+  /** singleElim, usecases/stages/bracket-seats.ts resolveBracketSeats (loop F): a slot no entrant will reach (D17, X-WD-3, X-DW-2) is dead.
    *  - An entrant waiting opposite it walks over at once (awardThrough, the bye award).
    *  - Both slots dead THROUGH DEPARTURE (X-WD-4): a double walkover, no event, which kills the slot it feeds by
    *    departure — or, on a final, nothing is written and it stays open (D19, X-DW-3).
@@ -1143,10 +1143,10 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
 /** A product that gates stage kinds by feature (ruling 24): `deny` maps a
  *  kind to the feature_key its 402 names, and is read in insertion order —
  *  the FIRST entry whose kind any posted stage has answers, as createStages
- *  checks its gates in order over every stage (stages.ts:373-382). Only kinds:
+ *  checks its gates in order over every stage (usecases/stages/stage-graph.ts). Only kinds:
  *  the product's gates read nothing else since V471 retired the advanced
  *  gate's config keys. Stages are kept per division (ids d1, d2, …).
- *  deleteFirst mirrors today's replaceStages (stages.ts: delete, THEN gate). */
+ *  deleteFirst mirrors today's replaceStages (usecases/stages/stage-graph.ts: delete, THEN gate). */
 export class FakeDeniedDriver extends FakeLeagueDriver {
   readonly deny: ReadonlyMap<string, string>;
   readonly deleteFirst: boolean;

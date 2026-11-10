@@ -4,7 +4,7 @@ import "server-only";
 //
 // A call is NOT a board move. Owner ruling B (2026-10-31): planned times never change on a call. Only the called match's court,
 // venue and time are written; every other match keeps its planned `scheduled_at`, and Match Day estimates the knock-on when it
-// reads. So `moveFixture` (schedule.ts), which refuses an overlap with a planned match on the target court, is not the write path,
+// reads. So `moveFixture` (schedule/move.ts), which refuses an overlap with a planned match on the target court, is not the write path,
 // and its guard stays exactly as it is for every other caller. The overlap a call leaves behind is pre-existing to the board's
 // delta gate, so a later board edit of the bumped match is not refused for it (match-day-call.test.ts, Review Focus 5).
 //
@@ -29,7 +29,7 @@ import "server-only";
 //
 // The BILLING freeze is a different thing and they DO honour it (owner ruling 10-31 (1), Match Day task F1): a competition over
 // its organisation's `competitions.max_active` is read-only (`frozenCompetitionIds` + `assertNotFrozen`, the guard every
-// schedule write runs — moveFixture's own, schedule.ts), so a call, its Undo and the preview of a call each refuse it with the
+// schedule write runs — moveFixture's own, schedule/move.ts), so a call, its Undo and the preview of a call each refuse it with the
 // guard's own 402. Two different freezes, two different answers: never conflate `schedule_locked` with this one.
 import type postgres from "postgres";
 import { withTenant } from "@/lib/db";
@@ -340,7 +340,7 @@ async function assertCallable(tx: Tx, f: CallTarget, courtId: string, courtNames
   // The court, first: may this match's division play on it at all (R1)? One tap must not put a match on another sport's venue.
   // Except the court the match is ALREADY PLANNED ON (task F7, owner ruling B4 final round): calling it there moves nothing, so
   // it takes the call even if the court has since stopped being a candidate (retagged, dropped from the division's list) — as
-  // the scheduler keeps such an assignment valid (schedule.ts, ruling 3).
+  // the scheduler keeps such an assignment valid (schedule/, ruling 3).
   if (courtId !== f.court_id && !(await callableCourtsByFixture(tx, [f])).get(f.id)?.has(courtId)) {
     const courtName = courtNames.get(courtId) ?? null;
     refuse(CALL_REFUSAL.NOT_CANDIDATE_COURT, `${courtName ?? "this court"} is not one of this division's courts`, {

@@ -41,9 +41,9 @@ import type { PersonRow } from "./persons";
  * (conflict-detail-legacy.ts) — `courtName` is "the caller-attached
  * resolution (never set by the engine)" per that field's own doc comment, so
  * without this the merge-preview prose fell back to a raw court uuid.
- * schedule.ts has an identical private `withCourtNames` (unexported, and
+ * schedule/conflicts.ts has an identical private `withCourtNames` (unexported, and
  * that file is out of scope here) — this is the same one-line attach,
- * duplicated locally rather than widening schedule.ts's exports for it.
+ * duplicated locally rather than widening schedule/ folder's exports for it.
  */
 function attachCourtNames(c: Conflict, courtNames: ReadonlyMap<string, string>): Conflict {
   if (c.details?.court === undefined) return c;
@@ -387,7 +387,7 @@ export async function mergePersons(
   // 8. Re-verify, AFTER the write has committed. Two people on two courts at
   //    once was a legal board a moment ago; one person on two courts is not, and
   //    the organiser is the only one who can move a card. `.catch` mirrors the
-  //    post-commit side effects in schedule.ts (`afterScheduleWrite`, the
+  //    post-commit side effects in schedule/after-write.ts (`afterScheduleWrite`, the
   //    official-notice emails): a report that fails may not unmake a merge that
   //    succeeded, and the merge has no transaction left to roll back anyway.
   //    Logged, though: swallowed silently, a systematic verifier regression
@@ -445,11 +445,11 @@ async function reverifyBoards(auth: AuthCtx, survivorId: string): Promise<Reveal
       // a merge that reveals two round-sequence fixtures now sharing a person
       // across rounds is exactly the kind of thing `reverifyBoards` exists to
       // surface (see its own doc comment — "reported, never enforced").
-      // Wired the same way `autoSchedule`/`applySchedule` were (`schedule.ts`,
+      // Wired the same way `autoSchedule`/`applySchedule` were (`schedule/apply.ts`,
       // the reference implementation).
       const roundRobin = await roundRobinStageIds(tx, board.id, settings);
       // P9 cutover: `court_id` is the real identity `toAssignment` reads
-      // (schedule.ts) — the frozen `court_label` is never written for a
+      // (schedule/) — the frozen `court_label` is never written for a
       // fixture scheduled after pass 3a, so gating on it here silently
       // dropped every post-cutover court-scheduled fixture from `assignments`
       // (found by sweep, no failing test): `reverifyBoards` would then have
@@ -475,7 +475,7 @@ async function reverifyBoards(auth: AuthCtx, survivorId: string): Promise<Reveal
       // positional arguments — settings, all, 0, ruleFixtures — resolving no
       // court calendars and no stranded courts at all, so a fixture
       // reassigned during a person merge was validated with no court-hours
-      // signal while every schedule.ts site had one. Hoisted so both signals
+      // signal while every schedule/ site had one. Hoisted so both signals
       // are resolved before the call, the same shape
       // `applySchedule`/`moveFixture` use.
       const assignedCourtIds = [

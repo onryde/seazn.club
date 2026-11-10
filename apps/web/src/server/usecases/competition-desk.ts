@@ -139,7 +139,7 @@ let cachedMatchMinutes: number | undefined;
 /** The schema's own default (schemas.ts's `ScheduleConfig.matchMinutes`
  *  `.default(30)`), read lazily and memoised: a division with no
  *  schedule_settings row at all falls back to this, the same way the read
- *  path parses an empty config (schedule.ts:296's `ScheduleConfig.parse`).
+ *  path parses an empty config (schedule/ folder's `ScheduleConfig.parse`).
  *  Deferred to first call, not evaluated at module load — a future required
  *  field on ScheduleConfig must not throw at import time and take down
  *  every importer of this module (Task 5 wires it into the competition page

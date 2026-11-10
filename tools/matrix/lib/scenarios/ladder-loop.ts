@@ -1,6 +1,6 @@
 // W1-driving Task 7 (D8, ruling 52): a ladder stage is driven through
 // challenges (POST /stages/:id/challenges), never through generate — its
-// generator creates nothing (usecases/stages.ts ladder gen is []), so the
+// generator creates nothing (usecases/stages/ ladder gen is []), so the
 // generate loop would read "drained" over an unplayed stage.
 //
 // D8: one bottom-up sweep of adjacent upward challenges. Adjacent means every

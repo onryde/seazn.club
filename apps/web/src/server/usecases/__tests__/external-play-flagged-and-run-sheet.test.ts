@@ -94,7 +94,7 @@ describe.runIf(HAS_DB)("listFlaggedExternalPlay — the queue's Flagged list", (
   });
 
   // T16 fix round 1, R4: a cancelled board's OPEN flags are still the organiser's to review. `cancelled` has no product
-  // writer (stages.ts: "defensive", an import path only), so the test sets it as an import would.
+  // writer (stages/: "defensive", an import path only), so the test sets it as an import would.
   it("R4: a CANCELLED board's open flag is listed (as cancelled, nothing to settle or resync) and closable; the round panel lists no cancelled board", async () => {
     const r = await round(2);
     const [b, other] = r.boards as [SeedRoundBoard, SeedRoundBoard];

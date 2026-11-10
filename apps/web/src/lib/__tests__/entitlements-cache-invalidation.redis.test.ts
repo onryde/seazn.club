@@ -172,7 +172,7 @@ describe.skipIf(!HAS_DB || !HAS_REDIS)("entitlement cache invalidation (real Red
   });
 
   // v17 W2 Task 8 (b). The dispute-lost revoke is a SECOND, independent delete
-  // of a competition_passes row (billing-events.ts handlePlatformDispute) — it
+  // of a competition_passes row (usecases/billing-events/disputes.ts handlePlatformDispute) — it
   // does not go through revokePassForRefundedCharge, so the test above proves
   // nothing about it. platform-dispute.test.ts asserts the row is gone; only a
   // real Redis can show whether the org stops resolving the pass, and a

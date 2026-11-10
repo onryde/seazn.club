@@ -2,7 +2,7 @@
 //
 // `reflowExisting` forwards `out.engine` from `buildSchedule` completely
 // unconditionally (see the return statement at the bottom of
-// `reflowExisting`, `schedule.ts`) — the same `BuildResult["engine"]` field
+// `reflowExisting`, `schedule/reflow.ts`) — the same `BuildResult["engine"]` field
 // BUILD/POLISH already populate, and `"optimized"` is reachable there only
 // by genuinely beating the greedy seed (`build.ts`'s `incumbent` branch).
 //

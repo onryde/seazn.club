@@ -7,7 +7,7 @@
 // expunge abandon (the withdrawal cascade's, D5). Each surface now says each with its own dictionary key.
 //
 // The kinds are the ENGINE's (`AWARD_REASONS` = `FORFEIT_REASONS` + "bye", plus a double walkover), never a list typed
-// here. A bye is written with NO event (stages.ts, fixture-bye.ts, fed-seats.ts) and `CoreForfeit` refuses reason
+// here. A bye is written with NO event (usecases/stages/, fixture-bye.ts, fed-seats.ts) and `CoreForfeit` refuses reason
 // "bye", so no ledger surface can meet one today; its line exists because the vocabulary is total over the engine's
 // award reasons (controller carry-in 7), not because a row renders it.
 //

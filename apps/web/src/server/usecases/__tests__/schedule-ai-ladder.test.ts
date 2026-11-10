@@ -1,4 +1,4 @@
-// Unit tests for the model fallback ladder (schedule-ai.ts): rung parsing,
+// Unit tests for the model fallback ladder (schedule-ai/): rung parsing,
 // the pure runLadder orchestrator, and the cost/served-model truth it carries.
 // No network — runLadder is exercised over injected attempt/acceptable fns.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

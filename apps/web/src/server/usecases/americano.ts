@@ -39,10 +39,10 @@ export interface AmericanoView {
  * pair score summed across decided fixtures (padel scoring is per-point, not
  * win/loss) — see the module comment. The ONE implementation: shared by the
  * live display below and qualification-by-personal-points (usecases/
- * stages.ts seedNextStage, L3/#414 pass 3), which additionally maps each
+ * stages/carry-over.ts seedNextStage, L3/#414 pass 3), which additionally maps each
  * `person_id` here to the division's persistent INDIVIDUAL entrant (never
  * one of this stage's ephemeral per-round `pair` entrants — those don't
- * survive into the next stage, see pairEntrantsFor in usecases/stages.ts).
+ * survive into the next stage, see pairEntrantsFor in usecases/stages/generators.ts).
  */
 export async function personalPointsLeaderboard(tx: Tx, stageId: string): Promise<AmericanoLeader[]> {
   return tx<{ person_id: string; name: string; points: number; games: number }[]>`

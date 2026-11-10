@@ -456,7 +456,7 @@ export async function openRound(
     }
 
     // D17: the re-arm, only now that the board WILL be invited (a reset answered `window_closed` would hand it to the
-    // sweep's no-show). As a re-pair resets a board (stages.ts clearSwissFixtureSeats, M-10): its row goes, and with
+    // sweep's no-show). As a re-pair resets a board (stages/swiss-boards.ts clearSwissFixtureSeats, M-10): its row goes, and with
     // it the closed pairing's stamps, so the attach below mints it afresh for this open. Its video meeting goes too —
     // it holds no game's evidence, and a meeting the sweep ended at the No result would refuse the replay's check-in
     // (VIDEO_MEETING_ENDED) — ended at RealtimeKit after the commit, as N-2's are. D16: both players' meetings, by board

@@ -260,7 +260,7 @@ beforeEach(() => {
 
 /**
  * COMPILE-TIME bridge between the domain type and the wire contract. Nothing
- * else binds them: `competition-schedule-ai.ts` declares an interface and
+ * else binds them: `competition-schedule-ai/` declares an interface and
  * `api-v1/schemas.ts` declares a Zod schema, both named
  * `AiCompetitionPlanResponse`, and the route hands the first to a client that
  * was promised the second.
@@ -297,7 +297,7 @@ const asWire = (r: CompetitionPlanDomain): CompetitionPlanWire => r;
 // and no assertion on `divisions.length` can see it.
 // ---------------------------------------------------------------------------
 describe("AiCompetitionPlanResponse — the `divisions` collision", () => {
-  /** Exactly what `aiPlanForCompetition` returns (competition-schedule-ai.ts):
+  /** Exactly what `aiPlanForCompetition` returns (competition-schedule-ai/orchestrator.ts):
    *  the meter stamp merged with the board's per-division data under ONE key.
    *
    *  Annotated with the DOMAIN type so the literal cannot drift from what the
@@ -516,7 +516,7 @@ describe.skipIf(!HAS_DB)("POST /competitions/{id}/schedule/ai-plan", () => {
 });
 
 // ---------------------------------------------------------------------------
-// ai-last mirrors the division twin `lastAiApply` (schedule.ts:607) exactly:
+// ai-last mirrors the division twin `lastAiApply` (schedule/apply.ts) exactly:
 // the last APPLIED plan (at + instruction + summary) plus a run counter. It is
 // not a proposal recall — the single-division board has never persisted a
 // proposal either, and a propose-only run writes no plan content anywhere.

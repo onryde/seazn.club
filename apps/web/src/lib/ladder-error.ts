@@ -28,7 +28,7 @@ import { t } from "@/lib/i18n-runtime";
 
 const BY_LOCALE: Record<Locale, Dict> = { en, es, fr, nl };
 
-/** The four refusals `issueChallenge` (server/usecases/stages.ts) can put in
+/** The four refusals `issueChallenge` (server/usecases/stages/ad-hoc.ts) can put in
  *  front of an organiser using the challenge form. ALL_CAPS_SNAKE wire codes
  *  by repo convention (schemas.ts), never i18n keys themselves.
  *

@@ -1,7 +1,7 @@
 [
  {
   "id": "t13-tiebreakers-source-hardcoded-sport",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/stage-graph.ts",
   "find": "tiebreakers: { keys: [...doc.tiebreakers], source: doc.sources.tiebreakers, pinnedAt:",
   "replace": "tiebreakers: { keys: [...doc.tiebreakers], source: \"sport\" as const, pinnedAt:",
   "killers": [
@@ -38,7 +38,7 @@
  },
  {
   "id": "t13-sport-default-from-winning-order",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/stage-graph.ts",
   "find": "sportDefault: [...doc.sportDefault] },",
   "replace": "sportDefault: [...doc.tiebreakers] },",
   "killers": [
@@ -60,7 +60,7 @@
  },
  {
   "id": "t13-points-source-hardcoded-sport",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/stage-graph.ts",
   "find": "points: { rule: doc.points, source: doc.sources.points, pinnedAt: doc.pinnedAt },",
   "replace": "points: { rule: doc.points, source: \"sport\" as const, pinnedAt: doc.pinnedAt },",
   "killers": [
@@ -82,7 +82,7 @@
  },
  {
   "id": "t13-reachable-outcomes-dropped",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/stage-graph.ts",
   "find": "    reachableOutcomes: [...doc.reachable],\n",
   "replace": "    reachableOutcomes: [],\n",
   "killers": [
@@ -104,7 +104,7 @@
  },
  {
   "id": "t13-table-rules-never-served",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/stage-graph.ts",
   "find": "return { ...r, tableRules: doc === undefined ? null : tableRulesWireOf(doc) };",
   "replace": "return { ...r, tableRules: null };",
   "killers": [

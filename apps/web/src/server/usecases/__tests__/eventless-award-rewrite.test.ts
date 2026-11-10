@@ -1,6 +1,6 @@
 // W2c batch-3 I1 (ruling, under the owner's standing instruction): a walkover no event records is stored once —
 // `writeAwardedMatchState` writes its `match_states` row when the award lands (F14's departed qualifier at Generate,
-// `stages.ts`; ruling 116's arriving side over a dead seat) and no read path refolds it. So a stage-rules save or a
+// `stages/`; ruling 116's arriving side over a dead seat) and no read path refolds it. So a stage-rules save or a
 // division save that moves a key the award's fold reads (`bestOf` on a set sport, football's `awardScore`, any key
 // `awardedMatchState` reads) RE-WRITES those walkovers' stored score in the same transaction — never refuses: a
 // walkover has no play to misfit, and the winner never changes. The stored row must equal the engine's own walkover

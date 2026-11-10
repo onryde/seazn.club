@@ -260,7 +260,7 @@ function show(expect: BracketExpect): string {
 /** Where the engine's bracket wires the loser of the match `row` (a row of `rows`, its whole stage), and who the
  *  product seated there. The bracket is laid out as the product's Start lays it (BRACKET_OF, the table terminal-finals
  *  reads) over the entrants the stage's rows seat; it is trusted only when the keys it generates are exactly the keys
- *  the product stored (ext_key = the generator's fixture id, stages.ts bracketToGen), so a stage the harness cannot
+ *  the product stored (ext_key = the generator's fixture id, usecases/stages/generators.ts bracketToGen), so a stage the harness cannot
  *  reconstruct is "unresolved", named, and never guessed. */
 type Layout = { readonly key: string; readonly fixtures: ReturnType<(typeof BRACKET_OF)[string]>["fixtures"] } | { readonly why: string };
 

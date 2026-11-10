@@ -122,7 +122,7 @@ export async function loadPackFile(file: string): Promise<PackLoad> {
 // ---------------------------------------------------------------------------
 
 /**
- * The product's own leg clamp — `usecases/stages.ts:756`,
+ * The product's own leg clamp — `usecases/stages/`,
  * `Math.min(Math.max(rawLegs, 1), 8)`, whose comment reads "Jul3/08 §2:
  * legs > 2 allowed (triple/quad RR), capped at 8".
  *

@@ -37,7 +37,7 @@ describe("@seazn/scheduler public surface", () => {
 
   // The engine used to load its client lazily (`await import`), so the first `import` of the scheduling usecases never paid
   // for gRPC and protobuf. A static `export { PlacementError } from "./placement-client.ts"` made `@seazn/scheduler`'s index
-  // load both the first time apps/web's schedule.ts is imported, for every route that touches it, solver or not. The error
+  // load both the first time apps/web's usecases/schedule/ is imported, for every route that touches it, solver or not. The error
   // type lives in its own module so the barrel's static graph stays free of the transport.
   it("importing the barrel loads neither gRPC nor protobuf — the client loads only when a solve is asked for", async () => {
     vi.resetModules();

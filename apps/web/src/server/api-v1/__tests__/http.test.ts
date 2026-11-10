@@ -186,7 +186,7 @@ describe("v1 envelope", () => {
   });
 
   // F2a (P7 follow-up, 2026-08-14): the seeded-path analogue of
-  // group_too_few_entrants (stages.ts generateSeededStageFixtures) — the
+  // group_too_few_entrants (usecases/stages/ generateSeededStageFixtures) — the
   // detail carries groups/qualifiers/required/stranded, and it must flow
   // through the JSON body's `error` object, not just live on the thrown
   // EngineError's `.data`, or the client never sees it.
@@ -215,7 +215,7 @@ describe("v1 envelope", () => {
   });
 
   // An `on_complete` progression stage pressed Generate before its source
-  // stage finished (stages.ts generateStageFixtures' pre-flight). The desk
+  // stage finished (usecases/stages/generate.ts generateStageFixtures' pre-flight). The desk
   // names BOTH stages in an amber notice, so the two ids have to reach the
   // JSON body — on the thrown EngineError alone they never left the server,
   // and the organiser got the raw English `message` in a red banner.

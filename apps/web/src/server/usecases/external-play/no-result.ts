@@ -9,7 +9,7 @@ import "server-only";
 //     the club's own language (stored text: the ledger has no reader to localise it for later).
 //     Offered ONLY where a void cannot hold progression up (fix round 3): a league, or a group stage's round-robin —
 //     a table completes over a void (`engineFixtureStatus` reads abandoned as the engine's settled `void`). A Swiss
-//     round is not paired while a board of the round before is undecided (stages.ts `DECIDED`), and abandoned is not
+//     round is not paired while a board of the round before is undecided (stages/swiss-gen.ts `DECIDED`), and abandoned is not
 //     decided there, so a void would stall the stage: refused, "a Swiss round needs every game decided". So is
 //     americano's (its mexicano mode waits on every game decided), which reads the same sentence.
 //   - Both players absent (no_show_both, double_walkover_blocked): W2b's double walkover, `core.forfeit {by: "both",

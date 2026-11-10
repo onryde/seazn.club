@@ -13,7 +13,7 @@
 //   3. a walkover loss (the player's no-show)  → no match (X-PS-1)
 //   4. a DQ of the player after a bare Start   → no match (ruling 115)
 //   5. a DQ of the player after play           → a match, a loss (X-PS-2)
-//   6. a double walkover the withdrawal cascade writes WITHOUT an event (stages.ts, the `dw` mode) → no match (X-PS-1)
+//   6. a double walkover the withdrawal cascade writes WITHOUT an event (stages/, the `dw` mode) → no match (X-PS-1)
 // Expected, from the rules above and nothing else: matches = 2, wins = 1, losses = 1, draws = 0.
 //
 // Two sports, deliberately different in what their snapshot declares: badminton (setbased: a `matches` key, no W/L)
@@ -171,7 +171,7 @@ async function seedScene(c: SportCase): Promise<Scene> {
       playedDqOpponent = personOf.get(opp)!;
     } else {
       // The withdrawal cascade's double walkover over a match nothing was recorded in — its own statement, verbatim
-      // (stages.ts, `dw` mode): no event is written.
+      // (stages/, `dw` mode): no event is written.
       await sql`
         update fixtures set status = 'forfeited', outcome = ${sql.json({ kind: "double_walkover" } as never)}
         where id = ${f.id} and status in ('scheduled', 'in_play', 'needs_decision', 'abandoned')`;

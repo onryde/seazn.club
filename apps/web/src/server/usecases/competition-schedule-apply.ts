@@ -5,7 +5,7 @@ import "server-only";
 // division's board, or none of it (spec §8).
 //
 // Nothing else in this product spans divisions. `applySchedule`
-// (schedule.ts:478) takes ONE division advisory lock, asserts ONE division's
+// (schedule/) takes ONE division advisory lock, asserts ONE division's
 // seq and bumps ONE division's seq, and the board applies a multi-stage plan by
 // calling that endpoint in a loop — so a stale token, a frozen division or a
 // blocking conflict discovered on the fifth call leaves the first four
@@ -180,7 +180,7 @@ export interface CompetitionApplyDivision {
   expected_seq: number;
   /** P9 pass 3b: `court_id` (a real `courts.id`), not the legacy `court_label`
    *  — mirrors `ApplyCompetitionScheduleRequest`'s wire shape (schemas.ts) and
-   *  `applySchedule`'s (schedule.ts) already-converted single-division twin.
+   *  `applySchedule`'s (schedule/apply.ts) already-converted single-division twin.
    *  `venue_id` optional, same coalesce-over-unchanged semantics as there. */
   assignments: {
     fixture_id: string;
@@ -208,7 +208,7 @@ export interface CompetitionApplyOut {
    *  moved, unchanged when nothing did (review 4 of #857, Minor 1). */
   divisions: { division_id: string; seq: number }[];
   /** Listed fixtures left where they are because they hold a result
-   *  (`heldInPlace`, schedule.ts), across every division. */
+   *  (`heldInPlace`, schedule/board.ts), across every division. */
   skipped: number;
   /**
    * The ENGINE verifier's `Conflict`, verbatim — the same camelCase shape the
@@ -382,7 +382,7 @@ export async function applyCompetitionSchedule(
   }
 
   // Stamped once and shared by every event this apply writes. The client's
-  // `model` is deliberately overwritten with the runtime one (schedule.ts:587):
+  // `model` is deliberately overwritten with the runtime one (schedule/):
   // SCHEDULING_AI_MODEL can override the model that actually ran, and the run
   // ledger records the truth, so trusting the request would misrecord the audit.
   const ai =
@@ -510,7 +510,7 @@ export async function applyCompetitionSchedule(
     // just at the DIVISION granularity instead of the stage/pool one.
     // Resolved once, up front, and looked up per fixture below (mirrors
     // `applySchedule`'s single-division `roundRobin` binding — see
-    // `schedule.ts`, the reference implementation for this wiring).
+    // `schedule/`, the reference implementation for this wiring).
     // Each division's Map carries its Swiss stages' round rules (X-SW-31, rulings 255-256) from that division's
     // OWN settings, so the divisions of one run never read each other's rest or cap.
     const roundRobinByDivision = new Map<string, ReadonlyMap<string, RoundFields>>(
@@ -643,7 +643,7 @@ export async function applyCompetitionSchedule(
     const found: Conflict[] = [];
     const before: Conflict[] = [];
     // C1 final-review (4th instance of the delta-gate partial-apply
-    // round-order blind spot — `schedule.ts`'s `roundRobinSequenceSiblings`
+    // round-order blind spot — `schedule/rounds.ts`'s `roundRobinSequenceSiblings`
     // carries the full mechanism; `applySchedule`'s partial path and
     // `moveFixture` are the reference implementations this generalizes from
     // one division to N independent ones). Accumulated across the whole loop
@@ -809,7 +809,7 @@ export async function applyCompetitionSchedule(
         const f = d.byId.get(a.fixture_id)!;
         // P9 pass 3a ruling, applied here in pass 3b: writers stop writing
         // court_label/venue (owner ruling, FULL cutover) — court_id/venue_id
-        // only. Mirrors `applySchedule`'s (schedule.ts) identical write.
+        // only. Mirrors `applySchedule`'s (schedule/apply.ts) identical write.
         //
         // Review wave 2: `venue_id` is DERIVED from the court, exactly as
         // `applySchedule` now does. It used to be
@@ -882,7 +882,7 @@ export async function applyCompetitionSchedule(
       applied,
       skipped,
       divisions: seqs,
-      // #461's contract (schedule.ts's `applySchedule`/`moveFixture`),
+      // #461's contract (schedule/apply.ts's `applySchedule`/`moveFixture`),
       // generalized to N divisions: a widened sibling exists so the GATE
       // above can see it, not so its own — possibly pre-existing and
       // entirely unrelated — conflicts leak into a response about a fixture
@@ -912,7 +912,7 @@ export async function applyCompetitionSchedule(
 
 /** Conflicts in reading order: division (domain order), then playing order
  *  within it. Never the fixture UUID except as a last-resort tie-break — the
- *  determinism contract (schedule-ai.ts:1-12). Exported for a direct,
+ *  determinism contract (schedule-ai/). Exported for a direct,
  *  pure-function regression test (C3 review finding 6) — no other module
  *  imports it. */
 export function sortConflicts(conflicts: readonly Conflict[], order: readonly LoadedDivision[]): Conflict[] {

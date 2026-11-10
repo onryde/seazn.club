@@ -44,7 +44,7 @@
 //      still describes the original defect, which is what a regression would
 //      look like.
 //
-//  (b) registrations.ts's buildGroupStatusView (~line 3341) feeds the CART's
+//  (b) usecases/registrations/group-status.ts's buildGroupStatusView feeds the CART's
 //      single `group.payment_intent_id` into resolveRefundPolicy for EVERY
 //      entry in the cart, with no check that THIS entry was the one actually
 //      covered by it. A promoted-but-unpaid entry inherits a nonzero
@@ -149,7 +149,7 @@ test("RS007 witness — cancelling one of two cart entries drops the subtotal to
     name: `Cross-Entry Cup ${TAG}`,
     visibility: "public",
     // A future starts_on gives resolveRefundPolicy's fallback deadline
-    // (registrations.ts) something real to compute against — without it (and
+    // (usecases/registrations/) something real to compute against — without it (and
     // no explicit refund_lock_at) the policy is fail-CLOSED, and defect (b)'s
     // wrongly-promised refund could never surface at all.
     starts_on: "2030-11-01",
@@ -456,7 +456,7 @@ test("RS007 witness — cancelling one of two cart entries drops the subtotal to
 
     // ---- ASSERTION (b): the dialog must not promise a refund for an entry
     // that was never charged. B's own actual charge is £0 — resolveRefundPolicy
-    // (registrations.ts) instead reads TRUE off the CART's shared
+    // (usecases/registrations/) instead reads TRUE off the CART's shared
     // payment_intent_id, which only ever names entry A's real PaymentIntent. ----
     expect(
       dialogText,

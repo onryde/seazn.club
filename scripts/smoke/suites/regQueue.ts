@@ -15,7 +15,7 @@ import { type Session, newSession, call, check, tag, html, v1, v1data } from "..
  *  WHO step) for an enabled division with no window bounds set. Found live-
  *  broken this session (RS010): this suite's own division here has
  *  `enabled: true` and no `opens_at`/`closes_at`, so `windowOpen()`
- *  (registrations.ts:610) reads it as open — the page can never have shown
+ *  (usecases/registrations/lookups.ts) reads it as open — the page can never have shown
  *  the closed string this suite asserted for, per
  *  `register-page-live.test.tsx`'s own "not the closed message" case. */
 export async function regQueueSuite(admin: Session): Promise<void> {

@@ -715,7 +715,7 @@
  },
  {
   "id": "t12-web-completed-stage-drops-cross-group",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/carry-over.ts",
   "find": "  return { pools, ...(bracket ? { bracket } : {}), ...(crossGroup ? { crossGroup } : {}) };",
   "replace": "  return { pools, ...(bracket ? { bracket } : {}) /*MUT*/ };",
   "killers": [
@@ -759,7 +759,7 @@
  },
  {
   "id": "t12-web-seed-next-stage-draw-not-stored",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/carry-over.ts",
   "find": "    await persistCrossGroupDraws(tx, resolvedSources, newLotsDraws);",
   "replace": "    /*MUT*/ void newLotsDraws;",
   "killers": [
@@ -774,7 +774,7 @@
  },
  {
   "id": "t12-web-proposal-draw-not-stored",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/seed-proposal.ts",
   "find": "    await persistCrossGroupDraws(tx, resolved, newLotsDraws);",
   "replace": "    /*MUT*/ void newLotsDraws;",
   "killers": [

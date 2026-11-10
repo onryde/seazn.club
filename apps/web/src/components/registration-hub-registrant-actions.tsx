@@ -24,7 +24,7 @@
 //
 // "Optimistic where safe, with rollback on 4xx" (owner ruling): approve,
 // reject, withdraw and (RS005 R1) markPaid each have exactly ONE possible
-// resulting status (registration-approval.ts / registrations.ts —
+// resulting status (registration-approval.ts / usecases/registrations/ —
 // confirmed, rejected, withdrawn, confirmed respectively — markPaid
 // confirms/materialises in the SAME server call rather than stopping at an
 // intermediate 'paid', see markPaid() below), so `runStatusAction` flips
@@ -114,7 +114,7 @@ export interface RegistrationHubRegistrantActionsProps {
   /** This entry's OWN quoted fee (RegistrationRow.amount_cents, frozen at
    *  submission) — the fee signal deriveRegistrantActionFlags uses as a
    *  stand-in for the division's live registration_settings.fee_cents
-   *  (registration-approval.ts:128, registrations.ts:3111-3114's real
+   *  (registration-approval.ts:128, usecases/registrations/ folder's real
    *  gates): this component only ever receives ONE row, never the
    *  division's settings. See that function's own doc comment for exactly
    *  when the two can diverge. */
@@ -255,7 +255,7 @@ export function RegistrationHubRegistrantActions({
       const text = failureText(err);
       // RS005 F2 finding 3 — see the file header. approveRegistration
       // (registration-approval.ts:128) and markRegistrationPaidOffline
-      // (registrations.ts:3147) both gate on the DIVISION's LIVE fee, not
+      // (usecases/registrations/) both gate on the DIVISION's LIVE fee, not
       // this row's frozen amountCents. Neither throw carries a
       // distinguishing `code` (both default to "UNKNOWN" — HttpError's
       // optional `code` was never passed for either), so this matches each

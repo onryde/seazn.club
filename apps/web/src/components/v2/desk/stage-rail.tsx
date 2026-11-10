@@ -528,10 +528,10 @@ export function StageRail({
                     // be gated behind a "you'll lose N fixtures" confirm
                     // dialog whenever stageFixtures.length > 0. That
                     // premise was never checked against the code and is
-                    // false — generateStageFixtures (stages.ts) is
+                    // false — generateStageFixtures (usecases/stages/generate.ts) is
                     // ADDITIVE ONLY. It builds `byKey` from the stage's
                     // existing fixtures and inserts only the generated
-                    // rows missing from it (stages.ts:997-1031); any
+                    // rows missing from it (usecases/stages/); any
                     // existing fixture that no longer matches the current
                     // rules is left in place, untouched, not discarded.
                     // The repo's only `delete from fixtures` are

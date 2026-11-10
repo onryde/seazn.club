@@ -46,7 +46,7 @@
 //    "Add a pair") — so a singles division is a genuinely different code path
 //    through the stepper, not a cosmetic variant.
 //  - S2 is the one that can only fail silently. Both refund paths read the
-//    entry's stored `amount_cents` (registrations.ts `resolveRefundPolicy` and
+//    entry's stored `amount_cents` (usecases/registrations/refunds.ts `resolveRefundPolicy` and
 //    `refundRegistration`), never the live `registration_settings.fee_cents` —
 //    a design decision with no test that would notice it being reversed. A
 //    future "read the current fee" refactor would look correct in review, pass

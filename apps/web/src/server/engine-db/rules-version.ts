@@ -65,7 +65,7 @@ export type UnfrozenRules = ReadonlyMap<string, string>;
  * is ever opened on it (and its format is locked against the per-match writer — `fixture-rules.ts` (7a)). Every other
  * shape with no frozen cfg is read, an event-less award included (batch-5 re-review, Q5): a take-back can reopen one that
  * HAS feeders (`fed-seats.ts`: the walkover revive, the reset release) — and the award a dead seat leaves in a later round
- * is written with `reason: "bye"` too (`awardSeededByes`' cascade, stages.ts), so the reason alone cannot tell a seeded bye
+ * is written with `reason: "bye"` too (`awardSeededByes`' cascade, usecases/stages/bracket-seats.ts), so the reason alone cannot tell a seeded bye
  * from it; a feeder can. A table (points-scope) key is not refused on a played knockout (`rule-locks.ts` "a knockout has no
  * table to protect"), so a division save can move what that award resolves to after a pad loaded it and before the
  * reopen. A bump at the save is the only place that can see the move; nothing bumps at the reopen. A match decided by

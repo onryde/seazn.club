@@ -69,7 +69,7 @@ const enDict = en as unknown as Dict;
 
 // Both carry the deprecated `detail` string ALONGSIDE the structured
 // `details` — the wire pairs the two, or sends neither (usecases/
-// schedule.ts `mapConflicts`, C3 2026-08-13 design amendment).
+// usecases/schedule/conflicts.ts `mapConflicts`, C3 2026-08-13 design amendment).
 const REST_WARNING = {
   fixture_id: "f1",
   code: "warn.rest",

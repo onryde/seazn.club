@@ -6,7 +6,7 @@
 //
 // Sport-free by nature: the decision reads seats, seeds, statuses and three booleans, no sport field.
 //
-// Final review m1 (owner ruling 2026-11-09): Rebuild refuses a frozen schedule (422 SCHEDULE_LOCKED, stages.ts
+// Final review m1 (owner ruling 2026-11-09): Rebuild refuses a frozen schedule (422 SCHEDULE_LOCKED, usecases/stages/
 // `regenerateStageInTx`), so a frozen division is never OFFERED it — the refusal says unfreeze first (`unfreezeFirst`).
 import { describe, expect, it } from "vitest";
 import { decideKnockoutLateEntry, decideWaitingEntrant, type KnockoutLateDecision, type LateLine } from "@/lib/knockout-late-entry";

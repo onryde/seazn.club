@@ -19,6 +19,7 @@ import { requireOrgPage } from "@/server/page-auth";
 import { sql } from "@/lib/db";
 import { hasFeatureOnAnyPass } from "@/lib/entitlements";
 import { listSponsorRows } from "@/server/usecases/sponsors";
+import { finishedPackageCompetitions } from "@/server/usecases/sponsor-deals";
 import { loadOnStreamScope } from "@/server/sponsors/on-stream";
 import { listReportLinks, reportLinkDefaults, sponsorOverview } from "@/server/sponsors/report";
 import { OrgSponsors } from "@/components/org-sponsors";
@@ -28,7 +29,7 @@ import { SponsorPackages } from "@/components/sponsor-packages";
 import { routes } from "@/lib/routes";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
-import { resolveOnStreamScope, resolveSponsorsTab, sponsorsTabsFor } from "@/lib/sponsors-hub";
+import { resolveOnStreamScope, resolveSponsorsTab, sponsorsHref, sponsorsTabsFor } from "@/lib/sponsors-hub";
 import { resolveSponsorPeriod } from "@/lib/sponsor-report";
 import { HubPanel, SponsorsHubTabs } from "./_components/hub-chrome";
 
@@ -81,17 +82,25 @@ export default async function SponsorsHubPage({
       </HubPanel>
     );
   } else if (tab === "packages") {
-    const [hasMonetize, competitions] = await Promise.all([
-      hasFeatureOnAnyPass(active.id, "sponsors.monetize"),
+    // The invoice form picks one of the org's sponsors (sponsor deals T12): only the picker's three fields cross to the client.
+    // A plan without the feature sees the upsell and no form, so it reads no sponsors (the page loads only what its tab shows).
+    // A package whose competition has finished offers no Send invoice (batch F review m4; the create refuses it anyway).
+    const hasMonetize = await hasFeatureOnAnyPass(active.id, "sponsors.monetize");
+    const [competitions, sponsorRows, finishedCompetitionIds] = await Promise.all([
       orgCompetitions(active.id),
+      hasMonetize ? listSponsorRows(active.id) : Promise.resolve([]),
+      hasMonetize ? finishedPackageCompetitions(active.id) : Promise.resolve([]),
     ]);
     body = (
       <HubPanel tab="packages" icon={Banknote} dict={dict}>
         <SponsorPackages
           orgId={active.id}
           competitions={competitions}
+          sponsors={sponsorRows.map((s) => ({ id: s.id, name: s.name, display_order: s.display_order }))}
           hasMonetize={hasMonetize}
           billingHref={routes.billing(orgSlug)}
+          sponsorsHref={sponsorsHref(orgSlug, "sponsors")}
+          finishedCompetitionIds={finishedCompetitionIds}
         />
       </HubPanel>
     );
@@ -118,6 +127,8 @@ export default async function SponsorsHubPage({
             status: s.status,
             competition_id: s.competition_id,
             on_stream: s.on_stream,
+            // F24: this map names the tab's fields one by one, so a field left out never reaches the tick.
+            locked_by_deal: s.locked_by_deal,
           }))}
           competitions={competitions}
           scope={scope}

@@ -1,6 +1,6 @@
 // PROMPT-59 round-trip (the test the wave skipped — and the stg capstone then
 // hit): a knockout stage whose qualification is a COMBINED spec must survive
-// the usecase layer's own spec check (stages.ts resolveNextStage) and generate
+// the usecase layer's own spec check (stages/ resolveNextStage) and generate
 // its bracket honouring slotOrder. Real Postgres required.
 import { describe, expect, it, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";

@@ -38,7 +38,7 @@
 // Same "cannot import apps/web" reason `advance.ts`'s own header gives —
 // most of that tree is `server-only`, and no production file under
 // `tools/bench/lib/` imports from `apps/web`. Types below match
-// `usecases/stages.ts#getStandings` (`StandingsOut`),
+// `usecases/stages/completion.ts#getStandings` (`StandingsOut`),
 // `packages/engine/src/competition/standings.ts#StandingsRow`,
 // `usecases/player-stats.ts#divisionPlayerStats/personStats/
 // personCareerStats`, field for field (`B05-repins-2026-09-07.md`'s
@@ -127,7 +127,7 @@ export interface StandingsRowWire {
   readonly tieBreak?: { readonly key: string; readonly with: readonly string[] };
 }
 
-/** `usecases/stages.ts#StandingsOut`. */
+/** `usecases/stages/completion.ts#StandingsOut`. */
 export interface StandingsWire {
   readonly stage_id: string;
   readonly pool_id: string | null;

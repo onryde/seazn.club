@@ -153,7 +153,7 @@ import {
   type GroupStatusView,
 } from "../registrations";
 // RS012: assignSoloSignUp lives in its own module (RS009's own header —
-// "everything here is reached through paths [registrations.ts] already
+// "everything here is reached through paths [registrations/] already
 // exports"), needed here only to prove an already-placed solo sign-up is
 // excluded from the pool-deadline sweep.
 import { assignSoloSignUp } from "../registration-assign";
@@ -2250,7 +2250,7 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     await sql`update organizations set stripe_charges_enabled = false where id = ${orgId}`;
     // submitRegistration's own pre-flight charges_enabled check is gone
     //, but the surviving resumeRegistrationCheckout carries the SAME
-    // guard (registrations.ts: "Payments are not set up for this organiser
+    // guard (registrations/: "Payments are not set up for this organiser
     // yet") — seed the pending stripe entry and resume it to exercise it.
     const res = await seedRegistration(competition.id, division.id, settings);
     await expect(
@@ -2864,7 +2864,7 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     );
     row = await loadWithGroup(res.registration.id);
     // Cart-scoped write-off (block comment above RegistrationWithGroupRow in
-    // registrations.ts) — group_refunded_cents, not the entry's own column.
+    // registrations/) — group_refunded_cents, not the entry's own column.
     expect(row.group_refunded_cents).toBe(500);
   });
 
@@ -2880,7 +2880,7 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     } as unknown as Stripe.Charge);
     let row = await loadWithGroup(res.registration.id);
     // Cart-scoped mirror (block comment above RegistrationWithGroupRow in
-    // registrations.ts) — group_refunded_cents, not the entry's own column.
+    // registrations/) — group_refunded_cents, not the entry's own column.
     expect(row.group_refunded_cents).toBe(300);
 
     // Never regresses below what we already recorded.
@@ -3215,7 +3215,7 @@ describe.skipIf(!HAS_DB)("dispute loss recovery (PROMPT-55)", () => {
 // ---------------------------------------------------------------------------
 // RS002 (V368): entry-level refunds — the three cart-level-money hazards
 // flagged in the block comment above RegistrationWithGroupRow
-// (registrations.ts), now fixed. No multi-entry submit flow exists yet
+// (registrations/), now fixed. No multi-entry submit flow exists yet
 // (RS002/RS003 own building group-submit), so `seedSecondEntry` attaches a
 // second entry directly to an existing cart, the same way `seedRegistration`
 // reproduces submitRegistration's single-entry write.
@@ -3455,7 +3455,7 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
     await handleRegistrationCheckoutCompleted(fakeSession(res.registration.id, 500));
 
     const row = await loadWithGroup(res.registration.id);
-    // Reverting the sql.begin wrap (registrations.ts ~confirmPaidRegistration
+    // Reverting the sql.begin wrap (registrations/checkout-completion.ts ~confirmPaidRegistration
     // "late" branch) makes this fail: the entry write would commit alone
     // and read back 500.
     expect(row.refunded_cents).toBe(0);
@@ -3472,7 +3472,7 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
 
     const row = await loadWithGroup(res.registration.id);
     expect(row.status).toBe("withdrawn"); // the status flip is its own, separate, unaffected tx
-    // Reverting the sql.begin wrap (registrations.ts ~withdrawCore
+    // Reverting the sql.begin wrap (registrations/withdraw.ts ~withdrawCore
     // auto-refund block) makes this fail: the entry write would commit
     // alone and read back 500.
     expect(row.refunded_cents).toBe(0);
@@ -3488,7 +3488,7 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
     await handleRegistrationCheckoutCompleted(session);
     await handleRegistrationCheckoutCompleted(session); // Stripe's "at least once" redelivery
 
-    // Reverting the already-refunded guard (registrations.ts
+    // Reverting the already-refunded guard (registrations/
     // ~confirmPaidRegistration, right before the "late" stripeRefund call)
     // makes this fail: a second real refund fires and the totals double.
     expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
@@ -3562,7 +3562,7 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
 
     const after = await loadWithGroup(a.id);
     // Reverting the greatest(refunded_cents, dispute.amount) fix
-    // (registrations.ts ~handleRegistrationDispute, "lost" branch) makes
+    // (registrations/disputes.ts ~handleRegistrationDispute, "lost" branch) makes
     // this fail: it would read back 1000 or 700, never 1700.
     expect(after.group_refunded_cents).toBe(1700);
   });
@@ -3572,7 +3572,7 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
 // RS003 W3b: the webhook re-keyed from a single registration_id to the
 // GROUP's registration_ids (comma-joined, W3a's createRegistrationCheckout),
 // plus the payment_status gate + async event pair the same wave closed
-// (owner's no-new-issues rule — every OTHER kind in billing-events.ts's
+// (owner's no-new-issues rule — every OTHER kind in billing-events/ folder's
 // dispatch already gated on payment_status; the registration branch didn't).
 // ---------------------------------------------------------------------------
 
@@ -4177,7 +4177,7 @@ describe.skipIf(!HAS_DB)("RS002 W5 review: rejected is terminal from every write
 
     const [row] = await sql<{ status: string; entrant_id: string | null }[]>`
       select status, entrant_id from registrations where id = ${registration.id}`;
-    // Reverting the rejected branch (registrations.ts confirmPaidRegistration)
+    // Reverting the rejected branch (registrations/checkout-completion.ts confirmPaidRegistration)
     // makes this fail: status would become 'confirmed' and entrant_id would
     // be set — money taken AND an entrant created for a rejected registration.
     expect(row!.status).toBe("rejected");
@@ -5080,7 +5080,7 @@ describe.skipIf(!HAS_DB)("RS012: putRegistrationSettings/getRegistrationSettings
     const read = await getRegistrationSettings(owner, division.id);
     expect(new Date(read.place_by_at!).toISOString()).toBe("2026-03-15T00:00:00.000Z");
 
-    // The sweep (Stage 2, registrations.ts ~:5195) reads this column with a
+    // The sweep (Stage 2, registrations/) reads this column with a
     // plain `select place_by_at ... from registration_settings` — proving
     // THAT read sees what this write-path just sent, not just this usecase's
     // own return values, is the actual seam this stage closes.
@@ -5414,7 +5414,7 @@ describe.skipIf(!HAS_DB)("RS012: sweepRegistrations pool-deadline pass", () => {
 // change as "a team slot freed" pushes the division past its configured
 // capacity with no re-check (promoteOldestWaitlisted/promoteWaitlistedRow
 // trust the caller that a slot is genuinely free). Fixed by `freesTeamSlot`
-// (registrations.ts, beside promoteOldestWaitlisted).
+// (registrations/waitlist.ts, beside promoteOldestWaitlisted).
 // ---------------------------------------------------------------------------
 
 describe.skipIf(!HAS_DB)("RS012 `/code-review high` finding 1 — freesTeamSlot (withdrawCore + sweep expiry)", () => {
@@ -5564,7 +5564,7 @@ describe.skipIf(!HAS_DB)("RS012 `/code-review high` finding 1 — freesTeamSlot 
     const waitingTeam = await seedTeamEntry(competition.id, division.id, "waitlisted");
     const solo = await seedSolo(competition, division, settings); // 'pending', 500, stripe
     // Push the cart's pay window into the past so the sweep's overdue pass
-    // (registrations.ts's `overdue` query) actually selects it.
+    // (registrations/ folder's `overdue` query) actually selects it.
     await sql`
       update registration_groups set expires_at = now() - interval '1 hour'
       where id = ${solo.registration.group_id}`;
@@ -6335,7 +6335,7 @@ describe.skipIf(!HAS_DB)("RS005 F1: swallowed registration-mail failures are now
 // groupById's own doc comment, and the RS007 status page's, which say so in
 // those words). Every OTHER ref_code-shaped field in this file
 // (PublicStatusView.ref_code, the refCode/refStatusUrl pairs elsewhere in
-// registrations.ts) is already correctly typed/guarded nullable — this one
+// registrations/) is already correctly typed/guarded nullable — this one
 // call site was the odd one out.
 //
 // The trap: TypeScript's `!` is erased at compile time and never throws, so
@@ -6486,7 +6486,7 @@ describe.skipIf(!HAS_DB)("RS012 stage 3b: buildGroupStatusView — pool_place_by
   });
 
   it("is null once withdrawn (e.g. by the sweep), even though the division's place_by_at is still set — /code-review high finding", async () => {
-    // The sweep's own withdrawal (registrations.ts's duePool pass) never
+    // The sweep's own withdrawal (registrations/ folder's duePool pass) never
     // clears place_by_at off the DIVISION — it only flips this ENTRY's
     // status. Without the terminal-status guard here, this raw field would
     // still carry a live-looking refund-by date on an already-withdrawn

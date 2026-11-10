@@ -103,7 +103,7 @@ const slotTaker = (tx: Tx) => tx`not ${byeLineSql(tx, "fixtures")}`;
  * The engine skips them — they are not REVERSIBLE (`isReversible`) — so this app-side check is the only barrier.
  * A late entry is one only when an ORGANISER added the player (ruling 252 items 8 and 11: an automatic arrival — a paid
  * registration, a waitlist promotion, an import — does not change Undo); a change to the round count always is.
- * W4 T5 (K1): so is a seed confirm (`seed_confirmed`, stages.ts `confirmSeedProposal`). It fills a setup-timing bracket's
+ * W4 T5 (K1): so is a seed confirm (`seed_confirmed`, stages/seed-proposal.ts `confirmSeedProposal`). It fills a setup-timing bracket's
  * seats through `fillSlot`, a write no ledger step records, so an Undo after it inverted the step BEFORE it — the
  * bracket's own day-one generation — and deleted the seeded draw. Each row is written by `appendUndoBarrierRow`
  * (swiss-late-entry.ts), which moves the division's token and never the watermark.
@@ -168,7 +168,7 @@ export function invertedStepSeq(direction: "undo" | "redo", payload: Record<stri
   return seq;
 }
 
-/** The rows a Pair next seated (`seated_fixture_ids`, stages.ts `generateStageFixturesTx`): the shells it UPDATED,
+/** The rows a Pair next seated (`seated_fixture_ids`, stages/generate-tx.ts `generateStageFixturesTx`): the shells it UPDATED,
  *  which `fixture_ids` — the Undo DELETE list — never names. Empty for every other generation. */
 /** The Pair-next row whose seats a `fixtures_cleared` step takes away. An Undo clears the row it inverts; a Redo
  *  re-does an Undo, so it clears the row THAT Undo had inverted (`__undo_of`, which a Redo copy keeps). Batch-1 I1: once
@@ -290,7 +290,7 @@ function snapshotIdKey(snapshot: unknown): string | undefined {
  *  seat, as the live rows keep her (a withdrawal before Start is a status
  *  flip). The ONE exception is a seat her own bye FED (`byeFedSeats`): the
  *  generator's third pass never carries a departed qualifier's bye into the
- *  next round (stages.ts, F14), so that seat restores EMPTY — its slot label
+ *  next round (stages/, F14), so that seat restores EMPTY — its slot label
  *  is restored, so it still reads as its placeholder. */
 const seatOf = (tx: Tx, entrantId: string | null | undefined, byeFedDeparted: boolean) =>
   byeFedDeparted
@@ -337,7 +337,7 @@ function byeFedSeats(snapshots: readonly FixtureSnapshot[]): Set<string> {
 //     number printed on sheets — renumbered only when taken since).
 //   - ...except an ext_key a LIVE row of the same stage holds by the time of
 //     the restore. Rows are minted outside the ledger — the Swiss shell
-//     top-up (stages.ts reconcileSwissRoundShells) inserts `sw-rN-bK` shells
+//     top-up (stages/swiss-reconcile.ts reconcileSwissRoundShells) inserts `sw-rN-bK` shells
 //     no undo ever removes — so the key can be taken again, and `(stage_id,
 //     ext_key)` is unique: a raw restore raised 23505, and since every retry
 //     replays the same snapshot, Undo was stuck for good. The restored row
@@ -389,7 +389,7 @@ function byeFedSeats(snapshots: readonly FixtureSnapshot[]): Set<string> {
 // taken after B's delete nulled A→B, so A comes back without it; restoring B
 // next re-derives it. Known residual: an INTRA-stage edge that a later,
 // partial regeneration's feed pass wrote from an older row into one of its
-// own new rows (stages.ts, "Second pass: feeds") is declared nowhere but that
+// own new rows (stages/, "Second pass: feeds") is declared nowhere but that
 // pass, so undoing that regeneration and restoring it does not re-wire it.
 // ---------------------------------------------------------------------------
 
@@ -433,7 +433,7 @@ async function snapshotFixtures(
  *  finished_at it had. Every play-driven status is a fold of score events
  *  (engine-db/append-event.ts), so on an unscored row they can only be the
  *  generator's own — a bye's award, a departed qualifier's walkover or void
- *  (stages.ts first pass) — or plain 'scheduled'. A scored row's evidence went
+ *  (stages/ first pass) — or plain 'scheduled'. A scored row's evidence went
  *  with the delete's cascade, so it returns unplayed, as it always has.
  *  `scored` must be literally false: a snapshot from before it existed
  *  restores 'scheduled', as it always did. */
@@ -585,7 +585,7 @@ async function execute(
   };
   switch (event.type) {
     // P9 pass 3a: `court`/`.court` on every payload below is a `courts.id`
-    // now (schedule.ts's `moveFixture`/`applySchedule` write it that way —
+    // now (schedule/move.ts's `moveFixture`/`applySchedule` write it that way —
     // see their own comments on `schedule_edited`/`schedule_applied`), so
     // every replay here writes `court_id`, never the legacy `court_label`.
     // This is the fix the dispatch's regression targets: undo/redo used to
@@ -1414,13 +1414,13 @@ export async function clearScheduleScoped(
     // `step` above for why the list of sibling sites is NOT restated here (it
     // was restated three times in this file, and every copy was wrong). One
     // note that IS worth keeping because it is a trap rather than a list:
-    // `moveFixture` (schedule.ts) refuses unconditionally, ahead of its own
+    // `moveFixture` (schedule/move.ts) refuses unconditionally, ahead of its own
     // `movesTimetable` test, so a freeze refuses every patch and not just a
     // reslot — while `patchFixture` (fixtures.ts) is a DIFFERENT function that
     // carries no freeze guard at all.
     //
     // The AI-plan refusals are the same code at a different status: 409, not
-    // 422, and `schedule-ai.ts` reads `divisions.schedule_locked` directly
+    // 422, and `schedule-ai/` reads `divisions.schedule_locked` directly
     // rather than through `divisionLockState` (its `divisionLockState` call
     // destructures `scopes` only and never consults `frozen`).
     const lockState = await divisionLockState(tx, divisionId);
@@ -1530,7 +1530,7 @@ export async function clearPoolEntrants(
 export const LockInput = z.object({
   schedule_locked: z.boolean().optional(),
   // P9 pass-3a-FIX: courts/venues are real ids (V374's locked_scopes
-  // migration) — `scopeLocked` (schedule.ts) matches on court_id/venue_id,
+  // migration) — `scopeLocked` (schedule/board.ts) matches on court_id/venue_id,
   // not organiser-typed names. Kept identical by hand to api-v1/schemas.ts's
   // `DivisionLocks` (the OpenAPI doc schema for this same route) — that file
   // is not the runtime validator here, this one is (see the route handler),
@@ -1577,7 +1577,7 @@ export async function setDivisionLocks(
  *  outside pass 3a's file scope (a console/UI concern, pass 4) and a rename
  *  here with no consumer updated to match would be a pointless wire break;
  *  a caller wanting a display name resolves `court` the same way any other
- *  P9 caller does (`courtNamesById` in schedule.ts). */
+ *  P9 caller does (`courtNamesById` in schedule/board.ts). */
 export async function scheduleStateAt(
   auth: AuthCtx,
   divisionId: string,
