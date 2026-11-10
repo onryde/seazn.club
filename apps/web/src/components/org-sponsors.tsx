@@ -13,6 +13,8 @@ import {
 import { useMsg } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { TIER_BADGE, TIER_MSG } from "@/components/sponsors/tier-labels";
+import { sponsorSaveErrorKey } from "@/components/sponsors/save-error";
+import { ApiV1Error } from "@/lib/client-v1";
 import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
 
 const MAX_LOGO_BYTES = 2 * 1024 * 1024;
@@ -35,6 +37,10 @@ export interface SponsorItem {
   click_count: number;
   /** The paid package order that activated this placement, if any. */
   paid_order_id?: string | null;
+  /** The deal the row shows (sponsor deals D8), or null when the sponsor has none. */
+  deal: { id: string; payment_status: string } | null;
+  /** A live deal owns this sponsor's tier, competition, stream and status (D9): the form offers none of them. */
+  locked_by_deal: boolean;
 }
 
 interface Draft {
@@ -50,6 +56,14 @@ interface Draft {
 const EMPTY_DRAFT: Draft = {
   name: "", url: "", tier: "partner", competition_id: "", file: null, preview: null,
 };
+
+/** Is a delete certain to be refused? Money history (paid or refunded) on any of a sponsor's deals is a 409
+ *  `sponsor_has_deal_history` (server/usecases/sponsors.ts `dealHoldsHistory`). What the row can see of it is its paid order
+ *  and the deal it shows; a pre-deals order or a history on an older deal is only known to the server, whose refusal is shown
+ *  the same way. So this only decides whether to ASK first - it refuses nothing. */
+function deleteIsRefusedForHistory(s: SponsorItem): boolean {
+  return Boolean(s.paid_order_id) || s.deal?.payment_status === "paid" || s.deal?.payment_status === "refunded";
+}
 
 /** People type bare domains — give the link a scheme before validation. */
 function normalizeUrl(raw: string): string {
@@ -74,7 +88,7 @@ function isValidSponsorUrl(raw: string): boolean {
 /** The one sponsor form — add and edit share it; logo travels with it.
  *  Hoisted out of OrgSponsors: a nested component definition would remount
  *  (and drop focus) on every parent render. */
-function SponsorForm({
+export function SponsorForm({
   value,
   onChange,
   onSubmit,
@@ -82,6 +96,7 @@ function SponsorForm({
   submitLabel,
   busy,
   hasTiers,
+  lockedByDeal,
   competitions,
   onPickLogo,
 }: {
@@ -92,6 +107,9 @@ function SponsorForm({
   submitLabel: string;
   busy: boolean;
   hasTiers: boolean;
+  /** A live deal sets the tier and the competition (D9): both selects are disabled and the form says why. Name, link and logo
+   *  stay editable. Always false on the add form. */
+  lockedByDeal: boolean;
   competitions: { id: string; name: string }[];
   onPickLogo: (file: File, set: (fn: (prev: Draft) => Draft) => void) => void;
 }) {
@@ -162,7 +180,7 @@ function SponsorForm({
                 <span className="label">{msg("sponsors.tierLabel")}</span>
                 <select
                   value={value.tier}
-                  disabled={busy}
+                  disabled={busy || lockedByDeal}
                   onChange={(e) =>
                     onChange((prev) => ({ ...prev, tier: e.target.value as SponsorTier }))
                   }
@@ -181,7 +199,7 @@ function SponsorForm({
                 <span className="label">{msg("sponsors.scopeLabel")}</span>
                 <select
                   value={value.competition_id}
-                  disabled={busy}
+                  disabled={busy || lockedByDeal}
                   onChange={(e) =>
                     onChange((prev) => ({ ...prev, competition_id: e.target.value }))
                   }
@@ -195,6 +213,11 @@ function SponsorForm({
                   ))}
                 </select>
               </label>
+            ) : null}
+            {hasTiers && lockedByDeal ? (
+              <p className="text-xs text-slate-500 sm:col-span-2" data-testid="sponsor-locked-note">
+                {msg("sponsors.deal.lockedNote")}
+              </p>
             ) : null}
           </div>
           <div className="mt-3 flex items-center gap-2">
@@ -249,11 +272,13 @@ export function OrgSponsors({
     const data = (await res.json().catch(() => ({}))) as {
       data?: unknown;
       // v1 errors are plain strings OR structured { code, message, issues }.
-      error?: string | { message?: string };
+      error?: string | { code?: string; message?: string };
     };
     if (!res.ok) {
-      const message = typeof data.error === "string" ? data.error : data.error?.message;
-      throw new Error(message ?? msg("settings.saveFailed"));
+      // Carry the envelope's CODE, not just its sentence: the sentence is server English, the code is what `run` maps to the
+      // dictionary (`sponsorSaveErrorKey`).
+      const e = typeof data.error === "string" ? { message: data.error } : (data.error ?? {});
+      throw new ApiV1Error(e.message ?? msg("settings.saveFailed"), res.status, e.code ?? "UNKNOWN");
     }
     // /api/v1 envelope: { ok, data } — callers want the payload.
     return data.data ?? data;
@@ -266,7 +291,15 @@ export function OrgSponsors({
     try {
       await fn();
     } catch (err) {
-      setError(err instanceof Error ? err.message : msg("settings.saveFailed"));
+      // A server refusal reads the dictionary's words for its code; an error this component raised itself (a logo that is too
+      // big, a failed upload) already carries its own translated sentence.
+      setError(
+        err instanceof ApiV1Error
+          ? msg(sponsorSaveErrorKey(err))
+          : err instanceof Error
+            ? err.message
+            : msg("settings.saveFailed"),
+      );
     } finally {
       setBusy(false);
     }
@@ -367,13 +400,16 @@ export function OrgSponsors({
 
   function remove(s: SponsorItem) {
     void (async () => {
-      // A bought placement deserves a pause: deleting hides what the
-      // sponsor paid for, and the money does NOT come back by itself.
-      if (s.paid_order_id) {
+      // The server's rule (sponsors.ts `deleteSponsor`, sponsor deals F3): a sponsor's deals go WITH it, unless one holds payment
+      // history (paid or refunded, or a pre-deals order) or an open payment link nobody could close - then the delete is a 409 and
+      // the sponsor stays. So a sponsor with deals asks first, in words that match; one already known to hold payment history
+      // is not asked to confirm a delete that cannot happen (its 409 reads `sponsors.error.hasDealHistory`). The server stays
+      // the rule's one owner: this only skips a question, it refuses nothing.
+      if (s.deal && !deleteIsRefusedForHistory(s)) {
         const ok = await confirm({
-          title: msg("sponsors.deletePaid.title"),
-          body: msg("sponsors.deletePaid.body", { name: s.name }),
-          confirmLabel: msg("sponsors.deletePaid.label"),
+          title: msg("sponsors.deleteDeal.title"),
+          body: msg("sponsors.deleteDeal.body", { name: s.name }),
+          confirmLabel: msg("sponsors.deleteDeal.label"),
           tone: "danger",
         });
         if (!ok) return;
@@ -430,6 +466,7 @@ export function OrgSponsors({
             submitLabel={msg("settings.org.sponsors.add")}
             busy={busy}
             hasTiers={hasTiers}
+            lockedByDeal={false}
             competitions={competitions}
             onPickLogo={pickLogo}
           />
@@ -472,6 +509,7 @@ export function OrgSponsors({
                     submitLabel={msg("sponsors.save")}
                     busy={busy}
                     hasTiers={hasTiers}
+                    lockedByDeal={s.locked_by_deal}
                     competitions={competitions}
                     onPickLogo={pickLogo}
                   />

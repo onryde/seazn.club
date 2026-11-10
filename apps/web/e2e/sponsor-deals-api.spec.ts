@@ -18,10 +18,26 @@
 //
 // Task 8 — seam S1 through a real server: a SIGNED payment_intent.succeeded posted to the real webhook route
 // (/api/webhooks/stripe → runEvent → the payment handler) puts the deal's OWN sponsor on the public page, and adds no sponsor.
+//
+// Task 12 — the one page-level test: today's console on a sponsor whose live deal owns its tier, scope and stream. The On stream
+// tick is disabled and says why; the Sponsors tab's tier and competition selects are disabled with the same note; and the
+// Packages tab's invoice form picks that sponsor by name — each at 320, 768 and 1280 with a 43-character name, no sideways scroll.
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext } from "@playwright/test";
-import { apiJson, withDb } from "./helpers";
+import { apiJson, expectNoHorizontalScroll, withDb } from "./helpers";
 import { postSignedEvent, stripeEvent, stripeUid } from "./_stripe-events";
-import { releaseSettingsOrg, seedCompetition, seedSettingsOrg, type SeededOrg } from "./settings-support";
+import { releaseSettingsOrg, seedCompetition, seedSettingsOrg, sponsorsUrl, type SeededOrg } from "./settings-support";
+
+/** Copy read from the dictionary the page renders from, never retyped (this folder's idiom: sponsors-hub.spec.ts). */
+const UI: Record<string, string> = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+);
+function ui(key: string, vars: Record<string, string> = {}): string {
+  const raw = UI[key];
+  if (raw === undefined) throw new Error(`en/ui.json has no ${key}`);
+  return Object.entries(vars).reduce((out, [k, v]) => out.replaceAll(`{${k}}`, v), raw);
+}
 
 type Deal = { id: string; deal_status: string; payment_status: string; sponsor_id: string };
 type Sponsor = { id: string; name: string; status: string };
@@ -237,4 +253,70 @@ test("deleting a competition a deal is scoped to answers 409 with the archive hi
   // Its positive pair: a competition of the same org with no deal deletes.
   const deleted = await apiJson(request, `/api/v1/competitions/${spare.id}`, "DELETE");
   expect(deleted.status, JSON.stringify(deleted.error)).toBe(200);
+});
+
+test("a sponsor under a live deal: On stream tick, tier and competition are locked with a note, and the invoice picker names it, at 320 / 768 / 1280", async ({ page, request }) => {
+  // Nine page loads (three tabs at three widths) plus the seeding.
+  test.setTimeout(180_000);
+  const org = await seedSettingsOrg(request, { plan: "pro", label: "deal-locks" });
+  seeded.push(org);
+  const PACKAGE_TIER = "gold";
+  const pkg = await apiJson<{ id: string }>(request, `/api/v1/orgs/${org.orgId}/sponsor-packages`, "POST", {
+    name: "Gold board", price_cents: 25_000, currency: "gbp", tier: PACKAGE_TIER,
+  });
+  expect(pkg.status, JSON.stringify(pkg.error)).toBe(201);
+  // The 43-character name is the realistic one: a short name hides a missing `min-w-0` up the chain (AGENTS.md, phone composition).
+  const LONG = "Harbourside Building Supplies and Timber Co";
+  expect(LONG.length, "premise: the name is the 43-character one").toBe(43);
+  const FREE = "Ridge Cycles";
+  const made = async (name: string) => {
+    const res = await apiJson<{ id: string }>(request, `/api/v1/orgs/${org.orgId}/sponsors`, "POST", { name, tier: "partner" });
+    expect(res.status, JSON.stringify(res.error)).toBe(201);
+    return res.data!.id;
+  };
+  const lockedId = await made(LONG);
+  const freeId = await made(FREE);
+  // A complimentary deal that is live at once: the cheapest way to a LIVE deal, which is what owns the sponsor's fields.
+  const deal = await createDeal(request, org.orgId, lockedId, { package_id: pkg.data!.id, payment_method: "complimentary", go_live: "immediate" });
+  expect(deal.status, JSON.stringify(deal.error)).toBe(201);
+  expect(deal.data!.deal.deal_status, "premise: the deal is live").toBe("live");
+  const rows = await sponsors(request, org.orgId);
+  expect(rows.length, "premise: both sponsors exist").toBe(2);
+
+  const widths = [320, 768, 1280];
+  let checked = 0;
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: 900 });
+
+    // On stream: the locked sponsor's tick is disabled and says why; the free sponsor's is not (the negative's positive pair).
+    await page.goto(sponsorsUrl(org.slug, "on_stream"));
+    const tick = page.getByTestId(`on-stream-tick-${lockedId}`);
+    await expect(tick, `${width}: a sponsor whose live deal owns the stream flag cannot be ticked by hand`).toBeDisabled();
+    await expect(page.getByTestId(`on-stream-locked-${lockedId}`), `${width}: and says why`).toHaveText(ui("sponsors.deal.lockedNote"));
+    await expect(page.getByTestId(`on-stream-tick-${freeId}`), `${width}: a sponsor with no deal still ticks`).toBeEnabled();
+    await expect(page.getByTestId(`on-stream-locked-${freeId}`), `${width}: and carries no note`).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+
+    // Sponsors tab: the edit form's tier and competition are locked, with the same note.
+    await page.goto(sponsorsUrl(org.slug, "sponsors"));
+    await page.getByRole("button", { name: ui("sponsors.edit", { name: LONG }) }).click();
+    const note = page.getByTestId("sponsor-locked-note");
+    await expect(note, `${width}: the locked edit form says why`).toHaveText(ui("sponsors.deal.lockedNote"));
+    const fields = note.locator("xpath=..");
+    await expect(fields.getByLabel(ui("sponsors.tierLabel")), `${width}: tier is the deal's`).toBeDisabled();
+    await expect(fields.getByLabel(ui("sponsors.scopeLabel")), `${width}: scope is the deal's`).toBeDisabled();
+    await expect(fields.getByLabel(ui("settings.org.sponsors.name")), `${width}: the name stays editable`).toBeEnabled();
+    await expectNoHorizontalScroll(page);
+
+    // Packages tab: the invoice form lists both sponsors by name, the long one included, and fits.
+    await page.goto(sponsorsUrl(org.slug, "packages"));
+    await page.getByTestId(`invoice-open-${pkg.data!.id}`).click();
+    const picker = page.getByTestId("invoice-sponsor");
+    await expect(picker, `${width}: the invoice form picks a sponsor`).toBeVisible();
+    await expect(picker.locator("option"), `${width}: one option per sponsor`).toHaveCount(2);
+    await expect(picker.locator(`option[value="${lockedId}"]`), `${width}: the 43-character name is listed whole`).toHaveText(LONG);
+    await expectNoHorizontalScroll(page);
+    checked++;
+  }
+  expect(checked, "every width was walked").toBe(widths.length);
 });

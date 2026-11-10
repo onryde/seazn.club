@@ -55,6 +55,7 @@ const sponsor = (over: Partial<OnStreamSponsor> & { id: string }): OnStreamSpons
   status: "active",
   competition_id: null,
   on_stream: false,
+  locked_by_deal: false,
   ...over,
 });
 const SPONSORS: OnStreamSponsor[] = [
@@ -307,6 +308,36 @@ describe("the tick list", () => {
     const m = mount({ sponsors: [sponsor({ id: "p1", status: "pending" }), sponsor({ id: "p2", status: "inactive", on_stream: true })] });
     expect(propsOf(m.find("on-stream-tick-p1")).disabled, "pending, unticked").toBe(true);
     expect(propsOf(m.find("on-stream-tick-p2")).disabled, "inactive, ticked: can be unticked").toBe(false);
+  });
+
+  it("a sponsor under a LIVE deal has its tick disabled - ticked or not - with the deal's reason beside it (sponsor deals T12, F24)", () => {
+    // The deal owns the stream flag (`includes_on_stream`, D9): a PATCH of on_stream on a locked sponsor answers 409
+    // `sponsor_locked_by_deal`, so the control is not offered. The pair: an unlocked sponsor of every other kind stays tickable.
+    const m = mount({
+      sponsors: [
+        sponsor({ id: "l1", locked_by_deal: true, on_stream: true }),
+        sponsor({ id: "l2", locked_by_deal: true, on_stream: false }),
+        sponsor({ id: "u1" }),
+      ],
+    });
+    let locked = 0;
+    for (const id of ["l1", "l2"]) {
+      expect(propsOf(m.find(`on-stream-tick-${id}`)).disabled, `${id} disabled`).toBe(true);
+      expect(m.text(`on-stream-sponsor-${id}`), `${id} says why`).toContain(msg("sponsors.deal.lockedNote"));
+      expect(propsOf(m.find(`on-stream-tick-${id}`))["aria-describedby"], `${id} describes the tick by the reason`).toBe(`on-stream-locked-${id}`);
+      locked++;
+    }
+    expect(locked).toBe(2);
+    expect(propsOf(m.find("on-stream-tick-l1")).checked, "a locked tick still shows the deal's value").toBe(true);
+    expect(propsOf(m.find("on-stream-tick-u1")).disabled).toBe(false);
+    expect(m.text("on-stream-sponsor-u1")).not.toContain(msg("sponsors.deal.lockedNote"));
+    expect(propsOf(m.find("on-stream-tick-u1"))["aria-describedby"]).toBeUndefined();
+  });
+
+  it("a locked sponsor's tick, even if called, writes nothing (the control is the only door, so the handler is guarded too)", () => {
+    const m = mount({ sponsors: [sponsor({ id: "l1", locked_by_deal: true })] });
+    m.tick("l1", true);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("a competition scope lists the organisation-wide sponsors and that competition's own - not another's (counted)", () => {

@@ -1,0 +1,313 @@
+// Sponsor deals, Task 12 - the Sponsors tab's manager (components/org-sponsors.tsx) on the deal API.
+//
+// Three things changed for a person using it, each pinned here from the side a person meets it on:
+//   1. A sponsor under a LIVE deal has its tier and competition controls disabled, with the deal's reason beside them
+//      (`locked_by_deal`, D9): the deal owns those fields, and a PATCH of either answers 409 `sponsor_locked_by_deal`.
+//   2. Deleting a sponsor that has a deal asks first - in words that match the server's rule (deals go with the sponsor) - and a
+//      refusal (409 `sponsor_has_deal_history`, `sponsor_has_open_checkout`) reads the DICTIONARY's words, never the server's.
+//   3. The retired "Delete a paid placement?" promise (the server now refuses that delete) is gone.
+//
+// vitest is `environment: "node"`: the island runs under components/__tests__/_hook-harness.tsx (the element TREE back, a click is
+// the element's own prop called); the form's markup is read with `renderToStaticMarkup`, which is where `disabled` shows. What
+// neither can see (CSS, widths, tap area) is the e2e's (`e2e/sponsor-deals-api.spec.ts`, run by CI).
+//
+// Every sweep reports how many it checked (TEST-STRATEGY: zero is a failure).
+//
+// Killers (one at a time, restore from a cp backup):
+//   K1  lock         drop `|| lockedByDeal` from the tier / competition selects' `disabled` -> "the selects are disabled"
+//   K2  wiring       `lockedByDeal={s.locked_by_deal}` -> `lockedByDeal={false}`           -> "edit passes the row's lock to the form"
+//   K3  delete ask   drop the `s.deal` arm of the confirm guard                            -> "a sponsor with a deal asks first"
+//   K4  mapped       `msg(sponsorSaveErrorKey(err))` -> `err.message`                      -> "a refusal reads the dictionary's words"
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import type { ReactElement } from "react";
+
+const confirmMock = vi.hoisted(() => vi.fn(async (_opts?: unknown) => true));
+vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMock }));
+
+import { OrgSponsors, SponsorForm } from "@/components/org-sponsors";
+import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { t } from "@/lib/i18n-runtime";
+import type { Dict } from "@/lib/i18n-constants";
+import type { MessageKey } from "@/lib/messages";
+import uiEn from "@/dictionaries/en/ui.json";
+
+const en = uiEn as unknown as Dict;
+const msg = (key: MessageKey, vars?: Record<string, string | number>) => t(en, key, vars);
+const flat = (s: string) => s.replace(/\s+/g, " ").trim();
+
+const ORG = "org-1";
+const LONG_NAME = "Harbourside Building Supplies and Timber Co";
+const COMPETITIONS = [{ id: "c1", name: "Spring Cup" }];
+
+const row = (over: Record<string, unknown> & { id: string }) => ({
+  competition_id: null,
+  name: `Sponsor ${over.id}`,
+  url: null,
+  logo_path: null,
+  tier: "gold",
+  display_order: 0,
+  status: "active",
+  click_count: 0,
+  paid_order_id: null,
+  deal: null,
+  locked_by_deal: false,
+  ...over,
+});
+const DEAL = { id: "d1", payment_status: "none" };
+
+const DRAFT = { name: "Name", url: "", tier: "gold" as const, competition_id: "", file: null, preview: null };
+
+function formMarkup(over: Record<string, unknown> = {}): string {
+  return renderToStaticMarkup(
+    <SponsorForm
+      value={DRAFT}
+      onChange={() => {}}
+      onSubmit={() => {}}
+      submitLabel="Save"
+      busy={false}
+      hasTiers
+      lockedByDeal={false}
+      competitions={COMPETITIONS}
+      onPickLogo={() => {}}
+      {...over}
+    />,
+  );
+}
+/** The opening tag of the `<select>` whose option list holds `needle`. */
+const selectTagHolding = (html: string, needle: string): string => {
+  const m = [...html.matchAll(/<select\b[^>]*>[\s\S]*?<\/select>/g)].find((x) => x[0].includes(needle));
+  if (!m) throw new Error(`no <select> holds ${needle}`);
+  return /^<select\b[^>]*>/.exec(m[0])![0];
+};
+const isDisabled = (tag: string) => /\sdisabled(=|\s|>)/.test(tag);
+
+describe("the form: a live deal owns the tier and the competition (sponsor deals D9)", () => {
+  it("locked: both selects are disabled and the deal's reason is on the form; the name and link stay editable", () => {
+    const html = formMarkup({ lockedByDeal: true });
+    expect(isDisabled(selectTagHolding(html, msg("sponsors.tier.gold"))), "tier").toBe(true);
+    expect(isDisabled(selectTagHolding(html, "Spring Cup")), "competition").toBe(true);
+    expect(flat(html)).toContain(msg("sponsors.deal.lockedNote"));
+    expect(msg("sponsors.deal.lockedNote"), "the brief's words").toBe("Set by the live deal");
+    // The pair: the fields a deal does NOT own are still typeable, and the save button is not disabled by the lock.
+    const inputs = [...html.matchAll(/<input\b[^>]*>/g)].map((m) => m[0]).filter((tag) => !/type="file"/.test(tag));
+    expect(inputs.length, "premise: the form has its text inputs").toBeGreaterThanOrEqual(2);
+    for (const tag of inputs) expect(isDisabled(tag), tag).toBe(false);
+    expect(isDisabled(/<button\b[^>]*>(?:(?!<\/button>)[\s\S])*Save<\/button>/.exec(html)![0].match(/^<button\b[^>]*>/)![0])).toBe(false);
+  });
+
+  it("unlocked: the selects are enabled and no reason is shown (the pair)", () => {
+    const html = formMarkup({ lockedByDeal: false });
+    expect(isDisabled(selectTagHolding(html, msg("sponsors.tier.gold")))).toBe(false);
+    expect(isDisabled(selectTagHolding(html, "Spring Cup"))).toBe(false);
+    expect(flat(html)).not.toContain(msg("sponsors.deal.lockedNote"));
+  });
+
+  it("a plan without tiers shows no selects, so no reason either - even for a locked sponsor", () => {
+    const html = formMarkup({ lockedByDeal: true, hasTiers: false });
+    expect(html).not.toContain("<select");
+    expect(flat(html)).not.toContain(msg("sponsors.deal.lockedNote"));
+  });
+});
+
+const fetchMock = vi.fn();
+const calls: { url: string; method: string; body: Record<string, unknown> | null }[] = [];
+let answer: (url: string, method: string) => { status: number; body: unknown } = () => ({ status: 200, body: { data: [] } });
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  calls.length = 0;
+  confirmMock.mockImplementation(async () => true);
+  answer = () => ({ status: 200, body: { data: [] } });
+  fetchMock.mockReset();
+  fetchMock.mockImplementation(async (url: string, init?: { method?: string; body?: string }) => {
+    const method = init?.method ?? "GET";
+    calls.push({ url, method, body: init?.body ? (JSON.parse(init.body) as Record<string, unknown>) : null });
+    const a = answer(url, method);
+    return { ok: a.status < 400, status: a.status, json: async () => a.body };
+  });
+  vi.stubGlobal("fetch", fetchMock);
+});
+
+const flush = async () => {
+  for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+};
+
+function mount(rows: ReturnType<typeof row>[]) {
+  const island = renderIsland(OrgSponsors, {
+    orgId: ORG,
+    initialSponsors: rows,
+    competitions: COMPETITIONS,
+    hasTiers: true,
+    billingHref: "/billing",
+    canEdit: true,
+  } as Parameters<typeof OrgSponsors>[0]);
+  const byLabel = (key: MessageKey, name: string): ReactElement => {
+    const label = msg(key, { name });
+    const el = island.tree().find((e) => propsOf(e)["aria-label"] === label);
+    if (!el) throw new Error(`no control labelled "${label}"`);
+    return el;
+  };
+  const form = (): ReactElement => {
+    const el = island.tree().find((e) => "lockedByDeal" in propsOf(e) && "submitLabel" in propsOf(e) && propsOf(e).onCancel !== undefined);
+    if (!el) throw new Error("no edit form is open");
+    return el;
+  };
+  return {
+    island,
+    edit: (name: string) => (propsOf(byLabel("sponsors.edit", name)).onClick as () => void)(),
+    remove: (name: string) => (propsOf(byLabel("settings.org.sponsors.remove", name)).onClick as () => void)(),
+    form,
+    hasRow: (name: string) => island.text().includes(name),
+    text: () => flat(island.text()),
+  };
+}
+
+describe("Edit hands the form the ROW's lock (the join between the list and the form)", () => {
+  it("a locked sponsor opens its form locked; an unlocked one opens it free (both checked)", () => {
+    const locked = mount([row({ id: "a", name: LONG_NAME, deal: DEAL, locked_by_deal: true })]);
+    locked.edit(LONG_NAME);
+    expect(propsOf(locked.form()).lockedByDeal).toBe(true);
+    const free = mount([row({ id: "b", name: "Quay Chandlers" })]);
+    free.edit("Quay Chandlers");
+    expect(propsOf(free.form()).lockedByDeal).toBe(false);
+  });
+
+  it("the ADD form is never locked (a new sponsor has no deal)", () => {
+    const m = mount([]);
+    const add = m.island.tree().find((e) => "lockedByDeal" in propsOf(e) && "submitLabel" in propsOf(e));
+    expect(add, "premise: the add form is on the page").toBeDefined();
+    expect(propsOf(add!).lockedByDeal).toBe(false);
+  });
+
+  it("saving a locked sponsor's name sends the name ALONE - the disabled tier and scope never ride the PATCH", async () => {
+    answer = (url, method) => (method === "GET" ? { status: 200, body: { data: [] } } : { status: 200, body: { data: {} } });
+    const m = mount([row({ id: "a", name: "Old name", tier: "title", competition_id: "c1", deal: DEAL, locked_by_deal: true })]);
+    m.edit("Old name");
+    (propsOf(m.form()).onChange as (fn: (p: typeof DRAFT) => typeof DRAFT) => void)((p) => ({ ...p, name: "New name" }));
+    (propsOf(m.form()).onSubmit as () => void)();
+    await flush();
+    const patches = calls.filter((c) => c.method === "PATCH");
+    expect(patches.map((c) => c.url)).toEqual([`/api/v1/orgs/${ORG}/sponsors/a`]);
+    expect(patches[0]!.body).toEqual({ name: "New name" });
+  });
+
+  it("a PATCH the server still refuses (409 sponsor_locked_by_deal) reads the dictionary's words", async () => {
+    const SERVER = "this sponsor has a live deal: its tier, scope, stream and visibility come from the deal";
+    answer = (_url, method) =>
+      method === "PATCH"
+        ? { status: 409, body: { ok: false, error: { code: "sponsor_locked_by_deal", message: SERVER } } }
+        : { status: 200, body: { data: [] } };
+    const m = mount([row({ id: "a", name: "Old name", deal: DEAL, locked_by_deal: true })]);
+    m.edit("Old name");
+    (propsOf(m.form()).onChange as (fn: (p: typeof DRAFT) => typeof DRAFT) => void)((p) => ({ ...p, name: "New name" }));
+    (propsOf(m.form()).onSubmit as () => void)();
+    await flush();
+    expect(m.text()).toContain(msg("sponsors.error.lockedByDeal"));
+    expect(m.text()).not.toContain(SERVER);
+  });
+});
+
+describe("Delete: the confirm says what the server will really do, and a refusal is the dictionary's words", () => {
+  it("a sponsor with a deal asks first, in the deal copy, and the old paid-placement promise is gone", async () => {
+    answer = () => ({ status: 200, body: { data: null } });
+    const m = mount([row({ id: "a", name: LONG_NAME, deal: DEAL })]);
+    m.remove(LONG_NAME);
+    await flush();
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    const opts = confirmMock.mock.calls[0]![0] as { title: string; body: string; confirmLabel: string };
+    expect(opts.title).toBe(msg("sponsors.deleteDeal.title"));
+    expect(opts.body).toBe(msg("sponsors.deleteDeal.body", { name: LONG_NAME }));
+    expect(opts.confirmLabel).toBe(msg("sponsors.deleteDeal.label"));
+    expect(opts.body, "it must not claim a paid placement is kept or refunded - the server refuses that delete").not.toMatch(/NOT refunded/i);
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.url)).toEqual([`/api/v1/orgs/${ORG}/sponsors/a`]);
+    expect(m.hasRow(LONG_NAME), "a confirmed delete leaves the list").toBe(false);
+  });
+
+  it("declining the confirm sends nothing and keeps the row", async () => {
+    confirmMock.mockImplementation(async () => false);
+    const m = mount([row({ id: "a", name: "Quay Chandlers", deal: DEAL })]);
+    m.remove("Quay Chandlers");
+    await flush();
+    expect(calls.filter((c) => c.method === "DELETE")).toEqual([]);
+    expect(m.hasRow("Quay Chandlers")).toBe(true);
+  });
+
+  it("a sponsor with no deal deletes without a confirm, as before (the pair)", async () => {
+    answer = () => ({ status: 200, body: { data: null } });
+    const m = mount([row({ id: "a", name: "Quay Chandlers" })]);
+    m.remove("Quay Chandlers");
+    await flush();
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(1);
+  });
+
+  it("a sponsor with a PAID deal is not asked to confirm a delete the server refuses: the server's refusal is shown in the dictionary's words and the row stays", async () => {
+    const SERVER = "this sponsor has deal history (money paid or refunded, or a pre-deals order) — end its deals instead";
+    answer = (_url, method) =>
+      method === "DELETE"
+        ? { status: 409, body: { ok: false, error: { code: "sponsor_has_deal_history", message: SERVER } } }
+        : { status: 200, body: { data: [] } };
+    const m = mount([row({ id: "a", name: "Quay Chandlers", deal: DEAL, paid_order_id: "o1" })]);
+    m.remove("Quay Chandlers");
+    await flush();
+    expect(confirmMock, "no confirm for a delete that cannot happen").not.toHaveBeenCalled();
+    expect(m.text()).toContain(msg("sponsors.error.hasDealHistory"));
+    expect(m.text()).not.toContain(SERVER);
+    expect(m.hasRow("Quay Chandlers")).toBe(true);
+  });
+
+  it("a sponsor whose shown deal was paid, or refunded, is not asked to confirm a delete that cannot happen either (both checked)", async () => {
+    const SERVER = "this sponsor has deal history";
+    let checked = 0;
+    for (const payment_status of ["paid", "refunded"]) {
+      confirmMock.mockClear();
+      answer = (_url, method) =>
+        method === "DELETE"
+          ? { status: 409, body: { ok: false, error: { code: "sponsor_has_deal_history", message: SERVER } } }
+          : { status: 200, body: { data: [] } };
+      const m = mount([row({ id: "a", name: "Quay Chandlers", deal: { id: "d1", payment_status } })]);
+      m.remove("Quay Chandlers");
+      await flush();
+      expect(confirmMock, payment_status).not.toHaveBeenCalled();
+      expect(m.text(), payment_status).toContain(msg("sponsors.error.hasDealHistory"));
+      expect(m.hasRow("Quay Chandlers"), payment_status).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The pair: a deal that took no money (complimentary, or unpaid) still asks.
+    confirmMock.mockClear();
+    answer = () => ({ status: 200, body: { data: null } });
+    mount([row({ id: "b", name: "Ridge Cycles", deal: { id: "d2", payment_status: "pending" } })]).remove("Ridge Cycles");
+    await flush();
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("each delete refusal reads its own words: history, and an open payment link that could not be closed (both checked)", async () => {
+    const CASES: [string, MessageKey][] = [
+      ["sponsor_has_deal_history", "sponsors.error.hasDealHistory"],
+      ["sponsor_has_open_checkout", "sponsors.error.hasOpenCheckout"],
+    ];
+    let checked = 0;
+    for (const [code, key] of CASES) {
+      answer = (_url, method) =>
+        method === "DELETE" ? { status: 409, body: { ok: false, error: { code, message: "server english" } } } : { status: 200, body: { data: [] } };
+      const m = mount([row({ id: "a", name: "Quay Chandlers", deal: DEAL })]);
+      m.remove("Quay Chandlers");
+      await flush();
+      expect(m.text(), code).toContain(msg(key));
+      expect(m.text(), code).not.toContain("server english");
+      expect(m.hasRow("Quay Chandlers"), `${code}: the row stays`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(CASES.length);
+  });
+});
+
+describe("the copy that replaces the paid-placement promise", () => {
+  it("states the real rule: deals go with the sponsor, history blocks the delete (and says so)", () => {
+    expect(msg("sponsors.deleteDeal.body", { name: "X" })).toMatch(/deal/i);
+    expect(msg("sponsors.error.hasDealHistory")).toMatch(/can.t be deleted/i);
+    expect(msg("sponsors.error.hasOpenCheckout")).toMatch(/payment link/i);
+  });
+});

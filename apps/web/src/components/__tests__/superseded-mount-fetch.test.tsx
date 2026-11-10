@@ -153,7 +153,14 @@ describe("a superseded first read never lands on the panel that replaced it", ()
       tier: "gold",
       active: true,
     });
-    const props = { orgId: "org-a", competitions: [], hasMonetize: false, billingHref: "/billing" };
+    const props = {
+      orgId: "org-a",
+      competitions: [],
+      sponsors: [],
+      hasMonetize: false,
+      billingHref: "/billing",
+      sponsorsHref: "/o/x/sponsors?tab=sponsors",
+    };
     const island = renderIsland(SponsorPackages, props);
     await flush();
     expect(net.pending, "a plan without the feature reads nothing").toEqual([]);
@@ -161,12 +168,12 @@ describe("a superseded first read never lands on the panel that replaced it", ()
     island.rerender({ ...props, hasMonetize: true });
     island.rerender({ ...props, hasMonetize: true, orgId: "org-b" });
     answer("/api/v1/orgs/org-b/sponsor-packages", [pkg("ZqBravoPack")]);
-    answer("/api/v1/orgs/org-b/sponsor-orders", []);
+    answer("/api/v1/orgs/org-b/sponsor-deals", []);
     await flush();
     expect(island.text()).toContain("ZqBravoPack");
 
     answer("/api/v1/orgs/org-a/sponsor-packages", [pkg("ZqAlphaPack")]);
-    answer("/api/v1/orgs/org-a/sponsor-orders", []);
+    answer("/api/v1/orgs/org-a/sponsor-deals", []);
     await flush();
     expect(island.text()).toContain("ZqBravoPack");
     expect(island.text()).not.toContain("ZqAlphaPack");

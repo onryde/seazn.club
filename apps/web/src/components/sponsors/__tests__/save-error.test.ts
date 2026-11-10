@@ -40,7 +40,39 @@ describe("sponsorSaveErrorKey - the envelope's code, to the dictionary", () => {
       checked++;
     }
     expect(checked).toBe(cases.length);
-    expect(Object.keys(SAVE_ERROR_MSG).length, "every mapped code is one the cases reach").toBe(cases.length);
+  });
+
+  it("each sponsor-deal refusal maps to its own key, through the code the real handler sends verbatim (count reported)", async () => {
+    // Sponsor deals, Task 12 (carries): the codes the deal usecases refuse with (server/usecases/sponsors.ts, sponsor-deals.ts,
+    // server/sponsors/deal-apply.ts), typed here from the plan's D-table. Each reaches the client as `error.code` - the real
+    // handler is asked, so a code the envelope would rewrite shows here.
+    const cases: Array<[number, string, string]> = [
+      [409, "sponsor_locked_by_deal", "sponsors.error.lockedByDeal"],
+      [409, "sponsor_has_open_deal", "sponsors.error.hasOpenDeal"],
+      [409, "sponsor_has_deal_history", "sponsors.error.hasDealHistory"],
+      [409, "sponsor_has_open_checkout", "sponsors.error.hasOpenCheckout"],
+      [409, "deal_changed", "sponsors.error.dealChanged"],
+      [409, "deal_paid_online", "sponsors.error.dealPaidOnline"],
+      [409, "deal_not_refundable", "sponsors.error.notRefundable"],
+      [409, "deal_disputed", "sponsors.error.dealDisputed"],
+      [409, "connect_required", "sponsors.error.connectRequired"],
+      [422, "on_payment_needs_payment", "sponsors.error.needsPayment"],
+      [502, "stripe_unavailable", "sponsors.error.stripeUnavailable"],
+    ];
+    let checked = 0;
+    for (const [status, code, key] of cases) {
+      const res = await v1(async () => {
+        throw new HttpError(status, "the server's own sentence", code);
+      });
+      const sent = ((await res.json()) as { error: { code: string } }).error.code;
+      expect(sent, `${code} reaches the client verbatim`).toBe(code);
+      expect(sponsorSaveErrorKey(new ApiV1Error("the server's own sentence", status, sent)), code).toBe(key);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+    // The plan gate's code is the status's own (402 PAYMENT_REQUIRED), not a deal code.
+    expect(sponsorSaveErrorKey(new ApiV1Error("x", 402, await codeFor(402)))).toBe("sponsors.error.planRequired");
+    expect(Object.keys(SAVE_ERROR_MSG).length, "every mapped code is one a case reaches (5 by status + 1 plan gate + the deal codes)").toBe(5 + 1 + cases.length);
   });
 
   it("anything else - another code, an unknown one, a network failure, not an error at all - is the house fallback (count reported)", async () => {
