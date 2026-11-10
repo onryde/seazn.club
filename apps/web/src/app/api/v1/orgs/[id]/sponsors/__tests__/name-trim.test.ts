@@ -42,8 +42,12 @@ afterAll(async () => {
   await c?.end();
 });
 
-/** What a "blank" name looks like to a person: nothing, spaces, a tab, a newline, a non-breaking space. */
-const BLANK = ["", " ", "   ", "\t", "\n", " \t \n ", "  "];
+/** A non-breaking space, built from its code point so no editor or tool can normalise it to a plain space and leave the list claiming
+ *  a character it does not hold (the file is checked for the real thing below). */
+const NBSP = String.fromCharCode(0xa0);
+
+/** What a "blank" name looks like to a person: nothing, spaces, a tab, a newline, a non-breaking space (alone, doubled, between spaces). */
+const BLANK = ["", " ", "   ", "\t", "\n", " \t \n ", NBSP, NBSP + NBSP, ` ${NBSP} `];
 
 const SCHEMAS = [
   ["usecase CreateSponsorInput (the v1 runtime parse)", CreateSponsorInput],
@@ -53,6 +57,13 @@ const SCHEMAS = [
 ] as const;
 
 describe("sponsor name: trimmed and never blank - the schemas (no DB)", () => {
+  it("premise: the blank list really holds a non-breaking space (code point 160), and a plain space is not one", () => {
+    expect(NBSP.charCodeAt(0)).toBe(160);
+    expect(NBSP).not.toBe(" ");
+    expect(BLANK.filter((b) => b.includes(NBSP)).length, "three of the blanks carry it").toBe(3);
+    expect(new Set(BLANK).size, "no blank is listed twice").toBe(BLANK.length);
+  });
+
   it("every write schema refuses a blank name, on the `name` field (count reported)", () => {
     let checked = 0;
     for (const [schemaName, schema] of SCHEMAS) {
@@ -72,9 +83,10 @@ describe("sponsor name: trimmed and never blank - the schemas (no DB)", () => {
       expect(schema.parse({ name: "  Harbour Physio  " }).name, schemaName).toBe("Harbour Physio");
       expect(schema.parse({ name: "\n\tHarbour  Physio\t" }).name, `${schemaName}: inner double space is the sponsor's own`).toBe("Harbour  Physio");
       expect(schema.parse({ name: "Harbour Physio" }).name, `${schemaName}: an already-clean name is untouched`).toBe("Harbour Physio");
-      checked += 3;
+      expect(schema.parse({ name: `${NBSP}Harbour Physio${NBSP}` }).name, `${schemaName}: a non-breaking space at the edge is trimmed too`).toBe("Harbour Physio");
+      checked += 4;
     }
-    expect(checked).toBe(SCHEMAS.length * 3);
+    expect(checked).toBe(SCHEMAS.length * 4);
   });
 
   it("the 80-character limit counts the TRIMMED name: 80 words-characters padded with spaces saves, 81 does not", () => {
@@ -118,7 +130,8 @@ describe.skipIf(!HAS_DB)("sponsor name: trimmed and never blank - over the real 
     expect(checked, "anti-vacuity").toBe(BLANK.length);
     expect(await countOf(auth.orgId), "no blank sponsor was written").toBe(0);
 
-    const ok = await create(auth.orgId, { name: "   Harbour Physio  " });
+    // Edge whitespace of every kind the person might paste: spaces and a non-breaking space.
+    const ok = await create(auth.orgId, { name: `   ${NBSP}Harbour Physio ${NBSP} ` });
     expect(ok.status).toBe(201);
     const made = ((await ok.json()) as Envelope).data!;
     expect(made.name, "the answer").toBe("Harbour Physio");
