@@ -30,7 +30,7 @@ import { UnknownRow, formatRows, parseRows } from "../lib/pr-sample.ts";
 import { redact } from "../lib/redact.ts";
 
 /** R27's two declaring paths, verbatim from _RULES.md: a PR touching either declares its rows. */
-export const DECLARING: readonly RegExp[] = [/^packages\/engine\//, /^apps\/web\/src\/server\/usecases\/stages\/[^/]+\.ts$/];
+export const DECLARING: readonly RegExp[] = [/^packages\/engine\//, /^apps\/web\/src\/server\/usecases\/stages\/.+\.ts$/];
 
 /** The lock whose diff carries an engine bump since engine split 2b, and the engine's name in it. */
 export const LOCK = "pnpm-lock.yaml";

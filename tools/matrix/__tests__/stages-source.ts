@@ -6,8 +6,9 @@ import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 export const STAGES_DIR = "apps/web/src/server/usecases/stages";
-/** The folder holds 19 modules (index.ts + 18) when this was written; a read below this floor is a lost scan, not a refactor. */
-export const MIN_MODULES = 10;
+/** The folder holds 19 modules (index.ts + 18) when this was written, and the floor is that count: a read below it is a lost scan
+ *  (a module deleted, moved or misnamed), not a refactor. Splitting further only raises the count; removing a module lowers the floor on purpose. */
+export const MIN_MODULES = 19;
 
 /** The module files of the stages folder, `index.ts` included, sorted. THROWS below `MIN_MODULES`. */
 export function stagesModules(repo: string): string[] {

@@ -170,16 +170,22 @@ describe.skipIf(!HAS_DB)("stage config writes merge server-side (design §T2)", 
   // directory and scan the FLATTENED source.
   it("leaves no read-modify-write stage-config writer anywhere in usecases/", () => {
     const dir = join(process.cwd(), "src/server/usecases");
-    const files = readdirSync(dir).filter((f) => f.endsWith(".ts"));
+    // RECURSIVE (minus __tests__): a use-case split into a folder (`stages/`, `schedule-ai/`, …) is still the use-case. A flat
+    // readdir stopped seeing `stages/` when it became a folder and lost four writers while every loose floor stayed green.
+    const files = tsFilesUnder(dir);
     // Non-vacuous: a glob that silently matched nothing would pass forever.
     expect(files.length).toBeGreaterThan(20);
+    // …and the folder this scan once lost is in it: the stages use-case is 19 modules (index.ts + 18).
+    expect(files.filter((f) => f.startsWith("stages/")).length).toBeGreaterThanOrEqual(19);
 
     const offenders: string[] = [];
     let writersSeen = 0;
+    let stagesFolderWriters = 0;
     for (const file of files) {
       const flat = readFileSync(join(dir, file), "utf8").replace(/\s+/g, " ");
       for (const m of flat.matchAll(/update stages set config = (.{0,120})/g)) {
         writersSeen++;
+        if (file.startsWith("stages/")) stagesFolderWriters++;
         const tail = m[1]!;
         // Server-side merge (`config || …`) and key delete (`config - 'rules'`)
         // are the two legal shapes. Anything else interpolates a JS-side value
@@ -188,8 +194,23 @@ describe.skipIf(!HAS_DB)("stage config writes merge server-side (design §T2)", 
         offenders.push(`${file}: ${m[0].slice(0, 90)}`);
       }
     }
-    // …and the scan really is looking at writers, not at an empty match set.
-    expect(writersSeen).toBeGreaterThan(0);
+    // …and the scan really is looking at writers, not at an empty match set. 16 writers across 9 files when this was last
+    // counted (usecases/stages/ holds 4 of them: ad-hoc, carry-over, completion, seed-proposal), the same 16 the pre-split
+    // flat file tree held. Deleting a writer is legal and lowers the floor: edit the number in the same change.
+    expect(writersSeen).toBeGreaterThanOrEqual(16);
+    expect(stagesFolderWriters).toBeGreaterThanOrEqual(4);
     expect(offenders).toEqual([]);
   });
 });
+
+/** Every `.ts` under `dir` (recursive, `__tests__` skipped), as paths relative to `dir` with `/` separators. */
+function tsFilesUnder(dir: string, rel = ""): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(join(dir, rel), { withFileTypes: true })) {
+    if (e.name === "__tests__") continue;
+    const r = rel ? `${rel}/${e.name}` : e.name;
+    if (e.isDirectory()) out.push(...tsFilesUnder(dir, r));
+    else if (e.name.endsWith(".ts")) out.push(r);
+  }
+  return out;
+}

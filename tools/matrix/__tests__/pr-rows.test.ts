@@ -252,16 +252,21 @@ describe("pr-rows decision", () => {
 describe("DECLARING is R27's two paths, verbatim from _RULES.md", () => {
   const declares = (p: string): boolean => DECLARING.some((re) => re.test(p));
 
-  it("packages/engine/** and apps/web/src/server/usecases/stages/*.ts declare; nothing near them does", () => {
-    for (const p of [ENGINE, "packages/engine/package.json", "packages/engine/src/sport/module.ts", STAGES]) expect(declares(p), p).toBe(true);
+  it("packages/engine/** and apps/web/src/server/usecases/stages/**/*.ts declare; nothing near them does", () => {
+    for (const p of [
+      ENGINE, "packages/engine/package.json", "packages/engine/src/sport/module.ts", STAGES,
+      // A module in a folder below `stages/` is the use-case too (a future `stages/sub/x.ts` must still fire the gate).
+      "apps/web/src/server/usecases/stages/nested/x.ts", "apps/web/src/server/usecases/stages/index.ts",
+    ]) expect(declares(p), p).toBe(true);
     for (const p of [
       "packages/engine-extras/src/a.ts", "packages/engineering/a.ts", "packages/reference/src/a.ts", "apps/engine/src/a.ts", "tools/matrix/run.ts",
       "apps/web/src/server/usecases/stages-extra.ts", "apps/web/src/server/usecases/stages.ts.bak", "apps/web/src/server/usecases/other/stages.ts",
-      // The folder's own boundary: a module's sub-path, a non-.ts file and a sibling folder are no declaring path.
-      "apps/web/src/server/usecases/stages/nested/x.ts", "apps/web/src/server/usecases/stages/x.tsx", "apps/web/src/server/usecases/stages-x/a.ts",
+      // The folder's own boundary: a non-.ts file, a sibling folder, a sibling file and the division page's panel are no declaring path.
+      "apps/web/src/server/usecases/stages/x.tsx", "apps/web/src/server/usecases/stages-x/a.ts", "apps/web/src/server/usecases/stages-panel.ts",
+      "apps/web/src/components/v2/stages-panel.tsx",
       "apps/web/src/server/stages.ts", "apps/web/src/components/x.tsx", "docs/superpowers/specs/x.md",
-      // Anchored at the repo root: the same path inside another tree is no declaring path.
-      "vendor/packages/engine/src/a.ts", "x/apps/web/src/server/usecases/stages.ts",
+      // Anchored at the repo root: the same path inside another tree is no declaring path (the folder form and the old file form).
+      "vendor/packages/engine/src/a.ts", "x/apps/web/src/server/usecases/stages.ts", "x/apps/web/src/server/usecases/stages/a.ts",
     ]) expect(declares(p), p).toBe(false);
   });
 
