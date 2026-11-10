@@ -73,7 +73,10 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
-import { createDeal, endDealNow, finishedPackageCompetitions, markDealPaid, sweepSponsorDeals, type CreateDealInput } from "../sponsor-deals";
+import {
+  createDeal, dealCreatorName, endDealNow, finishedPackageCompetitions, isDealCompetitionFinished, markDealPaid, sweepSponsorDeals,
+  type CreateDealInput,
+} from "../sponsor-deals";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
@@ -1048,5 +1051,64 @@ describe.skipIf(!HAS_DB)("finishedPackageCompetitions: the finished competitions
     expect(maxInFlight, "every desk read in flight at once").toBe(N);
     expect(got, "the finished two, in id order - not in the order their reads finished").toEqual(sorted.filter((id) => id !== ids[1]));
     expect(got).toHaveLength(2);
+  });
+});
+
+// The deal page's two reads (Task 17): whether the deal's competition has finished (the timeline's end step names it), and who
+// created the deal (its first step names them).
+describe.skipIf(!HAS_DB)("isDealCompetitionFinished: the deal page's `competition finished` word is the desk's, for one competition", () => {
+  it("empty first: a whole-organisation deal has no competition, so it is never finished and reads no desk", async () => {
+    const o = await org();
+    h.deskFault = true; // any desk read would throw
+    expect(await isDealCompetitionFinished(o.orgId, null)).toBe(false);
+  });
+
+  it("finished is true; in progress and no divisions are false (the same rig as the sweep's, counted)", async () => {
+    const o = await org();
+    let checked = 0;
+    for (const [phase, want] of [["finished", true], ["in_progress", false], ["no_divisions", false]] as const) {
+      expect(await isDealCompetitionFinished(o.orgId, await competition(o, phase)), phase).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("a competition whose desk cannot be read is not finished (a display hint: it never throws and never claims an end)", async () => {
+    const o = await org();
+    const id = await competition(o, "finished");
+    h.deskFault = true;
+    expect(await isDealCompetitionFinished(o.orgId, id)).toBe(false);
+  });
+});
+
+describe.skipIf(!HAS_DB)("dealCreatorName: the creator of a deal, by name, only while they are a member of the org", () => {
+  async function member(o: Org, displayName: string, role = "admin"): Promise<string> {
+    const [{ id }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified) values (${`creator-${uniq()}@test.local`}, ${displayName}, true) returning id`;
+    made.userIds.push(id);
+    await sql`insert into org_members (org_id, user_id, role) values (${o.orgId}, ${id}, ${role}) on conflict do nothing`;
+    return id;
+  }
+
+  it("empty first: a deal with no recorded creator (null) names no one", async () => {
+    const o = await org();
+    expect(await dealCreatorName(o.orgId, null)).toBeNull();
+  });
+
+  it("a member's display name; a user who is not a member of THIS org, a removed member, a deleted user and a blank name are all null (never a guess)", async () => {
+    const o = await org();
+    const other = await org();
+    const sam = await member(o, "Sam Patel");
+    expect(await dealCreatorName(o.orgId, sam)).toBe("Sam Patel");
+    expect(await dealCreatorName(other.orgId, sam), "a member of another org only").toBeNull();
+    const blank = await member(o, "   ");
+    expect(await dealCreatorName(o.orgId, blank), "a blank display name (users.display_name is NOT NULL, so blank is the empty one)").toBeNull();
+    const gone = await member(o, "Gone Member");
+    expect(await dealCreatorName(o.orgId, gone)).toBe("Gone Member");
+    await sql`delete from org_members where org_id = ${o.orgId} and user_id = ${gone}`;
+    expect(await dealCreatorName(o.orgId, gone), "removed from the org since").toBeNull();
+    const deleted = await member(o, "Deleted User");
+    await sql`update users set deleted_at = now() where id = ${deleted}`;
+    expect(await dealCreatorName(o.orgId, deleted), "a deleted user").toBeNull();
   });
 });

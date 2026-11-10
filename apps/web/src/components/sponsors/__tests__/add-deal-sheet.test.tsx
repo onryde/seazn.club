@@ -918,9 +918,9 @@ describe("a second open deal on the same package asks first", () => {
     await submit(island);
     expect(confirmMock).toHaveBeenCalledTimes(1);
     expect(confirmMock.mock.calls[0]![0]).toMatchObject({
-      title: msg("sponsors.order.dupConfirm.title"),
-      body: msg("sponsors.order.dupConfirm.body", { name: "Ridge Gold Physiotherapy" }),
-      confirmLabel: msg("sponsors.order.dupConfirm.label"),
+      title: msg("sponsors.deal.confirm.dup.title"),
+      body: msg("sponsors.deal.confirm.dup.body", { name: "Ridge Gold Physiotherapy" }),
+      confirmLabel: msg("sponsors.deal.confirm.dup.label"),
     });
     expect(p.onCreate, "declined").not.toHaveBeenCalled();
     await submit(island);

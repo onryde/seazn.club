@@ -101,7 +101,7 @@ function bodyProps(over: Partial<SponsorSheetBodyProps> = {}): SponsorSheetBodyP
   return {
     sponsor: sponsor(), deals: [], orgId: ORG, orgSlug: SLUG, hasTiers: true, canEdit: true, busy: false, tz: "UTC", competitions: COMPS,
     editing: false, renderEditor: () => <p data-testid="editor-stub">editor</p>, onEdit: noop, onToggleStream: noop, onShowAgain: noop,
-    onAddDeal: noop, onDealAction: noop, error: null, notice: null, reportLinks: [], reportDefaults: DEFAULTS, ...over,
+    onAddDeal: noop, onDealAction: noop, error: null, notice: null, payLink: null, reportLinks: [], reportDefaults: DEFAULTS, ...over,
   };
 }
 const bodyHtml = (over: Partial<SponsorSheetBodyProps> = {}) => renderToStaticMarkup(<SponsorSheetBody {...bodyProps(over)} />);
@@ -576,7 +576,7 @@ const refuseWith = (status: number, code: string) => ({ status, body: { ok: fals
 function hubOf(over: Partial<SponsorsHubData> = {}): SponsorsHubData {
   return {
     orgSlug: SLUG, deals: [], packages: [], hasMonetize: true, monetizeOrgWide: true, monetizeCompetitionIds: [], finishedCompetitionIds: [],
-    chargesEnabled: true, sponsorId: "a", dealId: null, reportLinks: [LINK],
+    chargesEnabled: true, sponsorId: "a", dealId: null, dealCreatedByName: null, dealCompetitionFinished: false, reportLinks: [LINK],
     reportDefaults: DEFAULTS, ...over,
   };
 }
@@ -787,7 +787,7 @@ describe("the deal buttons write through the deal routes, ask where the money or
     expect(opts.tone).toBe("danger");
     expect(opts.confirmLabel).toBe("End deal");
     expect(opts.body, "the live words, then the money words with the deal's amount and the sponsor's name").toBe(
-      [msg("sponsors.order.endConfirm.bodyLive", { name: LONG_NAME }), msg("sponsors.order.endConfirm.paidKept", { amount: "£600", name: LONG_NAME })].join(" "),
+      [msg("sponsors.deal.confirm.end.bodyLive", { name: LONG_NAME }), msg("sponsors.deal.confirm.end.paidKept", { amount: "£600", name: LONG_NAME })].join(" "),
     );
     expect(opts.body).toMatch(/doesn't refund/);
     expect(opts.body).toMatch(/Refund/);
@@ -797,12 +797,12 @@ describe("the deal buttons write through the deal routes, ask where the money or
   it("End now on a deal with no money kept (unpaid, complimentary, disputed) says nothing about a refund, and a queued deal's body follows the sponsor's live deal (6 checked)", async () => {
     const live2 = deal({ id: "d-live", deal_status: "live", payment_status: "paid" });
     const CASES: [string, SponsorDeal[], string, MessageKey, boolean][] = [
-      ["live, unpaid", [deal({ id: "t", deal_status: "live", payment_status: "pending" })], "t", "sponsors.order.endConfirm.bodyLive", false],
-      ["live, complimentary", [deal({ id: "t", deal_status: "live", payment_status: "none", payment_method: "complimentary", go_live: "immediate" })], "t", "sponsors.order.endConfirm.bodyLive", false],
-      ["live, paid but disputed", [deal({ id: "t", deal_status: "live", payment_status: "paid", disputed_at: "2026-11-02T10:00:00.000Z" })], "t", "sponsors.order.endConfirm.bodyLive", false],
-      ["queued behind a live deal, unpaid", [live2, deal({ id: "t", deal_status: "scheduled", payment_status: "pending" })], "t", "sponsors.order.endConfirm.bodyKept", false],
-      ["queued, nothing live, unpaid", [deal({ id: "t", deal_status: "awaiting_payment", payment_status: "pending" })], "t", "sponsors.order.endConfirm.bodyHidden", false],
-      ["queued, paid", [deal({ id: "t", deal_status: "awaiting_approval", payment_status: "paid", go_live: "on_approval" })], "t", "sponsors.order.endConfirm.bodyHidden", true],
+      ["live, unpaid", [deal({ id: "t", deal_status: "live", payment_status: "pending" })], "t", "sponsors.deal.confirm.end.bodyLive", false],
+      ["live, complimentary", [deal({ id: "t", deal_status: "live", payment_status: "none", payment_method: "complimentary", go_live: "immediate" })], "t", "sponsors.deal.confirm.end.bodyLive", false],
+      ["live, paid but disputed", [deal({ id: "t", deal_status: "live", payment_status: "paid", disputed_at: "2026-11-02T10:00:00.000Z" })], "t", "sponsors.deal.confirm.end.bodyLive", false],
+      ["queued behind a live deal, unpaid", [live2, deal({ id: "t", deal_status: "scheduled", payment_status: "pending" })], "t", "sponsors.deal.confirm.end.bodyKept", false],
+      ["queued, nothing live, unpaid", [deal({ id: "t", deal_status: "awaiting_payment", payment_status: "pending" })], "t", "sponsors.deal.confirm.end.bodyHidden", false],
+      ["queued, paid", [deal({ id: "t", deal_status: "awaiting_approval", payment_status: "paid", go_live: "on_approval" })], "t", "sponsors.deal.confirm.end.bodyHidden", true],
     ];
     let checked = 0;
     for (const [label, deals, target, key, kept] of CASES) {

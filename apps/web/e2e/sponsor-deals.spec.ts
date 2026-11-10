@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Locator, type Page, type Response } from "@playwright/test";
 import { apiJson, expectNoHorizontalScroll, setBoolEntitlementOverrideSql, setOrgConnectSql, withDb } from "./helpers";
 import {
-  openSponsorRowTools, releaseSettingsOrg, seedCompetition, seedMemberIdentity, seedSettingsOrg, sponsorsUrl, sponsorUrl, type SeededOrg,
+  dealUrl, openSponsorRowTools, releaseSettingsOrg, seedCompetition, seedMemberIdentity, seedSettingsOrg, sponsorsUrl, sponsorUrl, type SeededOrg,
 } from "./settings-support";
 
 const UI: Record<string, string> = JSON.parse(
@@ -796,4 +796,126 @@ test("add deal sheet: a bottom sheet on a phone, a panel from sm - the cards fit
     checked++;
   }
   expect(checked, "every width was walked").toBe(widths.length);
+});
+
+// --- Task 17: the deal page - a timeline and only the actions that apply ------------------------------------------------------------
+// The REAL producers behind the page (deals made through the API, moved by the real routes) read back through the real hub page
+// into the real island; the page's buttons write through the same routes the row's do. What vitest cannot see: the timeline
+// following the answer, and the confirm that speaks of the deal's own money.
+
+const dealPageUrl = (slug: string, sponsorId: string, dealId: string): string => dealUrl(slug, sponsorId, dealId);
+const stepOf = (page: Page, key: string): Locator => page.locator(`[data-testid="deal-page-step"][data-step="${key}"]`);
+const dealAction = (page: Page, action: string): Locator => page.locator(`[data-testid="deal-page-action"][data-action="${action}"]`);
+
+/** Taps a deal-page button. One that asks first (`alertdialog`) is retried until its dialog shows: the first tap on a page can land
+ *  before React has attached (class 20) - safe to repeat, nothing is sent until the dialog's own button is pressed. One that does
+ *  not ask (Approve) is tapped once, after waiting for it. */
+async function tapAction(page: Page, action: string, dialogRole: "alertdialog" | null): Promise<void> {
+  const button = dealAction(page, action);
+  await expect(button, `${action} is offered`).toBeVisible();
+  if (dialogRole === null) {
+    await button.click();
+    return;
+  }
+  const dialog = page.getByRole(dialogRole);
+  await expect(async () => {
+    if (await dialog.isVisible()) return;
+    await button.click({ timeout: 2_000 });
+    await expect(dialog, `${action} asks first`).toBeVisible({ timeout: 3_000 });
+  }).toPass({ timeout: 20_000 });
+}
+
+test("deal page: Approve puts them live and the timeline moves from Not yet to the live date", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const s = await dealSetup(request, "page-approve", "community");
+  const dealId = await newDeal(request, s.org.orgId, s.sponsorId, { package_id: s.pkg, go_live: "on_approval" });
+  const paid = await apiJson<Deal>(request, `/api/v1/orgs/${s.org.orgId}/sponsor-deals/${dealId}/mark-paid`, "POST");
+  expect(paid.status, JSON.stringify(paid.error)).toBe(200);
+  expect(await dealStatus(request, s.org.orgId, dealId), "premise: paid, waiting for the club's approval").toBe("awaiting_approval");
+  await expectPublic(request, s, false, "premise: awaiting approval is hidden");
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(dealPageUrl(s.org.slug, s.sponsorId, dealId));
+  await expect(page.getByTestId("deal-page"), "the deal's page, on top of its sponsor").toBeVisible();
+  await expect(page.getByTestId("deal-page-name")).toContainText("£250");
+  // Before: the approval is the next step and the live step has not happened.
+  await expect(stepOf(page, "approved")).toHaveAttribute("data-state", "next");
+  await expect(stepOf(page, "live")).toHaveAttribute("data-state", "not_yet");
+  await expect(stepOf(page, "live").getByTestId("deal-page-step-line")).toHaveText(ui("sponsors.deal.timeline.line.notYet"));
+  // The actions are the engine's for a paid deal awaiting approval - never Mark as paid, never Send invoice.
+  await expect(page.getByTestId("deal-page-action")).toHaveCount(3);
+  expect(await page.getByTestId("deal-page-action").evaluateAll((els) => els.map((e) => e.getAttribute("data-action")))).toEqual(["approve", "refund", "end_now"]);
+
+  const [approved] = await Promise.all([postedTo(page, `/sponsor-deals/${dealId}/approve`), tapAction(page, "approve", null)]);
+  expect(approved.status(), `approve answered ${approved.status()}: ${await approved.text()}`).toBe(200);
+
+  // After: the timeline followed the answer without a reload - live is done and carries a date, not "Not yet".
+  await expect(stepOf(page, "live")).toHaveAttribute("data-state", "done");
+  await expect(stepOf(page, "live").getByTestId("deal-page-step-line")).not.toHaveText(ui("sponsors.deal.timeline.line.notYet"));
+  await expect(stepOf(page, "approved")).toHaveAttribute("data-state", "done");
+  await expect(dealAction(page, "approve"), "approved: Approve is gone").toHaveCount(0);
+  expect(await dealStatus(request, s.org.orgId, dealId)).toBe("live");
+  await expectPublic(request, s, true, "approved: on the public page");
+});
+
+test("deal page: End now asks, then takes them off the public page", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const s = await dealSetup(request, "page-end", "community");
+  const dealId = await newDeal(request, s.org.orgId, s.sponsorId, { package_id: s.pkg, go_live: "on_payment" });
+  const paid = await apiJson<Deal>(request, `/api/v1/orgs/${s.org.orgId}/sponsor-deals/${dealId}/mark-paid`, "POST");
+  expect(paid.status, JSON.stringify(paid.error)).toBe(200);
+  expect(await dealStatus(request, s.org.orgId, dealId), "premise: paid on payment, so live").toBe("live");
+  await expectPublic(request, s, true, "premise: a live deal shows");
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(dealPageUrl(s.org.slug, s.sponsorId, dealId));
+  await expect(stepOf(page, "live")).toHaveAttribute("data-state", "done");
+  // The box says what is on right now, and the confirm says what ending switches off.
+  await expect(page.getByTestId("deal-page-going-live-title")).toHaveText(ui("sponsors.deal.goingLive.titleLive"));
+  await tapAction(page, "end_now", "alertdialog");
+  const dialog = page.getByRole("alertdialog", { name: ui("sponsors.deal.confirm.end.title") });
+  await expect(dialog).toContainText("public page and stream switch off");
+  // Cancelling writes nothing: the deal is still live.
+  await dialog.getByRole("button", { name: ui("confirm.cancel"), exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(await dealStatus(request, s.org.orgId, dealId), "cancelled: nothing was sent").toBe("live");
+
+  await tapAction(page, "end_now", "alertdialog");
+  const [ended] = await Promise.all([
+    postedTo(page, `/sponsor-deals/${dealId}/end`),
+    page.getByRole("alertdialog", { name: ui("sponsors.deal.confirm.end.title") }).getByRole("button", { name: ui("sponsors.deal.confirm.end.label"), exact: true }).click(),
+  ]);
+  expect(ended.status(), `end answered ${ended.status()}: ${await ended.text()}`).toBe(200);
+  await expect(stepOf(page, "ended"), "the timeline now ends").toHaveAttribute("data-state", "done");
+  await expect(stepOf(page, "ended").getByTestId("deal-page-step-line")).toContainText(ui("sponsors.deal.timeline.reason.endedNow"));
+  expect(await dealStatus(request, s.org.orgId, dealId)).toBe("ended");
+  await expectPublic(request, s, false, "ended: off the public page");
+});
+
+test("deal page: Refund (offline) records it, no card copy", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const s = await dealSetup(request, "page-refund", "community");
+  const dealId = await newDeal(request, s.org.orgId, s.sponsorId, { package_id: s.pkg, go_live: "on_payment" });
+  const paid = await apiJson<Deal>(request, `/api/v1/orgs/${s.org.orgId}/sponsor-deals/${dealId}/mark-paid`, "POST");
+  expect(paid.status, JSON.stringify(paid.error)).toBe(200);
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(dealPageUrl(s.org.slug, s.sponsorId, dealId));
+  // The paid line says what is true of the money: recorded by hand, never "by card".
+  await expect(stepOf(page, "paid").getByTestId("deal-page-step-line")).toContainText(ui("sponsors.deal.timeline.line.paidRecorded", { amount: PRICE }));
+  await expect(stepOf(page, "paid").getByTestId("deal-page-step-line")).not.toContainText("by card");
+  await tapAction(page, "refund", "alertdialog");
+  const dialog = page.getByRole("alertdialog", { name: ui("sponsors.deal.confirm.refund.title") });
+  await expect(dialog, "the offline confirm: the club pays the sponsor back itself").toContainText(ui("sponsors.deal.confirm.refund.bodyRecorded", { amount: PRICE, name: s.name }));
+  await expect(dialog, "and never speaks of a card or a payout").not.toContainText(/card|payout/i);
+  const [refunded] = await Promise.all([
+    postedTo(page, `/sponsor-deals/${dealId}/refund`),
+    dialog.getByRole("button", { name: ui("sponsors.deal.confirm.refund.label", { amount: PRICE }), exact: true }).click(),
+  ]);
+  expect(refunded.status(), `refund answered ${refunded.status()}: ${await refunded.text()}`).toBe(200);
+  await expect(stepOf(page, "ended").getByTestId("deal-page-step-line")).toContainText(ui("sponsors.deal.timeline.reason.refunded"));
+  await expect(dealAction(page, "refund"), "refunded: nothing left to refund").toHaveCount(0);
+  const read = await apiJson<Deal>(request, `/api/v1/orgs/${s.org.orgId}/sponsor-deals/${dealId}`);
+  expect([read.data!.deal_status, read.data!.payment_status]).toEqual(["ended", "refunded"]);
+  await expectPublic(request, s, false, "refunded: off the public page");
 });

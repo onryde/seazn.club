@@ -49,6 +49,7 @@ vi.mock("@/components/org-sponsors", () => ({
       hasMonetize: boolean; monetizeOrgWide: boolean; monetizeCompetitionIds: readonly string[]; finishedCompetitionIds: readonly string[];
       chargesEnabled: boolean; deals: { id: string }[]; packages: { id: string }[];
       sponsorId: string | null; dealId: string | null;
+      dealCreatedByName: string | null; dealCompetitionFinished: boolean;
     };
   }) => (
     <div
@@ -62,6 +63,8 @@ vi.mock("@/components/org-sponsors", () => ({
       data-hub-packages={hub.packages.map((k) => k.id).join("|")}
       data-hub-sponsor={hub.sponsorId ?? "-"}
       data-hub-deal={hub.dealId ?? "-"}
+      data-hub-creator={hub.dealCreatedByName ?? "-"}
+      data-hub-comp-finished={String(hub.dealCompetitionFinished)}
       data-ends={competitions.map((c) => c.ends_on ?? "-").sort().join("|")}
     />
   ),
@@ -343,5 +346,37 @@ describe.skipIf(!HAS_DB)("the Sponsors tab reads the org's deals, packages, plan
     // The list, with neither.
     const list = await renderSponsorsTab(mine, "sponsors");
     expect([field(list, "sponsor"), field(list, "deal")]).toEqual(["-", "-"]);
+  });
+
+  // Sponsor deals PR 2, Task 17: the deal page's two own reads, through the real page and database. The creator is read only
+  // when a deal is selected; the "competition finished" answer only for a non-ended deal with no end date of its own.
+  it("a selected deal carries its creator's display name, read from the database; the list and a deal with no creator carry none (Task 17)", async () => {
+    const rig = await seedOrg({ withPass: false });
+    const [{ id: userId }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified)
+      values ('creator-' || gen_random_uuid() || '@test.local', 'Dana Creator', true) returning id`;
+    // dealCreatorName names a creator only while they are still a member of THIS org.
+    await sql`insert into org_members (org_id, user_id, role) values (${rig.orgId}, ${userId}, 'admin')`;
+    await sql`update sponsor_orders set created_by = ${userId} where id = ${rig.dealId}`;
+    const picked = await renderSponsorsTab(rig, "sponsors", { sponsor: rig.sponsorId, deal: rig.dealId });
+    expect(field(picked, "creator")).toBe("Dana Creator");
+    // The control arms: no deal selected reads nothing; a deal nobody created has no name.
+    expect(field(await renderSponsorsTab(rig, "sponsors"), "creator")).toBe("-");
+    await sql`update sponsor_orders set created_by = null where id = ${rig.dealId}`;
+    expect(field(await renderSponsorsTab(rig, "sponsors", { sponsor: rig.sponsorId, deal: rig.dealId }), "creator")).toBe("-");
+  });
+
+  // The positive case (every division finished) needs the division rig of sponsor-deals-sweep.test.ts, which drives
+  // `isDealCompetitionFinished` itself and counts its three phases; here the real loader is proven wired into the real page: the
+  // field is present and false for an org-wide deal and for a competition still going (a `completed` STATUS alone is not finished -
+  // the desk's derived phase decides, never the stored column).
+  it("a selected deal's competition-finished field is wired and false for an org-wide deal and for a competition still going, even one marked completed (Task 17)", async () => {
+    const rig = await seedOrg({ withPass: false });
+    const at = () => renderSponsorsTab(rig, "sponsors", { sponsor: rig.sponsorId, deal: rig.dealId });
+    expect(field(await at(), "comp-finished"), "org-wide: no competition to have finished").toBe("false");
+    await sql`update sponsor_orders set competition_id = ${rig.passedId} where id = ${rig.dealId}`;
+    expect(field(await at(), "comp-finished"), "a competition with no divisions has not begun").toBe("false");
+    await sql`update competitions set status = 'completed' where id = ${rig.passedId}`;
+    expect(field(await at(), "comp-finished"), "the stored status is not the desk's phase").toBe("false");
   });
 });

@@ -3,7 +3,7 @@
 //
 // `renderIsland` (components/__tests__/_hook-harness.tsx) renders one function component one level deep, so `OrgSponsors` comes back
 // with `<SponsorList .../>` unexpanded - and every control a person clicks lives inside it. SponsorList, SponsorRowMore and DealChip
-// (and, since Task 15, SponsorSheetBody - the sponsor's own page) are deliberately STATELESS (their only hooks are the copy and locale reads; every bit of state is OrgSponsors'), which is exactly
+// (and, since Task 15, SponsorSheetBody - the sponsor's own page; since Task 17 DealPageBody and PayLinkBanner) are deliberately STATELESS (their only hooks are the copy and locale reads; every bit of state is OrgSponsors'), which is exactly
 // the shape `expandWithHooks` exists for. A child that grows a `useState` makes that helper throw loudly, which is the signal to
 // drive it with its own `renderIsland` instead.
 import { isValidElement, type ReactElement, type ReactNode } from "react";
@@ -11,10 +11,12 @@ import { expandWithHooks } from "@/components/__tests__/_hook-harness";
 import { DealChip } from "@/components/sponsors/deal-chip";
 import { SponsorList } from "@/components/sponsors/sponsor-list";
 import { SponsorSheetBody } from "@/components/sponsors/sponsor-sheet";
+import { DealPageBody } from "@/components/sponsors/deal-page";
+import { PayLinkBanner } from "@/components/sponsors/pay-link-banner";
 import { SponsorRowMore } from "@/components/sponsors/sponsor-row-more";
 
 type AnyComponent = (props: never) => ReactNode;
-const EXPANDED: readonly AnyComponent[] = [SponsorList, SponsorRowMore, DealChip, SponsorSheetBody] as unknown as AnyComponent[];
+const EXPANDED: readonly AnyComponent[] = [SponsorList, SponsorRowMore, DealChip, SponsorSheetBody, DealPageBody, PayLinkBanner] as unknown as AnyComponent[];
 
 /** Every element in the tree, with SponsorList / SponsorRowMore / DealChip replaced by what they render. */
 export function expandSponsorTree(node: ReactNode, out: ReactElement[] = []): ReactElement[] {

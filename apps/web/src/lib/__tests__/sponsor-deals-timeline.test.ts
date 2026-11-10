@@ -8,6 +8,9 @@
 //     approval step exists only for the `on_approval` rule; the mockup's offline deal (Marlow & Daughters Bakery) shows no
 //     "Invoice sent" step - an offline deal sends no invoice in this PR (Task 23 may), so that step is skipped until a send is
 //     recorded;
+//   - an ENDED deal's applicable steps that never happened are `missed` (the screen shows them: "Not paid", "Never went live" - the
+//     club must see why nothing came of the deal); a step the deal does not have (a complimentary deal's payment) stays `skipped`
+//     and is not drawn (Task 17; owner ruling, pr2-carries);
 //   - `next` is the ONE step an open deal is waiting on (mockup: "Awaiting payment", "Awaiting your approval"); "Ends" is a
 //     future date, never the thing the deal waits on (mockup: it stays "todo" beside a waiting step).
 // The eight (payment method x go-live) combinations spec §5.2 allows ("When paid" is not offered for a complimentary deal)
@@ -77,8 +80,13 @@ function deal(over: Partial<SponsorDeal>): SponsorDeal {
   };
 }
 
-const NO_END = { competitionEndsOn: null };
-const LETTER: Record<TimelineStep["state"], string> = { done: "d", next: "n", not_yet: "t", skipped: "s" };
+/** The context the page hands over: the competition's end date (a display hint), whether the DESK says it has finished (the derived
+ *  phase, never the date), and the creator's name (null: not resolvable). */
+const NO_END: { competitionEndsOn: string | null; competitionFinished: boolean; createdBy: string | null } = {
+  competitionEndsOn: null, competitionFinished: false, createdBy: null,
+};
+const ctx = (over: Partial<typeof NO_END>) => ({ ...NO_END, ...over });
+const LETTER: Record<TimelineStep["state"], string> = { done: "d", next: "n", not_yet: "t", skipped: "s", missed: "m" };
 const states = (steps: TimelineStep[]): string => steps.map((s) => LETTER[s.state]).join("");
 const stepOf = (steps: TimelineStep[], key: TimelineStep["key"]): TimelineStep => {
   const found = steps.find((s) => s.key === key);
@@ -93,7 +101,7 @@ interface Row {
   phase: Phase;
   /** The deal, typed field by field. */
   deal: Partial<SponsorDeal>;
-  /** One letter per step of the deal's order: d done, n next, t not yet, s skipped. */
+  /** One letter per step of the deal's order: d done, n next, t not yet, s skipped (does not apply), m missed (never happened, ended). */
   want: string;
 }
 
@@ -126,13 +134,14 @@ const ROWS: Row[] = [
   // offline, straight away
   { method: "offline", rule: "immediate", phase: "mid-flow", want: "dsnstt", deal: { deal_status: "scheduled" } },
   { method: "offline", rule: "immediate", phase: "live", want: "dsnsdt", deal: { deal_status: "live", ...LIVE } },
-  // ended while still unpaid: the payment never happened, so its step is skipped, not "not yet"
-  { method: "offline", rule: "immediate", phase: "ended", want: "dsssdd", deal: { ...LIVE, ...ENDED("ended_now", "pending") } },
+  // ended while still unpaid: the payment never happened and the deal HAD one, so the step is `missed` (shown as "Not paid"), not "not yet"
+  { method: "offline", rule: "immediate", phase: "ended", want: "dsmsdd", deal: { ...LIVE, ...ENDED("ended_now", "pending") } },
   // offline, after approval
   { method: "offline", rule: "on_approval", phase: "mid-flow", want: "dsdntt", deal: { deal_status: "awaiting_approval", ...PAID } },
   { method: "offline", rule: "on_approval", phase: "live", want: "dsdddt", deal: { deal_status: "live", ...PAID, ...APPROVED, ...LIVE } },
-  // End now while it still waited on payment: nothing after "created" ever happened
-  { method: "offline", rule: "on_approval", phase: "ended", want: "dssssd", deal: { ...ENDED("ended_now", "pending") } },
+  // End now while it still waited on payment: nothing after "created" ever happened - the payment, the approval and going live are
+  // missed; the invoice step never applied to an offline deal that sent none, so it stays skipped
+  { method: "offline", rule: "on_approval", phase: "ended", want: "dsmmmd", deal: { ...ENDED("ended_now", "pending") } },
   // complimentary: no payment states, "when paid" not offered
   { method: "complimentary", rule: "immediate", phase: "mid-flow", want: "dsssnt", deal: { deal_status: "scheduled", payment_status: "none", sponsor_email: null } },
   { method: "complimentary", rule: "immediate", phase: "live", want: "dsssdt", deal: { deal_status: "live", payment_status: "none", sponsor_email: null, ...LIVE } },
@@ -279,7 +288,7 @@ describe("dealTimeline: the end step", () => {
   const COMP = "c1";
 
   it("live, no end date, scoped to a competition -> ends carries the competition's end date as a hint (and no time)", () => {
-    const steps = dealTimeline(deal({ deal_status: "live", competition_id: COMP, ...LIVE, ...PAID }), { competitionEndsOn: "2027-08-31" });
+    const steps = dealTimeline(deal({ deal_status: "live", competition_id: COMP, ...LIVE, ...PAID }), ctx({ competitionEndsOn: "2027-08-31" }));
     const ends = stepOf(steps, "ends");
     expect(ends.detail).toEqual({ competitionEndsOn: "2027-08-31" });
     expect(ends.at).toBeNull();
@@ -287,29 +296,29 @@ describe("dealTimeline: the end step", () => {
   });
 
   it("an open deal that has not gone live yet ends the same way (mockup: the awaiting-approval deal already shows its end)", () => {
-    const steps = dealTimeline(deal({ deal_status: "awaiting_approval", go_live: "on_approval", competition_id: COMP, ...PAID }), { competitionEndsOn: "2027-08-31" });
+    const steps = dealTimeline(deal({ deal_status: "awaiting_approval", go_live: "on_approval", competition_id: COMP, ...PAID }), ctx({ competitionEndsOn: "2027-08-31" }));
     expect(stepOf(steps, "ends").detail).toEqual({ competitionEndsOn: "2027-08-31" });
   });
 
   it("the deal's own end date wins: no competition hint beside an ends_at", () => {
-    const steps = dealTimeline(deal({ deal_status: "live", competition_id: COMP, ends_at: T_ENDS_AT, ...LIVE }), { competitionEndsOn: "2027-08-31" });
+    const steps = dealTimeline(deal({ deal_status: "live", competition_id: COMP, ends_at: T_ENDS_AT, ...LIVE }), ctx({ competitionEndsOn: "2027-08-31" }));
     expect(stepOf(steps, "ends").at).toBe(T_ENDS_AT);
     expect(stepOf(steps, "ends").detail).toBeUndefined();
   });
 
   it("an org-wide deal has no competition to end with, whatever date the caller hands over", () => {
-    const steps = dealTimeline(deal({ deal_status: "live", competition_id: null, ...LIVE }), { competitionEndsOn: "2027-08-31" });
+    const steps = dealTimeline(deal({ deal_status: "live", competition_id: null, ...LIVE }), ctx({ competitionEndsOn: "2027-08-31" }));
     expect(stepOf(steps, "ends").detail).toBeUndefined();
     expect(stepOf(steps, "ends").at).toBeNull();
   });
 
   it("a competition with no end date set offers no hint", () => {
-    const steps = dealTimeline(deal({ deal_status: "live", competition_id: COMP, ...LIVE }), { competitionEndsOn: null });
+    const steps = dealTimeline(deal({ deal_status: "live", competition_id: COMP, ...LIVE }), ctx({ competitionEndsOn: null }));
     expect(stepOf(steps, "ends").detail).toBeUndefined();
   });
 
   it("an end date in the past does not finish the deal: the derived phase ends a deal (spec §8a), never this date", () => {
-    const steps = dealTimeline(deal({ deal_status: "live", competition_id: COMP, ...LIVE }), { competitionEndsOn: "2020-01-01" });
+    const steps = dealTimeline(deal({ deal_status: "live", competition_id: COMP, ...LIVE }), ctx({ competitionEndsOn: "2020-01-01" }));
     expect(stepOf(steps, "ends").state).toBe("not_yet");
     expect(steps.some((s) => s.key === "ended")).toBe(false);
   });
@@ -317,7 +326,7 @@ describe("dealTimeline: the end step", () => {
   it("an ended deal closes on `ended` with the reason it ended for, for every declared reason (counted), and never carries an end hint", () => {
     let checked = 0;
     for (const reason of END_REASONS) {
-      const steps = dealTimeline(deal({ ...ENDED(reason, "paid"), competition_id: COMP, ...PAID, ...LIVE }), { competitionEndsOn: "2027-08-31" });
+      const steps = dealTimeline(deal({ ...ENDED(reason, "paid"), competition_id: COMP, ...PAID, ...LIVE }), ctx({ competitionEndsOn: "2027-08-31" }));
       const last = steps[steps.length - 1]!;
       expect(last.key, reason).toBe("ended");
       expect(last.state, reason).toBe("done");
@@ -334,6 +343,83 @@ describe("dealTimeline: the end step", () => {
     const last = dealTimeline(deal({ deal_status: "ended", ended_at: T_ENDED }), NO_END).at(-1)!;
     expect(last.key).toBe("ended");
     expect(last.detail).toBeUndefined();
+  });
+});
+
+describe("dealTimeline: an ended deal shows what never happened (`missed`), and hides what never applied (`skipped`)", () => {
+  it("every ended row: a step that applies and did not happen is missed, one that does not apply is skipped, and no open row has a missed step (24 checked)", () => {
+    let ended = 0;
+    let open = 0;
+    let missedSeen = 0;
+    for (const row of ROWS) {
+      const steps = dealTimeline(full(row), NO_END);
+      const missed = steps.filter((s) => s.state === "missed").length;
+      if (row.phase === "ended") {
+        // The typed table's `m` letters are the expectation (typed from the spec's states, not read back).
+        expect(missed, `${row.method}/${row.rule}/ended`).toBe([...row.want].filter((c) => c === "m").length);
+        ended++;
+        missedSeen += missed;
+      } else {
+        expect(missed, `${row.method}/${row.rule}/${row.phase}: an open deal waits, it misses nothing`).toBe(0);
+        open++;
+      }
+    }
+    expect(ended).toBe(8);
+    expect(open).toBe(16);
+    // Anti-vacuity: the two typed rows with missed steps (1 + 3) were reached.
+    expect(missedSeen).toBe(4);
+  });
+
+  it("the unpaid offline deal ended now: Not paid and Never went live are missed; a complimentary deal's payment is not (it never had one)", () => {
+    const unpaid = dealTimeline(deal({ payment_method: "offline", go_live: "on_payment", ...ENDED("ended_now", "pending") }), NO_END);
+    expect(stepOf(unpaid, "paid").state).toBe("missed");
+    expect(stepOf(unpaid, "live").state).toBe("missed");
+    expect(stepOf(unpaid, "approved").state, "an on_payment deal has no approval step").toBe("skipped");
+    const free = dealTimeline(deal({ payment_method: "complimentary", go_live: "immediate", ...LIVE, ...ENDED("ended_now", "none") }), NO_END);
+    expect(stepOf(free, "paid").state).toBe("skipped");
+    expect(stepOf(free, "live").state).toBe("done");
+  });
+
+  it("an online deal ended before its invoice went out misses the invoice too", () => {
+    const steps = dealTimeline(deal({ deal_status: "ended", ended_at: T_ENDED, ended_reason: "ended_now" }), NO_END);
+    expect(states(steps)).toBe("dmmsmd");
+  });
+});
+
+describe("dealTimeline: who created it, and a competition the desk says has finished", () => {
+  const COMP = "c1";
+
+  it("the created step names the creator when the page resolved a name, and carries no author (not a guess) when it did not", () => {
+    const named = dealTimeline(deal({}), ctx({ createdBy: "Sam Patel" }));
+    expect(stepOf(named, "created").detail).toEqual({ by: "Sam Patel" });
+    const unnamed = dealTimeline(deal({}), NO_END);
+    expect(stepOf(unnamed, "created").detail).toBeUndefined();
+    expect(stepOf(unnamed, "created").at).toBe(T_CREATED);
+    // An empty name is no name.
+    expect(stepOf(dealTimeline(deal({}), ctx({ createdBy: "" })), "created").detail).toBeUndefined();
+  });
+
+  it("an open competition deal whose competition the desk says has finished says so on its end step (it ends at the next hourly check), beside the date hint", () => {
+    const steps = dealTimeline(deal({ deal_status: "live", competition_id: COMP, ...LIVE, ...PAID }), ctx({ competitionEndsOn: "2027-08-31", competitionFinished: true }));
+    expect(stepOf(steps, "ends").detail).toEqual({ competitionEndsOn: "2027-08-31", competitionFinished: "yes" });
+    expect(stepOf(steps, "ends").state, "still open: the sweep has not ended it yet").toBe("not_yet");
+  });
+
+  it("finished is the DESK's word, never the date: a past end date alone says nothing, and a finished competition with no date still says it", () => {
+    const pastDate = dealTimeline(deal({ deal_status: "live", competition_id: COMP, ...LIVE }), ctx({ competitionEndsOn: "2020-01-01", competitionFinished: false }));
+    expect(stepOf(pastDate, "ends").detail).toEqual({ competitionEndsOn: "2020-01-01" });
+    const noDate = dealTimeline(deal({ deal_status: "live", competition_id: COMP, ...LIVE }), ctx({ competitionEndsOn: null, competitionFinished: true }));
+    expect(stepOf(noDate, "ends").detail).toEqual({ competitionFinished: "yes" });
+  });
+
+  it("the pairs: the deal's own end date, an org-wide deal and an ended deal never carry the finished note", () => {
+    const own = dealTimeline(deal({ deal_status: "live", competition_id: COMP, ends_at: T_ENDS_AT, ...LIVE }), ctx({ competitionFinished: true }));
+    expect(stepOf(own, "ends").detail, "the sweep ends it on ends_at, not on the competition").toBeUndefined();
+    const whole = dealTimeline(deal({ deal_status: "live", competition_id: null, ...LIVE }), ctx({ competitionFinished: true }));
+    expect(stepOf(whole, "ends").detail).toBeUndefined();
+    const ended = dealTimeline(deal({ ...ENDED("competition_finished", "paid"), competition_id: COMP, ...PAID, ...LIVE }), ctx({ competitionFinished: true }));
+    expect(ended.some((s) => s.key === "ends")).toBe(false);
+    expect(stepOf(ended, "ended").detail).toEqual({ reason: "competition_finished" });
   });
 });
 

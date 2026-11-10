@@ -28,13 +28,16 @@ import {
   endKeepsPayment,
   hasLiveDeal,
   hasOpenDealOn,
+  payLinkStillOpen,
+  refundConfirmBodyKey,
+  refundPlacementKey,
 } from "@/components/sponsors/deal-copy";
 import { allowedActions, isUnpaid, type PaymentStatus, type SponsorDeal } from "@/lib/sponsor-deals";
 import { SPONSOR_TIERS, type SponsorTier } from "@/components/org-sponsors";
 
 // The deal screens' shared words and questions moved to components/sponsors/deal-copy.ts (sponsor deals PR 2, Task 15); this tab's
 // transitional picker (deleted in Task 18) keeps exporting them under the names its tests import.
-export { dupConfirmBodyKey, endConfirmBodyKey, endKeepsPayment, hasLiveDeal, hasOpenDealOn };
+export { dupConfirmBodyKey, endConfirmBodyKey, endKeepsPayment, hasLiveDeal, hasOpenDealOn, payLinkStillOpen, refundConfirmBodyKey, refundPlacementKey };
 
 interface PackageItem {
   id: string;
@@ -99,36 +102,11 @@ export function sponsorsByDisplayOrder(sponsors: readonly SponsorPick[]): Sponso
     .map(({ sponsor }) => sponsor);
 }
 
-/** The refund confirm's money words (review m1, batch G New-3): back to the card through Stripe only when a card payment at
- *  Stripe paid the deal - `has_payment_intent`, the SAME fact refundDeal decides on (server/usecases/sponsor-deals.ts). Without
- *  it (marked as paid by hand, or paid offline) the refund is recorded and the club pays the sponsor back. `marked_paid_by` is
- *  not that fact: it is nulled when the marking user is deleted. */
-export function refundConfirmBodyKey(deal: SponsorDeal): MessageKey {
-  return deal.has_payment_intent ? "sponsors.order.refundConfirm.body" : "sponsors.order.refundConfirm.bodyRecorded";
-}
-
-/** The refund confirm's placement words (review m1 remainder, batch G): a refund ends the deal, so the public pages do what
- *  ending it does (endConfirmBodyKey) - except for a deal that has already ended, where nothing on them changes. */
-export function refundPlacementKey(deals: readonly SponsorDeal[], deal: SponsorDeal): MessageKey {
-  if (deal.deal_status === "ended") return "sponsors.order.refundConfirm.placementEnded";
-  if (deal.deal_status === "live") return "sponsors.order.refundConfirm.placementLive";
-  if (deal.sponsor_id !== null && hasLiveDeal(deals, deal.sponsor_id)) return "sponsors.order.refundConfirm.placementKept";
-  return "sponsors.order.refundConfirm.placementHidden";
-}
-
-/** Can the pay link the console last showed still be paid (batch G New-1)? Only while its deal has not ended and still owes
- *  money: End now kills the link, and a paid or refunded deal has nothing left to pay. The deal is the list's copy when the
- *  list has it - every action re-reads it - else the one the send answered (the re-read has not landed yet). */
-export function payLinkStillOpen(deals: readonly SponsorDeal[], sent: SponsorDeal): boolean {
-  const current = deals.find((d) => d.id === sent.id) ?? sent;
-  return current.deal_status !== "ended" && isUnpaid(current.payment_status);
-}
-
 /** The payment chip (review m3): an ended deal that was never paid says so, rather than reading as a live "Pending". */
 function paymentChip(deal: SponsorDeal): { key: MessageKey; className: string } {
-  if (deal.disputed_at) return { key: "sponsors.order.status.disputed", className: "bg-rose-100 text-rose-700" };
+  if (deal.disputed_at) return { key: "sponsors.deal.badge.disputed", className: "bg-rose-100 text-rose-700" };
   if (deal.payment_status === "refunded" && deal.dispute_id) {
-    return { key: "sponsors.order.status.disputeLost", className: "bg-rose-200 text-rose-900" };
+    return { key: "sponsors.deal.badge.disputeLost", className: "bg-rose-200 text-rose-900" };
   }
   if (deal.deal_status === "ended" && isUnpaid(deal.payment_status)) {
     return { key: "sponsors.order.status.endedUnpaid", className: "bg-slate-100 text-slate-500" };
@@ -287,14 +265,14 @@ export function SponsorPackages({
     void (async () => {
       const amount = money(deal.amount_cents, deal.currency);
       const ok = await confirm({
-        title: msg("sponsors.order.refundConfirm.title"),
+        title: msg("sponsors.deal.confirm.refund.title"),
         // What happens to the money, then to the public pages (by the deal's state), then that it is final.
         body: [
           msg(refundConfirmBodyKey(deal), { amount, name: deal.sponsor_name }),
           msg(refundPlacementKey(deals, deal), { name: deal.sponsor_name }),
-          msg("sponsors.order.refundConfirm.irreversible"),
+          msg("sponsors.deal.confirm.refund.irreversible"),
         ].join(" "),
-        confirmLabel: msg("sponsors.order.refundConfirm.label", { amount }),
+        confirmLabel: msg("sponsors.deal.confirm.refund.label", { amount }),
         tone: "danger",
       });
       if (!ok) return;
@@ -329,14 +307,14 @@ export function SponsorPackages({
   function endDealNow(deal: SponsorDeal) {
     void (async () => {
       const ok = await confirm({
-        title: msg("sponsors.order.endConfirm.title"),
+        title: msg("sponsors.deal.confirm.end.title"),
         body: [
           msg(endConfirmBodyKey(deals, deal), { name: deal.sponsor_name }),
           ...(endKeepsPayment(deal)
-            ? [msg("sponsors.order.endConfirm.paidKept", { amount: money(deal.amount_cents, deal.currency), name: deal.sponsor_name })]
+            ? [msg("sponsors.deal.confirm.end.paidKept", { amount: money(deal.amount_cents, deal.currency), name: deal.sponsor_name })]
             : []),
         ].join(" "),
-        confirmLabel: msg("sponsors.order.endConfirm.label"),
+        confirmLabel: msg("sponsors.deal.confirm.end.label"),
         tone: "danger",
       });
       if (!ok) return;
@@ -366,9 +344,9 @@ export function SponsorPackages({
       // one for the same sponsor + package, or they can pay twice.
       if (hasOpenDealOn(deals, sponsor.id, pkg.id)) {
         const ok = await confirm({
-          title: msg("sponsors.order.dupConfirm.title"),
+          title: msg("sponsors.deal.confirm.dup.title"),
           body: msg(dupConfirmBodyKey(deals, sponsor.id, pkg.id), { name: sponsor.name }),
-          confirmLabel: msg("sponsors.order.dupConfirm.label"),
+          confirmLabel: msg("sponsors.deal.confirm.dup.label"),
           tone: "danger",
         });
         if (!ok) return;
@@ -469,7 +447,7 @@ export function SponsorPackages({
                       className="btn flex items-center gap-1.5 text-xs text-red-500 hover:bg-red-50"
                     >
                       <Undo2 className="h-3.5 w-3.5" />
-                      {msg("sponsors.order.refund")}
+                      {msg("sponsors.deal.action.refund")}
                     </button>
                   ) : null}
                   {deal.disputed_at || deal.dispute_id ? (
@@ -480,9 +458,9 @@ export function SponsorPackages({
                       href={`/api/v1/orgs/${orgId}/sponsor-deals/${deal.id}/evidence`}
                       download
                       className="btn btn-ghost text-xs font-medium text-rose-700"
-                      title={msg("sponsors.order.evidenceTitle")}
+                      title={msg("sponsors.deal.evidenceTitle")}
                     >
-                      {msg("sponsors.order.evidence")}
+                      {msg("sponsors.deal.evidence")}
                     </a>
                   ) : null}
                 </div>
@@ -522,13 +500,13 @@ export function SponsorPackages({
       {error && <p className="text-sm text-red-600">{error}</p>}
       {sentUrl ? (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-          <span>{msg("sponsors.order.sent")}</span>
+          <span>{msg("sponsors.deal.payLink.sent")}</span>
           <code data-testid="invoice-link" className="max-w-72 truncate text-xs">
             {sentUrl}
           </code>
           <button
             type="button"
-            aria-label={msg("sponsors.order.copyLink")}
+            aria-label={msg("sponsors.deal.payLink.copy")}
             onClick={() => void navigator.clipboard?.writeText(sentUrl)}
             className="grid h-6 w-6 place-items-center rounded text-emerald-700 hover:bg-emerald-100"
           >

@@ -18,14 +18,18 @@ import { useConfirm } from "@/components/ui/confirm-provider";
 import { TIER_MSG } from "@/components/sponsors/tier-labels";
 import { SponsorList, dealPrice, groupTierOf, sameOrderBand, type DealWrite } from "@/components/sponsors/sponsor-list";
 import { AddDealSheet, type CreateDealBody } from "@/components/sponsors/add-deal-sheet";
-import { SponsorSheet, SponsorSheetBody, type SheetDealAction } from "@/components/sponsors/sponsor-sheet";
-import { endConfirmBodyKey, endKeepsPayment } from "@/components/sponsors/deal-copy";
+import { SponsorSheet, SponsorSheetBody } from "@/components/sponsors/sponsor-sheet";
+import { DealPageBody } from "@/components/sponsors/deal-page";
+import { PayLinkBanner } from "@/components/sponsors/pay-link-banner";
+import {
+  endConfirmBodyKey, endKeepsPayment, markPaidRetiresPayLink, payLinkStillOpen, refundConfirmBodyKey, refundPlacementKey,
+} from "@/components/sponsors/deal-copy";
 import { createDealWrite, sponsorSaveErrorKey } from "@/components/sponsors/save-error";
 import type { SponsorWrite } from "@/components/sponsors/save-error";
 import { ApiV1Error } from "@/lib/client-v1";
-import type { SponsorDeal } from "@/lib/sponsor-deals";
+import type { DealAction, SponsorDeal } from "@/lib/sponsor-deals";
 import type { ReportLinkDefaults, ReportLinkSummary } from "@/lib/sponsor-report";
-import { sponsorsHref } from "@/lib/sponsors-hub";
+import { sponsorHref, sponsorsHref } from "@/lib/sponsors-hub";
 import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
 import type { SponsorPackageRow } from "@/server/usecases/sponsors";
 
@@ -70,7 +74,8 @@ export interface SponsorItem {
  *  page (Task 15: `sponsorId` picks it, `deals` fill its Deals, `reportLinks` and `reportDefaults` are its Report link), the Add deal
  *  sheet (Task 16: `packages` are its cards, `hasMonetize`, `monetizeOrgWide`, `monetizeCompetitionIds` and `chargesEnabled` decide
  *  whether Online is open FOR THE SCOPE picked, `finishedCompetitionIds` lock the packages that are no longer sold, `deals` feed its
- *  "already has one of these" confirm) and the deal page (Task 17: `dealId`, still unread until it lands). */
+ *  "already has one of these" confirm) and the deal page (Task 17: `dealId` picks it; `dealCreatedByName` and `dealCompetitionFinished`
+ *  are the two reads its timeline needs from the server). */
 export interface SponsorsHubData {
   orgSlug: string;
   /** Every deal of the org, newest first (legacy pre-deals rows included: they are ended deals). */
@@ -92,6 +97,10 @@ export interface SponsorsHubData {
   sponsorId: string | null;
   /** `?deal=` after the page checked it is one of the selected sponsor's deals; null shows the sponsor's page. */
   dealId: string | null;
+  /** The selected deal's creator, by display name (a removed member or a deleted user reads null); null with no deal selected. */
+  dealCreatedByName: string | null;
+  /** The selected deal's competition has finished, by the desk's derived phase (never a date); false with no deal selected. */
+  dealCompetitionFinished: boolean;
   /** The selected sponsor's live report links (an editor's page only; empty otherwise). */
   reportLinks: ReportLinkSummary[];
   /** The Report link's opening dates (this year), read for an editor's page only; null for a viewer, whose page has no such section. */
@@ -114,11 +123,12 @@ const EMPTY_DRAFT: Draft = {
 
 /** The route each deal write POSTs. Send and Resend invoice are one route: the server sends a draft's first invoice and re-sends an
  *  open one's the same way (ensureDealCheckout). */
-const DEAL_ROUTE: Record<SheetDealAction, string> = {
+const DEAL_ROUTE: Record<DealAction, string> = {
   send_invoice: "send-invoice",
   resend_invoice: "send-invoice",
   mark_paid: "mark-paid",
   approve: "approve",
+  refund: "refund",
   end_now: "end",
 };
 
@@ -360,6 +370,9 @@ export function OrgSponsors({
   const [error, setError] = useState<string | null>(null);
   /** What a write that changes nothing on screen says it did (Resend invoice: the chip stays "Awaiting payment"). */
   const [notice, setNotice] = useState<string | null>(null);
+  /** The pay link the last send, resend or online Add deal answered with, and the deal it pays: shown only while that deal can still
+   *  be paid (`payLinkStillOpen`), so End now, Mark as paid or a payment takes it down with the deal. */
+  const [payLink, setPayLink] = useState<{ deal: SponsorDeal; url: string } | null>(null);
 
   /** A call on the org's v1 API (`path` after `/orgs/{id}`); the envelope's payload back. */
   async function v1(path: string, init: RequestInit): Promise<unknown> {
@@ -546,18 +559,21 @@ export function OrgSponsors({
   }
 
   /** A deal's write (Tasks 6 and 7's routes). The list is re-read whatever the answer - the chip, the action and the group all
-   *  follow the deal, and a refusal means it moved under the tap - and, while a sponsor's page is open, so are the deals. Sending
-   *  or resending an invoice changes nothing a row shows, so it says it was sent. Two writes ask first, each with words about its
-   *  own consequence: Mark as paid (house precedent: the registrant hub's mark paid) is the club's attestation that money arrived
-   *  outside the app, and it moves the deal on by its go-live rule - often live - with no undo; End now ends the deal and, on a
-   *  deal the sponsor has paid, says the money stays and Refund is the separate step (it never moves money). Approve stays one tap
-   *  (End now reverses a live deal); sending an invoice is harmless. `name` is the sponsor's current name. */
-  function runDealAction(deal: SponsorDeal, name: string, action: SheetDealAction) {
+   *  follow the deal, and a refusal means it moved under the tap - and, while a sponsor's page is open (or a pay link is on show, which
+   *  follows its deal), so are the deals. Sending or resending an invoice changes nothing a row shows, so it says it was sent, and
+   *  keeps the pay link it answered with. Three writes ask first, each with words about its own consequence: Mark as paid (house
+   *  precedent: the registrant hub's mark paid) is the club's attestation that money arrived outside the app, and it moves the deal on
+   *  by its go-live rule - often live - with no undo (on an online deal whose invoice went out it also retires the pay link); End now
+   *  ends the deal and, on a deal the sponsor has paid, says the money stays and Refund is the separate step (it never moves money);
+   *  Refund (the deal page's) asks about the money - back to the card through Stripe, or recorded for the club to pay back by hand -
+   *  then what the public pages do, then that it is final. Approve stays one tap (End now reverses a live deal); sending an invoice is
+   *  harmless. `name` is the sponsor's current name. */
+  function runDealAction(deal: SponsorDeal, name: string, action: DealAction) {
     void (async () => {
       if (action === "mark_paid") {
         const ok = await confirm({
           title: msg("sponsors.deal.markPaid.title", { amount: dealPrice(deal, locale), name }),
-          body: msg("sponsors.deal.markPaid.body"),
+          body: [msg("sponsors.deal.markPaid.body"), ...(markPaidRetiresPayLink(deal) ? [msg("sponsors.deal.confirm.markPaid.payLink", { name })] : [])].join(" "),
           confirmLabel: msg("sponsors.deal.action.markPaid"),
           tone: "default",
         });
@@ -565,12 +581,27 @@ export function OrgSponsors({
       }
       if (action === "end_now") {
         const ok = await confirm({
-          title: msg("sponsors.order.endConfirm.title"),
+          title: msg("sponsors.deal.confirm.end.title"),
           body: [
             msg(endConfirmBodyKey(deals, deal), { name }),
-            ...(endKeepsPayment(deal) ? [msg("sponsors.order.endConfirm.paidKept", { amount: dealPrice(deal, locale), name })] : []),
+            ...(endKeepsPayment(deal) ? [msg("sponsors.deal.confirm.end.paidKept", { amount: dealPrice(deal, locale), name })] : []),
           ].join(" "),
-          confirmLabel: msg("sponsors.order.endConfirm.label"),
+          confirmLabel: msg("sponsors.deal.confirm.end.label"),
+          tone: "danger",
+        });
+        if (!ok) return;
+      }
+      if (action === "refund") {
+        const amount = dealPrice(deal, locale);
+        const ok = await confirm({
+          title: msg("sponsors.deal.confirm.refund.title"),
+          // What happens to the money, then to the public pages (by the deal's state), then that it is final.
+          body: [
+            msg(refundConfirmBodyKey(deal), { amount, name }),
+            msg(refundPlacementKey(deals, deal), { name }),
+            msg("sponsors.deal.confirm.refund.irreversible"),
+          ].join(" "),
+          confirmLabel: msg("sponsors.deal.confirm.refund.label", { amount }),
           tone: "danger",
         });
         if (!ok) return;
@@ -578,12 +609,17 @@ export function OrgSponsors({
       await run(
         async () => {
           try {
-            await v1(`/sponsor-deals/${deal.id}/${DEAL_ROUTE[action]}`, { method: "POST" });
-            if (action === "resend_invoice") setNotice(msg("sponsors.deal.notice.invoiceResent", { name }));
-            if (action === "send_invoice") setNotice(msg("sponsors.deal.notice.invoiceSent", { name }));
+            const answer = (await v1(`/sponsor-deals/${deal.id}/${DEAL_ROUTE[action]}`, { method: "POST" })) as
+              | { deal?: SponsorDeal; checkout_url?: string | null }
+              | null;
+            if (action === "resend_invoice" || action === "send_invoice") {
+              // The answer carries the pay link beside the deal (F11); the deal itself carries no url.
+              setPayLink(answer?.checkout_url ? { deal: answer.deal ?? deal, url: answer.checkout_url } : null);
+              setNotice(msg(action === "resend_invoice" ? "sponsors.deal.notice.invoiceResent" : "sponsors.deal.notice.invoiceSent", { name }));
+            }
           } finally {
             await refresh().catch(() => {});
-            if (hub.sponsorId !== null) await refreshDeals().catch(() => {});
+            if (hub.sponsorId !== null || payLink !== null) await refreshDeals().catch(() => {});
           }
         },
         action === "resend_invoice" || action === "send_invoice" ? "resend_invoice" : undefined,
@@ -601,7 +637,12 @@ export function OrgSponsors({
     setError(null);
     setNotice(null);
     try {
-      await v1(`/sponsors/${s.id}/deals`, { method: "POST", body: JSON.stringify(body) });
+      const made = (await v1(`/sponsors/${s.id}/deals`, { method: "POST", body: JSON.stringify(body) })) as
+        | { deal?: SponsorDeal; checkout_url?: string | null }
+        | null;
+      // F11: the pay link rides beside the deal in the create's answer. An online create that did not make one (a Stripe refusal) is
+      // handled below; a create that sends no invoice has none.
+      setPayLink(made?.deal && made.checkout_url ? { deal: made.deal, url: made.checkout_url } : null);
       setNotice(msg(body.payment_method === "online" ? "sponsors.deal.notice.invoiceSent" : "sponsors.dealSheet.notice.saved", { name: s.name }));
     } catch (err) {
       if (!(err instanceof ApiV1Error) || err.code !== "stripe_unavailable" || body.payment_method !== "online") throw err;
@@ -662,7 +703,14 @@ export function OrgSponsors({
   // that changes the sponsor (a stream toggle, an edit, Show on site again) shows on its page. A sponsor the list no longer holds
   // (deleted since the page loaded) is no selection: the list shows.
   const selected = hub.sponsorId === null ? undefined : sponsors.find((s) => s.id === hub.sponsorId);
+  // The deal whose page is open (`?deal=`, checked by the page to be one of the selected sponsor's). Read from the live deals, so a
+  // write shows on its page. A deal the sponsor does not hold (a stranger's id, one this list no longer has) is no selection: the
+  // sponsor's page shows.
+  const selectedDeal =
+    selected === undefined || hub.dealId === null ? undefined : deals.find((d) => d.id === hub.dealId && d.sponsor_id === selected.id);
   const sheetOpen = selected !== undefined;
+  // The pay link, only while its deal can still be paid; each page shows the one that is its own.
+  const openPayLink = payLink !== null && payLinkStillOpen(deals, payLink.deal) ? payLink : null;
   // The sponsor the Add deal sheet is open for - from either the list's row or the sponsor's page. A sponsor the list no longer holds
   // (deleted since) opens nothing.
   const addDealSponsor = addDealFor === null ? undefined : sponsors.find((s) => s.id === addDealFor);
@@ -671,8 +719,35 @@ export function OrgSponsors({
 
   return (
     <div className="space-y-5">
+      {/* A deal's own page, when one is selected (it sits on its sponsor's page: back and close lead there): the page body below md
+          (the list is hidden then), a side panel from md. */}
+      {selected && selectedDeal ? (
+        <SponsorSheet
+          title={msg("sponsors.deal.title")}
+          backText={selected.name}
+          backLabel={msg("sponsors.deal.backLabel", { name: selected.name })}
+          closeHref={sponsorHref(hub.orgSlug, selected.id)}
+          suspended={false}
+        >
+          <DealPageBody
+            deal={selectedDeal}
+            sponsorName={selected.name}
+            orgId={orgId}
+            canEdit={canEdit}
+            busy={busy}
+            tz={tz}
+            competitions={competitions}
+            createdBy={hub.dealCreatedByName}
+            competitionFinished={hub.dealCompetitionFinished}
+            payLink={openPayLink?.deal.id === selectedDeal.id ? openPayLink.url : null}
+            error={error}
+            notice={notice}
+            onAction={(deal, action) => runDealAction(deal, selected.name, action)}
+          />
+        </SponsorSheet>
+      ) : null}
       {/* The sponsor's page, when one is selected: the page body below md (the list is hidden then), a side panel from md. */}
-      {selected ? (
+      {selected && !selectedDeal ? (
         <SponsorSheet
           title={msg("sponsors.sheet.title")}
           backText={msg("sponsors.sheet.back")}
@@ -715,6 +790,7 @@ export function OrgSponsors({
             onDealAction={(deal, action) => runDealAction(deal, selected.name, action)}
             error={error}
             notice={notice}
+            payLink={openPayLink?.deal.sponsor_id === selected.id ? openPayLink.url : null}
             reportLinks={hub.reportLinks}
             reportDefaults={hub.reportDefaults}
           />
@@ -732,6 +808,7 @@ export function OrgSponsors({
             {notice}
           </p>
         )}
+        {!sheetOpen && openPayLink !== null ? <PayLinkBanner url={openPayLink.url} /> : null}
 
         {canEdit ? (
           <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">

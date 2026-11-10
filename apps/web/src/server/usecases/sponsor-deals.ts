@@ -599,6 +599,34 @@ export async function finishedPackageCompetitions(orgId: string, now: Date = new
   return rows.filter((_, i) => phases[i] === "finished").map((r) => r.competition_id);
 }
 
+/**
+ * Has this deal's competition finished - the deal page's timeline says so on a deal that ends with its competition (Task 17)?
+ * `isCompetitionFinished`'s answer (the derived phase, never the competition's stored end date), for ONE competition. A whole-
+ * organisation deal (`null`) has none and reads no desk. This is a DISPLAY hint, so a desk that cannot be read answers false
+ * (logged): the page never claims an end it could not check, and the sweep's own guard is what ends the deal.
+ */
+export async function isDealCompetitionFinished(orgId: string, competitionId: string | null, now: Date = new Date()): Promise<boolean> {
+  if (competitionId === null) return false;
+  return (await competitionPhaseOf(orgId, competitionId, now)) === "finished";
+}
+
+/**
+ * The name the deal page puts beside "Created": the creator's display name, or null when it cannot honestly be named. A deal's
+ * `created_by` is a user id; it is resolved only while that user is STILL a member of this org (a removed member's name is not
+ * for the org's other members to read, and a deleted user has none), and a blank name is no name. The page then draws "Created"
+ * with a date and no author rather than guess.
+ */
+export async function dealCreatorName(orgId: string, userId: string | null): Promise<string | null> {
+  if (userId === null) return null;
+  const [row] = await sql<{ display_name: string | null }[]>`
+    select u.display_name
+      from users u
+      join org_members m on m.user_id = u.id and m.org_id = ${orgId}
+     where u.id = ${userId} and u.deleted_at is null`;
+  const name = row?.display_name?.trim() ?? "";
+  return name === "" ? null : name;
+}
+
 /** A competition's derived phase for the sweep (`isCompetitionFinished`). A read that throws is `unreadable` — never
  *  `finished`. */
 async function competitionPhaseOf(orgId: string, competitionId: string, now: Date): Promise<"finished" | "not_finished" | "unreadable"> {

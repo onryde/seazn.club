@@ -22,6 +22,7 @@ import { Modal } from "@/components/modal";
 import { useMdUp } from "@/components/ui/use-md-up";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { DealChip } from "@/components/sponsors/deal-chip";
+import { PayLinkBanner } from "@/components/sponsors/pay-link-banner";
 import { ShareReport } from "@/components/sponsors/share-report";
 import { TIER_MSG } from "@/components/sponsors/tier-labels";
 import { canShowAgain, dealPrice } from "@/components/sponsors/sponsor-list";
@@ -74,9 +75,10 @@ function hostOf(url: string): string {
   }
 }
 
-const CARD = "min-w-0 rounded-xl border border-slate-200 bg-white p-4";
-const SECTION_TITLE = "text-sm font-semibold text-slate-800";
-const SMALL_BTN = "btn btn-ghost px-3 py-1.5 text-xs max-md:min-h-11";
+/** The sponsor page's card, section title and small button - the deal page (deal-page.tsx) wears the same three. */
+export const CARD = "min-w-0 rounded-xl border border-slate-200 bg-white p-4";
+export const SECTION_TITLE = "text-sm font-semibold text-slate-800";
+export const SMALL_BTN = "btn btn-ghost px-3 py-1.5 text-xs max-md:min-h-11";
 
 /** The wrapper: the page body below md, a right-hand side panel from md. `closeHref` is the list's URL; closing navigates there.
  *  `suspended`: another sheet (Add deal) is open over this one, so a close aimed at this one (Escape reaches both) does nothing. */
@@ -152,6 +154,8 @@ export interface SponsorSheetBodyProps {
   /** The last refusal and the last "it was sent" - the page-level ones sit behind a side panel's backdrop, so the body shows them. */
   error: string | null;
   notice: string | null;
+  /** The pay link the console last made, while its deal can still be paid (the page applies `payLinkStillOpen`); null shows none. */
+  payLink: string | null;
   /** The sponsor's live report links (an editor's page only) and the share form's opening dates; null hides the section. */
   reportLinks: ReportLinkSummary[];
   reportDefaults: ReportLinkDefaults | null;
@@ -160,7 +164,7 @@ export interface SponsorSheetBodyProps {
 export function SponsorSheetBody(props: SponsorSheetBodyProps) {
   const {
     sponsor, deals, orgId, orgSlug, hasTiers, canEdit, busy, tz, competitions, editing, renderEditor, onEdit, onToggleStream,
-    onShowAgain, onAddDeal, onDealAction, error, notice, reportLinks, reportDefaults,
+    onShowAgain, onAddDeal, onDealAction, error, notice, payLink, reportLinks, reportDefaults,
   } = props;
   const msg = useMsg();
   const locale = useLocaleOrDefault();
@@ -265,6 +269,7 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
       <p role="status" data-testid="sponsor-notice" className="text-sm text-emerald-700 empty:sr-only">
         {notice}
       </p>
+      {payLink !== null ? <PayLinkBanner url={payLink} /> : null}
 
       <header className="flex min-w-0 items-center gap-3">
         {sponsor.logo_path ? (

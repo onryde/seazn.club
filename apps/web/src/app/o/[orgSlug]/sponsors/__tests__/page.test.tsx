@@ -20,6 +20,9 @@
 //     they are THIS org's (a deal: the selected sponsor's) - and the sponsor's report links are read only then, only for an editor
 //   - Sponsors (Task 15): `?sponsor=<own>` renders the REAL sponsor page (`data-testid="sponsor-sheet"`, F23 - moved here from Task 13,
 //     where nothing yet drew it), for that sponsor, with the Report link's opening dates read for an editor only
+//   - The deal page (Task 17): `?sponsor=<own>&deal=<own>` renders the REAL deal page (`data-testid="deal-page"`) on top of its sponsor, and
+//     the page makes the timeline's two server reads - the creator's name and "has the competition finished" - only while a deal is
+//     selected (and the second only for an open deal that ends with its competition)
 //   - Overview (S13): every member gets the numbers for the period the URL names (kept only if it is a period or one of THIS
 //     org's competitions), all read at ONE `now`; only an editor's page loads the report links and the share form's defaults
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,6 +38,8 @@ const h = vi.hoisted(() => ({
   listSponsorRows: vi.fn(),
   listSponsorPackages: vi.fn(),
   listDeals: vi.fn(),
+  dealCreatorName: vi.fn(),
+  isDealCompetitionFinished: vi.fn(),
   finishedPackageCompetitions: vi.fn(),
   hasFeatureOnAnyPass: vi.fn(),
   featureScopes: vi.fn(),
@@ -51,6 +56,8 @@ vi.mock("@/server/usecases/sponsors", () => ({ listSponsorRows: h.listSponsorRow
 vi.mock("@/server/usecases/sponsor-deals", () => ({
   finishedPackageCompetitions: h.finishedPackageCompetitions,
   listDeals: h.listDeals,
+  dealCreatorName: h.dealCreatorName,
+  isDealCompetitionFinished: h.isDealCompetitionFinished,
 }));
 vi.mock("@/lib/entitlements", () => ({ hasFeatureOnAnyPass: h.hasFeatureOnAnyPass, featureScopes: h.featureScopes }));
 vi.mock("@/lib/db", () => ({ sql: h.sql }));
@@ -96,6 +103,8 @@ function Marker(p: {
       chargesEnabled: boolean;
       sponsorId: string | null;
       dealId: string | null;
+      dealCreatedByName: string | null;
+      dealCompetitionFinished: boolean;
       reportLinks: { id: string }[];
       reportDefaults: { from: string; to: string } | null;
     };
@@ -120,6 +129,8 @@ function Marker(p: {
       data-hub-charges={String(p.hub.chargesEnabled)}
       data-hub-sponsor={p.hub.sponsorId ?? "-"}
       data-hub-deal={p.hub.dealId ?? "-"}
+      data-hub-deal-by={p.hub.dealCreatedByName ?? "-"}
+      data-hub-deal-finished={String(p.hub.dealCompetitionFinished)}
       data-hub-links={p.hub.reportLinks.map((l) => l.id).join("|")}
       data-hub-defaults={p.hub.reportDefaults === null ? "-" : `${p.hub.reportDefaults.from}..${p.hub.reportDefaults.to}`}
     />
@@ -282,6 +293,8 @@ beforeEach(() => {
     { id: "d3", sponsor_id: "s2" },
   ]);
   h.listSponsorPackages.mockResolvedValue([{ id: "p1" }, { id: "p2" }]);
+  h.dealCreatorName.mockResolvedValue("Sam Patel");
+  h.isDealCompetitionFinished.mockResolvedValue(false);
   h.finishedPackageCompetitions.mockResolvedValue(["c2"]);
   h.loadOnStreamScope.mockResolvedValue({ settings: { enabled: true, frequency: "busy" }, ownRow: true, sports: [{ sportKey: "cricket", kinds: [], sample: null, sampleCompetitionId: null }] });
   h.hasFeatureOnAnyPass.mockResolvedValue(true);
@@ -854,6 +867,120 @@ describe("?sponsor=<own> draws the sponsor's own page (Task 15 - F23, moved here
     expect(attr(await render("sponsors", undefined, undefined, { sponsor: "s1" }), "org-sponsors", "data-hub-defaults")).toBe("2026-01-01..2026-12-31");
     asMember("viewer", false);
     expect(attr(await render("sponsors", undefined, undefined, { sponsor: "s1" }), "org-sponsors", "data-hub-defaults")).toBe("-");
+  });
+});
+
+describe("?deal=<own> draws the deal's own page (Task 17), and the timeline's two server reads ride with it", () => {
+  const SPONSOR = {
+    id: "s1", name: "Harbour Print", competition_id: null, url: null, logo_path: null, tier: "gold", display_order: 0,
+    status: "active", click_count: 4, on_stream: false, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false, last_billing_email: null,
+  };
+  const DEAL = {
+    id: "d1", sponsor_id: "s1", package_id: "p1", deal_status: "awaiting_payment", payment_status: "pending", payment_method: "offline",
+    go_live: "on_payment", package_name: "Gold Season", tier: "gold", includes_on_stream: false, competition_id: "c1", amount_cents: 60_000,
+    currency: "gbp", sponsor_name: "Harbour Print", sponsor_email: null, ends_at: null, created_at: "2026-10-01T09:00:00.000Z", created_by: "u-creator",
+    invoice_sent_at: null, paid_at: null, marked_paid_by: null, approved_at: null, approved_by: null, live_at: null, ended_at: null,
+    ended_reason: null, parked_at: null, disputed_at: null, dispute_id: null, has_payment_intent: false, invoice_number: null,
+  };
+  const OTHER = { ...DEAL, id: "d9", sponsor_id: "s2", package_name: "Silver Season" };
+  const sel = (html: string) => ({
+    by: attr(html, "org-sponsors", "data-hub-deal-by"),
+    finished: attr(html, "org-sponsors", "data-hub-deal-finished"),
+  });
+
+  beforeEach(() => {
+    h.listSponsorRows.mockResolvedValue([SPONSOR, { ...SPONSOR, id: "s2", name: "Ridge Kitchens" }]);
+    h.listDeals.mockResolvedValue([DEAL, OTHER]);
+    h.listReportLinks.mockResolvedValue([]);
+  });
+
+  it("a selected deal: the creator's name is read for THIS org and the deal's creator, and handed over (the seam, through the marker)", async () => {
+    const html = await render("sponsors", undefined, undefined, { sponsor: "s1", deal: "d1" });
+    expect(h.dealCreatorName).toHaveBeenCalledTimes(1);
+    expect(h.dealCreatorName).toHaveBeenCalledWith(ORG.id, "u-creator");
+    expect(sel(html).by).toBe("Sam Patel");
+    // the pair: the name the read returned is what is handed over, not a constant
+    h.dealCreatorName.mockResolvedValue(null);
+    expect(sel(await render("sponsors", undefined, undefined, { sponsor: "s1", deal: "d1" })).by).toBe("-");
+  });
+
+  it("an open deal that ends with its competition asks the desk about THAT competition, and hands the answer over", async () => {
+    h.isDealCompetitionFinished.mockResolvedValue(true);
+    const html = await render("sponsors", undefined, undefined, { sponsor: "s1", deal: "d1" });
+    expect(h.isDealCompetitionFinished).toHaveBeenCalledTimes(1);
+    expect(h.isDealCompetitionFinished).toHaveBeenCalledWith(ORG.id, "c1");
+    expect(sel(html).finished).toBe("true");
+    h.isDealCompetitionFinished.mockResolvedValue(false);
+    expect(sel(await render("sponsors", undefined, undefined, { sponsor: "s1", deal: "d1" })).finished).toBe("false");
+  });
+
+  it("no desk read when the answer would not be used: no deal selected, an ended deal, or a deal with its own end date (4 checked)", async () => {
+    const CASES: [string, Record<string, unknown>[], Record<string, string>][] = [
+      ["no deal selected", [DEAL], { sponsor: "s1" }],
+      ["a foreign deal id", [DEAL], { sponsor: "s1", deal: "d9" }],
+      ["an ended deal", [{ ...DEAL, deal_status: "ended", ended_reason: "expired", ended_at: "2026-10-31T10:00:00.000Z" }], { sponsor: "s1", deal: "d1" }],
+      ["an end date of its own", [{ ...DEAL, ends_at: "2027-03-31T12:00:00.000Z" }], { sponsor: "s1", deal: "d1" }],
+    ];
+    let checked = 0;
+    for (const [label, deals, query] of CASES) {
+      h.isDealCompetitionFinished.mockClear();
+      h.listDeals.mockResolvedValue(deals);
+      const html = await render("sponsors", undefined, undefined, query);
+      expect(h.isDealCompetitionFinished, label).not.toHaveBeenCalled();
+      expect(sel(html).finished, label).toBe("false");
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("no creator read without a deal selected (the list and the sponsor's page need none), and none on another tab", async () => {
+    await render("sponsors");
+    await render("sponsors", undefined, undefined, { sponsor: "s1" });
+    await render("packages", undefined, undefined, { sponsor: "s1", deal: "d1" });
+    expect(h.dealCreatorName).not.toHaveBeenCalled();
+    expect(h.isDealCompetitionFinished).not.toHaveBeenCalled();
+  });
+
+  describe("the REAL page", () => {
+    beforeEach(() => {
+      real.on = true;
+    });
+    afterEach(() => {
+      real.on = false;
+    });
+    const dealPages = (html: string) => [...html.matchAll(/<section\b[^>]*data-testid="deal-page"[^>]*>/g)].map((m) => m[0]);
+
+    it("?deal=<own> draws that deal's page for its package, with its creator on the timeline - and not the sponsor's page", async () => {
+      const html = await render("sponsors", undefined, undefined, { sponsor: "s1", deal: "d1" });
+      const pages = dealPages(html);
+      expect(pages, "exactly one deal page").toHaveLength(1);
+      expect(pages[0]).toContain('data-deal-id="d1"');
+      expect(html).toContain("Gold Season");
+      expect(html, "the creator the server read, on the timeline's Created step").toContain("Sam Patel");
+      expect(html).not.toContain('data-testid="sponsor-sheet"');
+    });
+
+    it("a foreign deal id, or none, draws the SPONSOR's page (never a stranger's deal)", async () => {
+      for (const query of [{ sponsor: "s1", deal: "d9" }, { sponsor: "s1" }]) {
+        const html = await render("sponsors", undefined, undefined, query);
+        expect(dealPages(html), JSON.stringify(query)).toHaveLength(0);
+        expect(html, JSON.stringify(query)).toContain('data-testid="sponsor-sheet"');
+      }
+    });
+
+    it("a viewer reads the deal page too, with no button on it", async () => {
+      asMember("viewer", false);
+      const html = await render("sponsors", undefined, undefined, { sponsor: "s1", deal: "d1" });
+      expect(dealPages(html)).toHaveLength(1);
+      expect(html).not.toContain('data-testid="deal-page-action"');
+      expect(html).toContain('data-testid="deal-page-timeline"');
+    });
+
+    it("an editor's deal page carries the buttons the deal offers (Mark as paid, End now for an offline deal awaiting payment)", async () => {
+      const html = await render("sponsors", undefined, undefined, { sponsor: "s1", deal: "d1" });
+      const actions = [...html.matchAll(/data-testid="deal-page-action"[^>]*data-action="([a-z_]+)"/g)].map((m) => m[1]);
+      expect(actions).toEqual(["mark_paid", "end_now"]);
+    });
   });
 });
 

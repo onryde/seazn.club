@@ -377,13 +377,16 @@ export function dealSummary(i: {
 }
 
 /** One step of a deal's timeline (spec §6.5, mockup screen 5). `at` is the ISO time the step happened, or null.
- *  `done`: it happened. `next`: the ONE step an open deal is waiting on. `not_yet`: still to come. `skipped`: this deal has no
- *  such step (a complimentary deal has no invoice or payment), or it never happened and now never will (an ended deal).
- *  `detail` keys by step: `invoice_sent.to`; `paid.method|amountCents|currency`; `ends.competitionEndsOn`; `ended.reason`. */
+ *  `done`: it happened. `next`: the ONE step an open deal is waiting on. `not_yet`: still to come. `skipped`: this deal has no such
+ *  step (a complimentary deal has no invoice or payment) - the screen does not draw it. `missed`: the deal HAS the step, it never
+ *  happened, and the deal has ended, so it never will (an unpaid deal ended now: "Not paid") - the screen DOES draw it, so the club
+ *  can see why nothing came of the deal.
+ *  `detail` keys by step: `created.by`; `invoice_sent.to`; `paid.method|amountCents|currency`; `ends.competitionEndsOn|
+ *  competitionFinished`; `ended.reason`. */
 export type TimelineStep = {
   key: "created" | "invoice_sent" | "paid" | "approved" | "live" | "ends" | "ended";
   at: string | null;
-  state: "done" | "next" | "not_yet" | "skipped";
+  state: "done" | "next" | "not_yet" | "skipped" | "missed";
   detail?: Record<string, string>;
 };
 
@@ -398,19 +401,30 @@ export type TimelineStep = {
  * HAS happened is `done` wherever it sits (an immediate deal is live while its payment is still awaited). `ends` is a future
  * date, never the thing a deal waits on.
  *
+ * An ENDED deal waits on nothing: each step it has that never happened is `missed` (drawn, e.g. "Not paid"); a step it never had
+ * stays `skipped` (hidden).
+ *
  * `ctx.competitionEndsOn` is a DISPLAY hint (the competition's end date, YYYY-MM-DD, or null): an open deal scoped to a
  * competition with no end date of its own ends when that competition finishes (spec §8a), so its `ends` step carries the date the
  * competition is scheduled to end. It never decides anything here - a deal ends on the competition's derived phase (the sweep),
  * not on a date this function reads - so a hint in the past leaves the deal open.
+ * `ctx.competitionFinished` is the DESK's answer (the competition's derived phase, server/usecases/sponsor-deals.ts
+ * `isDealCompetitionFinished`), never the date: for an open deal that ends with its competition, the `ends` step says the
+ * competition has finished - the deal is still open only until the sweep's next hourly check.
+ * `ctx.createdBy` is the creator's display name, or null when it could not be resolved (a removed member, a deleted user): the
+ * created step then names no one rather than guess.
  */
-export function dealTimeline(d: SponsorDeal, ctx: { competitionEndsOn: string | null }): TimelineStep[] {
+export function dealTimeline(
+  d: SponsorDeal,
+  ctx: { competitionEndsOn: string | null; competitionFinished: boolean; createdBy: string | null },
+): TimelineStep[] {
   const ended = d.deal_status === "ended";
   const complimentary = d.payment_method === "complimentary";
   const invoiceSent = d.invoice_sent_at !== null;
   const paid = d.payment_status === "paid" || d.payment_status === "refunded";
 
   const raw: { key: TimelineStep["key"]; at: string | null; applies: boolean; done: boolean; detail?: Record<string, string> }[] = [
-    { key: "created", at: d.created_at, applies: true, done: true },
+    { key: "created", at: d.created_at, applies: true, done: true, ...(ctx.createdBy ? { detail: { by: ctx.createdBy } } : {}) },
     {
       key: "invoice_sent",
       at: d.invoice_sent_at,
@@ -434,8 +448,8 @@ export function dealTimeline(d: SponsorDeal, ctx: { competitionEndsOn: string | 
     const base = { key: r.key, at: r.at, ...(r.detail ? { detail: r.detail } : {}) };
     if (!r.applies) return { ...base, state: "skipped" };
     if (r.done) return { ...base, state: "done" };
-    // An ended deal waits on nothing: what never happened never will.
-    if (ended) return { ...base, state: "skipped" };
+    // An ended deal waits on nothing: what it had and never got, it never will - shown as missed, not hidden.
+    if (ended) return { ...base, state: "missed" };
     if (!waiting) {
       waiting = true;
       return { ...base, state: "next" };
@@ -447,8 +461,12 @@ export function dealTimeline(d: SponsorDeal, ctx: { competitionEndsOn: string | 
     steps.push({ key: "ended", at: d.ended_at, state: "done", ...(d.ended_reason ? { detail: { reason: d.ended_reason } } : {}) });
     return steps;
   }
-  const endsOn = ctx.competitionEndsOn;
-  const hint = d.ends_at === null && d.competition_id !== null && endsOn !== null;
-  steps.push({ key: "ends", at: d.ends_at, state: "not_yet", ...(hint ? { detail: { competitionEndsOn: endsOn } } : {}) });
+  // Only a deal that ends WITH its competition (a competition scope and no end date of its own: the sweep's `competition_finished`
+  // arm) carries either note; a deal with its own `ends_at` ends on that, and a whole-organisation deal has no competition.
+  const withCompetition = d.ends_at === null && d.competition_id !== null;
+  const detail: Record<string, string> = {};
+  if (withCompetition && ctx.competitionEndsOn !== null) detail.competitionEndsOn = ctx.competitionEndsOn;
+  if (withCompetition && ctx.competitionFinished) detail.competitionFinished = "yes";
+  steps.push({ key: "ends", at: d.ends_at, state: "not_yet", ...(Object.keys(detail).length > 0 ? { detail } : {}) });
   return steps;
 }

@@ -399,6 +399,27 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
       hubPackages.body.includes('data-testid="sponsors-tab-packages"') &&
       hubPackages.body.includes('data-testid="sponsor-packages"'),
   );
+  // Sponsor deals PR 2, Task 17: `&deal=<id>` on a sponsor's page is that deal's own page - from the REAL list the deal landed in
+  // above (Acme's online deal), read back through the real hub page. A stranger's id is the sponsor's page again, never a 404.
+  const acmeDeal = deals.status === 200
+    ? v1data<{ id: string; sponsor_id: string }[]>(deals).find((d) => d.sponsor_id === acmeSponsor)
+    : undefined;
+  const hubDeal = acmeDeal
+    ? await html(admin, `/o/${proOrgSlug}/sponsors?tab=sponsors&sponsor=${acmeSponsor}&deal=${acmeDeal.id}`)
+    : { status: 0, body: "" };
+  const hubStrangerDeal = acmeDeal
+    ? await html(admin, `/o/${proOrgSlug}/sponsors?tab=sponsors&sponsor=${acmeSponsor}&deal=00000000-0000-4000-8000-000000000000`)
+    : { status: 0, body: "" };
+  check(
+    "sd hub &deal=<id> renders the deal page",
+    acmeDeal !== undefined &&
+      hubDeal.status === 200 &&
+      hubDeal.body.includes('data-testid="deal-page"') &&
+      hubDeal.body.includes(`data-deal-id="${acmeDeal.id}"`) &&
+      hubDeal.body.includes('data-testid="deal-page-timeline"') &&
+      hubStrangerDeal.status === 200 &&
+      !hubStrangerDeal.body.includes('data-testid="deal-page"'),
+  );
   const legacyTab = await pageRedirect(admin, `/o/${proOrgSlug}/settings?tab=sponsors&x=1`);
   check(
     "sp legacy settings?tab=sponsors redirects to the hub's Sponsors tab (second param kept)",

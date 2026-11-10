@@ -342,8 +342,8 @@ describe("the duplicate-invoice confirm keys on the SPONSOR and the package, and
     await sendFor([deal({ deal_status: "awaiting_payment" })]);
     expect(confirmMock).toHaveBeenCalledTimes(1);
     const opts = confirmMock.mock.calls[0]![0] as { title: string; confirmLabel: string };
-    expect(opts.title).toBe(msg("sponsors.order.dupConfirm.title"));
-    expect(opts.confirmLabel).toBe(msg("sponsors.order.dupConfirm.label"));
+    expect(opts.title).toBe(msg("sponsors.deal.confirm.dup.title"));
+    expect(opts.confirmLabel).toBe(msg("sponsors.deal.confirm.dup.label"));
     expect(callsTo("POST", "/deals")).toEqual([]);
   });
 
@@ -740,7 +740,7 @@ describe("a Send invoice that fails AFTER it saved the deal re-reads the list, s
     m.click("invoice-send");
     await flush();
     expect(confirmMock, "the second Send asks first: the saved draft is an open deal for the sponsor and package").toHaveBeenCalledTimes(1);
-    expect((confirmMock.mock.calls[0]![0] as { title: string }).title).toBe(msg("sponsors.order.dupConfirm.title"));
+    expect((confirmMock.mock.calls[0]![0] as { title: string }).title).toBe(msg("sponsors.deal.confirm.dup.title"));
     const posts = callsTo("POST", "/deals");
     expect(posts, "both Sends POSTed (the second confirmed)").toHaveLength(2);
     for (const post of posts) expect(Object.keys(post.body!), "the console never asks to end the current deal").not.toContain("end_current");
@@ -845,10 +845,10 @@ describe("End now is offered on every deal that has not ended, asks first, and s
     // The middle case is PAID and not live, so its body also owes New-2's paid-kept sentence (batch G).
     const amount = new Intl.NumberFormat(undefined, { style: "currency", currency: "GBP" }).format(250);
     const CASES: [string, Record<string, unknown>[], string, MessageKey, MessageKey | null][] = [
-      ["the live deal itself (paid: the PR 2 ruling - a LIVE paid deal keeps its money too)", [LIVE_OTHER], "d-live", "sponsors.order.endConfirm.bodyLive", "sponsors.order.endConfirm.paidKept"],
-      ["the live deal itself, unpaid", [deal({ id: "d-live", package_id: "p2", deal_status: "live", payment_status: "pending" })], "d-live", "sponsors.order.endConfirm.bodyLive", null],
-      ["an open deal behind a live one", [LIVE_OTHER, deal({ id: "d-open", deal_status: "scheduled", payment_status: "paid" })], "d-open", "sponsors.order.endConfirm.bodyKept", "sponsors.order.endConfirm.paidKept"],
-      ["an open deal, nothing live", [deal({ id: "d-open", deal_status: "awaiting_payment" })], "d-open", "sponsors.order.endConfirm.bodyHidden", null],
+      ["the live deal itself (paid: the PR 2 ruling - a LIVE paid deal keeps its money too)", [LIVE_OTHER], "d-live", "sponsors.deal.confirm.end.bodyLive", "sponsors.deal.confirm.end.paidKept"],
+      ["the live deal itself, unpaid", [deal({ id: "d-live", package_id: "p2", deal_status: "live", payment_status: "pending" })], "d-live", "sponsors.deal.confirm.end.bodyLive", null],
+      ["an open deal behind a live one", [LIVE_OTHER, deal({ id: "d-open", deal_status: "scheduled", payment_status: "paid" })], "d-open", "sponsors.deal.confirm.end.bodyKept", "sponsors.deal.confirm.end.paidKept"],
+      ["an open deal, nothing live", [deal({ id: "d-open", deal_status: "awaiting_payment" })], "d-open", "sponsors.deal.confirm.end.bodyHidden", null],
     ];
     const seen = new Set<string>();
     let checked = 0;
@@ -863,8 +863,8 @@ describe("End now is offered on every deal that has not ended, asks first, and s
       const opts = confirmMock.mock.calls[0]![0] as { title: string; body: string; confirmLabel: string; tone?: string };
       const want = [msg(key, { name: LONG_NAME }), ...(paid ? [msg(paid, { amount, name: LONG_NAME })] : [])].join(" ");
       expect(opts.body, label).toBe(want);
-      expect(opts.title).toBe(msg("sponsors.order.endConfirm.title"));
-      expect(opts.confirmLabel).toBe(msg("sponsors.order.endConfirm.label"));
+      expect(opts.title).toBe(msg("sponsors.deal.confirm.end.title"));
+      expect(opts.confirmLabel).toBe(msg("sponsors.deal.confirm.end.label"));
       expect(opts.tone).toBe("danger");
       seen.add(opts.body);
       checked++;
@@ -942,10 +942,10 @@ describe("the refund confirm says whether money moves through Stripe - on the SA
   it("intent recorded: the card body; no intent - marked by hand (marker since deleted, or still there), or offline: the recorded body (all four)", async () => {
     const amount = new Intl.NumberFormat(undefined, { style: "currency", currency: "GBP" }).format(250);
     const CASES: [string, Record<string, unknown>, MessageKey][] = [
-      ["online, paid at Stripe", { payment_method: "online", has_payment_intent: true, marked_paid_by: null }, "sponsors.order.refundConfirm.body"],
-      ["online, marked paid by a user since deleted", { payment_method: "online", has_payment_intent: false, marked_paid_by: null }, "sponsors.order.refundConfirm.bodyRecorded"],
-      ["online, marked paid by hand", { payment_method: "online", has_payment_intent: false, marked_paid_by: "u-1" }, "sponsors.order.refundConfirm.bodyRecorded"],
-      ["offline", { payment_method: "offline", has_payment_intent: false, marked_paid_by: "u-1", sponsor_email: null }, "sponsors.order.refundConfirm.bodyRecorded"],
+      ["online, paid at Stripe", { payment_method: "online", has_payment_intent: true, marked_paid_by: null }, "sponsors.deal.confirm.refund.body"],
+      ["online, marked paid by a user since deleted", { payment_method: "online", has_payment_intent: false, marked_paid_by: null }, "sponsors.deal.confirm.refund.bodyRecorded"],
+      ["online, marked paid by hand", { payment_method: "online", has_payment_intent: false, marked_paid_by: "u-1" }, "sponsors.deal.confirm.refund.bodyRecorded"],
+      ["offline", { payment_method: "offline", has_payment_intent: false, marked_paid_by: "u-1", sponsor_email: null }, "sponsors.deal.confirm.refund.bodyRecorded"],
     ];
     let checked = 0;
     for (const [label, over, key] of CASES) {
@@ -959,8 +959,8 @@ describe("the refund confirm says whether money moves through Stripe - on the SA
       expect(body, label).toBe(
         [
           msg(key, { amount, name: LONG_NAME }),
-          msg("sponsors.order.refundConfirm.placementLive", { name: LONG_NAME }),
-          msg("sponsors.order.refundConfirm.irreversible"),
+          msg("sponsors.deal.confirm.refund.placementLive", { name: LONG_NAME }),
+          msg("sponsors.deal.confirm.refund.irreversible"),
         ].join(" "),
       );
       checked++;
@@ -976,10 +976,10 @@ describe("the refund confirm says what the public pages do, by the deal's state 
   const amount = new Intl.NumberFormat(undefined, { style: "currency", currency: "GBP" }).format(250);
   const LIVE_OTHER = deal({ id: "d-live", package_id: "p2", deal_status: "live", payment_status: "paid", has_payment_intent: true });
   const CASES: [string, Record<string, unknown>[], MessageKey][] = [
-    ["live", [deal({ id: "d-r", deal_status: "live", payment_status: "paid", has_payment_intent: true })], "sponsors.order.refundConfirm.placementLive"],
-    ["scheduled behind the sponsor's live deal", [LIVE_OTHER, deal({ id: "d-r", deal_status: "scheduled", payment_status: "paid", has_payment_intent: true })], "sponsors.order.refundConfirm.placementKept"],
-    ["awaiting approval, nothing live", [deal({ id: "d-r", deal_status: "awaiting_approval", payment_status: "paid", has_payment_intent: true })], "sponsors.order.refundConfirm.placementHidden"],
-    ["ended (expired), paid", [deal({ id: "d-r", deal_status: "ended", ended_reason: "expired", payment_status: "paid", has_payment_intent: true })], "sponsors.order.refundConfirm.placementEnded"],
+    ["live", [deal({ id: "d-r", deal_status: "live", payment_status: "paid", has_payment_intent: true })], "sponsors.deal.confirm.refund.placementLive"],
+    ["scheduled behind the sponsor's live deal", [LIVE_OTHER, deal({ id: "d-r", deal_status: "scheduled", payment_status: "paid", has_payment_intent: true })], "sponsors.deal.confirm.refund.placementKept"],
+    ["awaiting approval, nothing live", [deal({ id: "d-r", deal_status: "awaiting_approval", payment_status: "paid", has_payment_intent: true })], "sponsors.deal.confirm.refund.placementHidden"],
+    ["ended (expired), paid", [deal({ id: "d-r", deal_status: "ended", ended_reason: "expired", payment_status: "paid", has_payment_intent: true })], "sponsors.deal.confirm.refund.placementEnded"],
   ];
 
   it("live -> hands over or comes off; behind a live deal -> kept; nothing live -> stays off; ended -> no change (all four, four different bodies)", async () => {
@@ -995,9 +995,9 @@ describe("the refund confirm says what the public pages do, by the deal's state 
       const body = (confirmMock.mock.calls[0]![0] as { body: string }).body;
       expect(body, label).toBe(
         [
-          msg("sponsors.order.refundConfirm.body", { amount, name: LONG_NAME }),
+          msg("sponsors.deal.confirm.refund.body", { amount, name: LONG_NAME }),
           msg(placement, { name: LONG_NAME }),
-          msg("sponsors.order.refundConfirm.irreversible"),
+          msg("sponsors.deal.confirm.refund.irreversible"),
         ].join(" "),
       );
       seen.add(body);
@@ -1017,9 +1017,9 @@ describe("the refund confirm says what the public pages do, by the deal's state 
     await flush();
     expect((confirmMock.mock.calls[0]![0] as { body: string }).body).toBe(
       [
-        msg("sponsors.order.refundConfirm.bodyRecorded", { amount, name: LONG_NAME }),
-        msg("sponsors.order.refundConfirm.placementKept", { name: LONG_NAME }),
-        msg("sponsors.order.refundConfirm.irreversible"),
+        msg("sponsors.deal.confirm.refund.bodyRecorded", { amount, name: LONG_NAME }),
+        msg("sponsors.deal.confirm.refund.placementKept", { name: LONG_NAME }),
+        msg("sponsors.deal.confirm.refund.irreversible"),
       ].join(" "),
     );
   });
@@ -1029,7 +1029,7 @@ describe("the refund confirm says what the public pages do, by the deal's state 
     const PAGES: Record<string, RegExp> = { en: /public pages/i, es: /páginas públicas/i, fr: /pages publiques/i, nl: /openbare pagina/i };
     let checked = 0;
     for (const [loc, dict] of Object.entries(LOCALES)) {
-      for (const key of ["sponsors.order.refundConfirm.body", "sponsors.order.refundConfirm.bodyRecorded"]) {
+      for (const key of ["sponsors.deal.confirm.refund.body", "sponsors.deal.confirm.refund.bodyRecorded"]) {
         expect(dict[key], `${loc} ${key}`).toBeTruthy();
         expect(dict[key], `${loc} ${key}`).not.toMatch(PAGES[loc]!);
         checked++;
@@ -1055,7 +1055,7 @@ describe("End now on a paid deal - live or not - says the money stays and a refu
   ];
 
   it("paid (live or not) -> the paid-kept sentence names the amount; unpaid or disputed -> none (all six)", async () => {
-    const paidKept = msg("sponsors.order.endConfirm.paidKept", { amount, name: LONG_NAME });
+    const paidKept = msg("sponsors.deal.confirm.end.paidKept", { amount, name: LONG_NAME });
     let checked = 0;
     for (const [label, rows, says] of CASES) {
       confirmMock.mockClear();
@@ -1077,11 +1077,11 @@ describe("End now on a paid deal - live or not - says the money stays and a refu
     const LOCALES = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as Record<string, Record<string, string>>;
     let checked = 0;
     for (const [loc, dict] of Object.entries(LOCALES)) {
-      const text = dict["sponsors.order.endConfirm.paidKept"];
+      const text = dict["sponsors.deal.confirm.end.paidKept"];
       expect(text, loc).toBeTruthy();
       expect(text, loc).toContain("{amount}");
-      expect(text, loc).toContain(dict["sponsors.order.refund"]!);
-      if (loc !== "en") expect(text, loc).not.toBe(LOCALES.en!["sponsors.order.endConfirm.paidKept"]);
+      expect(text, loc).toContain(dict["sponsors.deal.action.refund"]!);
+      if (loc !== "en") expect(text, loc).not.toBe(LOCALES.en!["sponsors.deal.confirm.end.paidKept"]);
       checked++;
     }
     expect(checked).toBe(4);
@@ -1114,7 +1114,7 @@ describe("the Invoice sent banner shows a pay link only while its deal can still
     await flush();
     expect(callsTo("POST", "/end").map((c) => c.url)).toEqual([`${API}/sponsor-deals/d-other/end`, `${API}/sponsor-deals/d-new/end`]);
     expect(m.has("invoice-link"), "the sent deal ended: its link is dead").toBe(false);
-    expect(m.text()).not.toContain(msg("sponsors.order.sent"));
+    expect(m.text()).not.toContain(msg("sponsors.deal.payLink.sent"));
   });
 
   it("a re-read that shows the resent deal paid, or refunded, hides it (both)", async () => {
@@ -1156,10 +1156,10 @@ describe("the duplicate confirm says whether the open deal still has money to ta
     const PAID_WAITING = deal({ id: "d-p", deal_status: "awaiting_approval", payment_status: "paid" });
     const COMP_QUEUED = deal({ id: "d-c", deal_status: "scheduled", payment_method: "complimentary", payment_status: "none" });
     const CASES: [string, Record<string, unknown>[], MessageKey][] = [
-      ["unpaid", [UNPAID], "sponsors.order.dupConfirm.body"],
-      ["paid, awaiting approval", [PAID_WAITING], "sponsors.order.dupConfirm.bodySettled"],
-      ["complimentary, queued", [COMP_QUEUED], "sponsors.order.dupConfirm.bodySettled"],
-      ["one of each", [PAID_WAITING, UNPAID], "sponsors.order.dupConfirm.body"],
+      ["unpaid", [UNPAID], "sponsors.deal.confirm.dup.body"],
+      ["paid, awaiting approval", [PAID_WAITING], "sponsors.deal.confirm.dup.bodySettled"],
+      ["complimentary, queued", [COMP_QUEUED], "sponsors.deal.confirm.dup.bodySettled"],
+      ["one of each", [PAID_WAITING, UNPAID], "sponsors.deal.confirm.dup.body"],
     ];
     let checked = 0;
     for (const [label, rows, key] of CASES) {
@@ -1203,7 +1203,7 @@ describe("End now's live-deal sentence is true by F19: a queued deal goes live o
   it("names the queued deal's end date in all four locales, and still names the sponsor (counted)", () => {
     let checked = 0;
     for (const [loc, dict] of Object.entries(LOCALES)) {
-      const text = dict["sponsors.order.endConfirm.bodyLive"];
+      const text = dict["sponsors.deal.confirm.end.bodyLive"];
       expect(text, loc).toMatch(END_DATE[loc]!);
       expect(text, loc).toContain("{name}");
       checked++;

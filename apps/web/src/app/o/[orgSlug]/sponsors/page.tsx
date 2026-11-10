@@ -19,7 +19,7 @@ import { requireOrgPage } from "@/server/page-auth";
 import { sql } from "@/lib/db";
 import { featureScopes, hasFeatureOnAnyPass } from "@/lib/entitlements";
 import { listSponsorPackages, listSponsorRows } from "@/server/usecases/sponsors";
-import { finishedPackageCompetitions, listDeals } from "@/server/usecases/sponsor-deals";
+import { dealCreatorName, finishedPackageCompetitions, isDealCompetitionFinished, listDeals } from "@/server/usecases/sponsor-deals";
 import { loadOnStreamScope } from "@/server/sponsors/on-stream";
 import { listReportLinks, reportLinkDefaults, sponsorOverview } from "@/server/sponsors/report";
 import { OrgSponsors } from "@/components/org-sponsors";
@@ -110,6 +110,18 @@ export default async function SponsorsHubPage({
     // selected sponsor's own deals. Anything else is the list again - never a 404, never a crash.
     const sponsorId = resolveSponsorParam(rawSponsor, sponsorRows);
     const dealId = sponsorId === null ? null : resolveDealParam(rawDeal, deals.filter((d) => d.sponsor_id === sponsorId));
+    // The deal page's two server reads (Task 17), only while a deal is selected: who created it, and - for an open deal that ends with
+    // its competition (no end date of its own) - whether the desk says that competition has finished. The timeline words both.
+    const selectedDeal = dealId === null ? null : (deals.find((d) => d.id === dealId) ?? null);
+    const [dealCreatedByName, dealCompetitionFinished] =
+      selectedDeal === null
+        ? [null, false]
+        : await Promise.all([
+            dealCreatorName(active.id, selectedDeal.created_by),
+            selectedDeal.deal_status !== "ended" && selectedDeal.ends_at === null
+              ? isDealCompetitionFinished(active.id, selectedDeal.competition_id)
+              : Promise.resolve(false),
+          ]);
     // The sponsor page's Report link section: the selected sponsor's live links. The read is an editor's (it refuses a viewer).
     // Its opening dates are this year's (`resolveSponsorPeriod` with no `?period=` - the Overview's landing window). Read with the
     // links, for an editor's page only: a viewer's sponsor page has no such section.
@@ -132,7 +144,7 @@ export default async function SponsorsHubPage({
           canEdit={canEdit}
           hub={{
             orgSlug, deals, packages, hasMonetize, monetizeOrgWide: monetize.orgWide, monetizeCompetitionIds: monetize.competitionIds,
-            chargesEnabled, finishedCompetitionIds, sponsorId, dealId, reportLinks, reportDefaults,
+            chargesEnabled, finishedCompetitionIds, sponsorId, dealId, dealCreatedByName, dealCompetitionFinished, reportLinks, reportDefaults,
           }}
         />
       </HubPanel>

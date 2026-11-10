@@ -718,7 +718,7 @@ test("invoice: Add deal on the sponsor's page, Online, Send invoice mints a REAL
   await expect(panel).toBeVisible({ timeout: READ_MS });
   await expect(panel.getByText(ui("sponsors.order.status.pending"))).toBeVisible();
   await expect(
-    panel.getByRole("button", { name: ui("sponsors.order.refund"), exact: true }),
+    panel.getByRole("button", { name: ui("sponsors.deal.action.refund"), exact: true }),
     "a pending order must NOT offer a refund",
   ).toHaveCount(0);
 
@@ -731,7 +731,7 @@ test("invoice: Add deal on the sponsor's page, Online, Send invoice mints a REAL
   await send.click();
   const dialog = page.getByRole("alertdialog");
   await expect(dialog, "a sponsor with an open deal on this package is asked before a second invoice").toBeVisible();
-  await expect(dialog.getByText(ui("sponsors.order.dupConfirm.title"))).toBeVisible();
+  await expect(dialog.getByText(ui("sponsors.deal.confirm.dup.title"))).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await page.getByTestId("add-deal-cancel").click();
@@ -884,7 +884,7 @@ test("paid: a real destination charge, delivered as a signed event, activates th
   await expect(panel).toBeVisible({ timeout: READ_MS });
   await expect(panel.getByText(ui("sponsors.order.status.paid"))).toBeVisible();
   await expect(
-    panel.getByRole("button", { name: ui("sponsors.order.refund"), exact: true }),
+    panel.getByRole("button", { name: ui("sponsors.deal.action.refund"), exact: true }),
     "a paid order must offer a refund",
   ).toBeVisible();
 });
@@ -907,28 +907,28 @@ test("refund: the console reverses the charge, and the placement comes off the p
 
   const panel = page.getByTestId("sponsor-packages");
   await expect(panel).toBeVisible({ timeout: READ_MS });
-  await panel.getByRole("button", { name: ui("sponsors.order.refund"), exact: true }).click();
+  await panel.getByRole("button", { name: ui("sponsors.deal.action.refund"), exact: true }).click();
 
   // The confirm step is not decoration: `refundOrder` returns without calling
   // Stripe if it is dismissed, so the dialog is on the money path.
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText(ui("sponsors.order.refundConfirm.title"))).toBeVisible();
+  await expect(dialog.getByText(ui("sponsors.deal.confirm.refund.title"))).toBeVisible();
   // Paid at Stripe Checkout (leg 3's real charge), never marked by hand: the card body, not the recorded-only one (review m1).
   // Then what the public pages do (batch G, m1 remainder): this deal is LIVE, so its placement hands over or comes off.
   await expect(
     dialog.getByText(
       uiSentences([
-        ["sponsors.order.refundConfirm.body", { amount: ".+", name: SPONSOR_NAME }],
-        ["sponsors.order.refundConfirm.placementLive", { name: SPONSOR_NAME }],
-        ["sponsors.order.refundConfirm.irreversible", {}],
+        ["sponsors.deal.confirm.refund.body", { amount: ".+", name: SPONSOR_NAME }],
+        ["sponsors.deal.confirm.refund.placementLive", { name: SPONSOR_NAME }],
+        ["sponsors.deal.confirm.refund.irreversible", {}],
       ]),
     ),
   ).toBeVisible();
   const confirm = dialog.getByRole("button", {
     // "Refund {amount}" — the amount is browser-locale currency formatting, so
     // the sentence is pinned and the money is left open (see `uiPattern`).
-    name: uiPattern("sponsors.order.refundConfirm.label", { amount: ".+" }),
+    name: uiPattern("sponsors.deal.confirm.refund.label", { amount: ".+" }),
   });
   await expect(confirm).toBeVisible();
 
@@ -996,7 +996,7 @@ test("refund: the console reverses the charge, and the placement comes off the p
   await expect(settled).toBeVisible({ timeout: READ_MS });
   await expect(settled.getByText(ui("sponsors.order.status.refunded"))).toBeVisible();
   await expect(
-    settled.getByRole("button", { name: ui("sponsors.order.refund"), exact: true }),
+    settled.getByRole("button", { name: ui("sponsors.deal.action.refund"), exact: true }),
     "a refunded order must not offer a second refund",
   ).toHaveCount(0);
 
@@ -1128,14 +1128,14 @@ test("end now: an invoice the sponsor never pays is resent, then ended from its 
   await panel.getByTestId(`order-end-${dealId}`).click();
   const dialog = page.getByRole("alertdialog");
   await expect(dialog, "End now asks first").toBeVisible();
-  await expect(dialog.getByText(ui("sponsors.order.endConfirm.title"))).toBeVisible();
-  await expect(dialog.getByText(ui("sponsors.order.endConfirm.bodyHidden", { name: SECOND_NAME }))).toBeVisible();
+  await expect(dialog.getByText(ui("sponsors.deal.confirm.end.title"))).toBeVisible();
+  await expect(dialog.getByText(ui("sponsors.deal.confirm.end.bodyHidden", { name: SECOND_NAME }))).toBeVisible();
   const [ended] = await Promise.all([
     page.waitForResponse(
       (r) => r.url().endsWith(`/api/v1/orgs/${org.orgId}/sponsor-deals/${dealId}/end`) && r.request().method() === "POST",
       { timeout: STRIPE_MS },
     ),
-    dialog.getByRole("button", { name: ui("sponsors.order.endConfirm.label"), exact: true }).click(),
+    dialog.getByRole("button", { name: ui("sponsors.deal.confirm.end.label"), exact: true }).click(),
   ]);
   expect(ended.status(), `POST /end answered ${ended.status()}: ${await ended.text()}`).toBe(200);
   await expect(dialog).toHaveCount(0);

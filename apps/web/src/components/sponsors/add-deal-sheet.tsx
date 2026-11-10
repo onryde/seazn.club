@@ -180,9 +180,9 @@ export function AddDealSheet({
         const ok = await confirm(
           method === "online"
             ? {
-                title: msg("sponsors.order.dupConfirm.title"),
+                title: msg("sponsors.deal.confirm.dup.title"),
                 body: msg(dupConfirmBodyKey(deals, sponsor.id, pkg.id), { name: sponsor.name }),
-                confirmLabel: msg("sponsors.order.dupConfirm.label"),
+                confirmLabel: msg("sponsors.deal.confirm.dup.label"),
                 tone: "danger",
               }
             : {
