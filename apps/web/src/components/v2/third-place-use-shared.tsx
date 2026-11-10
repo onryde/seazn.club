@@ -19,7 +19,7 @@ export function ThirdPlaceUseShared({ stageId, onDone, disabled = false }: { sta
   const msg = useMsg();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  async function useShared() {
+  async function saveShared() {
     setBusy(true);
     setError(null);
     try {
@@ -34,7 +34,7 @@ export function ThirdPlaceUseShared({ stageId, onDone, disabled = false }: { sta
   }
   return (
     <span className="inline-flex flex-col items-start gap-1">
-      <button type="button" data-testid="third-place-use-shared" disabled={busy || disabled} onClick={() => void useShared()} className="btn btn-ghost min-h-11 px-3 py-1.5 text-sm">
+      <button type="button" data-testid="third-place-use-shared" disabled={busy || disabled} onClick={() => void saveShared()} className="btn btn-ghost min-h-11 px-3 py-1.5 text-sm">
         {msg("thirdPlace.useShared")}
       </button>
       {error && <span className="text-xs text-red-600" data-testid="third-place-use-shared-error">{error}</span>}
