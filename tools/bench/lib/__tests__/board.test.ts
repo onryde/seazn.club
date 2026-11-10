@@ -38,7 +38,7 @@
 // module scope, and a collection failure contributes ZERO failures to the JSON
 // reporter — so judge this file on `numTotalTests`, never on `numFailedTests`.
 import { describe, expect, it } from "vitest";
-import { ScheduleConfig } from "../../../../apps/web/src/server/api-v1/schemas.ts";
+import { ScheduleConfig } from "../../../../apps/web/src/server/api-v1/schemas/index.ts";
 import {
   encodeConstraints,
   judgeDivision,

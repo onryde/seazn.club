@@ -76,8 +76,12 @@ describe("server/relay/domain is pure", () => {
   // PR-2 T6: api-v1/schemas.ts is also loaded by the standalone OpenAPI generator (node --experimental-strip-types, no resolver,
   // so no extensionless or `@/` import can be followed). The domain files it takes constants from must therefore import NOTHING.
   it("every domain file api-v1/schemas.ts imports (the generator loads it with no resolver) imports nothing at all", () => {
-    const schemas = readFileSync(resolve(DOMAIN, "../../api-v1/schemas.ts"), "utf8");
-    const loaded = [...codeOf(schemas).matchAll(/from "\.\.\/relay\/domain\/([\w-]+\.ts)"/g)].map((m) => m[1]!);
+    // api-v1/schemas/ is a folder of modules (one level deeper than the old file, hence the extra `../`): read them all.
+    const schemasDir = resolve(DOMAIN, "../../api-v1/schemas");
+    const modules = readdirSync(schemasDir).filter((f) => f.endsWith(".ts"));
+    expect(modules.length, "anti-vacuity: schemas/ modules scanned").toBeGreaterThan(1);
+    const schemas = modules.map((f) => readFileSync(join(schemasDir, f), "utf8")).join("\n");
+    const loaded = [...codeOf(schemas).matchAll(/from "\.\.\/\.\.\/relay\/domain\/([\w-]+\.ts)"/g)].map((m) => m[1]!);
     expect(loaded, "anti-vacuity: the constants schemas.ts takes from the domain").toEqual(expect.arrayContaining(["auto-stream.ts", "health-reasons.ts", "ladder.ts"]));
     for (const name of loaded) {
       const f = files.find((x) => x.name === name);

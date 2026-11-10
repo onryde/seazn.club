@@ -12,8 +12,9 @@ import { builtinModules } from "@seazn/engine/sports";
 import { TOP_LEVEL_STAGE_DECIDERS } from "../../../apps/web/src/lib/top-level-stage-deciders.ts";
 import { FORMAT_BOUNDS } from "../../../apps/web/src/lib/format-bounds.ts";
 import { swissRoundsDefault } from "../../../apps/web/src/lib/swiss-rounds.ts";
-import { STAGE_DECIDER_MOVED, StageConfig } from "../../../apps/web/src/server/api-v1/schemas.ts";
+import { STAGE_DECIDER_MOVED, StageConfig } from "../../../apps/web/src/server/api-v1/schemas/index.ts";
 import { COUNTRY_SEPARATION_NOT_OFFERED_MESSAGE } from "../../../apps/web/src/lib/knockout-refusals.ts";
+import { schemasText } from "./product-text.ts";
 import { SWISS_REQUESTED_BYES_DEFERRED_MESSAGE } from "../../../apps/web/src/lib/swiss-refusals.ts";
 import {
   API_ONLY_ROWS, BUILDER_DEFAULT_KNOBS, BUILDER_KNOB_BOUNDS, BUILDER_PREFERRED_VARIANT, ROW_KEYS,
@@ -195,7 +196,7 @@ function thirdPlaceKey(): string {
   return key;
 }
 
-const SCHEMAS_TS = (): string => readFileSync(resolve(REPO, "apps/web/src/server/api-v1/schemas.ts"), "utf8");
+const SCHEMAS_TS = (): string => schemasText();
 
 /** The body of api-v1/schemas.ts's StageConfig — a strictObject, so the POST /stages door 400s on any key outside it. */
 function stageConfigBody(src: string = SCHEMAS_TS()): string {

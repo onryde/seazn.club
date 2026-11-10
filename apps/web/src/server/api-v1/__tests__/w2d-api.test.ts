@@ -875,8 +875,11 @@ describe("W2d T13 the documented standings row and the retired code", () => {
 
   it("POINTS_RULE_INEXPRESSIBLE appears nowhere in schemas, openapi or the error map (greenfield deletion, git grep -a, counted files > 0)", () => {
     const code = ["POINTS", "RULE", "INEXPRESSIBLE"].join("_");
+    // api-v1/schemas/ is a folder of modules: every tracked one is scanned (git ls-files lists the directory).
+    const schemaModules = execFileSync("git", ["ls-files", "--", "apps/web/src/server/api-v1/schemas"], { cwd: REPO, encoding: "utf8" }).split("\n").filter(Boolean);
+    expect(schemaModules.length, "anti-vacuity: schemas/ modules scanned").toBeGreaterThan(1);
     const paths = [
-      "apps/web/src/server/api-v1/schemas.ts",
+      ...schemaModules,
       "apps/web/src/server/api-v1/openapi.ts",
       "apps/web/src/server/api-v1/http.ts",
       "apps/web/src/lib/rule-errors.ts",

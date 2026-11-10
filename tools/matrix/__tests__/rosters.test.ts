@@ -31,7 +31,7 @@ import { ROSTER_MAX, RosterTooLarge, SIDE_SIZE_FOUND, SIDE_SIZE_ROUTE, lineupFor
 import { entrantKindFor, resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "../lib/variants.ts";
 import { FakeLeagueDriver } from "./fake-driver.ts";
-import { wireCodeFor } from "./product-text.ts";
+import { schemasText, wireCodeFor } from "./product-text.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const read = (rel: string) => readFileSync(resolve(REPO, rel), "utf8");
@@ -188,7 +188,7 @@ describe("rosters — the lineup builder against the engine", () => {
   });
 
   it("ROSTER_MAX is the product's CreateEntrant member cap, read from schemas.ts", () => {
-    const cap = /members: z\.array\(CreateEntrantMemberInput\)\.max\((\d+)\)/.exec(read("apps/web/src/server/api-v1/schemas.ts"))?.[1];
+    const cap = /members: z\.array\(CreateEntrantMemberInput\)\.max\((\d+)\)/.exec(schemasText())?.[1];
     expect(cap, "schemas.ts CreateEntrant no longer caps members in the expected shape").toBeDefined();
     expect(ROSTER_MAX).toBe(Number(cap));
   });

@@ -30,7 +30,7 @@ import { describe, expect, it } from "vitest";
 // The PRODUCT schema, imported so the fake's key set below is checked against
 // its source of truth instead of against a second hand-copy of the same list
 // (R05). Same import `board.test.ts` already uses for its own drift guards.
-import { ScheduleConfig, DivisionStatus } from "../../../../apps/web/src/server/api-v1/schemas.ts";
+import { ScheduleConfig, DivisionStatus } from "../../../../apps/web/src/server/api-v1/schemas/index.ts";
 import { checkBoard } from "../checker.ts";
 import { BenchHttpError, type RawResult, type RequestOptions, type Session } from "../http.ts";
 import type { SeedTransport } from "../seed.ts";

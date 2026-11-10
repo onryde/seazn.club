@@ -7,7 +7,7 @@ import type { RawResult, Session } from "../../bench/lib/http.ts";
 import { HttpDriver, REQUEST_TIMEOUT_MS, TEMPLATE_VISIBILITY, type Transport } from "../lib/driver/http-driver.ts";
 import { DESK_PHASES, DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, nextMatchFixtureId, voidTargetOf } from "../lib/driver/types.ts";
 import { START } from "../lib/streams/types.ts";
-import { nextMatchStartedText, wireCodeFor } from "./product-text.ts";
+import { nextMatchStartedText, schemasText, wireCodeFor } from "./product-text.ts";
 
 interface Call { path: string; method: string; body: unknown; cookies: number }
 function fake(replies: ((c: Call) => RawResult | undefined)[]): { t: Transport; calls: Call[] } {
@@ -59,7 +59,6 @@ describe("HttpDriver — org pinning (Review Focus 4)", () => {
 // (api-v1/schemas.ts:1205-1226) — ids and the applied visibility, no org id and
 // no sport — so the driver reads the competition, division and stages back.
 describe("HttpDriver — createFromTemplate (W1-driving Task 13)", () => {
-  const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
   const answer = (over: Record<string, unknown> = {}) => ({ competitionId: "c9", slug: "box-league", visibility: "public", divisions: [{ id: "d9", stages: [{ id: "s1", fixtureCount: 0 }] }], templateKey: "box-league", templateVersion: 1, ...over });
   const division = { id: "d9", slug: "main", sport_key: "badminton", variant_key: "short", config: { bestOf: 3 } };
   const comp = (over: Record<string, unknown> = {}) => ({ id: "c9", slug: "box-league", org_id: "org-1", visibility: "public", ...over });
@@ -71,7 +70,7 @@ describe("HttpDriver — createFromTemplate (W1-driving Task 13)", () => {
   ];
 
   it("the visibility it expects is the product's default for an omitted one (schemas.ts CreateFromTemplate)", () => {
-    const text = readFileSync(resolve(REPO_ROOT, "apps/web/src/server/api-v1/schemas.ts"), "utf8");
+    const text = schemasText();
     const block = text.slice(text.indexOf("export const CreateFromTemplate"), text.indexOf("export type CreateFromTemplate"));
     expect(block).toContain(`visibility: Visibility.default("${TEMPLATE_VISIBILITY}")`);
   });
@@ -1088,7 +1087,7 @@ describe("HttpDriver — divisionPhase (W1d Task 14, item 15c)", () => {
   it("the void and the dating are the product's: core.void is a kernel core event, and PATCH /fixtures/:id takes scheduled_at as an offset datetime or null", () => {
     // (app half, owner ruling 2026-10-30 option A) The pin that core.void is a kernel core event read packages/engine/src/core/events.ts:
     // it is the engine half, in onryde/seazn.club.engine's test/http-driver.test.ts. This half pins the product's dating.
-    const schemas = product("apps/web/src/server/api-v1/schemas.ts");
+    const schemas = schemasText();
     const block = schemas.slice(schemas.indexOf("export const PatchFixture"), schemas.indexOf("export type PatchFixture"));
     expect(block).toContain("scheduled_at: z.iso.datetime({ offset: true }).nullable(),");
     // The instant it sends parses as that schema's offset datetime: an ISO string ending in Z.

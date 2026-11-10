@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { CreateStages } from "../../../apps/web/src/server/api-v1/schemas.ts";
+import { CreateStages } from "../../../apps/web/src/server/api-v1/schemas/index.ts";
 import { API_ONLY_ROWS, ROW_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { expectedGate } from "../lib/format-gates-copy.ts";
 import {
