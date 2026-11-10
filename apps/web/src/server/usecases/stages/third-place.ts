@@ -100,7 +100,7 @@ export async function patchKnockoutStage(
         // X-TP-1: a root bracket's field is the active roster (the same count `refuseFormatTooSmall` reads).
         const [{ n }] = await tx<{ n: number }[]>`
           select count(*)::int as n from entrants where division_id = ${stage.division_id} and status in ('registered', 'confirmed')`;
-        if (!thirdPlaceOffered(n)) throw knockoutRefusal("KO_THIRD_PLACE_TOO_FEW", { entrants: n });
+        if (!thirdPlaceOffered(n)) throw knockoutRefusal("KO_THIRD_PLACE_TOO_FEW", { entrants: n, stageId });
       }
       await refuseBrokenDependentCuts(tx, stage, playoff);
 

@@ -701,9 +701,9 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
       await sql`update entrants set status = ${departed} where id = ${a.away_entrant_id}`;
       await playBadminton(s.auth, a.id, true);
       const voided = await fixtureRow(thirdId);
-      expect([voided.status, voided.outcome, voided.home_entrant_id, voided.away_entrant_id], `${departed}: rig — both loser feeds dead: the third-place line is void`).toEqual([
-        "abandoned",
-        null,
+      expect([voided.status, voided.outcome, voided.home_entrant_id, voided.away_entrant_id], `${departed}: rig — both loser feeds dead through departure: the third-place line is a departure double walkover (B4 M-1, X-TP-7), not a void`).toEqual([
+        "forfeited",
+        { kind: "double_walkover" },
         null,
         null,
       ]);
@@ -733,7 +733,7 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     expect(checked).toBe(DEPARTED_STATUSES.size);
   }, 120_000);
 
-  it("R-1 consequence: BOTH semis lost by departed entrants — both third-place seats are departure-dead, a line that feeds nothing stays open (X-WD-4/D19, as a final does), and the stage still completes on its final", async () => {
+  it("R-1 consequence: BOTH semis lost by departed entrants — both third-place seats are departure-dead, so the third-place line is a departure double walkover (B4 M-1, X-TP-7: 3rd vacant; a FINAL feeds nothing and stays open for W4's vacant title, a third-place line does not), and the stage still completes on its final", async () => {
     // single-sport: badminton. Before R-1 a departed loser's seat was dead but unstamped, so this line was VOIDED; the
     // stamp makes both seats departures, which is X-WD-4's "every side withdrew" — and D19 writes no double walkover on
     // a line with no next match. Bracket completion ranks an unplayed third-place line by the fallback (bracketRanks).
@@ -746,9 +746,9 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
       await playBadminton(s.auth, sf.id, true);
     }
     const third = await fixtureRow(a.loser_to_fixture);
-    expect([third.status, third.outcome, labelOf(third, 1), labelOf(third, 2)], "both seats stamped dead; nothing written on the line").toEqual([
-      "scheduled",
-      null,
+    expect([third.status, third.outcome, labelOf(third, 1), labelOf(third, 2)], "both seats stamped dead; the line is a double walkover, written as a bye is").toEqual([
+      "forfeited",
+      { kind: "double_walkover" },
       BYE_KEY,
       BYE_KEY,
     ]);

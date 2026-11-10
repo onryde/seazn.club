@@ -295,7 +295,7 @@ test.describe("X-TP-2 the organiser picks Play-off match in the builder and the 
     }
   };
 
-  test("builder Play-off -> Start -> semi-finals -> the -3p line -> places 1, 2, 3, 4, and the public page lists the third-place line", async ({ page, request }) => {
+  test("builder Play-off -> Start -> semi-finals -> the -3p line -> places 1, 2, 3, 4, and the stage's control reads only", async ({ page, request }) => {
     test.setTimeout(240_000);
     const org = await activeOrg(page);
     const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W4 B builder ${TAG}`, visibility: "public" });
@@ -353,6 +353,7 @@ test.describe("X-TP-2 the organiser picks Play-off match in the builder and the 
     expect(done.data!.events.find((e) => e.type === "stage_completed")!.places!.map((p) => p.rank), "3rd and 4th are decided by the match").toEqual([1, 2, 3, 4]);
 
     await page.goto(`/o/${org.slug}/c/${comp.data!.slug}/d/${divSlug}?tab=fixtures`);
-    await expect(page.getByText("3rd", { exact: true }).first(), "the third-place line carries its own round code").toBeAttached();
+    // The stage has begun: the organiser's page reads the control read-only (X-TP-6), whatever it was set to.
+    await expect(page.getByTestId("stage-third-place-choice")).toHaveAttribute("data-read-only", "");
   });
 });
