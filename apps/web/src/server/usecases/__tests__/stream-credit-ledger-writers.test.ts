@@ -31,7 +31,7 @@ import {
 import { STREAM_HISTORY_KINDS } from "../stream-credit-history";
 
 const WRITER_FILE = "server/usecases/stream-credits.ts";
-const SESSIONS_FILE = "server/usecases/stream-sessions.ts";
+const SESSIONS_FILE = "server/usecases/stream-sessions/apply.ts";   // the use-case's refund_credit effect handler lives in the apply module
 const DOMAIN_FILE = "server/relay/domain/session.ts";
 
 describe("the scanners see the evasions (W9) — each run on a synthetic source", () => {

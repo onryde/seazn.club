@@ -1,5 +1,5 @@
 // A23 (lane C amendments, OWNER 2026-09-28): the provider adapter is Fly-specific and the application layer must not be.
-// `usecases/stream-sessions.ts` used to import `createFailedFrom` from `runner-fly.ts` — Fly's error classification
+// `usecases/stream-sessions.ts` (now the folder `usecases/stream-sessions/`) used to import `createFailedFrom` from `runner-fly.ts` — Fly's error classification
 // inside the application layer, i.e. a second provider would have had to be taught to throw Fly's error type. The port
 // (`ports.ts`) now declares ONE provider-neutral create failure, `RunnerCreateError`, and this guard keeps the adapter's
 // vocabulary on its own side of it: no file under `server/usecases/**` or `server/relay/domain/**` may import the Fly
@@ -55,7 +55,7 @@ describe("A23 + m2: the application layer and the domain never import a provider
     const files = GUARDED.flatMap(walk);
     const names = files.map((f) => relative(SERVER, f));
     expect(files.length, "the walk read nothing").toBeGreaterThan(0);
-    expect(names).toContain(join("usecases", "stream-sessions.ts"));      // the file that leaked Fly (A23)
+    expect(names).toContain(join("usecases", "stream-sessions", "apply.ts"));      // the module that holds the code that leaked Fly (A23: the create failure)
     expect(names).toContain(join("usecases", "relay-sweep.ts"));          // the file that leaked Cloudflare (m2)
     expect(names).toContain(join("usecases", "__tests__", "relay-sweep.test.ts"));   // …and its test, which read the same constant
     expect(names).toContain(join("relay", "domain", "runner.ts"));        // the domain's half of the walk is not empty either

@@ -125,7 +125,7 @@ const LEDGER: Record<string, [file: string, words: string]> = {
   // PB2 item 2 + fix round 1 (a): the ONE start seam — the organiser's Go live, the phone's start and the automatic start
   // all come through it — so no NEW stream starts by any path; reads and Stop never pass here. The HTTP 402 of the
   // organiser's door is witnessed in routes.test.ts ("PB2 over HTTP: on a FROZEN competition a Go live is 402").
-  "stream-sessions.ts#startBroadcast": [
+  "stream-sessions/start.ts#startBroadcast": [
     "server/usecases/__tests__/stream-auto.test.ts",
     "Match Day PB2 (a): a billing-frozen competition starts no new stream",
   ],
