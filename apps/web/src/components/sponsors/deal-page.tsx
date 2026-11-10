@@ -110,7 +110,7 @@ export function DealPageBody(props: DealPageBodyProps) {
   // A competition's end date is a calendar day, not an instant: read it at noon UTC in UTC so no zone moves it.
   const calendarDay = (ymd: string) => fmtPublicDate(locale, "UTC", `${ymd}T12:00:00Z`, DATE);
   const scopeName = (competitionId: string | null) =>
-    competitionId ? (competitions.find((c) => c.id === competitionId)?.name ?? "…") : msg("sponsors.scopeAll");
+    competitionId ? (competitions.find((c) => c.id === competitionId)?.name ?? msg("sponsors.dealSheet.scopeUnknown")) : msg("sponsors.scopeAll");
   const join = (...parts: (string | null)[]) => parts.filter((p): p is string => Boolean(p)).join(" · ");
 
   const complimentary = deal.payment_method === "complimentary";

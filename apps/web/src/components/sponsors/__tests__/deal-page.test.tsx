@@ -594,6 +594,23 @@ describe("the Deal block: package and tier, scope, payment, the invoice email, t
     expect(fact(html({ deal: KESTREL }), "scope")).toBe("All competitions");
   });
 
+  it("a deal on a competition the page was not handed names it as this package's competition, never a bare ellipsis (4 places counted)", () => {
+    // `orgCompetitions` hands the page at most 100 competitions, so a deal can point at one the list does not hold.
+    const lost = deal({ ...MARLOW, ends_at: null, competition_id: "c-not-in-the-list" });
+    let checked = 0;
+    expect(fact(html({ deal: lost }), "scope")).toBe("This package's competition");
+    checked++;
+    for (const markup of [html({ deal: lost }), html({ deal: lost, competitionFinished: true })]) {
+      expect(stepWords(markup, "ends")![1], "the ends step names the competition in words").toContain("This package's competition");
+      expect(textOfMarkup(markup), "no placeholder ellipsis anywhere on the page").not.toContain("\u2026");
+      checked++;
+    }
+    // the same page for a competition the list DOES hold still reads the competition's own name
+    expect(fact(html({ deal: deal({ ...MARLOW, ends_at: null, competition_id: "c-season" }) }), "scope")).toBe("Season 2026/27");
+    checked++;
+    expect(checked).toBe(4);
+  });
+
   it("the three go-live rules read as the Add deal sheet names them, each differently (3 checked)", () => {
     const WANT: [SponsorDeal["go_live"], string][] = [["on_payment", "When paid"], ["immediate", "Straight away"], ["on_approval", "After I approve"]];
     let checked = 0;
