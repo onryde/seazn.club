@@ -327,7 +327,8 @@ export async function seedNextStage(auth: AuthCtx, completedStageId: string): Pr
     for (const s of progression.sources) {
       const source = await resolveProgressionSource(tx, next, s.stage);
       resolvedSources.push(source);
-      shapes.push(await sourceShapeOf(tx, source));
+      // W4 T8 (m4): the take rides along, so an `on_complete` `firstLosses` take sizes its slots from the source's first-loss field.
+      shapes.push(await sourceShapeOf(tx, source, s.take));
       // ANY OTHER named source must be complete NOW too, or this throws
       // STAGE_NOT_READY — caught by completeStage's existing best-effort
       // try/catch (Decision 4), same as today's single-source contract.

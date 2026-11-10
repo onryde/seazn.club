@@ -336,6 +336,8 @@ describe.skipIf(!HAS_DB)("every in-scope format template is generated as the eng
     }
     // X-TP-5 (engine 5.0.0): a third-place match needs two real semi-finals. The field each knockout stage is drawn at is the
     // engine's own arithmetic (`fieldOf`); below four entrants Generate must refuse it, and a combo that does not is a defect.
+    // A first-loss plate is exempt: its field is unknown day one, and a third-place match under two real semi-finals is DROPPED at
+    // its proposal, never refused (RB4-E5/T4, RB4-P6) - witnessed in plate-first-loss.test.ts ("a plate configured with a third-place match", k=2, 3, 4).
     const thirdFields = drafts.flatMap((d, at) => (d.kind === "knockout" && d.config.thirdPlace === true && !takesFirstLosses(d) ? [{ at, k: fieldOf(drafts, at, n) }] : []));
     const refusedAt = thirdFields.find((t) => t.k < 4);
     if (refusedAt !== undefined) {

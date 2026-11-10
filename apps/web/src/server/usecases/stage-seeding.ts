@@ -10,6 +10,7 @@ import "server-only";
 // generation/proposal flows) goes through this file rather than querying
 // `pools`/`standings_snapshots`/`fixtures` directly, so the two callers can
 // never drift apart.
+import { refuseFirstLossesFromDoubleElim } from "./stored-progression";
 import { createHash } from "node:crypto";
 import type postgres from "postgres";
 import {
@@ -324,6 +325,9 @@ export async function validateStageProgression(
       source.kind === "knockout" && ((preset?.config ?? (await sourceConfigOf(tx, source as { id: string }))).thirdPlace === true),
     );
   }
+  // W4 T8 (I3): a `firstLosses` take from a double-elimination source is refused HERE, at save, by name - its field has no single
+  // "first loss" round, and the plate card and the propose path would only meet it later.
+  refuseFirstLossesFromDoubleElim(progression as ProgressionSpec, sourceKinds);
   try {
     validateProgressionAgainstShapes(shapes, progression, target.kind);
   } catch (err) {

@@ -342,6 +342,16 @@ export function ProgressionPanel({
       </section>
     );
   }
+  if (!proposal && plate?.state === "refused") {
+    return (
+      <section className="card mb-6 border-red-200 p-4" data-progression-state="plate-refused">
+        <h3 className="text-sm font-semibold text-slate-800">{stageName}</h3>
+        <p className="mt-2 text-sm text-red-700" role="alert">
+          {seedingErrorMessage(locale, "SEEDING_FIRSTLOSSES_DE_SOURCE", msg("plate.tooSmall"))}
+        </p>
+      </section>
+    );
+  }
   if (!proposal && plate?.state === "too_small") {
     return (
       <section className="card mb-6 p-4" data-progression-state="plate-too-small">

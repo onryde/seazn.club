@@ -139,13 +139,17 @@ export async function writeProgressionSetupFixtures(tx: Tx, stageId: string): Pr
   // score-dependent formats (swiss/americano/ladder) have no seed-order
   // shape to draw before results exist, same restriction the plain path
   // has; `generate()` covers every bracket/table kind that DOES have one.
-  const gen: SeededGenFixture[] = generate(stage.kind, stage.config, entrants, poolIds);
+  // RB4-E5 / RB4-T4: a third-place match needs two real semi-finals. A plate's field is unknown up front, so a plate that asks for one
+  // and draws under four is drawn WITHOUT it (never refused: RB4-P6); `computeSeedProposal` records the drop in the proposal.
+  const isFirstLossPlate = progression.sources.some((s) => s.take.some((t) => t.kind === "firstLosses"));
+  const config = isFirstLossPlate && stage.config.thirdPlace === true && placed.length < 4 ? { ...stage.config, thirdPlace: false } : stage.config;
+  const gen: SeededGenFixture[] = generate(stage.kind, config, entrants, poolIds);
 
   // W4 T8 (X-PL-7): a plate's lines are sized by its field, and the field can change size before the plate starts (a corrected
   // round-two result, a withdrawal). Lines laid out for another size are not this bracket: they go, and the right ones are
   // written below. Never over a started line (`stageHasStarted`: a plate that has begun stands as it is drawn). Keyed on the
   // lines' own keys, so a re-run at the SAME size (an un-fill putting labels back) keeps every row and its time and court.
-  if (progression.sources.some((s) => s.take.some((t) => t.kind === "firstLosses")) && existing.length > 0) {
+  if (isFirstLossPlate && existing.length > 0) {
     const wanted = new Set(gen.map((g) => g.extKey));
     const stale = existing.some((e) => e.ext_key === null || !wanted.has(e.ext_key)) || gen.some((g) => !existing.some((e) => e.ext_key === g.extKey));
     if (stale && !(await stageHasStarted(tx, stageId))) {

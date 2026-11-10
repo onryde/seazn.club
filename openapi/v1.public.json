@@ -26976,6 +26976,10 @@
                             },
                             "standingsHash": {
                               "type": "string"
+                            },
+                            "thirdPlaceDropped": {
+                              "type": "boolean",
+                              "const": true
                             }
                           },
                           "required": [
@@ -27030,7 +27034,8 @@
                           "reason": "example"
                         }
                       ],
-                      "standingsHash": "example"
+                      "standingsHash": "example",
+                      "thirdPlaceDropped": true
                     }
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"

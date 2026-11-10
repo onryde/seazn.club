@@ -306,7 +306,7 @@ type PlateTake = Record<string, unknown>[];
 const LEGACY_TAKE: PlateTake = [{ kind: "roundLosers", round: 1, count: 4 }];
 
 /** A division of 8 whose plate carries the LEGACY take (what the template wrote before X-PL-6), generated day-one: three TBD placeholders. */
-async function plateRig(opts: { generate?: boolean; take?: PlateTake } = {}): Promise<PlateRig> {
+async function plateRig(opts: { generate?: boolean; take?: PlateTake; timing?: "setup" | "on_complete" } = {}): Promise<PlateRig> {
   const { auth } = await seedOrg("pro");
   const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "V498 " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
   const div = await createDivision(auth, comp.id, { name: "Open", slug: "open-" + randomUUID().slice(0, 6), sport_key: "badminton", variant_key: "bwf", config: {} });
@@ -320,7 +320,7 @@ async function plateRig(opts: { generate?: boolean; take?: PlateTake } = {}): Pr
       kind: "knockout",
       name: "Plate",
       config: {},
-      progression: { sources: [{ stage: "previous", take: opts.take ?? LEGACY_TAKE }], placement: "rank_order", timing: "setup" },
+      progression: { sources: [{ stage: "previous", take: opts.take ?? LEGACY_TAKE }], placement: "rank_order", timing: opts.timing ?? "setup" },
     }),
   );
   if (opts.generate !== false) {
@@ -364,6 +364,17 @@ describe.runIf(HAS_DB)("W4 delta V498: unplayed plates take every first loss", (
     expect(v.second.rewritten, "a second run changes nothing").toBe(0);
     expect(v.second.deleted).toBe(0);
     expect(v.again).toEqual(v.after.prog);
+  }, 240_000);
+
+  it("review m5: an on_complete roundLosers stage is NOT rewritten (only a setup plate draws from a first-loss field)", async () => {
+    const r = await plateRig({ generate: false, timing: "on_complete" });
+    const v = await rolledBack(async (tx, notices) => {
+      const before = await takeOfPlate(tx, r.stageId);
+      await runPlate(tx, notices);
+      return { before, after: await takeOfPlate(tx, r.stageId) };
+    });
+    expect(v.before.sources[0]!.take, "premise: the legacy take").toEqual(LEGACY_TAKE);
+    expect(v.after, "an on_complete stage keeps its roundLosers").toEqual(v.before);
   }, 240_000);
 
   it("X-PL-6 empty case: a plate not generated yet (no fixtures) is rewritten too, and deletes nothing", async () => {
