@@ -209,7 +209,7 @@ describe("currentQualifiedFromStages — topNPerGroup / bestNth (groups_ko, A3 f
 });
 
 describe("X-PL-6 — the plate sends no Top N, and a stored firstLosses plate reads back no count", () => {
-  const base = { swissRounds: 5, poolCount: 2, legs: 1, standingsCarry: "none" as const };
+  const base = { swissRounds: 5, poolCount: 2, legs: 1, standingsCarry: "none" as const, thirdPlace: "shared" as const };
 
   it("formatStagesFor('ko_plate') sends take [firstLosses] whatever the Top N knob says (today: roundLosers count 4) — and qualifying_main keeps its 4", () => {
     let checked = 0;
@@ -234,7 +234,7 @@ describe("X-PL-6 — the plate sends no Top N, and a stored firstLosses plate re
 });
 
 describe("F6 — standings carry on settings applyStructure path", () => {
-  const knobs = { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 };
+  const knobs = { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1, thirdPlace: "shared" as const };
 
   it("formatStagesFor with points sets carry on the progression stage", () => {
     const drafts = formatStagesFor("league_ko", { ...knobs, standingsCarry: "points" });

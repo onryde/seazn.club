@@ -21,7 +21,9 @@ import { LegsChoice } from "@/components/v2/legs-choice";
 import { doubleElimFormatReason } from "@/lib/feature-copy";
 import { FORMAT_BOUNDS } from "@/lib/format-bounds";
 import { STAGE_TEMPLATES, type StageDraft, type StandingsCarry } from "@/lib/format-templates";
-import type { FormatKnobsShown, FormatPickerView } from "@/lib/division-builder/format-choice";
+import { thirdPlaceOffer, type FormatKnobsShown, type FormatPickerView } from "@/lib/division-builder/format-choice";
+import type { ThirdPlaceMode } from "@/lib/third-place";
+import { ThirdPlaceChoice } from "@/components/v2/third-place-choice";
 import type { MessageKey } from "@/lib/messages";
 import { swissRoundsGuidanceLine } from "@/lib/swiss-rounds";
 import type { ViewerPlan } from "@/lib/viewer-plan";
@@ -62,6 +64,9 @@ export interface FormatKnobsState {
   setLegs: Dispatch<SetStateAction<number>>;
   standingsCarry: StandingsCarry;
   setStandingsCarry: Dispatch<SetStateAction<StandingsCarry>>;
+  /** B4 T10 (X-TP-2): Shared by default (`thirdPlaceModeOf`'s one default), the division's stored choice in the dialog. */
+  thirdPlace: ThirdPlaceMode;
+  setThirdPlace: Dispatch<SetStateAction<ThirdPlaceMode>>;
   showAll: boolean;
   setShowAll: Dispatch<SetStateAction<boolean>>;
 }
@@ -73,6 +78,7 @@ export interface FormatKnobsInit {
   poolCount?: number;
   legs?: number;
   standingsCarry?: StandingsCarry;
+  thirdPlace?: ThirdPlaceMode;
 }
 
 /** The picker's state, opening at `init` (the builder: the templates' defaults; the dialog: the division's stages as
@@ -84,6 +90,7 @@ export function useFormatKnobs(init: FormatKnobsInit = {}): FormatKnobsState {
   const [poolCount, setPoolCount] = useState(init.poolCount ?? 2);
   const [legs, setLegs] = useState(init.legs ?? 1);
   const [standingsCarry, setStandingsCarry] = useState<StandingsCarry>(init.standingsCarry ?? "none");
+  const [thirdPlace, setThirdPlace] = useState<ThirdPlaceMode>(init.thirdPlace ?? "shared");
   const [showAll, setShowAll] = useState(false);
   return {
     templatePicked,
@@ -98,6 +105,8 @@ export function useFormatKnobs(init: FormatKnobsInit = {}): FormatKnobsState {
     setLegs,
     standingsCarry,
     setStandingsCarry,
+    thirdPlace,
+    setThirdPlace,
     showAll,
     setShowAll,
   };
@@ -281,6 +290,15 @@ export function formatPickerFields({
               className="input min-h-11"
             />
           </label>
+        )}
+        {shown.thirdPlace && (
+          <div className="sm:col-span-2">
+            <ThirdPlaceChoice
+              value={knobs.thirdPlace}
+              onChange={knobs.setThirdPlace}
+              offer={thirdPlaceOffer(template, knobs, guidanceEntrants)}
+            />
+          </div>
         )}
         {shown.carry && (
           <label className="block">

@@ -10,6 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FORMAT_BOUNDS } from "@/lib/format-bounds";
 import { STAGE_TEMPLATES, type StandingsCarry } from "@/lib/format-templates";
+import type { ThirdPlaceMode } from "@/lib/third-place";
 import { formatStagesFor } from "@/lib/division-builder/format-choice";
 import { KNOCKOUT_REFUSALS } from "@/lib/knockout-refusals";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -77,12 +78,12 @@ describe("X-SD-9 byes and slotOrder stay API-only", () => {
     // pickers read), legs both ways, and every standings carry.
     const span = (b: { min: number; max: number }) => [...new Set([b.min, Math.round((b.min + b.max) / 2), b.max])];
     const CARRIES: StandingsCarry[] = ["none", "points", "full"];
-    const combos: { qualified: number; swissRounds: number; poolCount: number; legs: number; standingsCarry: StandingsCarry }[] = [];
+    const combos: { qualified: number; swissRounds: number; poolCount: number; legs: number; standingsCarry: StandingsCarry; thirdPlace: ThirdPlaceMode }[] = [];
     for (const qualified of span(FORMAT_BOUNDS.qualify))
       for (const swissRounds of span(FORMAT_BOUNDS.swissRounds))
         for (const poolCount of span(FORMAT_BOUNDS.pools))
           for (const legs of span(FORMAT_BOUNDS.legs))
-            for (const standingsCarry of CARRIES) combos.push({ qualified, swissRounds, poolCount, legs, standingsCarry });
+            for (const standingsCarry of CARRIES) combos.push({ qualified, swissRounds, poolCount, legs, standingsCarry, thirdPlace: "shared" });
 
     let bodies = 0;
     let stages = 0;
