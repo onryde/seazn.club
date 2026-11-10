@@ -401,15 +401,17 @@ export function StandingsTable({
                         </span>
                       );
                     })()}
-                    {places?.get(row.entrantId)?.shared ? (
-                      <span
-                        data-testid={`standings-shared-place-${row.entrantId}`}
-                        className="ml-2 shrink-0 rounded-full bg-orange-100 px-2 py-0.5 align-middle text-[10px] font-medium text-orange-900"
-                      >
-                        {msg(SHARED_PLACE_MSG_KEY)}
-                      </span>
-                    ) : null}
                   </span>
+                  {/* X-TP-3: below `md` the chip sits on a line of its own under the name (beside it, a 43-character name
+                      was squeezed to four letters at 320); from `md` it stays inline after the name. */}
+                  {places?.get(row.entrantId)?.shared ? (
+                    <span
+                      data-testid={`standings-shared-place-${row.entrantId}`}
+                      className="inline-block whitespace-nowrap rounded-full bg-orange-100 px-2 py-0.5 align-middle text-[10px] font-medium text-orange-900 max-md:mt-1 md:ml-2"
+                    >
+                      {msg(SHARED_PLACE_MSG_KEY)}
+                    </span>
+                  ) : null}
                   {/* W3 app-B T3: a Swiss bye / late join, on a line of its own under the name. Nothing for an unmarked row. */}
                   <StandingsRowMarkers
                     markers={rowMarkers(swissFacts?.[row.entrantId], msg)}
