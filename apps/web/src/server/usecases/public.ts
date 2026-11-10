@@ -73,6 +73,7 @@ import {
   type CompetitionHubDocT,
 } from "@/server/public-site/competition-hub-schema";
 import { routes } from "@/lib/routes";
+import { isoDateTime } from "@/lib/public-site";
 import { clientIp } from "@/lib/client-ip";
 
 // s-maxage=30 at the edge (doc 08 §6); Redis mirrors that window.
@@ -546,11 +547,15 @@ export async function publicSchedule(
         | "status"
         | "outcome"
         | "summary"
+        | "is_final"
+        | "third_place"
+        | "joint_winners_at"
       >[]
     >`
       select v.id, v.stage_id, v.pool_id, v.round_no, v.seq_in_round, v.home_entrant_id,
              v.away_entrant_id, v.home_slot_label, v.away_slot_label,
-             v.scheduled_at, v.venue, v.court_label, v.status, v.outcome, v.summary
+             v.scheduled_at, v.venue, v.court_label, v.status, v.outcome, v.summary,
+             v.is_final, v.third_place, v.joint_winners_at
       from public_fixtures_v v
       left join stages st on st.id = v.stage_id
       where v.division_id = ${division.id}
@@ -560,7 +565,11 @@ export async function publicSchedule(
     // null for both. venue_name/court_name (derived, disambiguated via
     // public-site/data.ts's withCourtVenueNames — same helper the HTML
     // schedule page uses) are what a consumer should render instead.
-    const fixtures = await withCourtVenueNames(rawFixtures);
+    const fixtures = (await withCourtVenueNames(rawFixtures)).map((f) => ({
+      ...f,
+      // W4 (V499; review m-8): a joint-winners final reads `decided` with a null outcome - this says why.
+      joint_winners_at: f.joint_winners_at == null ? null : isoDateTime(f.joint_winners_at),
+    }));
     return { division_id: division.id, fixtures };
   });
 }
@@ -838,19 +847,24 @@ export async function publicFixture(fixtureId: string): Promise<unknown> {
         | "summary"
         | "last_seq"
         | "stream_url"
+        | "is_final"
+        | "third_place"
+        | "joint_winners_at"
       >[]
     >`
       select id, division_id, stage_id, pool_id, round_no, seq_in_round, home_entrant_id,
              away_entrant_id, home_slot_label, away_slot_label,
              scheduled_at, venue, court_label, status, outcome,
-             summary, last_seq, stream_url
+             summary, last_seq, stream_url, is_final, third_place, joint_winners_at
       from public_fixtures_v where id = ${fixtureId} limit 1`;
     if (!row) throw new HttpError(404, "fixture not found");
     // P9 cutover (finding #2): same treatment as publicSchedule above —
     // venue_name/court_name replace the frozen venue/court_label. The context
     // needs only the row's own ids, so it reads alongside (T4).
+    // W4 B5b (review I-2): the poll carries the final's own facts (`is_final`, `third_place`, `joint_winners_at`), or its
+    // `match_centre` has no "Joint winners" line and the first settled poll wipes the one the page was served with.
     const [fixture, ctx] = await Promise.all([
-      withCourtVenueName(row),
+      withCourtVenueName({ ...row, joint_winners_at: row.joint_winners_at == null ? null : isoDateTime(row.joint_winners_at) }),
       loadFixtureMatchCentreCtx(row.division_id, row.stage_id),
     ]);
     // Task 9 — the match-centre view model, built by the SAME loader
