@@ -11,6 +11,15 @@ import { stagesSource } from "./stages-source.ts";
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const read = (p: string) => readFileSync(resolve(REPO, p), "utf8");
 
+/** api-v1/schemas/ is a folder of modules (index.ts is only the barrel): a whole-file text scan of "the schemas" reads
+ *  them all, concatenated. Fewer than two modules is a failure (anti-vacuity), never a quiet empty scan. */
+export function schemasText(): string {
+  const dir = resolve(REPO, "apps/web/src/server/api-v1/schemas");
+  const modules = readdirSync(dir).filter((f) => f.endsWith(".ts")).sort();
+  if (modules.length < 2) throw new Error(`product-text: ${dir} holds ${modules.length} module(s) - the schemas scan would be vacuous`);
+  return modules.map((f) => readFileSync(resolve(dir, f), "utf8")).join("\n");
+}
+
 /** T8-R5 (I-R1), pure: the entrant_members primary key's name and the unique
  *  violation a second (entrant, person) member row raises, as Postgres words
  *  it. V213 declares the key with no `constraint <name>`, so Postgres names it
@@ -215,7 +224,7 @@ export function fixtureStatusesFrom(schemas: string, declaration: string | null)
 /** fixtureStatusesFrom over the repo's own files. */
 export function fixtureStatusesText(): string[] {
   const decl = resolve(REPO, "apps/web/src/lib/fixture-status.ts");
-  return fixtureStatusesFrom(read("apps/web/src/server/api-v1/schemas.ts"), existsSync(decl) ? readFileSync(decl, "utf8") : null);
+  return fixtureStatusesFrom(schemasText(), existsSync(decl) ? readFileSync(decl, "utf8") : null);
 }
 
 export interface NextMatchText {

@@ -55,7 +55,7 @@ describe("lib/sponsor-tiers — the client-safe tier authority (F10)", () => {
     const SRC = join(import.meta.dirname, "../..");
     // The API schema is the one exemption: openapi-gen cannot follow `@/` imports, so its enum stays a literal, and
     // server/sponsors/__tests__/migration.test.ts pins it to SPONSOR_TIERS.
-    const EXEMPT = new Set(["lib/sponsor-tiers.ts", "server/api-v1/schemas.ts"]);
+    const EXEMPT = new Set(["lib/sponsor-tiers.ts", "server/api-v1/schemas/sponsors.ts"]);
     const LIST = /["']title["']\s*,\s*["']gold["']\s*,\s*["']silver["']\s*,\s*["']partner["']/;
     const files: string[] = [];
     const walk = (dir: string) => {

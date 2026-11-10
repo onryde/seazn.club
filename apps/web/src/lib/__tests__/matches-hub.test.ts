@@ -91,7 +91,7 @@
 // change to the ladder it sits in — this one was verified equivalent in review,
 // and then falsified by the very commit that added `match_day`.
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { describe, expect, it } from "vitest";
 import {
@@ -123,7 +123,12 @@ describe("bucketFixture — every status the wire schema declares has a bucket",
     // Anchored on "forfeited", which occurs exactly once in that file (verified
     // 2026-09-08). Reading the source rather than importing keeps this pure
     // lib test free of `schemas.ts`'s engine import graph.
-    const src = readFileSync(new URL("../../server/api-v1/schemas.ts", import.meta.url), "utf8");
+    // api-v1/schemas/ is a folder of modules now (index.ts is only the barrel): the scan reads every module, so a
+    // second, drifting copy cannot hide in any of them.
+    const dir = new URL("../../server/api-v1/schemas/", import.meta.url);
+    const modules = readdirSync(dir).filter((f) => f.endsWith(".ts"));
+    expect(modules.length, "anti-vacuity: schemas/ modules scanned").toBeGreaterThan(1);
+    const src = modules.map((f) => readFileSync(new URL(f, dir), "utf8")).join("\n");
     // W2a: the Fixture status enum is `z.enum(FIXTURE_STATUSES)`; a literal list
     // holding "forfeited" anywhere else in the file would be a second, drifting copy.
     expect(src.split("\n").filter((l) => /status: z\.enum\(FIXTURE_STATUSES\)/.test(l))).toHaveLength(1);

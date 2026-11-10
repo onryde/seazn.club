@@ -19,7 +19,7 @@
 // Anti-vacuity (TEST-STRATEGY.md): every sweep reports what it checked and zero checked is a FAILURE; the scanner is itself
 // tested on fixtures that must pass AND on their mutants that must fail; and the guards were mutated by hand (below).
 // Single-sport reason: no sport is involved - these are SQL statements.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -79,7 +79,8 @@ const BOTH_SIDES: readonly BothSides[] = [
 /** The only production files that may name a camera-report column. Paths under `src`. */
 const CAMERA_REPORT_FILES = ["server/usecases/external-play/camera-report.ts", "server/usecases/external-play/room.ts"] as const;
 /** The OpenAPI document and the schemas that build it describe the wire, not the column (§5.6.3). */
-const WIRE_DESCRIBERS = ["server/api-v1/openapi.ts", "server/api-v1/schemas.ts"] as const;
+const SCHEMA_MODULES = readdirSync(join(SRC, "server/api-v1/schemas")).filter((f) => f.endsWith(".ts")).map((f) => `server/api-v1/schemas/${f}`);
+const WIRE_DESCRIBERS = ["server/api-v1/openapi.ts", ...SCHEMA_MODULES] as const;
 
 // ─── The scanner, on fixtures ────────────────────────────────────────────────────────────────────────────────────────
 
@@ -344,6 +345,7 @@ describe("nothing but the pill reads the camera report (§5.6.3)", () => {
     const named = filesNamingCameraReport(SRC, []).named;
     for (const f of CAMERA_REPORT_FILES) expect(named, `${f} names a camera-report column`).toContain(f);
     const present = new Set(productionSources(SRC));
+    expect(SCHEMA_MODULES.length, "anti-vacuity: schemas/ modules excluded as wire describers").toBeGreaterThan(1);
     for (const f of WIRE_DESCRIBERS) expect(present.has(f), `${f} exists`).toBe(true);
   });
 

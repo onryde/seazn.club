@@ -14,7 +14,7 @@
 // `hubLiveness` is what makes it unreachable. That claim is not asserted, it
 // is ENUMERATED — over the whole wire status vocabulary, read out of
 // `schemas.ts` so a status added to the wire reds this file.
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { byeAward } from "@/lib/fixture-bye";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -157,7 +157,10 @@ const STATUSES = FIXTURE_STATUSES;
 
 describe("hubLiveness — the ONE liveness derivation", () => {
   it("the STATUSES list still matches the enum in server/api-v1/schemas.ts (FIXTURE_STATUSES)", () => {
-    const src = readFileSync(new URL("../../api-v1/schemas.ts", import.meta.url), "utf8");
+    const dir = new URL("../../api-v1/schemas/", import.meta.url);
+    const modules = readdirSync(dir).filter((f) => f.endsWith(".ts"));
+    expect(modules.length, "anti-vacuity: schemas/ modules scanned").toBeGreaterThan(1);
+    const src = modules.map((f) => readFileSync(new URL(f, dir), "utf8")).join("\n");
     expect(src.split("\n").filter((l) => /status: z\.enum\(FIXTURE_STATUSES\)/.test(l))).toHaveLength(1);
     expect(src.split("\n").filter((l) => /status: z\.enum\(\[.*"forfeited".*\]\)/.test(l))).toEqual([]);
   });
