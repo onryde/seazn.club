@@ -33,7 +33,7 @@ vi.mock("@/lib/stripe", () => ({
 }));
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: vi.fn(async () => ({ ok: true, providerId: "re_test" })) }));
 // `deferred` is Next's `after()`: here a queue the test flushes itself, so "a bust was deferred" is observable, not a race.
-const h = vi.hoisted(() => ({ tails: [] as (() => Promise<unknown>)[], fired: [] as string[], deskFault: false, hook: null as null | (() => Promise<void>) }));
+const h = vi.hoisted(() => ({ tails: [] as (() => Promise<unknown>)[], fired: [] as string[], deskFault: false, hook: null as null | ((competitionId?: string) => Promise<void>) }));
 vi.mock("next/server", async (orig) => ({
   ...(await orig<typeof import("next/server")>()),
   after: (task: () => Promise<unknown>) => {
@@ -56,7 +56,7 @@ vi.mock("../competition-desk", async (orig) => {
     getCompetitionDesk: async (...args: Parameters<typeof real.getCompetitionDesk>) => {
       if (h.deskFault) throw new Error("the desk cannot be read");
       const desk = await real.getCompetitionDesk(...args);
-      await h.hook?.(); // "another writer acts between the sweep's read and its lock", when a test sets one
+      await h.hook?.(args[1]); // "another writer acts between the sweep's read and its lock", when a test sets one
       return desk;
     },
   };
@@ -1017,5 +1017,36 @@ describe.skipIf(!HAS_DB)("finishedPackageCompetitions: the finished competitions
     await compPkg(o, await competition(o, "finished"));
     h.deskFault = true;
     expect(await finishedPackageCompetitions(o.orgId)).toEqual([]);
+  });
+
+  it("batch G New-4: the desks are read in parallel - every one in flight at once - and the answer keeps the id order though they finish in reverse", async () => {
+    const o = await org();
+    const ids = [await competition(o, "finished"), await competition(o, "in_progress"), await competition(o, "finished")];
+    for (const id of ids) await compPkg(o, id);
+    const sorted = [...ids].sort(); // the read's own order (`order by competition_id`): lowercase hex uuids sort the same in JS
+    const N = ids.length;
+    const parked = new Map<string, () => void>();
+    const seen: string[] = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    // A barrier: each desk read parks until all N are parked, then they are let go in REVERSE id order, staggered, so they
+    // finish in reverse. A sequential read never brings the rest, so each parked read lets itself go after 300ms, alone.
+    h.hook = async (competitionId) => {
+      seen.push(competitionId!);
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise<void>((resolve) => {
+        parked.set(competitionId!, resolve);
+        if (parked.size === N) [...sorted].reverse().forEach((id, i) => setTimeout(() => parked.get(id)?.(), i * 25));
+        else setTimeout(resolve, 300);
+      });
+      inFlight--;
+    };
+    const got = await finishedPackageCompetitions(o.orgId);
+    h.hook = null;
+    expect(seen.sort(), "one desk read per competition").toEqual(sorted);
+    expect(maxInFlight, "every desk read in flight at once").toBe(N);
+    expect(got, "the finished two, in id order - not in the order their reads finished").toEqual(sorted.filter((id) => id !== ids[1]));
+    expect(got).toHaveLength(2);
   });
 });

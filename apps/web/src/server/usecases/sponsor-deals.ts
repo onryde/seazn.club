@@ -593,11 +593,10 @@ export async function finishedPackageCompetitions(orgId: string, now: Date = new
     select distinct competition_id from sponsor_packages
      where active and competition_id is not null
      order by competition_id`);
-  const finished: string[] = [];
-  for (const { competition_id } of rows) {
-    if ((await competitionPhaseOf(orgId, competition_id, now)) === "finished") finished.push(competition_id);
-  }
-  return finished;
+  // One desk read per distinct competition, all at once (batch G New-4): the page waits on the slowest, not on their sum. The
+  // set is bounded by the org's own active packages. The answer keeps the read's id order, whatever order the desks finish in.
+  const phases = await Promise.all(rows.map(({ competition_id }) => competitionPhaseOf(orgId, competition_id, now)));
+  return rows.filter((_, i) => phases[i] === "finished").map((r) => r.competition_id);
 }
 
 /** A competition's derived phase for the sweep (`isCompetitionFinished`). A read that throws is `unreadable` — never
