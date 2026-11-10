@@ -127,18 +127,27 @@ describe("*_enc columns never leave their owners", () => {
 // stripped first — config.ts's sample-cap note names fixture_stream_samples in prose, and
 // prose is not SQL. (Claims 1–3 do NOT strip: a comment naming an *_enc column is still a leak.)
 const CAPTURE_TABLES = /\b(fixture_stream_events|fixture_stream_samples|stream_provider_calls|stream_storage_snapshots)\b/;
-const CAPTURE_WRITERS = ["server/relay/telemetry.ts", "server/usecases/relay-sweep.ts", "server/usecases/stream-sessions.ts"];
+// stream-sessions is a folder (it was one file, `stream-sessions.ts`): the writers are the modules whose CODE names a capture table.
+const STREAM_SESSIONS_WRITERS = [
+  "server/usecases/stream-sessions/heartbeat.ts",
+  "server/usecases/stream-sessions/ingest-poll.ts",
+  "server/usecases/stream-sessions/persist.ts",
+  "server/usecases/stream-sessions/phone-lost.ts",
+];
+const CAPTURE_WRITERS = ["server/relay/telemetry.ts", "server/usecases/relay-sweep.ts", ...STREAM_SESSIONS_WRITERS];
 const stripComments = (src: string): string =>
   src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
 
 describe("capture tables are named only by their writers (claim 4)", () => {
-  it("outside __tests__, only telemetry.ts, relay-sweep.ts and stream-sessions.ts name a capture table — and telemetry.ts does (C14)", () => {
+  it("outside __tests__, only telemetry.ts, relay-sweep.ts and the stream-sessions modules name a capture table — and telemetry.ts does (C14)", () => {
     const naming = walk(SRC)
       .map((f) => relative(SRC, f))
       .filter((f) => !f.split("/").includes("__tests__"))
       .filter((f) => CAPTURE_TABLES.test(stripComments(readFileSync(join(SRC, f), "utf8"))));
     // The positive pair: the scan sees the one writer that must match (an empty scan would pass the next line).
     expect(naming).toContain("server/relay/telemetry.ts");
+    // …and each stream-sessions module on the list still names one, so a stale entry cannot widen the allowlist unseen.
+    for (const w of STREAM_SESSIONS_WRITERS) expect(naming, `${w} names a capture table`).toContain(w);
     expect(naming.filter((f) => !CAPTURE_WRITERS.includes(f))).toEqual([]);
   });
 });

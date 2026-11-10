@@ -241,7 +241,7 @@ describe("privacy — what the YouTube section says about the other halves of th
     for (const name of ["Cloudflare", "Fly.io"]) expect(list, `${name} is on the sub-processors list`).toContain(name);
     expect(list, "Cloudflare's listed purpose covers the live-stream ingest").toContain("live-stream video ingest");
     // The key is handed to Cloudflare as a live-input output (addOutput) and the session effect reads it for no other port.
-    const effect = src("../../../server/usecases/stream-sessions.ts");
+    const effect = src("../../../server/usecases/stream-sessions/apply.ts");   // the add_output effect lives in the apply module
     expect(effect).toContain("deps.drivers.ingest.addOutput(inputId, target");
     // R8 (B7 re-review m2): this used to pin a code COMMENT. The claim is "the destination key goes to Cloudflare and never to the Fly
     // Machine", so it is held by the three pieces of code that decide it, each sliced and checked on its own.
@@ -250,8 +250,9 @@ describe("privacy — what the YouTube section says about the other halves of th
     expect(addOutput.length, "anti-vacuity: the add_output effect was found").toBeGreaterThan(200);
     expect(addOutput, "the add_output effect reads the destination's key").toContain("readSessionDestination(tx, await destinationRowOf(tx, current.id))");
     //  (2) the facts the Machine is given for a composed session carry the PROGRAMME input's credential, never a destination read;
-    const factsStart = effect.indexOf("export async function sessionFactsForJob(");
-    const facts = effect.slice(factsStart, effect.indexOf("export async function fillReplayUrl(", factsStart));
+    const jobFacts = src("../../../server/usecases/stream-sessions/job-facts.ts");
+    const factsStart = jobFacts.indexOf("export async function sessionFactsForJob(");
+    const facts = jobFacts.slice(factsStart);   // sessionFactsForJob is the last declaration of its module (it used to end where fillReplayUrl began)
     expect(facts.length, "anti-vacuity: sessionFactsForJob was found").toBeGreaterThan(1000);
     const composed = facts.slice(facts.indexOf("const fixtureId = s.fixtureId;"));
     expect(composed.length, "anti-vacuity: the composed branch was found").toBeGreaterThan(500);
