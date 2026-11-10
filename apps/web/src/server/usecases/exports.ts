@@ -535,7 +535,7 @@ export async function buildDivisionDocModel(
             stageKind: snapshot.stage_kind,
             nameOf: (id) => nameById.get(id) ?? id,
             badgeOf: (id) => badgeById.get(id),
-            msg: (k) => t(publicDict, k),
+            msg: (k, v) => t(publicDict, k, v),
           });
           const heading = table.pool_id === null ? undefined : `${table.stage_name} — ${poolLabel(publicDict, poolKey.get(table.pool_id))}`;
           return sections.map((s) => (heading === undefined ? s : { heading, ...s }));

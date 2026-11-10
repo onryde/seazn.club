@@ -3,15 +3,15 @@
 // runs here inside a rolled-back transaction on a dedicated client (it acts on the whole shared test DB; a committed run would
 // rewrite sibling suites' rows). Every assertion reads this test's own stage.
 //
-// Seeding: a real bracket is played and completed through the usecases (so the stored snapshot is 4.0's: the ENGINE's own places,
-// the oracle), then its snapshot is put back to the 3.x shape the delta exists for - strict 1..n, the semi-final loser of the
+// Seeding: a real bracket is played and completed through the usecases (so the stored snapshot is W4's (engine 5+): the ENGINE's own places,
+// the oracle), then its snapshot is put back to the pre-W4 shape the delta exists for - strict 1..n, the semi-final loser of the
 // larger seed 4th (RB4-S7 / Q1) - inside the rolled-back transaction.
 // single-sport: badminton - the delta reads rank, outcome and round columns, no sport field.
 import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import postgres from "postgres";
 import { afterAll, describe, expect, it } from "vitest";
-import { connectionOptions } from "@/lib/db";
+import { connectionOptions, sql as appSql } from "@/lib/db";
 import { bracketPlaceLabels } from "@/lib/bracket-places";
 import { playBadminton, rowsOf } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 import { seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
@@ -22,6 +22,7 @@ import { createEntrants } from "@/server/usecases/entrants";
 import { seedOrg } from "@/server/usecases/__tests__/_seed";
 import { CreateStage } from "@/server/api-v1/schemas";
 import { randomUUID } from "node:crypto";
+import { bracketProgression, type RankInput } from "../../../../../packages/reference/src/index.ts";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const DELTAS = resolve(__dirname, "../../../../../db/migration/deltas");
@@ -92,7 +93,7 @@ const snapOf = async (tx: Tx, stageId: string): Promise<Snap> =>
   (await tx<Snap[]>`select rows, previous_rows, computed_through_seq::text, updated_at from standings_snapshots where stage_id = ${stageId} and pool_id is null`)[0]!;
 const ranksOf = (s: Snap) => Object.fromEntries(s.rows.map((r) => [r.entrantId, r.rank]));
 
-/** The 3.x shape: the semi-final loser of the larger seed ranked 4th, the rest as 4.0 stored them (3.x was strict 1..n). */
+/** The pre-W4 shape: the semi-final loser of the larger seed ranked 4th, the rest as W4 stored them (pre-W4 was strict 1..n). */
 async function downgradeTo3x(tx: Tx, f: Finished): Promise<void> {
   const seeds = await tx<{ id: string; seed: number }[]>`select id, seed from entrants where id in ${tx(f.losers)}`;
   const worse = [...seeds].sort((a, b) => b.seed - a.seed)[0]!.id;
@@ -120,7 +121,7 @@ describe.runIf(HAS_DB)("W4 delta V496: finished knockouts re-rank to a shared 3r
       const again = await snapOf(tx, f.stageId);
       return { before, first, after, second, again };
     });
-    expect(Object.values(ranksOf(v.before)).sort(), "premise: the seeded snapshot is the 3.x strict shape").toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(Object.values(ranksOf(v.before)).sort(), "premise: the seeded snapshot is the pre-W4 strict shape").toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(v.first.changed, "at least this stage").toBeGreaterThanOrEqual(1);
     const want = Object.fromEntries(f.places.map((p) => [p.entrantId, p.rank])); // R9: the engine is the oracle
     expect(ranksOf(v.after)).toEqual(want);
@@ -160,6 +161,33 @@ describe.runIf(HAS_DB)("W4 delta V496: finished knockouts re-rank to a shared 3r
     });
     expect(v.after).toEqual(v.before);
   }, 480_000);
+
+  it("X-FR-5 a VOIDED third-place line shares 3rd (m1: the engine ranks a voided play-off level, X-TP-3) - the delta re-ranks it", async () => {
+    const shared = await finished(8);
+    const f = await finished(8, true);
+    const v = await rolledBack(async (tx, notices) => {
+      // the play-off never ran: its line holds nobody and has no outcome; the snapshot is the pre-W4 seed split
+      await tx`update fixtures set home_entrant_id = null, away_entrant_id = null, outcome = null, status = 'scheduled' where stage_id = ${f.stageId} and (third_place or ext_key like '%-3p')`;
+      const before = await snapOf(tx, f.stageId);
+      await run(tx, notices);
+      return { before, after: await snapOf(tx, f.stageId) };
+    });
+    expect(Object.values(ranksOf(v.before)).sort(), "premise: the snapshot is the 3rd/4th split").toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    // R9: the engine's own places for a no-play-off 8-draw are the oracle for the SHAPE; the two 3rds are this bracket's semi-final losers
+    expect(Object.values(ranksOf(v.after)).sort()).toEqual(shared.places.map((p) => p.rank).sort());
+    expect(v.after.rows.filter((r) => r.rank === 3).map((r) => r.entrantId).sort()).toEqual(f.losers);
+  }, 480_000);
+
+  it("X-FR-5 a semi-final settled by an abandon award (V432: abandoned counts as decided) re-ranks too (m2)", async () => {
+    const f = await finished(4);
+    const v = await rolledBack(async (tx, notices) => {
+      await downgradeTo3x(tx, f);
+      await tx`update fixtures set status = 'abandoned' where id = (select id from fixtures where stage_id = ${f.stageId} and round_no = (select max(round_no) - 1 from fixtures where stage_id = ${f.stageId}) order by seq_in_round limit 1)`;
+      await run(tx, notices);
+      return snapOf(tx, f.stageId);
+    });
+    expect(Object.values(ranksOf(v)).sort()).toEqual([1, 2, 3, 3]);
+  }, 240_000);
 
   it("X-FR-5 a snapshot already shared (a completion after the bump) is skipped: the empty arm", async () => {
     const f = await finished(8);
@@ -206,7 +234,7 @@ describe.runIf(HAS_DB)("W4 delta V496: finished knockouts re-rank to a shared 3r
       await run(tx, notices);
       return { before, after: await snapOf(tx, f.stageId) };
     });
-    expect(Object.values(ranksOf(v.before)).sort(), "premise: still the strict 3.x shape").toEqual([1, 2, 3, 4]);
+    expect(Object.values(ranksOf(v.before)).sort(), "premise: still the strict pre-W4 shape").toEqual([1, 2, 3, 4]);
     expect(v.after).toEqual(v.before);
   }, 240_000);
 
@@ -432,4 +460,85 @@ describe.runIf(HAS_DB)("W4 delta V498: unplayed plates take every first loss", (
     const line = v.run.notices.find((m) => /of them with a court or a time/.test(m));
     expect(Number(line?.match(/(\d+) of them with a court or a time/)?.[1]), "the scheduled placeholder is counted aloud").toBeGreaterThanOrEqual(1);
   }, 240_000);
+// B6a fix round 1 (review m4; brief Step 2c): the V496 OUTPUT against the bracket-progression ORACLE (@seazn/reference, written from
+// the rulebook, never from the engine or this delta). A finished knockout with no third-place fixture is downgraded to the 3.x shape,
+// the delta runs, and the stored ranks must equal the oracle's places for the same result (RB4-T2 shared 3rd, RB4-R2 strict below).
+// Reuses this file's `finished` / `downgradeTo3x` / `run` / `rolledBack`; the oracle is imported by relative path (apps/web does not
+// depend on @seazn/reference).
+describe.runIf(HAS_DB)("W4 delta V496 vs the rulebook oracle (RB4-T2, R2)", () => {
+  it("a 4-draw and an 8-draw finished with no third-place fixture: after V496 the stored ranks equal the oracle's (counted)", async () => {
+    let checked = 0;
+    for (const n of [4, 8]) {
+      const f = await finished(n);
+      const rows = await rowsOf(f.stageId);
+      const seeds = new Map((await appSql<{ id: string; seed: number | null }[]>`select id, seed from entrants where id in ${appSql(f.places.map((p) => p.entrantId))}`).map((e) => [e.id, e.seed] as const));
+      const played = rows.filter((r) => r.outcome?.winner && r.ext_key !== null && !r.ext_key.endsWith("-3p"));
+      const loserOf = (r: (typeof played)[number]) => (r.outcome!.winner === r.home_entrant_id ? r.away_entrant_id! : r.home_entrant_id!);
+      const last = Math.max(...played.map((r) => r.round_no));
+      const final = played.find((r) => r.round_no === last)!; // one fixture in the last round: no third-place fixture here
+      const input: RankInput = {
+        thirdPlace: "shared",
+        title: { kind: "champion", champion: final.outcome!.winner!, runnerUp: loserOf(final) },
+        semiLosers: played.filter((r) => r.round_no === last - 1).map(loserOf),
+        others: played.filter((r) => r.round_no < last - 1).map((r) => ({ entrant: loserOf(r), eliminatedRound: r.round_no, seed: seeds.get(loserOf(r)) ?? null })),
+      };
+      const want = Object.fromEntries(bracketProgression.ranks(input).map((p) => [p.entrant, p.rank]));
+      const v = await rolledBack(async (tx, notices) => {
+        await downgradeTo3x(tx, f);
+        await run(tx, notices);
+        return snapOf(tx, f.stageId);
+      });
+      expect(ranksOf(v), `n=${n}`).toEqual(want);
+      expect(Object.keys(want).length, `n=${n} covers every entrant`).toBe(n);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  }, 480_000);
+});
+
+// ---- B5a Task 12: V499 (fixtures.joint_winners_at) ----
+// single-sport: badminton - the delta reads status/outcome/seat columns, no sport field.
+const JOINT_NAME = /^V\d+__w4_fixture_joint_winners\.sql$/;
+const jointFiles = readdirSync(DELTAS).filter((f) => JOINT_NAME.test(f));
+const jointText = jointFiles.length === 1 ? readFileSync(resolve(DELTAS, jointFiles[0]!), "utf8") : "";
+
+describe("W4 delta V499: joint winners column", () => {
+  it("exactly one delta carries the name; it adds the column and the check and re-creates the public view, no data change", () => {
+    expect(jointFiles, "one delta named *__w4_fixture_joint_winners.sql").toHaveLength(1);
+    expect(jointText).toMatch(/add column if not exists joint_winners_at timestamptz null/);
+    expect(jointText).toMatch(/create or replace view public_fixtures_v/);
+    expect(jointText, "the new column is APPENDED last").toMatch(/f\.joint_winners_at\s+from fixtures f/);
+    expect(jointText, "no update/delete: no data change").not.toMatch(/^\s*(update|delete)\s/im);
+  });
+
+  it.skipIf(!HAS_DB)("the check: a declaration needs decided + no outcome + both seats; a plain row is untouched; the view carries the column", async () => {
+    const s = await seedBracket({ sport: "badminton", variant: "bwf", stageKind: "knockout", entrants: 2 });
+    const id = s.fixtureIds[0]!;
+    let checked = 0;
+    await rolledBack(async (tx) => {
+      const [none] = await tx<{ n: number }[]>`select count(*)::int as n from fixtures where joint_winners_at is not null and stage_id = ${s.stageId}`;
+      expect(none!.n, "no data change: nothing in the freshly seeded stage carries it before a declaration").toBe(0);
+      checked++;
+      // a scheduled fixture: refused
+      await expect(tx.savepoint(async (sp) => sp`update fixtures set joint_winners_at = now() where id = ${id}`)).rejects.toMatchObject({ code: "23514" });
+      checked++;
+      // decided but holding an outcome: refused (the pinned negative)
+      await expect(
+        tx.savepoint(async (sp) => sp`update fixtures set status = 'decided', outcome = ${sp.json({ kind: "win", winner: null } as never)}, joint_winners_at = now() where id = ${id}`),
+      ).rejects.toMatchObject({ code: "23514" });
+      checked++;
+      // decided, no outcome, one seat missing: refused
+      await expect(
+        tx.savepoint(async (sp) => sp`update fixtures set status = 'decided', outcome = null, away_entrant_id = null, joint_winners_at = now() where id = ${id}`),
+      ).rejects.toMatchObject({ code: "23514" });
+      checked++;
+      // the shape the declaration writes: accepted, and the view (public competition) selects it
+      await tx`update competitions set visibility = 'public' where id = ${s.competitionId}`;
+      await tx`update fixtures set status = 'decided', outcome = null, joint_winners_at = now() where id = ${id}`;
+      const [row] = await tx<{ joint_winners_at: Date | null }[]>`select joint_winners_at from public_fixtures_v where id = ${id}`;
+      expect(row?.joint_winners_at, "the public view selects the column").toBeInstanceOf(Date);
+      checked++;
+    });
+    expect(checked, "anti-vacuity: five assertions ran").toBe(5);
+  }, 120_000);
 });

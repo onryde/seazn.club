@@ -29,6 +29,7 @@ const PLAN_CODES = [
   "KO_REDRAW_WOULD_CLEAR_SETUP",
   // B2 fix round 2 (item 2): Start reconciles in place only; a redraw is Update draw's, refused at Start by name.
   "KO_START_NEEDS_UPDATE_DRAW",
+  "KO_START_NEEDS_UPDATE_DRAW_FROZEN",
   // T9 (X-LE-2): a fed knockout never takes a late player; the refusal names the stage that fills it.
   "KO_LATE_ENTRY_FED_STAGE",
   // T10 (X-LE-6): round 1 has no slot left; Rebuild is offered (details.can_rebuild) only when nothing has started.
@@ -50,6 +51,17 @@ const PLAN_CODES = [
   "PAGE_PLAYOFF_NEEDS_TABLE_SOURCE",
   // T8 (X-PL-2): a plate proposal on a field under two first-match losers.
   "PLATE_FIELD_TOO_SMALL",
+  // B5a T11 (X-CH-3): a reinstated finalist would re-open a vacant title whose stage already seeded another.
+  "VACANT_TITLE_ALREADY_SEEDED",
+  // B5a T12 (X-CH-4, X-CH-6): "Declare joint winners" and its Undo.
+  "JOINT_WINNERS_NOT_A_FINAL",
+  "JOINT_WINNERS_FINAL_DECIDED",
+  "JOINT_WINNERS_NOT_DECLARED",
+  // B5a fix round 1 (I-3): the append door's refusal on a final ruled joint.
+  "FINAL_JOINT_WINNERS_DECLARED",
+  // B5a fix round 1 (m-3, m-4): declare over two departed finalists; Undo with a finalist departed since.
+  "JOINT_WINNERS_FINALISTS_OUT",
+  "JOINT_WINNERS_UNDO_FINALIST_OUT",
 ] as const;
 
 const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;

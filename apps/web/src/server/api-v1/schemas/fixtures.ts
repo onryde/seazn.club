@@ -395,3 +395,17 @@ export const FixtureStream = z.object({
   stream_url: z.string().nullable(),
 });
 export type FixtureStream = z.infer<typeof FixtureStream>;
+
+// W4 T12 (X-CH-4): "Declare joint winners" and its Undo.
+export const JointWinnersResult = z.object({
+  fixture_id: z.string().uuid(),
+  /** The declaration settled the stage's last open line, so the stage completed with it. */
+  stage_completed: z.boolean(),
+});
+export type JointWinnersResult = z.infer<typeof JointWinnersResult>;
+export const JointWinnersUndoResult = z.object({
+  fixture_id: z.string().uuid(),
+  /** The status the final holds again (what it held before the declaration). */
+  status: z.string(),
+});
+export type JointWinnersUndoResult = z.infer<typeof JointWinnersUndoResult>;

@@ -30,6 +30,7 @@ export type KnockoutRefusalCode =
   // B2 fix round 2 (item 2): Start reconciles a root knockout in place only; a change that needs the bracket drawn again is
   // Update draw's (its notice says what moved), so Start refuses it by name and names the button.
   | "KO_START_NEEDS_UPDATE_DRAW"
+  | "KO_START_NEEDS_UPDATE_DRAW_FROZEN"
   // T9 (X-LE-2): a late player asked into a knockout an earlier stage fills (`{stage}`: that stage's name) — a fed
   // bracket never takes one; its field is the source's.
   | "KO_LATE_ENTRY_FED_STAGE"
@@ -58,7 +59,22 @@ export type KnockoutRefusalCode =
   | "STEPLADDER_NEEDS_TABLE_SOURCE"
   | "PAGE_PLAYOFF_NEEDS_TABLE_SOURCE"
   // T8 (X-PL-2): a plate proposal asked of a field under two first-match losers; the plate completes by name instead.
-  | "PLATE_FIELD_TOO_SMALL";
+  | "PLATE_FIELD_TOO_SMALL"
+  // B5a T11 (X-CH-3; T12): reversing a vacant title (a Reinstate) or undoing joint winners on a stage whose completion already
+  // filled another stage's draw - its ranks are not this stage's to change any more.
+  | "VACANT_TITLE_ALREADY_SEEDED"
+  // B5a T12 (X-CH-4, X-CH-6): "Declare joint winners" on a fixture that is no deciding final.
+  | "JOINT_WINNERS_NOT_A_FINAL"
+  // B5a T12: ... on a final that already holds a result (a winner, or a decided/walkover outcome).
+  | "JOINT_WINNERS_FINAL_DECIDED"
+  // B5a T12: Undo on a final that holds no joint-winners declaration.
+  | "JOINT_WINNERS_NOT_DECLARED"
+  // B5a fix round 1 (I-3): a score event, a pad Undo or a settle on a final ruled joint (Undo the declaration first).
+  | "FINAL_JOINT_WINNERS_DECLARED"
+  // B5a fix round 1 (m-3): declare on a final whose seated finalists have both withdrawn (the title is vacant, X-CH-3).
+  | "JOINT_WINNERS_FINALISTS_OUT"
+  // B5a fix round 1 (m-4): Undo while a finalist has withdrawn since the declaration (it would seat a departed finalist).
+  | "JOINT_WINNERS_UNDO_FINALIST_OUT";
 
 export interface KnockoutRefusalRow {
   status: 400 | 409 | 422;
@@ -107,6 +123,13 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
     status: 409,
     en: "The draw needs updating — press Update draw first.",
     key: "knockout.refusal.KO_START_NEEDS_UPDATE_DRAW",
+  },
+  // W4 B6a fix round 1 (review I2): Start on a FROZEN board that needs a redraw. Update draw is refused while frozen, so the plain
+  // copy would name a remedy that fails; this one says unfreeze first (as knockout.lateEntry.unfreezeFirst does).
+  KO_START_NEEDS_UPDATE_DRAW_FROZEN: {
+    status: 409,
+    en: "The draw needs updating, and the schedule is frozen: unfreeze it on the Schedule page, press Update draw, then Start.",
+    key: "knockout.refusal.KO_START_NEEDS_UPDATE_DRAW_FROZEN",
   },
   KO_LATE_ENTRY_FED_STAGE: {
     status: 422,
@@ -164,6 +187,41 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
     status: 422,
     en: "A page playoff needs a table to seed from. Add a league, groups or a Swiss stage first.",
     key: "knockout.refusal.PAGE_PLAYOFF_NEEDS_TABLE_SOURCE",
+  },
+  VACANT_TITLE_ALREADY_SEEDED: {
+    status: 409,
+    en: "This result already seeded the next stage. Correct it there first.",
+    key: "knockout.refusal.VACANT_TITLE_ALREADY_SEEDED",
+  },
+  JOINT_WINNERS_NOT_A_FINAL: {
+    status: 422,
+    en: "Joint winners can only be declared on a final.",
+    key: "knockout.refusal.JOINT_WINNERS_NOT_A_FINAL",
+  },
+  JOINT_WINNERS_FINAL_DECIDED: {
+    status: 409,
+    en: "This final already has a result.",
+    key: "knockout.refusal.JOINT_WINNERS_FINAL_DECIDED",
+  },
+  JOINT_WINNERS_NOT_DECLARED: {
+    status: 409,
+    en: "This final has no joint winners to undo.",
+    key: "knockout.refusal.JOINT_WINNERS_NOT_DECLARED",
+  },
+  FINAL_JOINT_WINNERS_DECLARED: {
+    status: 409,
+    en: "Joint winners were declared on this final. Undo them first.",
+    key: "knockout.refusal.FINAL_JOINT_WINNERS_DECLARED",
+  },
+  JOINT_WINNERS_FINALISTS_OUT: {
+    status: 409,
+    en: "Both finalists have withdrawn, so this title is vacant. Reinstate one to rule on it.",
+    key: "knockout.refusal.JOINT_WINNERS_FINALISTS_OUT",
+  },
+  JOINT_WINNERS_UNDO_FINALIST_OUT: {
+    status: 409,
+    en: "A finalist has withdrawn since. Reinstate them before undoing joint winners, or leave the joint title.",
+    key: "knockout.refusal.JOINT_WINNERS_UNDO_FINALIST_OUT",
   },
 };
 

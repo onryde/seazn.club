@@ -376,6 +376,10 @@ export interface GenerateOptions {
    *  place, and a redraw is refused (KO_START_NEEDS_UPDATE_DRAW) instead of run. Never sent by a client: `startDivision`
    *  sets it. */
   inPlaceOnly?: boolean;
+  /** W4 app B, Task 20 (C27): Start on a FROZEN board. A newcomer (an active entrant in no first-round seat) is not placed -
+   *  placing is a schedule write the freeze binds - but MARKED WAITING (`entrants.knockout_waiting_stage_id`), as the late-entry
+   *  path marks an arrival; a departed entrant is reconciled as on any board. Only with `inPlaceOnly`; never sent by a client. */
+  waitNewcomers?: boolean;
   /** W4 B2 fix round 2 (item 5): the stage's setup in SEALED tables (streams, YouTube broadcasts), read on a privileged
    *  connection by `generateStageFixturesWrite`'s prelude — a knockout redraw refuses over it as over the rest. Never sent
    *  by a client. */

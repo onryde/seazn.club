@@ -200,6 +200,9 @@ const RULES: RouteRule[] = [
   { method: "GET", path: "/fixtures/:id/audit", scope: "read", pin: "fixture" },
   { method: "POST", path: "/fixtures/:id/events", scope: "score", pin: "fixture" },
   { method: "POST", path: "/fixtures/:id/finalize", scope: "manage", pin: "fixture" },
+  // W4 T12 (X-CH-4): ruling a final joint winners (and undoing it) is the organiser's - a `manage` key.
+  { method: "POST", path: "/fixtures/:id/joint-winners", scope: "manage", pin: "fixture" },
+  { method: "DELETE", path: "/fixtures/:id/joint-winners", scope: "manage", pin: "fixture" },
   { method: "GET", path: "/fixtures/:id/lineups/:entrantId", scope: "read", pin: "fixture" },
   { method: "PUT", path: "/fixtures/:id/lineups/:entrantId", scope: "manage", pin: "fixture" },
   { method: "PATCH", path: "/fixtures/:id/officials", scope: "manage", pin: "fixture" },
