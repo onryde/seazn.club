@@ -193,7 +193,7 @@ describe.skipIf(!HAS_DB)("X-TP-1 third place is not offered below 4", () => {
       const r = await rig(sport, 3);
       const err = await refusal(patchKnockoutStage(r.auth, r.stageId, { thirdPlace: "playoff" }));
       expect([err.status, err.code, err.message]).toEqual([422, "KO_THIRD_PLACE_TOO_FEW", "A third-place match needs at least 4 entrants. Use Shared third place instead."]);
-      expect(err.extra).toMatchObject({ entrants: 3 });
+      expect(err.extra).toMatchObject({ entrants: 3, stageId: r.stageId });
       expect((await configOf(r.stageId)).thirdPlace, "rolled back").toBeUndefined();
       expect(await lineKeys(r.stageId), "no line written").toEqual(engineBracketRows(3, false).map((x) => x.ext_key).sort());
       expect((await patchKnockoutStage(r.auth, r.stageId, { thirdPlace: "shared" })).regenerated).toBe(false);
@@ -236,7 +236,7 @@ describe.skipIf(!HAS_DB)("X-TP-1 third place is not offered below 4", () => {
       await writeEntrantPatch(r.auth, r.ids[3]!, { status: "withdrawn" });
       const err = await refusal(generateStageFixtures(r.auth, r.stageId));
       expect([err.status, err.code]).toEqual([422, "KO_THIRD_PLACE_TOO_FEW"]);
-      expect(err.extra).toMatchObject({ entrants: 3 });
+      expect(err.extra).toMatchObject({ entrants: 3, stageId: r.stageId });
       // the offered way out: Shared, one tap, then Generate succeeds (the PATCH redraws the three that are left)
       const patched = await patchKnockoutStage(r.auth, r.stageId, { thirdPlace: "shared" });
       expect(patched.thirdPlace).toBe("shared");

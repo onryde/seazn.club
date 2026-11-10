@@ -2762,7 +2762,6 @@
   "thirdPlace.playoffHint": "Los dos semifinalistas eliminados juegan un partido por el tercer puesto.",
   "thirdPlace.tooFewCount": "Esta fase tiene {count} participantes y un partido por el tercer puesto necesita al menos 4.",
   "thirdPlace.dropped": "Partido por el tercer puesto omitido: menos de 2 semifinales",
-  "thirdPlace.saved": "Tercer puesto: {mode}.",
   "jointWinners.action": "Declarar campeones compartidos",
   "jointWinners.confirmTitle": "¿Declarar campeones compartidos?",
   "jointWinners.confirm": "{a} y {b} serán campeones los dos. Puedes deshacerlo.",

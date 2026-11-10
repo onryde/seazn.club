@@ -4,6 +4,7 @@
 //  A. Start tournament — quick-start: generate → sequence-slot → active.
 //  B. Schedule — plan-first: opens the drag-and-drop board (generate + auto
 //     pass live there); publish and start follow from the board.
+import { ThirdPlaceUseShared, tooFewOfferFrom } from "@/components/v2/third-place-use-shared";
 import { useState } from "react";
 import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
@@ -79,6 +80,7 @@ export function LaunchActions({
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tooFew, setTooFew] = useState<{ stageId: string; entrants: number } | null>(null);
   const [paywall, setPaywall] = useState<string | null>(null);
   // Starting PUBLISHES the schedule, so it is refused the two ways publish is
   // (#230 item 2 follow-up), and this is the button the pro and community
@@ -100,6 +102,7 @@ export function LaunchActions({
   async function start(acknowledgeWarnings = false) {
     setBusy(true);
     setError(null);
+    setTooFew(null);
     try {
       const out = await apiV1<{ generated: number }>(`/api/v1/divisions/${divisionId}/start`, {
         method: "POST",
@@ -133,6 +136,12 @@ export function LaunchActions({
         // W3 T11 (X-SW-16): a Swiss with more rounds than its field can pair — the refusal and the field's guidance in
         // the reader's language, never the server's English sentence.
         setError(swissRefusalText(err.code, err.extra, msg, msgPlural));
+      } else if (tooFewOfferFrom(err) !== null) {
+        // B4 fix round 1 (I-2; pick 7A): a play-off stage that fell under four entrants - the count, and the button that
+        // saves Shared on the stage the refusal names and starts again.
+        const offer = tooFewOfferFrom(err)!;
+        setError(msg("thirdPlace.tooFewCount", { count: offer.entrants }));
+        setTooFew(offer);
       } else if (err instanceof ApiV1Error && isKnockoutRefusalCode(err.code)) {
         // W4 B2 fix round 1 (G1): Start reconciles a root knockout drawn before its roster moved, and refuses by name when
         // that would redraw over organiser setup — the knockout table's sentence, in the reader's language.
@@ -169,6 +178,7 @@ export function LaunchActions({
       </Link>
       {paywall && <UpgradeGate feature={paywall} compact viewerPlan={viewerPlan} />}
       {error && <span className="text-xs text-red-600">{error}</span>}
+      {error && tooFew && <ThirdPlaceUseShared stageId={tooFew.stageId} onDone={() => start()} disabled={busy} />}
       {/* Closed BEFORE the POST, not after it: a confirmed start that the
           server then refuses has to land in the gate dialog below, and two
           sheets open at once is not a state this surface has. */}
