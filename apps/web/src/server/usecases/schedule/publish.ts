@@ -15,6 +15,7 @@ import type {
 } from "@/server/api-v1/schemas";
 import { assertNotFrozen, frozenCompetitionIds } from "../entitlement-freeze";
 import {
+  generateStageFixturesTx,
   generateStageFixturesUnpublished,
   refuseFormatTooSmall,
   refuseSwissRoundsAboveMaxAtStart,
@@ -336,9 +337,19 @@ export async function startDivision(
     // newcomer into a bye, a departed entrant's match to a bye. A change that needs the bracket drawn again is refused by
     // name, KO_START_NEEDS_UPDATE_DRAW, and the start with it, before any write: the redraw is Update draw's, whose notice
     // says what moved. So Start deletes no fixture, and its one publish below names every fixture there is. A frozen
-    // board is left as the organiser froze it.
+    // board is handled by the frozen branch below.
     const outcome = await generateStageFixturesUnpublished(auth, pre.firstStage.id, { inPlaceOnly: true });
     generated = outcome.created;
+  } else if (pre.firstStage.roster_drift) {
+    // W4 app B, Task 20 (C27; PO ruling, logged): a FROZEN board. Placing a newcomer is a schedule write the freeze binds, so
+    // Start MARKS them waiting instead (`entrants.knockout_waiting_stage_id`, as the late-entry path marks an arrival - the
+    // desk counts them and the organiser's tap places them once the board is open) and never refuses on their account. A
+    // departed entrant is reconciled exactly as above (in place; a line that needs a redraw is still refused by name). Run
+    // on `generateStageFixturesTx` in this one transaction, NOT through `generateStageFixturesUnpublished`: that entry's
+    // pre-flight refuses a frozen division wholesale. A refusal rolls the marks back with the rest.
+    await withTenant(auth.orgId, (tx) =>
+      generateStageFixturesTx(tx, auth, pre.firstStage.id, { inPlaceOnly: true, waitNewcomers: true }),
+    );
   }
 
   const out = await withTenant(auth.orgId, async (tx) => {
