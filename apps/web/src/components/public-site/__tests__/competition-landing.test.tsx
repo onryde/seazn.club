@@ -335,6 +335,7 @@ describe("CompetitionLanding — only the tabs THIS bundle has a panel for", () 
         rounds: [{ key: "main-1", label: "Final", lane: null, fixtureIds: ["k1"] }],
         drawable: false,
         championFixtureId: null,
+        title: null,
       },
     ],
     leaders: [board("premier", "runs", [leader("p1", "Arjun Mehta", null)])],

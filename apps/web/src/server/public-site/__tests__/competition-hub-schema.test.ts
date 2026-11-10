@@ -215,6 +215,26 @@ describe("CompetitionHubDoc — knockouts", () => {
     expect(issuesOf(broken)).toEqual([{ path: "knockouts.0.championFixtureId", code: "custom" }]);
   });
 
+  it("W4: all three titles parse, and a title with no fixture (or a fixture with no title) is refused at the title", () => {
+    const doc = validDoc() as CompetitionHubDocT;
+    const view = (over: Record<string, unknown>) => ({ ...doc, knockouts: [{ ...doc.knockouts[0]!, ...over }, doc.knockouts[1]!] });
+    let parsed = 0;
+    for (const title of [
+      { kind: "champion", champion: "e1" },
+      { kind: "joint", winners: ["e1", "e2"] },
+      { kind: "vacant" },
+    ]) {
+      expect(issuesOf(view({ title })), JSON.stringify(title)).toEqual([]);
+      parsed++;
+    }
+    expect(parsed).toBe(3);
+    expect(issuesOf(view({ title: null }))).toEqual([{ path: "knockouts.0.title", code: "custom" }]);
+    expect(issuesOf(view({ championFixtureId: null }))).toEqual([{ path: "knockouts.0.title", code: "custom" }]);
+    // A joint title names exactly two winners; a champion names one id.
+    expect(issuesOf(view({ title: { kind: "joint", winners: ["e1"] } })).length).toBeGreaterThan(0);
+    expect(issuesOf(view({ title: { kind: "champion" } })).length).toBeGreaterThan(0);
+  });
+
   it("an empty view is not a view: `rounds` and each round's `fixtureIds` are non-empty", () => {
     const doc = validDoc() as CompetitionHubDocT;
     const noRounds = { ...doc, knockouts: [{ ...doc.knockouts[0]!, rounds: [] }, doc.knockouts[1]!] };

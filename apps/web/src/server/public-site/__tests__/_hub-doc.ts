@@ -258,6 +258,7 @@ export function validHubDoc(): unknown {
         ],
         drawable: true,
         championFixtureId: "f1",
+        title: { kind: "champion", champion: "e1" },
       },
       {
         id: "div-a-de1",
@@ -270,6 +271,7 @@ export function validHubDoc(): unknown {
         rounds: [{ key: "WB-1", label: "Round 1", lane: "WB", fixtureIds: ["f1", "f2"] }],
         drawable: false,
         championFixtureId: null,
+        title: null,
       },
     ],
     info: {

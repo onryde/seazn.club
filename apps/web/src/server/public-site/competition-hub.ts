@@ -96,7 +96,7 @@ import { cachedIfFound } from "./cache-found";
 import { divisionQualification, qualificationFixtures } from "./division-qualification";
 import { buildLeaderBoards, type LeaderDivisionConsent } from "./leaders";
 import { readLeaderRows } from "./public-leaders";
-import { BRACKET_KINDS, BRACKET_SETTLED, bracketChampion, divisionChampion } from "./champion";
+import { BRACKET_KINDS, BRACKET_SETTLED, bracketTitleOf, divisionTitle, titleEntrantIds, type BracketTitleRead } from "./champion";
 import { describeFormat } from "./describe-format";
 import { stageFormatLines } from "./stage-format-lines";
 import type {
@@ -110,6 +110,7 @@ import type {
   LeaderBoardT,
   TableViewT,
   TeamCardT,
+  DivisionTitleWireT,
 } from "./competition-hub-schema";
 import { routes } from "@/lib/routes";
 
@@ -611,7 +612,7 @@ function buildKnockoutView(a: {
     });
   }
 
-  const champion = bracketChampion(a.fixtures);
+  const titled = bracketTitleOf(a.fixtures);
 
   // THE RESET NOBODY OWES leaves the rail (Task 2 fix round 1, ruling 2). Once
   // a champion is crowned, a round made only of CONDITIONAL fixtures that never
@@ -631,7 +632,7 @@ function buildKnockoutView(a: {
   // A reset that has STARTED stays (Task 2 fix round 2): unowed or not, a live
   // match dropped from the rail cannot be reached from it, and the tab opens
   // on a live round first. Liveness is `hubLiveness`'s, the one derivation.
-  const shownRounds = champion
+  const shownRounds = titled
     ? rounds.filter(
         (g) =>
           g.fixtures.some((f) => hubLiveness(f.status).live) ||
@@ -662,8 +663,21 @@ function buildKnockoutView(a: {
       twoSidedBracket(
         a.fixtures.map((f) => ({ id: f.id, round_no: f.round_no, seq_in_round: f.seq_in_round })),
       ).ok,
-    championFixtureId: champion?.fixtureId ?? null,
+    championFixtureId: titled?.fixtureId ?? null,
+    title: titled === null ? null : wireTitle(titled),
   };
+}
+
+/** The engine's title without the fixture id the read carries beside it (the wire has both as separate fields). */
+function wireTitle(t: BracketTitleRead): DivisionTitleWireT {
+  switch (t.kind) {
+    case "champion":
+      return { kind: "champion", champion: t.champion };
+    case "joint":
+      return { kind: "joint", winners: [t.winners[0], t.winners[1]] };
+    case "vacant":
+      return { kind: "vacant" };
+  }
 }
 
 // ------------------------------------------------------------ the document
@@ -946,7 +960,8 @@ export async function loadCompetitionHub(
       });
     }
 
-    const championId = divisionChampion(stages, fixtures, standings);
+    // W4: a joint title flags BOTH finalists' rows; a vacant one flags nobody (`titleEntrantIds`).
+    const championIds = titleEntrantIds(divisionTitle(stages, fixtures, standings));
     // A pool is named from its KEY in the org's locale, never by its stored
     // English name (`lib/pool-label.ts`).
     const poolKey = new Map(pools.map((p) => [p.id, p.key]));
@@ -996,7 +1011,7 @@ export async function loadCompetitionHub(
             entrantNames: names,
             entrantLogos: badges,
             entrantColours: colours,
-            championId,
+            championIds,
             updatedAt: snap.updated_at,
             msg,
             qualification: qualificationFor(stage, snap),

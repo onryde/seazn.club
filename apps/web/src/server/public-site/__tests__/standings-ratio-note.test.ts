@@ -165,7 +165,7 @@ describe("buildTableView — cellNotes, parallel to cells", () => {
     entrantNames: { a: "Alpha", b: "Beta" },
     entrantLogos: {},
     entrantColours: {},
-    championId: null,
+    championIds: [],
     updatedAt: "2026-09-22T00:00:00.000Z",
     msg,
   });

@@ -581,7 +581,8 @@ export interface TableViewInput {
    *  above: a missing key and an explicit null are one thing to the renderer,
    *  which falls through `EntityLogo`'s chain to a neutral tile. */
   entrantColours: Record<string, string | null>;
-  championId: string | null;
+  /** W4: the entrants the division's title crowns — one, a joint pair, or none (vacant). Every one gets the crown. */
+  championIds: readonly string[];
   updatedAt: string;
   /** `t(dict, …)` bound by the caller, in the ORG's locale. The builder resolves
    *  every string it emits; nothing downstream re-derives one. */
@@ -681,7 +682,7 @@ export function buildTableView(input: TableViewInput): TableViewT {
       // rows, and the view's row order is its own. No status = null, which the
       // schema states as a required key (never an absent one).
       qual: qual !== null && Object.hasOwn(qual.rows, r.entrantId) ? qual.rows[r.entrantId]! : null,
-      champion: !level && input.championId === r.entrantId,
+      champion: !level && input.championIds.includes(r.entrantId),
       // Only a marked row carries the key (a cached document and a plain table are one shape: absent = nothing to mark).
       ...markersOf(r.entrantId),
     })),
