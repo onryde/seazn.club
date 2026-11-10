@@ -36,6 +36,8 @@ import {
 import type { SwissRowFacts } from "@/server/public-site/swiss-row-facts";
 import type { QualificationView } from "@/server/public-site/qualification-view";
 import type { QualRowT } from "@/server/public-site/competition-hub-schema";
+import { bracketPlaceLabels, isBracketPlacement } from "@/lib/bracket-places";
+import { SHARED_PLACE_MSG_KEY } from "@/server/public-site/standings-view";
 import { EntityLogo } from "@/components/ui/entity-logo";
 import { StandingsPopover } from "./standings-popover";
 import { StandingsRowMarkers } from "./standings-row-markers";
@@ -144,6 +146,10 @@ export function StandingsTable({
   const level = isLevelTable(rows);
   const qualification = level ? null : qualificationIn;
   const leader = (row: StandingsRow) => !level && row.rank === 1;
+  // X-TP-3 (R24 pick 2A): a bracket's shared place (two semi-final losers both 3rd) wears a small "Shared place" chip beside
+  // the name; the number is the stored RANK (C8), so the next row reads 5. Only a bracket kind: a league's level rows are
+  // an unbroken tie with their own popover, not a shared place.
+  const places = isBracketPlacement(stageKind ?? "") && !level ? bracketPlaceLabels(rows) : null;
   const dateOf = (iso: string) => formatPublicInstant(locale, tz, iso, { dateStyle: "medium" });
   // Podium chips are fixed vocabulary (gold/silver/bronze) — deliberately NOT
   // org-themeable, so a red-branded org still reads gold as first place.
@@ -395,6 +401,14 @@ export function StandingsTable({
                         </span>
                       );
                     })()}
+                    {places?.get(row.entrantId)?.shared ? (
+                      <span
+                        data-testid={`standings-shared-place-${row.entrantId}`}
+                        className="ml-2 shrink-0 rounded-full bg-orange-100 px-2 py-0.5 align-middle text-[10px] font-medium text-orange-900"
+                      >
+                        {msg(SHARED_PLACE_MSG_KEY)}
+                      </span>
+                    ) : null}
                   </span>
                   {/* W3 app-B T3: a Swiss bye / late join, on a line of its own under the name. Nothing for an unmarked row. */}
                   <StandingsRowMarkers

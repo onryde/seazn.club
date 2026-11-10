@@ -532,6 +532,7 @@ export async function buildDivisionDocModel(
             metricSpecs: sportModule.metrics,
             cascade,
             layout,
+            stageKind: snapshot.stage_kind,
             nameOf: (id) => nameById.get(id) ?? id,
             badgeOf: (id) => badgeById.get(id),
             msg: (k) => t(publicDict, k),
