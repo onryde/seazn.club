@@ -146,7 +146,7 @@ const EXEMPT: readonly Exemption[] = [
   { file: "src/lib/scorer-sheets.ts", fn: "isBye", sites: 2, reason: "printable scorer sheets: PRINTABLE_STATUSES (scheduled, in_play) only" },
   { file: "src/server/usecases/scorer-sheets.ts", fn: "listSheetDays", sites: 2, reason: "the printable days: PRINTABLE_STATUSES (scheduled, in_play) only" },
   { file: "src/server/usecases/scan-match-names.ts", fn: "seat", sites: 1, reason: "seat names reach the scan page's Waiting screen (scheduled, a seat empty) and printable sheets (scheduled/in_play) only; a settled tie is view_only" },
-  { file: "src/server/usecases/schedule.ts", fn: "moveFixture", sites: 2, reason: "the officials-change email on a MOVE: the board holds a settled tie (`playedFixtureIds`), so it never moves" },
+  { file: "src/server/usecases/schedule/move.ts", fn: "moveFixture", sites: 2, reason: "the officials-change email on a MOVE: the board holds a settled tie (`playedFixtureIds`), so it never moves" },
   // Not a stored seat's occupant.
   { file: "src/components/v2/progression-panel.tsx", fn: "destinationSlotLabelText", sites: 1, reason: "names a progression DESTINATION slot in the editor, never a seat's occupant" },
   // The format preview: generated fixtures, which carry no stored outcome.

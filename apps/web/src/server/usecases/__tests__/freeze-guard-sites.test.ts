@@ -111,11 +111,11 @@ const LEDGER: Record<string, [file: string, words: string]> = {
   "registrations/organiser-actions.ts#confirmRegistrationWaived": [REGISTRATIONS, REG_SWEEP],
   "registrations/organiser-actions.ts#markRegistrationPaidOffline": [REGISTRATIONS, REG_SWEEP],
   "schedule-ai-preview.ts#resolveCompetitionScope": [SWEEP, '"schedule-ai-preview.ts#resolveCompetitionScope"'],
-  "schedule.ts#applySchedule": [SWEEP, '"schedule.ts#applySchedule"'],
-  "schedule.ts#moveFixture": [SWEEP, '"schedule.ts#moveFixture"'],
-  "schedule.ts#publishSchedule": [SWEEP, '"schedule.ts#publishSchedule"'],
-  "schedule.ts#putScheduleSettings": [SWEEP, '"schedule.ts#putScheduleSettings"'],
-  "schedule.ts#startDivision": [SWEEP, '"schedule.ts#startDivision"'],
+  "schedule/apply.ts#applySchedule": [SWEEP, '"schedule/apply.ts#applySchedule"'],
+  "schedule/move.ts#moveFixture": [SWEEP, '"schedule/move.ts#moveFixture"'],
+  "schedule/publish.ts#publishSchedule": [SWEEP, '"schedule/publish.ts#publishSchedule"'],
+  "schedule/settings.ts#putScheduleSettings": [SWEEP, '"schedule/settings.ts#putScheduleSettings"'],
+  "schedule/publish.ts#startDivision": [SWEEP, '"schedule/publish.ts#startDivision"'],
   "stage-rules.ts#putStageRules": [
     "server/usecases/__tests__/stage-rules.test.ts",
     "402s when the competition is frozen by the billing quota",
@@ -142,7 +142,7 @@ describe("the billing freeze's guard sites (PB2: every write but scoring)", () =
   it("the scoring door carries no freeze guard (PB2, option A), and the scan would see one there if it did", () => {
     expect(sites.filter((s) => s.startsWith("scoring.ts#"))).toEqual([]);
     // The scan's positive control: the same rules find the guard in a sibling write that keeps it.
-    expect(sites).toContain("schedule.ts#moveFixture");
+    expect(sites).toContain("schedule/move.ts#moveFixture");
     // And the file is still the scoring door the ruling is about (its entitlement function stands, without the freeze).
     const scoring = readFileSync(join(SRC, "server/usecases/scoring.ts"), "utf8");
     expect(scoring).toContain("async function assertEntitledToScore(");
