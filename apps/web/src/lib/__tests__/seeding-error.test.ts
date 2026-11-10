@@ -62,6 +62,8 @@ describe("seedingErrorMessage — mechanics", () => {
       "SEEDING_NOTHING_TO_FILL",
       // W4 app PR B (M4): a roundLosers take from a double-elimination source.
       "SEEDING_ROUNDLOSERS_DE_SOURCE",
+      // W4 app PR B (Task 8): a firstLosses take from a double-elimination source.
+      "SEEDING_FIRSTLOSSES_DE_SOURCE",
     ];
     expect([...SEEDING_ERROR_CODES].sort()).toEqual([...expected].sort());
   });

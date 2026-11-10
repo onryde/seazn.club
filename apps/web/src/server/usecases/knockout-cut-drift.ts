@@ -31,6 +31,7 @@ import { log } from "@/server/logger";
 import { stageHasStarted } from "./fixture-started-sql";
 import { resolveProgressionSource, sourcesToTables } from "./stage-seeding";
 import { departedEntrantIds, setupDependentsOf } from "./stages";
+import { isFirstLossProgression, reseedPlateQualifiers } from "./plate-field";
 
 export type { KnockoutCutDrift };
 
@@ -61,9 +62,18 @@ const onSource = (slate: Slate, sourceStageId: string) =>
  *  `withoutLuckyLoser`, what the results alone make it. */
 async function cutToday(tx: Tx, dependent: BracketDependent, opts: { withoutLuckyLoser?: boolean } = {}): Promise<string[]> {
   const { shapes, tables, resolved } = await sourcesToTables(tx, dependent, dependent.progression.sources, opts);
-  const { qualifiers } = resolveStoredProgression(dependent.progression, shapes, tables, dependent.kind as never, resolved.map((r) => r.kind));
+  const resolvedToday = resolveStoredProgression(dependent.progression, shapes, tables, dependent.kind as never, resolved.map((r) => r.kind));
+  // W4 T8 (X-SD-11): a plate's seed order is the draw's (main-draw seeds on the fold), as its proposal stored it.
+  const qualifiers = isFirstLossProgression(dependent.progression)
+    ? await reseedPlateQualifiers(tx, { id: dependent.id, config: await configOf(tx, dependent.id) }, resolvedToday.qualifiers)
+    : resolvedToday.qualifiers;
   const departed = await departedEntrantIds(tx, dependent.division_id);
   return [...qualifiers].sort((a, b) => a.seed - b.seed).map((q) => q.entrantId).filter((id) => !departed.has(id));
+}
+
+async function configOf(tx: Tx, stageId: string): Promise<Record<string, unknown>> {
+  const [row] = await tx<{ config: Record<string, unknown> | null }[]>`select config from stages where id = ${stageId}`;
+  return row?.config ?? {};
 }
 
 interface BracketLine {

@@ -14,6 +14,9 @@ import { departedLoseBestNth, descriptorKey, destinationSlotsBySeed, sourcesToTa
 import { STAGE_COLS, type StageRow, type FixtureRow } from "./types";
 import { fireStageRevalidate, refoldStageTable, departedEntrantIds } from "./helpers";
 import { fillSlot, resolveBracketSeats } from "./bracket-seats";
+import { knockoutRefusal } from "../knockout-refusal";
+import { writeProgressionSetupFixtures } from "./setup-fixtures";
+import { isFirstLossProgression, reseedPlateQualifiers } from "../plate-field";
 import {
   nonRealCarrySource,
   carrySourceRefusal,
@@ -135,13 +138,22 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // real targetKind ruling 13's snake/bracket-target guard needs to fire
     // on this resolution path too, not just at createStages' save-time
     // validateStageProgression call.
-    const { qualifiers, ties, newLotsDraws } = resolveStoredProgression(
+    const resolvedProgression = resolveStoredProgression(
       progression,
       shapes,
       departedLoseBestNth(tables, resolved, await departedEntrantIds(tx, stage.division_id)),
       stage.kind,
       resolved.map((r) => r.kind),
     );
+    const { ties, newLotsDraws } = resolvedProgression;
+    // W4 T8 (X-PL-5, X-SD-11): a plate has no lines until its field is known; this is where they are drawn, at the field's size
+    // (`sourcesToTables` above has already refused a field still open). Then its seeds are the main draw's, on the fold.
+    const firstLossPlate = isFirstLossProgression(progression);
+    // X-PL-2: under two first-match losers there is no bracket to draw; `maybeProposePlate` completes the plate by name instead,
+    // and a direct propose is refused by name rather than writing an empty draw.
+    if (firstLossPlate && resolvedProgression.qualifiers.length < 2) throw knockoutRefusal("PLATE_FIELD_TOO_SMALL");
+    if (firstLossPlate) await writeProgressionSetupFixtures(tx, stageId);
+    const qualifiers = firstLossPlate ? await reseedPlateQualifiers(tx, stage, resolvedProgression.qualifiers) : resolvedProgression.qualifiers;
     // W2d T12 (spec §5.9): stored under the division lock held above, so a re-proposal seats the same draw.
     await persistCrossGroupDraws(tx, resolved, newLotsDraws);
 

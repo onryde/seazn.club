@@ -33,7 +33,7 @@ import {
   undoDivision,
 } from "../history";
 import { moveFixture, putScheduleSettings, startDivision } from "../schedule";
-import { completeStage, confirmSeedProposal, createStages, generateStageFixtures } from "../stages";
+import { completeStage, confirmSeedProposal, createStages, generateStageFixtures, getSeedProposal } from "../stages";
 import { createCourt, createVenue } from "../venues";
 import { seedOrg } from "./_seed";
 
@@ -87,6 +87,7 @@ const divisionState = async (divisionId: string) =>
     select seq, edit_watermark from divisions where id = ${divisionId}`)[0]!;
 
 interface Rig {
+  template: "ko_plate" | "groups_ko";
   auth: AuthCtx;
   divisionId: string;
   courts: string[];
@@ -141,11 +142,19 @@ async function rig(template: "ko_plate" | "groups_ko"): Promise<Rig> {
   await startDivision(auth, division.id);
   expect((await rowsOf(ids[0]!)).length, "rig: Start generated the first stage").toBeGreaterThan(0);
   const checkpoint = await createCheckpoint(auth, division.id, "Before the draw");
-  await generateStageFixtures(auth, ids[1]!); // the day-one bracket: every seat TBD
+  const generated = await generateStageFixtures(auth, ids[1]!); // the day-one bracket: every seat TBD
   const bracket = await rowsOf(ids[1]!);
-  expect(bracket.length, "rig: the day-one bracket exists").toBeGreaterThan(0);
-  expect(bracket.every((r) => r.home_entrant_id === null && r.away_entrant_id === null), "rig: nobody seated before the confirm").toBe(true);
+  if (template === "ko_plate") {
+    // W4 T8 (X-PL-5, owner ruling G2): the plate has NO day-one lines - its field is unknown until round two. Its Generate is a
+    // no-op, not a refusal; the lines are written when the plate is PROPOSED, after round two.
+    expect(generated.created, "rig: the plate's Generate writes nothing before its field is known").toBe(0);
+    expect(bracket, "rig: the plate has no lines before round two").toEqual([]);
+  } else {
+    expect(bracket.length, "rig: the day-one bracket exists").toBeGreaterThan(0);
+    expect(bracket.every((r) => r.home_entrant_id === null && r.away_entrant_id === null), "rig: nobody seated before the confirm").toBe(true);
+  }
   return {
+    template,
     auth,
     divisionId: division.id,
     courts,
@@ -168,6 +177,13 @@ async function playOutAndComplete(r: Rig): Promise<{ id: string }> {
   }
   const done = await completeStage(r.auth, r.stageIds[0]);
   expect(done.completed, "rig: the first stage completed").toBe(true);
+  if (r.template === "ko_plate") {
+    // W4 T8: the plate was proposed while the main draw was played (after round two), so the completion computes nothing more.
+    expect(done.seed_proposal, "rig: the plate's proposal is not the completion's").toBeUndefined();
+    const proposal = await getSeedProposal(r.auth, r.stageIds[1]);
+    expect(proposal?.status, "rig: a draft seed proposal for the plate, drawn after round two").toBe("draft");
+    return { id: proposal!.id };
+  }
   expect(done.seed_proposal, "rig: a draft seed proposal for the bracket").toBeTruthy();
   return done.seed_proposal!;
 }
@@ -344,11 +360,12 @@ describe.runIf(HAS_DB)("W4 T5 K1 Undo cannot cross a seed confirm", () => {
   }, 300_000);
 
   it("K1 the empty case: with nothing confirmed, Undo inverts the bracket's day-one generation exactly as before (no barrier)", async () => {
-    const r = await rig("ko_plate");
-    // No play, no confirm: the newest Undo step is the Plate's own generation, and nothing stands in its way.
+    // groups_ko: the plate no longer has a day-one generation to invert (T8), so the format that still does carries this case.
+    const r = await rig("groups_ko");
+    // No play, no confirm: the newest Undo step is the knockout's own generation, and nothing stands in its way.
     const out = await undoDivision(r.auth, r.divisionId);
     expect(out.applied.type, "the generation is inverted").toBe("fixtures_cleared");
-    expect(await rowsOf(r.stageIds[1]), "the day-one Plate is gone").toEqual([]);
+    expect(await rowsOf(r.stageIds[1]), "the day-one bracket is gone").toEqual([]);
     expect((await ledgerOf(r.divisionId)).some((e) => e.type === "seed_confirmed"), "no barrier was ever written").toBe(false);
   }, 300_000);
 });

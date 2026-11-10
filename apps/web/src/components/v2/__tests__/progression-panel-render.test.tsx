@@ -303,3 +303,40 @@ describe("ProgressionPanel - Confirm warns that a confirmed draw can't be undone
     expect(checked, "anti-vacuity: four locales, both branches").toBe(8);
   });
 });
+
+// W4 app PR B, Task 8 (X-PL-5, X-PL-2): the plate's stage card, told where its field stands (`lib/plate-card-state.ts`).
+describe("ProgressionPanel - the plate's card", () => {
+  it("waiting: says it draws after round 2 and how many first matches are decided, with NO Compute button (the source is not complete)", () => {
+    const html = renderToStaticMarkup(
+      <ProgressionPanel {...baseProps({ sourceReady: false, plate: { state: "waiting", done: 2, total: 4 } })} />,
+    );
+    expect(html).toContain('data-progression-state="plate-waiting"');
+    expect(html).toContain("Plate draws after round 2 — 2 of 4 first matches decided");
+    expect(html).not.toContain("<button");
+  });
+  it("too small: names the outcome, no button", () => {
+    const html = renderToStaticMarkup(<ProgressionPanel {...baseProps({ sourceReady: false, plate: { state: "too_small" } })} />);
+    expect(html).toContain('data-progression-state="plate-too-small"');
+    expect(html).toContain("Not enough first-match losers for a plate");
+    expect(html).not.toContain("<button");
+  });
+  it("ready with no proposal: the ordinary empty card with Compute (the field is known though the main draw is not complete)", () => {
+    const html = renderToStaticMarkup(<ProgressionPanel {...baseProps({ sourceReady: false, plate: { state: "ready" } })} />);
+    expect(html).toContain('data-progression-state="empty"');
+  });
+  it("ready WITH a draft proposal: the ordinary draft card, the waiting copy is gone", () => {
+    const html = renderToStaticMarkup(<ProgressionPanel {...baseProps({ proposal: DRAFT, plate: { state: "ready" } })} />);
+    expect(html).toContain('data-progression-state="draft"');
+    expect(html).not.toContain("plate-waiting");
+  });
+  it("a stage that is no plate (plate null) with its source not ready still renders nothing", () => {
+    expect(renderToStaticMarkup(<ProgressionPanel {...baseProps({ sourceReady: false, plate: null })} />)).toBe("");
+  });
+  it("the copy exists in all four locales with the placeholders intact", async () => {
+    for (const l of ["en", "es", "fr", "nl"]) {
+      const ui = (await import(`@/dictionaries/${l}/ui.json`)).default as Record<string, string>;
+      expect(ui["plate.drawsAfterRound2"], `${l}: drawsAfterRound2`).toMatch(/\{done\}.*\{total\}|\{total\}.*\{done\}/);
+      expect(ui["plate.tooSmall"]?.length, `${l}: tooSmall`).toBeGreaterThan(10);
+    }
+  });
+});
