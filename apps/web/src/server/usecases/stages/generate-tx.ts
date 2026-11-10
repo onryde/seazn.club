@@ -47,7 +47,7 @@ import {
   knockoutDrawOrder,
   POOL_KEYS,
   poolCount,
-  generate,
+  generateForStage,
 } from "./generators";
 import { isEmptySwissReshape } from "./swiss-reconcile";
 import { swissActiveEntrants, swissGen } from "./swiss-gen";
@@ -125,7 +125,7 @@ async function reconcileKnockoutGenerate(
     }
   }
   const started = (await divisionHasStarted(tx, stage.division_id)) || (await stageHasStarted(tx, stage.id));
-  const fresh = generate(stage.kind, stage.config, entrants, poolIds).map((g) => ({
+  const fresh = generateForStage(stage.id, stage.kind, stage.config, entrants, poolIds).map((g) => ({
     pool_id: g.poolId ?? null,
     round_no: g.roundNo,
     seq_in_round: g.seqInRound,
@@ -377,7 +377,7 @@ export async function generateStageFixturesTx(
   } else if (stage.kind === "ladder") {
     gen = []; // Jul3/08 §6: ladder fixtures come from challenges, on demand
   } else {
-    gen = generate(stage.kind, stage.config, entrants, poolIds);
+    gen = generateForStage(stage.id, stage.kind, stage.config, entrants, poolIds);
   }
 
   // F14: the draw above was built over the FULL qualification list, so every

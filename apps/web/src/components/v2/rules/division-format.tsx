@@ -167,7 +167,7 @@ export function DivisionFormatDialog({
   const swissRounds = knobs.swissRoundsPicked ?? swissRoundsDefault(plan.entrants);
   const shown = formatKnobsShown(template);
   const values = { qualified: knobs.qualified, swissRounds, poolCount: knobs.poolCount, legs: knobs.legs, standingsCarry: knobs.standingsCarry, thirdPlace: knobs.thirdPlace };
-  const drafts = formatStagesFor(template, values, plan.entrants);
+  const drafts = formatStagesFor(template, values, counted ? entrants : 0);
   const view = formatPickerView({ offer, plan, template, stages: drafts, showAll: knobs.showAll, templateLocks, carryAllowed, standingsCarry: knobs.standingsCarry });
   const venue = venueNoun(sportKey);
   const placesText = (n: number) => msgPlural(`divBuilder.places.${venue}`, n, { count: n });
@@ -387,6 +387,7 @@ export function DivisionFormatDialog({
           view,
           stages: drafts,
           guidanceEntrants: plan.entrants,
+          thirdPlaceEntrants: counted ? entrants : 0,
           templateLocks,
           viewerPlan,
         })}

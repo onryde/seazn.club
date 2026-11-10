@@ -11,6 +11,7 @@ import { withdrawBracketEntrant, type BracketFixture } from "@seazn/engine/compe
 import { byeAward } from "@/lib/fixture-bye";
 import type { Tx, GenFixture, ActiveEntrant } from "./types";
 import { knockoutRefusal } from "../knockout-refusal";
+import { HttpError } from "@/lib/errors";
 // The draw primitives moved to the engine-db layer (competition.ts reads them; usecases import engine-db, never the reverse).
 import { knockoutDraws, knockoutDrawOrder } from "@/server/engine-db/knockout-draw";
 export { knockoutDraws, knockoutDrawOrder };
@@ -404,6 +405,23 @@ function roundRobinGen(
     away: f.away,
     ...(poolId ? { poolId } : {}),
   }));
+}
+
+/** `generate` for a stage the caller knows: B4 I-2 - the third-place refusal carries `stageId`, so the Start surface (which
+ *  draws every stage and cannot name the one that refused) can offer "Use Shared" for exactly that stage. */
+export function generateForStage(
+  stageId: string,
+  kind: string,
+  cfg: Record<string, unknown>,
+  entrants: ActiveEntrant[],
+  poolIds: Map<string, string>,
+): GenFixture[] {
+  try {
+    return generate(kind, cfg, entrants, poolIds);
+  } catch (err) {
+    if (err instanceof HttpError && err.code === "KO_THIRD_PLACE_TOO_FEW") throw knockoutRefusal("KO_THIRD_PLACE_TOO_FEW", { ...(err.extra ?? {}), stageId });
+    throw err;
+  }
 }
 
 export function generate(

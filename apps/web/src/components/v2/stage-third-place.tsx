@@ -71,6 +71,7 @@ export function StageThirdPlace({
           readOnlyReason={started ? msg("knockout.refusal.THIRD_PLACE_LOCKED") : null}
           busy={busy}
           testId="stage-third-place-choice"
+          storedView
         />
       )}
       {dropped && (

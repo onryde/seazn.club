@@ -2601,7 +2601,6 @@
   "thirdPlace.playoffHint": "De twee verliezende halvefinalisten spelen een wedstrijd om de derde plaats.",
   "thirdPlace.tooFewCount": "Deze fase heeft {count} deelnemers en een wedstrijd om de derde plaats vraagt minstens 4.",
   "thirdPlace.dropped": "Wedstrijd om de derde plaats vervallen: minder dan 2 halve finales",
-  "thirdPlace.saved": "Derde plaats: {mode}.",
   "jointWinners.action": "Gedeelde winnaars aanwijzen",
   "jointWinners.confirmTitle": "Gedeelde winnaars aanwijzen?",
   "jointWinners.confirm": "{a} en {b} worden allebei kampioen. Je kunt dit ongedaan maken.",

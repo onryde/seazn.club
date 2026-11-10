@@ -3,6 +3,7 @@
 // Board action layer (v3/04 §2): every schedule write, optimistic overrides,
 // debounced re-validation, realtime refresh, and the optimistic-concurrency
 // resync (v3/11 gap 10). Views stay dumb — they call these.
+import { tooFewOfferFrom } from "@/components/v2/third-place-use-shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
@@ -61,6 +62,8 @@ export interface BoardActions {
   conflicts: BoardConflict[];
   conflictsByFixture: Record<string, BoardConflict[]>;
   error: string | null;
+  /** B4 I-2: set with `error` when a Start was refused for a play-off stage under four entrants (the stage, the field, the call to repeat). */
+  tooFew: { stageId: string; entrants: number; path: string; done: string } | null;
   notice: string | null;
   paywall: string | null;
   busy: boolean;
@@ -202,6 +205,9 @@ export function useBoardActions(
   const [overrides, setOverrides] = useState<Record<string, Override>>({});
   const [conflicts, setConflicts] = useState<BoardConflict[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // B4 fix round 1 (I-2; pick 7A): a Start refused because a play-off stage fell under four entrants - the stage it names and
+  // the call to run again once Shared is saved.
+  const [tooFew, setTooFew] = useState<{ stageId: string; entrants: number; path: string; done: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [paywall, setPaywall] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -605,6 +611,7 @@ export function useBoardActions(
   const act = useCallback(
     async (path: string, done: string, acknowledgeWarnings = false): Promise<GateRefusal | null> => {
       setError(null);
+      setTooFew(null);
       setNotice(null);
       setLastRun(null);
       setPublishAllOutcome(null);
@@ -636,13 +643,19 @@ export function useBoardActions(
             conflicts: (err.extra.conflicts as BoardConflict[] | undefined) ?? [],
           };
         }
+        const offer = tooFewOfferFrom(err);
+        if (offer !== null) {
+          setError(msg("thirdPlace.tooFewCount", { count: offer.entrants }));
+          setTooFew({ ...offer, path, done });
+          return null;
+        }
         fail(err);
         return null;
       } finally {
         setBusy(false);
       }
     },
-    [fail, router],
+    [fail, msg, router],
   );
 
   const publishAll = useCallback(
@@ -807,6 +820,7 @@ export function useBoardActions(
     conflicts,
     conflictsByFixture,
     error,
+    tooFew,
     notice,
     paywall,
     busy,
