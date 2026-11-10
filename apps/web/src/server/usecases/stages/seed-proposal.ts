@@ -4,7 +4,8 @@ import "server-only";
 
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { resolveProgression, type ProgressionSpec } from "@seazn/engine/competition";
+import { type ProgressionSpec } from "@seazn/engine/competition";
+import { resolveStoredProgression } from "../stored-progression";
 import { BYE_SLOT_LABEL } from "@/lib/bye-line";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
@@ -134,7 +135,7 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // real targetKind ruling 13's snake/bracket-target guard needs to fire
     // on this resolution path too, not just at createStages' save-time
     // validateStageProgression call.
-    const { qualifiers, ties, newLotsDraws } = resolveProgression(
+    const { qualifiers, ties, newLotsDraws } = resolveStoredProgression(
       progression,
       shapes,
       departedLoseBestNth(tables, resolved, await departedEntrantIds(tx, stage.division_id)),

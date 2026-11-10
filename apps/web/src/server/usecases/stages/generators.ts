@@ -10,6 +10,9 @@ import { EngineError } from "@seazn/engine/core";
 import { generateRoundRobin, generateSingleElim, generateDoubleElim, generatePagePlayoff, generateStepladder, type BracketFixtureGen, type GeneratedBracket, generateAmericano, pairMexicanoRound, type AmericanoRound } from "@seazn/engine/scheduling";
 import { withdrawBracketEntrant, type BracketFixture } from "@seazn/engine/competition";
 import { byeAward } from "@/lib/fixture-bye";
+import { parseExtKey } from "@/server/engine-db/competition";
+import { engineRoundOf, laneDepthOf } from "@/server/engine-db/bracket-rounds";
+import { bracketRosterOf } from "@/server/engine-db/bracket-roster";
 import type { Tx, GenFixture, ActiveEntrant } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -247,9 +250,11 @@ export function walkoverDepartedQualifiers(
   gen: GenFixture[],
   departed: ReadonlySet<string>,
 ): { gen: GenFixture[]; voided: ReadonlySet<string> } {
+  // C5/C9: the engine's round is 0-based per lane; `roundNo` is the stored, offset one.
+  const laneDepth = laneDepthOf(gen.map((g) => ({ lane: parseExtKey(g.extKey).bracket, roundNo: g.roundNo })));
   const fixtures: BracketFixture[] = gen.map((g) => ({
     id: g.extKey,
-    round: g.roundNo,
+    round: engineRoundOf(g.roundNo, parseExtKey(g.extKey).bracket, laneDepth),
     status: "scheduled" as const,
     ...(g.home === null ? {} : { home: g.home }),
     ...(g.away === null ? {} : { away: g.away }),
@@ -263,11 +268,12 @@ export function walkoverDepartedQualifiers(
       {
         id: stageId,
         kind: kind as "knockout" | "double_elim" | "stepladder",
-        // engine 5.0.0 made `entrants` required. The seated set is what this planner has always read (no behaviour
-        // change); app B's T2' widens it to the stage's full drawn roster.
-        // `bracketRoster` (engine-db/competition.ts) declares the same seated set at completion (plus
-        // `config.qualified` when stored); T2' unifies all three.
-        entrants: [...new Set(gen.flatMap((g) => [g.home, g.away]).filter((id): id is string => id !== null))],
+        // engine 5.0.0: `entrants` is the stage's DRAWN roster (`bracketRosterOf`, the same function the completion read
+        // uses): everyone seated, departed included - and the departed qualifiers, who may hold no seat at all (C1/C12).
+        entrants: bracketRosterOf({
+          drawn: [...departed],
+          seated: gen.flatMap((g) => [g.home, g.away]).filter((id): id is string => id !== null),
+        }),
       },
       entrantId,
       fixtures,

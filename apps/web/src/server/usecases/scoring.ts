@@ -1204,7 +1204,15 @@ async function maybeAutoAdvance(auth: AuthCtx, stageId: string, divisionId: stri
     // owed on it. A plain recorded abandon still holds (W2a: it is not a dead feeder, and it awaits the organiser).
     const [{ open }] = await tx<{ open: number }[]>`
       select count(*) filter (where status not in ('decided', 'forfeited', 'finalized', 'cancelled')
-                                and not ${hasActiveAbandonSql(tx, "fixtures", { expunge: true })})::int as open
+                                and not ${hasActiveAbandonSql(tx, "fixtures", { expunge: true })}
+                                -- C2/C17: a double-elimination bracket reset the grand final did not trigger is never played
+                                -- (the winners' champion - the grand final's HOME entrant - won it): not owed, as the
+                                -- completion read (readBracketStage) and undecidedBracketFixtures both read it.
+                                and not (fixtures.ext_key = 'gf-reset' and exists (
+                                  select 1 from fixtures gf
+                                   where gf.stage_id = fixtures.stage_id and gf.ext_key = 'gf'
+                                     and gf.status in ('decided', 'forfeited', 'finalized')
+                                     and gf.outcome->>'winner' = gf.home_entrant_id::text)))::int as open
       from fixtures where stage_id = ${stageId}`;
     return open === 0;
   });
