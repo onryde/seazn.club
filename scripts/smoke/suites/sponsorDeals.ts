@@ -149,6 +149,20 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
     refused?.status === 403 && read?.status === 200 && v1data<Deal>(read).payment_status === "pending",
   );
 
+  // --- PR 2 Task 13: the hub's ?sponsor= is trusted for nothing. A REAL sponsor id of another org (the Pro org's, made above) on this
+  // org's hub is no selection: the page answers 200 with the Sponsors tab's list - this org's sponsor in it, the foreign one nowhere
+  // - and never the sponsor page (its marker, `sponsor-sheet`, arrives with Task 15; until then the absence is a floor, and the
+  // list and the missing foreign name are the live assertions).
+  const foreignHub = await html(free, `/o/${org.slug}/sponsors?tab=sponsors&sponsor=${viewerSponsor}`);
+  check(
+    "sd hub ?sponsor=<foreign> falls back to the list",
+    foreignHub.status === 200 &&
+      foreignHub.body.includes('data-testid="sponsors-tab-sponsors"') &&
+      foreignHub.body.includes(paidName) &&
+      !foreignHub.body.includes(`Deal Viewer ${tag}`) &&
+      !foreignHub.body.includes('data-testid="sponsor-sheet"'),
+  );
+
   // --- T9, the hourly sweep's route (D20): the cron secret guards it, and the right one answers the sweep's counts. CI sets
   // CRON_SECRET for the smoke job and its server alike (ci.yml), so a wrong secret is exactly a 401.
   const wrongCron = await fetch(`${BASE}/api/cron/sponsor-deals`, { method: "POST", headers: { "x-cron-secret": "definitely-wrong-sponsor-deals" } });

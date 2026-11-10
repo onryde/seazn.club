@@ -13,6 +13,9 @@
 //   - the data each tab needs is loaded for that tab only, and never twice across a sequence
 //   - On stream (S12): an editor gets the tab with the org's sponsors, tiers gate and the scope the URL names - kept only if it
 //     is one of THIS org's competitions; a non-editor gets Overview and the On stream loader is never called (R19)
+//   - Sponsors (sponsor deals PR 2, Task 13): the tab also reads the org's deals, packages, both plan flags, whether Stripe takes
+//     charges, and the competitions' end dates; `?sponsor=` / `?deal=` select a sponsor's own page and a deal on it - kept only if
+//     they are THIS org's (a deal: the selected sponsor's) - and the sponsor's report links are read only then, only for an editor
 //   - Overview (S13): every member gets the numbers for the period the URL names (kept only if it is a period or one of THIS
 //     org's competitions), all read at ONE `now`; only an editor's page loads the report links and the share form's defaults
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,6 +25,8 @@ const h = vi.hoisted(() => ({
   requireOrgPage: vi.fn(),
   resolveLocale: vi.fn(),
   listSponsorRows: vi.fn(),
+  listSponsorPackages: vi.fn(),
+  listDeals: vi.fn(),
   finishedPackageCompetitions: vi.fn(),
   hasFeatureOnAnyPass: vi.fn(),
   sql: vi.fn(),
@@ -33,8 +38,11 @@ const h = vi.hoisted(() => ({
 
 vi.mock("@/server/page-auth", () => ({ requireOrgPage: h.requireOrgPage }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: h.resolveLocale }));
-vi.mock("@/server/usecases/sponsors", () => ({ listSponsorRows: h.listSponsorRows }));
-vi.mock("@/server/usecases/sponsor-deals", () => ({ finishedPackageCompetitions: h.finishedPackageCompetitions }));
+vi.mock("@/server/usecases/sponsors", () => ({ listSponsorRows: h.listSponsorRows, listSponsorPackages: h.listSponsorPackages }));
+vi.mock("@/server/usecases/sponsor-deals", () => ({
+  finishedPackageCompetitions: h.finishedPackageCompetitions,
+  listDeals: h.listDeals,
+}));
 vi.mock("@/lib/entitlements", () => ({ hasFeatureOnAnyPass: h.hasFeatureOnAnyPass }));
 vi.mock("@/lib/db", () => ({ sql: h.sql }));
 vi.mock("@/server/sponsors/on-stream", () => ({ loadOnStreamScope: h.loadOnStreamScope }));
@@ -52,7 +60,24 @@ vi.mock("@/components/ui/scroll-active-tab-into-view", () => ({
 
 // The islands, as markers carrying exactly what the page handed them.
 vi.mock("@/components/org-sponsors", () => ({
-  OrgSponsors: (p: { orgId: string; initialSponsors: unknown[]; competitions: unknown[]; hasTiers: boolean; canEdit: boolean; billingHref: string }) => (
+  OrgSponsors: (p: {
+    orgId: string;
+    initialSponsors: unknown[];
+    competitions: { id: string; ends_on?: string | null }[];
+    hasTiers: boolean;
+    canEdit: boolean;
+    billingHref: string;
+    hub: {
+      orgSlug: string;
+      deals: { id: string }[];
+      packages: { id: string }[];
+      hasMonetize: boolean;
+      chargesEnabled: boolean;
+      sponsorId: string | null;
+      dealId: string | null;
+      reportLinks: { id: string }[];
+    };
+  }) => (
     <div
       data-testid="org-sponsors"
       data-org={p.orgId}
@@ -60,7 +85,16 @@ vi.mock("@/components/org-sponsors", () => ({
       data-has-tiers={String(p.hasTiers)}
       data-sponsors={p.initialSponsors.length}
       data-competitions={p.competitions.length}
+      data-competition-ends={p.competitions.map((c) => `${c.id}:${c.ends_on ?? "-"}`).join("|")}
       data-billing={p.billingHref}
+      data-hub-slug={p.hub.orgSlug}
+      data-hub-deals={p.hub.deals.map((d) => d.id).join("|")}
+      data-hub-packages={p.hub.packages.map((k) => k.id).join("|")}
+      data-hub-monetize={String(p.hub.hasMonetize)}
+      data-hub-charges={String(p.hub.chargesEnabled)}
+      data-hub-sponsor={p.hub.sponsorId ?? "-"}
+      data-hub-deal={p.hub.dealId ?? "-"}
+      data-hub-links={p.hub.reportLinks.map((l) => l.id).join("|")}
     />
   ),
 }));
@@ -152,13 +186,20 @@ const UI_BY_LOCALE = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as Record<string
 
 const ORG = { id: "org-1", name: "Riverside", slug: "riverside", role: "owner" };
 
-async function render(tab?: string, scope?: string | string[], period?: string | string[]): Promise<string> {
+async function render(
+  tab?: string,
+  scope?: string | string[],
+  period?: string | string[],
+  pick: { sponsor?: string | string[]; deal?: string | string[] } = {},
+): Promise<string> {
   const element = await SponsorsHubPage({
     params: Promise.resolve({ orgSlug: ORG.slug }),
     searchParams: Promise.resolve({
       ...(tab === undefined ? {} : { tab }),
       ...(scope === undefined ? {} : { scope }),
       ...(period === undefined ? {} : { period }),
+      ...(pick.sponsor === undefined ? {} : { sponsor: pick.sponsor }),
+      ...(pick.deal === undefined ? {} : { deal: pick.deal }),
     }),
   });
   const { prelude } = await prerender(element);
@@ -208,10 +249,26 @@ beforeEach(() => {
     { id: "s1", name: "Harbour", tier: "gold", status: "active", competition_id: null, on_stream: true, display_order: 3, locked_by_deal: false },
     { id: "s2", name: "Ridge", tier: "partner", status: "active", competition_id: "c1", on_stream: false, display_order: 0, locked_by_deal: true },
   ]);
+  h.listDeals.mockResolvedValue([
+    { id: "d1", sponsor_id: "s1" },
+    { id: "d2", sponsor_id: "s1" },
+    { id: "d3", sponsor_id: "s2" },
+  ]);
+  h.listSponsorPackages.mockResolvedValue([{ id: "p1" }, { id: "p2" }]);
   h.finishedPackageCompetitions.mockResolvedValue(["c2"]);
   h.loadOnStreamScope.mockResolvedValue({ settings: { enabled: true, frequency: "busy" }, ownRow: true, sports: [{ sportKey: "cricket", kinds: [], sample: null, sampleCompetitionId: null }] });
   h.hasFeatureOnAnyPass.mockResolvedValue(true);
-  h.sql.mockResolvedValue([{ id: "c1", name: "Spring Cup" }, { id: "c2", name: "Autumn Cup" }, { id: "c3", name: "Cup 3" }]);
+  // The page makes two reads through `sql`: the org's competitions, and whether its Stripe account takes charges. One mock cannot
+  // answer both the same way, so it answers by the query's own text.
+  h.sql.mockImplementation(async (strings: TemplateStringsArray) =>
+    strings.join("?").includes("stripe_charges_enabled")
+      ? [{ stripe_charges_enabled: true }]
+      : [
+          { id: "c1", name: "Spring Cup", ends_on: "2027-08-31" },
+          { id: "c2", name: "Autumn Cup", ends_on: null },
+          { id: "c3", name: "Cup 3", ends_on: "2026-12-01" },
+        ],
+  );
   h.sponsorOverview.mockResolvedValue([{ sponsorId: "s1" }, { sponsorId: null }]);
   h.listReportLinks.mockResolvedValue([{ id: "l1" }, { id: "l2" }]);
   h.reportLinkDefaults.mockResolvedValue({ from: "2026-01-01", to: "2026-12-31", competitionId: null });
@@ -366,8 +423,15 @@ describe("the Packages tab keeps Settings' gate: sponsors.monetize, granted AND 
     expect(attr(await render("packages"), "sponsor-packages-island", "data-has-monetize")).toBe("true");
     expect(h.hasFeatureOnAnyPass.mock.calls.map((c) => c[1])).toEqual(["sponsors.monetize"]);
     h.hasFeatureOnAnyPass.mockClear();
-    expect(attr(await render("sponsors"), "org-sponsors", "data-has-tiers")).toBe("false");
-    expect(h.hasFeatureOnAnyPass.mock.calls.map((c) => c[1])).toEqual(["sponsors.tiers"]);
+    // The Sponsors tab asks BOTH (Task 13: the Add deal sheet locks Send invoice by monetize), each answered on its own.
+    const sponsors = await render("sponsors");
+    expect(attr(sponsors, "org-sponsors", "data-has-tiers")).toBe("false");
+    expect(attr(sponsors, "org-sponsors", "data-hub-monetize")).toBe("true");
+    expect(h.hasFeatureOnAnyPass.mock.calls.map((c) => c[1])).toEqual(["sponsors.tiers", "sponsors.monetize"]);
+    h.hasFeatureOnAnyPass.mockImplementation(async (_org: string, key: string) => key === "sponsors.tiers");
+    const flipped = await render("sponsors");
+    expect(attr(flipped, "org-sponsors", "data-has-tiers")).toBe("true");
+    expect(attr(flipped, "org-sponsors", "data-hub-monetize")).toBe("false");
   });
 });
 
@@ -422,6 +486,162 @@ describe("the Packages tab hands over which packages' competitions have finished
     await render("on_stream");
     expect(h.finishedPackageCompetitions).not.toHaveBeenCalled();
   });
+});
+
+describe("the Sponsors tab loads what the sponsor and deal screens read (sponsor deals PR 2, Task 13)", () => {
+  const auth = { orgId: ORG.id, via: "session", userId: "u1", role: "owner", keyId: null };
+
+  it("reads the org's deals and packages as the signed-in member, and hands over what it read, in order", async () => {
+    const html = await render("sponsors");
+    expect(h.listDeals).toHaveBeenCalledTimes(1);
+    expect(h.listDeals).toHaveBeenCalledWith(auth);
+    expect(h.listSponsorPackages).toHaveBeenCalledTimes(1);
+    expect(h.listSponsorPackages).toHaveBeenCalledWith(auth);
+    expect(attr(html, "org-sponsors", "data-hub-deals")).toBe("d1|d2|d3");
+    expect(attr(html, "org-sponsors", "data-hub-packages")).toBe("p1|p2");
+    expect(attr(html, "org-sponsors", "data-hub-slug")).toBe(ORG.slug);
+  });
+
+  it("the empty case: an org with no deals and no packages hands over EMPTY lists (not missing ones)", async () => {
+    h.listDeals.mockResolvedValue([]);
+    h.listSponsorPackages.mockResolvedValue([]);
+    const html = await render("sponsors");
+    expect(html).toContain('data-testid="org-sponsors"');
+    expect(attr(html, "org-sponsors", "data-hub-deals")).toBe("");
+    expect(attr(html, "org-sponsors", "data-hub-packages")).toBe("");
+  });
+
+  it("whether the org's Stripe account takes charges is read from the org, granted AND denied", async () => {
+    expect(attr(await render("sponsors"), "org-sponsors", "data-hub-charges")).toBe("true");
+    h.sql.mockImplementation(async (strings: TemplateStringsArray) =>
+      strings.join("?").includes("stripe_charges_enabled") ? [{ stripe_charges_enabled: false }] : [],
+    );
+    expect(attr(await render("sponsors"), "org-sponsors", "data-hub-charges")).toBe("false");
+    // An org row the read cannot find is NOT charge-ready.
+    h.sql.mockImplementation(async () => []);
+    expect(attr(await render("sponsors"), "org-sponsors", "data-hub-charges")).toBe("false");
+  });
+
+  it("asks for THIS org's charges and competitions only (the org id is bound into both reads)", async () => {
+    await render("sponsors");
+    const reads = h.sql.mock.calls.map((c) => ({ text: (c[0] as TemplateStringsArray).join("?"), values: c.slice(1) }));
+    const charges = reads.find((r) => r.text.includes("stripe_charges_enabled"));
+    const comps = reads.find((r) => r.text.includes("from competitions"));
+    expect(charges?.values).toEqual([ORG.id]);
+    expect(comps?.values).toEqual([ORG.id]);
+  });
+
+  it("hands the competitions over WITH their end dates (YYYY-MM-DD or none) - the deal timeline's end hint", async () => {
+    const html = await render("sponsors");
+    expect(attr(html, "org-sponsors", "data-competition-ends")).toBe("c1:2027-08-31|c2:-|c3:2026-12-01");
+    const comps = h.sql.mock.calls.map((c) => (c[0] as TemplateStringsArray).join("?")).find((t) => t.includes("from competitions"));
+    expect(comps, "the read selects ends_on as text, so a date column cannot reach the client as a Date").toMatch(/ends_on::text/);
+  });
+
+  it("another tab reads none of it (the page loads only what its tab shows)", async () => {
+    let checked = 0;
+    for (const tab of ["overview", "packages", "on_stream"]) {
+      await render(tab, undefined, undefined, { sponsor: "s1", deal: "d1" });
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(h.listDeals).not.toHaveBeenCalled();
+    expect(h.listSponsorPackages).not.toHaveBeenCalled();
+    expect(h.sql.mock.calls.map((c) => (c[0] as TemplateStringsArray).join("?")).filter((t) => t.includes("stripe_charges_enabled"))).toEqual([]);
+  });
+});
+
+describe("?sponsor= and ?deal= on the Sponsors tab: this org's, else the list (Task 13)", () => {
+  const sel = (html: string) => ({
+    sponsor: attr(html, "org-sponsors", "data-hub-sponsor"),
+    deal: attr(html, "org-sponsors", "data-hub-deal"),
+    links: attr(html, "org-sponsors", "data-hub-links"),
+  });
+
+  beforeEach(() => {
+    h.listReportLinks.mockResolvedValue([
+      { id: "l1", sponsorId: "s1" },
+      { id: "l2", sponsorId: "s2" },
+      { id: "l3", sponsorId: "s1" },
+    ]);
+  });
+
+  it("no ?sponsor= is the list: nothing selected and no report link read", async () => {
+    const html = await render("sponsors");
+    expect(sel(html)).toEqual({ sponsor: "-", deal: "-", links: "" });
+    expect(h.listReportLinks).not.toHaveBeenCalled();
+    expect(panels(html)).toEqual(["sponsors"]);
+  });
+
+  it("?sponsor=<own> resolves: the page passes that id on and reads the report links (this sponsor's only)", async () => {
+    const html = await render("sponsors", undefined, undefined, { sponsor: "s1" });
+    expect(sel(html)).toEqual({ sponsor: "s1", deal: "-", links: "l1|l3" });
+    expect(h.listReportLinks).toHaveBeenCalledTimes(1);
+    expect(h.listReportLinks).toHaveBeenCalledWith(auth0(), ORG.id);
+    // ...and the second sponsor, so the first is not just "the first row".
+    expect(sel(await render("sponsors", undefined, undefined, { sponsor: "s2" }))).toEqual({ sponsor: "s2", deal: "-", links: "l2" });
+  });
+
+  it("?sponsor=<foreign> renders the list as if absent - no crash, no 404, no report link read (counted)", async () => {
+    let checked = 0;
+    for (const raw of ["other-orgs-sponsor", "", "S1", "__proto__", "constructor", ["s1", "s2"], ["s1"]]) {
+      h.listReportLinks.mockClear();
+      const html = await render("sponsors", undefined, undefined, { sponsor: raw });
+      expect(panels(html), JSON.stringify(raw)).toEqual(["sponsors"]);
+      expect(sel(html), JSON.stringify(raw)).toEqual({ sponsor: "-", deal: "-", links: "" });
+      expect(h.listReportLinks, JSON.stringify(raw)).not.toHaveBeenCalled();
+      checked++;
+    }
+    expect(checked).toBe(7);
+  });
+
+  it("?deal=<own> on its own sponsor resolves; a deal of ANOTHER sponsor of the same org, a foreign deal and a repeated deal do not", async () => {
+    expect(sel(await render("sponsors", undefined, undefined, { sponsor: "s1", deal: "d2" })).deal).toBe("d2");
+    expect(sel(await render("sponsors", undefined, undefined, { sponsor: "s2", deal: "d3" })).deal).toBe("d3");
+    let refused = 0;
+    for (const raw of ["d3", "not-mine", "", "__proto__", ["d1", "d2"]]) {
+      const got = sel(await render("sponsors", undefined, undefined, { sponsor: "s1", deal: raw }));
+      expect(got.deal, JSON.stringify(raw)).toBe("-");
+      expect(got.sponsor, `${JSON.stringify(raw)}: the sponsor stays selected`).toBe("s1");
+      refused++;
+    }
+    expect(refused).toBe(5);
+  });
+
+  it("a ?deal= without a valid sponsor selects nothing (a deal lives on its sponsor's page)", async () => {
+    expect(sel(await render("sponsors", undefined, undefined, { deal: "d1" }))).toEqual({ sponsor: "-", deal: "-", links: "" });
+    expect(sel(await render("sponsors", undefined, undefined, { sponsor: "not-mine", deal: "d1" }))).toEqual({
+      sponsor: "-", deal: "-", links: "",
+    });
+  });
+
+  it("a sponsor with no deals selects no deal, and no deal id of another sponsor leaks in", async () => {
+    h.listDeals.mockResolvedValue([{ id: "d3", sponsor_id: "s2" }]);
+    expect(sel(await render("sponsors", undefined, undefined, { sponsor: "s1", deal: "d3" }))).toEqual({ sponsor: "s1", deal: "-", links: "l1|l3" });
+  });
+
+  it("an org with no sponsors has nothing to select, whatever the URL says", async () => {
+    h.listSponsorRows.mockResolvedValue([]);
+    h.listDeals.mockResolvedValue([]);
+    expect(sel(await render("sponsors", undefined, undefined, { sponsor: "s1", deal: "d1" }))).toEqual({ sponsor: "-", deal: "-", links: "" });
+  });
+
+  it("a non-editor resolves the sponsor (the read-only view) but never reads report links - the read refuses a non-editor", async () => {
+    asMember("viewer", false);
+    const html = await render("sponsors", undefined, undefined, { sponsor: "s1", deal: "d1" });
+    expect(sel(html)).toEqual({ sponsor: "s1", deal: "d1", links: "" });
+    expect(h.listReportLinks).not.toHaveBeenCalled();
+  });
+
+  it("each render stands alone: a selection is not carried into the next render", async () => {
+    await render("sponsors", undefined, undefined, { sponsor: "s1", deal: "d1" });
+    expect(sel(await render("sponsors"))).toEqual({ sponsor: "-", deal: "-", links: "" });
+  });
+
+  /** The member `asMember("owner", true)` signs in as. */
+  function auth0() {
+    return { orgId: ORG.id, via: "session", userId: "u1", role: "owner", keyId: null };
+  }
 });
 
 describe("a non-editor gets the same read-only view Settings gave - canEdit false, no Packages (R19; Settings never refused)", () => {
@@ -485,7 +705,7 @@ describe("the page loads only what the tab it shows needs, and nothing is carrie
 
   it("Sponsors then Packages in sequence: each render asks for its own gate once, so a second call carries nothing over", async () => {
     await render("sponsors");
-    expect(h.hasFeatureOnAnyPass.mock.calls.map((c) => c[1])).toEqual(["sponsors.tiers"]);
+    expect(h.hasFeatureOnAnyPass.mock.calls.map((c) => c[1])).toEqual(["sponsors.tiers", "sponsors.monetize"]);
     expect(h.listSponsorRows).toHaveBeenCalledTimes(1);
     h.hasFeatureOnAnyPass.mockClear();
     h.listSponsorRows.mockClear();

@@ -15,7 +15,10 @@ import { useConfirm } from "@/components/ui/confirm-provider";
 import { TIER_BADGE, TIER_MSG } from "@/components/sponsors/tier-labels";
 import { sponsorSaveErrorKey } from "@/components/sponsors/save-error";
 import { ApiV1Error } from "@/lib/client-v1";
+import type { SponsorDeal } from "@/lib/sponsor-deals";
+import type { ReportLinkSummary } from "@/lib/sponsor-report";
 import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
+import type { SponsorPackageRow } from "@/server/usecases/sponsors";
 
 const MAX_LOGO_BYTES = 2 * 1024 * 1024;
 
@@ -43,6 +46,27 @@ export interface SponsorItem {
   locked_by_deal: boolean;
   /** A deal waits to go live (draft, awaiting payment or approval, scheduled): it holds the sponsor's status (D9). */
   has_open_deal: boolean;
+}
+
+/** What the hub page reads for the Sponsors tab beyond the list (sponsor deals PR 2, Task 13). The sponsor list rows (Task 14),
+ *  the sponsor's own page (Task 15), the Add deal sheet (Task 16) and the deal page (Task 17) are its consumers; nothing here
+ *  reads it yet. */
+export interface SponsorsHubData {
+  orgSlug: string;
+  /** Every deal of the org, newest first (legacy pre-deals rows included: they are ended deals). */
+  deals: SponsorDeal[];
+  /** Every package of the org, active first. */
+  packages: SponsorPackageRow[];
+  /** `sponsors.monetize` on any competition's pass: online invoices are sold on this plan. */
+  hasMonetize: boolean;
+  /** The org's Stripe account takes charges. */
+  chargesEnabled: boolean;
+  /** `?sponsor=` after the page checked it is one of this org's sponsors; null shows the list. */
+  sponsorId: string | null;
+  /** `?deal=` after the page checked it is one of the selected sponsor's deals; null shows the sponsor's page. */
+  dealId: string | null;
+  /** The selected sponsor's live report links (an editor's page only; empty otherwise). */
+  reportLinks: ReportLinkSummary[];
 }
 
 interface Draft {
@@ -265,10 +289,12 @@ export function OrgSponsors({
 }: {
   orgId: string;
   initialSponsors: SponsorItem[];
-  competitions: { id: string; name: string }[];
+  /** `ends_on`: the competition's end date (YYYY-MM-DD) or null; the deal timeline shows it beside "ends with the competition". */
+  competitions: { id: string; name: string; ends_on?: string | null }[];
   hasTiers: boolean;
   billingHref: string;
   canEdit: boolean;
+  hub: SponsorsHubData;
 }) {
   const msg = useMsg();
   const confirm = useConfirm();

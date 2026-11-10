@@ -39,9 +39,27 @@ vi.mock("@/lib/resolve-locale", () => ({ resolveLocale }));
 // "did the org get the feature?" is an exact string check rather than a guess
 // at some rendered input's class name. lib/db and lib/entitlements are NOT
 // stubbed — the pass overlay is the thing under test.
+// Sponsor deals PR 2, Task 13: the marker also carries what the REAL loaders handed the island (the deals, packages, the flags
+// and the page's reading of ?sponsor= / ?deal=), so those are checked against a real database, not a mock.
 vi.mock("@/components/org-sponsors", () => ({
-  OrgSponsors: ({ hasTiers }: { hasTiers: boolean }) => (
-    <div data-testid={`sponsor-tiers-${hasTiers}`} />
+  OrgSponsors: ({ hasTiers, hub, competitions }: {
+    hasTiers: boolean;
+    competitions: { ends_on: string | null }[];
+    hub: {
+      hasMonetize: boolean; chargesEnabled: boolean; deals: { id: string }[]; packages: { id: string }[];
+      sponsorId: string | null; dealId: string | null;
+    };
+  }) => (
+    <div
+      data-testid={`sponsor-tiers-${hasTiers}`}
+      data-hub-monetize={String(hub.hasMonetize)}
+      data-hub-charges={String(hub.chargesEnabled)}
+      data-hub-deals={hub.deals.map((d) => d.id).join("|")}
+      data-hub-packages={hub.packages.map((k) => k.id).join("|")}
+      data-hub-sponsor={hub.sponsorId ?? "-"}
+      data-hub-deal={hub.dealId ?? "-"}
+      data-ends={competitions.map((c) => c.ends_on ?? "-").sort().join("|")}
+    />
   ),
 }));
 vi.mock("@/components/sponsor-packages", () => ({
@@ -63,6 +81,10 @@ interface Rig {
   orgSlug: string;
   passedId: string;
   plainId: string;
+  /** Sponsor deals PR 2, Task 13: one sponsor with one awaiting-payment deal on one package. */
+  sponsorId: string;
+  dealId: string;
+  packageId: string;
 }
 
 /** A COMMUNITY org (explicit subscriptions row — a raw org insert leaves none,
@@ -94,11 +116,26 @@ async function seedOrg(opts: { withPass: boolean }): Promise<Rig> {
     await sql`insert into competition_passes (competition_id, org_id)
               values (${passedId}, ${orgId}) on conflict (competition_id) do nothing`;
   }
+  // One competition has an end date, one does not: the hub hands both to the island (the deal timeline's end hint).
+  await sql`update competitions set ends_on = '2027-08-31' where id = ${passedId}`;
+  // A sponsor with an online deal awaiting payment on an org-wide package.
+  const [{ id: packageId }] = await sql<{ id: string }[]>`
+    insert into sponsor_packages (org_id, name, price_cents, currency)
+    values (${orgId}, ${"Pkg " + s}, 1000, 'gbp') returning id`;
+  const [{ id: sponsorId }] = await sql<{ id: string }[]>`
+    insert into sponsors (org_id, competition_id, name, tier, status)
+    values (${orgId}, ${null}, ${"Sponsor " + s}, 'partner', 'inactive') returning id`;
+  const [{ id: dealId }] = await sql<{ id: string }[]>`
+    insert into sponsor_orders (org_id, package_id, sponsor_name, sponsor_email, amount_cents, currency, status, sponsor_id,
+                                deal_status, payment_method, go_live, tier, includes_on_stream, package_name, competition_id)
+    values (${orgId}, ${packageId}, ${"Sponsor " + s}, ${"sponsor-" + s + "@test.local"}, 1000, 'gbp', 'pending', ${sponsorId},
+            'awaiting_payment', 'online', 'on_payment', 'partner', false, ${"Pkg " + s}, ${null})
+    returning id`;
   await invalidateOrgEntitlements(orgId);
-  return { orgId, orgSlug, passedId, plainId };
+  return { orgId, orgSlug, passedId, plainId, sponsorId, dealId, packageId };
 }
 
-async function renderSponsorsTab(rig: Rig, tab: SponsorsTab): Promise<string> {
+async function renderSponsorsTab(rig: Rig, tab: SponsorsTab, pick: { sponsor?: string; deal?: string } = {}): Promise<string> {
   const org = { id: rig.orgId, name: "Spon Org", slug: rig.orgSlug, role: "owner",
     logo_url: null, logo_storage_path: null, branding: {}, timezone: "Europe/London" };
   requireOrgPage.mockResolvedValue({
@@ -111,7 +148,7 @@ async function renderSponsorsTab(rig: Rig, tab: SponsorsTab): Promise<string> {
 
   const element = await SponsorsHubPage({
     params: Promise.resolve({ orgSlug: rig.orgSlug }),
-    searchParams: Promise.resolve({ tab }),
+    searchParams: Promise.resolve({ tab, ...pick }),
   });
   const { prelude } = await prerender(element);
   const reader = (prelude as ReadableStream<Uint8Array>).getReader();
@@ -165,5 +202,58 @@ describe.skipIf(!HAS_DB)("the Sponsors hub sees an Event Pass held on any compet
 
     expect(await hasFeature(withPass.orgId, "sponsors.monetize", withPass.passedId)).toBe(true);
     expect(await hasFeature(withPass.orgId, "sponsors.monetize", withPass.plainId)).toBe(false);
+  });
+});
+
+// Sponsor deals PR 2, Task 13: the Sponsors tab's new reads, through the REAL page, loaders and database (the unit file stubs
+// them all). Seeds are run-unique; each org is its own, so a leak between two orgs shows as the wrong id.
+describe.skipIf(!HAS_DB)("the Sponsors tab reads the org's deals, packages, plan flags and competition dates for real (Task 13)", () => {
+  const field = (html: string, name: string): string | undefined => new RegExp(`data-hub-${name}="([^"]*)"`).exec(html)?.[1];
+
+  it("hands over THIS org's deal and package, and no other org's", async () => {
+    const mine = await seedOrg({ withPass: false });
+    const other = await seedOrg({ withPass: false });
+    const html = await renderSponsorsTab(mine, "sponsors");
+    expect(field(html, "deals")).toBe(mine.dealId);
+    expect(field(html, "packages")).toBe(mine.packageId);
+    expect(field(html, "deals")).not.toContain(other.dealId);
+    expect(field(html, "packages")).not.toContain(other.packageId);
+  });
+
+  it("asks sponsors.monetize with the pass overlay, granted AND denied - the same answer the Packages tab gives", async () => {
+    const withPass = await seedOrg({ withPass: true });
+    const noPass = await seedOrg({ withPass: false });
+    expect(field(await renderSponsorsTab(withPass, "sponsors"), "monetize")).toBe("true");
+    expect(field(await renderSponsorsTab(noPass, "sponsors"), "monetize")).toBe("false");
+    // The control arm: the Packages tab agrees about the same two orgs.
+    expect(await renderSponsorsTab(withPass, "packages")).toContain("sponsor-monetize-true");
+    expect(await renderSponsorsTab(noPass, "packages")).toContain("sponsor-monetize-false");
+  });
+
+  it("reads whether Stripe takes charges from the org row: off by default, on once the account is ready", async () => {
+    const rig = await seedOrg({ withPass: false });
+    expect(field(await renderSponsorsTab(rig, "sponsors"), "charges")).toBe("false");
+    await sql`update organizations set stripe_charges_enabled = true where id = ${rig.orgId}`;
+    expect(field(await renderSponsorsTab(rig, "sponsors"), "charges")).toBe("true");
+  });
+
+  it("hands the competitions' end dates over as YYYY-MM-DD text, null where none is set", async () => {
+    const rig = await seedOrg({ withPass: false });
+    expect(/data-ends="([^"]*)"/.exec(await renderSponsorsTab(rig, "sponsors"))?.[1]).toBe("-|2027-08-31");
+  });
+
+  it("?sponsor= and ?deal= select this org's sponsor and its deal - and another org's ids select nothing", async () => {
+    const mine = await seedOrg({ withPass: false });
+    const other = await seedOrg({ withPass: false });
+    const own = await renderSponsorsTab(mine, "sponsors", { sponsor: mine.sponsorId, deal: mine.dealId });
+    expect([field(own, "sponsor"), field(own, "deal")]).toEqual([mine.sponsorId, mine.dealId]);
+    const foreignSponsor = await renderSponsorsTab(mine, "sponsors", { sponsor: other.sponsorId, deal: other.dealId });
+    expect([field(foreignSponsor, "sponsor"), field(foreignSponsor, "deal")]).toEqual(["-", "-"]);
+    // A real deal of another org on this org's own sponsor is still not a selection.
+    const foreignDeal = await renderSponsorsTab(mine, "sponsors", { sponsor: mine.sponsorId, deal: other.dealId });
+    expect([field(foreignDeal, "sponsor"), field(foreignDeal, "deal")]).toEqual([mine.sponsorId, "-"]);
+    // The list, with neither.
+    const list = await renderSponsorsTab(mine, "sponsors");
+    expect([field(list, "sponsor"), field(list, "deal")]).toEqual(["-", "-"]);
   });
 });

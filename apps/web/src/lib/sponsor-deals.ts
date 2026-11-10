@@ -263,3 +263,80 @@ export function primaryLabel(m: PaymentMethod, r: GoLiveRule, otherLive: boolean
   if (m === "online") return "send_invoice";
   return r === "immediate" && !otherLive ? "save_and_go_live" : "save_deal";
 }
+
+/** One step of a deal's timeline (spec §6.5, mockup screen 5). `at` is the ISO time the step happened, or null.
+ *  `done`: it happened. `next`: the ONE step an open deal is waiting on. `not_yet`: still to come. `skipped`: this deal has no
+ *  such step (a complimentary deal has no invoice or payment), or it never happened and now never will (an ended deal).
+ *  `detail` keys by step: `invoice_sent.to`; `paid.method|amountCents|currency`; `ends.competitionEndsOn`; `ended.reason`. */
+export type TimelineStep = {
+  key: "created" | "invoice_sent" | "paid" | "approved" | "live" | "ends" | "ended";
+  at: string | null;
+  state: "done" | "next" | "not_yet" | "skipped";
+  detail?: Record<string, string>;
+};
+
+/**
+ * The deal page's timeline, top to bottom as mockup screen 5 draws it: created, invoice_sent, paid, approved, live, then `ends`
+ * for an open deal or `ended` for an ended one. Every deal answers all six rows (a step that does not apply is `skipped`; the
+ * screen hides those), so two deals' timelines line up.
+ *
+ * Applies: `invoice_sent` to an online deal (an offline one only once a send is recorded - the mockup's offline deal shows no
+ * invoice step), never to a complimentary one; `paid` to every deal but a complimentary one; `approved` to the `on_approval` rule
+ * only. An open deal waits on its first applicable step that has not happened (`next`); later ones are `not_yet`, but a step that
+ * HAS happened is `done` wherever it sits (an immediate deal is live while its payment is still awaited). `ends` is a future
+ * date, never the thing a deal waits on.
+ *
+ * `ctx.competitionEndsOn` is a DISPLAY hint (the competition's end date, YYYY-MM-DD, or null): an open deal scoped to a
+ * competition with no end date of its own ends when that competition finishes (spec §8a), so its `ends` step carries the date the
+ * competition is scheduled to end. It never decides anything here - a deal ends on the competition's derived phase (the sweep),
+ * not on a date this function reads - so a hint in the past leaves the deal open.
+ */
+export function dealTimeline(d: SponsorDeal, ctx: { competitionEndsOn: string | null }): TimelineStep[] {
+  const ended = d.deal_status === "ended";
+  const complimentary = d.payment_method === "complimentary";
+  const invoiceSent = d.invoice_sent_at !== null;
+  const paid = d.payment_status === "paid" || d.payment_status === "refunded";
+
+  const raw: { key: TimelineStep["key"]; at: string | null; applies: boolean; done: boolean; detail?: Record<string, string> }[] = [
+    { key: "created", at: d.created_at, applies: true, done: true },
+    {
+      key: "invoice_sent",
+      at: d.invoice_sent_at,
+      applies: !complimentary && (d.payment_method === "online" || invoiceSent),
+      done: invoiceSent,
+      ...(invoiceSent && d.sponsor_email ? { detail: { to: d.sponsor_email } } : {}),
+    },
+    {
+      key: "paid",
+      at: d.paid_at,
+      applies: !complimentary,
+      done: paid,
+      ...(paid ? { detail: { method: d.payment_method, amountCents: String(d.amount_cents), currency: d.currency } } : {}),
+    },
+    { key: "approved", at: d.approved_at, applies: d.go_live === "on_approval", done: d.approved_at !== null },
+    { key: "live", at: d.live_at, applies: true, done: d.live_at !== null || d.deal_status === "live" },
+  ];
+
+  let waiting = false;
+  const steps: TimelineStep[] = raw.map((r) => {
+    const base = { key: r.key, at: r.at, ...(r.detail ? { detail: r.detail } : {}) };
+    if (!r.applies) return { ...base, state: "skipped" };
+    if (r.done) return { ...base, state: "done" };
+    // An ended deal waits on nothing: what never happened never will.
+    if (ended) return { ...base, state: "skipped" };
+    if (!waiting) {
+      waiting = true;
+      return { ...base, state: "next" };
+    }
+    return { ...base, state: "not_yet" };
+  });
+
+  if (ended) {
+    steps.push({ key: "ended", at: d.ended_at, state: "done", ...(d.ended_reason ? { detail: { reason: d.ended_reason } } : {}) });
+    return steps;
+  }
+  const endsOn = ctx.competitionEndsOn;
+  const hint = d.ends_at === null && d.competition_id !== null && endsOn !== null;
+  steps.push({ key: "ends", at: d.ends_at, state: "not_yet", ...(hint ? { detail: { competitionEndsOn: endsOn } } : {}) });
+  return steps;
+}
