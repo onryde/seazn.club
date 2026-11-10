@@ -26,8 +26,6 @@ function refusalText(err: unknown, msg: Msg): string {
   return msg("score.failed");
 }
 
-const jointUrl = (fixtureId: string) => `/api/v1/fixtures/${fixtureId}/joint-winners`;
-
 /** The ruling's write and what must follow it. The console's `live` is `useState(initialState)`, which `router.refresh()`
  *  never re-seeds, so BOTH run: `onChanged` is the console's own `resync()` (status, badge, offer) and `refresh` re-renders
  *  the server props (`joint_winners_at`). A failed resync is swallowed: the write already landed, and the refresh still
@@ -37,7 +35,7 @@ export async function commitJointWinners(
   fixtureId: string,
   after: { onChanged: () => Promise<unknown> | void; refresh: () => void },
 ): Promise<void> {
-  await apiV1(jointUrl(fixtureId), { method });
+  await apiV1(`/api/v1/fixtures/${fixtureId}/joint-winners`, { method });
   try {
     await after.onChanged();
   } catch {
