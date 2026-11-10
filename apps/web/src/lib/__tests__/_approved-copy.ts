@@ -344,7 +344,7 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
  *    against `"none"` on removal (`:64`). ROUND 1 SAID "charged pro rata
  *    straight away" AND WAS WRONG: `create_prorations` books the adjustment
  *    onto the NEXT INVOICE rather than charging immediately — stated in
- *    `server/usecases/billing-events.ts:738-740`, and the product's own UI copy
+ *    `server/usecases/billing-events/addon-pricing.ts:57-59`, and the product's own UI copy
  *    already had it right (`en/ui.json` `addOns.extraOrg.prorateUp`, which
  *    deliberately does not say "now").
  *

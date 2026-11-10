@@ -56,7 +56,13 @@ describe("R3 failure counters ↔ the usecases' return types", () => {
   const importedSource = (routePath: string) => {
     const route = readFileSync(join(WEB_API, routePath.replace(/^\/api\//, ""), "route.ts"), "utf8");
     const specs = [...route.matchAll(/from "@\/([^"]+)"/g)].map((m) => m[1]!);
-    return specs.map((s) => [`${s}.ts`, `${s}/index.ts`].map((f) => join(WEB_SRC, f)).find(existsSync)).filter((f): f is string => !!f).map((f) => readFileSync(f, "utf8")).join("\n");
+    // A module split into a folder (`usecases/billing-events/`) is still that module: its counters live in the siblings, not the barrel's
+    // re-exports, so a folder contributes EVERY .ts in it (a barrel-only read lost `failed: number` when billing-events was split).
+    const textOf = (f: string): string =>
+      f.endsWith(`${sep}index.ts`)
+        ? readdirSync(dirname(f)).filter((n) => n.endsWith(".ts")).sort().map((n) => readFileSync(join(dirname(f), n), "utf8")).join("\n")
+        : readFileSync(f, "utf8");
+    return specs.map((s) => [`${s}.ts`, `${s}/index.ts`].map((f) => join(WEB_SRC, f)).find(existsSync)).filter((f): f is string => !!f).map(textOf).join("\n");
   };
 
   it("every counter's field is declared as a number in a module its route imports (a renamed field cannot read as healthy)", () => {

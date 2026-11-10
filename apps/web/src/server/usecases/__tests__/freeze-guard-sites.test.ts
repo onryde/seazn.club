@@ -88,7 +88,7 @@ const CALLS = "refuses a frozen competition's call, Undo and preview with the gu
 
 /** site → [the test file, words that test's own title or table carries]. The sweep file names each site by its key. */
 const LEDGER: Record<string, [file: string, words: string]> = {
-  "competition-schedule-ai.ts#planForCompetition": [
+  "competition-schedule-ai/orchestrator.ts#planForCompetition": [
     "server/usecases/__tests__/competition-schedule-ai-route.test.ts",
     "a frozen COMPETITION → 402 competitions.max_active, before any spend",
   ],

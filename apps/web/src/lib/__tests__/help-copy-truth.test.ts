@@ -2583,7 +2583,7 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     }
     // Stated where the behaviour is documented, so the article and the comment
     // cannot drift apart.
-    expect(webSource("server/usecases/billing-events.ts")).toContain(
+    expect(webSource("server/usecases/billing-events/addon-pricing.ts")).toContain(
       "books those adjustments onto the next invoice rather than",
     );
     // BOTH raise paths say it. One would leave the other free to drift back to
