@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { stagesSource } from "./stages-source.ts";
 import type { RawResult, Session } from "../../bench/lib/http.ts";
 import { HttpDriver, REQUEST_TIMEOUT_MS, TEMPLATE_VISIBILITY, type Transport } from "../lib/driver/http-driver.ts";
 import { DESK_PHASES, DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, nextMatchFixtureId, voidTargetOf } from "../lib/driver/types.ts";
@@ -388,7 +389,7 @@ describe("HttpDriver — the seed proposal (W1-driving T6, D1)", () => {
     expect(e).toMatchObject({ status: 422, code: "SEEDING_TIE_UNRESOLVED", extra: { slots: ["f1:home"], entrantIds: ["a", "c"] } });
   });
   it("SEEDING_FAILED_AFTER_COMMIT is the product's own code (usecases/stages.ts progressCompletedStage), read as text", () => {
-    const text = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../../../apps/web/src/server/usecases/stages.ts"), "utf8");
+    const text = stagesSource(resolve(dirname(fileURLToPath(import.meta.url)), "../../.."));
     const m = /err instanceof Error \? err\.message : String\(err\),\s*"([A-Z_]+)"/.exec(text);
     expect(m?.[1]).toBe(SEEDING_FAILED_AFTER_COMMIT);
   });

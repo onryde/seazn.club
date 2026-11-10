@@ -677,8 +677,8 @@ describe("regression cases (R29)", () => {
     expect(checked).toBe(FENCES.length);
   });
   it("final batch FB-3: every committed match is the product's own words — thrown in its source, and read from the product's message in the committed live evidence", () => {
-    /** The product files whose thrown words the committed matches quote. */
-    const SOURCES = ["apps/web/src/server/engine-db/append-event.ts", "apps/web/src/server/engine-db/fold.ts", "apps/web/src/server/usecases/stages.ts"];
+    /** The product files whose thrown words the committed matches quote (`usecases/stages` is a folder: every module in it). */
+    const SOURCES = ["apps/web/src/server/engine-db/append-event.ts", "apps/web/src/server/engine-db/fold.ts", "apps/web/src/server/usecases/stages"];
     const words = new Map(SOURCES.map((p) => [p, thrownWords(p)]));
     const live: { cell: string; check: string; said: string }[] = [];
     const walk = (dir: string): void => {

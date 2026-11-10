@@ -19,12 +19,12 @@ import {
   BATCH_CALLERS,
   BATCH_GATES_FN,
   MAX_DELEGATION,
-  STAGES_PATH,
   exportedStageGateFns,
   functionBody,
   gatesChain,
   productFormatGates,
   readProduct,
+  readStages,
 } from "./product-gates-source.ts";
 
 const read = readProduct;
@@ -78,7 +78,7 @@ describe("the product's gate table (the fake's source of truth)", () => {
     // The follow: createStages, replaceStages and its dry run (FMT5) each reach the one gates function - in their own body
     // or through ONE delegate they call (FMT5: both PUT entries run `runReplaceStages`) - so the PUT is gated by the table
     // the POST is, and the dry run refuses what the PUT would.
-    const src = read(STAGES_PATH);
+    const src = readStages();
     let callers = 0;
     for (const c of BATCH_CALLERS) {
       const chain = gatesChain(src, c);

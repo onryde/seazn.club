@@ -81,7 +81,7 @@ const EXEMPT: readonly Exemption[] = [
   },
   // Scores credited per pair member — the rule's own answer for a pair side.
   { file: "src/server/usecases/americano.ts", fn: "personalPointsLeaderboard", sites: 1, reason: "americano/mexicano personal points over PAIR entrants, where the rule's roster stands in for every member anyway" },
-  { file: "src/server/usecases/stages.ts", fn: "americanoGen", sites: 1, reason: "mexicano's next-round pairing by per-person points over PAIR entrants (the rule's own roster answer); credits nothing" },
+  { file: "src/server/usecases/stages/generators.ts", fn: "americanoGen", sites: 1, reason: "mexicano's next-round pairing by per-person points over PAIR entrants (the rule's own roster answer); credits nothing" },
   // A candidate set ranked by the stats fold's own figure.
   {
     file: "src/server/usecases/org-posts.ts",
@@ -124,10 +124,10 @@ const EXEMPT: readonly Exemption[] = [
       "final re-review 2, R2-2: under the meeting row's lock, is this person still a member of one of the board's two entrants NOW — a video participant is stored only for the pairing the meeting was made for; who appeared is never asked, credits nothing",
   },
   // Registration finds a person in the player lane (persons_org_user_lane_uq).
-  { file: "src/server/usecases/registrations.ts", fn: "resolvePlayerPerson", sites: 1, reason: "registration's person lookup in the player lane; credits nothing" },
-  { file: "src/server/usecases/registrations.ts", fn: "findPlayerPersonByEmail", sites: 1, reason: "registration's person lookup in the player lane; credits nothing" },
-  { file: "src/server/usecases/registrations.ts", fn: "playerPersonConsentsByEmail", sites: 1, reason: "registration's consent lookup in the player lane; credits nothing" },
-  { file: "src/server/usecases/registrations.ts", fn: "findOrCreatePlayerPerson", sites: 1, reason: "registration's person lookup in the player lane; credits nothing" },
+  { file: "src/server/usecases/registrations/people.ts", fn: "resolvePlayerPerson", sites: 1, reason: "registration's person lookup in the player lane; credits nothing" },
+  { file: "src/server/usecases/registrations/people.ts", fn: "findPlayerPersonByEmail", sites: 1, reason: "registration's person lookup in the player lane; credits nothing" },
+  { file: "src/server/usecases/registrations/people.ts", fn: "playerPersonConsentsByEmail", sites: 1, reason: "registration's consent lookup in the player lane; credits nothing" },
+  { file: "src/server/usecases/registrations/people.ts", fn: "findOrCreatePlayerPerson", sites: 1, reason: "registration's person lookup in the player lane; credits nothing" },
 ];
 
 interface Site {

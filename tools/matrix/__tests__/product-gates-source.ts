@@ -15,10 +15,12 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stagesSource } from "./stages-source.ts";
 
 export const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 export const readProduct = (p: string): string => readFileSync(resolve(REPO, p), "utf8");
-export const STAGES_PATH = "apps/web/src/server/usecases/stages.ts";
+/** The stages use-case is a folder; its text is every module in it (see stages-source.ts). */
+export const readStages = (): string => stagesSource(REPO);
 export const FORMAT_GATES_PATH = "apps/web/src/server/usecases/format-gates.ts";
 
 /** The text of `head`'s body: from its signature to the first closing brace at column 0. */
@@ -84,7 +86,7 @@ export function batchGatesBody(stagesSrc: string): string {
 /** The product's format gates in the order the batch asks them: which feature each requires and which stage kinds its body
  *  names (format-gates.ts). Read from the text of `batchGatesBody`, never from `expectedGate`. */
 export function productFormatGates(): { fn: string; key: string; kinds: string[] }[] {
-  const batch = batchGatesBody(readProduct(STAGES_PATH));
+  const batch = batchGatesBody(readStages());
   const gates = readProduct(FORMAT_GATES_PATH);
   return [...batch.matchAll(/(stageNeeds\w+Gate)\([\s\S]*?requireFeature\(auth\.orgId, "([^"]+)"/g)].map((m) => ({
     fn: m[1] ?? "",

@@ -193,7 +193,7 @@ const SITES: readonly { file: string; count: number; case: string; override?: fa
   { file: "apps/web/src/server/public-site/stage-format-lines.ts", count: 1, case: "stage-format-lines.ts stageFormatLines", override: false },
   // W3 T3 (SW-M7, X-SW-5): the Swiss bye freezes at award - the cfg append-event.ts would freeze at a first event, over
   // the bye shell's own override.
-  { file: "apps/web/src/server/usecases/stages.ts", count: 1, case: "stages.ts swissGen bye seat" },
+  { file: "apps/web/src/server/usecases/stages/swiss-gen.ts", count: 1, case: "stages.ts swissGen bye seat" },
 ];
 /** The ledger's total, which the source scan and the driven set must both reach. */
 const SITE_TOTAL = SITES.reduce((n, s) => n + s.count, 0);

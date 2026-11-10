@@ -561,7 +561,10 @@ describe("joint RuleFixture producers stay in the fixture-id namespace (#443)", 
     const jointModules = readdirSync(new URL("../competition-schedule-ai/", import.meta.url)).filter((f) => f.endsWith(".ts"));
     expect(jointModules.length, "anti-vacuity: the joint modules were found").toBeGreaterThan(1);
     const joint = jointModules.map((f) => read(`../competition-schedule-ai/${f}`)).join("\n");
-    const board = read("../schedule.ts");
+    // `schedule` is a folder too: the board's producers are EVERY module in it.
+    const boardModules = readdirSync(new URL("../schedule/", import.meta.url)).filter((f) => f.endsWith(".ts"));
+    expect(boardModules.length, "anti-vacuity: the board modules were found").toBeGreaterThan(1);
+    const board = boardModules.map((f) => read(`../schedule/${f}`)).join("\n");
     const producers = (s: string): number => (s.match(/winnerTo:/g) ?? []).length;
 
     expect(/export function toRuleFixture\(/.test(single)).toBe(true);

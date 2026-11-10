@@ -1,7 +1,7 @@
-import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { stagesSource } from "./stages-source.ts";
 import { FORFEIT_REASONS } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import {
@@ -287,7 +287,7 @@ describe("unplayedBoard - the engine's verdict on a seated Swiss board (P-A2)", 
     expect(unplayedBoard({ kind: "win", winner: "a", method: "forfeit" }, true)).toBe(false);
   });
   it("the product reads the same two ingredients: buildSwissHistory asks for a double walkover and for isUnplayedForfeit", () => {
-    const src = readFileSync(resolve(REPO, "apps/web/src/server/usecases/stages.ts"), "utf8");
+    const src = stagesSource(REPO);
     const at = src.indexOf("export function buildSwissHistory(");
     expect(at, "anti-vacuity: the pairing history is where it was").toBeGreaterThan(-1);
     const body = src.slice(at, src.indexOf("const latestSeated", at));

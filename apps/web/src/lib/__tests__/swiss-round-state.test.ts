@@ -176,12 +176,12 @@ describe("swissRoundState — every fixture status of the wire vocabulary lands 
     expect(swissRoundState(3, [board(1, status)], false)?.state).toBe(ONE_BOARD[status]);
   });
 
-  it("the decided set is the repo's own settled set: usecases/stages.ts's DECIDED, read from source", () => {
-    // `stages.ts` is a server-only usecase and cannot be imported here, so its declaration is read as TEXT (the pattern
+  it("the decided set is the repo's own settled set: usecases/stages/swiss-gen.ts's DECIDED, read from source", () => {
+    // `stages/swiss-gen.ts` is a server-only usecase and cannot be imported here, so its declaration is read as TEXT (the pattern
     // `champion.test.ts` uses for BRACKET_SETTLED): a status added to or removed from that set reds here.
-    const source = readFileSync(new URL("../../server/usecases/stages.ts", import.meta.url), "utf8");
+    const source = readFileSync(new URL("../../server/usecases/stages/swiss-gen.ts", import.meta.url), "utf8");
     const match = /const DECIDED(?::[^=]*)? = new Set\(\[([^\]]*)\]\)/.exec(source);
-    expect(match, "stages.ts still declares DECIDED").not.toBeNull();
+    expect(match, "stages/swiss-gen.ts still declares DECIDED").not.toBeNull();
     const declared = [...match![1]!.matchAll(/"([a-z_]+)"/g)].map(([, s]) => s!);
     expect(declared.length).toBeGreaterThan(0);
     expect([...WITHDRAWAL_PLAYED_STATUSES].sort()).toEqual(declared.sort());

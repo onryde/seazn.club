@@ -20,6 +20,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
+import { stagesSource } from "./stages-source.ts";
 import { SPORT_KEYS, type StagePostBody } from "../lib/catalogue.ts";
 import { RefusedCall, type FixtureRow, type GenerateOut, type StageRef } from "../lib/driver/types.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
@@ -39,7 +40,7 @@ import { entrantMembersPkeyFrom, entrantMembersPkeyText, wireCodeFor } from "./p
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..", "..");
-const STAGES_TS = resolve(REPO, "apps/web/src/server/usecases/stages.ts");
+const stagesText = (): string => stagesSource(REPO);
 const FORMAT_TEMPLATES_TS = resolve(REPO, "apps/web/src/lib/format-templates.ts");
 // Engine split 2b (reverse inventory row 24): the engine is the installed package, so the rule's line is read from its compiled module,
 // which keeps the source line verbatim (I: the same expectation, read from what this harness runs).
@@ -347,7 +348,7 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
   }, 120_000);
 
   it("the fake's mexicano wait and player set ARE the product's (text pins, review 1 I-3, review 2 I-3)", () => {
-    const src = readFileSync(STAGES_TS, "utf8");
+    const src = stagesText();
     const gen = sliceFunction(src, "americanoGen");
     expect(gen).toContain("STAGE_NOT_READY");
     expect(gen).not.toMatch(/\nasync function /);
@@ -368,7 +369,7 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
   });
 
   it("team americano: the product's member read has no kind filter and no order (text pin, I-2) — one arbitrary member per team, the LAST row read", () => {
-    const gen = sliceFunction(readFileSync(STAGES_TS, "utf8"), "americanoGen");
+    const gen = sliceFunction(stagesText(), "americanoGen");
     const select = gen.match(/tx<\{ entrant_id: string; person_id: string \}\[\]>`([\s\S]*?)`/)?.[1] ?? "";
     expect(select).toMatch(/from entrant_members/);
     expect(select).not.toMatch(/\bkind\b/i);
@@ -481,7 +482,7 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     // a duplicate pair entrant row would raise — is NOT the cause (the regex is not over-broad).
     for (const other of ["entrants_pkey", "em_pk"]) expect(SELF_PAIR_CAUSE.test(pk.violation.replace(pk.name, other)), other).toBe(false);
     // The member insert has no ON CONFLICT, so a duplicate (entrant, person) row raises (stages.ts pairEntrantsFor).
-    const pairs = sliceFunction(readFileSync(STAGES_TS, "utf8"), "pairEntrantsFor");
+    const pairs = sliceFunction(stagesText(), "pairEntrantsFor");
     expect(pairs).toContain("await tx`insert into entrant_members ${tx(memberRows)}`;");
     expect(pairs).not.toMatch(/on conflict/i);
     // The v1 catch-all: an error no earlier arm claims (a database error is

@@ -5,8 +5,9 @@
 // reads: the engine-directory readers (`ENGINE`, `engineFileExists`, `readEngineFile`) and the parser re-exports are not copied,
 // because the rows come from the installed package's testkit (`@seazn/engine/testkit`) and the engine's paths are the engine's
 // checker's. Nothing else is edited: the same TEST_FILE, CHECKER_FILES, AWAITING_PROOF, budget, title parser and proof checks, so
-// the two halves cannot disagree about what proves a row. `typescript` is a root devDependency.
-import { existsSync, readFileSync } from "node:fs";
+// the two halves cannot disagree about what proves a row. `typescript` is a root devDependency. One addition since the copy: a
+// `X.ts` the engine's rows still name that became a folder `X/` resolves to its modules (`modulesAt`, a seam adapter).
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -118,7 +119,34 @@ export const inEngine = (p: string): boolean => p.startsWith(ENGINE_ROW_PREFIX);
 /** A `proved by` entry is a repo-relative test path, or a matrix case id prefixed `matrix:`. A matrix case is
  *  additional evidence only: a row that names nothing else names no proving test (spec §6). */
 export const isMatrixCase = (p: string): boolean => p.startsWith("matrix:");
-export const fileExists = (p: string): boolean => existsSync(join(REPO, p));
+
+/** The files a repo-relative path stands for, or undefined when it names nothing: `[p]` when `p` exists as written; otherwise,
+ *  for a `X.ts` that is gone, the sorted `.ts` modules of the folder `X/` it became (src/server/MODULARIZATION.md), provided the
+ *  folder has an `index.ts`; otherwise undefined. The exact path always wins over the folder.
+ *
+ *  SEAM ADAPTER. The rule table comes from the installed engine package (`@seazn/engine/testkit`), whose rows still name the
+ *  pre-split app files in `enforcedAt` (`apps/web/src/server/usecases/stages.ts`, `schedule.ts`, `registrations.ts`; the
+ *  `api-v1/schemas.ts` split will add one). That table is another repo's, so this half resolves the old name to the folder that
+ *  replaced it instead of failing every row. Retire this fallback, and the folder branch of `fileExists`/`readRepoFile`, when
+ *  the engine's `enforcedAt` paths name the modules or the folders. */
+export function modulesAt(root: string, p: string): string[] | undefined {
+  if (existsSync(join(root, p))) return [p];
+  if (!p.endsWith(".ts")) return undefined;
+  const dir = p.slice(0, -".ts".length);
+  let names: string[];
+  try {
+    names = readdirSync(join(root, dir), { withFileTypes: true })
+      .filter((e) => e.isFile() && e.name.endsWith(".ts"))
+      .map((e) => e.name)
+      .sort();
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return undefined;
+    throw e;
+  }
+  return names.includes("index.ts") ? names.map((n) => `${dir}/${n}`) : undefined;
+}
+export const fileExists = (p: string): boolean => modulesAt(REPO, p) !== undefined;
 
 /** Reads a repo-relative file; undefined when it does not exist. Injectable into `proofProblems`, so a synthetic row
  *  proves against in-memory fixtures instead of borrowing a real file (the old positive pair was the checker itself). */
@@ -131,7 +159,16 @@ const readOrUndefined = (file: string): string | undefined => {
     throw e;
   }
 };
-export const readRepoFile: ReadRepoFile = (p) => readOrUndefined(join(REPO, p));
+/** `readRepoFile` over a root: the file as written, or, for a `X.ts` that became a folder (`modulesAt`), the folder's modules
+ *  concatenated in sorted order, so a symbol is found in whichever module holds it. A directory that exists under the name
+ *  asked for still throws EISDIR (the default reader's contract), and a path that names nothing is undefined. */
+export function readModulesAt(root: string, p: string): string | undefined {
+  const modules = modulesAt(root, p);
+  if (modules === undefined) return undefined;
+  const sources = modules.map((m) => readOrUndefined(join(root, m)));
+  return sources.every((s) => s !== undefined) ? sources.join("\n") : undefined;
+}
+export const readRepoFile: ReadRepoFile = (p) => readModulesAt(REPO, p);
 /** Batch 4 review M7. The proof check reads one proving file per (row, test path) pair and parses each DISTINCT file once
  *  (`testTitles` memoises), so its cost grows with the table: 1.4 s for 311 pairs on an idle machine (about 4.5 ms a pair),
  *  and it timed out at 13 s under load. AGENTS.md class 20: a flat timeout beside a derived cost is a latent red, so the

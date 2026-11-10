@@ -1617,7 +1617,7 @@ export function markdownSection(markdown: string, heading: RegExp): string | nul
 
 // ── The entry-fee rate lock (V312, db/migration/deltas/V316__competition_fee_lock.sql)
 //
-// `effectiveFeePercentFor` (server/usecases/registrations.ts) reads
+// `effectiveFeePercentFor` (server/usecases/registrations/helpers.ts) reads
 // `competitions.fee_percent ?? feePercentFor(org)`: once a competition has taken
 // a paid entry its rate is STAMPED and every later entry pays that same rate,
 // immune to a plan change, a group detach, a downgrade — or an Event Pass
@@ -1645,7 +1645,7 @@ export const FEE_REVERSION_PATTERNS = [
 const FEE_LOCK_WORD = String.raw`(?:locked|locks|lock|fixed|frozen|pinned|stays?\s+at|does\s+not\s+(?:rise|change|move))`;
 // `card` is optional-but-recognised throughout: the trigger is the first paid
 // CARD entry (an offline entry carries no rate and leaves the competition
-// unlocked — see the comment above the stamp in registrations.ts), so copy that
+// unlocked — see the comment above the stamp in registrations/checkout-completion.ts), so copy that
 // says so precisely must satisfy this, not fall through it.
 const PAID_ENTRY_TRIGGER = String.raw`(?:first\s+(?:paid\s+)?(?:card\s+)?(?:entry|entrant|registration|payment|payer)|(?:already\s+)?(?:taken|took|had|has\s+had)\s+(?:a|its|the)\s+(?:first\s+)?paid\s+(?:card\s+)?(?:entry|registration)|no\s+paid\s+(?:card\s+)?(?:entry|entrant)|never\s+took\s+a\s+paid\s+(?:card\s+)?(?:entry|entrant))`;
 
@@ -1729,7 +1729,7 @@ export function unqualifiedFeeReversionFaults(label: string, markdown: string): 
 /**
  * CRITICAL 2, fix round 1 — a falsehood this task's own round-1 copy shipped.
  *
- * The locked rate is NOT a constant. `registrations.ts` is the only writer of
+ * The locked rate is NOT a constant. `registrations/checkout-completion.ts` is the only writer of
  * `competitions.fee_percent`, its `where … and fee_percent is null` makes it
  * first-wins, and `lockRate = chargedFeePercent ?? reg.fee_percent` records what
  * the first paid CARD entry was actually billed (offline entries carry no rate
@@ -4367,7 +4367,7 @@ export const FEE_RATE_CLAIM_CLASSIFIERS = [
 /**
  * The three true things there are to say about the rate after a pass ends, all
  * of them anchored on the FIRST PAID CARD ENTRY, because that is the only thing
- * that decides the answer (`registrations.ts` is the sole writer of
+ * that decides the answer (`registrations/checkout-completion.ts` is the sole writer of
  * `competitions.fee_percent`, and its `where … and fee_percent is null` makes it
  * first-wins).
  *
@@ -4395,7 +4395,7 @@ export const FEE_RATE_ALLOWLIST: ClaimAllowlist = {
   classifies: FEE_RATE_CLAIM_CLASSIFIERS,
   approved: APPROVED_FEE_RATE_FORMS,
   guidance:
-    "The rate is decided by the FIRST PAID CARD ENTRY and nothing else — check registrations.ts before rewording.",
+    "The rate is decided by the FIRST PAID CARD ENTRY and nothing else — check server/usecases/registrations/checkout-completion.ts before rewording.",
 };
 
 // ── A golden fixture over the two paragraphs that keep regressing ────────────
@@ -4422,7 +4422,7 @@ export interface ApprovedParagraph {
  * money an organiser is charged, they have carried a falsehood in three
  * consecutive rounds, and the cost of changing them is now one deliberate
  * re-approval — which is a person reading the new words against
- * `registrations.ts` and `org_has_feature`, exactly the step that was skipped
+ * `registrations/checkout-completion.ts` and `org_has_feature`, exactly the step that was skipped
  * each time.
  */
 export function goldenParagraphFaults(
@@ -4455,7 +4455,7 @@ export function goldenParagraphFaults(
         "  THIS TEST IS A GATE, NOT A BUG. This paragraph states " + paragraph.why,
         "  It has shipped a falsehood in three consecutive rounds of this wave, so",
         "  its wording is pinned and changing it requires a deliberate re-approval:",
-        "  read the new text against server/usecases/registrations.ts (the fee lock)",
+        "  read the new text against server/usecases/registrations/checkout-completion.ts (the fee lock)",
         "  and lib/entitlements.ts (the pass window), then paste it into",
         "  src/lib/__tests__/_approved-copy.ts.",
         "",
@@ -4531,7 +4531,7 @@ const GATE_PREAMBLE = [
   "  copy that was approved — not that it avoids any particular wording.",
   "",
   "  To make this pass: read your new text against the code it describes —",
-  "  server/usecases/registrations.ts for the entry-fee lock, lib/entitlements.ts",
+  "  server/usecases/registrations/checkout-completion.ts for the entry-fee lock, lib/entitlements.ts",
   "  for the pass window — then update the digests in",
   "  src/lib/__tests__/_approved-copy.ts and say in the commit what you checked.",
 ].join("\n");

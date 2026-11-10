@@ -1,11 +1,12 @@
 // Product rules the model's fake and its pins READ from the product's source
 // instead of typing them (Task 13 fix round 1, ruling C-1): a product change
 // moves the fake with it, and turns the model's pin red.
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type * as TS from "typescript";
+import { stagesSource } from "./stages-source.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const read = (p: string) => readFileSync(resolve(REPO, p), "utf8");
@@ -109,16 +110,16 @@ export function rosterLockText(): RosterLockText {
   return { statuses, openKinds, rootSwiss, rootKnockout, status, code, wireCode: code ?? wireCodeFor(status), message: m[5] };
 }
 
-/** schedule.ts ROUND_ROBIN_STAGE_KINDS: the stage kinds the product generates
+/** schedule/rounds.ts ROUND_ROBIN_STAGE_KINDS: the stage kinds the product generates
  *  as a round robin — the ones #879's positional reconcile can duplicate. Not
  *  `roundRobinStageIds`' own list since W3 T3b: that one is the wider
  *  ROUND_SEQUENCE_STAGE_KINDS (it adds swiss, a round sequence for scheduling
  *  but no round robin). */
 export function roundRobinKindsText(): string[] {
-  const m = /\nexport const ROUND_ROBIN_STAGE_KINDS: readonly string\[\] = \[([^\]]*)\];/.exec(read("apps/web/src/server/usecases/schedule.ts"));
-  if (m === null) throw new Error("product-text: schedule.ts ROUND_ROBIN_STAGE_KINDS not found in the expected shape");
+  const m = /\nexport const ROUND_ROBIN_STAGE_KINDS: readonly string\[\] = \[([^\]]*)\];/.exec(read("apps/web/src/server/usecases/schedule/rounds.ts"));
+  if (m === null) throw new Error("product-text: schedule/rounds.ts ROUND_ROBIN_STAGE_KINDS not found in the expected shape");
   const out = [...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);
-  if (out.length === 0) throw new Error("product-text: schedule.ts ROUND_ROBIN_STAGE_KINDS names no kind");
+  if (out.length === 0) throw new Error("product-text: schedule/rounds.ts ROUND_ROBIN_STAGE_KINDS names no kind");
   return out;
 }
 
@@ -277,7 +278,7 @@ export function nextMatchStartedText(): NextMatchText {
  *  bracket fixture — its lane's offset (a multiple of the lane depth), plus
  *  the engine's 0-based round, plus one. */
 export function bracketRoundNoText(): (lane: string | undefined, round: number, laneDepth: number) => number {
-  const body = /\nfunction bracketToGen\(bracket: GeneratedBracket, laneDepth: number\): GenFixture\[\] \{([\s\S]*?)\n\}\n/.exec(read("apps/web/src/server/usecases/stages.ts"))?.[1];
+  const body = /\nfunction bracketToGen\(bracket: GeneratedBracket, laneDepth: number\): GenFixture\[\] \{([\s\S]*?)\n\}\n/.exec(stagesSource(REPO))?.[1];
   const offset = body === undefined ? null : /const laneOffset = \(f: BracketFixtureGen\): number =>\s*f\.bracket === "LB" \? laneDepth : f\.bracket === "GF" \? laneDepth \* (\d+) : 0;/.exec(body);
   if (body === undefined || offset === null || !body.includes("const roundNo = laneOffset(f) + f.round + 1;")) {
     throw new Error("product-text: stages.ts bracketToGen's round_no is not lane offset + round + 1 — re-read it and re-check the model's later-round rule");
@@ -312,7 +313,7 @@ export function structuralBracketFrom(src: string): { kinds: string[]; resetKey:
   if (resetKey === null) throw new Error("product-text: no double_elim arm was read — the reset key is unknown");
   return { kinds, resetKey };
 }
-export const structuralBracketText = () => structuralBracketFrom(read("apps/web/src/server/usecases/stages.ts"));
+export const structuralBracketText = () => structuralBracketFrom(stagesSource(REPO));
 
 /** The literal words of every `throw new X(…)` in a product source file: each
  *  string argument, and a template's literal pieces (its head and the text
@@ -322,7 +323,11 @@ export const structuralBracketText = () => structuralBracketFrom(read("apps/web/
  *  transform chokes on its CJS bundle, and the model's fake imports this file. */
 export function thrownWords(path: string): string[] {
   const ts = createRequire(import.meta.url)("typescript") as typeof TS;
-  const sf = ts.createSourceFile(path, read(path), ts.ScriptTarget.Latest, true);
+  // A product "file" may be a folder (usecases/stages/): every module in it is read, and fewer than two is a lost scan.
+  const files = statSync(resolve(REPO, path)).isDirectory()
+    ? readdirSync(resolve(REPO, path)).filter((f) => f.endsWith(".ts")).sort().map((f) => `${path}/${f}`)
+    : [path];
+  if (files.length === 0 || (files.length < 2 && files[0] !== path)) throw new Error(`product-text: ${path} holds fewer than two modules — a vacuous pin`);
   const out: string[] = [];
   const visit = (n: TS.Node): void => {
     if (ts.isThrowStatement(n) && ts.isNewExpression(n.expression)) {
@@ -333,7 +338,7 @@ export function thrownWords(path: string): string[] {
     }
     ts.forEachChild(n, visit);
   };
-  visit(sf);
+  for (const f of files) visit(ts.createSourceFile(f, read(f), ts.ScriptTarget.Latest, true));
   if (out.length === 0) throw new Error(`product-text: ${path} throws no literal words — a vacuous pin`);
   return out;
 }
@@ -356,7 +361,7 @@ export function withdrawalTableKindsText(): string[] {
 /** stages.ts BRACKET_WALKOVER_KINDS: the bracket kinds whose withdrawal
  *  forfeits each pending line to the opponent (W1-driving T7). */
 export function bracketWalkoverKindsText(): string[] {
-  return setMembers(/\nexport const BRACKET_WALKOVER_KINDS: ReadonlySet<string> = new Set\(\[([\s\S]*?)\]\);/.exec(read("apps/web/src/server/usecases/stages.ts")), "stages.ts BRACKET_WALKOVER_KINDS");
+  return setMembers(/\nexport const BRACKET_WALKOVER_KINDS: ReadonlySet<string> = new Set\(\[([\s\S]*?)\]\);/.exec(stagesSource(REPO)), "stages.ts BRACKET_WALKOVER_KINDS");
 }
 
 /** stages.ts departedEntrantIds: the entrant statuses that have LEFT the
@@ -364,7 +369,7 @@ export function bracketWalkoverKindsText(): string[] {
  *  ladder is the raw order without them (W1-driving T7). W3 T15 made it
  *  `export async function` (the Swiss cut reads it too): the `export` is optional here. */
 export function departedStatusesText(): string[] {
-  const m = /\n(?:export )?async function departedEntrantIds\(tx: Tx, divisionId: string\): Promise<Set<string>> \{[\s\S]*?status in \(([^)]*)\)/.exec(read("apps/web/src/server/usecases/stages.ts"));
+  const m = /\n(?:export )?async function departedEntrantIds\(tx: Tx, divisionId: string\): Promise<Set<string>> \{[\s\S]*?status in \(([^)]*)\)/.exec(stagesSource(REPO));
   if (m === null) throw new Error("product-text: stages.ts departedEntrantIds not found in the expected shape — re-read it");
   const out = [...m[1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]);
   if (out.length === 0) throw new Error("product-text: stages.ts departedEntrantIds names no status");
@@ -383,7 +388,7 @@ export interface LadderText {
 /** stages.ts issueChallenge (W1-driving T7, D8): what FakeLadderDriver
  *  mirrors, read from the product's text. */
 export function ladderText(): LadderText {
-  const src = read("apps/web/src/server/usecases/stages.ts");
+  const src = stagesSource(REPO);
   const range = /\nexport const DEFAULT_LADDER_CHALLENGE_RANGE = (\d+);/.exec(src);
   if (range === null) throw new Error("product-text: stages.ts DEFAULT_LADDER_CHALLENGE_RANGE not found");
   const body = /\nexport async function issueChallenge\([\s\S]*?\n\}\n/.exec(src)?.[0];

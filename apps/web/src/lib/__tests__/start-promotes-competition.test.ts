@@ -15,13 +15,13 @@ import {
 
 describe("the competition statuses starting a division promotes", () => {
   it("matches the `where` clause startDivision actually guards on", () => {
-    const source = readFileSync(join(process.cwd(), "src/server/usecases/schedule.ts"), "utf8");
+    const source = readFileSync(join(process.cwd(), "src/server/usecases/schedule/publish.ts"), "utf8");
     // The promotion: `update competitions set status = 'live'
     //                 where id = ${division.competition_id} and status = 'published'`.
     const clause = /update competitions set status = '([a-z]+)'\s*where id = \$\{[^}]+\} and status = '([a-z]+)'/.exec(
       source.replace(/\n\s*/g, " "),
     );
-    expect(clause, "the competition promotion is no longer in schedule.ts").not.toBeNull();
+    expect(clause, "the competition promotion is no longer in schedule/publish.ts").not.toBeNull();
     // Both ends, because the dialog's sentence names both: a server that
     // promoted to some other status, or from some other one, would make the
     // copy false in a way a presence-only assertion cannot see.

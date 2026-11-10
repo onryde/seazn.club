@@ -7,6 +7,7 @@ import { generatePagePlayoff } from "@seazn/engine/scheduling";
 import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { stagesSource } from "./stages-source.ts";
 import { buildRuleOverride } from "../../../apps/web/src/lib/match-rules/index.ts";
 import { RULES, decide } from "../lib/applicability.ts";
 import { BUILDER_DEFAULT_KNOBS, ROW_KEYS, SPORT_KEYS, stagesForRow, type StagePostBody } from "../lib/catalogue.ts";
@@ -2671,7 +2672,7 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
   const ppRow = { row: "page_playoff_only" as const };
 
   it("text pin: page_playoff is NOT a bracket-walkover kind, so a withdrawal takes the open-format branch (voids pending, forfeits nothing)", () => {
-    const stages = readFileSync(resolve(REPO, "apps/web/src/server/usecases/stages.ts"), "utf8");
+    const stages = stagesSource(REPO);
     const set = /export const BRACKET_WALKOVER_KINDS: ReadonlySet<string> = new Set\(\[([\s\S]*?)\]\)/.exec(stages)?.[1];
     expect(set, "BRACKET_WALKOVER_KINDS literal not found").toBeDefined();
     const kinds = [...set!.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);

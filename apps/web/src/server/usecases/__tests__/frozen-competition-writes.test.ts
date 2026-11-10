@@ -64,24 +64,24 @@ const seed = () => seedBracket({ sport: "badminton", variant: "bwf", stageKind: 
 function writes(s: SeededBracket): Array<[site: string, attempt: () => Promise<unknown>]> {
   const fixtureId = s.fixtureIds[0]!;
   return [
-    ["schedule.ts#moveFixture", () => moveFixture(s.auth, fixtureId, { scheduled_at: "2030-06-01T10:00:00.000Z" })],
+    ["schedule/move.ts#moveFixture", () => moveFixture(s.auth, fixtureId, { scheduled_at: "2030-06-01T10:00:00.000Z" })],
     [
-      "schedule.ts#putScheduleSettings",
+      "schedule/settings.ts#putScheduleSettings",
       async () => putScheduleSettings(s.auth, s.divisionId, { config: (await getScheduleSettings(s.auth, s.divisionId)).config }),
     ],
     [
-      "schedule.ts#applySchedule",
+      "schedule/apply.ts#applySchedule",
       () =>
         applySchedule(s.auth, s.stageId, {
           source: "auto",
           assignments: [{ fixture_id: fixtureId, scheduled_at: "2030-06-01T10:00:00.000Z", court_id: randomUUID() }],
         }),
     ],
-    ["schedule.ts#publishSchedule", () => publishSchedule(s.auth, s.divisionId)],
-    ["schedule.ts#startDivision", () => startDivision(s.auth, s.divisionId)],
+    ["schedule/publish.ts#publishSchedule", () => publishSchedule(s.auth, s.divisionId)],
+    ["schedule/publish.ts#startDivision", () => startDivision(s.auth, s.divisionId)],
     ["entrants.ts#createEntrants", () => createEntrants(s.auth, s.divisionId, [{ kind: "individual", display_name: "Late Entry", members: [] }])],
     [
-      "stages.ts#insertStageBatch",
+      "stages/stage-graph.ts#insertStageBatch",
       () => createStages(s.auth, s.divisionId, CreateStage.parse({ seq: 2, kind: "knockout", name: "Plate", config: {} })),
     ],
     [
@@ -109,7 +109,7 @@ function writes(s: SeededBracket): Array<[site: string, attempt: () => Promise<u
     ],
     ["competitions.ts#patchCompetition", () => patchCompetition(s.auth, s.competitionId, { name: "Renamed Cup" })],
     ["fixture-rules.ts#writeFixtureRulesOverride", () => writeFixtureRulesOverride(s.auth, [fixtureId], { bestOf: 5 })],
-    ["stages.ts#deleteStage", () => deleteStage(s.auth, s.stageId)],
+    ["stages/stage-graph.ts#deleteStage", () => deleteStage(s.auth, s.stageId)],
   ];
 }
 

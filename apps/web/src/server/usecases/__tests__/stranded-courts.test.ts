@@ -208,15 +208,24 @@ function verifyConfigSources(): [string, string][] {
 
 describe("verify-config call sites carry both court signals", () => {
   const sources = verifyConfigSources();
-  const src = readFileSync(new URL("../schedule.ts", import.meta.url), "utf8");
+  // `schedule` is a folder (index.ts + sibling modules): the board's verify-config call sites are spread over
+  // its modules, so the single-file read is every module of the folder, joined.
+  const scheduleDir = new URL("../schedule/", import.meta.url);
+  const scheduleFiles = readdirSync(scheduleDir).filter((n) => n.endsWith(".ts")).sort();
+  const src = scheduleFiles.map((n) => readFileSync(new URL(n, scheduleDir), "utf8")).join("\n");
   const merge = readFileSync(new URL("../person-merge.ts", import.meta.url), "utf8");
   const srcCode = stripComments(src);
   const mergeCode = stripComments(merge);
 
   it("the walk finds at least the two files known to build verify configs", () => {
     const paths = sources.map(([p]) => p);
-    expect(paths).toContain("apps/web/src/server/usecases/schedule.ts");
+    // The board builds its verify configs in `schedule/engine-inputs.ts` (toVerifyConfig, verifyConfigForDivision) and
+    // calls them from the auto pass, apply, move and validate modules.
+    expect(paths).toContain("apps/web/src/server/usecases/schedule/engine-inputs.ts");
     expect(paths).toContain("apps/web/src/server/usecases/person-merge.ts");
+    // Anti-vacuity: the walk reached the board's other call sites, not just the module that defines the builders.
+    const boardPaths = paths.filter((p) => p.startsWith("apps/web/src/server/usecases/schedule/"));
+    expect(boardPaths.length, "the schedule/ modules that build or call a verify config").toBeGreaterThan(3);
   });
 
   it("EVERY file under server/ that calls toVerifyConfig names both signals at every call", () => {
@@ -243,6 +252,7 @@ describe("verify-config call sites carry both court signals", () => {
     file.slice(matchIndex - 9, matchIndex) === "function ";
 
   it("sanity: the source files actually resolved (a wrong relative path must fail loudly, not vacuously)", () => {
+    expect(scheduleFiles.length, "the schedule/ modules were listed").toBeGreaterThan(5);
     expect(src.length).toBeGreaterThan(1000);
     expect(merge.length).toBeGreaterThan(1000);
     expect(src).toContain("toVerifyConfig(");

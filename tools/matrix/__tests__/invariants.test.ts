@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { stagesSource } from "./stages-source.ts";
 import { generateDoubleElim, generatePagePlayoff, generateStepladder } from "@seazn/engine/scheduling";
 import { ENGINE_HTTP_STATUS } from "../lib/driver/engine-http.ts";
 import { SEEDING_FAILED_AFTER_COMMIT } from "../lib/driver/types.ts";
@@ -324,7 +325,7 @@ describe("I2 structural (W1-driving Task 9, ruling 45)", () => {
     expect(terminalFinalKeys("double_elim", F, { [pin.resetKey]: true })).toEqual(finalsOf(generateDoubleElim({ entrants: F, bracketReset: true }).fixtures));
     expect(terminalFinalKeys("double_elim", F, { [`${pin.resetKey}X`]: true })).toEqual(finalsOf(generateDoubleElim({ entrants: F }).fixtures)); // any other key: no reset
     // The pin's own guards, each reached: a product that stopped storing the engine id, or stopped reading the reset.
-    const src = readFileSync(resolve(REPO, "apps/web/src/server/usecases/stages.ts"), "utf8");
+    const src = stagesSource(REPO);
     expect(src).toContain("extKey: f.id,");
     expect(() => structuralBracketFrom(src.replace("extKey: f.id,", "extKey: `k-${f.id}`,"))).toThrow(/no longer stores the engine fixture id as ext_key/);
     expect(() => structuralBracketFrom(src.replace(/, bracketReset: cfg\.\w+ === true/, ""))).toThrow(/no longer reads double elim's bracket reset/);

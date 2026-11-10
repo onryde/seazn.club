@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { stagesSource } from "./stages-source.ts";
 import { ROW_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { ADVANCED_KINDS, DOUBLE_ELIM_KINDS, expectedGate, expectedGates } from "../lib/format-gates-copy.ts";
 import { batchGatesBody } from "./product-gates-source.ts";
@@ -18,7 +19,7 @@ const FREED_CONFIG_KEYS = ["byes", "cross_feeds", "placements"] as const;
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const gates = readFileSync(resolve(REPO, "apps/web/src/server/usecases/format-gates.ts"), "utf8");
-const stages = readFileSync(resolve(REPO, "apps/web/src/server/usecases/stages.ts"), "utf8");
+const stages = stagesSource(REPO);
 const bodyOf = (src: string, head: string): string => {
   const at = src.indexOf(head);
   expect(at, `${head} not found`).toBeGreaterThanOrEqual(0);

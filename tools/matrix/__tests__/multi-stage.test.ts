@@ -10,6 +10,7 @@ import { expandTake } from "@seazn/engine/competition";
 import { StageKind, forbidsLevelResult } from "@seazn/engine/core";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
+import { stagesSource } from "./stages-source.ts";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { DriverMisuse, RefusedCall, type FixtureRow } from "../lib/driver/types.ts";
 import { fieldSizeFor } from "../lib/field-size.ts";
@@ -90,7 +91,7 @@ describe("Step 0 — the product's multi-stage shape, pinned", () => {
     expect(MULTI.length).toBe(9);
   });
   it("the codes the advance reads are the product's own (usecases/stages.ts), never invented", () => {
-    const stages = read("apps/web/src/server/usecases/stages.ts");
+    const stages = stagesSource(REPO);
     const tie = /"a flagged tie is not resolved[^"]*",\s*"([A-Z_]+)"/.exec(stages);
     expect(tie?.[1]).toBe(SEEDING_TIE_CODE);
     // The 409 a /complete answers when the stage committed and its next stage's seeding failed (:4239-4252).

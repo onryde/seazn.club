@@ -107,21 +107,21 @@ const LEDGER: Record<string, [file: string, words: string]> = {
   "registration-approval.ts#approveRegistration": [REGISTRATIONS, REG_SWEEP],
   "registration-approval.ts#promoteFromWaitlist": [REGISTRATIONS, "refuses promote on a frozen competition"],
   "registration-approval.ts#rejectRegistration": [REGISTRATIONS, "refuses reject on a frozen competition"],
-  "registrations.ts#confirmRegistration": [REGISTRATIONS, REG_SWEEP],
-  "registrations.ts#confirmRegistrationWaived": [REGISTRATIONS, REG_SWEEP],
-  "registrations.ts#markRegistrationPaidOffline": [REGISTRATIONS, REG_SWEEP],
+  "registrations/organiser-actions.ts#confirmRegistration": [REGISTRATIONS, REG_SWEEP],
+  "registrations/organiser-actions.ts#confirmRegistrationWaived": [REGISTRATIONS, REG_SWEEP],
+  "registrations/organiser-actions.ts#markRegistrationPaidOffline": [REGISTRATIONS, REG_SWEEP],
   "schedule-ai-preview.ts#resolveCompetitionScope": [SWEEP, '"schedule-ai-preview.ts#resolveCompetitionScope"'],
-  "schedule.ts#applySchedule": [SWEEP, '"schedule.ts#applySchedule"'],
-  "schedule.ts#moveFixture": [SWEEP, '"schedule.ts#moveFixture"'],
-  "schedule.ts#publishSchedule": [SWEEP, '"schedule.ts#publishSchedule"'],
-  "schedule.ts#putScheduleSettings": [SWEEP, '"schedule.ts#putScheduleSettings"'],
-  "schedule.ts#startDivision": [SWEEP, '"schedule.ts#startDivision"'],
+  "schedule/apply.ts#applySchedule": [SWEEP, '"schedule/apply.ts#applySchedule"'],
+  "schedule/move.ts#moveFixture": [SWEEP, '"schedule/move.ts#moveFixture"'],
+  "schedule/publish.ts#publishSchedule": [SWEEP, '"schedule/publish.ts#publishSchedule"'],
+  "schedule/settings.ts#putScheduleSettings": [SWEEP, '"schedule/settings.ts#putScheduleSettings"'],
+  "schedule/publish.ts#startDivision": [SWEEP, '"schedule/publish.ts#startDivision"'],
   "stage-rules.ts#putStageRules": [
     "server/usecases/__tests__/stage-rules.test.ts",
     "402s when the competition is frozen by the billing quota",
   ],
-  "stages.ts#deleteStage": [SWEEP, '"stages.ts#deleteStage"'],
-  "stages.ts#insertStageBatch": [SWEEP, '"stages.ts#insertStageBatch"'],
+  "stages/stage-graph.ts#deleteStage": [SWEEP, '"stages/stage-graph.ts#deleteStage"'],
+  "stages/stage-graph.ts#insertStageBatch": [SWEEP, '"stages/stage-graph.ts#insertStageBatch"'],
   // PB2 item 2 + fix round 1 (a): the ONE start seam — the organiser's Go live, the phone's start and the automatic start
   // all come through it — so no NEW stream starts by any path; reads and Stop never pass here. The HTTP 402 of the
   // organiser's door is witnessed in routes.test.ts ("PB2 over HTTP: on a FROZEN competition a Go live is 402").
@@ -142,7 +142,7 @@ describe("the billing freeze's guard sites (PB2: every write but scoring)", () =
   it("the scoring door carries no freeze guard (PB2, option A), and the scan would see one there if it did", () => {
     expect(sites.filter((s) => s.startsWith("scoring.ts#"))).toEqual([]);
     // The scan's positive control: the same rules find the guard in a sibling write that keeps it.
-    expect(sites).toContain("schedule.ts#moveFixture");
+    expect(sites).toContain("schedule/move.ts#moveFixture");
     // And the file is still the scoring door the ruling is about (its entitlement function stands, without the freeze).
     const scoring = readFileSync(join(SRC, "server/usecases/scoring.ts"), "utf8");
     expect(scoring).toContain("async function assertEntitledToScore(");
