@@ -933,7 +933,7 @@ describe("cellFacts", () => {
       judged++;
     }
     expect(judged).toBe(SPORT_KEYS.length);
-    expect(cellFacts("ko_plate", "generic").stages[1]!.takes).toEqual(["roundLosers"]);
+    expect(cellFacts("ko_plate", "generic").stages[1]!.takes).toEqual(["firstLosses"]) // X-PL-6;
   });
 });
 

@@ -6,6 +6,7 @@
 // exactly as the server sizes a later stage. The oracle is the real draw (format-estimate.test.ts compares every drawn
 // stage with previewDivisionFixtures, and americano with the engine's generateAmericano); Swiss and the double
 // elimination's non-power-of-two fields are pinned to the rulebook. Pure, so the client can call it on every keystroke.
+import type { TakeRule } from "@seazn/engine/competition";
 import { stageGraphSizeRefusal } from "@/lib/format-size-gates";
 import { buildTemplateStages, type StageDraft, type TemplateKnobs } from "@/lib/format-templates";
 
@@ -44,6 +45,20 @@ function poolSizes(k: number, pools: number): number[] {
 /** Real round-one matches in a single-elimination draw of k: the padded draw's byes go to the top seeds. */
 function roundOneLosers(k: number): number {
   return k < 2 ? 0 : k - nextPow2(k) / 2;
+}
+
+/** X-PL-6: how many entrants the plate (a `firstLosses` take) is fed from a main draw of `n`, DISPLAY ONLY (the server's
+ *  field is the played one: `firstLossField`). The rulebook count under "better seed wins": the (2n - S) / 2 round-one
+ *  losers of a draw padded to S = nextPow2(n), plus one for every round-two line whose two seats are both bye holders
+ *  (the top S - n seeds; seed i meets seed S/2 + 1 - i in round two, so such lines number max(0, (S - n) - S/4)) — a
+ *  bye holder's FIRST match is that line, and one of the two loses it. A bye holder who meets a round-one winner wins it
+ *  under "better seed wins", so her loss is no estimate's business. The sweep in format-estimate.test.ts folds the
+ *  engine's own bracket instead of calling this. */
+export function estimatePlateField(n: number): number {
+  const k = Math.max(0, Math.floor(n));
+  if (k < 2) return 0;
+  const size = nextPow2(k);
+  return roundOneLosers(k) + Math.max(0, size - k - size / 4);
 }
 
 function stageEstimate(d: StageDraft, k: number): StageEstimate {
@@ -96,16 +111,33 @@ function stageEstimate(d: StageDraft, k: number): StageEstimate {
 
 /** How many of the previous stage's entrants a progression carries forward, the way the server sizes the slots. */
 function qualifiers(d: StageDraft, prev: StageEstimate, prevDraft: StageDraft): number {
-  const take = d.progression?.sources.flatMap((s) => s.take) ?? [];
+  const take = (d.progression?.sources.flatMap((s) => s.take) ?? []) as readonly TakeRule[];
   let total = 0;
   for (const rule of take) {
-    const r = rule as { kind: string; from?: number; to?: number; n?: number; count?: number; round?: number };
-    if (r.kind === "rankRange") total += Math.max(0, numberOr(r.to, 0) - numberOr(r.from, 1) + 1);
-    else if (r.kind === "topNPerGroup") {
-      const pools = poolSizes(prev.entrants, numberOr((prevDraft.config.pools as { count?: unknown } | undefined)?.count, 1)).length;
-      total += numberOr(r.n, 0) * pools;
-    } else if (r.kind === "bestNth") total += numberOr(r.count, 0);
-    else if (r.kind === "roundLosers") total += Math.min(numberOr(r.count, 0), r.round === 1 ? roundOneLosers(prev.entrants) : 0);
+    // Exhaustive over the engine's TakeRule: a kind added there fails tsc here until it is counted (D2, the take-reader sweep).
+    switch (rule.kind) {
+      case "rankRange":
+        total += Math.max(0, numberOr(rule.to, 0) - numberOr(rule.from, 1) + 1);
+        break;
+      case "topNPerGroup": {
+        const pools = poolSizes(prev.entrants, numberOr((prevDraft.config.pools as { count?: unknown } | undefined)?.count, 1)).length;
+        total += numberOr(rule.n, 0) * pools;
+        break;
+      }
+      case "bestNth":
+        total += numberOr(rule.count, 0);
+        break;
+      case "roundLosers":
+        total += Math.min(numberOr(rule.count, 0), rule.round === 1 ? roundOneLosers(prev.entrants) : 0);
+        break;
+      case "firstLosses":
+        total += estimatePlateField(prev.entrants);
+        break;
+      case "picks":
+        break; // a hand-built custom graph only (no template writes one); never sized here, as before
+      default:
+        rule satisfies never;
+    }
   }
   return Math.min(total, prev.entrants);
 }

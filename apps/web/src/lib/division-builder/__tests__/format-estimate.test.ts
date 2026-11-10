@@ -7,7 +7,8 @@ vi.mock("server-only", () => ({}));
 import { generateAmericano } from "@seazn/engine/scheduling";
 import { previewDivisionFixtures, type PreviewStageInput } from "@/server/usecases/stages";
 import { STAGE_TEMPLATES, buildTemplateStages, type TemplateKnobs } from "@/lib/format-templates";
-import { estimateMinutes, estimateTemplate } from "../format-estimate";
+import { estimateMinutes, estimatePlateField, estimateTemplate } from "../format-estimate";
+import { foldFirstLosses } from "./first-loss-fold";
 
 const BYE = "Bye";
 const realMatches = (s: { matches: { home: string; away: string }[] }) =>
@@ -147,15 +148,48 @@ describe("estimateTemplate against the rulebook (score-dependent formats, and wh
     }
   });
 
-  it("a plate takes only the main draw's REAL round-one losers: a 5-player draw has one round-one match, so no plate match", () => {
+  it("a plate takes every first loss: a 5-player draw has three byes, so round one has one loser and the two bye holders who meet in round two give one more", () => {
     const knobs = { qualified: 4, poolCount: 2, legs: 1, swissRounds: 3 };
-    // 5 into a draw of 8: three byes, so round one is ONE match and has ONE loser.
-    expect(estimateTemplate("ko_plate", 5, knobs).stages[1]!.entrants).toBe(1);
-    expect(estimateTemplate("ko_plate", 5, knobs).stages[1]!.matches).toBe(0);
+    // 5 into 8: seeds 1-3 have byes; round two is 1 v (4/5) and 2 v 3, and the 2 v 3 loser lost her FIRST match: field 2, one match.
+    expect(estimateTemplate("ko_plate", 5, knobs).stages[1]!.entrants).toBe(2);
+    expect(estimateTemplate("ko_plate", 5, knobs).stages[1]!.matches).toBe(1);
     // 8: four round-one losers, so a plate of four: three matches.
     expect(estimateTemplate("ko_plate", 8, knobs).stages[1]!.matches).toBe(3);
-    // 12 into 16: four byes, eight players in four round-one matches, four losers; the qualify knob (8) is capped at 4.
+    // 12 into 16: four byes, four round-one matches, four losers (no two bye holders meet: (2n-S)/2 only). The Top N knob is not read.
     expect(estimateTemplate("ko_plate", 12, { ...knobs, qualified: 8 }).stages[1]!.entrants).toBe(4);
+    expect(estimateTemplate("ko_plate", 12, { ...knobs, qualified: 2 }).stages[1]!.entrants).toBe(4);
+  });
+
+  describe("X-PL-6 estimatePlateField — the first-loss field (PL-1: a Top 4 dropped first losses above 12 entrants)", () => {
+    it("empty case first: nobody to lose, nothing to take", () => {
+      expect(estimatePlateField(0)).toBe(0);
+      expect(estimatePlateField(1)).toBe(0);
+      expect(estimatePlateField(-3)).toBe(0);
+    });
+
+    it("X-PL-6 the estimate counts the first-loss field, n = 4…131 counted — each n equals the fold of the engine's own bracket", () => {
+      const named = [5, 6, 7, 9, 13, 17, 33, 34, 35, 65, 66, 67, 129, 130, 131];
+      let checked = 0;
+      let above4 = 0;
+      for (let n = 4; n <= 131; n++) {
+        expect(estimatePlateField(n), `n=${n}`).toBe(foldFirstLosses(n));
+        checked++;
+        if (n > 12 && estimatePlateField(n) > 4) above4++;
+      }
+      for (const n of named) {
+        expect(estimatePlateField(n), `named n=${n}`).toBe(foldFirstLosses(n));
+        checked++;
+      }
+      expect(checked).toBe(131 - 4 + 1 + named.length); // anti-vacuity: every n and every named one was folded
+      // PL-1: above 12 entrants the old Top 4 dropped first losses — the field exceeds 4 for EVERY n above 12.
+      expect(above4).toBe(131 - 13 + 1);
+    });
+
+    it("the fold itself is not the estimate: it differs from the round-one-losers count where bye holders meet (n = 5, 9)", () => {
+      expect(foldFirstLosses(5)).toBe(2); // one round-one loser + the 2 v 3 line
+      expect(foldFirstLosses(9)).toBe(4); // one round-one loser + three bye-v-bye lines
+      expect(foldFirstLosses(8)).toBe(4);
+    });
   });
 
   it("a ladder has no fixed draw: no match count, no rounds, no time estimate", () => {

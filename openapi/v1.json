@@ -23202,6 +23202,19 @@
                                               "count"
                                             ],
                                             "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "const": "firstLosses"
+                                              }
+                                            },
+                                            "required": [
+                                              "kind"
+                                            ],
+                                            "additionalProperties": false
                                           }
                                         ]
                                       }
@@ -23632,6 +23645,19 @@
                                                 "kind",
                                                 "round",
                                                 "count"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "firstLosses"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind"
                                               ],
                                               "additionalProperties": false
                                             }
@@ -24602,6 +24628,19 @@
                                               "count"
                                             ],
                                             "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "const": "firstLosses"
+                                              }
+                                            },
+                                            "required": [
+                                              "kind"
+                                            ],
+                                            "additionalProperties": false
                                           }
                                         ]
                                       }
@@ -25032,6 +25071,19 @@
                                                 "kind",
                                                 "round",
                                                 "count"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "firstLosses"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind"
                                               ],
                                               "additionalProperties": false
                                             }

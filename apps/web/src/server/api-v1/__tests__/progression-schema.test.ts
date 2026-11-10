@@ -143,6 +143,18 @@ describe("ProgressionSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("X-PL-6 accepts { kind: \"firstLosses\" } and refuses it with a count, a round, or any other field (strict)", () => {
+    const wrap = (take: Record<string, unknown>) =>
+      ProgressionSchema.safeParse({ sources: [{ stage: "previous", take: [take] }], placement: "rank_order", timing: "setup" });
+    expect(wrap({ kind: "firstLosses" }).success).toBe(true);
+    let refused = 0;
+    for (const extra of [{ count: 4 }, { round: 1 }, { count: 4, round: 1 }, { n: 2 }]) {
+      expect(wrap({ kind: "firstLosses", ...extra }).success, JSON.stringify(extra)).toBe(false);
+      refused++;
+    }
+    expect(refused).toBe(4);
+  });
+
   it("rejects roundLosers missing count — must 400 at the edge, never 500 deep inside progressionSize", () => {
     const result = ProgressionSchema.safeParse({
       sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 1 }] }],

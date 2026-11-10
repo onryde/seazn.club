@@ -77,7 +77,7 @@ interface BracketLine {
 
 /** Who `take` is proven to name while the source is undecided, with the lines of its rank cuts' round (where a lucky loser's
  *  vacancy would be), or null when it cannot tell (see the header). */
-function provenBy(
+export function provenBy(
   lines: readonly BracketLine[],
   take: readonly { kind: string; from?: unknown; to?: unknown; round?: unknown }[],
 ): { proven: Set<string>; cutLines: BracketLine[] } | null {
@@ -106,6 +106,11 @@ function provenBy(
         add(l.home_entrant_id);
         add(l.away_entrant_id);
       }
+    } else if (t.kind === "firstLosses") {
+      // X-PL-6: a first loss is the loser of an entrant's FIRST real match, so whether a decided line is one depends on byes
+      // and forfeits across the whole draw (RB4-P1/P2) — not on this line's round alone, and a bye holder's first match is
+      // in round two. Nobody is PROVEN while the source is undecided: the slate stands until it is decided again.
+      return null;
     } else {
       return null;
     }

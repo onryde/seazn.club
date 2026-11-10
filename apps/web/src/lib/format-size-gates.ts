@@ -71,7 +71,7 @@ export function stageGraphSizeGate(stages: readonly StageGraphStage[], n: number
       const from = sourceOf(stages, at, source.stage);
       if (from === undefined || from.kind !== "knockout" || (from.progression ?? null) !== null) continue;
       for (const rule of source.take ?? []) {
-        if (rule.kind === "roundLosers") needs("KO_PLATE_TOO_FEW", PLATE_MIN);
+        if (rule.kind === "roundLosers" || rule.kind === "firstLosses") needs("KO_PLATE_TOO_FEW", PLATE_MIN);
         else if (rule.kind === "rankRange" && stage.kind === "knockout" && typeof rule.to === "number") needs("QUALIFYING_MAIN_TOO_FEW", rule.to);
       }
     }
