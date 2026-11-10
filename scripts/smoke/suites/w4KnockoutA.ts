@@ -1064,7 +1064,7 @@ export async function w4KnockoutASuite(): Promise<void> {
         bareConfirm?.status === 422 && errorCode(bareConfirm) === "SEEDING_TIE_UNRESOLVED" &&
         [...refusedIds].sort().join() === [...tiedByRank].sort().join() && seatedAfterRefusal === 0 &&
         // resolved by edits, the better original seed as seed 3: 1 v 4 and 2 v 3
-        confirmed.status === 200 && (seedOf.get(seed3!) ?? 99) < (seedOf.get(seed4!) ?? 99) && mainOne.length === 2 &&
+        confirmed.status === 200 && (seedOf.get(seed3) ?? 99) < (seedOf.get(seed4) ?? 99) && mainOne.length === 2 &&
         mainOne.map((f) => pairKey(f.home_entrant_id, f.away_entrant_id)).sort().join() === [pairKey(ranks[0], seed4), pairKey(ranks[1], seed3)].sort().join() &&
         seatedInMain.size === 4 && ranks.slice(0, 4).every((id) => seatedInMain.has(id)) &&
         quarters.every((f) => !seatedInMain.has(f.outcome?.loser ?? "-")) &&
