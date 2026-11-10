@@ -106,7 +106,10 @@ export interface OrgInvite {
   role: OrgRole;
   /** Invite-by-email: the recipient address; null for shareable links. */
   email: string | null;
-  token: string;
+  /** The join token of a shareable link. NULL for an email-bound invite: its token signs a new or unverified
+   *  account in with one click (`claimEmailInvite`), so it goes into the invitee's email and nowhere else, never
+   *  to an editor (`inviteForEditor`, server/usecases/invites.ts). Revoke by `id`. */
+  token: string | null;
   expires_at: string | null;
   max_uses: number;
   used_count: number;

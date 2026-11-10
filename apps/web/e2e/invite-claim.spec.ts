@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { apiJson, activeOrg } from "./helpers";
+import { apiJson, activeOrg, emailInviteTokenBySql } from "./helpers";
 
 // Email-invite auto-login (POST /api/invites/[token]/claim): a brand-new or
 // unverified invitee is signed in AND joined in one step (the emailed invite
@@ -7,16 +7,20 @@ import { apiJson, activeOrg } from "./helpers";
 // (needs_signin) so a forwarded invite can never take over a real account. The
 // invitee is always a FRESH context — someone who has never authenticated.
 test.describe("email invite auto-login (claim)", () => {
+  /** Invite `email` as the signed-in editor, and return the token its EMAIL carries. The editor's own answer must
+   *  not carry it (it would let the editor claim the address themselves), so it is read from the stored row, the
+   *  stand-in for the mailbox. */
   async function emailInvite(page: import("@playwright/test").Page, orgId: string, role: string, email: string) {
-    const invite = await apiJson<{ token: string }>(
+    const invite = await apiJson<{ id: string; token: string | null }>(
       page.request,
       `/api/orgs/${orgId}/invites`,
       "POST",
       { role, email },
     );
     expect(invite.status).toBeLessThan(300);
-    expect(invite.data?.token).toBeTruthy();
-    return invite.data!.token;
+    expect(invite.data?.id).toBeTruthy();
+    expect(invite.data?.token, "the editor's answer carries the email-bound token").toBeNull();
+    return emailInviteTokenBySql(invite.data!.id);
   }
 
   // A genuinely anonymous visitor. `browser.newContext()` on its own inherits the

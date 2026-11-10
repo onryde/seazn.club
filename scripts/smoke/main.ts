@@ -226,20 +226,33 @@ export async function main() {
 
   // Invite-by-email (team settings): personal invite, single-use forced,
   // address stored; email_sent reports the outcome of the email's first attempt
-  // (false with a blank key — the UI then offers the personal link for manual
-  // sharing while the outbox keeps the email).
+  // (false with a blank key — the outbox keeps the email). The answer carries NO
+  // token: an email invite's token signs a new or unverified account in, so it
+  // goes into the email only, never to the editor who minted it.
   const emailInvitee = `delivered+emailinvitee_${tag}@resend.dev`;
   const emailInvite = (await call(admin, `/api/orgs/${org.id}/invites`, "POST", {
     role: "viewer",
     email: emailInvitee,
   })) as {
     id: string;
-    token: string;
+    token: string | null;
     email: string | null;
     max_uses: number;
     email_sent?: boolean;
   };
   check("email invite stores address", emailInvite.email === emailInvitee);
+  check("email invite answer carries no token", emailInvite.token === null);
+  // The token the invite EMAIL carries: read from the stored row, the stand-in for
+  // the mailbox (no mail sink here).
+  const mailDb = smokeDb();
+  let mailedToken: string;
+  try {
+    const [row] = await mailDb<{ token: string }[]>`select token from org_invites where id = ${emailInvite.id}`;
+    mailedToken = row?.token ?? "";
+  } finally {
+    await mailDb.end();
+  }
+  check("email invite has a stored token for its email", mailedToken.length > 0);
   check("email invite forced single-use", emailInvite.max_uses === 1);
   check("email invite reports send status", typeof emailInvite.email_sent === "boolean");
   // Email outbox, phase 3 wave 3 (Task 5): the invite email is one `org_invite` row, ref the invite itself (each email invite is its
@@ -248,7 +261,7 @@ export async function main() {
   // Personal: only the invited address may accept — anyone else holding the
   // link (here: the admin who minted it) is turned away with a 403.
   await expectFail("email invite rejects a different account", () =>
-    call(admin, `/api/invites/${emailInvite.token}/accept`, "POST", {}),
+    call(admin, `/api/invites/${mailedToken}/accept`, "POST", {}),
   );
 
   // One-click claim (auto-login + join) for a brand-new email invitee: the
@@ -258,7 +271,7 @@ export async function main() {
   const claimer = newSession();
   const claimed = (await call(
     claimer,
-    `/api/invites/${emailInvite.token}/claim`,
+    `/api/invites/${mailedToken}/claim`,
     "POST",
   )) as { needs_signin?: boolean; role?: string };
   check("email invite claim signs the new invitee in", !!claimer.cookies["seazn_session"]);
@@ -266,7 +279,7 @@ export async function main() {
   check("email invite claim sets the active org", claimer.cookies["seazn_org"] === org.id);
   // Single-use: the now-spent invite refuses a second claim.
   await expectFail("email invite claim is single-use", () =>
-    call(newSession(), `/api/invites/${emailInvite.token}/claim`, "POST"),
+    call(newSession(), `/api/invites/${mailedToken}/claim`, "POST"),
   );
   // The claim just joined the invitee as a real member of `org`, consuming a
   // member seat the rest of this suite budgets for: free-plan members.max is 3
@@ -294,13 +307,21 @@ export async function main() {
   const linkTtlMs = new Date(linkInvite.expires_at ?? 0).getTime() - Date.now();
   check("link invite lives ~24 hours", linkTtlMs > 0.9 * 864e5 && linkTtlMs < 1.1 * 864e5);
   const teamInvites = (await call(admin, `/api/orgs/${org.id}/invites`)) as {
-    token: string;
+    id: string;
+    token: string | null;
     email: string | null;
   }[];
   check(
     "team panel lists both pending invites",
-    teamInvites.some((i) => i.token === emailInvite.token && i.email === emailInvitee) &&
+    teamInvites.some((i) => i.id === emailInvite.id && i.email === emailInvitee) &&
       teamInvites.some((i) => i.token === linkInvite.token && i.email === null),
+  );
+  // The link keeps its token (the editor copies it); the email invite's never appears.
+  check(
+    "team panel list carries no email-invite token",
+    teamInvites.filter((i) => i.email !== null).length > 0 &&
+      teamInvites.every((i) => i.email === null || i.token === null) &&
+      !JSON.stringify(teamInvites).includes(mailedToken),
   );
 
   // Admin invite -> a second user joins and CAN create a competition. Retire
