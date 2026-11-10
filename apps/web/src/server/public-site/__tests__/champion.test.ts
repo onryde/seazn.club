@@ -400,14 +400,14 @@ describe("bracketChampion — the engine's rule, and the one authority for a bra
     ).toBeNull();
   });
 
-  it("BRACKET_SETTLED is the repo's own settled set — `usecases/stages.ts`'s DECIDED, read from source", () => {
-    // `stages.ts` is a server-only usecase and cannot be imported into this
+  it("BRACKET_SETTLED is the repo's own settled set — `usecases/stages/swiss-gen.ts`'s DECIDED, read from source", () => {
+    // `stages/swiss-gen.ts` is a server-only usecase and cannot be imported into this
     // pure module, so its declaration is read as TEXT: a status added to or
     // removed from that set reds here instead of drifting silently.
-    const source = readFileSync(new URL("../../usecases/stages.ts", import.meta.url), "utf8");
+    const source = readFileSync(new URL("../../usecases/stages/swiss-gen.ts", import.meta.url), "utf8");
     // W3 T9 exported it with a type (`export const DECIDED: ReadonlySet<string> = new Set([...])`); the annotation is optional.
     const match = /const DECIDED(?::[^=]*)? = new Set\(\[([^\]]*)\]\)/.exec(source);
-    expect(match, "stages.ts still declares DECIDED").not.toBeNull();
+    expect(match, "stages/swiss-gen.ts still declares DECIDED").not.toBeNull();
     const declared = [...match![1]!.matchAll(/"([a-z_]+)"/g)].map(([, s]) => s!);
     expect(declared.length).toBeGreaterThan(0);
     expect([...BRACKET_SETTLED].sort()).toEqual(declared.sort());

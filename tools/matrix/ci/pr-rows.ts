@@ -1,6 +1,6 @@
 // CLI: pnpm run matrix:pr-rows --body-file <path> --changed-file <path> [--lock-diff-file <path>]
 // W1d Task 7 (R27, D13): the matrix rows a PR declares. A PR that touches packages/engine/** or
-// apps/web/src/server/usecases/stages.ts declares, in its body, the rows the matrix samples:
+// apps/web/src/server/usecases/stages/*.ts (the stages use-case folder; one file before the split) declares, in its body, the rows the matrix samples:
 //   Matrix rows: league, swiss        (catalogue rows)
 //   Matrix rows: all                  (every row)
 //   Matrix rows: none — <reason>      (a declaration of none; the fixed sample still runs)
@@ -30,7 +30,7 @@ import { UnknownRow, formatRows, parseRows } from "../lib/pr-sample.ts";
 import { redact } from "../lib/redact.ts";
 
 /** R27's two declaring paths, verbatim from _RULES.md: a PR touching either declares its rows. */
-export const DECLARING: readonly RegExp[] = [/^packages\/engine\//, /^apps\/web\/src\/server\/usecases\/stages\.ts$/];
+export const DECLARING: readonly RegExp[] = [/^packages\/engine\//, /^apps\/web\/src\/server\/usecases\/stages\/[^/]+\.ts$/];
 
 /** The lock whose diff carries an engine bump since engine split 2b, and the engine's name in it. */
 export const LOCK = "pnpm-lock.yaml";

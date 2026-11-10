@@ -15,7 +15,8 @@
 // called, the operation resolving. Un-awaited, the operation resolves ~HOLD_MS before the lookup finishes, on every run;
 // awaited, it cannot resolve first. The held lookup is counted: zero held would mean the test never reached the seam.
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
@@ -285,8 +286,11 @@ describe.skipIf(!HAS_DB)("a stage write resolves only after the revalidation it 
     expect(seen.toldAfterResolve, "nothing is told after it resolved").toBe(0);
   }, 120_000);
 
-  it("no call site in stages.ts is left un-awaited (every one is counted)", () => {
-    const src = readFileSync(fileURLToPath(new URL("../stages.ts", import.meta.url)), "utf8");
+  it("no call site in the stages modules is left un-awaited (every one is counted)", () => {
+    const dir = fileURLToPath(new URL("../stages/", import.meta.url));
+    const modules = readdirSync(dir).filter((f) => f.endsWith(".ts"));
+    expect(modules.length, "anti-vacuity: the stages folder's modules were read").toBeGreaterThan(1);
+    const src = modules.map((f) => readFileSync(join(dir, f), "utf8")).join("\n");
     const sites = src.split("\n").filter((l) => /\bfireStageRevalidate\(/.test(l) && !/function fireStageRevalidate\(/.test(l));
     expect(sites.length, "anti-vacuity: the file calls it").toBeGreaterThan(0);
     const loose = sites.filter((l) => !/\bawait fireStageRevalidate\(/.test(l));

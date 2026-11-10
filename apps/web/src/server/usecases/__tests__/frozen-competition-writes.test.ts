@@ -81,7 +81,7 @@ function writes(s: SeededBracket): Array<[site: string, attempt: () => Promise<u
     ["schedule/publish.ts#startDivision", () => startDivision(s.auth, s.divisionId)],
     ["entrants.ts#createEntrants", () => createEntrants(s.auth, s.divisionId, [{ kind: "individual", display_name: "Late Entry", members: [] }])],
     [
-      "stages.ts#insertStageBatch",
+      "stages/stage-graph.ts#insertStageBatch",
       () => createStages(s.auth, s.divisionId, CreateStage.parse({ seq: 2, kind: "knockout", name: "Plate", config: {} })),
     ],
     [
@@ -109,7 +109,7 @@ function writes(s: SeededBracket): Array<[site: string, attempt: () => Promise<u
     ],
     ["competitions.ts#patchCompetition", () => patchCompetition(s.auth, s.competitionId, { name: "Renamed Cup" })],
     ["fixture-rules.ts#writeFixtureRulesOverride", () => writeFixtureRulesOverride(s.auth, [fixtureId], { bestOf: 5 })],
-    ["stages.ts#deleteStage", () => deleteStage(s.auth, s.stageId)],
+    ["stages/stage-graph.ts#deleteStage", () => deleteStage(s.auth, s.stageId)],
   ];
 }
 

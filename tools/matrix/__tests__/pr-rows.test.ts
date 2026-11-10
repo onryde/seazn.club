@@ -13,7 +13,7 @@ import { REPO } from "./committed-plans.ts";
 import { SPAWN_MS, SpawnMeter } from "./spawn-budget.ts";
 
 const ENGINE = "packages/engine/src/competition/standings.ts";
-const STAGES = "apps/web/src/server/usecases/stages.ts";
+const STAGES = "apps/web/src/server/usecases/stages/generate.ts";
 
 describe("rowsFromBody (R27)", () => {
   it.each([
@@ -193,7 +193,7 @@ describe("pr-rows decision", () => {
     expect(decide({ body: "fixes a bug", changed: ["packages/engine/src/competition/standings.ts"] })).toEqual({ exit: 1, why: expect.stringContaining("packages/engine/src/competition/standings.ts") });
   });
 
-  it("stages.ts is a declaring path too", () => expect(decide({ body: "", changed: ["apps/web/src/server/usecases/stages.ts"] }).exit).toBe(1));
+  it("a stages module is a declaring path too", () => expect(decide({ body: "", changed: ["apps/web/src/server/usecases/stages/generate.ts"] }).exit).toBe(1));
 
   it("a UI-only change needs no declaration and samples only the fixed sample", () => expect(decide({ body: "", changed: ["apps/web/src/components/x.tsx"] })).toEqual({ exit: 0, rows: [] }));
 
@@ -252,11 +252,13 @@ describe("pr-rows decision", () => {
 describe("DECLARING is R27's two paths, verbatim from _RULES.md", () => {
   const declares = (p: string): boolean => DECLARING.some((re) => re.test(p));
 
-  it("packages/engine/** and apps/web/src/server/usecases/stages.ts declare; nothing near them does", () => {
+  it("packages/engine/** and apps/web/src/server/usecases/stages/*.ts declare; nothing near them does", () => {
     for (const p of [ENGINE, "packages/engine/package.json", "packages/engine/src/sport/module.ts", STAGES]) expect(declares(p), p).toBe(true);
     for (const p of [
       "packages/engine-extras/src/a.ts", "packages/engineering/a.ts", "packages/reference/src/a.ts", "apps/engine/src/a.ts", "tools/matrix/run.ts",
       "apps/web/src/server/usecases/stages-extra.ts", "apps/web/src/server/usecases/stages.ts.bak", "apps/web/src/server/usecases/other/stages.ts",
+      // The folder's own boundary: a module's sub-path, a non-.ts file and a sibling folder are no declaring path.
+      "apps/web/src/server/usecases/stages/nested/x.ts", "apps/web/src/server/usecases/stages/x.tsx", "apps/web/src/server/usecases/stages-x/a.ts",
       "apps/web/src/server/stages.ts", "apps/web/src/components/x.tsx", "docs/superpowers/specs/x.md",
       // Anchored at the repo root: the same path inside another tree is no declaring path.
       "vendor/packages/engine/src/a.ts", "x/apps/web/src/server/usecases/stages.ts",

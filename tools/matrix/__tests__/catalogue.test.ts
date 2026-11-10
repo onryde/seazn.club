@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { stagesSource } from "./stages-source.ts";
 import { STAGE_TEMPLATES, buildTemplateStages } from "../../../apps/web/src/lib/format-templates.ts";
 import { deciderKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
@@ -162,12 +163,13 @@ describe("catalogue — rows", () => {
   it("cellId is row|sport", () => { expect(cellId("league", "generic")).toBe("league|generic"); });
 });
 
-const STAGES_TS = () => readFileSync(resolve(REPO, "apps/web/src/server/usecases/stages.ts"), "utf8");
+const STAGES_TS = () => stagesSource(REPO);
 
 /** A top-level function's text, from its header to its closing `\n}\n`.
  *  Throws on a missing header OR closer — never reads on to EOF. */
 function fnBody(src: string, header: string): string {
-  const at = src.indexOf(`\n${header}`);
+  // A function another stages module imports carries `export` in front of its header since the folder split.
+  const at = [src.indexOf(`\n${header}`), src.indexOf(`\nexport ${header}`)].filter((i) => i >= 0).sort((a, b) => a - b)[0] ?? -1;
   if (at < 0) throw new Error(`stages.ts: ${header} not found`);
   const end = src.indexOf("\n}\n", at);
   if (end < 0) throw new Error(`stages.ts: ${header} has no closer`);

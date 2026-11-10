@@ -81,7 +81,7 @@ const EXEMPT: readonly Exemption[] = [
   },
   // Scores credited per pair member — the rule's own answer for a pair side.
   { file: "src/server/usecases/americano.ts", fn: "personalPointsLeaderboard", sites: 1, reason: "americano/mexicano personal points over PAIR entrants, where the rule's roster stands in for every member anyway" },
-  { file: "src/server/usecases/stages.ts", fn: "americanoGen", sites: 1, reason: "mexicano's next-round pairing by per-person points over PAIR entrants (the rule's own roster answer); credits nothing" },
+  { file: "src/server/usecases/stages/generators.ts", fn: "americanoGen", sites: 1, reason: "mexicano's next-round pairing by per-person points over PAIR entrants (the rule's own roster answer); credits nothing" },
   // A candidate set ranked by the stats fold's own figure.
   {
     file: "src/server/usecases/org-posts.ts",

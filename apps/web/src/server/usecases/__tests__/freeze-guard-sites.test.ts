@@ -120,8 +120,8 @@ const LEDGER: Record<string, [file: string, words: string]> = {
     "server/usecases/__tests__/stage-rules.test.ts",
     "402s when the competition is frozen by the billing quota",
   ],
-  "stages.ts#deleteStage": [SWEEP, '"stages.ts#deleteStage"'],
-  "stages.ts#insertStageBatch": [SWEEP, '"stages.ts#insertStageBatch"'],
+  "stages/stage-graph.ts#deleteStage": [SWEEP, '"stages/stage-graph.ts#deleteStage"'],
+  "stages/stage-graph.ts#insertStageBatch": [SWEEP, '"stages/stage-graph.ts#insertStageBatch"'],
   // PB2 item 2 + fix round 1 (a): the ONE start seam — the organiser's Go live, the phone's start and the automatic start
   // all come through it — so no NEW stream starts by any path; reads and Stop never pass here. The HTTP 402 of the
   // organiser's door is witnessed in routes.test.ts ("PB2 over HTTP: on a FROZEN competition a Go live is 402").
