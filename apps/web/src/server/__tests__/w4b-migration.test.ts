@@ -460,6 +460,8 @@ describe.runIf(HAS_DB)("W4 delta V498: unplayed plates take every first loss", (
     const line = v.run.notices.find((m) => /of them with a court or a time/.test(m));
     expect(Number(line?.match(/(\d+) of them with a court or a time/)?.[1]), "the scheduled placeholder is counted aloud").toBeGreaterThanOrEqual(1);
   }, 240_000);
+});
+
 // B6a fix round 1 (review m4; brief Step 2c): the V496 OUTPUT against the bracket-progression ORACLE (@seazn/reference, written from
 // the rulebook, never from the engine or this delta). A finished knockout with no third-place fixture is downgraded to the 3.x shape,
 // the delta runs, and the stored ranks must equal the oracle's places for the same result (RB4-T2 shared 3rd, RB4-R2 strict below).
