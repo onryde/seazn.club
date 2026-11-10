@@ -3845,6 +3845,7 @@
   "officials.alreadyOfficial": "al een official",
   "officials.addTeamRef": "Toevoegen als team-scheidsrechter",
   "officials.pending": "In behandeling: {reason}",
+  "officials.pendingSharedRank": "In behandeling: plaats {rank} wordt gedeeld door {holders} deelnemers - kies er handmatig een",
   "officials.colFixture": "Wedstrijd",
   "officials.colKickoff": "Aanvang",
   "officials.colOfficials": "Officials",

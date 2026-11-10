@@ -3845,6 +3845,7 @@
   "officials.alreadyOfficial": "ya es oficial",
   "officials.addTeamRef": "Agregar como árbitro-equipo",
   "officials.pending": "Pendiente: {reason}",
+  "officials.pendingSharedRank": "Pendiente: el puesto {rank} lo comparten {holders} participantes - elige uno a mano",
   "officials.colFixture": "Partido",
   "officials.colKickoff": "Inicio",
   "officials.colOfficials": "Oficiales",

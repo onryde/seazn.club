@@ -822,6 +822,18 @@ export const SourceOfficialsInput = z.object({
 });
 export type SourceOfficialsInput = z.infer<typeof SourceOfficialsInput>;
 
+/** The fixture statuses that carry a result a sourcing can read (V432's settled set with a winner): a finalized or forfeited
+ *  fixture is as decided as a `decided` one. */
+const RESULT_SETTLED: ReadonlySet<string> = new Set(["decided", "finalized", "forfeited"]);
+
+/** A pending sourcing entry: the engine's English `reason`, and for a shared rank a code the panel localizes. */
+export interface PendingSource {
+  reason: string;
+  code?: "shared_rank";
+  rank?: number;
+  holders?: number;
+}
+
 type RankTake = { rank: number; poolId?: string | undefined };
 type SourceSpec = SourceOfficialsInput["sources"][number];
 type StandingsTableLike = { stageId: string; poolId: string | undefined; decided: boolean; rows: { entrantId: string; rank: number }[] };
@@ -834,8 +846,8 @@ type StandingsTableLike = { stageId: string; poolId: string | undefined; decided
 export function withholdSharedRanks(
   sources: readonly SourceSpec[],
   standings: readonly StandingsTableLike[],
-): { sources: SourceSpec[]; pending: { reason: string }[] } {
-  const pending: { reason: string }[] = [];
+): { sources: SourceSpec[]; pending: PendingSource[] } {
+  const pending: PendingSource[] = [];
   const kept: SourceSpec[] = [];
   for (const source of sources) {
     if (source.kind !== "rank") {
@@ -847,7 +859,7 @@ export function withholdSharedRanks(
       if (table === undefined || !table.decided) return true;
       const holders = table.rows.filter((r) => r.rank === t.rank).length;
       if (holders < 2) return true;
-      pending.push({ reason: `rank ${t.rank} is shared by ${holders} entrants` });
+      pending.push({ reason: `rank ${t.rank} is shared by ${holders} entrants`, code: "shared_rank", rank: t.rank, holders });
       return false;
     });
     if (take.length > 0) kept.push({ ...source, take } as SourceSpec);
@@ -863,7 +875,7 @@ export async function sourceOfficials(
   input: SourceOfficialsInput,
 ): Promise<{
   resolved: { entrant_id: string; display_name: string; official_id: string | null }[];
-  pending: { reason: string }[];
+  pending: PendingSource[];
 }> {
   await requireFeature(auth.orgId, "officials.auto", await competitionForStage(stageId));
   return withTenant(auth.orgId, async (tx) => {
@@ -903,7 +915,7 @@ export async function sourceOfficials(
       standings,
       fixtures: fixturesRows.map((f) => ({
         id: f.id,
-        decided: f.status === "decided",
+        decided: RESULT_SETTLED.has(f.status),
         winnerId: f.outcome?.winner,
         loserId: f.outcome?.loser,
       })),
@@ -928,7 +940,7 @@ export async function sourceOfficials(
         display_name: nameById.get(r.entrantId) ?? r.entrantId,
         official_id: officialByEntrant.get(r.entrantId) ?? null,
       })),
-      pending: [...result.pending.map((p) => ({ reason: p.reason })), ...sharedPending],
+      pending: [...result.pending.map((p): PendingSource => ({ reason: p.reason })), ...sharedPending],
     };
   });
 }

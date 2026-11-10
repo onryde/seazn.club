@@ -42,14 +42,14 @@ export interface StandingsExportInput {
   metricSpecs: readonly MetricSpecLike[];
   cascade: readonly string[];
   layout: TableLayout;
-  /** The stage's kind. A bracket kind's rows are PLACES (X-TP-3): a place two rows share is printed "3=". Absent or any
+  /** The stage's kind. A bracket kind's rows are PLACES (X-TP-3): a place two rows share is printed in the org's words ("3 (shared)", `table.sharedRank`). Absent or any
    *  other kind: the public `#` as it was. */
   stageKind?: string;
   nameOf: (entrantId: string) => string;
   /** The entrant's crest URL, already resolved; absent or null: none. */
   badgeOf?: (entrantId: string) => string | null | undefined;
   /** The public dictionary's lookup, in the org's language (`t(publicDict, key)`). */
-  msg: (key: TKey) => string;
+  msg: (key: TKey, vars?: Record<string, string | number>) => string;
 }
 
 /** The table's document sections (one, for the standings kind), headed as the caller likes. */
@@ -62,7 +62,7 @@ export function standingsTableSections(input: StandingsExportInput): DocSection[
   const header = (c: { key: string; label: string }) => columnHeader(c, msg).abbr;
   // W2d concern 2 (anti-goal 3, X-TB-6): a LEVEL table — nothing counted — has no places, and `#` would print seed 1 first.
   const level = isLevelTable(input.rows);
-  // X-TP-3: a bracket's shared place (two semi-final losers both 3rd) is marked "3=" - the chip the public table wears, as text.
+  // X-TP-3: a bracket's shared place (two semi-final losers both 3rd) is marked in words - the chip the public table wears, as text.
   const places = !level && input.stageKind !== undefined && isBracketPlacement(input.stageKind) ? bracketPlaceLabels(input.rows) : null;
   const rows: ExportStandingsRow[] = [...input.rows]
     .sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99))
@@ -72,7 +72,7 @@ export function standingsTableSections(input: StandingsExportInput): DocSection[
         // the public `#` (`rankText`): the level dash, else the row's place; a row the ranking pass left no place keeps
         // the builder's position
         ...(level || r.rank !== undefined
-          ? { rank: places?.get(r.entrantId)?.shared ? `${rankText(r, level)}=` : exportCell(rankText(r, level)) }
+          ? { rank: places?.get(r.entrantId)?.shared ? msg("table.sharedRank", { rank: rankText(r, level) }) : exportCell(rankText(r, level)) }
           : {}),
         name: input.nameOf(r.entrantId),
         played: r.played,

@@ -271,8 +271,8 @@ export const TIE_BREAK_MSG_KEYS: Readonly<Record<string, TKey>> = {
   fewest_played: "table.tieBreak.fewest_played",
 } satisfies Record<PartialScheduleKey, DictionaryKey>;
 
-/** The trace key `rank_range` puts on a row whose place another row shares (a bracket's two semi-final losers, both 3rd). */
-export const SHARED_PLACE_KEY = "shared_place";
+/** D1: the chip a bracket's shared place wears (R24 pick 2A). The only consumer is StandingsTable; a seed proposal's
+ *  `shared_place` tie has no copy here (no real producer reaches a snapshot row's tie note). */
 export const SHARED_PLACE_MSG_KEY = "table.tieBreak.shared_place" satisfies DictionaryKey;
 
 /** Sort key for a row the ranking pass has not ranked (a division with no
@@ -372,9 +372,6 @@ export function tieBreakRule(
   partners: readonly string[] = row.tieBreak?.with ?? [],
 ): string {
   if (key === "diff" || key === "for") return msg(LEDGER_RULE_MSG_KEYS[key][ledgerFamily(row, key, table, partners)]);
-  // X-TP-3 (D1): the engine's `rank_range` flags a row whose place another row shares with this key. It is not a tie-break
-  // step, so it is not a TiebreakerKey (and `TIE_BREAK_MSG_KEYS` stays exactly the engine's keys).
-  if (key === SHARED_PLACE_KEY) return msg(SHARED_PLACE_MSG_KEY);
   const dictKey = TIE_BREAK_MSG_KEYS[key];
   return dictKey === undefined ? tieBreakLabel(key) : msg(dictKey);
 }
@@ -537,13 +534,7 @@ export function tieNoteText(
 ): string | null {
   const tb = row.tieBreak;
   if (!tb) return null;
-  const names = tb.with.map(nameOf).join(", ");
-  // A shared place is not split by a rule: "Shared place - Dev", not "Tied with Dev - split on shared place".
-  const lines = [
-    tb.key === SHARED_PLACE_KEY
-      ? `${tieBreakRule(tb.key, msg, row, table)} — ${names}`
-      : msg("table.tieBreak", { with: names, rule: tieBreakRule(tb.key, msg, row, table) }),
-  ];
+  const lines = [msg("table.tieBreak", { with: tb.with.map(nameOf).join(", "), rule: tieBreakRule(tb.key, msg, row, table) })];
   if (tb.note !== undefined) lines.push(msg(TIE_NOTE_KEYS[tb.note]));
   const drawn = tb.drawnAt === undefined ? null : dateOf(tb.drawnAt);
   if (drawn !== null) lines.push(msg("table.tieNote.drawnAt", { date: drawn }));

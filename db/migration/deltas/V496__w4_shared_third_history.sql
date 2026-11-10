@@ -4,17 +4,18 @@
 -- written (V495 is sponsor_deals; V497 is swiss auto-advance): RENUMBER BY SUFFIX AT MERGE if main has moved, never reorder.
 -- Its test reads this file by glob, never by number (apps/web/src/server/__tests__/w4b-migration.test.ts).
 --
--- DATA CHANGE (LOUD). Engine 4.0.0 ranks a knockout's two semi-final losers LEVEL, 3rd (1, 2, 3, 3, 5 ...) where no play-off
--- decided it. Before the bump the engine ranked them 3rd and 4th by seed, and `writeSnapshot` (engine-db/competition.ts) stored
+-- DATA CHANGE (LOUD). Engine 5.0.0 (W4) ranks a knockout's two semi-final losers LEVEL, 3rd (1, 2, 3, 3, 5 ...) where no play-off
+-- decided it. Before W4 (engine 4.x and earlier) the engine ranked them 3rd and 4th by seed, and `writeSnapshot` (engine-db/competition.ts) stored
 -- that once, at completion, in `standings_snapshots.rows` (pool null). Every snapshot reader (the standings API, the public
 -- standings, the exports, officials sourcing, a progression's rank_range) reads the STORED rank, so a bracket that finished
 -- before the deploy would keep its 4th until this delta runs. The champion needs no move: it is derived from the fixtures on
 -- read (`champion.ts`), and no final was joint or vacant before W4.
 --
--- What it changes: for each stage with kind = 'knockout' and status = 'complete' (V210), with a pool-null snapshot, with NO
--- third-place fixture at all (`third_place` V368, or an ext_key ending `-3p`), whose semi-finals are the two non-play-off
--- fixtures of the round before the final, BOTH settled with a seated winner and loser (never a double walkover, never a
--- bye), and whose snapshot holds exactly ONE row at rank 3 and exactly ONE at rank 4 and those two are the two semi-final
+-- What it changes: for each stage with kind = 'knockout' and status = 'complete' (V210), with a pool-null snapshot, with no PLAYED
+-- third-place fixture (`third_place` V368, or an ext_key ending `-3p`; a voided or cancelled one does not count: it shares
+-- 3rd, as the engine ranks it), whose semi-finals are the two non-play-off
+-- fixtures of the round before the final, BOTH with a seated winner and loser on their outcome (an abandon award counts;
+-- never a double walkover, never a bye), and whose snapshot holds exactly ONE row at rank 3 and exactly ONE at rank 4 and those two are the two semi-final
 -- losers: the rank-4 row's "rank" becomes 3. `previous_rows`, `computed_through_seq`, `updated_at` and every other row are
 -- untouched. Anything else is left as it is: a played play-off (3rd and 4th are real), a 2-entrant final-only bracket (ranks
 -- 1, 2: there is no 3rd), n = 3 (one real semi-final: 1, 2, 3), a semi-final both sides walked over, a snapshot already
@@ -26,7 +27,9 @@
 -- read). The block COUNTS FIRST and reports what it found in NOTICEs, then writes, and reports the rows it changed.
 --
 -- ── Runbook ──
--- 1. Run BEFORE the engine-4 app serves (prod.yml migrates before it deploys). One block: it commits whole or not at all.
+-- 1. Run BEFORE the W4 (engine 5+) app serves (prod.yml migrates before it deploys). One block: it commits whole or not at all.
+--    DEPLOY WINDOW: a knockout completed by a still-serving pre-W4 instance AFTER this ran keeps a strict 3rd/4th (nothing
+--    refreshes a completed snapshot but a correction). Re-run V496's predicate after the deploy: it is idempotent and safe.
 -- 2. READ THE NOTICES (`W4 shared-3rd history: ...`). The role matters: standings_snapshots is FORCE ROW LEVEL SECURITY with a
 --    policy `to app_user` only, so a role without BYPASSRLS counts 0, writes 0 and still exits clean. Flyway's migrating role
 --    bypasses it; a hand re-run must use that role.
@@ -69,7 +72,11 @@ begin
              where g.stage_id = s.id and g.third_place = false and (g.ext_key is null or g.ext_key not like '%-3p')) as final_round
       from stages s
      where s.kind = 'knockout' and s.status = 'complete'
-       and not exists (select 1 from fixtures p where p.stage_id = s.id and (p.third_place or p.ext_key like '%-3p'))
+       -- a PLAYED play-off decides 3rd and 4th (X-TP-3); a voided one (a third-place line that holds nobody and has no outcome, or a
+       -- cancelled one) shares 3rd, as the engine ranks it (stage.js `playOff.status === "void"`) and `competition.ts` reads it
+       and not exists (select 1 from fixtures p
+                        where p.stage_id = s.id and (p.third_place or p.ext_key like '%-3p') and p.status <> 'cancelled'
+                          and (p.outcome is not null or p.home_entrant_id is not null or p.away_entrant_id is not null))
   ),
   semis as (
     select b.stage_id, array_agg(f.outcome ->> 'loser' order by f.outcome ->> 'loser') as losers
@@ -78,8 +85,7 @@ begin
                      and f.third_place = false and (f.ext_key is null or f.ext_key not like '%-3p')
      group by b.stage_id
     having count(*) = 2
-       and count(*) filter (where f.status in ('decided', 'finalized', 'forfeited')
-                                  and f.outcome ->> 'winner' is not null and f.outcome ->> 'loser' is not null) = 2
+       and count(*) filter (where f.outcome ->> 'winner' is not null and f.outcome ->> 'loser' is not null) = 2
        and count(distinct f.outcome ->> 'loser') = 2
   ),
   places as (
