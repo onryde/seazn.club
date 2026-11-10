@@ -320,6 +320,12 @@ describe("ProgressionPanel - the plate's card", () => {
     expect(html).toContain("Not enough first-match losers for a plate");
     expect(html).not.toContain("<button");
   });
+  it("refused (a stored first-loss plate fed by a double-elimination stage): says so by the seeding refusal's copy, no button", () => {
+    const html = renderToStaticMarkup(<ProgressionPanel {...baseProps({ sourceReady: false, plate: { state: "refused" } })} />);
+    expect(html).toContain('data-progression-state="plate-refused"');
+    expect(html).toContain("A double-elimination source can");
+    expect(html).not.toContain("<button");
+  });
   it("ready with no proposal: the ordinary empty card with Compute (the field is known though the main draw is not complete)", () => {
     const html = renderToStaticMarkup(<ProgressionPanel {...baseProps({ sourceReady: false, plate: { state: "ready" } })} />);
     expect(html).toContain('data-progression-state="empty"');

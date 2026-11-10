@@ -59,6 +59,9 @@ begin
   select s.id
     from stages s
    where s.progression is not null
+     -- a plate: a knockout that draws at setup (an on_complete plate takes no first-loss field, review m5)
+     and s.kind = 'knockout'
+     and s.progression ->> 'timing' = 'setup'
      -- exactly one source, the previous stage, taking exactly one rule: roundLosers, round 1, a count, nothing else
      and case when jsonb_typeof(s.progression -> 'sources') = 'array' then jsonb_array_length(s.progression -> 'sources') end = 1
      and s.progression #>> '{sources,0,stage}' = 'previous'

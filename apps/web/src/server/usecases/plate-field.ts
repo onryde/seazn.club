@@ -15,6 +15,7 @@ import { unfillProposalSeats } from "@/server/engine-db/fed-seats";
 import { pinStageTableRules } from "@/server/engine-db/table-rules";
 import { log } from "@/server/logger";
 import type { PlateCardState } from "@/lib/plate-card-state";
+import { resolveSeedingSourceStage } from "@/lib/seeding-source-ready";
 import { stageHasStarted } from "./fixture-started-sql";
 import { sourcesToTables, standingsHash, poolTableRowsAcrossSources } from "./stage-seeding";
 import { loadBracketFixtures } from "./stages/carry-over";
@@ -31,9 +32,10 @@ export async function plateFieldOf(tx: Tx, mainStageId: string): Promise<FirstLo
 }
 
 /**
- * What the plate's stage card shows (`lib/plate-card-state.ts`): too small when the plate completed by name with no proposal; ready
- * when the main draw's field is complete; else waiting, `done` of `total` first matches decided (`done`: the entrants whose first
- * match is decided and lost - losers and forfeit losers; `total`: those plus the lines still owed a result).
+ * What the plate's stage card shows (`lib/plate-card-state.ts`): refused when the source is no single-elimination knockout (a stored
+ * row that predates the save-time refusal; `firstLossField` would throw on a lane bracket); too small when the plate completed by name
+ * with no proposal; ready when the main draw's field is complete; else waiting, `done` of `total` first matches decided - the decided
+ * REAL first-match lines (a walkover is no match, RB4-P2) over those plus the lines still owed a result.
  */
 export async function plateCardStateOf(
   auth: AuthCtx,
@@ -41,11 +43,46 @@ export async function plateCardStateOf(
   plate: { status: string },
   hasProposal: boolean,
 ): Promise<PlateCardState> {
-  if (plate.status === "complete" && !hasProposal) return { state: "too_small" };
-  const field = await withTenant(auth.orgId, (tx) => plateFieldOf(tx, mainStageId));
-  if (field.complete) return { state: "ready" };
-  const done = field.losers.length + field.excluded.length;
-  return { state: "waiting", done, total: done + field.pending.length };
+  return withTenant(auth.orgId, async (tx) => {
+    const [main] = await tx<{ kind: string }[]>`select kind from stages where id = ${mainStageId}`;
+    if (main?.kind !== "knockout") return { state: "refused" } as const;
+    if (plate.status === "complete" && !hasProposal) return { state: "too_small" } as const;
+    const field = await plateFieldOf(tx, mainStageId);
+    if (field.complete) return { state: "ready" } as const;
+    const rows = await tx<{ round_no: number; seq_in_round: number; home_entrant_id: string | null; away_entrant_id: string | null; outcome: { kind?: string } | null }[]>`
+      select round_no, seq_in_round, home_entrant_id, away_entrant_id, outcome from fixtures
+       where stage_id = ${mainStageId} order by round_no, seq_in_round`;
+    const played = new Set<string>();
+    let done = 0;
+    for (const r of rows) {
+      if (r.outcome === null || r.outcome.kind === "award" || r.home_entrant_id === null || r.away_entrant_id === null) continue;
+      if (!played.has(r.home_entrant_id) || !played.has(r.away_entrant_id)) done++;
+      played.add(r.home_entrant_id);
+      played.add(r.away_entrant_id);
+    }
+    return { state: "waiting", done, total: done + field.pending.length } as const;
+  });
+}
+
+/**
+ * The division page's loader for every plate card (`seedingStages` in page order): null for a stage that is no plate, the card's
+ * state for one. One read path for the page and its tests. A source that cannot be resolved answers `refused`, never a throw.
+ */
+export async function plateCardStatesFor(
+  auth: AuthCtx,
+  stages: readonly { id: string; division_id: string; seq: number; status: string; progression: unknown }[],
+  seedingStages: readonly { id: string; division_id: string; seq: number; status: string; progression: unknown }[],
+  hasProposal: readonly boolean[],
+): Promise<(PlateCardState | null)[]> {
+  return Promise.all(
+    seedingStages.map(async (s, i) => {
+      const progression = s.progression as Pick<ProgressionSpec, "sources">;
+      if (!isFirstLossProgression(progression)) return null;
+      const main = resolveSeedingSourceStage(stages, s, progression.sources[0]!.stage);
+      if (main === undefined) return null;
+      return plateCardStateOf(auth, main.id, s, hasProposal[i] === true);
+    }),
+  );
 }
 
 /** Whether a stored progression takes the first losses of any source (the plate's own shape). */
@@ -69,9 +106,14 @@ export async function reseedPlateQualifiers<Q extends { entrantId: string; seed:
   const ids = qualifiers.map((q) => q.entrantId);
   const rows = await tx<{ id: string; seed: number | null }[]>`select id, seed from entrants where id in ${tx(ids)}`;
   const seedOf = new Map(rows.map((r) => [r.id, r.seed] as const));
+  // The seeded first, by MAIN-draw seed (RB4-D10): `knockoutDrawOrder` returns its input untouched when nobody is unseeded, so the
+  // order is made here, not left to the first-loss order a qualifier's own `seed` carries. Ties and the unseeded keep first-loss order.
+  const inf = Number.POSITIVE_INFINITY;
   const field: ActiveEntrant[] = [...qualifiers]
     .sort((a, b) => a.seed - b.seed)
-    .map((q) => ({ id: q.entrantId, seed: seedOf.get(q.entrantId) ?? null, swiss_first_round: null }));
+    .map((q, i) => ({ e: { id: q.entrantId, seed: seedOf.get(q.entrantId) ?? null, swiss_first_round: null } as ActiveEntrant, i }))
+    .sort((a, b) => (a.e.seed ?? inf) - (b.e.seed ?? inf) || a.i - b.i)
+    .map((x) => x.e);
   const order = knockoutDrawOrder(plate.id, field, plate.config);
   const placeOf = new Map(order.map((e, i) => [e.id, i + 1] as const));
   return qualifiers.map((q) => ({ ...q, seed: placeOf.get(q.entrantId)! })).sort((a, b) => a.seed - b.seed);
@@ -79,7 +121,7 @@ export async function reseedPlateQualifiers<Q extends { entrantId: string; seed:
 
 /**
  * X-PL-2: a field under two cannot play a bracket. The plate COMPLETES, by name: a `stage_completed` with no ranks (and the
- * outcome in its payload, which the desk reads as `plate_too_small`), the stage `complete` with no lines - never an empty success
+ * outcome named in its payload, `plate_too_small`; the stage card says it in words), the stage `complete` with no lines - never an empty success
  * the organiser has to guess at, and never a stage left pending that holds the division open for ever. Caller holds the division lock.
  */
 async function completePlateTooSmall(tx: Tx, plate: { id: string; division_id: string }, losers: number): Promise<void> {
@@ -95,6 +137,12 @@ async function completePlateTooSmall(tx: Tx, plate: { id: string; division_id: s
   await tx`update stages set status = 'complete' where id = ${plate.id}`;
   await tx`update divisions set seq = ${seq} where id = ${plate.division_id}`;
   log.info({ event: "plate_too_small", stageId: plate.id, losers }, "plate_too_small");
+}
+
+/** The losing side of a race between two triggers of the same plate: the draw is already confirmed, or this draft was staled by the winner. */
+function isRaceLoss(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === "SEEDING_ALREADY_CONFIRMED" || code === "SEEDING_PROPOSAL_STALE";
 }
 
 type PlatePlan =
@@ -129,14 +177,24 @@ export async function maybeProposePlate(auth: AuthCtx, mainStageId: string): Pro
       const proposals = await tx<{ id: string; status: string; computed: { standingsHash?: string } }[]>`
         select id, status, computed from stage_seed_proposals where stage_id = ${plate.id} order by created_at desc, id desc`;
       const latest = proposals[0];
+      const lineCount = async () => (await tx<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${plate.id}`)[0]!.n;
       if (!field.complete) {
-        if (latest?.status === "draft") await tx`update stage_seed_proposals set status = 'stale' where id = ${latest.id}`;
+        // A field a taken-back result has reopened: a DRAFT is withdrawn WITH its lines (never a draft that cannot be confirmed, never
+        // lines under no proposal). A confirmed, seated plate stands until the result is decided again (T7: a first loss is not provable
+        // mid-correction); a started plate always stands.
+        if (latest?.status === "draft" && !(await stageHasStarted(tx, plate.id))) {
+          await tx`update stage_seed_proposals set status = 'stale' where id = ${latest.id}`;
+          await tx`delete from fixtures where stage_id = ${plate.id}`;
+        }
         continue;
       }
       if (field.losers.length < 2) {
-        const [lines] = await tx<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${plate.id}`;
-        // A plate that was drawn for a bigger field and has since shrunk keeps its lines: nothing may delete a bracket in play.
-        if (lines!.n > 0) continue;
+        // A plate that has begun stands as drawn. Before that, whatever was drawn for a bigger field goes (the draft is staled, a
+        // confirmed one's seats go back, the lines are removed) and the plate completes by name.
+        if (await stageHasStarted(tx, plate.id)) continue;
+        if (latest?.status === "confirmed") await unfillProposalSeats(tx, latest.id);
+        if (latest !== undefined && latest.status !== "stale") await tx`update stage_seed_proposals set status = 'stale' where id = ${latest.id}`;
+        await tx`delete from fixtures where stage_id = ${plate.id}`;
         await completePlateTooSmall(tx, plate, field.losers.length);
         plans.push({ plateId: plate.id, action: "too_small" });
         continue;
@@ -144,7 +202,12 @@ export async function maybeProposePlate(auth: AuthCtx, mainStageId: string): Pro
       const { tables } = await sourcesToTables(tx, plate, plate.progression.sources);
       const hash = standingsHash(poolTableRowsAcrossSources(tables));
       if ((latest?.status === "draft" || latest?.status === "confirmed") && latest.computed.standingsHash === hash) {
-        if (latest.status === "draft") plans.push({ plateId: plate.id, action: "confirm", proposalId: latest.id });
+        // Same field. A draft whose lines have since gone (an Undo of the draw's generation) cannot be confirmed: draw it again.
+        if (latest.status === "draft" && (await lineCount()) === 0) {
+          plans.push({ plateId: plate.id, action: "propose" });
+        } else if (latest.status === "draft") {
+          plans.push({ plateId: plate.id, action: "confirm", proposalId: latest.id });
+        }
         continue;
       }
       if (latest?.status === "confirmed") {
@@ -169,7 +232,13 @@ export async function maybeProposePlate(auth: AuthCtx, mainStageId: string): Pro
     }
     let proposalId: string;
     if (plan.action === "propose") {
-      proposalId = (await computeSeedProposal(auth, plan.plateId)).id;
+      try {
+        proposalId = (await computeSeedProposal(auth, plan.plateId)).id;
+      } catch (err) {
+        // Two last results racing both plan "propose": the other won (it is confirmed already). Idempotent, so quiet.
+        if (isRaceLoss(err)) continue;
+        throw err;
+      }
       proposed = true;
     } else {
       proposalId = plan.proposalId;
@@ -178,6 +247,7 @@ export async function maybeProposePlate(auth: AuthCtx, mainStageId: string): Pro
     try {
       await confirmSeedProposal(auth, plan.plateId, { proposalId });
     } catch (err) {
+      if (isRaceLoss(err)) continue;
       // Best-effort, like every auto step: the draft stands for the organiser to confirm, and says why it did not.
       log.warn({ event: "plate_auto_confirm_failed", stageId: plan.plateId, err: String(err) }, "plate_auto_confirm_failed");
     }

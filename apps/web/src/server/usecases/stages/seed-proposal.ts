@@ -47,6 +47,8 @@ export interface SeedProposalOut {
     }[];
     ties: { slots: string[]; entrantIds: string[]; reason: string }[];
     standingsHash: string;
+    /** W4 T8 (RB4-E5/T4): a plate configured with a third-place match whose field gave under two real semi-finals - drawn without it. */
+    thirdPlaceDropped?: true;
   };
 }
 
@@ -272,6 +274,8 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
       qualifiers: computedQualifiers,
       ties: computedTies,
       standingsHash: standingsHash(poolTableRowsAcrossSources(tables)),
+      // RB4-E5/T4: the plate asked for a third-place match and its field gave under two real semi-finals, so it was drawn without.
+      ...(firstLossPlate && stage.config.thirdPlace === true && resolvedProgression.qualifiers.length < 4 ? { thirdPlaceDropped: true as const } : {}),
     };
 
     await tx`update stage_seed_proposals set status = 'stale' where stage_id = ${stageId} and status = 'draft'`;

@@ -150,8 +150,8 @@ export async function undecide(rig: Pick<PlateRig, "auth">, fixtureId: string): 
 
 /** Every PLAYABLE line of `round` of the main stage (both seats named, no outcome yet) won by `pick(home, away)` - the better seed
  *  by default (a lower `seed` wins; an unseeded entrant loses to a seeded one, two unseeded: home). Answers the lines played. */
-export async function playRound(rig: PlateRig, round: number, pick?: (home: string, away: string) => string): Promise<LineRow[]> {
-  const rows = (await linesOf(rig.mainId)).filter((r) => r.round_no === round && r.home_entrant_id !== null && r.away_entrant_id !== null && r.outcome === null);
+export async function playRound(rig: PlateRig, round: number, pick?: (home: string, away: string) => string, stageId: string = rig.mainId): Promise<LineRow[]> {
+  const rows = (await linesOf(stageId)).filter((r) => r.round_no === round && r.home_entrant_id !== null && r.away_entrant_id !== null && r.outcome === null);
   const seed = (id: string) => rig.seedOf.get(id) ?? Number.POSITIVE_INFINITY;
   const better = (h: string, a: string) => (seed(a) < seed(h) ? a : h);
   for (const f of rows) await win(rig, f, (pick ?? better)(f.home_entrant_id!, f.away_entrant_id!));

@@ -185,7 +185,15 @@ async function progressCompletedStage(
   // (`SEEDING_ALREADY_CONFIRMED`), and the stage's own completion is the last chance for a field that only became known now.
   // Then on to the division's completion below: a plate already complete leaves nothing open.
   const plateNext = nextProgression?.timing === "setup" && isFirstLossProgression(nextProgression);
-  if (plateNext) await maybeProposePlate(auth, stageId);
+  if (plateNext) {
+    // The completion above has ALREADY committed: a failure of the plate's trigger is said aloud, never reported as a failed
+    // completion (the sibling branch's F3 finding-4 rule). The plate is proposed again by the next result or withdrawal.
+    try {
+      await maybeProposePlate(auth, stageId);
+    } catch (err) {
+      log.warn({ event: "plate_trigger_failed_at_completion", stageId, nextStageId: next!.id, err: String(err) }, "plate_trigger_failed_at_completion");
+    }
+  }
 
   if (nextProgression?.timing === "setup" && !plateNext) {
     // Best-effort, same spirit as the on_complete path's generation step

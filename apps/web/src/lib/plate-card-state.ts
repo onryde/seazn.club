@@ -4,4 +4,5 @@
 //   waiting   - some first matches are still to play: `done` of `total` are decided (the card's progress line).
 //   ready     - every first match is decided: the proposal exists, or is computable (the empty card offers Compute).
 //   too_small - the plate completed by name with fewer than two first-match losers (X-PL-2): nothing to draw, nothing owed.
-export type PlateCardState = { state: "waiting"; done: number; total: number } | { state: "ready" } | { state: "too_small" };
+//   refused   - the source is no single-elimination knockout (a stored row that predates the save-time refusal, I3): the card says so.
+export type PlateCardState = { state: "waiting"; done: number; total: number } | { state: "ready" } | { state: "too_small" } | { state: "refused" };
