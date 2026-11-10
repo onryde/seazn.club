@@ -283,6 +283,8 @@ export const TERMINAL_CONFLICT_CODES: ReadonlySet<string> = new Set([
   "UNDO_TARGET_MISSING",
   "UNDO_ALREADY_VOIDED",
   "UNDO_NOT_UNDOABLE",
+  // 2026-11-10: a cricket wicket with a later ball behind it. Only voiding the balls after it first changes the answer.
+  "UNDO_WICKET_NOT_LATEST",
   NEXT_MATCH_STARTED_CODE,
   // W2a (review M-1): the engine's 409s about the write's CONTENT — a generic draw or a finalize the bracket refuses
   // (LEVEL_RESULT_IN_BRACKET), a settle or a tie-break that does not apply. A resend is refused identically; as a

@@ -1694,6 +1694,7 @@ export function scoringErrorText(
   }
   const engine = code ? engineErrorLabel(code, m, extra?.reason) : null;
   if (engine !== null) return engine;
+  if (code === "UNDO_WICKET_NOT_LATEST") return m("scorepad.refusal.undoWicketNotLatest");
   if (code === NEXT_MATCH_STARTED_CODE) {
     const ref = nextMatchRefOf(extra);
     return ref
@@ -1716,7 +1717,7 @@ export const SCORING_VOCAB_KEYS: readonly MessageKey[] = [
   ...Object.values(DECIDED_METHOD_KEY), "fixture.decidedBy.plain", "fixture.decidedBy.tie",
   "fixture.decidedBy.shootoutPlain",
   // NEXT_MATCH_STARTED's sentences and the board label they name the match by.
-  "score.nextMatchStarted", "scorepad.refusal.nextMatchStarted",
+  "score.nextMatchStarted", "scorepad.refusal.nextMatchStarted", "scorepad.refusal.undoWicketNotLatest",
   "slot.match_ref", "slot.match_ref_code", ...ROUND_CODE_KEYS,
   ...Object.values(ENUM_VOCAB).flatMap((maps) => maps.flatMap((m) => Object.values(m))),
 ];

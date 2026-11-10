@@ -46,6 +46,7 @@
 //        `!== "core.void"` check.
 import { useEffect, useState, type ReactNode } from "react";
 import { ClientTime } from "@/components/client-time";
+import { isWicketBehindLaterBall, voidBackIds } from "@/lib/cricket-wicket-void";
 import { describeEvent, type EventDescription } from "@/lib/event-copy";
 import { buildRibbon, type MsgFn } from "./ribbon";
 
@@ -88,6 +89,11 @@ export interface ActivityRowState {
   readonly voided: boolean;
   readonly ownedByMe: boolean;
   readonly canVoid: boolean;
+  /**
+   * 2026-11-10: an active cricket wicket with an active ball after it. It shows NO Void (the server refuses it,
+   * `UNDO_WICKET_NOT_LATEST`); where the surface can run the sequence, "Void back to here" stands in for it.
+   */
+  readonly wicketBehindBall: boolean;
 }
 
 /**
@@ -152,12 +158,15 @@ export function activityRowState(
 ): ActivityRowState {
   const voided = all.some((v) => v.voids === event.id);
   const ownedByMe = deviceLinkId === null || ownEventIds.has(event.id);
+  const wicketBehindBall = !voided && isWicketBehindLaterBall(event, all);
   return {
     voided,
     ownedByMe,
+    wicketBehindBall,
     canVoid:
       voidingEnabled &&
       !voided &&
+      !wicketBehindBall &&
       (authority ? event.type !== "core.void" : isVoidableEventType(event.type)) &&
       ownedByMe,
   };
@@ -387,6 +396,12 @@ export interface ActivityPanelProps {
   /** Omitted on a read-only surface; its absence disables every void
    *  control, which `activityRowState` folds in as `voidingEnabled`. */
   onVoid?: (eventId: string) => void;
+  /**
+   * 2026-11-10 — "Void back to here" on an older cricket wicket: voids every active entry newer than it, newest first,
+   * then the wicket (the ids, in the order to send). Omitted on a surface that cannot run the sequence (a device link),
+   * which then shows no control on such a row at all. Armed and confirmed like Void; the confirm names the count.
+   */
+  onVoidBack?: (eventIds: readonly string[]) => void;
   voidingId?: string | null;
   /**
    * R7/C review fix #1 — "a Void that will refuse must LOOK unavailable".
@@ -591,6 +606,7 @@ export function ActivityPanel({
   personNames,
   t,
   onVoid,
+  onVoidBack,
   voidingId = null,
   voidDisabled = false,
   resolveDetail,
@@ -660,7 +676,7 @@ export function ActivityPanel({
           data-role="v3-activity-list"
         >
           {rows.map((event, index) => {
-            const { voided, canVoid } = activityRowState(
+            const { voided, canVoid, wicketBehindBall, ownedByMe } = activityRowState(
               event,
               events,
               ownEventIds,
@@ -819,7 +835,47 @@ export function ActivityPanel({
                     </span>
                   )}
                 </span>
-                {canVoid ? (
+                {wicketBehindBall && onVoidBack && ownedByMe && !!onVoid ? (
+                  armedId === event.id && voidingId !== event.id ? (
+                    <span className="flex shrink-0 flex-col gap-2 max-md:w-full">
+                      <span data-role="v3-activity-void-back-hint" className="text-xs text-slate-600">
+                        {t("pad.activity.voidBackHint", { count: voidBackIds(event, events).length })}
+                      </span>
+                      <span className="flex gap-2 max-md:justify-end">
+                        <button
+                          type="button"
+                          onClick={() => setArmedId(null)}
+                          data-role="v3-activity-void-cancel"
+                          className="min-h-11 min-w-11 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400"
+                        >
+                          {t("pad.activity.voidCancel")}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setArmedId(null);
+                            onVoidBack(voidBackIds(event, events));
+                          }}
+                          disabled={voidDisabled}
+                          data-role="v3-activity-void-back-confirm"
+                          className="min-h-11 min-w-11 rounded-lg border border-red-300 bg-red-50 px-3 text-sm font-semibold text-red-700 transition-colors hover:bg-red-100 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-400"
+                        >
+                          {t("pad.activity.voidConfirm")}
+                        </button>
+                      </span>
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setArmedId(event.id)}
+                      disabled={voidDisabled || voidingId === event.id}
+                      data-role="v3-activity-void-back"
+                      className="min-h-11 min-w-11 shrink-0 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400"
+                    >
+                      {voidingId === event.id ? t("pad.activity.voiding") : t("pad.activity.voidBack")}
+                    </button>
+                  )
+                ) : canVoid ? (
                   armedId === event.id && voidingId !== event.id ? (
                     <span className="flex shrink-0 gap-2 max-md:w-full max-md:justify-end">
                       <button

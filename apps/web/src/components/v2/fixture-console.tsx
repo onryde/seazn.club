@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { PadSpec } from "@seazn/engine/sport";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import { runVoidBack } from "@/lib/cricket-wicket-void";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import { AuditStrip } from "@/components/v2/audit-strip";
@@ -685,7 +686,12 @@ export function FixtureConsole({
    *  own error line, the settle dialog paints it in its block (spec §7: "the dialog closes and shows the reason"). A
    *  paywall answer still raises the upgrade gate here and carries no message. */
   const post = useCallback(
-    async (type: string, payload: unknown): Promise<{ ok: true } | { ok: false; message: string | null }> => {
+    async (
+      type: string,
+      payload: unknown,
+      /** "Void back to here": a sequence of voids carries its own running seq and refreshes once, at its end. */
+      sequence?: { expectedSeq: number },
+    ): Promise<{ ok: true } | { ok: false; message: string | null }> => {
       setError(null);
       // Review M-2: an old forfeit refusal answers the write it came from, not the next one — any new write clears it,
       // as it clears the console's own error line (reopening the dialog clears it too).
@@ -696,12 +702,13 @@ export function FixtureConsole({
         await apiV1(`/api/v1/fixtures/${fixture.id}/events`, {
           method: "POST",
           json: {
-            expected_seq: live.last_seq,
+            expected_seq: sequence?.expectedSeq ?? live.last_seq,
             type,
             payload,
             idempotency_key: crypto.randomUUID(),
           },
         });
+        if (sequence) return { ok: true };
         await resync();
         router.refresh();
         return { ok: true };
@@ -742,6 +749,28 @@ export function FixtureConsole({
       return r.ok;
     },
     [post],
+  );
+
+  // 2026-11-10 — "Void back to here" on an older cricket wicket (docs/specs/2026-11-10-cricket-wicket-void-latest-only.md).
+  // Each void is the ordinary `core.void` of the then-latest entry, newest first, so the server's wicket rule never blocks
+  // the sequence. One refused step stops it; the ledger is read again and the line says how many were voided.
+  const voidBack = useCallback(
+    async (ids: readonly string[], wicketId: string) => {
+      setVoidingId(wicketId);
+      try {
+        const r = await runVoidBack(ids, live.last_seq, (id, expectedSeq) =>
+          post("core.void", { event_id: id }, { expectedSeq }),
+        );
+        await resync().catch(() => undefined);
+        router.refresh();
+        if (r.refusal) {
+          setError(msg("score.voidBackStopped", { done: r.done, total: r.total, reason: r.refusal.message ?? msg("score.failed") }));
+        }
+      } finally {
+        setVoidingId(null);
+      }
+    },
+    [live.last_seq, post, resync, router, msg],
   );
 
   // W2a (spec §7): the settle dialog shows a refusal in its own block, so the console's error line stays clear.
@@ -1621,6 +1650,16 @@ export function FixtureConsole({
                 if (busy || padSyncing) return;
                 setVoidingId(eventId);
                 void send("core.void", { event_id: eventId }).finally(() => setVoidingId(null));
+              }
+            : undefined
+        }
+        onVoidBack={
+          scoring && !decidedLock(live.status)
+            ? (ids) => {
+                // The same belt as `onVoid`'s: a click that beats a re-render still cannot send.
+                if (busy || padSyncing) return;
+                const wicketId = ids[ids.length - 1];
+                if (wicketId !== undefined) void voidBack(ids, wicketId);
               }
             : undefined
         }
