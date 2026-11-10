@@ -8,15 +8,16 @@
 // organiser-ui-path check, and the layer planner (lib/layers.ts, which run.ts
 // loads statically and which must never reach lib/browser — boundary.test.ts)
 // plans it as 🚫. Neither keeps a copy.
-import { API_ONLY_ROWS, type ApiOnlyRowKey } from "./catalogue.ts";
+import { API_ONLY_ROWS, isKnobRow, type ApiOnlyRowKey } from "./catalogue.ts";
 import { routeTo, type Route } from "./routing.ts";
 import { templateFor } from "./templates.ts";
 
-/** The route to the wave that owns the organiser control each API-only row lacks. A row the PRODUCT refuses on every
+/** The route to the wave that owns the organiser control each API-only row lacks. `knockout_third_place` has none since W4 T15: the
+ *  builder's Third place control builds it (catalogue.ts KNOB_ROWS), so it is no API-only row to judge - `isKnobRow` answers before
+ *  this table is asked. A row the PRODUCT refuses on every
  *  sport has none: `page_playoff_only` and `stepladder_only` are refused standalone (W4 T16; RB4-S6, ruling 269 —
  *  catalogue.ts refusedCell, STANDALONE_REFUSED_REASON), so no wave owes them a control and no layer plans them. */
 export const API_ONLY_UI_WAVE: Readonly<Partial<Record<ApiOnlyRowKey, Route>>> = Object.freeze({
-  knockout_third_place: routeTo("W4", "no builder control for a third-place match (design §8)"),
   group_only: routeTo("W5", "no builder control for a group stage with no knockout (design §8)"),
   group_group_ko: routeTo("W5", "no builder control for two group stages (design §8)"),
 });
@@ -46,6 +47,7 @@ export class RefusedApiOnlyRow extends Error {
 /** The route of an API-only row the product offers. Own keys only, and refused by name: under strip-types a template
  *  row would otherwise read `undefined` as its wave, and so would a refused row. */
 export function apiOnlyUiRoute(row: ApiOnlyRowKey): Route {
+  if (isKnobRow(row)) throw new NotApiOnlyRow(row);
   const route = Object.prototype.hasOwnProperty.call(API_ONLY_UI_WAVE, row) ? API_ONLY_UI_WAVE[row] : undefined;
   if (route !== undefined) return route;
   if ((API_ONLY_ROWS as readonly string[]).includes(row)) throw new RefusedApiOnlyRow(row);

@@ -192,6 +192,46 @@ describe("I2 bracket-one-champion-ranks-permutation", () => {
     expect(evaluateInvariant(I2, run([bracket(["a", "b", "c"])])).evidence.join(" ")).toMatch(/d .*not ranked/);
     expect(evaluateInvariant(I2, run([bracket(["a", "b", "c", "d", "x"])])).evidence.join(" ")).toMatch(/x ranked but not in the field/);
   });
+  // W4 T15 (RB4-C3, RB4-C4, RB4-C5): joint and vacant titles, judged on the completion's `places` and `title` - a fake never serves a joint one.
+  describe("joint and vacant titles", () => {
+    const withTitle = (st: ReturnType<typeof bracket>, places: [string, number][], title: NonNullable<CompleteObs["title"]>) => ({
+      ...st, complete: { status: 200, code: null, completed: true, finalRanks: places.map((p) => p[0]), places: places.map(([entrantId, rank]) => ({ entrantId, rank })), title },
+    });
+    const unplayedFinal = (st: ReturnType<typeof bracket>) => ({ ...st, fixtures: st.fixtures.map((f) => (f.roundNo === 2 ? { ...f, status: "scheduled", outcome: null } : f)) });
+    const joint = { kind: "joint" as const, winners: ["a", "b"] as [string, string] };
+    it("a joint title with both finalists unbeaten and both rank 1 passes, counted", () => {
+      const v = evaluateInvariant(I2, run([withTitle(unplayedFinal(bracket(null)), [["a", 1], ["b", 1], ["c", 3], ["d", 3]], joint)]));
+      expect(v).toMatchObject({ verdict: "pass" });
+      expect(v.checked).toBeGreaterThan(4);
+    });
+    it("a joint title with only one finalist at rank 1 fails by name", () => {
+      const v = evaluateInvariant(I2, run([withTitle(unplayedFinal(bracket(null)), [["a", 1], ["b", 2], ["c", 3], ["d", 3]], joint)]));
+      expect(v.verdict).toBe("fail");
+      expect(v.evidence.join(" ")).toMatch(/joint title \(a,b\) but rank 1 is held by a/);
+    });
+    it("a joint title when the final WAS played (one unbeaten) fails by name", () => {
+      const v = evaluateInvariant(I2, run([withTitle(bracket(null), [["a", 1], ["b", 1], ["c", 3], ["d", 3]], joint)]));
+      expect(v.verdict).toBe("fail");
+      expect(v.evidence.join(" ")).toMatch(/joint title \(a,b\) but 1 unbeaten entrants: a/);
+    });
+    it("a joint title beside a THIRD unbeaten entrant fails (the finalists are not the only ones unbeaten)", () => {
+      const st = unplayedFinal(bracket(null));
+      const open = { ...st, fixtures: st.fixtures.filter((f) => !(f.home === "b" && f.away === "c")) }; // b v c never played: c is unbeaten too
+      const v = evaluateInvariant(I2, run([withTitle(open, [["a", 1], ["b", 1], ["c", 3], ["d", 3]], joint)]));
+      expect(v.verdict).toBe("fail");
+      expect(v.evidence.join(" ")).toMatch(/joint title \(a,b\) but 3 unbeaten entrants: a,b,c/);
+    });
+    it("a vacant title with a rank-1 holder fails; with nobody at rank 1 it passes", () => {
+      const vacant = { kind: "vacant" as const, finalists: ["a", "b"] };
+      const st = bracket(null);
+      const bad = evaluateInvariant(I2, run([withTitle(st, [["a", 1], ["b", 2], ["c", 3], ["d", 4]], vacant)], { facts: facts("withdrawn"), departed: ["a", "b"] }));
+      expect(bad.verdict).toBe("fail");
+      expect(bad.evidence.join(" ")).toMatch(/a vacant title but a hold rank 1 - nobody is champion/);
+      const good = evaluateInvariant(I2, run([withTitle(st, [["c", 3], ["d", 3], ["a", 5], ["b", 5]], vacant)], { facts: facts("withdrawn"), departed: ["a", "b"] }));
+      expect(good.verdict).toBe("pass");
+      expect(good.checked).toBeGreaterThan(0);
+    });
+  });
   it("negative: a final never played leaves two unbeaten; a drawn bracket fixture is named", () => {
     const unplayed = { ...bracket(["a", "b", "c", "d"]) };
     unplayed.fixtures = unplayed.fixtures.map((f) => (f.roundNo === 2 ? { ...f, status: "scheduled", outcome: null } : f));

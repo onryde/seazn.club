@@ -19,22 +19,22 @@
   "l2": {
     "formula": "runs in l2-pairs.json; pairTargets = owed (row, scenario) + (sport, scenario) pairs (the scenario applies there, or its only drop is the L3 harness gap — that run is marked l3Gap), each covered by one run, so runs ≥ owed (row, scenario) pairs",
     "value": 1589,
-    "pairTargets": 2455,
+    "pairTargets": 2456,
     "l3GapRuns": 0
   },
   "l3": {
     "formula": "Σ offered cells (1 LIFECYCLE + applicable L3 atomic, variant-bound included) + scorable variant cases (Q-B: LIFECYCLE each; unscorable ones are listed under variants, not run) + denied cases (one per gated row, generic) + regression cases",
     "lifecycle": 207,
-    "atomicApplicable": 13932,
+    "atomicApplicable": 13943,
     "bound": 160,
     "variantCasesScorable": 997,
     "variantCasesUnscorable": 0,
     "denied": 7,
     "regressions": 9,
-    "value": 15152
+    "value": 15163
   },
   "drops": {
-    "total": 6189,
+    "total": 6178,
     "harnessGap": 0,
     "unscorableOnly": 0,
     "byScenario": {
@@ -106,7 +106,7 @@
       "Q1a": 154,
       "Q1b": 154,
       "Q2": 154,
-      "Q3": 220,
+      "Q3": 209,
       "Q4a": 99,
       "Q4b": 154,
       "Q5a": 220,

@@ -8,6 +8,7 @@
 // WithdrawCascadeOut; usecases/public.ts publicStandings).
 import type { LedgerRow } from "../../../bench/lib/ledger.ts";
 import type { StagePostBody } from "../catalogue.ts";
+import type { ObservedTitle } from "../observed.ts";
 import { mapStrings, redact } from "../redact.ts";
 import type { ForfeitReason, StreamEvent } from "../streams/types.ts";
 
@@ -78,14 +79,23 @@ export interface ReinstateOut { entrant_id: string; status: string; late_entry: 
  *  is identified by its ext_key; absent from the fakes' single-stage rows.
  *  `scheduled_at` (W1d Task 14): the instant the product dated it at, as served
  *  (null: undated); absent from the fakes' rows, which read as undated. */
-export interface FixtureRow { id: string; stage_id: string; pool_id: string | null; round_no: number | null; fixture_no: number | null; home_entrant_id: string | null; away_entrant_id: string | null; status: string; outcome: unknown; third_place?: boolean; ext_key?: string | null; is_final?: boolean; scheduled_at?: string | null }
+export interface FixtureRow { id: string; stage_id: string; pool_id: string | null; round_no: number | null; fixture_no: number | null; home_entrant_id: string | null; away_entrant_id: string | null; status: string; outcome: unknown; third_place?: boolean; ext_key?: string | null; is_final?: boolean; scheduled_at?: string | null;
+  /** W4 T12 (Q4a; X-CH-4): set (an ISO instant) only on a final the organiser declared joint winners on - stored `decided` with no outcome
+   *  (usecases/joint-winners.ts; the Fixture wire carries it since B5a). Absent from the fakes' rows, which read as "no declaration". */
+  joint_winners_at?: string | null }
+/** POST /fixtures/:id/joint-winners's answer (api-v1/schemas/fixtures.ts JointWinnersResult): whether the declaration also completed the stage. */
+export interface JointWinnersOut { fixture_id: string; stage_completed: boolean }
+/** DELETE /fixtures/:id/joint-winners's answer (JointWinnersUndoResult): the status the final holds again. */
+export interface JointWinnersUndoOut { fixture_id: string; status: string }
 export interface GenerateOut { created: number; existing: number; fixtures: FixtureRow[] }
 export interface StartOut { division_id: string; status: string; started: boolean; generated: number }
 /** The next stage's DRAFT seed proposal a /complete minted
  *  (usecases/stages/completion.ts progressCompletedStage `seed_proposal`). There is no GET:
  *  /complete's answer is the only place the harness learns its id. */
 export interface SeedProposalRef { readonly id: string; readonly status: string }
-export interface CompleteOut { completed: boolean; events: { type: string; finalRanks?: string[] }[]; division_completed?: boolean; seed_proposal?: SeedProposalRef | null }
+/** W4 T3: a `stage_completed` event as the wire serves it - `places` (`{entrantId, rank}`, level entrants share a rank) and, for a bracket, `title`. */
+export interface CompleteEventWire { type: string; finalRanks?: string[]; places?: { entrantId: string; rank: number }[]; title?: ObservedTitle }
+export interface CompleteOut { completed: boolean; events: CompleteEventWire[]; division_completed?: boolean; seed_proposal?: SeedProposalRef | null }
 /** W3 app-B Task 6: POST /stages/{id}/swiss/finish (usecases/swiss-rounds-admin.ts finishSwissNow, FinishSwissResult) - the
  *  stage's completion answer, which Finish performs itself, plus k (`finished_after`: the round whose standings became final),
  *  the rows past it deleted and how many held a laid-out slot. */
@@ -306,6 +316,10 @@ export interface OrganiserDriver {
   /** W4 T24 (X-LE-10, ruling 271): the one tap that places a player WAITING on the stage's bracket (POST /stages/:id/late-entrants/:entrantId/place).
    *  A refusal the product ANSWERS (`refused` / `rebuild_offered`, 200) is returned; a 409 / 422 throws RefusedCall. Optional, as `reinstate`. */
   placeLateEntrant?(stageId: string, entrantId: string): Promise<LateEntryWire>;
+  /** W4 app PR B T12 (Q4a; X-CH-4, X-CH-6): "Declare joint winners" on an unplayed final (POST /fixtures/:id/joint-winners) and its Undo (DELETE). Optional,
+   *  as `reinstate`: the HTTP driver has them, a layer that does not drive the path (and the fakes) does not. A 409 / 422 refusal throws RefusedCall. */
+  declareJointWinners?(fixtureId: string): Promise<JointWinnersOut>;
+  undoJointWinners?(fixtureId: string): Promise<JointWinnersUndoOut>;
   readonly callCount: number;
 }
 
