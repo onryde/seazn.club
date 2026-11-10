@@ -649,18 +649,18 @@ test.describe("W4 a vacant title: both finalists withdraw", () => {
     await expect(page.getByTestId("bracket-title-vacant"), "the final's tile says so").toHaveCount(1);
   });
 
-  // KNOWN DEFECT (found by this journey, reported to the controller, not fixed here): the DESK's Withdraw is the cascade for BOTH finalists.
-  // The first one settles the final as a walkover to the other (X-CH-2); the second then finds a settled line, so the plan has nothing to do
-  // and the withdrawn finalist stays champion by award. RB4-C3 says both finalists out is a vacant title automatically. The server suite
-  // reaches the vacant title only by the bare flip first, so no test drove two Withdraws. `test.fail` keeps this red-when-fixed: when the
-  // defect is fixed this test PASSES, Playwright reports it as unexpectedly passing, and the marker comes off.
-  test("DEFECT: two Withdraws of the two finalists (the desk's own door) leave the withdrawn finalist champion instead of a vacant title", async ({ request }) => {
-    test.fail(true, "RB4-C3: the second Withdraw finds the final settled (a walkover to the finalist now leaving) and writes nothing");
+  // Fix round 1 (PO ruling 2026-11-10, RB4-C3): the desk's own door, two Withdraws in a row, is the vacant title too. The first settles the final as
+  // a walkover to the other finalist; the second turns that walkover into the departure double walkover.
+  test("two Withdraws of the two finalists (the desk's own door), in either order, leave the final a double walkover and the title vacant", async ({ request }) => {
     test.setTimeout(180_000);
     const { ko, final } = await seatedFinal(request, "vacant2");
-    for (const id of [ko.ids[0]!, ko.ids[1]!]) expect((await apiJson(request, `/api/v1/entrants/${id}/withdraw`, "POST")).status).toBe(200);
+    // The second finalist first: the reverse of the order the bare-flip test uses.
+    for (const id of [ko.ids[1]!, ko.ids[0]!]) expect((await apiJson(request, `/api/v1/entrants/${id}/withdraw`, "POST")).status).toBe(200);
     const walked = (await apiJson<{ status: string; outcome: { kind?: string } | null }>(request, `/api/v1/fixtures/${final.id}`)).data!;
     expect([walked.status, walked.outcome?.kind], "both sides out: a double walkover").toEqual(["forfeited", "double_walkover"]);
+    const done = await apiJson<Done>(request, `/api/v1/stages/${ko.mainId}/complete`, "POST");
+    const ev = done.data!.events.find((e) => e.type === "stage_completed")!;
+    expect([done.status, ev.title?.kind], "Complete answers a vacant title").toEqual([200, "vacant"]);
   });
 });
 

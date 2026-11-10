@@ -160,7 +160,7 @@ export async function w4KnockoutBSuite(): Promise<void> {
     const w = await v1(owner, `/api/v1/entrants/${d.ents[2]?.id}/withdraw`, "POST");
     await d.playRound(1);
     const waiting = await d.stageStatus(d.plateId);
-    await d.playRound(2, (f) => (f.home_entrant_id === d.ents[1]?.id || f.away_entrant_id === d.ents[1]?.id ? d.ents[1]!.id : f.home_entrant_id!));
+    await d.playRound(2, (f) => (f.home_entrant_id === d.ents[1]?.id || f.away_entrant_id === d.ents[1]?.id ? d.ents[1].id : f.home_entrant_id));
     const plateStatus = await d.stageStatus(d.plateId);
     const noLines = (await d.lines(d.plateId)).length === 0;
     await v1(owner, `/api/v1/stages/${d.mainId}/complete`, "POST");
@@ -284,10 +284,8 @@ export async function w4KnockoutBSuite(): Promise<void> {
     const final = (await d.lines()).find((l) => l.round_no === 2);
     const finalists = [final?.home_entrant_id, final?.away_entrant_id];
     const w = [];
-    // The first finalist leaves by a bare status flip, the second by the desk's Withdraw door. Two desk Withdraws in a row leave the final
-    // `forfeited` with an award (a product defect recorded in the T16 report): the first settles the final, so the second finds a settled line.
-    w.push(await v1(owner, `/api/v1/entrants/${finalists[0]}`, "PATCH", { status: "withdrawn" }));
-    w.push(await v1(owner, `/api/v1/entrants/${finalists[1]}/withdraw`, "POST"));
+    // Two desk Withdraws in a row (RB4-C3, PO ruling 2026-11-10): the first walks the final over, the second turns it into the double walkover.
+    for (const id of finalists) w.push(await v1(owner, `/api/v1/entrants/${id}/withdraw`, "POST"));
     const done = await v1(owner, `/api/v1/stages/${d.stageId}/complete`, "POST");
     type Done2 = { completed?: boolean; events?: { type: string; places?: { entrantId: string; rank: number }[]; title?: { kind?: string; champion?: string; finalists?: string[] } }[] };
     const ev = v1data<Done2 | undefined>(done)?.events?.find((e) => e.type === "stage_completed");
