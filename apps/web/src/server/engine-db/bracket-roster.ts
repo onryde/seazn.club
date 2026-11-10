@@ -1,6 +1,7 @@
 // W4 app PR B (C1/C12, X-FR-1, X-SP-4): the entrants a bracket stage DREW, which is what `BracketStage.entrants` declares
-// and what its ranks cover. A pure function of three facts, so the three sites that declare a roster (the completion read,
-// the generate-time departed-qualifier planner, the withdrawal planner) cannot drift.
+// and what its ranks cover. A pure function of three facts. The only site that declares it is the completion read
+// (`bracketRosterAndSeeds`, competition.ts), because that is where the engine RANKS: the withdrawal and generate-time
+// planners (`withdrawBracketEntrant`) read neither `stage.entrants` nor a fixture's round, so they declare the seated set.
 //
 // - `drawn`: the order the bracket was drawn with. A fed stage stores it as `config.qualified` (departed qualifiers
 //   included - the draw keeps their positions, F14); a root stage has no stored list and its draw order is rebuilt by the

@@ -4,16 +4,15 @@ import "server-only";
 // knockout draw order and its stored seed, and the departed-qualifier walkovers.
 
 import { randomUUID } from "node:crypto";
-import { swissDrawSeed, swissRoundOneOrder } from "@/lib/swiss-draw";
 import { chessIndividualOnlyError, isChessSport } from "@/lib/chess-individual-only";
 import { EngineError } from "@seazn/engine/core";
 import { generateRoundRobin, generateSingleElim, generateDoubleElim, generatePagePlayoff, generateStepladder, type BracketFixtureGen, type GeneratedBracket, generateAmericano, pairMexicanoRound, type AmericanoRound } from "@seazn/engine/scheduling";
 import { withdrawBracketEntrant, type BracketFixture } from "@seazn/engine/competition";
 import { byeAward } from "@/lib/fixture-bye";
-import { parseExtKey } from "@/server/engine-db/competition";
-import { engineRoundOf, laneDepthOf } from "@/server/engine-db/bracket-rounds";
-import { bracketRosterOf } from "@/server/engine-db/bracket-roster";
 import type { Tx, GenFixture, ActiveEntrant } from "./types";
+// The draw primitives moved to the engine-db layer (competition.ts reads them; usecases import engine-db, never the reverse).
+import { knockoutDraws, knockoutDrawOrder } from "@/server/engine-db/knockout-draw";
+export { knockoutDraws, knockoutDrawOrder };
 
 // ---------------------------------------------------------------------------
 // Fixture generation (doc 08 §3 — idempotent, returns diff)
@@ -250,11 +249,9 @@ export function walkoverDepartedQualifiers(
   gen: GenFixture[],
   departed: ReadonlySet<string>,
 ): { gen: GenFixture[]; voided: ReadonlySet<string> } {
-  // C5/C9: the engine's round is 0-based per lane; `roundNo` is the stored, offset one.
-  const laneDepth = laneDepthOf(gen.map((g) => ({ lane: parseExtKey(g.extKey).bracket, roundNo: g.roundNo })));
   const fixtures: BracketFixture[] = gen.map((g) => ({
     id: g.extKey,
-    round: engineRoundOf(g.roundNo, parseExtKey(g.extKey).bracket, laneDepth),
+    round: g.roundNo,
     status: "scheduled" as const,
     ...(g.home === null ? {} : { home: g.home }),
     ...(g.away === null ? {} : { away: g.away }),
@@ -268,12 +265,10 @@ export function walkoverDepartedQualifiers(
       {
         id: stageId,
         kind: kind as "knockout" | "double_elim" | "stepladder",
-        // engine 5.0.0: `entrants` is the stage's DRAWN roster (`bracketRosterOf`, the same function the completion read
-        // uses): everyone seated, departed included - and the departed qualifiers, who may hold no seat at all (C1/C12).
-        entrants: bracketRosterOf({
-          drawn: [...departed],
-          seated: gen.flatMap((g) => [g.home, g.away]).filter((id): id is string => id !== null),
-        }),
+        // engine 5.0.0 made `entrants` required. `withdrawBracketEntrant` reads neither `stage.entrants` nor a fixture's `round`
+        // (it walks home/away/status only), so the seated set and the stored round are enough here; the DRAWN roster and the
+        // 0-based engine rounds matter to the completion read (engine-db/competition.ts), where the engine ranks.
+        entrants: [...new Set(gen.flatMap((g) => [g.home, g.away]).filter((id): id is string => id !== null))],
       },
       entrantId,
       fixtures,
@@ -350,32 +345,6 @@ export function walkoverDepartedQualifiers(
 export function generatedAward(winner: string, home: string | null, away: string | null) {
   const other = winner === home ? away : home;
   return other === null ? byeAward(winner) : { kind: "award", winner, loser: other, reason: "withdrew" };
-}
-
-/**
- * W4 T7 (K5; RB4-D3, RB4-D6, X-SD-6/X-SD-9): whether a knockout's Generate DRAWS its field — the unseeded entrants placed
- * at random (`knockoutDrawOrder`), never in registration order. Not when an API `slotOrder` is set (RB4-D6: the slot map
- * overrides the draw, and it indexes into the field as given), nor when the stage draws from `config.qualified` (a fed
- * stage: that order IS the seeding), nor when nobody is unseeded (a wholly seeded field is the fold alone, X-SW-22's rule).
- */
-export function knockoutDraws(active: readonly ActiveEntrant[], cfg: Record<string, unknown>): boolean {
-  return !Array.isArray(cfg.slotOrder) && !Array.isArray(cfg.qualified) && active.some((e) => e.seed === null);
-}
-
-/**
- * W4 T7 (K5; RB4-D3/D4): a root knockout's field in DRAW order — the seeded first, by seed (the engine folds them,
- * RB4-D1/D2), then the unseeded shuffled with the stage's own seed (`swissRoundOneOrder(swissDrawSeed(stageId), …)`, the
- * W3 draw: one PRNG, one seed rule, so the same stage and the same field always draw the same bracket — RB4-D4, and a
- * Rebuild reuses it, RB4-D5). `active` itself (a copy, in its order) when the stage does not draw (`knockoutDraws`).
- */
-export function knockoutDrawOrder(stageId: string, active: readonly ActiveEntrant[], cfg: Record<string, unknown>): ActiveEntrant[] {
-  if (!knockoutDraws(active, cfg)) return [...active];
-  const byId = new Map(active.map((e) => [e.id, e]));
-  return swissRoundOneOrder(swissDrawSeed(stageId), active).map((id) => {
-    const e = byId.get(id);
-    if (e === undefined) throw new Error(`knockoutDrawOrder: the draw returned ${id}, which is not in the field`);
-    return e;
-  });
 }
 
 /** W4 T7 (RB4-D4): the draw seed the stage's newest Generate recorded (`fixtures_generated.payload.draw_seed`), or null —

@@ -37,9 +37,6 @@ import { feedsNextMatch } from "@/lib/bracket-next-match";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { resolveModule } from "@/server/engine-db/registry";
-import { parseExtKey } from "@/server/engine-db/competition";
-import { engineRoundOf, laneDepthOf } from "@/server/engine-db/bracket-rounds";
-import { bracketRosterOf } from "@/server/engine-db/bracket-roster";
 import { rowAwaitsSettle } from "@/server/engine-db/recorded-abandon";
 import {
   WITHDRAWAL_PENDING_STATUSES,
@@ -176,8 +173,6 @@ interface FixtureRowLite {
   stage_id: string;
   pool_id?: string | null;
   round_no: number;
-  /** The lane a bracket line sits in (`parseExtKey`): the engine's round is read per lane (C5/C9). */
-  ext_key?: string | null;
   status: string;
   home_entrant_id: string | null;
   away_entrant_id: string | null;
@@ -394,15 +389,13 @@ export async function withdrawEntrantCascade(
       } else if (WITHDRAWAL_WALKOVER_KINDS.has(stage.kind)) {
         const bracketFixtures: BracketFixture[] = [];
         const held = new Set<string>();
-        const stageRows = (fixtures as unknown as FixtureRowLite[]).filter((r) => r.stage_id === stage.id);
-        const laneDepth = laneDepthOf(stageRows.map((r) => ({ lane: parseExtKey(r.ext_key ?? null).bracket, roundNo: r.round_no })));
         for (const f of mine) {
           const abandoned = f.status === "abandoned" && activeAbandons(await listEvents(auth, f.id, 0)).length > 0;
           const owed = f.status === "in_play" && (await deciderOwed(auth, sportModule, f.id));
           if (f.status === "needs_decision" || owed || abandoned) held.add(f.id);
           bracketFixtures.push({
             id: f.id,
-            round: engineRoundOf(f.round_no, parseExtKey(f.ext_key ?? null).bracket, laneDepth),
+            round: f.round_no,
             status: bracketWithdrawalStatus(f.status, abandoned),
             home: f.home_entrant_id ?? undefined,
             away: f.away_entrant_id ?? undefined,
@@ -413,12 +406,11 @@ export async function withdrawEntrantCascade(
           {
             id: stage.id,
             kind: stage.kind as "knockout" | "double_elim" | "stepladder",
-            // engine 5.0.0: `entrants` is the stage's DRAWN roster (`bracketRosterOf`, as at completion): the stored
-            // draw (`config.qualified`, departed qualifiers included) and everyone any line of the stage seats (C1/C12).
-            entrants: bracketRosterOf({
-              drawn: Array.isArray((stage.config as { qualified?: unknown } | null)?.qualified) ? ((stage.config as { qualified: string[] }).qualified) : [],
-              seated: stageRows.flatMap((r) => [r.home_entrant_id, r.away_entrant_id]).filter((id): id is string => id !== null),
-            }),
+            // engine 5.0.0 made `entrants` required. The seated set is what this planner has always read (no behaviour
+            // change); app B's T2' widens it to the stage's full drawn roster.
+            // `bracketRoster` (engine-db/competition.ts) declares the same seated set at completion (plus
+            // `config.qualified` when stored); T2' unifies all three.
+            entrants: [...new Set(bracketFixtures.flatMap((b) => [b.home, b.away]).filter((id): id is string => id !== undefined))],
           },
           entrantId,
           bracketFixtures,
