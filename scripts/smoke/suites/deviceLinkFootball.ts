@@ -116,7 +116,7 @@ export async function deviceLinkFootballSuite(): Promise<void> {
   const plain = byPerson(ids.plain);
   step(`a numberless row reads squad_number null (got ${JSON.stringify(plain?.squad_number)})`, !!plain && plain.squad_number === null);
   // 5. A side with no sheet is an empty lineup.
-  step(`the other side, with no sheet, reads lineup [] (got ${JSON.stringify(sides?.[otherSeat]?.lineup)})`, Array.isArray(sides?.[otherSeat]?.lineup) && sides[otherSeat]!.lineup.length === 0);
+  step(`the other side, with no sheet, reads lineup [] (got ${JSON.stringify(sides?.[otherSeat]?.lineup)})`, Array.isArray(sides?.[otherSeat]?.lineup) && sides[otherSeat].lineup.length === 0);
 
   done();
 }
