@@ -207,7 +207,7 @@ describe("ProgressionSchema", () => {
   });
 
   // F6 — `carry` used to be rejected alongside `timing: "setup"`, because it
-  // was read only inside seedNextStage (usecases/stages.ts), which returns
+  // was read only inside seedNextStage (usecases/stages/carry-over.ts), which returns
   // early unless `timing === "on_complete"`; the combination parsed, charged
   // the org's `standings.carry_over` Pro entitlement and then silently no-opped.
   // F6 applies carry on both paths: seedNextStage for `on_complete`,
@@ -215,7 +215,7 @@ describe("ProgressionSchema", () => {
   // assert ONLY the schema edge — the pair parses with the field preserved.
   describe("carry with timing: setup (F6 — schema edge only)", () => {
     // Asserting only `success` would be satisfied by a parse that silently
-    // dropped `carry` — the exact shape stages.ts reads (`progression?.carry`)
+    // dropped `carry` — the exact shape usecases/stages/ reads (`progression?.carry`)
     // to decide whether to charge the entitlement and apply the deltas. Pin
     // the parsed VALUE, so a schema that accepts the pair but forgets the
     // field is still a failure here.

@@ -17,7 +17,7 @@ import "server-only";
 // sorted on stable DOMAIN keys, timestamps are ISO-8601 with the division tz
 // offset, and the solver draft is produced through domain-ranked stand-in ids so
 // the engine's per-(official, fixture) UUID tiebreak can never leak into it. DB
-// reads reuse the officials.ts / schedule.ts loaders — no SQL is re-derived here.
+// reads reuse the officials.ts / schedule/ loaders — no SQL is re-derived here.
 import { resolveProvider, selectProvider, type ProviderName } from "@/server/ai/select-provider";
 import {
   AiProviderError,
@@ -181,7 +181,7 @@ export async function buildOfficialsPack(
       (opts.schedule ?? []).map((s) => [s.fixture_id, s] as const),
     );
     // P9 cutover: `f.court_label` is frozen (no writer touches it any more —
-    // see FixtureLite's own doc in schedule.ts), so the pack's court display
+    // see FixtureLite's own doc in schedule/types.ts), so the pack's court display
     // is DERIVED from `courts` via `f.court_id` instead. The dry-run
     // override's own `court_label` is a separate, caller-supplied Phase-A
     // proposal (not yet persisted) and is untouched by this cutover.
@@ -682,7 +682,7 @@ export function refereeOfficialsPlan(
 // ===========================================================================
 // Phase B runner — the provider-seam structured-output call + referee
 // verify/repair loop (design/v4/03 §2, mirrors the Phase A runner in
-// schedule-ai.ts). Pure over the pack: no DB, no wall clock. Resolves
+// schedule-ai/). Pure over the pack: no DB, no wall clock. Resolves
 // selectProvider() itself (503 when unconfigured, SCHEDULING_AI_BASE_URL
 // escape hatch lives in the adapter).
 // ===========================================================================
@@ -875,7 +875,7 @@ function officialsDiff(pack: OfficialsPack, plan: AiOfficialsPlan): AiOfficialsP
 
 /** Internal shape runOfficialsAiPlan returns — same as the public
  *  AiOfficialsPlanResponse except usage carries cost_usd, for the run ledger
- *  (mirrors schedule-ai.ts's AiPlanResult). officialsAiPlanForDivision builds
+ *  (mirrors schedule-ai/types.ts's AiPlanResult). officialsAiPlanForDivision builds
  *  the public response explicitly so cost_usd never leaks into the API's
  *  pinned 3-field usage shape (officials-ai-route.test.ts asserts it). */
 export interface OfficialsPlanResult extends Omit<AiOfficialsPlanResponse, "usage"> {

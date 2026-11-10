@@ -18,7 +18,7 @@
 //
 // Client-safe on purpose (same stance as `lib/swiss-shell.ts`, whose
 // `swissBoardsForField` this reuses rather than restating): the desk panel is
-// a client component and cannot import `server/usecases/stages.ts`.
+// a client component and cannot import `server/usecases/stages/`.
 //
 // VOCABULARY. `board` is chess heritage and internal code vocabulary; it never
 // reaches a screen. On screen it is "matches".
@@ -57,7 +57,7 @@ export type SwissLegend = {
  * THE VOCABULARY IS THE STAGE'S OWN: `pending | active | complete` — the check
  * constraint on `stages.status` (db/migration/v2-engine/tables/V210__stages.sql)
  * and `Stage.status` in `server/api-v1/schemas.ts`. It is NOT the DIVISION's
- * `active | completed` (`DIVISION_STARTED_STATUSES`, `usecases/stages.ts`):
+ * `active | completed` (`DIVISION_STARTED_STATUSES`, `usecases/stages/helpers.ts`):
  * different column, different spelling, and copying that set here would have
  * matched nothing at all, leaving this gate inert and green.
  * `swiss-legend-complete-status-set` pins the set against the schema enum in
@@ -104,7 +104,7 @@ export type SwissLegendI18n = {
 
 /**
  * The size of the field this swiss stage would actually pair, mirroring
- * `generateStageFixturesWrite`'s own resolution (usecases/stages.ts) exactly:
+ * `generateStageFixturesWrite`'s own resolution (usecases/stages/generate.ts) exactly:
  * a stage carrying `config.qualified` draws from that list INTERSECTED with
  * the live field (swiss is not a `BRACKET_WALKOVER_KINDS` kind, so the policy
  * is expunge, not walkover); every other swiss stage draws the whole field.

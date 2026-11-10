@@ -11,7 +11,7 @@
 //   2. PURCHASE. `createRelayCheckout` — the use-case `/api/billing/relay-checkout` calls, not a hand-built
 //      `checkout.sessions.create` — opens a payment-mode session on that synced price in EVERY currency the pack
 //      declares (sessions only, nothing charged), each charging the declared amount for that currency, and Stripe holds
-//      the metadata the fulfilment path reads (billing-events.ts dispatch + stream-credits-checkout.ts): `kind`,
+//      the metadata the fulfilment path reads (usecases/billing-events/ dispatch + stream-credits-checkout.ts): `kind`,
 //      `org_id`, `pack`, and the `credits` snapshot the grant is taken from. A real, still-open session handed to the
 //      real fulfilment gate grants nothing. One pack (the 5-pack) is swept across currencies: the per-pack amounts are
 //      already pinned in every currency by (1), so more packs here would re-ask the same checkout the same question.

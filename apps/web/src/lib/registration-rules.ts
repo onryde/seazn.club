@@ -161,7 +161,7 @@ export function requiresDob(division: {
  * (`categoryEligibilityIssues`/`rosterCompositionIssues`, this file).
  * `eligibility_note` stays in the parameter type only because existing call
  * sites already pass the division's full context (`registration-submit.ts`,
- * `registrations.ts`) — accepted, never read.
+ * `usecases/registrations/`) — accepted, never read.
  */
 export function requiresGender(division: {
   category: string | null;

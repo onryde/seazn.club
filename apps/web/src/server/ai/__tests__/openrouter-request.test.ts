@@ -118,7 +118,7 @@ describe("openrouter request body", () => {
     expect(itemsSchema.maxItems).toBeUndefined();
     expect(itemsSchema.minItems).toBeUndefined();
     // The bound itself is still enforced elsewhere (AiSchedulePlan.safeParse
-    // in schedule-ai.ts) — this only removes the wire-level hint the vendor
+    // in usecases/schedule-ai/) — this only removes the wire-level hint the vendor
     // can't accept, so the rest of the schema must survive unstripped.
     expect(itemsSchema.type).toBe("array");
     expect(itemsSchema.items!.type).toBe("string");
@@ -172,7 +172,7 @@ describe("openrouter request body", () => {
     expect(body.messages[3]).toEqual({ role: "user", content: "fix it" });
   });
 
-  // A plain user turn's content is always a string (schedule-ai.ts sends
+  // A plain user turn's content is always a string (usecases/schedule-ai/ sends
   // JSON.stringify(...)) — must pass through untouched, not be mistaken for
   // a replayable assistant message object.
   it("leaves plain string-content turns untouched", () => {

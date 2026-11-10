@@ -117,7 +117,7 @@ export async function seedBracket(opts: {
   });
   // The entrant kind the sport DECLARES as its default (engine `entrantModel`), never a typed list of team sports.
   const kind = sportModule.entrantModel?.defaultKind ?? "individual";
-  // americano pairs individuals on the fly, and only individuals with a linked person (stages.ts americanoGen).
+  // americano pairs individuals on the fly, and only individuals with a linked person (usecases/stages/generators.ts americanoGen).
   const member = async (name: string) =>
     opts.stageKind !== "americano"
       ? []
@@ -157,7 +157,7 @@ export async function seedBracket(opts: {
     if (n.count !== 1) throw new Error("seedBracket: the stage points were not written");
   }
   await generateStageFixtures(auth, stage!.id);
-  // swiss: the first generate plants empty round shells; the second pairs round 1 (stages.ts swissGen).
+  // swiss: the first generate plants empty round shells; the second pairs round 1 (usecases/stages/swiss-gen.ts swissGen).
   if (opts.stageKind === "swiss") await generateStageFixtures(auth, stage!.id);
   // `scoreEvent` refuses a division that has not started (division-phase.ts); appendEvent does not ask.
   await startDivision(auth, division.id);

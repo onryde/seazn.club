@@ -5,7 +5,7 @@ import type { CompetitionPack } from "./types";
 /**
  * What actually goes on the wire to the model: the joint pack MINUS
  * `participants` and `assumptions`. The joint twin of `toModelPayload`
- * (schedule-ai.ts), and for the same reasons.
+ * (schedule-ai/model-payload.ts), and for the same reasons.
  *
  * Both fields are server-side enforcement inputs, not prompt material. #396
  * gives the joint referee and the joint draft the full advancer sets; it does
@@ -38,7 +38,7 @@ import type { CompetitionPack } from "./types";
 export function toJointModelPayload(
   pack: CompetitionPack,
   /** id -> display info, from the SAME `buildCompetitionPack` call that
-   *  built `pack`. Defaults to empty — see `toModelPayload` (schedule-ai.ts)
+   *  built `pack`. Defaults to empty — see `toModelPayload` (schedule-ai/model-payload.ts)
    *  for why that is a safe, behaviour-preserving default. */
   // P9 pass 3d: REQUIRED, not defaulted. With a default of `{}` every label
   // silently fell back to the court's UUID — which is the exact regression

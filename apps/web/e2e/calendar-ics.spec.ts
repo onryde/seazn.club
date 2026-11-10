@@ -21,7 +21,7 @@ import {
 // exists but has no time" without needing a catalogue template. A knockout's
 // generate() call inserts ALL rounds' fixture rows up front (Task 1 —
 // bracketToGen/generateStageFixtures, apps/web/src/server/usecases/
-// stages.ts:1117-1155): any fixture whose home/away is fed by ANOTHER
+// usecases/stages/): any fixture whose home/away is fed by ANOTHER
 // fixture from the SAME generate() batch (semi -> final here) is written
 // with a { key: "slot.winner_match", params: { round, seq } } label — no
 // entrant, no scheduled_at — resolved at render time to "Winner of {ref}".

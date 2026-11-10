@@ -225,7 +225,9 @@ describe("verify-config call sites carry both court signals", () => {
     expect(paths).toContain("apps/web/src/server/usecases/person-merge.ts");
     // Anti-vacuity: the walk reached the board's other call sites, not just the module that defines the builders.
     const boardPaths = paths.filter((p) => p.startsWith("apps/web/src/server/usecases/schedule/"));
-    expect(boardPaths.length, "the schedule/ modules that build or call a verify config").toBeGreaterThan(3);
+    // 5 modules when last counted (2026-11-10): apply, auto, conflicts, engine-inputs, move. Removing a call-site module
+    // is legal and lowers the floor: edit the number in the same change. A loose `> 3` let two of the five go unnoticed.
+    expect(boardPaths.length, "the schedule/ modules that build or call a verify config").toBeGreaterThanOrEqual(5);
   });
 
   it("EVERY file under server/ that calls toVerifyConfig names both signals at every call", () => {
@@ -252,7 +254,9 @@ describe("verify-config call sites carry both court signals", () => {
     file.slice(matchIndex - 9, matchIndex) === "function ";
 
   it("sanity: the source files actually resolved (a wrong relative path must fail loudly, not vacuously)", () => {
-    expect(scheduleFiles.length, "the schedule/ modules were listed").toBeGreaterThan(5);
+    // 15 `.ts` files in usecases/schedule/ when last counted (2026-11-10, index.ts included). Removing a module is legal
+    // and lowers the floor: edit the number in the same change. A loose `> 5` let ten of the fifteen go unnoticed.
+    expect(scheduleFiles.length, "the schedule/ modules were listed").toBeGreaterThanOrEqual(15);
     expect(src.length).toBeGreaterThan(1000);
     expect(merge.length).toBeGreaterThan(1000);
     expect(src).toContain("toVerifyConfig(");

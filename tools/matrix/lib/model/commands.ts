@@ -261,7 +261,7 @@ function winStream(m: ModelState, f: FixtureModel, winner: "home" | "away"): Str
 }
 
 /** W4 B2 fix round 2 (item 2): would a knockout's Start have to draw its bracket again? Start reconciles a root knockout
- *  IN PLACE only (schedule.ts startDivision): newcomers take the first round's byes (a bye: a first-round line with one
+ *  IN PLACE only (usecases/schedule/publish.ts startDivision): newcomers take the first round's byes (a bye: a first-round line with one
  *  seat, stored `forfeited`), and more newcomers than byes is a redraw, refused by name. The model's roster changes
  *  before Start only by AddEntrant (Withdraw waits for Start), so the newcomers are the entrants on no first-round seat. */
 function knockoutStartNeedsRedraw(m: ModelState): boolean {
@@ -300,7 +300,7 @@ class Start extends Cmd {
       throw e;
     });
     m.started = true;
-    // W4 B2 fix round 1 (G1): Start reconciles a root knockout that already has its lines (schedule.ts startDivision —
+    // W4 B2 fix round 1 (G1): Start reconciles a root knockout that already has its lines (usecases/schedule/publish.ts startDivision —
     // the model's knockout rows are single-stage, so their stage is the root): an entrant added over them is placed here
     // in place (a Start that would redraw is refused above), so the late entry is spent and a Generate after Start is the
     // named no-op. A league's Start draws nothing over its existing lines (#879's fence still reads the late entry).
@@ -405,7 +405,7 @@ class Correct extends Cmd {
 class Generate extends Cmd {
   readonly kind = "Generate" as const;
   // Before Start too: POST /stages/:id/generate refuses only a frozen schedule
-  // (stages.ts generateStageFixturesWrite), and it is how fixtures come to
+  // (usecases/stages/generate.ts generateStageFixturesWrite), and it is how fixtures come to
   // exist before Start — the first half of #879's sequence.
   protected ready(m: ModelState) { return !m.completed; }
   /** W4 app-A T8 (FX-G2; spec 2026-11-04 §6.5): after Start a root knockout is never reshaped — a Generate over its

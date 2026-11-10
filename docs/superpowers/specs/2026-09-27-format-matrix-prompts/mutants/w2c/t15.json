@@ -620,7 +620,7 @@
  },
  {
   "id": "t15fr1-departed-seat-no-s-lock",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/bracket-seats.ts",
   "find": "  if (at) await lockDivisionConfigShared(tx, at.stage_id);\n",
   "replace": "",
   "killers": [

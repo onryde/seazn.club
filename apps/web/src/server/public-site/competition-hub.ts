@@ -13,7 +13,7 @@ import "server-only";
 // Redis layer for the API, invalidated by one direct DEL of that literal key
 // (`cacheDel`, no keyspace SCAN) from both writers. Both keys drop on
 // a scoring write AND on a schedule write — see `invalidatePublicCache`
-// (usecases/scoring.ts) and `afterScheduleWrite` (usecases/schedule.ts). A hub
+// (usecases/scoring.ts) and `afterScheduleWrite` (usecases/schedule/after-write.ts). A hub
 // whose matches go stale on a reschedule is the defect this file exists to
 // avoid, and the schedule path is the one a first draft missed.
 //
@@ -229,7 +229,7 @@ const isForfeitTag = (kind: string): boolean => !kind.startsWith("abandoned");
  * "played" reader (`fixturesStatsReading` → `playedInStats`, rulings 112/115/118/127) over the fixture's stored ledger,
  * under the division's own module (ruling 118: chess's Start is play). A walkover, a double walkover and a
  * disqualification or a withdrawal with nothing played are not; a retirement, and a disqualification or a withdrawal
- * after play, are; a fixture with no ledger (an award stages.ts writes without an event) is not. Only forfeit-tagged
+ * after play, are; a fixture with no ledger (an award usecases/stages/ writes without an event) is not. Only forfeit-tagged
  * fixtures are asked, so a division with none reads nothing. Empty when the module is unknown: no claim is made.
  */
 async function forfeitPlayedById(

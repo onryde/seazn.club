@@ -352,7 +352,7 @@ test("a pool-targeted restByGroup binds the pool it names, and no other (#446)",
 }) => {
   // The first pool-bearing stage in the e2e suite. `kind: "group"` with
   // `pools.count: 2` is the only shape that writes `fixtures.pool_id`
-  // (stages.ts `poolCount`), and `pool_id` is precisely what #446 was about:
+  // (usecases/stages/generators.ts `poolCount`), and `pool_id` is precisely what #446 was about:
   // the placer carried it, the Assignment handed to the verifier did not, so a
   // pool-keyed rule bound during placement and evaporated during verification.
   const { divisionId, stageId, fixtures, courts } = await seedDivision(request, {

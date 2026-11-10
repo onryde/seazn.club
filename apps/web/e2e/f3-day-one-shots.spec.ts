@@ -325,7 +325,7 @@ test("F3 Task 5c — pending-seed-proposal dot on the Fixtures tab, visible from
   }
 
   // Completing the source stage computes a DRAFT proposal for its dependent
-  // timing:"setup" stage automatically (usecases/stages.ts) — nobody has
+  // timing:"setup" stage automatically (usecases/stages/) — nobody has
   // told the organiser yet. That gap is exactly what 5c's dot closes.
   const completed = await apiJson<{ completed: boolean; seed_proposal?: { id: string; status: string } }>(
     page.request,

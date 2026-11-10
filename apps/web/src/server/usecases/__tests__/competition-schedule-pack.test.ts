@@ -845,7 +845,7 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
 
   // I2: sequential accumulation means a board that does not fit starves the
   // LAST divisions — slotFixtures returns their fixtures as `no_slot` conflicts
-  // and schedule-ai.ts discards conflicts, so `draft` is simply short. Without a
+  // and schedule-ai/ discards conflicts, so `draft` is simply short. Without a
   // per-division count nobody downstream can tell a complete draft from a
   // truncated one.
   it("reports a partial draft per division when the board cannot fit", async () => {
@@ -881,7 +881,7 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
   }, 60_000);
 
   it("merges a shared person's entrant ids in global name order", async () => {
-    // M10: entrant-id arrays order on the entrant NAME (schedule-ai.ts:517-523, applied at :542).
+    // M10: entrant-id arrays order on the entrant NAME (schedule-ai/).
     // Oscar sorts before Papa, but Oscar's entrants are named zz-* and Papa's
     // aa-*, so appending Papa's ids to Oscar's breaks the invariant.
     const cup = await seedCompetition(auth, `People Cup ${randomUUID().slice(0, 6)}`, [
@@ -916,7 +916,7 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
 
   it("carries a person shared across two divisions, invisible to either alone", async () => {
     // The whole reason the joint people map cannot be a union of the per-division
-    // maps. schedule-ai.ts:540-543 keeps only persons in >= 2 entrants of THAT
+    // maps. schedule-ai/ keeps only persons in >= 2 entrants of THAT
     // division, so someone rostered into one entrant of A and one of B clears the
     // bar in neither and is in NEITHER source map — while H4 sends the model to
     // that very map to avoid entrant overlaps. Building it over the run's whole
@@ -1077,7 +1077,7 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack size limits (#350)", () => {
   }, 120_000);
 
   // One code, one status. The per-division builder refuses >500 with a 422
-  // (schedule-ai.ts) and the joint cap with a 409 — both spelling
+  // (schedule-ai/) and the joint cap with a 409 — both spelling
   // AI_PLAN_TOO_LARGE — and a joint caller must only ever see the 409.
   //
   // The MECHANISM is the pre-check, not the 422→409 re-throw: a single division

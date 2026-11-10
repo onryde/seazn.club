@@ -125,7 +125,7 @@ describe("useBoardActions — fail()'s SCHEDULE_CONFLICT reason list", () => {
 });
 
 // Review 3 of #857, N1: a drag or a pin on a match that holds a result is
-// refused by the server (schedule.ts `moveFixture`) in an English sentence.
+// refused by the server (usecases/schedule/move.ts `moveFixture`) in an English sentence.
 // The board says it in the reader's language, off the code.
 describe("useBoardActions — fail()'s played refusal", () => {
   it("a refused drag reads the played copy in this org's locale, never the server's English", async () => {
@@ -141,7 +141,7 @@ describe("useBoardActions — fail()'s played refusal", () => {
   });
 });
 
-// W4 B1a review #1: a drag onto a knockout bye line is refused by the server (BYE_LINE_NOT_PLACEABLE, schedule.ts
+// W4 B1a review #1: a drag onto a knockout bye line is refused by the server (BYE_LINE_NOT_PLACEABLE, usecases/schedule/
 // `moveFixture`) in an English sentence. The board says it in the reader's language, off the code, from the knockout
 // refusal table's own key — never the server's English.
 describe("useBoardActions — fail()'s knockout refusal", () => {

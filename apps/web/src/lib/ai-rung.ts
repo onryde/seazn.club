@@ -1,7 +1,7 @@
 // Token-weighted AI credit pricing (docs/superpowers/specs/2026-07-28-ai-credit-
 // token-weight-design.md, issue #348) and the seam the multi-division joint
 // solve (issue #350) plugs into. Pure, no I/O: imported by both server usecases
-// (schedule-ai.ts, officials-ai.ts) and, eventually, a confirm-card client
+// (usecases/schedule-ai/, officials-ai.ts) and, eventually, a confirm-card client
 // component — no I/O means no server-only import ever leaks into a client
 // bundle (same discipline as lib/pass-ladder.ts).
 //

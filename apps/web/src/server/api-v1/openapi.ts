@@ -69,7 +69,7 @@ const PAGE_QUERY = {
 };
 
 /** RS005 W1b — the Registrants-tab list/export filter set (usecases/
- *  registrations.ts's `ListRegistrationsFilters`), shared by the competition
+ *  usecases/registrations/list.ts's `ListRegistrationsFilters`), shared by the competition
  *  list route and its CSV export twin so the two documented query surfaces
  *  cannot drift apart. `free_agent`/`consent_pending` follow this file's
  *  existing "1"/"0" boolean-query convention (e.g. `archived` above). */

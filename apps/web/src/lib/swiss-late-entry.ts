@@ -69,7 +69,7 @@ export function swissFirstRoundIn(
 /**
  * THE round-field predicate (W3 T6 ruling 251; T8 review m8): an entrant whose first Swiss round is `firstRound` (null
  * = from round 1) is in round `target`'s field when that first round is at or before it. `swissFieldForRound`
- * (usecases/stages.ts) and the desk's pairing menu (`swiss-pairing-menu.ts`) both filter through it.
+ * (usecases/stages/swiss-gen.ts) and the desk's pairing menu (`swiss-pairing-menu.ts`) both filter through it.
  */
 export function inSwissRoundField(firstRound: number | null | undefined, target: number): boolean {
   return (firstRound ?? 1) <= target;

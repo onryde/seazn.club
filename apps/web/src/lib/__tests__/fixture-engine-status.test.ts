@@ -1,6 +1,6 @@
 // The ONE DB → engine fixture-status mapping (spec 05 §1). Three call sites
 // used to carry a verbatim copy each (engine-db/competition.ts, the bracket
-// rebuild in usecases/stages.ts, and the qualification builder would have been
+// rebuild in usecases/stages/, and the qualification builder would have been
 // the third); a copy that drifts lets the standings fold and the qualification
 // status disagree about whether a match counts as played. The table is pinned
 // whole, so a changed row reds here before it reds in a standings suite.

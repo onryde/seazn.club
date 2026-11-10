@@ -2425,7 +2425,7 @@ describe("packs/_tiny.json", () => {
   it("its fixture ext_keys are the ones the real round-robin generator emits, per division", () => {
     // packages/engine/src/scheduling/roundrobin.ts:140 — `rr-r{round}-c{court}`,
     // three rounds because d-tiny's stage config asks for three legs
-    // (usecases/stages.ts:755-758). If this drifts, B03 will seed fixtures the
+    // (usecases/stages/). If this drifts, B03 will seed fixtures the
     // streams cannot bind to. d-badminton declares one leg (2 entrants), hence
     // ONE fixture — "rr-r1-c1" again, the SAME text as d-tiny's first fixture,
     // because the generator's id is `rr-r{round}-c{court}` regardless of

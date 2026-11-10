@@ -6,7 +6,7 @@ import type { AiProvider } from "./provider";
 
 export type ProviderName = "anthropic" | "openrouter";
 
-/** Resolve a provider by explicit name. The model ladder (schedule-ai.ts) runs
+/** Resolve a provider by explicit name. The model ladder (usecases/schedule-ai/) runs
  *  each rung on its own provider by passing the name here — never by mutating
  *  AI_PROVIDER, which is process-global and unsafe under concurrent requests. */
 export function resolveProvider(name: ProviderName): AiProvider {

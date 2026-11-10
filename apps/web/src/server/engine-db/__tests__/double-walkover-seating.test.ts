@@ -421,7 +421,7 @@ const BYE_DELTAS = byeDeltas() as Record<string, Record<string, Record<"home" | 
 
 describe.skipIf(!HAS_DB)("C-5: every bye writer stores reason bye, and a bye credits exactly today's bye delta", () => {
   it("C-5 bye: the Swiss bye, the generator bye and the seeded bye store {kind:award, winner, loser:null, reason:bye}", async () => {
-    // single-sport: badminton; the three writers are sport-blind SQL (stages.ts).
+    // single-sport: badminton; the three writers are sport-blind SQL (usecases/stages/).
     const sw = await seedBracket({ sport: "badminton", variant: "bwf", stageKind: "swiss", entrants: 5, stageConfig: { rounds: 2 } });
     const swissBye = (await rowsOf(sw.stageId)).find((r) => r.round_no === 1 && (r.home_entrant_id === null) !== (r.away_entrant_id === null))!;
     const gen = await seedBracket({ sport: "badminton", variant: "bwf", stageKind: "knockout", entrants: 6 });

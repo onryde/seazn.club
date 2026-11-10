@@ -30,7 +30,10 @@ usecases/foo/
 - Names above are a default. Prefer domain names when the file has clear
   sub-domains (`stages/knockout.ts`, `stages/swiss.ts`).
 - Importers keep `from "@/server/usecases/foo"`. Resolution lands on
-  `foo/index.ts`. **No importer edits in a split commit.**
+  `foo/index.ts`. **No importer edits in a split commit.** One exception: an
+  importer that names the file with an explicit extension (`from "./foo.ts"`,
+  run by bare node / strip-types, which cannot resolve a folder) is repointed
+  to `foo/index.ts` in that commit. The `api-v1/schemas` split hit it.
 - `schemas.ts`-style files: one file per resource group, barrel re-exports
   every schema and inferred type.
 - **The barrel is the map.** `index.ts` opens with a short comment listing
@@ -65,19 +68,38 @@ usecases/foo/
 7. **Type-only imports stay type-only** (`import type`). Client components
    must not start importing server modules through a new barrel.
 8. **Sweep for the old filename before committing.** `grep -a -r "foo\.ts"`
-   across `apps/web` and `tools`. Source-text tests that `readFile` the old
+   across EVERY workspace (`apps/*`, `packages/*`, `tools/*`) and the repo-root
+   `scripts/`, not just `apps/web` and `tools`. CI caught `apps/cron-worker`,
+   `scripts/lib/rules-reference.ts` and `tools/matrix/ci/pr-rows.ts` after the
+   local gate was green. Source-text tests that `readFile` the old
    path (copy-truth, status-vocabulary, freeze-guard ledgers, repair scans)
    fail or, worse, pass vacuously. Repoint them to the module that now holds
    the text, keep the assertion, and add an anti-vacuity count of files
    scanned. Comments citing `foo.ts:LINE` go stale; fix them in a separate
    comment-only commit, not the split.
+9. **A source-text test or tool reads ALL modules of the folder**, never one.
+   Join them in name order and throw below a module-count floor: reading only
+   `index.ts` reads a barrel of re-exports and passes vacuously. Models:
+   `textOf` in `apps/cron-worker/test/drift.test.ts`,
+   `tools/matrix/__tests__/stages-source.ts`, `modulesAt` in
+   `scripts/lib/rules-reference.ts`. A floor is the module count taken now;
+   removing a module is legal and lowers it in the same change.
+10. **A PR touching `usecases/stages/**` carries a `Matrix rows:` line in its
+    body** (R27; `Matrix rows: none — <reason>` is a legal declaration), or
+    the `Matrix rows (R27)` CI job reds. DB-gated tests and CI-only scans are
+    where a split turns red, and a green scoped gate does not run them: also
+    run the `apps/cron-worker` and `scripts` tests (Verify below).
 
 ## Verify (scoped only — never the full suite)
 
 ```
 cd apps/web && npx tsc --noEmit
 cd apps/web && npx vitest run <the foo test paths> --reporter=json --outputFile=<f>
+pnpm --filter @seazn/cron-worker test
+./node_modules/.bin/vitest run scripts/__tests__/rules-reference.test.ts scripts/__tests__/rules-reference-folder.test.ts
 ```
+
+The last two are rule 10: they read `usecases/**` from outside `apps/web`.
 
 Read `numPassedTests`/`numTotalTests` from the JSON and confirm
 `.testResults[].name` resolve inside this worktree. Mutation-check once:

@@ -12,7 +12,7 @@ import "server-only";
 //    Confirm and the pad name it (fix batch 2, item 3);
 //  - the day and the times on the ORG clock (`resolveVenueTz(null, orgTz)`),
 //    never a division's own tz override: the repo rule is that calendar-day
-//    math wants `orgTz` (schedule.ts `ScheduleSettingsOut`), and a printed
+//    math wants `orgTz` (schedule/types.ts `ScheduleSettingsOut`), and a printed
 //    sheet must not depend on the device that prints it (controller ruling
 //    2026-09-24). The board's day tabs bucket on the VIEWER's device clock
 //    (`dayKey`, ruling R8), so they can differ from the sheet's day when the

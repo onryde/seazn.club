@@ -653,7 +653,7 @@ describe("RegistrationHubRegistrantActions — finding 4 (RS005 F2): a later act
 
 // RS005 F2 finding 3: deriveRegistrantActionFlags's amount_cents-based guess
 // stands in for the division's LIVE registration_settings.fee_cents
-// (registration-approval.ts:128, registrations.ts:3147) — after an organiser
+// (registration-approval.ts:128, usecases/registrations/) — after an organiser
 // edits the division's fee, the two disagree and the WRONG control renders
 // and 422s while the RIGHT one stays hidden. Neither error carries a
 // distinguishing `code` (both default to "UNKNOWN" — HttpError's optional

@@ -6,7 +6,7 @@
 //
 // The fake `call` reproduces the two server rules the order depends on:
 // starting a division promotes a PUBLISHED competition to `live`
-// (schedule.ts), never a draft; and a PATCH to a status sets it.
+// (usecases/schedule/), never a draft; and a PATCH to a status sets it.
 import { describe, expect, it } from "vitest";
 import { publishDrafts } from "../seed-publish.ts";
 import type { ApiCall } from "../seed-resume.ts";

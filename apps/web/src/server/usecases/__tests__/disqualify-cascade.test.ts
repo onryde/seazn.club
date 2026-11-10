@@ -413,7 +413,7 @@ describe.runIf(HAS_DB)("X-SW-23 a disqualification cascades like a withdrawal (R
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
-// W3 T15 review I4 (controller ruling 2026-11-02, under ruling 116's scope note at stages.ts `awardSeededByes`): the DQ
+// W3 T15 review I4 (controller ruling 2026-11-02, under ruling 116's scope note at stages/bracket-seats.ts `awardSeededByes`): the DQ
 // cascade's award carries reason `withdrew` (the engine has no unplayed `disqualified` forfeit: PF-2). A DISQUALIFIED
 // entrant is never shown publicly as having withdrawn; ruling 116 prescribes no DQ copy, so every public surface words
 // her walkover as the plain walkover, read from her published status (`public_entrants_v`, V412). Driven through the

@@ -4,7 +4,7 @@ import { openMatchActions } from "./helpers/match-actions";
 
 // NEW-H1 (rulebook-W2-sets-cricket.md:57; W2a spec §5.4.7, §8.2). A set-sport
 // knockout semi-final abandoned by its scorer folds to `outcome: null`, the
-// exact shape `feederIsDead` (usecases/stages.ts) read as a generator void.
+// exact shape `feederIsDead` (usecases/stages/bracket-seats.ts) read as a generator void.
 // The 2026-09-21 owner ruling says an abandoned match is STUCK AND VISIBLE:
 // the final's seat stays empty and no walkover is invented. This probe asserts
 // the ruling. It was RED at W2a Task 1 (reproduced: the final came back

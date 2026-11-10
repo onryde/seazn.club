@@ -25,7 +25,7 @@ export interface Fence { readonly id: string; readonly issue: string | null; rea
 /** ko-withdraw-waiting-on-tbd's stage kinds: knockout (MB-002/003),
  *  stepladder (MB-008, w1drv-model-m6) and double elim (MB-009, found by the
  *  T16 run w1drv-t16-model-g1, whose double-elim cell no fence fired on). All
- *  three are stages.ts BRACKET_WALKOVER_KINDS, the list withdrawal.ts walks
+ *  three are usecases/stages/generators.ts BRACKET_WALKOVER_KINDS, the list withdrawal.ts walks
  *  over. */
 const WITHDRAW_ON_TBD_KINDS: readonly string[] = Object.freeze(["knockout", "stepladder", "double_elim"]);
 /** ko-generate-after-roster-change's stage kinds, per trigger branch
@@ -47,7 +47,7 @@ export const FENCES: readonly Fence[] = Object.freeze([
     id: "late-entry-then-generate",
     issue: "#879",
     blocks: "Generate",
-    // Round-robin stages only (schedule.ts ROUND_ROBIN_STAGE_KINDS). An entrant
+    // Round-robin stages only (usecases/schedule/rounds.ts ROUND_ROBIN_STAGE_KINDS). An entrant
     // added while the stage already has fixtures — before Start, since the
     // roster locks at Start — then Generate: the reconcile keys on POSITION
     // (rr-r{round}-c{court}), so it duplicates pairs and misses others (issue
@@ -76,7 +76,7 @@ export const FENCES: readonly Fence[] = Object.freeze([
     id: "ko-generate-after-roster-change",
     issue: null,
     blocks: "Generate",
-    // MB-007/010 (double elim; knockout's MB-004/005 fixed by W4 T8). stages.ts
+    // MB-007/010 (double elim; knockout's MB-004/005 fixed by W4 T8). usecases/stages/
     // generateStageFixtures: a Generate over a bracket whose fixtures exist,
     // after the roster changed — an entrant added (MB-007, before Start) or one
     // withdrawn (MB-010, after) — 500s: the bye-award bulk UPDATE would strand

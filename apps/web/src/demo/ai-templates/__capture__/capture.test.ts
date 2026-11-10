@@ -281,8 +281,8 @@ async function boardFor(t: SeededTemplate, pack: unknown): Promise<AiDemoFixture
  *
  * `served_model` never reaches the wire — the response carries usage but not
  * the winning rung — so it is read back off the run's OWN ledger row, where
- * `planForDivision` stamps the model the ladder settled on (schedule-ai.ts
- * :2829). That is the only surface that knows whether rung 1 served or the run
+ * `planForDivision` stamps the model the ladder settled on (usecases/schedule-ai/orchestrator.ts).
+ * That is the only surface that knows whether rung 1 served or the run
  * escalated, and reading it here means `meta.model` can never be a guess.
  */
 async function servedModel(orgId: string, competitionId: string): Promise<string> {

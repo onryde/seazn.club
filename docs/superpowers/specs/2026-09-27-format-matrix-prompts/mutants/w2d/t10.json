@@ -314,7 +314,7 @@
  },
  {
   "id": "t10-create-stages-unchecked",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/stage-graph.ts",
   "find": "    refuseNewStageTable(sportModule, { kind: s.kind, name: s.name, config: configs[i]! }, { config: division.config, tiebreakers: division.tiebreakers });",
   "replace": "    void [i, s]; /*MUT*/",
   "killers": [

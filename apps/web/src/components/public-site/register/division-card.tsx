@@ -25,14 +25,14 @@ const BADGE = "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-me
  *  MEDIUM) — the ORGANISER's timezone is not plumbed to this client at all
  *  today: `PublicRegistrationDivision`/`PublicRegistrationInfo`
  *  (schemas.ts:2312, :2346) carry no tz field, and `publicRegistrationInfo`'s
- *  own SQL query (registrations.ts:~1382) never selects
+ *  own SQL query (usecases/registrations/settings.ts) never selects
  *  `organizations.timezone` even though that column exists and already
  *  governs scheduling elsewhere (`settings.orgTz`, #397/#448). Inventing
  *  that plumbing is out of scope here (a server-schema change touching
  *  files this task doesn't own) — the proper fix would select `o.timezone`
  *  alongside the org fields `publicRegistrationInfo` already reads, ship it
  *  the same way `currency` already is (`currency: comp.currency`, resolved
- *  ORG-WIDE and flattened onto every division — registrations.ts:1460's own
+ *  ORG-WIDE and flattened onto every division — usecases/registrations/ folder's own
  *  comment), and pass it down here as an explicit `timeZone` instead of
  *  leaving this function to infer one.
  *

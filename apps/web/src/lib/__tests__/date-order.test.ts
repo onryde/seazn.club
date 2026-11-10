@@ -109,7 +109,7 @@ describe("windowIsBackwards", () => {
   });
 
   it("matches the server's own rule, so the two layers cannot disagree", () => {
-    // registrations.ts: `new Date(opens_at) >= new Date(closes_at)` → 422.
+    // usecases/registrations/: `new Date(opens_at) >= new Date(closes_at)` → 422.
     // Mirrored here rather than referenced, because the whole point of the
     // client guard is that the server's version is never reached.
     const server = (o: string, c: string) => new Date(o) >= new Date(c);
@@ -125,7 +125,7 @@ describe("windowIsBackwards", () => {
 });
 
 // The competition window a division's schedule must sit inside. The server
-// already refuses a division outside it (schedule.ts CONTAINMENT GUARD, 422
+// already refuses a division outside it (usecases/schedule/ CONTAINMENT GUARD, 422
 // "widen the competition dates, or bring the division inside them"); these two
 // helpers are what let the pickers say so BEFORE the save, from the same
 // numbers, so the input cannot permit what the server then rejects.

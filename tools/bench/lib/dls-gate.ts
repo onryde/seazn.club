@@ -128,7 +128,7 @@
 // that fixture too, for the same reason read the other way: `createDeviceLink`
 // 422s a finalized or cancelled fixture, and one that has only ever drawn
 // shape refusals is still the `scheduled` row `/generate` inserted
-// (`usecases/stages.ts:1351`). A mint appends no event, so the replay's
+// (`usecases/stages/`). A mint appends no event, so the replay's
 // `expected_seq: 0` survives it.
 //
 // ---------------------------------------------------------------------------

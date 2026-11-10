@@ -6,7 +6,7 @@
 //
 // Expected: the owner's sentence, typed out here (never read off the panel). Swept over the five kinds the sentence is
 // TRUE for — a knockout, a stepladder and a page playoff (carry by role) and a league and a Swiss (carry by position) —
-// one sentence for all, because the carry runs for every kind (stages.ts `regenerateStageInTx`). NOT swept: a double
+// one sentence for all, because the carry runs for every kind (usecases/stages/generate-tx.ts `regenerateStageInTx`). NOT swept: a double
 // elimination, whose Rebuild still carries by position, so a rebuilt grand final does not keep the grand final's slot
 // and the sentence is false for it (owed to W6, W6-double-elim.md "Carried from W4"). Sport-free: the dialog reads no
 // sport field.

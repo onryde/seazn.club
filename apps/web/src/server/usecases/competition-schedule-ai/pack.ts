@@ -4,10 +4,10 @@ import "server-only";
 // buildCompetitionPack unions several divisions of ONE competition into a
 // single deterministic pack. It owns no SQL of its own beyond the competition
 // lookup: every division's board is assembled by the existing
-// buildSchedulePack in schedule-ai.ts, then merged here. That keeps one
+// buildSchedulePack in schedule-ai/pack.ts, then merged here. That keeps one
 // loader, one draft solver and one set of ordering invariants.
 //
-// Determinism is contractual (see schedule-ai.ts:1-12 — a golden snapshot binds
+// Determinism is contractual (see schedule-ai/ — a golden snapshot binds
 // two builds of an identically-seeded board to be byte-identical). Every array
 // here sorts on stable DOMAIN keys; where a joint sort needs a division
 // discriminator it uses the division's NAME and SLUG, never the per-seed UUID.
@@ -86,7 +86,7 @@ import type {
 
 /** Total movable fixtures across the whole joint pack. Over this the run is
  *  refused before any credit is reserved — the per-division builder keeps its
- *  own 500 cap in schedule-ai.ts, this one is on the SUM. */
+ *  own 500 cap in schedule-ai/, this one is on the SUM. */
 export const COMPETITION_MOVABLE_CAP = 500;
 
 const TOO_LARGE = "AI_PLAN_TOO_LARGE";
@@ -123,7 +123,7 @@ function withResolvedPersonScopes(
 }
 
 /**
- * The shape `personKeyResolver` (schedule-ai.ts) renders a same-name grouping in.
+ * The shape `personKeyResolver` (schedule-ai/identity.ts) renders a same-name grouping in.
  *
  * Every source pack ran that resolver over ITS OWN division's persons, so it
  * raised an assumption for any pair that was already same-named inside one
@@ -154,7 +154,7 @@ export interface BuildCompetitionPackOptions {
   raw?: RawParsed | null;
   /** A compile was attempted and produced nothing — distinct from `raw: null`,
    *  which also covers "no instruction given". See BuildPackOptions in
-   *  schedule-ai.ts. */
+   *  schedule-ai/pack.ts. */
   parseFailed?: boolean;
   /** W5 (#400): the stored resolution of a confirmed preview, which wins over
    *  `raw`. The joint twin of {@link BuildPackOptions.resolved} — and it is
@@ -337,7 +337,7 @@ export async function buildCompetitionPack(
   // human entered in two DIFFERENT divisions of the same competition under two
   // separate `persons` rows. Inside either division each row stands alone, so
   // neither pack collapses anything; only the joint person set has both. The
-  // resolver itself is IMPORTED from schedule-ai.ts rather than reimplemented —
+  // resolver itself is IMPORTED from schedule-ai/ rather than reimplemented —
   // a second notion of "same person" here would diverge silently, and the
   // synthetic `name:<normalised>` key has to be byte-identical on both sides or
   // it groups nothing.
@@ -508,7 +508,7 @@ export async function buildCompetitionPack(
     // and its whole entrant→persons map, not the division's own.
     //
     // `pack.fixtures.movable` already carries the bye-stripped `feeds.after`
-    // (schedule-ai.ts strips them and records the assumption), so the recursion
+    // (schedule-ai/ strips them and records the assumption), so the recursion
     // never walks into a feeder the model cannot see. Feeds are within-division,
     // so computing per division is the same answer as computing over the union.
     for (const [fixtureId, ids] of Object.entries(
@@ -650,7 +650,7 @@ export async function buildCompetitionPack(
 
   // P9 pass 3d: merge every division's own courtDirectory (id -> {label,
   // venue, tags}) into one joint map — each already queried the WHOLE org's
-  // courts (schedule-ai.ts's buildSchedulePack), so in practice these are
+  // courts (schedule-ai/pack.ts's buildSchedulePack), so in practice these are
   // identical, but a plain merge costs nothing and does not lean on that.
   const courtDirectory: Record<string, PackCourtInfo> = Object.assign(
     {},
@@ -737,7 +737,7 @@ export async function buildCompetitionPack(
       parseFailed: opts.parseFailed === true,
       // P9 pass 3d: name -> id over the JOINT candidate set (`courts`, the
       // union just above) — the single-division twin of this call
-      // (schedule-ai.ts) narrows to one division's candidates for the same
+      // (schedule-ai/) narrows to one division's candidates for the same
       // reason: an instruction naming a court excluded from every selected
       // division must defer, not compile against a court `pack.courts`
       // does not carry.
@@ -809,7 +809,7 @@ export async function buildCompetitionPack(
         // #14 sibling fix: was `cmp(a.court, b.court)` — a raw court uuid,
         // freshly minted per seed, so that sort was a fresh permutation on
         // every reseed (identical defect to the single-division path's own
-        // `courtOrderKey` fix, schedule-ai.ts). `courtRank` (defined above,
+        // `courtOrderKey` fix, schedule-ai/pack.ts). `courtRank` (defined above,
         // already used for `draft` ordering for the exact same reason) is
         // the joint-scope structural order instead: reproducible across two
         // identically-seeded competitions.
@@ -859,7 +859,7 @@ export async function buildCompetitionPack(
   // a union of the per-division maps.
   //
   // Each source pack keeps only persons rostered into >= 2 of its OWN entrants
-  // (schedule-ai.ts:540-543), because within one division those are the only ones
+  // (schedule-ai/), because within one division those are the only ones
   // that can create a cross-entrant clash. Across a joint run that bar is wrong:
   // a person in ONE entrant of A and ONE of B clears it in neither division and
   // is therefore in no source map, while H4 sends the model to this very map to
@@ -891,7 +891,7 @@ export async function buildCompetitionPack(
   // peopleByEntrant's rows carry no ORDER BY, so nothing here may lean on
   // insertion order the way the old first-seen merge did. Both the entrant_ids
   // array and the people array sort on the entrant NAME — the invariant at
-  // schedule-ai.ts:517-523, mirroring its own people sort at :544-548.
+  // schedule-ai/, mirroring its own people sort.
   const people: PackPerson[] = [...entrantsByPerson.entries()]
     .filter(([, ents]) => ents.size >= 2)
     .map(([person_id, ents]) => ({ person_id, entrant_ids: [...ents].sort(byEntrantName) }))

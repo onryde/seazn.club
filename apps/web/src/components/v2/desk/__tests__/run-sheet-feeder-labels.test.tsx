@@ -30,10 +30,10 @@ vi.mock("@/components/ui/confirm-provider", () => ({
  * individually-correct screens.
  *
  * WHY the rows differ, verified against the generators rather than assumed:
- * `generateStageFixtures` (the PLAIN bracket path, usecases/stages.ts ~1937)
+ * `generateStageFixtures` (the PLAIN bracket path, usecases/stages/generate.ts)
  * stamps `matchSlotLabel(g.homeFrom)` into `home_slot_label`, so a plain
  * knockout already renders "Winner of R1·1" everywhere. The SETUP path
- * (`generateProgressionSetupFixtures`, ~2670) stamps a label ONLY for a
+ * (`generateProgressionSetupFixtures`) stamps a label ONLY for a
  * synthetic seed ref and for `bracket.slot.bye` — a sibling-fed seat is left
  * NULL on purpose, because `stageOwesDraw`/`awaitsSeedDraw` read "no label ⇒
  * sibling-fed" for `timing: "setup"` stages. So the stored label cannot be
@@ -195,8 +195,8 @@ describe("RunSheetRow — an unfilled seat is named by its feeder", () => {
 
   it("the HOME seat's stored label outranks its feed too — the live bye-award shape", () => {
     // The mirror of the case above, and NOT a symmetry exercise: this is the
-    // shape `generateProgressionSetupFixtures`' third pass (usecases/stages.ts
-    // ~2812) actually writes. When a bye line's `winner_to_slot` is 1 it
+    // shape `generateProgressionSetupFixtures`' third pass (usecases/stages/setup-fixtures.ts)
+    // actually writes. When a bye line's `winner_to_slot` is 1 it
     // stamps the bye's award label onto the TARGET's HOME seat, so that seat
     // carries a stored "Rank 1" AND an inbound feed edge at the same time.
     // Stored must win: the bye means seed 1 is already through, and "Winner of

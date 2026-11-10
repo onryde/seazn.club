@@ -294,7 +294,7 @@ export interface NotChallengedLaterInput {
 
 /** Ruling 53 (D14): the ladder's twin of r4-not-paired-later. Items: seed 3
  *  is off the LIVE ladder (raw minus departed, the product's read-time
- *  filter); seed 3 still holds its rung in the RAW order (stages.ts never
+ *  filter); seed 3 still holds its rung in the RAW order (usecases/stages/ never
  *  prunes it); and no later challenge seats seed 3 (one item each — the
  *  product would refuse one LADDER_ENTRANT_WITHDRAWN). Ladder only; no later
  *  challenge is an abstain with its reason, never a pass (TEST-STRATEGY rule 2). */

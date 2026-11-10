@@ -133,28 +133,6 @@
   ]
  },
  {
-  "id": "t14-generate-skips-pin",
-  "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "    await resolveBracketSeats(tx, stageId);\n\n    if (stage.status === \"pending\") {\n      await tx`update stages set status = 'active' where id = ${stageId}`;\n      // W2d X-TB-2 (OC2): the table rules are fixed in the transaction that starts the stage.\n      await pinStageTableRules(tx, stageId);\n",
-  "replace": "    await resolveBracketSeats(tx, stageId);\n\n    if (stage.status === \"pending\") {\n      await tx`update stages set status = 'active' where id = ${stageId}`;\n      // W2d X-TB-2 (OC2): the table rules are fixed in the transaction that starts the stage.\n",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
-    ],
-    "name": "(?<!API v1: )empty case first: a generated stage is pinned by the real generate"
-   },
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
-    ],
-    "name": "(?<!API v1: )X-TB-2 the pin comes from the real generate"
-   }
-  ]
- },
- {
   "id": "t14-stage-rules-lock-off",
   "file": "apps/web/src/server/usecases/stage-rules.ts",
   "find": "    const locked = (await lockedStageIdsAmong(tx, [stageId])).has(stageId);\n",

@@ -143,7 +143,7 @@ const SETTINGS_BASE = {
  *  asserted directly below). The surviving revocation path is a staff/admin
  *  `org_entitlement_overrides` deny — abuse, chargeback risk, an unresolved
  *  dispute — and that is what this rig now uses. The enforcement code in
- *  usecases/registrations.ts is unchanged and still the thing under test.
+ *  usecases/registrations/ is unchanged and still the thing under test.
  *
  *  `withPass` buys an Event Pass on the competition BEFORE the deny lands, so
  *  the resolver's pass arm actually fires (lib/entitlements.ts:106 — the pass

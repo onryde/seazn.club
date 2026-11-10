@@ -200,7 +200,7 @@ describe.skipIf(!HAS_DB)("listDivisionFixtures — bracket feed edges reach the 
 //
 // `feedLabels()` needs BOTH ends of an edge in one row list
 // (`schedule-board.ts`'s `!byId.has(target)` guard). `wireCrossFeeds`
-// (usecases/stages.ts, reached from the tail of `generateStageFixtures`)
+// (usecases/stages/generate.ts, reached from the tail of `generateStageFixtures`)
 // writes edges whose source and destination sit in DIFFERENT stages, driven
 // by a stage's `cross_feeds` config. A per-stage map therefore cannot see
 // them.

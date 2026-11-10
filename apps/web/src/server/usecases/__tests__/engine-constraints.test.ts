@@ -1,8 +1,8 @@
 // #458 — ONE builder for the engine's `constraints` block.
 //
 // Three call sites built this object as independent literals over the same
-// shape — `verifyConfig` (schedule-ai.ts), `toSlotConfig` (schedule.ts) and
-// `verifyConfigFor` (competition-schedule-ai.ts) — and they had already
+// shape — `verifyConfig` (schedule-ai/verify.ts), `toSlotConfig` (schedule/engine-inputs.ts) and
+// `verifyConfigFor` (competition-schedule-ai/joint-verify.ts) — and they had already
 // drifted: the board site mapped EVERY start window through, the joint site
 // dropped any whose `target.kind` was outside the engine's enum, and the
 // single-division AI site pinned `startWindows: []` outright, which is #458.

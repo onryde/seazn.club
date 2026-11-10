@@ -173,7 +173,7 @@ export async function w2dTablesSuite(): Promise<void> {
     };
     const allLevel = (rows: readonly PubRow[]) => rows.length === 6 && rows.every((r) => r.level === true);
     // W2d concern 2 (spec §5.7): the generate wrote the stage's LEVEL table, so the visitor reads it with no organiser read
-    // first — the public read BEFORE the organiser's (which would otherwise write it lazily, usecases/stages.ts
+    // first — the public read BEFORE the organiser's (which would otherwise write it lazily, usecases/stages/
     // `getStandings`); then the organiser's, the same. Both level, nothing counted yet.
     const levelRead = await publicSettled(allLevel);
     const organiserLevel = allLevel(await table());

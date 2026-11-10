@@ -42,7 +42,7 @@ import "server-only";
 //     a road that stays open.
 //
 // THE GATE IS NOT RE-IMPLEMENTED HERE. `validateScheduleIn` + `assertPublishable`
-// keep exactly one authority (`schedule.ts`), reached through the same
+// keep exactly one authority (`schedule/`), reached through the same
 // `publishSchedule` the single-division endpoint calls. This module's whole job
 // is CHOOSING the divisions and CLASSIFYING the refusals.
 import { withTenant } from "@/lib/db";
@@ -84,7 +84,7 @@ export interface CompetitionPublishOut {
  * each division's publish are separate transactions, so a division that leaves
  * `setup` in the gap — someone presses Start, or the division completes —
  * reaches `publishSchedule` at another status and gets an UNCODED 422
- * ("a completed division cannot publish a schedule", schedule.ts:3648). Folded
+ * ("a completed division cannot publish a schedule", schedule/). Folded
  * into a refusal with a `PUBLISH_BLOCKED` fallback it reached the organiser as
  * HTTP 200 carrying a "blocked by conflicts" row with an EMPTY conflict list:
  * a refusal with nothing under it to read and nothing to fix.

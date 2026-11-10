@@ -36,7 +36,7 @@ const stripeMock = vi.hoisted(() => {
 });
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
-// PARTIAL mock: lib/billing.ts and billing-events.ts import a dozen other
+// PARTIAL mock: lib/billing.ts and usecases/billing-events/ import a dozen other
 // exports from this module and a full replacement breaks them. The rung
 // mismatch alert is queued on the email outbox (phase 3 wave 5, kind
 // `staff_pass_rung_mismatch`, once per Checkout Session) to this suite's own

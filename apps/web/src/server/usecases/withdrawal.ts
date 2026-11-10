@@ -21,7 +21,7 @@ import "server-only";
 // expunges (D5) — so standings recompute, undo works and the public cache
 // invalidates exactly like any other scoring write. Two writes carry no event,
 // as `awardSeededByes` writes a bye: the dead seat and the double walkover
-// (`writeDepartedSeat`, stages.ts). Every ledger write names its writer
+// (`writeDepartedSeat`, stages/bracket-seats.ts). Every ledger write names its writer
 // (`withdrawal_cascade`): PF-2 refuses `withdrew` and `expunge` from anyone
 // else. Not one transaction (ruling 101): each write commits on its own.
 // Finalized fixtures are locked (spec 03) and are reported, not touched.

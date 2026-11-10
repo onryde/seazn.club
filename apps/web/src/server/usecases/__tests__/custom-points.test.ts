@@ -289,7 +289,7 @@ describe.skipIf(!HAS_DB)("custom points & rank control (Jul3/05)", () => {
     // the seeding's own `config.qualified` (written by the same transaction)
     // rather than a hand-listed set, so a change to who qualifies moves both
     // sides together. Without buildCarryDeltas' qualified-set filter
-    // (stages.ts) every source row folds in and this is 4, not 3.
+    // (stages/) every source row folds in and this is 4, not 3.
     expect([...carried.map((d) => d.entrantId)].sort()).toEqual([...next!.config.qualified!].sort());
     expect(carried).toHaveLength(3);
     // standings_carried in the ledger

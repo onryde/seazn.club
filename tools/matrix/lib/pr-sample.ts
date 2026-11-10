@@ -1,6 +1,6 @@
 // --set pr-sample (W1d Task 7, R27, D13): the per-PR sample.
 //
-// A PR that touches the engine or stages.ts declares the matrix rows it touches (`Matrix rows:` in its body,
+// A PR that touches the engine or usecases/stages/ declares the matrix rows it touches (`Matrix rows:` in its body,
 // read by ci/pr-rows.ts). The sample is the L3 cases on those rows (the w1-driving set's cases there) plus a
 // FIXED sample of 33: the slice's 24 cases, and league|<sport>|<variant>|LIFECYCLE on the 9 sports the slice
 // lacks, so every registered sport has at least one case in every PR's sample. It is judged against the

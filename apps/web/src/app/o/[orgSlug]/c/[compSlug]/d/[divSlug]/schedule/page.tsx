@@ -313,7 +313,7 @@ export default async function DivisionSchedulePage({
               fixtures={fixtures}
               entrantNames={Object.fromEntries(entrants.map((e) => [e.id, e.display_name]))}
               // What an AI run is PRICED on — the same filter the server
-              // applies when it sizes the pack (schedule-ai.ts:505).
+              // applies when it sizes the pack (usecases/schedule-ai/).
               activeEntrantCounts={{
                 [id]: entrants.filter(
                   (e) => e.status !== "withdrawn" && e.status !== "disqualified",

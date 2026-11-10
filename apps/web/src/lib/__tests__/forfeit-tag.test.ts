@@ -546,7 +546,7 @@ describe("creditsNobody — the one predicate every score-line host reads (audit
   });
 });
 
-// W3 T15 review I4 (controller ruling 2026-11-02, under ruling 116's scope note at stages.ts `awardSeededByes`): since T15
+// W3 T15 review I4 (controller ruling 2026-11-02, under ruling 116's scope note at usecases/stages/bracket-seats.ts `awardSeededByes`): since T15
 // a disqualification runs the withdrawal cascade (RB3-17), whose award over her open board carries reason `withdrew`.
 // A DISQUALIFIED entrant is never shown publicly as having withdrawn. Ruling 116 words only a withdrawal and prescribes
 // no copy for a disqualification, so the ruling's fallback applies: the plain walkover wording — the walkover's tag, a

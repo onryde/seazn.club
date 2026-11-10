@@ -438,7 +438,7 @@ describe("runTinySuite — d-registration driven via a fake registrationDrivers"
     // A bench org is auto-provisioned by this run's own sign-in with no
     // Connect account and `stripe_charges_enabled` false, so
     // `resumeRegistrationCheckout` refuses to mint a session
-    // (registrations.ts:2325, :4387) and the whole paid funnel is unreachable.
+    // (usecases/registrations/) and the whole paid funnel is unreachable.
     // ORDER is the assertion that matters: a claim after the division is
     // configured is a claim that arrives too late to matter.
     const server = makeFakeServer();

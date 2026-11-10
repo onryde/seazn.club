@@ -31,7 +31,7 @@ export interface RegistrationEmailArgs {
   /** The cart's payable subtotal (`registration_groups.amount_cents` —
    *  sum of NON-waitlisted entries' fees). NOT recomputed from
    *  `entries[].feeCents` here — callers own that invariant, same as every
-   *  other cart-total reader in this codebase (registrations.ts). */
+   *  other cart-total reader in this codebase (usecases/registrations/). */
   totalCents: number;
   currency: string;
   paymentInstructions: string | null;
@@ -52,8 +52,8 @@ export function formatDeadline(d: Date | string): string {
 }
 
 /** `registrations.status` → its i18n key. Every value the column can hold
- *  (RegistrationRow["status"], registrations.ts) has one here — unlike the
- *  ICS description's partial map (registrations.ts's REG_ICS_STATUS_KEY),
+ *  (RegistrationRow["status"], usecases/registrations/types.ts) has one here — unlike the
+ *  ICS description's partial map (usecases/registrations/csv-ics.ts's REG_ICS_STATUS_KEY),
  *  which falls back to the raw English word: that shortcut is fine for a
  *  calendar attachment nobody reads closely, not for the body of the mail
  *  itself, so this map is total. */
@@ -102,7 +102,7 @@ export function registrationTemplate(
   const waitlisted = single && first.status === "waitlisted";
   // `totalCents` is the cart's whole payable SUBTOTAL — every non-waitlisted
   // entry's fee, INCLUDING one that is already `paid`/`confirmed` (settled)
-  // or withdrawn/rejected (registrations.ts's buildCartMail sums exactly
+  // or withdrawn/rejected (usecases/registrations/mail.ts's buildCartMail sums exactly
   // that). It answers "what did/does this cart cost", not "what is still
   // owed right now" — and this template is reused for more than the fresh
   // submit-time send: an organiser's resend on an already-settled entry, or

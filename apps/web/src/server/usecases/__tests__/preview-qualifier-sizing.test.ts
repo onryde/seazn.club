@@ -199,7 +199,7 @@ describe("previewDivisionFixtures — topNPerGroup sizing is shape-aware (F3 Tas
 // F3 review item 1 (owner-authorised widening) makes multi-source `setup`
 // progressions genuinely reachable — progression-multi-source.test.ts builds
 // one end to end. Before this fix, qualifierCount read `sources[0]` only
-// (comment removed from stages.ts: "previewDivisionFixtures never sees a
+// (comment removed from stages/preview.ts: "previewDivisionFixtures never sees a
 // multi-source progression... reading only sources[0] is complete"), so a
 // multi-source preview undersized the downstream stage exactly the way
 // commit 0ec159e52 fixed for `topNPerGroup` — the "preview that lies" class.

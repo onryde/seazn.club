@@ -29,7 +29,7 @@ export type CaptureNotReady = z.infer<typeof CaptureNotReady>;
 export const CaptureStartFailed = z.enum(["not-found", "cred-host", "config", "start-error"]);
 export type CaptureStartFailed = z.infer<typeof CaptureStartFailed>;
 
-/** W28 (2026-10-06): the pool's key, one capital letter (stages.ts POOL_KEYS) — never its English name. */
+/** W28 (2026-10-06): the pool's key, one capital letter (usecases/stages/generators.ts POOL_KEYS) — never its English name. */
 export const CAPTURE_POOL_RE = /^[A-Z]$/;
 /** W28: the engine's `RoundRole`, serialised verbatim — `kind`, plus `n` or `entrants` where the variant has one.
  *  `kind` is OPEN on the wire (no enum): a consumer shows nothing for a kind it does not know. */

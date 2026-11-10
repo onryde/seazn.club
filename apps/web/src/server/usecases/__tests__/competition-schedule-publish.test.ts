@@ -354,7 +354,7 @@ describe.skipIf(!HAS_DB)("publishCompetitionSchedule", () => {
     // THE RACE, DRIVEN FOR REAL. The candidate SELECT and each division's
     // publish are separate transactions, so `setup` is only true of a division
     // when it was READ. A division someone starts or completes in the gap
-    // reaches `publishSchedule` at another status, where schedule.ts:3648
+    // reaches `publishSchedule` at another status, where schedule/publish.ts
     // raises an HttpError 422 with NO `code` — not a gate verdict at all.
     //
     // Recorded as a refusal it would reach the organiser as HTTP 200 carrying

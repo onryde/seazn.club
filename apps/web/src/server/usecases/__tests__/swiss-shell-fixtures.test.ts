@@ -537,7 +537,7 @@ describe.runIf(HAS_DB)("swiss shell fixtures — Unpair", () => {
 // Generate, long after the organiser pressed Save on the format. These pin the
 // refusal at the door instead: an undeclared or nonsensical `config.rounds`
 // never becomes a stage row, so the 500-at-Generate is unreachable from the
-// product and `stages.ts`'s engine throw is left as the last line of defence.
+// product and `stages/` folder's engine throw is left as the last line of defence.
 //
 // `swiss` is the ONLY stage kind this covers. `swiss_playoff` /
 // `swiss_knockout` are TEMPLATE keys (lib/format-templates.ts), not

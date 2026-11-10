@@ -120,7 +120,7 @@
  },
  {
   "id": "t12-create-validates",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/stage-graph.ts",
   "find": "const configs = stageConfigsAtCreate(division, inputs, carried);",
   "replace": "const configs = inputs.map((s) => (s.config ?? {}) as Record<string, unknown>);",
   "killers": [
@@ -142,24 +142,9 @@
  },
  {
   "id": "t12-carry-lookup",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/stage-graph.ts",
   "find": "      carry?.rules ?? null,\n",
   "replace": "      null,\n",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/stage-defaults.test.ts"
-    ],
-    "name": "a slot whose seq:kind matched keeps its edits over the preset"
-   }
-  ]
- },
- {
-  "id": "t12-carry-passed",
-  "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "return insertStageBatch(tx, divisionId, inputs, stageCap, frozen, keep);",
-  "replace": "return insertStageBatch(tx, divisionId, inputs, stageCap, frozen);",
   "killers": [
    {
     "cwd": "apps/web",
@@ -698,7 +683,7 @@
  },
  {
   "id": "t12-fr4-cleared",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/stage-graph.ts",
   "find": "      keep.set(`${r.seq}:${r.kind}`, {",
   "replace": "      if (!cleared) keep.set(`${r.seq}:${r.kind}`, {",
   "killers": [

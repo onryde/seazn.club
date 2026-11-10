@@ -16,7 +16,7 @@ import "server-only";
 //
 // The WHOLE DIVISION's rows, not the stage's (review round 2): a seat fed from
 // another stage has no stored label naming its feeder — `wireCrossFeeds`
-// (stages.ts) writes only the source row's link — so its name comes from the
+// (stages/) writes only the source row's link — so its name comes from the
 // feed edge, whose source row lives in the other stage. Cross feeds never
 // leave their division (`wireCrossFeeds` reads one division's stages), which
 // is what makes the division enough; the board reads the whole competition.

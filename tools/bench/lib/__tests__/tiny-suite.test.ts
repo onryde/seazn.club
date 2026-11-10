@@ -933,7 +933,7 @@ describe("runTinySuite — --keep idempotence (T4)", () => {
   it("schedules INSIDE the pack's own competition window — not a wall-clock slot", async () => {
     // Found by the first live run, not by this suite. `startAt` was
     // `Date.now() + 24h` and the real API answered 422
-    // SCHEDULE_OUTSIDE_COMPETITION: `usecases/schedule.ts` requires a
+    // SCHEDULE_OUTSIDE_COMPETITION: `usecases/schedule/` requires a
     // division's schedule to sit inside its competition's dates, and `_tiny`
     // declares 2099. The fake transport accepts any schedule-settings PUT, so
     // offline there was nothing to fail — the fourth fixture in this wave to

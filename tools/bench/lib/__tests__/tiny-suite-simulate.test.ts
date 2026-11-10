@@ -2868,7 +2868,7 @@ async function twoAdvancingDivisionsPack(): Promise<string> {
     });
     // The knockout's own fixture owes a STREAM: the product stamps a generated
     // bracket game `scheduled` unless it carries an award (a bye —
-    // `usecases/stages.ts:1351`), and `seedSuite` throws on any generated
+    // `usecases/stages/`), and `seedSuite` throws on any generated
     // fixture still at `scheduled` that no stream claims (`seed.ts:342`,
     // `SETTLED_AT_GENERATION`). A stream in turn owes an `expected.matches`
     // row — `PackSchema`'s anti-vacuity rule, "a replayed stream with no

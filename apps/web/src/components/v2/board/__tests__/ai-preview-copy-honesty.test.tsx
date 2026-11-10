@@ -15,7 +15,7 @@
 //  * the failed-compile fallback. It offered to "send it as a preference —
 //    the architect will read it, and nothing will check it". There is no
 //    `as_preference` wire field: the fallback posts a run with NO `preview_id`,
-//    and `schedule-ai.ts:2319` reads `confirmed === null` as compile-inline, so
+//    and `usecases/schedule-ai/` reads `confirmed === null` as compile-inline, so
 //    stage 1 runs again and CAN produce hard constraints. The old copy promised
 //    the opposite of what happens on the one path where the compiler chokes.
 //

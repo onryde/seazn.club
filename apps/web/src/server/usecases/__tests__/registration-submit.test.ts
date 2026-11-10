@@ -35,7 +35,7 @@ vi.mock("@/lib/ref-code", async (importOriginal) => {
 });
 
 // RS008: inviteUnclaimedMembers is a fire-and-forget, post-commit side
-// effect (registrations.ts's own doc comment) — mocked here so joinTeamEntry's
+// effect (registrations/ folder's own doc comment) — mocked here so joinTeamEntry's
 // WIRING (does it call this, with the right args, at the right times) is
 // deterministic and provable without racing a detached promise. Everything
 // else from "../registrations" (materialise, the auto-confirm path
@@ -471,7 +471,7 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup", () => {
     // 'granted' (submit-time consent), not 'guardian' — the design's
     // guardian gate is about WHO may submit for a minor, not the player
     // row's own consent_status, which materialise/claim semantics elsewhere
-    // in `registrations.ts` already treat uniformly for captain-entered rows.
+    // in `registrations/` already treat uniformly for captain-entered rows.
     const res = await submitRegistrationGroup(
       { orgSlug, compSlug: competition.slug },
       {

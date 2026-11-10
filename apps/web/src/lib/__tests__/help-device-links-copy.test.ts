@@ -164,7 +164,7 @@ describe("the device's undo window ends when the result moves the competition on
 // pages said something the product no longer does:
 //  - device-links.md listed the ways a link ends and left out the one an
 //    organiser is most likely to press: Rebuild fixtures deletes every match
-//    in the stage (usecases/stages.ts rebuildStageFixtures), `device_links`
+//    in the stage (usecases/stages/generate.ts rebuildStageFixtures), `device_links`
 //    cascades off `fixtures` (V222), so every QR on that stage stops working —
 //    the rebuild dialog itself says so (progression.rosterDrift.sheetsStop).
 //  - scorer-role.md said device links are for mass scoring "on any plan" while

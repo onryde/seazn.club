@@ -14,7 +14,7 @@ export const PRINTABLE_STATUSES: ReadonlySet<string> = new Set(["scheduled", "in
  *  2026-09-24), so a page holds nine. */
 export const ROWS_PER_PAGE = 9;
 /** The label a bracket generator stamps on a bye's phantom side
- *  (stages.ts `BYE_SLOT_LABEL`). A bye can sit `scheduled` until its real
+ *  (usecases/stages/ `BYE_SLOT_LABEL`). A bye can sit `scheduled` until its real
  *  seat fills and `awardSeededByes` settles it, so the status alone does not
  *  exclude it. A seat is a bye only when it is EMPTY and carries this STORED
  *  label (the hub's `hubByeSides`, the player card's upcoming read): "one side

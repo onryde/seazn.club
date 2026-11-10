@@ -3,7 +3,7 @@
 // theirs can move it from Seazn. The re-link now holds every such board for the organiser as `account_changed`.
 // Re-linking the SAME account changes nothing at Lichess and holds nothing.
 //
-// "Live or mid-create" is M-10's predicate (stages.ts lockBoardsRefusingOnlineGames): a create sent (T9's
+// "Live or mid-create" is M-10's predicate (stages/swiss-boards.ts lockBoardsRefusingOnlineGames): a create sent (T9's
 // `create_sent_at` marker), or a recorded game no read has seen end on a bridge our side has not closed. Driven
 // through the REAL re-link (upsertLichessLink, as the OAuth callback calls it) against real bridge rows; the expected
 // holds are read from the brief's rule, never from the code under test.

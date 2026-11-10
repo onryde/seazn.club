@@ -64,7 +64,7 @@ import type { CompetitionPack, CompetitionPlanResult } from "./types";
 export const JOINT_SYSTEM_PROMPT = `${SYSTEM_PROMPT}\n\n${INSTRUCTION_RULES}\n\n${JOINT_RULES}`;
 
 /** proposal vs each movable fixture's current slot, over the union — the joint
- *  mirror of `computeDiff` (schedule-ai.ts:968). */
+ *  mirror of `computeDiff` (schedule-ai/verify.ts). */
 function computeJointDiff(plan: AiSchedulePlan, pack: CompetitionPack): CompetitionPlanResult["diff"] {
   const proposalById = new Map(plan.assignments.map((a) => [a.fixture_id, a]));
   const unsched = new Set(plan.unschedulable.map((u) => u.fixture_id));
@@ -85,7 +85,7 @@ function computeJointDiff(plan: AiSchedulePlan, pack: CompetitionPack): Competit
 }
 
 /** One round, joint system prompt. A near-copy of `callModel`
- *  (schedule-ai.ts:990) rather than a parameterisation of it: that function's
+ *  (schedule-ai/run.ts) rather than a parameterisation of it: that function's
  *  `system: SYSTEM_PROMPT` is asserted by the single-division tests, and adding
  *  a prompt parameter to the shipped per-division path to serve a new one is a
  *  behaviour change on a live endpoint for no gain. Everything else — the
@@ -123,7 +123,7 @@ async function callJointModel(
 
 /**
  * Run the schedule architect over a pre-built JOINT pack. Mirrors `runAiPlan`
- * (schedule-ai.ts:1042) round for round — same meter placement (the round's
+ * (schedule-ai/run.ts) round for round — same meter placement (the round's
  * output is charged the moment usage is known, BEFORE the refusal and
  * parse-failure throws), same single corrective retry for a malformed plan, same
  * MAX_REPAIR_ROUNDS, same fewest-blocking best-so-far selection, same
@@ -152,7 +152,7 @@ export async function runCompetitionAiPlan(
   /** P9 pass 3d, appended rather than inserted so no positional caller
    *  shifts. Same directory `buildCompetitionPack` returned alongside
    *  `pack` — see `toJointModelPayload` and `resolveModelCourtLabels`
-   *  (schedule-ai.ts). Defaults to empty. */
+   *  (schedule-ai/run.ts). Defaults to empty. */
   courtDirectory: Record<string, PackCourtInfo> = {},
 ): Promise<CompetitionPlanResult> {
   const provider = providerName ? resolveProvider(providerName) : selectProvider();
@@ -334,7 +334,7 @@ export async function runCompetitionAiPlan(
       } else {
         const board = toJointEngineAssignments(chosen, pack);
         // "Pin what stands, re-solve the violators" (z3 retirement design,
-        // stage B, C5) — the joint mirror of `schedule-ai.ts`'s identical
+        // stage B, C5) — the joint mirror of `schedule-ai/` folder's identical
         // ruling. The violators are every fixture THIS round's own JOINT
         // verifier named in a blocking conflict; everything else this run
         // may move — union every pinned fixture across every division — is
@@ -423,7 +423,7 @@ export async function runCompetitionAiPlan(
       content: JSON.stringify({
         // Byte-identical to pre-C3 (C3 2026-08-13 design doc ruling: "the
         // prose reaches the model, not just the screen") — see the identical
-        // comment at schedule-ai.ts's own `verifier_conflicts`.
+        // comment at schedule-ai/ folder's own `verifier_conflicts`.
         verifier_conflicts: conflicts.map(legacyVerifierConflict),
         ...(boardEngine === "optimized" ? { repaired_assignments: chosen.assignments } : {}),
         ...(unresolved.length > 0 ? { focus_fixture_ids: [...unresolved] } : {}),
@@ -455,7 +455,7 @@ function courtsAreOwned(plan: AiSchedulePlan, pack: CompetitionPack): boolean {
 }
 
 /** Wire the joint runner to the shared model ladder — the joint mirror of
- *  `runAiPlanLadder` (schedule-ai.ts:1541). The SAME meter instance is handed to
+ *  `runAiPlanLadder` (schedule-ai/orchestrator.ts). The SAME meter instance is handed to
  *  every rung, so the run's hard token budget spans the whole ladder rather than
  *  resetting per rung, and escalation stops the moment the meter refuses a round
  *  (entering a further rung would spend nothing but would write a model into

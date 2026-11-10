@@ -20,7 +20,7 @@ import {
 //      a real violation, so the second half forces a fixture onto the
 //      untagged court directly and confirms /validate's court_tag_mismatch
 //      conflict (P9 pass 2c — packages/engine/src/scheduling/calendar.ts,
-//      wired into the wire response by usecases/schedule.ts's
+//      wired into the wire response by usecases/schedule/ folder's
 //      validateScheduleIn) actually catches it. Verified read-only against
 //      that engine/usecase code this session: `moveFixture` (the single-
 //      fixture PATCH handler) never wires courtTagQualifiedIds into its own

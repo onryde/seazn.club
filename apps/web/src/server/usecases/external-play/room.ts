@@ -227,7 +227,7 @@ export async function resolveRoom(
  * The board: an online-chess board (loadOnlinePlayFixture's rule from its one home, guard.ts onlinePlayBoardWhere and
  * onlinePlayClock — its seats aside) in a round
  * with an open, of which NO board is seated — its own two seats included — Unpair clears the whole round at once
- * (stages.ts clearSwissFixtureSeats) and Generate seats it at once, so a board left empty once its round is seated
+ * (stages/swiss-boards.ts clearSwissFixtureSeats) and Generate seats it at once, so a board left empty once its round is seated
  * again was not re-paired for this caller (their board is elsewhere, or they sit the round out): the 404.
  *
  * The safe reading: the answer is only ever given for a board that seats NOBODY, so it cannot say who is seated; and

@@ -60,7 +60,7 @@ interface FixtureRow {
   away_slot_label: { key?: string } | null;
 }
 
-/** The dead-seat stamp (W2b X-WD-3 / plan D17): `stages.ts`'s `BYE_SLOT_LABEL` key, the bracket's own bye copy. */
+/** The dead-seat stamp (W2b X-WD-3 / plan D17): `stages/` folder's `BYE_SLOT_LABEL` key, the bracket's own bye copy. */
 const BYE_KEY = "bracket.slot.bye";
 const stampedDead = (r: FixtureRow) =>
   (r.home_entrant_id === null && r.home_slot_label?.key === BYE_KEY) || (r.away_entrant_id === null && r.away_slot_label?.key === BYE_KEY);

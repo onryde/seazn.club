@@ -10,7 +10,7 @@
 // requireAuth and previewDivisionFixtures are mocked: requireAuth because a
 // real session needs a live DB (out of scope here — this route only calls
 // requireAuth(req, "read"), no persistence), and previewDivisionFixtures
-// because stages.ts's qualifierCount() currently throws on ANY non-first
+// because usecases/stages/preview.ts's qualifierCount() currently throws on ANY non-first
 // stage (calls an engine export Task 1/2 already removed, pending Task 6 —
 // see topic_apps_web_api_v1_index memory) — irrelevant to what THIS test
 // verifies, which is the wire shape reaching the call, not the engine draw.

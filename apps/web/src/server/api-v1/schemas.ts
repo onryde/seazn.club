@@ -1247,7 +1247,7 @@ export type ProgressionInput = z.infer<typeof ProgressionSchema>;
  * Every key below has a real reader; omitting one would make it permanently
  * unreachable, because `CreateStage` is the ONLY client write path (there is
  * no PatchStage/UpdateStage) and the server's own later writes —
- * `config.ladder_order` at `usecases/stages.ts:3385`, and `qualified` /
+ * `config.ladder_order` at `usecases/stages/`, and `qualified` /
  * `cross_feeds` / `rank_overrides` / `carry_deltas` / `rngSeed` — round-trip
  * through rows this schema has to be a superset of. The list was derived by
  * enumerating every reader and every writer, not typed from memory.
@@ -1285,7 +1285,7 @@ export const StageConfig = z
   .strictObject({
     ...TOP_LEVEL_DECIDER_REFUSALS,
     // League / group shape.
-    // Floor from FORMAT_BOUNDS (Match Day D1). The ceiling stays 8 on the server, the generator's own clamp (usecases/stages.ts,
+    // Floor from FORMAT_BOUNDS (Match Day D1). The ceiling stays 8 on the server, the generator's own clamp (usecases/stages/,
     // "Jul3/08 §2: legs > 2 allowed"), by owner ruling Option A (2026-11-01): the builder offers 1-2 only (LegsChoice), and
     // Triple round robin is retired from the list, but a stored division with 3 or more legs keeps playing it, so the door
     // must not refuse the value it already holds.
@@ -3147,7 +3147,7 @@ export const GenerateResult = z.object({
    *  bye, each in `vacated` left and their opponent now holds a bye; no line was inserted or deleted. `regenerated`: the
    *  field crossed a power of two (or a change in place could not express the departures), so the bracket was drawn again,
    *  slots carried by bracket role (`slots`, as Rebuild reports them) — refused 409 KO_REDRAW_WOULD_CLEAR_SETUP when its
-   *  lines carry any match setup (stages.ts `stageAttachmentCounts`). After Start an arrival is refused 409 KO_GENERATE_AFTER_START. */
+   *  lines carry any match setup (usecases/stages/roster-drift.ts `stageAttachmentCounts`). After Start an arrival is refused 409 KO_GENERATE_AFTER_START. */
   reconcile: z
     .object({
       kind: z.enum(["noop", "in_place", "regenerated"]),
@@ -3400,9 +3400,9 @@ export const WINDOW_ENDS_BEFORE_STARTS = "A window's end cannot be before its st
 /** Every ordered instant pair a schedule config carries, checked on the way IN.
  *
  *  Deliberately on this wrapper and NOT on `ScheduleConfig` itself. That schema
- *  is the READ path too — `schedule.ts:296` runs `ScheduleConfig.parse` over the
+ *  is the READ path too — `usecases/schedule/` runs `ScheduleConfig.parse` over the
  *  stored `schedule_settings.config` jsonb and `.parse` throws, and
- *  `competition-schedule-ai.ts:2429` `safeParse`s the same rows. A refine there
+ *  `usecases/competition-schedule-ai/` `safeParse`s the same rows. A refine there
  *  would take every division that ALREADY holds a reversed range and turn its
  *  schedule page into a 500, punishing organisers for a value the product let
  *  them save. Refusing new bad writes fixes the source without breaking the
@@ -3750,7 +3750,7 @@ export type ScheduleMetrics = z.infer<typeof ScheduleMetrics>;
 /** How the proposal was produced — telemetry, not policy. `status` tracks the
  *  engine's BuildStatus union one-for-one. */
 export const ScheduleSolverInfo = z.object({
-  /** Mirrors the engine's `BuildResult["engine"]` exactly: `schedule.ts`
+  /** Mirrors the engine's `BuildResult["engine"]` exactly: `usecases/schedule/`
    *  assigns that field into this one one-for-one, so a member missing here is
    *  a board the API has no shape for — and that is not hypothetical, TS
    *  already refuses `engine: out.engine` when the two drift.
@@ -3794,7 +3794,7 @@ export const ScheduleSolverInfo = z.object({
      * which is a PROOF — about a board no tier had ever been in a position to
      * ask a question about.
      *
-     * Listed here rather than left off because `schedule.ts` assigns the
+     * Listed here rather than left off because `usecases/schedule/` assigns the
      * engine's `BuildStatus` into this object one-for-one, so a member missing
      * from this enum is a board the API has no shape for.
      */
@@ -3804,7 +3804,7 @@ export const ScheduleSolverInfo = z.object({
      * fault, an unmapped/unreadable status, or the RPC rejecting outright.
      *
      * Listed here rather than left off for the same reason `not_searched`
-     * above is: `schedule.ts` assigns `BuildStatus` into this object
+     * above is: `usecases/schedule/` assigns `BuildStatus` into this object
      * one-for-one. It shared `board.result.unavailable` with a z3-era
      * `z3_unavailable` that meant the same thing to an organiser; C7 retired
      * that older name, so this is now the only identifier for it. The copy is
@@ -3833,7 +3833,7 @@ export const ScheduleSolverInfo = z.object({
    *
    * HAND-MIRRORED, not generated: this file has no codegen link to
    * `packages/engine`, so a member added to the engine union without a match
-   * here is a value `schedule.ts`'s `out.notSearchedReason` assignment cannot
+   * here is a value `usecases/schedule/` folder's `out.notSearchedReason` assignment cannot
    * type as this field — TS catches it at the usecase seam, the same trap
    * `status` above and `ScheduleSolverInfo`'s own doc comment already warn
    * about.
@@ -3926,7 +3926,7 @@ export const ScheduleSolverInfo = z.object({
    *  Counts PLACEMENTS, not the division's lock flag: a locked fixture with
    *  no `scheduled_at`/`court_id` yet has nothing to anchor to and is not
    *  counted (the same rule the anchor itself uses — see `lockedFixtureIds`
-   *  in `schedule.ts`). */
+   *  in `usecases/schedule/board.ts`). */
   locked_kept: z.number().int().optional(),
 });
 export type ScheduleSolverInfo = z.infer<typeof ScheduleSolverInfo>;
@@ -4156,7 +4156,7 @@ export const AutoScheduleResult = z.object({
  *  GET /divisions/{id}/schedule/ai-last. Shared by ApplyScheduleRequest and the
  *  officials ApplyAssignmentsInput. */
 export const AiApplyMeta = z.object({
-  /** Trimmed server-side at the apply seam (schedule.ts / officials.ts), so it
+  /** Trimmed server-side at the apply seam (usecases/schedule/ / officials.ts), so it
    *  stays a plain string here — a zod transform would break openapi:gen. */
   instruction: z.string().max(500),
   summary: z.string().max(600),
@@ -4428,7 +4428,7 @@ export const PutRegistrationSettings = z
     refund_lock_at: z.iso.datetime({ offset: true }).nullish(),
     /** V389/RS012. `null` (the default) means "use the division's own
      *  `closes_at`" (ruling 2) — the pool-deadline sweep's own fallback,
-     *  registrations.ts. Nullable, not optional-with-a-sentinel, for the
+     *  usecases/registrations/. Nullable, not optional-with-a-sentinel, for the
      *  same reason `refund_lock_at` above is: clearing it back to the
      *  default is a real, meaningful edit, not "field omitted". */
     place_by_at: z.iso.datetime({ offset: true }).nullish(),
@@ -5541,7 +5541,7 @@ export const RestoreCheckpoint = z.object({
 export const DivisionLocks = z.object({
   schedule_locked: z.boolean().optional(),
   // P9 pass-3a-FIX: courts/venues are real ids (V374's locked_scopes
-  // migration; `usecases/schedule.ts`'s `scopeLocked` matches on
+  // migration; `usecases/schedule/board.ts`'s `scopeLocked` matches on
   // court_id/venue_id, not organiser-typed names) — CourtId/VenueId, not a
   // bare string, mirrors `usecases/history.ts`'s `LockInput` (the schema
   // that actually validates this route's body; kept identical by hand, same
@@ -5726,7 +5726,7 @@ const AiPlanAssignment = z.object({
  *  Id fields are plain `z.string()`, NOT `Uuid`, unlike `ScheduleConflictDetail`
  *  — deliberately looser, matching `AiPlanConflict.fixtureId` right below.
  *  The joint pack collapses two `persons` rows that share a display name onto
- *  a synthetic `name:<lowercased name>` key (competition-schedule-ai.ts) and
+ *  a synthetic `name:<lowercased name>` key (usecases/competition-schedule-ai/) and
  *  that key can be exactly what rides in `personIds` here; a strict UUID
  *  format would reject a real, correctly-computed conflict. */
 const AiPlanConflictDetail = z.object({
@@ -5765,8 +5765,8 @@ const AiPlanConflict = z.object({
    *  clients that read prose off the wire (the C3 design doc's ruling: the
    *  MODEL's own copy of a conflict, on the repair-round conversation, is a
    *  separate JSON.stringify that never reaches this schema and stays
-   *  byte-identical to pre-C3 on its own — see schedule-ai.ts/
-   *  competition-schedule-ai.ts). New clients should read `details` and
+   *  byte-identical to pre-C3 on its own — see usecases/schedule-ai/ and
+   *  usecases/competition-schedule-ai/). New clients should read `details` and
    *  localize at render time. */
   detail: z.string().optional(),
   /** Structured, id-only conflict detail (C3, 2026-08-13 design amendment).
@@ -6018,7 +6018,7 @@ export type AiOfficialsPlanResponse = z.infer<typeof AiOfficialsPlanResponse>;
 // #350 Multi-division JOINT AI scheduling — POST /competitions/{id}/schedule/
 // ai-plan. One model call over several divisions of one competition, priced as
 // a batch. The orchestrator is `aiPlanForCompetition`
-// (server/usecases/competition-schedule-ai.ts); these are the wire contracts.
+// (server/usecases/competition-schedule-ai/); these are the wire contracts.
 // ---------------------------------------------------------------------------
 
 export const AiCompetitionPlanRequest = z.object({
@@ -6294,7 +6294,7 @@ export const ApplyCompetitionScheduleRequest = z.object({
                 // applies verbatim here: a client still sending `court_label`
                 // must get a loud 400). `venue_id` is optional, same
                 // coalesce-over-unchanged semantics `applySchedule`
-                // (schedule.ts) already gives it.
+                // (usecases/schedule/) already gives it.
                 court_id: CourtId,
                 venue_id: VenueId.nullish(),
               })
@@ -6308,7 +6308,7 @@ export const ApplyCompetitionScheduleRequest = z.object({
                *
                * Deliberately not "support pinning": accepting the field would
                * need the `scheduling.board` gate the per-stage apply puts on pin
-               * changes (schedule.ts:485-487). Nothing sends it today, so this
+               * changes (usecases/schedule/). Nothing sends it today, so this
                * costs no capability and leaves Task 7 free to add pinning as a
                * decision rather than inherit it as an accident.
                */
@@ -6429,7 +6429,7 @@ export type OverrideStandings = z.infer<typeof OverrideStandings>;
 // ALL_CAPS_SNAKE per repo convention (ruling already made for D2/P1's
 // CAPACITY_IMPOSSIBLE — the design doc's dotted-lowercase codes here
 // (`seeding.source_stage_incomplete` etc.) are i18n-key-shaped, not the
-// convention typed codes use anywhere in this tree; see stages.ts for the
+// convention typed codes use anywhere in this tree; see usecases/stages/ for the
 // SEEDING_* HttpError codes this route surface actually throws).
 // ---------------------------------------------------------------------------
 

@@ -110,7 +110,7 @@
 // `listOfficialBlackouts`/`listOfficialsForConsole` are called only from the
 // schedule board's RSC page, never from an `/api/v1` route. The ONE place a
 // blackout's effect becomes visible over the API is `warn.official_unavailable`
-// off `POST /divisions/{id}/schedule/validate` (`usecases/schedule.ts:3372`,
+// off `POST /divisions/{id}/schedule/validate` (`usecases/schedule/`,
 // `requireResourceAuth(..., "read")` — ungated, no plan required) — a real
 // read (`validateSchedule`'s own comment: "nothing is written on this path"),
 // but one that only fires once the target fixture is actually SCHEDULED onto
@@ -258,7 +258,7 @@ interface IdOut {
 }
 
 interface GenerateOut {
-  // `created`/`existing` (stages.ts:1038-1039) are not surfaced here —
+  // `created`/`existing` (usecases/stages/) are not surfaced here —
   // nothing in this task's return shape needs the idempotency diff; a later
   // task owns idempotent re-seeding (brief: "do NOT build idempotence").
   fixtures: { id: string; ext_key?: string | null; status?: string | null }[];
@@ -277,7 +277,7 @@ export interface GeneratedFixtureRef {
   readonly extKey: string | null | undefined;
   readonly id: string;
   /** The status `/generate` gave it. Carried because a bracket settles its own
-   *  BYES at creation — `stages.ts:1351` stamps `forfeited` on any generated
+   *  BYES at creation — `usecases/stages/` stamps `forfeited` on any generated
    *  game with an `award` — and a settled fixture legitimately has no stream:
    *  there is no opponent and no event to fold. Optional so the dozens of
    *  hand-built refs in tests that predate byes keep compiling; absent reads
@@ -313,9 +313,9 @@ export function bindStreamFixtures(
   const byKey = new Map<string, GeneratedFixtureRef>();
   for (const f of fixtures) {
     // `FixtureRow.ext_key` is typed `string | null | undefined`
-    // (apps/web/src/server/usecases/stages.ts:205) ONLY because "dozens of
+    // (apps/web/src/server/usecases/stages/) ONLY because "dozens of
     // pre-existing tests hand-build a FixtureRow-shaped literal that
-    // predates this field" (stages.ts:196-204's own doc comment) — a REAL
+    // predates this field" (usecases/stages/ folder's own doc comment) — a REAL
     // `/generate` response always sets it (the generator's own stable id;
     // FIXTURE_COLS always selects it). So an actual `null`/`undefined` here
     // is a genuine anomaly, not "no stream could ever name this fixture" —
@@ -350,7 +350,7 @@ export function bindStreamFixtures(
   }
 
   // An unclaimed fixture is usually a missing stream — but not always. A
-  // bracket settles its own byes at creation (`stages.ts:1351`), and a bye has
+  // bracket settles its own byes at creation (`usecases/stages/`), and a bye has
   // no opponent and no events, so `PackStream` cannot express one: `home` and
   // `away` are both required and `events` is `.min(1)`. Suite 11 is the first
   // pack with byes (49 of them across two 128-slot draws) and this guard

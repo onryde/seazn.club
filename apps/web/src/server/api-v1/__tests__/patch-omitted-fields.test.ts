@@ -73,19 +73,42 @@ const registry: Swept[] = patchRows.flatMap((r) =>
   r.request ? [{ name: `PATCH ${r.path}`, schema: r.request as z.ZodType }] : [],
 );
 
-/** Every `export const Patch…Input` in server/usecases/*.ts, found by reading the files and then imported. */
-async function usecaseInputs(): Promise<Swept[]> {
-  const out: Swept[] = [];
-  for (const file of readdirSync(USECASES).filter((f) => f.endsWith(".ts")).sort()) {
+/** Every non-test `.ts` under `dir` (recursive, `__tests__` skipped), as `/`-separated paths relative to `dir`, sorted. */
+function tsFilesUnder(dir: string, rel = ""): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(join(dir, rel), { withFileTypes: true })) {
+    if (e.name === "__tests__") continue;
+    const r = rel ? `${rel}/${e.name}` : e.name;
+    if (e.isDirectory()) out.push(...tsFilesUnder(dir, r));
+    else if (e.name.endsWith(".ts")) out.push(r);
+  }
+  return out.sort();
+}
+
+interface UsecaseScan {
+  inputs: Swept[];
+  /** `.ts` files read. */
+  files: number;
+  /** Distinct sub-folders (a split use-case) that held at least one of them. */
+  folders: number;
+}
+
+/** Every `export const Patch…Input` under server/usecases/, found by reading the files and then imported. RECURSIVE: a
+ *  use-case split into a folder (`stages/`, `schedule/`, `registrations/`, …) is still the use-case, and a flat readdir
+ *  stopped seeing it the day it became one. */
+async function usecaseInputs(): Promise<UsecaseScan> {
+  const inputs: Swept[] = [];
+  const files = tsFilesUnder(USECASES);
+  for (const file of files) {
     const names = [...readFileSync(join(USECASES, file), "utf8").matchAll(/^export const (Patch\w*Input)\b/gm)].map((m) => m[1]!);
     if (names.length === 0) continue;
     const mod = (await import(join(USECASES, file))) as Record<string, unknown>;
     for (const n of names) {
       if (!(mod[n] instanceof z.ZodType)) throw new Error(`usecases/${file}: ${n} is not a zod schema`);
-      out.push({ name: `usecases/${file.replace(/\.ts$/, "")} ${n}`, schema: mod[n] as z.ZodType });
+      inputs.push({ name: `usecases/${file.replace(/\.ts$/, "")} ${n}`, schema: mod[n] as z.ZodType });
     }
   }
-  return out;
+  return { inputs, files: files.length, folders: new Set(files.filter((f) => f.includes("/")).map((f) => f.split("/")[0])).size };
 }
 
 /** Patch-shaped inputs that are neither a route body nor a usecase `Patch…Input`. */
@@ -102,17 +125,29 @@ const NAMED: Swept[] = [
  *  A scan that matches fewer has lost what routes actually parse with — lower this only by removing one on purpose. */
 const USECASE_INPUTS_FLOOR = 5;
 
+/** The scan's reach, which the match count above cannot see: no split folder holds a `Patch…Input` today, so a scan that
+ *  quietly drops one still finds all 5. Counted 2026-11-10 over `usecases/` minus `__tests__`: 274 `.ts` files (152 loose
+ *  + billing-events 14, competition-schedule-ai 10, external-play 33, registrations 20, schedule 15, schedule-ai 11,
+ *  stages 19) in 7 split folders. Removing a module is legal and lowers the file number in the same change; adding one
+ *  needs no edit. */
+const USECASE_FILES_FLOOR = 274;
+const USECASE_FOLDERS_FLOOR = 7;
+
 describe("PATCH bodies: an omitted field stays omitted", async () => {
-  const usecase = await usecaseInputs();
+  const scan = await usecaseInputs();
+  const usecase = scan.inputs;
   const swept = [...registry, ...usecase, ...NAMED];
   const probes = swept.map((s) => ({ ...s, ...omissionProbe(s.schema, s.name) }));
   const fields = probes.reduce((n, p) => n + p.fields, 0);
   const accepting = probes.filter((p) => p.schema.safeParse({}).success).length;
 
-  it(`sweeps ${swept.length} patch schemas (${registry.length} registry, ${usecase.length} usecase, ${NAMED.length} named), ${fields} fields; ${accepting} accept {}`, () => {
+  it(`sweeps ${swept.length} patch schemas (${registry.length} registry, ${usecase.length} usecase, ${NAMED.length} named), ${fields} fields; ${accepting} accept {}; usecase scan read ${scan.files} files in ${scan.folders} split folders`, () => {
     // Anti-vacuity, per source: an empty registry, a usecase scan below its floor, or a probe that read no field is a red.
     expect(registry.length).toBeGreaterThan(0);
     expect(usecase.length, "the usecase Patch…Input scan found fewer than its floor").toBeGreaterThanOrEqual(USECASE_INPUTS_FLOOR);
+    // …and the scan READ every split folder, not just the loose files (a flat readdir reads 152 of the 274).
+    expect(scan.files, "usecases/ files read fell below the count taken on 2026-11-10").toBeGreaterThanOrEqual(USECASE_FILES_FLOOR);
+    expect(scan.folders, "split use-case folders read fell below the count taken on 2026-11-10").toBeGreaterThanOrEqual(USECASE_FOLDERS_FLOOR);
     expect(fields).toBeGreaterThan(swept.length);
     // Every PATCH route documents its body: one without would be a PATCH this sweep silently never reads.
     expect(patchRows.filter((r) => !r.request).map((r) => r.path)).toEqual([]);

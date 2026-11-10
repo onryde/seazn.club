@@ -230,7 +230,7 @@ describe.skipIf(!HAS_DB)("SEC1: a key's scope gates the event at POST /fixtures/
   });
 
   it("an api_key AuthCtx that carries no scopes is refused every event, not trusted (no producer builds one for scoring)", async () => {
-    // stages.ts's system ctx (markFieldChangeSeedProposalsStale) is via "api_key" with no scopes; it never scores. If a
+    // stages/seed-stale.ts's system ctx (markFieldChangeSeedProposalsStale) is via "api_key" with no scopes; it never scores. If a
     // caller ever hands one to the ledger, it fails closed rather than writing as an organiser.
     const { s } = await rig();
     const id = s.fixtureIds[0]!;

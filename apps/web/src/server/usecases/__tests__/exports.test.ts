@@ -166,7 +166,7 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
   // say exports.ts read `fixtures.court_label` raw and had no `court_id`/
   // `courtNamesById` reference, so these assertions were "not expected to
   // hold". `exportFixtures`/`groupByCourt` resolve `court_name` off
-  // `court_id` via `courtNamesById` (schedule.ts) now — this test passes.
+  // `court_id` via `courtNamesById` (schedule/board.ts) now — this test passes.
   it("scoresheets pageBreaks=per_pitch: one stack per court, one break between them", async () => {
     const { auth } = await seedOrg();
     const { division, fixtures } = await seedDivision(auth);

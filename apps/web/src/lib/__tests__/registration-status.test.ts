@@ -1,14 +1,14 @@
 // RS004 W3b review finding 1 — `SPOT_HOLDERS` was hand-duplicated:
-// registrations.ts declared the canonical array, and the registration hub's
+// usecases/registrations/ declared the canonical array, and the registration hub's
 // page.tsx declared a byte-identical SECOND copy locally (to avoid dragging
-// registrations.ts's Stripe/email clients into a read-only page — a sound
+// usecases/registrations/ folder's Stripe/email clients into a read-only page — a sound
 // reason; the duplicate was not). This module is now the ONE place the list
-// is declared; registrations.ts re-exports it (so its three existing
+// is declared; usecases/registrations/ re-exports it (so its three existing
 // importers — itself, registration-approval.ts, registration-submit.ts —
 // need no change) and page.tsx imports it directly from here.
 //
 // These three tests pin exactly the defect described above: (1) the list's
-// contents, (2) that registrations.ts's export is the SAME binding, not a
+// contents, (2) that usecases/registrations/ folder's export is the SAME binding, not a
 // second array that can drift, and (3) that page.tsx's source carries no
 // local re-declaration at all.
 import { readFileSync } from "node:fs";

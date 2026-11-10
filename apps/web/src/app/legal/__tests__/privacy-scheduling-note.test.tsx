@@ -7,7 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 // activity the data subject cannot otherwise know about, so the privacy page
 // has to describe it. The mitigations it claims (non-persisted,
 // scheduling-scoped, disclosed in `assumptions`) are enforced elsewhere:
-// personKeyResolver (server/usecases/schedule-ai.ts:173) and its pack test
+// personKeyResolver (server/usecases/schedule-ai/identity.ts) and its pack test
 // "…one participant key, persons untouched".
 vi.mock("@/components/marketing-nav", () => ({ MarketingNav: () => null }));
 vi.mock("@/components/marketing-footer", () => ({ MarketingFooter: () => null }));

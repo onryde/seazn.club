@@ -456,7 +456,7 @@ describe.skipIf(!HAS_DB)("buildQualificationView on real reads (getPublicDivisio
     expect(cascaded.view!.table.label).toBe("First place goes through to Finals · 1 round left");
     expectSameStatuses(cascaded.view!, await engineStatuses(a.r, cascaded.rows, cascaded.statuses, leagueLeft, 1));
 
-    // (b) a registrant's self-cancel (registrations.ts) moves ONLY the entrant
+    // (b) a registrant's self-cancel (usecases/registrations/) moves ONLY the entrant
     // status: the leaver's fixtures stay scheduled with no result, so the
     // pooled snapshot never folds it. Its place is kept and its carry-over
     // folds in with any later result (an organiser forfeit: the cascade will

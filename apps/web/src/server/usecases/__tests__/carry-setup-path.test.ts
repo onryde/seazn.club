@@ -115,7 +115,7 @@ describe.skipIf(!HAS_DB)("F6 — carry-over source validation at propose time (t
           timing: "setup",
           // A knockout completion snapshots POSITIONAL placements only
           // (placementTable zeroes every stat), so there are no real points
-          // here to carry — see REAL_TABLE_KINDS (stages.ts).
+          // here to carry — see REAL_TABLE_KINDS (stages/types.ts).
           carry: "points",
         },
       },
@@ -256,7 +256,7 @@ describe.skipIf(!HAS_DB)("F6 — carry-over APPLIED at confirm time (timing: set
     // Derived from the target stage's OWN filled fixtures (the same
     // transaction's other half) rather than a hand-listed set, so a change to
     // who qualifies moves both sides together. Without buildCarryDeltas'
-    // qualified-set filter (stages.ts) every source row folds in: 4, not 3.
+    // qualified-set filter (stages/) every source row folds in: 4, not 3.
     const seated = await sql<{ entrant_id: string }[]>`
       select distinct home_entrant_id as entrant_id from fixtures
         where stage_id = ${superPool!.id} and home_entrant_id is not null

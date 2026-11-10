@@ -334,7 +334,7 @@ export const PARSE_MODEL_FALLBACK = "claude-haiku-4-5-20251001";
 /** Cheap and fast: the compile is a small extraction, and the referee checks
  *  every rule it produces regardless of which model produced it.
  *
- *  Read at call time, like the ladder in schedule-ai.ts: OPENROUTER_API_KEY is
+ *  Read at call time, like the ladder in schedule-ai/: OPENROUTER_API_KEY is
  *  the same deliberate production flip that activates the architect's gemini
  *  rung, so the two move together rather than needing separate configuration. */
 export function parserAiModel(): string {
@@ -391,7 +391,7 @@ export async function parseInstruction(
   // Resolve from the MODEL, not from the global AI_PROVIDER. `parserAiModel()`
   // returns a bare Anthropic id, and under AI_PROVIDER=openrouter a bare id is a
   // 404 that this function's own catch swallows — every run would silently
-  // compile to no rules. Same slug test the model ladder uses (schedule-ai.ts).
+  // compile to no rules. Same slug test the model ladder uses (schedule-ai/).
   const provider = opts.provider ?? resolveProvider(model.includes("/") ? "openrouter" : "anthropic");
   const meter = createTokenMeter(PARSE_TOKEN_CEILING);
 
@@ -659,7 +659,7 @@ export function resolveParsed(
   hints: {
     fixtureCount?: number;
     /** Court NAME -> id (P9 pass 3d), for the same candidate courts the
-     *  model was shown as settings.courts (schedule-ai.ts's
+     *  model was shown as settings.courts (schedule-ai/model-payload.ts's
      *  `toModelPayload`). A `no_play_between.court` is the NAME the model
      *  copied — the organiser's own instruction and the model both speak
      *  names, never ids — so this both verifies the name was one the model

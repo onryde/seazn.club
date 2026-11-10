@@ -7,7 +7,7 @@ This file starts at the first breaking change the v1 contract has taken. It
 is not a full changelog: additive fields do not appear here, because a reader
 that ignores an unknown field is unaffected by one.
 
-## 2026-11-09 — sponsor orders become sponsor deals; `/sponsor-orders` is removed
+## 2026-11-10 — sponsor orders become sponsor deals; `/sponsor-orders` is removed
 
 A sponsorship used to be an order: `POST /orgs/{id}/sponsor-orders` took a
 package, a sponsor name and an email, started a Stripe Checkout and mailed the
@@ -43,6 +43,28 @@ payment and dispute history kept.
 **Background.** Sponsor deals, plan 2026-11-07, Tasks 6 and 7. The pinning tests
 are `apps/web/src/app/api/v1/orgs/[id]/sponsor-deals/__tests__/routes.test.ts`
 and `apps/web/src/server/usecases/__tests__/sponsor-deals-online.test.ts`.
+
+## 2026-11-10 — a cricket wicket can be voided only while it is the latest ball
+
+`POST /api/v1/fixtures/{id}/events` with `type: "core.void"` used to accept any active entry as its target. For a cricket
+wicket (a `cricket.ball` or `cricket.superover.ball` whose payload carries a non-null `wicket`) with a later active ball
+behind it, that was a quiet corruption: the fold replays the ledger without the wicket, so the over boundaries shift, the
+bowler rules (consecutive overs, the per-bowler maximum) are not re-checked, the dismissed batter is no longer out, and the
+incoming batter keeps batting because later balls name him. The server now refuses it. Owner ruling, 2026-11-10; design:
+`docs/superpowers/specs/2026-11-10-cricket-wicket-void-latest-only.md`.
+
+| Case | Before | Now |
+|---|---|---|
+| Void of the latest active ball, a wicket | accepted | accepted (unchanged) |
+| Void of a wicket with a later active ball | accepted; the card replays without it | `409 UNDO_WICKET_NOT_LATEST`, nothing written |
+| Void of an older ball that is not a wicket | accepted | accepted (unchanged) |
+| A wicket followed only by non-ball entries (a bowler change, a powerplay) | accepted | accepted: the rule counts later ACTIVE BALLS only |
+| A later ball that is itself voided | n/a | does not count: void it first and the wicket is the latest again |
+| Another sport's event, "Void last entry", a decided fixture | as before | unchanged |
+
+The way back past a wicket is the ordinary one: void the entries after it, newest first, then the wicket. The organiser
+console's "Void back to here" does exactly that, after a confirm that names the count. The code is terminal: a resend is
+refused identically, so the scorer pad does not renegotiate it.
 
 ## 2026-11-02 — `PATCH /entrants/{id}` to `disqualified` walks the entrant's open matches over
 

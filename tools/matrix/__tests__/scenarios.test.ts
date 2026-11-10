@@ -1663,7 +1663,7 @@ class AmericanoFake extends FakeLeagueDriver {
     return super.addEntrants(d, es);
   }
 }
-/** The brief's field: americano needs at least 4 players (stages.ts americanoGen STAGE_NOT_READY). */
+/** The brief's field: americano needs at least 4 players (usecases/stages/generators.ts americanoGen STAGE_NOT_READY). */
 const AMERICANO_ENTRANTS = 8;
 /** The rows the brief names: americano and mexicano are one stage kind, and the row's mode decides. */
 const AMERICANO_ROWS = ["americano", "mexicano"] as const;
@@ -2081,13 +2081,13 @@ describe("the swiss branch of playStage on the swiss fake", () => {
     expect(driver.fixtures.every((f) => f.home_entrant_id === null && f.away_entrant_id === null && f.status === "scheduled")).toBe(true);
     const ids = driver.fixtures.map((f) => f.id);
     const g = await driver.generate();
-    expect(g.created).toBe(0); // seating UPDATEs shells (stages.ts swissGen)
+    expect(g.created).toBe(0); // seating UPDATEs shells (usecases/stages/swiss-gen.ts swissGen)
     expect(driver.fixtures.map((f) => f.id)).toEqual(ids);
     const r1 = driver.fixtures.filter((f) => f.round_no === 1);
     expect(r1.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null)).toHaveLength(3);
     expect(r1.filter((f) => f.away_entrant_id === null)).toEqual([expect.objectContaining({ status: "forfeited", outcome: { kind: "award", winner: r1.find((f) => f.away_entrant_id === null)!.home_entrant_id, loser: null, reason: "bye" } })]);
     expect(driver.fixtures.filter((f) => (f.round_no ?? 0) > 1).every((f) => f.home_entrant_id === null)).toBe(true);
-    // The next round is refused while this one has an undecided board (stages.ts swissGen gate),
+    // The next round is refused while this one has an undecided board (usecases/stages/swiss-gen.ts swissGen gate),
     // with the status the product maps STAGE_NOT_READY to (Task 8 m-7: it is 422, not 409).
     await expect(driver.generate()).rejects.toMatchObject({ status: STAGE_NOT_READY_STATUS, code: "STAGE_NOT_READY" });
   });
@@ -2255,7 +2255,7 @@ describe("W3 app-B Task 6: the Swiss loop reads SWISS_NO_LEGAL_PAIRING as a refu
     expect(r.state.state, "a crashed Finish reds the case").toBe("red");
   });
 
-  // T6 review m2: SWISS_ROUNDS_ABOVE_MAX is the other Pair refusal that offers Finish (stages.ts judgeSwissPairAt: a running Swiss
+  // T6 review m2: SWISS_ROUNDS_ABOVE_MAX is the other Pair refusal that offers Finish (usecases/stages/swiss-gen.ts judgeSwissPairAt: a running Swiss
   // whose field a withdrawal shrank under the target round; 409 when Finish is on offer). Its body is
   // `{ rounds, field, hardMax, ...swissFinishDetails }` - `canFinish` and `finish: { after, rounds }`, NOT the dead end's `finishAfter`.
   // Today's scenarios cannot reach it (the field is 8, hardMax 7), so this drives the loop with the product's body directly.

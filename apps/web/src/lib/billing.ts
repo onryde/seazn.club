@@ -146,7 +146,7 @@ export function buildEmbeddedCheckoutParams(args: {
    *  an org can move between groups (detach), after which its stamp names a
    *  group it no longer bills through — resolving through it would overwrite a
    *  DIFFERENT customer's plan/status/period end. See resolveGroupForStripeSub
-   *  in server/usecases/billing-events.ts.
+   *  in server/usecases/billing-events/group-resolution.ts.
    *
    *  Optional only so the pure-params unit tests can omit it; every real caller
    *  has it (api/billing/checkout gets it from requireBillingOwner, and every
@@ -1503,7 +1503,7 @@ export async function reconcilePassCheckout(
     // here left a buyer who redeemed a valid code with no pass on the return
     // render, silently, exactly as the webhook twin did. Two comparisons,
     // inline, and deliberately NOT lifted into a predicate shared with the
-    // webhook limb in billing-events.ts: these gates attract concurrent
+    // webhook limb in usecases/billing-events/: these gates attract concurrent
     // branches editing one site each, and folding them together would turn
     // that merge into "one side refactored, the other edited".
     // NOTE the inverted polarity — this gate names what it REFUSES, so each
@@ -1627,7 +1627,7 @@ export async function reconcileCheckout(
       // Pass-to-Pro credit (v3/07 D12; grant timing moved 2026-07-26 — see
       // docs/superpowers/specs/2026-07-26-pass-credit-redemption-design.md §1).
       // This is the reconcile-on-return arm of "learn a subscription started";
-      // the other is billing-events.ts handleSubscriptionChanged, for when the
+      // the other is usecases/billing-events/subscriptions.ts handleSubscriptionChanged, for when the
       // webhook DOES arrive. Run after the entitlement drop rather than before:
       // entitlements are what the page renders next, so they take priority, and
       // the credit is orthogonal to them (a balance transaction, not a plan

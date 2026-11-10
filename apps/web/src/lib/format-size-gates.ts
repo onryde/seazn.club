@@ -1,6 +1,6 @@
 // W4 app-A Task 15 (FX-G14's gate half, QM-2; rules X-PL-1, X-QM-2, X-QM-5; owner pick 5A): which fields a stage graph can be
 // played on, read off the GRAPH rather than a template key, so a division built through the API is gated like one built in the
-// builder. The server refuses at every door that draws the root (`refuseFormatTooSmall`, stages.ts) and the builder shows the card
+// builder. The server refuses at every door that draws the root (`refuseFormatTooSmall`, usecases/stages/swiss-gen.ts) and the builder shows the card
 // disabled with the same reason (format-choice.ts); both ask this file. Pure and client-safe.
 import type { KnockoutRefusalCode } from "@/lib/knockout-refusals";
 

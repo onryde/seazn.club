@@ -110,7 +110,7 @@ export interface EntryCardProps {
       amount_cents: number;
       /** FIX 3 (RS007 status-page review): set only when `refundable` is
        *  false because NO deadline could be derived at all
-       *  (resolveRefundPolicy, registrations.ts) — optional so every
+       *  (resolveRefundPolicy, usecases/registrations/refunds.ts) — optional so every
        *  existing hand-built fixture that predates this field still
        *  type-checks; a missing/undefined reason renders nothing extra,
        *  same as an explicit null. */
@@ -126,7 +126,7 @@ export interface EntryCardProps {
     instructionsHtml: string | null;
     currency: string;
     /** RS007 review fix #13(a): the org's own timezone (already resolved as
-     *  `refundTz` in buildGroupStatusView, registrations.ts) — every deadline
+     *  `refundTz` in buildGroupStatusView, usecases/registrations/group-status.ts) — every deadline
      *  rendered below uses THIS, never the hardcoded UTC the page used to
      *  render every pay-by date in regardless of where the org actually
      *  runs. */
@@ -411,7 +411,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
             {/* FIX 3 (RS007 status-page review): refund_policy carries a
                 `reason` when a refund is fail-closed-declined because no
                 deadline could be derived at all (resolveRefundPolicy,
-                registrations.ts) — previously rendered nowhere, so a
+                usecases/registrations/refunds.ts) — previously rendered nowhere, so a
                 registrant saw a plain refusal with no explanation. Plain-
                 English, says what the organiser will do, not what the
                 system computed. */}

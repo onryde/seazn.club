@@ -1048,7 +1048,7 @@ export function MoneySection({
   feePercentPct: number;
   cardUnsupportedCurrency: string | null;
   /** RS005 F4 — registrations in `waitlisted` status for this division right
-   *  now. `promoteWaitlistedRow` (registrations.ts, ~:875) reads the LIVE
+   *  now. `promoteWaitlistedRow` (usecases/registrations/waitlist.ts) reads the LIVE
    *  fee at promotion time, never whatever fee was showing when a
    *  waitlisted entrant joined (they hold `amount_cents = 0`, so there is
    *  no earlier quote to honour) — so a fee edited here silently re-prices
@@ -1076,7 +1076,7 @@ export function MoneySection({
   const paidConfigured = state.fee_cents > 0;
   // The auto-refund the lock governs can ONLY happen on a card entry:
   // withdrawCore's own predicate is `locked.payment_intent_id && …`
-  // (registrations.ts), and an offline entry has no payment intent, so
+  // (usecases/registrations/), and an offline entry has no payment intent, so
   // nothing auto-refunds and the cutoff governs nothing. Shown for
   // pay-the-organiser it asks the organiser to configure a policy that will
   // never run — the same false-claim class as the platform-cut line above.

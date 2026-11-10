@@ -1,7 +1,7 @@
 // The Redis key of the public fixture document (`publicFixture`,
 // usecases/public.ts) — ONE name for its reader and for every invalidator
 // that drops it (`invalidatePublicCache` in scoring.ts, `afterScheduleWrite`
-// in schedule.ts). Three hand-typed copies of a key that has to change
+// in usecases/schedule/). Three hand-typed copies of a key that has to change
 // together is how one of them gets missed.
 //
 // `v2` (owner decision 2026-09-16): the document's

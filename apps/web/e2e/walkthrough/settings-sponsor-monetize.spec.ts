@@ -58,7 +58,7 @@ import {
  *     deal, mints a Checkout Session and emails a link. Nothing moves it to
  *     `paid` except
  *     `payment_intent.succeeded` carrying `metadata.kind === "sponsor"`
- *     (`billing-events.ts:2172` -> `handleSponsorPaymentSucceeded`). The
+ *     (`usecases/billing-events/` -> `handleSponsorPaymentSucceeded`). The
  *     brief's three-step flow would have clicked a button that never renders.
  *
  *     Closed here the way `scripts/smoke.ts` already closes it for the

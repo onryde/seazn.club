@@ -96,7 +96,7 @@ export interface AiBriefContext {
    *  several times over. Use `activeEntrants`. */
   entrants: { id: string; name: string }[];
   /** Entrants the SERVER prices on: this division's, `status not in
-   *  ('withdrawn','disqualified')` (schedule-ai.ts:505). */
+   *  ('withdrawn','disqualified')` (usecases/schedule-ai/). */
   activeEntrants: number;
   /** Officials with at least one blackout date (M in "N officials, M with …"). */
   officialsWithBlackout: number;
@@ -107,7 +107,7 @@ export interface MovableFixture {
   id: string;
   /** ISO string, or null while the fixture sits in the tray. */
   scheduled_at: string | null;
-  /** P9 pass 4a: the real court identity — `inScope` (schedule-ai.ts) now
+  /** P9 pass 4a: the real court identity — `inScope` (usecases/schedule-ai/pack.ts) now
    *  matches `scope.courts` against `court_id`, and `court_label` is frozen
    *  legacy (null for anything scheduled since the cutover), so comparing on
    *  it never excludes anything and a court-scoped repair silently prices at
@@ -117,7 +117,7 @@ export interface MovableFixture {
 
 /**
  * The client's mirror of `buildSchedulePack`'s movable-fixture selection
- * (schedule-ai.ts:319 + its `inScope` at :260).
+ * (usecases/schedule-ai/pack.ts + its `inScope`).
  *
  * Scope only narrows a REPAIR round; generate and refine re-plan the whole set.
  * Getting this wrong is not cosmetic — a repair scoped to one court would
@@ -308,7 +308,7 @@ export function officialsQuoteInput(
  * Client kill switch, mirroring the server "ai-scheduling" flag. Fail-open: only
  * an explicit `false` from PostHog hides the entry point — an unconfigured,
  * still-loading, or undefined flag all read as enabled, so a flag outage never
- * pulls a paid feature (schedule-ai.ts evaluates the same flag with fallback:
+ * pulls a paid feature (usecases/schedule-ai/ evaluates the same flag with fallback:
  * true). There is no existing PostHog client-flag hook in the app, so this is
  * the pattern the board reads it by.
  */

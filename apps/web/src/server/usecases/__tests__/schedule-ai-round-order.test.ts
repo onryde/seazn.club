@@ -146,7 +146,7 @@ describe("round order through the single-division AI adapter (C1 gap B)", () => 
   it("does not treat a non-round-robin stage's round_no as round-robin order", () => {
     // Same shape as the violation test above — f-br-2 (round 2) scheduled
     // BEFORE f-br-1 (round 1) — but this is a bracket stage: round_no here
-    // is `stages.ts`'s display numbering (semis are "round 2" for the
+    // is `stages/` folder's display numbering (semis are "round 2" for the
     // bracket panel), never round-robin sequence. Forwarding it ungated is
     // the exact regression this feature exists to prevent.
     const BRACKET_FIXTURES: FixtureSpec[] = [

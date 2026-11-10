@@ -18,7 +18,7 @@ import { generateDoubleElim, generatePagePlayoff, generateSingleElim, generateSt
 export const STRUCTURAL_FINAL_KINDS: readonly string[] = Object.freeze(["double_elim", "stepladder", "page_playoff"] as const satisfies readonly BracketKind[]);
 
 /** The bracket kinds' generators, called as the product's Start calls them
- *  (usecases/stages.ts:1648-1673): the field, and the stage config the
+ *  (usecases/stages/): the field, and the stage config the
  *  product reads — a knockout's thirdPlace, byes and slotOrder, a double
  *  elim's bracketReset. ONE table for the snapshot's terminal finals and
  *  F1's opening round (T15-R8 m-4). A size or config the engine cannot lay
@@ -43,7 +43,7 @@ export const BRACKET_KINDS: readonly BracketKind[] = Object.freeze(Object.keys(B
 
 /** The terminal final is the engine's own `isFinal` fixture for this bracket
  *  shape — never a key table typed here. The ids are the product's ext_keys
- *  (usecases/stages.ts bracketToGen: `extKey: f.id`). Engine order is kept:
+ *  (usecases/stages/generators.ts bracketToGen: `extKey: f.id`). Engine order is kept:
  *  gf before gf-reset. Only the field's SIZE shapes the keys, and the
  *  generators refuse a size they cannot lay out (a page playoff of anything
  *  but 4 throws CONFIG_INVALID), exactly as the product's Start does. */

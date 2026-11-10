@@ -610,7 +610,7 @@ test("pools: pool A reads above pool B on the division page, the hub Table tab a
 // ── Pool label in the org's locale (2026-10-06) ──────────────────────────
 //
 // `pools.name` is only ever stored as the English "Pool " + key
-// (`usecases/stages.ts`), and the public surfaces printed it, English in every
+// (`usecases/stages/`), and the public surfaces printed it, English in every
 // locale. A Spanish org's division page and hub must name each pool with the
 // public dictionary's `table.poolLabel` over the pool's KEY ("Grupo A"), read
 // here out of the dictionary FILE, never typed. A dedicated org

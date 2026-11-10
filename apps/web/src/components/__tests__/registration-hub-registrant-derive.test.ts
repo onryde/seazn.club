@@ -313,7 +313,7 @@ describe("deriveRegistrantActionFlags", () => {
   // had pulled out was told they were still registered, siblings included.
   // Same rule and same source set as withdraw (isTerminalRegistrationStatus,
   // @/lib/registration-status) — resendRegistrationConfirmation
-  // (registrations.ts:1071) now refuses the same three statuses
+  // (usecases/registrations/) now refuses the same three statuses
   // server-side; this is the button-level courtesy.
   it("resend is legal on every non-terminal status", () => {
     for (const status of ["pending", "paid", "confirmed", "waitlisted"] as const) {
@@ -415,7 +415,7 @@ describe("deriveRegistrantActionFlags", () => {
   });
 
   // RS005 R1 finding 1's recovery path: markRegistrationPaidOffline's own
-  // rule (registrations.ts ~3102-3114) — status must still be 'pending', no
+  // rule (usecases/registrations/) — status must still be 'pending', no
   // payment_intent_id on file (a card payment refunds on the payments
   // trail instead), and a real fee owed. Deliberately no approval-mode
   // check: the usecase confirms identically on a manual or an auto
@@ -679,7 +679,7 @@ describe("deriveRegistrantActionFlags", () => {
 
   // RS005 F2 finding 3: approveRegistration/markRegistrationPaidOffline both
   // gate on the DIVISION's LIVE registration_settings.fee_cents
-  // (registration-approval.ts:128, registrations.ts:3147), not this row's
+  // (registration-approval.ts:128, usecases/registrations/), not this row's
   // frozen amount_cents. After a fee edit the two disagree and the WRONG
   // control renders. feeOverride lets a caller (RegistrationHubRegistrantActions)
   // correct the guess once the SERVER has said so authoritatively, without

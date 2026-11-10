@@ -151,7 +151,7 @@ const feed = (placement: "snake" | "rank_order"): NonNullable<StageDraft["progre
 /** The five shapes the builder does not offer, each built from a product
  *  authority: the builder's own stage bodies, the t20-super8 catalog template
  *  (pool counts and both feeds), and the knockout generate's
- *  `cfg.thirdPlace` read (usecases/stages.ts generate()). */
+ *  `cfg.thirdPlace` read (usecases/stages/generators.ts generate()). */
 function apiOnlyStages(row: ApiOnlyRowKey, knobs: TemplateKnobs): StageDraft[] {
   switch (row) {
     case "group_only":

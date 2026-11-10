@@ -111,7 +111,7 @@ async function seedDivision(
       await post(request, f.id, seq, p.type, p.payload);
       await post(request, f.id, seq, "core.forfeit", { by: patE, reason: "disqualified" });
     } else {
-      // The withdrawal cascade's no-event double walkover (stages.ts, the `dw` mode), its own statement.
+      // The withdrawal cascade's no-event double walkover (usecases/stages/, the `dw` mode), its own statement.
       await withDb(async (sql) => {
         await sql`update fixtures set status = 'forfeited', outcome = ${sql.json({ kind: "double_walkover" } as never)}
                   where id = ${f.id} and status in ('scheduled', 'in_play', 'needs_decision', 'abandoned')`;

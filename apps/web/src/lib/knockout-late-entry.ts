@@ -10,7 +10,7 @@
 //       walkover is then reversed (X-LE-5). The earliest such line in draw order (`seq`) when there are several;
 //   (3) refused: "Round 1 complete; no slot left", with Rebuild offered when nothing in the stage has started (X-LE-6) —
 //       unless the division's schedule is FROZEN: Rebuild refuses a frozen schedule (422 SCHEDULE_LOCKED,
-//       usecases/stages.ts `regenerateStageInTx`), so it is not offered and the refusal says unfreeze first (final review
+//       usecases/stages/generate-tx.ts `regenerateStageInTx`), so it is not offered and the refusal says unfreeze first (final review
 //       m1, owner ruling 2026-11-09).
 // Never round 2 or later (X-LE-7): only round-1 lines are read, and a withdrawn BYE HOLDER's line is never case (2) — its
 // bye already carried the holder into round 2, so taking that seat would seat the newcomer there.

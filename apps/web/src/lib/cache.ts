@@ -97,7 +97,7 @@ export const PUSH_AFTER_DELETE_BOUND_MS = 1_500;
  *
  * Both public-cache writers send through here, so the two cannot drift: a score
  * write (`invalidatePublicCache`, usecases/scoring.ts) and a schedule write
- * (`afterScheduleWrite`, usecases/schedule.ts, R10c m1). Each caller still
+ * (`afterScheduleWrite`, usecases/schedule/after-write.ts, R10c m1). Each caller still
  * attaches its own logging `.catch` first (F4), so a failed delete is logged
  * with the keys it was for. `send` must not throw.
  *

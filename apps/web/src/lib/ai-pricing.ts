@@ -1,5 +1,5 @@
 // USD list pricing per 1M tokens for the models the architect can run on
-// (schedule-ai.ts / officials-ai.ts — SCHEDULING_AI_MODEL). Isomorphic: the
+// (usecases/schedule-ai/ / officials-ai.ts — SCHEDULING_AI_MODEL). Isomorphic: the
 // server stamps cost onto telemetry + the run ledger, /admin/ai-runs renders
 // it. Cache reads/writes are not modelled — the runner's usage counters are
 // raw input/output tokens.
@@ -53,7 +53,7 @@ export function aiRunCostUsd(
 /** What ONE `pack_units` unit MEANS, per AI run phase (v17 gap #295).
  *
  *  The two run paths stamp the same JSONB key from different denominators:
- *  `schedule-ai.ts` stamps `movableIds.size` — only the fixtures the pack asked
+ *  `usecases/schedule-ai/` stamps `movableIds.size` — only the fixtures the pack asked
  *  the model to place — while `officials-ai.ts` stamps `pack.fixtures.length`,
  *  every fixture in the pack. So `pack_units` is NOT one measure with two
  *  sources: a $/unit computed across both phases is arithmetic over two

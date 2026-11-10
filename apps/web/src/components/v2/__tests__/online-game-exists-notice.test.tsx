@@ -1,6 +1,6 @@
 // T16 (T19 carry) — Unpair, Rebuild and deleting an entrant refuse 409
 // ONLINE_GAME_EXISTS on a board an online game stands behind
-// (stages.ts lockBoardsRefusingOnlineGames). The organiser's way out is the
+// (usecases/stages/swiss-boards.ts lockBoardsRefusingOnlineGames). The organiser's way out is the
 // arbiter panel's settle, so the refusal says so and links there.
 //
 // The copy is checked for TRUTH, not only presence: settling a board decides

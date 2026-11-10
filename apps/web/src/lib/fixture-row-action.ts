@@ -61,7 +61,7 @@ export type RowActionInput = {
 /**
  * The ONE fixture status the server will accept a timetable move for.
  *
- * `moveFixture` (server/usecases/schedule.ts) refuses any other outright —
+ * `moveFixture` (server/usecases/schedule/move.ts) refuses any other outright —
  * `if (movesTimetable && fixture.status !== MOVABLE_STATUS) throw new
  * HttpError(422, "fixture is X — decided fixtures are immutable")`. This is a
  * deliberate hand-copy of that server constant, for the same reason `SETTLED`

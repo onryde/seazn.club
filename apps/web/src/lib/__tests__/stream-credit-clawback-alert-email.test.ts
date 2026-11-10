@@ -1,7 +1,7 @@
 // Body copy for the staff alert queued when a match-credit pack charge is
 // refunded and the webhook could not reverse it cleanly
 // (`streamCreditClawbackAlertEmail`, rendered by `alertStreamClawback` in
-// billing-events.ts for four claw-back exits: partial, short refund and
+// usecases/billing-events/ for four claw-back exits: partial, short refund and
 // ungranted in `handleStreamPackChargeRefunded`, plus the short lost-dispute
 // one in `handlePlatformDispute`, and queued on the email outbox as kind
 // `staff_stream_credit_clawback`).

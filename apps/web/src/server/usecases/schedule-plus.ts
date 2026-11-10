@@ -60,7 +60,7 @@ export async function shiftDivisionSchedule(
     }
     // P9 cutover: court_id, not the frozen court_label — `Assignment`/
     // `ShiftableFixture.court` is a `courts.id` identity throughout this
-    // engine (toAssignment, schedule.ts), not a display value: history.ts's
+    // engine (toAssignment, schedule/engine-inputs.ts), not a display value: history.ts's
     // undo replay for this very event type writes `court_id = m.to.court`
     // straight back to the row (see its own P9 comment), so feeding it a
     // resolved NAME here would 500 the very next undo with a

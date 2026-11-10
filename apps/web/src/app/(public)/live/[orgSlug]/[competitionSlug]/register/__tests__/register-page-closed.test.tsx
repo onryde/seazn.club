@@ -16,7 +16,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 
-// Fix wave finding #1: `divisions` (registrations.ts) is filtered on
+// Fix wave finding #1: `divisions` (usecases/registrations/) is filtered on
 // rs.enabled ONLY — a division can be enabled but window-closed or
 // payments-unavailable, so `divisions.length === 0` alone let an
 // all-closed competition fall through to the LIVE stepper (stranded on

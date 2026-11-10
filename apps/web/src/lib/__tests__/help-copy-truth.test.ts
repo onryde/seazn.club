@@ -386,7 +386,7 @@ The quota is a **lifetime total per division** — it doesn't reset weekly or mo
   // ── #391: the JOINT run's own burst brake ───────────────────────────────────
   //
   // `rateLimit('ai-plan-competition:' + competitionId, { max: 3, windowSeconds:
-  // 3600 })` (server/usecases/competition-schedule-ai.ts) is a second, tighter
+  // 3600 })` (server/usecases/competition-schedule-ai/) is a second, tighter
   // brake keyed to a DIFFERENT subject than the documented per-division 5/hour.
   // The article named both single-division brakes and was silent about this one,
   // which reads as "same as above" to an organiser who has just been refused.
@@ -1085,7 +1085,7 @@ describe("the help-prose guards survive a rewording, not just a revert", () => {
 
   // The second exemption (#303): the genuinely live HOURLY burst brake
   // (`rateLimit('ai-plan:'+divisionId, {max:5, windowSeconds:3600})`,
-  // schedule-ai.ts) is shaped exactly like the retired lifetime table to the
+  // usecases/schedule-ai/) is shaped exactly like the retired lifetime table to the
   // base vocabulary, and must be writable — but ONLY when the sentence actually
   // names an hourly window. A day/week/month framing names no real mechanism
   // and must still red, same as any other invented allowance.
@@ -1571,8 +1571,8 @@ describe("an added falsehood fails whatever it says", () => {
   });
 
   // The gate tells the reader to read their wording against the code that writes
-  // the fee lock. `registrations.ts` became a folder (src/server/MODULARIZATION.md)
-  // and this used to pin the substring "registrations.ts", which kept passing
+  // the fee lock. `usecases/registrations/` became a folder (src/server/MODULARIZATION.md)
+  // and this used to pin the substring "usecases/registrations/", which kept passing
   // against the dead name. Pin the module that HOLDS the stamp, and make the
   // path a checked citation, so a move that strands it fails here.
   it("the fee-lock path the gate names is a real module, in both gate messages", () => {

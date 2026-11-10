@@ -114,7 +114,7 @@ function rankItems(ranks: readonly string[], must: readonly string[], may: Reado
 }
 
 /** The product's code for a /complete that COMMITTED and then failed to seed
- *  the next stage (usecases/stages.ts progressCompletedStage). The driver
+ *  the next stage (usecases/stages/completion.ts progressCompletedStage). The driver
  *  layer owns the constant (driver/types.ts SEEDING_FAILED_AFTER_COMMIT);
  *  this module is type-only (PF7), so the literal is repeated here and
  *  invariants.test.ts builds its stage from the driver's constant — a rename

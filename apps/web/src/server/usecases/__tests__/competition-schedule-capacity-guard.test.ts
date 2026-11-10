@@ -1,5 +1,5 @@
 // P1 review finding #3: the D2 capacity pre-check guard inside
-// `aiPlanForCompetition` (competition-schedule-ai.ts, planForCompetition's
+// `aiPlanForCompetition` (competition-schedule-ai/orchestrator.ts, planForCompetition's
 // per-kept-division loop just above the wallet resolve) had ZERO test
 // coverage — every existing capacity test (capacity-guard.test.ts,
 // schedule-capacity-guard.test.ts, capacity-precheck.spec.ts, smoke's

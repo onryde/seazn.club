@@ -52,7 +52,7 @@ export interface BoardFixture {
   /** P9 pass 4a: the fixture's REAL court identity — `court_label` above is
    *  frozen legacy (null for anything scheduled since the cutover). Every
    *  column/scope/swap comparison must key on this, never on `court_label`.
-   *  Mirrors `FixtureRow.court_id`/`court_name` (stages.ts). */
+   *  Mirrors `FixtureRow.court_id`/`court_name` (usecases/stages/). */
   court_id: string | null;
   /** DERIVED display name for `court_id` — never render `court_id` itself
    *  (a raw uuid) to an organiser. Falls back to `court_label` at the render
@@ -107,7 +107,7 @@ export interface BoardFixture {
 
 /** Whether the board may move or pin this card: `scheduled`, holding no
  *  result (`held`), and not a bye line (`bye_line`). The server
- *  refuses the rest (schedule.ts `isMovable`). */
+ *  refuses the rest (usecases/schedule/board.ts `isMovable`). */
 export function boardMovable(f: Pick<BoardFixture, "status" | "held" | "bye_line">): boolean {
   return f.status === "scheduled" && f.held !== true && f.bye_line !== true;
 }

@@ -219,7 +219,7 @@ export interface SeedPlanPerson {
    *
    * Not invented, and not a pack field: this is what the product's own
    * primary registration path writes on its INSERT branch
-   * (`usecases/registrations.ts:670` — "consent defaults to public_name=true
+   * (`usecases/registrations/` — "consent defaults to public_name=true
    * on the INSERT branch only (ruling 5)"). A bench-seeded person is the
    * admin-side analogue of that registrant, so it takes the same default. No
    * `PackSchema` field was added for it, because nothing in any pack needs to

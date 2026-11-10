@@ -565,7 +565,7 @@ export const UPCOMING_STALE_AFTER_MS = 3 * 60 * 60 * 1000;
 export const UPCOMING_SAFETY_CAP = 50;
 
 /**
- * The slot-label key `stages.ts` stores on a bye's phantom side — the ONLY
+ * The slot-label key `usecases/stages/` stores on a bye's phantom side — the ONLY
  * record of a bye (`competition-hub.ts`' `hubByeSides` reads the same key). A
  * bye is nobody's next match, but a bye line can sit `scheduled` with no
  * outcome: every line generated before 2026-09-17, and a seeded or dead-feeder

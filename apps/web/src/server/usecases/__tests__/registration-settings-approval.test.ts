@@ -108,7 +108,7 @@ describe.skipIf(!HAS_DB)("registration_settings.approval / allow_free_agents (RS
   // RS004 review finding 2 — CHARACTERISATION, not a bug fix. Passes before
   // and after this review pass; added for coverage of an untested path, not
   // because it caught a regression. PUT is a full replace: the guard at
-  // putRegistrationSettings (registrations.ts, ~1006) only ever sees THIS
+  // putRegistrationSettings (registrations/settings.ts) only ever sees THIS
   // call's own recomputed allowFreeAgents/entrantKind, and allow_free_agents
   // defaults back to false whenever a PUT omits it — so a later PUT that
   // switches entrant_kind away from 'team' can never combine with a

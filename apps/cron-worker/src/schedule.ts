@@ -113,7 +113,7 @@ export const JOBS: readonly Job[] = [
     retry: true,
     manual: true,
     // addonPrices.mismatched, NOT .alerted (I-4): `alerted` only increments inside
-    // `if (staffAlertsOn())` (billing-events.ts, sweepStaleOrgAddonPrices: STAFF_ALERT_EMAIL set and
+    // `if (staffAlertsOn())` (usecases/billing-events/addon-pricing.ts, sweepStaleOrgAddonPrices: STAFF_ALERT_EMAIL set and
     // not blank), so it stays 0 on an environment without that address while a stale rider price persists.
     failureCounts: ["data.failed", "data.orphanGroups.failed", "data.addonPrices.mismatched"],
   },

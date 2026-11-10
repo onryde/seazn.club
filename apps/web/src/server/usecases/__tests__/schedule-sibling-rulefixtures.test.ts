@@ -8,7 +8,7 @@
 //     existing.filter((e) => fixtureById.has(e.fixtureId))          calendar.ts
 //
 // where `fixtureById` is built from `config.ruleFixtures`. Every board path in
-// `schedule.ts` built `ruleFixtures` from THIS division's rows alone, so a
+// `schedule/` built `ruleFixtures` from THIS division's rows alone, so a
 // sibling's card was on the board as occupancy and invisible to every typed
 // rule. A competition-scoped `max_fixtures_per_day` therefore undercounted by
 // exactly the number of sibling fixtures on the day — silently, and in the

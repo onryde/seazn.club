@@ -155,7 +155,7 @@ async function buildRig(request: APIRequestContext, page: Page): Promise<Rig> {
     //
     // Written as ONE apply per division, not 66 PATCHes. Same timetable,
     // same write gate — `applySchedule` is where round order is actually
-    // refused (schedule.ts, "this IS the write gate"), so the ordering
+    // refused (usecases/schedule/, "this IS the write gate"), so the ordering
     // built above is still what makes the seed legal. Two things change:
     //
     //   1. Cost. 5 divisions × 66 PATCHes was 330 sequential round trips,

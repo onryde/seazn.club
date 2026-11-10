@@ -756,7 +756,7 @@ export async function organiserOverrideVideo(a: {
   await ensureBridgeRow(f, { basisIfUnopened: new Date() });
   await sql.begin(async (tx) => {
     // Lock order: the fixture BEFORE the bridge row — the order every seat
-    // clear and rebuild takes (stages.ts lockBoardsRefusingOnlineGames). The
+    // clear and rebuild takes (stages/swiss-boards.ts lockBoardsRefusingOnlineGames). The
     // audit insert below takes KEY SHARE on the fixture; with the bridge row
     // locked first, a clear holding the fixture would deadlock this.
     await tx`select id from fixtures where id = ${a.fixtureId} for share`;

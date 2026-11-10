@@ -1,5 +1,5 @@
 // P9 pass 3b regression coverage — the "third placer path" fix
-// (schedule-ai.ts's buildSchedulePack) and the inScope() court_id fix, both
+// (schedule-ai/pack.ts's buildSchedulePack) and the inScope() court_id fix, both
 // closed in this pass. Kept in a small, self-contained file rather than
 // folded into schedule-ai-pack.test.ts: that suite's SETTINGS_CONFIG and
 // golden `toMatchSnapshot()` predate the venues/courts cutover and need a
@@ -266,7 +266,7 @@ describe.skipIf(!HAS_DB)("inScope() matches a repair scope's courts on court_id 
 
 // P9 (stage court tags): buildSchedulePack used to resolve ONE division-wide
 // candidateCourtIds and stop — a stage's own required_court_tags was invisible
-// to the model, unlike autoSchedule (schedule.ts) which unions the stage's own
+// to the model, unlike autoSchedule (schedule/auto.ts) which unions the stage's own
 // tags in. This mirrors validateScheduleIn's identical fix (review finding
 // #11) on the verify side.
 describe.skipIf(!HAS_DB)(

@@ -1,6 +1,6 @@
 import "server-only";
 // Shared dispute-recovery core (payments-hardening Task 5, extracted verbatim
-// from registrations.ts's PROMPT-55 recovery so registration entry fees,
+// from registrations/ folder's PROMPT-55 recovery so registration entry fees,
 // sponsor orders, and platform subscriptions all reverse a lost dispute
 // through one audited code path.
 //

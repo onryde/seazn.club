@@ -8,7 +8,7 @@ type Ctx = { params: Promise<{ id: string }> };
  *  rather than the additive-only top-up `/generate` always does. Refuses 409
  *  STAGE_HAS_RESULTS if any fixture already carries a real result, and 422
  *  STAGE_NOT_ROOT for a stage that doesn't draw fixtures directly from the
- *  active roster (see usecases/stages.ts's rebuildStageFixtures doc comment). */
+ *  active roster (see usecases/stages/generate.ts's rebuildStageFixtures doc comment). */
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { id } = await params;

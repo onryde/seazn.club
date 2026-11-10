@@ -29,7 +29,7 @@ const voidTarget = (ev: StreamEvent): string | undefined => {
 /** W3 app-B Task 6 (rulebook P-A2, X-SW-15; app-A T7 review m3): was this two-seated Swiss board NOT PLAYED, so its pair has
  *  not met and the product may pair it again? A double walkover, or a forfeit the engine's one rule (`isUnplayedForfeit`)
  *  calls unplayed: a walkover whatever was played, any other forfeit only while nothing was. Exactly the expression the
- *  product's pairing history reads (usecases/stages.ts buildSwissHistory), so the I6 exemption cannot drift from the rule
+ *  product's pairing history reads (usecases/stages/swiss-gen.ts buildSwissHistory), so the I6 exemption cannot drift from the rule
  *  the product pairs by. `played` is the board's own "was anything played" fact (`playRecorded` of its ledger); a null or
  *  non-object outcome is nothing decided and is no unplayed board. */
 export function unplayedBoard(outcome: unknown, played: boolean): boolean {

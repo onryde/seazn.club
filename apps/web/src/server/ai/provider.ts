@@ -1,6 +1,6 @@
 // The seam between the AI runners and whichever service actually answers.
 //
-// Phase A (schedule-ai.ts) and Phase B (officials-ai.ts) both want the same
+// Phase A (usecases/schedule-ai/) and Phase B (officials-ai.ts) both want the same
 // thing: send a system prompt plus a conversation, get a schema-valid plan
 // back, and be able to replay the model's own turn on a repair round. Only the
 // wire format differs, so that is all an adapter owns.
@@ -14,7 +14,7 @@ export type AiEffort = "low" | "medium" | "high" | "xhigh" | "max";
  *  adaptive thinking and on output_config.effort alike).
  *
  *  `effort.thinking` is deliberately separate from `effort.effort`: in the
- *  code this preserves (schedule-ai.ts aiReasoningParams), whether thinking
+ *  code this preserves (usecases/schedule-ai/model-config.ts aiReasoningParams), whether thinking
  *  is adaptive or disabled is an independent env-driven toggle, while effort
  *  is sent UNCONDITIONALLY regardless of that toggle. Collapsing "disabled
  *  thinking" into `{ kind: "none" }` would silently drop the effort setting

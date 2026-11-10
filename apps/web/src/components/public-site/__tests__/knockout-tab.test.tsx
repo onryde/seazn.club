@@ -181,7 +181,7 @@ const MULTI = hubDoc({
 
 /**
  * DOUBLES, a 4-draw (review F5). A pair entrant is NAMED "A / B"
- * (`stages.ts`, `members.join(" / ")`), so a slot waiting on two of them under
+ * (`usecases/stages/`, `members.join(" / ")`), so a slot waiting on two of them under
  * the old "{a} / {b}" copy read "Ana Lee / Bo Kim / Cy Po / Di Wu", with
  * nothing to say where one team ends. d1 is unplayed; d2 is decided, its winner
  * already in the final's away slot.

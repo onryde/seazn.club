@@ -535,7 +535,7 @@ test.describe("competition hub: Knockout tab", () => {
       }
       {
         // Fix round 2b: THREE entrants in a knockout. The draw is padded to
-        // four, so one first-round fixture is a bye (`stages.ts`,
+        // four, so one first-round fixture is a bye (`usecases/stages/`,
         // `byeSlotLabel`). Unplayed: the final still has a side waiting on
         // the real semi-final, which is the positive pair's '?'.
         const comp = await publicCompetition(request, "Hub KO Bye");

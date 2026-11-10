@@ -248,7 +248,7 @@ describe("generic streams + matchesRequest", () => {
 });
 
 // W3 app-B Task 6 (app-A T7 review m3; rulebook P-A2, X-SW-15): I6 exempts a board the engine reads as NOT PLAYED. The
-// verdict comes from the engine's own predicate, the one the product's pairing history reads (stages.ts buildSwissHistory),
+// verdict comes from the engine's own predicate, the one the product's pairing history reads (usecases/stages/swiss-gen.ts buildSwissHistory),
 // and the expected values below are the rulebook's sentence, not that predicate's output: "A pair whose match was not
 // played (a one-sided walkover, a double walkover, a forfeit before play) has not met"; a retirement after play is a meeting.
 describe("unplayedBoard - the engine's verdict on a seated Swiss board (P-A2)", () => {

@@ -8,7 +8,7 @@ import { withTenant } from "@/lib/db";
 import { byeAward, isOneSidedAwardBye } from "@/lib/fixture-bye";
 // DB fixtures.status → engine FixtureStatus (spec 05 §1 vocabulary). ONE
 // mapping, shared with the qualification builder and the bracket rebuild in
-// usecases/stages.ts; the local name is kept so the call sites read as before.
+// usecases/stages/; the local name is kept so the call sites read as before.
 import { log } from "@/server/logger";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "./level-seat";
 import { fixtureBoardRef, isLegacyForfeitWin } from "./fed-seats";
@@ -61,7 +61,7 @@ const TABLE_KINDS = new Set(["league", "group", "swiss", "americano"]);
 // is validated from a raw DB string at the loadStageInputs boundary, so TS
 // can't prove the three branches cover it statically — see parseStageKind).
 // Exported (round-4 review, B) so bracket-kinds-sync.test.ts can pin this
-// literal against its two hand-copied siblings (usecases/stages.ts's own
+// literal against its two hand-copied siblings (usecases/stages/ folder's own
 // BRACKET_KINDS, the engine's BRACKET_STAGE_KINDS) — see that test's header
 // comment for why an unsynced 5th bracket kind is a silent, fail-open hazard.
 export const BRACKET_KINDS = ["knockout", "double_elim", "stepladder", "page_playoff"] as const;
@@ -149,7 +149,7 @@ function awardByeDelta(
 // L3/#414 pass 2 — `ext_key` is the ONE place a bracket fixture's lane
 // (WB/LB/GF, double-elim only) and thirdPlace status can be recovered by
 // PARSING an id: bracket.ts mints these ids at generation (`wb-r{r}-i{i}`,
-// `lb-r{r}-i{i}`, `gf`/`gf-reset`, `${idPrefix}-3p`) and stages.ts writes
+// `lb-r{r}-i{i}`, `gf`/`gf-reset`, `${idPrefix}-3p`) and usecases/stages/ writes
 // them straight to fixtures.ext_key (PROMPT-09). F1 (2026-08-17) added
 // fixtures.lane/fixtures.third_place as a direct, cheaper alternative
 // (db/migration/deltas/V368__fixture_round_role.sql) — this function still
@@ -272,7 +272,7 @@ interface StageRow {
     rank_overrides?: unknown; // Jul3/05 §4 manual rank locks
     h2h_scope?: string; // Jul3/05 §5
     // L3/#414 pass 2 — Jul3/08 §6: a ladder's finish order. Initialised from
-    // seed order on the FIRST issued challenge (usecases/stages.ts
+    // seed order on the FIRST issued challenge (usecases/stages/
     // issueChallenge) and re-swapped in place whenever a challenger beats the
     // entrant above them (usecases/scoring.ts) — absent until then, so a
     // ladder stage with zero fixtures ever has no order to complete into.
@@ -705,7 +705,7 @@ async function writeSnapshot(
  * Writes EVERY pool the fold produced, each under its OWN key — `pool_id`
  * null only for the "" pool, i.e. the single non-pool table. This is
  * pool-safety held HERE rather than at each call site, because none of the
- * callers (usecases/stages.ts `getStandings`, `overrideStandings`,
+ * callers (usecases/stages/completion.ts `getStandings`, `overrideStandings`,
  * `unpairSwissRound` and `refoldStageTable` — the generate, a seed confirm,
  * a roster delete —, usecases/scoring.ts `onDecided`, usecases/stage-rules.ts,
  * usecases/admin-fixture-config.ts) knows whether the stage it is recomputing
@@ -733,7 +733,7 @@ async function writeSnapshot(
  * `emptyFold` (W2d concern 2) — what a pool whose fold has no row does. A fold with no row is no table (the engine's
  * `isLevelTable`: "No rows is no table"):
  * - `"write"` (default): stored like any other, as every caller before W2d did.
- * - `"skip"`: not written. The generate's and a seed confirm's refold (usecases/stages.ts `refoldStageTable`): fixtures
+ * - `"skip"`: not written. The generate's and a seed confirm's refold (usecases/stages/helpers.ts `refoldStageTable`): fixtures
  *   may seat nobody yet (a Swiss mint's shells), and a pooled stage's pool membership comes from results
  *   (`entrantsOfPool`), so before the first one every pool folds to nothing. Written, either would replace the public
  *   page's "No standings yet" with a table of no rows.
@@ -778,7 +778,7 @@ export async function recomputeStandings(
  * the same fold + tiebreaker cascade `recomputeStandings` runs, with neither
  * a second tenant transaction nor a snapshot write.
  *
- * Exists for Swiss Playoff's repairing (usecases/stages.ts `swissGen`), which
+ * Exists for Swiss Playoff's repairing (usecases/stages/swiss-gen.ts `swissGen`), which
  * needs the division's REAL finishing order between rounds and must read it
  * inside the generation transaction it is already holding the division lock
  * in. `recomputeStandings` cannot serve that: it opens its own `withTenant`.
@@ -984,7 +984,7 @@ export async function refreshCompletedBracketPlacement(orgId: string, stageId: s
  * double_elim/stepladder/page_playoff) rebuild BracketFixture[] from each
  * fixture's outcome + ext_key and snapshot bracketRanks() wrapped as a single
  * pool (placementTable); ladder snapshots config.ladder_order once every
- * challenge fixture is settled. seedNextStage (usecases/stages.ts, pass 3)
+ * challenge fixture is settled. seedNextStage (usecases/stages/carry-over.ts, pass 3)
  * reads these snapshots to qualify entrants into the next stage.
  */
 export async function completeStageIfReady(
@@ -993,7 +993,7 @@ export async function completeStageIfReady(
   opts: {
     /** W4 T6 (AN-2): a caller's last word on a BRACKET stage the engine would complete, asked under the division lock in
      *  this transaction before anything is written; a throw refuses the completion and rolls it back. The organiser's
-     *  Complete (usecases/stages.ts `completeStage`) refuses a bracket with a line still owed a result here. */
+     *  Complete (usecases/stages/completion.ts `completeStage`) refuses a bracket with a line still owed a result here. */
     beforeBracketComplete?: (tx: Tx) => Promise<void>;
   } = {},
 ): Promise<CompleteResult> {

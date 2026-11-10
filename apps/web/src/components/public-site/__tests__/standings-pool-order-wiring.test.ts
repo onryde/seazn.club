@@ -159,7 +159,7 @@ describe("pool order on the pages that draw one standings table per pool", () =>
   });
 
   // Pool label i18n (2026-10-06). The pools above carry the only name the
-  // generator ever stores — the English "Pool " + key (`usecases/stages.ts`).
+  // generator ever stores — the English "Pool " + key (`usecases/stages/`).
   // Both pages render in the ORG's locale (ISR: never the visitor's), so the
   // caption must be that locale's `table.poolLabel` over the pool's KEY. The
   // expected words come out of the dictionary FILES, not the code under test.

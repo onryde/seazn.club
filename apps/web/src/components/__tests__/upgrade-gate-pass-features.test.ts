@@ -33,7 +33,7 @@ afterAll(async () => {
  *
  * `registration.fee_percent` (Free's rate → the pass's; 5% → 4% since V398) is
  * a deduction RATE, not a gate: it is
- * read with `getLimit` at server/usecases/registrations.ts and folded into the
+ * read with `getLimit` at server/usecases/registrations/ and folded into the
  * payout, so it never throws PaymentRequiredError and no <UpgradeGate> can ever
  * be rendered for it. It is named here, rather than subtracted silently, so a
  * future reader can tell a deliberate exclusion from an oversight — and so that

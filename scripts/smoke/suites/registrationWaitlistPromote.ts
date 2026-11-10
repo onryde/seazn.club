@@ -7,7 +7,7 @@ import { newSession, call, check, signIn, tag, smokeDb, v1, v1data } from "../ha
  * confirmed), the waitlisted row carries a 1-based queue position, and the
  * PUBLIC entrant list only ever reflects confirmed entrants. Then promotes
  * off the waitlist and proves — the part a shallower test would miss —
- * that `promoteWaitlistedRow` always lands `pending` (registrations.ts's own
+ * that `promoteWaitlistedRow` always lands `pending` (usecases/registrations/waitlist.ts's own
  * doc comment), regardless of the division's `approval` setting: the public
  * count does NOT move on promote alone, only once a follow-up approve()
  * actually materialises an entrant. Own fresh org; keyless-safe.

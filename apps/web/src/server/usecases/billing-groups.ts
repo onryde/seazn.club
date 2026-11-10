@@ -222,7 +222,7 @@ async function assertGroupCanBillSeats(group: GroupRow, quantity: number): Promi
  *    seat is PRORATED and `quantity_paid` rises to match.
  *
  *    NOT "charged immediately", which is what this line said until v17 gap #299
- *    and which is contradicted by `billing-events.ts:738-740` in this same
+ *    and which is contradicted by `billing-events/` in this same
  *    repo: `create_prorations` books the adjustment onto the NEXT INVOICE.
  *    Nothing in this file charges a card — the only Stripe mutations here are
  *    `subscriptions.update/cancel`, a read-only `invoices.createPreview`,

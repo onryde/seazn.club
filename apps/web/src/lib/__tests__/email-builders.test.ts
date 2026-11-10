@@ -587,7 +587,7 @@ describe("email builders compose from the html templates", () => {
           { displayName: "Still Owing", status: "pending", feeCents: 1500 },
         ],
         // A caller might still pass the whole-cart historical subtotal here
-        // (registrations.ts's own `totalCents` field) — the template must
+        // (usecases/registrations/ folder's own `totalCents` field) — the template must
         // not use it for the amount it quotes as due.
         totalCents: 4000,
       },

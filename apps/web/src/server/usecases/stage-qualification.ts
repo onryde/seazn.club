@@ -11,7 +11,7 @@ import "server-only";
 // under withTenant, where RLS limits the outer read to this org — an id from
 // another org matches no `stages` row and the function is never called for it.
 //
-// Its own module, not `usecases/stages.ts`: the console page's tests mock that
+// Its own module, not `usecases/stages/`: the console page's tests mock that
 // module wholesale.
 //
 // Returned RAW — every column the function returns, exactly as

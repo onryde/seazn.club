@@ -1,5 +1,5 @@
 // RS002 wave 2 (rewritten per _INDEX.md "RS002 entry conditions" item 5,
-// 2026-08-17): eligibility extracted from registrations.ts, evaluating the
+// 2026-08-17): eligibility extracted from registrations/, evaluating the
 // V364 first-class divisions.category/age_min/age_max columns, plus
 // roster-level rosterIssues. RS007/V380 (owner ruling, _INDEX.md
 // "Eligibility consolidation") later dropped the jsonb `eligibility` rules
@@ -28,7 +28,7 @@ import {
   type EligibilityIssue,
   type EligibilityRosterPlayer,
 } from "../registration-eligibility";
-// The move must not shrink the set of importers: registrations.ts re-exports
+// The move must not shrink the set of importers: registrations/ re-exports
 // every moved symbol verbatim. `eligibilityIssues` was ALSO re-exported here
 // originally, but the legacy string[] wrapper it named was deleted at its
 // source (RS002 W5 whole-branch review — zero production callers repo-wide,

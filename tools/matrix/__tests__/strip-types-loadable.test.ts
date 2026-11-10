@@ -10,7 +10,7 @@
 //     SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]:
 //     TypeScript parameter property is not supported in strip-only mode
 //
-// The bench's `schedule.ts` carried `constructor(private readonly divisionRef:
+// The bench's `usecases/schedule/` carried `constructor(private readonly divisionRef:
 // string) {}` through 1150 passing tests, a clean `tsc -p
 // tsconfig.scripts.json`, a clean eslint, two implementer rounds and three
 // reviewer passes. Every one of those gates is blind to it, because vitest

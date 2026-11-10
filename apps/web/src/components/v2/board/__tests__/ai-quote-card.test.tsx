@@ -1,7 +1,7 @@
 // The confirm card an organiser reads BEFORE spending credits (#348 §8, #350 §7).
 //
 // The number on this card is money, and the server recomputes it independently
-// (`quoteRun` in schedule-ai.ts / competition-schedule-ai.ts). So the one thing
+// (`quoteRun` in usecases/schedule-ai/ / usecases/competition-schedule-ai/). So the one thing
 // these tests exist for is that the client and the server cannot disagree: the
 // card must price through the SAME pure `quoteRun`, with the same inputs, and
 // display the credits it returns — never its own arithmetic.
@@ -501,7 +501,7 @@ describe("AiConsole brief step", () => {
 // ------------------------------------------- the OTHER half of agreement
 // `quoteRun` being shared makes the arithmetic agree. It does nothing about the
 // INPUTS, and that is where the two sides actually drift: the server narrows
-// movable fixtures by scope in repair mode only (schedule-ai.ts:319) and counts
+// movable fixtures by scope in repair mode only (usecases/schedule-ai/) and counts
 // entrants `status not in ('withdrawn','disqualified')` (:505).
 describe("the RungInput the client builds", () => {
   const briefFor = (over: Partial<AiBriefContext> = {}): AiBriefContext => ({

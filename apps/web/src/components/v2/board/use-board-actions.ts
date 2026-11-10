@@ -327,7 +327,7 @@ export function useBoardActions(
         return true;
       } else if (err instanceof ApiV1Error && err.code === "RATE_LIMITED") {
         // The per-org solver cooldown (AUTO_SCHEDULE_COOLDOWN, usecases/
-        // schedule.ts). A NOTICE, not an error, and the register is deliberate:
+        // usecases/schedule/). A NOTICE, not an error, and the register is deliberate:
         // this is the same class of outcome as `solver_busy` — ordinary,
         // transient, entirely outside the organiser's hands, and the same click
         // a few minutes later works. Red styling would suggest their board is
@@ -339,7 +339,7 @@ export function useBoardActions(
         // endpoint, so the code is unambiguous here.
         setNotice(msg("board.action.cooldown"));
       } else if (err instanceof ApiV1Error && err.code === PLAYED_REFUSAL_CODE) {
-        // A drag or pin on a match that holds a result (schedule.ts
+        // A drag or pin on a match that holds a result (usecases/schedule/
         // `moveFixture`). The server's sentence is English.
         setError(msg("schedule.error.played"));
       } else if (err instanceof ApiV1Error && err.code === "SCHEDULE_CONFLICT") {
@@ -566,7 +566,7 @@ export function useBoardActions(
           // against the fresh board and apply THAT.
           //
           // `current_seq` rides on the 409 itself — server/api-v1/http.ts's
-          // SEQ_CONFLICT branch reads EngineError's `actualSeq` (schedule.ts's
+          // SEQ_CONFLICT branch reads EngineError's `actualSeq` (usecases/schedule/ folder's
           // `assertFreshSeq`, which always sets it) off `err.data` and forwards
           // it as `current_seq`, verified via http.test.ts's "SEQ_CONFLICT
           // carries current_seq" spec. Waiting on `router.refresh()` to

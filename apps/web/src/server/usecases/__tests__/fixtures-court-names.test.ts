@@ -70,7 +70,7 @@ describe.skipIf(!HAS_DB)("fixtures.ts court-name reads (#14)", () => {
     const courtB = await createCourt(auth, venueB.id, { name: "Court 1", sort: 0, tags: [] });
 
     // patchFixture is the writer AND the read path under test (#14's
-    // stages.ts:2784 sibling — but here just exercising the normal PATCH
+    // stages/ sibling — but here just exercising the normal PATCH
     // response, not the FK-validation fix).
     const patched1 = await patchFixture(auth, fixtures[0]!.id, {
       scheduled_at: "2026-07-20T09:00:00.000Z",
@@ -110,9 +110,9 @@ describe.skipIf(!HAS_DB)("fixtures.ts court-name reads (#14)", () => {
     expect(patched.court_name).toBe("Court 9");
   });
 
-  // generateStageFixtures (stages.ts) re-reads and returns EVERY fixture in
+  // generateStageFixtures (stages/generate.ts) re-reads and returns EVERY fixture in
   // the stage on regeneration (idempotent) — same court_name resolution
-  // pattern as fixtures.ts above, applied at 3 sites in stages.ts
+  // pattern as fixtures.ts above, applied at 3 sites in stages/
   // (generateStageFixtures, generateProgressionSetupFixtures,
   // confirmSeedProposal). Only the exported, directly-callable one is
   // exercised here; the other two are byte-identical code (mechanically

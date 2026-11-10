@@ -551,7 +551,7 @@ test.describe("the inline editor's per-fixture court picker", () => {
     const url = `/o/${org.slug}/c/${comp.slug}/d/${div.slug}?tab=fixtures`;
     // FRENCH, deliberately. The retired code rendered `err.message` — the
     // EngineError's own English sentence, thrown by `assertNoNewBlocking` in
-    // src/server/usecases/schedule.ts — so on an `en` console the defect and
+    // src/server/usecases/schedule/ — so on an `en` console the defect and
     // the fix are indistinguishable and this test would witness nothing. Every
     // expected string below is READ from the dictionaries rather than typed, so
     // a copy edit moves the assertion with it instead of leaving it pinned to

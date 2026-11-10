@@ -59,7 +59,7 @@ describe("mapSaveError — structured zod issues (400 VALIDATION)", () => {
 // schemas.ts flows into this test automatically, and it fails unless
 // mapSaveError's pattern is updated to match. The other five are
 // HttpError(422, "...") string literals inline in
-// server/usecases/registrations.ts, a genuinely server-only file (raw DB
+// server/usecases/registrations/, a genuinely server-only file (raw DB
 // access via `tx`) this client-side suite must not import — COPIED
 // verbatim instead, each with a comment naming the exact source line, so a
 // `git grep` for the old string on a reword finds this test too.

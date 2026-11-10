@@ -79,7 +79,7 @@ const UUID_RE = "^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$";
 // `sql` (lib/db.ts) is a Proxy whose apply/get traps both call getClient(),
 // which THROWS when DATABASE_URL is unset. So a module-scope tagged template
 // — `const COSTED = sql\`…\`` — opens a database client at IMPORT time, not
-// query time. schedule-ai.ts and officials-ai.ts import this module, and much
+// query time. schedule-ai/ and officials-ai.ts import this module, and much
 // of the usecase graph imports those, so one eager fragment took ~30 suites
 // down at COLLECTION in CI's unit job, which deliberately runs with no
 // DATABASE_URL so DB suites self-skip (ci.yml). It is invisible locally,
@@ -236,7 +236,7 @@ export const MEDIAN_WINDOW_DAYS = 30;
  *  this codebase, e.g. `alertCreditPackGrantFailed`'s call sites): the median
  *  read is caught here, and the queue logs and reports its own failure.
  *  Silent (no query, no alert) when `STAFF_ALERT_EMAIL` is unset, matching
- *  every other alert in `billing-events.ts`/`pass-credit.ts`.
+ *  every other alert in `billing-events/`/`pass-credit.ts`.
  *
  *  Queued on the email outbox (kind `staff_ai_run_cost`) once per RUN, under a
  *  ref minted here (P-W5-6): a run has no id of its own (the ledger inserts

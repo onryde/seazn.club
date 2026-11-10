@@ -58,7 +58,7 @@ const FIX = "11111111-1111-1111-1111-111111111111";
 // conflict-detail-format.ts used to interpolate `court` verbatim. P9 review
 // wave 3's fix made that read `courtName` instead (server-resolved,
 // venue-qualified) — and `AiPlanConflictDetail` (this schema, unlike
-// `ScheduleConflictDetail`) has NO `courtName` field at all: schedule-ai.ts's
+// `ScheduleConflictDetail`) has NO `courtName` field at all: usecases/schedule-ai/ folder's
 // own `blocking: result.blocking.map(withLegacyDetail)` never calls
 // `attachCourtNames` first, unlike person-merge.ts's conflicts path, which
 // already does (`conflicts.map((c) => withLegacyDetail(attachCourtNames(c,

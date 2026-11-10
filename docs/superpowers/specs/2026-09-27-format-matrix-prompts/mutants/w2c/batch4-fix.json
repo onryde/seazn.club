@@ -1,20 +1,5 @@
 [
  {
-  "id": "b4-i1-create-lock-removed",
-  "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "  await tx`select pg_advisory_xact_lock(hashtext(${\"division:\" + divisionId}))`;\n  const [division] = await tx<({ competition_id: string } & StageRulesScope)[]>`",
-  "replace": "  const [division] = await tx<({ competition_id: string } & StageRulesScope)[]>`",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
-    ],
-    "name": "batch 4 I1: createStages reads the division UNDER the division lock"
-   }
-  ]
- },
- {
   "id": "b4-m1-knockout-only-dropped",
   "file": "apps/web/src/server/api-v1/openapi.ts",
   "find": "a knockout-only decider on a table stage",
@@ -90,40 +75,10 @@
   ]
  },
  {
-  "id": "b4-m6-gate-parses-null",
-  "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "const points = sentPoints(cfg);",
-  "replace": "const points = cfg?.points;",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/stage-points.test.ts"
-    ],
-    "name": "M6 config.points: null at create and replace means no points for this slot"
-   }
-  ]
- },
- {
   "id": "b4-m6-null-stored",
   "file": "apps/web/src/server/usecases/stage-defaults.ts",
   "find": "const config = withoutNullPoints(sentConfig);",
   "replace": "const config = sentConfig;",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/stage-points.test.ts"
-    ],
-    "name": "M6 config.points: null at create and replace means no points for this slot"
-   }
-  ]
- },
- {
-  "id": "b4-m6-null-takes-carry",
-  "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "carry?.points !== undefined && sent.points === undefined ?",
-  "replace": "carry?.points !== undefined && (sent.points ?? undefined) === undefined ?",
   "killers": [
    {
     "cwd": "apps/web",
@@ -390,21 +345,6 @@
      "src/server/api-v1/__tests__/openapi-request-examples.test.ts"
     ],
     "name": "every property of a patch is load-bearing on its own"
-   }
-  ]
- },
- {
-  "id": "b4-n3-stage-read-takes-no-row-lock",
-  "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "variant_key, config from divisions where id = ${divisionId}\n    for no key update`;",
-  "replace": "variant_key, config from divisions where id = ${divisionId}`;",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
-    ],
-    "name": "on a COMPLETED division, racing a rename that also names a masking field: both finish, no 40P01"
    }
   ]
  }

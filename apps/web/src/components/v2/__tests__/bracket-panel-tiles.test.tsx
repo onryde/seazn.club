@@ -189,7 +189,7 @@ describe("N-1: a decided tile's result has its own box, never over a name (organ
 /** A legacy bye: a one-seat award with no reason and NO stored label (pre-flight census: the double-elimination byes
  *  written before the bye label existed). Its empty seat has nothing to resolve, so the tile fell back to "TBD". */
 const LEGACY_BYE = (winner: string) => ({ kind: "award", winner });
-/** Today's bye, as `byeAward` writes it, on a seat `stages.ts` stamped with the bye label. */
+/** Today's bye, as `byeAward` writes it, on a seat `usecases/stages/` stamped with the bye label. */
 const BYE = (winner: string) => ({ kind: "award", winner, loser: null, reason: "bye" });
 const BYE_LABEL: SlotLabel = { key: "bracket.slot.bye", params: {} };
 /** Ruling 116's walkover: the withdrawn winner's dead seat, NAMED — not a bye, and not touched here. */
