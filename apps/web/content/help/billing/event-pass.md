@@ -27,7 +27,7 @@ For the competition it covers, and every division inside it:
 - **A 4% platform fee** on card entry fees, instead of Community's 5% — on a $2,000 event that's $20 back in your pocket.
 - **Branded exports** — order of play, match sheets, rotas and posters carry your masthead, logo and sponsor line instead of exporting as plain tables.
 - **Public player cards** — entrants get their public profile pages.
-- **Sponsor tiers and paid packages** — Title / Gold / Silver / Partner grouping, per-competition placement, and selling priced sponsorship by card ([sponsors](/help/sharing/sponsors)).
+- **Sponsor tiers and online sponsor invoices** — Title / Gold / Silver / Partner grouping, per-competition placement, and invoicing a sponsor by card ([sponsors](/help/sharing/sponsors)).
 - **The realtime scoreboard and slideshow** — live scores turn over on the venue screen *and* on the competition's public spectator pages, so your audience follows along live, not just your own noticeboard.
 - **Advanced formats** — americano and ladders.
 - **AI credits**, once, added to your organisation's wallet when the pass is bought — **+25 AI credits**, to spend on scheduling the event ([AI Schedule](/help/scheduling/ai-scheduling)).

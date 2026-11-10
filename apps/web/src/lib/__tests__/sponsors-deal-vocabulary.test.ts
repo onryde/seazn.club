@@ -12,6 +12,10 @@
 import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
 
 const LOCALES = ["en", "es", "fr", "nl"] as const;
 type Locale = (typeof LOCALES)[number];
@@ -98,5 +102,62 @@ describe("no sponsors.* screen string in any locale says 'order'", () => {
       const using = Object.values(read[l]).filter((v) => DEAL_WORD[l].test(v)).length;
       expect(using, `${l}: values that say deal`).toBeGreaterThan(20);
     }
+  });
+});
+
+// ---- what an Event Pass lifts, named truthfully ------------------------------------------------------------------------------------
+// The pass lifts two entitlements on its own competition (lib/pass-comparison.ts: `sponsors.tiers`, `sponsors.monetize`): sponsor
+// TIERS and ONLINE sponsor INVOICES. "Paid packages" was the pre-deals word for the second - a package is now a price list that every
+// plan has (a Partner package is free of any plan), so copy that sells "paid packages" promises something no plan or pass gates.
+// The truth is typed from those two entitlement names, never read from the copy.
+describe("copy that says what the Event Pass lifts for sponsors: tiers and online invoices, and the pass covers only its own competition", () => {
+  const UI: Record<Locale, Record<string, string>> = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as Record<Locale, Record<string, string>>;
+  /** The pre-deals phrase for the online-invoice entitlement, in each locale. */
+  const PAID_PACKAGES: Record<Locale, RegExp> = {
+    en: /paid packages/i,
+    es: /paquetes de pago/i,
+    fr: /offres payantes/i,
+    nl: /betaalde pakketten/i,
+  };
+  const INVOICE: Record<Locale, RegExp> = { en: /invoices/i, es: /facturas/i, fr: /factures/i, nl: /facturen/i };
+  const TIERS: Record<Locale, RegExp> = { en: /tiers/i, es: /niveles/i, fr: /niveaux/i, nl: /niveaus/i };
+  const EVENT_PASS = /event pass/i;
+
+  it("the pass-comparison row (upgrade.limit.sponsors) names tiers and online invoices in every locale, and no 'paid packages' (4 counted)", () => {
+    let checked = 0;
+    for (const l of LOCALES) {
+      const row = UI[l]["upgrade.limit.sponsors"]!;
+      expect(row, `${l}: ${row}`).not.toMatch(PAID_PACKAGES[l]);
+      expect(row, `${l}: names the tiers`).toMatch(TIERS[l]);
+      expect(row, `${l}: names the invoices`).toMatch(INVOICE[l]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("the tier hints say a pass covers its own competition (the Event Pass is named), in every locale (8 counted)", () => {
+    let checked = 0;
+    for (const l of LOCALES) {
+      for (const key of ["sponsors.pkg.tiersHint", "sponsors.dealSheet.scopeTiersHint"]) {
+        expect(UI[l][key], `${l} ${key}`).toMatch(EVENT_PASS);
+        checked++;
+      }
+    }
+    expect(checked).toBe(8);
+  });
+
+  it("the help pages and the Stripe product descriptions that list what the pass carries do not sell 'paid packages' (4 files counted)", () => {
+    const files = [
+      join(process.cwd(), "content", "help", "billing", "plans.md"),
+      join(process.cwd(), "content", "help", "billing", "event-pass.md"),
+      join(process.cwd(), "src", "config", "stripe-plans.json"),
+      join(process.cwd(), "src", "config", "tips.ts"),
+    ];
+    let checked = 0;
+    for (const f of files) {
+      expect(readFileSync(f, "utf8"), f).not.toMatch(/paid packages/i);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 });
