@@ -109,6 +109,19 @@ export async function patchKnockoutStage(
       await tx`update stages set config = config || ${tx.json({ thirdPlace: playoff } as never)} where id = ${stageId}`;
       if (rows.length === 0) return { result: { ...base, regenerated: false }, generated: null, removedIds: [], changed: true };
 
+      // M-3 (PO ruling): Shared before the first match ALWAYS succeeds, whatever the stage's kind or setup. It never draws the
+      // bracket again: the -3p line goes in place (its court/time slot with it, and any setup on that one line), the semi-finals'
+      // loser edges into it are cleared, and every other line keeps its row and its organiser setup. Play-off (adding a line)
+      // is the redraw / progression writer below.
+      if (!playoff) {
+        const bronze = await tx<{ id: string }[]>`select id from fixtures where stage_id = ${stageId} and third_place`;
+        const ids = bronze.map((b) => b.id);
+        if (ids.length > 0) {
+          await tx`update fixtures set loser_to_fixture = null, loser_to_slot = null where loser_to_fixture in ${tx(ids)}`;
+          await tx`delete from fixtures where id in ${tx(ids)}`;
+        }
+        return { result: { ...base, regenerated: ids.length > 0 }, generated: null, removedIds: ids, changed: true };
+      }
       if (root || qualified) {
         if (readsSealed && sealed === undefined) throw new Error("patchKnockoutStage: the sealed setup counts were not read");
         const attachments = await stageAttachmentCounts(tx, stageId, sealed ?? { streams: 0, youtubeBroadcasts: 0 });
@@ -117,28 +130,9 @@ export async function patchKnockoutStage(
         return { result: { ...base, regenerated: true }, generated: regen.generated, removedIds: regen.removedIds, changed: true };
       }
       // A fed stage's lines (placeholders, or SEATED from a confirmed proposal: I-1, the stage has not started) are edited IN
-      // PLACE, never drawn again - a redraw would drop the confirmed draw. Play-off: the progression's own writer is idempotent over
-      // the rows it finds (keyed by ext_key) and adds the missing -3p line with its two loser feeds. Shared: the -3p line goes, and
-      // the semi-finals' loser edges into it with it (a seat that was filled stays filled).
-      let removedIds: string[] = [];
-      if (!playoff) {
-        const bronze = await tx<{ id: string }[]>`select id from fixtures where stage_id = ${stageId} and third_place`;
-        if (bronze.length > 0) {
-          const ids = bronze.map((b) => b.id);
-          // The line's own organiser setup would CASCADE away with it: refuse by name, as a redraw does.
-          const [att] = await tx<{ n: number }[]>`
-            select ((select count(*) from fixture_officials where fixture_id in ${tx(ids)})
-                  + (select count(*) from lineups where fixture_id in ${tx(ids)})
-                  + (select count(*) from device_links where fixture_id in ${tx(ids)})
-                  + (select count(*) from fixture_availability where fixture_id in ${tx(ids)})
-                  + (select count(*) from fixture_calls where fixture_id in ${tx(ids)}))::int as n`;
-          if ((att?.n ?? 0) > 0) throw knockoutRefusal("KO_REDRAW_WOULD_CLEAR_SETUP", { attachments: await stageAttachmentCounts(tx, stageId, { streams: 0, youtubeBroadcasts: 0 }) });
-          await tx`update fixtures set loser_to_fixture = null, loser_to_slot = null where loser_to_fixture in ${tx(ids)}`;
-          await tx`delete from fixtures where id in ${tx(ids)}`;
-          removedIds = ids;
-        }
-        return { result: { ...base, regenerated: removedIds.length > 0 }, generated: null, removedIds, changed: true };
-      }
+      // PLACE, never drawn again - a redraw would drop the confirmed draw. The progression's own writer is idempotent over the
+      // rows it finds (keyed by ext_key) and adds the missing -3p line with its two loser feeds.
+      const removedIds: string[] = [];
       const generated = await writeProgressionSetupFixtures(tx, stageId);
       return { result: { ...base, regenerated: true }, generated, removedIds, changed: true };
     },
