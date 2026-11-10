@@ -78,7 +78,7 @@ export function allTiesResolved(ties: readonly TieOut[], editsBySlot: ReadonlyMa
 }
 
 /** `Map<destinationSlot, entrantId>` -> the wire `edits[]` shape
- *  (ConfirmSeedProposal, schemas.ts:3063). */
+ *  (ConfirmSeedProposal, api-v1/schemas/seeding-discipline.ts). */
 export function buildEditsPayload(
   editsBySlot: ReadonlyMap<string, string>,
 ): { destinationSlot: string; entrantId: string }[] {

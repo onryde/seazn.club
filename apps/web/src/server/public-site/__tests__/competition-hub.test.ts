@@ -13,7 +13,7 @@
 // a document with `bucket: "completed"` beside `live: true` as reachable, and
 // `hubLiveness` is what makes it unreachable. That claim is not asserted, it
 // is ENUMERATED — over the whole wire status vocabulary, read out of
-// `schemas.ts` so a status added to the wire reds this file.
+// `api-v1/schemas/` so a status added to the wire reds this file.
 import { readdirSync, readFileSync } from "node:fs";
 import { byeAward } from "@/lib/fixture-bye";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
@@ -157,9 +157,9 @@ const enCaptions = (stage: string, keys: string[] = ["A", "B"]) =>
 // ---------------------------------------------------------------------------
 
 // The v1 wire vocabulary for a fixture's status (`Fixture.status`,
-// `server/api-v1/schemas.ts`). W2a: that enum is `z.enum(FIXTURE_STATUSES)`, so
+// `server/api-v1/schemas/`). W2a: that enum is `z.enum(FIXTURE_STATUSES)`, so
 // this list IS the wire vocabulary; the guard below reads the source text to
-// prove schemas.ts still uses it (the matches-hub.test.ts guard's twin).
+// prove api-v1/schemas/ still uses it (the matches-hub.test.ts guard's twin).
 const STATUSES = FIXTURE_STATUSES;
 
 describe("hubLiveness — the ONE liveness derivation", () => {
@@ -238,7 +238,7 @@ describe("STATUS_LINE_KEYS", () => {
 // exported sources `standings-view.ts` builds `table.col.*`/`table.tieBreak.*`
 // from, and `FORMAT_KEYS` is scanned out of `describe-format.ts`'s own source
 // text (the same drift-guard convention `STATUS_LINE_KEYS`'s
-// `schemas.ts` scan above uses) so a new `format.*` sentence lands in this
+// `api-v1/schemas/` scan above uses) so a new `format.*` sentence lands in this
 // list unattended. `table.pool` / `table.poolLabel` (`lib/pool-label.ts`, the
 // hub's pool caption) and `table.tieBreak` (standings-view.ts:174) are the
 // literals with no exported source to scan — all are call sites this file

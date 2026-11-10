@@ -26,6 +26,7 @@ import { sweepStreamSessions } from "../relay-sweep";
 import { saveStreamSettings } from "../stream-codes";
 import { createSession, currentSession, heartbeat, stopSession, tickOpenSessions, tickSession } from "../stream-sessions";
 import { captureRig, phoneId, type CaptureRig } from "./_capture-rig";
+import { streamSessionsSource } from "./_stream-sessions-source";
 
 const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
 vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
@@ -137,9 +138,10 @@ const sweepTick = (r: CaptureRig, sid: string) => tickSession(sid, r.deps, "swee
 // ---------------------------------------------------------------------------------------------------------------------
 describe("the tunable is read at the call site (AGENTS.md #20)", () => {
   const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-  it("stream-sessions.ts reads AUTO_STOP_AFTER_RESULT_SECONDS only through tunable(NAME, NAME)", () => {
+  it("stream-sessions/ reads AUTO_STOP_AFTER_RESULT_SECONDS only through tunable(NAME, NAME)", () => {
     const name = "AUTO_STOP_AFTER_RESULT_SECONDS";
-    const code = strip(readFileSync(resolve(import.meta.dirname, "..", "stream-sessions.ts"), "utf8")).replace(/^import[\s\S]*?\bfrom\s*"[^"]*";?/gm, "");
+    // Every module of the folder (it was one file), each stripped of comments and imports before they are joined.
+    const code = streamSessionsSource((text) => strip(text).replace(/^import[\s\S]*?\bfrom\s*"[^"]*";?/gm, ""));
     const viaTunable = new RegExp(`tunable\\(\\s*"${name}"\\s*,\\s*${name}\\s*\\)`, "g");
     expect([...code.matchAll(viaTunable)].length, `a tunable("${name}", ${name}) call`).toBeGreaterThan(0);
     expect(code.replace(viaTunable, "").match(new RegExp(`\\b${name}\\b`)), `${name} used outside tunable()`).toBeNull();

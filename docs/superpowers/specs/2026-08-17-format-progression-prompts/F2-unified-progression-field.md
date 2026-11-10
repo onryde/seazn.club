@@ -69,7 +69,7 @@ interface Progression {
    target database and STOP if it is false** — the ruling is dated and this file
    will outlive its accuracy.
 3. **Zod** — one `ProgressionSchema` replacing `QualificationSpecSchema`
-   (`schemas.ts:508`) and `StageSeedingSchema` (`:543-555`). Delete the
+   (`api-v1/schemas/`) and `StageSeedingSchema` (`:543-555`). Delete the
    mutual-exclusion 422 at `stages.ts:217-222`; with one field it is unreachable.
 4. **Writers** — `createStages` (`stages.ts:228`) and `instantiateTemplate`
    (`templates.ts:327`).
@@ -135,7 +135,7 @@ interface Progression {
 
 ## Execution
 
-Sequential implementer → reviewer loop. `stages.ts`, `schemas.ts` and
+Sequential implementer → reviewer loop. `stages.ts`, `api-v1/schemas/` and
 `stage-seeding.ts` are single-writer, and this session touches all three.
 
 **Scout (sonnet) first:** re-pin every line reference above, and report the

@@ -69,7 +69,7 @@
 // ---------------------------------------------------------------------------
 // `publicDivisionStats`'s own division lookup requires `c.visibility in
 // ('public','unlisted')` (player-stats.ts:534-536) — and `CreateCompetition.
-// visibility` defaults to `'private'` (schemas.ts:94), which is exactly
+// visibility` defaults to `'private'` (api-v1/schemas/), which is exactly
 // what `seedSuite` sent before this task (no `visibility` key at all). So
 // the public route 404s on `_tiny` today for a SECOND, independent reason
 // from the emptiness above — nothing to do with consent or scoring. Fixed

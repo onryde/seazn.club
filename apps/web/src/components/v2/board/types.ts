@@ -147,7 +147,7 @@ export interface BoardConfig {
 
 /** Snake_case wire mirror of the engine's `ConflictDetail`
  *  (`packages/engine/src/scheduling/conflict-detail.ts`), matching
- *  `ScheduleConflictDetail` in server/api-v1/schemas.ts field for field.
+ *  `ScheduleConflictDetail` in server/api-v1/schemas/scheduling.ts field for field.
  *  Structural rather than the zod-inferred type or an engine import (C3,
  *  2026-08-13 design amendment) — same reason `BoardConfig.constraints` is
  *  hand-declared rather than importing `SchedulingConstraints` just above:
@@ -162,7 +162,7 @@ export interface BoardConflictDetail {
   other_fixture_id?: string;
   court?: string;
   /** P9 review wave 3, finding #3: the server's resolved, venue-qualified
-   *  display name for `court` (schemas.ts's ScheduleConflictDetail.court_name,
+   *  display name for `court` (api-v1/schemas/scheduling.ts's ScheduleConflictDetail.court_name,
    *  via courtNamesById -> buildCourtDirectory — see toWireConflictDetail).
    *  `court` itself is a raw `courts.id` uuid for every kind that carries it
    *  (court_double_booking, locked_slot_clash, court_tag_mismatch) and must
@@ -346,7 +346,7 @@ export const UNASSIGNED = " unassigned";
  *
  * Snake_case wire mirror, hand-declared for the same reason `BoardConflict`
  * and `BoardConfig.constraints` above are: this stays a pure shapes file that
- * a client bundle can import without dragging `server/api-v1/schemas.ts` (and
+ * a client bundle can import without dragging `server/api-v1/schemas/` (and
  * therefore zod + the usecases) behind it.
  */
 export interface PublishAllDivisionResult {

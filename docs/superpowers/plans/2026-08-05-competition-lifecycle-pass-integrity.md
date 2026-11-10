@@ -78,7 +78,7 @@ cd $WT && pnpm run i18n:check
 
 | File | Responsibility |
 | --- | --- |
-| `apps/web/src/server/api-v1/schemas.ts` | `ends_on` required on create, non-nullable on patch, `ends_on >= starts_on` |
+| `apps/web/src/server/api-v1/schemas/` | `ends_on` required on create, non-nullable on patch, `ends_on >= starts_on` |
 | `apps/web/src/components/v2/competition-wizard.tsx` | Required field + message |
 | `apps/web/src/components/v2/competition-settings.tsx` | Still editable, same validation message |
 | every fixture/seed that creates a competition | Carries an end date |
@@ -1521,7 +1521,7 @@ break a live competition over a typo."
 ### Task 10: A mandatory, changeable end date
 
 **Files:**
-- Modify: `apps/web/src/server/api-v1/schemas.ts:44` (create), `:71` (patch), plus the cross-field refine
+- Modify: `apps/web/src/server/api-v1/schemas/` (create), `:71` (patch), plus the cross-field refine
 - Modify: `apps/web/src/components/v2/competition-wizard.tsx:129-135`
 - Modify: `apps/web/src/components/v2/competition-settings.tsx:276-283`
 - Modify: `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json`
@@ -1581,7 +1581,7 @@ Expected: 3 failures (no-end-date accepted, before-start accepted, null patch ac
 
 - [ ] **Step 3: Tighten the schemas**
 
-`schemas.ts:44`:
+`api-v1/schemas/`:
 
 ```ts
   /**
@@ -1594,7 +1594,7 @@ Expected: 3 failures (no-end-date accepted, before-start accepted, null patch ac
   ends_on: z.iso.date(),
 ```
 
-`schemas.ts:71` — `ends_on: z.iso.date(),` (the surrounding `.partial()` keeps it optional to *send*), and extend the existing `.refine` chain:
+`api-v1/schemas/` — `ends_on: z.iso.date(),` (the surrounding `.partial()` keeps it optional to *send*), and extend the existing `.refine` chain:
 
 ```ts
   .refine(

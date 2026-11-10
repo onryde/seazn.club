@@ -34,7 +34,7 @@ generation. This is the wave's payoff.
 - `apps/web/src/server/usecases/venues.ts` / `venue-assignment.ts` (PROMPT-70) —
   `listDivisionVenues(auth, divisionId): Promise<VenueWithCourts[]>` (the source
   of courts + `openFrom`/`openTo`).
-- `apps/web/src/server/api-v1/schemas.ts` ~line 607 — the schedule config zod
+- `apps/web/src/server/api-v1/schemas/` ~line 607 — the schedule config zod
   (`courts: string[]`, `blackouts`, `sessionWindows`, `tz`). Add the optional
   `courtVenueCourtIds` map (below).
 - `apps/web/src/components/v2/board/settings-panel.tsx` + `.../board/types.ts`
@@ -124,7 +124,7 @@ export function venueScheduleInputs(
   (pure generator) + extend `schedule.test.ts` (integration write-back)
 - **Modify** `packages/engine/src/scheduling/calendar.test.ts` — court-scoped
   blackout confinement test (proves the mechanism the design relies on)
-- **Modify** `apps/web/src/server/api-v1/schemas.ts` — `courtVenueCourtIds`
+- **Modify** `apps/web/src/server/api-v1/schemas/` — `courtVenueCourtIds`
 - **Modify** `apps/web/src/components/v2/board/settings-panel.tsx`, `types.ts`
 - **Modify** the two board server pages (comp + division `schedule/page.tsx`)
 - **Create** `apps/web/e2e/venue-scheduling.spec.ts`

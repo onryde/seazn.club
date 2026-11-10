@@ -1772,7 +1772,7 @@ describe("PackSchema — pre-freeze reservations (venues, officials, claim invit
 //
 // The shape is the PRODUCT'S, not a bench dialect: `CourtHourRangeInput` /
 // `CourtExceptionInput` (`apps/web/src/server/usecases/venues.ts:132-169`) on
-// the way in, `CourtWithCalendar` (`api-v1/schemas.ts:4514-4518`) on the way
+// the way in, `CourtWithCalendar` (`api-v1/schemas/`) on the way
 // back out of `GET /orgs/{id}/venues`. Only the key CASE differs — the pack
 // dialect is camelCase throughout and there is not one snake_case key in
 // `PackSchema` — and the camelCase spelling here is the engine's OWN

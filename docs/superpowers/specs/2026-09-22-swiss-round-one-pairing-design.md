@@ -65,7 +65,7 @@ effectivePairing({ override, stored, round }):
 ### API — `POST /api/v1/stages/{id}/generate`
 
 - New optional JSON body `{ pairing?: "fold" | "rank_adjacent" }`, zod request
-  schema in `apps/web/src/server/api-v1/schemas.ts`, registered in
+  schema in `apps/web/src/server/api-v1/schemas/`, registered in
   `api-v1/openapi.ts`; `openapi/v1.json` and `v1.public.json` regenerated (CI
   drift check).
 - Absent/empty body ⇒ identical to today apart from ruling C. The desk's

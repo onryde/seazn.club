@@ -6,7 +6,7 @@
 //      refuse sending a body they can prove will be rejected.
 //   2. `CapacityPrecheckInput` (usecases/capacity-guard.ts) — what the route
 //      actually parses with. Imports the constants.
-//   3. `CapacityPrecheck` (api-v1/schemas.ts) — the wire twin the generated
+//   3. `CapacityPrecheck` (api-v1/schemas/schedule-analysis.ts) — the wire twin the generated
 //      OpenAPI spec publishes. CANNOT import them: that file is consumed by
 //      `scripts/openapi-gen.ts` under plain `node --experimental-strip-types`,
 //      which does not resolve the `@/` alias, so the import turns

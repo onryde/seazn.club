@@ -30,7 +30,7 @@ Read first: `_RULES.md` → `_INDEX.md` → spec
 - new migrations under `db/migration/`, new usecase
   `apps/web/src/server/usecases/venues.ts`, routes under
   `apps/web/src/app/api/v1/orgs/[id]/venues/`, org settings pages,
-  `schemas.ts`, `openapi.ts`, key-scopes, 4 dictionaries
+  `api-v1/schemas/`, `openapi.ts`, key-scopes, 4 dictionaries
 
 ## Do NOT touch
 

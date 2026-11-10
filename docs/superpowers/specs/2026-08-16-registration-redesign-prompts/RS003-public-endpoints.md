@@ -14,7 +14,7 @@ consume, with the same abuse protections the old single endpoint had.
 
 ## Scope
 
-1. **Zod schemas** (`server/api-v1/schemas.ts`): `PublicRegisterGroupRequest`
+1. **Zod schemas** (`server/api-v1/schemas/`): `PublicRegisterGroupRequest`
    — contact {display_name, contact_email, dob?, gender?}, locale?, entries[]
    (division_id, entrant_kind, team_name?, free_agent?, players[] max 50 each
    with name/dob?/gender?/squad_number?, answers, partner_name?,
@@ -91,7 +91,7 @@ consume, with the same abuse protections the old single endpoint had.
 
 ## Execution
 
-Sequential implementer loop (schemas.ts + routes + webhook overlap). Scout:
+Sequential implementer loop (api-v1/schemas/ + routes + webhook overlap). Scout:
 pin old route's rate-limit/honeypot lines from git history (`git log -p` on
 the deleted route), current webhook handler file:line, payment machinery
 RS001 kept. Reviewer focus: authz on status GET, webhook group transition

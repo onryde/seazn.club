@@ -14,7 +14,7 @@
 
 The surface is `apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/schedule/page.tsx` (436 lines) — tabs `["board", "health", "settings", "constraints", "officials", "history"]` (`TABS`, line 55). This wave's surface is the **`settings`** tab (`StandaloneScheduleSettings`, `components/v2/board/settings-panel.tsx:167`) and the **`constraints`** tab (`ConstraintsPanel`, `components/v2/constraints-panel.tsx`). Do NOT touch the `board`/`health`/`officials`/`history` tabs or `ScheduleBoard`/`fixture-console.tsx` — those belong to the competition-desk programme (`docs/superpowers/specs/2026-09-02-competition-desk-prompts/_INDEX.md`), a separate live programme with its own rulings. This page happens to host both surfaces; this wave's scope is the two tabs named above, nothing else on the page.
 
-**One PUT endpoint, one schema, shared by both tabs.** Both panels read-then-write `PUT /api/v1/divisions/{id}/schedule-settings` against `PutScheduleSettings` (`schemas.ts:1528`) — `{ config: ScheduleConfig, tz?: string | null }`. `ScheduleConfig` (`schemas.ts:1384-1461`) is the single source of truth for every bound this wave tests:
+**One PUT endpoint, one schema, shared by both tabs.** Both panels read-then-write `PUT /api/v1/divisions/{id}/schedule-settings` against `PutScheduleSettings` (`api-v1/schemas/`) — `{ config: ScheduleConfig, tz?: string | null }`. `ScheduleConfig` (`api-v1/schemas/`) is the single source of truth for every bound this wave tests:
 
 | Field | Bound | Default |
 |---|---|---|
@@ -26,17 +26,17 @@ The surface is `apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/schedule/p
 | `constraints.restMin` | `z.number().int().min(0).max(24*60).optional()` — same 0-1440 family as `perEntrantMinRest`, one layer down | none |
 | `startAt`/`endAt` | `IsoDateTime.nullish()` each, no numeric bound — order is checked separately (below) | `null` |
 
-**Order checking is a `superRefine` on the WRITE wrapper, deliberately not on `ScheduleConfig` itself** (`checkInstantOrder`, `schemas.ts:1487-1526`, attached via `PutScheduleSettings.superRefine(checkInstantOrder)`, line 1544) — the same schema is also the READ/parse path (`schedule.ts:296`'s `.parse`, `competition-schedule-ai.ts:2429`'s `.safeParse`), so a refine there would 500 every division that already holds a reversed range from before this check existed. This wave's tests target the WRITE wrapper only:
+**Order checking is a `superRefine` on the WRITE wrapper, deliberately not on `ScheduleConfig` itself** (`checkInstantOrder`, `api-v1/schemas/`, attached via `PutScheduleSettings.superRefine(checkInstantOrder)`, line 1544) — the same schema is also the READ/parse path (`schedule.ts:296`'s `.parse`, `competition-schedule-ai.ts:2429`'s `.safeParse`), so a refine there would 500 every division that already holds a reversed range from before this check existed. This wave's tests target the WRITE wrapper only:
 
 - `startAt`/`endAt` reversed → `code: "custom"`, `path: ["config", "endAt"]`, message = the exported constant `ENDS_BEFORE_STARTS` (same constant W5's competition-level case #18 asserted against — confirm it's genuinely the same exported symbol, not a same-text duplicate, before asserting string equality).
 - A `blackouts[i]` or `sessionWindows[i]` with `to < from` → `code: "custom"`, `path: ["config", "blackouts", i, "to"]` (or `sessionWindows`), message = the exported constant `WINDOW_ENDS_BEFORE_STARTS`.
-- **Comparison is by EPOCH, not string order** (`Date.parse`, `schemas.ts:1505`) — deliberately, because `IsoDateTime` accepts any offset and lexicographic order is only chronological within one offset. A same-instant pair (`startAt === endAt`) is **permitted**, not refused (a zero-length window is empty, not incoherent) — do not write a test asserting equality is refused, it isn't.
+- **Comparison is by EPOCH, not string order** (`Date.parse`, `api-v1/schemas/`) — deliberately, because `IsoDateTime` accepts any offset and lexicographic order is only chronological within one offset. A same-instant pair (`startAt === endAt`) is **permitted**, not refused (a zero-length window is empty, not incoherent) — do not write a test asserting equality is refused, it isn't.
 
 **Case #17 (play-from/until) never reaches the network at all.** `settings-panel.tsx:425-436`: half-filled or inverted play hours set `hoursError` and `return` **before** the `apiV1(...PUT...)` call — a pure client-side early exit. The expansion itself is `dailyHoursToWindows` (`lib/schedule-board.ts:184-203`), a **pure function**: returns `null` on `fromHHMM >= toHHMM` (line 190) or on empty/malformed HHMM (`HHMM.test`, line 189). Because this is pure and already exported, the cheap, direct-signal test is a vitest unit test calling it with the half-filled and inverted cases — not a browser round trip. The browser round trip only earns its place proving the GUARD ITSELF is wired (the panel's early-return actually fires and blocks the network call, not just that the pure function returns null in isolation) — one Playwright assertion that `page.on("request")`/`waitForResponse` never fires a PUT after entering inverted hours and clicking Save, and that `boardset.hoursError`'s rendered text appears.
 
 **`scheduling.board` and `scheduling.constraints` are open on every plan tier as of V353 (#382)** — the page's own top comment says the entitlement checks "stay: an override or a future tier still moves through them," meaning they are currently **dead gates**, not upsells. Do not write a test asserting a Free-tier upsell renders for either key — there is none to see today. If this wave wants a positive proof the plumbing survives (rather than testing nothing), the only honest test is a `setBoolEntitlementOverrideSql` forcing one of these OFF and confirming the override still has no visible effect anywhere in the tree (documents the dead-gate state the same way W5's F9 documented an unexploited gap) — optional, Task 2 Step 6, not required by the design's case register.
 
-**Division create needs a real `sport_key`/`variant_key` pair.** `CreateDivision` (`schemas.ts:301-326`) requires `name`, `sport_key`, `variant_key` (`config` defaults to `{}`). The established safe combo other walkthrough specs already use successfully: `sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }` (`registration-connect.spec.ts:147-150`) — reuse this exact shape, do not invent a different sport/variant pair untested elsewhere in this suite.
+**Division create needs a real `sport_key`/`variant_key` pair.** `CreateDivision` (`api-v1/schemas/`) requires `name`, `sport_key`, `variant_key` (`config` defaults to `{}`). The established safe combo other walkthrough specs already use successfully: `sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }` (`registration-connect.spec.ts:147-150`) — reuse this exact shape, do not invent a different sport/variant pair untested elsewhere in this suite.
 
 ## Global Constraints
 
@@ -163,7 +163,7 @@ test.describe("division schedule settings — drive and persist", () => {
   });
 ```
 
-Confirm the ACTUAL GET route exists at `/api/v1/divisions/{id}/schedule-settings` with a `GET` handler returning `{ config, tz, ... }` shaped per the `ScheduleSettings` type (`schemas.ts:1547-1553`) — read the route file before writing the read-back assertion, do not assume the shape from the write schema alone.
+Confirm the ACTUAL GET route exists at `/api/v1/divisions/{id}/schedule-settings` with a `GET` handler returning `{ config, tz, ... }` shaped per the `ScheduleSettings` type (`api-v1/schemas/`) — read the route file before writing the read-back assertion, do not assume the shape from the write schema alone.
 
 - [ ] **Step 3: startAt/endAt persistence (a normal, non-inverted pair) and the `tz` tri-state**
 
@@ -303,7 +303,7 @@ Same shape as Step 1, `-1` for each of `gapMinutes`, `perEntrantMinRest`, and (r
       });
       expect(order.status).toBe(422);
       // pin the exact exported constant, not a hand-typed literal — import it
-      // from schemas.ts if it's exported, or match its exact text if it isn't
+      // from api-v1/schemas/ if it's exported, or match its exact text if it isn't
       expect(JSON.stringify(order.error)).toContain("cannot be before its start");
 
       const window = await apiJson(request, `/api/v1/divisions/${div.id}/schedule-settings`, "PUT", {
@@ -318,7 +318,7 @@ Same shape as Step 1, `-1` for each of `gapMinutes`, `perEntrantMinRest`, and (r
   });
 ```
 
-Confirm whether `ENDS_BEFORE_STARTS`/`WINDOW_ENDS_BEFORE_STARTS` are exported from `schemas.ts` (they read as `export const` in the ground-truth section above — verify at the actual line, import and assert equality rather than a `.toContain` on a substring, which is weaker and could pass on an unrelated coincidental match).
+Confirm whether `ENDS_BEFORE_STARTS`/`WINDOW_ENDS_BEFORE_STARTS` are exported from `api-v1/schemas/` (they read as `export const` in the ground-truth section above — verify at the actual line, import and assert equality rather than a `.toContain` on a substring, which is weaker and could pass on an unrelated coincidental match).
 
 - [ ] **Step 4: Case #22 — courts above the 50 cap**
 

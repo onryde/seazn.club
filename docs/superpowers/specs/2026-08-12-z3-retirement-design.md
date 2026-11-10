@@ -9,7 +9,7 @@ surfaces z3 still serves.
 
 - **REFLOW** ("Re-flow unlocked") and the **AI generate/refine/repair rounds**
   still call z3, both default ON. BUILD and POLISH are already off it.
-- `"z3"` is a **public enum value**: `apps/web/src/server/api-v1/schemas.ts:1016`
+- `"z3"` is a **public enum value**: `apps/web/src/server/api-v1/schemas/`
   (`engine: greedy | z3 | z3+lns | optimized`) and `:2190`
   (repair: `none | z3 | llm`); three occurrences in `openapi/v1.public.json`.
 - `"z3"` is **stored** in board rows and in the demo fixture
@@ -84,7 +84,7 @@ can shrink the code and leave the ledger overstating its coverage.
    optimized`, repair `z3 → optimized`. Rewrite-then-narrow order is
    mandatory: `ScheduleConfig` is the READ path — narrowing the enum while
    old rows exist 500s them.
-2. Narrow `schemas.ts:1016` to `["greedy","optimized"]` and `:2190` to
+2. Narrow `api-v1/schemas/` to `["greedy","optimized"]` and `:2190` to
    `["none","optimized","llm"]`.
 3. Regenerate `openapi/v1.public.json` — drift gate is CI-only; run the gen
    locally and commit, `git status --porcelain` clean.

@@ -3,7 +3,7 @@
 //
 // The JSON file is the cross-repo authority — the compositor vendors it byte for byte (C07) — and the zod twins
 // (RelayJobSession, RelayHeartbeat, RelayHeartbeatReply, RelayPhaseReply and RelayPhaseEndpoint in
-// apps/web/src/server/api-v1/schemas.ts) mirror it. Modelled on gen-capture-contracts.ts, with ONE difference: the root
+// apps/web/src/server/api-v1/schemas/streaming.ts) mirror it. Modelled on gen-capture-contracts.ts, with ONE difference: the root
 // is BARE. It carries only `$schema`, `$id`, `title`, `description` and `$defs` (session, heartbeat, heartbeatReply,
 // phaseReply, phaseEndpoint), never a schema twin of its own: a vendoring repo validates against `#/$defs/<name>`. Every STRUCTURAL key comes from z.toJSONSchema; this script adds only the prose,
 // and the prose lives here, not hand-typed into the JSON, so a re-run reproduces the file exactly.
@@ -69,7 +69,7 @@ const SESSION: Shape = {
   },
 };
 
-/** The server's exitDetail bound (schemas.ts `.max(200)`), in UTF-16 code units — JavaScript string length. */
+/** The server's exitDetail bound (api-v1/schemas/ `.max(200)`), in UTF-16 code units — JavaScript string length. */
 const EXIT_DETAIL_UTF16_MAX = 200;
 
 const HEARTBEAT: Shape = {

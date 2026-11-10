@@ -179,7 +179,7 @@ export interface JoinTeamEntryInput {
    *  or insert branch ever writes. Typed optional anyway (like
    *  `guardian_consent` below, whose own enforcement is conditional on
    *  minority rather than unconditional): `PublicJoinRequest.privacy_consent`
-   *  IS required at the wire (schemas.ts) and is this field's only
+   *  IS required at the wire (api-v1/schemas/) and is this field's only
    *  real-traffic source, so the type gap here can never be reached through
    *  the route — it exists only so hand-built call sites (this module's own
    *  test suites) keep compiling while each is updated to pass the field
@@ -385,7 +385,7 @@ function entryDisplayName(
     // `partner_name` stays only as DEFENCE, and is unreachable as things
     // stand — do not read this line as live behaviour. A pair is fixed at
     // exactly two players (the `rawPlayers.length !== 2` check above) and
-    // `full_name` is `z.string().min(1)` (schemas.ts), so players[1] is
+    // `full_name` is `z.string().min(1)` (api-v1/schemas/), so players[1] is
     // always present and non-empty here. Kept so that loosening either rule
     // degrades to the old name instead of to `contact.name`; its own test
     // pins the 422 that makes it unreachable.

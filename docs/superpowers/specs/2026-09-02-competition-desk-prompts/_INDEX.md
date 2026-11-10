@@ -152,7 +152,7 @@ Recorded because each was believed, acted on, and wrong.
 - **The wrong surface was scouted first** — `fixture-console.tsx` instead of
   the division fixtures tab. Cost a full scout pass. See owner ruling 1.
 - **`DEFAULT_MATCH_MINUTES = 60`** contradicted the codebase's 30 (zod default,
-  `schemas.ts:1266`). Ruling: DERIVE such constants from the schema, never
+  `api-v1/schemas/`). Ruling: DERIVE such constants from the schema, never
   retype them, so they cannot drift from the source of truth again.
 - **My V2/V3 fix instruction was wrong.** I said "un-hide the pill, stop
   truncating", which preserves the desktop DNA at 320. The owner caught it:

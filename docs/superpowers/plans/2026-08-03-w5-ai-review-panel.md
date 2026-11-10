@@ -6,7 +6,7 @@
 
 **Architecture:** A new parse-only preview endpoint runs the W3 stage-1 compiler outside `spendCredit`, persists the compiled result to a new `ai_parse_previews` row, and returns it with a `preview_id`. The console renders that as a confirm gate; declining is a client no-op that spent nothing. Confirming posts the run with `preview_id`, and the run reuses the stored parse instead of compiling a second time — a changed instruction 409s rather than silently recompiling behind a confirmation the organiser already gave. After a run, one shared review module builds every amber/note row (warnings, unschedulable, assumptions) and the count is derived from that same array, so "N to review" cannot drift from what is on screen.
 
-**Tech Stack:** Next.js (this repo's fork — read `node_modules/next/dist/docs/` before writing route code), React 19 server/client components, zod (`apps/web/src/server/api-v1/schemas.ts`), Flyway migrations, Postgres, vitest (`renderToStaticMarkup` + `DictProvider` component pattern), Playwright e2e, Tailwind.
+**Tech Stack:** Next.js (this repo's fork — read `node_modules/next/dist/docs/` before writing route code), React 19 server/client components, zod (`apps/web/src/server/api-v1/schemas/`), Flyway migrations, Postgres, vitest (`renderToStaticMarkup` + `DictProvider` component pattern), Playwright e2e, Tailwind.
 
 ---
 
@@ -62,7 +62,7 @@ There are two arrays named `assumptions` in this codebase and conflating them is
 
 | File | Change |
 |---|---|
-| `apps/web/src/server/api-v1/schemas.ts` | `AiParsePreviewRequest`/`AiParsePreviewResponse`; `assumptions` on `AiPlanResponse` (~:1710 block) and `AiCompetitionPlanResponse` (:1867+); `preview_id` on both plan requests |
+| `apps/web/src/server/api-v1/schemas/` | `AiParsePreviewRequest`/`AiParsePreviewResponse`; `assumptions` on `AiPlanResponse` (~:1710 block) and `AiCompetitionPlanResponse` (:1867+); `preview_id` on both plan requests |
 | `apps/web/src/server/api-v1/openapi.ts` | register the two new routes (existing registrations at :226, :230) |
 | `apps/web/src/server/usecases/schedule-ai.ts` | reuse a stored parse at :2228; carry model assumptions into the response build at :2478 |
 | `apps/web/src/server/usecases/competition-schedule-ai.ts` | same, at :2082 and the joint response build |
@@ -95,7 +95,7 @@ There are two arrays named `assumptions` in this codebase and conflating them is
 - Create: `apps/web/src/server/usecases/schedule-ai-preview.ts`
 - Create: `apps/web/src/app/api/v1/divisions/[id]/schedule/ai-preview/route.ts`
 - Create: `apps/web/src/app/api/v1/competitions/[id]/schedule/ai-preview/route.ts`
-- Modify: `apps/web/src/server/api-v1/schemas.ts`, `apps/web/src/server/api-v1/openapi.ts`
+- Modify: `apps/web/src/server/api-v1/schemas/`, `apps/web/src/server/api-v1/openapi.ts`
 - Test: `apps/web/src/server/usecases/__tests__/schedule-ai-preview.test.ts`
 
 **Interfaces:**
@@ -191,7 +191,7 @@ Expected: the new suite fails to resolve `previewScheduleAi`. Confirm from the J
 
 - [ ] **Step 5: Write the schemas**
 
-In `apps/web/src/server/api-v1/schemas.ts`, beside the existing AI schemas:
+In `apps/web/src/server/api-v1/schemas/`, beside the existing AI schemas:
 
 ```ts
 export const AiParsePreviewRequest = z.object({
@@ -224,7 +224,7 @@ export const AiParsePreviewResponse = z.object({
 export type AiParsePreviewResponse = z.infer<typeof AiParsePreviewResponse>;
 ```
 
-`HardConstraint` is already exported from the engine (`packages/engine/src/scheduling/constraints.ts:61-86`) — import it, do not redeclare it. If `schemas.ts` cannot import from the engine, check how W3 got `RuleCode` in there (`schemas.ts` near :1710) and follow that exact route.
+`HardConstraint` is already exported from the engine (`packages/engine/src/scheduling/constraints.ts:61-86`) — import it, do not redeclare it. If `api-v1/schemas/` cannot import from the engine, check how W3 got `RuleCode` in there (`api-v1/schemas/` near :1710) and follow that exact route.
 
 - [ ] **Step 6: Write the usecase**
 
@@ -279,7 +279,7 @@ git commit -m "feat(scheduler): parse-only preview endpoint that spends no credi
 ## Task 2 — The run reuses the confirmed compile, or refuses
 
 **Files:**
-- Modify: `apps/web/src/server/usecases/schedule-ai.ts` (~:2228), `apps/web/src/server/usecases/competition-schedule-ai.ts` (~:2082), `apps/web/src/server/api-v1/schemas.ts`
+- Modify: `apps/web/src/server/usecases/schedule-ai.ts` (~:2228), `apps/web/src/server/usecases/competition-schedule-ai.ts` (~:2082), `apps/web/src/server/api-v1/schemas/`
 - Test: `apps/web/src/server/usecases/__tests__/schedule-ai-preview-reuse.test.ts`
 
 **Interfaces:**
@@ -323,7 +323,7 @@ it("does not consume a second rate-limit token when a preview is reused", async 
 
 - [ ] **Step 3: Add `preview_id` to both plan requests**
 
-In `schemas.ts`, add `preview_id: Uuid.optional()` to `AiPlanRequest` and `AiCompetitionPlanRequest`. Optional, because smoke, the e2e API paths and any external consumer must keep working without it.
+In `api-v1/schemas/`, add `preview_id: Uuid.optional()` to `AiPlanRequest` and `AiCompetitionPlanRequest`. Optional, because smoke, the e2e API paths and any external consumer must keep working without it.
 
 - [ ] **Step 4: Implement the reuse gate**
 
@@ -396,7 +396,7 @@ Fix so that **both** properties hold — a double-submit still buys exactly one 
 ## Task 3 — Model assumptions reach the client
 
 **Files:**
-- Modify: `apps/web/src/server/api-v1/schemas.ts`, `apps/web/src/server/usecases/schedule-ai.ts` (~:2478 response build), `apps/web/src/server/usecases/competition-schedule-ai.ts` (joint response build)
+- Modify: `apps/web/src/server/api-v1/schemas/`, `apps/web/src/server/usecases/schedule-ai.ts` (~:2478 response build), `apps/web/src/server/usecases/competition-schedule-ai.ts` (joint response build)
 - Test: `apps/web/src/server/usecases/__tests__/schedule-ai-assumptions.test.ts`
 
 **Interfaces:**

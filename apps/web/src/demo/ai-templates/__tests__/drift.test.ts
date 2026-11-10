@@ -431,7 +431,7 @@ describe("northside-open — the committed joint run still verifies", () => {
   it("(f) carries one pricing quote row per division", () => {
     const parsed = AiCompetitionPlanResponse.parse(fixture.response);
     // `divisions` is the meter stamp's per-division PRICE rows merged with the
-    // board's picker data (schemas.ts:2369 — the key is declared twice and the
+    // board's picker data (api-v1/schemas/ — the key is declared twice and the
     // ORDER of the two declarations decides which survives). A joint run serves
     // ONE model, so differing `rung` values across these rows are per-division
     // QUOTES, not per-division escalation — nothing here may assert otherwise.

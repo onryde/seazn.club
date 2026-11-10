@@ -49,7 +49,7 @@ declarations, mutate each guard once), frontend-design skill in every UI dispatc
 - Templates: `components/overlay/template-registry.ts` (`bar`, `bug`; `slabPlacement`, `sceneCardSafeArea`).
 - Compositor → web: the page's `console.info` signals (`seazn:ready`, `seazn:alive`, `lib/overlay-compositor.ts`) read
   from CEF's console (`crates/adapters/src/cef_graphics.rs`); the heartbeat (`RelayHeartbeat`,
-  `api-v1/schemas.ts:2018`, **`.strict()`**, published in `docs/contracts/relay-job.v1.json`).
+  `api-v1/schemas/`, **`.strict()`**, published in `docs/contracts/relay-job.v1.json`).
 - Storage: `lib/supabase-storage.ts` (sponsor logos use it).
 
 **Premises the code proved false (recorded, not blockers):**

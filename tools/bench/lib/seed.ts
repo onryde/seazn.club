@@ -54,7 +54,7 @@
 // (`apps/web/src/lib/auth.ts:377-391`, `ensureActiveOrg`/`createOrgForUser`),
 // there is no `apps/web/src/app/api/v1/orgs/route.ts` (only `orgs/[id]/...`
 // subresources — checked, `find apps/web/src/app/api/v1/orgs -maxdepth 1
-// -type f` returns nothing), and `schemas.ts` declares no `PatchOrg` /
+// -type f` returns nothing), and `api-v1/schemas/` declares no `PatchOrg` /
 // `CreateOrg` symbol at all. So `plan.org.name` and `plan.org.timezone` have
 // NO reachable surface in this driver and are never sent anywhere — a brief/
 // API-shape finding recorded here rather than guessed around (an org PATCH
@@ -220,7 +220,7 @@ export interface SeedSuiteInput {
   readonly transport?: SeedTransport;
   /**
    * T4 EXTENSION (declared here rather than redesigned around, per that
-   * task's brief): extra `CreateCompetition.branding` (schemas.ts:95, jsonb,
+   * task's brief): extra `CreateCompetition.branding` (api-v1/schemas/competitions.ts, jsonb,
    * ungated) merged into the competition create-call body below. Not
    * something `SeedPlan` can carry — `buildSeedPlan` is a pure pack->plan
    * mapping and a `--keep` idempotence marker is bench-RUNTIME state, not
@@ -235,7 +235,7 @@ export interface SeedSuiteInput {
   readonly competitionBranding?: Record<string, unknown>;
   /**
    * B03 T6b EXTENSION, same shape as `competitionBranding` just above: extra
-   * `CreateCompetition.visibility` (`schemas.ts:94`, `Visibility.default
+   * `CreateCompetition.visibility` (`api-v1/schemas/`, `Visibility.default
    * ("private")`) merged into the competition create-call body. Not
    * something `SeedPlan`/`PackSchema` can carry — visibility is bench-
    * RUNTIME config (whether THIS run wants its public read-model reachable),
@@ -386,7 +386,7 @@ export function bindStreamFixtures(
  *  compute on the create bodies — optional fields are omitted rather than defaulted, since
  *  the server already applies its own default (`CreateVenue.sort` /
  *  `CreateCourtInput.sort` both `.default(0)`, apps/web/src/server/api-v1/
- *  schemas.ts:4519-4522, apps/web/src/server/usecases/venues.ts:116-120) and
+ *  schemas/, apps/web/src/server/usecases/venues.ts:116-120) and
  *  restating that default here would be a second copy that could drift.
  *
  *  A court that declares a calendar takes a SECOND write after its create —
@@ -515,7 +515,7 @@ async function seedPersons(
   return personIdByRef;
 }
 
-/** One `EntrantMemberInput` (schemas.ts:365-370), `personRef` resolved to a
+/** One `EntrantMemberInput` (api-v1/schemas/entrants.ts), `personRef` resolved to a
  *  real `person_id`. */
 function buildMemberBody(
   m: SeedPlanRosterMember,
@@ -545,7 +545,7 @@ function buildMemberBody(
  *  division (array body — same bulk-registration path `tinyPlan` uses,
  *  generalized past its one-division limit). Needs every division AND every
  *  person resolved first: a roster member's `person_id` is real, and
- *  `EntrantMemberInput.person_id` is a mandatory `Uuid` (schemas.ts:365) —
+ *  `EntrantMemberInput.person_id` is a mandatory `Uuid` (api-v1/schemas/) —
  *  there is no "create now, backfill the roster later" on this path. */
 async function seedEntrants(
   base: string,
@@ -652,10 +652,10 @@ export async function seedSuite(input: SeedSuiteInput): Promise<SeededSuite> {
       const division = await t.request<IdOut>(base, s, `/api/v1/competitions/${competition.id}/divisions`, {
         method: "POST",
         // Spread rather than field-by-field: `tiebreakers` is optional on the
-        // plan and `CreateDivision` is NON-strict (`schemas.ts:225-250`), so a
+        // plan and `CreateDivision` is NON-strict (`api-v1/schemas/`), so a
         // key sent as `undefined` is silently DROPPED rather than refused —
         // the same way a division-creation wizard once lost its whole
-        // eligibility block (RS007/V380, the comment at `schemas.ts:233`).
+        // eligibility block (RS007/V380, the comment at `api-v1/schemas/`).
         // Omitting the key entirely is the only way to mean "not declared".
         body: {
           name: d.name,
@@ -668,14 +668,14 @@ export async function seedSuite(input: SeedSuiteInput): Promise<SeededSuite> {
       divisionIdByRef.set(d.ref, division.id);
 
       // Always an ARRAY body (even for one stage), so the response is
-      // always an array too (`CreateStages`'s union — schemas.ts:824 —
+      // always an array too (`CreateStages`'s union — api-v1/schemas/ —
       // otherwise returns a single object for a single-object body, per
       // stages/route.ts:34's `Array.isArray(body) ? rows : rows[0]`).
       const stages = await t.request<IdOut[]>(base, s, `/api/v1/divisions/${division.id}/stages`, {
         method: "POST",
         // `progression` is spread conditionally for the OPPOSITE reason to
         // `tiebreakers` above: `CreateStage` is `.strict()`
-        // (`schemas.ts:821`), so an undeclared key is REJECTED outright rather
+        // (`api-v1/schemas/`), so an undeclared key is REJECTED outright rather
         // than dropped. Sending `progression: undefined` on a stage that has
         // none would fail the whole create call, not merely lose the field.
         body: d.stages.map((st) => ({
@@ -789,7 +789,7 @@ interface FixtureOfficialsOut {
   readonly officials: readonly FixtureOfficialRow[];
 }
 
-/** `ScheduleConflict`'s wire shape (`schemas.ts`), narrowed to the three
+/** `ScheduleConflict`'s wire shape (`api-v1/schemas/`), narrowed to the three
  *  fields this file reads — same minimal-local-type precedent as
  *  `lib/suites/tiny.ts`'s own `ValidateOut`. */
 export interface ScheduleConflictRow {
@@ -899,7 +899,7 @@ export interface SeededOfficialsAndClaims {
    * `mintOfficialInvites`'s own header comment for why `PackOfficial.person`
    * stays unresolvable even after this call fires: `POST /persons` cannot
    * create a lane="official" row at all (`PersonLane` admits only
-   * `"player"|"coach"|"staff"`, `api-v1/schemas.ts:370`), so the pack's own
+   * `"player"|"coach"|"staff"`, `api-v1/schemas/`), so the pack's own
    * `p-dee`/`p-eli` were never real rows to begin with — the invite mints a
    * BRAND NEW person (`full_name = official.display_name`), disconnected
    * from whichever pack person the author intended. Read back through a

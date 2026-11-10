@@ -52,7 +52,7 @@ schema:
 
     import { StageKind, StageSeedingSchema } from "@/server/api-v1/schemas";
 
-`StageSeedingSchema` is at `apps/web/src/server/api-v1/schemas.ts:543-555`:
+`StageSeedingSchema` is at `apps/web/src/server/api-v1/schemas/`:
 
     source: "previous" | { stageId: Uuid }
     take: TakeRule[]            // 1..8
@@ -143,7 +143,7 @@ written before V298 was re-verified. Do not use `knockout(4)`.
 
 ## Do NOT touch
 
-- `apps/web/src/server/api-v1/schemas.ts` — import from it, never edit it.
+- `apps/web/src/server/api-v1/schemas/` — import from it, never edit it.
 - `apps/web/src/server/usecases/stages.ts` and anything in P5's
   stage-seeding server logic. A different task owns instantiation.
 - `apps/web/src/server/usecases/templates.ts` — the instantiation usecase is
@@ -306,7 +306,7 @@ if you add a failure path, use that shape.
   persistence shape, but do not edit that file. Another task owns it.
 - P5's stage-seeding server internals. You CALL P5's pathway; you never
   reimplement or edit it.
-- `apps/web/src/server/api-v1/schemas.ts` — import only.
+- `apps/web/src/server/api-v1/schemas/` — import only.
 - `apps/web/src/server/templates/catalog/**` and `schema.ts` — a previous
   task owns those; they should already be correct. If they are not, report
   it rather than editing them.
@@ -406,7 +406,7 @@ render a line describing where its entrants come from. The spec's example
 phrasing is "Top 2 per group → QF".
 
 Derive the text from the stage's `seeding.take` rules
-(`apps/web/src/server/api-v1/schemas.ts:543-555`):
+(`apps/web/src/server/api-v1/schemas/`):
 
 - `{ kind: "topNPerGroup", n }` → "Top {n} per group"
 - `{ kind: "bestNth", nth, count }` → "{count} best {nth}-placed"

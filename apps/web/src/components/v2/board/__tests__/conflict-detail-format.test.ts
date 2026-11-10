@@ -76,7 +76,7 @@ describe("formatConflictDetail — instruction_time splits on ruleType", () => {
 describe("formatConflictDetail — court_double_booking's optional otherFixtureId", () => {
   // P9 review wave 3, finding #3: `court` is a real courts.id uuid since the
   // P9 cutover, never a name — the server resolves `courtName` beside it
-  // (schemas.ts's court_name, via courtNamesById -> buildCourtDirectory) and
+  // (api-v1/schemas/ folder's court_name, via courtNamesById -> buildCourtDirectory) and
   // that is what these messages must interpolate, never `court` itself.
   const COURT_UUID = "7c9c3ad1-4f2e-4b1a-9e77-1a2b3c4d5e6f";
 
@@ -348,7 +348,7 @@ describe("formatConflictDetail — exhaustive sweep", () => {
     const seen = new Set(ALL.map((d) => d.kind));
     // `Record<ConflictDetailKind, true>` witness — the SAME exhaustiveness
     // idiom `conflict-detail-legacy.test.ts`'s own `CASES` table uses (and the
-    // engine's `FIELD_ORDER_WITNESS` / schemas.ts's `CONFLICT_DETAIL_KIND_WITNESS`):
+    // engine's `FIELD_ORDER_WITNESS` / api-v1/schemas/scheduling.ts's `CONFLICT_DETAIL_KIND_WITNESS`):
     // a kind added to (or renamed in) the engine's union and forgotten here is a
     // TYPE ERROR on this object literal — a missing property — not a silently
     // stale hand-typed array a human forgot to extend. This is what makes the

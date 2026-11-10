@@ -62,7 +62,7 @@ migrations, Next.js (App Router), 4-locale flat-dotted-key dictionaries, zod.
   inside the same giant `stages.ts` file this plan edits in Tasks 5–6 — a
   textual conflict is likely even though the two sessions' edits are in
   logically disjoint regions of the file.
-- `stages.ts`, `schemas.ts` and `stage-seeding.ts` are single-writer files for
+- `stages.ts`, `api-v1/schemas/` and `stage-seeding.ts` are single-writer files for
   this whole programme — this session touches all three; no parallel work on
   them from any other session.
 
@@ -74,10 +74,10 @@ migrations, Next.js (App Router), 4-locale flat-dotted-key dictionaries, zod.
 
 | name | vocabulary | type site | Zod site |
 |---|---|---|---|
-| `topN` | qualification | `packages/engine/src/competition/qualification.ts:25-28` | `apps/web/src/server/api-v1/schemas.ts:492` (`TopNS`) |
-| `rankRange` | seeding | `apps/web/src/server/usecases/stage-seeding.ts:43` | `schemas.ts:549-552` (`RankRangeTakeS`) |
-| `bestOfRank` | qualification | `qualification.ts:29-39` | `schemas.ts:493-502` (`BestOfRankS`) |
-| `bestNth` | seeding | `stage-seeding.ts:45` | `schemas.ts:554-556` (`BestNthTakeS`) |
+| `topN` | qualification | `packages/engine/src/competition/qualification.ts:25-28` | `apps/web/src/server/api-v1/schemas/` (`TopNS`) |
+| `rankRange` | seeding | `apps/web/src/server/usecases/stage-seeding.ts:43` | `api-v1/schemas/stages.ts` (`RankRangeTakeS`) |
+| `bestOfRank` | qualification | `qualification.ts:29-39` | `api-v1/schemas/` (`BestOfRankS`) |
+| `bestNth` | seeding | `stage-seeding.ts:45` | `api-v1/schemas/stages.ts` (`BestNthTakeS`) |
 
 `topNPerGroup` (seeding-only) is a **different** capability from
 `topN` (qualification-only) and is **not** part of either collapse — do not
@@ -112,7 +112,7 @@ conflate them.
    `TakePicks.from`, `TopN.from`, `BestOfRank.from`, `RoundLosers.from`,
    `CombinedQualification.from` are all declared
    (`qualification.ts:22,26,30,45,62`) and zod-validated
-   (`schemas.ts:492-511`), but **nothing in the codebase ever reads
+   (`api-v1/schemas/`), but **nothing in the codebase ever reads
    `.from`** — `git grep -a` across `packages/engine/src` and
    `apps/web/src` for `.from` on a qualification spec returns zero hits
    outside the declarations themselves, and neither
@@ -338,7 +338,7 @@ dedupe are orthogonal to `TakeRule` and apply uniformly across all five kinds
 - **Delete** `packages/engine/src/competition/qualification.ts` and
   `qualification.test.ts` (superseded; their still-relevant assertions move
   into `progression.test.ts`).
-- **Modify** `apps/web/src/server/api-v1/schemas.ts` — one `ProgressionSchema`
+- **Modify** `apps/web/src/server/api-v1/schemas/` — one `ProgressionSchema`
   replacing `QualificationSpecSchema` and `StageSeedingSchema`; `CreateStage`
   gains `progression`, loses `qualification`/`seeding`.
 - **Modify** `apps/web/src/server/usecases/stage-seeding.ts` — shrinks to the
@@ -412,7 +412,7 @@ export interface SeededMapEntry { slot: string; source: string }
  *  stage's fixtures appear (at setup vs. on source completion) is an
  *  apps/web orchestration decision (Decision 1), not something the take-rule/
  *  placement/resolution math needs to know. apps/web's `ProgressionSchema`
- *  (schemas.ts) is `ProgressionSpec & { timing: "setup" | "on_complete" }`. */
+ *  (api-v1/schemas/stages.ts) is `ProgressionSpec & { timing: "setup" | "on_complete" }`. */
 export interface ProgressionSpec {
   sources: readonly ProgressionSource[];
   placement: "rank_order" | "snake" | "seeded_map";
@@ -1455,9 +1455,9 @@ git commit -m "engine(F2): resolve multi-source progressions with dedupe and tie
 ### Task 3: Zod — one `ProgressionSchema`, `CreateStage` updated, mutual-exclusion 422 deleted
 
 **Files:**
-- Modify: `apps/web/src/server/api-v1/schemas.ts` (delete
+- Modify: `apps/web/src/server/api-v1/schemas/` (delete
   `QualificationSpecSchema` block `:486-529`, `StageSeedingSchema` block
-  `:543-573`; add `ProgressionSchema`; `CreateStage` `:575-582`)
+  `:543-573`; add `ProgressionSchema`; `CreateStage`)
 - Modify: `apps/web/src/server/templates/schema.ts` (`TemplateStageSeeding`
   `:38-59`, `TemplateStage.seeding` `:102-111`)
 - Test: `apps/web/src/server/api-v1/__tests__/progression-schema.test.ts`
@@ -1552,8 +1552,8 @@ cd <worktree> && npm run test --workspace apps/web -- run apps/web/src/server/ap
 Expected: failed suite — `ProgressionSchema` is not exported yet.
 
 - [ ] **Step 3: Implement.** Delete `TopNS`, `BestOfRankS`, `RoundLosersS`,
-  `QualificationSpecSchema` (`schemas.ts:486-529`) and `RankRangeTakeS`
-  through `StageSeedingSchema` (`schemas.ts:549-573` — but keep
+  `QualificationSpecSchema` (`api-v1/schemas/`) and `RankRangeTakeS`
+  through `StageSeedingSchema` (`api-v1/schemas/` — but keep
   `SeededMapEntryS`, it survives unchanged). Replace with:
 
 ```ts
@@ -1614,7 +1614,7 @@ export const ProgressionSchema = z
 export type ProgressionInput = z.infer<typeof ProgressionSchema>;
 ```
 
-Update `CreateStage` (`schemas.ts:575-582`):
+Update `CreateStage` (`api-v1/schemas/`):
 ```ts
 export const CreateStage = z.object({
   seq: z.number().int().min(1),
@@ -1649,7 +1649,7 @@ and on `TemplateStage`:
 wiring… euro24's R16, t20-super8's Super 8 and SF/F, league-playoff's
 page_playoff").
 
-Update the import at `schemas.ts` top and `templates/schema.ts:35` from
+Update the import at `api-v1/schemas/` top and `templates/schema.ts:35` from
 `StageSeedingSchema`/`StageSeedingInput` to `ProgressionSchema`/
 `ProgressionInput`.
 
@@ -1816,7 +1816,7 @@ git commit -m "db(F2): drop stages.qualification/seeding, add stages.progression
 >    the real catalogue JSON's `.seeding` block is silently STRIPPED rather
 >    than rejected, and nothing errors. Task 5 owns it, alongside the catalogue
 >    JSONs it renders.
-> 2. **The `Stage` RESPONSE schema** (`apps/web/src/server/api-v1/schemas.ts`,
+> 2. **The `Stage` RESPONSE schema** (`apps/web/src/server/api-v1/schemas/`,
 >    around 607-617) still exposes raw `qualification` / `seeding` records.
 >    Task 3 deliberately left it — it is a read-path shape, so it belongs with
 >    the readers in **Task 6**, not here. Recorded in both places so whichever
@@ -1834,7 +1834,7 @@ git commit -m "db(F2): drop stages.qualification/seeding, add stages.progression
 > list.** Confirmed by re-running the sweep independently.
 >
 > **First, the change that makes this whole class LOUD instead of silent —
-> do this before the rest.** `CreateStage` (`schemas.ts`, ends `});`) is
+> do this before the rest.** `CreateStage` (`api-v1/schemas/`, ends `});`) is
 > **not `.strict()`**. So `stages-panel.tsx:961`, the live "Add stage" flow,
 > POSTs `qualification: { topN }`, Zod silently DROPS the unknown key, the
 > stage is created with `progression: null`, the request returns success, and
@@ -1898,7 +1898,7 @@ git commit -m "db(F2): drop stages.qualification/seeding, add stages.progression
 >   `.qualification` straight off the GET response and asserts
 >   `{losersOfRound: {round,count}}` on it; both the read and the assertion
 >   shape need to move to `.progression`/`roundLosers` once Task 6 converts
->   the `Stage` response schema (schemas.ts ~607-617) they depend on.
+>   the `Stage` response schema (api-v1/schemas/ ~607-617) they depend on.
 > - **`apps/web/e2e/mobile.spec.ts:1470`** — `seeding: {source, take:
 >   [{kind:"topNPerGroup", n:1}], placement}`.
 > - **`apps/web/e2e/mobile.spec.ts:1609`** — `seeding: {source, take:
@@ -2342,7 +2342,7 @@ git commit -m "writers(F2): createStages, instantiateTemplate, the picker and ca
 ### Task 6: Readers — `generateStageFixtures`, `seedNextStage` (multi-source), `computeSeedProposal`/`confirmSeedProposal`, `qualifierCount`, `openapi:gen`, full gate
 
 > **Added 2026-08-18 — the `Stage` RESPONSE schema is yours.**
-> `apps/web/src/server/api-v1/schemas.ts` (around 607-617) still exposes raw
+> `apps/web/src/server/api-v1/schemas/` (around 607-617) still exposes raw
 > `qualification` / `seeding` records to API consumers. Task 3 rewrote the
 > REQUEST schemas and deliberately left this one, because it is a read-path
 > shape. No task owned it until now. It must move to `progression` in this
@@ -2806,7 +2806,7 @@ Global Constraints section.
 ### Critical Files for Implementation
 
 - `packages/engine/src/competition/progression.ts`
-- `apps/web/src/server/api-v1/schemas.ts`
+- `apps/web/src/server/api-v1/schemas/`
 - `apps/web/src/server/usecases/stages.ts`
 - `apps/web/src/server/usecases/stage-seeding.ts`
 - `db/migration/deltas/V371__stage_progression_field.sql`

@@ -1877,7 +1877,7 @@ test.describe("W3 — match poster", () => {
     const { res, size } = await download(ctx, href);
     expect(res.headers()["cache-control"]).toContain("s-maxage=60");
     expect(size).toEqual({ width: 1080, height: 1920 });
-    // private competition → 404 like its page (`visibility` defaults to "private", schemas.ts:94; stated explicitly anyway)
+    // private competition → 404 like its page (`visibility` defaults to "private", api-v1/schemas/; stated explicitly anyway)
     const priv = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", { name: `W3 private ${TAG}`, visibility: "private", ends_on: "2030-12-31" });
     const pdiv = await apiJson<{ id: string; slug: string }>(request, `/api/v1/competitions/${priv.data!.id}/divisions`, "POST", { name: "Priv", sport_key: "cricket", variant_key: "t20" });
     for (const display_name of ["Priv A", "Priv B"]) {

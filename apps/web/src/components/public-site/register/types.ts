@@ -1,7 +1,7 @@
 // RS006 public stepper — client state shapes. Pure types, no runtime code.
 //
 // Designed to map cleanly onto `PublicRegisterGroupRequest`
-// (server/api-v1/schemas.ts:2416) without reshaping later — the chassis +
+// (server/api-v1/schemas/registration.ts) without reshaping later — the chassis +
 // WHO (step 1) + ENTRIES (step 2) were built first; steps 4-5 (CONSENT,
 // REVIEW→PAY) still extend this state, they do not replace it. See
 // `toGroupContact`/`toGroupEntry` in `cart.ts` for the mapping this shape
@@ -14,7 +14,7 @@
 export type Gender = "m" | "f" | "x";
 
 /** Step 1 (WHO) contact fields, plus step 4 (CONSENT)'s guardian pair —
- *  mirrors `PublicRegisterGroupContact` (schemas.ts:2368) field-for-field,
+ *  mirrors `PublicRegisterGroupContact` (api-v1/schemas/registration.ts) field-for-field,
  *  including `guardian_name`/`guardian_consent`. Earlier RS006 waves (before
  *  step 4 existed) deliberately left the guardian pair off this shape "this
  *  session doesn't collect them, so they are intentionally absent here
@@ -42,7 +42,7 @@ export const EMPTY_CONTACT: ContactState = {
 };
 
 /** Step 4 (CONSENT)'s two TOP-LEVEL wire fields (`PublicRegisterGroupRequest.
- *  privacy_consent`/`.media_consent`, schemas.ts:2434 — siblings of `contact`,
+ *  privacy_consent`/`.media_consent`, api-v1/schemas/ — siblings of `contact`,
  *  not nested inside it, unlike the guardian pair above). Cart-wide, one
  *  choice each for the whole submission. */
 export interface ConsentState {
@@ -52,7 +52,7 @@ export interface ConsentState {
 
 export const EMPTY_CONSENT: ConsentState = { privacy_consent: false, media_consent: false };
 
-/** The subset of `PublicRegistrationDivision` (schemas.ts:2312) the chassis'
+/** The subset of `PublicRegistrationDivision` (api-v1/schemas/registration.ts) the chassis'
  *  pure logic reads. Narrow on purpose — the same reason
  *  registration-eligibility.ts's `EligibilityDivision` is narrow: callers
  *  (including tests) can pass a hand-built object with no cast. */
@@ -96,11 +96,11 @@ export interface DivisionLike {
   currency: string;
   payment_method: "offline" | "stripe";
   /** Step 3's custom-questions renderer (design §4 step 3). A LOCAL shape,
-   *  not an import of `RegistrationFormField` (server/api-v1/schemas.ts) —
+   *  not an import of `RegistrationFormField` (server/api-v1/schemas/registration.ts) —
    *  same "narrow on purpose" reasoning as the rest of this interface: a
    *  hand-built test fixture needs no cast, and this file stays decoupled
    *  from the wire schema module. Structurally identical to the wire shape
-   *  (schemas.ts:2153-2165), so a real `PublicRegistrationDivision` value
+   *  (api-v1/schemas/), so a real `PublicRegistrationDivision` value
    *  satisfies this with no mapping step. */
   form_fields: FormFieldDef[];
   /** RS007/V380 — the retired jsonb "custom rule" note, now a first-class
@@ -204,7 +204,7 @@ export interface CartEntry {
    *  ever produces. */
   answers: Record<string, string | boolean>;
   /** True when the CONTACT themselves is one of THIS entry's players —
-   *  mirrors `PublicRegisterGroupEntry.registering_self` (schemas.ts:2399)
+   *  mirrors `PublicRegisterGroupEntry.registering_self` (api-v1/schemas/registration.ts)
    *  1:1, including its field name. PER-ENTRY on purpose (RS006): a
    *  registrant may link themselves on more than one cart entry at once
    *  (singles + doubles at the same tournament is the common racket-sports

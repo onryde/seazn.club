@@ -87,7 +87,7 @@ are NOT in `validateConfigState`'s issue set at all (client never blocks an
 inverted age band — server-only, already proven above). Cutoff fields are
 also absent from `validateConfigState`; the panel's own client behavior is a
 `disabled={!maxAge}` on the cutoff `<select>`s (UI-only affordance, not a
-validation gate). Server side, `checkAgeCutoff` (`schemas.ts:284-296`,
+validation gate). Server side, `checkAgeCutoff` (`api-v1/schemas/`,
 attached via `.superRefine(checkAgeCutoff)` to both `CreateDivision` and
 `PatchDivision`):
 
@@ -107,7 +107,7 @@ function checkAgeCutoff(v, ctx) {
 }
 ```
 
-The schema's OWN comment (`schemas.ts:271-279`) states explicitly: **no
+The schema's OWN comment (`api-v1/schemas/`) states explicitly: **no
 merge-and-validate/DB-race backstop exists or is needed for the cutoff
 day-validity check** — both-or-neither forces month/day to travel together in
 ONE request, so it is always self-contained (unlike `age_min`/`age_max`,
@@ -564,7 +564,7 @@ test.describe("registration settings — cutoff bounds and the card-fee server-s
 ```
 
 Confirm `AGE_CUTOFF_BOTH_OR_NEITHER`/`AGE_CUTOFF_DAY_INVALID_FOR_MONTH` are
-genuinely exported from `schemas.ts` at the path this import uses (§0 quotes
+genuinely exported from `api-v1/schemas/` at the path this import uses (§0 quotes
 them; re-verify the exact export before trusting the quoted snippet) and
 confirm the actual HTTP status is 400 by reading `http.ts`'s dispatch — do
 not assume from W6's finding without re-checking this route family

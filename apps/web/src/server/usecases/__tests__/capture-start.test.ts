@@ -94,7 +94,7 @@ const netSpend = async (sid: string) =>
   (await sql<{ net: number }[]>`select coalesce(sum(delta), 0)::int as net from org_stream_credits where session_id = ${sid} and reason in ('consume','refund')`)[0]!.net;
 
 describe("phoneStartRefusal — §6.7.2's table, every internal refusal (pure)", () => {
-  // The table as the spec writes it. Each row's internal error is built the way stream-sessions.ts throws it.
+  // The table as the spec writes it. Each row's internal error is built the way usecases/stream-sessions/ throws it.
   const rows: [string, unknown, { status: number; code: string } | "already_live"][] = [
     ["plan_lacks_overlay", new PaymentRequiredError("streaming.overlay"), { status: 403, code: "not_entitled" }],
     ["plan_lacks_relay", new PaymentRequiredError("streaming.relay"), { status: 403, code: "not_entitled" }],

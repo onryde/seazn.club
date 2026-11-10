@@ -1,7 +1,7 @@
 // TakeRuleSchema (the edge's zod parse) against every take rule the product
 // itself ships (ruling 55, controller ruling CL-R2).
 //
-// The SHAPE tie is compile-time and lives beside the schema in schemas.ts:
+// The SHAPE tie is compile-time and lives beside the schema in api-v1/schemas/:
 // z.infer<typeof TakeRuleSchema> and the engine's TakeRule must be assignable
 // both ways, or tsc fails. What tsc cannot see is the value level — min/max,
 // .int(), .strict(), the rankRange refine. This file holds that half: every

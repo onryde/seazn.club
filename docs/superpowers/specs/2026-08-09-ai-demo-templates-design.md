@@ -75,20 +75,20 @@ One JSON per template at `apps/web/src/demo/ai-templates/<slug>.json`:
 `AiSchedulePlan` never crosses an exported boundary: the model's own output is
 parsed, structurally checked, verified and repaired entirely inside
 `aiPlanForDivision`, and what the usecase returns is `AiPlanResponse`
-(`api-v1/schemas.ts:2110`) — already post-verify. Nothing the capture can call
+(`api-v1/schemas/`) — already post-verify. Nothing the capture can call
 hands back the pre-verify plan.
 
 So the fixture stores the verified `response` **verbatim**, and the drift
 guard reconstructs what it needs: a plan-shaped projection of
 `response.proposal` + `response.unschedulable`. That projection is lossless
 for `structuralCheck`'s purposes, which is the only thing reading it —
-`proposal`'s rows are `AiPlanAssignment` (`api-v1/schemas.ts:2006`), which is
+`proposal`'s rows are `AiPlanAssignment` (`api-v1/schemas/`), which is
 *field-name*-identical to `AiAssignment` (`schedule-ai-prompt.ts:226`); the
 plan schema is strictly narrower (`scheduled_at` must be
 `.datetime({offset: true})` and `court_label` `.min(1)`, both bare
 `z.string()` on the wire), which costs the projection nothing because those
 values only reached the wire by parsing as a plan in the first place.
-`response.unschedulable` (`api-v1/schemas.ts:2112`) is a superset of the
+`response.unschedulable` (`api-v1/schemas/`) is a superset of the
 plan's — it adds `rule`, which `structuralCheck` ignores. The
 museum-of-an-older-product failure the issue names is still caught: the
 projection is re-checked against today's `structuralCheck` and re-verified

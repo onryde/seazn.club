@@ -154,7 +154,7 @@ marked (re-pinned), and is re-pinned before an edit regardless.
      both the route and the panel. `""` → `null`.
    - `apps/web/src/app/api/v1/fixtures/[id]/stream/route.ts`, `PUT`, body
      `{ streamUrl: string | null }` (`parseBody` + a new `PutFixtureStream` zod
-     schema beside `PatchFixture` in **`server/api-v1/schemas.ts`** — re-pinned
+     schema beside `PatchFixture` in **`server/api-v1/schemas/`** — re-pinned
      2026-09-07 @ fb99bbd4c, RP6; `run-sheet-row.tsx:26` imports
      `PatchFixture` from exactly that path), gate
      `requireResourceAuth(req, "fixture", id, "write")` (`server/api-v1/auth.ts:352`;

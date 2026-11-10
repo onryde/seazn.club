@@ -69,7 +69,7 @@ PROMPT-81 adds no migrations.
 - **Create** `apps/web/src/app/api/v1/me/officiating/[fixtureOfficialId]/report/route.ts` (GET/PUT)
 - **Create** `apps/web/src/app/api/v1/me/officiating/[fixtureOfficialId]/report/submit/route.ts` (POST)
 - **Create** `apps/web/src/app/api/v1/fixtures/[id]/reports/route.ts` (GET)
-- **Modify** `apps/web/src/server/api-v1/schemas.ts` + `openapi.ts` (drift gate)
+- **Modify** `apps/web/src/server/api-v1/schemas/` + `openapi.ts` (drift gate)
 
 ## Interfaces (produced — PROMPT-81 consumes these exact names)
 

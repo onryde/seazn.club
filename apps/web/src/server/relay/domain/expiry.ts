@@ -12,7 +12,7 @@ export type Expiry =
   | { kind: "none" } | { kind: "requested_timeout" } | { kind: "provision_timeout" } | { kind: "warming_timeout" }
   | { kind: "wall_clock" } | { kind: "stale_beat" } | { kind: "grace_expired" } | { kind: "ending_timeout" }
   // R2008: never returned by `evaluate` — a COMPOSED session's camera never appearing is judged on the compositor's own phase
-  // log, which only the use-case reads (stream-sessions.ts `phoneLostEnd`), as m-5's warming rule is.
+  // log, which only the use-case reads (usecases/stream-sessions/phone-lost.ts `phoneLostEnd`), as m-5's warming rule is.
   | { kind: "camera_never_live" };
 
 /** `staleHeartbeatSeconds` times a composed runner that has PLAYED (and the idle states that re-fire on the same window);
@@ -63,7 +63,7 @@ const laterOf = (a: Date | null, b: Date | null): Date | null => (a === null ? b
 
 /** The warming timeout's ONE clock (A8, capture QR v2 §5.3): `warmingTimeoutMinutes` from warming ENTRY, so provisioning
  *  time never eats the phone's pre-flight window. The createdAt fallback is load-bearing: a session opened before V430
- *  has no warming_at. `evaluate` judges a warming session on it, and the tick (stream-sessions.ts `tickSession`, m-5)
+ *  has no warming_at. `evaluate` judges a warming session on it, and the tick (usecases/stream-sessions/tick.ts `tickSession`, m-5)
  *  judges a passthrough session that went live with no first ingest recorded on the same clock — one authority. */
 export function warmingTimedOut(s: Pick<Session, "warmingAt" | "createdAt">, now: Date, limits: ExpiryLimits = DEFAULT_LIMITS): boolean {
   return now.getTime() - (s.warmingAt ?? s.createdAt).getTime() >= limits.warmingTimeoutMinutes * 60_000;

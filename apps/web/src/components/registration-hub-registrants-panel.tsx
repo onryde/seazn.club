@@ -8,7 +8,7 @@ import { RegistrationHubRegistrantTable } from "@/components/registration-hub-re
 import { hasActiveFilters } from "@/components/registration-hub-registrant-derive";
 // A real (non-type-only) VALUE import — safe here because this file has no
 // "use client": it is a server component, never bundled for the browser, so
-// schemas.ts's own transitive reach (it once reached the engine's gRPC
+// api-v1/schemas/ folder's own transitive reach (it once reached the engine's gRPC
 // scheduling client, Node built-ins dns/net/http2, before that client moved
 // to `@seazn/scheduler`) never becomes the browser's problem.
 // RegistrationHubRegistrantFilters (below) is the opposite case —

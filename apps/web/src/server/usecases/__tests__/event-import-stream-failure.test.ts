@@ -1,4 +1,4 @@
-// Final review I-4, second half. Validating `at` at the schema (schemas.ts)
+// Final review I-4, second half. Validating `at` at the schema (api-v1/schemas/)
 // closes the ONE trigger that was found; this closes the class. Design doc §4
 // promises "200 whenever the call executed — per-stream outcomes are data, not
 // transport errors", and an unexpected throw out of `runStream` broke that

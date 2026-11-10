@@ -137,7 +137,7 @@ organiser, at the moment they hit the cap, that visibility is the dial to turn �
 notch along that dial is an uncapped, fully public, link-shareable dashboard.
 
 **Failure scenario.** Free org creates its third competition, gets
-`public_quota_degraded` (`schemas.ts:186-194`) saying "your plan hosts 2 public
+`public_quota_degraded` (`api-v1/schemas/`) saying "your plan hosts 2 public
 dashboards". The organiser PATCHes it to `unlisted` — `patchCompetition` reaches
 `assertPublicQuota` only for a switch to `public`, so no quota check runs (`competitions.ts:463`) — and shares the
 link. Repeat indefinitely. The cap the wave just halved meters nothing.
@@ -202,7 +202,7 @@ plan (`pro`/`pro_plus`)"*. `V393:146` dropped the plan. Comment only.
 drops the opt-in. A caller that asked for `{visibility: "public", discoverable: true}`,
 passed the `discovery.listed` entitlement check, and got degraded receives a 201 whose
 `public_quota_degraded` names only the *visibility* substitution
-(`schemas.ts:186-194` — `requested_visibility` / `applied_visibility`). Two things were
+(`api-v1/schemas/` — `requested_visibility` / `applied_visibility`). Two things were
 substituted; one is reported. The drop itself is correct (a private competition cannot be
 showcased). Either add the dropped opt-in to `PublicQuotaDegraded`, or state in that
 schema's doc comment that showcase rides visibility so a consumer knows to re-request it.

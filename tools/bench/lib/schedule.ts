@@ -20,14 +20,12 @@
 //    code that should have produced it", pointed at B04's core claim.
 //
 // 2. `--engine` IS AN ASSERTION, NOT A SELECTOR (design §1.1/§2.1).
-//    `AutoScheduleRequest` (`apps/web/src/server/api-v1/schemas.ts:1643-1688`
-//    — RE-PINNED: `tiny.ts` cites `:1496-1542` and the B04 design's own F5
-//    correction cites `:1653-1687`; both are stale, which is exactly why these
-//    pins are worth re-reading rather than copying) carries no engine field, and no env var, flag or setting selects one:
+//    `AutoScheduleRequest` (`apps/web/src/server/api-v1/schemas/scheduling.ts`)
+//    carries no engine field, and no env var, flag or setting selects one:
 //    `build.ts:1165-1204` attempts the solver every time and falls back to
 //    greedy on `MAX_SOLVER_QUEUE`, `!canSolveWithin`, or an unreachable
 //    placement service. But `AutoScheduleResult.solver.engine`
-//    (`schemas.ts:1713`) says which one RAN, forwarded verbatim from
+//    (`api-v1/schemas/schedule-analysis.ts`) says which one RAN, forwarded verbatim from
 //    `BuildResult.engine`. So the bench cannot choose and can identify — and
 //    identifying is worth a gate, because `_RULES.md` §2 names the exact false
 //    green it catches: set the placement vars on the test process instead of
@@ -71,7 +69,7 @@ const MINUTE_MS = 60_000;
 
 /** The key a warn row with no structured `details` is tallied under.
  *
- *  `ScheduleConflict.details` is `.optional()` on the wire (`schemas.ts:1582`)
+ *  `ScheduleConflict.details` is `.optional()` on the wire (`api-v1/schemas/`)
  *  — "there should be none, but the field stays optional to match the engine's
  *  own `Conflict.details?`". A row without it is still a warn row that
  *  happened, and dropping it would make the tally quietly under-report. */
@@ -85,7 +83,7 @@ const ENGINE_FILE_NAME = /^[a-z][a-z0-9_-]*$/;
 // The wire shapes this driver reads — F4's hand-copy, WIDENED
 // ---------------------------------------------------------------------------
 
-/** `AutoScheduleResult` as far as B04 reads it (`schemas.ts:2097-2102`).
+/** `AutoScheduleResult` as far as B04 reads it (`api-v1/schemas/schedule-analysis.ts`).
  *
  *  F4: `tiny.ts:717-726` declares THREE fields of a much larger wire schema, so
  *  a field added or renamed server-side is invisible to `tsc` here. This widens
@@ -109,7 +107,7 @@ export interface AutoScheduleOut {
     placed: number;
     total: number;
   };
-  /** `ScheduleSolverInfo` (`schemas.ts:1704`). NON-optional on the wire —
+  /** `ScheduleSolverInfo` (`api-v1/schemas/`). NON-optional on the wire —
    *  declared optional here only so a response that omits it is reportable
    *  rather than a TypeError. */
   solver?: {
@@ -123,7 +121,7 @@ export interface AutoScheduleOut {
   };
 }
 
-/** `ScheduleConflict` (`schemas.ts:1548`), read through `details.kind`
+/** `ScheduleConflict` (`api-v1/schemas/`), read through `details.kind`
  *  ONLY. Never `code` — a code is a family, `details.kind` is the rule — and
  *  never `detail`, which is deprecated pre-C3 English. */
 interface WireConflict {
@@ -137,7 +135,7 @@ interface ValidateOut {
   conflicts?: readonly WireConflict[];
 }
 
-/** `ScheduleSettings` (`schemas.ts:1446-1452`) — what `PUT
+/** `ScheduleSettings` (`api-v1/schemas/`) — what `PUT
  *  /divisions/{id}/schedule-settings` RETURNS: the persisted config, not an
  *  echo of the request. `putScheduleSettings` returns it from the usecase and
  *  the route forwards it unmapped, which is what makes the round-trip check in
@@ -147,13 +145,13 @@ interface PutSettingsOut {
   tz?: string;
 }
 
-/** `S.Fixture` (`schemas.ts:1000-1055`) minus the frozen `venue`/`court_label`
+/** `S.Fixture` (`api-v1/schemas/`) minus the frozen `venue`/`court_label`
  *  the route strips. NOTE `scheduled_at` and NO `ends_at` — design §4.2's
  *  whole reason for deriving the end. */
 interface WireFixture {
   id: string;
   division_id?: string;
-  // B05 T3 — present on the real wire (`schemas.ts:1093`, inside the
+  // B05 T3 — present on the real wire (`api-v1/schemas/`, inside the
   // `S.Fixture` range this interface already narrows) but never read before
   // this task: every division `runScheduleLayer` ever fetched a board for
   // had exactly one stage, so `division_id` alone was enough to scope
@@ -173,7 +171,7 @@ interface WireFixture {
   schedule_locked?: boolean;
 }
 
-/** `S.VenueWithCourts` (`schemas.ts:4531`) — snake_case on the wire, camelCase
+/** `S.VenueWithCourts` (`api-v1/schemas/`) — snake_case on the wire, camelCase
  *  on the engine's `CourtHoursRow`/`CourtExceptionRow`. That rename happens
  *  exactly once, in `toBoardCourt` below. */
 interface WireVenue {
@@ -200,10 +198,10 @@ interface WireVenue {
 export type RequestedEngine = "optimized" | "greedy" | "both";
 
 /** What actually produced the board — `AutoScheduleResult.solver.engine`
- *  (`schemas.ts:1713`), forwarded verbatim from `BuildResult.engine`. */
+ *  (`api-v1/schemas/`), forwarded verbatim from `BuildResult.engine`. */
 export type ActualEngine = "greedy" | "optimized";
 
-/** `ScheduleMetrics` (`schemas.ts:1693-1699`), camelCased once, here. */
+/** `ScheduleMetrics` (`api-v1/schemas/`), camelCased once, here. */
 export interface ScheduleMetricsOut {
   makespanMinutes: number;
   worstIdleGapMinutes: number;
@@ -216,7 +214,7 @@ export interface ScheduleMetricsOut {
  *
  *  `scheduledAt`/`courtId` are optional because a lock is meaningful in two
  *  situations: pinning a fixture the product has ALREADY placed, and declaring
- *  a slot and pinning it in one PATCH. `PatchFixture` (`schemas.ts:964-979`)
+ *  a slot and pinning it in one PATCH. `PatchFixture` (`api-v1/schemas/`)
  *  accepts all three fields together, so both are one call.
  *
  *  `expected_seq` is deliberately absent from this type and never sent: the
@@ -483,7 +481,7 @@ function toBoardCourt(venueId: string, court: NonNullable<WireVenue["courts"]>[n
 
 /** Compares what the product KEPT against what the pack DECLARED.
  *
- *  `ScheduleConfig` (`schemas.ts:1283`) is a plain `z.object`, NOT `.strict()`
+ *  `ScheduleConfig` (`api-v1/schemas/`) is a plain `z.object`, NOT `.strict()`
  *  — unlike `PatchFixture` and `ApplyScheduleRequest`, which both are. A zod
  *  object STRIPS an unknown key rather than refusing it, so a pack that
  *  declares a knob this product build does not have gets a 200, a config
@@ -509,7 +507,7 @@ function toBoardCourt(venueId: string, court: NonNullable<WireVenue["courts"]>[n
  *
  *  RULING R04 — the TZ is checked too, and it is checked FIRST, because a
  *  wrong zone is the one divergence that makes this bench file false product
- *  defects rather than miss real ones. `ScheduleSettings.tz` (`schemas.ts:1450`)
+ *  defects rather than miss real ones. `ScheduleSettings.tz` (`api-v1/schemas/`)
  *  is the RESOLVED zone, not an echo: `putScheduleSettings` stores whatever it
  *  was sent and answers with `resolveVenueTz(stored, orgTz)` (`lib/tz.ts:44`),
  *  which returns the sent string only when it is a valid IANA name and
@@ -662,7 +660,7 @@ class Sink {
 }
 
 /** `Fixture.officials` is `z.array(z.unknown())` on the wire
- *  (`schemas.ts:1033`), so nothing guarantees the element shape. Each one is
+ *  (`api-v1/schemas/`), so nothing guarantees the element shape. Each one is
  *  shape-guarded here and an unreadable element is REPORTED, never dropped —
  *  design §4.3: a silently-shrinking array makes every officials rule
  *  vacuously green. */
@@ -882,7 +880,7 @@ async function runDivision(
     // --- Step 4: propose ----------------------------------------------------
     // `only_unlocked: false` IS THE BUILD, and an empty body cannot be one.
     // `AutoScheduleRequest` is a `z.preprocess` that DERIVES `mode` from this
-    // flag (`schemas.ts:1643-1651`): `body.only_unlocked === false ? "build" :
+    // flag (`api-v1/schemas/`): `body.only_unlocked === false ? "build" :
     // "reflow"`, with the strict `=== false` there precisely because an ABSENT
     // flag defaults to `true` and must derive a reflow. So `body: {}` — the
     // obvious call, and what `tiny.ts` sends today — silently asks for a
@@ -907,8 +905,8 @@ async function runDivision(
 
     // --- Step 5: persist ----------------------------------------------------
     // AN EMPTY PROPOSAL IS NOT AN EMPTY APPLY. `ApplyScheduleRequest`'s
-    // `assignments` is `.min(1).max(500)` (`schemas.ts:2146-2147`) while
-    // `AutoScheduleResult`'s has NO minimum (`:2098`), so the one response the
+    // `assignments` is `.min(1).max(500)` (`api-v1/schemas/schedule-analysis.ts`) while
+    // `AutoScheduleResult`'s has NO minimum, so the one response the
     // solver returns on a capacity refusal is a body this endpoint rejects.
     // Posting it anyway 400s, and the throw would abort this division BEFORE
     // `/validate` and before the board fetch — destroying the exact evidence
@@ -971,7 +969,7 @@ async function runDivision(
     // `after` used to contain wholesale.
     const after = afterAllStages.filter((f) => f.stage_id === division.stageId);
     // The filter's failure mode is SILENT and vacuous, so it is checked rather
-    // than trusted: `S.Fixture` (`api-v1/schemas.ts:1091-1093`) declares
+    // than trusted: `S.Fixture` (`api-v1/schemas/`) declares
     // `stage_id` REQUIRED, but this interface types it optional, and if the
     // field ever stopped arriving every row would compare `undefined !==
     // stageId` and the board would come back EMPTY — no fixtures, therefore no
@@ -1082,7 +1080,7 @@ function readSolver(
   const solver = auto.solver;
   if (solver === undefined || solver.engine === undefined) {
     // `AutoScheduleResult.solver` is NON-optional on the wire
-    // (`schemas.ts:2101`) and `engine` is a required enum inside it, so this is
+    // (`api-v1/schemas/`) and `engine` is a required enum inside it, so this is
     // a contract break, not a shrug. Recording `actualEngine: undefined` and
     // moving on would put `engine-undefined.json` on disk and assert nothing.
     sink.error(
@@ -1252,11 +1250,11 @@ export async function readEngineArtifacts(
 //    from the start call is not proof the phase moved, and every write path
 //    downstream depends on the phase rather than the response.
 
-/** `DivisionStatus`'s wire values (`apps/web/src/server/api-v1/schemas.ts:53`
+/** `DivisionStatus`'s wire values (`apps/web/src/server/api-v1/schemas/`
  *  — `z.enum(["setup","scheduled","active","completed"])`). Hand mirrored,
  *  not imported: the bench's older convention (its other mirrors have since
  *  become imports of import-free apps/web modules, e.g. `validate-pack.ts`'s
- *  stage composition, W2c Task 13b), even though `schemas.ts`
+ *  stage composition, W2c Task 13b), even though `api-v1/schemas/`
  *  itself is safely importable (pure Zod, not server-only). A TEST file pins
  *  this against a REAL import of `DivisionStatus` (`schedule.test.ts`'s own
  *  "the mirror is diffed against apps/web, not itself" describe block, R05

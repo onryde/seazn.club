@@ -97,7 +97,7 @@ Playwright, Postgres via Flyway (`db/migration/deltas`).
 2. **Three more user-reachable emitters** beyond the brief's six:
    `config/format-gallery.tsx:277,308,321`. Owner ruling R4 includes them.
 3. **`timing: "setup"` + `carry` is rejected by the schema**
-   (`api-v1/schemas.ts` second `.refine`). No template, gallery entry, catalogue
+   (`api-v1/schemas/` second `.refine`). No template, gallery entry, catalogue
    file or UI writes `carry` (grep: zero hits outside `stages.ts`/tests), so no
    organiser loses anything today — but after F3 the marketed Pro entitlement
    `standings.carry_over` (`feature-copy.ts:51`) is unreachable on any picker

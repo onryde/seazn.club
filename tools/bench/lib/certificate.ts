@@ -116,7 +116,7 @@ const NO_VIOLATIONS: readonly CheckerFinding[] = [];
 
 /** The solver status that means the product could not place this board.
  *  `ScheduleSolverInfo.status` is a lowercase zod enum
- *  (`apps/web/src/server/api-v1/schemas.ts:1731`), so this is an exact
+ *  (`apps/web/src/server/api-v1/schemas/`), so this is an exact
  *  comparison and not a case-folded one — a case-folded match here would
  *  quietly accept a status the product never emits. */
 const INFEASIBLE = "infeasible";

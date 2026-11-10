@@ -111,7 +111,7 @@ export interface CompetitionDesk {
    *  that rendered it was retired by Match Day (B1), and live matches are
    *  Match Day's now — on their courts, or in its "Playing, no court" group
    *  (B4). It stays because the public desk API returns it
-   *  (`GET /competitions/{id}/desk`, schemas.ts `CompetitionDesk`); removing it is a
+   *  (`GET /competitions/{id}/desk`, api-v1/schemas/scoring.ts `CompetitionDesk`); removing it is a
    *  wire change, not a tidy-up. */
   in_play_fixtures: DeskInPlayFixture[];
   /** The soonest `next` across every division, EXCLUDING a division whose own
@@ -136,7 +136,7 @@ export interface CompetitionDesk {
 }
 
 let cachedMatchMinutes: number | undefined;
-/** The schema's own default (schemas.ts's `ScheduleConfig.matchMinutes`
+/** The schema's own default (api-v1/schemas/scheduling.ts's `ScheduleConfig.matchMinutes`
  *  `.default(30)`), read lazily and memoised: a division with no
  *  schedule_settings row at all falls back to this, the same way the read
  *  path parses an empty config (schedule/ folder's `ScheduleConfig.parse`).
@@ -155,7 +155,7 @@ export function defaultMatchMinutes(): number {
       cachedMatchMinutes = ScheduleConfig.parse({}).matchMinutes;
     } catch (err) {
       log.error({ event: "desk_default_match_minutes_failed", err }, "desk_default_match_minutes_failed");
-      cachedMatchMinutes = 30; // schemas.ts matchMinutes .default(30)
+      cachedMatchMinutes = 30; // api-v1/schemas/ matchMinutes .default(30)
     }
   }
   return cachedMatchMinutes;

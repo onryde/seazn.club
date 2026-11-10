@@ -2,7 +2,7 @@
 // /fixtures/{id}/lineups/{entrantId}) can 422 ELIGIBILITY_VIOLATION
 // (`putLineup` -> `gateRosterEligibility`, server/usecases/fixtures.ts) — the
 // Zod schema already accepts an optional `eligibility_override`
-// (PutLineup, api-v1/schemas.ts), but `save()` never sent it and its catch
+// (PutLineup, api-v1/schemas/scoring.ts), but `save()` never sent it and its catch
 // just rendered the generic error banner with no way to override and retry.
 // This is an INTERACTION test on purpose (`renderIsland`, not
 // `renderToStaticMarkup`, the convention the rest of this file's tests use):

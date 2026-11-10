@@ -297,8 +297,8 @@ The 14 engine-PR rows are proved in the engine. The 39 app-A rows are proved by 
   - `:969-981`: the ladder's `stage_completed` maps `ladder_order` to `FinalPlace[]` with rank = i + 1.
   - `:1063-1070`: `placementTable(completed.finalRanks)` takes `FinalPlace[]`, so ties are kept.
   - The `toBracketFixture` status of an unneeded DE reset: see Step 4.
-- Modify: every exhaustive switch over `TakeRule["kind"]` / `SlotDescriptor["kind"]` that tsc names. Known: `components/v2/template-gallery.tsx:128`, `tools/matrix/lib/scenarios/advance.ts:71-102`, `lib/slot-label.ts`, `server/usecases/stage-seeding.ts`, `server/api-v1/schemas.ts` (the `TakeRuleSchema` compile-time tie at `:1037-1040`).
-  - At the bump, each answers `firstLosses` with a named "not yet wired" throw; Task 7 replaces it. The tie in `schemas.ts` admits `firstLosses` only in Task 7, so the throw is unreachable from the wire in between. Say so in the commit body.
+- Modify: every exhaustive switch over `TakeRule["kind"]` / `SlotDescriptor["kind"]` that tsc names. Known: `components/v2/template-gallery.tsx:128`, `tools/matrix/lib/scenarios/advance.ts:71-102`, `lib/slot-label.ts`, `server/usecases/stage-seeding.ts`, `server/api-v1/schemas/` (the `TakeRuleSchema` compile-time tie at `:1037-1040`).
+  - At the bump, each answers `firstLosses` with a named "not yet wired" throw; Task 7 replaces it. The tie in `api-v1/schemas/` admits `firstLosses` only in Task 7, so the throw is unreachable from the wire in between. Say so in the commit body.
 - Modify: `TIE_BREAK_MSG_KEYS` (`server/public-site/standings-view.ts`) gains `shared_place` → `table.tieBreak.shared_place` ("Shared place"), in 4 locales, if tsc demands it. Otherwise it is added in Task 4.
 - Modify: `scripts/lib/rules-reference.ts:37` `AWAITING_PROOF`. Copy every entry the installed 4.0.0 still holds: the 17 `"W4 app PR B"`, plus any `"W4 app PR A"` Task 0 counted. Copy the values verbatim. The doc comment gains the W4 paragraph, in the engine's words (`test/rules-reference.ts` at 4.0.0).
 - Modify: `scripts/__tests__/rules-reference.test.ts` `AMENDED_TEXT` (`:41-81`) gains `X-DW-3`. `says` is 4.0.0's row text verbatim: `"A double walkover is refused where the fixture has no next match (final, last rung, third-place match) with guidance: reschedule, record a walkover if one side turned up, or settle as a last resort; the fixture stays open. A vacant title, joint winners and a vacant 3rd are X-CH-3, X-CH-4 and X-TP-7 (rulings 267 and 274)."`; `by` is `"rulings 267 and 274 (2026-11-04, W4 rulebook RB4-C3, RB4-C4, RB4-T6): the vacant title and joint winners it handed to W4"`. Then the `amended` count assertion at `:207` moves by one; re-read it.
@@ -363,7 +363,7 @@ The 14 engine-PR rows are proved in the engine. The 39 app-A rows are proved by 
 - Create: `apps/web/src/server/api-v1/stage-events.ts`.
 - Modify:
   - `server/usecases/stages.ts` `completeStage` / `progressCompletedStage` (`:5683-5760`): map `result.events` through the adapter before returning.
-  - `server/api-v1/schemas.ts`: a `StageCompletedEvent` zod schema inside `CompleteResult.events` (a union member, with every other event still free-form), then `openapi:gen`.
+  - `server/api-v1/schemas/`: a `StageCompletedEvent` zod schema inside `CompleteResult.events` (a union member, with every other event still free-form), then `openapi:gen`.
   - `tools/matrix/lib/driver/types.ts:75` and `tools/matrix/lib/observed.ts:63`: `places?` and `title?`, read by Task 15.
 - Test: `apps/web/src/server/api-v1/__tests__/stage-events.test.ts` (unit); extend the complete-route test (grep `stages/[id]/complete` under `app/api/v1/stages/__tests__`).
 
@@ -538,7 +538,7 @@ The 14 engine-PR rows are proved in the engine. The 39 app-A rows are proved by 
 
 **Files:**
 - Modify:
-  - `server/api-v1/schemas.ts`: a `FirstLossesTakeS = z.object({ kind: z.literal("firstLosses") }).strict()` member of the take union. The compile-time tie (`:1037-1040`) now holds both ways. Then `openapi:gen`.
+  - `server/api-v1/schemas/`: a `FirstLossesTakeS = z.object({ kind: z.literal("firstLosses") }).strict()` member of the take union. The compile-time tie (`:1037-1040`) now holds both ways. Then `openapi:gen`.
   - `lib/format-templates.ts:283-296`: `ko_plate` builds `take: [{ kind: "firstLosses" }]` and ignores `qualified`.
   - `lib/division-builder/format-choice.ts`: `formatStagesFor` (`:80-91`), the comment at `:33-35`, and `:146,174` (no hidden `qualified: 4` for `ko_plate`; `qualifying_main` keeps its 4).
   - `lib/division-builder/format-estimate.ts:44-46,107`: the plate's estimated field is `estimatePlateField(n)`.
@@ -651,12 +651,12 @@ The 14 engine-PR rows are proved in the engine. The 39 app-A rows are proved by 
 
 **Rules:** X-TP-1, X-TP-2, X-TP-6, X-TP-7.
 
-**Gap:** 3P-1 (API-only `StageConfig.thirdPlace`, `schemas.ts:1242`).
+**Gap:** 3P-1 (API-only `StageConfig.thirdPlace`, `api-v1/schemas/`).
 
 **Files:**
 - Create: `apps/web/src/lib/third-place.ts`.
 - Modify:
-  - `server/api-v1/schemas.ts`: `PatchSwissStage` (`app/api/v1/stages/[id]/route.ts:29-36`) becomes `PatchStage = z.union([PatchSwissStage, PatchKnockoutStage])`, with `PatchKnockoutStage = z.object({ thirdPlace: z.enum(["shared", "playoff"]) }).strict()`. Then `openapi:gen`.
+  - `server/api-v1/schemas/generation.ts`: `PatchSwissStage` (`app/api/v1/stages/[id]/route.ts:29-36`) becomes `PatchStage = z.union([PatchSwissStage, PatchKnockoutStage])`, with `PatchKnockoutStage = z.object({ thirdPlace: z.enum(["shared", "playoff"]) }).strict()`. Then `openapi:gen`.
   - `app/api/v1/stages/[id]/route.ts`: PATCH dispatches on the stage's kind; a mismatched body is a named 422.
   - `server/usecases/stages.ts`:
     - `patchKnockoutStage(auth, stageId, body)`: under the `division:` lock; refused once `stageHasStarted` (app A); writes `config.thirdPlace` (true = Play-off); regenerates before Start through app A's reconcile (`reconcileRootBracket` / `regenerateStageInTx`) when fixtures exist.

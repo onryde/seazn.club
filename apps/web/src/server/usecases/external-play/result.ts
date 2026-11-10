@@ -102,7 +102,7 @@ type Disposition =
 
 const NONE: ResultWrite = { wrote: "none" };
 
-/** `AppendEventRequest.idempotency_key` is `max(200)` (api-v1/schemas.ts). */
+/** `AppendEventRequest.idempotency_key` is `max(200)` (api-v1/schemas/). */
 const KEY_MAX = 200;
 
 /** Deterministic, so a replay costs one ledger read and writes nothing: the

@@ -284,7 +284,7 @@ export const TABS: readonly SettingsTab[] = [
 // Competitions (W5) — the settings surface under `/o/{org}/c/{comp}/settings`.
 // ---------------------------------------------------------------------------
 
-/** The `visibility` values `Visibility` accepts (api-v1/schemas.ts). */
+/** The `visibility` values `Visibility` accepts (api-v1/schemas/). */
 export type SeededCompetitionVisibility = "private" | "unlisted" | "public";
 /** The `status` values the `competitions.status` CHECK accepts (V207). */
 export type SeededCompetitionStatus =
@@ -319,7 +319,7 @@ export interface SeededCompetition {
  *     here, per context — and the answer is then CHECKED against `org_id` on
  *     the returned row, which is the only thing that can catch a silent
  *     mis-seed.
- *  2. `CreateCompetition` (api-v1/schemas.ts) declares no `status`, and zod
+ *  2. `CreateCompetition` (api-v1/schemas/competitions.ts) declares no `status`, and zod
  *     STRIPS unknown keys rather than refusing them. A create sent
  *     `status: "live"` therefore returns 201 with `status: "draft"` and no
  *     error anywhere. Status is applied by a follow-up PATCH instead — the

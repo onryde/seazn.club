@@ -141,7 +141,7 @@ export type LostCountdown =
   | { kind: "warming"; reason: "no_inbound_timeout" | "phone_lost"; elapsedMs: number; remainingMs: number };
 
 type Word = "connected" | "disconnected" | "unknown";
-/** What THIS tick read of the phone's input (stream-sessions.ts `TickObservation`), the reading its ends were judged on.
+/** What THIS tick read of the phone's input (usecases/stream-sessions/tick.ts `TickObservation`), the reading its ends were judged on.
  *  - `fresh`: the word W19 judges, a claimed read's own or a coalesced sample young enough to stand for one; undefined =
  *    none (a failed read, a no-evidence read, an older sample).
  *  - `served`: the word `current.ingest` carries, fresh or carried by a no-evidence read (G-a); null = no word at all.

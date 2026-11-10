@@ -43,7 +43,7 @@ vi.mock("@/lib/posthog-server", () => ({ captureServer: vi.fn().mockResolvedValu
 const HAS_DB = !!process.env.DATABASE_URL;
 
 /** Every `CompetitionStatus` member the promotion must refuse, and the one it
- *  must accept. Derived from `schemas.ts`'s enum rather than a hand-typed
+ *  must accept. Derived from `api-v1/schemas/`'s enum rather than a hand-typed
  *  subset, so a new status shows up here as a compile-time choice. */
 type Status = "draft" | "published" | "live" | "completed" | "archived";
 

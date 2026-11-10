@@ -233,7 +233,7 @@ function fakeTransport(generateFixturesByStageId: Record<string, { id: string; e
         return { id: `court-${slug((body as { name: string }).name)}` } as T;
       }
       // The calendar route's real response is `CourtCalendar` — the stored
-      // rows plus two advisory stranded-fixture counts (schemas.ts:4556).
+      // rows plus two advisory stranded-fixture counts (api-v1/schemas/).
       // It is deliberately NOT an echo of the request: `seedVenuesAndCourts`
       // must not start reading its own write back as though it were a fetch,
       // and a fake that echoed would hide it if it did.
@@ -349,7 +349,7 @@ describe("seedSuite — single division, no venues (the _tiny shape)", () => {
     //
     // Nothing asserted this body until now, and the gap was not theoretical:
     // renaming the plan's `sportKey` -> `sport_key` (to match what
-    // `CreateDivision` actually spells, schemas.ts:229-230) left this file's
+    // `CreateDivision` actually spells, api-v1/schemas/) left this file's
     // fixture on the old name, so the driver sent `sport_key: undefined` — a
     // REQUIRED field (`z.string().min(1)`) — and the whole suite stayed green.
     // `tsc` could not see it either: `tsconfig.scripts.json:35` EXCLUDES
@@ -369,7 +369,7 @@ describe("seedSuite — single division, no venues (the _tiny shape)", () => {
     expect(divisionCall?.body && "tiebreakers" in (divisionCall.body as object)).toBe(false);
 
     // Same for the stage body, where the asymmetry bites harder: `CreateStage`
-    // is `.strict()` (schemas.ts:821), so an undeclared key is REJECTED and a
+    // is `.strict()` (api-v1/schemas/), so an undeclared key is REJECTED and a
     // stray `progression: undefined` would fail the create call outright.
     const stageCall = calls.find((c) => c.path === "/api/v1/divisions/div-open-division/stages");
     expect(stageCall?.body).toEqual([
@@ -525,7 +525,7 @@ describe("seedSuite — two divisions, venues+courts, and a SHARED ext_key acros
     // division/stage that declared them.
     //
     // Both are real create-body fields (`CreateDivision.tiebreakers`,
-    // schemas.ts:233; `CreateStage.progression`, schemas.ts:819) and both were
+    // api-v1/schemas/; `CreateStage.progression`, api-v1/schemas/stages.ts) and both were
     // dropped on the floor by the first cut of the plan builder. That was
     // invisible to every test then in the tree because no fixture declared
     // either — and `_tiny.json` itself declares `"tiebreakers"`, so the only

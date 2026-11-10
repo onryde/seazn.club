@@ -261,7 +261,7 @@ describe("decide — legal edges", () => {
     expect(p.next.state).toBe("warming");
     expect(p.effects).toEqual([{ type: "add_output" }]);
     // R2004 (spec §5.3): the Machine publishes to Cloudflare Input B and the destination is an Output on B. Which input
-    // the output attaches to is the usecase's (stream-sessions.ts runEffects); the domain says only that there is one.
+    // the output attaches to is the usecase's (usecases/stream-sessions/apply.ts runEffects); the domain says only that there is one.
     const c = decide(S({ state: "provisioning", mode: "composed" }), { type: "provisioned" }, T0);
     expect(c.next.state).toBe("warming");
     expect(c.effects).toEqual([{ type: "add_output" }]);
@@ -1790,7 +1790,7 @@ describe("C1 (lane C final review): a passthrough session that holds an output R
 });
 
 // R2008 (owner ruling 2026-10-19): a COMPOSED session that went live and whose camera NEVER appeared is failed
-// `camera_never_live` and its credit is refunded — the viewer never saw video. The use-case decides WHEN (stream-sessions.ts
+// `camera_never_live` and its credit is refunded — the viewer never saw video. The use-case decides WHEN (usecases/stream-sessions/phone-lost.ts
 // `phoneLostEnd`); the domain admits exactly one cell and names the money effect.
 describe("decide — R2008: expire × camera_never_live fails a composed LIVE session and owes its credit back", () => {
   const PLAYING: Runner = { state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1", stopRequestedAt: null, lastExit: null, crashes: CRASHES_NONE };

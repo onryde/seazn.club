@@ -33,7 +33,7 @@ import { isUnreachable } from "@/lib/is-server-answer";
 const BY_LOCALE: Record<Locale, Dict> = { en, es, fr, nl };
 
 /** The wire code thrown by the containment guard. ALL_CAPS_SNAKE by repo
- *  convention (schemas.ts) — a wire code, never an i18n key itself. */
+ *  convention (api-v1/schemas/) — a wire code, never an i18n key itself. */
 export const SCHEDULE_OUTSIDE_COMPETITION = "SCHEDULE_OUTSIDE_COMPETITION";
 
 /** The `extra` the guard rides along with. Every field optional at this

@@ -37,7 +37,7 @@ Playwright via CI dispatch only.
 
 ## Findings: spec pins re-verified on `5c4aeda9cd` (origin/main `a8f27bb7cf` + specs)
 
-True as cited: `StreamMode` `server/api-v1/schemas.ts:1652`; composed `output` null `:1765-1767`; the chain's
+True as cited: `StreamMode` `server/api-v1/schemas/`; composed `output` null `:1765-1767`; the chain's
 neutral `sending` `lib/stream-chain.ts:20` (R2006 note :19); `frozen` in `PROGRAMME_PHASES` `lib/relay-phase.ts:12`;
 `stream.onAir` `components/v2/fixture-stream-panel.tsx:2385`; `STREAM_POLL_MS = 5_000`
 `lib/stream-session-view.ts:37`; the overlay route's relay `private, no-store` and public `s-maxage=2`
@@ -132,7 +132,7 @@ Shifted or false (recorded):
 
 Modified: `server/sponsors/operator-log.ts` and `server/sponsors/airings.ts` (sponsors plan files),
 `server/overlay/load.ts`, `components/overlay/{overlay-scene.tsx,overlay-scenes.ts,overlay-slate.tsx,overlay-stage.tsx,use-moment-queue.ts}`,
-`server/api-v1/{schemas,openapi,key-scopes}.ts`, `server/usecases/stream-sessions.ts` (reset at admission; the session
+`server/api-v1/{schemas,openapi,key-scopes}.ts`, `server/usecases/stream-sessions/` (reset at admission; the session
 view field), `lib/stream-session-view.ts`, `components/v2/fixture-stream-panel.tsx`, the four `ui.json`,
 `e2e/{mobile,stream-overlay,overlay-compositor}.spec.ts`, `scripts/smoke.ts`.
 
@@ -167,7 +167,7 @@ it("RLS: org B reads neither table's org A rows (count reported)", …);
 
 **Files:**
 - Create: `server/stream-operator/state.ts`, `lib/operator-console.ts` (types + `skippableMomentIds`), `app/api/v1/fixtures/[id]/stream/operator/route.ts`
-- Modify: `server/api-v1/{schemas,openapi,key-scopes}.ts` (add `"PUT /fixtures/:id/stream/operator"` to the session-only list beside stop, :339-343), `server/usecases/stream-sessions.ts` (`createSession` :1514 calls `resetStreamOperator`, Q4)
+- Modify: `server/api-v1/{schemas,openapi,key-scopes}.ts` (add `"PUT /fixtures/:id/stream/operator"` to the session-only list beside stop, :339-343), `server/usecases/stream-sessions/start.ts` (`createSession` calls `resetStreamOperator`, Q4)
 - Test: `server/stream-operator/__tests__/state.test.ts`, the route test, `lib/__tests__/operator-console.test.ts`
 
 **Interfaces:**
@@ -179,7 +179,7 @@ export type OperatorScene = "match" | "break" | "full_time";
 export interface OperatorState { scene: OperatorScene; graphicsHidden: boolean; nextSponsorId: string | null; nextSetAt: string | null; skipMomentId: string | null; version: number }
 export const DEFAULT_OPERATOR_STATE: OperatorState;   // match, shown, nulls, version 0
 export function skippableMomentIds(plan: SponsorPlan, eventAt: (seq: number) => string, o: { now: number; delayMs: number; aheadMs: (seq: number) => number }): string[];  // Q3
-// schemas.ts
+// api-v1/schemas/
 export const PutStreamOperator = z.object({ version: z.number().int().min(0), scene: z.enum(["match", "break", "full_time"]).optional(),
   graphicsHidden: z.boolean().optional(), nextSponsorId: z.string().uuid().nullable().optional(), skipMomentId: z.string().max(80).optional() }).strict();
 // server/stream-operator/state.ts
@@ -213,7 +213,7 @@ it("empty body {version} only → 400 (nothing to change)", …);
 ### Task C3: The operator in the plan, the overlay answer and the airing row
 
 **Files:**
-- Modify: `server/sponsors/operator-log.ts` (`operatorLogFor` reads `fixture_stream_operator_log`, the cross-plan seam), `server/sponsors/airings.ts` (`recordAirings` sets `skipped`), `server/overlay/load.ts` (`operator` field), `server/api-v1/schemas.ts` (overlay answer)
+- Modify: `server/sponsors/operator-log.ts` (`operatorLogFor` reads `fixture_stream_operator_log`, the cross-plan seam), `server/sponsors/airings.ts` (`recordAirings` sets `skipped`), `server/overlay/load.ts` (`operator` field), `server/api-v1/schemas/` (overlay answer)
 - Test: rewrite `server/sponsors/__tests__/assign.test.ts`'s `operatorLogFor` case; add `server/stream-operator/__tests__/plan-wiring.test.ts`
 
 **Interfaces:**
@@ -282,7 +282,7 @@ it("skip folds only the named moment", …);
 ### Task C5: The health strip and the session-view field
 
 **Files:**
-- Modify: `lib/operator-console.ts` (`graphicsHealth`), `server/api-v1/schemas.ts` (`StreamSessionCurrent` :1751 gains `graphics`), `server/usecases/stream-sessions.ts` (`currentSession` :2439 fills it), `lib/stream-session-view.ts`
+- Modify: `lib/operator-console.ts` (`graphicsHealth`), `server/api-v1/schemas/streaming.ts` (`StreamSessionCurrent` gains `graphics`), `server/usecases/stream-sessions/current.ts` (`currentSession` fills it), `lib/stream-session-view.ts`
 - Test: `lib/__tests__/graphics-health.test.ts`, extend `server/usecases/__tests__/stream-sessions.test.ts`
 
 **Interfaces:**
@@ -370,7 +370,7 @@ it("the sponsor name cell's ancestor chain carries min-w-0 at every level; the n
 ### Task C9: The YouTube line from Connect (after the Connect PR merges)
 
 **Files:**
-- Modify: `lib/operator-console.ts` (`GraphicsHealth.youtube` gains Connect states), `server/usecases/stream-sessions.ts` (read the session's `youtube_broadcast_id` → `youtube_broadcasts.state`), the four `ui.json`
+- Modify: `lib/operator-console.ts` (`GraphicsHealth.youtube` gains Connect states), `server/usecases/stream-sessions/` (read the session's `youtube_broadcast_id` → `youtube_broadcasts.state`), the four `ui.json`
 - Test: extend `lib/__tests__/graphics-health.test.ts`
 
 **Interfaces:**

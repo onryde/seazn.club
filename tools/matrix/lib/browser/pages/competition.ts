@@ -26,7 +26,7 @@ import { paths } from "./paths.ts";
 /** The day HttpDriver's own create sends (http-driver.ts:96; pinned). */
 export const COMPETITION_ENDS_ON = "2030-12-31";
 
-/** The product's Competition row (api-v1 schemas.ts Competition). */
+/** The product's Competition row (api-v1 api-v1/schemas/competitions.ts Competition). */
 export interface CompetitionOut { id: string; org_id: string; name: string; slug: string; visibility: string; status: string }
 
 /** Creates the competition through the wizard, Unlisted as HttpDriver creates

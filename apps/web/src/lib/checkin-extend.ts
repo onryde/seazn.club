@@ -2,7 +2,7 @@
 // it is still open - per board, and for a whole round. Client-safe on purpose (nothing server-only): the server rule
 // (`server/external-play/window.ts` `extendRefusal`, `usecases/external-play/checkin-extend.ts`) and the two screens that
 // offer it (the arbiter panel, the organiser's Open round control) read ONE vocabulary here.
-// Relative with `.ts`, not "@/…": api-v1/schemas.ts imports this file, so it is also compiled under tsconfig.scripts.json
+// Relative with `.ts`, not "@/…": api-v1/schemas/ imports this file, so it is also compiled under tsconfig.scripts.json
 // (nodenext), which refuses an extensionless specifier - the convention of every file in that chain.
 import type { DictionaryKey } from "./i18n-keys.ts";
 

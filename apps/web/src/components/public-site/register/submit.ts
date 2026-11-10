@@ -10,7 +10,7 @@ import { toGroupPlayers } from "./roster";
 import type { CartState, ConsentState, ContactState } from "./types";
 import { routes } from "@/lib/routes";
 
-/** Mirrors `PublicRegisterGroupRequest`'s wire shape (schemas.ts:2430)
+/** Mirrors `PublicRegisterGroupRequest`'s wire shape (api-v1/schemas/)
  *  field-for-field. `locale` is deliberately absent: the route resolves it
  *  server-side from the `seazn_locale` cookie (`explicitLocale`,
  *  lib/explicit-locale.ts) and never reads a client-supplied one, so there is
@@ -72,7 +72,7 @@ export function buildSubmitBody(
   };
 }
 
-/** The subset of `PublicRegisterGroupResponse` (schemas.ts:2499) the
+/** The subset of `PublicRegisterGroupResponse` (api-v1/schemas/registration.ts) the
  *  post-submit redirect decision needs. */
 export interface SubmitResultShape {
   group_id: string;

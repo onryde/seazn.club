@@ -32,7 +32,7 @@
 | `apps/web/src/lib/db.ts` | Export the existing `Tx` type alias (one line) |
 | `apps/web/src/server/engine-db/append-event.ts` | Split: `appendEventInTx` (tx body) + `appendEvent` (wrapper). No behaviour change |
 | `apps/web/src/server/usecases/event-import.ts` | The whole import usecase: caps, resolve, dry-run, write loop, receipts, report |
-| `apps/web/src/server/api-v1/schemas.ts` | `EventImportRequest`, `EventImportReport` |
+| `apps/web/src/server/api-v1/schemas/` | `EventImportRequest`, `EventImportReport` |
 | `apps/web/src/server/api-v1/openapi.ts` | One `ROUTES` entry |
 | `apps/web/src/app/api/v1/divisions/[id]/events/import/route.ts` | HTTP shell: auth, feature gate, delegate |
 | `apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/import/page.tsx` | Server page: auth, feature gate, renders the client form |
@@ -402,7 +402,7 @@ git commit -m "refactor(scoring): extract appendEventInTx so a caller can own th
 
 **Files:**
 - Create: `apps/web/src/server/usecases/event-import.ts`
-- Modify: `apps/web/src/server/api-v1/schemas.ts`
+- Modify: `apps/web/src/server/api-v1/schemas/`
 - Test: `apps/web/src/server/usecases/__tests__/event-import-dryrun.test.ts`
 
 **Interfaces:**
@@ -539,7 +539,7 @@ Expected: FAIL — `../event-import` does not exist.
 
 - [ ] **Step 3: Write the schema**
 
-In `apps/web/src/server/api-v1/schemas.ts`, beside the other request schemas:
+In `apps/web/src/server/api-v1/schemas/`, beside the other request schemas:
 
 ```ts
 /** P11 (D6) batch score-event import. `seq` is assigned server-side 0..n — a

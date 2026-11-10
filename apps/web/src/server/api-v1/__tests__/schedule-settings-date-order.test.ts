@@ -25,7 +25,7 @@ import {
 // `courts.id` uuids). This suite is pure schema validation — no DB, no
 // `HAS_DB` gate — so a random uuid satisfies the shape without a live
 // courts row to seed against. NOTE: `blackouts[].court` (below) is a
-// SEPARATE, free-text `z.string().max(100).optional()` field (schemas.ts)
+// SEPARATE, free-text `z.string().max(100).optional()` field (api-v1/schemas/)
 // — it stays a plain label and is deliberately left untouched.
 const COURT_1 = randomUUID();
 

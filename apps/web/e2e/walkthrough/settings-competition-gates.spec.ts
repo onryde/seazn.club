@@ -90,13 +90,13 @@ const L = {
    * date inverted against the stored row, W8/F8).
    *
    * Read from the dictionary rather than retyped BECAUSE the schema says it
-   * is a mirror: `ENDS_BEFORE_STARTS` (api-v1/schemas.ts, `export const` just
+   * is a mirror: `ENDS_BEFORE_STARTS` (api-v1/schemas/competitions.ts, `export const` just
    * under the `#376` block comment) is documented as "Message mirrors the `en`
    * copy for `comp.validation.endsBeforeStarts` … an API client reads this
    * same sentence either out of a 400's `issues` … or out of a 422's
    * `error.message`". Two spellings of one sentence in two files is a standing
    * invitation to drift, and this is the only thing in the tree that would
-   * notice. A value import of `schemas.ts` is not the alternative: it pulls
+   * notice. A value import of `api-v1/schemas/` is not the alternative: it pulls
    * `@seazn/engine/scheduling` and `lib/registration-rules.ts` into a
    * Playwright worker, and no e2e file imports it today.
    */
@@ -689,7 +689,7 @@ test("case #18: an end before the start is refused both in one body (400, issue 
       ends_on: "2027-01-01",
     });
     // 400, NOT 422, for THIS shape. The order check is a `superRefine` on
-    // `PatchCompetition` (api-v1/schemas.ts, `checkDateOrder` and the
+    // `PatchCompetition` (api-v1/schemas/competitions.ts, `checkDateOrder` and the
     // `.superRefine(checkDateOrder)` on `PatchCompetition`), so it throws a
     // ZodError, and `v1Inner` maps ZodError to 400 with `issues`
     // (api-v1/http.ts) before any use-case runs. 422 on this route is the
@@ -734,7 +734,7 @@ test("case #18: an end before the start is refused both in one body (400, issue 
     //
     // `checkDateOrder` is a `superRefine` on the request BODY, so it can only
     // compare the dates a request CARRIES; a patch naming one date alone walks
-    // past it by construction. `schemas.ts` has always claimed the gap was
+    // past it by construction. `api-v1/schemas/` has always claimed the gap was
     // closed elsewhere ("the same order is re-checked in the use-case against
     // the stored row"), and until W8 that re-check did not exist: with
     // `starts_on = 2027-06-01` stored, a `PATCH { ends_on: "2027-01-01" }`

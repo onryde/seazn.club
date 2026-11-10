@@ -226,7 +226,7 @@ export async function assertPublicQuota(auth: AuthCtx, excludeId?: string): Prom
  * incapable of disagreeing again.
  *
  * Returns the note as well as the value, because the note is the API contract:
- * see `PublicQuotaDegraded` (api-v1/schemas.ts) for why a silent substitution
+ * see `PublicQuotaDegraded` (api-v1/schemas/competitions.ts) for why a silent substitution
  * in a 201 is wrong for every consumer and not only for the client that
  * happens to diff the row.
  *
@@ -661,14 +661,14 @@ export async function patchCompetition(
     if (!before) throw new HttpError(404, "competition not found");
     refOrgSlug = before.org_slug;
     refSlugBefore = before.slug;
-    // Settings walkthrough F8. `checkDateOrder` (api-v1/schemas.ts) is a
+    // Settings walkthrough F8. `checkDateOrder` (api-v1/schemas/competitions.ts) is a
     // `superRefine` on the request BODY, so it only ever compares the two
     // dates a single request CARRIES — and the settings form always sends
     // both, which is why this hole never showed up through the UI. A scripted
     // `PATCH { ends_on }` alone walked straight past it and left the row
     // ending before it starts (witnessed 2026-09-06 against a running
     // server: starts_on 2027-06-01 stored, `{ ends_on: "2027-01-01" }` -> 200).
-    // `schemas.ts` had documented this re-check as already existing; it did
+    // `api-v1/schemas/` had documented this re-check as already existing; it did
     // not. Same merge-against-the-stored-row shape as `divisions.ts`'s
     // age_min/age_max check, inside the SAME tenant transaction as the write
     // so nothing can slip between the read and the update, and reusing the

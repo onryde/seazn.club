@@ -44,7 +44,7 @@ export interface HttpDriverOptions {
 export const REQUEST_TIMEOUT_MS = 60_000;
 
 /** The visibility a template create applies when none is asked
- *  (schemas.ts CreateFromTemplate `visibility: Visibility.default("public")`,
+ *  (api-v1/schemas/stages.ts CreateFromTemplate `visibility: Visibility.default("public")`,
  *  pinned by http-driver.test.ts). The gallery sends none, so neither does
  *  createFromTemplate: both paths build the same competition, and anything
  *  else applied is the public-dashboard cap's degrade (W1-driving Task 13). */
@@ -166,7 +166,7 @@ export class HttpDriver implements OrganiserDriver {
     return this.#call(`/api/v1/divisions/${divisionId}/stages`);
   }
 
-  /** D2: an input's members ride inline as `new_person` members (schemas.ts
+  /** D2: an input's members ride inline as `new_person` members (api-v1/schemas/entrants.ts
    *  NewPersonMemberInput), in order; an input without them sends no
    *  `members` key at all, so an individual's body is unchanged. */
   async addEntrants(divisionId: string, entrants: readonly EntrantInput[]): Promise<EntrantRow[]> {
@@ -206,7 +206,7 @@ export class HttpDriver implements OrganiserDriver {
 
   /** The browser's roster filler (ruling 47): the entrants tab adds by name
    *  only, so each member is created as a person (POST /persons) and the
-   *  entrant's roster is then set in ONE PATCH naming them (schemas.ts
+   *  entrant's roster is then set in ONE PATCH naming them (api-v1/schemas/entrants.ts
    *  PatchEntrant `members`, a full replacement). Answers the stored roster.
    *  An empty roster is refused before any call: its PATCH would CLEAR the
    *  entrant's roster, never seed one. A refused person stops before the
@@ -395,7 +395,7 @@ export class HttpDriver implements OrganiserDriver {
   }
 
   /** W1-driving T6 (D1): the organiser's Confirm on the next stage's draft
-   *  (route seed-proposal/confirm, schemas.ts ConfirmSeedProposal). */
+   *  (route seed-proposal/confirm, api-v1/schemas/seeding-discipline.ts ConfirmSeedProposal). */
   async confirmSeedProposal(stageId: string, body: { proposalId: string; tiePicks?: readonly { slots: readonly string[]; order: readonly string[] }[] }): Promise<SeedConfirmOut> {
     return this.#call(`/api/v1/stages/${stageId}/seed-proposal/confirm`, "POST", body);
   }

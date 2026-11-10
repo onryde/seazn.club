@@ -1127,7 +1127,7 @@ async function seedTemplateCompetition(): Promise<void> {
  * "Manual division" (brief's own wording) resolves to `approval: "manual"`
  * on `registration_settings` (RS004/V364) — the ONLY manual-shaped mode this
  * settings model has (usecases/registrations/types.ts's `RegistrationSettingsRow` /
- * schemas.ts's `PutRegistrationSettings` both declare exactly `approval:
+ * api-v1/schemas/registration.ts's `PutRegistrationSettings` both declare exactly `approval:
  * "auto" | "manual"`, nothing else). There is no second "organiser-only, no
  * public link" mode to pick instead — an `approval: "manual"` entry submits
  * through the SAME public link as every other division and simply stops at

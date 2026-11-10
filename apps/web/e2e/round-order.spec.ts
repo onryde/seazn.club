@@ -369,7 +369,7 @@ const lineUp = (fixtureIds: string[], courtId: string) =>
 /** A syntactically valid but never-persisted court id — only used to probe
  *  `currentDivisionSeq`'s deliberately-wrong `expected_seq: 999_999_999`
  *  request, which the SEQ_CONFLICT check rejects before `court_id` is ever
- *  looked up against real rows. `CourtId` (schemas.ts) only checks the
+ *  looked up against real rows. `CourtId` (api-v1/schemas/common.ts) only checks the
  *  string is uuid-shaped. */
 const PROBE_COURT_ID = "00000000-0000-4000-8000-000000000000";
 

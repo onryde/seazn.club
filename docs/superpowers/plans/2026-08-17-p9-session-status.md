@@ -48,7 +48,7 @@ passes, each with its own gate, rather than one big-bang diff.
    rejects as `outside_competition_window` or start-window violations.
    This is independent of P9 and predates it.
 3. **`capacity.no_matching_court` is the wrong shape.** Typed codes in
-   this repo are ALL_CAPS_SNAKE — settled at `schemas.ts:3134-3138`,
+   this repo are ALL_CAPS_SNAKE — settled at `api-v1/schemas/`,
    precedent `CAPACITY_IMPOSSIBLE_CODE` (`capacity-guard.ts:32`). Same
    class of error as P8's `court.in_use`. P9 ships `NO_MATCHING_COURT`.
 4. **There is no `tournaments` table.** Amendment A5 owed P9 "the
@@ -275,7 +275,7 @@ placement); `p9e2e` has the prod build on :3387.
 ## OPEN: `/code-review` high found 14, and they are NOT all fixed yet
 
 Two implementers were running when this was written:
-- **wave 1a** (`history.ts`, V374, `schemas.ts` lock shapes): defensive replay
+- **wave 1a** (`history.ts`, V374, `api-v1/schemas/` lock shapes): defensive replay
   skip for a non-uuid court; unmappable blackout/locked-scope entries dropped
   in the migration so every stored config parses; guard mismatch at V374:666.
   Backfill block DROPPED per ruling 2.
@@ -284,7 +284,7 @@ Two implementers were running when this was written:
   rendered in the AI review panel and the joint divergent-courts warning; the
   client quote and the server charge counting courts differently (MONEY).
 
-**Wave 2 NOT STARTED** — needs `schemas.ts`/`schedule.ts` once wave 1 releases:
+**Wave 2 NOT STARTED** — needs `api-v1/schemas/`/`schedule.ts` once wave 1 releases:
 - **#10** `court_tag_mismatch` is `reason: "court"` → blocking → backs
   `assertPublishable`, so adding a tag requirement to a division with an
   existing board hard-refuses publish with no override. This contradicts

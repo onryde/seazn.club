@@ -7,7 +7,7 @@ import { listRegistrations } from "@/server/usecases/registrations";
 type Ctx = { params: Promise<{ id: string }> };
 
 // RS005 W1b: was a hand-copied, short allowlist (missing expired/rejected —
-// ?status=rejected 400d). Derives from RegistrationStatus.options (schemas.ts)
+// ?status=rejected 400d). Derives from RegistrationStatus.options (api-v1/schemas/registration.ts)
 // now — the ONE source, shared with the OpenAPI query enum (openapi.ts).
 const STATUSES = RegistrationStatus.options as readonly string[];
 

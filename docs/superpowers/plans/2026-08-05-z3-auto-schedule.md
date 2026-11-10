@@ -60,7 +60,7 @@
 | File | Change |
 | --- | --- |
 | `packages/engine/src/scheduling/index.ts` | One `export *` per new module. **Touched by every engine task — this is why the engine tasks are sequential.** |
-| `apps/web/src/server/api-v1/schemas.ts:856` | `AutoScheduleRequest.mode`; `AutoScheduleResult.metrics` / `.solver`. |
+| `apps/web/src/server/api-v1/schemas/` | `AutoScheduleRequest.mode`; `AutoScheduleResult.metrics` / `.solver`. |
 | `apps/web/src/server/usecases/schedule.ts:~660-740` | `autoSchedule` becomes a three-way dispatch. |
 | `apps/web/src/components/v2/schedule-board.tsx` | Result strip + Polish button. |
 | `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json` | New keys. |
@@ -2011,7 +2011,7 @@ git commit -m "feat(engine): polish mode reports already_optimal instead of chur
 ### Task 8: API schema + OpenAPI regeneration
 
 **Files:**
-- Modify: `apps/web/src/server/api-v1/schemas.ts:856-866`
+- Modify: `apps/web/src/server/api-v1/schemas/`
 - Modify: `openapi/v1.json`, `openapi/v1.public.json` (regenerated, never hand-edited)
 - Test: `apps/web/src/server/usecases/__tests__/schedule.test.ts`
 
@@ -2061,13 +2061,13 @@ Expected: five failures — `mode` is `undefined`.
 
 - [ ] **Step 3: Change the schema**
 
-Replace lines 856-866 of `apps/web/src/server/api-v1/schemas.ts`:
+Replace lines 856-866 of `apps/web/src/server/api-v1/schemas/`:
 
 ```ts
 // NOTE: `z.preprocess`, NOT `.transform()`. `openapi.ts:288` converts every
 // registered schema with `z.toJSONSchema(…, { io: "output" })`, and a trailing
 // transform IS the output node — so `openapi:gen` dies with "Transforms cannot
-// be represented in JSON Schema". `schemas.ts` already carries that warning on
+// be represented in JSON Schema". `api-v1/schemas/` already carries that warning on
 // `AiApplyMeta`. Preprocess puts the function on the INPUT side, where the
 // generator never looks. Measured, not guessed: the transform form was tried
 // and the generator failed.
@@ -2147,7 +2147,7 @@ git commit -m "feat(api): auto-schedule mode, board metrics and solver telemetry
 not suggestions:**
 
 1. **Task 8 shipped the SCHEMA ONLY.** `metrics`/`solver` are declared in
-   `apps/web/src/server/api-v1/schemas.ts` but `AutoScheduleOut` at
+   `apps/web/src/server/api-v1/schemas/` but `AutoScheduleOut` at
    `apps/web/src/server/usecases/schedule.ts:648` still returns
    `{ assignments, conflicts }`. Populating them is THIS task's work. Task 11's
    result strip and Task 15's e2e are both blind until it lands — the strip

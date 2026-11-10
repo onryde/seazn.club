@@ -582,7 +582,7 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
   });
 
   // Fix round 1, finding 1: DEFAULT_MATCH_MINUTES must come from
-  // ScheduleConfig's own zod default (schemas.ts, 30), not a retyped
+  // ScheduleConfig's own zod default (api-v1/schemas/, 30), not a retyped
   // constant. This division has NO schedule_settings row at all, so
   // getCompetitionDesk falls all the way back to DEFAULT_MATCH_MINUTES — a
   // fixture scheduled 45 minutes ago clears a 30-minute match (result

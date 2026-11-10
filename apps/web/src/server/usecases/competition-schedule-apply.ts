@@ -179,7 +179,7 @@ export interface CompetitionApplyDivision {
    *  overwrite a concurrent edit there while every other division was guarded. */
   expected_seq: number;
   /** P9 pass 3b: `court_id` (a real `courts.id`), not the legacy `court_label`
-   *  — mirrors `ApplyCompetitionScheduleRequest`'s wire shape (schemas.ts) and
+   *  — mirrors `ApplyCompetitionScheduleRequest`'s wire shape (api-v1/schemas/) and
    *  `applySchedule`'s (schedule/apply.ts) already-converted single-division twin.
    *  `venue_id` optional, same coalesce-over-unchanged semantics as there. */
   assignments: {

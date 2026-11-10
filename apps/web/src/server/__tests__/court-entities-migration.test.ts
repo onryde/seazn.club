@@ -1,7 +1,7 @@
 // V374 (P9 pass 1): stored-config cutover to real venues/courts entities.
 // The read-path trap this migration exists to close: a stored
 // schedule_settings.config row with string court names must not 500 once
-// ScheduleConfig.courts requires real court ids (schemas.ts). This suite
+// ScheduleConfig.courts requires real court ids (api-v1/schemas/). This suite
 // seeds REAL stored shapes (string courts, missing courts key, empty array,
 // duplicate strings, a unicode/whitespace string), runs the migration's own
 // SQL blocks (extracted from the delta file, same technique as
@@ -832,7 +832,7 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
 
     // P9 dispatch #7-adjacent ("treat the locked-scopes item like #7";
     // supersedes review wave 1, finding 12's "drop"): history.ts's
-    // LockInput / schemas.ts's DivisionLocks tightened `courts`/`venues` to
+    // LockInput / api-v1/schemas/ folder's DivisionLocks tightened `courts`/`venues` to
     // CourtId/VenueId, and the console echoes a division's existing
     // locked_scopes back into the body of every lock PUT, so a stale name
     // 400s that PUT with no UI path to clear it. Wave 1 fixed that by

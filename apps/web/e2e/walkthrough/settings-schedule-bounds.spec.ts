@@ -13,7 +13,7 @@ import {
 import { apiJson } from "../helpers";
 // A VALUE import, deliberately — `settings-competition-gates.spec.ts:87-89`
 // (W5) documents choosing NOT to do this ("no e2e file imports it today")
-// out of an unverified concern that `schemas.ts` pulls `@seazn/engine/
+// out of an unverified concern that `api-v1/schemas/` pulls `@seazn/engine/
 // scheduling` and `lib/registration-rules.ts` into a Playwright worker. That
 // concern is untested there, not confirmed — empirically probed here first
 // (a throwaway spec doing exactly this import, run against a live server:
@@ -69,7 +69,7 @@ import { ENDS_BEFORE_STARTS, WINDOW_ENDS_BEFORE_STARTS } from "../../src/server/
  * SCHEMA NOTE the plan asked to be confirmed before trusting any of this:
  * `PutScheduleSettings.config` is typed `ScheduleConfig` (not `.partial()`),
  * but every one of `ScheduleConfig`'s own fields carries either `.default()`
- * or `.nullish()` (`schemas.ts:1384-1461`) — none are bare-required. A
+ * or `.nullish()` (`api-v1/schemas/`) — none are bare-required. A
  * single-field body like `{ config: { matchMinutes: 0 } }` is therefore
  * schema-VALID on every OTHER field (they fill in from their defaults), so a
  * bound violation always fails on the bound under test, never on a missing
@@ -220,8 +220,8 @@ test("case #18: PUT refuses endAt before startAt, and a blackout window with to 
     });
     expect(order.status, `startAt/endAt reversed: ${JSON.stringify(order.error)}`).toBe(400);
     // Identity against the exported constant, not a substring — the same
-    // symbol `checkDateOrder` (competition-level, `schemas.ts:71-78`) and
-    // `checkInstantOrder` (division-level, this endpoint, `schemas.ts:1487-
+    // symbol `checkDateOrder` (competition-level, `api-v1/schemas/`) and
+    // `checkInstantOrder` (division-level, this endpoint, `api-v1/schemas/-
     // 1526`) both reference, confirmed at the source rather than assumed
     // from the ground-truth doc's own paraphrase.
     const orderIssue = issuesOf(order).find((i) => i.path.join(".") === "config.endAt");
@@ -238,7 +238,7 @@ test("case #18: PUT refuses endAt before startAt, and a blackout window with to 
       WINDOW_ENDS_BEFORE_STARTS,
     );
 
-    // `checkInstantOrder` (`schemas.ts:1516-1525`) loops over BOTH
+    // `checkInstantOrder` (`api-v1/schemas/`) loops over BOTH
     // `blackouts` and `sessionWindows` in one `[key, rows]` tuple — the
     // blackouts assertion above alone leaves `sessionWindows`'s own tuple
     // membership (and its own path/message) completely unproven; a typo in

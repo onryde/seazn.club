@@ -12,7 +12,8 @@
 // `frozen` id anchored only via `current` (no `.locked`) is NOT safe on
 // EVERY `buildSchedule` exit. The success/`improved` path anchors it
 // correctly (via `pinnedAssignments`), but every FALLBACK exit —
-// `already_optimal`, `verifier_rejected`, `not_searched`, a proved tie —
+// `already_optimal`, `verifier_rejected`, `not_searched`, a proved tie that does not
+// disturb `current` less (engine 6.0.2) —
 // reports `seed.assignments`, the PLAIN unpinned greedy seed, which has no
 // idea a `current`-only id is supposed to stay put (confirmed empirically:
 // a throwaway two-fixture repro against unmodified `build.ts` swapped both

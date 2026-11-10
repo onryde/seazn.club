@@ -1,7 +1,7 @@
 // RS005 W1b — regression coverage for the division registration list route.
 // Was: a hand-copied 5-value STATUSES array missing `expired`/`rejected`, so
 // `?status=rejected` 400d even though the DB CHECK (V364) allows it. Fixed to
-// derive from schemas.ts's `RegistrationStatus` — the ONE source, shared with
+// derive from api-v1/schemas/registration.ts's `RegistrationStatus` — the ONE source, shared with
 // the OpenAPI query enum — and the response is now the widened
 // `RegistrationListEntry` shape (RS005 W1a's `listRegistrations`).
 import { afterAll, describe, expect, it, vi } from "vitest";

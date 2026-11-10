@@ -826,9 +826,9 @@ export function AiConsole({
             fixture_id: p.fixture_id,
             scheduled_at: p.scheduled_at,
             // P9 pass 3b: the wire KEY is `court_id` on the apply route
-            // (`ApplyScheduleRequest`'s `.strict()` item, schemas.ts) —
+            // (`ApplyScheduleRequest`'s `.strict()` item, api-v1/schemas/) —
             // `p.court_label` is still the AI plan response's OWN field
-            // name (schemas.ts's `AiPlanResponse`, unconverted by design),
+            // name (api-v1/schemas/ai-planning.ts's `AiPlanResponse`, unconverted by design),
             // and it already carries a real `courts.id` value.
             court_id: p.court_label,
             stage_id: stageOf.get(p.fixture_id) ?? "",

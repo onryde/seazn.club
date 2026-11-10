@@ -246,7 +246,7 @@ line.
     a replaced phone's session lines are kept. This is R4's case.
   - A session moved to a reissued code (the C3 move in `capture-phone.ts`) belongs to the new code.
   - **A null `pairing_id` means the line is dropped.** That is an organiser's start on a fixture with no phone paired:
-    `StartActor.pairingId` is `phone?.pairingId ?? null` on that path (`stream-sessions.ts:1233`), and V430:109 makes
+    `StartActor.pairingId` is `phone?.pairingId ?? null` on that path (`usecases/stream-sessions/`), and V430:109 makes
     the column nullable. No pairing leads to any code, so there is nothing to attribute the line to (Q9).
   - An unknown sid, or another code's sid, is dropped.
 - **A masked `sid` (`***`) is dropped.** It names no session that can be checked.

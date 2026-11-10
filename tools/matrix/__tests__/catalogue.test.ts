@@ -198,7 +198,7 @@ function thirdPlaceKey(): string {
 
 const SCHEMAS_TS = (): string => schemasText();
 
-/** The body of api-v1/schemas.ts's StageConfig — a strictObject, so the POST /stages door 400s on any key outside it. */
+/** The body of api-v1/schemas/stages.ts's StageConfig — a strictObject, so the POST /stages door 400s on any key outside it. */
 function stageConfigBody(src: string = SCHEMAS_TS()): string {
   const start = src.indexOf("export const StageConfig = z\n  .strictObject({\n");
   if (start < 0) throw new Error("schemas.ts: StageConfig is no longer a z.strictObject");

@@ -14,13 +14,11 @@
 // A19/A20 (one destination one row; the stored url re-checked at provision).
 //
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): every rig rides seedOrg's `generic` division. Relay is sport-agnostic
-// because nothing in stream-sessions.ts reads the sport except the admission SNAPSHOT, which copies `divisions.sport_key`
+// because nothing in usecases/stream-sessions/ reads the sport except the admission SNAPSHOT, which copies `divisions.sport_key`
 // verbatim — and the Db test compares that copy to its source row rather than to a sport literal.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
 import fc from "fast-check";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { ApiV1Error, apiV1 } from "@/lib/client-v1";
@@ -49,6 +47,7 @@ import { composedUnavailable, disabledRelayDrivers, relayDrivers, setRelayDriver
 import type { OutputState, ProviderCallRecorder, RunnerSpec } from "@/server/relay/ports";
 import * as telemetry from "@/server/relay/telemetry";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
+import { streamSessionsSource } from "./_stream-sessions-source";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import {
   creditBalance, grantCredits, orgMoneyLockKey, refundCredits, revokeCredits, streamMonthlyGrantKey, streamMonthlyPeriod,
@@ -2150,7 +2149,7 @@ describe.skipIf(!HAS_DB)("lazy expiry — every rule fires on a READ, with NO sw
     // lacks the string — while containing that very literal, so it was
     // permanently red. The needle is built from parts for the same reason: a
     // source scan that names its own needle verbatim cannot scan itself.
-    const usecase = readFileSync(resolve(import.meta.dirname, "../stream-sessions.ts"), "utf8");
+    const usecase = streamSessionsSource();   // every module of the stream-sessions folder (it was one file)
     const needle = ["relay", "sweep"].join("-");
     expect(usecase).not.toContain(needle);
     expect(usecase).toContain("applyExpiry("); // the positive twin: the lazy call exists
@@ -6330,7 +6329,7 @@ describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewe
         await new Promise((res) => setTimeout(res, 20));
       }
     };
-    const SPEND_READ = "%as net from org_stream_credits%";   // the spend read's own text (stream-sessions.ts currentSession)
+    const SPEND_READ = "%as net from org_stream_credits%";   // the spend read's own text (usecases/stream-sessions/current.ts currentSession)
     const FOREIGN_APP = "m5 another suite";
     const B_LATE_MS = 750;
     const anyWaiters = async () => (await sql<{ n: number }[]>`

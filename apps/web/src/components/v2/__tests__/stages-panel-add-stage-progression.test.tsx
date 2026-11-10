@@ -1,6 +1,6 @@
 // F2 (unified progression field): stages-panel.tsx's "Add stage" form
 // (AddStageForm) POSTs qualification: { topN } today. Task 5a already made
-// CreateStage .strict() (schemas.ts), so that unknown key now 400s and the
+// CreateStage .strict() (api-v1/schemas/), so that unknown key now 400s and the
 // live "Add stage" flow is broken until this converts — dispatch's own
 // framing: "Highest priority of your UI files."
 //

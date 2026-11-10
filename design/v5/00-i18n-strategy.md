@@ -92,7 +92,7 @@ recipient locale is unknown.
 - Timezones unchanged (competition tz remains authoritative for schedule display).
 - zod/API errors: server keeps stable `code`s (already in the v1 envelope); client maps
   code → `errors.*` dictionary key, falling back to server `message`. Custom zod messages
-  in `schemas.ts` become codes where user-facing. No server-side translated strings in v1
+  in `api-v1/schemas/` become codes where user-facing. No server-side translated strings in v1
   API responses (API consumers get English + codes; documented).
 
 ## §6 Out of scope (binding)

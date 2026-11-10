@@ -28,7 +28,7 @@ Today only four sports (tennis, badminton, table tennis, volleyball) can set rul
 - **Deciders.** Football extra time and penalties, cricket super over and hockey shoot-out are one switch for the whole
   division, labelled "Knockout fixtures only". Cricket's switch is not actually limited: the engine plays a super over on
   ANY tie when it is on (`cricket.ts:939` reads cfg only; read, not run). Stage decider keys can be set only through the
-  create/replace stages API body, where they are typed `z.unknown()` (`api-v1/schemas.ts:1109-1110`, SC-P8).
+  create/replace stages API body, where they are typed `z.unknown()` (`api-v1/schemas/`, SC-P8).
 - **No match-level change.** The only per-match config is the V347 snapshot (`fixtures.config_snapshot`), null until
   the first event and then frozen (`append-event.ts:297`, `:449`). There is nowhere to say "this one match is best of 1".
 - **Division edits: one lock too strict, one missing** (corrected by the plan review; the brainstorm's "no started
@@ -252,7 +252,7 @@ for finalized matches after a reopen, and is a `resolveFixtureCfg` caller, so it
 - `usecases/fixture-rules.ts` (new) — `writeFixtureRulesOverride` + refold check + audit.
 - `usecases/divisions.ts` — Q3/Q4 refusals; partial save reports refused fields.
 - `usecases/stages.ts` — stage creation writes `stageDefaults`; `replaceStages` carry keeps the new keys.
-- `api-v1/schemas.ts` — decider keys validated (SC-P8); `PUT /stages/{id}/rules` covers every sport;
+- `api-v1/schemas/` — decider keys validated (SC-P8); `PUT /stages/{id}/rules` covers every sport;
   `PUT /fixtures/{id}/rules` (new); error codes in OpenAPI (CI drift check).
 - `public-site/stage-format-lines.ts`, `describe-rules.ts` — stage resolution, all sports, deciders.
 - `db/migration/deltas/V4xx__fixture_rules_override.sql` (number above V438): `fixtures.rules_override jsonb null`

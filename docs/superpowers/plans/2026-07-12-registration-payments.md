@@ -207,7 +207,7 @@ Fix any `platformFeePercent` imports (grep; the unit test file references it —
 ### Task 3: Schemas + settings write path (method, instructions, validations)
 
 **Files:**
-- Modify: `apps/web/src/server/api-v1/schemas.ts:646-722`
+- Modify: `apps/web/src/server/api-v1/schemas/`
 - Modify: `apps/web/src/server/usecases/registrations.ts` (`RegistrationSettingsRow`, `SETTINGS_COLS`, `DEFAULT_SETTINGS`, `getRegistrationSettings`, `putRegistrationSettings`)
 - Test: extend `apps/web/src/server/usecases/__tests__/registrations.test.ts`
 
@@ -245,7 +245,7 @@ it("offline fees stay plan-free and store an instructions override", async () =>
 
 - [ ] **Step 3: Implement**
 
-schemas.ts:
+api-v1/schemas/:
 - `RegistrationStatus` enum += `"expired"`.
 - `PutRegistrationSettings` object gains:
 

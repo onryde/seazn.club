@@ -428,7 +428,7 @@ const ACTUAL_ENGINES = ["greedy", "optimized"] satisfies readonly ActualEngine[]
 const SOLVER_MODES = ["build", "reflow", "polish"] satisfies readonly SolverMode[];
 
 /** `ScheduleMetricsOut` (`schedule.ts`), which is `ScheduleMetrics`
- *  (`schemas.ts:1693-1699`) camelCased once at the driver seam. */
+ *  (`api-v1/schemas/`) camelCased once at the driver seam. */
 export const ScheduleMetricsReport = z.object({
   makespanMinutes: z.number(),
   worstIdleGapMinutes: z.number(),

@@ -19,7 +19,7 @@ Read first: `_RULES.md` → `_INDEX.md` → spec
 ## Files (scout re-pins ALL of these first — spec citations are stale by design)
 
 - new: `packages/engine/src/scheduling/capacity.ts` + unit tests beside it
-- `apps/web/src/server/api-v1/schemas.ts` (report + 422 shape),
+- `apps/web/src/server/api-v1/schemas/` (report + 422 shape),
   schedule-auto route + its usecase, OpenAPI spec regen output
 - schedule setup component (scout locates), 4 dictionaries
 

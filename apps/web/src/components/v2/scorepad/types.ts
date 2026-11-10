@@ -3,7 +3,7 @@
 // fixture-console.tsx's LiveState/EventIn ("use client" component file):
 // those mirror the same wire shapes but this tree must stay importable from
 // a plain Node/test context with zero React in the graph. Shapes below are
-// pinned against server/api-v1/schemas.ts, server/usecases/scoring.ts and
+// pinned against server/api-v1/schemas/, server/usecases/scoring.ts and
 // server/usecases/fixtures.ts (see module-client.ts / pipeline.ts headers
 // for the exact line refs measured on main @ ae22e299).
 
@@ -24,7 +24,7 @@ export interface PendingEvent {
    *  future UI's list rendering. Distinct from `idempotencyKey`: this is
    *  local-only bookkeeping, never sent over the wire. */
   localId: string;
-  /** Sent as AppendEventRequest.idempotency_key (schemas.ts:624-630). Never
+  /** Sent as AppendEventRequest.idempotency_key (api-v1/schemas/scoring.ts). Never
    *  regenerated once the event is enqueued. */
   idempotencyKey: string;
   /** Envelope type string, e.g. "cricket.ball", "core.void". */
@@ -233,7 +233,7 @@ export interface LedgerSlotEvent {
   voids_event_id?: string | null;
 }
 
-/** AppendEventResponse / ScoreOutcome (schemas.ts:644-648,
+/** AppendEventResponse / ScoreOutcome (api-v1/schemas/,
  *  server/usecases/scoring.ts `ScoreOutcome`) — the 201 success body. */
 export interface AppendSuccess {
   seq: number;

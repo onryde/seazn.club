@@ -95,7 +95,7 @@ export interface RegisterInfo {
   /** Widened at step 4 (CONSENT) — `org.name` interpolates into the GDPR
    *  data-processing sentence (register.consent.data). The real
    *  PublicRegistrationInfo the server hands page.tsx already carries this
-   *  (schemas.ts:2354); narrowed here the same way `divisions` already is. */
+   *  (api-v1/schemas/); narrowed here the same way `divisions` already is. */
   org: { name: string };
   divisions: DivisionLike[];
 }

@@ -879,7 +879,7 @@ test("a court's restricted hours reach the scheduler and raise an advisory confl
   );
   // Resolve court 2's id from the venue read, then pin the fixture onto it at a
   // time INSIDE the window the calendar below will close.
-  // PatchFixture (schemas.ts:964) is .strict() — court_id and scheduled_at only.
+  // PatchFixture (api-v1/schemas/fixtures.ts) is .strict() — court_id and scheduled_at only.
   await apiJson(page.request, `/api/v1/fixtures/${seeded.fixtureId}`, "PATCH", {
     court_id: court2Id,
     scheduled_at: wednesdayAt("10:00"),
@@ -930,7 +930,7 @@ test("a court's restricted hours reach the scheduler and raise an advisory confl
   // Asserted through the validate API, NOT the board: the board's copy for this
   // conflict is already pinned by court-tags-scheduling.spec.ts:697-706, and
   // re-asserting it here would duplicate that coverage while proving less.
-  // ScheduleConflict (schemas.ts:1548-1592) carries `blocking` — so the API can
+  // ScheduleConflict (api-v1/schemas/scheduling.ts) carries `blocking` — so the API can
   // state the advisory property DIRECTLY, which no board assertion can.
   const validated = await apiJson<{ conflicts: { fixture_id: string; code: string; blocking: boolean }[] }>(
     page.request,

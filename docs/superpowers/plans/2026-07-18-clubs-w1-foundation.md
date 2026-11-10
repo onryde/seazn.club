@@ -18,7 +18,7 @@
 - **Colors deviation from spec §4.1 (intentional):** keep the deployed `z.record(z.string(), z.string())` wire shape; the UI writes flat keys `home_primary`, `home_secondary`, `away_primary`, `away_secondary`. No nested object, no data migration.
 - Keep `/directory?tab=clubs` URL stable (label changes to "Clubs & Teams"; param value stays `clubs`).
 - i18n: every new UI string goes into `apps/web/src/dictionaries/{en,fr,es,nl}/ui.json` — the 4-locale parity test fails otherwise.
-- After ANY change to `apps/web/src/server/api-v1/schemas.ts` or route files: run `npm run openapi:gen` and commit the regenerated `openapi/*.json` (3×-repeated gotcha).
+- After ANY change to `apps/web/src/server/api-v1/schemas/` or route files: run `npm run openapi:gen` and commit the regenerated `openapi/*.json` (3×-repeated gotcha).
 - Every code change ships a test that fails without it.
 - Work in a worktree branch, never checkout in the main repo dir: `git worktree add .claude/worktrees/clubs-w1 -b feat/clubs-w1`.
 - Verify before push: `npx tsc --noEmit` + `npm run test:unit` from `apps/web`.
@@ -283,7 +283,7 @@ git commit -m "feat(clubs): enforce clubs.max/teams.max/teams.squad_max via enti
 
 **Files:**
 - Modify: `apps/web/src/server/usecases/clubs.ts` (COLS, create, patch, slug)
-- Modify: `apps/web/src/server/api-v1/schemas.ts` (Club, CreateClub, PatchClub)
+- Modify: `apps/web/src/server/api-v1/schemas/clubs.ts` (Club, CreateClub, PatchClub)
 - Test: `apps/web/src/server/usecases/__tests__/club-slug.test.ts` (new)
 
 **Interfaces:**
@@ -351,7 +351,7 @@ In `patchClub`, before the update, when `patch.slug !== undefined && patch.slug 
     }
 ```
 
-`schemas.ts` — extend `Club` output with `slug/home_ground/website/notes: z.string().nullable()`; `CreateClub` + `PatchClub` with the same optional fields (`website: z.string().url().max(200)`, `home_ground: z.string().min(1).max(200)`, `notes: z.string().max(2000)`, `slug: z.string().min(1).max(80)` — patch variants `.nullable().optional()`).
+`api-v1/schemas/` — extend `Club` output with `slug/home_ground/website/notes: z.string().nullable()`; `CreateClub` + `PatchClub` with the same optional fields (`website: z.string().url().max(200)`, `home_ground: z.string().min(1).max(200)`, `notes: z.string().max(2000)`, `slug: z.string().min(1).max(80)` — patch variants `.nullable().optional()`).
 
 - [ ] **Step 4: Run tests + openapi**
 
@@ -372,7 +372,7 @@ git commit -m "feat(clubs): profile columns + auto slug on create, explicit slug
 **Files:**
 - Modify: `apps/web/src/server/usecases/clubs.ts` (contacts CRUD, getClub includes contacts)
 - Modify: `apps/web/src/server/usecases/teams.ts` (setTeamClub)
-- Modify: `apps/web/src/server/api-v1/schemas.ts` (ClubContact, CreateClubContact, PatchClubContact, CreateTeamStandalone, PatchTeam)
+- Modify: `apps/web/src/server/api-v1/schemas/clubs.ts` (ClubContact, CreateClubContact, PatchClubContact, CreateTeamStandalone, PatchTeam)
 - Create: `apps/web/src/app/api/v1/clubs/[id]/contacts/route.ts`, `.../contacts/[contactId]/route.ts`, `apps/web/src/app/api/v1/teams/[id]/route.ts`
 - Modify: `apps/web/src/app/api/v1/teams/route.ts` (POST)
 - Test: `apps/web/src/server/usecases/__tests__/club-contacts.test.ts` (new)
@@ -534,7 +534,7 @@ export async function setTeamClub(
 
 - [ ] **Step 4: Schemas + routes**
 
-`schemas.ts` (near the Club block):
+`api-v1/schemas/` (near the Club block):
 
 ```ts
 export const ClubContact = z.object({
@@ -1409,7 +1409,7 @@ function QuickAdd({ name, persons, busy, onAdded, onError }: {
 }
 ```
 
-(Import `apiV1` — the moved file needs the same imports the old panel had. Verify the exact `POST /api/v1/persons` response shape — unwrap per `apiV1`'s envelope handling — and `CreatePerson`'s required fields at `schemas.ts:271`; if `consent` or other fields are required, send their minimal defaults exactly as `PersonsPanel`'s create form does.)
+(Import `apiV1` — the moved file needs the same imports the old panel had. Verify the exact `POST /api/v1/persons` response shape — unwrap per `apiV1`'s envelope handling — and `CreatePerson`'s required fields at `api-v1/schemas/`; if `consent` or other fields are required, send their minimal defaults exactly as `PersonsPanel`'s create form does.)
 
 Also export the self-fetching wrapper for the thin list and teams tab:
 

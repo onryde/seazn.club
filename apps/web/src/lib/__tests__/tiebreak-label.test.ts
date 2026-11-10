@@ -77,7 +77,7 @@ describe("localizedTieBreakLabel", () => {
   });
 
   // W3 app-B T3 (X-SW-31, step 1): the key list is the engine's own TiebreakerKey vocabulary - the wire enum
-  // `TiebreakerKeyS`, which `schemas.ts` holds equal to the engine's type in BOTH directions (an `AssertTrue`) - never a
+  // `TiebreakerKeyS`, which `api-v1/schemas/` holds equal to the engine's type in BOTH directions (an `AssertTrue`) - never a
   // list typed here. Counted: a vocabulary that grew a key gains a row of words in all four locales or this reds.
   it("every TiebreakerKey the engine declares has a console rule word and a public tie-break word in all four locales (counted)", () => {
     const keys = TiebreakerKeyS.options;

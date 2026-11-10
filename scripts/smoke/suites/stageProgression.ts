@@ -243,7 +243,7 @@ export async function stageProgressionSuite(): Promise<void> {
     );
   }
   // P6 (D4b task A) fix round 1 — the schema comment's "Cleared on fill"
-  // contract (schemas.ts's Fixture.home_slot_label), proved end to end: a
+  // contract (api-v1/schemas/scoring.ts's Fixture.home_slot_label), proved end to end: a
   // filled slot must not keep carrying stale descriptor text a renderer
   // could show ALONGSIDE the real entrant name.
   check(

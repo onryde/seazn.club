@@ -30,7 +30,7 @@ const BY_LOCALE: Record<Locale, Dict> = { en, es, fr, nl };
 
 /** The four refusals `issueChallenge` (server/usecases/stages/ad-hoc.ts) can put in
  *  front of an organiser using the challenge form. ALL_CAPS_SNAKE wire codes
- *  by repo convention (schemas.ts), never i18n keys themselves.
+ *  by repo convention (api-v1/schemas/), never i18n keys themselves.
  *
  *  The fifth refusal that function can throw — "challenges only exist on
  *  ladder stages" — is deliberately absent: the panel only renders on a

@@ -16,7 +16,7 @@
 //    is swept, and the fake round trip runs on every team sport.
 //
 // Expected values come from the engine's declarations (resolvePositions,
-// validateLineup), the product's text (schemas.ts' member cap) and the cited
+// validateLineup), the product's text (api-v1/schemas/' member cap) and the cited
 // rulebooks (RULEBOOK_SIDE_SIZE) — never from rosters.ts.
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";

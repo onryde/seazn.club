@@ -391,7 +391,7 @@ test("a court-scoped blackout reaches the OPTIMISER instead of switching it off"
         // The two courts' offered start times now genuinely differ -- the
         // exact shape that used to be refused before ever reaching placement.
         //
-        // `blackouts[].court` (ScheduleConfig, schemas.ts) is still a plain
+        // `blackouts[].court` (ScheduleConfig, api-v1/schemas/) is still a plain
         // `z.string()` post-P9 — NOT narrowed to CourtId — but usecases/schedule/ folder's
         // own builder forwards it verbatim alongside `courts`
         // (now real ids) with no separate name resolution, so a blackout

@@ -31,7 +31,7 @@ Fields and their gates, read directly from the component (line numbers are `comp
 
 **Case #10 (discoverable auto-clear) is already implemented**, not a gap: `patchCompetition` (usecases/competitions.ts:563-565) — `if (nextVisibility !== "public" && before.discoverable && effective.discoverable !== false) effective.discoverable = false;`. This wave's job is proving it with a real PATCH+read-back, per `_RULES.md` §9 ("a claim about what a person sees is settled by driving the product, never by reading the code") — not fixing anything.
 
-**Case #18 (`ends_on < starts_on`)** is enforced twice: client (`save()`, line 142-145, blocks before the request) and server (`schemas.ts:74-78`, a zod `.refine` on `PatchCompetition` producing `code: "custom", path: ["ends_on"]`). Both need a positive proof, per `_RULES.md` §9 and the programme's own recurring finding that a client-only check reads as a server guarantee it is not.
+**Case #18 (`ends_on < starts_on`)** is enforced twice: client (`save()`, line 142-145, blocks before the request) and server (`api-v1/schemas/`, a zod `.refine` on `PatchCompetition` producing `code: "custom", path: ["ends_on"]`). Both need a positive proof, per `_RULES.md` §9 and the programme's own recurring finding that a client-only check reads as a server guarantee it is not.
 
 **Youth interstitial** (`visibility-picker.tsx:47-56`): leaving `private` while `hasYouthDivisions` raises a `useConfirm()` modal (`visibility.youth.*` message keys) before `onChange` fires. `hasYouthDivisions` is a server-computed prop (page.tsx:82-88, reads the `divisions.youth` boolean column) — this is UI-only behavior (the modal, and the fact that declining leaves `value` unchanged) with no server-side equivalent to cross-check, so it earns its one browser round trip per `_RULES.md` §5.4.
 
@@ -107,7 +107,7 @@ export async function releaseCompetition(request: APIRequestContext, id: string)
 }
 ```
 
-Check `POST /api/v1/competitions`'s create schema (`schemas.ts` around line 88-93, already read for §0) for any other **required** field beyond `name`/`ends_on` before finalizing this — `rs007-money-matrix.spec.ts:333`'s own `createCompetition` helper is the closest existing example; diff your version against it and reconcile any field it sends that this one does not, or say why not.
+Check `POST /api/v1/competitions`'s create schema (`api-v1/schemas/` around line 88-93, already read for §0) for any other **required** field beyond `name`/`ends_on` before finalizing this — `rs007-money-matrix.spec.ts:333`'s own `createCompetition` helper is the closest existing example; diff your version against it and reconcile any field it sends that this one does not, or say why not.
 
 - [ ] **Step 2: Write the spec file — general tab drive+persist**
 

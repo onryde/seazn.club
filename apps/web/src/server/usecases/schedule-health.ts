@@ -95,7 +95,7 @@ interface HealthFixtureRow {
  *  (schedule/board.ts's loader is division-scoped only) — this is deliberately
  *  NOT added there; see this file's header. */
 // Review finding #1: `abandoned` IS a status this occupies real court time
-// under — it is a valid state in the canonical enum (api-v1/schemas.ts's
+// under — it is a valid state in the canonical enum (api-v1/schemas/scoring.ts's
 // `Fixture.status`) and `me-officiating.ts`'s own FINISHED_STATUSES groups
 // it with decided/finalized/forfeited as "the match happened". Dropping it
 // here would shrink an affected entrant's restSpread `span_e` and invent a

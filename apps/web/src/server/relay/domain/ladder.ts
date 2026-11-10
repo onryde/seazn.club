@@ -1,5 +1,5 @@
 // The compositor's degrade ladder, as web reads it off the heartbeat (relay-job.v1 `rung`). It imports NOTHING, on
-// purpose: api-v1/schemas.ts takes `z.enum(LADDER_RUNGS)` from here, and that file is also loaded by the standalone
+// purpose: api-v1/schemas/ takes `z.enum(LADDER_RUNGS)` from here, and that file is also loaded by the standalone
 // generators (node --experimental-strip-types, no module resolver). domain-purity.test.ts pins it.
 //
 // Owner ruling 2026-10-18 (compositor `docs/_INDEX.md` Owed 20, "no lite mode; if CPU impacts, measure and raise the

@@ -32,7 +32,7 @@
   - `capture-beat.v1.json`;
   - `capture-start.v1.json`.
 
-  Their zod twins are in `server/api-v1/schemas.ts`. The v1 QR contract and its fixtures are deleted (W4, a hard cut).
+  Their zod twins are in `server/api-v1/schemas/`. The v1 QR contract and its fixtures are deleted (W4, a hard cut).
   Capture vendors the contracts. The bytes have not changed since capture verified them. The commit that holds them is
   now `c596f2e40`, after the 2026-10-05 rebase.
 - **One migration, `V430__capture_stream_codes.sql`.**
@@ -566,7 +566,7 @@ a peer session's word.
   lock, **F-CF5**. Today it affects only failure throttling.
 - **Pending the owner:** the YouTube one-vs-many-video behaviour (S10), and the organiser help text that waits on it.
 - **Later, PR-2 (final review G-1): a stream code outlives its issuer's membership.** A phone start is
-  attributed to the code's `issued_by` (`stream-sessions.ts`, `capture-phone.ts`), and removing a member does not touch
+  attributed to the code's `issued_by` (`usecases/stream-sessions/`, `capture-phone.ts`), and removing a member does not touch
   `fixture_stream_codes`. A removed staff member, or anyone holding a photo of the QR, can still start that fixture's
   paid broadcast to the org's own saved destination until Revoke & reissue or code expiry. The damage is bounded to
   the org's own channel and credits. **Owner decision 2026-10-05: fixed in PR-2.** A user's codes are revoked when their membership is

@@ -1,8 +1,8 @@
 // lib/relay-phase.ts is IMPORT-FREE, and that is a guard, not a comment (R2007 PR B review M3). Two readers depend on it:
-//   * api-v1/schemas.ts imports it by relative `.ts` path, and scripts/openapi-gen.ts / gen-relay-contracts.ts load
-//     schemas.ts under bare `node --experimental-strip-types` (no `@/`);
+//   * api-v1/schemas/ imports it by relative `.ts` path, and scripts/openapi-gen.ts / gen-relay-contracts.ts load
+//     api-v1/schemas/ under bare `node --experimental-strip-types` (no `@/`);
 //   * the overlay page (a client component, R2005) reads the loopback phase endpoint through it, and must never pull a
-//     server module into the client bundle — schemas.ts itself reaches the engine's scheduler, which `next build` cannot
+//     server module into the client bundle — api-v1/schemas/ itself reaches the engine's scheduler, which `next build` cannot
 //     bundle for the browser (tsc and vitest stay green when it happens).
 // So the file may import NOTHING — not a package, not a relative module, not even a type-only import. The scanner is
 // proved on planted sources first, so a scan that finds nothing is a real zero.

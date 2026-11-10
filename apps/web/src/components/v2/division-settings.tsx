@@ -371,7 +371,7 @@ export function DivisionSettings({
     }, msg("divset.publicPage.saved"));
   };
 
-  // D5/P8 gap closed: PatchDivision (server/api-v1/schemas.ts) and COLS
+  // D5/P8 gap closed: PatchDivision (server/api-v1/schemas/divisions.ts) and COLS
   // (usecases/divisions.ts) now carry `required_court_tags`, normalised on
   // write with the same normalizeTags() the courts path uses. Not read by
   // scheduling/candidate-court filtering — that stays P9's.

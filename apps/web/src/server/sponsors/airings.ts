@@ -1,7 +1,7 @@
 import "server-only";
 // server/sponsors/airings.ts — R4 sponsors on stream, S8: proof of play (spec 2026-10-27 §3.6.4). The compositor's
-// heartbeat carries the overlay page's `seazn:sponsor:start|end` lines as `airings` (RelayAiring, api-v1/schemas.ts);
-// `heartbeat` (usecases/stream-sessions.ts) hands them here inside the beat's own transaction, under the session row's
+// heartbeat carries the overlay page's `seazn:sponsor:start|end` lines as `airings` (RelayAiring, api-v1/schemas/streaming.ts);
+// `heartbeat` (usecases/stream-sessions/heartbeat.ts) hands them here inside the beat's own transaction, under the session row's
 // lock, and the session's end closes whatever is still open (`closeOpenAirings`, from the one transition writer).
 //
 // PRIVILEGED path: app_user cannot write sponsor_airings (V492 grants it SELECT only); this runs on the relay's `sql`

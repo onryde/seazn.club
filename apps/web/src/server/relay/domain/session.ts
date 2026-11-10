@@ -26,7 +26,7 @@ export const isActive = (s: SessionState): boolean => ACTIVE_STATES.includes(s);
 /** #983 review r1: whether a job token names an attempt OLDER than the session's current one (runner_attempts, the create
  *  calls made) — i.e. it is a Machine a retry replaced. `att` null is a token minted before the claim existed (a session in
  *  flight across the deploy): never superseded, so it keeps the behaviour it had. The heartbeat drains such a Machine
- *  (stream-sessions.ts); the sponsor frame upload refuses it 410 (sponsors/airings.ts, R4 S9). */
+ *  (usecases/stream-sessions/); the sponsor frame upload refuses it 410 (sponsors/airings.ts, R4 S9). */
 export function supersededAttempt(att: number | null, currentAttempt: number): boolean {
   return att !== null && att < currentAttempt;
 }
@@ -468,7 +468,7 @@ function expire(s: Session, e: Expiry, now: Date, illegal: () => InvalidTransiti
     case "warming_timeout":
       // m-5 (controller ruling, capture QR v2 T7): a PASSTHROUGH session that is live with no first ingest recorded is
       // judged by the warming rule — failed no_inbound_timeout at its warming deadline. `first_ingest_at` is not a
-      // domain field, so the use-case decides WHEN (stream-sessions.ts `tickSession`); the domain admits the cell.
+      // domain field, so the use-case decides WHEN (usecases/stream-sessions/tick.ts `tickSession`); the domain admits the cell.
       // Composed live stays refused: a composed session never records first ingest (only the passthrough poll writes
       // it), so the same rule would fail EVERY composed broadcast at its warming deadline.
       if (s.state !== "warming" && !(s.state === "live" && s.mode === "passthrough")) throw illegal();

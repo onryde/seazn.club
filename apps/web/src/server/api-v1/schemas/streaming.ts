@@ -535,7 +535,7 @@ export const RelayHeartbeat = z
     // exit 75 — compositor `docs/_INDEX.md` Owed 66; domain/runner.ts BEAT_EXIT_REASONS pins this equal). A record of what the Machine said, kept
     // in the two beat stores only — never the runner's exit columns (A5: those are persisted from the OBSERVED exit), and
     // nothing here reacts to it (R2003 owns what a stopped beat does). exitDetail is compositor-redacted human text,
-    // never parsed, and scrubbed again before it is stored (stream-sessions.ts `heartbeat`). Its max counts UTF-16
+    // never parsed, and scrubbed again before it is stored (usecases/stream-sessions/heartbeat.ts `heartbeat`). Its max counts UTF-16
     // units; the contract publishes maxLength 100 (code points), the bound under which any text fits (review M1).
     exitReason: z.enum(["ended", "deadline", "signalled", "session_gone", "refused", "fatal", "restart"]).nullish(),
     exitDetail: z.string().max(200).nullish(),

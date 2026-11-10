@@ -1,6 +1,6 @@
 // W4 app-A Task 16 (SP-UI): the product's standalone-stage predicate. Expected values come from the rulebook, never the
 // module: RB4-S6 (X-SP-6, ruling 269) — a stepladder and a page playoff are not offered standalone; RB4-S7 (X-SP-7) — both
-// stay offered as final stages, i.e. WITH a progression. The kind list is the API's own (`api-v1/schemas.ts` StageKind),
+// stay offered as final stages, i.e. WITH a progression. The kind list is the API's own (`api-v1/schemas/common.ts` StageKind),
 // so a kind added there is swept here without an edit.
 import { describe, expect, it } from "vitest";
 import { StageKind } from "@/server/api-v1/schemas";

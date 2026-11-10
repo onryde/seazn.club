@@ -2,7 +2,7 @@ import "server-only";
 // server/usecases/stream-credits-tab.ts — the view model of Settings → Credits → Streaming, the match-credit twin of
 // credits-tab.ts (the AI wallet's). A READ over the same ledger the fixture page's Phone tab reads, through the same
 // authorities, so the two screens cannot disagree about a number:
-//   * the balance and its split — `relayCredits` (stream-sessions.ts), the Phone tab's own reader, which also GRANTS
+//   * the balance and its split — `relayCredits` (usecases/stream-sessions/panel-reads.ts), the Phone tab's own reader, which also GRANTS
 //     this month's free credits before it reads (idempotent), so an org that has never opened a fixture's Stream panel
 //     still sees the credits its plan gives it;
 //   * whether Stream is on at all — `relayOffer` (stream-panel-context.ts), the ONE decision the fixture panel and the

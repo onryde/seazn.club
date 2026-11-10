@@ -543,7 +543,7 @@ describe("jointApplyDivisions — the payload the apply is built from", () => {
         expectedSeq: 4,
         assignments: [
           // P9 pass 3b: jointApplyDivisions' OWN output is keyed court_id
-          // (ApplyCompetitionScheduleRequest's .strict() item, schemas.ts) —
+          // (ApplyCompetitionScheduleRequest's .strict() item, api-v1/schemas/) —
           // court_label above is plan().proposal's field, unchanged.
           { fixture_id: "f1", scheduled_at: "2026-08-01T09:00:00.000Z", court_id: "Court 1" },
         ],

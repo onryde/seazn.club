@@ -28,7 +28,7 @@ import { minutesOfDay, hhmmOfMinutes } from "@/components/v2/shared/time-options
 
 // ---------------------------------------------------------------------------
 // Types (structurally match the API's Venue/Court/CourtCalendar schemas —
-// server/api-v1/schemas.ts — but declared locally rather than imported: that
+// server/api-v1/schemas/ — but declared locally rather than imported: that
 // server module tree is off limits this session and this is a client
 // component besides).
 // ---------------------------------------------------------------------------

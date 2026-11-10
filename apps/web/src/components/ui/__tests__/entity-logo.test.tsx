@@ -309,9 +309,7 @@ describe("monogramInk — the gate between a stored colour and a painted tile", 
     // `team_display_v.colors.home_primary` (`competition-hub.ts`'s
     // `primaryColour`, :335-340) and the v1 API takes club `colors` as an
     // unvalidated `z.record(z.string(), z.string())` on both write paths
-    // (`server/api-v1/schemas.ts:3188` `CreateClub`, `:3199` `PatchClub`).
-    // Those two pins were `:3169`/`:3180` when Task 10 wrote them and had
-    // drifted nineteen lines by the time this moved; re-pinned here.
+    // (`server/api-v1/schemas/clubs.ts` `CreateClub`, `PatchClub`).
     expect(monogramInk("123456")).toEqual({ bg: "#123456", ink: "#ffffff" });
     expect(monogramInk("ffdd00")).toEqual({ bg: "#ffdd00", ink: "#0f172a" });
     expect(monogramInk("  #123456  ")).toEqual({ bg: "#123456", ink: "#ffffff" });

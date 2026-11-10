@@ -16,11 +16,11 @@ Owner-approved 2026-09-04 (three decisions, §2). Session prompt:
 Five premises checked against `main` at `3065c50da` before any code. Three
 were false, one was weaker than stated, one held. Every line below is pinned;
 re-pin before trusting it (`_RULES.md` §1 — and these pins are BRANCH-RELATIVE,
-which is how `tiny.ts`'s own `schemas.ts:1496-1542` went stale).
+which is how `tiny.ts`'s own `api-v1/schemas/` went stale).
 
 ### 1.1 `--engine` cannot select an engine. It never could.
 
-`AutoScheduleRequest` (`apps/web/src/server/api-v1/schemas.ts:1653-1687`)
+`AutoScheduleRequest` (`apps/web/src/server/api-v1/schemas/`)
 carries `only_unlocked`, `mode` (derived from it) and `ignore_locks`. There is
 no engine field, no env var, no feature flag, no org or competition setting,
 and no column that selects greedy over the solver.
@@ -41,7 +41,7 @@ read in the **server** process. A bench that talks HTTP black-box — which is
 the architecture, §2 of the parent spec — cannot flip it per request.
 
 **But the result says which engine ran.** `AutoScheduleResult.solver.engine`
-is `z.enum(["greedy","optimized"])` on the wire (`schemas.ts:1713`), forwarded
+is `z.enum(["greedy","optimized"])` on the wire (`api-v1/schemas/`), forwarded
 verbatim from `BuildResult.engine` and never re-derived.
 
 So: **cannot choose, can identify.** §2.1 is what B04 does with that.
@@ -364,7 +364,7 @@ the second round trip.
 ### 4.2 End times are derived, and the derivation is cross-checked
 
 `Fixture` carries `scheduled_at` and no `ends_at`
-(`schemas.ts:1000-1055`), while `auto.assignments[]` carries an optional
+(`api-v1/schemas/`), while `auto.assignments[]` carries an optional
 `ends_at`. So `BoardFixture.end` is derived as `start + matchMinutes`.
 
 Where `auto` supplied an `ends_at`, `schedule.ts` compares it against the
@@ -412,7 +412,7 @@ recorded here and in the PR body; none is fixed in this session.
   function each state their reasoning; this one is not mentioned, which is
   what makes it look unintended rather than decided.
 - **F2 — `ScheduleConflict.blocking`'s doc comment contradicts its
-  producer.** The comment (`schemas.ts:1548-1554`) says `blocking` is
+  producer.** The comment (`api-v1/schemas/`) says `blocking` is
   "DELTA-based … a court clash … blocks when THIS change introduced or
   worsened it". `mapConflicts` sets it from `isBlockingConflict`, which is
   absolute; the delta is a separate function applied at the move gate. A
@@ -427,7 +427,7 @@ recorded here and in the PR body; none is fixed in this session.
   field added or renamed server-side is invisible to `tsc` here. B04 widens
   it to what it reads; the copy remains hand-maintained (same class as the
   known pad-shim trap).
-- **F5 — `tiny.ts`'s `schemas.ts:1496-1542` pin is stale**; the type is now
+- **F5 — `tiny.ts`'s `api-v1/schemas/` pin is stale**; the type is now
   at `1653-1687`. Fixed inline — a bench file, inside the stated file set.
 - **F6 — `crossPersonClash` is deprecated and read by nothing.** §1.3.
   Parent spec §5 requires ≥2 suites to cover it; that coverage cannot exist.

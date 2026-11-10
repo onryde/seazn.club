@@ -114,7 +114,7 @@ describe("registrantsExportHref", () => {
 describe("CONSENT_STATUS_STYLE", () => {
   // No shared zod enum exists for this column (unlike RegistrationStatus) —
   // registration_players.consent_status (V363) is only ever a 2-value zod
-  // subset elsewhere (schemas.ts's ClaimPlayer, deliberately excluding
+  // subset elsewhere (api-v1/schemas/ folder's ClaimPlayer, deliberately excluding
   // 'pending' for that different use). So this pins the literal 3-value set
   // the DB CHECK constraint declares, by hand, rather than iterating a
   // schema this column has none of.

@@ -12,7 +12,7 @@
 // a `Msg` — a dictionary key plus params, resolved client-side with `t()`.
 import { z } from "zod";
 // RELATIVE, with the explicit `.ts` extension, following the reasoning written
-// out at `server/api-v1/schemas.ts:24-28`: that module is shared with the
+// out at `server/api-v1/schemas/`: that module is shared with the
 // standalone OpenAPI generator, which runs under bare
 // `node --experimental-strip-types` with no tsconfig `paths` resolution, so a
 // `@/...` specifier throws ERR_MODULE_NOT_FOUND there while resolving fine
@@ -109,7 +109,7 @@ export const HubDivision = z.object({
   name: z.string(),
   sportKey: z.string(),
   sportName: z.string().nullable(),
-  /** `DivisionStatus` (`server/api-v1/schemas.ts:60`) — carried as a bare
+  /** `DivisionStatus` (`server/api-v1/schemas/`) — carried as a bare
    *  string, not that enum, so a division whose status vocabulary grows still
    *  parses here rather than failing the whole document. */
   status: z.string(),
@@ -389,9 +389,9 @@ export const LeaderBoard = z.object({
 
 /**
  * What an entrant IS — the `entrants.kind` column, which the v1 surface
- * declares as `EntrantKind` (`server/api-v1/schemas.ts`). Restated here rather
+ * declares as `EntrantKind` (`server/api-v1/schemas/`). Restated here rather
  * than imported, like the fixture-status enum this file's sibling restates:
- * `api-v1/schemas.ts` is the WRITE surface's vocabulary and this is a public
+ * `api-v1/schemas/` is the WRITE surface's vocabulary and this is a public
  * read document, and the client can only ever `import type` from this module
  * (a zod value cannot cross that boundary), so the two would not share a value
  * at runtime either way. If the column ever grows a fourth kind, both lists

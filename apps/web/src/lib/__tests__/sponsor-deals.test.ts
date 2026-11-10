@@ -146,7 +146,7 @@ describe("lib/sponsor-deals — the value sets (D2, the V495 CHECKs; the DB half
     expect(src.length, "read the module").toBeGreaterThan(0);
     const specifiers = [...src.matchAll(/^\s*import\b[^;]*?from\s+["']([^"']+)["']/gm)].map((m) => m[1]!);
     expect(specifiers.length, "imports checked").toBeGreaterThan(0);
-    // The relative one carries `.ts`: schemas.ts imports this module's value sets and tsconfig.scripts.json (nodenext, which
+    // The relative one carries `.ts`: api-v1/schemas/ imports this module's value sets and tsconfig.scripts.json (nodenext, which
     // refuses an extensionless relative specifier: TS2835) reaches it through there, so `./sponsor-tiers` alone reddens the
     // in-image `turbo run typecheck`.
     for (const s of specifiers) expect(["./sponsor-tiers.ts", "@/lib/sponsor-tiers"], s).toContain(s);

@@ -6,7 +6,7 @@
 // `server-only`, corrected from an earlier "client-safe, like format-
 // gallery.tsx" design (e2e caught it, not tsc/vitest): this module
 // VALUE-imports schema.ts's CompetitionTemplate, which VALUE-imports
-// StageKind from api-v1/schemas.ts, which imports HardConstraint from
+// StageKind from api-v1/schemas/, which imports HardConstraint from
 // @seazn/engine/scheduling — a barrel that then also reached the gRPC placement
 // client (@grpc/grpc-js, Node-only; now in `@seazn/scheduler`). A Server Component
 // can still import this fine (it never ships to the browser); the wizard's gallery client

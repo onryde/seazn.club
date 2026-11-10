@@ -62,7 +62,7 @@ Read the R0 memo: Machine size (`guest { cpus, memory_mb, cpu_kind }`), B3 vs
 B2 verdict, WHEP vs LL-HLS latency (seeds `delayMs` default), host events
 observed, the storage-headroom read. Re-pin R1's symbols on `main`:
 `server/relay/runner-fly.ts` (the `guest` constant), `server/relay/tokens.ts`
-(page-token verify), `stream-sessions.ts` transitions (`warming` → `live` on
+(page-token verify), `usecases/stream-sessions/` transitions (`warming` → `live` on
 `playing`), the heartbeat route, `use-live-fixture.ts` (`delayMs`,
 `presentationNowOffsetMs`), `OVERLAY_THEMES` and `resolveTheme`,
 `overlay-stage.tsx`'s clock interval. `ls db/migration/deltas | sort -V |

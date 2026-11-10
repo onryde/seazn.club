@@ -173,7 +173,7 @@ Worktree: `/Users/ashokhein/github/wt-ai-gap-b`, branch `ai-gap-b-joint-undo`.
 **Files:**
 - Create: `apps/web/src/app/api/v1/competitions/[id]/schedule/restore/route.ts`
 - Create: `apps/web/src/server/usecases/competition-schedule-restore.ts`
-- Modify: `apps/web/src/server/api-v1/schemas.ts` (add `RestoreCompetitionScheduleRequest`)
+- Modify: `apps/web/src/server/api-v1/schemas/` (add `RestoreCompetitionScheduleRequest`)
 - Modify: `apps/web/src/server/api-v1/openapi.ts` (add the ROUTES entry)
 - Test: `apps/web/src/server/usecases/__tests__/competition-schedule-restore.test.ts`
 
@@ -366,7 +366,7 @@ Note on the lock: `pg_advisory_xact_lock` is released when its transaction ends,
 
 - [ ] **Step 4: Add the request schema**
 
-In `apps/web/src/server/api-v1/schemas.ts`, beside `ApplyCompetitionScheduleRequest`:
+In `apps/web/src/server/api-v1/schemas/`, beside `ApplyCompetitionScheduleRequest`:
 
 ```ts
 export const RestoreCompetitionScheduleRequest = z.object({
@@ -917,7 +917,7 @@ The card computes its quote by calling the same pure function the server calls. 
 **Detection happens server-side.** The client sends the number its card showed; the server compares it against what it actually charged. That way the telemetry fires even if nobody is looking at the screen, and the event is written by the side that knows the truth.
 
 **Files:**
-- Modify: `apps/web/src/server/api-v1/schemas.ts` — add `quoted_credits` to the AI run request schemas, and `quote_mismatch` to `AiRunPriceFields`
+- Modify: `apps/web/src/server/api-v1/schemas/` — add `quoted_credits` to the AI run request schemas, and `quote_mismatch` to `AiRunPriceFields`
 - Modify: `apps/web/src/server/usecases/schedule-ai.ts`, `competition-schedule-ai.ts`, `officials-ai.ts` — compare and record
 - Modify: `apps/web/src/components/v2/board/ai-console.tsx`, `ai-competition-console.tsx` — send `quoted_credits`, render the receipt line
 - Modify: `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json`
@@ -974,7 +974,7 @@ cd /Users/ashokhein/github/wt-ai-gap-a && node -e "const r=require('/tmp/a3.json
 
 - [ ] **Step 3: Extend the schemas**
 
-In `schemas.ts`, add to `AiRunPriceFields` (line 1682):
+In `api-v1/schemas/`, add to `AiRunPriceFields` (line 1682):
 
 ```ts
   /** Set only when the client's confirm card quoted a different number than the

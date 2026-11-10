@@ -125,7 +125,7 @@ as "exit code 0" — only its own `EXIT=$?` said otherwise.
 
 | File | Change |
 |---|---|
-| `scripts/bench/lib/suites/tiny.ts` | Replace the scheduling half (`:1065-1200`) with a call into `schedule.ts`; walk N divisions, not `divisions[0]`; delete the ad-hoc venue/court creation at `:974-993`; widen `AutoScheduleOut` (`:717-726`); fix the stale `schemas.ts:1496-1542` pin at `:1108-1118`. |
+| `scripts/bench/lib/suites/tiny.ts` | Replace the scheduling half (`:1065-1200`) with a call into `schedule.ts`; walk N divisions, not `divisions[0]`; delete the ad-hoc venue/court creation at `:974-993`; widen `AutoScheduleOut` (`:717-726`); fix the stale `api-v1/schemas/` pin at `:1108-1118`. |
 | `scripts/bench/bench.ts` | `--engine` semantics (`:66,78-81`); pass the resolved report dir into the suite. |
 | `scripts/bench/lib/report.ts` | New render sections: scheduling, checker, certificate, believability, engine delta. Hook is the `sections` array in `renderMarkdown` (`:363-369`). |
 | `scripts/bench/packs/build-packs/_tiny.ts` + `packs/_tiny.json` | Add `venues[]` (one venue, two courts) and a `scheduleConfig` on BOTH divisions. |
@@ -661,7 +661,7 @@ export function assessBelievability(input: …): BelievabilityReport;
 - [ ] **Step 3: Replace the scheduling half** (`:1065-1200`) with
   `runScheduleLayer` → `checkBoard` → `certify` → `assessBelievability`, over
   EVERY division. Widen `AutoScheduleOut` (`:717-726`). Fix the stale
-  `schemas.ts:1496-1542` pin (F5).
+  `api-v1/schemas/` pin (F5).
 - [ ] **Step 4: `suite_scheduled` pino event**, one per division, carrying
   `engine`, `status`, `wallMs`, `conflicts`, `checkerVerdict`,
   `certificateBranch` — the prompt's acceptance line, verbatim fields.

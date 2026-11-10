@@ -30,7 +30,8 @@
 //      conflict — and every fixture this pack pinned — comes back at
 //      EXACTLY the slot `board` (the caller's own record) had it at,
 //      regardless of what `buildSchedule` itself reports: its FALLBACK exits
-//      (`already_optimal`, a proved tie, `verifier_rejected`, `not_searched`)
+//      (`already_optimal`, a proved tie that does not disturb `current` less
+//      — engine 6.0.2 —, `verifier_rejected`, `not_searched`)
 //      report the plain unpinned greedy seed, which has no idea a
 //      `current`-only frozen id is supposed to stay put (the same C4 finding
 //      `reflowExisting` guards against — see its doc comment).
@@ -140,7 +141,7 @@ export type RepairEngine = "none" | "optimized" | "llm";
 
 /**
  * The closed vocabulary `AiRepairReport.status`/`.fallback` already validate
- * on the wire (`schemas.ts`) — z3-decomposition-shaped names this module
+ * on the wire (`api-v1/schemas/`) — z3-decomposition-shaped names this module
  * keeps DELIBERATELY rather than inventing a `BuildStatus`-shaped set of its
  * own: C5's file set is additive-only on the wire (the `engine` enum alone),
  * so every value this module can now produce is mapped back onto these four,
@@ -150,7 +151,8 @@ export type RepairEngine = "none" | "optimized" | "llm";
  *     longer blocking.
  *   * `partial` — some moved, at least one violator is still blocking.
  *   * `unrepaired` — nothing moved: `buildSchedule` could not improve on
- *     the frozen board (`already_optimal`, a proved tie, `infeasible`,
+ *     the frozen board (`already_optimal`, a proved tie that does not disturb `current`
+ *     less (engine 6.0.2), `infeasible`,
  *     `not_searched`, `verifier_rejected`) or was unreachable
  *     (`solver_unavailable`, `solver_busy`).
  *   * `clean` — never produced by this module (it is only ever asked once a
@@ -161,7 +163,7 @@ export type SolverRepairStatus = "clean" | "repaired" | "partial" | "unrepaired"
 
 /** Why the caller is falling back to LLM repair. Every value is a fact about
  *  this call, never a guess. Same closed set the wire already validates
- *  (`schemas.ts`'s `AiRepairReport.fallback`) minus `queue_wait`: that value
+ *  (`api-v1/schemas/ai-planning.ts`'s `AiRepairReport.fallback`) minus `queue_wait`: that value
  *  existed only for the z3-era busy-gate this module no longer has (see the
  *  module doc comment) and is no longer producible — the wire keeps accepting
  *  it, narrowing it away is C7's job, not this one's. */
