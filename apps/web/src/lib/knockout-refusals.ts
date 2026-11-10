@@ -68,7 +68,13 @@ export type KnockoutRefusalCode =
   // B5a T12: ... on a final that already holds a result (a winner, or a decided/walkover outcome).
   | "JOINT_WINNERS_FINAL_DECIDED"
   // B5a T12: Undo on a final that holds no joint-winners declaration.
-  | "JOINT_WINNERS_NOT_DECLARED";
+  | "JOINT_WINNERS_NOT_DECLARED"
+  // B5a fix round 1 (I-3): a score event, a pad Undo or a settle on a final ruled joint (Undo the declaration first).
+  | "FINAL_JOINT_WINNERS_DECLARED"
+  // B5a fix round 1 (m-3): declare on a final whose seated finalists have both withdrawn (the title is vacant, X-CH-3).
+  | "JOINT_WINNERS_FINALISTS_OUT"
+  // B5a fix round 1 (m-4): Undo while a finalist has withdrawn since the declaration (it would seat a departed finalist).
+  | "JOINT_WINNERS_UNDO_FINALIST_OUT";
 
 export interface KnockoutRefusalRow {
   status: 400 | 409 | 422;
@@ -201,6 +207,21 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
     status: 409,
     en: "This final has no joint winners to undo.",
     key: "knockout.refusal.JOINT_WINNERS_NOT_DECLARED",
+  },
+  FINAL_JOINT_WINNERS_DECLARED: {
+    status: 409,
+    en: "Joint winners were declared on this final. Undo them first.",
+    key: "knockout.refusal.FINAL_JOINT_WINNERS_DECLARED",
+  },
+  JOINT_WINNERS_FINALISTS_OUT: {
+    status: 409,
+    en: "Both finalists have withdrawn, so this title is vacant. Reinstate one to rule on it.",
+    key: "knockout.refusal.JOINT_WINNERS_FINALISTS_OUT",
+  },
+  JOINT_WINNERS_UNDO_FINALIST_OUT: {
+    status: 409,
+    en: "A finalist has withdrawn since. Reinstate them before undoing joint winners, or leave the joint title.",
+    key: "knockout.refusal.JOINT_WINNERS_UNDO_FINALIST_OUT",
   },
 };
 

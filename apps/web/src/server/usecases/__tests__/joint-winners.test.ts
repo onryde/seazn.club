@@ -23,7 +23,9 @@ import { loadCompetitionHub } from "@/server/public-site/competition-hub";
 import { CompetitionHubDoc } from "@/server/public-site/competition-hub-schema";
 import { getPublicDivision } from "@/server/public-site/data";
 import { standingsCardModel } from "@/server/og/model";
+import { bracketTitle } from "@seazn/engine/competition";
 import { jointWinnersOffered } from "@/lib/joint-winners";
+import { loadBracketFixtures } from "../stages/carry-over";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants, patchEntrant, writeEntrantPatch } from "../entrants";
@@ -252,24 +254,131 @@ describe.skipIf(!HAS_DB)("W4 B5a T12: declare joint winners (X-CH-4, X-CH-6)", (
     expect(hub!.knockouts.every((k) => k.championFixtureId === null && k.title === null)).toBe(true);
     expect(hub!.knockouts.length, "anti-vacuity: the hub carries the bracket").toBeGreaterThan(0);
   });
+
+  // I-3: after a declaration NO event may land on the final; the refusal is NAMED (409), never a bare 23514 / 500.
+  it("I-3 a score event, a pad Undo and a settle on a final ruled joint are each refused FINAL_JOINT_WINNERS_DECLARED, nothing written", async () => {
+    const r = await finalSeated();
+    // In play (X-CH-6 offers it): the pad may be live when the organiser rules.
+    await post(r.auth, r.final.id, "core.start");
+    const [start] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${r.final.id} and type = 'core.start'`;
+    await declareJointWinners(r.auth, r.final.id);
+    const eventsBefore = (await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${r.final.id}`)[0]!.n;
+    const refused = { code: "FINAL_JOINT_WINNERS_DECLARED", status: 409 };
+    await expect(post(r.auth, r.final.id, "badminton.game.summary", { home: 21, away: 10 }), "a scorer's tap").rejects.toMatchObject(refused);
+    await expect(post(r.auth, r.final.id, "core.void", { event_id: start!.id }), "a pad Undo").rejects.toMatchObject(refused);
+    await expect(post(r.auth, r.final.id, "core.settle", { winner: r.final.home_entrant_id, method: "organiser" }), "a settle").rejects.toMatchObject(refused);
+    expect((await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${r.final.id}`)[0]!.n, "nothing written").toBe(eventsBefore);
+    const row = await jointRow(r.final.id);
+    expect([row.status, row.outcome, row.joint_winners_at !== null], "the declaration stands").toEqual(["decided", null, true]);
+    // After the Undo the final takes events again (the refusal is the declaration's, not a lock).
+    await undoJointWinners(r.auth, r.final.id);
+    await post(r.auth, r.final.id, "badminton.game.summary", { home: 21, away: 10 });
+  });
+
+  it("m-1 a decided semi-final is refused NOT_A_FINAL (the structure is asked before the result)", async () => {
+    const s = await seedBracket({ ...BADMINTON, stageKind: "knockout", entrants: 4 });
+    const semi = (await rowsOf(s.stageId)).find((x) => x.home_entrant_id && x.away_entrant_id)!;
+    await playBadminton(s.auth, semi.id, true);
+    await expect(declareJointWinners(s.auth, semi.id)).rejects.toMatchObject({ code: "JOINT_WINNERS_NOT_A_FINAL" });
+  });
+
+  it("m-3 both finalists out (a bare flip leaves the final open): the ruling is refused JOINT_WINNERS_FINALISTS_OUT; one out is still ruled", async () => {
+    const r = await finalSeated();
+    await writeEntrantPatch(r.auth, r.final.home_entrant_id!, { status: "withdrawn" });
+    await writeEntrantPatch(r.auth, r.final.away_entrant_id!, { status: "withdrawn" });
+    expect((await fixtureRow(r.final.id)).status, "premise: the bare flips left the final open").toBe("scheduled");
+    await expect(declareJointWinners(r.auth, r.final.id)).rejects.toMatchObject({ code: "JOINT_WINNERS_FINALISTS_OUT" });
+    expect((await jointRow(r.final.id)).joint_winners_at).toBeNull();
+    await patchEntrant(r.auth, r.final.home_entrant_id!, { status: "confirmed" });
+    // The pair is no longer both out: the ruling goes through (the positive pair).
+    expect((await fixtureRow(r.final.id)).status).not.toBe("decided");
+  });
+
+  it("m-4 Undo while a finalist has withdrawn since the declaration is refused by name; after the Reinstate it restores", async () => {
+    const r = await finalSeated();
+    await declareJointWinners(r.auth, r.final.id);
+    await withdrawEntrantCascade(r.auth, r.final.home_entrant_id!);
+    await expect(undoJointWinners(r.auth, r.final.id)).rejects.toMatchObject({ code: "JOINT_WINNERS_UNDO_FINALIST_OUT" });
+    expect((await jointRow(r.final.id)).joint_winners_at, "the joint title stands").not.toBeNull();
+    await patchEntrant(r.auth, r.final.home_entrant_id!, { status: "confirmed" });
+    expect((await undoJointWinners(r.auth, r.final.id)).status).toBe("scheduled");
+  });
+
+  // I-5: the carry-over reader (`loadBracketFixtures`) maps a joint final the way `toBracketFixture` does, and the ENGINE
+  // reads it as the joint title through that mapping.
+  it("I-5 loadBracketFixtures maps a joint final to the engine's jointWinners row; bracketTitle reads it joint", async () => {
+    const r = await finalSeated();
+    await declareJointWinners(r.auth, r.final.id);
+    const rows = await sql.begin((tx) => loadBracketFixtures(tx as never, r.stageId));
+    const mapped = rows.find((b) => b.id === r.final.id)!;
+    expect([mapped.status, mapped.isFinal, mapped.jointWinners, mapped.winner, mapped.loser]).toEqual(["decided", true, true, undefined, undefined]);
+    expect(bracketTitle(rows), "the engine crowns both seats through the carry-over mapping").toEqual({
+      kind: "joint",
+      winners: [r.final.home_entrant_id, r.final.away_entrant_id],
+    });
+    // Differential: every other row of the stage is mapped as before (no jointWinners on a played semi).
+    expect(rows.filter((b) => b.jointWinners === true)).toHaveLength(1);
+    await undoJointWinners(r.auth, r.final.id);
+    const after = await sql.begin((tx) => loadBracketFixtures(tx as never, r.stageId));
+    expect(after.some((b) => b.jointWinners === true), "Undo clears the mapping").toBe(false);
+  });
+
+  it("m-6 C7: getStandings (the provisional bracketRanks path) answers after Undo, and a joint ruled beside a withdrawn semi-loser reads on every public surface", async () => {
+    const r = await finalSeated();
+    const semiLoser = ((await rowsOf(r.stageId)).find((x) => x.id !== r.final.id && x.outcome)!.outcome as { loser: string }).loser;
+    await declareJointWinners(r.auth, r.final.id);
+    await undoJointWinners(r.auth, r.final.id);
+    await expect(getStandings(r.auth, r.stageId), "the provisional ranks read after the Undo").resolves.toBeDefined();
+    await writeEntrantPatch(r.auth, semiLoser, { status: "withdrawn" });
+    await declareJointWinners(r.auth, r.final.id);
+    const [slugs] = await sql<{ org: string; comp: string; div: string }[]>`
+      select o.slug as org, c.slug as comp, d.slug as div from divisions d
+        join competitions c on c.id = d.competition_id join organizations o on o.id = d.org_id where d.id = ${r.divisionId}`;
+    await sql`update competitions set visibility = 'public' where id = ${r.competitionId}`;
+    expect(await ranks(r.auth, r.stageId)).toEqual([1, 1, 3, 3]);
+    const data = await getPublicDivision(slugs!.org, slugs!.comp, slugs!.div);
+    expect(divisionTitle(data!.stages, data!.fixtures, data!.standings)).toMatchObject({ kind: "joint" });
+    const hub = await loadCompetitionHub(slugs!.org, slugs!.comp, new Date(), { uncached: true });
+    expect(CompetitionHubDoc.safeParse(hub).success).toBe(true);
+  });
 });
 
 // C31: the seam is inert until a REAL final ruled joint reaches every public reader through the real producer.
+const C31_SPORTS = [
+  { sport: "badminton", kind: "individual" as const, variant: BADMINTON.variant },
+  // I-4: a team sport - team entrants, `entrantKind: "team"` on the card, a different decider vocabulary.
+  { sport: "football", kind: "team" as const, variant: declaredVariant("football", "11-a-side") },
+];
+
+/** A decided line for `winner` in the sport's own vocabulary (badminton straight games; football a 1-0). */
+async function playWinner(auth: AuthCtx, sport: string, f: { id: string; home_entrant_id: string | null; away_entrant_id: string | null }, winner: string): Promise<void> {
+  if (sport === "badminton") {
+    await playBadminton(auth, f.id, winner === f.home_entrant_id);
+    return;
+  }
+  await post(auth, f.id, "core.start");
+  await post(auth, f.id, "football.goal", { by: winner });
+  await post(auth, f.id, "football.period", { phase: "HT" });
+  await post(auth, f.id, "football.period", { phase: "FT" });
+  const r = await fixtureRow(f.id);
+  if (r.status !== "decided") throw new Error(`rig: football line did not decide (${r.status})`);
+}
+
 describe.skipIf(!HAS_DB)("W4 B5a T12 C31: a ruled joint final reaches the division page, the hub, the OG card and the event", () => {
-  async function leagueKo() {
+  async function leagueKo(pick: (typeof C31_SPORTS)[number]) {
     const { auth } = await seedOrg("pro");
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "W4 T12 " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
     const division = await createDivision(auth, comp.id, {
       name: "Open",
       slug: "open-" + randomUUID().slice(0, 6),
-      sport_key: "badminton",
-      variant_key: declaredVariant("badminton", "bwf"),
+      sport_key: pick.sport,
+      variant_key: pick.variant,
       config: {},
     });
     const made = await createEntrants(
       auth,
       division.id,
-      Array.from({ length: 4 }, (_, i) => ({ kind: "individual" as const, display_name: `E${i + 1}`, seed: i + 1, members: [] })),
+      Array.from({ length: 4 }, (_, i) => ({ kind: pick.kind, display_name: `E${i + 1}`, seed: i + 1, members: [] })),
     );
     const drafts = buildTemplateStages("league_ko", { swissRounds: 5, poolCount: 2, legs: 1, qualified: 4 });
     const ids: string[] = [];
@@ -284,7 +393,7 @@ describe.skipIf(!HAS_DB)("W4 B5a T12 C31: a ruled joint final reaches the divisi
     for (let guard = 0; guard < 20; guard++) {
       const open = (await rowsOf(ids[0]!)).filter((f) => f.home_entrant_id && f.away_entrant_id && f.status === "scheduled");
       if (open.length === 0) break;
-      for (const f of open) await playBadminton(auth, f.id, num(f.home_entrant_id!) < num(f.away_entrant_id!));
+      for (const f of open) await playWinner(auth, pick.sport, f, num(f.home_entrant_id!) < num(f.away_entrant_id!) ? f.home_entrant_id! : f.away_entrant_id!);
     }
     expect((await completeStage(auth, ids[0]!)).completed, "rig: the league completed").toBe(true);
     const p = await getSeedProposal(auth, ids[1]!);
@@ -294,13 +403,13 @@ describe.skipIf(!HAS_DB)("W4 B5a T12 C31: a ruled joint final reaches the divisi
       const open = (await rowsOf(ids[1]!)).filter((f) => f.home_entrant_id && f.away_entrant_id && f.status === "scheduled");
       const semis = open.filter((f) => f.winner_to_fixture !== null);
       if (semis.length === 0) break;
-      for (const f of semis) await playBadminton(auth, f.id, num(f.home_entrant_id!) < num(f.away_entrant_id!));
+      for (const f of semis) await playWinner(auth, pick.sport, f, num(f.home_entrant_id!) < num(f.away_entrant_id!) ? f.home_entrant_id! : f.away_entrant_id!);
     }
     return { auth, comp, division, stageIds: [ids[0]!, ids[1]!] as const, names: new Map(made.map((m) => [m.id, m.display_name])) };
   }
 
-  it("C31 acceptance: every public reader names BOTH winners; negatives refuse", async () => {
-    const r = await leagueKo();
+  for (const pick of C31_SPORTS) it(`C31 acceptance (${pick.sport}): every public reader names BOTH winners; negatives refuse`, async () => {
+    const r = await leagueKo(pick);
     const final = await finalOf(r.stageIds[1]);
     expect(final.status, "rig: the final is seated and unplayed").toBe("scheduled");
     const [a, b] = [final.home_entrant_id!, final.away_entrant_id!];
@@ -333,7 +442,7 @@ describe.skipIf(!HAS_DB)("W4 B5a T12 C31: a ruled joint final reaches the divisi
     // 3. the OG card names both, joint.
     const names = Object.fromEntries(r.names);
     const card = standingsCardModel({
-      orgName: "o", competitionName: "c", divisionName: "d", logo: null, branding: [], youth: false, entrantKind: "individual", rules: null,
+      orgName: "o", competitionName: "c", divisionName: "d", logo: null, branding: [], youth: false, entrantKind: pick.kind, rules: null,
       rows: [], names, title,
     });
     expect(card.champion).toMatchObject({ joint: true });
@@ -349,7 +458,7 @@ describe.skipIf(!HAS_DB)("W4 B5a T12 C31: a ruled joint final reaches the divisi
     // negatives: a joint final cannot be re-ruled; Undo then a real winner crowns a champion.
     await expect(declareJointWinners(r.auth, final.id)).rejects.toMatchObject({ code: "JOINT_WINNERS_FINAL_DECIDED" });
     await undoJointWinners(r.auth, final.id);
-    await playBadminton(r.auth, final.id, true);
+    await playWinner(r.auth, pick.sport, final, a);
     const after = await getPublicDivision(slugs!.org, slugs!.comp, slugs!.div);
     expect(divisionTitle(after!.stages, after!.fixtures, after!.standings)).toMatchObject({ kind: "champion", champion: a });
     await expect(declareJointWinners(r.auth, final.id), "a final with a winner named").rejects.toMatchObject({ code: "JOINT_WINNERS_FINAL_DECIDED" });

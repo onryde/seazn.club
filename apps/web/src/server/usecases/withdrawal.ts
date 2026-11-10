@@ -492,6 +492,10 @@ export async function withdrawEntrantCascade(
               await departSeat(auth, u.fixtureId, entrantId, "double_walkover");
               settled.push(u.fixtureId);
               out.walkovers++;
+            } else if (isDecidingFinalOfKnockout(step)) {
+              // Review m-3: a Start with nothing played is a live ledger the no-event write refuses; the final stays open and is
+              // NAMED, so the organiser is told it is theirs to settle or void.
+              out.left_to_organiser.push(u.fixtureId);
             }
             continue;
           }

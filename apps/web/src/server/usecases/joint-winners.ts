@@ -8,12 +8,13 @@ import "server-only";
 // (`appendUndoBarrierRow`'s pattern): it is no history step.
 //
 // Both writers run under the division's advisory lock, then the stage-seats lock, then the fixture's own append lock - the
-// house order (fed-seats.ts) - so a scorer's first event either commits before and is seen, or waits and finds the final
-// decided (`LOCKED_FIXTURE_STATUSES`). Organiser-only: the routes take the `write` door of the fixture (a `manage` key).
+// house order (fed-seats.ts) - so a scorer's first event either commits before and is seen, or waits and is refused by name
+// (`FINAL_JOINT_WINNERS_DECLARED`, append-event.ts: `decided` is not in `LOCKED_FIXTURE_STATUSES`, so the append door asks). Organiser-only: the routes take the `write` door of the fixture (a `manage` key).
 import { withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { log } from "@/server/logger";
 import { jointWinnersOffered } from "@/lib/joint-winners";
-import { assertStageNotSeeded, lockDivisionConfigShared, lockStageSeats, reopenCompletedStage } from "@/server/engine-db/fed-seats";
+import { assertStageNotSeeded, departedOf, lockDivisionConfigShared, lockStageSeats, reopenCompletedStage } from "@/server/engine-db/fed-seats";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { knockoutRefusal } from "./knockout-refusal";
 import { afterScheduleWrite } from "./schedule";
@@ -80,12 +81,16 @@ export interface DeclareJointWinnersResult {
 export async function declareJointWinners(auth: AuthCtx, fixtureId: string): Promise<DeclareJointWinnersResult> {
   const { f } = await withTenant(auth.orgId, async (tx) => {
     const f = await lockedFinal(tx, fixtureId);
-    // A result (or a declaration) already stands: never hidden by this one.
-    if (f.joint_winners_at !== null || DECIDED_STATUSES.has(f.status)) throw knockoutRefusal("JOINT_WINNERS_FINAL_DECIDED");
-    // A double-elimination grand final feeds its own reset, which a joint grand final would leave owed for good (C32, parked):
-    // only the kinds with one deciding final take it.
+    if (f.joint_winners_at !== null) throw knockoutRefusal("JOINT_WINNERS_FINAL_DECIDED");
+    // Is it a final that can take one at all? A double-elimination grand final feeds its own reset, which a joint grand final
+    // would leave owed for good (C32, parked): only the kinds with one deciding final take it. Asked BEFORE the result, so a
+    // decided semi-final answers "not a final", not "this final already has a result".
+    if (f.stage_kind === "double_elim" || !f.is_final || f.third_place || f.conditional || f.home_entrant_id === null || f.away_entrant_id === null) {
+      throw knockoutRefusal("JOINT_WINNERS_NOT_A_FINAL");
+    }
+    // A result already stands: never hidden by this declaration.
+    if (DECIDED_STATUSES.has(f.status)) throw knockoutRefusal("JOINT_WINNERS_FINAL_DECIDED");
     if (
-      f.stage_kind === "double_elim" ||
       !jointWinnersOffered({
         is_final: f.is_final,
         third_place: f.third_place,
@@ -98,6 +103,8 @@ export async function declareJointWinners(auth: AuthCtx, fixtureId: string): Pro
     ) {
       throw knockoutRefusal("JOINT_WINNERS_NOT_A_FINAL");
     }
+    // Both finalists out is a VACANT title (X-CH-3): it takes no joint ruling over two departed entrants.
+    if ((await departedOf(tx, [f.home_entrant_id, f.away_entrant_id])).size === 2) throw knockoutRefusal("JOINT_WINNERS_FINALISTS_OUT");
     const [row] = await tx<{ id: string }[]>`
       update fixtures set status = 'decided', outcome = null, joint_winners_at = now()
        where id = ${f.id} and status = ${f.status} and joint_winners_at is null returning id`;
@@ -107,11 +114,15 @@ export async function declareJointWinners(auth: AuthCtx, fixtureId: string): Pro
   });
   // Complete the stage it settles. The organiser's Complete (progression included) is the one writer; a bracket still owed a
   // result elsewhere (a third-place match) is its named refusal - the declaration stands, the stage waits.
+  // The declaration has COMMITTED: whatever the completion answers, the cache is published and the declaration is reported
+  // (a completion failure is logged and reads `stage_completed: false`, the organiser's Complete is still there).
   let stageCompleted = false;
   try {
     stageCompleted = (await completeStage(auth, f.stage_id)).completed;
   } catch (err) {
-    if (!(err instanceof HttpError && err.code === "STAGE_HAS_UNDECIDED_FIXTURES")) throw err;
+    if (!(err instanceof HttpError && err.code === "STAGE_HAS_UNDECIDED_FIXTURES")) {
+      log.error({ err, fixtureId: f.id, stageId: f.stage_id }, "declareJointWinners: the stage completion failed after the declaration committed");
+    }
   }
   await publish(auth, f);
   return { fixture_id: f.id, stage_completed: stageCompleted };
@@ -121,6 +132,9 @@ export async function undoJointWinners(auth: AuthCtx, fixtureId: string): Promis
   const { f, status } = await withTenant(auth.orgId, async (tx) => {
     const f = await lockedFinal(tx, fixtureId);
     if (f.joint_winners_at === null) throw knockoutRefusal("JOINT_WINNERS_NOT_DECLARED");
+    // A finalist who left AFTER the declaration (the joint title stands over a withdrawal): restoring the open final would seat
+    // a departed finalist with no walkover written. Refused by name until they are reinstated.
+    if ((await departedOf(tx, [f.home_entrant_id!, f.away_entrant_id!])).size > 0) throw knockoutRefusal("JOINT_WINNERS_UNDO_FINALIST_OUT");
     // The newest declaration of THIS fixture (declare -> undo -> declare writes a second row).
     const [row] = await tx<{ payload: { prior?: { status?: string; outcome?: unknown } } }[]>`
       select payload from division_events
