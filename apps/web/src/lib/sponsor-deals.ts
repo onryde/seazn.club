@@ -6,7 +6,7 @@
 //
 // Each value set mirrors a named CHECK on sponsor_orders (the sponsor-deals delta);
 // server/sponsors/__tests__/deal-values-db.test.ts reads them back and compares (F31).
-import type { SponsorTier } from "./sponsor-tiers";
+import type { SponsorTier } from "./sponsor-tiers.ts";
 
 /** D2: the lifecycle. `scheduled` = every condition of the rule is met, but the sponsor already has a live deal (§8a). */
 export const DEAL_STATUSES = ["draft", "awaiting_payment", "awaiting_approval", "scheduled", "live", "ended"] as const;

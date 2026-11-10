@@ -12,7 +12,6 @@
 // `{ deal, checkout_url: null }` for a deal that is not online (F11). The usecase's own rules are
 // server/usecases/__tests__/sponsor-deals.test.ts's. Sport-agnostic (a deal reads no sport).
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 

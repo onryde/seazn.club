@@ -11,6 +11,7 @@ import "server-only";
 // This module fires no public-page bust (F1): a console caller awaits `expirePublicSponsors` after its commit, and the
 // webhook, dispute and sweep callers keep `deferred`. It exports nothing bust-shaped.
 import type { Tx } from "@/lib/db";
+import { omit } from "@/lib/omit";
 import { sponsorRefusal } from "@/lib/sponsor-refusals";
 import { pickRowDeal, type SponsorDeal } from "@/lib/sponsor-deals";
 import type { SponsorTier } from "@/lib/sponsor-tiers";
@@ -230,15 +231,7 @@ export function sponsorDealSummary(deals: readonly ServerDeal[]): SponsorDealSum
 /** A ServerDeal without its money handles: the shape the console and the API carry. The pay link is never on the deal
  *  (F11): it is answered once, by the call that minted or reused it. */
 export function clientDeal(d: ServerDeal): SponsorDeal {
-  const {
-    payment_intent_id: _intent,
-    checkout_session_id: _session,
-    checkout_url: _url,
-    checkout_expires_at: _expires,
-    invoice_send_count: _sends,
-    ...deal
-  } = d;
-  return deal;
+  return omit(d, "payment_intent_id", "checkout_session_id", "checkout_url", "checkout_expires_at", "invoice_send_count");
 }
 
 /** D9 (spec §8a "what a live deal locks"): the sponsor fields a live deal owns. */

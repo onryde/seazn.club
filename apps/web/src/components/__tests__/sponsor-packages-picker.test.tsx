@@ -33,7 +33,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 
-const confirmMock = vi.hoisted(() => vi.fn(async (_opts?: unknown) => true));
+const confirmMock = vi.hoisted(() => vi.fn<(opts?: unknown) => Promise<boolean>>(async () => true));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMock }));
 
 import { SponsorPackages } from "@/components/sponsor-packages";

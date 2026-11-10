@@ -393,7 +393,7 @@ export async function passGrantsSuite(): Promise<void> {
       sponsor_email: `delivered+grants_deal_${tag}@resend.dev`,
     });
   const passOnline = passPackage.status === 201 ? await onlineDeal("pass", v1data<{ id: string }>(passPackage).id, passComp.id) : null;
-  const errorCode = (r: V1Res | null) => (r?.json.error as { code?: string } | undefined)?.code;
+  const errorCode = (r: V1Res | null) => r?.json.error?.code;
   check(
     "pass grants/sponsors: an online deal on the passed competition passes both plan gates (409 connect_required, not 402)",
     passOnline?.status === 409 && errorCode(passOnline) === "connect_required",

@@ -339,7 +339,7 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
   const gateDeals = v1data<unknown[]>(await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-deals?sponsor_id=${gateSponsor}`));
   check(
     "sp online deal refused without Connect (409)",
-    gated.status === 409 && (gated.json.error as { code?: string } | undefined)?.code === "connect_required" &&
+    gated.status === 409 && gated.json.error?.code === "connect_required" &&
       Array.isArray(gateDeals) && gateDeals.length === 0,
   );
   // The one org in the run that gets a REAL connected account, when supplied —
