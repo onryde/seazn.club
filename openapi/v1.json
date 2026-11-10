@@ -91592,6 +91592,16 @@
                             }
                           ]
                         },
+                        "joint_winners_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "match_centre": {
                           "type": "object",
                           "properties": {

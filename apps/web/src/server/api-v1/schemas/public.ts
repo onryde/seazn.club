@@ -77,6 +77,8 @@ export const PublicFixtureSummary = z.object({
   outcome: PublicFixtureOutcome,
   summary: PublicFixtureSummarySchema,
   last_seq: z.number().int().nullable(),
+  /** W4 (V499): when the organiser ruled this unplayed final a joint title (`status` decided, `outcome` null); else null. */
+  joint_winners_at: z.string().nullable().optional(),
   /** Task 9 — the match-centre view model, built by the SAME loader the
    *  page's own data fetch (`getPublicFixture`) uses. */
   match_centre: MatchCentreDoc,
