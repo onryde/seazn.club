@@ -23,7 +23,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { completeStageIfReady } from "@/server/engine-db";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { fixtureRow, playBadminton, post } from "@/server/engine-db/__tests__/helpers/w2b-rig";
-import { divisionChampion, type ChampionFixture, type ChampionStage, type ChampionStandings } from "@/server/public-site/champion";
+import { divisionTitle, type ChampionFixture, type ChampionStage, type ChampionStandings } from "@/server/public-site/champion";
 import { createCompetition } from "../competitions";
 import { createDivision, patchDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -354,7 +354,8 @@ async function championOf(divisionId: string): Promise<string | null> {
       from fixtures f join stages s on s.id = f.stage_id where s.division_id = ${divisionId}`;
   const standings = await sql<ChampionStandings[]>`
     select ss.stage_id, ss.pool_id, ss.rows from standings_snapshots ss join stages s on s.id = ss.stage_id where s.division_id = ${divisionId}`;
-  return divisionChampion(stages, fixtures, standings);
+  const t = divisionTitle(stages, fixtures, standings);
+  return t?.kind === "champion" ? t.champion : null;
 }
 
 describe.runIf(HAS_DB)("W4 T6 X-CH-2 one finalist withdraws: the final walks over and the other is champion", () => {

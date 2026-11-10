@@ -161,7 +161,7 @@ const viewInput = (doc: RulesDoc, m: AnySportModule, rows: StandingsRow[], local
   entrantNames: NAMES,
   entrantLogos: {},
   entrantColours: {},
-  championId: null,
+  championIds: [],
   updatedAt: "2026-10-29T10:00:00Z",
   msg: msgOf(locale),
   rules: doc,

@@ -121,7 +121,7 @@ async function publicTable(m: AnySportModule, doc: Doc, rows: readonly Standings
     entrantNames: NAMES,
     entrantLogos: {},
     entrantColours: {},
-    championId: null,
+    championIds: [],
     updatedAt: "2026-11-03T10:00:00Z",
     msg: (key, vars) => t(dict, key, vars),
     rules: doc,

@@ -541,3 +541,38 @@ describe("TableTab — the division filter", () => {
   });
 });
 
+// W4 B2a (X-CH-1): a JOINT title flags two rows. `.find` kept only the first, so the second winner's crown vanished.
+describe("TableTab — a joint title names both winners; a vacant title names nobody", () => {
+  const stripOf = (h: string, slug: string) => {
+    const at = h.indexOf(`data-testid="mh-table-champion-${slug}"`);
+    return at === -1 ? null : h.slice(at, h.indexOf("</p>", at));
+  };
+  it("two crowned rows (in different tables) read as ONE strip naming both, once each", () => {
+    const h = render(
+      hubDoc({
+        tables: [
+          tableView("ga", "sunday-league", { caption: "Group A", rows: [tableRow("wanderers", 1, { champion: true }), tableRow("rovers", 2)] }),
+          tableView("gb", "sunday-league", { caption: "Group B", rows: [tableRow("athletic", 1), tableRow("blue-blazers", 2, { champion: true })] }),
+          // The same entrants again in the stage they feed: one strip, not four names.
+          tableView("se", "sunday-league", { caption: "Super Eight", rows: [tableRow("wanderers", 1, { champion: true }), tableRow("blue-blazers", 1, { champion: true })] }),
+        ],
+      }),
+    );
+    const strip = stripOf(h, "sunday-league")!;
+    expect(strip).not.toBeNull();
+    expect(strip).toContain("Joint winners");
+    expect(strip).not.toContain(">Champion<");
+    expect(strip).toContain("Wanderers and Blue Blazers");
+    expect(strip.split("Wanderers").length - 1, "once each").toBe(1);
+    expect(strip.split("Blue Blazers").length - 1, "once each").toBe(1);
+  });
+
+  it("one crowned row stays a plain Champion strip; none (a vacant title) draws no strip at all", () => {
+    const one = render(hubDoc({ tables: [tableView("ga", "sunday-league", { caption: "A", rows: [tableRow("wanderers", 1, { champion: true }), tableRow("rovers", 2)] })] }));
+    expect(stripOf(one, "sunday-league")).toContain(">Champion<");
+    expect(stripOf(one, "sunday-league")).not.toContain("Joint");
+    const none = render(hubDoc({ tables: [tableView("ga", "sunday-league", { caption: "A", rows: [tableRow("wanderers", 1), tableRow("rovers", 2)] })] }));
+    expect(stripOf(none, "sunday-league")).toBeNull();
+  });
+});
+

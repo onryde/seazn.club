@@ -9,7 +9,8 @@ import { resolveModule } from "@/server/engine-db";
 import { tableOrderOf } from "@/server/engine-db/table-rules";
 import type { StandingsRow } from "@seazn/engine/competition";
 import { getPublicDivision } from "@/server/public-site/data";
-import { BRACKET_KINDS, divisionChampion } from "@/server/public-site/champion";
+import { DivisionTitleBanner } from "@/components/public-site/division-title-banner";
+import { BRACKET_KINDS, divisionTitle } from "@/server/public-site/champion";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { sharedRenameTarget } from "@/server/slug-resolve";
 import { publicThemeStyle } from "@/lib/public-theme";
@@ -237,36 +238,24 @@ export default async function DivisionHomePage({ params }: Props) {
       (a.status === "complete" ? 1 : 0) - (b.status === "complete" ? 1 : 0) || a.seq - b.seq,
   );
 
-  // Champion (v1 parity): crown the winner above the table. A bracket is
-  // crowned by `bracketChampion` (`server/public-site/champion.ts`) — its final,
-  // settled with a winner, on the engine's rule: a forfeit counts, and an
-  // unplayed bronze match does not hold the crown back. A league/group crowns
-  // rank 1 of the final overall standings once its decisive stage is done.
+  // Title (v1 parity): crown the winner above the table. A bracket is
+  // titled by `bracketTitleOf` (`server/public-site/champion.ts`) — its final,
+  // settled, on the engine's rule: a forfeit counts, and an unplayed bronze
+  // match does not hold the crown back. A final can end in a champion, in JOINT
+  // winners, or in a VACANT title (both finalists departed); none of the three
+  // is dropped (W4 X-CH-1). A league/group crowns rank 1 of the final overall
+  // standings once its decisive stage is done.
   //
-  // Both rules live in that file — the competition hub crowns the same entrant
+  // Both rules live in that file — the competition hub crowns the same entrants
   // on every table and in its knockout view, and two copies would be two
   // crowns that agree only until one of them moves.
-  const championId: string | null = divisionChampion(stages, fixtures, standings);
+  const title = divisionTitle(stages, fixtures, standings);
+  const nameOf = (id: string) => entrantNames[id] ?? "—";
 
   // Rendered at the very top of the division page (above the tabs) so the
   // winner is visible on Schedule/Standings/Entrants alike — v1 parity.
-  // Gold is fixed podium vocabulary, deliberately outside the org theme.
-  const championBanner = championId ? (
-    <div className="relative mb-6 overflow-hidden rounded-xl bg-court p-4 text-court-ink shadow-md">
-      <span aria-hidden className="absolute inset-y-0 left-0 w-1 bg-amber-400" />
-      <div className="flex items-center gap-4 pl-2">
-        <span className="animate-trophy text-4xl" aria-hidden>🏆</span>
-        <div className="min-w-0">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-300">
-            {t(dict, "table.champion")}
-          </p>
-          <p className="truncate font-display text-3xl font-bold uppercase leading-tight tracking-tight">
-            {entrantNames[championId] ?? "—"}
-          </p>
-        </div>
-      </div>
-    </div>
-  ) : null;
+  // R24 pick 3A: "Joint winners: X and Y" under ONE trophy; "Title vacant" is a muted line, with no trophy.
+  const championBanner = <DivisionTitleBanner title={title} nameOf={nameOf} dict={dict} />;
 
   const standingsPanel = (
     <div className="space-y-8">

@@ -163,7 +163,7 @@ describe("the tie note says the sport's word — on the hub and on the division 
       entrantNames: { a: "Alpha", b: "Beta" },
       entrantLogos: {},
       entrantColours: {},
-      championId: null,
+      championIds: [],
       updatedAt: "2026-09-23T10:00:00Z",
       msg: (k, v) => t(dict, k, v),
     }).rows[1]!.tieBreakText;
@@ -258,7 +258,7 @@ describe("a tied row with no ledger reads its partners' word", () => {
       entrantNames: names,
       entrantLogos: {},
       entrantColours: {},
-      championId: null,
+      championIds: [],
       updatedAt: "2026-09-24T10:00:00Z",
       msg: (k, v) => t(en as unknown as Dict, k, v),
     });

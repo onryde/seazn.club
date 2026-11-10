@@ -175,11 +175,74 @@ describe("ST-G26 the champion model's guard", () => {
   it("a champion id the public entrant list does not carry prints no crown over a blank name: the table's fallback", async () => {
     const { standingsCardModel } = await import("@/server/og/model");
     const base = { orgName: "o", competitionName: "c", divisionName: "d", logo: null, branding: [], youth: false, entrantKind: "individual", rules: null };
-    const model = standingsCardModel({ ...base, rows: [], names: { e1: "Maya Kapoor" }, championId: "ghost" });
+    const model = standingsCardModel({ ...base, rows: [], names: { e1: "Maya Kapoor" }, title: { kind: "champion", champion: "ghost" } });
     expect(model.champion).toBeNull();
     expect(model.fallbackKey).toBe("og.standings.empty");
     // The positive pair: an id it does carry is crowned.
-    expect(standingsCardModel({ ...base, rows: [], names: { e1: "Maya Kapoor" }, championId: "e1" }).champion?.name).toBe("Maya Kapoor");
+    expect(standingsCardModel({ ...base, rows: [], names: { e1: "Maya Kapoor" }, title: { kind: "champion", champion: "e1" } }).champion?.name).toBe("Maya Kapoor");
+  });
+});
+
+// W4 B2a (X-CH-1, X-CH-3; C16): the card names what the title crowned — one champion, BOTH joint winners, nobody for a
+// vacant title — and the Plate never titles a division. Differential: the pre-W4 card read `data.standings[0]` /
+// the first finished final, so a joint final named nobody and a Plate (stored last) crowned its own winner.
+describe("W4 B2a the OG card names the title: champion, joint winners, vacant", () => {
+  const jointFinal = (stageId: string): Fx[] => [
+    ...bracket(stageId).slice(0, 2),
+    { id: "kf", stage_id: stageId, round_no: 2, seq_in_round: 1, home_entrant_id: "e1", away_entrant_id: "e2", status: "decided", outcome: null, is_final: true, joint_winners_at: "2026-11-10T10:00:00Z" },
+  ];
+  const vacantFinal = (stageId: string): Fx[] => [
+    ...bracket(stageId).slice(0, 2),
+    { id: "kf", stage_id: stageId, round_no: 2, seq_in_round: 1, home_entrant_id: "e1", away_entrant_id: "e2", status: "forfeited", outcome: { kind: "double_walkover" }, is_final: true },
+  ];
+
+  it("JOINT: both names on one line, the Joint winners label, ONE trophy — in every locale's own words", async () => {
+    let checked = 0;
+    for (const locale of Object.keys(DICTS)) {
+      Object.assign(state, { locale, stages: [stage("ko", 1, "knockout")], fixtures: jointFinal("ko"), standings: [placement("ko")] });
+      const html = await draw();
+      const both = DICTS[locale]!["title.jointNames"]!.replace("{a}", "Maya Kapoor").replace("{b}", "Leo Ng");
+      expect(html, locale).toContain(`>${esc(both)}<`);
+      expect(html, locale).toContain(`>${esc(line(locale, "title.joint"))}<`);
+      expect(html, locale).not.toContain(`>${esc(line(locale, "table.champion"))}<`);
+      expect(html.split(TROPHY).length - 1, `${locale}: one trophy`).toBe(1);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("VACANT: no name and no trophy — the card falls back to the empty line (a bracket has no table to show)", async () => {
+    Object.assign(state, { stages: [stage("ko", 1, "knockout")], fixtures: vacantFinal("ko"), standings: [placement("ko")] });
+    const html = await draw();
+    expect(html).not.toContain(TROPHY);
+    for (const name of ["Maya Kapoor", "Leo Ng", "Clara Dunn", "Dmitri Volkov"]) expect(html, name).not.toContain(name);
+    expect(html).toContain(`>${esc(line("en", "og.standings.empty"))}<`);
+  });
+
+  it("a Knockout + Plate division crowns the MAIN draw's winner, never the plate's (C16)", async () => {
+    // The Plate is stored AFTER the main draw (seq 2) and feeds from its losers; its own final is won by e3.
+    const plateFinal: Fx[] = [{ id: "pf", stage_id: "pl", round_no: 2, seq_in_round: 1, home_entrant_id: "e3", away_entrant_id: "e4", status: "decided", outcome: { kind: "win", winner: "e3", loser: "e4" }, is_final: true }];
+    Object.assign(state, {
+      stages: [stage("ko", 1, "knockout"), { ...stage("pl", 2, "knockout"), feeds_from: [{ stageId: "ko", side: "losers" }] }],
+      fixtures: [...bracket("ko"), ...plateFinal],
+      standings: [placement("ko"), { stage_id: "pl", pool_id: null, rows: [] }],
+    });
+    const html = await draw();
+    expect(html).toContain(`>${esc("Maya Kapoor")}<`);
+    expect(html).toContain(`>${esc(line("en", "table.champion"))}<`);
+    expect(html).not.toContain("Clara Dunn");
+    // The positive pair, same rows without the graph: the old rule crowned the plate (seq).
+    Object.assign(state, { stages: [stage("ko", 1, "knockout"), stage("pl", 2, "knockout")] });
+    expect(await draw()).toContain(`>${esc("Clara Dunn")}<`);
+  });
+
+  it("the model: a joint pair with one name missing from the public list names nobody (never half a crown)", async () => {
+    const { standingsCardModel } = await import("@/server/og/model");
+    const base = { orgName: "o", competitionName: "c", divisionName: "d", logo: null, branding: [], youth: false, entrantKind: "individual", rules: null, rows: [] };
+    const joint = { kind: "joint" as const, winners: ["e1", "e2"] as [string, string] };
+    expect(standingsCardModel({ ...base, names: { e1: "A" }, title: joint }).champion).toBeNull();
+    expect(standingsCardModel({ ...base, names: { e1: "A", e2: "B" }, title: joint }).champion).toMatchObject({ name: "A & B", joint: true });
+    expect(standingsCardModel({ ...base, names: { e1: "A", e2: "B" }, title: { kind: "vacant" } }).champion).toBeNull();
   });
 });
 

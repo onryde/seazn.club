@@ -96,7 +96,7 @@ const base: Omit<TableViewInput, "rows"> = {
   entrantNames: { a: "Alpha", b: "Beta" },
   entrantLogos: { a: "https://x/a.png", b: null },
   entrantColours: {},
-  championId: null,
+  championIds: [],
   updatedAt: "2026-09-05T10:00:00Z",
   msg,
 };
@@ -226,7 +226,7 @@ describe("buildTableView", () => {
       }),
       row("a", { played: 1, points: 3, metrics: { gf: 2, ga: 0, gd: 2 }, rank: 1 }),
     ];
-    const v = buildTableView({ ...base, rows, championId: "a" });
+    const v = buildTableView({ ...base, rows, championIds: ["a"] });
     // Order-differential: input order is [b, a] and output order is [a, b].
     expect(v.rows.map((r) => r.entrantId)).toEqual(["a", "b"]);
     expect(v.rows[0]).toMatchObject({
@@ -465,7 +465,7 @@ describe("buildTableView", () => {
   });
 
   it("an entrant absent from the name and logo maps renders its id and no badge (negative pair for Alpha's badge)", () => {
-    const v = buildTableView({ ...base, rows: [row("zz", { rank: 1 })], championId: "a" });
+    const v = buildTableView({ ...base, rows: [row("zz", { rank: 1 })], championIds: ["a"] });
     expect(v.rows[0]!.name).toBe("zz");
     expect(v.rows[0]!.badgeUrl).toBeNull();
     // championId names an entrant that is not in this table at all.
@@ -476,7 +476,7 @@ describe("buildTableView", () => {
     const v = buildTableView({
       ...base,
       rows: [row("a", { rank: 1 }), row("b", { rank: 2 })],
-      championId: null,
+      championIds: [],
     });
     expect(v.rows.map((r) => r.champion)).toEqual([false, false]);
   });
@@ -500,7 +500,7 @@ describe("qualification (spec 2026-09-22)", () => {
     row("b", { played: 1, points: 3, metrics: { gf: 1, ga: 0, gd: 1 }, rank: 2, tieBreak: { key: "diff", with: ["a"] } }),
     row("a", { played: 1, points: 3, metrics: { gf: 2, ga: 0, gd: 2 }, rank: 1 }),
   ];
-  const input: TableViewInput = { ...base, rows, championId: "a" };
+  const input: TableViewInput = { ...base, rows, championIds: ["a"] };
 
   it("empty case: no qualification input → view.qualification null and every row.qual null", () => {
     const v = buildTableView(input);
@@ -615,5 +615,16 @@ describe("qualification (spec 2026-09-22)", () => {
     expect(buildTableView({ ...input, qualification: null })).toEqual(expected);
     // …and an absent input is the same table as an explicit null.
     expect(buildTableView(input)).toEqual(expected);
+  });
+});
+
+describe("W4 B2a: championIds — a joint title crowns both rows, a vacant one none", () => {
+  const rows = [row("a", { rank: 1 }), row("b", { rank: 1 }), row("c", { rank: 3 })];
+  it("two ids flag exactly those two rows; the third is not a champion", () => {
+    const v = buildTableView({ ...base, rows, championIds: ["a", "b"] });
+    expect(v.rows.map((r) => [r.entrantId, r.champion])).toEqual([["a", true], ["b", true], ["c", false]]);
+  });
+  it("EMPTY (vacant): flags nobody", () => {
+    expect(buildTableView({ ...base, rows, championIds: [] }).rows.some((r) => r.champion)).toBe(false);
   });
 });

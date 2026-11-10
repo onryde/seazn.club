@@ -126,7 +126,14 @@ import {
 } from "../data";
 import { MatchCentreHeader, type SideT } from "../match-centre-schema";
 import { CompetitionHubDoc } from "../competition-hub-schema";
-import { divisionChampion } from "../champion";
+import { divisionTitle } from "../champion";
+
+/** The single champion's entrant id of `divisionTitle` — null for no title, a joint title or a vacant one. */
+const championIdOf = (...a: Parameters<typeof divisionTitle>): string | null => {
+  const t = divisionTitle(...a);
+  return t?.kind === "champion" ? t.champion : null;
+};
+
 import { describeFormat } from "../describe-format";
 import { STRUCTURAL_KEYS, TIE_BREAK_MSG_KEYS } from "../standings-view";
 import {
@@ -2795,7 +2802,7 @@ describe("loadCompetitionHub — knockouts, one view per bracket stage", () => {
       const id = doc.knockouts[0]!.championFixtureId;
       return {
         view: fixtures.find((f) => f.id === id)?.outcome?.winner ?? null,
-        division: divisionChampion(stages, fixtures, []),
+        division: championIdOf(stages, fixtures, []),
       };
     };
     // What a forfeit writes since W2b, chess included: an award naming its loser and reason.

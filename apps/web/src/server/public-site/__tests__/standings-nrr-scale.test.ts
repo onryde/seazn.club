@@ -91,7 +91,7 @@ const viewInput = (variant: string, rows: StandingsRow[], rules: ReturnType<type
   entrantNames: NAMES,
   entrantLogos: {},
   entrantColours: {},
-  championId: null,
+  championIds: [],
   updatedAt: "2026-10-28T10:00:00Z",
   msg: (k, v) => t(EN, k, v),
   rules,
