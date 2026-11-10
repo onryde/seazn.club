@@ -554,16 +554,23 @@ describe("joint RuleFixture producers stay in the fixture-id namespace (#443)", 
     const singleFiles = readdirSync(new URL("../schedule-ai/", import.meta.url)).filter((n) =>
       n.endsWith(".ts"),
     );
-    expect(singleFiles.length).toBeGreaterThan(1); // anti-vacuity: the folder was found and holds the split modules
+    // Anti-vacuity: the folder was found and holds every split module. 11 `.ts` files in usecases/schedule-ai/ when last
+    // counted (2026-11-10, index.ts included). Removing a module is legal and lowers the floor: edit the number in the
+    // same change. A loose `> 1` would stay green with ten of the eleven gone.
+    expect(singleFiles.length, "anti-vacuity: the schedule-ai modules were found").toBeGreaterThanOrEqual(11);
     const single = singleFiles.map((n) => read(`../schedule-ai/${n}`)).join("\n");
     // competition-schedule-ai/ is a folder (barrel + modules): the joint producers are ALL of its modules, so the scan
     // covers every one. The anti-vacuity below fails a scan that found no modules.
     const jointModules = readdirSync(new URL("../competition-schedule-ai/", import.meta.url)).filter((f) => f.endsWith(".ts"));
-    expect(jointModules.length, "anti-vacuity: the joint modules were found").toBeGreaterThan(1);
+    // 10 `.ts` files in usecases/competition-schedule-ai/ when last counted (2026-11-10, index.ts included). Removing a
+    // module is legal and lowers the floor: edit the number in the same change.
+    expect(jointModules.length, "anti-vacuity: the joint modules were found").toBeGreaterThanOrEqual(10);
     const joint = jointModules.map((f) => read(`../competition-schedule-ai/${f}`)).join("\n");
     // `schedule` is a folder too: the board's producers are EVERY module in it.
     const boardModules = readdirSync(new URL("../schedule/", import.meta.url)).filter((f) => f.endsWith(".ts"));
-    expect(boardModules.length, "anti-vacuity: the board modules were found").toBeGreaterThan(1);
+    // 15 `.ts` files in usecases/schedule/ when last counted (2026-11-10, index.ts included). Removing a module is
+    // legal and lowers the floor: edit the number in the same change.
+    expect(boardModules.length, "anti-vacuity: the board modules were found").toBeGreaterThanOrEqual(15);
     const board = boardModules.map((f) => read(`../schedule/${f}`)).join("\n");
     const producers = (s: string): number => (s.match(/winnerTo:/g) ?? []).length;
 
