@@ -234,6 +234,8 @@ interface FixtureRow {
   is_final?: boolean;
   third_place?: boolean;
   conditional?: boolean;
+  /** W4 B5b (V499): when the final was ruled joint winners - the bracket tile's footer reads it (`finalTitleTag`). */
+  joint_winners_at?: string | null;
   /** The bracket FEED edges (V214__fixtures.sql): which fixture this one's winner/loser
    *  advances into, and which seat there (1 = home, 2 = away). Mirrors
    *  `FixtureRow.winner_to_fixture` etc. on the shared server type;

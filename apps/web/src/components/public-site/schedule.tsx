@@ -15,6 +15,7 @@ import { dayDateShort, dayLabelLong } from "@/lib/day-label";
 import { intlLocaleFor } from "@/lib/public-date-locale";
 import { msg } from "@/lib/messages";
 import { unseatedForfeitLoser, type ForfeitCopy, type ForfeitWords } from "@/lib/forfeit-tag";
+import { finalTitleTag } from "@/lib/final-title-tag";
 import { ForfeitTagChip } from "./forfeit-tag-chip";
 import { bracketForfeitWords } from "@/lib/bracket-forfeit-words";
 // Every word here arrives finished, in the ORG's locale (P6 fix round 1 #2,
@@ -129,6 +130,9 @@ export interface ScheduleCopy {
   timesIn: string;
   /** No fixtures at all. */
   empty: string;
+  /** W4 B5b (pick 3A): a deciding final ruled joint winners reads this in the result's place - the public dictionary's
+   *  `title.joint`, the page banner's own words. Optional: a caller that hands none shows no label, exactly as before. */
+  jointWinners?: string;
   /** W2b Task 13 (review I-2) — the forfeit tags and sentences (`forfeitCopyOf` over the caller's public dictionary),
    *  read by this tab's rows and by the bracket. Optional: a caller that hands none shows no tag, exactly as before. */
   forfeit?: ForfeitCopy;
@@ -305,7 +309,10 @@ function ScorebugRow({
   const winner = f.outcome?.winner ?? null;
   // A double walkover credits nobody: its summary's 0 — 0 would read as an unplayed match, so it shows its tag alone.
   const doubleWalkover = forfeit?.kind === "double_walkover";
-  const lines = (decided || live) && !doubleWalkover ? sideLines(f) : null;
+  // W4 B5b (pick 3A): a final the organiser ruled JOINT WINNERS has no winner and no score to show - an abandoned game's
+  // stray side lines beside "Joint winners" would read as its result - so the row says that instead, and weights both names.
+  const jointFinal = finalTitleTag(f) === "joint";
+  const lines = (decided || live) && !doubleWalkover && !jointFinal ? sideLines(f) : null;
   // V4 (T17 fix round 4, as V1): an online board with no scheduled time whose round is open shows when it opened —
   // the fixture page's "Round opened HH:MM" clock — where the rail said "TBD". A real time, a live or a decided row
   // keeps its own.
@@ -332,7 +339,7 @@ function ScorebugRow({
   const awayName = sideName(f.away_entrant_id, "away");
 
   const nameCls = (id: string | null) =>
-    winner && id === winner
+    (winner && id === winner) || (jointFinal && id !== null)
       ? "truncate text-[15px] font-semibold leading-6 text-ink"
       : winner
         ? "truncate text-[15px] font-medium leading-6 text-ink-muted"
@@ -395,6 +402,11 @@ function ScorebugRow({
       <span title={homeName} className={nameCls(f.home_entrant_id)}>{homeName}</span>
       {lines ? (
         <span data-testid="schedule-score" className={scoreCls(f.home_entrant_id)}>{lines[0]}</span>
+      ) : jointFinal && copy.jointWinners !== undefined ? (
+        <span data-testid="schedule-joint-winners" className="row-span-2 flex max-w-28 items-center gap-1 self-center text-right text-xs font-semibold leading-tight text-amber-700">
+          <span aria-hidden className="shrink-0">🏆</span>
+          <span className="min-w-0 text-balance">{copy.jointWinners}</span>
+        </span>
       ) : chip !== null ? (
         // No score lines beside the tag (a double walkover, or a line too long for the column): the tag alone, with a
         // credited headline when there is one — never a double walkover's 0 — 0.
