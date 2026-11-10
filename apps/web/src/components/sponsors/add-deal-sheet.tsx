@@ -58,8 +58,10 @@ export interface AddDealSheetProps {
   packages: readonly SponsorPackageRow[];
   /** `ends_on`: the competition's end date (YYYY-MM-DD) or null. */
   competitions: readonly { id: string; name: string; ends_on?: string | null }[];
-  /** The plan places tiers and competition deals (`sponsors.tiers`). */
-  hasTiers: boolean;
+  /** `sponsors.tiers` is on for the whole organisation (a paid plan), and so for every competition. */
+  tiersOrgWide: boolean;
+  /** The competitions an Event Pass lifts `sponsors.tiers` on (the server gates placement per scope, deal-gates.ts `assertPlacementAllowed`). */
+  tiersCompetitionIds: readonly string[];
   /** The plan sells online invoices (`sponsors.monetize`) on SOME scope: what separates "needs a plan" from "not for this scope". */
   hasMonetize: boolean;
   /** `sponsors.monetize` is on for the whole organisation (a paid plan), and so for every competition. */
@@ -103,7 +105,7 @@ const PAY_LINE: Record<PaymentMethod, MessageKey> = {
 const LOCK_LINK = "inline-flex items-center font-medium text-purple-700 underline max-md:min-h-11";
 
 export function AddDealSheet({
-  sponsor, deals, packages, competitions, hasTiers, hasMonetize, monetizeOrgWide, monetizeCompetitionIds, chargesEnabled, finishedCompetitionIds,
+  sponsor, deals, packages, competitions, tiersOrgWide, tiersCompetitionIds, hasMonetize, monetizeOrgWide, monetizeCompetitionIds, chargesEnabled, finishedCompetitionIds,
   orgSlug, onCreate, onClose,
 }: AddDealSheetProps) {
   const msg = useMsg();
@@ -112,8 +114,15 @@ export function AddDealSheet({
   const hintId = useId();
 
   const onSale = packages.filter((p) => p.active);
-  /** The plan does not place this package (spec §10 Q1: on the community plan every deal is Partner on the whole organisation). */
-  const packageLocked = (p: SponsorPackageRow) => !hasTiers && placementNeedsTiers(p.tier, p.competition_id);
+  /** The plan places tiers and competition deals FOR THIS SCOPE ("" is the whole organisation): org-wide covers every scope, an Event Pass
+   *  only its own competition (the server's per-scope gate, deal-gates.ts `assertPlacementAllowed`; the `monetizeFor` mirror). */
+  const tiersFor = (scopeId: string) => tiersOrgWide || (scopeId !== "" && tiersCompetitionIds.includes(scopeId));
+  /** Tiers are reachable on SOME scope: what separates "needs a plan" from "not for this scope". */
+  const hasTiers = tiersOrgWide || tiersCompetitionIds.length > 0;
+  /** The plan does not place this package (spec §10 Q1: on the community plan every deal is Partner on the whole organisation). A package for
+   *  one competition needs tiers on THAT competition; one for any competition needs them on some scope (the sheet then picks a placed one). */
+  const packageLocked = (p: SponsorPackageRow) =>
+    p.competition_id !== null ? !tiersFor(p.competition_id) : !hasTiers && placementNeedsTiers(p.tier, null);
   /** The package's competition has finished: it is not sold (the server refuses it, 409 `competition_finished`). */
   const packageFinished = (p: SponsorPackageRow) => p.competition_id !== null && finishedCompetitionIds.includes(p.competition_id);
   const packageOpen = (p: SponsorPackageRow) => !packageLocked(p) && !packageFinished(p);
@@ -121,10 +130,18 @@ export function AddDealSheet({
    *  its own competition (the server's per-scope gate, deal-gates.ts `assertOnlineAllowed`). */
   const monetizeFor = (scopeId: string) => monetizeOrgWide || (scopeId !== "" && monetizeCompetitionIds.includes(scopeId));
 
+  /** The scope a package places on: the one a competition package fixes, else the person's pick; while the pick is the whole organisation
+   *  (the opening state) and that is not placed for this package, the first competition that is. A competition the person chose stays
+   *  chosen (the submit guard `placementOk` then says whether it can be sent). Derived, never stored, so a package change re-asks. */
+  const scopeOf = (p: SponsorPackageRow, picked: string) => {
+    if (p.competition_id !== null) return p.competition_id;
+    if (picked !== "" || tiersFor("") || !placementNeedsTiers(p.tier, null)) return picked;
+    return competitions.find((c) => tiersFor(c.id))?.id ?? picked;
+  };
   const firstOpen = onSale.find(packageOpen) ?? null;
   const [packageId, setPackageId] = useState<string | null>(() => firstOpen?.id ?? null);
   const [pickedScope, setPickedScope] = useState("");
-  const [pickedMethod, setPickedMethod] = useState<PaymentMethod>(chargesEnabled && monetizeFor(firstOpen?.competition_id ?? "") ? "online" : "offline");
+  const [pickedMethod, setPickedMethod] = useState<PaymentMethod>(chargesEnabled && monetizeFor(firstOpen === null ? "" : scopeOf(firstOpen, "")) ? "online" : "offline");
   const [pickedRule, setPickedRule] = useState<GoLiveRule>("on_payment");
   const [email, setEmail] = useState(sponsor.last_billing_email ?? "");
   const [endsOn, setEndsOn] = useState("");
@@ -137,7 +154,7 @@ export function AddDealSheet({
   const pkg = onSale.find((p) => p.id === packageId) ?? null;
   /** A package for one competition fixes the scope (the server refuses any other: 422 scope_outside_package). */
   const scopeFixed = pkg !== null && pkg.competition_id !== null;
-  const scope = pkg?.competition_id ?? pickedScope;
+  const scope = pkg === null ? pickedScope : scopeOf(pkg, pickedScope);
   /** Online is only for a scope the plan sells it on AND an account that can take the money; a stale choice falls to Offline. */
   const onlineOpen = chargesEnabled && monetizeFor(scope);
   const method: PaymentMethod = pickedMethod === "online" && !onlineOpen ? "offline" : pickedMethod;
@@ -154,7 +171,7 @@ export function AddDealSheet({
   const emailValid = EMAIL_RE.test(emailTrim);
   const emailOk = method === "complimentary" || (method === "online" ? emailValid : emailTrim === "" || emailValid);
   /** The placement the plan allows - the same predicate the server enforces, so a community user never meets the 402. */
-  const placementOk = pkg !== null && (hasTiers || !placementNeedsTiers(pkg.tier, scope === "" ? null : scope));
+  const placementOk = pkg !== null && (tiersFor(scope) || !placementNeedsTiers(pkg.tier, scope === "" ? null : scope));
   const canSubmit = pkg !== null && packageOpen(pkg) && placementOk && emailOk && !busy;
 
   const scopeCompetition = scope === "" ? null : (competitions.find((c) => c.id === scope) ?? null);
@@ -360,8 +377,8 @@ export function AddDealSheet({
   );
 
   // The scope select. On a plan without tiers every competition is disabled (F29); the hint says why, with the way out.
-  const competitionBlocked = (id: string) => !hasTiers && pkg !== null && placementNeedsTiers(pkg.tier, id);
-  const wholeBlocked = !hasTiers && pkg !== null && placementNeedsTiers(pkg.tier, null);
+  const competitionBlocked = (id: string) => !tiersFor(id) && pkg !== null && placementNeedsTiers(pkg.tier, id);
+  const wholeBlocked = !tiersFor("") && pkg !== null && placementNeedsTiers(pkg.tier, null);
   const anyBlocked = competitions.some((c) => competitionBlocked(c.id));
   const pkgCompetition = pkg === null ? null : pkg.competition_id;
   const scopeInList = pkgCompetition === null || competitions.some((c) => c.id === pkgCompetition);

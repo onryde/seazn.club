@@ -31,7 +31,7 @@ vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMo
 import { Modal } from "@/components/modal";
 import { PackageCard, PackageCreateSheet, PackageList, parsePriceCents, type PackageCardProps } from "@/components/sponsors/package-list";
 import { expandWithHooks, propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
-import { SPONSOR_TIERS } from "@/lib/sponsor-tiers";
+import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
 import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
@@ -63,7 +63,7 @@ const FIVE = [TITLE, GOLD, SILVER, PARTNER, SIXES];
 
 function props(over: Partial<Parameters<typeof PackageList>[0]> = {}): Parameters<typeof PackageList>[0] {
   return {
-    orgId: ORG, initialPackages: FIVE, competitions: COMPS, hasTiers: true, hasMonetize: true, billingHref: "/o/x/settings/billing",
+    orgId: ORG, initialPackages: FIVE, competitions: COMPS, tiersOrgWide: true, tiersCompetitionIds: [], hasMonetize: true, billingHref: "/o/x/settings/billing",
     finishedCompetitionIds: [], canEdit: true, ...over,
   };
 }
@@ -147,10 +147,10 @@ async function flush() {
 describe("the empty case: no packages yet", () => {
   it("says so and offers Create to an editor - on every plan, a community editor included", () => {
     let checked = 0;
-    for (const hasTiers of [true, false]) {
+    for (const tiersOrgWide of [true, false]) {
       for (const hasMonetize of [true, false]) {
-        const html = listHtml({ initialPackages: [], hasTiers, hasMonetize });
-        const label = `tiers=${hasTiers} monetize=${hasMonetize}`;
+        const html = listHtml({ initialPackages: [], tiersOrgWide, hasMonetize });
+        const label = `tiers=${tiersOrgWide} monetize=${hasMonetize}`;
         expect(flat(html), label).toContain(msg("sponsors.pkg.empty"));
         expect(countOf(html, "package-card"), `${label}: no card`).toBe(0);
         expect(countOf(html, "sponsor-pkg-create"), `${label}: Create is offered`).toBe(1);
@@ -271,7 +271,7 @@ describe("the create sheet: today's fields plus the On stream toggle", () => {
     renderToStaticMarkup(
       <PackageCreateSheet
         draft={{ name: "", price: "", currency: "gbp", tier: "partner", competition_id: "", includes_on_stream: false }}
-        onChange={() => {}} onSubmit={() => {}} onClose={() => {}} competitions={COMPS} hasTiers busy={false} canSave={false} error={null}
+        onChange={() => {}} onSubmit={() => {}} onClose={() => {}} competitions={COMPS} tiersOrgWide tiersCompetitionIds={[]} busy={false} canSave={false} error={null}
         billingHref="/o/x/settings/billing" {...over}
       />,
     );
@@ -291,7 +291,7 @@ describe("the create sheet: today's fields plus the On stream toggle", () => {
   it("the sheet is the house Modal, titled 'Create package', with Cancel and Create in its footer", () => {
     const el = expandWithHooks(PackageCreateSheet, {
       draft: { name: "", price: "", currency: "gbp", tier: "partner", competition_id: "", includes_on_stream: false },
-      onChange: () => {}, onSubmit: () => {}, onClose: () => {}, competitions: COMPS, hasTiers: true, busy: false, canSave: false, error: null,
+      onChange: () => {}, onSubmit: () => {}, onClose: () => {}, competitions: COMPS, tiersOrgWide: true, tiersCompetitionIds: [], busy: false, canSave: false, error: null,
       billingHref: "/x",
     }) as ReactElement;
     expect(el.type).toBe(Modal);
@@ -309,7 +309,7 @@ describe("the create sheet: today's fields plus the On stream toggle", () => {
   });
 
   it("a plan without tiers: every tier but Partner and every competition is disabled, with the reason and the way out (P3)", () => {
-    const html = sheet({ hasTiers: false });
+    const html = sheet({ tiersOrgWide: false });
     const tierSelect = /<select\b[^>]*data-testid="package-create-tier"[^>]*>[\s\S]*?<\/select>/.exec(html)![0];
     const scopeSelect = /<select\b[^>]*data-testid="package-create-scope"[^>]*>[\s\S]*?<\/select>/.exec(html)![0];
     const options = (select: string) => [...select.matchAll(/<option\b([^>]*)>([^<]*)<\/option>/g)].map((m) => ({ value: /value="([^"]*)"/.exec(m[1]!)?.[1], disabled: /\sdisabled(=|\s|$)/.test(m[1]!) }));
@@ -324,10 +324,42 @@ describe("the create sheet: today's fields plus the On stream toggle", () => {
   });
 
   it("a plan with tiers: everything is open and there is no reason shown (the pair)", () => {
-    const html = sheet({ hasTiers: true });
+    const html = sheet({ tiersOrgWide: true });
     expect(/<option\b[^>]*\sdisabled/.test(html)).toBe(false);
     expect(flat(html)).not.toContain(msg("sponsors.pkg.tiersHint"));
     expect(countOf(html, "package-create-upgrade")).toBe(0);
+  });
+
+  it("an Event Pass on one competition opens that competition and every tier on it, and nothing else - the whole organisation stays Partner-only, with the reason (counted)", () => {
+    // The server's gate (usecases/sponsors.ts `createSponsorPackage`): a competition-scoped package asks `sponsors.tiers` on THAT competition; the whole
+    // organisation asks the plan only, so a pass never lifts it. c-season holds the pass; c-sixes does not.
+    const pass = { tiersOrgWide: false, tiersCompetitionIds: ["c-season"] };
+    const options = (html: string, id: string) => {
+      const select = new RegExp(`<select\\b[^>]*data-testid="${id}"[^>]*>[\\s\\S]*?<\\/select>`).exec(html)![0];
+      return [...select.matchAll(/<option\b([^>]*)>([^<]*)<\/option>/g)].map((m) => ({ value: /value="([^"]*)"/.exec(m[1]!)?.[1], disabled: /\sdisabled(=|\s|$)/.test(m[1]!) }));
+    };
+    // [tier, expected open scopes] - typed from the rule: Partner is open on the whole organisation (no tiers needed there), a competition
+    // needs tiers on it, and any other tier needs them org-wide for the whole organisation.
+    const cases: [SponsorTier, string[]][] = [
+      ["partner", ["", "c-season"]],
+      ["gold", ["c-season"]],
+    ];
+    let checked = 0;
+    for (const [tier, open] of cases) {
+      const html = sheet({ ...pass, draft: { name: "", price: "", currency: "gbp", tier, competition_id: "", includes_on_stream: false } });
+      expect(options(html, "package-create-scope").filter((o) => !o.disabled).map((o) => o.value), `${tier}: the scopes it can be placed on`).toEqual(open);
+      checked++;
+    }
+    const base = sheet(pass);
+    expect(options(base, "package-create-tier").filter((o) => !o.disabled).map((o) => o.value), "on the whole organisation only Partner is open").toEqual(["partner"]);
+    const onCompetition = sheet({ ...pass, draft: { name: "", price: "", currency: "gbp", tier: "partner", competition_id: "c-season", includes_on_stream: false } });
+    expect(options(onCompetition, "package-create-tier").filter((o) => !o.disabled).map((o) => o.value), "on the pass's competition every tier is open").toEqual([...SPONSOR_TIERS]);
+    const onOther = sheet({ ...pass, draft: { name: "", price: "", currency: "gbp", tier: "partner", competition_id: "c-sixes", includes_on_stream: false } });
+    expect(options(onOther, "package-create-tier").filter((o) => !o.disabled).map((o) => o.value), "a competition without a pass places nothing").toEqual([]);
+    expect(flat(base), "something is still shut, so the reason and the way out show").toContain(msg("sponsors.pkg.tiersHint"));
+    expect(countOf(base, "package-create-upgrade")).toBe(1);
+    checked += 3;
+    expect(checked).toBe(5);
   });
 
   it("a refusal shows inside the sheet, as an alert; no refusal shows nothing", () => {
@@ -467,7 +499,7 @@ describe("create: the sheet POSTs the package, then the list re-reads", () => {
     let checked = 0;
     for (const [tier, scope] of [["gold", ""], ["partner", "c-sixes"], ["title", "c-sixes"]] as const) {
       calls.length = 0;
-      const m = mount({ hasTiers: false });
+      const m = mount({ tiersOrgWide: false });
       await m.tap("sponsor-pkg-create");
       m.type("package-create-name", "Forced");
       m.type("package-create-price", "100");
@@ -480,7 +512,7 @@ describe("create: the sheet POSTs the package, then the list re-reads", () => {
     }
     expect(checked).toBe(3);
     // The pair: the same draft on a plan WITH tiers is saveable (the guard is the plan, not the draft).
-    const withTiers = mount({ hasTiers: true });
+    const withTiers = mount({ tiersOrgWide: true });
     await withTiers.tap("sponsor-pkg-create");
     withTiers.type("package-create-name", "Forced");
     withTiers.type("package-create-price", "100");
@@ -488,9 +520,32 @@ describe("create: the sheet POSTs the package, then the list re-reads", () => {
     expect(propsOf(withTiers.one("package-create-submit")).disabled).toBe(false);
   });
 
+  it("an Event Pass on one competition saves a package for THAT competition and refuses every other placement (4 checked, 2 pairs)", async () => {
+    // Per scope, like the server: tiers on c-season only. Typed from the gate (`createSponsorPackage`), never read back from the sheet.
+    const pass = { tiersOrgWide: false, tiersCompetitionIds: ["c-season"] };
+    let checked = 0;
+    for (const [tier, scope, saveable] of [
+      ["gold", "c-season", true],
+      ["title", "c-season", true],
+      ["gold", "c-sixes", false],
+      ["gold", "", false],
+    ] as const) {
+      calls.length = 0;
+      const m = mount(pass);
+      await m.tap("sponsor-pkg-create");
+      m.type("package-create-name", "Pass package");
+      m.type("package-create-price", "100");
+      m.type("package-create-tier", tier);
+      m.type("package-create-scope", scope);
+      expect(propsOf(m.one("package-create-submit")).disabled, `${tier}/${scope || "whole"}: ${saveable ? "placed by the pass" : "the server would answer 402"}`).toBe(!saveable);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
   it("a plan without tiers opens the sheet on Partner for the whole organisation, and what it sends says so", async () => {
     answer = (_url, method) => (method === "POST" ? { status: 201, body: { data: PARTNER } } : { status: 200, body: { data: [PARTNER] } });
-    const m = mount({ hasTiers: false, initialPackages: [] });
+    const m = mount({ tiersOrgWide: false, initialPackages: [] });
     await m.tap("sponsor-pkg-create");
     m.type("package-create-name", "Club partner");
     m.type("package-create-price", "120");

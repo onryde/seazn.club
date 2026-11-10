@@ -46,6 +46,7 @@ vi.mock("@/components/org-sponsors", () => ({
     hasTiers: boolean;
     competitions: { ends_on: string | null }[];
     hub: {
+      tiersOrgWide: boolean; tiersCompetitionIds: readonly string[];
       hasMonetize: boolean; monetizeOrgWide: boolean; monetizeCompetitionIds: readonly string[]; finishedCompetitionIds: readonly string[];
       chargesEnabled: boolean; deals: { id: string }[]; packages: { id: string }[];
       sponsorId: string | null; dealId: string | null;
@@ -54,6 +55,8 @@ vi.mock("@/components/org-sponsors", () => ({
   }) => (
     <div
       data-testid={`sponsor-tiers-${hasTiers}`}
+      data-hub-tiers-wide={String(hub.tiersOrgWide)}
+      data-hub-tiers-ids={hub.tiersCompetitionIds.join("|")}
       data-hub-monetize={String(hub.hasMonetize)}
       data-hub-monetize-wide={String(hub.monetizeOrgWide)}
       data-hub-monetize-ids={hub.monetizeCompetitionIds.join("|")}
@@ -72,12 +75,13 @@ vi.mock("@/components/org-sponsors", () => ({
 // Task 18: the Packages tab is a price list on every plan; its island gets both plan flags as affordances, the org's packages and
 // competitions (the scope picker) - the marker carries what the REAL loaders handed it.
 vi.mock("@/components/sponsors/package-list", () => ({
-  PackageList: ({ hasMonetize, hasTiers, initialPackages, competitions }: {
-    hasMonetize: boolean; hasTiers: boolean; initialPackages: { id: string }[]; competitions: { id: string }[];
+  PackageList: ({ hasMonetize, tiersOrgWide, tiersCompetitionIds, initialPackages, competitions }: {
+    hasMonetize: boolean; tiersOrgWide: boolean; tiersCompetitionIds: readonly string[]; initialPackages: { id: string }[]; competitions: { id: string }[];
   }) => (
     <div
       data-testid={`sponsor-monetize-${hasMonetize}`}
-      data-pkg-tiers={String(hasTiers)}
+      data-pkg-tiers-wide={String(tiersOrgWide)}
+      data-pkg-tiers-ids={tiersCompetitionIds.join("|")}
       data-pkg-packages={initialPackages.map((k) => k.id).join("|")}
       data-pkg-competitions={competitions.map((c) => c.id).sort().join("|")}
     />
@@ -245,7 +249,8 @@ describe.skipIf(!HAS_DB)("the Sponsors tab reads the org's deals, packages, plan
     const html = await renderSponsorsTab(mine, "packages");
     const pkg = (name: string) => new RegExp(`data-pkg-${name}="([^"]*)"`).exec(html)?.[1];
     expect(html).toContain("sponsor-monetize-false");
-    expect(pkg("tiers")).toBe("false");
+    expect(pkg("tiers-wide")).toBe("false");
+    expect(pkg("tiers-ids")).toBe("");
     expect(pkg("packages")).toBe(mine.packageId);
     expect(pkg("packages")).not.toContain(other.packageId);
     expect(pkg("competitions")).toBe([mine.passedId, mine.plainId].sort().join("|"));
@@ -256,7 +261,10 @@ describe.skipIf(!HAS_DB)("the Sponsors tab reads the org's deals, packages, plan
     const withPass = await seedOrg({ withPass: true });
     const html = await renderSponsorsTab(withPass, "packages");
     expect(html).toContain("sponsor-monetize-true");
-    expect(new RegExp('data-pkg-tiers="([^"]*)"').exec(html)?.[1]).toBe("true");
+    // ... and the tier one is PER SCOPE: the pass's own competition, never the whole organisation (the server gates the write that way).
+    expect([new RegExp('data-pkg-tiers-wide="([^"]*)"').exec(html)?.[1], new RegExp('data-pkg-tiers-ids="([^"]*)"').exec(html)?.[1]]).toEqual(["false", withPass.passedId]);
+    expect(await hasFeature(withPass.orgId, "sponsors.tiers"), "premise: the whole organisation is NOT lifted by a pass").toBe(false);
+    expect(await hasFeature(withPass.orgId, "sponsors.tiers", withPass.passedId), "premise: the passed competition is").toBe(true);
   });
 
   it("asks sponsors.monetize with the pass overlay, granted AND denied - the same answer the Packages tab gives", async () => {
@@ -283,6 +291,28 @@ describe.skipIf(!HAS_DB)("the Sponsors tab reads the org's deals, packages, plan
     // The control arm: no pass, no plan - nowhere.
     const noneHtml = await renderSponsorsTab(noPass, "sponsors");
     expect([field(noneHtml, "monetize"), field(noneHtml, "monetize-wide"), field(noneHtml, "monetize-ids")]).toEqual(["false", "false", ""]);
+  });
+
+  it("hands over WHERE tiers are placed, through the real entitlements: an Event Pass lifts its own competition and never the whole organisation (the m2 mirror, 3 arms)", async () => {
+    const withPass = await seedOrg({ withPass: true });
+    const noPass = await seedOrg({ withPass: false });
+    const paid = await seedOrg({ withPass: true });
+    await setOrgPlan(paid.orgId, "pro");
+    await invalidateOrgEntitlements(paid.orgId);
+    // Premises from the entitlement engine itself, never a plan name's reading typed here.
+    expect(await hasFeature(paid.orgId, "sponsors.tiers"), "premise: the plan has it org-wide").toBe(true);
+    expect(await hasFeature(withPass.orgId, "sponsors.tiers"), "premise: a pass does not").toBe(false);
+    const tiers = async (rig: Rig) => {
+      const html = await renderSponsorsTab(rig, "sponsors");
+      return [field(html, "tiers-wide"), field(html, "tiers-ids")];
+    };
+    expect(await tiers(withPass), "an Event Pass on one competition").toEqual(["false", withPass.passedId]);
+    expect(await tiers(noPass), "no plan and no pass: nowhere").toEqual(["false", ""]);
+    expect(await tiers(paid), "a paid plan: org-wide, no per-competition list").toEqual(["true", ""]);
+    expect(await featureScopes(withPass.orgId, "sponsors.tiers")).toEqual({ orgWide: false, competitionIds: [withPass.passedId] });
+    // The old org-level flag is still derived from it (an Event Pass opens the sponsor list's tier controls).
+    expect(await renderSponsorsTab(withPass, "sponsors")).toContain("sponsor-tiers-true");
+    expect(await renderSponsorsTab(noPass, "sponsors")).toContain("sponsor-tiers-false");
   });
 
   it("a plan that sells online everywhere is org-wide with no per-competition list - and a pass beside it changes nothing (batch H fix round 1: m2)", async () => {

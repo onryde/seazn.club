@@ -180,6 +180,8 @@ const HUB: SponsorsHubData = {
   orgSlug: "harbour-vale",
   deals: [],
   packages: [],
+  tiersOrgWide: true,
+  tiersCompetitionIds: [],
   hasMonetize: true,
   monetizeOrgWide: true,
   monetizeCompetitionIds: [],

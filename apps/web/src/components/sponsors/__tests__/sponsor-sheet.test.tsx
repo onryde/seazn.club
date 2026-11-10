@@ -575,7 +575,7 @@ const refuseWith = (status: number, code: string) => ({ status, body: { ok: fals
 
 function hubOf(over: Partial<SponsorsHubData> = {}): SponsorsHubData {
   return {
-    orgSlug: SLUG, deals: [], packages: [], hasMonetize: true, monetizeOrgWide: true, monetizeCompetitionIds: [], finishedCompetitionIds: [],
+    orgSlug: SLUG, deals: [], packages: [], tiersOrgWide: true, tiersCompetitionIds: [], hasMonetize: true, monetizeOrgWide: true, monetizeCompetitionIds: [], finishedCompetitionIds: [],
     chargesEnabled: true, sponsorId: "a", dealId: null, dealCreatedByName: null, dealCompetitionFinished: false, reportLinks: [LINK],
     reportDefaults: DEFAULTS, ...over,
   };

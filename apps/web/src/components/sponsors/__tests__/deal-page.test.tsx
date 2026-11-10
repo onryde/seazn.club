@@ -678,7 +678,7 @@ const sponsor = (over: Partial<SponsorItem> = {}): SponsorItem => ({
 });
 function hubOf(over: Partial<SponsorsHubData> = {}): SponsorsHubData {
   return {
-    orgSlug: SLUG, deals: [], packages: [], hasMonetize: true, monetizeOrgWide: true, monetizeCompetitionIds: [], finishedCompetitionIds: [],
+    orgSlug: SLUG, deals: [], packages: [], tiersOrgWide: true, tiersCompetitionIds: [], hasMonetize: true, monetizeOrgWide: true, monetizeCompetitionIds: [], finishedCompetitionIds: [],
     chargesEnabled: true, sponsorId: "a", dealId: null, dealCreatedByName: null, dealCompetitionFinished: false, reportLinks: [],
     reportDefaults: { from: "2026-01-01", to: "2026-11-09", competitionId: null }, ...over,
   };

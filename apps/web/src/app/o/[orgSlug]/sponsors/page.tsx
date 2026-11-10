@@ -90,20 +90,21 @@ export default async function SponsorsHubPage({
   if (tab === "sponsors") {
     // The sponsor and deal screens read more than the list (sponsor deals PR 2, Task 13): the org's deals and packages, both plan
     // flags (affordances, org-wide like the rest of this page), whether Stripe takes charges, and each competition's end date.
-    // Two more for the Add deal sheet (Task 16 fix round 1): WHERE online selling is on (the server gates it per scope, so an Event
-    // Pass lifts its own competition and not the whole organisation: `monetize`), and which competitions' packages are finished
+    // Two more for the Add deal sheet (Task 16 fix round 1): WHERE tiers are placed and online selling is on (the server gates both per
+    // scope, so an Event Pass lifts its own competition and not the whole organisation: `tiers`, `monetize`), and which competitions' packages are finished
     // (a package for one is not sold: the create refuses it, 409 competition_finished).
-    const [sponsorRows, deals, packages, hasTiers, monetize, chargesEnabled, competitions, finishedCompetitionIds] = await Promise.all([
+    const [sponsorRows, deals, packages, tiers, monetize, chargesEnabled, competitions, finishedCompetitionIds] = await Promise.all([
       listSponsorRows(active.id),
       listDeals(page.auth),
       listSponsorPackages(page.auth),
-      hasFeatureOnAnyPass(active.id, "sponsors.tiers"),
+      featureScopes(active.id, "sponsors.tiers"),
       featureScopes(active.id, "sponsors.monetize"),
       orgChargesEnabled(active.id),
       orgCompetitions(active.id),
       finishedPackageCompetitions(active.id),
     ]);
-    // Reachable ANYWHERE (an affordance, as before): the plan sells online invoices on some scope.
+    // Reachable ANYWHERE (an affordance, as before): the plan places tiers / sells online invoices on some scope.
+    const hasTiers = tiers.orgWide || tiers.competitionIds.length > 0;
     const hasMonetize = monetize.orgWide || monetize.competitionIds.length > 0;
     // `?sponsor=` / `?deal=` are selections only if they are THIS org's: the sponsor from the rows just read, the deal from the
     // selected sponsor's own deals. Anything else is the list again - never a 404, never a crash.
@@ -142,7 +143,8 @@ export default async function SponsorsHubPage({
           billingHref={routes.billing(orgSlug)}
           canEdit={canEdit}
           hub={{
-            orgSlug, deals, packages, hasMonetize, monetizeOrgWide: monetize.orgWide, monetizeCompetitionIds: monetize.competitionIds,
+            orgSlug, deals, packages, tiersOrgWide: tiers.orgWide, tiersCompetitionIds: tiers.competitionIds,
+            hasMonetize, monetizeOrgWide: monetize.orgWide, monetizeCompetitionIds: monetize.competitionIds,
             chargesEnabled, finishedCompetitionIds, sponsorId, dealId, dealCreatedByName, dealCompetitionFinished, reportLinks, reportDefaults,
           }}
         />
@@ -150,14 +152,15 @@ export default async function SponsorsHubPage({
     );
   } else if (tab === "packages") {
     // The price list (Task 18; sponsor deals D17): a package is a placement, so the tab is offered on EVERY plan and reads the org's
-    // packages whatever it holds. The two plan flags are affordances only (org-wide, like the rest of this page): `sponsors.tiers`
-    // opens the tier and one-competition controls in the create sheet, `sponsors.monetize` only picks the closing note. The server
-    // gates the write itself (`createSponsorPackage`). A package whose competition has finished is marked as not sold (the Add deal
+    // packages whatever it holds. The two plan flags are affordances only: `sponsors.tiers` opens the tier and one-competition controls
+    // in the create sheet PER SCOPE (the server's gate: an Event Pass lifts its own competition and never the whole organisation, so
+    // the sheet reads WHERE, `featureScopes`), `sponsors.monetize` only picks the closing note (any scope). The server gates the write
+    // itself (`createSponsorPackage`). A package whose competition has finished is marked as not sold (the Add deal
     // sheet refuses it too: 409 competition_finished).
-    const [packages, competitions, hasTiers, hasMonetize, finishedCompetitionIds] = await Promise.all([
+    const [packages, competitions, tiers, hasMonetize, finishedCompetitionIds] = await Promise.all([
       listSponsorPackages(page.auth),
       orgCompetitions(active.id),
-      hasFeatureOnAnyPass(active.id, "sponsors.tiers"),
+      featureScopes(active.id, "sponsors.tiers"),
       hasFeatureOnAnyPass(active.id, "sponsors.monetize"),
       finishedPackageCompetitions(active.id),
     ]);
@@ -167,7 +170,8 @@ export default async function SponsorsHubPage({
           orgId={active.id}
           initialPackages={packages}
           competitions={competitions.map((c) => ({ id: c.id, name: c.name }))}
-          hasTiers={hasTiers}
+          tiersOrgWide={tiers.orgWide}
+          tiersCompetitionIds={tiers.competitionIds}
           hasMonetize={hasMonetize}
           billingHref={routes.billing(orgSlug)}
           finishedCompetitionIds={finishedCompetitionIds}

@@ -141,25 +141,33 @@ export function PackageCard({ pkg, competitions, finished, canEdit, busy, onReti
 
 // --- the create sheet ----------------------------------------------------------------------------------------------------------------
 
+/** The plan places tiers FOR THIS SCOPE (null is the whole organisation): org-wide covers every scope, an Event Pass only its own
+ *  competition - the server's per-scope gate, so an Event Pass holder is not offered what the 402 would refuse. */
+const packageTiersFor = (orgWide: boolean, competitionIds: readonly string[], competitionId: string | null) =>
+  orgWide || (competitionId !== null && competitionIds.includes(competitionId));
+
 export interface PackageCreateSheetProps {
   draft: PackageDraft;
   onChange: (next: PackageDraft) => void;
   onSubmit: () => void;
   onClose: () => void;
   competitions: readonly { id: string; name: string }[];
-  /** An affordance, like the Sponsors tab's: whether the plan (or an Event Pass) has sponsors.tiers. The server decides per scope. */
-  hasTiers: boolean;
+  /** An affordance that follows the server's per-scope gate (usecases/sponsors.ts `createSponsorPackage`): `sponsors.tiers` is on for the
+   *  whole organisation (a paid plan), and so for every competition ... */
+  tiersOrgWide: boolean;
+  /** ... or only for the competitions an Event Pass lifts it on (a pass never lifts the whole organisation). */
+  tiersCompetitionIds: readonly string[];
   busy: boolean;
   canSave: boolean;
   error: string | null;
   billingHref: string;
 }
 
-export function PackageCreateSheet({ draft, onChange, onSubmit, onClose, competitions, hasTiers, busy, canSave, error, billingHref }: PackageCreateSheetProps) {
+export function PackageCreateSheet({ draft, onChange, onSubmit, onClose, competitions, tiersOrgWide, tiersCompetitionIds, busy, canSave, error, billingHref }: PackageCreateSheetProps) {
   const msg = useMsg();
   const priceInvalid = draft.price.trim() !== "" && parsePriceCents(draft.price) === null;
   const scope = draft.competition_id === "" ? null : draft.competition_id;
-  const locked = (tier: SponsorTier, competitionId: string | null) => !hasTiers && placementNeedsTiers(tier, competitionId);
+  const locked = (tier: SponsorTier, competitionId: string | null) => !packageTiersFor(tiersOrgWide, tiersCompetitionIds, competitionId) && placementNeedsTiers(tier, competitionId);
   return (
     <Modal
       title={msg("sponsors.pkg.create")}
@@ -256,7 +264,7 @@ export function PackageCreateSheet({ draft, onChange, onSubmit, onClose, competi
             </select>
           </label>
         </div>
-        {!hasTiers ? (
+        {!tiersOrgWide ? (
           <p data-testid="package-create-tiers-hint" className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs text-slate-600">
             <span>{msg("sponsors.pkg.tiersHint")}</span>
             <Link data-testid="package-create-upgrade" href={billingHref} className={LOCK_LINK}>
@@ -294,7 +302,9 @@ export interface PackageListProps {
   /** The packages as the server listed them: active first, newest first. */
   initialPackages: SponsorPackageRow[];
   competitions: readonly { id: string; name: string }[];
-  hasTiers: boolean;
+  /** `sponsors.tiers` on the whole organisation, and on the competitions an Event Pass lifts it on (`PackageCreateSheetProps`). */
+  tiersOrgWide: boolean;
+  tiersCompetitionIds: readonly string[];
   /** Online invoices are on for this plan somewhere (an affordance): only the closing note reads it. */
   hasMonetize: boolean;
   billingHref: string;
@@ -303,7 +313,7 @@ export interface PackageListProps {
   canEdit: boolean;
 }
 
-export function PackageList({ orgId, initialPackages, competitions, hasTiers, hasMonetize, billingHref, finishedCompetitionIds, canEdit }: PackageListProps) {
+export function PackageList({ orgId, initialPackages, competitions, tiersOrgWide, tiersCompetitionIds, hasMonetize, billingHref, finishedCompetitionIds, canEdit }: PackageListProps) {
   const msg = useMsg();
   const confirm = useConfirm();
   const [packages, setPackages] = useState<SponsorPackageRow[]>(initialPackages);
@@ -317,7 +327,8 @@ export function PackageList({ orgId, initialPackages, competitions, hasTiers, ha
   const url = `/api/v1/orgs/${orgId}/sponsor-packages`;
   const priceCents = parsePriceCents(draft.price);
   // The same placement answer the server enforces: a plan without tiers cannot save a package that needs them, however the draft got there.
-  const placementOk = hasTiers || !placementNeedsTiers(draft.tier, draft.competition_id === "" ? null : draft.competition_id);
+  const draftScope = draft.competition_id === "" ? null : draft.competition_id;
+  const placementOk = packageTiersFor(tiersOrgWide, tiersCompetitionIds, draftScope) || !placementNeedsTiers(draft.tier, draftScope);
   const canSave = draft.name.trim() !== "" && priceCents !== null && placementOk;
 
   /** Re-read the list from the server: its order, and each package's `used_by`. A failed re-read keeps what the write already showed. */
@@ -450,7 +461,8 @@ export function PackageList({ orgId, initialPackages, competitions, hasTiers, ha
           onSubmit={() => void createPackage()}
           onClose={closeSheet}
           competitions={competitions}
-          hasTiers={hasTiers}
+          tiersOrgWide={tiersOrgWide}
+          tiersCompetitionIds={tiersCompetitionIds}
           busy={busy}
           canSave={canSave}
           error={sheetError}

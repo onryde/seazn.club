@@ -72,7 +72,8 @@ export interface SponsorItem {
 /** What the hub page reads for the Sponsors tab beyond the list (sponsor deals PR 2, Task 13). Its readers: the sponsor list
  *  (Task 14, READS `orgSlug` only - a row carries its own deal, so `deals` would be a second authority for it), the sponsor's own
  *  page (Task 15: `sponsorId` picks it, `deals` fill its Deals, `reportLinks` and `reportDefaults` are its Report link), the Add deal
- *  sheet (Task 16: `packages` are its cards, `hasMonetize`, `monetizeOrgWide`, `monetizeCompetitionIds` and `chargesEnabled` decide
+ *  sheet (Task 16: `packages` are its cards, `tiersOrgWide` and `tiersCompetitionIds` decide which scopes place them, `hasMonetize`,
+ *  `monetizeOrgWide`, `monetizeCompetitionIds` and `chargesEnabled` decide
  *  whether Online is open FOR THE SCOPE picked, `finishedCompetitionIds` lock the packages that are no longer sold, `deals` feed its
  *  "already has one of these" confirm) and the deal page (Task 17: `dealId` picks it; `dealCreatedByName` and `dealCompetitionFinished`
  *  are the two reads its timeline needs from the server). */
@@ -82,6 +83,11 @@ export interface SponsorsHubData {
   deals: SponsorDeal[];
   /** Every package of the org, active first. */
   packages: SponsorPackageRow[];
+  /** `sponsors.tiers` on the whole organisation (a paid plan), and so on every competition. The server gates placement PER SCOPE
+   *  (deal-gates.ts `assertPlacementAllowed`): an Event Pass lifts its own competition and never the whole organisation. */
+  tiersOrgWide: boolean;
+  /** The competitions an Event Pass lifts `sponsors.tiers` on (empty when `tiersOrgWide`: org-wide covers every competition). */
+  tiersCompetitionIds: string[];
   /** `sponsors.monetize` on any competition's pass: online invoices are sold on this plan (somewhere). */
   hasMonetize: boolean;
   /** ...and on the whole organisation (a paid plan). The server gates online selling PER SCOPE (deal-gates.ts): an Event Pass lifts
@@ -888,7 +894,8 @@ export function OrgSponsors({
           deals={deals}
           packages={hub.packages}
           competitions={competitions}
-          hasTiers={hasTiers}
+          tiersOrgWide={hub.tiersOrgWide}
+          tiersCompetitionIds={hub.tiersCompetitionIds}
           hasMonetize={hub.hasMonetize}
           monetizeOrgWide={hub.monetizeOrgWide}
           monetizeCompetitionIds={hub.monetizeCompetitionIds}

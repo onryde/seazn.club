@@ -96,6 +96,8 @@ function Marker(p: {
       orgSlug: string;
       deals: { id: string }[];
       packages: { id: string }[];
+      tiersOrgWide: boolean;
+      tiersCompetitionIds: readonly string[];
       hasMonetize: boolean;
       monetizeOrgWide: boolean;
       monetizeCompetitionIds: readonly string[];
@@ -122,6 +124,8 @@ function Marker(p: {
       data-hub-slug={p.hub.orgSlug}
       data-hub-deals={p.hub.deals.map((d) => d.id).join("|")}
       data-hub-packages={p.hub.packages.map((k) => k.id).join("|")}
+      data-hub-tiers-wide={String(p.hub.tiersOrgWide)}
+      data-hub-tiers-ids={p.hub.tiersCompetitionIds.join("|")}
       data-hub-monetize={String(p.hub.hasMonetize)}
       data-hub-monetize-wide={String(p.hub.monetizeOrgWide)}
       data-hub-monetize-ids={p.hub.monetizeCompetitionIds.join("|")}
@@ -197,7 +201,8 @@ vi.mock("@/components/sponsors/package-list", () => ({
     orgId: string;
     initialPackages: { id: string }[];
     competitions: { id: string; name: string }[];
-    hasTiers: boolean;
+    tiersOrgWide: boolean;
+    tiersCompetitionIds: readonly string[];
     hasMonetize: boolean;
     billingHref: string;
     finishedCompetitionIds: readonly string[];
@@ -208,7 +213,8 @@ vi.mock("@/components/sponsors/package-list", () => ({
       data-org={p.orgId}
       data-packages={p.initialPackages.map((k) => k.id).join("|")}
       data-competitions={p.competitions.map((c) => `${c.id}:${c.name}`).join("|")}
-      data-has-tiers={String(p.hasTiers)}
+      data-tiers-wide={String(p.tiersOrgWide)}
+      data-tiers-ids={p.tiersCompetitionIds.join("|")}
       data-has-monetize={String(p.hasMonetize)}
       data-billing={p.billingHref}
       data-finished={p.finishedCompetitionIds.join("|")}
@@ -424,11 +430,11 @@ describe("a panel's heading IS its tab's label - one declaration, so the two can
 });
 
 describe("the Sponsors tab keeps Settings' gates: sponsors.tiers, granted AND denied", () => {
-  it("granted => OrgSponsors gets hasTiers true; the question is asked org-wide for sponsors.tiers", async () => {
+  it("granted => OrgSponsors gets hasTiers true; the question is asked per scope (featureScopes) for sponsors.tiers", async () => {
     h.hasFeatureOnAnyPass.mockResolvedValue(true);
     const html = await render("sponsors");
     expect(attr(html, "org-sponsors", "data-has-tiers")).toBe("true");
-    expect(h.hasFeatureOnAnyPass).toHaveBeenCalledWith(ORG.id, "sponsors.tiers");
+    expect(h.featureScopes).toHaveBeenCalledWith(ORG.id, "sponsors.tiers");
   });
 
   it("denied => hasTiers false (the upsell arm), and the list is still the org's", async () => {
@@ -478,7 +484,8 @@ describe("the Packages tab is the price list, on every plan (sponsor deals PR 2,
     const html = await render("packages");
     expect(html).toContain('data-testid="package-list-island"');
     expect(attr(html, "package-list-island", "data-packages")).toBe("p1|p2");
-    expect(attr(html, "package-list-island", "data-has-tiers")).toBe("false");
+    expect(attr(html, "package-list-island", "data-tiers-wide")).toBe("false");
+    expect(attr(html, "package-list-island", "data-tiers-ids")).toBe("");
     expect(attr(html, "package-list-island", "data-has-monetize")).toBe("false");
   });
 
@@ -487,13 +494,14 @@ describe("the Packages tab is the price list, on every plan (sponsor deals PR 2,
     for (const tiers of [true, false]) {
       for (const monetize of [true, false]) {
         h.hasFeatureOnAnyPass.mockClear();
+        h.featureScopes.mockClear();
         h.hasFeatureOnAnyPass.mockImplementation(async (_org: string, key: string) => (key === "sponsors.tiers" ? tiers : key === "sponsors.monetize" ? monetize : false));
         const html = await render("packages");
         const label = `tiers=${tiers} monetize=${monetize}`;
-        expect(attr(html, "package-list-island", "data-has-tiers"), label).toBe(String(tiers));
+        expect(attr(html, "package-list-island", "data-tiers-wide"), label).toBe(String(tiers));
         expect(attr(html, "package-list-island", "data-has-monetize"), label).toBe(String(monetize));
         expect(h.hasFeatureOnAnyPass.mock.calls.map((c) => c[1]).sort(), label).toEqual(["sponsors.monetize", "sponsors.tiers"]);
-        expect(h.hasFeatureOnAnyPass).toHaveBeenCalledWith(ORG.id, "sponsors.tiers");
+        expect(h.featureScopes.mock.calls.map((c) => c[1]), `${label}: tiers are asked per scope, monetize is the any-pass question`).toEqual(["sponsors.tiers"]);
         expect(h.hasFeatureOnAnyPass).toHaveBeenCalledWith(ORG.id, "sponsors.monetize");
         checked++;
       }
@@ -514,7 +522,7 @@ describe("the Packages tab is the price list, on every plan (sponsor deals PR 2,
     await render("packages");
     expect(h.listSponsorRows).not.toHaveBeenCalled();
     expect(h.listDeals, "and no orders list: deals live on the Sponsors tab").not.toHaveBeenCalled();
-    expect(h.featureScopes, "the per-scope read is the Sponsors tab's").not.toHaveBeenCalled();
+    expect(h.featureScopes.mock.calls.map((c) => c[1]), "the only per-scope read is the tiers one").toEqual(["sponsors.tiers"]);
   });
 });
 
@@ -555,11 +563,36 @@ describe("the Sponsors tab hands the Add deal sheet WHERE online selling is on, 
     ids: attr(html, "org-sponsors", "data-hub-monetize-ids"),
   });
 
-  it("asks featureScopes for sponsors.monetize for THIS org, and for nothing else's scope (tiers stay org-wide)", async () => {
+  it("asks featureScopes for sponsors.tiers and sponsors.monetize for THIS org, and for nothing else", async () => {
     await render("sponsors");
-    expect(h.featureScopes).toHaveBeenCalledTimes(1);
+    expect(h.featureScopes).toHaveBeenCalledTimes(2);
+    expect(h.featureScopes).toHaveBeenCalledWith(ORG.id, "sponsors.tiers");
     expect(h.featureScopes).toHaveBeenCalledWith(ORG.id, "sponsors.monetize");
-    expect(h.hasFeatureOnAnyPass.mock.calls.map((c) => c[1]).filter((k) => k === "sponsors.tiers")).toEqual(["sponsors.tiers"]);
+  });
+
+  it("tiers arrive as featureScopes answered, in every shape (4 checked, both tabs): the Event Pass lifts its own competition and never the whole organisation", async () => {
+    const SHAPES: [string, { orgWide: boolean; competitionIds: string[] }, { wide: string; ids: string; hasTiers: string }][] = [
+      ["a paid plan", { orgWide: true, competitionIds: [] }, { wide: "true", ids: "", hasTiers: "true" }],
+      ["an Event Pass on one competition", { orgWide: false, competitionIds: ["c1"] }, { wide: "false", ids: "c1", hasTiers: "true" }],
+      ["Event Passes on two", { orgWide: false, competitionIds: ["c1", "c3"] }, { wide: "false", ids: "c1|c3", hasTiers: "true" }],
+      ["no plan and no pass", { orgWide: false, competitionIds: [] }, { wide: "false", ids: "", hasTiers: "false" }],
+    ];
+    let checked = 0;
+    for (const [label, answer, want] of SHAPES) {
+      h.featureScopes.mockImplementation(async (_org: string, key: string) => (key === "sponsors.tiers" ? answer : { orgWide: false, competitionIds: [] }));
+      const sponsors = await render("sponsors");
+      expect(
+        { wide: attr(sponsors, "org-sponsors", "data-hub-tiers-wide"), ids: attr(sponsors, "org-sponsors", "data-hub-tiers-ids"), hasTiers: attr(sponsors, "org-sponsors", "data-has-tiers") },
+        `${label}: Sponsors tab`,
+      ).toEqual(want);
+      const packages = await render("packages");
+      expect({ wide: attr(packages, "package-list-island", "data-tiers-wide"), ids: attr(packages, "package-list-island", "data-tiers-ids") }, `${label}: Packages tab`).toEqual({
+        wide: want.wide,
+        ids: want.ids,
+      });
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 
   it("the answer arrives as it is, in every shape the entitlement can take (4 checked): org-wide, a pass on one competition, passes on two, none", async () => {
@@ -1066,7 +1099,7 @@ describe("the page loads only what the tab it shows needs, and nothing is carrie
     // (the featureScopes stub delegates to hasFeatureOnAnyPass, so monetize shows up in both - the second assertion is the one that
     // says WHO asked)
     expect(h.hasFeatureOnAnyPass.mock.calls.map((c) => c[1])).toEqual(["sponsors.tiers", "sponsors.monetize"]);
-    expect(h.featureScopes.mock.calls.map((c) => c[1])).toEqual(["sponsors.monetize"]);
+    expect(h.featureScopes.mock.calls.map((c) => c[1])).toEqual(["sponsors.tiers", "sponsors.monetize"]);
     expect(h.listSponsorRows).toHaveBeenCalledTimes(1);
     expect(h.listSponsorPackages).toHaveBeenCalledTimes(1);
     h.hasFeatureOnAnyPass.mockClear();
@@ -1074,8 +1107,8 @@ describe("the page loads only what the tab it shows needs, and nothing is carrie
     h.listSponsorRows.mockClear();
     h.listSponsorPackages.mockClear();
     await render("packages");
-    expect(h.hasFeatureOnAnyPass.mock.calls.map((c) => c[1])).toEqual(["sponsors.tiers", "sponsors.monetize"]);
-    expect(h.featureScopes, "the Packages tab asks the org-level question, not the per-scope one").not.toHaveBeenCalled();
+    expect(h.hasFeatureOnAnyPass.mock.calls.map((c) => c[1]).sort()).toEqual(["sponsors.monetize", "sponsors.tiers"]);
+    expect(h.featureScopes.mock.calls.map((c) => c[1]), "the Packages tab asks WHERE tiers are on, and only that per scope (monetize is the any-pass note)").toEqual(["sponsors.tiers"]);
     expect(h.listSponsorRows, "and reads no sponsors").not.toHaveBeenCalled();
     expect(h.listSponsorPackages, "its packages once").toHaveBeenCalledTimes(1);
   });

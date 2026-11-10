@@ -660,8 +660,8 @@ describe("Move: two rows drawn side by side in a group may sit APART in the stor
 // --- the island: the writes the actions make ---------------------------------------------------------------------------------------
 
 const HUB: SponsorsHubData = {
-  orgSlug: SLUG, deals: [], packages: [], hasMonetize: true, monetizeOrgWide: true, monetizeCompetitionIds: [], finishedCompetitionIds: [],
-  chargesEnabled: true, sponsorId: null, dealId: null, reportLinks: [], reportDefaults: null,
+  orgSlug: SLUG, deals: [], packages: [], tiersOrgWide: true, tiersCompetitionIds: [], hasMonetize: true, monetizeOrgWide: true, monetizeCompetitionIds: [], finishedCompetitionIds: [],
+  chargesEnabled: true, sponsorId: null, dealId: null, dealCreatedByName: null, dealCompetitionFinished: false, reportLinks: [], reportDefaults: null,
 };
 
 const fetchMock = vi.fn();
@@ -1016,10 +1016,16 @@ describe("Add deal on a row opens the Add deal sheet for that sponsor; the sheet
     wide.click("Add deal: Northbank Print");
     const w = propsOf(sheetsIn(wide)[0]!);
     expect([w.monetizeOrgWide, w.monetizeCompetitionIds, w.finishedCompetitionIds]).toEqual([true, [], []]);
+    // The tier scopes come from the hub too, per scope (an Event Pass lifts its own competition): the other value arrives, not the first one's.
+    const pass = mount(ROWS, { hub: { ...HUB_WITH_PACKAGES, tiersOrgWide: false, tiersCompetitionIds: ["c1"] } });
+    pass.click("Add deal: Northbank Print");
+    const ps = propsOf(sheetsIn(pass)[0]!);
+    expect([ps.tiersOrgWide, ps.tiersCompetitionIds], "an Event Pass on one competition").toEqual([false, ["c1"]]);
+    expect([p.tiersOrgWide, p.tiersCompetitionIds], "the hub's own, a paid plan").toEqual([HUB_WITH_PACKAGES.tiersOrgWide, HUB_WITH_PACKAGES.tiersCompetitionIds]);
+    // The list's own org-level `hasTiers` (an affordance for its tier groups) is NOT what the sheet places by: it never receives it.
     const noTiers = mount(ROWS, { hub: HUB_WITH_PACKAGES, hasTiers: false });
     noTiers.click("Add deal: Northbank Print");
-    expect(propsOf(sheetsIn(noTiers)[0]!).hasTiers, "hasTiers").toBe(false);
-    expect(p.hasTiers).toBe(true);
+    expect(propsOf(sheetsIn(noTiers)[0]!).hasTiers, "the sheet reads the hub's per-scope answer, not the org-level flag").toBeUndefined();
     expect(p.orgSlug).toBe(SLUG);
     expect(p.deals, "the org's deals feed the 'already has one' confirm").toEqual(HUB_WITH_PACKAGES.deals);
     expect(p.competitions).toBe(COMPS);

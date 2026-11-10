@@ -31,6 +31,10 @@
 //   F6  nothing saved      the page-level words used for an offline create                 -> "ends the current deal and sends no invoice"
 // Batch H re-review (batch I first commit):
 //   F7  opening method     the useState initialiser reads `hasMonetize` for `monetizeFor(firstOpen scope)` -> "the FIRST package's scope"
+// Per-scope tiers (batch I, the m2 mirror):
+//   T1  per-scope tiers    `tiersFor` ignores the scope (org-wide boolean again)               -> "an Event Pass lifts its own competition"
+//   T2  submit guard       `placementOk` reads org-wide tiers only                             -> "a deal for the pass's competition can be sent"
+//   T3  default scope      the opening scope stays on a blocked whole organisation            -> "opens on the first scope the pass places"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
@@ -92,7 +96,7 @@ function props(over: Partial<AddDealSheetProps> = {}): AddDealSheetProps {
   // A paid plan sells online invoices everywhere: `monetizeOrgWide` follows `hasMonetize` unless a test says otherwise (an Event Pass).
   const hasMonetize = over.hasMonetize ?? true;
   return {
-    sponsor: sponsor(), deals: [], packages: PACKAGES, competitions: COMPETITIONS, hasTiers: true, hasMonetize, monetizeOrgWide: hasMonetize,
+    sponsor: sponsor(), deals: [], packages: PACKAGES, competitions: COMPETITIONS, tiersOrgWide: true, tiersCompetitionIds: [], hasMonetize, monetizeOrgWide: hasMonetize,
     monetizeCompetitionIds: [], chargesEnabled: true, finishedCompetitionIds: [],
     orgSlug: SLUG, onCreate: vi.fn(async (body: CreateDealBody) => { created.push(body); }), onClose: vi.fn(), ...over,
   };
@@ -199,7 +203,7 @@ describe("D22 openings: payment follows the plan, go-live opens on payment, scop
   });
 
   it("(c) community: offline; Online locked with the upgrade hint; Gold, Silver and the competition's Partner locked; the whole-organisation Partner open and chosen; every competition option disabled with the tier hint", () => {
-    const { island } = mount({ hasTiers: false, hasMonetize: false, chargesEnabled: false });
+    const { island } = mount({ tiersOrgWide: false, hasMonetize: false, chargesEnabled: false });
     expect(methodOf(island)).toEqual(["offline"]);
     expect(isDisabled(island, "add-deal-payment-online")).toBe(true);
     expect(propsOf(one(island, "add-deal-payment-link-online")).href).toBe(routes.billing(SLUG));
@@ -252,6 +256,93 @@ describe("D22 openings: payment follows the plan, go-live opens on payment, scop
     pick(island, "add-deal-package-p-partner");
     expect(scopeOf(island)).toBe("");
     expect(propsOf(one(island, "add-deal-scope")).disabled).not.toBe(true);
+  });
+});
+
+describe("Tiers and competition deals are placed per scope: an Event Pass lifts its own competition and never the whole organisation (the m2 mirror)", () => {
+  // The server's gate is per scope (server/sponsors/deal-gates.ts `assertPlacementAllowed`: `requireFeature(org, "sponsors.tiers",
+  // competitionId)`; a null scope resolves org-wide, which on a pass org is the community answer). A pass org: tiers are reachable on
+  // SOME scope, org-wide is false, and only c1 is lifted. Typed from that rule, never read back from the sheet.
+  const PASS = { tiersOrgWide: false, tiersCompetitionIds: ["c1"] } as const;
+  const CUP2 = pkg({ id: "p-cup2", name: "Winter Partner", price_cents: 7_000, tier: "partner", competition_id: "c2" });
+  const WITH_CUP2 = { packages: [...PACKAGES, CUP2] };
+
+  it("the packages: the pass's competition's package and any-competition tiers are open; another competition's package is locked, with the way out (counted)", () => {
+    const { island } = mount({ ...PASS, ...WITH_CUP2 });
+    // [id, locked, why]
+    const expected: [string, boolean, string][] = [
+      ["p-cup", false, "a package for the pass's own competition"],
+      ["p-cup2", true, "a package for a competition with no pass"],
+      ["p-partner", false, "Partner on the whole organisation needs no tiers"],
+      ["p-gold", false, "Gold for any competition: the pass's competition can take it"],
+      ["p-silver", false, "Silver for any competition: the pass's competition can take it"],
+    ];
+    let checked = 0;
+    for (const [id, locked, why] of expected) {
+      expect(isDisabled(island, `add-deal-package-${id}`), `${id}: ${why}`).toBe(locked);
+      expect(has(island, `add-deal-package-upgrade-${id}`), `${id}: the way out`).toBe(locked);
+      checked++;
+    }
+    expect(checked).toBe(expected.length);
+  });
+
+  it("a Gold package for any competition opens on the first scope the pass places - the whole organisation is disabled - and a deal for it can be sent (T2, T3)", async () => {
+    const { island, p } = mount(PASS);
+    pick(island, "add-deal-package-p-gold");
+    expect(scopeOf(island), "not the blocked whole organisation").toBe("c1");
+    const options = optionIds(island);
+    const disabledBy = Object.fromEntries(options.map((o) => [String(propsOf(o).value), propsOf(o).disabled === true]));
+    expect(disabledBy, "the whole organisation and the competition without a pass are disabled; the pass's competition is open").toEqual({ "": true, c1: false, c2: true });
+    expect(isDisabled(island, "add-deal-submit"), "sendable: the scope it opened on is placed").toBe(false);
+    await submit(island);
+    expect(p.onCreate).toHaveBeenLastCalledWith(expect.objectContaining({ package_id: "p-gold", competition_id: "c1" }));
+  });
+
+  it("a Partner package for any competition opens on the whole organisation (it needs no tiers there); only the pass's competition can be picked beside it", () => {
+    const { island } = mount(PASS);
+    pick(island, "add-deal-package-p-partner");
+    expect(scopeOf(island)).toBe("");
+    const options = optionIds(island);
+    expect(Object.fromEntries(options.map((o) => [String(propsOf(o).value), propsOf(o).disabled === true]))).toEqual({ "": false, c1: false, c2: true });
+    chooseScope(island, "c2");
+    expect(isDisabled(island, "add-deal-submit"), "a competition without a pass cannot be sent (it would be a 402)").toBe(true);
+    chooseScope(island, "c1");
+    expect(isDisabled(island, "add-deal-submit")).toBe(false);
+  });
+
+  it("the scope hint says why a competition is disabled, with the way out - and a pass holder whose every competition is lifted sees no hint (the pair)", () => {
+    const partial = mount(PASS).island;
+    pick(partial, "add-deal-package-p-partner");
+    expect(textIn(partial, "add-deal-scope-hint")).toContain(msg("sponsors.dealSheet.scopeTiersHint"));
+    expect(propsOf(one(partial, "add-deal-scope-upgrade")).href).toBe(routes.billing(SLUG));
+    const all2 = mount({ tiersOrgWide: false, tiersCompetitionIds: ["c1", "c2"] }).island;
+    pick(all2, "add-deal-package-p-partner");
+    expect(has(all2, "add-deal-scope-hint")).toBe(false);
+  });
+
+  it("the sequence: the scope is re-derived per package - Gold lands on the pass's competition, Partner goes back to the whole organisation, a hand-picked competition stays, and a hand-picked whole organisation is refused for Silver", () => {
+    const { island } = mount(PASS);
+    pick(island, "add-deal-package-p-gold");
+    expect(scopeOf(island), "Gold: the whole organisation is not placed").toBe("c1");
+    pick(island, "add-deal-package-p-partner");
+    expect(scopeOf(island), "Partner needs no tiers on the whole organisation, and nobody picked c1 by hand").toBe("");
+    chooseScope(island, "c1");
+    pick(island, "add-deal-package-p-gold");
+    pick(island, "add-deal-package-p-partner");
+    expect(scopeOf(island), "a hand-picked competition stays").toBe("c1");
+    chooseScope(island, "");
+    expect(scopeOf(island)).toBe("");
+    pick(island, "add-deal-package-p-silver");
+    expect(scopeOf(island), "a hand-picked whole organisation is not placed for Silver: back to the competition that is").toBe("c1");
+    expect(isDisabled(island, "add-deal-submit")).toBe(false);
+  });
+
+  it("nothing lifted anywhere is the community sheet: every tiered package locked, every competition disabled (the empty case)", () => {
+    const { island } = mount({ tiersOrgWide: false, tiersCompetitionIds: [] });
+    expect(isDisabled(island, "add-deal-package-p-gold")).toBe(true);
+    expect(isDisabled(island, "add-deal-package-p-silver")).toBe(true);
+    expect(isDisabled(island, "add-deal-package-p-cup")).toBe(true);
+    expect(isDisabled(island, "add-deal-package-p-partner")).toBe(false);
   });
 });
 
@@ -553,7 +644,7 @@ describe("what is sent is what is shown (the seam)", () => {
   });
 
   it("the guard: a competition forced onto a community sheet (the disabled option cannot be picked, but the handler can be called) sends nothing", async () => {
-    const { island, p } = mount({ hasTiers: false, hasMonetize: false, chargesEnabled: false });
+    const { island, p } = mount({ tiersOrgWide: false, hasMonetize: false, chargesEnabled: false });
     chooseScope(island, "c1");
     expect(isDisabled(island, "add-deal-submit"), "the button waits").toBe(true);
     await submit(island);
@@ -734,9 +825,9 @@ describe("a package whose competition has finished is not sold (m1)", () => {
   });
 
   it("the lock does not depend on the plan: a paid plan locks it too, and a community sheet shows the finished reason before the plan's", () => {
-    const paid = mount({ hasTiers: true, finishedCompetitionIds: ["c1"] });
+    const paid = mount({ tiersOrgWide: true, finishedCompetitionIds: ["c1"] });
     expect(isDisabled(paid.island, "add-deal-package-p-cup")).toBe(true);
-    const community = mount({ hasTiers: false, hasMonetize: false, chargesEnabled: false, finishedCompetitionIds: ["c1"] });
+    const community = mount({ tiersOrgWide: false, hasMonetize: false, chargesEnabled: false, finishedCompetitionIds: ["c1"] });
     expect(has(community.island, "add-deal-package-finished-p-cup")).toBe(true);
     expect(has(community.island, "add-deal-package-lock-p-cup"), "one reason at a time").toBe(false);
   });
