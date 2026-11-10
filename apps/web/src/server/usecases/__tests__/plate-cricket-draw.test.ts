@@ -2,6 +2,7 @@
 // was refused 422 SEEDING_RULES_MISSING after every first loss was known, while the other ten sports drew it.
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { computeSeedProposal, generateStageFixtures } from "../stages";
+import { withdrawEntrantCascade } from "../withdrawal";
 import { sql } from "@/lib/db";
 import { scoreEvent } from "../scoring";
 import { builtinModules } from "@seazn/engine/sports";
@@ -150,5 +151,63 @@ describe.skipIf(!HAS_DB)("the plate draws on cricket (matrix defect 2)", () => {
       select home_slot_label as h, away_slot_label as a from fixtures where stage_id = ${rig.plateId} and round_no = 1`;
     expect(labels.flatMap((l) => [l.h, l.a]).filter((x) => x?.key === "slot.first_loss"), "three first-loss seats").toHaveLength(3);
     expect(labels.flatMap((l) => [l.h, l.a]).filter((x) => x?.key === "bracket.slot.bye"), "and the bye a field of three has").toHaveLength(1);
+  }, 300_000);
+
+  // Round 2 (review m1): the HARM direction of the seat check. A false "stale" deletes the plate's rows and with them the
+  // organiser's court and time. An UNCHANGED field, bye or not, must keep every row id and what was set on it.
+  it.each([
+    ["cricket", CRICKET_PICK, 8, 3],
+    ["football", FOOTBALL_PICK, 5, 0],
+    ["football", FOOTBALL_PICK, 7, 0],
+  ] as const)("%s n=%s: proposing twice on an unchanged field (bye-bearing) keeps every plate row and its court and time", async (_name, pick, n, abandonLast) => {
+    const rig = await plateRig(n, { autoProgress: false, ...pick });
+    if (abandonLast === 3) {
+      // A field of three first losers: three won first matches, the fourth abandoned (a bracket of 3 carries a bye).
+      const round1 = (await linesOf(rig.mainId)).filter((l) => l.round_no === 1);
+      for (const f of round1.slice(0, 3)) await win(rig, f, f.home_entrant_id!);
+      const id = round1[3]!.id;
+      const tip = (await sql<{ s: number }[]>`select coalesce(max(seq), 0)::int as s from score_events where fixture_id = ${id}`)[0]!.s;
+      await scoreEvent(rig.auth, id, { expected_seq: tip, type: "core.start", payload: {} } as never);
+      await scoreEvent(rig.auth, id, { expected_seq: tip + 1, type: "core.abandon", payload: { reason: "abandoned" } } as never);
+    } else {
+      await playRound(rig, 1);
+      await playRound(rig, 2);
+    }
+    const first = await computeSeedProposal(rig.auth, rig.plateId);
+    const k = first.computed.qualifiers.length;
+    expect(k, "anti-vacuity: a field with a bye (3, or the fold's count for a non power-of-two main draw)").toBeGreaterThanOrEqual(2);
+    const byes = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixtures where stage_id = ${rig.plateId} and (home_slot_label->>'key' = 'bracket.slot.bye' or away_slot_label->>'key' = 'bracket.slot.bye')`;
+    if (n === 8) expect(byes[0]!.n, "rig: the field of three drew a bye").toBe(1);
+    const before = await linesOf(rig.plateId);
+    const target = before[0]!;
+    await sql`update fixtures set scheduled_at = '2030-01-01T10:00:00Z', court_label = 'C1' where id = ${target.id}`;
+    const second = await computeSeedProposal(rig.auth, rig.plateId);
+    expect(second.computed.qualifiers.length, "the same field").toBe(k);
+    expect((await linesOf(rig.plateId)).map((l) => l.id), "the very same rows, in order").toEqual(before.map((l) => l.id));
+    const [row] = await sql<{ court_label: string | null; scheduled_at: Date | null }[]>`select court_label, scheduled_at from fixtures where id = ${target.id}`;
+    expect([row!.court_label, row!.scheduled_at?.toISOString()], "the organiser's court and time survived the second proposal").toEqual(["C1", "2030-01-01T10:00:00.000Z"]);
+  }, 600_000);
+
+  // Round 2 (review m2): a CONFIRMED plate whose field then shrinks while the main draw is still open. The plate is un-filled and
+  // redrawn only when a correction lands in a COMPLETED knockout source (seed-stale.ts correctBracketDependent, X-QM-4, which
+  // knockout-source-correction.test.ts pins for the same size); before that the confirmed slate stands. The seat check lives on the
+  // proposal's call, which a confirmed plate refuses (409) before it reaches the write, so it can never wipe a confirmed plate:
+  // pinned here, the harm direction. (The reviewer's 4 -> 3 redraw of a confirmed plate is not reachable on an open source.)
+  it("football n=8, auto-progress ON: a confirmed plate (four seats) stands untouched when its field shrinks to three before the main draw completes", async () => {
+    const rig = await plateRig(8, { autoProgress: true, ...FOOTBALL_PICK });
+    const round1 = (await linesOf(rig.mainId)).filter((l) => l.round_no === 1);
+    for (const f of round1) await win(rig, f, f.home_entrant_id!);
+    const [confirmed] = await sql<{ status: string }[]>`select status from stage_seed_proposals where stage_id = ${rig.plateId} order by created_at desc limit 1`;
+    expect(confirmed?.status, "rig: auto-progress confirmed the plate at 4").toBe("confirmed");
+    const before = await linesOf(rig.plateId);
+    await undecide(rig, round1[3]!.id);
+    await withdrawEntrantCascade(rig.auth, round1[3]!.home_entrant_id!);
+    const [after] = await sql<{ status: string }[]>`select status from stage_seed_proposals where stage_id = ${rig.plateId} order by created_at desc limit 1`;
+    expect(after?.status, "the confirmed slate stands").toBe("confirmed");
+    const now = await linesOf(rig.plateId);
+    expect(now.map((l) => l.id), "same rows").toEqual(before.map((l) => l.id));
+    const seated = new Set(now.flatMap((l) => [l.home_entrant_id, l.away_entrant_id]).filter((x) => x !== null));
+    expect(seated.size, "all four first losers still hold their seats").toBe(4);
   }, 300_000);
 });
