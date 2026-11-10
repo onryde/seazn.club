@@ -7,11 +7,12 @@ import { newSession, check, signIn, tag, v1, v1data } from "../harness.ts";
  * side's team sheet (one bench row, one numberless row), mints a device link, and the phone — a bare HTTP client with the
  * link's Bearer dl_ and no cookie — reads `GET /api/v1/device-link`. Every expected value is a literal this suite put.
  *
- * Five checks: the lineup rows carry slot, position, order, role(s) and shirt number. (The football clock checks, a Date header
- * on the events door, are not on this branch.) EXPECTED_CHECKS counts all five, so a run that executed fewer cannot pass.
+ * Checks 1–5 are Task 1's (the lineup rows carry slot, position, order, role(s) and shirt number); 6–7 are Task 2's (the
+ * events door answers a `Date` header the pad samples its server-time offset from). EXPECTED_CHECKS counts all seven, so a
+ * run that executed fewer cannot pass.
  * Its own fresh org, purged by cleanup(). SMOKE_ONLY=deviceLinkFootball runs it alone.
  */
-const EXPECTED_CHECKS = 5;
+const EXPECTED_CHECKS = 7;
 
 type Row = {
   person_id: string;
