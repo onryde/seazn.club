@@ -1,0 +1,137 @@
+{
+  "scenario": "W4B_Q5A",
+  "cases": [
+    {
+      "caseId": "ko_plate|football|11-a-side|W4B_Q5A",
+      "state": "works",
+      "reason": "10 checks, 115 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5a-plate-entrant-withdraws",
+          "verdict": "pass",
+          "checked": 17
+        }
+      ]
+    },
+    {
+      "caseId": "ko_plate|cricket|t20|W4B_Q5A",
+      "state": "red",
+      "reason": "I4-nothing-ends-stuck: stage 2: never asked to complete; w4b-q5a-plate-entrant-withdraws: the plate drew no line for a first loser (field 4, proposal refused, confirm not asked ) - nobody could withdraw from it; life-loop-bounded: play loop exited never",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5a-plate-entrant-withdraws",
+          "verdict": "fail",
+          "checked": 1
+        }
+      ]
+    },
+    {
+      "caseId": "ko_plate|boardgame|blitz|W4B_Q5A",
+      "state": "works",
+      "reason": "9 checks, 97 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5a-plate-entrant-withdraws",
+          "verdict": "pass",
+          "checked": 17
+        }
+      ]
+    },
+    {
+      "caseId": "ko_plate|carrom|club-29|W4B_Q5A",
+      "state": "works",
+      "reason": "9 checks, 97 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5a-plate-entrant-withdraws",
+          "verdict": "pass",
+          "checked": 17
+        }
+      ]
+    },
+    {
+      "caseId": "ko_plate|generic|score|W4B_Q5A",
+      "state": "works",
+      "reason": "9 checks, 97 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5a-plate-entrant-withdraws",
+          "verdict": "pass",
+          "checked": 17
+        }
+      ]
+    },
+    {
+      "caseId": "ko_plate|volleyball|beach|W4B_Q5A",
+      "state": "works",
+      "reason": "10 checks, 115 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5a-plate-entrant-withdraws",
+          "verdict": "pass",
+          "checked": 17
+        }
+      ]
+    },
+    {
+      "caseId": "ko_plate|badminton|bwf-3x15|W4B_Q5A",
+      "state": "works",
+      "reason": "9 checks, 97 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5a-plate-entrant-withdraws",
+          "verdict": "pass",
+          "checked": 17
+        }
+      ]
+    },
+    {
+      "caseId": "ko_plate|tabletennis|bo5|W4B_Q5A",
+      "state": "works",
+      "reason": "9 checks, 97 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5a-plate-entrant-withdraws",
+          "verdict": "pass",
+          "checked": 17
+        }
+      ]
+    },
+    {
+      "caseId": "ko_plate|tennis|tour|W4B_Q5A",
+      "state": "works",
+      "reason": "9 checks, 97 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5a-plate-entrant-withdraws",
+          "verdict": "pass",
+          "checked": 17
+        }
+      ]
+    },
+    {
+      "caseId": "ko_plate|icehockey|iihf|W4B_Q5A",
+      "state": "works",
+      "reason": "10 checks, 115 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5a-plate-entrant-withdraws",
+          "verdict": "pass",
+          "checked": 17
+        }
+      ]
+    },
+    {
+      "caseId": "ko_plate|hockey|fih-outdoor|W4B_Q5A",
+      "state": "works",
+      "reason": "10 checks, 115 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5a-plate-entrant-withdraws",
+          "verdict": "pass",
+          "checked": 17
+        }
+      ]
+    }
+  ]
+}

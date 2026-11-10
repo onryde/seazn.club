@@ -15,10 +15,10 @@
 import type { FixtureRow } from "../driver/types.ts";
 import { DEPARTED_STATUSES, crownOf, winnerOf, type CompleteObs, type ObservedOutcome, type ObservedPlace } from "../observed.ts";
 import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, stageCompleted, type Item } from "./assertions.ts";
-import { Recorder, playDivision, setUpDivision, snapshot } from "./common.ts";
+import { Recorder, finishStage, playDivision, setUpDivision, snapshot } from "./common.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
 import { lineLoser, lineOf, type Line } from "./w4a-late-entry.ts";
-import { Q3_FIELD, Q3_OUT_FIELD, finalOf, rankOf, type Q3Key } from "./w4b-support.ts";
+import { Q3_FIELD, Q3_OUT_FIELD, finalOf, rankOf, playOut, watchProductWrites, type Q3Key } from "./w4b-support.ts";
 import type { Scenario, ScenarioContext, ScenarioOutput } from "./types.ts";
 
 export type ThirdPlaceMode = "shared" | "playoff";
@@ -141,13 +141,25 @@ async function q3Run(ctx: ScenarioContext, key: Q3Key): Promise<ScenarioOutput> 
     // walked over into the final and the third-place line seats two departed sides (a DEPARTURE double walkover, ruling 270's M-1).
     for (const seed of [3, 4]) {
       const id = setup.idOfSeed(seed);
-      const w = await ctx.driver.withdraw(id);
+      const w = await watchProductWrites(ctx, rec, setup, `the withdrawal of seed ${seed}`, () => ctx.driver.withdraw(id));
       rec.facts.add("withdrawn");
       rec.withdrawn.add(id);
       rec.notes.push(`withdrawal of seed ${seed}: policy ${w.policy}, ${w.walkovers} walkover(s)`);
     }
   }
-  const plays = await playDivision(ctx, rec, setup);
+  let plays: Awaited<ReturnType<typeof playDivision>>;
+  if (out) {
+    // With the field down to two, the product refuses a RE-generate (KO_THIRD_PLACE_TOO_FEW: its entrant count is the ACTIVE field), which the play loop
+    // would read as a stuck stage. The organiser's screen never asks again: the bracket was drawn at Start, so the open final is decided and the stage
+    // completed directly (the refusal stays in the notes, below, as a product observation).
+    await playOut(ctx, rec, setup, setup.stage);
+    rec.track(setup.stage.id).exit = "drained";
+    rec.exit = "drained";
+    plays = [{ stage: setup.stage, field: setup.entrants.map((e) => e.id), advance: null, complete: await finishStage(ctx, rec, setup.stage.id) }];
+  } else {
+    plays = await playDivision(ctx, rec, setup);
+  }
+  for (const g of rec.generates.filter((x) => x.status !== 200)) rec.notes.push(`generate refused ${g.status} ${g.code ?? "(no code)"}: ${g.message ?? ""}`);
   const observed = await snapshot(ctx, rec, setup, plays, { configEdit: null, withdrawal: null });
   const stageId = setup.stage.id;
   const lines = (await ctx.driver.listFixtures(setup.division.id)).filter((f: FixtureRow) => f.stage_id === stageId).map(lineOf);

@@ -184,6 +184,8 @@ export function resultsAsPosted(rec: Recorder, observed: ObservedRun): CheckResu
       items.push({ ok: true, note: `${stored}: a bye` });
     } else if (cascadeWrote(f, w)) {
       items.push({ ok: true, note: `${stored}: written by the recorded ${w!.policy}` });
+    } else if (rec.productActs.has(f.id)) {
+      items.push({ ok: true, note: `${stored}: written by the product after ${rec.productActs.get(f.id)}` });
     } else {
       items.push({ ok: false, note: `${stored} — the harness never posted it, and no bye or recorded withdrawal explains it` });
     }
