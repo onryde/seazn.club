@@ -13,6 +13,7 @@ import { buildStandings, type BuildOpts, type DocSection, type ExportStandingsRo
 import { isLevelTable, rankText, type StandingsRow, type TableLayout } from "@seazn/engine/competition";
 import type { StandingsColumn, MetricSpecLike } from "@/lib/public-site";
 import type { TKey } from "@/lib/i18n-runtime";
+import { bracketPlaceLabels, isBracketPlacement } from "@/lib/bracket-places";
 import { cellText, columnHeader, resultColumnsOf, tableColumns } from "@/server/public-site/standings-view";
 
 /** The Pts column as `standingsColumns` declares it (always present, after the metrics and before the derived columns).
@@ -41,6 +42,9 @@ export interface StandingsExportInput {
   metricSpecs: readonly MetricSpecLike[];
   cascade: readonly string[];
   layout: TableLayout;
+  /** The stage's kind. A bracket kind's rows are PLACES (X-TP-3): a place two rows share is printed "3=". Absent or any
+   *  other kind: the public `#` as it was. */
+  stageKind?: string;
   nameOf: (entrantId: string) => string;
   /** The entrant's crest URL, already resolved; absent or null: none. */
   badgeOf?: (entrantId: string) => string | null | undefined;
@@ -58,6 +62,8 @@ export function standingsTableSections(input: StandingsExportInput): DocSection[
   const header = (c: { key: string; label: string }) => columnHeader(c, msg).abbr;
   // W2d concern 2 (anti-goal 3, X-TB-6): a LEVEL table — nothing counted — has no places, and `#` would print seed 1 first.
   const level = isLevelTable(input.rows);
+  // X-TP-3: a bracket's shared place (two semi-final losers both 3rd) is marked "3=" - the chip the public table wears, as text.
+  const places = !level && input.stageKind !== undefined && isBracketPlacement(input.stageKind) ? bracketPlaceLabels(input.rows) : null;
   const rows: ExportStandingsRow[] = [...input.rows]
     .sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99))
     .map((r) => {
@@ -65,7 +71,9 @@ export function standingsTableSections(input: StandingsExportInput): DocSection[
       return {
         // the public `#` (`rankText`): the level dash, else the row's place; a row the ranking pass left no place keeps
         // the builder's position
-        ...(level || r.rank !== undefined ? { rank: exportCell(rankText(r, level)) } : {}),
+        ...(level || r.rank !== undefined
+          ? { rank: places?.get(r.entrantId)?.shared ? `${rankText(r, level)}=` : exportCell(rankText(r, level)) }
+          : {}),
         name: input.nameOf(r.entrantId),
         played: r.played,
         won: r.won,

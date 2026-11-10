@@ -361,6 +361,7 @@
   "table.tieBreak.point_diff": "diferencia de puntos",
   "table.tieBreak.matches_played": "partidos jugados",
   "table.tieBreak.fewest_played": "menos partidos jugados",
+  "table.tieBreak.shared_place": "Puesto compartido",
   "table.tieBreak.field_goals": "goles de campo",
   "table.tieBreak.h2h_points": "puntos del enfrentamiento directo",
   "table.tieBreak.h2h_diff": "diferencia del enfrentamiento directo",
