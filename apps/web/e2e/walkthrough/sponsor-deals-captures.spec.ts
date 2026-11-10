@@ -95,7 +95,8 @@ const PACKAGES = {
 type PackageKey = keyof typeof PACKAGES;
 
 type DealStatus = "live" | "scheduled" | "awaiting_payment" | "awaiting_approval" | "ended";
-type PlannedDeal = { key: string; sponsor: SponsorKey; pkg: PackageKey; status: DealStatus; parked?: true };
+/** `paid`: the order's money is in (a mark-paid went through). `dealChip` reads a SCHEDULED deal that is paid as "Paid", not "Scheduled". */
+type PlannedDeal = { key: string; sponsor: SponsorKey; pkg: PackageKey; status: DealStatus; parked?: true; paid?: true };
 
 /** Every deal the seed makes and the status it ends the seeding in (after the two dispute states below). */
 const PLAN: readonly PlannedDeal[] = [
@@ -103,9 +104,9 @@ const PLAN: readonly PlannedDeal[] = [
   { key: "live", sponsor: "long", pkg: "gold", status: "live" },
   { key: "queued", sponsor: "long", pkg: "partner", status: "scheduled" },
   { key: "waiting", sponsor: "quay", pkg: "partner", status: "awaiting_payment" },
-  { key: "approval", sponsor: "northbank", pkg: "partner", status: "awaiting_approval" },
-  { key: "disputed", sponsor: "ridge", pkg: "gold", status: "live", parked: true },
-  { key: "lost", sponsor: "oldMill", pkg: "gold", status: "ended" },
+  { key: "approval", sponsor: "northbank", pkg: "partner", status: "awaiting_approval", paid: true },
+  { key: "disputed", sponsor: "ridge", pkg: "gold", status: "live", parked: true, paid: true },
+  { key: "lost", sponsor: "oldMill", pkg: "gold", status: "ended", paid: true },
 ];
 const planned = (key: string): PlannedDeal => {
   const p = PLAN.find((d) => d.key === key);
@@ -115,19 +116,25 @@ const planned = (key: string): PlannedDeal => {
 
 /** A sponsor's row shows its first deal in this order (spec 6.1: the design's own order, declared here, not read from the page). */
 const ROW_ORDER: readonly DealStatus[] = ["live", "awaiting_approval", "awaiting_payment", "scheduled"];
-/** The chip words a row wears for the deal it shows: a parked live deal reads "on hold". */
-function rowChipWords(sponsor: SponsorKey): string {
-  const mine = PLAN.filter((d) => d.sponsor === sponsor);
-  if (mine.length === 0) return ui("sponsors.deal.chip.none");
-  const shown = ROW_ORDER.map((s) => mine.find((d) => d.status === s)).find((d) => d !== undefined) ?? mine.find((d) => d.status === "ended")!;
-  const words: Record<DealStatus, string> = {
-    live: ui("sponsors.deal.chip.live"),
-    scheduled: ui("sponsors.deal.chip.scheduled"),
+/** The chip words a planned deal wears, read the way `dealChip` (lib/sponsor-deals.ts) reads a deal: a parked live deal reads "on hold",
+ *  and a SCHEDULED deal that is paid reads "Paid" (it is waiting its turn with the money in), not "Scheduled". No seeded deal is scheduled
+ *  AND paid (the queued one is complimentary), so that branch is matched to the source here and not witnessed by a picture. */
+function chipWords(d: PlannedDeal): string {
+  if (d.status === "live") return d.parked ? ui("sponsors.deal.chip.liveOnHold") : ui("sponsors.deal.chip.live");
+  const words: Record<Exclude<DealStatus, "live">, string> = {
+    scheduled: d.paid ? ui("sponsors.deal.chip.paid") : ui("sponsors.deal.chip.scheduled"),
     awaiting_payment: ui("sponsors.deal.chip.awaitingPayment"),
     awaiting_approval: ui("sponsors.deal.chip.awaitingApproval"),
     ended: ui("sponsors.deal.chip.ended"),
   };
-  return shown.status === "live" && shown.parked ? ui("sponsors.deal.chip.liveOnHold") : words[shown.status];
+  return words[d.status];
+}
+/** The chip words a sponsor's row wears: the chip of the deal it shows (the first in ROW_ORDER, else its latest ended one). */
+function rowChipWords(sponsor: SponsorKey): string {
+  const mine = PLAN.filter((d) => d.sponsor === sponsor);
+  if (mine.length === 0) return ui("sponsors.deal.chip.none");
+  const shown = ROW_ORDER.map((s) => mine.find((d) => d.status === s)).find((d) => d !== undefined) ?? mine.find((d) => d.status === "ended")!;
+  return chipWords(shown);
 }
 /** How many DISTINCT sponsors hold a not-ended deal on a package: what its card says ("Used by N sponsors", or "Not used yet"). */
 function usedByWords(pkg: PackageKey): string {
@@ -321,6 +328,7 @@ for (const width of WIDTHS) {
         await expect(stepOf(page, "live"), "witness: the live step is done").toHaveAttribute("data-state", "done");
         // The pair of the disputed shot below: a deal with no dispute carries no badge.
         await expect(region.getByTestId("deal-page-badge"), "witness: no dispute badge on a live deal").toHaveCount(0);
+        await expect(region.getByTestId("deal-chip"), "witness: a live deal's chip, from the plan").toHaveText(chipWords(planned("live")));
       });
     });
 
@@ -334,6 +342,10 @@ for (const width of WIDTHS) {
       await dealShot(page, "deal-disputed", "disputed", async (region) => {
         await expect(region.locator('[data-testid="deal-page-badge"][data-badge="disputed"]'), "witness: the Disputed badge").toBeVisible();
         await expect(region.getByTestId("deal-page-evidence"), "witness: the evidence link that answers it").toBeVisible();
+        // Parked by the dispute: still live in the ledger, but not live on the pages, and the chip says so (the pair of the live deal above).
+        const held = chipWords(planned("disputed"));
+        expect(held, "premise: the on-hold words are not the plain live words").not.toBe(chipWords(planned("live")));
+        await expect(region.getByTestId("deal-chip"), "witness: the parked deal's chip reads on hold").toHaveText(held);
       });
     });
 
