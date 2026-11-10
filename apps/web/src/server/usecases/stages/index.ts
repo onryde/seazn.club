@@ -86,6 +86,8 @@ export {
   unseatSwissRoundsSeatingEntrant,
   unpairSwissRound,
 } from "./swiss-boards";
+export { patchKnockoutStage } from "./third-place";
+export type { PatchKnockoutStageResult } from "./third-place";
 export { previewDivisionFixtures } from "./preview";
 export type { PreviewMatch, PreviewSection, PreviewPhase, PreviewStageInput } from "./preview";
 export {

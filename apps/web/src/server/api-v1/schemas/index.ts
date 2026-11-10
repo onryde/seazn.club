@@ -117,7 +117,7 @@ export {
 } from "./scoring.ts";
 export {
   SwissReshapeResult, SwissRoundsJudgementResult, GenerateResult, GenerateStageInput, RebuildResult, UnpairResult,
-  PatchSwissStage, PatchSwissStageResult, AddSwissRoundResult, FinishSwissResult, SwissCutDriftResult, OpenRoundInput,
+  PatchSwissStage, PatchSwissStageResult, PatchKnockoutStage, PatchKnockoutStageResult, PatchStage, AddSwissRoundResult, FinishSwissResult, SwissCutDriftResult, OpenRoundInput,
   OpenRoundSkip, OpenRoundResult, CheckinExtendBoardOut, ExtendRoundCheckinInput, CheckinExtendRoundOut,
   CompleteResult,
 } from "./generation.ts";

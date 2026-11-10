@@ -21,7 +21,7 @@ import {
   type ActiveEntrant,
   type GenerateWrite,
 } from "./types";
-import { POOL_KEYS, poolCount, generate } from "./generators";
+import { POOL_KEYS, poolCount, generateForStage } from "./generators";
 
 // ---------------------------------------------------------------------------
 // D4a (P5) / F2 — TBD-shape generation for a `timing: "setup"` progression.
@@ -143,7 +143,7 @@ export async function writeProgressionSetupFixtures(tx: Tx, stageId: string): Pr
   // and draws under four is drawn WITHOUT it (never refused: RB4-P6); `computeSeedProposal` records the drop in the proposal.
   const isFirstLossPlate = progression.sources.some((s) => s.take.some((t) => t.kind === "firstLosses"));
   const config = isFirstLossPlate && stage.config.thirdPlace === true && placed.length < 4 ? { ...stage.config, thirdPlace: false } : stage.config;
-  const gen: SeededGenFixture[] = generate(stage.kind, config, entrants, poolIds);
+  const gen: SeededGenFixture[] = generateForStage(stageId, stage.kind, config, entrants, poolIds);
 
   // W4 T8 (X-PL-7): a plate's lines are sized by its field, and the field can change size before the plate starts (a corrected
   // round-two result, a withdrawal). Lines laid out for another size are not this bracket: they go, and the right ones are

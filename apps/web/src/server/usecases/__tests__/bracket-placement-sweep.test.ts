@@ -44,6 +44,8 @@ import { BRACKET_STAGE_KINDS } from "@/lib/run-sheet-groups";
 import { STAGE_TEMPLATES, buildTemplateStages, type StageDraft, type TemplateKnobs } from "@/lib/format-templates";
 import { PLATE_MIN, QUALIFYING_MAIN_MIN } from "@/lib/format-size-gates";
 import { foldFirstLosses } from "@/lib/division-builder/__tests__/first-loss-fold";
+import { EngineError } from "@seazn/engine/core";
+import { generateSingleElim } from "@seazn/engine/scheduling";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -207,9 +209,9 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
   /** W4 T8: first-loss plates met DAY ONE with no lines (Generate writes none, refuses nothing): a recorded outcome, not a bracket to place. */
   let plateNoLines = 0;
   /** Engine 5.0.0 (X-TP-5): a knockout asked for a third-place match without two real semi-finals is refused by the engine
-   *  (CONFIG_INVALID `third_place_needs_two_semis`) - at Generate for a field of 2 or 3. Counted apart from `refused`: it is
+   *  (CONFIG_INVALID `third_place_needs_two_semis`, named KO_THIRD_PLACE_TOO_FEW by B4 T9 / D3) - at Generate for a field of 2 or 3. Counted apart from `refused`: it is
    *  the rule working, judged below against the rule's arithmetic (fewer than 4 entrants, fewer than 2 real semis). */
-  const thirdRefused: Array<{ label: string; entrants: number; realSemis: number; code: unknown; reason: unknown }> = [];
+  const thirdRefused: Array<{ label: string; entrants: number; code: unknown }> = [];
   /** W4 T24: every (wide template, field, q, third) the seeded pass asked, so a field cannot drop out of the widened sweep unnoticed. */
   const wideAsked: Array<{ key: string; n: number; q: number; third: boolean }> = [];
 
@@ -232,10 +234,9 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
       try {
         await generateStageFixtures(auth, id);
       } catch (e) {
-        const third = /a third-place match needs two real semi-finals; (\d+) entrants give (\d+)/.exec((e as Error).message);
-        if (third !== null && drafts[i]!.kind === "knockout" && drafts[i]!.config.thirdPlace === true) {
-          const named = e as { code?: unknown; data?: { reason?: unknown } };
-          thirdRefused.push({ label, entrants: Number(third[1]), realSemis: Number(third[2]), code: named.code, reason: named.data?.reason });
+        const named = e as { code?: unknown; extra?: { entrants?: unknown } };
+        if (named.code === "KO_THIRD_PLACE_TOO_FEW" && drafts[i]!.kind === "knockout" && drafts[i]!.config.thirdPlace === true) {
+          thirdRefused.push({ label, entrants: Number(named.extra?.entrants), code: named.code });
           thirdOwed = true;
           refusedBracket++;
           continue;
@@ -412,8 +413,16 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
     // semi-finals (the engine's own sentence), and the sweep also drew third-place knockouts that were NOT refused.
     expect(thirdRefused.length, "anti-vacuity: the sweep met the third-place refusal").toBeGreaterThan(0);
     for (const t of thirdRefused) {
-      expect([t.entrants < 4, t.realSemis < 2], `${t.label}: refused for ${t.entrants} entrants / ${t.realSemis} real semis`).toEqual([true, true]);
-      expect([t.code, t.reason], `${t.label}: refused by code and reason, not only by wording`).toEqual(["CONFIG_INVALID", "third_place_needs_two_semis"]);
+      // The rule's arithmetic is the ENGINE's own: the generator, asked for that field with a third-place match, says how many
+      // real semi-finals it has and refuses by reason (never the product's reading of it).
+      let engine: { reason?: unknown; realSemis?: unknown } | null = null;
+      try {
+        generateSingleElim({ entrants: Array.from({ length: t.entrants }, (_, i) => `e${i + 1}`), thirdPlace: true });
+      } catch (err) {
+        if (EngineError.is(err)) engine = err.data as { reason?: unknown; realSemis?: unknown };
+      }
+      expect([t.entrants < 4, Number(engine?.realSemis) < 2], `${t.label}: refused for ${t.entrants} entrants / ${engine?.realSemis} real semis`).toEqual([true, true]);
+      expect([t.code, engine?.reason], `${t.label}: named KO_THIRD_PLACE_TOO_FEW, over the engine's own reason`).toEqual(["KO_THIRD_PLACE_TOO_FEW", "third_place_needs_two_semis"]);
     }
     expect(seen.some((c) => c.label.includes("third=true") && c.kind === "knockout"), "a third-place knockout was drawn where the engine allows it").toBe(true);
 

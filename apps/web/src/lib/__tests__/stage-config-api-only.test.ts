@@ -10,6 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FORMAT_BOUNDS } from "@/lib/format-bounds";
 import { STAGE_TEMPLATES, type StandingsCarry } from "@/lib/format-templates";
+import type { ThirdPlaceMode } from "@/lib/third-place";
 import { formatStagesFor } from "@/lib/division-builder/format-choice";
 import { KNOCKOUT_REFUSALS } from "@/lib/knockout-refusals";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -77,12 +78,12 @@ describe("X-SD-9 byes and slotOrder stay API-only", () => {
     // pickers read), legs both ways, and every standings carry.
     const span = (b: { min: number; max: number }) => [...new Set([b.min, Math.round((b.min + b.max) / 2), b.max])];
     const CARRIES: StandingsCarry[] = ["none", "points", "full"];
-    const combos: { qualified: number; swissRounds: number; poolCount: number; legs: number; standingsCarry: StandingsCarry }[] = [];
+    const combos: { qualified: number; swissRounds: number; poolCount: number; legs: number; standingsCarry: StandingsCarry; thirdPlace: ThirdPlaceMode }[] = [];
     for (const qualified of span(FORMAT_BOUNDS.qualify))
       for (const swissRounds of span(FORMAT_BOUNDS.swissRounds))
         for (const poolCount of span(FORMAT_BOUNDS.pools))
           for (const legs of span(FORMAT_BOUNDS.legs))
-            for (const standingsCarry of CARRIES) combos.push({ qualified, swissRounds, poolCount, legs, standingsCarry });
+            for (const standingsCarry of CARRIES) for (const thirdPlace of ["shared", "playoff"] as const) combos.push({ qualified, swissRounds, poolCount, legs, standingsCarry, thirdPlace });
 
     let bodies = 0;
     let stages = 0;
@@ -105,7 +106,7 @@ describe("X-SD-9 byes and slotOrder stay API-only", () => {
     expect(leaks, "RB4-D6: a builder-built stage carries byes or slotOrder").toEqual([]);
     // Anti-vacuity: every template × every knob set built, and the bracket family was actually among them.
     expect(STAGE_TEMPLATES.length).toBeGreaterThan(0);
-    expect(combos.length).toBe(3 * 3 * 3 * 2 * 3);
+    expect(combos.length).toBe(3 * 3 * 3 * 2 * 3 * 2);
     expect(bodies).toBe(STAGE_TEMPLATES.length * combos.length);
     expect(stages).toBeGreaterThanOrEqual(bodies);
     expect(knockoutFamily, "the sweep reached knockout stages").toBeGreaterThan(0);

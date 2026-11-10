@@ -62,6 +62,11 @@ const PLAN_CODES = [
   // B5a fix round 1 (m-3, m-4): declare over two departed finalists; Undo with a finalist departed since.
   "JOINT_WINNERS_FINALISTS_OUT",
   "JOINT_WINNERS_UNDO_FINALIST_OUT",
+  // B4 T9 (X-TP-1, X-TP-6, D3): third place - a play-off under four entrants (names the count, offers Shared), the setting
+  // read-only once play has started, and the setting sent to a stage that is no knockout.
+  "KO_THIRD_PLACE_TOO_FEW",
+  "THIRD_PLACE_LOCKED",
+  "STAGE_NOT_KNOCKOUT",
 ] as const;
 
 const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;
@@ -182,6 +187,18 @@ describe("KNOCKOUT_REFUSALS (W4 app-A)", () => {
     expect(err.message).toBe("Qualifying + Main draw needs at least 8 entrants.");
     expect(err.extra).toMatchObject({ min: 8 });
     expect(() => knockoutRefusal("QUALIFYING_MAIN_TOO_FEW"), "a hole in the sentence is refused by name").toThrow(/QUALIFYING_MAIN_TOO_FEW.*min/);
+  });
+
+  it("B4 T9: the third-place refusals carry the brief's sentences and statuses: 422 too few (names the count), 409 locked, 422 not a knockout", () => {
+    expect(KNOCKOUT_REFUSALS.KO_THIRD_PLACE_TOO_FEW).toEqual({
+      status: 422,
+      en: "A third-place match needs at least 4 entrants. Use Shared third place instead.",
+      key: "knockout.refusal.KO_THIRD_PLACE_TOO_FEW",
+    });
+    expect(KNOCKOUT_REFUSALS.THIRD_PLACE_LOCKED).toEqual({ status: 409, en: "Third place can't change once play has started.", key: "knockout.refusal.THIRD_PLACE_LOCKED" });
+    expect(KNOCKOUT_REFUSALS.STAGE_NOT_KNOCKOUT.status).toBe(422);
+    const err = knockoutRefusal("KO_THIRD_PLACE_TOO_FEW", { entrants: 3 });
+    expect(err.extra).toMatchObject({ entrants: 3 });
   });
 
   it("knockoutRefusalText fills a sentence from the envelope's fields, in the reader's language, and takes no non-scalar with it", () => {

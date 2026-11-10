@@ -27,6 +27,8 @@ import { DivisionFormatButton, DivisionFormatDialog, formatChipText, type Divisi
 import { DivisionRulesStrip } from "@/components/v2/rules/division-rules-strip";
 import { ApiV1Error } from "@/lib/client-v1";
 import { OPENING_PLAN } from "@/lib/division-builder/model";
+import { ThirdPlaceChoice } from "@/components/v2/third-place-choice";
+import { THIRD_PLACE_MIN } from "@/lib/third-place";
 import { FORMAT_BOUNDS } from "@/lib/format-bounds";
 import { FORMAT_CHANGE_REFUSALS, type FormatChangePreview } from "@/lib/format-change";
 import { buildTemplateStages, templatesForSport } from "@/lib/format-templates";
@@ -558,5 +560,21 @@ describe("a stored format is kept as it is, never clamped (ported from Settings 
     click(h, "division-format-save");
     await flush();
     expect(calls()[1]!.json!.map((s) => [s.kind, (s.config as { legs?: number }).legs])).toEqual([["league", 3]]);
+  });
+});
+
+describe("M-5: the Format dialog offers the Play-off on the division's REAL field, never the opening plan's stand-in", () => {
+  it("under 2 entrants the picker is handed 0 (Play-off not offered), not the builder's opening 16; from 2 up it is handed the count", () => {
+    let seen = 0;
+    for (const entrants of [0, 1, 3, THIRD_PLACE_MIN, 6]) {
+      const { h } = mountDialog({ stages: stagesOf("knockout"), entrants });
+      const choice = h.tree().find((e) => e.type === ThirdPlaceChoice);
+      expect(choice, `${entrants} entrants: the third place control is drawn`).toBeTruthy();
+      const counted = entrants >= 2 ? entrants : 0;
+      expect(propsOf(choice!).offer, `${entrants} entrants`).toEqual({ offered: counted >= THIRD_PLACE_MIN, entrants: counted });
+      seen++;
+    }
+    expect(seen).toBe(5);
+    expect(OPENING_PLAN.entrants, "premise: the stand-in field would have offered it").toBeGreaterThanOrEqual(THIRD_PLACE_MIN);
   });
 });

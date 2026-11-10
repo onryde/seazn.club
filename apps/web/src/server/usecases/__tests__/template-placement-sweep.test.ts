@@ -23,7 +23,7 @@
 // swiss_playoff - T26c fix round 1, I1: its "Rank 4" seat could never be filled, yet it got a court and a time).
 //
 // A knockout drawn at 2 or 3 WITH a third-place match is no longer a placement question: engine 5.0.0 (X-TP-5) refuses it at
-// Generate (CONFIG_INVALID `third_place_needs_two_semis`), so the third-place line that used to be placed although its seat was
+// Generate (CONFIG_INVALID `third_place_needs_two_semis`, named KO_THIRD_PLACE_TOO_FEW since B4 T9), so the third-place line that used to be placed although its seat was
 // the bye semi's loser (G1, knockout half) does not exist. The sweep holds those combos as REFUSED, each asserted to be refused
 // by that rule and judged against its arithmetic (fewer than four entrants). G1's double-elimination half is W6's.
 //
@@ -109,7 +109,7 @@ function topNFor(template: string, n: number): number {
 /** The stage drafts the builder posts for `template` at a field of `n`, optionally with a third-place match on every
  *  knockout stage (the knob exists on the knockout kind only). */
 function draftsFor(template: string, n: number, third: boolean): StageDraft[] {
-  const drafts = formatStagesFor(template, { ...openingKnobs(n), qualified: topNFor(template, n), standingsCarry: "none" });
+  const drafts = formatStagesFor(template, { ...openingKnobs(n), qualified: topNFor(template, n), standingsCarry: "none", thirdPlace: "shared" });
   return third ? drafts.map((d) => (d.kind === "knockout" ? { ...d, config: { ...d.config, thirdPlace: true } } : d)) : drafts;
 }
 
@@ -350,12 +350,9 @@ describe.skipIf(!HAS_DB)("every in-scope format template is generated as the eng
           break;
         }
       }
-      const message = refusal instanceof Error ? refusal.message : String(refusal);
-      expect(message, `${label}: Generate refuses a third place at ${refusedAt.k} entrants`).toMatch(
-        new RegExp(`a third-place match needs two real semi-finals; ${refusedAt.k} entrants give`),
-      );
-      const named = refusal as { code?: unknown; data?: { reason?: unknown } };
-      expect([named.code, named.data?.reason], `${label}: refused by code and reason, not only by wording`).toEqual(["CONFIG_INVALID", "third_place_needs_two_semis"]);
+      const named = refusal as { code?: unknown; extra?: { entrants?: unknown } };
+      // B4 T9 (D3): the engine's `third_place_needs_two_semis` is NAMED, never a bare CONFIG_INVALID; its count is the field's.
+      expect([named.code, named.extra?.entrants], `${label}: Generate refuses a third place at ${refusedAt.k} entrants by name`).toEqual(["KO_THIRD_PLACE_TOO_FEW", refusedAt.k]);
       refusedThird.push({ label, entrants: refusedAt.k });
       return;
     }

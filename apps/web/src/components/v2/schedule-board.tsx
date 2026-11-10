@@ -7,6 +7,7 @@
 // pick-then-place mechanism for mouse, touch AND keyboard, and optimistic-
 // concurrency on every write (v3/11 gap 10). Week view (cross-day drag) and
 // the pin/undo affordances predate v3 and stay.
+import { ThirdPlaceUseShared } from "@/components/v2/third-place-use-shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { gridStepMinutes } from "@seazn/engine/scheduling/grid-step";
@@ -1280,6 +1281,9 @@ export function ScheduleBoard({
       )}
       {actions.error && (
         <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{actions.error}</p>
+      )}
+      {actions.error && actions.tooFew && (
+        <ThirdPlaceUseShared stageId={actions.tooFew.stageId} disabled={actions.busy} onDone={() => void actions.act(actions.tooFew!.path, actions.tooFew!.done)} />
       )}
       {/* Directly under the green "Placed N matches" line, because it is the
           qualification OF that line: the solver is anytime, so what it returned

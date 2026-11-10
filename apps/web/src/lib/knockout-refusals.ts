@@ -74,7 +74,14 @@ export type KnockoutRefusalCode =
   // B5a fix round 1 (m-3): declare on a final whose seated finalists have both withdrawn (the title is vacant, X-CH-3).
   | "JOINT_WINNERS_FINALISTS_OUT"
   // B5a fix round 1 (m-4): Undo while a finalist has withdrawn since the declaration (it would seat a departed finalist).
-  | "JOINT_WINNERS_UNDO_FINALIST_OUT";
+  | "JOINT_WINNERS_UNDO_FINALIST_OUT"
+  // B4 T9 (X-TP-1, D3): a third-place match on a stage that draws under four entrants (the engine's `third_place_needs_two_semis`),
+  // at Generate, Start or the setting's PATCH. `details.entrants` is the count; the way out is Shared.
+  | "KO_THIRD_PLACE_TOO_FEW"
+  // B4 T9 (X-TP-6): the third-place setting is edited until the stage starts, then read-only.
+  | "THIRD_PLACE_LOCKED"
+  // B4 T9: the third-place setting sent to a stage that is no knockout (PATCH /stages/{id} `{ thirdPlace }`).
+  | "STAGE_NOT_KNOCKOUT";
 
 export interface KnockoutRefusalRow {
   status: 400 | 409 | 422;
@@ -207,6 +214,21 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
     status: 409,
     en: "This final has no joint winners to undo.",
     key: "knockout.refusal.JOINT_WINNERS_NOT_DECLARED",
+  },
+  KO_THIRD_PLACE_TOO_FEW: {
+    status: 422,
+    en: "A third-place match needs at least 4 entrants. Use Shared third place instead.",
+    key: "knockout.refusal.KO_THIRD_PLACE_TOO_FEW",
+  },
+  THIRD_PLACE_LOCKED: {
+    status: 409,
+    en: "Third place can't change once play has started.",
+    key: "knockout.refusal.THIRD_PLACE_LOCKED",
+  },
+  STAGE_NOT_KNOCKOUT: {
+    status: 422,
+    en: "Third place only applies to a knockout stage.",
+    key: "knockout.refusal.STAGE_NOT_KNOCKOUT",
   },
   FINAL_JOINT_WINNERS_DECLARED: {
     status: 409,

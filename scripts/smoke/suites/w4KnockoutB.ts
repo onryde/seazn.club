@@ -16,7 +16,7 @@ import { appendScoreEvent, check, newSession, signIn, tag, v1, v1data } from "..
  * E4 is the only first loser) with no lines, and the division then completes.
  */
 export async function w4KnockoutBSuite(): Promise<void> {
-  const EXPECTED_CHECKS = 3;
+  const EXPECTED_CHECKS = 5;
   let checked = 0;
   const w4Check = (label: string, cond: boolean) => {
     checked++;
@@ -157,6 +157,70 @@ export async function w4KnockoutBSuite(): Promise<void> {
     w4Check(
       "w4b T8 (X-PL-2): a plate with one first loser completes by name with no lines, and the division completes with the main draw" +
         (ok ? "" : ` - withdraw ${w.status}, plate while open ${waiting}, after the final ${plateStatus}, lines ${noLines ? 0 : ">0"}, division ${division?.status}`),
+      ok,
+    );
+  }
+
+  // B4 helper: a started four-player badminton knockout (Play-off or Shared as asked); lines and the home-wins play helper.
+  type TFx = { id: string; stage_id: string; round_no: number; home_entrant_id: string | null; away_entrant_id: string | null; status: string; third_place?: boolean; outcome?: { kind?: string } | null };
+  const fourPlayers = async (label: string, thirdPlace: boolean, startIt: boolean) => {
+    // Its own competition: the community plan caps the divisions one competition holds, and checks 1-3 already use several.
+    const own = v1data<{ id: string } | undefined>(
+      await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W4 Knockout B ${label} ${tag}`, visibility: "private" }),
+    );
+    const divId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/competitions/${own?.id}/divisions`, "POST", { name: label, sport_key: "badminton", variant_key: "bwf", config: {} }),
+    )?.id;
+    const ents = v1data<{ id: string }[] | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST", Array.from({ length: 4 }, (_, i) => ({ kind: "individual", display_name: `W4B ${label} E${i + 1} ${tag}`, seed: i + 1 }))),
+    );
+    const stageId = v1data<{ id: string } | undefined>(await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "knockout", name: label, config: thirdPlace ? { thirdPlace: true } : {} }))?.id;
+    await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
+    const started = startIt ? await v1(owner, `/api/v1/divisions/${divId}/start`, "POST") : null;
+    const lines = async () => (v1data<TFx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
+    const homeWins = async (id: string) => {
+      await appendScoreEvent(owner, id, "core.start", {});
+      await appendScoreEvent(owner, id, "badminton.game.summary", { home: 21, away: 10 });
+      await appendScoreEvent(owner, id, "badminton.game.summary", { home: 21, away: 12 });
+    };
+    return { divId, stageId, ents: ents ?? [], started, lines, homeWins };
+  };
+
+  // Check 4 (B4 T9, X-TP-2): PATCH Play-off on a drawn Shared bracket - exactly one third-place line, fed by both semi-finals.
+  {
+    const d = await fourPlayers("TP Patch", false, false);
+    const before = (await d.lines()).filter((l) => l.third_place === true).length;
+    const patched = await v1(owner, `/api/v1/stages/${d.stageId}`, "PATCH", { thirdPlace: "playoff" });
+    const after = await d.lines();
+    const thirds = after.filter((l) => l.third_place === true);
+    const ok = before === 0 && patched.status < 300 && thirds.length === 1 && after.length === 4;
+    w4Check(
+      "w4b B4 T9 (X-TP-2): PATCH thirdPlace playoff on a drawn four-player knockout leaves exactly one third-place line (4 lines in all)" +
+        (ok ? "" : ` - patch ${patched.status}, third-place lines ${before} -> ${thirds.length}, lines ${after.length}`),
+      ok,
+    );
+  }
+
+  // Check 5 (B4 T9, X-TP-7): both beaten semi-finalists out (one semi-finalist of each semi withdraws): the -3p is a departure
+  // double walkover and the stage ranks 1, 2, 4, 4 (the rulebook's: 3rd is vacant, both rank 4th).
+  {
+    const d = await fourPlayers("TP Both Out", true, true);
+    const semis = (await d.lines()).filter((l) => l.round_no === 1 && !l.third_place);
+    const w = [];
+    for (const sf of semis) w.push(await v1(owner, `/api/v1/entrants/${sf.away_entrant_id}/withdraw`, "POST"));
+    const afterW = await d.lines();
+    const bronze = afterW.find((l) => l.third_place === true);
+    const final = afterW.find((l) => l.round_no === 2 && l.third_place !== true);
+    if (final) await d.homeWins(final.id);
+    const done = await v1(owner, `/api/v1/stages/${d.stageId}/complete`, "POST");
+    type Done = { completed?: boolean; events?: { type: string; places?: { entrantId: string; rank: number }[] }[] };
+    const places = v1data<Done | undefined>(done)?.events?.find((e) => e.type === "stage_completed")?.places ?? [];
+    const ok =
+      semis.length === 2 && w.every((r) => r.status < 300) && bronze?.outcome?.kind === "double_walkover" &&
+      JSON.stringify(places.map((p) => p.rank).sort()) === JSON.stringify([1, 2, 4, 4]);
+    w4Check(
+      "w4b B4 T9 (X-TP-7): with both beaten semi-finalists out the third-place line is a double walkover and the places are 1, 2, 4, 4" +
+        (ok ? "" : ` - semis ${semis.length}, withdraw ${w.map((r) => r.status).join(",")}, bronze ${bronze?.status}/${bronze?.outcome?.kind}, places ${places.map((p) => p.rank).join(",")}`),
       ok,
     );
   }

@@ -248,7 +248,7 @@ describe("X-QM-2 the builder cannot send a cut through a round", () => {
     const h = mountBuilder();
     pickTemplate(h, "qualifying_main");
     expect(qualifyKnob(h), "qualifying_main").toBeUndefined();
-    const take = (formatStagesFor("qualifying_main", { qualified: 3, swissRounds: 3, poolCount: 2, legs: 1, standingsCarry: "none" })[1]!.progression as { sources: { take: unknown[] }[] }).sources[0]!.take;
+    const take = (formatStagesFor("qualifying_main", { qualified: 3, swissRounds: 3, poolCount: 2, legs: 1, standingsCarry: "none", thirdPlace: "shared" })[1]!.progression as { sources: { take: unknown[] }[] }).sources[0]!.take;
     expect(take, "a stale 3 from another format's knob does not ride along").toEqual([{ kind: "rankRange", from: 1, to: 4 }]);
     pickTemplate(h, "league_ko");
     expect(qualifyKnob(h), "league_ko").toBeDefined();
