@@ -164,8 +164,12 @@ export async function w4KnockoutBSuite(): Promise<void> {
   // B4 helper: a started four-player badminton knockout (Play-off or Shared as asked); lines and the home-wins play helper.
   type TFx = { id: string; stage_id: string; round_no: number; home_entrant_id: string | null; away_entrant_id: string | null; status: string; third_place?: boolean; outcome?: { kind?: string } | null };
   const fourPlayers = async (label: string, thirdPlace: boolean, startIt: boolean) => {
+    // Its own competition: the community plan caps the divisions one competition holds, and checks 1-3 already use several.
+    const own = v1data<{ id: string } | undefined>(
+      await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W4 Knockout B ${label} ${tag}`, visibility: "private" }),
+    );
     const divId = v1data<{ id: string } | undefined>(
-      await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", { name: label, sport_key: "badminton", variant_key: "bwf", config: {} }),
+      await v1(owner, `/api/v1/competitions/${own?.id}/divisions`, "POST", { name: label, sport_key: "badminton", variant_key: "bwf", config: {} }),
     )?.id;
     const ents = v1data<{ id: string }[] | undefined>(
       await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST", Array.from({ length: 4 }, (_, i) => ({ kind: "individual", display_name: `W4B ${label} E${i + 1} ${tag}`, seed: i + 1 }))),
