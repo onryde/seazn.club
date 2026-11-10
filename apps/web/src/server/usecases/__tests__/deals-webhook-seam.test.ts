@@ -744,7 +744,7 @@ describe.skipIf(!HAS_DB)("F18: a legacy order's refund and dispute flip its mone
     const o = await org();
     const p = await pkg(o);
     const count = await sponsorCount(o.orgId);
-    // A pre-deals checkout still open when V493 ran: the legacy rewrite kept its money pending, and it has no sponsor (the old
+    // A pre-deals checkout still open when V495 ran: the legacy rewrite kept its money pending, and it has no sponsor (the old
     // webhook made one on payment).
     const [{ id: unpaid }] = await sql<{ id: string }[]>`
       insert into sponsor_orders (org_id, package_id, sponsor_id, sponsor_name, sponsor_email, amount_cents, currency, status,

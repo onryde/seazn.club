@@ -960,7 +960,7 @@ export async function deleteCompetition(auth: AuthCtx, id: string): Promise<void
     // would delete — dies on 23503 as a 500. Refuse it here, in words, BEFORE the sweep below: the widened prune policy would
     // otherwise delete a session-less, unpaid deal through its package join. Legacy orders (D6) are outside the SCOPE arm: an
     // abandoned checkout is still swept below, and a paid one is the money guard's. They are NOT outside the SPONSOR arm: a legacy
-    // order only ever names a sponsor once it was paid (V493), and holds it by the same RESTRICT key as a deal, so the cascade
+    // order only ever names a sponsor once it was paid (V495), and holds it by the same RESTRICT key as a deal, so the cascade
     // that deletes the sponsor would 500 on it. (A deviation from the brief's wording, which filtered both arms.)
     //
     // After the money guard on purpose: a deal that took money (paid, refunded, disputed) answers in the money guard's own words

@@ -26,7 +26,7 @@ afterAll(async () => {
 
 describe.skipIf(!HAS_DB)("lib/sponsor-deals value sets = the sponsor_orders CHECKs (F31)", () => {
   it("each constant equals its CHECK's value set, read from pg_constraint (5 sets checked)", async () => {
-    // [the V493 constraint name, the constant that must name the same values]
+    // [the V495 constraint name, the constant that must name the same values]
     const SETS: [string, readonly string[]][] = [
       ["sponsor_orders_deal_status_check", DEAL_STATUSES],
       ["sponsor_orders_payment_method_check", PAYMENT_METHODS],

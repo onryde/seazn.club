@@ -29,7 +29,7 @@
 //     packages this test declared (PACKAGES), so I8 compares the deal against a value the code under test did not produce.
 //
 // Invariants after every step (the brief's I1–I8, F7 and F36 folded in):
-//   I1 at most one live deal per sponsor. The schema already enforces it (V493's partial unique index
+//   I1 at most one live deal per sponsor. The schema already enforces it (V495's partial unique index
 //      `sponsor_orders_one_live_per_sponsor`), so I1 can never fail on committed state: a code path that tried a second live
 //      deal surfaces as a 23505 — a non-HTTP error, which M1 fails as a 500 (or, inside a webhook, `deliver` fails as a throw
 //      Stripe would retry forever). I1 stays as the statement of the rule; the index is its enforcement;

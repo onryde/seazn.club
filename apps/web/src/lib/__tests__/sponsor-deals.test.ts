@@ -47,7 +47,7 @@ import {
   type SponsorDeal,
 } from "@/lib/sponsor-deals";
 
-// ---- the spec's literals (spec §5.2, D2, the V493 CHECKs, the F3 ruling) ----------------------------------------------
+// ---- the spec's literals (spec §5.2, D2, the V495 CHECKs, the F3 ruling) ----------------------------------------------
 const SPEC_DEAL_STATUSES = ["draft", "awaiting_payment", "awaiting_approval", "scheduled", "live", "ended"];
 const SPEC_PAYMENT_METHODS = ["online", "offline", "complimentary"];
 const SPEC_GO_LIVE_RULES = ["on_payment", "immediate", "on_approval"];
@@ -131,7 +131,7 @@ function ruleError(fn: () => unknown): DealRuleError | null {
   }
 }
 
-describe("lib/sponsor-deals — the value sets (D2, the V493 CHECKs; the DB half is server/sponsors/__tests__/deal-values-db.test.ts)", () => {
+describe("lib/sponsor-deals — the value sets (D2, the V495 CHECKs; the DB half is server/sponsors/__tests__/deal-values-db.test.ts)", () => {
   it("each constant is the spec's list, in the spec's order", () => {
     expect([...DEAL_STATUSES]).toEqual(SPEC_DEAL_STATUSES);
     expect([...PAYMENT_METHODS]).toEqual(SPEC_PAYMENT_METHODS);
@@ -395,7 +395,7 @@ describe("the path walks — create → send → paid → approve in the order e
 
 describe("allowedActions — the full action table (F15): deal_status × payment_status × payment_method", () => {
   /** [deal_status, payment_status, method, allowedActions in DEAL_ACTIONS order, rowNextAction, reachable].
-   *  Reachable = some product path writes it (spec §5.2, D2, the V493 CHECKs: complimentary ⇔ `none`; an offline deal
+   *  Reachable = some product path writes it (spec §5.2, D2, the V495 CHECKs: complimentary ⇔ `none`; an offline deal
    *  never fails a payment; a refund or a lost dispute ends the deal). Unreachable rows still pin their answer. */
   type Row = [DealStatus, PaymentStatus, PaymentMethod, DealAction[], RowAction | null, boolean];
   const TABLE: Row[] = [
@@ -514,7 +514,7 @@ describe("allowedActions — the full action table (F15): deal_status × payment
     expect(TABLE.filter((row) => row[5]).length, "reachable rows").toBe(27);
   });
 
-  it("the typed reachable set agrees with the V493 CHECK none_iff_complimentary (27 reachable rows checked)", () => {
+  it("the typed reachable set agrees with the V495 CHECK none_iff_complimentary (27 reachable rows checked)", () => {
     let checked = 0;
     for (const [s, p, m, , , reachable] of TABLE) {
       if (!reachable) continue;

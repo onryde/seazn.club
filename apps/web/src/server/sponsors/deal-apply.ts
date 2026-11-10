@@ -42,7 +42,7 @@ export interface LockedSponsor {
   tier: SponsorTier;
   competition_id: string | null;
   on_stream: boolean;
-  /** Placement provenance (ruling (g), V493): the deal whose snapshot `tier`, `competition_id` and `on_stream` carry, set by
+  /** Placement provenance (ruling (g), V495): the deal whose snapshot `tier`, `competition_id` and `on_stream` carry, set by
    *  the live write; null when the club set them by hand (or a hand PATCH of any of them has since taken them over). */
   placement_from_deal_id: string | null;
 }

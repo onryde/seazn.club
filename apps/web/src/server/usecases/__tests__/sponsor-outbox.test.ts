@@ -427,8 +427,8 @@ describe.skipIf(!HAS_DB)("a paid sponsor order queues its receipt on the outbox 
   it("a payment success re-run on a refunded order creates no sponsor and leaves the order refunded (its sponsor cannot be deleted: money history)", async () => {
     // Only an order that has not been paid activates: `pending`, or `failed` (Stripe lets a failed intent succeed on a retry). Every
     // other status the database allows is non-activating, named here: `paid` (the test above), `refunded` (this one) and `none` (a
-    // complimentary deal has no payment: sponsor deals V493). A new status added to the column must be placed on one side or the
-    // other, so the set is read from the column's own check constraint, by name (V493 named it beside the deal-status CHECK).
+    // complimentary deal has no payment: sponsor deals V495). A new status added to the column must be placed on one side or the
+    // other, so the set is read from the column's own check constraint, by name (V495 named it beside the deal-status CHECK).
     const ACTIVATING = ["failed", "pending"];
     const NON_ACTIVATING = ["none", "paid", "refunded"];
     const [{ def }] = await sql<{ def: string }[]>`

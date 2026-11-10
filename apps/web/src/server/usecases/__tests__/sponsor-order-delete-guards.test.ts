@@ -396,7 +396,7 @@ describe.skipIf(!HAS_DB)("deleteCompetition and sponsor deals (D18)", () => {
   });
 
   // The brief wrote the sponsor-side arm with the same "not legacy" filter as the scope-side one. A legacy order that names a sponsor
-  // (V493: only a PAID one ever did; an abandoned checkout has none) holds that sponsor by the RESTRICT key exactly as a deal does,
+  // (V495: only a PAID one ever did; an abandoned checkout has none) holds that sponsor by the RESTRICT key exactly as a deal does,
   // so excluding it left a 23503 / 500 here, the very failure D18 exists to remove.
   it("a legacy PAID order holding a sponsor scoped to the competition (org-wide package) is a 409, not the 500 its RESTRICT key gave", async () => {
     const { auth, orgId, compId } = await seedOrgWithComp();

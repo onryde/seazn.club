@@ -33,7 +33,7 @@ export type DealAction = (typeof DEAL_ACTIONS)[number];
  *  every comparison here reads either. */
 export interface SponsorDeal {
   id: string;
-  /** Null only on a legacy row (the V493 CHECK sponsor_or_legacy). */
+  /** Null only on a legacy row (the V495 CHECK sponsor_or_legacy). */
   sponsor_id: string | null;
   package_id: string;
   deal_status: DealStatus;
@@ -96,7 +96,7 @@ export function goLiveRulesFor(m: PaymentMethod): readonly GoLiveRule[] {
   return m === "complimentary" ? GO_LIVE_RULES.filter((r) => r !== "on_payment") : GO_LIVE_RULES;
 }
 
-/** Complimentary has no payment states (`none`, the V493 CHECK none_iff_complimentary); the others start pending. */
+/** Complimentary has no payment states (`none`, the V495 CHECK none_iff_complimentary); the others start pending. */
 export function initialPaymentStatus(m: PaymentMethod): PaymentStatus {
   return m === "complimentary" ? "none" : "pending";
 }

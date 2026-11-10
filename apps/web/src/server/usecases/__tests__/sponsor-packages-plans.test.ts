@@ -6,7 +6,7 @@
 //
 // `used_by` (the brief's definition): the count of DISTINCT sponsors over non-ended, non-legacy deals on the package. Its
 // empty case is stated first. Deals are seeded through SQL with every deal column explicit (Task 5's helpers do not
-// exist yet), each a shape the V493 CHECKs accept. Expected values come from the spec and the brief, never from
+// exist yet), each a shape the V495 CHECKs accept. Expected values come from the spec and the brief, never from
 // usecases/sponsors.ts. Real Postgres; skipped without DATABASE_URL. Seeds are run-unique.
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";

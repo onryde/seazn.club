@@ -492,7 +492,7 @@ export async function resolveSponsors(
 
 export interface SponsorPackageRow {
   id: string;
-  /** Null: any competition (the deal picks), V493. */
+  /** Null: any competition (the deal picks), V495. */
   competition_id: string | null;
   name: string;
   description: string | null;
@@ -501,7 +501,7 @@ export interface SponsorPackageRow {
   tier: SponsorTier;
   active: boolean;
   created_at: string;
-  /** A deal on this package puts its sponsor on the stream too (V493; snapshotted onto the deal, D4). */
+  /** A deal on this package puts its sponsor on the stream too (V495; snapshotted onto the deal, D4). */
   includes_on_stream: boolean;
   /** How many DISTINCT sponsors hold an open (non-ended, non-legacy) deal on this package. */
   used_by: number;
@@ -512,7 +512,7 @@ const PKG_COLS = [
   "currency", "tier", "active", "created_at", "includes_on_stream",
 ] as const;
 
-/** `used_by`, read beside a package row (select or returning). Non-ended is non-legacy too: V493 rewrote every pre-deals
+/** `used_by`, read beside a package row (select or returning). Non-ended is non-legacy too: V495 rewrote every pre-deals
  *  order as an ENDED deal, and `sponsor_orders_ended_shape` keeps a non-ended deal reason-free. */
 function packageUsedBy(tx: Tx) {
   return tx`(select count(distinct o.sponsor_id)::int from sponsor_orders o
@@ -1572,7 +1572,7 @@ export async function buildSponsorDisputeEvidence(
   origin: string,
 ): Promise<{ ref: string; html: string }> {
   const order = await withTenant(auth.orgId, async (tx) => {
-    // Any deal, not only one paid online: an offline or complimentary deal has no billing email and pays `none` (V493).
+    // Any deal, not only one paid online: an offline or complimentary deal has no billing email and pays `none` (V495).
     const [row] = await tx<
       (Omit<SponsorOrderRow, "sponsor_email" | "status"> & {
         sponsor_email: string | null;
