@@ -186,10 +186,13 @@ describe("every /<path>/${token} template is scrubbed, or is knowingly public", 
   const builders = pathBuilders();
 
   it("the scan found the builders (anti-vacuity)", () => {
+    // No `/api/orgs/[id]/invites/${token}/revoke` builder any more: since 2026-11-07 the Team panel revokes by the
+    // invite's ID (an email-bound invite's token never reaches it). The route still takes a link's token, so its PATH
+    // stays a credential route (VERDICTS, swept above); there is just no template building it from a token.
     expect([...builders.keys()].sort()).toEqual(
-      expect.arrayContaining(["/join", "/checkin", "/api/checkin", "/claim", "/api/claims", "/api/invites", "/api/orgs/[id]/invites", "/score", "/api/v1/capture/codes", "/refer", "/r", "/api/v1/public/registrations/by-ref", "/r/sponsor"]),
+      expect.arrayContaining(["/join", "/checkin", "/api/checkin", "/claim", "/api/claims", "/api/invites", "/score", "/api/v1/capture/codes", "/refer", "/r", "/api/v1/public/registrations/by-ref", "/r/sponsor"]),
     );
-    expect(builders.size).toBeGreaterThanOrEqual(12);
+    expect(builders.size).toBeGreaterThanOrEqual(11);
   });
 
   it("each builder's URL loses its token, or is on the public list with its reason; no public entry is stale", () => {
@@ -208,7 +211,7 @@ describe("every /<path>/${token} template is scrubbed, or is knowingly public", 
       }
     }
     for (const prefix of Object.keys(PUBLIC_BUILDERS)) expect(builders.has(prefix), `${prefix} is no longer built anywhere: delete it`).toBe(true);
-    expect(scrubbed).toBeGreaterThanOrEqual(18);
+    expect(scrubbed).toBeGreaterThanOrEqual(16); // (11 builders - 3 public) x 2 kinds
     expect(kept).toBe(Object.keys(PUBLIC_BUILDERS).length * KINDS.length);
   });
 });

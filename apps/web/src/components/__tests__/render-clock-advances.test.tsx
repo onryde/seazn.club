@@ -98,7 +98,7 @@ describe("a clock read during render advances on its own (react-hooks/purity)", 
         org_id: "org-1",
         role: "viewer",
         email: "zq-expiring@example.test",
-        token: "tok-1",
+        token: null, // the list's real shape: an email-bound invite's token never reaches the panel
         expires_at: SOON,
         max_uses: 1,
         used_count: 0,
