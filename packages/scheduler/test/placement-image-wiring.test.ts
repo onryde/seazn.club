@@ -3,7 +3,7 @@
 // The placement service lives in its own repo now. This repo vendors its proto and pins the image built from the very commit the
 // proto was copied at (`VENDORED.json`'s `imageTag`). Two things must stay true or CI tests the wrong thing without saying so:
 //
-//   * the seven jobs that run `placement-service:ci` get it by PULLING the pinned `ghcr.io/onryde/seazn-placement:<sha>` (and
+//   * the jobs that run `placement-service:ci` get it by PULLING the pinned `ghcr.io/onryde/seazn-placement:<sha>` (and
 //     retagging it), through the one script `scripts/placement-image.sh` — none builds it from source and none types a tag;
 //   * the scheduler's live tests (placement-integration, repair-decompose-cpsat-integration) run in ci.yml's `scheduler-live`
 //     job, against that same pinned image as a service container.
@@ -362,6 +362,8 @@ const ALL_JOBS = WORKFLOW_FILES.flatMap((f) => jobsOf(f));
 /** The jobs that docker-run the CI placement image: facts, from the plan's table — not from the scan under test. */
 const RUNNERS = [
   "ci.yml:smoke-db",
+  "ci.yml:smoke-db-app",
+  "ci.yml:smoke-db-outliers",
   "ci.yml:smoke-db-usecases",
   "ci.yml:smoke-e2e",
   "e2e.yml:e2e-parallel",
@@ -445,7 +447,7 @@ function runBody(step: Step): string {
 }
 
 describe("the workflows: every placement image comes from the pin", () => {
-  it("scans every workflow (anti-vacuity), and finds exactly the seven jobs that docker-run the CI placement image", () => {
+  it("scans every workflow (anti-vacuity), and finds exactly the jobs (RUNNERS) that docker-run the CI placement image", () => {
     // Floors lowered by exactly what engine split 2b deleted (mutation.yml and engine-canary.yml; their 5 jobs and ci.yml's
     // engine and engine-pack): 2 workflows, 7 jobs.
     expect(WORKFLOW_FILES.length, "workflow files scanned").toBeGreaterThan(8);
@@ -455,7 +457,7 @@ describe("the workflows: every placement image comes from the pin", () => {
     expect(found).toEqual([...RUNNERS].sort());
   });
 
-  it("each of the seven pulls the pin BEFORE its first docker run of the image, in one unsilenced step", () => {
+  it("each runner pulls the pin BEFORE its first docker run of the image, in one unsilenced step", () => {
     let checked = 0;
     for (const id of RUNNERS) {
       const [file, jobId] = id.split(":") as [string, string];
@@ -479,7 +481,7 @@ describe("the workflows: every placement image comes from the pin", () => {
       ).toEqual([]);
       checked++;
     }
-    expect(checked, "jobs checked").toBe(7);
+    expect(checked, "jobs checked").toBe(RUNNERS.length);
   });
 
   it("a BACKGROUND pull is joined by a `wait:` that names it before the container starts, and only smoke-e2e backgrounds it", () => {
@@ -503,7 +505,7 @@ describe("the workflows: every placement image comes from the pin", () => {
     expect(backgrounded.sort()).toEqual(BACKGROUND_PULL);
   });
 
-  it("every id a `wait:` names in the seven jobs is a step in that job (the pull step kept its id)", () => {
+  it("every id a `wait:` names in the runner jobs is a step in that job (the pull step kept its id)", () => {
     let waits = 0;
     for (const id of RUNNERS) {
       const [file, jobId] = id.split(":") as [string, string];
@@ -519,7 +521,7 @@ describe("the workflows: every placement image comes from the pin", () => {
     expect(waits, "wait ids checked (smoke-e2e: 2, e2e: 3 each)").toBe(2 + 3 + 3 + 3);
   });
 
-  it("no workflow uses a `context: services/placement` build action or types a tag; none of the seven blocks uses build-push-action or setup-buildx-action", () => {
+  it("no workflow uses a `context: services/placement` build action or types a tag; none of the runner blocks uses build-push-action or setup-buildx-action", () => {
     let jobsScanned = 0;
     for (const file of WORKFLOW_FILES) {
       const text = stripComments(readFileSync(join(WORKFLOWS, file), "utf8"));
@@ -543,7 +545,7 @@ describe("the workflows: every placement image comes from the pin", () => {
       expect(text, `${id}: nothing left uses buildx, so its setup step is dead weight`).not.toContain("setup-buildx-action");
       blocks++;
     }
-    expect(blocks).toBe(7);
+    expect(blocks, "blocks checked").toBe(RUNNERS.length);
   });
 });
 

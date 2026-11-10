@@ -16,10 +16,10 @@
 //     --results apps/web/vitest-results.json -- src/server src/lib
 //
 // `--exclude <glob>` (repeatable) is forwarded verbatim to `vitest list`, and
-// exists because ci.yml splits src/server+src/lib across two jobs by excluding
-// complementary halves of src/server/usecases/__tests__. The listing must be
-// narrowed by the SAME glob the run was narrowed by, or every file the other
-// job owns is reported here as "listed but not run".
+// exists because ci.yml splits src/server+src/lib across four DB jobs, each
+// excluding every src/server/usecases test outside its own first-letter range.
+// The listing must be narrowed by the SAME glob the run was narrowed by, or
+// every file the other jobs own is reported here as "listed but not run".
 //
 // Why exclude-globs and not `--shard`, which would need no globs at all: in
 // vitest 4.1.9 `vitest run --shard=1/2` genuinely partitions (verified 7 + 7
