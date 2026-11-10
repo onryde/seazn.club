@@ -40,6 +40,17 @@ describe("X-TP-3 the table of a bracket's places", () => {
     expect(html).toContain("Shared place");
   });
 
+  it("the chip never shares the name's flex row below md (a 43-character name was squeezed to four letters at 320, seen in a browser)", () => {
+    const html = render([1, 2, 3, 3], "knockout");
+    const chip = html.match(/<span data-testid="standings-shared-place-c" class="([^"]*)"/)?.[1] ?? "";
+    expect(chip, "the chip was rendered").not.toBe("");
+    expect(chip).toContain("max-md:mt-1");
+    expect(chip).toContain("whitespace-nowrap");
+    expect(chip, "not a shrink-0 sibling of the name inside the flex row").not.toContain("shrink-0");
+    // the chip follows the closing of the name's row, it is not inside it
+    expect(html).toMatch(/<\/span><span data-testid="standings-shared-place-c"/);
+  });
+
   it("a joint 1st (1, 1, 3, 3, 5): two gold leaders, four chips", () => {
     const html = render([1, 1, 3, 3, 5], "knockout");
     expect(chips(html)).toEqual(["a", "b", "c", "d"]);
