@@ -83,7 +83,7 @@ export class DealRuleError extends Error {
 }
 
 /** F15: a failed payment is still unpaid — Task 8 keeps it payable, so it offers what a pending one offers. */
-function isUnpaid(p: PaymentStatus): boolean {
+export function isUnpaid(p: PaymentStatus): boolean {
   return p === "pending" || p === "failed";
 }
 

@@ -16,6 +16,13 @@
 //   K3  dup match   `d.sponsor_id === chosen.id` -> match on the typed email        -> "the duplicate-invoice confirm keys on the sponsor"
 //   K4  pay link    `result.checkout_url` -> a constant                              -> "shows the pay link the create answered"
 //   K5  empty       drop the empty-sponsors arm                                      -> "with no sponsors the form says Add a sponsor first"
+// Batch F fix round 1 (review I1, I2, m1, m3, m4, m6, m8, M-a) - each guard mutated once, restored from a cp backup:
+//   K6  ended       drop `d.deal_status !== "ended"` from hasOpenDealOn               -> "an ENDED deal for the same sponsor and package never asks"
+//   K7  re-read     drop the re-read after a failed write                            -> "a create that fails AFTER it saved ... re-reads the list"
+//   K8  resend gate offer Resend on every deal                                       -> "Resend invoice is offered exactly where the deal offers"
+//   K9  end gate    offer End now on every deal                                      -> "End now is offered on every deal that has not ended"
+//   K10 end body    always the live body                                             -> "the End now confirm says what happens to the public pages"
+//   K11 finished    ignore finishedCompetitionIds                                     -> "a package whose competition has finished offers no Send invoice"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 
@@ -347,9 +354,18 @@ describe("the duplicate-invoice confirm keys on the SPONSOR and the package, and
     expect(confirmMock).not.toHaveBeenCalled();
   });
 
-  it("a legacy order (no sponsor, ended) never asks", async () => {
-    await sendFor([deal({ sponsor_id: null, deal_status: "ended", ended_reason: "legacy" })]);
-    expect(confirmMock).not.toHaveBeenCalled();
+  it("an ENDED deal for the same sponsor and package never asks - a legacy order and an ended deal (review m6: the sponsor matches, so only the ended rule keeps it quiet)", async () => {
+    let checked = 0;
+    for (const ended of [
+      deal({ sponsor_id: "sp-a", deal_status: "ended", ended_reason: "legacy" }),
+      deal({ sponsor_id: "sp-a", deal_status: "ended", ended_reason: "ended_now" }),
+    ]) {
+      confirmMock.mockClear();
+      await sendFor([ended]);
+      expect(confirmMock, String(ended.ended_reason)).not.toHaveBeenCalled();
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });
 
@@ -437,12 +453,13 @@ describe("a refusal reads the dictionary's words for its CODE, never the server'
   const refuse = (status: number, code: string) => ({ status, body: { ok: false, error: { code, message: SERVER_SENTENCE } } });
 
   it("Send invoice: connect_required, on_payment_needs_payment, deal_changed and stripe_unavailable each read their own key (all four)", async () => {
-    // Codes are the usecases' (server/usecases/sponsor-deals.ts), typed here; the keys are the ones this task adds.
+    // Codes are the usecases' (server/usecases/sponsor-deals.ts), typed here. A create's stripe_unavailable comes AFTER the deal is
+    // saved (createDeal sends the invoice post-commit, F11), so it reads the saved-draft words, never "nothing was changed" (I1).
     const CASES: [number, string, MessageKey][] = [
       [409, "connect_required", "sponsors.error.connectRequired"],
       [422, "on_payment_needs_payment", "sponsors.error.needsPayment"],
       [409, "deal_changed", "sponsors.error.dealChanged"],
-      [502, "stripe_unavailable", "sponsors.error.stripeUnavailable"],
+      [502, "stripe_unavailable", "sponsors.error.invoiceSavedNoLink"],
     ];
     let checked = 0;
     for (const [status, code, key] of CASES) {
@@ -539,12 +556,20 @@ describe("the form says an unpaid invoice hides the sponsor, unless a live deal 
     expect(checked).toBe(3);
   });
 
-  it("a sponsor already under a LIVE deal is not told it will be hidden - the live deal keeps it shown (the pair)", async () => {
-    answerWith("GET", "/sponsor-deals", { body: { data: [deal({ id: "d-live", sponsor_id: "sp-a", package_id: "p2", deal_status: "live", payment_status: "paid" })] } });
-    const m = await mount();
-    m.click("invoice-open-p1");
-    expect(m.pickerValue()).toBe("sp-a");
-    expect(m.has("invoice-hidden-note"), "no line for the sponsor with a live deal").toBe(false);
+  it("a sponsor already under a LIVE deal - paid, or complimentary (review M-a) - is not told it will be hidden: the live deal keeps it shown (the pair, both checked)", async () => {
+    let checked = 0;
+    for (const live of [
+      deal({ id: "d-live", sponsor_id: "sp-a", package_id: "p2", deal_status: "live", payment_status: "paid" }),
+      deal({ id: "d-comp", sponsor_id: "sp-a", package_id: "p2", deal_status: "live", payment_method: "complimentary", payment_status: "none", sponsor_email: null }),
+    ]) {
+      answerWith("GET", "/sponsor-deals", { body: { data: [live] } });
+      const m = await mount();
+      m.click("invoice-open-p1");
+      expect(m.pickerValue()).toBe("sp-a");
+      expect(m.has("invoice-hidden-note"), `${String(live.payment_method)}: no hidden line for the sponsor with a live deal`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("the line follows the PICKED sponsor: live-dealt sponsor none, a free sponsor has it, back again none (derived, not copied)", async () => {
@@ -603,5 +628,302 @@ describe("the copy fixed in fix round 1 (m2, m3) says what is true now, in all f
       checked++;
     }
     expect(checked).toBe(4);
+  });
+});
+
+// =================================================================================================================================
+// Batch F fix round 1: the console can exit the deals it creates (review I2), a failed write re-reads (I1), and the copy says
+// what is true for the deal in front of it (m1, m3, m4, m8). Expected values: spec §5.2's action table and the dictionary's
+// own keys, typed here - never read from the component.
+// =================================================================================================================================
+
+const refuseWith = (status: number, code: string) => ({ status, body: { ok: false, error: { code, message: "the server's own English sentence" } } });
+
+describe("a Send invoice that fails AFTER it saved the deal re-reads the list, says the invoice is saved, and a second Send asks first (review I1)", () => {
+  it("stripe_unavailable on the create: the deals are re-read, the saved-draft words show (not 'nothing was changed'), the draft's Resend is offered, and the second Send meets the duplicate confirm", async () => {
+    const m = await mount();
+    m.click("invoice-open-p1");
+    m.typeEmail("pay@harbourside.test");
+    answerWith("POST", "/sponsors/sp-a/deals", refuseWith(502, "stripe_unavailable"));
+    // What the server holds after the create committed and its invoice failed: the draft (createDeal, F11).
+    answerWith("GET", "/sponsor-deals", { body: { data: [deal({ id: "d-saved", deal_status: "draft" })] } });
+    const readsBefore = callsTo("GET", "/sponsor-deals").length;
+    m.click("invoice-send");
+    await flush();
+    expect(callsTo("GET", "/sponsor-deals").length, "the list is re-read after the failure").toBe(readsBefore + 1);
+    expect(m.text()).toContain(msg("sponsors.error.invoiceSavedNoLink"));
+    expect(m.text()).not.toContain(msg("sponsors.error.stripeUnavailable"));
+    expect(m.has("order-resend-d-saved"), "the saved draft is listed, with its Resend").toBe(true);
+    expect(m.has("invoice-send"), "the form stays open").toBe(true);
+    m.click("invoice-send");
+    await flush();
+    expect(confirmMock, "the second Send asks first: the saved draft is an open deal for the sponsor and package").toHaveBeenCalledTimes(1);
+    expect((confirmMock.mock.calls[0]![0] as { title: string }).title).toBe(msg("sponsors.order.dupConfirm.title"));
+    const posts = callsTo("POST", "/deals");
+    expect(posts, "both Sends POSTed (the second confirmed)").toHaveLength(2);
+    for (const post of posts) expect(Object.keys(post.body!), "the console never asks to end the current deal").not.toContain("end_current");
+  });
+
+  it("a refusal BEFORE anything was saved (connect_required) still re-reads, and leaves no deal behind to resend (the pair)", async () => {
+    const m = await mount();
+    m.click("invoice-open-p1");
+    m.typeEmail("pay@harbourside.test");
+    answerWith("POST", "/sponsors/sp-a/deals", refuseWith(409, "connect_required"));
+    const readsBefore = callsTo("GET", "/sponsor-deals").length;
+    m.click("invoice-send");
+    await flush();
+    expect(callsTo("GET", "/sponsor-deals").length).toBe(readsBefore + 1);
+    expect(m.text()).toContain(msg("sponsors.error.connectRequired"));
+    expect(m.text()).toContain(msg("sponsors.orders.empty"));
+  });
+});
+
+describe("Resend invoice is offered exactly where the deal offers it, and goes through send-invoice (review I2)", () => {
+  // Spec §5.2: an ONLINE deal that is still unpaid (pending or failed) and has not ended can have its invoice (re)sent - a draft
+  // sends it, an awaiting-payment, live or scheduled deal resends it. Typed from the spec.
+  const CASES: [string, Record<string, unknown>, boolean][] = [
+    ["online draft", { deal_status: "draft" }, true],
+    ["online awaiting payment", { deal_status: "awaiting_payment" }, true],
+    ["online live, unpaid", { deal_status: "live" }, true],
+    ["online scheduled, failed", { deal_status: "scheduled", payment_status: "failed" }, true],
+    ["online awaiting approval (paid)", { deal_status: "awaiting_approval", payment_status: "paid" }, false],
+    ["online live, paid", { deal_status: "live", payment_status: "paid" }, false],
+    ["online ended, unpaid", { deal_status: "ended", ended_reason: "ended_now" }, false],
+    ["offline awaiting payment", { deal_status: "awaiting_payment", payment_method: "offline" }, false],
+    ["complimentary live", { deal_status: "live", payment_method: "complimentary", payment_status: "none" }, false],
+  ];
+
+  it("offered for an online unpaid deal that has not ended, and for nothing else (all nine checked)", async () => {
+    let checked = 0;
+    for (const [label, over, offered] of CASES) {
+      answerWith("GET", "/sponsor-deals", { body: { data: [deal({ id: "d-x", ...over })] } });
+      const m = await mount();
+      expect(m.has("order-resend-d-x"), label).toBe(offered);
+      if (offered) expect(flat(textOf(m.find("order-resend-d-x"))), label).toBe(msg("sponsors.order.resend"));
+      checked++;
+    }
+    expect(checked).toBe(CASES.length);
+    expect(CASES.filter((c) => c[2]).length, "both arms exercised").toBeGreaterThan(0);
+  });
+
+  it("a tap POSTs /sponsor-deals/{id}/send-invoice with no body, shows the link it answered and re-reads; no confirm", async () => {
+    const url = "https://checkout.stripe.com/c/pay/cs_test_resent";
+    answerWith("GET", "/sponsor-deals", { body: { data: [deal({ id: "d-x" })] } });
+    answerWith("POST", "/sponsor-deals/d-x/send-invoice", { body: { ok: true, data: { deal: deal({ id: "d-x" }), checkout_url: url } } });
+    const m = await mount();
+    const readsBefore = callsTo("GET", "/sponsor-deals").length;
+    m.click("order-resend-d-x");
+    await flush();
+    const posts = callsTo("POST", "/send-invoice");
+    expect(posts.map((c) => c.url)).toEqual([`${API}/sponsor-deals/d-x/send-invoice`]);
+    expect(posts[0]!.body).toBeNull();
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(propsOf(m.find("invoice-link")).children).toBe(url);
+    expect(callsTo("GET", "/sponsor-deals").length).toBe(readsBefore + 1);
+  });
+
+  it("a failed Resend reads Resend's own words and re-reads: stripe_unavailable is 'not sent' (the old link may be closed), deal_paid_online is the sponsor's payment on its way (both)", async () => {
+    let checked = 0;
+    for (const [status, code, key] of [
+      [502, "stripe_unavailable", "sponsors.error.resendStripeUnavailable"],
+      [409, "deal_paid_online", "sponsors.error.resendPaidOnline"],
+    ] as [number, string, MessageKey][]) {
+      net.calls.length = 0;
+      answerWith("GET", "/sponsor-deals", { body: { data: [deal({ id: "d-x" })] } });
+      answerWith("POST", "/sponsor-deals/d-x/send-invoice", refuseWith(status, code));
+      const m = await mount();
+      const readsBefore = callsTo("GET", "/sponsor-deals").length;
+      m.click("order-resend-d-x");
+      await flush();
+      expect(m.text(), code).toContain(msg(key));
+      expect(m.text(), code).not.toContain(msg("sponsors.error.stripeUnavailable"));
+      expect(callsTo("GET", "/sponsor-deals").length, `${code}: re-read`).toBe(readsBefore + 1);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
+describe("End now is offered on every deal that has not ended, asks first, and says what happens to the public pages (review I2)", () => {
+  it("every deal status: offered unless ended (all six checked)", async () => {
+    let checked = 0;
+    for (const status of DEAL_STATUSES) {
+      answerWith("GET", "/sponsor-deals", { body: { data: [deal({ id: "d-x", deal_status: status })] } });
+      const m = await mount();
+      expect(m.has("order-end-d-x"), status).toBe(status !== "ended");
+      if (status !== "ended") expect(flat(textOf(m.find("order-end-d-x")))).toBe(msg("sponsors.order.endNow"));
+      checked++;
+    }
+    expect(checked).toBe(DEAL_STATUSES.length);
+  });
+
+  it("the confirm body follows the deal: a live deal; an open one behind the sponsor's live deal; an open one with none (all three, each a different sentence)", async () => {
+    // Spec §8a / deal-apply step 4: a live deal keeps the sponsor shown; without one, an open deal hides it.
+    const LIVE_OTHER = deal({ id: "d-live", package_id: "p2", deal_status: "live", payment_status: "paid" });
+    const CASES: [string, Record<string, unknown>[], string, MessageKey][] = [
+      ["the live deal itself", [LIVE_OTHER], "d-live", "sponsors.order.endConfirm.bodyLive"],
+      ["an open deal behind a live one", [LIVE_OTHER, deal({ id: "d-open", deal_status: "scheduled", payment_status: "paid" })], "d-open", "sponsors.order.endConfirm.bodyKept"],
+      ["an open deal, nothing live", [deal({ id: "d-open", deal_status: "awaiting_payment" })], "d-open", "sponsors.order.endConfirm.bodyHidden"],
+    ];
+    const seen = new Set<string>();
+    let checked = 0;
+    for (const [label, rows, target, key] of CASES) {
+      confirmMock.mockClear();
+      confirmMock.mockImplementationOnce(async () => false);
+      answerWith("GET", "/sponsor-deals", { body: { data: rows } });
+      const m = await mount();
+      m.click(`order-end-${target}`);
+      await flush();
+      expect(confirmMock, label).toHaveBeenCalledTimes(1);
+      const opts = confirmMock.mock.calls[0]![0] as { title: string; body: string; confirmLabel: string; tone?: string };
+      expect(opts.body, label).toBe(msg(key, { name: LONG_NAME }));
+      expect(opts.title).toBe(msg("sponsors.order.endConfirm.title"));
+      expect(opts.confirmLabel).toBe(msg("sponsors.order.endConfirm.label"));
+      expect(opts.tone).toBe("danger");
+      seen.add(opts.body);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(seen.size, "three different sentences").toBe(3);
+  });
+
+  it("declining sends nothing; confirming POSTs /sponsor-deals/{id}/end with no body and re-reads", async () => {
+    answerWith("GET", "/sponsor-deals", { body: { data: [deal({ id: "d-x" })] } });
+    answerWith("POST", "/sponsor-deals/d-x/end", { body: { ok: true, data: deal({ id: "d-x", deal_status: "ended", ended_reason: "ended_now" }) } });
+    const m = await mount();
+    confirmMock.mockImplementationOnce(async () => false);
+    m.click("order-end-d-x");
+    await flush();
+    expect(callsTo("POST", "/end")).toEqual([]);
+    const readsBefore = callsTo("GET", "/sponsor-deals").length;
+    m.click("order-end-d-x");
+    await flush();
+    const posts = callsTo("POST", "/end");
+    expect(posts.map((c) => c.url)).toEqual([`${API}/sponsor-deals/d-x/end`]);
+    expect(posts[0]!.body).toBeNull();
+    expect(callsTo("GET", "/sponsor-deals").length).toBe(readsBefore + 1);
+  });
+
+  it("a refused End now reads its code's words and re-reads (the deal moved under it)", async () => {
+    answerWith("GET", "/sponsor-deals", { body: { data: [deal({ id: "d-x" })] } });
+    answerWith("POST", "/sponsor-deals/d-x/end", refuseWith(409, "deal_changed"));
+    const m = await mount();
+    const readsBefore = callsTo("GET", "/sponsor-deals").length;
+    m.click("order-end-d-x");
+    await flush();
+    expect(m.text()).toContain(msg("sponsors.error.dealChanged"));
+    expect(callsTo("GET", "/sponsor-deals").length).toBe(readsBefore + 1);
+  });
+});
+
+describe("the invoice form says when the new deal will start: behind a live deal it queues (spec §8a), otherwise it hides the sponsor until paid", () => {
+  it("exactly one of the two lines, by the picked sponsor: live deal -> the queue line; none -> the hidden line (both directions)", async () => {
+    answerWith("GET", "/sponsor-deals", { body: { data: [deal({ id: "d-live", sponsor_id: "sp-a", package_id: "p2", deal_status: "live", payment_status: "paid" })] } });
+    const m = await mount();
+    m.click("invoice-open-p1");
+    expect(flat(textOf(m.find("invoice-queued-note")))).toBe(msg("sponsors.order.queuedAfterCurrent"));
+    expect(m.has("invoice-hidden-note")).toBe(false);
+    m.pick("sp-c");
+    expect(m.has("invoice-queued-note"), "a sponsor with no live deal does not queue").toBe(false);
+    expect(m.has("invoice-hidden-note")).toBe(true);
+  });
+});
+
+describe("an ended deal that was never paid says so (review m3)", () => {
+  it("ended + pending or failed reads Ended, unpaid; ended + paid, and a live unpaid deal, keep their payment label (all four)", async () => {
+    const CASES: [Record<string, unknown>, MessageKey][] = [
+      [{ deal_status: "ended", payment_status: "pending", ended_reason: "ended_now" }, "sponsors.order.status.endedUnpaid"],
+      [{ deal_status: "ended", payment_status: "failed", ended_reason: "expired" }, "sponsors.order.status.endedUnpaid"],
+      [{ deal_status: "ended", payment_status: "paid", ended_reason: "expired" }, "sponsors.order.status.paid"],
+      [{ deal_status: "live", payment_status: "pending" }, "sponsors.order.status.pending"],
+    ];
+    let checked = 0;
+    for (const [over, key] of CASES) {
+      answerWith("GET", "/sponsor-deals", { body: { data: [deal({ id: "d-x", ...over })] } });
+      const m = await mount();
+      expect(m.text(), JSON.stringify(over)).toContain(msg(key));
+      if (key !== "sponsors.order.status.endedUnpaid") expect(m.text()).not.toContain(msg("sponsors.order.status.endedUnpaid"));
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+});
+
+describe("the refund confirm says whether money moves through Stripe (review m1)", () => {
+  it("an online deal paid at Stripe: the card body; marked paid by hand, or offline: the recorded-only body (all three)", async () => {
+    const amount = new Intl.NumberFormat(undefined, { style: "currency", currency: "GBP" }).format(250);
+    const CASES: [string, Record<string, unknown>, MessageKey][] = [
+      ["online, paid at Stripe", { payment_method: "online", marked_paid_by: null }, "sponsors.order.refundConfirm.body"],
+      ["online, marked paid by hand", { payment_method: "online", marked_paid_by: "u-1" }, "sponsors.order.refundConfirm.bodyRecorded"],
+      ["offline", { payment_method: "offline", marked_paid_by: "u-1", sponsor_email: null }, "sponsors.order.refundConfirm.bodyRecorded"],
+    ];
+    let checked = 0;
+    for (const [label, over, key] of CASES) {
+      confirmMock.mockClear();
+      confirmMock.mockImplementationOnce(async () => false);
+      answerWith("GET", "/sponsor-deals", { body: { data: [deal({ id: "d-paid", deal_status: "live", payment_status: "paid", ...over })] } });
+      const m = await mount();
+      m.click("order-refund-d-paid");
+      await flush();
+      expect((confirmMock.mock.calls[0]![0] as { body: string }).body, label).toBe(msg(key, { amount, name: LONG_NAME }));
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+});
+
+describe("the duplicate confirm says whether the open deal still has money to take (review m8)", () => {
+  async function dupBody(existing: Record<string, unknown>[]): Promise<string> {
+    answerWith("GET", "/sponsor-deals", { body: { data: existing } });
+    confirmMock.mockImplementationOnce(async () => false);
+    const m = await mount();
+    m.click("invoice-open-p1");
+    m.typeEmail("pay@harbourside.test");
+    m.click("invoice-send");
+    await flush();
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    return (confirmMock.mock.calls[0]![0] as { body: string }).body;
+  }
+
+  it("an open deal still unpaid -> the could-pay-twice body; open deals with nothing left to pay -> the settled body; one of each -> could-pay-twice (all four)", async () => {
+    const UNPAID = deal({ id: "d-u", deal_status: "awaiting_payment", payment_status: "failed" });
+    const PAID_WAITING = deal({ id: "d-p", deal_status: "awaiting_approval", payment_status: "paid" });
+    const COMP_QUEUED = deal({ id: "d-c", deal_status: "scheduled", payment_method: "complimentary", payment_status: "none" });
+    const CASES: [string, Record<string, unknown>[], MessageKey][] = [
+      ["unpaid", [UNPAID], "sponsors.order.dupConfirm.body"],
+      ["paid, awaiting approval", [PAID_WAITING], "sponsors.order.dupConfirm.bodySettled"],
+      ["complimentary, queued", [COMP_QUEUED], "sponsors.order.dupConfirm.bodySettled"],
+      ["one of each", [PAID_WAITING, UNPAID], "sponsors.order.dupConfirm.body"],
+    ];
+    let checked = 0;
+    for (const [label, rows, key] of CASES) {
+      confirmMock.mockClear();
+      expect(await dupBody(rows), label).toBe(msg(key, { name: LONG_NAME }));
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+});
+
+describe("a package whose competition has finished offers no Send invoice (review m4; the create refuses it anyway)", () => {
+  it("the finished competition's package shows the finished label and keeps Retire; the whole-org package keeps Send invoice", async () => {
+    const m = await mount({ finishedCompetitionIds: ["c1"] });
+    expect(m.has("invoice-open-p2"), "p2 is for c1, which has finished").toBe(false);
+    expect(flat(textOf(m.find("pkg-finished-p2")))).toBe(msg("sponsors.pkg.competitionFinished"));
+    expect(m.has("invoice-open-p1"), "the whole-org package is still sold").toBe(true);
+    expect(m.has("pkg-finished-p1")).toBe(false);
+    const retire = m.island.tree().filter((e) => propsOf(e)["aria-label"] === msg("sponsors.pkg.retire", { name: PKG_ONE_COMP.name }));
+    expect(retire, "Retire is still offered on the finished package").toHaveLength(1);
+  });
+
+  it("nothing finished (the prop absent or empty): both packages offer Send invoice and no finished label (both)", async () => {
+    let checked = 0;
+    for (const over of [{}, { finishedCompetitionIds: [] }]) {
+      const m = await mount(over);
+      expect(m.has("invoice-open-p2")).toBe(true);
+      expect(m.has("pkg-finished-p2")).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });

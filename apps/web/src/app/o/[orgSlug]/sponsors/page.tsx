@@ -19,6 +19,7 @@ import { requireOrgPage } from "@/server/page-auth";
 import { sql } from "@/lib/db";
 import { hasFeatureOnAnyPass } from "@/lib/entitlements";
 import { listSponsorRows } from "@/server/usecases/sponsors";
+import { finishedPackageCompetitions } from "@/server/usecases/sponsor-deals";
 import { loadOnStreamScope } from "@/server/sponsors/on-stream";
 import { listReportLinks, reportLinkDefaults, sponsorOverview } from "@/server/sponsors/report";
 import { OrgSponsors } from "@/components/org-sponsors";
@@ -83,10 +84,12 @@ export default async function SponsorsHubPage({
   } else if (tab === "packages") {
     // The invoice form picks one of the org's sponsors (sponsor deals T12): only the picker's three fields cross to the client.
     // A plan without the feature sees the upsell and no form, so it reads no sponsors (the page loads only what its tab shows).
+    // A package whose competition has finished offers no Send invoice (batch F review m4; the create refuses it anyway).
     const hasMonetize = await hasFeatureOnAnyPass(active.id, "sponsors.monetize");
-    const [competitions, sponsorRows] = await Promise.all([
+    const [competitions, sponsorRows, finishedCompetitionIds] = await Promise.all([
       orgCompetitions(active.id),
       hasMonetize ? listSponsorRows(active.id) : Promise.resolve([]),
+      hasMonetize ? finishedPackageCompetitions(active.id) : Promise.resolve([]),
     ]);
     body = (
       <HubPanel tab="packages" icon={Banknote} dict={dict}>
@@ -97,6 +100,7 @@ export default async function SponsorsHubPage({
           hasMonetize={hasMonetize}
           billingHref={routes.billing(orgSlug)}
           sponsorsHref={sponsorsHref(orgSlug, "sponsors")}
+          finishedCompetitionIds={finishedCompetitionIds}
         />
       </HubPanel>
     );

@@ -9,16 +9,18 @@
 //
 // Transitional (sponsor deals T12): the order rail is the deal API now. This
 // tab keeps today's layout on it - the typed sponsor name became a picker of
-// the org's sponsors - until the deal screens replace it (PR 2).
+// the org's sponsors - until the deal screens replace it (PR 2). Batch F fix
+// round 1: each order row can Resend its invoice and End now, so the console
+// can exit every deal it creates.
 import { useCallback, useEffect, useState } from "react";
 import Link from "@/components/ui/console-link";
-import { Copy, Send, Undo2, XCircle } from "lucide-react";
+import { CircleStop, Copy, Send, Undo2, XCircle } from "lucide-react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
-import { sponsorSaveErrorKey } from "@/components/sponsors/save-error";
+import { sponsorSaveErrorKey, type SponsorWrite } from "@/components/sponsors/save-error";
 import { ApiV1Error } from "@/lib/client-v1";
 import type { MessageKey } from "@/lib/messages";
-import { allowedActions, type PaymentStatus, type SponsorDeal } from "@/lib/sponsor-deals";
+import { allowedActions, isUnpaid, type PaymentStatus, type SponsorDeal } from "@/lib/sponsor-deals";
 import { SPONSOR_TIERS, type SponsorTier } from "@/components/org-sponsors";
 
 interface PackageItem {
@@ -100,6 +102,51 @@ export function hasLiveDeal(deals: readonly SponsorDeal[], sponsorId: string): b
   return deals.some((d) => d.sponsor_id === sponsorId && d.deal_status === "live");
 }
 
+/** The duplicate-invoice confirm's words (review m8): "could pay twice" only while one of the sponsor's open deals on this
+ *  package still has money to take (pending or failed); open deals with nothing left to pay make a second deal, not a second
+ *  payment. */
+export function dupConfirmBodyKey(deals: readonly SponsorDeal[], sponsorId: string, packageId: string): MessageKey {
+  const unpaid = deals.some(
+    (d) =>
+      d.sponsor_id === sponsorId &&
+      d.package_id === packageId &&
+      d.deal_status !== "live" &&
+      d.deal_status !== "ended" &&
+      isUnpaid(d.payment_status),
+  );
+  return unpaid ? "sponsors.order.dupConfirm.body" : "sponsors.order.dupConfirm.bodySettled";
+}
+
+/** End now's confirm words (review I2): what the public pages do once this deal ends. A live deal hands over to the queue (or
+ *  the sponsor comes off); a deal that never went live leaves the sponsor as it is - shown under its live deal, else hidden
+ *  (server/sponsors/deal-apply.ts, step 4). */
+export function endConfirmBodyKey(deals: readonly SponsorDeal[], deal: SponsorDeal): MessageKey {
+  if (deal.deal_status === "live") return "sponsors.order.endConfirm.bodyLive";
+  if (deal.sponsor_id !== null && hasLiveDeal(deals, deal.sponsor_id)) return "sponsors.order.endConfirm.bodyKept";
+  return "sponsors.order.endConfirm.bodyHidden";
+}
+
+/** The refund confirm's words (review m1): money goes back through Stripe only for an online deal the sponsor paid at
+ *  Checkout. One marked as paid by hand - or paid offline - is recorded as refunded, and the club pays the sponsor back. The
+ *  server decides on the payment intent, which the list does not carry; `marked_paid_by` is its visible twin. */
+export function refundConfirmBodyKey(deal: SponsorDeal): MessageKey {
+  return deal.payment_method !== "online" || deal.marked_paid_by !== null
+    ? "sponsors.order.refundConfirm.bodyRecorded"
+    : "sponsors.order.refundConfirm.body";
+}
+
+/** The payment chip (review m3): an ended deal that was never paid says so, rather than reading as a live "Pending". */
+function paymentChip(deal: SponsorDeal): { key: MessageKey; className: string } {
+  if (deal.disputed_at) return { key: "sponsors.order.status.disputed", className: "bg-rose-100 text-rose-700" };
+  if (deal.payment_status === "refunded" && deal.dispute_id) {
+    return { key: "sponsors.order.status.disputeLost", className: "bg-rose-200 text-rose-900" };
+  }
+  if (deal.deal_status === "ended" && isUnpaid(deal.payment_status)) {
+    return { key: "sponsors.order.status.endedUnpaid", className: "bg-slate-100 text-slate-500" };
+  }
+  return { key: STATUS_MSG[deal.payment_status], className: STATUS_BADGE[deal.payment_status] };
+}
+
 export function SponsorPackages({
   orgId,
   competitions,
@@ -107,6 +154,7 @@ export function SponsorPackages({
   hasMonetize,
   billingHref,
   sponsorsHref,
+  finishedCompetitionIds = [],
 }: {
   orgId: string;
   competitions: { id: string; name: string }[];
@@ -116,6 +164,8 @@ export function SponsorPackages({
   billingHref: string;
   /** The Sponsors tab, for the empty picker's "Add a sponsor first". */
   sponsorsHref: string;
+  /** Competitions that have finished: a package for one of them is not sold (review m4; the create refuses it anyway). */
+  finishedCompetitionIds?: readonly string[];
 }) {
   const msg = useMsg();
   const confirm = useConfirm();
@@ -191,15 +241,19 @@ export function SponsorPackages({
     };
   }, [hasMonetize, fetchSponsorship]);
 
-  async function run(fn: () => Promise<void>) {
+  async function run(fn: () => Promise<void>, opts: { write?: SponsorWrite; dealWrite?: boolean } = {}) {
     setBusy(true);
     setError(null);
     try {
       await fn();
     } catch (err) {
-      // A server refusal reads the dictionary's words for its code (components/sponsors/save-error.ts); anything else - a
-      // network failure, a non-envelope body - is the house fallback.
-      setError(msg(sponsorSaveErrorKey(err)));
+      // A server refusal reads the dictionary's words for its code (components/sponsors/save-error.ts) - the write's own words
+      // first; anything else - a network failure, a non-envelope body - is the house fallback.
+      setError(msg(sponsorSaveErrorKey(err, opts.write)));
+      // A deal write can fail AFTER it changed something (review I1): a create saves its deal before Stripe makes the link, a
+      // Resend may close the old link first. The list is re-read so it shows what the server holds - and the next Send meets
+      // the saved deal's duplicate confirm. A failed re-read leaves the error already shown.
+      if (opts.dealWrite) await load().catch(() => {});
     } finally {
       setBusy(false);
     }
@@ -243,15 +297,55 @@ export function SponsorPackages({
       const amount = money(deal.amount_cents, deal.currency);
       const ok = await confirm({
         title: msg("sponsors.order.refundConfirm.title"),
-        body: msg("sponsors.order.refundConfirm.body", { amount, name: deal.sponsor_name }),
+        body: msg(refundConfirmBodyKey(deal), { amount, name: deal.sponsor_name }),
         confirmLabel: msg("sponsors.order.refundConfirm.label", { amount }),
         tone: "danger",
       });
       if (!ok) return;
-      await run(async () => {
-        await api(`/sponsor-deals/${deal.id}/refund`, { method: "POST" });
+      await run(
+        async () => {
+          await api(`/sponsor-deals/${deal.id}/refund`, { method: "POST" });
+          await load();
+        },
+        { dealWrite: true },
+      );
+    })();
+  }
+
+  /** Resend (or, for a draft, send) a deal's invoice: the server reuses an open payment link or makes a new one, and emails
+   *  it (ensureDealCheckout). The answer carries the link, like the create's. */
+  function resendInvoice(deal: SponsorDeal) {
+    void run(
+      async () => {
+        const result = (await api(`/sponsor-deals/${deal.id}/send-invoice`, { method: "POST" })) as {
+          deal: SponsorDeal;
+          checkout_url: string | null;
+        };
+        setSentUrl(result.checkout_url);
         await load();
+      },
+      { write: "resend_invoice", dealWrite: true },
+    );
+  }
+
+  /** End a deal now (review I2: the console can exit every deal it creates). Its payment link stops working; the confirm says
+   *  what the public pages do next. */
+  function endDealNow(deal: SponsorDeal) {
+    void (async () => {
+      const ok = await confirm({
+        title: msg("sponsors.order.endConfirm.title"),
+        body: msg(endConfirmBodyKey(deals, deal), { name: deal.sponsor_name }),
+        confirmLabel: msg("sponsors.order.endConfirm.label"),
+        tone: "danger",
       });
+      if (!ok) return;
+      await run(
+        async () => {
+          await api(`/sponsor-deals/${deal.id}/end`, { method: "POST" });
+          await load();
+        },
+        { dealWrite: true },
+      );
     })();
   }
 
@@ -272,31 +366,35 @@ export function SponsorPackages({
       if (hasOpenDealOn(deals, sponsor.id, pkg.id)) {
         const ok = await confirm({
           title: msg("sponsors.order.dupConfirm.title"),
-          body: msg("sponsors.order.dupConfirm.body", { name: sponsor.name }),
+          body: msg(dupConfirmBodyKey(deals, sponsor.id, pkg.id), { name: sponsor.name }),
           confirmLabel: msg("sponsors.order.dupConfirm.label"),
           tone: "danger",
         });
         if (!ok) return;
       }
-      await run(async () => {
-        // A deal for the picked sponsor, paid online and live when paid: today's "pay-now invoice". The package's own scope
-        // rides along (a package for one competition must be sold for it).
-        const result = (await api(`/sponsors/${sponsor.id}/deals`, {
-          method: "POST",
-          body: JSON.stringify({
-            package_id: pkg.id,
-            competition_id: pkg.competition_id,
-            payment_method: "online",
-            go_live: "on_payment",
-            sponsor_email: invoice.email.trim(),
-          }),
-        })) as { deal: SponsorDeal; checkout_url: string | null };
-        // F11: the pay link rides beside the deal in the create's answer; the deal itself carries no url.
-        setSentUrl(result.checkout_url);
-        setInvoice({ sponsorId: "", email: "" });
-        setInvoiceFor(null);
-        await load();
-      });
+      await run(
+        async () => {
+          // A deal for the picked sponsor, paid online and live when paid: today's "pay-now invoice". The package's own scope
+          // rides along (a package for one competition must be sold for it). Never `end_current`: the console does not end a
+          // live deal behind the club's back, so a create's only Stripe call is the invoice, after the save (F11).
+          const result = (await api(`/sponsors/${sponsor.id}/deals`, {
+            method: "POST",
+            body: JSON.stringify({
+              package_id: pkg.id,
+              competition_id: pkg.competition_id,
+              payment_method: "online",
+              go_live: "on_payment",
+              sponsor_email: invoice.email.trim(),
+            }),
+          })) as { deal: SponsorDeal; checkout_url: string | null };
+          // F11: the pay link rides beside the deal in the create's answer; the deal itself carries no url.
+          setSentUrl(result.checkout_url);
+          setInvoice({ sponsorId: "", email: "" });
+          setInvoiceFor(null);
+          await load();
+        },
+        { write: "create_deal", dealWrite: true },
+      );
     })();
   }
 
@@ -428,109 +526,127 @@ export function SponsorPackages({
         </p>
       ) : (
         <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">
-          {packages.map((pkg) => (
-            <li key={pkg.id} className="px-3 py-2.5">
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-slate-800">
-                    {pkg.name}
-                    {!pkg.active ? (
-                      <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-500">
-                        {msg("sponsors.pkg.retired")}
-                      </span>
-                    ) : null}
-                  </p>
-                  <p className="truncate text-xs text-slate-400">
-                    {msg(TIER_MSG[pkg.tier])} · {money(pkg.price_cents, pkg.currency)}
-                    {pkg.competition_id
-                      ? ` · ${competitions.find((c) => c.id === pkg.competition_id)?.name ?? "…"}`
-                      : ""}
-                  </p>
-                </div>
-                {pkg.active ? (
-                  <div className="flex shrink-0 items-center gap-1">
-                    <button
-                      type="button"
-                      disabled={busy}
-                      data-testid={`invoice-open-${pkg.id}`}
-                      onClick={() => toggleInvoice(pkg)}
-                      className="btn flex items-center gap-1.5 text-xs"
-                    >
-                      <Send className="h-3.5 w-3.5" />
-                      {msg("sponsors.pkg.invoice")}
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={msg("sponsors.pkg.retire", { name: pkg.name })}
-                      disabled={busy}
-                      onClick={() => retirePackage(pkg)}
-                      className="grid h-7 w-7 place-items-center rounded text-slate-400 hover:bg-red-50 hover:text-red-500"
-                    >
-                      <XCircle className="h-4 w-4" />
-                    </button>
+          {packages.map((pkg) => {
+            const finished = pkg.competition_id !== null && finishedCompetitionIds.includes(pkg.competition_id);
+            return (
+              <li key={pkg.id} className="px-3 py-2.5">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-slate-800">
+                      {pkg.name}
+                      {!pkg.active ? (
+                        <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-500">
+                          {msg("sponsors.pkg.retired")}
+                        </span>
+                      ) : null}
+                    </p>
+                    <p className="truncate text-xs text-slate-400">
+                      {msg(TIER_MSG[pkg.tier])} · {money(pkg.price_cents, pkg.currency)}
+                      {pkg.competition_id
+                        ? ` · ${competitions.find((c) => c.id === pkg.competition_id)?.name ?? "…"}`
+                        : ""}
+                    </p>
                   </div>
-                ) : null}
-              </div>
-              {invoiceFor === pkg.id ? (
-                chosen ? (
-                  <div className="mt-3 grid items-end gap-3 sm:grid-cols-3">
-                    <label className="block min-w-0">
-                      <span className="label">{msg("sponsors.order.sponsorPick")}</span>
-                      <select
-                        data-testid="invoice-sponsor"
-                        value={chosen.id}
-                        onChange={(e) => setInvoice({ ...invoice, sponsorId: e.target.value })}
-                        className="input w-full"
+                  {pkg.active ? (
+                    <div className="flex shrink-0 items-center gap-1">
+                      {finished ? (
+                        // The competition is over: the deal would end within the hour (§8a), so the package is not sold.
+                        <span
+                          data-testid={`pkg-finished-${pkg.id}`}
+                          className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-500"
+                        >
+                          {msg("sponsors.pkg.competitionFinished")}
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          data-testid={`invoice-open-${pkg.id}`}
+                          onClick={() => toggleInvoice(pkg)}
+                          className="btn flex items-center gap-1.5 text-xs"
+                        >
+                          <Send className="h-3.5 w-3.5" />
+                          {msg("sponsors.pkg.invoice")}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        aria-label={msg("sponsors.pkg.retire", { name: pkg.name })}
+                        disabled={busy}
+                        onClick={() => retirePackage(pkg)}
+                        className="grid h-7 w-7 place-items-center rounded text-slate-400 hover:bg-red-50 hover:text-red-500"
                       >
-                        {pickable.map((sponsor) => (
-                          <option key={sponsor.id} value={sponsor.id}>
-                            {sponsor.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="block min-w-0">
-                      <span className="label">{msg("sponsors.order.email")}</span>
-                      <input
-                        data-testid="invoice-email"
-                        value={invoice.email}
-                        onChange={(e) => setInvoice({ ...invoice, email: e.target.value })}
-                        type="email"
-                        className="input w-full"
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      data-testid="invoice-send"
-                      disabled={busy || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(invoice.email)}
-                      onClick={() => sendInvoice(pkg)}
-                      className="btn btn-primary"
-                    >
-                      {busy ? "…" : msg("sponsors.order.send")}
-                    </button>
-                    {/* The invoice is always a "live when paid" deal, so until it is paid the sponsor drops off the public pages -
-                        unless a live deal is already keeping it there. The club is told, in the form that does it. */}
-                    {hasLiveDeal(deals, chosen.id) ? null : (
-                      <p data-testid="invoice-hidden-note" className="text-xs text-slate-500 sm:col-span-3">
-                        {msg("sponsors.order.hiddenUntilPaid")}
-                      </p>
-                    )}
-                  </div>
-                ) : (
-                  // An invoice goes to one of the org's sponsors, so an org with none starts there.
-                  <p className="mt-3 text-sm">
-                    <Link
-                      data-testid="invoice-no-sponsors"
-                      href={sponsorsHref}
-                      className="font-medium text-purple-700 underline"
-                    >
-                      {msg("sponsors.order.noSponsors")}
-                    </Link>
-                  </p>
-                )
-              ) : null}
-            </li>
-          ))}
+                        <XCircle className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+                {invoiceFor === pkg.id && !finished ? (
+                  chosen ? (
+                    <div className="mt-3 grid items-end gap-3 sm:grid-cols-3">
+                      <label className="block min-w-0">
+                        <span className="label">{msg("sponsors.order.sponsorPick")}</span>
+                        <select
+                          data-testid="invoice-sponsor"
+                          value={chosen.id}
+                          onChange={(e) => setInvoice({ ...invoice, sponsorId: e.target.value })}
+                          className="input w-full"
+                        >
+                          {pickable.map((sponsor) => (
+                            <option key={sponsor.id} value={sponsor.id}>
+                              {sponsor.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="block min-w-0">
+                        <span className="label">{msg("sponsors.order.email")}</span>
+                        <input
+                          data-testid="invoice-email"
+                          value={invoice.email}
+                          onChange={(e) => setInvoice({ ...invoice, email: e.target.value })}
+                          type="email"
+                          className="input w-full"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        data-testid="invoice-send"
+                        disabled={busy || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(invoice.email)}
+                        onClick={() => sendInvoice(pkg)}
+                        className="btn btn-primary"
+                      >
+                        {busy ? "…" : msg("sponsors.order.send")}
+                      </button>
+                      {/* The invoice is always a "live when paid" deal, so until it is paid the sponsor drops off the public pages -
+                          unless a live deal is already keeping it there, in which case the new deal queues behind it (§8a). The
+                          club is told which, in the form that does it. */}
+                      {hasLiveDeal(deals, chosen.id) ? (
+                        <p data-testid="invoice-queued-note" className="text-xs text-slate-500 sm:col-span-3">
+                          {msg("sponsors.order.queuedAfterCurrent")}
+                        </p>
+                      ) : (
+                        <p data-testid="invoice-hidden-note" className="text-xs text-slate-500 sm:col-span-3">
+                          {msg("sponsors.order.hiddenUntilPaid")}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    // An invoice goes to one of the org's sponsors, so an org with none starts there.
+                    <p className="mt-3 text-sm">
+                      <Link
+                        data-testid="invoice-no-sponsors"
+                        href={sponsorsHref}
+                        className="font-medium text-purple-700 underline"
+                      >
+                        {msg("sponsors.order.noSponsors")}
+                      </Link>
+                    </p>
+                  )
+                ) : null}
+              </li>
+            );
+          })}
         </ul>
       )}
 
@@ -545,61 +661,78 @@ export function SponsorPackages({
           </p>
         ) : (
           <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">
-            {deals.map((deal) => (
-              <li key={deal.id} className="flex flex-wrap items-center gap-3 px-3 py-2">
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-slate-800">{deal.sponsor_name}</p>
-                  {deal.sponsor_email ? (
-                    <p className="truncate text-xs text-slate-400">{deal.sponsor_email}</p>
-                  ) : null}
-                </div>
-                <span className="text-sm tabular-nums text-slate-600">
-                  {money(deal.amount_cents, deal.currency)}
-                </span>
-                <span
-                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${
-                    deal.disputed_at
-                      ? "bg-rose-100 text-rose-700"
-                      : deal.payment_status === "refunded" && deal.dispute_id
-                        ? "bg-rose-200 text-rose-900"
-                        : STATUS_BADGE[deal.payment_status]
-                  }`}
-                >
-                  {msg(
-                    deal.disputed_at
-                      ? "sponsors.order.status.disputed"
-                      : deal.payment_status === "refunded" && deal.dispute_id
-                        ? "sponsors.order.status.disputeLost"
-                        : STATUS_MSG[deal.payment_status],
-                  )}
-                </span>
-                {allowedActions(deal).includes("refund") ? (
-                  <button
-                    type="button"
-                    data-testid={`order-refund-${deal.id}`}
-                    disabled={busy}
-                    onClick={() => refundDeal(deal)}
-                    className="btn flex items-center gap-1.5 text-xs text-red-500 hover:bg-red-50"
-                  >
-                    <Undo2 className="h-3.5 w-3.5" />
-                    {msg("sponsors.order.refund")}
-                  </button>
-                ) : null}
-                {deal.disputed_at || deal.dispute_id ? (
-                  // Same rail as registrations: one document, mapped to
-                  // Stripe's evidence fields, downloaded from the flagged row.
-                  <a
-                    data-testid={`order-evidence-${deal.id}`}
-                    href={`/api/v1/orgs/${orgId}/sponsor-deals/${deal.id}/evidence`}
-                    download
-                    className="btn btn-ghost text-xs font-medium text-rose-700"
-                    title={msg("sponsors.order.evidenceTitle")}
-                  >
-                    {msg("sponsors.order.evidence")}
-                  </a>
-                ) : null}
-              </li>
-            ))}
+            {deals.map((deal) => {
+              const actions = allowedActions(deal);
+              const chip = paymentChip(deal);
+              return (
+                <li key={deal.id} className="flex flex-wrap items-center gap-3 px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-slate-800">{deal.sponsor_name}</p>
+                    {deal.sponsor_email ? (
+                      <p className="truncate text-xs text-slate-400">{deal.sponsor_email}</p>
+                    ) : null}
+                  </div>
+                  <span className="text-sm tabular-nums text-slate-600">
+                    {money(deal.amount_cents, deal.currency)}
+                  </span>
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${chip.className}`}>
+                    {msg(chip.key)}
+                  </span>
+                  {/* The row's actions wrap as one group under the name on a phone. */}
+                  <div className="flex flex-wrap items-center gap-1">
+                    {actions.includes("send_invoice") || actions.includes("resend_invoice") ? (
+                      <button
+                        type="button"
+                        data-testid={`order-resend-${deal.id}`}
+                        disabled={busy}
+                        onClick={() => resendInvoice(deal)}
+                        className="btn flex items-center gap-1.5 text-xs"
+                      >
+                        <Send className="h-3.5 w-3.5" />
+                        {msg("sponsors.order.resend")}
+                      </button>
+                    ) : null}
+                    {actions.includes("end_now") ? (
+                      <button
+                        type="button"
+                        data-testid={`order-end-${deal.id}`}
+                        disabled={busy}
+                        onClick={() => endDealNow(deal)}
+                        className="btn flex items-center gap-1.5 text-xs text-red-500 hover:bg-red-50"
+                      >
+                        <CircleStop className="h-3.5 w-3.5" />
+                        {msg("sponsors.order.endNow")}
+                      </button>
+                    ) : null}
+                    {actions.includes("refund") ? (
+                      <button
+                        type="button"
+                        data-testid={`order-refund-${deal.id}`}
+                        disabled={busy}
+                        onClick={() => refundDeal(deal)}
+                        className="btn flex items-center gap-1.5 text-xs text-red-500 hover:bg-red-50"
+                      >
+                        <Undo2 className="h-3.5 w-3.5" />
+                        {msg("sponsors.order.refund")}
+                      </button>
+                    ) : null}
+                    {deal.disputed_at || deal.dispute_id ? (
+                      // Same rail as registrations: one document, mapped to
+                      // Stripe's evidence fields, downloaded from the flagged row.
+                      <a
+                        data-testid={`order-evidence-${deal.id}`}
+                        href={`/api/v1/orgs/${orgId}/sponsor-deals/${deal.id}/evidence`}
+                        download
+                        className="btn btn-ghost text-xs font-medium text-rose-700"
+                        title={msg("sponsors.order.evidenceTitle")}
+                      >
+                        {msg("sponsors.order.evidence")}
+                      </a>
+                    ) : null}
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>

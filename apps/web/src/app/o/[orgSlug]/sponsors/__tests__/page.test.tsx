@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
   requireOrgPage: vi.fn(),
   resolveLocale: vi.fn(),
   listSponsorRows: vi.fn(),
+  finishedPackageCompetitions: vi.fn(),
   hasFeatureOnAnyPass: vi.fn(),
   sql: vi.fn(),
   loadOnStreamScope: vi.fn(),
@@ -33,6 +34,7 @@ const h = vi.hoisted(() => ({
 vi.mock("@/server/page-auth", () => ({ requireOrgPage: h.requireOrgPage }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: h.resolveLocale }));
 vi.mock("@/server/usecases/sponsors", () => ({ listSponsorRows: h.listSponsorRows }));
+vi.mock("@/server/usecases/sponsor-deals", () => ({ finishedPackageCompetitions: h.finishedPackageCompetitions }));
 vi.mock("@/lib/entitlements", () => ({ hasFeatureOnAnyPass: h.hasFeatureOnAnyPass }));
 vi.mock("@/lib/db", () => ({ sql: h.sql }));
 vi.mock("@/server/sponsors/on-stream", () => ({ loadOnStreamScope: h.loadOnStreamScope }));
@@ -124,10 +126,12 @@ vi.mock("@/components/sponsor-packages", () => ({
     hasMonetize: boolean;
     billingHref: string;
     sponsorsHref: string;
+    finishedCompetitionIds?: readonly string[];
   }) => (
     <div
       data-testid="sponsor-packages-island"
       data-org={p.orgId}
+      data-finished={p.finishedCompetitionIds === undefined ? "<absent>" : p.finishedCompetitionIds.join("|")}
       data-has-monetize={String(p.hasMonetize)}
       data-competitions={p.competitions.length}
       data-pick={p.sponsors.map((s) => `${s.id}:${s.name}:${s.display_order}`).join("|")}
@@ -204,6 +208,7 @@ beforeEach(() => {
     { id: "s1", name: "Harbour", tier: "gold", status: "active", competition_id: null, on_stream: true, display_order: 3, locked_by_deal: false },
     { id: "s2", name: "Ridge", tier: "partner", status: "active", competition_id: "c1", on_stream: false, display_order: 0, locked_by_deal: true },
   ]);
+  h.finishedPackageCompetitions.mockResolvedValue(["c2"]);
   h.loadOnStreamScope.mockResolvedValue({ settings: { enabled: true, frequency: "busy" }, ownRow: true, sports: [{ sportKey: "cricket", kinds: [], sample: null, sampleCompetitionId: null }] });
   h.hasFeatureOnAnyPass.mockResolvedValue(true);
   h.sql.mockResolvedValue([{ id: "c1", name: "Spring Cup" }, { id: "c2", name: "Autumn Cup" }, { id: "c3", name: "Cup 3" }]);
@@ -389,6 +394,33 @@ describe("the Packages tab hands the invoice form its sponsor picker (sponsor de
     const html = await render("packages");
     expect(html).toContain('data-testid="sponsor-packages-island"');
     expect(attr(html, "sponsor-packages-island", "data-pick")).toBe("");
+  });
+});
+
+describe("the Packages tab hands over which packages' competitions have finished (batch F review m4)", () => {
+  // The client hides Send invoice on those packages; createDeal refuses them anyway (409 competition_finished). The ids are the
+  // usecase's answer, handed over as they are.
+  it("granted: asks finishedPackageCompetitions for THIS org and hands its answer over as it is", async () => {
+    const html = await render("packages");
+    expect(h.finishedPackageCompetitions).toHaveBeenCalledWith(ORG.id);
+    expect(attr(html, "sponsor-packages-island", "data-finished")).toBe("c2");
+  });
+
+  it("nothing finished: an EMPTY list, not a missing one", async () => {
+    h.finishedPackageCompetitions.mockResolvedValue([]);
+    expect(attr(await render("packages"), "sponsor-packages-island", "data-finished")).toBe("");
+  });
+
+  it("a plan WITHOUT sponsors.monetize asks nothing (it sees the upsell, no packages)", async () => {
+    h.hasFeatureOnAnyPass.mockImplementation(async (_org: string, key: string) => key !== "sponsors.monetize");
+    expect(attr(await render("packages"), "sponsor-packages-island", "data-finished")).toBe("");
+    expect(h.finishedPackageCompetitions).not.toHaveBeenCalled();
+  });
+
+  it("another tab never asks (the page loads only what its tab shows)", async () => {
+    await render("sponsors");
+    await render("on_stream");
+    expect(h.finishedPackageCompetitions).not.toHaveBeenCalled();
   });
 });
 
