@@ -93,6 +93,7 @@ import { gapSuite } from "./suites/gap.ts";
 import { visualSeedRoutesSuite } from "./suites/visualSeedRoutes.ts";
 import { streamTargetsSuite } from "./suites/streamTargets.ts";
 import { captureV2Suite } from "./suites/captureV2.ts";
+import { deviceLinkFootballSuite } from "./suites/deviceLinkFootball.ts";
 import { captureRecordSuite } from "./suites/captureRecord.ts";
 import { streamOverlaySuite } from "./suites/streamOverlay.ts";
 import { v3ContentApiSuite } from "./suites/v3ContentApi.ts";
@@ -867,6 +868,9 @@ export async function main() {
   // --- capture record upload (spec 2026-10-12 §13.2, case `capture-record`): a phone's Send record over the real route —
   //     another code's line and a bad line dropped (owner ruling RL), the body-level refusals, every answer private.
   await suite("captureRecord", () => captureRecordSuite());
+  // --- S2-5 football Remote Scoring (plan W, design §10): the device-link bootstrap's lineup rows carry the team sheet
+  //     (slot, position, order, role(s), shirt number), and the events door answers the Date header the pad's clock samples.
+  await suite("deviceLinkFootball", () => deviceLinkFootballSuite());
 
   // --- the above-Pro rung (Task 11): community's save-point window and its
   // ungated officials, api.write re-armed above Pro, and the rung above Pro

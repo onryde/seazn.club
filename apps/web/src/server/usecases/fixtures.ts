@@ -642,7 +642,7 @@ export type PutLineupOut = LineupOut & LineupCheck;
  *  it (finding 3). `slot` is `text` in the DDL but carries
  *  `check (slot in ('starting','bench'))` (V215), so the narrowing where it is
  *  read is the database's guarantee, not an assumption. */
-interface StoredLineupSlot {
+export interface StoredLineupSlot {
   person_id: string;
   full_name: string;
   squad_number: number | null;
@@ -694,7 +694,7 @@ function formatLineupIssue(issue: LineupIssue): string {
  *  applied was invisible to the warnings, which is the wrong answer to
  *  "is the lineup I now have valid?". Observable today in issue ORDER —
  *  `validateLineup` emits issues in slot-walk order and the read-back is
- *  ordered by `order_no nulls last, full_name`, so a request sent in some
+ *  ordered by `order_no nulls last, full_name, person_id`, so a request sent in some
  *  other order produced a list in the request's order, about rows stored in
  *  a different one.
  *
@@ -897,7 +897,7 @@ async function readLineup(
     join persons p on p.id = l.person_id
     left join entrant_members em on em.entrant_id = l.entrant_id and em.person_id = l.person_id
     where l.fixture_id = ${fixtureId} and l.entrant_id = ${entrantId}
-    order by l.order_no nulls last, p.full_name`;
+    order by l.order_no nulls last, p.full_name, l.person_id`;
   return { fixture_id: fixtureId, entrant_id: entrantId, slots };
 }
 

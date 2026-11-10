@@ -1605,6 +1605,9 @@ export async function cleanup(tag: string): Promise<void> {
     // all cascade with the org (V479: on delete cascade on org_id).
     `delivered+ytconnect_${tag}@resend.dev`,
     `delivered+ytconnect_b_${tag}@resend.dev`,
+    // deviceLinkFootballSuite's own org (S2-5 plan W) — its competition, football fixture, lineup, device link and events
+    // cascade with it.
+    `delivered+dlfootball_${tag}@resend.dev`,
   ];
   const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
   const sql = postgres(url, {

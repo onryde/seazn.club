@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { apiJson, mintLoginPathBySql, seedScoredDivision, TAG } from "./helpers";
+import { apiJson, mintLoginPathBySql, seedRosteredFixture, seedScoredDivision, TAG } from "./helpers";
 import { consentedAnonymousState } from "./scorepad-a11y-kit";
 import {
   assertPropagatedUnderPoll,
@@ -727,5 +727,67 @@ test("a second writer's event reaches a device link's inner pad, mounted after S
     ).toBe(String((rows.data ?? []).length));
   } finally {
     await deviceCtx.close();
+  }
+});
+
+// S2-5 design §10: the phone's football and cricket pads build the team sheet from the bootstrap, so each lineup row
+// carries its slot and shirt number. Through the real server: a football fixture's home sheet with a bench row, read
+// back over the link's own door.
+test("the device-link bootstrap names the bench and shirt numbers once a team sheet is set", async ({
+  request,
+  playwright,
+}) => {
+  const starter = `DL Sheet Keeper ${TAG}`;
+  const bench = `DL Sheet Sub ${TAG}`;
+  const fx = await seedRosteredFixture(request, {
+    label: `DL Sheet ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
+    sportKey: "football",
+    variantKey: "11-a-side",
+    home: [
+      { fullName: starter, squadNumber: 1, positionKey: "GK" },
+      { fullName: bench, squadNumber: 17 },
+    ],
+    away: [{ fullName: `DL Sheet Away ${TAG}`, squadNumber: 4 }],
+    skipLineups: true,
+  });
+  const put = await apiJson(request, `/api/v1/fixtures/${fx.fixtureId}/lineups/${fx.homeEntrantId}`, "PUT", {
+    slots: [
+      { person_id: fx.personIds[starter], slot: "starting", position_key: "GK", order_no: 1, roles: [] },
+      { person_id: fx.personIds[bench], slot: "bench", order_no: 2, roles: [] },
+    ],
+  });
+  expect(put.status).toBe(200);
+  const minted = await apiJson<{ secret: string }>(
+    request,
+    `/api/v1/fixtures/${fx.fixtureId}/device-links`,
+    "POST",
+    { label: "Pitch 1" },
+  );
+  expect(minted.status).toBe(201);
+
+  // The link's own context, no cookie: the bootstrap is the one v1 door a dl_ bearer opens.
+  const dlApi = await playwright.request.newContext({
+    baseURL: BASE,
+    storageState: { cookies: [], origins: [] },
+  });
+  try {
+    const res = await dlApi.get("/api/v1/device-link", {
+      headers: { authorization: `Bearer ${minted.data!.secret}` },
+    });
+    expect(res.status()).toBe(200);
+    type Row = { person_id: string; slot: string; squad_number: number | null; position_key: string | null };
+    const body = (await res.json()) as {
+      data: { sides: Record<"home" | "away", { entrant_id: string; lineup: Row[] } | null> };
+    };
+    const home = body.data.sides.home!;
+    expect(home.entrant_id).toBe(fx.homeEntrantId);
+    const benchRow = home.lineup.find((l) => l.person_id === fx.personIds[bench]);
+    expect(benchRow?.slot).toBe("bench");
+    expect(benchRow?.squad_number).toBe(17);
+    const starterRow = home.lineup.find((l) => l.person_id === fx.personIds[starter]);
+    expect(starterRow).toMatchObject({ slot: "starting", squad_number: 1, position_key: "GK" });
+    expect(body.data.sides.away!.lineup).toEqual([]);
+  } finally {
+    await dlApi.dispose();
   }
 });

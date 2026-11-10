@@ -26,6 +26,7 @@ import { v1Suite } from "./suites/v1.ts";
 import { streamTargetsSuite } from "./suites/streamTargets.ts";
 import { captureV2Suite } from "./suites/captureV2.ts";
 import { captureRecordSuite } from "./suites/captureRecord.ts";
+import { deviceLinkFootballSuite } from "./suites/deviceLinkFootball.ts";
 import { streamOverlaySuite } from "./suites/streamOverlay.ts";
 import { matchRoomSuite } from "./suites/matchRoom.ts";
 import { arbiterSuite } from "./suites/arbiter.ts";
@@ -62,6 +63,7 @@ const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
   w3SwissB: () => w3SwissBSuite(),
   w4KnockoutA: () => w4KnockoutASuite(),
   youtubeConnect: () => youtubeConnectSuite(),
+  deviceLinkFootball: () => deviceLinkFootballSuite(),
 };
 
 /** The subset's setup: the same calls main() makes for this state, in main()'s order — the admin sign-in, the plan
