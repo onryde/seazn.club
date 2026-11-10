@@ -38,6 +38,7 @@ import { w2dTablesSuite } from "./suites/w2dTables.ts";
 import { w2eRefusalsSuite } from "./suites/w2eRefusals.ts";
 import { w3SwissASuite } from "./suites/w3SwissA.ts";
 import { w4KnockoutASuite } from "./suites/w4KnockoutA.ts";
+import { w4KnockoutBSuite } from "./suites/w4KnockoutB.ts";
 import { w3SwissBSuite } from "./suites/w3SwissB.ts";
 import { w4aTimeModelSuite } from "./suites/w4aTimeModel.ts";
 import { cricketDlsSuite } from "./suites/cricketDls.ts";
@@ -1298,6 +1299,9 @@ export async function main() {
   // X-RB-1); the suite's own header lists each. After w3SwissB, as the plan places every new suite after the last.
   // Own fresh owner; keyless; every read and write a v1 route.
   await suite("w4KnockoutA", () => w4KnockoutASuite());
+  // Format matrix W4 knockout app PR B: one counted check per task that owes one (B1: T3, the places/title wire, X-FR-4).
+  // Own fresh owner; keyless; every read and write a v1 route. After w4KnockoutA.
+  await suite("w4KnockoutB", () => w4KnockoutBSuite());
 }
 
 async function smokePlanMatrix(): Promise<void> {
