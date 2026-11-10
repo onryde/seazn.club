@@ -406,10 +406,10 @@ export async function withdrawEntrantCascade(
           {
             id: stage.id,
             kind: stage.kind as "knockout" | "double_elim" | "stepladder",
-            // engine 5.0.0 made `entrants` required. The seated set is what this planner has always read (no behaviour
-            // change); app B's T2' widens it to the stage's full drawn roster.
-            // `bracketRoster` (engine-db/competition.ts) declares the same seated set at completion (plus
-            // `config.qualified` when stored); T2' unifies all three.
+            // engine 5.0.0 made `entrants` required. The seated set is what this planner reads, and it stays the
+            // seated set (B1 review M5 reverted a widening to the full drawn roster: the planner only walks lines
+            // over, so an entrant in no fixture has nothing to plan). The DRAWN roster is declared where ranks are
+            // read: `bracketRoster` (engine-db/competition.ts) adds the departed and `config.qualified` entrants.
             entrants: [...new Set(bracketFixtures.flatMap((b) => [b.home, b.away]).filter((id): id is string => id !== undefined))],
           },
           entrantId,
