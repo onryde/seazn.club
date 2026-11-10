@@ -157,7 +157,7 @@ describe.skipIf(!HAS_DB)("W4 B5a T12: declare joint winners (X-CH-4, X-CH-6)", (
     await post(r.auth, r.final.id, "core.abandon", { reason: "rain" });
     const held = await fixtureRow(r.final.id);
     expect([held.status, held.outcome], "premise: abandoned, decided nobody").toEqual(["abandoned", null]);
-    expect(jointWinnersOffered({ ...held, is_final: true, third_place: false, joint_winners_at: null })).toBe(true);
+    expect(jointWinnersOffered({ ...held, is_final: true, third_place: false, joint_winners_at: null, stage_kind: "knockout" })).toBe(true);
     await declareJointWinners(r.auth, r.final.id);
     expect((await jointRow(r.final.id)).status).toBe("decided");
     const out = await undoJointWinners(r.auth, r.final.id);
@@ -203,12 +203,12 @@ describe.skipIf(!HAS_DB)("W4 B5a T12: declare joint winners (X-CH-4, X-CH-6)", (
     await expect(declareJointWinners(s.auth, final.id), "a decided final").rejects.toMatchObject({ code: "JOINT_WINNERS_FINAL_DECIDED" });
     expect((await jointRow(final.id)).joint_winners_at).toBeNull();
     // anti-vacuity: the predicate itself says no to each non-final and yes to an open one.
-    expect(jointWinnersOffered({ is_final: false, third_place: false, status: "scheduled", home_entrant_id: "a", away_entrant_id: "b", joint_winners_at: null })).toBe(false);
-    expect(jointWinnersOffered({ is_final: true, third_place: true, status: "scheduled", home_entrant_id: "a", away_entrant_id: "b", joint_winners_at: null })).toBe(false);
-    expect(jointWinnersOffered({ is_final: true, third_place: false, status: "scheduled", home_entrant_id: "a", away_entrant_id: null, joint_winners_at: null })).toBe(false);
-    expect(jointWinnersOffered({ is_final: true, third_place: false, status: "decided", home_entrant_id: "a", away_entrant_id: "b", joint_winners_at: null })).toBe(false);
-    expect(jointWinnersOffered({ is_final: true, third_place: false, status: "scheduled", home_entrant_id: "a", away_entrant_id: "b", joint_winners_at: "2030-01-01" })).toBe(false);
-    expect(jointWinnersOffered({ is_final: true, third_place: false, status: "scheduled", home_entrant_id: "a", away_entrant_id: "b", joint_winners_at: null })).toBe(true);
+    expect(jointWinnersOffered({ is_final: false, third_place: false, status: "scheduled", home_entrant_id: "a", away_entrant_id: "b", joint_winners_at: null, stage_kind: "knockout" })).toBe(false);
+    expect(jointWinnersOffered({ is_final: true, third_place: true, status: "scheduled", home_entrant_id: "a", away_entrant_id: "b", joint_winners_at: null, stage_kind: "knockout" })).toBe(false);
+    expect(jointWinnersOffered({ is_final: true, third_place: false, status: "scheduled", home_entrant_id: "a", away_entrant_id: null, joint_winners_at: null, stage_kind: "knockout" })).toBe(false);
+    expect(jointWinnersOffered({ is_final: true, third_place: false, status: "decided", home_entrant_id: "a", away_entrant_id: "b", joint_winners_at: null, stage_kind: "knockout" })).toBe(false);
+    expect(jointWinnersOffered({ is_final: true, third_place: false, status: "scheduled", home_entrant_id: "a", away_entrant_id: "b", joint_winners_at: "2030-01-01", stage_kind: "knockout" })).toBe(false);
+    expect(jointWinnersOffered({ is_final: true, third_place: false, status: "scheduled", home_entrant_id: "a", away_entrant_id: "b", joint_winners_at: null, stage_kind: "knockout" })).toBe(true);
   });
 
   it("a declared final refuses a second declaration (FINAL_DECIDED); a third-place match left unplayed keeps the stage open", async () => {
