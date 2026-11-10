@@ -497,3 +497,50 @@ describe.runIf(HAS_DB)("W4 delta V496 vs the rulebook oracle (RB4-T2, R2)", () =
     expect(checked).toBe(2);
   }, 480_000);
 });
+
+// ---- B5a Task 12: V499 (fixtures.joint_winners_at) ----
+// single-sport: badminton - the delta reads status/outcome/seat columns, no sport field.
+const JOINT_NAME = /^V\d+__w4_fixture_joint_winners\.sql$/;
+const jointFiles = readdirSync(DELTAS).filter((f) => JOINT_NAME.test(f));
+const jointText = jointFiles.length === 1 ? readFileSync(resolve(DELTAS, jointFiles[0]!), "utf8") : "";
+
+describe("W4 delta V499: joint winners column", () => {
+  it("exactly one delta carries the name; it adds the column and the check and re-creates the public view, no data change", () => {
+    expect(jointFiles, "one delta named *__w4_fixture_joint_winners.sql").toHaveLength(1);
+    expect(jointText).toMatch(/add column if not exists joint_winners_at timestamptz null/);
+    expect(jointText).toMatch(/create or replace view public_fixtures_v/);
+    expect(jointText, "the new column is APPENDED last").toMatch(/f\.joint_winners_at\s+from fixtures f/);
+    expect(jointText, "no update/delete: no data change").not.toMatch(/^\s*(update|delete)\s/im);
+  });
+
+  it.skipIf(!HAS_DB)("the check: a declaration needs decided + no outcome + both seats; a plain row is untouched; the view carries the column", async () => {
+    const s = await seedBracket({ sport: "badminton", variant: "bwf", stageKind: "knockout", entrants: 2 });
+    const id = s.fixtureIds[0]!;
+    let checked = 0;
+    await rolledBack(async (tx) => {
+      const [none] = await tx<{ n: number }[]>`select count(*)::int as n from fixtures where joint_winners_at is not null and stage_id = ${s.stageId}`;
+      expect(none!.n, "no data change: nothing in the freshly seeded stage carries it before a declaration").toBe(0);
+      checked++;
+      // a scheduled fixture: refused
+      await expect(tx.savepoint(async (sp) => sp`update fixtures set joint_winners_at = now() where id = ${id}`)).rejects.toMatchObject({ code: "23514" });
+      checked++;
+      // decided but holding an outcome: refused (the pinned negative)
+      await expect(
+        tx.savepoint(async (sp) => sp`update fixtures set status = 'decided', outcome = ${sp.json({ kind: "win", winner: null } as never)}, joint_winners_at = now() where id = ${id}`),
+      ).rejects.toMatchObject({ code: "23514" });
+      checked++;
+      // decided, no outcome, one seat missing: refused
+      await expect(
+        tx.savepoint(async (sp) => sp`update fixtures set status = 'decided', outcome = null, away_entrant_id = null, joint_winners_at = now() where id = ${id}`),
+      ).rejects.toMatchObject({ code: "23514" });
+      checked++;
+      // the shape the declaration writes: accepted, and the view (public competition) selects it
+      await tx`update competitions set visibility = 'public' where id = ${s.competitionId}`;
+      await tx`update fixtures set status = 'decided', outcome = null, joint_winners_at = now() where id = ${id}`;
+      const [row] = await tx<{ joint_winners_at: Date | null }[]>`select joint_winners_at from public_fixtures_v where id = ${id}`;
+      expect(row?.joint_winners_at, "the public view selects the column").toBeInstanceOf(Date);
+      checked++;
+    });
+    expect(checked, "anti-vacuity: five assertions ran").toBe(5);
+  }, 120_000);
+});
