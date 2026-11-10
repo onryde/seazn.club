@@ -50,7 +50,7 @@ import { loadLotsDraws, persistLotsDraws, pinStageTableRules, tableRulesOf, type
 import { swissAbsentRounds } from "./swiss-absent-rounds";
 import { attachFeedRefs, engineRoundOf, laneDepthOf } from "./bracket-rounds";
 import { bracketRosterOf, drawSeedsOf } from "./bracket-roster";
-import { knockoutDrawOrder } from "@/server/usecases/stages/generators";
+import { rootBracketOrder } from "./knockout-draw";
 
 type Tx = postgres.TransactionSql;
 
@@ -947,14 +947,26 @@ export interface CompleteResult {
  *
  *  `seeds` are the DRAW seeds (position in that order, 1-based) - never a registration seed the draw did not use: a fed
  *  stage's registration seeds are unrelated to its qualification order, and X-SP-4 reads a stepladder rung from them. */
-/** The field the stage's newest seed-proposal confirm drew, in seed order (`seed_confirmed.entrants`, stages/seed-proposal.ts),
- *  or null: no confirm (a root stage, or an `on_complete` one, whose draw is `config.qualified`), or a row written before PR B. */
+/** The field the stage's newest seed-proposal confirm drew, in seed order, or null: no confirm (a root stage, or an
+ *  `on_complete` one, whose draw is `config.qualified`).
+ *
+ *  Authority: `seed_confirmed.payload.entrants` (stages/seed-proposal.ts) - the FINAL slots, i.e. the computed slate with the
+ *  organiser's edits and tie picks applied, which the request carried and no row stores. A confirm written before PR B has no
+ *  `entrants`; its `proposal_id` still names the proposal row, whose persisted `computed.qualifiers` (rank = seed) is the slate
+ *  before edits - the best lossless record there is (an edited slot reads as the computed entrant, not the edit). */
 async function confirmedDraw(tx: Tx, divisionId: string, stageId: string): Promise<string[] | null> {
-  const [row] = await tx<{ entrants: unknown }[]>`
-    select payload->'entrants' as entrants from division_events
+  const [row] = await tx<{ entrants: unknown; proposal_id: string | null }[]>`
+    select payload->'entrants' as entrants, payload->>'proposal_id' as proposal_id from division_events
      where division_id = ${divisionId} and type = 'seed_confirmed' and payload->>'stage_id' = ${stageId}
      order by seq desc limit 1`;
-  return Array.isArray(row?.entrants) ? (row!.entrants as string[]) : null;
+  if (row === undefined) return null;
+  if (Array.isArray(row.entrants)) return row.entrants as string[];
+  if (row.proposal_id === null) return null;
+  const [proposal] = await tx<{ qualifiers: unknown }[]>`
+    select computed->'qualifiers' as qualifiers from stage_seed_proposals where id = ${row.proposal_id} and stage_id = ${stageId}`;
+  if (!Array.isArray(proposal?.qualifiers)) return null;
+  const qs = proposal!.qualifiers as { rank: number; entrantId: string }[];
+  return [...new Map([...qs].sort((x, y) => x.rank - y.rank).map((q) => [q.entrantId, q.rank] as const)).keys()];
 }
 
 async function bracketRosterAndSeeds(tx: Tx, inputs: StageInputs, stageId: string): Promise<{ entrants: string[]; seeds: Map<string, number> }> {
@@ -977,7 +989,7 @@ async function bracketRosterAndSeeds(tx: Tx, inputs: StageInputs, stageId: strin
     const rows = await tx<{ id: string; seed: number | null }[]>`
       select id, seed from entrants where id in ${tx(seated)} order by seed nulls last, created_at, id`;
     const active = rows.map((r) => ({ id: r.id, seed: r.seed, swiss_first_round: null }));
-    drawn = knockoutDrawOrder(stageId, active, (inputs.stage.config ?? {}) as Record<string, unknown>).map((e) => e.id);
+    drawn = rootBracketOrder(inputs.kind, stageId, active, (inputs.stage.config ?? {}) as Record<string, unknown>);
   }
   const entrants = bracketRosterOf({ drawn, seated, waiting });
   return { entrants, seeds: drawSeedsOf(entrants) };
