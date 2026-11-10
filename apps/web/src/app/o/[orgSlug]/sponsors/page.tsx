@@ -93,14 +93,22 @@ export default async function SponsorsHubPage({
     // Two more for the Add deal sheet (Task 16 fix round 1): WHERE tiers are placed and online selling is on (the server gates both per
     // scope, so an Event Pass lifts its own competition and not the whole organisation: `tiers`, `monetize`), and which competitions' packages are finished
     // (a package for one is not sold: the create refuses it, 409 competition_finished).
-    const [sponsorRows, deals, packages, tiers, monetize, chargesEnabled, competitions, finishedCompetitionIds] = await Promise.all([
+    //
+    // Two waves, never one `Promise.all` of eight: the pool is `max: 5` (lib/db.ts `connectionOptions`), `listSponsorRows`,
+    // `listDeals` and `listSponsorPackages` each pin a connection for a whole transaction, and a sixth read just queues behind them -
+    // eight at once made every load of this tab hold the whole pool and queue the other three (batch J perf carry). The first wave is
+    // the five that read the org's own rows; the second the plan questions and the finished-competition desk reads, which only the
+    // Add deal sheet's affordances need.
+    const [sponsorRows, deals, packages, competitions, chargesEnabled] = await Promise.all([
       listSponsorRows(active.id),
       listDeals(page.auth),
       listSponsorPackages(page.auth),
+      orgCompetitions(active.id),
+      orgChargesEnabled(active.id),
+    ]);
+    const [tiers, monetize, finishedCompetitionIds] = await Promise.all([
       featureScopes(active.id, "sponsors.tiers"),
       featureScopes(active.id, "sponsors.monetize"),
-      orgChargesEnabled(active.id),
-      orgCompetitions(active.id),
       finishedPackageCompetitions(active.id),
     ]);
     // Reachable ANYWHERE (an affordance, as before): the plan places tiers / sells online invoices on some scope.

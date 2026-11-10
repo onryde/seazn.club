@@ -718,6 +718,70 @@ describe("the Sponsors tab loads what the sponsor and deal screens read (sponsor
   });
 });
 
+// Batch J, the perf carry: PR 2 grew the Sponsors tab's one `Promise.all` from three reads to eight, and the connection pool holds five
+// (`connectionOptions`, lib/db.ts). Three of the reads pin a connection for a whole transaction, so a sixth just queues. The bound is
+// the pool's own declared size, read from the module that declares it - never a 5 typed here - and what is counted is reads IN FLIGHT
+// at once: each mocked read stays open for one macrotask, so every read a `Promise.all` starts together is open together.
+describe("no tab asks for more reads at once than the connection pool holds (batch J perf carry)", () => {
+  it("each tab's peak of reads in flight is within the pool, with the reads counted and the Sponsors tab shown to overlap (anti-vacuity)", async () => {
+    const { connectionOptions } = await vi.importActual<typeof import("@/lib/db")>("@/lib/db");
+    const POOL = connectionOptions("postgres://u@localhost/x", {}).max;
+    expect(POOL, "the pool's declared size").toBeGreaterThan(0);
+
+    const flight = { now: 0, peak: 0, started: 0 };
+    /** A read that stays open for one macrotask, so reads started together are open together. */
+    async function open<T>(value: () => T): Promise<T> {
+      flight.started++;
+      flight.now++;
+      flight.peak = Math.max(flight.peak, flight.now);
+      try {
+        await new Promise<void>((done) => setTimeout(done, 0));
+        return value();
+      } finally {
+        flight.now--;
+      }
+    }
+    h.listSponsorRows.mockImplementation(() => open(() => []));
+    h.listDeals.mockImplementation(() => open(() => []));
+    h.listSponsorPackages.mockImplementation(() => open(() => []));
+    h.finishedPackageCompetitions.mockImplementation(() => open(() => []));
+    // `featureScopes` stands alone here: its default (the file's beforeEach) calls `hasFeatureOnAnyPass`, which would count one read twice.
+    h.featureScopes.mockImplementation(() => open(() => ({ orgWide: true, competitionIds: [] })));
+    h.hasFeatureOnAnyPass.mockImplementation(() => open(() => true));
+    h.sql.mockImplementation((strings: TemplateStringsArray) =>
+      open(() => (strings.join("?").includes("stripe_charges_enabled") ? [{ stripe_account_id: "acct_1", stripe_charges_enabled: true }] : [])),
+    );
+    h.loadOnStreamScope.mockImplementation(() => open(() => ({ settings: null, ownRow: false, sports: [] })));
+    h.sponsorOverview.mockImplementation(() => open(() => []));
+    h.listReportLinks.mockImplementation(() => open(() => []));
+    h.reportLinkDefaults.mockImplementation(() => open(() => ({ from: "2026-01-01", to: "2026-12-31", competitionId: null })));
+
+    const peaks: Record<string, { peak: number; started: number }> = {};
+    for (const tab of SPONSORS_TABS) {
+      flight.now = 0;
+      flight.peak = 0;
+      flight.started = 0;
+      const html = await render(tab, undefined, undefined, { sponsor: "s1" });
+      expect(panels(html), `?tab=${tab}: the tab really rendered, so its reads completed`).toEqual([tab]);
+      expect(flight.now, `?tab=${tab}: every read has finished`).toBe(0);
+      peaks[tab] = { peak: flight.peak, started: flight.started };
+    }
+    console.info(`reads in flight (pool ${POOL}): ${SPONSORS_TABS.map((t) => `${t} peak ${peaks[t]!.peak} of ${peaks[t]!.started}`).join(", ")}`);
+
+    let checked = 0;
+    for (const tab of SPONSORS_TABS) {
+      expect(peaks[tab]!.started, `?tab=${tab}: reads were counted`).toBeGreaterThan(0);
+      expect(peaks[tab]!.peak, `?tab=${tab}: reads in flight at once, against a pool of ${POOL}`).toBeLessThanOrEqual(POOL);
+      checked++;
+    }
+    expect(checked).toBe(SPONSORS_TABS.length);
+    // The Sponsors tab is the heavy one: it reads MORE than the pool holds (so the bound means something - a tab with fewer reads than
+    // the pool could never break it), and a counter that never saw two open at once was not counting.
+    expect(peaks.sponsors!.started, "the Sponsors tab starts more reads than the pool holds").toBeGreaterThan(POOL);
+    expect(peaks.sponsors!.peak, "and the counter saw them overlap").toBeGreaterThan(1);
+  });
+});
+
 describe("?sponsor= and ?deal= on the Sponsors tab: this org's, else the list (Task 13)", () => {
   const sel = (html: string) => ({
     sponsor: attr(html, "org-sponsors", "data-hub-sponsor"),
