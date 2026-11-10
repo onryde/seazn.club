@@ -396,6 +396,32 @@ describe("Deals: this sponsor's deals, the current ones then the past ones, newe
   });
 });
 
+describe("a deal for a competition the page does not hold says so in words, never a bare ellipsis", () => {
+  it("'package · This package's competition' - and a competition the page holds keeps its own name (the pair); the fallback is translated", () => {
+    const rows = [
+      deal({ id: "gone", package_name: "Cup Partner", competition_id: "c-removed" }),
+      deal({ id: "known", package_name: "Cup Partner", competition_id: "c-season" }),
+    ];
+    const markup = bodyHtml({ deals: rows });
+    const whatOf = (id: string) => {
+      const d = dealsIn(markup).find((x) => attrOf(x.open, "data-deal-id") === id)!;
+      return textOfMarkup(findOne(d.outer, "sponsor-sheet-deal-what").outer);
+    };
+    expect(whatOf("gone"), "an unknown competition").toBe(`Cup Partner · ${msg("sponsors.dealSheet.scopeUnknown")}`);
+    expect(whatOf("gone"), "never the bare glyph").not.toContain("…");
+    expect(whatOf("known")).toBe("Cup Partner · Season 2026/27");
+    // The key exists, in words of its own, in every other locale: a locale cannot be left on English.
+    let checked = 0;
+    for (const [locale, dict] of [["es", uiEs], ["fr", uiFr], ["nl", uiNl]] as const) {
+      const words = (dict as unknown as Record<string, string>)["sponsors.dealSheet.scopeUnknown"];
+      expect(words, `${locale} has the key`).toBeTruthy();
+      expect(words, `${locale} is translated`).not.toBe(msg("sponsors.dealSheet.scopeUnknown"));
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+});
+
 describe("the buttons ARE allowedActions (the engine's answer), never a client copy - and 'Open deal' is always there (S4)", () => {
   const WORDS: Record<string, string> = {
     send_invoice: "Send invoice", resend_invoice: "Resend invoice", mark_paid: "Mark as paid", approve: "Approve", end_now: "End now",

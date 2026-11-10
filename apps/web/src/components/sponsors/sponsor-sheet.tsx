@@ -172,7 +172,7 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
   const { current, past } = sponsorDealGroups(deals, sponsor.id);
   const day = (iso: string | null) => fmtPublicDate(locale, tz, iso, { day: "numeric", month: "short" });
   const scopeName = (competitionId: string | null) =>
-    competitionId ? (competitions.find((c) => c.id === competitionId)?.name ?? "…") : msg("sponsors.scopeAll");
+    competitionId ? (competitions.find((c) => c.id === competitionId)?.name ?? msg("sponsors.dealSheet.scopeUnknown")) : msg("sponsors.scopeAll");
 
   // D9 / F28: a LIVE deal owns the sponsor's tier, competition and stream, so they are shown as the deal's, read-only, with the
   // reason. A deal still waiting to go live changes none of them yet: they stay the club's to set, and the line says what the

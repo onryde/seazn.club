@@ -175,7 +175,9 @@ export function AddDealSheet({
   const canSubmit = pkg !== null && packageOpen(pkg) && placementOk && emailOk && !busy;
 
   const scopeCompetition = scope === "" ? null : (competitions.find((c) => c.id === scope) ?? null);
-  const scopeName = scope === "" ? null : (scopeCompetition?.name ?? msg("sponsors.dealSheet.scopeUnknown"));
+  // Both places the name is used (the summary's "for {scope}" and the hint's "when {name} finishes") put it INSIDE a sentence, so the
+  // fallback for a competition the page does not hold is the lower-case form.
+  const scopeName = scope === "" ? null : (scopeCompetition?.name ?? msg("sponsors.dealSheet.scopeUnknownInline"));
   const label = primaryLabel(method, rule, otherLive);
   const labelKey: MessageKey =
     label === "send_invoice" ? "sponsors.deal.action.sendInvoice" : label === "save_and_go_live" ? "sponsors.dealSheet.primary.saveAndGoLive" : "sponsors.dealSheet.primary.saveDeal";

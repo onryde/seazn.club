@@ -514,6 +514,24 @@ describe("Ends on: the whole organisation only", () => {
     expect(textIn(island, "add-deal-runs-hint"), "no end date known").toBe(msg("sponsors.dealSheet.scopeRunsNoDate", { name: "Winter League 2026/27" }));
   });
 
+  it("a package for a competition the page does not hold reads its fallback in lower case INSIDE a sentence (the hint and the summary), never capitalised mid-sentence", () => {
+    const GHOST = pkg({ id: "p-ghost", name: "Ghost Cup", tier: "partner", competition_id: "gone" });
+    const { island } = mount({ packages: [GHOST] });
+    expect(checkedOf(island, "add-deal-package-"), "premise: the only package is chosen").toEqual(["p-ghost"]);
+    expect(has(island, "add-deal-runs-hint"), "premise: a package for a competition fixes the scope, so the hint is drawn").toBe(true);
+    const inline = msg("sponsors.dealSheet.scopeUnknownInline");
+    const capitalised = msg("sponsors.dealSheet.scopeUnknown");
+    expect(inline, "premise: the two forms differ").not.toBe(capitalised);
+    expect(textIn(island, "add-deal-runs-hint")).toBe(msg("sponsors.dealSheet.scopeRunsNoDate", { name: inline }));
+    // The summary names the scope in the middle of its sentence too ("... for {scope} ...").
+    expect(summaryOf(island), "the summary names it in lower case").toContain(inline);
+    expect(summaryOf(island), "and never in the capitalised form").not.toContain(capitalised);
+    // The pair: a competition the page DOES hold keeps its own name, exactly as written.
+    const { island: known } = mount({ packages: [CUP] });
+    expect(textIn(known, "add-deal-runs-hint")).toBe(msg("sponsors.dealSheet.scopeRuns", { name: "Season 2026/27", date: "31 Aug 2027" }));
+    expect(summaryOf(known)).toContain("Season 2026/27");
+  });
+
   it("a date typed for the whole organisation is NOT sent once a competition is picked (what is shown is what is sent)", async () => {
     const { island, p } = mount();
     typeInto(island, "add-deal-ends-on", "2027-03-31");
