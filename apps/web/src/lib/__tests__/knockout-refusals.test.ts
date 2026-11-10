@@ -48,6 +48,12 @@ const PLAN_CODES = [
   // T16 (SP-UI, X-SP-6, ruling 269): a stepladder or page playoff with no table to seed from — one code per kind (D13).
   "STEPLADDER_NEEDS_TABLE_SOURCE",
   "PAGE_PLAYOFF_NEEDS_TABLE_SOURCE",
+  // B5a T11 (X-CH-3): a reinstated finalist would re-open a vacant title whose stage already seeded another.
+  "VACANT_TITLE_ALREADY_SEEDED",
+  // B5a T12 (X-CH-4, X-CH-6): "Declare joint winners" and its Undo.
+  "JOINT_WINNERS_NOT_A_FINAL",
+  "JOINT_WINNERS_FINAL_DECIDED",
+  "JOINT_WINNERS_NOT_DECLARED",
 ] as const;
 
 const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;

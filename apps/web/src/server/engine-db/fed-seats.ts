@@ -804,15 +804,7 @@ export async function reviveVacantFinal(
   const now: "walkover" | "scheduled" = doubleWalkover && f.other_departed ? "walkover" : "scheduled";
   if (!doubleWalkover && f.other_departed) return null; // the winner is out too: nothing to re-open (a departed winner)
   // Another stage's draw was filled from this one's ranks: they are not ours to change.
-  if (f.stage_status === "complete") {
-    const [seeded] = await tx`
-      select 1 from stages n join stages s on s.division_id = n.division_id and n.seq > s.seq
-       where s.id = ${f.stage_id}
-         and (n.config ? 'qualified'
-              or exists (select 1 from stage_seed_proposals p where p.stage_id = n.id and p.status = 'confirmed'))
-       limit 1`;
-    if (seeded) throw knockoutRefusal("VACANT_TITLE_ALREADY_SEEDED", { stage_id: f.stage_id });
-  }
+  if (f.stage_status === "complete") await assertStageNotSeeded(tx, f.stage_id);
   if (now === "walkover") {
     await tx`
       update fixtures set outcome = ${tx.json({ kind: "award", winner: entrantId, loser: other, reason: "withdrew" } as never)}
@@ -827,10 +819,29 @@ export async function reviveVacantFinal(
       const { refreshCompletedBracketPlacementTx } = await import("./competition");
       await refreshCompletedBracketPlacementTx(tx, f.stage_id);
     } else {
-      await tx`delete from standings_snapshots where stage_id = ${f.stage_id} and pool_id is null`;
-      await tx`update stages set status = 'active' where id = ${f.stage_id}`;
-      await tx`update divisions set status = 'active' where id = ${f.division_id} and status = 'completed'`;
+      await reopenCompletedStage(tx, f.stage_id, f.division_id);
     }
   }
   return { fixtureId: f.id, now };
+}
+
+/** B5a T11/T12: refuse (409 VACANT_TITLE_ALREADY_SEEDED) when a later stage of the division was filled from this stage's
+ *  ranks - a confirmed seed proposal on it, or its stored `config.qualified` draw. The ranks are not this stage's to change. */
+export async function assertStageNotSeeded(tx: Tx, stageId: string): Promise<void> {
+  const [seeded] = await tx`
+    select 1 from stages n join stages s on s.division_id = n.division_id and n.seq > s.seq
+     where s.id = ${stageId}
+       and (n.config ? 'qualified'
+            or exists (select 1 from stage_seed_proposals p where p.stage_id = n.id and p.status = 'confirmed'))
+     limit 1`;
+  if (seeded) throw knockoutRefusal("VACANT_TITLE_ALREADY_SEEDED", { stage_id: stageId });
+}
+
+/** B5a T11/T12: a completed stage whose final is open again goes back to `active`: its pool-null placement snapshot is
+ *  deleted (a stale ranking never stands for an open final) and a division that completed on it is active again. The
+ *  stage's `stage_completed` ledger row stays - it is the fact of that completion. */
+export async function reopenCompletedStage(tx: Tx, stageId: string, divisionId: string): Promise<void> {
+  await tx`delete from standings_snapshots where stage_id = ${stageId} and pool_id is null`;
+  await tx`update stages set status = 'active' where id = ${stageId} and status = 'complete'`;
+  await tx`update divisions set status = 'active' where id = ${divisionId} and status = 'completed'`;
 }

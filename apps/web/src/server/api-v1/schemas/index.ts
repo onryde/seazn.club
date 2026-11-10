@@ -97,6 +97,7 @@ export {
   ArbiterJoinOut, ArbiterLeaveOut, ExternalPlayResyncOut, VideoOverrideInput, VideoOverrideOut, ExternalPlayLobbyOut,
   ResolveExternalPlay, ResolveExternalPlayOut, CloseExternalPlayFlags, CloseExternalPlayFlagsOut, RoomAct,
   RoomCameraFault, RoomCameraReport, RoomSeatClaim, RoomCameraAnswer, RoomActOut, FixtureStream,
+  JointWinnersResult, JointWinnersUndoResult,
 } from "./fixtures.ts";
 export {
   StreamMode, StreamSessionState, StreamFailReason, StreamEndReason, StreamTargetKind, CreateStreamSession,

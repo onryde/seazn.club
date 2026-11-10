@@ -109,9 +109,11 @@ const HAS_DB = !!process.env.DATABASE_URL;
 // ── Frozen pre-T4 bodies (e5848d2f3). The differential oracle; never call ──
 // ── these from product code.                                              ──
 
-const normalizeFixtureBefore = <T extends { scheduled_at: unknown }>(f: T): T => ({
+const normalizeFixtureBefore = <T extends { scheduled_at: unknown; joint_winners_at?: unknown }>(f: T): T => ({
   ...f,
   scheduled_at: isoDateTime(f.scheduled_at),
+  // W4 B5a T12 (V499): the one additive field this oracle follows - a timestamptz read as an ISO string, null when unruled.
+  ...("joint_winners_at" in f ? { joint_winners_at: f.joint_winners_at == null ? null : isoDateTime(f.joint_winners_at) } : {}),
 });
 const normalizeStandingsBefore = (s: PublicStandings): PublicStandings => ({
   ...s,
@@ -148,7 +150,7 @@ async function readPublicDivisionDetailBefore(division: PublicDivision) {
            home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
            scheduled_at, venue, court_label,
            status, outcome, summary, last_seq,
-           lane, is_final, third_place, conditional,
+           lane, is_final, third_place, conditional, joint_winners_at,
            (select x.ext_key from fixtures x where x.id = public_fixtures_v.id) as ext_key,
            (select x.winner_to_fixture from fixtures x where x.id = public_fixtures_v.id) as winner_to_fixture,
            (select x.winner_to_slot    from fixtures x where x.id = public_fixtures_v.id) as winner_to_slot,
