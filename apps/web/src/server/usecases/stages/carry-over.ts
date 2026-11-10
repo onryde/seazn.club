@@ -137,10 +137,11 @@ export async function loadBracketFixtures(tx: Tx, stageId: string): Promise<Brac
       winner_to_slot: number | null;
       loser_to_fixture: string | null;
       loser_to_slot: number | null;
+      joint_winners_at: Date | string | null;
     }[]
   >`
     select f.id, f.round_no, f.status, f.home_entrant_id, f.away_entrant_id, f.outcome, f.ext_key,
-           s.kind as stage_kind, f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot
+           s.kind as stage_kind, f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot, f.joint_winners_at
     from fixtures f join stages s on s.id = f.stage_id
     where f.stage_id = ${stageId}
     order by f.round_no, f.seq_in_round`;
@@ -159,12 +160,16 @@ export async function loadBracketFixtures(tx: Tx, stageId: string): Promise<Brac
     });
     const { bracket, thirdPlace } = parseExtKey(f.ext_key);
     const { winner, loser, walkedOver } = bracketWinnerLoser(f.outcome, f.home_entrant_id, f.away_entrant_id);
+    // W4 T12 (X-CH-4; review I-5): a final ruled joint reads as the engine's `jointWinners` row - the same mapping
+    // `toBracketFixture` (engine-db/competition.ts) makes. The engine asks a joint row to be a final, which only it can be.
+    const joint = f.joint_winners_at !== null;
     return {
       id: f.id,
       // C5/C9: the ENGINE's round - 0-based per lane. A stored `roundLosers.round` is translated at the
       // `resolveProgression` boundary (`resolveStoredProgression`), so the stored take rule keeps its meaning.
       round: engineRoundOf(f.round_no, bracket, laneDepth),
-      status: toBracketFixtureStatus(f.status),
+      status: joint ? "decided" : toBracketFixtureStatus(f.status),
+      ...(joint ? { isFinal: true, jointWinners: true } : {}),
       ...(bracket !== undefined ? { bracket } : {}),
       ...(thirdPlace ? { thirdPlace: true } : {}),
       ...(f.home_entrant_id !== null ? { home: f.home_entrant_id } : {}),

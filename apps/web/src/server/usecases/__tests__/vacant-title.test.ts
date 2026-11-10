@@ -218,7 +218,7 @@ describe.skipIf(!HAS_DB)("W4 B5a T11: both finalists out leaves the title vacant
   it("X-CH-3 the console's recorded double walkover on a final is still refused (X-DW-3 holds for a recorded one)", async () => {
     const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 2 });
     const final = await finalOf(s.stageId);
-    await expect(post(s.auth, final.id, "core.forfeit", { by: "both", reason: "walkover" })).rejects.toBeDefined();
+    await expect(post(s.auth, final.id, "core.forfeit", { by: "both", reason: "walkover" })).rejects.toMatchObject({ code: "DOUBLE_WALKOVER_NO_NEXT_MATCH" });
     expect((await fixtureRow(final.id)).status).toBe("scheduled");
   });
 
@@ -238,5 +238,32 @@ describe.skipIf(!HAS_DB)("W4 B5a T11: both finalists out leaves the title vacant
     const [still] = await sql<{ status: string }[]>`select status from entrants where id = ${a}`;
     expect(still!.status, "the refusal rolled the Reinstate back").toBe("withdrawn");
     expect((await fixtureRow(final.id)).outcome).toEqual({ kind: "double_walkover" });
+  });
+
+  it("I-2 once the final is vacant, voiding a semi-final works again: the seat is released and the final is open, not vacant (badminton)", async () => {
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 4 });
+    const semis = (await rowsOf(s.stageId)).filter((r) => r.home_entrant_id && r.away_entrant_id);
+    expect(semis, "rig: two seated semis").toHaveLength(2);
+    for (const sf of semis) await playBadminton(s.auth, sf.id, true);
+    const final = await finalOf(s.stageId);
+    const [a, b] = [final.home_entrant_id!, final.away_entrant_id!];
+    await bothOut(s, a, b);
+    expect((await fixtureRow(final.id)).outcome, "premise: the title is vacant").toEqual({ kind: "double_walkover" });
+    // Take back the second game of the semi that seated `a`: the semi is undecided again.
+    const feeder = semis.find((sf) => sf.winner_to_fixture === final.id && (sf.winner_to_slot === 1 ? final.home_entrant_id : final.away_entrant_id) === a)!;
+    const live = await sql<{ id: string }[]>`
+      select e.id from score_events e where e.fixture_id = ${feeder.id} and e.type = 'badminton.game.summary'
+        and not exists (select 1 from score_events v where v.voids_event_id = e.id) order by e.seq desc`;
+    await post(s.auth, feeder.id, "core.void", { event_id: live[0]!.id });
+    const after = await fixtureRow(final.id);
+    expect([after.status, after.outcome], "the final is open again, not vacant").toEqual(["scheduled", null]);
+    expect(feeder.winner_to_slot === 1 ? after.home_entrant_id : after.away_entrant_id, "the voided semi's seat is released").toBeNull();
+    expect(feeder.winner_to_slot === 1 ? after.away_entrant_id : after.home_entrant_id, "the other finalist keeps its seat").toBe(b);
+    // The semi can be replayed to the other result and the final takes the new finalist.
+    await post(s.auth, feeder.id, "badminton.game.summary", { home: 10, away: 21 });
+    await post(s.auth, feeder.id, "badminton.game.summary", { home: 10, away: 21 });
+    expect((await fixtureRow(feeder.id)).status, "premise: the replayed semi decided (away wins 2-1)").toBe("decided");
+    const replayed = await fixtureRow(final.id);
+    expect(feeder.winner_to_slot === 1 ? replayed.home_entrant_id : replayed.away_entrant_id, "the replayed semi seats its new winner").not.toBeNull();
   });
 });
