@@ -2,6 +2,7 @@
 // money and to the public pages, and the "this sponsor already has one of these" check behind the Add deal sheet's duplicate
 // confirm. They lived in the Packages tab's transitional picker (components/sponsor-packages.tsx, which Task 18 deletes and which
 // now re-exports them): the sponsor page and the Add deal sheet need the SAME answers, so there is one home. Pure: no hooks.
+import { fmtNumber } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
 import { isLiveDeal, isOpenDeal, isUnpaid, type SponsorDeal } from "@/lib/sponsor-deals";
 
@@ -43,4 +44,15 @@ export function endConfirmBodyKey(deals: readonly SponsorDeal[], deal: SponsorDe
  *  (lib/sponsor-deals.ts allowedActions), is the separate step. A disputed payment is the dispute's, not the club's to refund. */
 export function endKeepsPayment(deal: SponsorDeal): boolean {
   return deal.payment_status === "paid" && !deal.disputed_at;
+}
+
+/** £1,500 / £120.50: whole amounts drop the pence, the way the mockup writes them. The ONE price format of the deal screens - the list
+ *  row, the Mark as paid confirm, and the Add deal sheet's package cards and summary all name the same amount the same way. */
+export function priceLabel(locale: string, cents: number, currency: string): string {
+  const whole = cents % 100 === 0;
+  try {
+    return fmtNumber(locale, cents / 100, { style: "currency", currency: currency.toUpperCase(), minimumFractionDigits: whole ? 0 : 2 });
+  } catch {
+    return `${(cents / 100).toFixed(2)} ${currency.toUpperCase()}`;
+  }
 }

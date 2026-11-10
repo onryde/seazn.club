@@ -34,12 +34,15 @@ const confirmMock = vi.hoisted(() => vi.fn<(opts?: unknown) => Promise<boolean>>
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMock }));
 
 import { OrgSponsors, SponsorForm, type SponsorItem, type SponsorsHubData } from "@/components/org-sponsors";
+import { AddDealSheet, type CreateDealBody } from "@/components/sponsors/add-deal-sheet";
 import { canShowAgain, SponsorList, type SponsorListProps } from "@/components/sponsors/sponsor-list";
 import { SponsorRowMore } from "@/components/sponsors/sponsor-row-more";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { expandSponsorTree } from "./_sponsor-tree";
 import { attrOf, classTokens, findAll, findOne, textOfMarkup } from "./_markup";
+import { ApiV1Error } from "@/lib/client-v1";
 import { SPONSOR_TIERS } from "@/lib/sponsor-tiers";
+import type { SponsorPackageRow } from "@/server/usecases/sponsors";
 import type { SponsorDeal } from "@/lib/sponsor-deals";
 import { t } from "@/lib/i18n-runtime";
 import { LOCALES, type Dict } from "@/lib/i18n-constants";
@@ -75,7 +78,7 @@ const deal = (over: Partial<SponsorDeal>): SponsorDeal => ({ ...DEAL, ...over })
 
 const sponsor = (over: Partial<SponsorItem> & { id: string; name: string }): SponsorItem => ({
   competition_id: null, url: null, logo_path: null, tier: "partner", display_order: 0, status: "active", click_count: 0,
-  on_stream: false, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false, ...over,
+  on_stream: false, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false, last_billing_email: null, ...over,
 });
 
 /** The mockup's eight rows (screen 1), in the mockup's group order. `chip` / `sub` / `action` are the words in the picture. */
@@ -152,7 +155,7 @@ function listProps(sponsors: SponsorItem[], over: Partial<SponsorListProps> = {}
   return {
     sponsors, hasTiers: true, canEdit: true, busy: false, orgSlug: SLUG, tz: "UTC", competitions: COMPS, editingId: null,
     renderEditor: () => null, moreOpenId: null, onToggleMore: noop, onEdit: noop, onMove: noop, onRemove: noop,
-    onAction: noop, ...over,
+    onAction: noop, onAddDeal: noop, ...over,
   };
 }
 const listHtml = (sponsors: SponsorItem[], over: Partial<SponsorListProps> = {}) =>
@@ -212,14 +215,18 @@ describe("the eight mockup rows: each chip, sub-line and ONE next action (mockup
     expect(attrOf(action.open, "data-action")).toBe("open_deal");
   });
 
-  it("Add deal and Open deal navigate (links to the sponsor's page, and to the deal); the three writes are buttons", () => {
+  it("Open deal navigates (a link to the deal); Add deal and the three writes are buttons (Add deal opens the sheet)", () => {
     const markup = listHtml(ROWS);
-    const add = findOne(rowOf(markup, "s7"), "sponsor-row-action");
-    expect(add.open.startsWith("<a "), "a link").toBe(true);
-    expect(attrOf(add.open, "href")).toBe(`/o/${SLUG}/sponsors?tab=sponsors&sponsor=s7`);
     const open = findOne(rowOf(markup, "s6"), "sponsor-row-action");
     expect(open.open.startsWith("<a "), "a link").toBe(true);
     expect(attrOf(open.open, "href")).toBe(`/o/${SLUG}/sponsors?tab=sponsors&sponsor=s6&deal=d6`);
+    // Both rows whose action is Add deal (a sponsor with no deal, and one whose deal ended).
+    for (const id of ["s7", "s8"]) {
+      const add = findOne(rowOf(markup, id), "sponsor-row-action");
+      expect(attrOf(add.open, "data-action"), id).toBe("add_deal");
+      expect(add.open.startsWith("<button "), `${id}: Add deal is a button`).toBe(true);
+      expect(attrOf(add.open, "href"), `${id}: no href to follow`).toBeUndefined();
+    }
     for (const id of ["s2", "s3", "s4"]) {
       const button = findOne(rowOf(markup, id), "sponsor-row-action");
       expect(button.open.startsWith("<button "), `${id}: a button`).toBe(true);
@@ -237,7 +244,7 @@ describe("the eight mockup rows: each chip, sub-line and ONE next action (mockup
 
   it("every action is disabled while a write is in flight (busy), links excepted", () => {
     const markup = listHtml(ROWS, { busy: true });
-    for (const id of ["s2", "s3", "s4"]) {
+    for (const id of ["s2", "s3", "s4", "s7", "s8"]) {
       expect(attrOf(findOne(rowOf(markup, id), "sponsor-row-action").open, "disabled"), id).toBe("");
     }
     expect(attrOf(findOne(rowOf(listHtml(ROWS, { busy: false }), "s2"), "sponsor-row-action").open, "disabled")).toBeUndefined();
@@ -677,12 +684,12 @@ const flush = async () => {
   for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0));
 };
 
-function mount(rows: SponsorItem[], opts: { canEdit?: boolean; hasTiers?: boolean } = {}) {
+function mount(rows: SponsorItem[], opts: { canEdit?: boolean; hasTiers?: boolean; hub?: SponsorsHubData } = {}) {
   const island = renderIsland(
     OrgSponsors,
     {
       orgId: ORG, initialSponsors: rows, competitions: COMPS, hasTiers: opts.hasTiers ?? true, billingHref: "/billing",
-      canEdit: opts.canEdit ?? true, hub: HUB,
+      canEdit: opts.canEdit ?? true, hub: opts.hub ?? HUB,
     },
     expandSponsorTree,
   );
@@ -957,5 +964,106 @@ describe("the new copy exists in all four locales, with its placeholders intact"
 
   it("the hint is the brief's sentence (English)", () => {
     expect(uiEn["sponsors.form.hint"]).toBe("Name, logo and link. Add a deal afterwards to set their tier and where they show.");
+  });
+});
+
+
+// --- Add deal: the row's button opens the sheet, and the sheet makes the deal through the v1 route (Task 16) ---------------------------
+
+describe("Add deal on a row opens the Add deal sheet for that sponsor; the sheet's create is the v1 POST, then a re-read", () => {
+  const PACKAGE: SponsorPackageRow = {
+    id: "p-gold", competition_id: null, name: "Gold Season", description: null, price_cents: 60_000, currency: "gbp", tier: "gold",
+    active: true, created_at: "2026-10-01T09:00:00.000Z", includes_on_stream: true, used_by: 0,
+  };
+  const HUB_WITH_PACKAGES: SponsorsHubData = { ...HUB, packages: [PACKAGE], hasMonetize: true, chargesEnabled: false };
+  const sheetsIn = (m: ReturnType<typeof mount>) => m.island.tree().filter((e) => e.type === AddDealSheet);
+  const BODY: CreateDealBody = { package_id: "p-gold", competition_id: null, payment_method: "offline", go_live: "on_payment", end_current: false };
+
+  it("no sheet until the button is tapped; then ONE, for that sponsor, handed the hub's packages and plan flags (every hub field it reads, counted)", () => {
+    const m = mount(ROWS, { hub: HUB_WITH_PACKAGES });
+    expect(sheetsIn(m), "premise: closed to begin with").toHaveLength(0);
+    m.click("Add deal: Northbank Print");
+    const sheets = sheetsIn(m);
+    expect(sheets).toHaveLength(1);
+    const p = propsOf(sheets[0]!);
+    expect((p.sponsor as SponsorItem).id).toBe("s7");
+    expect(p.packages, "hub.packages").toBe(HUB_WITH_PACKAGES.packages);
+    expect(p.hasMonetize, "hub.hasMonetize").toBe(true);
+    expect(p.chargesEnabled, "hub.chargesEnabled - false here, so Online is locked on the sheet").toBe(false);
+    // The pairs: each flag is passed through as it is, not pinned (counted).
+    let flags = 0;
+    for (const hasMonetize of [true, false]) {
+      for (const chargesEnabled of [true, false]) {
+        const other = mount(ROWS, { hub: { ...HUB_WITH_PACKAGES, hasMonetize, chargesEnabled } });
+        other.click("Add deal: Northbank Print");
+        const q = propsOf(sheetsIn(other)[0]!);
+        expect([q.hasMonetize, q.chargesEnabled], `monetize=${hasMonetize} charges=${chargesEnabled}`).toEqual([hasMonetize, chargesEnabled]);
+        flags++;
+      }
+    }
+    expect(flags).toBe(4);
+    const noTiers = mount(ROWS, { hub: HUB_WITH_PACKAGES, hasTiers: false });
+    noTiers.click("Add deal: Northbank Print");
+    expect(propsOf(sheetsIn(noTiers)[0]!).hasTiers, "hasTiers").toBe(false);
+    expect(p.hasTiers).toBe(true);
+    expect(p.orgSlug).toBe(SLUG);
+    expect(p.deals, "the org's deals feed the 'already has one' confirm").toEqual(HUB_WITH_PACKAGES.deals);
+    expect(p.competitions).toBe(COMPS);
+    expect(POSTS(), "opening the sheet writes nothing").toEqual([]);
+    expect(calls, "and reads nothing").toEqual([]);
+    (p.onClose as () => void)();
+    expect(sheetsIn(m), "closed again").toHaveLength(0);
+  });
+
+  it("onCreate POSTs the body as given to /sponsors/{id}/deals, re-reads the list and the deals, and says what happened (offline -> 'Deal saved')", async () => {
+    answer = (url, method) => (method === "GET" ? { status: 200, body: { data: [] } } : { status: 201, body: { data: { deal: {}, checkout_url: null } } });
+    const m = mount(ROWS, { hub: HUB_WITH_PACKAGES });
+    m.click("Add deal: Northbank Print");
+    await (propsOf(sheetsIn(m)[0]!).onCreate as (b: CreateDealBody) => Promise<void>)(BODY);
+    expect(calls.filter((c) => c.method === "POST")).toEqual([{ url: `/api/v1/orgs/${ORG}/sponsors/s7/deals`, method: "POST", body: BODY }]);
+    expect(calls.filter((c) => c.method === "GET").map((c) => c.url).sort()).toEqual([`/api/v1/orgs/${ORG}/sponsor-deals`, `/api/v1/orgs/${ORG}/sponsors`]);
+    expect(m.text()).toContain("Deal saved for Northbank Print.");
+  });
+
+  it("an online deal says the invoice went out", async () => {
+    answer = (url, method) => (method === "GET" ? { status: 200, body: { data: [] } } : { status: 201, body: { data: { deal: {}, checkout_url: "https://pay.example" } } });
+    const m = mount(ROWS, { hub: HUB_WITH_PACKAGES });
+    m.click("Add deal: Northbank Print");
+    await (propsOf(sheetsIn(m)[0]!).onCreate as (b: CreateDealBody) => Promise<void>)({ ...BODY, payment_method: "online", sponsor_email: "pay@northbank.example" });
+    expect(m.text()).toContain("Invoice sent for Northbank Print.");
+    expect(m.text()).not.toContain("Deal saved");
+  });
+
+  it("a refusal rejects (the sheet shows it, choices kept), leaves the sheet open, puts nothing on the page - and still re-reads", async () => {
+    answer = (url, method) =>
+      method === "POST" ? { status: 422, body: { ok: false, error: { code: "package_retired", message: "server english" } } } : { status: 200, body: { data: ROWS } };
+    const m = mount(ROWS, { hub: HUB_WITH_PACKAGES });
+    m.click("Add deal: Northbank Print");
+    const onCreate = propsOf(sheetsIn(m)[0]!).onCreate as (b: CreateDealBody) => Promise<void>;
+    const err = await onCreate(BODY).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiV1Error);
+    expect((err as ApiV1Error).code).toBe("package_retired");
+    expect(sheetsIn(m), "still open").toHaveLength(1);
+    expect(m.text()).not.toContain("server english");
+    expect(m.text()).not.toContain(msg("sponsors.error.packageRetired"));
+    expect(calls.filter((c) => c.method === "GET"), "a refusal can mean a deal moved: re-read both").toHaveLength(2);
+  });
+
+  it("a Stripe refusal RESOLVES (the deal may be saved, so the sheet must close) and the page says it: the draft sentence, or the 'look at the deals' one when the current deal was being ended", async () => {
+    answer = (url, method) =>
+      method === "POST" ? { status: 502, body: { ok: false, error: { code: "stripe_unavailable", message: "server english" } } } : { status: 200, body: { data: [] } };
+    let checked = 0;
+    for (const [endCurrent, key] of [[false, "sponsors.error.invoiceSavedNoLink"], [true, "sponsors.error.invoiceNotSentCheck"]] as const) {
+      calls.length = 0;
+      const m = mount(ROWS, { hub: HUB_WITH_PACKAGES });
+      m.click("Add deal: Northbank Print");
+      await (propsOf(sheetsIn(m)[0]!).onCreate as (b: CreateDealBody) => Promise<void>)({ ...BODY, payment_method: "online", sponsor_email: "a@b.example", end_current: endCurrent });
+      expect(m.text(), String(endCurrent)).toContain(msg(key));
+      expect(m.text()).not.toContain("server english");
+      expect(m.text(), "no success notice").not.toContain("Invoice sent for");
+      expect(calls.filter((c) => c.method === "GET"), "the saved draft shows on the re-read").toHaveLength(2);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });

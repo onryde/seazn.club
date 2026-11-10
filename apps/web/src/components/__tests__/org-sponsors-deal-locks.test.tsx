@@ -62,6 +62,7 @@ const row = (over: Partial<SponsorItem> & { id: string }): SponsorItem => ({
   deal: null,
   locked_by_deal: false,
   has_open_deal: false,
+  last_billing_email: null,
   ...over,
 });
 /** A deal as the server's list sends it (the whole `SponsorDeal`), for a row to show. Live and paid unless a test says otherwise. */

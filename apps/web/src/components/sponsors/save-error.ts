@@ -53,13 +53,23 @@ export const SAVE_ERROR_MSG: Readonly<Record<EnvelopeCode | SponsorRefusalCode, 
 };
 
 /** A write whose refusal means something else than the shared words say, for one or two codes. */
-export type SponsorWrite = "create_deal" | "resend_invoice";
+export type SponsorWrite = "create_deal" | "create_deal_ending" | "resend_invoice";
+
+/** Which create a refusal came from: the Add deal sheet asks to end the sponsor's live deal (`end_current`) in the same call or not,
+ *  and a 502 means something different in each (below). */
+export function createDealWrite(endCurrent: boolean): SponsorWrite {
+  return endCurrent ? "create_deal_ending" : "create_deal";
+}
 
 /** Per-write words, consulted before the shared map (batch F review I1, m7). */
 export const SAVE_ERROR_BY_WRITE: Readonly<Record<SponsorWrite, Partial<Record<SponsorRefusalCode, MessageKey>>>> = {
-  // The console's Send invoice. Its create never asks to end the current deal (no `end_current`), so its only Stripe call is
-  // the invoice, sent AFTER the deal is saved (createDeal, F11): a 502 there leaves a saved draft, which Resend sends.
+  // A create that does NOT end the current deal: its only Stripe call is the invoice, sent AFTER the deal is saved (createDeal,
+  // F11), so a 502 there leaves a saved draft, which Send invoice sends.
   create_deal: { stripe_unavailable: "sponsors.error.invoiceSavedNoLink" },
+  // A create that ends the current deal (`end_current`, Task 16) has a SECOND Stripe call, before anything is written: closing the
+  // live deal's pay link. A 502 is therefore either "nothing was saved" or "the deal is saved, its invoice is not sent", and the
+  // answer does not say which - so the words send the organiser to look at the sponsor's deals rather than promise either.
+  create_deal_ending: { stripe_unavailable: "sponsors.error.invoiceNotSentCheck" },
   // Resend may close the old link before Stripe fails to make the new one, so "nothing was changed" is not certain; and a
   // stored session already paid is the sponsor's payment on its way, not a hand-marked one.
   resend_invoice: {

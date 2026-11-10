@@ -18,16 +18,17 @@ import Link from "@/components/ui/console-link";
 import { ArrowDown, ArrowUp, MousePointerClick, Pencil, Trash2 } from "lucide-react";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { DealChip } from "@/components/sponsors/deal-chip";
+import { priceLabel } from "@/components/sponsors/deal-copy";
 import { SponsorRowMore } from "@/components/sponsors/sponsor-row-more";
 import { TIER_BADGE, TIER_MSG } from "@/components/sponsors/tier-labels";
 import type { SponsorItem } from "@/components/org-sponsors";
-import { fmtNumber, fmtPublicDate } from "@/lib/format";
+import { fmtPublicDate } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
 import { rowNextAction, type RowAction, type SponsorDeal } from "@/lib/sponsor-deals";
 import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
 import { dealHref, sponsorHref } from "@/lib/sponsors-hub";
 
-/** The row actions that WRITE (the other two, Add deal and Open deal, navigate). */
+/** The row actions that WRITE (the other two: Add deal opens the Add deal sheet, Open deal navigates to the deal). */
 export type DealWrite = Extract<RowAction, "resend_invoice" | "mark_paid" | "approve">;
 
 /** Can the club switch this sponsor back on by hand (spec §10.3: "After all of a sponsor's deals have ended: the club may
@@ -74,6 +75,8 @@ export interface SponsorListProps {
   onMove: (id: string, delta: -1 | 1) => void;
   onRemove: (s: SponsorItem) => void;
   onAction: (s: SponsorItem, action: DealWrite) => void;
+  /** Add deal opens the Add deal sheet for this sponsor (Task 16); it writes nothing itself. */
+  onAddDeal: (s: SponsorItem) => void;
 }
 
 const ACTION_MSG: Record<RowAction, MessageKey> = {
@@ -95,19 +98,9 @@ function hostOf(url: string): string {
   }
 }
 
-/** £1,500 / £120.50: whole amounts drop the pence, the way the mockup writes them. Exported for the Mark as paid confirm, which
- *  names the same amount the row shows. */
+/** A deal's price as its row shows it (`priceLabel`). Exported for the Mark as paid confirm, which names the same amount. */
 export function dealPrice(d: SponsorDeal, locale: string): string {
-  const whole = d.amount_cents % 100 === 0;
-  try {
-    return fmtNumber(locale, d.amount_cents / 100, {
-      style: "currency",
-      currency: d.currency.toUpperCase(),
-      minimumFractionDigits: whole ? 0 : 2,
-    });
-  } catch {
-    return `${(d.amount_cents / 100).toFixed(2)} ${d.currency.toUpperCase()}`;
-  }
+  return priceLabel(locale, d.amount_cents, d.currency);
 }
 
 /** The sub-line (mockup screen 1): `package · price · scope` for a live deal, and for every other state the third part says where
@@ -145,7 +138,7 @@ const ICON_BUTTON =
 export function SponsorList(props: SponsorListProps) {
   const {
     sponsors, hasTiers, canEdit, busy, orgSlug, tz, competitions, editingId, renderEditor, moreOpenId, onToggleMore, onEdit, onMove,
-    onRemove, onAction,
+    onRemove, onAction, onAddDeal,
   } = props;
   const msg = useMsg();
   const locale = useLocaleOrDefault();
@@ -170,9 +163,9 @@ export function SponsorList(props: SponsorListProps) {
     } as const;
     if (next === "add_deal") {
       return (
-        <Link href={sponsorHref(orgSlug, s.id)} {...common}>
+        <button type="button" disabled={busy} onClick={() => onAddDeal(s)} {...common}>
           {label}
-        </Link>
+        </button>
       );
     }
     if (next === "open_deal") {

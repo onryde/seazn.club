@@ -691,7 +691,7 @@ describe("?sponsor= and ?deal= on the Sponsors tab: this org's, else the list (T
 describe("?sponsor=<own> draws the sponsor's own page (Task 15 - F23, moved here from Task 13), and the Report link's opening dates ride with it", () => {
   const SPONSOR = {
     id: "s1", name: "Harbour Print", competition_id: null, url: "https://harbour-print.example/", logo_path: null, tier: "gold", display_order: 0,
-    status: "active", click_count: 4, on_stream: false, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false,
+    status: "active", click_count: 4, on_stream: false, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false, last_billing_email: null,
   };
   const DEAL = {
     id: "d1", sponsor_id: "s1", package_id: "p1", deal_status: "awaiting_payment", payment_status: "pending", payment_method: "offline",

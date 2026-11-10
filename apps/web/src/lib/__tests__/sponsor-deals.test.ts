@@ -141,15 +141,20 @@ describe("lib/sponsor-deals — the value sets (D2, the V495 CHECKs; the DB half
     expect([...DEAL_ACTIONS]).toEqual(SPEC_DEAL_ACTIONS);
   });
 
-  it("is client-safe: it imports only lib/sponsor-tiers (imports checked reported, 0 ⇒ fail)", () => {
+  it("is client-safe: it imports only lib/sponsor-tiers at run time; the one TYPE-only import (the summary's MessageKey) is erased (imports checked reported, 0 ⇒ fail)", () => {
     const src = readFileSync(join(import.meta.dirname, "..", "sponsor-deals.ts"), "utf8");
     expect(src.length, "read the module").toBeGreaterThan(0);
-    const specifiers = [...src.matchAll(/^\s*import\b[^;]*?from\s+["']([^"']+)["']/gm)].map((m) => m[1]!);
-    expect(specifiers.length, "imports checked").toBeGreaterThan(0);
+    const imports = [...src.matchAll(/^\s*import\b(\s+type\b)?[^;]*?from\s+["']([^"']+)["']/gm)].map((m) => ({ typeOnly: m[1] !== undefined, from: m[2]! }));
+    expect(imports.length, "imports checked").toBeGreaterThan(0);
+    const runtime = imports.filter((i) => !i.typeOnly);
+    const typeOnly = imports.filter((i) => i.typeOnly);
     // The relative one carries `.ts`: api-v1/schemas/ imports this module's value sets and tsconfig.scripts.json (nodenext, which
     // refuses an extensionless relative specifier: TS2835) reaches it through there, so `./sponsor-tiers` alone reddens the
     // in-image `turbo run typecheck`.
-    for (const s of specifiers) expect(["./sponsor-tiers.ts", "@/lib/sponsor-tiers"], s).toContain(s);
+    for (const i of runtime) expect(["./sponsor-tiers.ts", "@/lib/sponsor-tiers"], i.from).toContain(i.from);
+    // `import type` never reaches the bundle, so it cannot make this module server-only: the summary's keys are typed by the
+    // message catalogue (the i18n house rule bans dynamic `msg()` keys) and nothing else may be type-imported without a ruling here.
+    for (const i of typeOnly) expect(["./sponsor-tiers.ts", "@/lib/sponsor-tiers", "@/lib/messages"], i.from).toContain(i.from);
     expect(src).not.toMatch(/\brequire\(/);
     expect(src).not.toMatch(/\bimport\(/);
     expect(src).not.toMatch(/["']server-only["']/);

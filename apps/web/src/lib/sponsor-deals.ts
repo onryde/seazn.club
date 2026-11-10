@@ -6,6 +6,7 @@
 //
 // Each value set mirrors a named CHECK on sponsor_orders (the sponsor-deals delta);
 // server/sponsors/__tests__/deal-values-db.test.ts reads them back and compares (F31).
+import type { MessageKey } from "@/lib/messages";
 import type { SponsorTier } from "./sponsor-tiers.ts";
 
 /** D2: the lifecycle. `scheduled` = every condition of the rule is met, but the sponsor already has a live deal (§8a). */
@@ -269,6 +270,76 @@ export function dealChip(d: SponsorDeal): DealChip {
 export function primaryLabel(m: PaymentMethod, r: GoLiveRule, otherLive: boolean): "send_invoice" | "save_deal" | "save_and_go_live" {
   if (m === "online") return "send_invoice";
   return r === "immediate" && !otherLive ? "save_and_go_live" : "save_deal";
+}
+
+/** The Add deal sheet's summary, as the dictionary keys and the values that fill them (the i18n house rule bans a dynamic `msg()` key,
+ *  and this module is client-safe with no dictionary of its own): the sheet renders each part and joins them with a space. */
+export type SummaryParts = { key: MessageKey; params: Record<string, string> }[];
+
+/** What the Add deal sheet says will happen (mockup screen 3), from the choices on the sheet and nothing else:
+ *   - the head: who gets which package for which scope, and what it costs how (an online deal then says where its invoice goes);
+ *   - when they go live (spec §5.2). A deal queued behind a live one (`otherLive`, §8a) drops "straight away" - that would be false -
+ *     and says it waits for the live deal to end; the other rules keep the condition they wait on and add the wait;
+ *   - the sponsor coming off the pages in the meantime (spec §8a): a sponsor on the pages today (`currentlyShown`) whose new deal does
+ *     not go live now is hidden until it does. A LIVE deal keeps its sponsor on the pages whatever is queued behind it
+ *     (server/sponsors/deal-apply.ts, step 3), so `otherLive` says nothing is hidden. `otherLive` is the EFFECTIVE flag: false once
+ *     the organiser ends the current deal now.
+ *  `scopeName` null is the whole organisation. `amount` is the price as the sheet shows it. A complimentary deal cannot go live on
+ *  payment - the server's refusal (422 `on_payment_needs_payment`), here the same DealRuleError the lifecycle table throws. */
+export function dealSummary(i: {
+  sponsorName: string;
+  packageName: string;
+  scopeName: string | null;
+  method: PaymentMethod;
+  rule: GoLiveRule;
+  amount: string;
+  email: string | null;
+  otherLive: boolean;
+  currentlyShown: boolean;
+}): SummaryParts {
+  if (i.method === "complimentary" && i.rule === "on_payment") {
+    throw new DealRuleError("on_payment_needs_payment", "a complimentary deal has no payment to go live on");
+  }
+  const whole = i.scopeName === null;
+  const who: Record<string, string> = { name: i.sponsorName, package: i.packageName };
+  if (i.scopeName !== null) who.scope = i.scopeName;
+  const parts: SummaryParts = [];
+  if (i.method === "online") {
+    parts.push({ key: whole ? "sponsors.dealSheet.summary.head.onlineAll" : "sponsors.dealSheet.summary.head.online", params: who });
+    parts.push(
+      i.email
+        ? { key: "sponsors.dealSheet.summary.invoiceTo", params: { amount: i.amount, email: i.email } }
+        : { key: "sponsors.dealSheet.summary.invoice", params: { amount: i.amount } },
+    );
+  } else if (i.method === "offline") {
+    parts.push({ key: whole ? "sponsors.dealSheet.summary.head.offlineAll" : "sponsors.dealSheet.summary.head.offline", params: { ...who, amount: i.amount } });
+  } else {
+    parts.push({ key: whole ? "sponsors.dealSheet.summary.head.complimentaryAll" : "sponsors.dealSheet.summary.head.complimentary", params: who });
+  }
+
+  if (!(i.rule === "immediate" && i.otherLive)) {
+    const live: Record<GoLiveRule, Partial<Record<PaymentMethod, MessageKey>>> = {
+      on_payment: { online: "sponsors.dealSheet.summary.live.whenPaid", offline: "sponsors.dealSheet.summary.live.whenMarked" },
+      immediate: {
+        online: "sponsors.dealSheet.summary.live.now",
+        offline: "sponsors.dealSheet.summary.live.now",
+        complimentary: "sponsors.dealSheet.summary.live.onSave",
+      },
+      on_approval: {
+        online: "sponsors.dealSheet.summary.live.approvalPaid",
+        offline: "sponsors.dealSheet.summary.live.approvalMarked",
+        complimentary: "sponsors.dealSheet.summary.live.approvalOnly",
+      },
+    };
+    const key = live[i.rule][i.method];
+    if (key === undefined) throw new Error(`dealSummary: no go-live sentence for ${i.method}/${i.rule}`);
+    parts.push({ key, params: {} });
+  }
+  if (i.otherLive) parts.push({ key: "sponsors.dealSheet.summary.queued", params: { name: i.sponsorName } });
+  if (i.currentlyShown && !i.otherLive && i.rule !== "immediate") {
+    parts.push({ key: "sponsors.dealSheet.summary.hidden", params: { name: i.sponsorName } });
+  }
+  return parts;
 }
 
 /** One step of a deal's timeline (spec §6.5, mockup screen 5). `at` is the ISO time the step happened, or null.

@@ -104,12 +104,14 @@ describe("sponsorSaveErrorKey - the envelope's code, to the dictionary", () => {
 
   it("one code, two meanings: the console's Send invoice and Resend read their own words for stripe_unavailable and deal_paid_online; every other write reads the shared words (counted)", () => {
     // Expected values from the server's paths (server/usecases/sponsor-deals.ts):
-    //  - createDeal sends an online deal's invoice AFTER the deal is saved (F11), and the console's form never asks to end the
-    //    current deal (no `end_current`), so a create's 502 there leaves a saved draft - never "nothing was changed";
+    //  - createDeal sends an online deal's invoice AFTER the deal is saved (F11): without `end_current` a create's 502 leaves a
+    //    saved draft - never "nothing was changed"; WITH `end_current` it may instead have failed closing the live deal's pay link,
+    //    before anything was written, so its words promise neither (Task 16);
     //  - sendDealInvoice may close the old link (retire) before Stripe fails to mint a new one, so it says "not sent";
     //  - deal_paid_online on a Resend is the stored session already paid (ensureDealCheckout); on Mark as paid it is F37.
     const CASES: Array<[SponsorWrite | undefined, string, string]> = [
       ["create_deal", "stripe_unavailable", "sponsors.error.invoiceSavedNoLink"],
+      ["create_deal_ending", "stripe_unavailable", "sponsors.error.invoiceNotSentCheck"],
       ["resend_invoice", "stripe_unavailable", "sponsors.error.resendStripeUnavailable"],
       ["resend_invoice", "deal_paid_online", "sponsors.error.resendPaidOnline"],
       [undefined, "stripe_unavailable", "sponsors.error.stripeUnavailable"],
@@ -117,6 +119,7 @@ describe("sponsorSaveErrorKey - the envelope's code, to the dictionary", () => {
       // An override never leaks to another code of the same write.
       ["create_deal", "deal_changed", "sponsors.error.dealChanged"],
       ["create_deal", "package_retired", "sponsors.error.packageRetired"],
+      ["create_deal_ending", "package_retired", "sponsors.error.packageRetired"],
       ["resend_invoice", "deal_not_invoiceable", "sponsors.error.notInvoiceable"],
       ["resend_invoice", "NOT_FOUND", "sponsors.error.notFound"],
       ["create_deal", "INTERNAL", SAVE_ERROR_FALLBACK_MSG],
@@ -168,6 +171,7 @@ describe("sponsorSaveErrorKey - the envelope's code, to the dictionary", () => {
     for (const [locale, dict] of Object.entries(LOCALES)) {
       expect(dict["sponsors.error.stripeUnavailable"], `${locale}: premise, the shared sentence says it`).toMatch(NOTHING_CHANGED[locale]!);
       expect(dict["sponsors.error.invoiceSavedNoLink"], locale).not.toMatch(NOTHING_CHANGED[locale]!);
+      expect(dict["sponsors.error.invoiceNotSentCheck"], locale).not.toMatch(NOTHING_CHANGED[locale]!);
       expect(dict["sponsors.error.resendStripeUnavailable"], locale).not.toMatch(NOTHING_CHANGED[locale]!);
       checked++;
     }

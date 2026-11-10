@@ -17,9 +17,10 @@ import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { TIER_MSG } from "@/components/sponsors/tier-labels";
 import { SponsorList, dealPrice, groupTierOf, sameOrderBand, type DealWrite } from "@/components/sponsors/sponsor-list";
+import { AddDealSheet, type CreateDealBody } from "@/components/sponsors/add-deal-sheet";
 import { SponsorSheet, SponsorSheetBody, type SheetDealAction } from "@/components/sponsors/sponsor-sheet";
 import { endConfirmBodyKey, endKeepsPayment } from "@/components/sponsors/deal-copy";
-import { sponsorSaveErrorKey } from "@/components/sponsors/save-error";
+import { createDealWrite, sponsorSaveErrorKey } from "@/components/sponsors/save-error";
 import type { SponsorWrite } from "@/components/sponsors/save-error";
 import { ApiV1Error } from "@/lib/client-v1";
 import type { SponsorDeal } from "@/lib/sponsor-deals";
@@ -60,12 +61,15 @@ export interface SponsorItem {
   locked_by_deal: boolean;
   /** A deal waits to go live (draft, awaiting payment or approval, scheduled): it holds the sponsor's status (D9). */
   has_open_deal: boolean;
+  /** The billing email the Add deal sheet opens at (D22): the latest of this sponsor's deals that carries one. */
+  last_billing_email: string | null;
 }
 
 /** What the hub page reads for the Sponsors tab beyond the list (sponsor deals PR 2, Task 13). Its readers: the sponsor list
  *  (Task 14, READS `orgSlug` only - a row carries its own deal, so `deals` would be a second authority for it), the sponsor's own
  *  page (Task 15: `sponsorId` picks it, `deals` fill its Deals, `reportLinks` and `reportDefaults` are its Report link), the Add deal
- *  sheet (Task 16) and the deal page (Task 17: `dealId`, still unread until it lands). */
+ *  sheet (Task 16: `packages` are its cards, `hasMonetize` and `chargesEnabled` decide whether Online is open, `deals` feed its
+ *  "already has one of these" confirm) and the deal page (Task 17: `dealId`, still unread until it lands). */
 export interface SponsorsHubData {
   orgSlug: string;
   /** Every deal of the org, newest first (legacy pre-deals rows included: they are ended deals). */
@@ -579,6 +583,24 @@ export function OrgSponsors({
     })();
   }
 
+  /** The Add deal sheet's write: POST the deal, then re-read what it changed (the list and the deals, whatever the answer - a refusal
+   *  can mean a deal moved meanwhile). A refusal is the SHEET's to show, with its choices kept. A Stripe refusal is the exception: it
+   *  means a deal may have been saved without its invoice, so the sheet closes (a second tap would make a second deal) and the page
+   *  says it, over the re-read list. Resolving closes the sheet. */
+  async function createDeal(s: SponsorItem, body: CreateDealBody): Promise<void> {
+    setError(null);
+    setNotice(null);
+    try {
+      await v1(`/sponsors/${s.id}/deals`, { method: "POST", body: JSON.stringify(body) });
+      setNotice(msg(body.payment_method === "online" ? "sponsors.deal.notice.invoiceSent" : "sponsors.dealSheet.notice.saved", { name: s.name }));
+    } catch (err) {
+      if (!(err instanceof ApiV1Error) || err.code !== "stripe_unavailable") throw err;
+      setError(msg(sponsorSaveErrorKey(err, createDealWrite(body.end_current))));
+    } finally {
+      await Promise.all([refresh(), refreshDeals()].map((read) => read.catch(() => {})));
+    }
+  }
+
   /** A row's one write: the deal the row shows is the one acted on. `rowNextAction(null)` is Add deal, a link: no write is offered
    *  for a sponsor with no deal. */
   function dealAction(s: SponsorItem, action: DealWrite) {
@@ -627,6 +649,9 @@ export function OrgSponsors({
   // (deleted since the page loaded) is no selection: the list shows.
   const selected = hub.sponsorId === null ? undefined : sponsors.find((s) => s.id === hub.sponsorId);
   const sheetOpen = selected !== undefined;
+  // The sponsor the Add deal sheet is open for - from either the list's row or the sponsor's page. A sponsor the list no longer holds
+  // (deleted since) opens nothing.
+  const addDealSponsor = addDealFor === null ? undefined : sponsors.find((s) => s.id === addDealFor);
   // The sponsor's editor is the page's while its page is open; the list behind a side panel must not draw a second one.
   const listEditingId = selected !== undefined && editingId === selected.id ? null : editingId;
 
@@ -751,8 +776,24 @@ export function OrgSponsors({
           onMove={move}
           onRemove={remove}
           onAction={dealAction}
+          onAddDeal={(s) => setAddDealFor(s.id)}
         />
       </div>
+
+      {addDealSponsor ? (
+        <AddDealSheet
+          sponsor={addDealSponsor}
+          deals={deals}
+          packages={hub.packages}
+          competitions={competitions}
+          hasTiers={hasTiers}
+          hasMonetize={hub.hasMonetize}
+          chargesEnabled={hub.chargesEnabled}
+          orgSlug={hub.orgSlug}
+          onCreate={(body) => createDeal(addDealSponsor, body)}
+          onClose={() => setAddDealFor(null)}
+        />
+      ) : null}
     </div>
   );
 }

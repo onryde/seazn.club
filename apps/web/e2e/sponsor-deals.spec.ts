@@ -14,8 +14,10 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Locator, type Page, type Response } from "@playwright/test";
-import { apiJson, expectNoHorizontalScroll, withDb } from "./helpers";
-import { openSponsorRowTools, releaseSettingsOrg, seedMemberIdentity, seedSettingsOrg, sponsorsUrl, type SeededOrg } from "./settings-support";
+import { apiJson, expectNoHorizontalScroll, setBoolEntitlementOverrideSql, setOrgConnectSql, withDb } from "./helpers";
+import {
+  openSponsorRowTools, releaseSettingsOrg, seedCompetition, seedMemberIdentity, seedSettingsOrg, sponsorsUrl, sponsorUrl, type SeededOrg,
+} from "./settings-support";
 
 const UI: Record<string, string> = JSON.parse(
   readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
@@ -151,8 +153,15 @@ test("list: each row shows one next action and the chip its deal state names", a
   await expectRow(page, online, ui("sponsors.deal.chip.awaitingPayment"), ui("sponsors.deal.action.resendInvoice"), "an online invoice is resent, not marked paid");
   await expectRow(page, none, ui("sponsors.deal.chip.none"), ui("sponsors.deal.action.addDeal"), "a sponsor with no deal is offered one");
   expect(await expectAtMostOneActionPerRow(page), "every row was looked at").toBe(5);
-  // Add deal goes to the sponsor's own page: a link, not a write.
-  await expect(rowOf(page, none).getByTestId("sponsor-row-action"), "Add deal is a link to the sponsor's page").toHaveAttribute("href", new RegExp(`sponsor=${none}`));
+  // Add deal opens the Add deal sheet (Task 16): a button, not a link, and it writes nothing by itself. The first tap on a page can land
+  // before React has attached, so it is retried until the sheet shows (opening is idempotent); Cancel puts it away.
+  const addDeal = rowOf(page, none).getByTestId("sponsor-row-action");
+  await expect(addDeal, "Add deal is a button now: no href to follow").not.toHaveAttribute("href", /.*/);
+  await tapUntil(addDeal, page.getByTestId("add-deal-sheet"), "Add deal opens the sheet");
+  await expect(page.locator(`[role="dialog"]:has([data-testid="add-deal-sheet"])`), "the sheet is a dialog").toBeVisible();
+  await page.getByTestId("add-deal-cancel").click();
+  await expect(page.getByTestId("add-deal-sheet"), "Cancel puts it away").toHaveCount(0);
+  await expectRow(page, none, ui("sponsors.deal.chip.none"), ui("sponsors.deal.action.addDeal"), "Cancel wrote nothing: the sponsor still has no deal");
 
   // Mark as paid asks first. Cancelled, nothing is sent and the row does not move (the negative) ...
   const cancelDialog = await openMarkPaidConfirm(page, unpaid, "Quay Fisheries");
@@ -486,4 +495,301 @@ test("sponsor page: a live deal's tier and stream are read-only; name and link s
   expect(after.data!.find((s) => s.id === freeId)!.on_stream, "the server agrees").toBe(true);
   await expect(stream, "and the box reads back checked").toBeChecked();
   await expectNoHorizontalScroll(page);
+});
+
+
+// --- PR 2, Task 16: the Add deal sheet ---------------------------------------------------------------------------------------------
+//
+// What no vitest suite can see: the sheet's openings come from the REAL hub flags (the plan, the Connect account) the page loaded,
+// the real POST behind its button and the real server's answer, the public page a deal moves a sponsor on and off, and the sheet's
+// layout in a bottom sheet at 320. Money note: an ONLINE deal's invoice is a Stripe Checkout Session, which this server (a dummy test
+// key, a fabricated connected account) cannot make - the online test below asserts what the real server then does (502
+// `stripe_unavailable`, a saved draft) and the settings-sponsor-monetize walkthrough, run with real Stripe, owns the paid half.
+
+/** A community org with a public competition, one partner package for the whole organisation (£250), and one sponsor with a link. */
+async function dealSetup(request: APIRequestContext, label: string, plan: "community" | "pro") {
+  const org = await seedSettingsOrg(request, { plan, label });
+  seeded.push(org);
+  const comp = await seedCompetition(request, org.orgId, { name: `Deals ${label}`, visibility: "public" });
+  const pkg = await newPackage(request, org.orgId, "partner");
+  const name = `Harbourside ${label} ${Math.random().toString(36).slice(2, 6)}`;
+  const sponsorId = await newSponsor(request, org.orgId, name);
+  return { org, comp, pkg, sponsorId, name };
+}
+
+/** Whether the public competition page names the sponsor. Polled to the wanted answer: the page is cached per org and busted by the
+ *  write, and a bust that is tail work lands a beat after the response - so "it changed" is waited for, never read once. */
+async function expectPublic(request: APIRequestContext, s: { org: SeededOrg; comp: { slug: string }; name: string }, shown: boolean, why: string): Promise<void> {
+  await expect
+    .poll(async () => {
+      const res = await request.get(`/live/${s.org.slug}/${s.comp.slug}`);
+      return res.status() === 200 && (await res.text()).includes(s.name);
+    }, { message: why, timeout: 40_000, intervals: [500, 1_000, 2_000, 3_000, 5_000] })
+    .toBe(shown);
+}
+
+/** Opens the Add deal sheet from the sponsor's row (a sponsor with no live deal has an Add deal on its row). */
+async function openAddDealFromRow(page: Page, sponsorId: string): Promise<Locator> {
+  const sheet = page.getByTestId("add-deal-sheet");
+  await tapUntil(rowOf(page, sponsorId).getByTestId("sponsor-row-action"), sheet, "Add deal opens the sheet");
+  return sheet;
+}
+
+/** Presses the sheet's primary button and returns the create's response (the sheet closes itself on success). */
+async function saveDeal(page: Page, sponsorId: string): Promise<Response> {
+  const [res] = await Promise.all([
+    page.waitForResponse((r) => r.url().includes(`/sponsors/${sponsorId}/deals`) && r.request().method() === "POST", { timeout: 60_000 }),
+    page.getByTestId("add-deal-submit").click(),
+  ]);
+  return res;
+}
+
+test("add deal (Pro): online is the opening, a billing email is required, Send invoice is the button; with Stripe unreachable the deal is kept as a draft and the page says so", async ({ page, request }) => {
+  // Seeding, one page load and a create that waits on a failing Stripe call.
+  test.setTimeout(240_000);
+  const s = await dealSetup(request, "add-online", "pro");
+  await setBoolEntitlementOverrideSql(s.org.orgId, "sponsors.monetize", true);
+  await setOrgConnectSql(s.org.orgId, true);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(sponsorsUrl(s.org.slug, "sponsors"));
+  const sheet = await openAddDealFromRow(page, s.sponsorId);
+  // D22 (a), from the REAL hub flags: a plan that sells invoices with Stripe taking charges opens on Online, when paid.
+  await expect(page.getByTestId("add-deal-payment-online"), "Pro with Connect opens on Online").toBeChecked();
+  await expect(page.getByTestId("add-deal-golive-on_payment")).toBeChecked();
+  await expect(page.getByTestId("add-deal-payment-link-online"), "and Online is not locked").toHaveCount(0);
+  // The billing email is required for an online deal: no address, no button.
+  const submit = page.getByTestId("add-deal-submit");
+  await expect(submit, "Send invoice is the button").toHaveText(ui("sponsors.deal.action.sendInvoice"));
+  await expect(submit, "no billing email yet: it waits").toBeDisabled();
+  await page.getByTestId("add-deal-email").fill("pay@deals.e2e.test");
+  await expect(submit).toBeEnabled();
+  await expect(page.getByTestId("add-deal-summary")).toContainText("We email an invoice for £250 to pay@deals.e2e.test.");
+  await expect(sheet.getByTestId("add-deal-ends-on"), "the whole organisation: an end date is offered").toBeVisible();
+
+  const res = await saveDeal(page, s.sponsorId);
+  const answer = (await res.json()) as { error?: { code?: string } };
+  expect(res.status(), `create answered ${res.status()}: ${JSON.stringify(answer)}`).toBe(502);
+  expect(answer.error?.code).toBe("stripe_unavailable");
+  // The refusal closes the sheet (a second tap would make a second deal) and the PAGE says what is true: the deal is saved.
+  await expect(sheet, "the sheet closes: the deal exists").toHaveCount(0);
+  await expect(page.getByText(ui("sponsors.error.invoiceSavedNoLink")), "the page says the deal is saved and no invoice went out").toBeVisible();
+  const deals = await apiJson<Deal[]>(request, `/api/v1/orgs/${s.org.orgId}/sponsor-deals`);
+  const mine = deals.data!.filter((d) => d.sponsor_id === s.sponsorId);
+  expect(mine, "exactly one deal was made").toHaveLength(1);
+  expect(mine[0]!.deal_status, "kept as a draft: Send invoice retries it").toBe("draft");
+  await expectRow(page, s.sponsorId, ui("sponsors.deal.chip.draft"), ui("sponsors.deal.action.openDeal"), "the list was re-read: the draft shows");
+});
+
+test("add deal (community): offline, after I approve -> Save deal -> Mark as paid -> still hidden -> Approve -> on the public page", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const s = await dealSetup(request, "add-approve", "community");
+  await expectPublic(request, s, true, "premise: a sponsor added by hand shows");
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(sponsorsUrl(s.org.slug, "sponsors"));
+  const sheet = await openAddDealFromRow(page, s.sponsorId);
+
+  // D22 (b)/(c), from the real flags: community opens on Offline; Online is locked with its upgrade way out.
+  await expect(page.getByTestId("add-deal-payment-offline"), "community opens on Offline").toBeChecked();
+  await expect(page.getByTestId("add-deal-payment-online")).toBeDisabled();
+  await expect(page.getByTestId("add-deal-payment-lock-online")).toContainText(ui("sponsors.dealSheet.pay.lockedPlanLink"));
+  // F29: the partner package for the whole org is open; the competitions are not offered to a plan without tiers.
+  await expect(page.getByTestId(`add-deal-package-${s.pkg}`)).toBeChecked();
+  await expect(page.getByTestId("add-deal-scope-hint"), "competitions need a paid plan").toContainText(ui("sponsors.dealSheet.scopeTiersHint"));
+  expect(await page.getByTestId("add-deal-scope").locator("option:not([disabled])").count(), "only the whole organisation is open").toBe(1);
+
+  await page.getByTestId("add-deal-golive-on_approval-card").click();
+  await expect(page.getByTestId("add-deal-golive-on_approval")).toBeChecked();
+  await expect(page.getByTestId("add-deal-submit")).toHaveText(ui("sponsors.dealSheet.primary.saveDeal"));
+  await expect(page.getByTestId("add-deal-summary"), "a sponsor on the pages is told it comes off until the deal is live").toContainText(
+    ui("sponsors.dealSheet.summary.hidden", { name: s.name }),
+  );
+
+  const res = await saveDeal(page, s.sponsorId);
+  expect(res.status(), `create answered ${res.status()}: ${await res.text()}`).toBe(201);
+  const created = ((await res.json()) as { data: { deal: Deal & { go_live: string; payment_method: string }; checkout_url: string | null } }).data;
+  expect({ status: created.deal.deal_status, go_live: created.deal.go_live, method: created.deal.payment_method }, "what was shown is what was made").toEqual({
+    status: "awaiting_payment", go_live: "on_approval", method: "offline",
+  });
+  expect(created.checkout_url, "an offline deal has no pay link").toBeNull();
+  await expect(sheet, "saved: the sheet closes").toHaveCount(0);
+  await expect(page.getByTestId("sponsor-notice")).toHaveText(ui("sponsors.dealSheet.notice.saved", { name: s.name }));
+  await expectRow(page, s.sponsorId, ui("sponsors.deal.chip.awaitingPayment"), ui("sponsors.deal.action.markPaid"), "a saved offline deal waits for the club's money");
+  await expectPublic(request, s, false, "waiting for payment: hidden");
+
+  const dialog = await openMarkPaidConfirm(page, s.sponsorId, s.name);
+  const [paid] = await Promise.all([
+    postedTo(page, `/sponsor-deals/${created.deal.id}/mark-paid`),
+    dialog.getByRole("button", { name: ui("sponsors.deal.action.markPaid"), exact: true }).click(),
+  ]);
+  expect(paid.status(), `mark-paid answered ${paid.status()}: ${await paid.text()}`).toBe(200);
+  await expectRow(page, s.sponsorId, ui("sponsors.deal.chip.awaitingApproval"), ui("sponsors.deal.action.approve"), "paid, it waits for approval");
+  await expectPublic(request, s, false, "paid is not approved: still hidden");
+
+  const [approved] = await Promise.all([postedTo(page, `/sponsor-deals/${created.deal.id}/approve`), rowOf(page, s.sponsorId).getByTestId("sponsor-row-action").click()]);
+  expect(approved.status(), `approve answered ${approved.status()}: ${await approved.text()}`).toBe(200);
+  await expectRow(page, s.sponsorId, ui("sponsors.deal.chip.live"), null, "approved, it is live");
+  await expectPublic(request, s, true, "approved: on the public page");
+  const html = await (await request.get(`/live/${s.org.slug}/${s.comp.slug}`)).text();
+  expect(html, "the SAME sponsor row: its tracked link").toContain(`/s/${s.sponsorId}`);
+});
+
+test("add deal: complimentary, straight away -> Save and go live -> on the public page at once", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const s = await dealSetup(request, "add-free", "community");
+  // Take the sponsor off the pages first, so "on the public page at once" is the deal's doing and not the sponsor's starting state.
+  const off = await apiJson(request, `/api/v1/orgs/${s.org.orgId}/sponsors/${s.sponsorId}`, "PATCH", { status: "inactive" });
+  expect(off.status, JSON.stringify(off.error)).toBe(200);
+  await expectPublic(request, s, false, "premise: off the public pages");
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(sponsorsUrl(s.org.slug, "sponsors"));
+  // A sponsor switched off by hand has no deal, so its row offers Add deal; the sheet is the same from the sponsor's page.
+  await openAddDealFromRow(page, s.sponsorId);
+
+  await page.getByTestId("add-deal-payment-complimentary-card").click();
+  await expect(page.getByTestId("add-deal-golive-immediate"), "complimentary moves go-live off 'when paid'").toBeChecked();
+  await expect(page.getByTestId("add-deal-golive-on_payment"), "and 'When paid' is gone").toHaveCount(0);
+  await expect(page.getByTestId("add-deal-email"), "no invoice, no address").toHaveCount(0);
+  await expect(page.getByTestId("add-deal-submit")).toHaveText(ui("sponsors.dealSheet.primary.saveAndGoLive"));
+  await expect(page.getByTestId("add-deal-summary")).toContainText(ui("sponsors.dealSheet.summary.live.onSave"));
+
+  const res = await saveDeal(page, s.sponsorId);
+  expect(res.status(), `create answered ${res.status()}: ${await res.text()}`).toBe(201);
+  const created = ((await res.json()) as { data: { deal: Deal } }).data.deal;
+  expect(created.deal_status, "live on save").toBe("live");
+  expect(created.payment_status, "a complimentary deal has no payment").toBe("none");
+  await expect(page.getByTestId("add-deal-sheet")).toHaveCount(0);
+  await expectRow(page, s.sponsorId, ui("sponsors.deal.chip.live"), null, "live, nothing more to do");
+  await expectPublic(request, s, true, "live: on the public page at once");
+});
+
+test("add deal: an org-wide Ends on date is saved as the deal's end (read back through GET /sponsor-deals/{id}); a competition scope offers none", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const s = await dealSetup(request, "add-ends", "pro");
+  // The org's zone is pinned so the stored end can be typed out: `ends_on` is a day IN THE ORG'S ZONE, stored as the start of the next day.
+  await withDb((sql) => sql`update organizations set timezone = 'UTC' where id = ${s.org.orgId}`);
+  const day = new Date(Date.now() + 30 * 86_400_000);
+  const endsOn = day.toISOString().slice(0, 10);
+  const next = new Date(day.getTime() + 86_400_000).toISOString().slice(0, 10);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(sponsorsUrl(s.org.slug, "sponsors"));
+  await openAddDealFromRow(page, s.sponsorId);
+
+  await page.getByTestId("add-deal-payment-complimentary-card").click();
+  await page.getByTestId("add-deal-ends-on").fill(endsOn);
+  const res = await saveDeal(page, s.sponsorId);
+  expect(res.status(), `create answered ${res.status()}: ${await res.text()}`).toBe(201);
+  const created = ((await res.json()) as { data: { deal: Deal } }).data.deal;
+  expect(JSON.parse(res.request().postData() ?? "null"), "the typed date is what was sent").toMatchObject({ competition_id: null, ends_on: endsOn });
+  const read = await apiJson<{ ends_at: string | null }>(request, `/api/v1/orgs/${s.org.orgId}/sponsor-deals/${created.id}`);
+  expect(read.status, JSON.stringify(read.error)).toBe(200);
+  expect(read.data!.ends_at, "the end is the start of the day after the typed one").toBe(`${next}T00:00:00.000Z`);
+
+  // The pair: a competition scope has no date field and sends none - the deal ends with the competition.
+  const other = await newSponsor(request, s.org.orgId, "Quay Fisheries");
+  await page.goto(sponsorsUrl(s.org.slug, "sponsors"));
+  await openAddDealFromRow(page, other);
+  await page.getByTestId("add-deal-scope").selectOption(s.comp.id);
+  await expect(page.getByTestId("add-deal-ends-on"), "a competition's deal ends with it: no date to type").toHaveCount(0);
+  await expect(page.getByTestId("add-deal-runs-hint")).toBeVisible();
+  await page.getByTestId("add-deal-payment-complimentary-card").click();
+  const res2 = await saveDeal(page, other);
+  expect(res2.status(), `create answered ${res2.status()}: ${await res2.text()}`).toBe(201);
+  const sent = JSON.parse(res2.request().postData() ?? "null") as Record<string, unknown>;
+  expect(sent.competition_id).toBe(s.comp.id);
+  expect("ends_on" in sent, "no ends_on for a competition").toBe(false);
+});
+
+test("add deal on a live sponsor: it queues behind the live deal; 'End the current deal now' swaps them", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const s = await dealSetup(request, "add-queue", "community");
+  const liveDeal = await newDeal(request, s.org.orgId, s.sponsorId, { package_id: s.pkg, payment_method: "complimentary", go_live: "immediate" });
+  expect(await dealStatus(request, s.org.orgId, liveDeal), "premise: live").toBe("live");
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(sponsorUrl(s.org.slug, s.sponsorId));
+  const sheet = page.getByTestId("add-deal-sheet");
+
+  // --- Queued: the note says so, the summary says the sponsor stays, the button does NOT promise to go live.
+  await tapUntil(page.getByTestId("sponsor-sheet-add-deal"), sheet, "Add deal opens the sheet over the sponsor's page");
+  await expect(page.getByTestId("add-deal-queue-note")).toHaveText(ui("sponsors.dealSheet.queueNote"));
+  await page.getByTestId("add-deal-golive-immediate-card").click();
+  await expect(page.getByTestId("add-deal-submit"), "behind a live deal 'straight away' queues: Save deal").toHaveText(ui("sponsors.dealSheet.primary.saveDeal"));
+  await expect(page.getByTestId("add-deal-summary")).toContainText(ui("sponsors.dealSheet.summary.queued", { name: s.name }));
+  const res = await saveDeal(page, s.sponsorId);
+  expect(res.status(), `create answered ${res.status()}: ${await res.text()}`).toBe(201);
+  const queued = ((await res.json()) as { data: { deal: Deal } }).data.deal;
+  expect(queued.deal_status, "queued behind the live deal").toBe("scheduled");
+  expect(await dealStatus(request, s.org.orgId, liveDeal), "the live deal is untouched").toBe("live");
+  expect(JSON.parse(res.request().postData() ?? "null"), "end_current is sent false").toMatchObject({ end_current: false });
+  await expect(sheet).toHaveCount(0);
+  await expectPublic(request, s, true, "the sponsor stays on the pages");
+
+  // --- Swapped: ticking 'End the current deal now' ends the live deal and the new one is live in its place.
+  await tapUntil(page.getByTestId("sponsor-sheet-add-deal"), sheet, "Add deal opens the sheet again");
+  await page.getByTestId("add-deal-golive-immediate-card").click();
+  await page.getByTestId("add-deal-end-current-label").click();
+  await expect(page.getByTestId("add-deal-end-current")).toBeChecked();
+  await expect(page.getByTestId("add-deal-queue-note"), "the note no longer applies").toHaveCount(0);
+  await expect(page.getByTestId("add-deal-submit"), "with the current deal ended it goes live on save").toHaveText(ui("sponsors.dealSheet.primary.saveAndGoLive"));
+  const res2 = await saveDeal(page, s.sponsorId);
+  expect(res2.status(), `create answered ${res2.status()}: ${await res2.text()}`).toBe(201);
+  const swapped = ((await res2.json()) as { data: { deal: Deal } }).data.deal;
+  expect(JSON.parse(res2.request().postData() ?? "null"), "end_current is sent true").toMatchObject({ end_current: true });
+  expect(swapped.deal_status, "the new deal is live").toBe("live");
+  const ended = await apiJson<{ deal_status: string; ended_reason: string | null }>(request, `/api/v1/orgs/${s.org.orgId}/sponsor-deals/${liveDeal}`);
+  expect({ status: ended.data!.deal_status, reason: ended.data!.ended_reason }, "the old live deal was ended now").toEqual({ status: "ended", reason: "ended_now" });
+  expect(await dealStatus(request, s.org.orgId, queued.id), "the earlier queued deal waits its turn").toBe("scheduled");
+  await expectPublic(request, s, true, "and the sponsor never left the pages");
+});
+
+test("add deal sheet: a bottom sheet on a phone, a panel from sm - the cards fit, no sideways scroll, every control a 44px target, the buttons stay on screen (320 / 390 / 768 / 1280)", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const s = await dealSetup(request, "add-layout", "pro");
+  await setBoolEntitlementOverrideSql(s.org.orgId, "sponsors.monetize", true);
+  await setOrgConnectSql(s.org.orgId, true);
+  // The realistic long names: a 43-character sponsor, a package named to the same length, both on a live deal so the queue box shows.
+  const LONG = "Harbourside Building Supplies and Timber Co";
+  const longSponsor = await newSponsor(request, s.org.orgId, LONG);
+  const pk = await apiJson<{ id: string }>(request, `/api/v1/orgs/${s.org.orgId}/sponsor-packages`, "POST", {
+    name: "Harbourside Title Season Sponsorship Package", price_cents: 150_000, currency: "gbp", tier: "title", includes_on_stream: true,
+  });
+  expect(pk.status, JSON.stringify(pk.error)).toBe(201);
+  const liveDeal = await newDeal(request, s.org.orgId, longSponsor, { package_id: pk.data!.id, payment_method: "complimentary", go_live: "immediate" });
+  expect(await dealStatus(request, s.org.orgId, liveDeal), "premise: live").toBe("live");
+
+  const widths = [320, 390, 768, 1280];
+  let checked = 0;
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: width < 768 ? 700 : 900 });
+    await page.goto(sponsorUrl(s.org.slug, longSponsor));
+    const sheet = page.getByTestId("add-deal-sheet");
+    await tapUntil(page.getByTestId("sponsor-sheet-add-deal"), sheet, `${width}: Add deal opens the sheet`);
+    const dialog = page.locator(`[role="dialog"]:has([data-testid="add-deal-sheet"])`);
+    await expect(page.getByTestId("add-deal-end-current"), `${width}: the queue box shows`).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    // Nothing in the sheet pokes out sideways: its own scroll width is its width.
+    const fits = await dialog.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+    expect(fits.scroll, `${width}: the sheet has no sideways overflow`).toBeLessThanOrEqual(fits.client + 1);
+    // The buttons are in the sheet's footer, on screen, 44px where a finger is the pointer.
+    const box = (await page.getByTestId("add-deal-submit").boundingBox())!;
+    expect(box.y + box.height, `${width}: the primary button is on screen`).toBeLessThanOrEqual((page.viewportSize()!.height) + 1);
+    if (width < 768) {
+      for (const id of ["add-deal-submit", "add-deal-cancel", "add-deal-email", "add-deal-scope"]) {
+        expect((await page.getByTestId(id).boundingBox())!.height, `${width}: ${id} is a 44px target`).toBeGreaterThanOrEqual(44);
+      }
+      // A card is tapped on its body: hit-test the middle of the card, do not trust the paint.
+      for (const id of ["add-deal-payment-offline-card", "add-deal-golive-immediate-card"]) {
+        const hit = await page.getByTestId(id).evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          return { height: r.height, inside: at === el || el.contains(at) };
+        });
+        expect(hit.inside, `${width}: ${id} takes the tap`).toBe(true);
+        expect(hit.height, `${width}: ${id} is at least 44px tall`).toBeGreaterThanOrEqual(44);
+      }
+    }
+    await page.getByTestId("add-deal-cancel").click();
+    await expect(sheet).toHaveCount(0);
+    checked++;
+  }
+  expect(checked, "every width was walked").toBe(widths.length);
 });

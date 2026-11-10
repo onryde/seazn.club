@@ -34,6 +34,7 @@ vi.mock("@/components/ui/use-md-up", () => ({ useMdUp: () => mdUp.value }));
 
 import { OrgSponsors, SponsorForm, type SponsorItem, type SponsorsHubData } from "@/components/org-sponsors";
 import { Modal } from "@/components/modal";
+import { AddDealSheet } from "@/components/sponsors/add-deal-sheet";
 import { ShareReport } from "@/components/sponsors/share-report";
 import {
   ReportLinkSection,
@@ -86,7 +87,7 @@ const deal = (over: Partial<SponsorDeal>): SponsorDeal => ({ ...DEAL, sponsor_id
 const sponsor = (over: Partial<SponsorItem> = {}): SponsorItem => ({
   id: "a", name: "Ridge Gold Physiotherapy", competition_id: null, url: "https://ridgegoldphysio.co.uk/", logo_path: null,
   tier: "partner", display_order: 0, status: "active", click_count: 12, on_stream: false, paid_order_id: null, deal: null,
-  locked_by_deal: false, has_open_deal: false, ...over,
+  locked_by_deal: false, has_open_deal: false, last_billing_email: null, ...over,
 });
 
 const DEFAULTS: ReportLinkDefaults = { from: "2026-01-01", to: "2026-11-09", competitionId: null };
@@ -804,8 +805,13 @@ describe("Add deal on the page asks OrgSponsors to open the Add deal sheet for t
     expect(propsOf(wrapper()).suspended).toBe(false);
     expect(propsOf(wrapper()).closeHref).toBe(LIST_URL);
     expect(m.all("sponsor-sheet-add-deal"), "one Add deal in the empty state").toHaveLength(1);
+    expect(m.island.tree().some((e) => e.type === AddDealSheet), "premise: no Add deal sheet before the tap").toBe(false);
     m.tap("sponsor-sheet-add-deal");
     expect(propsOf(wrapper()).suspended, "an Add deal sheet is open over the page").toBe(true);
+    // The consumer, not just the flag: the sheet is really there, and it is for THIS sponsor.
+    const sheets = m.island.tree().filter((e) => e.type === AddDealSheet);
+    expect(sheets).toHaveLength(1);
+    expect((propsOf(sheets[0]!).sponsor as SponsorItem).id).toBe("a");
   });
 });
 
