@@ -1,3 +1,4 @@
+import { EngineError } from "@seazn/engine/core";
 import {
   resolveProgression,
   type ProgressionSource,
@@ -45,7 +46,19 @@ export function resolveStoredProgression(
   tables: readonly SourceTables[],
   targetKind?: string,
 ): ReturnType<typeof resolveProgression> {
-  const out = resolveProgression(specToEngine(spec), shapes, tables, targetKind);
+  let out: ReturnType<typeof resolveProgression>;
+  try {
+    out = resolveProgression(specToEngine(spec), shapes, tables, targetKind);
+  } catch (e) {
+    // The engine names the round it was asked about, in ITS numbering; the refusal an organiser (or an API client) reads
+    // keeps the stored one.
+    if (e instanceof EngineError && e.code === "QUALIFICATION_INVALID" && typeof (e.data as { round?: unknown } | undefined)?.round === "number") {
+      const data = e.data as { round: number };
+      const stored = data.round + 1;
+      throw new EngineError(e.code, e.message.replace(/bracket round \d+ /, `bracket round ${stored} `), { ...data, round: stored });
+    }
+    throw e;
+  }
   return {
     ...out,
     qualifiers: out.qualifiers.map((q) => ({ ...q, descriptor: descriptorToStored(q.descriptor) })),

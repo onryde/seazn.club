@@ -893,15 +893,41 @@ export async function tableStageCompletable(tx: Tx, stageId: string): Promise<bo
   return isTableStageComplete(toTableStage(inputs, new Map()), inputs.tableFixtures);
 }
 
-/** The `stage_completed` event as it crosses the wire and is stored: `finalRanks` stays entrant ids in rank order (the
- *  shape every API client, the bench, the matrix and the smoke suites read). The engine's own event carries `FinalPlace[]`
- *  since 5.0.0; `toWireEvent` flattens it (a tie keeps its rank order; app B's T3 adds `places` beside it). */
+/** W4 T3 (X-CH-1, X-FR-4): what a bracket's deciding final crowned, as it crosses the wire. `finalists` of a vacant title are
+ *  the deciding final's two seats (the engine's `{kind:"vacant"}` carries none - C7), `champion` / `winners` are the engine's. */
+export type WireTitle =
+  | { kind: "champion"; champion: string }
+  | { kind: "joint"; winners: [string, string] }
+  | { kind: "vacant"; finalists: string[] };
+
+/** The `stage_completed` event as it crosses the wire and is stored. `finalRanks` stays entrant ids in rank order (the
+ *  shape every API client, the bench, the matrix and the smoke suites read, so it is never replaced); `places` is the same
+ *  list WITH its ranks - a shared place is two entries holding one rank (`[1, 2, 3, 3]`) - and `title` (bracket stages
+ *  only) says what the final crowned. The engine's own event carries `FinalPlace[]` since 5.0.0. */
 export type WireDivisionEvent =
   | Exclude<DivisionEvent, { type: "stage_completed" }>
-  | { type: "stage_completed"; stageId: string; finalRanks: string[] };
+  | { type: "stage_completed"; stageId: string; finalRanks: string[]; places: { entrantId: string; rank: number }[]; title?: WireTitle };
 
-export function toWireEvent(ev: DivisionEvent): WireDivisionEvent {
-  return ev.type === "stage_completed" ? { ...ev, finalRanks: ev.finalRanks.map((p) => p.entrantId) } : ev;
+export function toWireEvent(ev: DivisionEvent, title?: WireTitle): WireDivisionEvent {
+  return ev.type === "stage_completed"
+    ? {
+        type: "stage_completed",
+        stageId: ev.stageId,
+        finalRanks: ev.finalRanks.map((p) => p.entrantId),
+        places: ev.finalRanks.map((p) => ({ entrantId: p.entrantId, rank: p.rank })),
+        ...(title !== undefined ? { title } : {}),
+      }
+    : ev;
+}
+
+/** The wire title of a completed bracket. A vacant title names the two sides of the final both walked over: the latest-round
+ *  settled final with `walkedOver: "both"` (the one `decidingFinal` reads), never the engine's shape (C7). */
+function wireTitleOf(title: { kind: "champion"; champion: string } | { kind: "joint"; winners: readonly [string, string] } | { kind: "vacant" }, fixtures: readonly BracketFixture[]): WireTitle {
+  if (title.kind === "champion") return { kind: "champion", champion: title.champion };
+  if (title.kind === "joint") return { kind: "joint", winners: [title.winners[0], title.winners[1]] };
+  const finals = fixtures.filter((f) => f.isFinal === true && f.walkedOver === "both").sort((a, b) => b.round - a.round);
+  const final = finals[0];
+  return { kind: "vacant", finalists: final === undefined ? [] : [final.home, final.away].filter((id): id is string => id !== undefined) };
 }
 
 export interface CompleteResult {
@@ -921,6 +947,16 @@ export interface CompleteResult {
  *
  *  `seeds` are the DRAW seeds (position in that order, 1-based) - never a registration seed the draw did not use: a fed
  *  stage's registration seeds are unrelated to its qualification order, and X-SP-4 reads a stepladder rung from them. */
+/** The field the stage's newest seed-proposal confirm drew, in seed order (`seed_confirmed.entrants`, stages/seed-proposal.ts),
+ *  or null: no confirm (a root stage, or an `on_complete` one, whose draw is `config.qualified`), or a row written before PR B. */
+async function confirmedDraw(tx: Tx, divisionId: string, stageId: string): Promise<string[] | null> {
+  const [row] = await tx<{ entrants: unknown }[]>`
+    select payload->'entrants' as entrants from division_events
+     where division_id = ${divisionId} and type = 'seed_confirmed' and payload->>'stage_id' = ${stageId}
+     order by seq desc limit 1`;
+  return Array.isArray(row?.entrants) ? (row!.entrants as string[]) : null;
+}
+
 async function bracketRosterAndSeeds(tx: Tx, inputs: StageInputs, stageId: string): Promise<{ entrants: string[]; seeds: Map<string, number> }> {
   const seated = inputs.entrants;
   const stored = (inputs.stage.config as { qualified?: unknown } | null)?.qualified;
@@ -928,8 +964,13 @@ async function bracketRosterAndSeeds(tx: Tx, inputs: StageInputs, stageId: strin
     (await tx<{ id: string }[]>`select id from entrants where knockout_waiting_stage_id = ${stageId}`).map((r) => r.id),
   );
   let drawn: string[];
+  const confirmed = Array.isArray(stored) ? null : await confirmedDraw(tx, inputs.stage.division_id, stageId);
   if (Array.isArray(stored)) {
     drawn = stored as string[];
+  } else if (confirmed !== null) {
+    // A setup-timed fed stage (stepladder, page playoff, a knockout cut from a table): its draw was published at the seed
+    // proposal's confirm, which recorded who it drew. Needed because a seat emptied by a later withdrawal holds no entrant.
+    drawn = confirmed;
   } else if (seated.length === 0) {
     drawn = [];
   } else {
@@ -1122,7 +1163,7 @@ export async function completeStageIfReady(
       }
       // X-TB-4: rank_lock carries the STORED order and drawn_at (PS-5b) — the second, stored pass's events.
       const completed = await rankWithStoredLots(tx, inputs);
-      events = completed.events.map(toWireEvent);
+      events = completed.events.map((e) => toWireEvent(e));
       for (const pool of completed.tables.pools) {
         await writeSnapshot(tx, stageId, pool.pool || null, pool.rows, inputs.division.seq);
       }
@@ -1154,7 +1195,9 @@ export async function completeStageIfReady(
           { stageId },
         );
       }
-      events = [{ type: "stage_completed", stageId, finalRanks: [...finalRanks] }];
+      events = [
+        { type: "stage_completed", stageId, finalRanks: [...finalRanks], places: finalRanks.map((entrantId, i) => ({ entrantId, rank: i + 1 })) },
+      ];
       await writeSnapshot(tx, stageId, null, placementTable(finalRanks).rows, inputs.division.seq);
     } else if (isBracketKind(inputs.kind)) {
       const { bracketStage, bracketFixtures } = await readBracketStage(tx, inputs, stageId);
@@ -1219,7 +1262,8 @@ export async function completeStageIfReady(
       // losers, third-place, DE-reset and page-playoff with no algorithm
       // change, per the pass-1 regression tests) + the stage_completed event.
       const completed = completeBracketStage(bracketStage, bracketFixtures);
-      events = completed.events.map(toWireEvent);
+      const wireTitle = wireTitleOf(completed.title, bracketFixtures);
+      events = completed.events.map((e) => toWireEvent(e, wireTitle));
       await writeSnapshot(
         tx,
         stageId,

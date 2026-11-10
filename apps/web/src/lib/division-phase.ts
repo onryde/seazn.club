@@ -753,10 +753,15 @@ export function resolvePhase(input: PhaseInput): DivisionPhase {
   // about STAGES answering a question about FIXTURES, the same vacuous shape
   // rules 1 and 1b guard one level up. Reachable, and driven end to end
   // through the real API (fix-round-f-report.md): a knockout with a
-  // third-place playoff completes on its FINAL alone (isBracketStageComplete,
-  // packages/engine/src/competition/stage.ts:134, requires only the `isFinal`
-  // fixtures), so `POST /stages/{id}/complete` marks the stage complete and
-  // the division `completed` while the playoff is still `scheduled` and dated.
+  // third-place playoff used to complete on its FINAL alone (engine < 5.0.0:
+  // `isBracketStageComplete` required only the `isFinal` fixtures), so
+  // `POST /stages/{id}/complete` marked the stage complete and the division
+  // `completed` while the playoff was still `scheduled` and dated. (Closed at
+  // the source since engine 5.0.0 - X-CH-7, ruling 274: a bracket completes
+  // only with EVERY fixture settled, and the app refuses by name,
+  // STAGE_HAS_UNDECIDED_FIXTURES, W4 app A T6. The guard below stays: this
+  // rule answers a question about FIXTURES whatever the stages say, and a
+  // stage completed before 5.0.0 can still stand beside an unplayed line.)
   // The desk then read "3 of 4 played · complete · Finished" directly beside a
   // red "result missing … Enter result" for that very fixture — the wave's
   // signature defect, a row contradicting itself, for the eighth time.

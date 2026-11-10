@@ -646,7 +646,18 @@ export async function confirmSeedProposal(
       tx,
       stage.division_id,
       "seed_confirmed",
-      { stage_id: stageId, proposal_id: proposal.id, source: "organiser" },
+      {
+        stage_id: stageId,
+        proposal_id: proposal.id,
+        source: "organiser",
+        // W4 app PR B (C1/C12): the field this confirm DREW, in seed order - the bracket's drawn roster. A seat a later
+        // withdrawal empties and stamps dead keeps no entrant id on the fixture, so completion reads who was drawn from here
+        // (`bracketRosterAndSeeds`): a withdrawn stepladder seed is ranked at the rung she was due to enter (X-SP-4) instead of
+        // vanishing from the ranks.
+        entrants: [...new Map(finalSlots.map(([slot, entrantId]) => [entrantId, seedByWireSlot.get(slot) ?? Number.MAX_SAFE_INTEGER] as const)).entries()]
+          .sort((a, b) => a[1] - b[1])
+          .map(([entrantId]) => entrantId),
+      },
       auth.userId,
     );
 
