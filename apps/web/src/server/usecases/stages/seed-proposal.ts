@@ -140,6 +140,7 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
       shapes,
       departedLoseBestNth(tables, resolved, await departedEntrantIds(tx, stage.division_id)),
       stage.kind,
+      resolved.map((r) => r.kind),
     );
     // W2d T12 (spec §5.9): stored under the division lock held above, so a re-proposal seats the same draw.
     await persistCrossGroupDraws(tx, resolved, newLotsDraws);

@@ -60,6 +60,8 @@ describe("seedingErrorMessage — mechanics", () => {
       // least one qualifier; now it can have none, and confirming an empty
       // draw used to succeed and burn the terminal `confirmed` status.
       "SEEDING_NOTHING_TO_FILL",
+      // W4 app PR B (M4): a roundLosers take from a double-elimination source.
+      "SEEDING_ROUNDLOSERS_DE_SOURCE",
     ];
     expect([...SEEDING_ERROR_CODES].sort()).toEqual([...expected].sort());
   });
