@@ -24,6 +24,7 @@ import { routes } from "@/lib/routes";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { creditsNobody, unseatedForfeitLoser } from "@/lib/forfeit-tag";
+import { finalTitleTag } from "@/lib/final-title-tag";
 import { bracketSeatFallbackKey } from "@/lib/bracket-bye-seat";
 // `seatLabel` is SHARED with the draw list's `RunSheetRow`: both panels sit on
 // ?tab=fixtures and must answer the same way about the same seat, so the
@@ -68,6 +69,11 @@ interface FixtureLike {
   loser_to_slot?: number | null;
   status: string;
   outcome: unknown;
+  /** W4 B5b (pick 3A): the deciding final's role flag and the organiser's joint ruling, which the tile's footer reads
+   *  (`finalTitleTag`). Optional for the reason the fields above are: this suite builds FixtureLike by hand. */
+  is_final?: boolean;
+  third_place?: boolean;
+  joint_winners_at?: string | null;
 }
 
 /** A bracket row as `feedLabels()` wants it — the feed columns are optional on
@@ -172,6 +178,31 @@ function TileHeadline({ headline }: { headline: string }) {
       {headline}
     </span>
   );
+}
+
+/** W4 B5b (owner pick 3A): a deciding final's tile footer. A final ruled JOINT WINNERS reads "Joint winners" under ONE
+ *  trophy (the pair is named by the two seats above it and by the page banner); a VACANT title (both finalists walked from
+ *  it) reads a muted "Title vacant" with no trophy. Either takes the headline's own row - a tile has no second one - so it
+ *  can never cover a name. Every other tile keeps its headline, or none. */
+function TileFooter({ f, headline }: { f: FixtureLike; headline: string | undefined }) {
+  const msg = useMsg();
+  const tag = finalTitleTag(f);
+  if (tag === "joint") {
+    return (
+      <span data-testid="bracket-tile-title-joint" className="flex min-w-0 items-center gap-1 leading-none text-[11px] font-semibold text-amber-300">
+        <span aria-hidden className="shrink-0">🏆</span>
+        <span className="min-w-0 truncate">{msg("bracket.jointWinners")}</span>
+      </span>
+    );
+  }
+  if (tag === "vacant") {
+    return (
+      <span data-testid="bracket-tile-title-vacant" className="block min-w-0 truncate leading-none text-[11px] text-[color:var(--app-fg-muted,#94a3b8)]">
+        {msg("bracket.titleVacant")}
+      </span>
+    );
+  }
+  return headline !== undefined ? <TileHeadline headline={headline} /> : null;
 }
 
 export function BracketPanel({
@@ -374,7 +405,7 @@ export function BracketPanel({
                 <span className="flex h-full min-w-0 flex-col justify-center gap-0.5">
                   {side(seatEntrant(f, "home"), seatLabel(f.home_slot_label, feeds[f.id], "home"), winner, live, bracketSeatFallbackKey(f, "home"))}
                   {side(seatEntrant(f, "away"), seatLabel(f.away_slot_label, feeds[f.id], "away"), winner, live, bracketSeatFallbackKey(f, "away"))}
-                  {headline !== undefined && <TileHeadline headline={headline} />}
+                  <TileFooter f={f} headline={headline} />
                 </span>
               </Link>
             );
@@ -501,7 +532,7 @@ function DoubleElimPanel({
         <span className="flex h-full min-w-0 flex-col justify-center gap-0.5">
           {sideRow(seatEntrant(f, "home"), seatLabel(f.home_slot_label, feeds[f.id], "home"), "home")}
           {sideRow(seatEntrant(f, "away"), seatLabel(f.away_slot_label, feeds[f.id], "away"), "away")}
-          {headline !== undefined && <TileHeadline headline={headline} />}
+          <TileFooter f={f} headline={headline} />
         </span>
       </Link>
     );
@@ -671,7 +702,7 @@ function StepladderPanel({
               <span className="flex min-w-0 flex-col gap-0.5">
                 {row(f, seatEntrant(f, "home"), seatLabel(f.home_slot_label, feeds[f.id], "home"), "home")}
                 {row(f, seatEntrant(f, "away"), seatLabel(f.away_slot_label, feeds[f.id], "away"), "away")}
-                {headlines?.[f.id] !== undefined && <TileHeadline headline={headlines[f.id]!} />}
+                <TileFooter f={f} headline={headlines?.[f.id]} />
               </span>
             </Link>
           </div>
@@ -785,7 +816,7 @@ function PagePlayoffPanel({
                   <span className="flex h-full min-w-0 flex-col justify-center gap-0.5">
                     {row(f, seatEntrant(f, "home"), seatLabel(f.home_slot_label, feeds[f.id], "home"), "home")}
                     {row(f, seatEntrant(f, "away"), seatLabel(f.away_slot_label, feeds[f.id], "away"), "away")}
-                    {headlines?.[f.id] !== undefined && <TileHeadline headline={headlines[f.id]!} />}
+                    <TileFooter f={f} headline={headlines?.[f.id]} />
                   </span>
                 </Link>
               </span>

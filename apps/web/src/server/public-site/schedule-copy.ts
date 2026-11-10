@@ -37,6 +37,8 @@ export function publicScheduleCopy(dict: Dict, ui: (key: "schedule.tbd") => stri
     // group's first timed match (a DST boundary can change the abbreviation).
     timesIn: t(dict, "division.timesIn"),
     empty: t(dict, "division.scheduleEmpty"),
+    // W4 B5b (pick 3A): the division page banner's own words (`title.joint`), so the row and the banner say one thing.
+    jointWinners: t(dict, "title.joint"),
   };
 }
 
