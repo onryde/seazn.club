@@ -719,7 +719,7 @@ describe.skipIf(!HAS_DB)("Start on a frozen board reconciles a drifted root knoc
     expect(firstRoundSeats(after)).not.toContain(line.home_entrant_id);
   }, 120_000);
 
-  it("(f) a drift only a redraw can fix stays refused by name on a frozen board - and the newcomer is NOT left marked by the refused Start", async () => {
+  it("(f) a drift only a redraw can fix is refused on a frozen board with the FROZEN code (unfreeze first), not KO_START_NEEDS_UPDATE_DRAW - and nothing is left marked", async () => {
     const r = await koRig(8);
     const line = realLine(await linesOf(r.stageId));
     await withdrawEntrantCascade(r.auth, line.home_entrant_id!);
@@ -727,9 +727,59 @@ describe.skipIf(!HAS_DB)("Start on a frozen board reconciles a drifted root knoc
     await r.add("P9");
     await freeze(r);
     const before = await linesOf(r.stageId);
-    await expect(startDivision(r.auth, r.divisionId)).rejects.toMatchObject({ status: 409, code: "KO_START_NEEDS_UPDATE_DRAW" });
+    await expect(startDivision(r.auth, r.divisionId)).rejects.toMatchObject({ status: 409, code: "KO_START_NEEDS_UPDATE_DRAW_FROZEN" });
     expect(await divisionStatus(r.divisionId)).toBe("setup");
     expect(await waitingOf(r.divisionId), "a refused Start writes nothing").toEqual([]);
     expect(shapeByName(r, await linesOf(r.stageId))).toEqual(shapeByName(r, before));
+  }, 120_000);
+
+  it("(g) review I2: a departed BYE HOLDER on a frozen board - Start refuses KO_START_NEEDS_UPDATE_DRAW_FROZEN, never the plain code, and the division stays in setup", async () => {
+    const r = await koRig(6);
+    const bye = (await linesOf(r.stageId)).find((l) => l.round_no === 1 && l.status === "forfeited")!;
+    const holder = (bye.home_entrant_id ?? bye.away_entrant_id)!;
+    await withdrawEntrantCascade(r.auth, holder);
+    await freeze(r);
+    const err = await startDivision(r.auth, r.divisionId).then(() => null, (e: unknown) => e as { status: number; code: string });
+    expect(err, "Start refused").not.toBeNull();
+    expect([err!.status, err!.code]).toEqual([409, "KO_START_NEEDS_UPDATE_DRAW_FROZEN"]);
+    expect(await divisionStatus(r.divisionId)).toBe("setup");
+  }, 120_000);
+
+  it("(h) review I1: a frozen Start refused AFTER the reconcile (rolling rounds with no times) leaves nothing marked; unfreeze, Start again - the newcomer is SEATED and not waiting", async () => {
+    const r = await koRig(6);
+    // a settings row with roundMinutes, so the frozen Start's rolling-times sweep has rounds to write and refuses
+    await sql`
+      insert into schedule_settings (division_id, config, tz, updated_at)
+      values (${r.divisionId}, ${sql.json({ startAt: at(DAY, "08:00"), matchMinutes: 30, gapMinutes: 0, courts: [], roundMinutes: 60, blackouts: [], sessionWindows: [], constraints: { restMin: 20, noBackToBack: false, startWindows: [], fieldFairness: "off", parallelism: "mixed", crossPersonClash: "warn", hard: [] } })}, ${"UTC"}, now())
+      on conflict (division_id) do update set config = excluded.config, tz = excluded.tz`;
+    const late = await r.add("P7");
+    await freeze(r);
+    await expect(startDivision(r.auth, r.divisionId)).rejects.toMatchObject({ status: 422, code: SCHEDULE_LOCKED_CODE });
+    expect(await divisionStatus(r.divisionId)).toBe("setup");
+    expect(await waitingOf(r.divisionId), "the refused Start wrote no mark").toEqual([]);
+    await setDivisionLocks(r.auth, r.divisionId, { schedule_locked: false });
+    await startDivision(r.auth, r.divisionId);
+    expect(firstRoundSeats(await linesOf(r.stageId))).toContain(late);
+    expect(await waitingOf(r.divisionId)).toEqual([]);
+    expect(await listKnockoutWaiting(r.auth, r.divisionId)).toEqual([]);
+  }, 180_000);
+
+  it("(i) review I1 defensive: a seated entrant carrying a stale waiting mark is cleared by the next pre-Start reconcile", async () => {
+    const r = await koRig(6);
+    const late = await r.add("P7");
+    await sql`update entrants set knockout_waiting_stage_id = ${r.stageId} where id = ${late}`; // a mark from an earlier refused Start
+    await startDivision(r.auth, r.divisionId); // unfrozen: seats the newcomer in a bye
+    expect(firstRoundSeats(await linesOf(r.stageId))).toContain(late);
+    expect(await waitingOf(r.divisionId)).toEqual([]);
+  }, 120_000);
+
+  it("(j) review m1: a drift that REACHES the frozen branch with an active and a withdrawn newcomer - only the active one is marked", async () => {
+    const r = await koRig(6);
+    const live = await r.add("P7");
+    const gone = await r.add("P8");
+    await withdrawEntrantCascade(r.auth, gone);
+    await freeze(r);
+    await startDivision(r.auth, r.divisionId);
+    expect(await waitingOf(r.divisionId)).toEqual([live]);
   }, 120_000);
 });

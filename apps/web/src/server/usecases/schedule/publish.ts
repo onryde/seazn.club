@@ -13,6 +13,7 @@ import type {
   ScheduleConflict,
   StartDivisionRequest,
 } from "@/server/api-v1/schemas";
+import { fireStageRevalidate } from "../stages/helpers";
 import { assertNotFrozen, frozenCompetitionIds } from "../entitlement-freeze";
 import {
   generateStageFixturesTx,
@@ -340,17 +341,10 @@ export async function startDivision(
     // board is handled by the frozen branch below.
     const outcome = await generateStageFixturesUnpublished(auth, pre.firstStage.id, { inPlaceOnly: true });
     generated = outcome.created;
-  } else if (pre.firstStage.roster_drift) {
-    // W4 app B, Task 20 (C27; PO ruling, logged): a FROZEN board. Placing a newcomer is a schedule write the freeze binds, so
-    // Start MARKS them waiting instead (`entrants.knockout_waiting_stage_id`, as the late-entry path marks an arrival - the
-    // desk counts them and the organiser's tap places them once the board is open) and never refuses on their account. A
-    // departed entrant is reconciled exactly as above (in place; a line that needs a redraw is still refused by name). Run
-    // on `generateStageFixturesTx` in this one transaction, NOT through `generateStageFixturesUnpublished`: that entry's
-    // pre-flight refuses a frozen division wholesale. A refusal rolls the marks back with the rest.
-    await withTenant(auth.orgId, (tx) =>
-      generateStageFixturesTx(tx, auth, pre.firstStage.id, { inPlaceOnly: true, waitNewcomers: true }),
-    );
   }
+  // W4 app B, Task 20 (C27; PO ruling, logged): a FROZEN board with a drifted root knockout - the reconcile runs INSIDE the status
+  // transaction below (review I1), so a Start refused anywhere after it leaves no waiting mark and no seat change behind.
+  const frozenDrift = pre.firstStage.n > 0 && pre.firstStage.roster_drift && pre.scheduleFrozen;
 
   const out = await withTenant(auth.orgId, async (tx) => {
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
@@ -364,6 +358,15 @@ export async function startDivision(
     ).map((f) => f.id);
     if (!division || division.status === "active") {
       return { started: false, fixtureIds, competitionPromoted: false };
+    }
+
+    // Placing a newcomer is a schedule write the freeze binds, so Start MARKS them waiting instead (`entrants.knockout_waiting_stage_id`,
+    // as the late-entry path marks an arrival - the desk counts them and the organiser's tap places them once the board is open) and
+    // never refuses on their account. A departed entrant is reconciled as on any board (in place; a redraw-needing change is refused by
+    // name, KO_START_NEEDS_UPDATE_DRAW_FROZEN). Runs on `generateStageFixturesTx`, NOT `generateStageFixturesUnpublished`: that entry's
+    // pre-flight refuses a frozen division wholesale.
+    if (frozenDrift) {
+      await generateStageFixturesTx(tx, auth, pre.firstStage.id, { inPlaceOnly: true, waitNewcomers: true });
     }
 
     // Rolling quick-start times (doc 12 §1.A) — only for a straight
@@ -442,6 +445,8 @@ export async function startDivision(
     return { started: true, fixtureIds, competitionPromoted: !!promoted };
   });
   afterScheduleWrite(divisionId, pre.competition_id, "start", out.fixtureIds);
+  // Review m2: the unfrozen branch's Generate revalidates the stage; so does the frozen one, once its write has committed.
+  if (frozenDrift && out.started) await fireStageRevalidate(auth.orgId, pre.firstStage.id);
   // Outside the transaction, mirroring the competition PATCH's own lifecycle
   // block (competitions.ts) — analytics never rolls back the write it rides
   // on. Routed through `competitionLifecycleEvent` rather than naming the

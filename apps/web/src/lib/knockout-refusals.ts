@@ -30,6 +30,7 @@ export type KnockoutRefusalCode =
   // B2 fix round 2 (item 2): Start reconciles a root knockout in place only; a change that needs the bracket drawn again is
   // Update draw's (its notice says what moved), so Start refuses it by name and names the button.
   | "KO_START_NEEDS_UPDATE_DRAW"
+  | "KO_START_NEEDS_UPDATE_DRAW_FROZEN"
   // T9 (X-LE-2): a late player asked into a knockout an earlier stage fills (`{stage}`: that stage's name) — a fed
   // bracket never takes one; its field is the source's.
   | "KO_LATE_ENTRY_FED_STAGE"
@@ -107,6 +108,13 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
     status: 409,
     en: "The draw needs updating — press Update draw first.",
     key: "knockout.refusal.KO_START_NEEDS_UPDATE_DRAW",
+  },
+  // W4 B6a fix round 1 (review I2): Start on a FROZEN board that needs a redraw. Update draw is refused while frozen, so the plain
+  // copy would name a remedy that fails; this one says unfreeze first (as knockout.lateEntry.unfreezeFirst does).
+  KO_START_NEEDS_UPDATE_DRAW_FROZEN: {
+    status: 409,
+    en: "The draw needs updating, and the schedule is frozen: unfreeze it on the Schedule page, press Update draw, then Start.",
+    key: "knockout.refusal.KO_START_NEEDS_UPDATE_DRAW_FROZEN",
   },
   KO_LATE_ENTRY_FED_STAGE: {
     status: 422,
