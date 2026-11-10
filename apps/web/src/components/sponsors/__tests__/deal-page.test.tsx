@@ -153,7 +153,15 @@ describe("the header (acceptance: the package, the price, the sponsor and the ch
   it("the dispute badges: 'Disputed' while a dispute is open, 'Dispute lost' only when the engine ended the deal for it", () => {
     const CASES: { label: string; d: SponsorDeal; badge: string | null }[] = [
       { label: "an open dispute", d: deal({ deal_status: "live", payment_status: "paid", disputed_at: "2026-11-02T10:00:00.000Z", dispute_id: "dp_1" }), badge: "Disputed" },
-      { label: "a lost dispute", d: deal({ deal_status: "ended", payment_status: "refunded", ended_reason: "dispute_lost", ended_at: "2026-11-05T10:00:00.000Z", dispute_id: "dp_1" }), badge: "Dispute lost" },
+      // The producer KEEPS `disputed_at` on a loss (usecases/sponsors.ts: the loss path sets status/deal_status/ended_*, never clears it), so
+      // the lost deal arrives with both set - and the dispute is over, so it must read "Dispute lost" alone, not "Disputed" beside it.
+      { label: "a lost dispute (disputed_at kept)", d: deal({ deal_status: "ended", payment_status: "refunded", ended_reason: "dispute_lost", ended_at: "2026-11-05T10:00:00.000Z", disputed_at: "2026-11-02T10:00:00.000Z", dispute_id: "dp_1" }), badge: "Dispute lost" },
+      { label: "a lost dispute with nothing else recorded", d: deal({ deal_status: "ended", payment_status: "refunded", ended_reason: "dispute_lost", ended_at: "2026-11-05T10:00:00.000Z", dispute_id: "dp_1" }), badge: "Dispute lost" },
+      // A pre-deals order that lost a dispute: the legacy branch only flips the order to refunded (no `ended_reason` of its own), so the
+      // loss is told by the refund + the dispute id - the old screen's rule.
+      { label: "a legacy order that lost a dispute", d: deal({ deal_status: "ended", payment_status: "refunded", ended_reason: "legacy", ended_at: "2026-10-01T10:00:00.000Z", disputed_at: "2026-09-02T10:00:00.000Z", dispute_id: "dp_9" }), badge: "Dispute lost" },
+      { label: "a legacy order refunded by the club (no dispute)", d: deal({ deal_status: "ended", payment_status: "refunded", ended_reason: "legacy", ended_at: "2026-10-01T10:00:00.000Z" }), badge: null },
+      { label: "a dispute still open on an ended deal", d: deal({ deal_status: "ended", payment_status: "paid", ended_reason: "ended_now", ended_at: "2026-11-03T10:00:00.000Z", disputed_at: "2026-11-02T10:00:00.000Z", dispute_id: "dp_1" }), badge: "Disputed" },
       // The false claim to refuse: a deal the CLUB refunded after a dispute it won still carries the dispute's id.
       { label: "a club refund after a won dispute", d: deal({ deal_status: "ended", payment_status: "refunded", ended_reason: "refunded", ended_at: "2026-11-05T10:00:00.000Z", dispute_id: "dp_1" }), badge: null },
       { label: "no dispute", d: deal({ deal_status: "live", payment_status: "paid" }), badge: null },
@@ -164,7 +172,7 @@ describe("the header (acceptance: the package, the price, the sponsor and the ch
       expect(badges, c.label).toEqual(c.badge === null ? [] : [c.badge]);
       checked++;
     }
-    expect(checked).toBe(4);
+    expect(checked).toBe(8);
   });
 });
 
@@ -294,6 +302,22 @@ describe("Evidence pack: only when disputed, and last (D3)", () => {
     expect(html2.trimEnd().endsWith("</a>"), "nothing follows the pack").toBe(true);
   });
 
+  it("a LOST dispute is over: no evidence pack to download, not even an empty actions row (the producer keeps disputed_at on a loss; 3 counted)", () => {
+    const lost = deal({ deal_status: "ended", payment_status: "refunded", ended_reason: "dispute_lost", ended_at: "2026-11-05T10:00:00.000Z", disputed_at: "2026-11-02T10:00:00.000Z", dispute_id: "dp_1" });
+    const legacyLoss = deal({ deal_status: "ended", payment_status: "refunded", ended_reason: "legacy", ended_at: "2026-10-01T10:00:00.000Z", disputed_at: "2026-09-02T10:00:00.000Z", dispute_id: "dp_9" });
+    let checked = 0;
+    for (const d of [lost, legacyLoss]) {
+      const markup = html({ deal: d });
+      expect(findAll(markup, "deal-page-evidence"), d.id).toHaveLength(0);
+      expect(findAll(markup, "deal-page-actions"), `${d.ended_reason}: nothing to press`).toHaveLength(0);
+      checked++;
+    }
+    // The pair: the same deal ended some OTHER way, with the dispute still open, keeps its pack.
+    expect(findAll(html({ deal: deal({ ...lost, ended_reason: "ended_now", payment_status: "paid" }) }), "deal-page-evidence")).toHaveLength(1);
+    checked++;
+    expect(checked).toBe(3);
+  });
+
   it("the positive pair: no dispute, no pack - however many actions, and a dispute id with no open dispute is not a dispute", () => {
     for (const d of [QUAY, MARLOW, HARBOUR, OLD_ANCHOR, deal({ ...HARBOUR, dispute_id: "dp_old", disputed_at: null })]) {
       expect(findAll(html({ deal: d }), "deal-page-evidence"), d.id).toHaveLength(0);
@@ -326,6 +350,23 @@ describe("a legacy (pre-deals) deal opened by id (the empty case)", () => {
     expect(attrOf(findOne(markup, "deal-chip").open, "data-chip-kind")).toBe("ended");
     expect(stepWords(markup, "ended")).toEqual(["Ended", "1 Oct 2026 · From before deals existed"]);
     expect(findAll(markup, "deal-page-going-live"), "an ended deal switches nothing on").toHaveLength(0);
+  });
+
+  it("a PAID legacy order's timeline shows only what was recorded: V495 leaves the invoice and go-live times empty, so nothing says 'Never sent' or 'Never went live' (2 counted)", () => {
+    const paid = deal({ ...LEGACY, payment_status: "paid", paid_at: "2026-09-20T09:00:00.000Z" });
+    const markup = html({ deal: paid });
+    expect(findAll(markup, "deal-page-step").map((x) => [attrOf(x.open, "data-step"), attrOf(x.open, "data-state")])).toEqual([
+      ["created", "done"], ["paid", "done"], ["ended", "done"],
+    ]);
+    const words = flat(textOfMarkup(findOne(markup, "deal-page-timeline").outer));
+    expect(words).not.toContain("Never sent");
+    expect(words).not.toContain("Never went live");
+    // The unpaid one: the payment never arrived and that IS known, so "Not paid" still shows; the unknown steps do not.
+    const unpaid = html({ deal: LEGACY });
+    expect(findAll(unpaid, "deal-page-step").map((x) => [attrOf(x.open, "data-step"), attrOf(x.open, "data-state")])).toEqual([
+      ["created", "done"], ["paid", "missed"], ["ended", "done"],
+    ]);
+    expect(flat(textOfMarkup(findOne(unpaid, "deal-page-timeline").outer))).not.toContain("Never");
   });
 
   it("a PAID legacy order keeps the one thing the engine offers it - Refund - because the money is still the club's to give back", () => {

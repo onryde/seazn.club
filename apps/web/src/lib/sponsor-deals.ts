@@ -416,7 +416,8 @@ export type TimelineStep = {
  * date, never the thing a deal waits on.
  *
  * An ENDED deal waits on nothing: each step it has that never happened is `missed` (drawn, e.g. "Not paid"); a step it never had
- * stays `skipped` (hidden).
+ * stays `skipped` (hidden). A LEGACY one (a pre-deals order) knows only its money: the steps the migration never recorded are
+ * `skipped` too, not `missed`.
  *
  * `ctx.competitionEndsOn` is a DISPLAY hint (the competition's end date, YYYY-MM-DD, or null): an open deal scoped to a
  * competition with no end date of its own ends when that competition finishes (spec §8a), so its `ends` step carries the date the
@@ -436,6 +437,9 @@ export function dealTimeline(
   const complimentary = d.payment_method === "complimentary";
   const invoiceSent = d.invoice_sent_at !== null;
   const paid = d.payment_status === "paid" || d.payment_status === "refunded";
+  // A pre-deals order (V495, ended_reason `legacy`): the migration backfilled the MONEY and left invoice_sent_at / approved_at / live_at
+  // NULL, so "never sent" and "never went live" would be guesses. Only the payment stays a known fact (paid, or never arrived).
+  const legacy = d.ended_reason === "legacy";
 
   const raw: { key: TimelineStep["key"]; at: string | null; applies: boolean; done: boolean; detail?: Record<string, string> }[] = [
     { key: "created", at: d.created_at, applies: true, done: true, ...(ctx.createdBy ? { detail: { by: ctx.createdBy } } : {}) },
@@ -462,6 +466,7 @@ export function dealTimeline(
     const base = { key: r.key, at: r.at, ...(r.detail ? { detail: r.detail } : {}) };
     if (!r.applies) return { ...base, state: "skipped" };
     if (r.done) return { ...base, state: "done" };
+    if (legacy && r.key !== "paid") return { ...base, state: "skipped" };
     // An ended deal waits on nothing: what it had and never got, it never will - shown as missed, not hidden.
     if (ended) return { ...base, state: "missed" };
     if (!waiting) {

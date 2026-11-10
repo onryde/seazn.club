@@ -381,6 +381,27 @@ describe("dealTimeline: an ended deal shows what never happened (`missed`), and 
     expect(stepOf(free, "live").state).toBe("done");
   });
 
+  it("a LEGACY (pre-deals) ended deal: the steps V495 never recorded are skipped, not missed - 'Never sent' and 'Never went live' would be guesses (5 counted)", () => {
+    // typed from the migration: it backfilled the money (payment_status, paid_at) and left invoice_sent_at / live_at / approved_at NULL.
+    const LEGACY = (over: Partial<SponsorDeal>) => deal({ ...ENDED("legacy", "pending"), ...over });
+    const cases: [string, Partial<SponsorDeal>, string][] = [
+      // created, invoice_sent, paid, approved, live, ended
+      ["paid online", { payment_status: "paid", paid_at: T_PAID }, "dsdssd"],
+      ["unpaid online: the payment IS known not to have come", {}, "dsmssd"],
+      ["paid offline", { payment_method: "offline", payment_status: "paid", paid_at: T_PAID }, "dsdssd"],
+      ["a recorded invoice still shows (done wins over unknown)", { ...SENT, payment_status: "paid", paid_at: T_PAID }, "dddssd"],
+      ["a recorded go-live still shows", { ...LIVE, payment_status: "paid", paid_at: T_PAID }, "dsdsdd"],
+    ];
+    let checked = 0;
+    for (const [label, over, want] of cases) {
+      expect(states(dealTimeline(LEGACY(over), NO_END)), label).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(5);
+    // The pair: the same unrecorded steps on an ordinary ended deal are MISSED - the rule is the legacy row's, not a general softening.
+    expect(states(dealTimeline(deal({ ...ENDED("ended_now", "pending") }), NO_END))).toBe("dmmsmd");
+  });
+
   it("an online deal ended before its invoice went out misses the invoice too", () => {
     const steps = dealTimeline(deal({ deal_status: "ended", ended_at: T_ENDED, ended_reason: "ended_now" }), NO_END);
     expect(states(steps)).toBe("dmmsmd");

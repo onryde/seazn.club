@@ -120,9 +120,13 @@ export function DealPageBody(props: DealPageBodyProps) {
 
   const offered = canEdit ? allowedActions(deal) : [];
   const buttons = DEAL_ACTIONS.filter((a) => offered.includes(a));
-  const showEvidence = canEdit && Boolean(deal.disputed_at);
-  const disputed = Boolean(deal.disputed_at);
-  const disputeLost = deal.ended_reason === "dispute_lost";
+  // A lost dispute is over: the producer ends the deal `dispute_lost` but KEEPS `disputed_at`, so an open dispute is only one that has
+  // not been lost - the "Disputed" badge and the evidence pack (which answers an open dispute) go. A pre-deals order that lost one has
+  // no `ended_reason` of its own (the legacy branch only flips it to refunded), so its loss is told as the old screen did: refunded
+  // with a dispute id.
+  const disputeLost = deal.ended_reason === "dispute_lost" || (deal.ended_reason === "legacy" && deal.payment_status === "refunded" && deal.dispute_id !== null);
+  const disputed = Boolean(deal.disputed_at) && !disputeLost;
+  const showEvidence = canEdit && disputed;
 
   /** One timeline step, in words: its title and its line. The step's state picks the wording; the engine decided the state. */
   function words(s: TimelineStep): { title: string; line: string } {
