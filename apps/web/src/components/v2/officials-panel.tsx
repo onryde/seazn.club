@@ -63,7 +63,7 @@ interface Proposal {
 }
 interface Sourced {
   resolved: { entrant_id: string; display_name: string; official_id: string | null }[];
-  pending: { reason: string }[];
+  pending: { reason: string; code?: "shared_rank"; rank?: number; holders?: number }[];
 }
 
 const OFFICIALS_TOP = new Set(["scheduled"]);
@@ -435,7 +435,9 @@ export function OfficialsPanel({
               ))}
               {sourced.pending.map((p, i) => (
                 <li key={`p${i}`} className="rounded-md bg-amber-50 px-3 py-1.5 text-amber-700">
-                  {msg("officials.pending", { reason: p.reason })}
+                  {p.code === "shared_rank"
+                    ? msg("officials.pendingSharedRank", { rank: p.rank ?? 0, holders: p.holders ?? 0 })
+                    : msg("officials.pending", { reason: p.reason })}
                 </li>
               ))}
             </ul>

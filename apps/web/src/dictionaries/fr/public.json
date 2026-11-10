@@ -362,6 +362,7 @@
   "table.tieBreak.matches_played": "matchs joués",
   "table.tieBreak.fewest_played": "moins de matchs joués",
   "table.tieBreak.shared_place": "Place partagée",
+  "table.sharedRank": "{rank} (ex æquo)",
   "table.tieBreak.field_goals": "buts de champ",
   "table.tieBreak.h2h_points": "points en confrontation directe",
   "table.tieBreak.h2h_diff": "différence en confrontation directe",

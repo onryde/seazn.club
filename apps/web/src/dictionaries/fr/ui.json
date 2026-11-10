@@ -3731,6 +3731,7 @@
   "officials.alreadyOfficial": "déjà un officiel",
   "officials.addTeamRef": "Ajouter comme arbitre-équipe",
   "officials.pending": "En attente : {reason}",
+  "officials.pendingSharedRank": "En attente : la place {rank} est partagée par {holders} participants - choisissez-en un à la main",
   "officials.colFixture": "Match",
   "officials.colKickoff": "Coup d'envoi",
   "officials.colOfficials": "Officiels",

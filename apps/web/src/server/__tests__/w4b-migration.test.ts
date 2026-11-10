@@ -3,8 +3,8 @@
 // runs here inside a rolled-back transaction on a dedicated client (it acts on the whole shared test DB; a committed run would
 // rewrite sibling suites' rows). Every assertion reads this test's own stage.
 //
-// Seeding: a real bracket is played and completed through the usecases (so the stored snapshot is 4.0's: the ENGINE's own places,
-// the oracle), then its snapshot is put back to the 3.x shape the delta exists for - strict 1..n, the semi-final loser of the
+// Seeding: a real bracket is played and completed through the usecases (so the stored snapshot is W4's (engine 5+): the ENGINE's own places,
+// the oracle), then its snapshot is put back to the pre-W4 shape the delta exists for - strict 1..n, the semi-final loser of the
 // larger seed 4th (RB4-S7 / Q1) - inside the rolled-back transaction.
 // single-sport: badminton - the delta reads rank, outcome and round columns, no sport field.
 import { readdirSync, readFileSync } from "node:fs";
@@ -86,7 +86,7 @@ const snapOf = async (tx: Tx, stageId: string): Promise<Snap> =>
   (await tx<Snap[]>`select rows, previous_rows, computed_through_seq::text, updated_at from standings_snapshots where stage_id = ${stageId} and pool_id is null`)[0]!;
 const ranksOf = (s: Snap) => Object.fromEntries(s.rows.map((r) => [r.entrantId, r.rank]));
 
-/** The 3.x shape: the semi-final loser of the larger seed ranked 4th, the rest as 4.0 stored them (3.x was strict 1..n). */
+/** The pre-W4 shape: the semi-final loser of the larger seed ranked 4th, the rest as W4 stored them (pre-W4 was strict 1..n). */
 async function downgradeTo3x(tx: Tx, f: Finished): Promise<void> {
   const seeds = await tx<{ id: string; seed: number }[]>`select id, seed from entrants where id in ${tx(f.losers)}`;
   const worse = [...seeds].sort((a, b) => b.seed - a.seed)[0]!.id;
@@ -114,7 +114,7 @@ describe.runIf(HAS_DB)("W4 delta V496: finished knockouts re-rank to a shared 3r
       const again = await snapOf(tx, f.stageId);
       return { before, first, after, second, again };
     });
-    expect(Object.values(ranksOf(v.before)).sort(), "premise: the seeded snapshot is the 3.x strict shape").toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(Object.values(ranksOf(v.before)).sort(), "premise: the seeded snapshot is the pre-W4 strict shape").toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(v.first.changed, "at least this stage").toBeGreaterThanOrEqual(1);
     const want = Object.fromEntries(f.places.map((p) => [p.entrantId, p.rank])); // R9: the engine is the oracle
     expect(ranksOf(v.after)).toEqual(want);
@@ -154,6 +154,33 @@ describe.runIf(HAS_DB)("W4 delta V496: finished knockouts re-rank to a shared 3r
     });
     expect(v.after).toEqual(v.before);
   }, 480_000);
+
+  it("X-FR-5 a VOIDED third-place line shares 3rd (m1: the engine ranks a voided play-off level, X-TP-3) - the delta re-ranks it", async () => {
+    const shared = await finished(8);
+    const f = await finished(8, true);
+    const v = await rolledBack(async (tx, notices) => {
+      // the play-off never ran: its line holds nobody and has no outcome; the snapshot is the pre-W4 seed split
+      await tx`update fixtures set home_entrant_id = null, away_entrant_id = null, outcome = null, status = 'scheduled' where stage_id = ${f.stageId} and (third_place or ext_key like '%-3p')`;
+      const before = await snapOf(tx, f.stageId);
+      await run(tx, notices);
+      return { before, after: await snapOf(tx, f.stageId) };
+    });
+    expect(Object.values(ranksOf(v.before)).sort(), "premise: the snapshot is the 3rd/4th split").toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    // R9: the engine's own places for a no-play-off 8-draw are the oracle for the SHAPE; the two 3rds are this bracket's semi-final losers
+    expect(Object.values(ranksOf(v.after)).sort()).toEqual(shared.places.map((p) => p.rank).sort());
+    expect(v.after.rows.filter((r) => r.rank === 3).map((r) => r.entrantId).sort()).toEqual(f.losers);
+  }, 480_000);
+
+  it("X-FR-5 a semi-final settled by an abandon award (V432: abandoned counts as decided) re-ranks too (m2)", async () => {
+    const f = await finished(4);
+    const v = await rolledBack(async (tx, notices) => {
+      await downgradeTo3x(tx, f);
+      await tx`update fixtures set status = 'abandoned' where id = (select id from fixtures where stage_id = ${f.stageId} and round_no = (select max(round_no) - 1 from fixtures where stage_id = ${f.stageId}) order by seq_in_round limit 1)`;
+      await run(tx, notices);
+      return snapOf(tx, f.stageId);
+    });
+    expect(Object.values(ranksOf(v)).sort()).toEqual([1, 2, 3, 3]);
+  }, 240_000);
 
   it("X-FR-5 a snapshot already shared (a completion after the bump) is skipped: the empty arm", async () => {
     const f = await finished(8);
@@ -200,7 +227,7 @@ describe.runIf(HAS_DB)("W4 delta V496: finished knockouts re-rank to a shared 3r
       await run(tx, notices);
       return { before, after: await snapOf(tx, f.stageId) };
     });
-    expect(Object.values(ranksOf(v.before)).sort(), "premise: still the strict 3.x shape").toEqual([1, 2, 3, 4]);
+    expect(Object.values(ranksOf(v.before)).sort(), "premise: still the strict pre-W4 shape").toEqual([1, 2, 3, 4]);
     expect(v.after).toEqual(v.before);
   }, 240_000);
 
