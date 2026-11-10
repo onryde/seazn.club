@@ -40,7 +40,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import { stageDefaultsFor } from "@seazn/engine/sport";
 import { expectStageToolsSheet } from "./helpers/stage-tools-sheet";
 import { moduleOf, summaryFormatText } from "./helpers/stage-summary";
-import { SPONSORS_TABS, sponsorsHref } from "../src/lib/sponsors-hub";
+import { SPONSORS_TABS, dealHref, sponsorHref, sponsorsHref } from "../src/lib/sponsors-hub";
 import { RULEBOOK_SPLITS } from "../src/components/v2/stage-rules/__tests__/_points-split-rulebook";
 import {
   HIT_TARGET_FLOOR_PX,
@@ -337,6 +337,19 @@ let publicCricketFixturePath = "";
  *  consenting players, whose card leads with that live match. */
 let publicCricketCompSlug = "";
 let publicCricketPlayerId = "";
+/** Sponsor deals PR 2 (Batch J) - the sponsor's own page and the deal's own page, which the hub picks by `?sponsor=` / `?deal=`. One
+ *  sponsor (a realistic 43-character name) holding one open offline deal, seeded by the setup test below. An id the hub does not know
+ *  renders the LIST - a 200 with no overflow - so "console routes" names a test id it must see on each, and null here fails that test. */
+let sponsorsSweep: { sponsorId: string; dealId: string; packageId: string; orgId: string } | null = null;
+
+// The sponsor is removed with its deal (an open offline deal holds no money, so the delete is allowed) and the package is retired, so
+// a re-run against the same database does not pile sponsors into the shared org. Never throws: a teardown must not fail a green run.
+test.afterAll(async ({ request }) => {
+  if (sponsorsSweep === null) return;
+  const { orgId, sponsorId, packageId } = sponsorsSweep;
+  await apiJson(request, `/api/v1/orgs/${orgId}/sponsors/${sponsorId}`, "DELETE").catch(() => undefined);
+  await apiJson(request, `/api/v1/orgs/${orgId}/sponsor-packages/${packageId}`, "DELETE").catch(() => undefined);
+});
 
 test("setup: public competition with an entrant-ready division", async ({ page, request }) => {
   // This file is `mode: "serial"`, so a red HERE aborts every test after it —
@@ -559,6 +572,21 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
   publicCricketFixturePath = `/live/${orgSlug}/${mcCompSlug.data!.slug}/${mcDivSlug.data!.slug}/fixtures/${mcFx.fixtureId}`;
   publicCricketCompSlug = mcCompSlug.data!.slug;
   publicCricketPlayerId = mcFx.personIds[`MC Home 1 ${TAG}`]!;
+
+  // Sponsor deals PR 2 (Batch J) - the sponsor's page and the deal's page need a real sponsor and a real deal to render at all.
+  const sweepPackage = await apiJson<{ id: string }>(request, `/api/v1/orgs/${org.id}/sponsor-packages`, "POST", {
+    name: `Mobile Gate partner board ${TAG}`, price_cents: 25_000, currency: "gbp", tier: "partner",
+  });
+  expect(sweepPackage.status, `sponsor package -> ${sweepPackage.status} ${JSON.stringify(sweepPackage.error)}`).toBe(201);
+  const sweepSponsor = await apiJson<{ id: string }>(request, `/api/v1/orgs/${org.id}/sponsors`, "POST", {
+    name: "Harbourside Building Supplies and Timber Co", tier: "partner", url: "https://sponsor.example/",
+  });
+  expect(sweepSponsor.status, `sponsor -> ${sweepSponsor.status} ${JSON.stringify(sweepSponsor.error)}`).toBe(201);
+  const sweepDeal = await apiJson<{ deal: { id: string } }>(request, `/api/v1/orgs/${org.id}/sponsors/${sweepSponsor.data!.id}/deals`, "POST", {
+    package_id: sweepPackage.data!.id, competition_id: null, payment_method: "offline", go_live: "on_payment",
+  });
+  expect(sweepDeal.status, `sponsor deal -> ${sweepDeal.status} ${JSON.stringify(sweepDeal.error)}`).toBe(201);
+  sponsorsSweep = { sponsorId: sweepSponsor.data!.id, dealId: sweepDeal.data!.deal.id, packageId: sweepPackage.data!.id, orgId: org.id };
 });
 
 // "load" + a short settle instead of networkidle — the dev server's HMR
@@ -567,7 +595,7 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
 async function auditRoute(
   page: Page,
   path: string,
-  opts: { allowancePx?: number; requireScorePad?: boolean } = {},
+  opts: { allowancePx?: number; requireScorePad?: boolean; requireTestId?: string } = {},
 ) {
   const response = await page.goto(path, { waitUntil: "load" });
   expect(response, `${path}: navigation produced no response`).not.toBeNull();
@@ -585,6 +613,13 @@ async function auditRoute(
       page.getByTestId("score-pad"),
       `${path}: expected the score pad to be visible, not just a ${response!.status()} response`,
     ).toBeVisible();
+  }
+  if (opts.requireTestId !== undefined) {
+    // The same vacuity, for a route a QUERY STRING picks: the sponsor's page and the deal's page are `?sponsor=` / `?deal=` on the
+    // hub, and an id it does not know renders the list - a 200 with no overflow. So the page must show what the route is FOR, once.
+    const wanted = page.getByTestId(opts.requireTestId);
+    await expect(wanted, `${path}: expected exactly one ${opts.requireTestId}, not just a ${response!.status()} response`).toHaveCount(1);
+    await expect(wanted, `${path}: expected ${opts.requireTestId} to be visible`).toBeVisible();
   }
   await expectNoHorizontalScroll(page, opts);
 }
@@ -630,7 +665,10 @@ async function mergeDivisionConfig(
 }
 
 test("console routes: no horizontal scroll", async ({ page, request }) => {
-  const routes: Array<{ path: string; allowancePx?: number }> = [
+  // The sponsor and deal the setup test seeded: without them the two pages below would silently render the list.
+  expect(sponsorsSweep, "the setup test seeded a sponsor and a deal for the sponsor pages").not.toBeNull();
+  const sweep = sponsorsSweep!;
+  const routes: Array<{ path: string; allowancePx?: number; requireTestId?: string }> = [
     { path: "/dashboard" },
     // These six used to be legacy id-routes (/competitions/{id},
     // /divisions/{id}...) deleted by commit e8bed930 — they 404'd, and a 404
@@ -678,6 +716,10 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
     // is swept by name instead of silently missing from the seven width projects. The profile here is the org's owner, so the
     // editor-only tabs (On stream, Packages) render their bodies rather than falling back to Overview.
     ...SPONSORS_TABS.map((tab) => ({ path: sponsorsHref(orgSlug, tab) })),
+    // The sponsor's own page and the deal's own page (sponsor deals PR 2): a page below 768, a side panel from it. Each must show the
+    // surface the route is for (`requireTestId`), or the list rendering in its place would pass.
+    { path: sponsorHref(orgSlug, sweep.sponsorId), requireTestId: "sponsor-sheet" },
+    { path: dealHref(orgSlug, sweep.sponsorId, sweep.dealId), requireTestId: "deal-page" },
     { path: "/settings?tab=team" },
     { path: "/settings?tab=api" },
     { path: "/settings?tab=preferences" },
@@ -726,8 +768,10 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
     // default to `min-width: auto`).
     { path: `/o/${orgSlug}/c/new` },
   ];
-  for (const { path, allowancePx } of routes) {
-    await auditRoute(page, path, { allowancePx });
+  // 60s was ample for ~35 routes; the budget now follows the route count, so the next route added moves it too.
+  test.setTimeout(Math.max(60_000, routes.length * 4_000));
+  for (const { path, allowancePx, requireTestId } of routes) {
+    await auditRoute(page, path, { allowancePx, requireTestId });
   }
 });
 

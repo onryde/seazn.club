@@ -986,3 +986,439 @@ test("packages: a package's used-by count follows its deals, and Retire takes it
   await expect(usedBy, "the deal already on it carries on: still counted").toHaveText(ui("sponsors.pkg.usedBy.one", { count: "1" }));
   await expectNoHorizontalScroll(page);
 });
+
+// --- Batch J, Task 19: the whole flow in one sitting, the cases that break it, and the widths ------------------------------------------
+//
+// What no earlier test here does: walk a club from NOTHING to a sponsor on the public page and back off it by tapping only what a
+// person taps (no API seeding between the steps - the API is read back, never used to set up), and ask the questions a person asks of a
+// screen they are afraid of: what if I send it empty, what if I tap Save twice, what does Back do, what can a viewer do, does it
+// still fit on a phone with a real name. Every case below is read from a real page, written through the real routes, and read back
+// through the real API.
+
+/** Where a text breaks onto a new line, read character by character from the laid-out page: two LETTERS (non-space characters next to
+ *  each other in the source) that sit on different lines are a mid-word break. `chars` is how many characters were measured, so a
+ *  check that looked at nothing says so (a name that measured 0 characters proves nothing). */
+async function lineBreaks(el: Locator): Promise<{ chars: number; lines: number; midWord: string[] }> {
+  return el.evaluate((root) => {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const seen: { ch: string; top: number; bottom: number }[] = [];
+    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+      const text = node as Text;
+      for (let i = 0; i < text.data.length; i++) {
+        const range = document.createRange();
+        range.setStart(text, i);
+        range.setEnd(text, i + 1);
+        const box = range.getBoundingClientRect();
+        seen.push({ ch: text.data.charAt(i), top: box.top, bottom: box.bottom });
+      }
+    }
+    const letters = seen.filter((c) => /\S/.test(c.ch));
+    const midWord: string[] = [];
+    for (let i = 0; i + 1 < seen.length; i++) {
+      const a = seen[i]!;
+      const b = seen[i + 1]!;
+      if (/\S/.test(a.ch) && /\S/.test(b.ch) && b.top >= a.bottom - 1) midWord.push(`${a.ch}|${b.ch} at ${i}`);
+    }
+    const tops = new Set(letters.map((c) => Math.round(c.top)));
+    return { chars: letters.length, lines: tops.size, midWord };
+  });
+}
+
+/** Every control a row offers, on screen right now, in the order it is on the page: its test id, then its accessible words. The ⋯ is
+ *  left out - it exists only below 768 and is the fold's own door, not a control the row offers. */
+async function controlSet(page: Page, sponsorId: string): Promise<string[]> {
+  return rowOf(page, sponsorId).evaluate((row) => {
+    const shown = (el: Element): boolean => {
+      const box = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      return box.width > 0 && box.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    };
+    return Array.from(row.querySelectorAll("a[href], button, input, select, textarea, [role='button']"))
+      .filter((el) => el.getAttribute("data-testid") !== "sponsor-row-more" && shown(el))
+      .map((el) => `${el.getAttribute("data-testid") ?? el.tagName.toLowerCase()} | ${(el.getAttribute("aria-label") ?? el.textContent ?? "").trim()}`);
+  });
+}
+
+const urlIs = (expected: string) => (u: URL): boolean => u.pathname + u.search === expected;
+
+test("T19 golden path (community, UI only): a package, a sponsor, an offline deal paid on payment, Mark as paid, on the public page, End now, off it", async ({ page, request }) => {
+  // Five page loads, a package, a sponsor, a deal, two confirms and four polls of the cached public page.
+  test.setTimeout(360_000);
+  const org = await seedSettingsOrg(request, { plan: "community", label: "t19-golden" });
+  seeded.push(org);
+  const comp = await seedCompetition(request, org.orgId, { name: "Deals t19-golden", visibility: "public" });
+  const PKG = "Matchday Partner";
+  const NAME = `Harbourside Golden ${Math.random().toString(36).slice(2, 6)}`;
+  const shown = { org, comp, name: NAME };
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  // --- 1. A package, made on the Packages tab. £250 is what is typed; the cents are what the server must end up holding.
+  await page.goto(sponsorsUrl(org.slug, "packages"));
+  const createButton = page.getByTestId("sponsor-package-list").getByTestId("sponsor-pkg-create");
+  await expect(createButton, "a community org's editor is offered Create package").toBeVisible();
+  const pkgSheet = page.getByTestId("package-create-sheet");
+  await tapUntil(createButton, pkgSheet, "Create package opens the sheet");
+  await pkgSheet.getByTestId("package-create-name").fill(PKG);
+  await pkgSheet.getByTestId("package-create-price").fill("250");
+  await pkgSheet.getByTestId("package-create-currency").selectOption("gbp");
+  const [madePkg] = await Promise.all([
+    page.waitForResponse((r) => r.url().endsWith(`/api/v1/orgs/${org.orgId}/sponsor-packages`) && r.request().method() === "POST", { timeout: 30_000 }),
+    page.getByTestId("package-create-submit").click(),
+  ]);
+  expect(madePkg.status(), `create package answered ${madePkg.status()}: ${await madePkg.text()}`).toBe(201);
+  const pkgs = await apiJson<{ id: string; name: string; price_cents: number; currency: string }[]>(request, `/api/v1/orgs/${org.orgId}/sponsor-packages`);
+  const pkg = pkgs.data!.find((p) => p.name === PKG);
+  expect(pkg, "the package the page made is in the API's list").toBeDefined();
+  expect({ price: pkg!.price_cents, currency: pkg!.currency }, "£250 typed is 25 000 pence held").toEqual({ price: 25_000, currency: "gbp" });
+
+  // --- 2. A sponsor, added on the Sponsors tab by its name alone.
+  await page.goto(sponsorsUrl(org.slug, "sponsors"));
+  const tab = page.getByTestId("sponsors-tab-sponsors");
+  const nameInput = tab.getByLabel(ui("settings.org.sponsors.name"), { exact: true });
+  const add = tab.getByRole("button", { name: ui("settings.org.sponsors.add"), exact: true });
+  // A controlled input typed into before hydration loses its value; Add is enabled only once the name is in the component's state.
+  await expect(async () => {
+    await nameInput.fill(NAME);
+    await expect(add).toBeEnabled({ timeout: 1_000 });
+  }).toPass({ timeout: 30_000 });
+  const [madeSponsor] = await Promise.all([
+    page.waitForResponse((r) => r.url().endsWith(`/api/v1/orgs/${org.orgId}/sponsors`) && r.request().method() === "POST", { timeout: 30_000 }),
+    add.click(),
+  ]);
+  expect(madeSponsor.status(), `add sponsor answered ${madeSponsor.status()}: ${await madeSponsor.text()}`).toBe(201);
+  const sponsors = await apiJson<{ id: string; name: string }[]>(request, `/api/v1/orgs/${org.orgId}/sponsors`);
+  const sponsor = sponsors.data!.find((s) => s.name === NAME);
+  expect(sponsor, "the sponsor the page added is in the API's list").toBeDefined();
+  const sponsorId = sponsor!.id;
+  await expect(rowOf(page, sponsorId), "and on the list").toBeVisible();
+  await expectPublic(request, shown, true, "a sponsor added by hand, before any deal, shows on the public page");
+
+  // --- 3. Its deal: the package just made, offline, going live when it is paid. Saving hides it until the club has the money.
+  const sheet = await openAddDealFromRow(page, sponsorId);
+  await expect(page.getByTestId(`add-deal-package-${pkg!.id}`), "the only package is the one picked").toBeChecked();
+  await expect(page.getByTestId("add-deal-payment-offline"), "a community org's deal is offline").toBeChecked();
+  await page.getByTestId("add-deal-golive-on_payment-card").click();
+  await expect(page.getByTestId("add-deal-golive-on_payment")).toBeChecked();
+  await expect(page.getByTestId("add-deal-submit")).toHaveText(ui("sponsors.dealSheet.primary.saveDeal"));
+  const saved = await saveDeal(page, sponsorId);
+  expect(saved.status(), `create answered ${saved.status()}: ${await saved.text()}`).toBe(201);
+  const made = ((await saved.json()) as { data: { deal: Deal } }).data.deal;
+  expect(made.deal_status, "saved, waiting for the club's money").toBe("awaiting_payment");
+  await expect(sheet, "saved: the sheet closes").toHaveCount(0);
+  await expectRow(page, sponsorId, ui("sponsors.deal.chip.awaitingPayment"), ui("sponsors.deal.action.markPaid"), "the saved deal waits for payment");
+  await expectPublic(request, shown, false, "waiting for payment: off the public page");
+
+  // --- 4. Mark as paid (asks first, naming the sponsor and the amount): live, and back on the public page.
+  const dialog = await openMarkPaidConfirm(page, sponsorId, NAME);
+  const [paid] = await Promise.all([
+    postedTo(page, `/sponsor-deals/${made.id}/mark-paid`),
+    dialog.getByRole("button", { name: ui("sponsors.deal.action.markPaid"), exact: true }).click(),
+  ]);
+  expect(paid.status(), `mark-paid answered ${paid.status()}: ${await paid.text()}`).toBe(200);
+  await expectRow(page, sponsorId, ui("sponsors.deal.chip.live"), null, "paid on payment: live, nothing more to do");
+  expect(await dealStatus(request, org.orgId, made.id), "the server agrees").toBe("live");
+  await expectPublic(request, shown, true, "live: on the public page");
+
+  // --- 5. End now, from the deal's own page, reached by the taps a person makes: the name, then the deal's Open.
+  await rowOf(page, sponsorId).getByTestId("sponsor-row-name-link").click();
+  const open = page.getByTestId("sponsor-sheet-deal-open");
+  await expect(open, "the sponsor's page lists its one deal").toHaveCount(1);
+  await open.click();
+  await expect(page).toHaveURL(urlIs(dealUrl(org.slug, sponsorId, made.id)));
+  await expect(page.getByTestId("deal-page")).toBeVisible();
+  await tapAction(page, "end_now", "alertdialog");
+  const [ended] = await Promise.all([
+    postedTo(page, `/sponsor-deals/${made.id}/end`),
+    page.getByRole("alertdialog", { name: ui("sponsors.deal.confirm.end.title") }).getByRole("button", { name: ui("sponsors.deal.confirm.end.label"), exact: true }).click(),
+  ]);
+  expect(ended.status(), `end answered ${ended.status()}: ${await ended.text()}`).toBe(200);
+  await expect(stepOf(page, "ended"), "the timeline now ends").toHaveAttribute("data-state", "done");
+  expect(await dealStatus(request, org.orgId, made.id), "the server agrees").toBe("ended");
+  await expectPublic(request, shown, false, "ended: off the public page");
+});
+
+test("T19 break: a blank sponsor name is refused - the button waits, nothing is sent, and the API answers 400 and keeps no sponsor", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const org = await seedSettingsOrg(request, { plan: "community", label: "t19-blank" });
+  seeded.push(org);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const sent: string[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "POST" && r.url().endsWith(`/api/v1/orgs/${org.orgId}/sponsors`)) sent.push(r.postData() ?? "");
+  });
+  await page.goto(sponsorsUrl(org.slug, "sponsors"));
+  const tab = page.getByTestId("sponsors-tab-sponsors");
+  const nameInput = tab.getByLabel(ui("settings.org.sponsors.name"), { exact: true });
+  const add = tab.getByRole("button", { name: ui("settings.org.sponsors.add"), exact: true });
+
+  // The positive pair first: a typed name enables the button, so "disabled" below is the blank's doing and not a form still waking up.
+  await expect(async () => {
+    await nameInput.fill("Typed Sponsor");
+    await expect(add).toBeEnabled({ timeout: 1_000 });
+  }).toPass({ timeout: 30_000 });
+  const blanks = ["", "   "];
+  for (const blank of blanks) {
+    await nameInput.fill(blank);
+    await expect(add, `"${blank}" is no name: Add waits`).toBeDisabled();
+    // Enter in the field is the other way to send a form: it must not get round the button either.
+    await nameInput.press("Enter");
+  }
+  // The API is the guard behind the page: an empty name is a validation refusal, and nothing is created.
+  const refused = await apiJson(request, `/api/v1/orgs/${org.orgId}/sponsors`, "POST", { name: "" });
+  expect(refused.status, `an empty name answered ${refused.status}: ${JSON.stringify(refused.error)}`).toBe(400);
+
+  // A real add at the end is the sentinel that proves the blanks above sent NOTHING: it is the only request, and the only sponsor.
+  await nameInput.fill("Sentinel Sponsor");
+  const [res] = await Promise.all([
+    page.waitForResponse((r) => r.url().endsWith(`/api/v1/orgs/${org.orgId}/sponsors`) && r.request().method() === "POST", { timeout: 30_000 }),
+    add.click(),
+  ]);
+  expect(res.status(), `the real add answered ${res.status()}: ${await res.text()}`).toBe(201);
+  expect(sent.map((body) => (JSON.parse(body) as { name: string }).name), "the page sent exactly one write - the sentinel's").toEqual(["Sentinel Sponsor"]);
+  const after = await apiJson<{ id: string; name: string }[]>(request, `/api/v1/orgs/${org.orgId}/sponsors`);
+  expect(after.data!.map((s) => s.name), "the org holds the sentinel and no blank-named sponsor").toEqual(["Sentinel Sponsor"]);
+});
+
+test("T19 break: tapping Save deal twice while it is in flight makes ONE deal", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const s = await dealSetup(request, "t19-double", "community");
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const sent: string[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "POST" && new URL(r.url()).pathname.endsWith(`/sponsors/${s.sponsorId}/deals`)) sent.push(r.url());
+  });
+  // The write is held for two seconds, so the second tap of a double-tap lands while the first is still in flight - the real shape of
+  // the mistake, where an answer that comes back at once would leave nothing to double.
+  await page.route(`**/sponsors/${s.sponsorId}/deals`, async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    return route.continue();
+  });
+  await page.goto(sponsorsUrl(s.org.slug, "sponsors"));
+  const sheet = await openAddDealFromRow(page, s.sponsorId);
+  await page.getByTestId("add-deal-payment-complimentary-card").click();
+  const [res] = await Promise.all([
+    page.waitForResponse((r) => r.url().includes(`/sponsors/${s.sponsorId}/deals`) && r.request().method() === "POST", { timeout: 60_000 }),
+    page.getByTestId("add-deal-submit").dblclick(),
+  ]);
+  expect(res.status(), `create answered ${res.status()}: ${await res.text()}`).toBe(201);
+  await expect(sheet, "saved: the sheet closes").toHaveCount(0);
+  expect(sent, "the page sent ONE write for two taps").toHaveLength(1);
+  const deals = await apiJson<Deal[]>(request, `/api/v1/orgs/${s.org.orgId}/sponsor-deals`);
+  expect(deals.data!.filter((d) => d.sponsor_id === s.sponsorId), "and the sponsor holds ONE deal").toHaveLength(1);
+});
+
+test("T19 break: Back from a deal lands on its sponsor, and from the sponsor on the list - the link, the browser's button and, on a desktop, Escape", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const s = await dealSetup(request, "t19-back", "community");
+  const dealId = await newDeal(request, s.org.orgId, s.sponsorId, { package_id: s.pkg });
+  const listUrl = sponsorsUrl(s.org.slug, "sponsors");
+  const sponsorPage = sponsorUrl(s.org.slug, s.sponsorId);
+  const dealPage = dealUrl(s.org.slug, s.sponsorId, dealId);
+  const sheet = page.getByTestId("sponsor-sheet");
+  const deal = page.getByTestId("deal-page");
+  const listView = page.getByTestId("sponsors-list-view");
+  const back = page.getByTestId("sponsor-sheet-back");
+
+  // --- A phone, by the page's own Back link.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(listUrl);
+  await rowOf(page, s.sponsorId).getByTestId("sponsor-row-name-link").click();
+  await expect(page).toHaveURL(urlIs(sponsorPage));
+  await expect(sheet, "the sponsor's page").toBeVisible();
+  await page.getByTestId("sponsor-sheet-deal-open").click();
+  await expect(page).toHaveURL(urlIs(dealPage));
+  await expect(deal, "the deal's page").toBeVisible();
+  expect(await back.getAttribute("href"), "from a deal, Back leads to ITS sponsor").toBe(sponsorPage);
+  await expect(back, "and says whose").toContainText(s.name);
+  await back.click();
+  await expect(page).toHaveURL(urlIs(sponsorPage));
+  await expect(sheet, "Back from the deal: the sponsor's page").toBeVisible();
+  await expect(deal, "and the deal's page is gone").toHaveCount(0);
+  expect(await back.getAttribute("href"), "from the sponsor, Back leads to the list").toBe(listUrl);
+  await back.click();
+  await expect(page).toHaveURL(urlIs(listUrl));
+  await expect(sheet, "Back from the sponsor: no sponsor page").toHaveCount(0);
+  await expect(listView, "the list").toBeVisible();
+
+  // --- The same way in, by the browser's own back button: each step undoes exactly one.
+  await rowOf(page, s.sponsorId).getByTestId("sponsor-row-name-link").click();
+  await expect(page).toHaveURL(urlIs(sponsorPage));
+  await page.getByTestId("sponsor-sheet-deal-open").click();
+  await expect(page).toHaveURL(urlIs(dealPage));
+  await expect(deal).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(urlIs(sponsorPage));
+  await expect(sheet, "the browser's Back from the deal: its sponsor").toBeVisible();
+  await expect(deal).toHaveCount(0);
+  await page.goBack();
+  await expect(page).toHaveURL(urlIs(listUrl));
+  await expect(listView, "and again: the list").toBeVisible();
+  await expect(sheet).toHaveCount(0);
+  await page.goForward();
+  await expect(page).toHaveURL(urlIs(sponsorPage));
+  await expect(sheet, "Forward returns to the sponsor, not past it").toBeVisible();
+
+  // --- A desktop: the deal is a panel, and Escape closes it to the sponsor's panel, and that to the list.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(dealPage);
+  await expect(page.getByRole("dialog").getByTestId("deal-page"), "from 768 the deal is a panel").toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page).toHaveURL(urlIs(sponsorPage));
+  await expect(sheet, "Escape from the deal: its sponsor's panel").toBeVisible();
+  await expect(deal).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(page).toHaveURL(urlIs(listUrl));
+  await expect(sheet, "Escape from the sponsor: the list").toHaveCount(0);
+  await expect(listView).toBeVisible();
+});
+
+test("T19 break: a viewer opens a sponsor and its deal and sees every fact - and none of the controls an editor has", async ({ page, browser, request }) => {
+  test.setTimeout(240_000);
+  const s = await dealSetup(request, "t19-viewer", "community");
+  const dealId = await newDeal(request, s.org.orgId, s.sponsorId, { package_id: s.pkg });
+  expect(await dealStatus(request, s.org.orgId, dealId), "premise: an offline deal waiting for its money - an editor has actions on it").toBe("awaiting_payment");
+  const editorOnly = ["sponsor-sheet-edit", "sponsor-sheet-add-deal", "sponsor-sheet-deal-action", "sponsor-sheet-deal-open", "sponsor-sheet-stream", "sponsor-sheet-report"];
+
+  // --- The pair: the owner has every one of them, so a viewer's absence below is the role's doing and not a page that never drew them.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(sponsorUrl(s.org.slug, s.sponsorId));
+  const ownerDialog = page.getByRole("dialog");
+  await expect(ownerDialog.getByTestId("sponsor-sheet-name")).toHaveText(s.name);
+  for (const id of editorOnly) await expect(ownerDialog.getByTestId(id).first(), `the owner has ${id}`).toBeVisible();
+  await page.goto(dealUrl(s.org.slug, s.sponsorId, dealId));
+  await expect(page.getByTestId("deal-page-action").first(), "the owner has the deal's actions").toBeVisible();
+
+  const member = await seedMemberIdentity(browser, request, s.org.orgId, "viewer");
+  try {
+    const vp = await member.ctx.newPage();
+    for (const width of [1280, 320]) {
+      await vp.setViewportSize({ width, height: 900 });
+      await vp.goto(sponsorUrl(s.org.slug, s.sponsorId));
+      const scope = width >= 768 ? vp.getByRole("dialog") : vp.getByTestId("sponsor-sheet-page");
+      await expect(scope.getByTestId("sponsor-sheet-name"), `${width}: the viewer sees the sponsor`).toHaveText(s.name);
+      await expect(scope.getByTestId("sponsor-sheet-deal"), `${width}: and its deal`).toHaveCount(1);
+      await expect(scope.getByTestId("sponsor-sheet-deal-state"), `${width}: and where the deal stands`).toBeVisible();
+      for (const id of editorOnly) await expect(scope.getByTestId(id), `${width}: a viewer has no ${id}`).toHaveCount(0);
+      await expect(scope.getByTestId("sponsor-sheet-stream-state"), `${width}: the stream flag is read, not toggled`).toBeVisible();
+      await expectNoHorizontalScroll(vp);
+
+      await vp.goto(dealUrl(s.org.slug, s.sponsorId, dealId));
+      const deal = vp.getByTestId("deal-page");
+      await expect(deal, `${width}: the viewer sees the deal`).toBeVisible();
+      await expect(deal.getByTestId("deal-page-step").first(), `${width}: and its timeline`).toBeVisible();
+      await expect(vp.getByTestId("deal-page-action"), `${width}: a viewer has no deal action`).toHaveCount(0);
+      await expect(vp.getByTestId("deal-page-evidence"), `${width}: nor the dispute evidence`).toHaveCount(0);
+      await expectNoHorizontalScroll(vp);
+    }
+  } finally {
+    await member.release();
+  }
+});
+
+test("T19 widths: list, sponsor page, Add deal sheet and deal page fit 320 / 768 / 1280 with a 43-character name, and a row's control set is the same at every width", async ({ page, request }) => {
+  // Three widths, each with four screens, and the fold opened on three rows at 320.
+  test.setTimeout(300_000);
+  const org = await seedSettingsOrg(request, { plan: "pro", label: "t19-widths" });
+  seeded.push(org);
+  const LONG = "Harbourside Building Supplies and Timber Co";
+  expect(LONG.length, "premise: the realistic 43-character name").toBe(43);
+  const QUAY = "Quay Fisheries";
+  const RIDGE = "Ridge Cycles";
+  const gold = await newPackage(request, org.orgId, "gold");
+  const partner = await newPackage(request, org.orgId, "partner");
+  const longId = await newSponsor(request, org.orgId, LONG);
+  const quayId = await newSponsor(request, org.orgId, QUAY);
+  const ridgeId = await newSponsor(request, org.orgId, RIDGE);
+  const liveDeal = await newDeal(request, org.orgId, longId, { package_id: gold, payment_method: "complimentary", go_live: "immediate" });
+  expect(await dealStatus(request, org.orgId, liveDeal), "premise: live").toBe("live");
+  const waiting = await newDeal(request, org.orgId, quayId, { package_id: partner });
+  expect(await dealStatus(request, org.orgId, waiting), "premise: waiting for money - its row offers Mark as paid").toBe("awaiting_payment");
+  // Three rows, three kinds: a live deal (no action), an open deal (an action), and none (Add deal).
+  const rows: [string, string][] = [[longId, LONG], [quayId, QUAY], [ridgeId, RIDGE]];
+
+  const sets = new Map<number, Map<string, string[]>>();
+  const widths = [320, 768, 1280];
+  let screens = 0;
+  let measured = 0;
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: 900 });
+
+    // --- The list.
+    await page.goto(sponsorsUrl(org.slug, "sponsors"));
+    await expect(page.getByTestId("sponsor-row"), `${width}: all three sponsors are listed`).toHaveCount(3);
+    await expectNoHorizontalScroll(page);
+    const perRow = new Map<string, string[]>();
+    for (const [id, name] of rows) {
+      await openSponsorRowTools(page, name);
+      perRow.set(id, await controlSet(page, id));
+    }
+    sets.set(width, perRow);
+    await expectNoHorizontalScroll(page);
+    const listName = await lineBreaks(rowOf(page, longId).getByTestId("sponsor-row-name-text"));
+    expect(listName.chars, `${width}: the list measured every letter of the name`).toBe(LONG.replace(/\s/g, "").length);
+    expect(listName.midWord, `${width}: the list's name never breaks inside a word`).toEqual([]);
+    measured++;
+    screens++;
+
+    // --- The sponsor's page (a page below 768, a side panel from it).
+    await page.goto(sponsorUrl(org.slug, longId));
+    const sheetName = page.getByTestId("sponsor-sheet-name");
+    await expect(sheetName, `${width}: the sponsor's page names it`).toHaveText(LONG);
+    await expectNoHorizontalScroll(page);
+    const pageName = await lineBreaks(sheetName);
+    expect(pageName.chars, `${width}: the sponsor page measured every letter`).toBe(LONG.replace(/\s/g, "").length);
+    expect(pageName.midWord, `${width}: the sponsor page's name never breaks inside a word`).toEqual([]);
+    measured++;
+    screens++;
+
+    // --- The Add deal sheet over it.
+    const sheet = page.getByTestId("add-deal-sheet");
+    await tapUntil(page.getByTestId("sponsor-sheet-add-deal"), sheet, `${width}: Add deal opens the sheet`);
+    await expectNoHorizontalScroll(page);
+    const dialog = page.locator(`[role="dialog"]:has([data-testid="add-deal-sheet"])`);
+    const fits = await dialog.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+    expect(fits.scroll, `${width}: nothing in the Add deal sheet pokes out sideways`).toBeLessThanOrEqual(fits.client + 1);
+    await page.getByTestId("add-deal-cancel").click();
+    await expect(sheet).toHaveCount(0);
+    screens++;
+
+    // --- The deal's page.
+    await page.goto(dealUrl(org.slug, longId, liveDeal));
+    await expect(page.getByTestId("deal-page"), `${width}: the deal's page`).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    const dealSponsor = await lineBreaks(page.getByTestId("deal-page-sponsor"));
+    expect(dealSponsor.chars, `${width}: the deal page measured every letter of the sponsor`).toBe(LONG.replace(/\s/g, "").length);
+    expect(dealSponsor.midWord, `${width}: the deal page's sponsor name never breaks inside a word`).toEqual([]);
+    const dealName = await lineBreaks(page.getByTestId("deal-page-name"));
+    expect(dealName.chars, `${width}: the deal page measured its heading`).toBeGreaterThan(0);
+    expect(dealName.midWord, `${width}: the deal's heading never breaks inside a word`).toEqual([]);
+    measured += 2;
+    screens++;
+  }
+  expect(screens, "four screens at each of three widths").toBe(widths.length * 4);
+  expect(measured, "every name measurement ran").toBe(widths.length * 4);
+
+  // The control set: the SAME controls, in the SAME order, with the SAME repeats, at 320 (fold open) as at 1280 - never a groomed
+  // subset on the phone. The expected members are named from the dictionary the page renders from, so an empty set cannot pass.
+  const wide = sets.get(1280)!;
+  const longControls = wide.get(longId)!;
+  for (const label of [
+    ui("sponsors.edit", { name: LONG }),
+    ui("settings.org.sponsors.moveUp", { name: LONG }),
+    ui("settings.org.sponsors.moveDown", { name: LONG }),
+    ui("settings.org.sponsors.remove", { name: LONG }),
+  ]) {
+    expect(longControls.some((c) => c.endsWith(`| ${label}`)), `1280: the long-named row offers ${label}`).toBe(true);
+  }
+  expect(wide.get(quayId)!.some((c) => c.startsWith("sponsor-row-action |")), "1280: the open deal's row offers its one next action").toBe(true);
+  expect(wide.get(ridgeId)!.some((c) => c.startsWith("sponsor-row-action |")), "1280: the sponsor with no deal is offered Add deal").toBe(true);
+  let compared = 0;
+  for (const width of [320, 768]) {
+    for (const [id, name] of rows) {
+      expect(sets.get(width)!.get(id), `${width} against 1280: ${name}'s controls - membership, order and repeats`).toEqual(wide.get(id));
+      compared++;
+    }
+  }
+  expect(compared, "two widths against the widest, three rows each").toBe(6);
+});
