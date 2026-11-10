@@ -651,7 +651,7 @@ test.describe("W4 a vacant title: both finalists withdraw", () => {
 
   // Fix round 1 (PO ruling 2026-11-10, RB4-C3): the desk's own door, two Withdraws in a row, is the vacant title too. The first settles the final as
   // a walkover to the other finalist; the second turns that walkover into the departure double walkover.
-  test("two Withdraws of the two finalists (the desk's own door), in either order, leave the final a double walkover and the title vacant", async ({ request }) => {
+  test("two Withdraws of the two finalists (the desk's own door), the second seed first, leave the final a double walkover, the title vacant and both finalists 2nd", async ({ request }) => {
     test.setTimeout(180_000);
     const { ko, final } = await seatedFinal(request, "vacant2");
     // The second finalist first: the reverse of the order the bare-flip test uses.
@@ -661,6 +661,8 @@ test.describe("W4 a vacant title: both finalists withdraw", () => {
     const done = await apiJson<Done>(request, `/api/v1/stages/${ko.mainId}/complete`, "POST");
     const ev = done.data!.events.find((e) => e.type === "stage_completed")!;
     expect([done.status, ev.title?.kind], "Complete answers a vacant title").toEqual([200, "vacant"]);
+    const rankOf = new Map(ev.places!.map((p) => [ko.seedOf.get(p.entrantId)!, p.rank] as const));
+    expect([1, 2].map((sd) => rankOf.get(sd)), "RB4-C3: both finalists rank 2nd, nobody 1st").toEqual([2, 2]);
   });
 });
 
