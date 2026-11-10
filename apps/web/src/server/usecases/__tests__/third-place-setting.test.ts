@@ -5,6 +5,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { appendEvent } from "@/server/engine-db";
 import { HttpError } from "@/lib/errors";
 import { engineBracketRows } from "@/lib/__tests__/engine-bracket-rows";
 import { KNOCKOUT_REFUSALS } from "@/lib/knockout-refusals";
@@ -21,7 +22,8 @@ import { completeStage, createStages, generateStageFixtures, getStandings, patch
 import { createCourt, createVenue } from "../venues";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { writeEntrantPatch } from "../entrants";
-import { seedOrg } from "./_seed";
+import { GENERIC_CONFIG, seedOrg } from "./_seed";
+import { confirmSeedProposal } from "../stages";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -333,4 +335,62 @@ describe.skipIf(!HAS_DB)("a fed knockout (a setup progression) redraws its place
     expect((await patchKnockoutStage(auth, main!.id, { thirdPlace: "shared" })).regenerated).toBe(true);
     expect(await lineKeys(main!.id)).toEqual(engineBracketRows(4, false).map((x) => x.ext_key).sort());
   }, 180_000);
+});
+
+// I-1 (B4 fix round 1; X-TP-6, PO ruling): a fed knockout whose lines are SEATED (the league finished, the proposal confirmed) but
+// whose first match has not started is still editable. THIRD_PLACE_LOCKED fires only once a match in the stage has started.
+describe.skipIf(!HAS_DB)("I-1 a SEATED fed knockout stays editable until a match in it starts", () => {
+  async function seatedMain() {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "I1 " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+    const div = await createDivision(auth, comp.id, { name: "Open", slug: "open-" + randomUUID().slice(0, 6), sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG });
+    await createEntrants(auth, div.id, Array.from({ length: 4 }, (_, i) => ({ kind: "individual", display_name: `E${i + 1}`, seed: i + 1, members: [] })) as never);
+    const stages = await createStages(auth, div.id, [
+      { seq: 1, kind: "league", name: "League", config: {}, progression: null },
+      CreateStage.parse({ seq: 2, kind: "knockout", name: "Main", config: {}, progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }], placement: "rank_order", timing: "setup" } }),
+    ] as never);
+    const leagueId = stages.find((x) => x.kind === "league")!.id;
+    const mainId = stages.find((x) => x.kind === "knockout")!.id;
+    await generateStageFixtures(auth, mainId);
+    await generateStageFixtures(auth, leagueId);
+    for (const f of await rowsOf(leagueId)) {
+      await appendEvent(auth.orgId, f.id, 0, { type: "core.start", payload: {} });
+      await appendEvent(auth.orgId, f.id, 1, { type: "generic.result", payload: { p1Score: 2, p2Score: 0 } });
+    }
+    await completeStage(auth, leagueId);
+    const [proposal] = await sql<{ id: string }[]>`select id from stage_seed_proposals where stage_id = ${mainId} and status = 'draft'`;
+    await confirmSeedProposal(auth, mainId, { proposalId: proposal!.id });
+    const rows = await rowsOf(mainId);
+    expect(rows.filter((r) => r.home_entrant_id !== null || r.away_entrant_id !== null).length, "rig: the lines are SEATED").toBeGreaterThan(0);
+    return { auth, mainId };
+  }
+
+  it("seated and unplayed: Play-off adds exactly one -3p line fed by both semi-finals, Shared takes it away; the seats stay", async () => {
+    const { auth, mainId } = await seatedMain();
+    const seatsBefore = (await rowsOf(mainId)).map((r) => [r.id, r.home_entrant_id, r.away_entrant_id]);
+    const on = await patchKnockoutStage(auth, mainId, { thirdPlace: "playoff" });
+    expect(on.thirdPlace).toBe("playoff");
+    expect(await lineKeys(mainId), "the engine's Play-off bracket").toEqual(engineBracketRows(4, true).map((x) => x.ext_key).sort());
+    const bronze = await bronzeOf(mainId);
+    expect(bronze, "exactly one -3p line").toHaveLength(1);
+    expect((await rowsOf(mainId)).filter((x) => x.loser_to_fixture === bronze[0]!.id), "fed by both semi-finals").toHaveLength(2);
+    const seatsAfter = (await rowsOf(mainId)).filter((r) => r.id !== bronze[0]!.id).map((r) => [r.id, r.home_entrant_id, r.away_entrant_id]);
+    expect(seatsAfter, "the confirmed draw is untouched").toEqual(seatsBefore);
+    const off = await patchKnockoutStage(auth, mainId, { thirdPlace: "shared" });
+    expect(off.thirdPlace).toBe("shared");
+    expect(await lineKeys(mainId), "back to the Shared bracket").toEqual(engineBracketRows(4, false).map((x) => x.ext_key).sort());
+    expect((await rowsOf(mainId)).filter((x) => x.loser_to_fixture !== null), "no loser edge into a line that is gone").toHaveLength(0);
+    expect((await rowsOf(mainId)).map((r) => [r.id, r.home_entrant_id, r.away_entrant_id]), "the draw is still the same").toEqual(seatsBefore);
+  }, 240_000);
+
+  it("once a match in the stage has started the same PATCH is THIRD_PLACE_LOCKED, writing nothing", async () => {
+    const { auth, mainId } = await seatedMain();
+    const semi = (await rowsOf(mainId)).find((r) => r.round_no === 1 && r.home_entrant_id && r.away_entrant_id)!;
+    await appendEvent(auth.orgId, semi.id, 0, { type: "core.start", payload: {} });
+    const before = await lineKeys(mainId);
+    const err = await refusal(patchKnockoutStage(auth, mainId, { thirdPlace: "playoff" }));
+    expect([err.status, err.code]).toEqual([409, "THIRD_PLACE_LOCKED"]);
+    expect(await lineKeys(mainId)).toEqual(before);
+    expect((await configOf(mainId)).thirdPlace, "config untouched").not.toBe(true);
+  }, 240_000);
 });
