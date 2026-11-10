@@ -534,6 +534,9 @@ describe.runIf(HAS_DB)("W4 T14 a correction inside a completed knockout source (
     const r = await rig({ template: "ko_plate" });
     await playSource(r);
     expect((await offered(r))!.sort(), "premise: the quarter-final losers").toEqual(["E5", "E6", "E7", "E8"]);
+    // The plate is drawn when it is proposed (T8): this is its day one, exactly as the un-fill has to give it back.
+    const drawn = await rowsOf(r.stageIds[1]);
+    expect(drawn.length, "anti-vacuity: the proposal drew a plate of four (3 lines)").toBe(3);
     const confirmedId = await confirmLatest(r);
 
     await correctQuarter(r, "E4", "E5", {
@@ -552,7 +555,9 @@ describe.runIf(HAS_DB)("W4 T14 a correction inside a completed knockout source (
     const unfilled = await rowsOf(r.stageIds[1]);
     expect(unfilled.length, "anti-vacuity: the plate keeps its lines").toBeGreaterThan(0);
     expect(unfilled.every((f) => f.home_entrant_id === null && f.away_entrant_id === null && f.status === "scheduled"), "its seats went back before it started").toBe(true);
-    expect(unfilled.flatMap((f) => [f.home_slot_label, f.away_slot_label]).filter((l) => l !== null).length, "and the labels came back").toBeGreaterThanOrEqual(4);
+    expect(unfilled.map((f) => [f.id, f.home_entrant_id, f.away_entrant_id, f.status, f.outcome, f.home_slot_label, f.away_slot_label]), "the plate is back as it was drawn: the same lines, every label restored")
+      .toEqual(drawn.map((f) => [f.id, null, null, "scheduled", null, f.home_slot_label, f.away_slot_label]));
+    expect(unfilled.flatMap((f) => [f.home_slot_label, f.away_slot_label]).filter((l) => l !== null).length, "and the labels came back (a plate of four: two round-one lines)").toBe(4);
     expect((await offered(r))!.sort(), "E4 lost it now").toEqual(["E4", "E6", "E7", "E8"]);
     const secondId = await confirmLatest(r);
     const held = (await rowsOf(r.stageIds[1])).find((f) => f.home_entrant_id !== null && f.away_entrant_id !== null)!;

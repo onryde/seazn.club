@@ -339,7 +339,7 @@ describe.runIf(HAS_DB)("W4 T5 K1 Undo cannot cross a seed confirm", () => {
     await confirm(r, proposal.id);
     const plate = await rowsOf(r.stageIds[1]);
     const ledger = await ledgerOf(r.divisionId);
-    // A restore is a loop of Undos back to the save point; its first step inverts the bracket's day-one generation.
+    // A restore is a loop of Undos back to the save point; its first step undoes the plate's draw (written when it was proposed, after round two) or the placement, and the confirm sits across it.
     await expect(restoreCheckpoint(r.auth, r.divisionId, r.checkpointId, true)).rejects.toMatchObject(SEED_CONFIRM_REFUSAL);
     expect(await rowsOf(r.stageIds[1])).toEqual(plate);
     expect(await ledgerOf(r.divisionId)).toEqual(ledger);

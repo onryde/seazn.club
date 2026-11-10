@@ -1,6 +1,7 @@
 import "server-only";
 // Marking seed proposals stale when a source stage or the field changes.
 
+import { log } from "@/server/logger";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { ProgressionSpec } from "@seazn/engine/competition";
@@ -220,8 +221,9 @@ export async function markFieldChangeSeedProposalsStale(orgId: string, divisionI
     try {
       const { maybeProposePlate } = await import("../plate-field");
       await maybeProposePlate(systemCtx, m.id);
-    } catch {
-      // best-effort, see docstring
+    } catch (err) {
+      // best-effort, see docstring - but said aloud: a plate that was not proposed after a withdrawal must be findable.
+      log.warn({ event: "plate_trigger_failed_after_withdrawal", stageId: m.id, err: String(err) }, "plate_trigger_failed_after_withdrawal");
     }
   }
 }
