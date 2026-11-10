@@ -1156,11 +1156,16 @@ type WireDeepRequired<T> = T extends readonly (infer E)[]
 type MutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 type AssertTrue<T extends true> = T;
 type TakeRuleWire = z.infer<typeof TakeRuleSchema>;
+// Engine 5.0.0 added `{ kind: "firstLosses" }` (the plate feed). The wire stays CLOSED to it on purpose: nothing in the
+// app can resolve that take yet (app B's T7 does, and admits `FirstLossesTakeS` then), so accepting it now would open an
+// input the resolver cannot handle. The tie is therefore against the engine's TakeRule MINUS that member; a member the
+// engine adds beyond it still fails tsc here.
+type WireTakeRule = Exclude<TakeRule, { kind: "firstLosses" }>;
 export type TakeRuleSchemaMatchesEngine = AssertTrue<
-  MutuallyAssignable<WireDeepReadonly<TakeRuleWire>, WireDeepReadonly<TakeRule>>
+  MutuallyAssignable<WireDeepReadonly<TakeRuleWire>, WireDeepReadonly<WireTakeRule>>
 >;
 export type TakeRuleSchemaMatchesEngineFields = AssertTrue<
-  MutuallyAssignable<WireDeepRequired<TakeRuleWire>, WireDeepRequired<TakeRule>>
+  MutuallyAssignable<WireDeepRequired<TakeRuleWire>, WireDeepRequired<WireTakeRule>>
 >;
 
 // W2d (m8): the API's tie-break vocabularies are the engine's declared ones, exactly — a key or note added to the

@@ -311,12 +311,21 @@ describe.skipIf(!HAS_DB)("L3/#414 pass 2 — placement snapshot per stage kind",
       { ext_key: "se-r1-i0", round_no: 2, home: a, away: c, outcome: { kind: "win", winner: a, loser: c } },
     ]);
 
+    // MOVED by engine 5.0.0 (X-TP-4: a play-off holds completion; X-CH-7: every fixture settled). Until 4.x the stage
+    // completed on the final alone and ranks 3/4 fell back to seed. Now the undecided 3rd-place line keeps it open and
+    // writes no snapshot.
+    const held = await completeStageIfReady(orgId, stageId);
+    expect(held.completed, "the unplayed third-place line holds the stage open").toBe(false);
+    expect(await snapshotRanks(stageId), "nothing is snapshotted while it is open").toBeNull();
+
+    // Decided, the play-off splits the semi-final losers by ITS result - D beats B, against the seed order (B is seed 2) -
+    // while 1st and 2nd still come off the true final, never off the play-off ("never masquerades as the decider").
+    await sql`
+      update fixtures set status = 'decided', outcome = ${sql.json({ kind: "win", winner: d, loser: b })}
+       where stage_id = ${stageId} and ext_key = 'se-3p'`;
     const result = await completeStageIfReady(orgId, stageId);
     expect(result.completed).toBe(true);
-    // 1=A, 2=C off the true final; 3/4 fall back to elimination order (both B
-    // and D lost at round 1, so the tiebreak — seed, then id — decides among
-    // equals rather than the (unplayed) 3rd-place result).
-    expect(await snapshotRanks(stageId)).toEqual([a, c, b, d]);
+    expect(await snapshotRanks(stageId)).toEqual([a, c, d, b]);
   });
 
   it("double_elim: reads the WB/GF lanes off ext_key and ranks the grand final", async () => {

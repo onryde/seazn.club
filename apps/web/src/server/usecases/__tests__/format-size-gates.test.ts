@@ -24,7 +24,6 @@ import { validateStageProgression } from "../stage-seeding";
 import { scoreEvent } from "../scoring";
 import {
   completeStage,
-  confirmSeedProposal,
   createStages,
   generateStageFixtures,
   getSeedProposal,
@@ -32,6 +31,7 @@ import {
   replaceStages,
 } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
+import { confirmResolvingTies } from "./_confirm-with-ties";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -545,7 +545,7 @@ describe.runIf(HAS_DB)("W4 T15 format gates (FX-G14 gate half, QM-2)", () => {
       }
       expect((await completeStage(r.auth, r.stageIds[0]!)).completed).toBe(true);
       const proposal = await getSeedProposal(r.auth, r.stageIds[1]!);
-      await confirmSeedProposal(r.auth, r.stageIds[1]!, { proposalId: proposal!.id });
+      await confirmResolvingTies(r.auth, r.stageIds[1]!, proposal!.id);
 
       const ranks = ["E5", "E2", "E1", "E3"];
       const [{ config }] = await sql<{ config: { qualified?: string[] } }[]>`select config from stages where id = ${r.stageIds[1]!}`;

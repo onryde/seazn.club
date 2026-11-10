@@ -161,6 +161,32 @@ describe.runIf(HAS_DB)("W4 T6 AN-2: a bracket completes only with every match de
     expect((await completeStage(held.auth, held.stageId)).completed).toBe(true);
   }, 240_000);
 
+  it("the wire (engine 5.0.0 FinalPlace[]): stage_completed.finalRanks stays entrant ids in rank order - in the response AND in the stored event - and a decided third place splits 3rd from 4th", async () => {
+    // Smoke w4KnockoutA, the bench and the matrix read these as strings; the engine's own event carries { entrantId, rank }.
+    for (const { sport, variant } of SPORTS) {
+      const r = await semisDecided(sport, variant);
+      await decide(r.auth, sport, r.final, true);
+      await decide(r.auth, sport, r.third, true);
+      const done = await completeStage(r.auth, r.stageId);
+      expect(done.completed).toBe(true);
+      const ev = done.events.find((e) => e.type === "stage_completed");
+      expect(ev?.type, `${sport}: the event is returned`).toBe("stage_completed");
+      const ranks = ev?.type === "stage_completed" ? ev.finalRanks : [];
+      const [stored] = await sql<{ payload: { finalRanks: unknown } }[]>`
+        select payload from division_events where division_id = ${r.divisionId} and type = 'stage_completed'`;
+      expect(stored!.payload.finalRanks, `${sport}: the stored event carries the same ids`).toEqual(ranks);
+      expect(ranks.length, `${sport}: four ranked`).toBe(4);
+      expect(ranks.every((id) => typeof id === "string"), `${sport}: plain ids, not places`).toBe(true);
+      const after = await linesOf(r.stageId);
+      const final = after.find((l) => l.id === r.final.id)!;
+      const third = after.find((l) => l.id === r.third.id)!;
+      expect(ranks[0], `${sport}: the final's winner is first`).toBe(final.home_entrant_id);
+      expect(ranks[1], `${sport}: the final's loser is second`).toBe(final.away_entrant_id);
+      expect(ranks[2], `${sport}: the third-place winner is third`).toBe(third.home_entrant_id);
+      expect(ranks[3], `${sport}: the third-place loser is fourth`).toBe(third.away_entrant_id);
+    }
+  }, 240_000);
+
   it("C4: a final NOT yet settled keeps the soft answer — {completed: false}, no refusal, nothing written", async () => {
     // single-sport: badminton — the engine's own completion predicate answers here; no sport field is read.
     const r = await semisDecided("badminton", "bwf");

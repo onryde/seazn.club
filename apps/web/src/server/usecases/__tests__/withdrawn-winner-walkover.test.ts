@@ -406,7 +406,7 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
     expect(surfaces, "every surface, every sport").toBe(SPORTS.length * 14);
   }, 240_000);
 
-  it("the ranks do not move: she is no loser of a tie she never sat in, so she ranks where a departed entrant always has — below every field entrant", async () => {
+  it("the ranks: she won her semi-final and left before the final, so she is the withdrawn FINALIST and ranks 2nd (engine 5.0.0, dead-seat attribution)", async () => {
     // single-sport: badminton — the ranks read the stored outcomes, not the sport.
     const { sport, variant, play } = SPORTS[0]!;
     const s = await seedBracket({ sport, variant, stageKind: "knockout", entrants: 4 });
@@ -424,11 +424,13 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
     const ranks = ev?.type === "stage_completed" ? ev.finalRanks : [];
     expect(done.completed).toBe(true);
     expect(ranks[0], "the arriving side is champion").toBe(finalist);
-    // The rule the stepladder pin states (withdrawal-w2b.test.ts): where a departed entrant ranks is not ruled, and it
-    // is never above a field entrant. Ruling 116 is copy: it names her, it does not make her a finalist.
+    // MOVED by engine 5.0.0 (changelog "Dead-seat attribution": "A withdrawn finalist ranks 2nd"; X-CH-2). She reached the
+    // final by winning her semi, and the seat's feed names her, so the walkover over it is HER loss: 2nd, not last. Before
+    // 5.0.0 the seat was anonymous and she ranked last (or not at all). The old value is no longer the rule.
     const field = ranks.filter((id) => id !== w1);
     expect(field.length, "the field is ranked").toBe(3);
-    expect([-1, ranks.length - 1], `she ranks last or not at all (${ranks.indexOf(w1)} of ${ranks.length})`).toContain(ranks.indexOf(w1));
+    expect(ranks.length, "everyone is ranked once").toBe(4);
+    expect(ranks.indexOf(w1), "the withdrawn finalist ranks 2nd").toBe(1);
   }, 120_000);
 
   it("the positive pairs: a genuine bye of an odd draw, and a dead seat a double walkover made, stay byes that read no forfeit", async () => {

@@ -34,8 +34,15 @@ function rowsOf(gen: GeneratedBracket, deLanes = false): BracketFixtureRef[] {
 describe("bracketPlacement", () => {
   it("a single-elimination tree of any size is drawn in the stage's card (swept over field sizes, byes and a third-place match)", () => {
     let checked = 0;
+    let refused = 0;
     for (const n of [3, 4, 5, 6, 7, 8, 12, 16]) {
       for (const thirdPlace of [false, true]) {
+        if (thirdPlace && n < 4) {
+          // Engine 5.0.0 (X-TP-5): fewer than two real semi-finals draws no third place - refused, never a silent drop.
+          expect(() => generateSingleElim({ entrants: field(n), thirdPlace }), `${n} entrants with a third place`).toThrow(/two real semi-finals/);
+          refused += 1;
+          continue;
+        }
         const rows = rowsOf(generateSingleElim({ entrants: field(n), thirdPlace }));
         // The premise, from the engine: the panel's own reader accepts it as a two-sided tree - otherwise "card" proves nothing.
         expect(twoSidedBracket(rows).ok, `premise: ${n} entrants / third=${thirdPlace} reads as a two-sided tree`).toBe(true);
@@ -43,7 +50,8 @@ describe("bracketPlacement", () => {
         checked += 1;
       }
     }
-    expect(checked).toBe(16);
+    expect(checked).toBe(15);
+    expect(refused, "anti-vacuity: the field below four was reached").toBe(1);
   });
 
   it("a double-elimination tree keeps the page (it has no card button), with and without the bracket reset", () => {

@@ -1093,7 +1093,7 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
       this.log("completeStage");
       if (this.fixtures.some((f) => PENDING.has(f.status))) return { completed: false, events: [] };
       const seed = (id: string) => this.entrants.find((e) => e.id === id)?.seed ?? Number.MAX_SAFE_INTEGER;
-      const out: { id: string; round: number }[] = [];
+      const out: { id: string; round: number; wo: boolean }[] = [];
       let champion: string | null = null;
       for (const f of this.fixtures) {
         const w = (f.outcome as { winner?: unknown } | null)?.winner;
@@ -1102,7 +1102,7 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
         if (typeof w !== "string" || f.home_entrant_id === null || f.away_entrant_id === null) continue;
         // A loser that plays on (a page playoff's pp-q1) is not out yet - unless its next seat is dead (a walkover's loser).
         const lo = this.loserFeeds.get(f.id);
-        if (lo === undefined || this.deadSlots.has(`${lo.to}:${lo.slot}`)) out.push({ id: w === f.home_entrant_id ? f.away_entrant_id : f.home_entrant_id, round: f.round_no ?? 0 });
+        if (lo === undefined || this.deadSlots.has(`${lo.to}:${lo.slot}`)) out.push({ id: w === f.home_entrant_id ? f.away_entrant_id : f.home_entrant_id, round: f.round_no ?? 0, wo: f.status === "forfeited" });
         if (!this.feeds.has(f.id)) champion = w;
       }
       // T16 review m8: rank every entrant the stage's fixtures name, as the product's `bracketRanks` does (engine
@@ -1111,17 +1111,18 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
       // elimination, by seed. An award's loser who holds no seat there (ruling 116's withdrawn winner) is no loss
       // (engine-db/competition.ts `bracketWinnerLoser`), and a seated one is the first loop's.
       const ranked = new Set<string>([...out.map((x) => x.id), ...(champion === null ? [] : [champion])]);
-      const rank = (id: string | null | undefined, round: number) => {
+      const rank = (id: string | null | undefined, round: number, wo = false) => {
         if (typeof id !== "string" || ranked.has(id)) return;
-        out.push({ id, round });
+        out.push({ id, round, wo });
         ranked.add(id);
       };
       for (const f of this.fixtures) {
         const o = f.outcome as { kind?: unknown; loser?: unknown } | null;
-        if (o?.kind === "double_walkover") for (const id of [f.home_entrant_id, f.away_entrant_id]) rank(id, f.round_no ?? 0);
+        if (o?.kind === "double_walkover") for (const id of [f.home_entrant_id, f.away_entrant_id]) rank(id, f.round_no ?? 0, true);
       }
       for (const f of this.fixtures) for (const id of [f.home_entrant_id, f.away_entrant_id]) rank(id, -1);
-      out.sort((a, b) => b.round - a.round || seed(a.id) - seed(b.id));
+      // Engine 5.0.0 (X-SP-5): in a page playoff an entrant put out by a walkover ranks below one put out by play in the same round.
+      out.sort((a, b) => b.round - a.round || (this.pagePlayoff ? Number(a.wo) - Number(b.wo) : 0) || seed(a.id) - seed(b.id));
       if (this.thirdPlace) {
         // The final's winner, then its loser, then the third-place match's winner and loser, then the rest by round.
         const pair = (row: FakeFixture | undefined): string[] => {

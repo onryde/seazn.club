@@ -260,7 +260,13 @@ export function walkoverDepartedQualifiers(
   const departedSeat = new Map<string, "home" | "away">();
   for (const entrantId of departed) {
     const { updates } = withdrawBracketEntrant(
-      { id: stageId, kind: kind as "knockout" | "double_elim" | "stepladder" },
+      {
+        id: stageId,
+        kind: kind as "knockout" | "double_elim" | "stepladder",
+        // engine 5.0.0 made `entrants` required. The seated set is what this planner has always read (no behaviour
+        // change); app B's T2' widens it to the stage's full drawn roster.
+        entrants: [...new Set(gen.flatMap((g) => [g.home, g.away]).filter((id): id is string => id !== null))],
+      },
       entrantId,
       fixtures,
     );

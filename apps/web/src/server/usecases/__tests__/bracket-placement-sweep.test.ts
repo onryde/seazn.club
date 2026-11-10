@@ -216,6 +216,10 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
   /** Every bracket stage the sweep asked about (about to generate / about to seed), and how many of those the usecase refused. */
   let enumerated = 0;
   let refusedBracket = 0;
+  /** Engine 5.0.0 (X-TP-5): a knockout asked for a third-place match without two real semi-finals is refused by the engine
+   *  (CONFIG_INVALID `third_place_needs_two_semis`) - at Generate for a field of 2 or 3. Counted apart from `refused`: it is
+   *  the rule working, judged below against the rule's arithmetic (fewer than 4 entrants, fewer than 2 real semis). */
+  const thirdRefused: Array<{ label: string; entrants: number; realSemis: number }> = [];
   /** W4 T24: every (wide template, field, q, third) the seeded pass asked, so a field cannot drop out of the widened sweep unnoticed. */
   const wideAsked: Array<{ key: string; n: number; q: number; third: boolean }> = [];
 
@@ -231,12 +235,20 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
       return null;
     }
     const stageIds = stages.map((s) => s.id);
+    let thirdOwed = false;
     for (const [i, id] of stageIds.entries()) {
       const isBracket = BRACKET_STAGE_KINDS.has(drafts[i]!.kind);
       if (isBracket) enumerated++;
       try {
         await generateStageFixtures(auth, id);
       } catch (e) {
+        const third = /a third-place match needs two real semi-finals; (\d+) entrants give (\d+)/.exec((e as Error).message);
+        if (third !== null && drafts[i]!.kind === "knockout" && drafts[i]!.config.thirdPlace === true) {
+          thirdRefused.push({ label, entrants: Number(third[1]), realSemis: Number(third[2]) });
+          thirdOwed = true;
+          refusedBracket++;
+          continue;
+        }
         refused.push(`${label}: generate ${drafts[i]!.kind} refused (${(e as Error).message})`);
         if (isBracket) refusedBracket++;
         continue;
@@ -246,7 +258,7 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
         seen.push({ label: `${label} / ${drafts[i]!.name}`, phase: "day-one", kind: drafts[i]!.kind, ...got });
       }
     }
-    return { auth, divisionId: division.id, stageIds, seedOf };
+    return { auth, divisionId: division.id, stageIds, seedOf, thirdOwed };
   }
 
   /** Play each stage out in turn, complete it, seed the next from it, and record the bracket stages the seeding filled. */
@@ -254,6 +266,8 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
     const ctx = await dayOne(label, n, drafts);
     if (!ctx) return;
     const { auth, divisionId, stageIds, seedOf } = ctx;
+    // A stage the engine refused to draw (a third place without two semis) has no fixtures to seed into: nothing more to ask.
+    if (ctx.thirdOwed) return;
     try {
       await startDivision(auth, divisionId);
     } catch (e) {
@@ -385,6 +399,14 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
       expect(seen.some((c) => c.phase === "seeded" && c.label === `qualifying_main n=${n} q=4 third=false / Main draw`), `qualifying_main n=${n} q=4: the Main draw is drawn`).toBe(true);
       expect(refused.some((r) => r.startsWith(`qualifying_main n=${n} q=3 third=false: createStages refused`)), `qualifying_main n=${n} q=3 without a third-place match: a cut of 1-3 is no whole band`).toBe(true);
     }
+
+    // X-TP-5, against the rule's arithmetic: every third-place refusal named a field under four with fewer than two real
+    // semi-finals (the engine's own sentence), and the sweep also drew third-place knockouts that were NOT refused.
+    expect(thirdRefused.length, "anti-vacuity: the sweep met the third-place refusal").toBeGreaterThan(0);
+    for (const t of thirdRefused) {
+      expect([t.entrants < 4, t.realSemis < 2], `${t.label}: refused for ${t.entrants} entrants / ${t.realSemis} real semis`).toEqual([true, true]);
+    }
+    expect(seen.some((c) => c.label.includes("third=true") && c.kind === "knockout"), "a third-place knockout was drawn where the engine allows it").toBe(true);
 
     // A refusal is the usecase saying no to an impossible request, not a stage that lost its bracket (see `auditRefusals`).
     const audit = auditRefusals(refused);

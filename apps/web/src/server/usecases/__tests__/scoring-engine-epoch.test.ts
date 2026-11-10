@@ -231,6 +231,22 @@ describe.skipIf(!HAS_DB)("scoreEvent — the engine-epoch gate (D31)", () => {
     expect(after.seq).toBe(1);
   });
 
+  it("5b. cricket's gate epoch is 4 (engine 6.0.0, CK-SO-4): an epoch-3 phone is refused 426, the web pad (no engine_epoch) and an epoch-4 client write", async () => {
+    // The literal is the engine's own release declaration ("cricket's FOLD_EPOCH rises from 3 to 4", v6.0.0), pinned so an
+    // engine that moves it again, or a gate that stops reading it, reds here. No bump: this is the REAL epoch.
+    expect(bump.get("cricket") ?? 0, "premise: no test bump is applied to cricket").toBe(0);
+    expect(foldEpochOf("cricket"), "cricket's declared fold epoch").toBe(4);
+    const old = await seed("cricket");
+    const err = await refusal(start(old, { engine_epoch: 3 }));
+    expect([err.status, err.code], "an epoch-3 phone").toEqual([426, "ENGINE_OUTDATED"]);
+    expect(err.extra).toEqual({ sport: "cricket", required: 4, got: 3 });
+    expect(await rows(old.fixtureId), "the refusal wrote nothing").toBe(0);
+    const web = await start(old, {});
+    expect(web.seq, "the web pad sends no engine_epoch and is not gated").toBe(1);
+    const fresh = await seed("cricket");
+    expect((await start(fresh, { engine_epoch: 4 })).seq, "an epoch-4 client writes").toBe(1);
+  });
+
   it("6. the key is NOT burned: lower with key K → 426; the same K at the current epoch → 201 and exactly one row", async () => {
     const s = await seed(BADMINTON);
     bump.set(BADMINTON, 1);

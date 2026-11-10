@@ -42,6 +42,7 @@ import {
 } from "../stages";
 import { createCourt, createVenue } from "../venues";
 import { withdrawEntrantCascade } from "../withdrawal";
+import { confirmResolvingTies } from "./_confirm-with-ties";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -194,7 +195,7 @@ async function playSource(r: Rig, winners: readonly string[] = []): Promise<void
 async function confirmLatest(r: Rig): Promise<string> {
   const p = await getSeedProposal(r.auth, r.stageIds[1]);
   expect(p?.status, "rig: the newest proposal is a draft").toBe("draft");
-  await confirmSeedProposal(r.auth, r.stageIds[1], { proposalId: p!.id });
+  await confirmResolvingTies(r.auth, r.stageIds[1], p!.id);
   return p!.id;
 }
 

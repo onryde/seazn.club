@@ -20,7 +20,8 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
-import { completeStage, computeSeedProposal, confirmSeedProposal, createStages, generateStageFixtures, getSeedProposal } from "../stages";
+import { completeStage, computeSeedProposal, createStages, generateStageFixtures, getSeedProposal } from "../stages";
+import { confirmResolvingTies } from "./_confirm-with-ties";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -101,7 +102,7 @@ async function drive(n: number, opts: { qualified?: number } = {}): Promise<stri
       proposal = await getSeedProposal(auth, main);
     }
     step = "confirm";
-    await confirmSeedProposal(auth, main, { proposalId: proposal!.id });
+    await confirmResolvingTies(auth, main, proposal!.id);
     step = "main";
     await playOut(auth, main, seedOf);
     step = "complete main";

@@ -754,6 +754,8 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     ]);
     expect(await activeTypes(third.id)).toEqual([]);
     const final = await playBadminton(s.auth, a.winner_to_fixture!, true);
+    // Engine 5.0.0 holds completion for every unsettled fixture (X-TP-4, X-CH-7), so the app reads this nobody-can-play line
+    // as the void it is (`nobodyCanPlay`, engine-db/competition.ts) and the stage still completes on its final.
     expect((await completeStage(s.auth, s.stageId)).completed, "the final decided the stage").toBe(true);
     expect(final.status).toBe("decided");
   }, 120_000);

@@ -1401,17 +1401,16 @@ describe.skipIf(!HAS_DB)("D-G1: a recorded abandon that decided nobody holds sta
     const [st] = await sql<{ status: string }[]>`select status from stages where id = ${s.stageId}`;
     expect(st!.status, "nothing was written").toBe("active");
 
-    // The positive pair: the same void with BOTH finalists departed is the F14 shape (walkoverDepartedQualifiers) —
-    // departed entrants are ranked by the unbeaten default, last, legitimately, and the stage completes.
+    // The positive pair, MOVED by engine 5.0.0. The same void with BOTH finalists departed is the F14 shape
+    // (walkoverDepartedQualifiers). Until 4.x it completed, the departed finalists ranked last by the unbeaten default.
+    // 5.0.0's `completeBracketStage` refuses a settled final that decided nothing: CONFIG_INVALID `no_title` ("a void
+    // final with no reset after it"). The engine-declared value is the refusal, so that is what is pinned. The PRODUCT
+    // answer - a vacant title the organiser can close (`title: { kind: "vacant" }`, ranks 2,2) - is W4 app PR B's
+    // (plan-rebase 2026-11-10 §2, "vacant-final hold"); until then this shape cannot complete. Reported to the owner.
     await sql`update entrants set status = 'withdrawn' where id in ${sql([final.home_entrant_id!, final.away_entrant_id!])}`;
-    const c = await completion(s.auth, s.stageId);
-    expect(c.completed).toBe(true);
-    expect(new Set(c.ranks!.slice(0, 2)), "the semi-final losers lost later than anyone departed").toEqual(
-      new Set(semis.map((r) => r.away_entrant_id)),
-    );
-    expect(new Set(c.ranks!.slice(2)), "the departed finalists are last").toEqual(
-      new Set([final.home_entrant_id, final.away_entrant_id]),
-    );
+    await expect(completeStage(s.auth, s.stageId)).rejects.toMatchObject({ code: "CONFIG_INVALID", message: expect.stringMatching(/decided no title/) });
+    const [after] = await sql<{ status: string }[]>`select status from stages where id = ${s.stageId}`;
+    expect(after!.status, "nothing was written").toBe("active");
   });
 });
 

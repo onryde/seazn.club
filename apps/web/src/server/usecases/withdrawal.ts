@@ -403,7 +403,13 @@ export async function withdrawEntrantCascade(
         }
         // The planner is kind-blind (it walks every unsettled line of the entrant over to its opponent).
         const result = withdrawBracketEntrant(
-          { id: stage.id, kind: stage.kind as "knockout" | "double_elim" | "stepladder" },
+          {
+            id: stage.id,
+            kind: stage.kind as "knockout" | "double_elim" | "stepladder",
+            // engine 5.0.0 made `entrants` required. The seated set is what this planner has always read (no behaviour
+            // change); app B's T2' widens it to the stage's full drawn roster.
+            entrants: [...new Set(bracketFixtures.flatMap((b) => [b.home, b.away]).filter((id): id is string => id !== undefined))],
+          },
           entrantId,
           bracketFixtures,
         );
