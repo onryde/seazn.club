@@ -453,10 +453,13 @@ test("sell: the Sponsors hub's Packages and orders tab creates a priced package,
   await page.goto(sponsorsUrl(org.slug, "packages"));
 
   const panel = page.getByTestId("sponsor-packages");
+  // `sponsor-packages` wraps BOTH views since the final fix (a plan without the feature keeps its deals' exits there), so the
+  // sell console is told apart by its own package form, and the upsell by its own paragraph - each the other's pair.
   await expect(
-    panel,
-    "a Pro org with sponsors.monetize must get the sell console, not the upsell paragraph",
+    panel.getByTestId("sponsor-pkg-create"),
+    "a Pro org with sponsors.monetize must get the sell console's package form",
   ).toBeVisible({ timeout: READ_MS });
+  await expect(panel.getByTestId("sponsor-sell-upsell"), "...and not the upsell paragraph").toHaveCount(0);
   await expect(
     panel.getByText(ui("sponsors.sell.empty")),
     "a fresh org must open on the no-packages empty state",

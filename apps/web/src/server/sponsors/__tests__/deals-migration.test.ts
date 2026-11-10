@@ -538,7 +538,9 @@ describe.skipIf(!HAS_DB)("sponsor deals schema — the constraints are real", ()
       return JSON.stringify(await tx.unsafe(`explain (format json) ${SWEEP}`));
     });
     expect(plan).toContain('"Index Name":"sponsor_orders_open_sweep_idx"');
-    expect(plan, "keyed on the sweep's order: nothing to sort").not.toContain('"Node Type":"Sort"');
+    // Neither a full Sort nor an Incremental Sort (Postgres 13+, CI runs 16): an index on a PREFIX of the order key would
+    // still be walked, then sorted incrementally.
+    expect(plan, "keyed on the sweep's order: nothing to sort").not.toMatch(/"Node Type":"(Incremental )?Sort"/);
   });
 
   // D6: the legacy block is the file's own text between its markers, run as the migration runs it, in a transaction that

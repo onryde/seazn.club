@@ -29,6 +29,7 @@
 // Final fix (final review m1):
 //   K16 exits       no-plan view back to the upsell alone                            -> "keeps every exit from the deals it already has"
 //   K17 resend gate drop `hasMonetize &&` from Resend                                -> "...: no Resend without the plan"
+//   K18 empty case  show the Orders list without the plan even with no deals         -> "a plan without sponsors.monetize and no deals reads only"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 
@@ -523,6 +524,15 @@ describe("the gate and the first read", () => {
     expect(m.text()).toContain(msg("sponsors.sell.upsell"));
     expect(m.text(), "no Orders heading for an org with nothing to exit").not.toContain(msg("sponsors.orders.title"));
     expect(m.text(), "and never the 'send a package invoice' empty line it cannot act on").not.toContain(msg("sponsors.orders.empty"));
+    // The two views share the `sponsor-packages` wrapper; each has its own testid (the e2e tells them apart by these).
+    expect(m.has("sponsor-sell-upsell")).toBe(true);
+    expect(m.has("sponsor-pkg-create")).toBe(false);
+  });
+
+  it("with the plan: the package form's testid, not the upsell's (the pair of the above)", async () => {
+    const m = await mount();
+    expect(m.has("sponsor-pkg-create")).toBe(true);
+    expect(m.has("sponsor-sell-upsell")).toBe(false);
   });
 
   it("the first read is packages + deals - the packages and the deal list, nothing else (counted)", async () => {

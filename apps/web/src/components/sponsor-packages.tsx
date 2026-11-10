@@ -535,7 +535,7 @@ export function SponsorPackages({
     // Orders empty line invites a Send this plan cannot make).
     return (
       <div data-testid="sponsor-packages" className="space-y-4">
-        <p className="text-sm text-slate-500">
+        <p data-testid="sponsor-sell-upsell" className="text-sm text-slate-500">
           {msg("sponsors.sell.upsell")}{" "}
           <Link href={billingHref} className="text-purple-600 underline">
             {msg("settings.upgrade.link")}
@@ -573,8 +573,8 @@ export function SponsorPackages({
         </div>
       ) : null}
 
-      {/* Create a package */}
-      <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+      {/* Create a package: its testid is the sell console's own (`sponsor-packages` also wraps the no-plan view). */}
+      <div data-testid="sponsor-pkg-create" className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
         <p className="mb-3 text-sm font-semibold text-slate-800">{msg("sponsors.pkg.create")}</p>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="block">
