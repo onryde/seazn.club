@@ -781,6 +781,19 @@ test("add deal sheet: a bottom sheet on a phone, a panel from sm - the cards fit
     // The buttons are in the sheet's footer, on screen, 44px where a finger is the pointer.
     const box = (await page.getByTestId("add-deal-submit").boundingBox())!;
     expect(box.y + box.height, `${width}: the primary button is on screen`).toBeLessThanOrEqual((page.viewportSize()!.height) + 1);
+    // From sm the cards sit three to a row: one row, one height - a card with a short line must not stop short of its neighbours.
+    if (width >= 768) {
+      const rows = {
+        payment: ["add-deal-payment-online-card", "add-deal-payment-offline-card", "add-deal-payment-complimentary-card"],
+        golive: ["add-deal-golive-on_payment-card", "add-deal-golive-immediate-card", "add-deal-golive-on_approval-card"],
+      };
+      for (const [row, ids] of Object.entries(rows)) {
+        const boxes = await Promise.all(ids.map(async (id) => (await page.getByTestId(id).boundingBox())!));
+        expect(new Set(boxes.map((b) => Math.round(b.y))).size, `${width}: the ${row} cards share one row`).toBe(1);
+        const heights = boxes.map((b) => Math.round(b.height));
+        expect(Math.max(...heights) - Math.min(...heights), `${width}: the ${row} cards are one height (${heights.join("/")})`).toBeLessThanOrEqual(1);
+      }
+    }
     if (width < 768) {
       for (const id of ["add-deal-submit", "add-deal-cancel", "add-deal-email", "add-deal-scope"]) {
         expect((await page.getByTestId(id).boundingBox())!.height, `${width}: ${id} is a 44px target`).toBeGreaterThanOrEqual(44);

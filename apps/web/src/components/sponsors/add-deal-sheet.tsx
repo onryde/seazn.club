@@ -86,7 +86,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  *  radio keeps its native keyboard and screen-reader behaviour), then the card, then the dot that marks the choice without colour
  *  alone. */
 const CARD =
-  "flex h-full min-w-0 flex-col gap-1 rounded-xl border border-slate-200 bg-white py-3 pl-3 pr-10 transition-colors hover:border-purple-300 " +
+  "flex min-w-0 flex-1 flex-col gap-1 rounded-xl border border-slate-200 bg-white py-3 pl-3 pr-10 transition-colors hover:border-purple-300 " +
   "peer-checked:border-purple-500 peer-checked:bg-purple-50 peer-checked:ring-1 peer-checked:ring-purple-500 " +
   "peer-focus-visible:ring-2 peer-focus-visible:ring-purple-400 peer-disabled:opacity-60 peer-disabled:hover:border-slate-200";
 const DOT =
@@ -246,8 +246,10 @@ export function AddDealSheet({
     title: ReactNode; line?: ReactNode; lineTestid?: string; chips?: ReactNode; hint?: ReactNode;
   }) {
     return (
-      <div key={c.value} className="min-w-0">
-        <label data-testid={c.cardTestid ?? `${c.testid}-card`} className={`relative block min-w-0 ${c.disabled ? "cursor-not-allowed" : "cursor-pointer"}`}>
+      // A flex column all the way down, so a row of cards shares one height: the grid stretches this wrapper, the label grows into it
+      // (flex-1) and the card fills the label (flex-1). A `block` label here let each card size to its own text (uneven rows).
+      <div key={c.value} className="flex min-w-0 flex-col">
+        <label data-testid={c.cardTestid ?? `${c.testid}-card`} className={`relative flex min-w-0 flex-1 flex-col ${c.disabled ? "cursor-not-allowed" : "cursor-pointer"}`}>
           <input
             type="radio"
             name={c.group}
