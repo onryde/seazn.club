@@ -355,25 +355,39 @@ describe.skipIf(!HAS_DB)("W4 T16 fix 1: two sequential Withdraws of both finalis
     checked++;
   });
 
-  it("(c) the third-place match: its two sides Withdraw one after the other - vacant 3rd, both rank 4th (1, 2, 4, 4)", async () => {
-    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 4, stageConfig: { thirdPlace: true } });
-    for (const sf of (await rowsOf(s.stageId)).filter((r) => r.home_entrant_id && r.away_entrant_id)) await playBadminton(s.auth, sf.id, true);
-    const [bronze] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${s.stageId} and third_place`;
-    const b0 = await fixtureRow(bronze!.id);
-    const [a, b] = [b0.home_entrant_id!, b0.away_entrant_id!];
-    await withdrawEntrantCascade(s.auth, a);
-    expect((await fixtureRow(b0.id)).outcome, "premise: walkover to the other").toMatchObject({ kind: "award", winner: b, reason: "withdrew" });
-    await withdrawEntrantCascade(s.auth, b);
-    expect((await fixtureRow(b0.id)).outcome).toEqual({ kind: "double_walkover" });
-    const final = await finalOf(s.stageId);
-    expect([final.status, final.outcome], "the deciding final is untouched").toEqual(["scheduled", null]);
-    await playBadminton(s.auth, final.id, true);
-    expect((await completeStage(s.auth, s.stageId)).completed).toBe(true);
-    const ranks = await ranksOf(s.auth, s.stageId);
-    expect([...ranks.values()].sort(), "1st, 2nd, and the two bronze sides level 4th").toEqual([1, 2, 4, 4]);
-    expect([ranks.get(a), ranks.get(b)]).toEqual([4, 4]);
-    checked++;
-  });
+  const footballWins = async (auth: Parameters<typeof getStandings>[0], id: string) => {
+    await post(auth, id, "core.start");
+    await post(auth, id, "football.goal", { by: (await fixtureRow(id)).home_entrant_id, minute: 12 });
+    await post(auth, id, "football.period", { phase: "HT" });
+    await post(auth, id, "football.period", { phase: "FT" });
+    const r = await fixtureRow(id);
+    if (r.status !== "decided") throw new Error(`rig: ${r.ext_key} did not decide (${r.status})`);
+  };
+  const bronzeSports = [
+    { sport: "badminton", variant: declaredVariant("badminton", "bwf"), extra: {}, play: async (auth: Parameters<typeof getStandings>[0], id: string) => void (await playBadminton(auth, id, true)) },
+    { sport: "football", variant: declaredVariant("football", "11-a-side"), extra: { stageRules: {} }, play: footballWins },
+  ] as const;
+  for (const sp of bronzeSports) {
+    it(`(c) the third-place match: its two sides Withdraw one after the other - vacant 3rd, both rank 4th (1, 2, 4, 4) (${sp.sport})`, async () => {
+      const s = await seedBracket({ sport: sp.sport, variant: sp.variant, stageKind: "knockout", entrants: 4, stageConfig: { thirdPlace: true }, ...sp.extra });
+      for (const sf of (await rowsOf(s.stageId)).filter((r) => r.home_entrant_id && r.away_entrant_id)) await sp.play(s.auth, sf.id);
+      const [bronze] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${s.stageId} and third_place`;
+      const b0 = await fixtureRow(bronze!.id);
+      const [a, b] = [b0.home_entrant_id!, b0.away_entrant_id!];
+      await withdrawEntrantCascade(s.auth, a);
+      expect((await fixtureRow(b0.id)).outcome, "premise: walkover to the other").toMatchObject({ kind: "award", winner: b, reason: "withdrew" });
+      await withdrawEntrantCascade(s.auth, b);
+      expect((await fixtureRow(b0.id)).outcome).toEqual({ kind: "double_walkover" });
+      const final = await finalOf(s.stageId);
+      expect([final.status, final.outcome], "the deciding final is untouched").toEqual(["scheduled", null]);
+      await sp.play(s.auth, final.id);
+      expect((await completeStage(s.auth, s.stageId)).completed).toBe(true);
+      const ranks = await ranksOf(s.auth, s.stageId);
+      expect([...ranks.values()].sort(), "1st, 2nd, and the two bronze sides level 4th").toEqual([1, 2, 4, 4]);
+      expect([ranks.get(a), ranks.get(b)]).toEqual([4, 4]);
+      checked++;
+    });
+  }
 
   it("(d) a PLAYED final stays as played when a finalist then withdraws: the champion is unchanged (ruling 271)", async () => {
     const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 2 });
@@ -402,6 +416,69 @@ describe.skipIf(!HAS_DB)("W4 T16 fix 1: two sequential Withdraws of both finalis
     await withdrawEntrantCascade(s.auth, a, { as: "disqualified" });
     expect(await ledger(), "the walkover is not voided and re-written: b is still in").toBe(rows);
     expect((await fixtureRow(final.id)).outcome, "b still holds the walkover").toMatchObject({ kind: "award", winner: b, reason: "withdrew" });
+    checked++;
+  });
+
+  it("(I2) Withdraw, the organiser Completes the stage, then the walkover champion withdraws: the CHAMPION STANDS (PO ruling 2026-11-10)", async () => {
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 2 });
+    const final = await finalOf(s.stageId);
+    const [a, b] = [final.home_entrant_id!, final.away_entrant_id!];
+    await withdrawEntrantCascade(s.auth, a);
+    expect((await completeStage(s.auth, s.stageId)).completed).toBe(true);
+    const ranksBefore = await ranksOf(s.auth, s.stageId);
+    expect([ranksBefore.get(b), ranksBefore.get(a)], "premise: b champion, a 2nd").toEqual([1, 2]);
+    const ledger = async () => (await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${final.id}`)[0]!.n;
+    const rows = await ledger();
+    await withdrawEntrantCascade(s.auth, b);
+    const after = await fixtureRow(final.id);
+    expect([after.status, after.outcome], "the walkover stands").toEqual(["forfeited", { kind: "award", winner: b, loser: a, reason: "withdrew" }]);
+    expect(await ledger(), "no void, no re-write").toBe(rows);
+    expect([...(await ranksOf(s.auth, s.stageId)).entries()].sort(), "the stored ranks are unchanged").toEqual([...ranksBefore.entries()].sort());
+    const [slugs] = await sql<{ org: string; comp: string; div: string }[]>`
+      select o.slug as org, c.slug as comp, d.slug as div from divisions d
+        join competitions c on c.id = d.competition_id join organizations o on o.id = d.org_id where d.id = ${s.divisionId}`;
+    await sql`update competitions set visibility = 'public' where id = ${s.competitionId}`;
+    const data = await getPublicDivision(slugs!.org, slugs!.comp, slugs!.div);
+    expect(divisionTitle(data!.stages, data!.fixtures, data!.standings), "the public title agrees").toMatchObject({ kind: "champion" });
+    checked++;
+  });
+
+  it("(I2, -3p) the stage Completed, the bronze walkover winner then withdraws: the bronze walkover stands", async () => {
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 4, stageConfig: { thirdPlace: true } });
+    for (const sf of (await rowsOf(s.stageId)).filter((r) => r.home_entrant_id && r.away_entrant_id)) await playBadminton(s.auth, sf.id, true);
+    const [bronze] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${s.stageId} and third_place`;
+    const b0 = await fixtureRow(bronze!.id);
+    const [a, b] = [b0.home_entrant_id!, b0.away_entrant_id!];
+    await withdrawEntrantCascade(s.auth, a);
+    await playBadminton(s.auth, (await finalOf(s.stageId)).id, true);
+    expect((await completeStage(s.auth, s.stageId)).completed).toBe(true);
+    await withdrawEntrantCascade(s.auth, b);
+    expect((await fixtureRow(b0.id)).outcome).toEqual({ kind: "award", winner: b, loser: a, reason: "withdrew" });
+    checked++;
+  });
+
+  it("(m1) a walkover that is NOT a withdrawal (the organiser's award) stays an award when its winner then departs", async () => {
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 2 });
+    const final = await finalOf(s.stageId);
+    const [a, b] = [final.home_entrant_id!, final.away_entrant_id!];
+    await post(s.auth, final.id, "core.forfeit", { by: a, reason: "walkover" });
+    const before = await fixtureRow(final.id);
+    expect(before.outcome, "premise: an award for another reason").toMatchObject({ kind: "award", winner: b });
+    expect((before.outcome as { reason?: string }).reason, "premise: not a withdrawal").not.toBe("withdrew");
+    await withdrawEntrantCascade(s.auth, b);
+    const after = await fixtureRow(final.id);
+    expect([after.status, after.outcome]).toEqual([before.status, before.outcome]);
+    checked++;
+  });
+
+  it("(m1) a SEMI-final is no final: withdraw A then B there, and the semi stays an award to B", async () => {
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 4 });
+    const semi = (await rowsOf(s.stageId)).find((r) => r.home_entrant_id && r.away_entrant_id)!;
+    const [a, b] = [semi.home_entrant_id!, semi.away_entrant_id!];
+    await withdrawEntrantCascade(s.auth, a);
+    expect((await fixtureRow(semi.id)).outcome, "premise: walkover to b").toMatchObject({ kind: "award", winner: b, reason: "withdrew" });
+    await withdrawEntrantCascade(s.auth, b);
+    expect((await fixtureRow(semi.id)).outcome, "still an award to b, never a double walkover").toMatchObject({ kind: "award", winner: b });
     checked++;
   });
 });

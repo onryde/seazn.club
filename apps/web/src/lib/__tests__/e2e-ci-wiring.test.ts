@@ -435,6 +435,10 @@ const WALKTHROUGH_SPECS: string[] = [
   // Playoffs through the real builder, plays them out and withdraws a
   // finalist; the only test that drives those finals end to end in a browser.
   "w4-final-stages.spec.ts",
+  // W4 knockout doubles — an organiser builds a badminton-pairs Knockout +
+  // Plate with a shared third place, adds a late pair, confirms the plate,
+  // plays both brackets out and reads the public page.
+  "w4-knockout-doubles.spec.ts",
 
   // Device-link write path W1 — the realtime propagation flows §6b of the
   // design surveyed and found uncovered: a courtside device's goal reaching

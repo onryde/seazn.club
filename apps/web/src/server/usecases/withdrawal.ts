@@ -448,7 +448,9 @@ export async function withdrawEntrantCascade(
           for (const f of mine) {
             const o = f.outcome as { kind?: string; winner?: string; reason?: string } | null;
             const scoped = f.is_final === true || f.third_place === true;
-            if (!scoped || f.status !== "forfeited" || o?.kind !== "award" || o.reason !== REASON || o.winner !== entrantId) continue;
+            // PO ruling 2026-11-10 (I2): once the organiser has Completed the stage the walkover champion STANDS; a later
+            // departure takes the ordinary post-complete handling, never the vacant title.
+            if (stage.status === "complete" || !scoped || f.status !== "forfeited" || o?.kind !== "award" || o.winner !== entrantId) continue;
             const other = f.home_entrant_id === entrantId ? f.away_entrant_id : f.home_entrant_id;
             if (!other) continue;
             const events = await listEvents(auth, f.id, 0);
