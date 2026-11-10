@@ -188,11 +188,21 @@ function ui(key: string, vars: Record<string, string | number> = {}): string {
  * This keeps the sentence under test and lets the money through.
  */
 function uiPattern(key: string, wildcards: Record<string, string>): RegExp {
+  return new RegExp(`^${uiSource(key, wildcards)}$`);
+}
+
+/** `uiPattern`'s body: the escaped sentence with its named placeholders open. */
+function uiSource(key: string, wildcards: Record<string, string>): string {
   const raw = UI_EN[key];
   if (raw === undefined) throw new Error(`missing en dictionary key: ${key}`);
   const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const filled = escaped.replace(/\\\{(\w+)\\\}/g, (m, k: string) => wildcards[k] ?? m);
-  return new RegExp(`^${filled}$`);
+  return escaped.replace(/\\\{(\w+)\\\}/g, (m, k: string) => wildcards[k] ?? m);
+}
+
+/** A confirm body the console builds from several sentences joined by one space (the refund's money, placement and
+ *  can't-be-undone sentences), as ONE whole-text RegExp: each part pinned, in order, nothing else. */
+function uiSentences(parts: [string, Record<string, string>][]): RegExp {
+  return new RegExp(`^${parts.map(([key, wildcards]) => uiSource(key, wildcards)).join(" ")}$`);
 }
 
 /** Budgets expressed in what each leg does, never a flat literal beside a
@@ -274,6 +284,8 @@ interface SponsorRow {
   name: string;
   tier: string;
   status: "active" | "pending" | "inactive";
+  competition_id: string | null;
+  on_stream: boolean;
 }
 
 /** The sponsor's three emails go through the email outbox (phase 3, wave 2).
@@ -858,7 +870,16 @@ test("refund: the console reverses the charge, and the placement comes off the p
   await expect(dialog).toBeVisible();
   await expect(dialog.getByText(ui("sponsors.order.refundConfirm.title"))).toBeVisible();
   // Paid at Stripe Checkout (leg 3's real charge), never marked by hand: the card body, not the recorded-only one (review m1).
-  await expect(dialog.getByText(uiPattern("sponsors.order.refundConfirm.body", { amount: ".+", name: SPONSOR_NAME }))).toBeVisible();
+  // Then what the public pages do (batch G, m1 remainder): this deal is LIVE, so its placement hands over or comes off.
+  await expect(
+    dialog.getByText(
+      uiSentences([
+        ["sponsors.order.refundConfirm.body", { amount: ".+", name: SPONSOR_NAME }],
+        ["sponsors.order.refundConfirm.placementLive", { name: SPONSOR_NAME }],
+        ["sponsors.order.refundConfirm.irreversible", {}],
+      ]),
+    ),
+  ).toBeVisible();
   const confirm = dialog.getByRole("button", {
     // "Refund {amount}" — the amount is browser-locale currency formatting, so
     // the sentence is pinned and the money is left open (see `uiPattern`).
@@ -958,16 +979,16 @@ test("refund: the console reverses the charge, and the placement comes off the p
 // Leg 5 — END NOW (batch F fix round 1, review I2): the console exits a deal it created
 // ---------------------------------------------------------------------------
 
-test("end now: an invoice the sponsor never pays is resent, then ended from its order - its link dies at Stripe, the sponsor stays off the public page until the club taps Show on site again", async ({
+test("end now: an invoice the sponsor never pays is resent, then ended from its order - its link dies at Stripe, the sponsor stays off the public page until the club taps Show on site again, in the placement the club set by hand", async ({
   page,
   request,
 }: {
   page: Page;
   request: APIRequestContext;
 }) => {
-  // Navs: the console (three visits), the Sponsors tab (twice), the public page read five times, the outbox poll. Stripe: the
-  // send, the resend, the end, the runner's read.
-  test.setTimeout(budget(11, 4));
+  // Navs: the console (three visits), the Sponsors tab (twice), the public page read five times and opened twice, the outbox
+  // poll. Stripe: the send, the resend, the end, the runner's read.
+  test.setTimeout(budget(13, 4));
   expect(packageId, "leg 1 must have sold a package").not.toBe("");
 
   // A public competition, so the sponsor's public view can be read back: an org-wide sponsor's board shows on its page.
@@ -977,16 +998,29 @@ test("end now: an invoice the sponsor never pays is resent, then ended from its 
     expect(res.status(), "the public competition page answers").toBe(200);
     return (await res.text()).includes(SECOND_NAME);
   };
+  // Batch G ruling (g): the sponsor STARTS from a placement the club set by hand - the title tier, scoped to this competition
+  // (a Pro org: `sponsors.tiers`) - so ending a deal that never went live can be seen to keep it, not reset it to the default
+  // org-wide partner.
   const added = await apiJson<SponsorRow>(request, `/api/v1/orgs/${org.orgId}/sponsors`, "POST", {
     name: SECOND_NAME,
     url: "https://quay-chandlers.example/",
+    tier: "title",
+    competition_id: comp.id,
   });
   expect(added.status, `POST /sponsors answered ${added.status}: ${JSON.stringify(added.error)}`).toBe(201);
   const secondId = added.data!.id;
   expect(added.data!.status, "premise: a sponsor added by hand is on").toBe("active");
+  expect(added.data, "premise: the hand-set placement").toMatchObject({ tier: "title", competition_id: comp.id, on_stream: false });
   await expect
     .poll(onPublicPage, { timeout: READ_MS, message: "premise: a sponsor added by hand shows on the public page" })
     .toBe(true);
+  // ...as the title sponsor, in the hero lockup and not on the board (each the other's negative pair).
+  const publicUrl = `/live/${org.slug}/${comp.slug}`;
+  await page.goto(publicUrl);
+  await expect(page.getByTestId("mh-hero-sponsor"), "premise: the title tier is the hero lockup").toContainText(SECOND_NAME, {
+    timeout: READ_MS,
+  });
+  await expect(page.getByTestId("mh-sponsors").filter({ hasText: SECOND_NAME }), "premise: and not the board").toHaveCount(0);
 
   // Send it an invoice from the console (a real Checkout Session on the fixture account).
   await page.goto(sponsorsUrl(org.slug, "packages"));
@@ -1059,6 +1093,8 @@ test("end now: an invoice the sponsor never pays is resent, then ended from its 
   ]);
   expect(ended.status(), `POST /end answered ${ended.status()}: ${await ended.text()}`).toBe(200);
   await expect(dialog).toHaveCount(0);
+  // Batch G New-1: the banner showed this deal's link after the resend (above); the deal ended, the link is dead, the banner goes.
+  await expect(panel.getByTestId("invoice-link"), "an ended deal's pay link is no longer offered").toHaveCount(0);
 
   const deals = await apiJson<OrderRow[]>(request, `/api/v1/orgs/${org.orgId}/sponsor-deals`);
   expect(deals.status, "GET /sponsor-deals").toBe(200);
@@ -1081,6 +1117,12 @@ test("end now: an invoice the sponsor never pays is resent, then ended from its 
   // The confirm said the sponsor stays off the public page; it does, and it is still switched off.
   const off = await apiJson<SponsorRow[]>(request, `/api/v1/orgs/${org.orgId}/sponsors`);
   expect(off.data?.find((s) => s.id === secondId)?.status, "the sponsor's last deal ended: it stays off").toBe("inactive");
+  // Ruling (g): the deal never went live, so it never wrote the placement - the club's hand-set one is kept, not reset.
+  expect(off.data?.find((s) => s.id === secondId), "the hand-set placement survives the never-live deal").toMatchObject({
+    tier: "title",
+    competition_id: comp.id,
+    on_stream: false,
+  });
   expect(await onPublicPage(), "and is not on the public page").toBe(false);
 
   // Spec §10.3 (owner, 2026-11-07): "After all of a sponsor's deals have ended: the club may switch the sponsor back on by
@@ -1103,4 +1145,15 @@ test("end now: an invoice the sponsor never pays is resent, then ended from its 
   const on = await apiJson<SponsorRow[]>(request, `/api/v1/orgs/${org.orgId}/sponsors`);
   expect(on.data?.find((s) => s.id === secondId)?.status, "the sponsor reads back on").toBe("active");
   await expect.poll(onPublicPage, { timeout: READ_MS, message: "switched back on, it shows on the public page again" }).toBe(true);
+  expect(on.data?.find((s) => s.id === secondId), "switched back on in the placement the club set").toMatchObject({
+    tier: "title",
+    competition_id: comp.id,
+  });
+  // Read back where a visitor meets it: the title sponsor's hero lockup again - not the partner board a reset would have put it
+  // on (the pair: a reset placement shows on the board and not in the hero).
+  await page.goto(publicUrl);
+  await expect(page.getByTestId("mh-hero-sponsor"), "back in the hero, as the title sponsor").toContainText(SECOND_NAME, {
+    timeout: READ_MS,
+  });
+  await expect(page.getByTestId("mh-sponsors").filter({ hasText: SECOND_NAME }), "not on the board").toHaveCount(0);
 });
