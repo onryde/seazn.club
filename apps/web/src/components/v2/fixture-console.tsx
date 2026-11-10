@@ -78,6 +78,7 @@ import { resolvePad } from "@/components/v2/scorepad/v3/registry";
 import { cricketHasNoInnings } from "@/components/v2/scorepad/v3/skins/cricket";
 import { genericHasNoResult } from "@/components/v2/scorepad/v3/skins/generic";
 import { JointWinnersDeclared, JointWinnersOffer } from "@/components/v2/joint-winners-block";
+import { knockoutRefusalText } from "@/lib/knockout-refusals";
 import { jointWinnersOffered } from "@/lib/joint-winners";
 import { HeldNote, NeedsDecisionBlock, finalizeVisible, heldCause, inTableStage, needsDecision, type SettleResult } from "@/components/v2/needs-decision";
 import { ForfeitDialog, forfeitBaseState, forfeitDialogModel, forfeitPlayRecorded, type ForfeitDialogModel, type ForfeitResult } from "@/components/v2/forfeit-dialog";
@@ -1000,7 +1001,6 @@ export function FixtureConsole({
   const tiebreakPending = held && heldCause({ outcome: live.outcome, events }) === "tiebreak";
   const offerForfeit = !decided && (!held || tiebreakPending) && canOrganise && (forfeitModel?.who.length ?? 0) > 0;
   const offerAbandon = !decided && !held && canOrganise;
-  const offerOrganiserActions = offerForfeit || offerAbandon;
   // W4 B5b (X-CH-6; pick 4A): "Declare joint winners" - the shared predicate over the LIVE status and the seats, plus the two
   // refusals only the console can see: both finalists already out is a vacant title (the server's JOINT_WINNERS_FINALISTS_OUT),
   // and only an organiser rules (the route is a `manage` door).
@@ -1019,6 +1019,12 @@ export function FixtureConsole({
       away_entrant_id: away.id,
       joint_winners_at: fixture.joint_winners_at ?? null,
     });
+  const homeName = home ? entrantDisplayName(home) : null;
+  const awayName = away ? entrantDisplayName(away) : null;
+  // W4 B5b (pick 4A; review I-3): on a final that is NOT held there is no Settle to sit beside, so the ruling is a secondary
+  // action in the Match actions panel (it folds on phones, below the pad), never a card above the pad. Held: beside Settle.
+  const offerJointInPanel = jointOffer && scoring && !!home && !!away && !held;
+  const offerOrganiserActions = offerForfeit || offerAbandon || offerJointInPanel;
   const wideLayout = useMediaQuery("(min-width: 768px)");
   const wideOpen = wideLayout && matchActionsOpen;
   // The Match actions panel (R7/C2, D-12). From 768 px it opens directly under the Scoring header, beside the toggle
@@ -1059,6 +1065,16 @@ export function FixtureConsole({
               >
                 {msg("score.abandon")}
               </button>
+            )}
+            {offerJointInPanel && (
+              <JointWinnersOffer
+                msg={msg}
+                fixtureId={fixture.id}
+                home={{ name: homeName! }}
+                away={{ name: awayName! }}
+                busy={busy || padSyncing}
+                onChanged={resync}
+              />
             )}
           </div>
           {abandonPrompt && (
@@ -1143,8 +1159,6 @@ export function FixtureConsole({
   // `display_name` is a team-sports snapshot; for an individual or a pair the
   // people are on the wire and are what a scorer recognises. See
   // `lib/entrant-name.ts`.
-  const homeName = home ? entrantDisplayName(home) : null;
-  const awayName = away ? entrantDisplayName(away) : null;
   // Design review M-4 (audit 4.1): the side the page names in a dead seat (R116-4) may have WITHDRAWN — the run sheet
   // row that links here marks her (`run-sheet-row.tsx` `seatName`), so the header does too, in the same composition:
   // her name muted, the entrant status's own word in a chip, each name a `min-w-0 truncate` span, the chip and "vs"
@@ -1477,21 +1491,15 @@ export function FixtureConsole({
           // Pick 4A: the declaration sits BESIDE Settle on a held final.
           extra={
             jointOffer ? (
-              <JointWinnersOffer msg={msg} fixtureId={fixture.id} home={{ name: homeName! }} away={{ name: awayName! }} busy={busy || padSyncing} variant="inline" />
+              <JointWinnersOffer msg={msg} fixtureId={fixture.id} home={{ name: homeName! }} away={{ name: awayName! }} busy={busy || padSyncing} onChanged={resync} />
             ) : null
           }
         />
       )}
 
-      {/* W4 B5b (pick 4A): the same action on a final that is NOT held (scheduled, in play) - a rained-off final has no Settle
-          to sit beside. A held final carries it inside the block above, so it is never rendered twice. */}
-      {jointOffer && !(scoring && home && away && canOrganise && held) && (
-        <JointWinnersOffer msg={msg} fixtureId={fixture.id} home={{ name: homeName! }} away={{ name: awayName! }} busy={busy || padSyncing} variant="card" />
-      )}
-
       {/* A final ruled joint winners: both finalists named, and the Undo. No pad, Settle or Finalize is offered here. */}
       {jointFinal && home && away && (
-        <JointWinnersDeclared msg={msg} fixtureId={fixture.id} home={{ name: homeName! }} away={{ name: awayName! }} canUndo={canOrganise} busy={busy || padSyncing} />
+        <JointWinnersDeclared msg={msg} fixtureId={fixture.id} home={{ name: homeName! }} away={{ name: awayName! }} canUndo={canOrganise} undoBlockedReason={home.withdrawn === true || away.withdrawn === true ? knockoutRefusalText("JOINT_WINNERS_UNDO_FINALIST_OUT", {}, msg) : null} busy={busy || padSyncing} onChanged={resync} />
       )}
 
       {/* Owner 2026-11-05: Finalize (and Share) is a banner at the top, in the same place as the Needs-a-decision block,

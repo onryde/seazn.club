@@ -2586,8 +2586,6 @@
   "knockout.refusal.FINAL_JOINT_WINNERS_DECLARED": "Voor deze finale zijn gedeelde winnaars aangewezen. Maak dat eerst ongedaan.",
   "knockout.refusal.JOINT_WINNERS_UNDO_FINALIST_OUT": "Een finalist is sindsdien teruggetrokken. Herstel die eerst voordat je de gedeelde winnaars ongedaan maakt, of laat de gedeelde titel staan.",
   "knockout.refusal.JOINT_WINNERS_FINALISTS_OUT": "Beide finalisten zijn teruggetrokken, dus de titel is vacant. Herstel er één om erover te beslissen.",
-  "jointWinners.title": "Kan de finale niet gespeeld worden?",
-  "jointWinners.body": "Als de finale niet gespeeld kan worden, kunnen beide finalisten de titel delen.",
   "jointWinners.action": "Gedeelde winnaars aanwijzen",
   "jointWinners.confirmTitle": "Gedeelde winnaars aanwijzen?",
   "jointWinners.confirm": "{a} en {b} worden allebei kampioen. Je kunt dit ongedaan maken.",

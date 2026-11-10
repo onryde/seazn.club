@@ -23,8 +23,8 @@ export interface JointWinnersFixture {
   conditional?: boolean;
   /** The fixture's stage kind. A double-elimination grand final feeds its own reset, which a joint grand final would leave
    *  owed for good (C32, parked), so only the kinds with ONE deciding final take a ruling. Optional: absent reads as a
-   *  kind that does (the desk always passes it; the server passes it from the stage row). */
-  stage_kind?: string | null;
+   *  kind that does. REQUIRED (null = unknown stage) so a new caller cannot leave it out and read as offerable. */
+  stage_kind: string | null;
 }
 
 export function jointWinnersOffered(f: JointWinnersFixture): boolean {

@@ -2586,8 +2586,6 @@
   "knockout.refusal.FINAL_JOINT_WINNERS_DECLARED": "Se declararon ganadores conjuntos en esta final. Deshazlo primero.",
   "knockout.refusal.JOINT_WINNERS_UNDO_FINALIST_OUT": "Un finalista se ha retirado desde entonces. Reincorpóralo antes de deshacer los ganadores conjuntos, o deja el título conjunto.",
   "knockout.refusal.JOINT_WINNERS_FINALISTS_OUT": "Ambos finalistas se han retirado, así que el título está vacante. Reincorpora a uno para decidirlo.",
-  "jointWinners.title": "¿No se puede jugar la final?",
-  "jointWinners.body": "Si la final no puede jugarse, los dos finalistas pueden compartir el título.",
   "jointWinners.action": "Declarar campeones compartidos",
   "jointWinners.confirmTitle": "¿Declarar campeones compartidos?",
   "jointWinners.confirm": "{a} y {b} serán campeones los dos. Puedes deshacerlo.",

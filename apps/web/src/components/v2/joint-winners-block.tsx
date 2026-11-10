@@ -28,6 +28,24 @@ function refusalText(err: unknown, msg: Msg): string {
 
 const jointUrl = (fixtureId: string) => `/api/v1/fixtures/${fixtureId}/joint-winners`;
 
+/** The ruling's write and what must follow it. The console's `live` is `useState(initialState)`, which `router.refresh()`
+ *  never re-seeds, so BOTH run: `onChanged` is the console's own `resync()` (status, badge, offer) and `refresh` re-renders
+ *  the server props (`joint_winners_at`). A failed resync is swallowed: the write already landed, and the refresh still
+ *  carries the new state. A refused write throws before either runs. Exported so a node test can drive the sequence. */
+export async function commitJointWinners(
+  method: "POST" | "DELETE",
+  fixtureId: string,
+  after: { onChanged: () => Promise<unknown> | void; refresh: () => void },
+): Promise<void> {
+  await apiV1(jointUrl(fixtureId), { method });
+  try {
+    await after.onChanged();
+  } catch {
+    // swallowed on purpose - see above
+  }
+  after.refresh();
+}
+
 const FOCUSABLE = 'button:not([disabled]),[href],[tabindex]:not([tabindex="-1"])';
 
 /** The confirm sheet. Exported for its node test (effects are inert under `renderToStaticMarkup`). */
@@ -114,38 +132,37 @@ export function JointWinnersSheet({
   );
 }
 
-/** The "Declare joint winners" button and its sheet. `variant="inline"` is the button alone (it sits beside Settle in the
- *  held block's action row); `"card"` wraps it in the organiser block with its one-line reason. */
+/** The "Declare joint winners" button and its sheet: the button alone, for the ORGANISER block (owner pick 4A) - beside
+ *  Settle in the held block's action row, or in the Match actions panel (which folds on phones) when the final is not held. */
 export function JointWinnersOffer({
   msg,
   fixtureId,
   home,
   away,
   busy,
-  variant,
+  onChanged,
 }: {
   msg: Msg;
   fixtureId: string;
   home: Finalist;
   away: Finalist;
   busy: boolean;
-  variant: "inline" | "card";
+  /** The console's `resync()`: re-seeds `live` after the ruling. */
+  onChanged: () => Promise<unknown> | void;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const sendingRef = useRef(false);
-  const titleId = useId();
 
   const declare = async () => {
     if (sendingRef.current) return;
     sendingRef.current = true;
     setSending(true);
     try {
-      await apiV1(jointUrl(fixtureId), { method: "POST" });
+      await commitJointWinners("POST", fixtureId, { onChanged, refresh: () => router.refresh() });
       setOpen(false);
-      router.refresh();
     } catch (err) {
       // A refusal closes the sheet and reads beside the button that reopens it (the settle dialog's rule).
       setOpen(false);
@@ -179,31 +196,12 @@ export function JointWinnersOffer({
     </p>
   ) : null;
 
-  if (variant === "inline") {
-    return (
-      <>
-        {button}
-        {sheet}
-        {err !== null && <div className="w-full md:basis-full">{err}</div>}
-      </>
-    );
-  }
   return (
-    <section
-      data-testid="joint-winners-offer"
-      aria-labelledby={titleId}
-      className="rounded-2xl border border-purple-100 bg-purple-50/40 p-4 md:flex md:items-center md:justify-between md:gap-4"
-    >
-      <div className="min-w-0">
-        <h2 id={titleId} className="text-sm font-semibold text-slate-800">
-          {msg("jointWinners.title")}
-        </h2>
-        <p className="mt-1 text-sm text-slate-600">{msg("jointWinners.body")}</p>
-        {err}
-      </div>
-      <div className="mt-3 flex shrink-0 flex-col gap-2 md:mt-0 md:flex-row">{button}</div>
+    <>
+      {button}
       {sheet}
-    </section>
+      {err !== null && <div className="w-full md:basis-full">{err}</div>}
+    </>
   );
 }
 
@@ -214,14 +212,20 @@ export function JointWinnersDeclared({
   home,
   away,
   canUndo,
+  undoBlockedReason,
   busy,
+  onChanged,
 }: {
   msg: Msg;
   fixtureId: string;
   home: Finalist;
   away: Finalist;
   canUndo: boolean;
+  /** Set when the console already knows the server would refuse the Undo (a finalist has since left): the button is
+   *  disabled and this line says why. */
+  undoBlockedReason?: string | null;
   busy: boolean;
+  onChanged: () => Promise<unknown> | void;
 }) {
   const router = useRouter();
   const [sending, setSending] = useState(false);
@@ -234,8 +238,7 @@ export function JointWinnersDeclared({
     setSending(true);
     setError(null);
     try {
-      await apiV1(jointUrl(fixtureId), { method: "DELETE" });
-      router.refresh();
+      await commitJointWinners("DELETE", fixtureId, { onChanged, refresh: () => router.refresh() });
     } catch (err) {
       setError(refusalText(err, msg));
     } finally {
@@ -268,12 +271,17 @@ export function JointWinnersDeclared({
           <button
             type="button"
             data-testid="joint-winners-undo"
-            disabled={busy || sending}
+            disabled={busy || sending || !!undoBlockedReason}
             onClick={() => void undo()}
             className="btn btn-ghost min-h-11 w-full shrink-0 md:w-auto"
           >
             {msg("jointWinners.undo")}
           </button>
+          {undoBlockedReason ? (
+            <p data-testid="joint-winners-undo-blocked" className="min-w-0 break-words text-xs text-slate-600">
+              {undoBlockedReason}
+            </p>
+          ) : null}
         </div>
       )}
     </section>

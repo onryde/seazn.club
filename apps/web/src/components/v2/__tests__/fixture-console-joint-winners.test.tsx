@@ -78,6 +78,8 @@ function html(over: Over = {}): string {
 const OFFER = 'data-testid="joint-winners-open"';
 const UNDO = 'data-testid="joint-winners-undo"';
 const DECLARED = 'data-testid="joint-winners-declared"';
+const ROLE_ACTIONS = 'data-role="match-actions"';
+const count = (hay: string, needle: string) => hay.split(needle).length - 1;
 const HELD_EVENTS = [EV("ev-1", 1, "core.start"), EV("ev-2", 2, "core.abandon")];
 
 describe("B5b T13: the Declare joint winners offer (X-CH-6)", () => {
@@ -99,6 +101,9 @@ describe("B5b T13: the Declare joint winners offer (X-CH-6)", () => {
     for (const c of cases) {
       const out = html(c.over);
       expect(out, c.name).toContain(OFFER);
+      expect(count(out, OFFER), `${c.name}: rendered exactly once`).toBe(1);
+      // Review I-3: never a standalone card above the pad.
+      expect(out, `${c.name}: no always-on card`).not.toContain('data-testid="joint-winners-offer"');
       expect(out, `${c.name}: the declared banner is not shown`).not.toContain(DECLARED);
       expect(out, `${c.name}: no Undo on an open final`).not.toContain(UNDO);
       // X-CH-5: the settle stays offered beside it where the state holds one - and ONLY there.
@@ -142,6 +147,38 @@ describe("B5b T13: the Declare joint winners offer (X-CH-6)", () => {
   });
 });
 
+describe("B5b T13 review I-3: where the action lives (pick 4A: the organiser block, never above the pad)", () => {
+  it("not held (scheduled, in play): inside the Match actions panel, which sits BELOW the Scoring card, as a ghost (secondary) button", () => {
+    let checked = 0;
+    for (const status of ["scheduled", "in_play"]) {
+      const out = html({ status });
+      const panel = out.indexOf(ROLE_ACTIONS);
+      expect(panel, `${status}: the panel renders`).toBeGreaterThan(-1);
+      const offer = out.indexOf(OFFER);
+      expect(offer, `${status}: the offer is inside the panel`).toBeGreaterThan(panel);
+      expect(out.indexOf('data-role="console-scoring"'), `${status}: ... and after the Scoring card (never above the pad)`).toBeLessThan(offer);
+      const btn = out.slice(out.lastIndexOf("<button", offer), out.indexOf("</button>", offer));
+      expect(btn, `${status}: lower emphasis than Settle / Start`).toContain("btn-ghost");
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("not held and the panel's toggle exists even when Forfeit/Abandon are not offered (the ruling alone opens it)", () => {
+    // Abandon is offered on a not-held final, so the toggle is there; assert the toggle is the one that folds the panel.
+    expect(html({ status: "scheduled" })).toContain('data-testid="match-actions-toggle"');
+  });
+
+  it("held: beside Settle, NOT in the Match actions panel", () => {
+    const out = html({ status: "needs_decision", outcome: { kind: "draw" } });
+    const settle = out.indexOf('data-testid="settle-open"');
+    const offer = out.indexOf(OFFER);
+    expect(settle).toBeGreaterThan(-1);
+    expect(Math.abs(offer - settle), "adjacent: the offer is in the same action row as Settle").toBeLessThan(900);
+    expect(out.indexOf(ROLE_ACTIONS) === -1 || out.indexOf(ROLE_ACTIONS) > offer, "the panel (if any) is not what carries it").toBe(true);
+  });
+});
+
 describe("B5b T13: a joint final in the console (X-CH-4)", () => {
   const JOINT: Over = { status: "decided", joint_winners_at: "2026-11-10T12:00:00.000Z" };
 
@@ -162,6 +199,17 @@ describe("B5b T13: a joint final in the console (X-CH-4)", () => {
     const out = html({ ...JOINT, canOrganise: false });
     expect(out).not.toContain(UNDO);
     expect(out).not.toContain(OFFER);
+  });
+
+  it("review m-6: a finalist who has since left shuts the Undo (the server refuses it) and says why; with both in, no line", () => {
+    const out = html({ ...JOINT, home: side("e-home", "Riverside FC", true) });
+    expect(out).toContain('data-testid="joint-winners-undo-blocked"');
+    const btn = out.slice(out.lastIndexOf("<button", out.indexOf(UNDO)), out.indexOf("</button>", out.indexOf(UNDO)));
+    expect(btn).toContain("disabled");
+    const ok = html(JOINT);
+    expect(ok).not.toContain('data-testid="joint-winners-undo-blocked"');
+    const okBtn = ok.slice(ok.lastIndexOf("<button", ok.indexOf(UNDO)), ok.indexOf("</button>", ok.indexOf(UNDO)));
+    expect(okBtn).not.toContain("disabled");
   });
 
   it("the Undo renders ONLY on a joint final", () => {
@@ -197,8 +245,8 @@ describe("B5b T13: the confirm sheet names both finalists", () => {
     expect(out).toContain(`>${en["editor.cancel"]}<`);
   });
 
-  it("every locale carries the nine keys, non-empty, translated, and keeps the {a} and {b} slots", () => {
-    const keys = ["jointWinners.title", "jointWinners.body", "jointWinners.action", "jointWinners.confirmTitle", "jointWinners.confirm", "jointWinners.undo", "jointWinners.declaredTitle", "jointWinners.declaredBody", "bracket.jointWinners", "bracket.titleVacant"] as const;
+  it("every locale carries the eight keys, non-empty, translated, and keeps the {a} and {b} slots", () => {
+    const keys = ["jointWinners.action", "jointWinners.confirmTitle", "jointWinners.confirm", "jointWinners.undo", "jointWinners.declaredTitle", "jointWinners.declaredBody", "bracket.jointWinners", "bracket.titleVacant"] as const;
     let checked = 0;
     for (const [loc, dict] of [["es", es], ["fr", fr], ["nl", nl]] as const) {
       for (const k of keys) {
@@ -209,6 +257,6 @@ describe("B5b T13: the confirm sheet names both finalists", () => {
         checked++;
       }
     }
-    expect(checked, "anti-vacuity").toBe(30);
+    expect(checked, "anti-vacuity").toBe(24);
   });
 });

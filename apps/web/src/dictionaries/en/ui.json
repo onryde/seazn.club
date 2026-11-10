@@ -2586,8 +2586,6 @@
   "knockout.refusal.FINAL_JOINT_WINNERS_DECLARED": "Joint winners were declared on this final. Undo them first.",
   "knockout.refusal.JOINT_WINNERS_UNDO_FINALIST_OUT": "A finalist has withdrawn since. Reinstate them before undoing joint winners, or leave the joint title.",
   "knockout.refusal.JOINT_WINNERS_FINALISTS_OUT": "Both finalists have withdrawn, so this title is vacant. Reinstate one to rule on it.",
-  "jointWinners.title": "Can't play the final?",
-  "jointWinners.body": "If the final can't be played, both finalists can share the title.",
   "jointWinners.action": "Declare joint winners",
   "jointWinners.confirmTitle": "Declare joint winners?",
   "jointWinners.confirm": "{a} and {b} will both be champions. You can undo this.",
