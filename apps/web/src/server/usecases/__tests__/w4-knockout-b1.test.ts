@@ -20,7 +20,9 @@ import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { bracketStageIsDecided } from "@/server/engine-db/competition";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
+import { EngineError } from "@seazn/engine/core";
 import { resolveStoredProgression } from "../stored-progression";
+import { HttpError } from "@/lib/errors";
 import { completeStage, loadBracketFixtures } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { createEntrants } from "../entrants";
@@ -305,19 +307,71 @@ describe.runIf(HAS_DB)("C9 (C5/C11): the plate's field completes after round 2 o
       const losers = (await Promise.all(r1.map((r) => fixtureRow(r.id)))).map((r) => (r.outcome!.winner === r.home_entrant_id ? r.away_entrant_id! : r.home_entrant_id!));
       const bracket = await sql.begin((tx) => loadBracketFixtures(tx as never, s.stageId));
       const spec = { sources: [{ stage: "previous" as const, take: [{ kind: "roundLosers" as const, round: 1, count: 2 }] }], placement: "rank_order" as const };
-      const out = resolveStoredProgression(spec, [{ poolCount: 1 } as never], [{ pools: [], bracket }]);
+      const out = resolveStoredProgression(spec, [{ poolCount: 1 } as never], [{ pools: [], bracket }], undefined, ["knockout"]);
       expect(new Set(out.qualifiers.map((q) => q.entrantId)), "the round-1 losers (stored round 1 = the opening round)").toEqual(new Set(losers));
       expect(out.qualifiers.map((q) => q.descriptor), "descriptors keep the STORED round").toEqual([
         { kind: "round_loser", round: 1, position: 1 },
         { kind: "round_loser", round: 1, position: 2 },
       ]);
       // The converse: stored round 2 is the final - its loser is the one entrant.
-      expect(
-        () => resolveStoredProgression({ ...spec, sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 2, count: 1 }] }] }, [{ poolCount: 1 } as never], [{ pools: [], bracket }]),
-        "stored round 2 is the final, undecided: refused by the engine, never silently read as round 1",
-      ).toThrow(/round 1 has no loser|has no loser/);
+      let refusal: unknown;
+      try {
+        resolveStoredProgression({ ...spec, sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 2, count: 1 }] }] }, [{ poolCount: 1 } as never], [{ pools: [], bracket }], undefined, ["knockout"]);
+      } catch (e) {
+        refusal = e;
+      }
+      // Stored round 2 is engine round 1: the engine says "bracket round 1 ..."; the organiser reads the STORED number (M1).
+      expect(refusal, "stored round 2 is the final, undecided: refused by the engine, never silently read as round 1").toBeInstanceOf(EngineError);
+      expect((refusal as EngineError).message).toMatch(/bracket round 2 has no loser/);
+      expect((refusal as EngineError).message).not.toMatch(/bracket round 1 /);
+      expect((refusal as EngineError).data).toMatchObject({ round: 2 });
       swept++;
     }, 240_000);
   }
   it("anti-vacuity: both shapes in both sports", () => expect(swept).toBe(SPORTS.length * 2));
+});
+
+describe.runIf(HAS_DB)("C9 + feed refs (review M6): a bye holder who withdrew before round 2 is read through her feed, so the plate's field still completes", () => {
+  let swept = 0;
+  for (const sport of SPORTS) {
+    it(`${sport}: six entrants, seed 1 (a bye holder) withdraws before round 1 is played: her round-2 seat is dead, the walkover over it is HER forfeit (excluded), and the field completes`, async () => {
+      const s = await seedBracket({ sport, variant: variantOf(sport), stageKind: "knockout", entrants: 6 });
+      const [seed1] = await sql<{ id: string }[]>`select id from entrants where division_id = ${s.divisionId} and seed = 1`;
+      await withdrawEntrantCascade(s.auth, seed1!.id);
+      const rowsNow = () => sql.begin((tx) => loadBracketFixtures(tx as never, s.stageId));
+      for (const r of (await rowsOf(s.stageId)).filter((x) => x.round_no === 1 && x.home_entrant_id !== null && x.away_entrant_id !== null && x.status === "scheduled")) await play(s.auth, sport, r, true);
+      for (const r of (await rowsOf(s.stageId)).filter((x) => x.round_no === 2 && x.status === "scheduled" && x.home_entrant_id !== null && x.away_entrant_id !== null)) await play(s.auth, sport, r, true);
+      const field = firstLossField(await rowsNow());
+      expect(field.complete, "every first match is settled: seed 1's by the walkover over her dead seat").toBe(true);
+      expect(field.excluded.map((l) => l.entrantId), "her forfeit is an EXCLUDED first loss, not a played one").toEqual([seed1!.id]);
+      expect(field.losers.map((l) => l.entrantId), "and she is not among the played first losses").not.toContain(seed1!.id);
+      swept++;
+    }, 240_000);
+  }
+  it("anti-vacuity: both sports", () => expect(swept).toBe(SPORTS.length));
+});
+
+describe("M4: a roundLosers take whose source is a double elimination is refused by name, not resolved across lanes", () => {
+  const spec = (take: unknown[]) => ({ sources: [{ stage: "previous" as const, take }], placement: "rank_order" as const }) as never;
+  const refusal = (take: unknown[], kinds: string[]) => {
+    try {
+      resolveStoredProgression(spec(take), [{ poolKeys: [] } as never], [{ pools: [] }], undefined, kinds);
+    } catch (e) {
+      return e;
+    }
+    return null;
+  };
+  it("refuses roundLosers from a double_elim source with SEEDING_ROUNDLOSERS_DE_SOURCE (422), naming the source", () => {
+    const e = refusal([{ kind: "roundLosers", round: 1, count: 2 }], ["double_elim"]);
+    expect(e).toBeInstanceOf(HttpError);
+    expect(e).toMatchObject({ status: 422, code: "SEEDING_ROUNDLOSERS_DE_SOURCE" });
+  });
+  it("the same take from a single-elimination source is NOT refused by this guard (it reaches the engine)", () => {
+    const e = refusal([{ kind: "roundLosers", round: 1, count: 2 }], ["knockout"]);
+    expect(e instanceof HttpError && (e as HttpError & { code?: string }).code === "SEEDING_ROUNDLOSERS_DE_SOURCE").toBe(false);
+  });
+  it("a double_elim source with a different take (rankRange) is not refused: only round losers collide across lanes", () => {
+    const e = refusal([{ kind: "rankRange", from: 1, to: 2 }], ["double_elim"]);
+    expect(e instanceof HttpError && (e as HttpError & { code?: string }).code === "SEEDING_ROUNDLOSERS_DE_SOURCE").toBe(false);
+  });
 });

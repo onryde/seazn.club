@@ -309,7 +309,8 @@ describe.skipIf(!HAS_DB)("a withdrawn finalist stage seed is RANKED (X-SP-4 / X-
       loserOfRow(r1After),
     ]);
     expect(ranks.indexOf(f.seed[2]) + 1).toBe(3);
-    expect(r2.id, "rig: R2 exists and was walked over").toBeTruthy();
+    // R2 was walked over to the climber (seed 4) the moment R1 decided: the comment's claim, asserted.
+    expect(walkedOverTo(await fixtureRow(r2.id)), "R2 walks over to R1's winner").toEqual({ status: "forfeited", kind: "award", winner: f.seed[4] });
   });
 
   it.each(SPORTS)("%s: X-SP-5 page playoff - seed 1 withdraws before Q1: she ranks 4th, below the eliminator's loser", async (sport) => {
