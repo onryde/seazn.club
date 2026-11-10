@@ -467,7 +467,9 @@ async function planRelease(
     if (!mine.has(occupant)) continue;
     // W4 B5a (review I-2): a final that went VACANT (both finalists out, `departSeat`'s no-event double walkover) was never
     // played, so it does not count as started: taking a finalist's feeder back re-opens it, the other finalist keeps the seat.
-    const reset = isCascadeWalkover(t) || isDepartureDoubleWalkover(t);
+    // Final-only (n-2): a departure double walkover that FEEDS a next match stamped dead seats downstream, which this reset
+    // would leave stamped; that line keeps its refusal. A vacant final feeds nothing, so there is nothing to give back.
+    const reset = isCascadeWalkover(t) || (isDepartureDoubleWalkover(t) && t.winner_to_fixture === null && t.loser_to_fixture === null);
     if (!reset && hasStarted(t)) {
       const ref = await boardRef(tx, t);
       throw new HttpError(409, nextMatchStartedMessage(nextMatchLabel(ref, msg)), NEXT_MATCH_STARTED_CODE, { next_match: ref });
