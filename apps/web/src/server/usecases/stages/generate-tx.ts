@@ -94,11 +94,27 @@ async function reconcileKnockoutGenerate(
   tx: Tx,
   auth: AuthCtx,
   stage: StageRow,
-  entrants: ActiveEntrant[],
+  field: ActiveEntrant[],
   poolIds: Map<string, string>,
   inPlaceOnly: boolean,
   sealedSetup: SealedSetupCounts | undefined,
+  waitNewcomers: boolean,
 ): Promise<GenerateWrite> {
+  let entrants = field;
+  // W4 app B, Task 20 (C27; PO ruling): on a frozen board Start does not seat a newcomer (a schedule write) - it MARKS them
+  // waiting, as the late-entry path does (`markWaiting`), and reconciles the rest of the field as ever. The newcomer is out of
+  // the field this reconcile reads, so a departure still plans in place and a redraw is still refused by name. Written in this
+  // transaction: a refusal below rolls the marks back with everything else.
+  if (waitNewcomers) {
+    const seats = await tx<{ home: string | null; away: string | null }[]>`
+      select home_entrant_id as home, away_entrant_id as away from fixtures where stage_id = ${stage.id} and round_no = 1`;
+    const seated = new Set(seats.flatMap((l) => [l.home, l.away]).filter((id): id is string => id !== null));
+    const newcomers = entrants.filter((e) => !seated.has(e.id));
+    if (newcomers.length > 0) {
+      await tx`update entrants set knockout_waiting_stage_id = ${stage.id} where id in ${tx(newcomers.map((e) => e.id))}`;
+      entrants = entrants.filter((e) => seated.has(e.id));
+    }
+  }
   const started = (await divisionHasStarted(tx, stage.division_id)) || (await stageHasStarted(tx, stage.id));
   const fresh = generate(stage.kind, stage.config, entrants, poolIds).map((g) => ({
     pool_id: g.poolId ?? null,
@@ -303,7 +319,7 @@ export async function generateStageFixturesTx(
         `generateStageFixtures: a reconciled Generate would strand a home_slot_label or away_slot_label on fixture(s) ${stranded.map((f) => f.id).join(",")}: a root bracket's lines carry only a bye's or a feeder's label`,
       );
     }
-    return reconcileKnockoutGenerate(tx, auth, stage, entrants, poolIds, opts.inPlaceOnly === true, opts.sealedSetup);
+    return reconcileKnockoutGenerate(tx, auth, stage, entrants, poolIds, opts.inPlaceOnly === true, opts.sealedSetup, opts.inPlaceOnly === true && opts.waitNewcomers === true);
   }
 
   let swissSeatedCount = 0;
