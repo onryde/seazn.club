@@ -2570,6 +2570,7 @@
   "knockout.refusal.KO_GENERATE_AFTER_START": "Le jeu a commencé : Générer ne modifiera pas le tableau. Utilisez Ajouter au tableau.",
   "knockout.refusal.KO_REDRAW_WOULD_CLEAR_SETUP": "Le tableau devrait être tiré à nouveau, ce qui efface la configuration déjà en place sur ses matchs (officiels, feuilles d'équipe, appareils de score, diffusions, disponibilités des joueurs ou appels sur un terrain). Utilisez Reconstruire les matchs : il indique d'abord ce qu'il efface.",
   "knockout.refusal.KO_START_NEEDS_UPDATE_DRAW": "Le tableau doit être mis à jour — appuyez d'abord sur Mettre à jour le tableau.",
+  "knockout.refusal.KO_START_NEEDS_UPDATE_DRAW_FROZEN": "Le tableau doit être mis à jour et le calendrier est gelé : dégelez-le sur la page Calendrier, appuyez sur Mettre à jour le tableau, puis sur Démarrer.",
   "knockout.refusal.KO_LATE_ENTRY_FED_STAGE": "Ce tableau est alimenté par {stage}. Ajoutez le joueur là-bas.",
   "knockout.refusal.KO_LATE_ENTRY_NO_SLOT": "1er tour complet ; il ne reste aucune place.",
   "knockout.refusal.KO_LATE_ENTRY_NOT_UNDOABLE": "L'ajout d'un joueur en retard ne peut pas être annulé. Retirez plutôt le joueur.",
