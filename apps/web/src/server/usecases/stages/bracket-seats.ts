@@ -262,8 +262,13 @@ function seatFeederIsDead(e: FeederEdge | undefined): boolean {
  *  A line whose two seats are both dead this way had every side withdraw, which is a double walkover (X-WD-4), not a
  *  void. Any other dead feeder — a void, a cancelled line, a forfeit loser, and a RECORDED double walkover (its
  *  `core.forfeit{by:"both"}` behind it: nobody withdrew, the plan's Review Focus 1 voids that line) — keeps the void. */
-function seatDeparted(bye: boolean, e: FeederEdge | undefined): boolean {
-  return bye || (e !== undefined && e.via === "winner" && e.row.departed_walkover);
+function seatDeparted(bye: boolean, e: FeederEdge | undefined, thirdPlace = false): boolean {
+  if (bye || (e !== undefined && e.via === "winner" && e.row.departed_walkover)) return true;
+  // B4 M-1 (X-TP-7): a third-place line's seat is fed by a semi-final's LOSER. When that loser withdrew (the semi was a walkover
+  // for her opponent), the seat is dead through departure too - the line is a double walkover, not a void.
+  // The cascade writes the walkover BEFORE the entrant's status flip is visible to this read, so the award's own `withdrew`
+  // reason counts as the departure too.
+  return thirdPlace && e !== undefined && e.via === "loser" && (e.row.loser_withdrawn || (e.row.outcome?.kind === "award" && e.row.outcome.reason === "withdrew"));
 }
 
 interface SeatRow {
@@ -273,7 +278,7 @@ interface SeatRow {
   home_slot_label: { key?: string } | null;
   away_slot_label: { key?: string } | null;
   status: string;
-  outcome: { kind?: string; winner?: string; method?: string } | null;
+  outcome: { kind?: string; winner?: string; method?: string; reason?: string } | null;
   winner_to_fixture: string | null;
   winner_to_slot: number | null;
   loser_to_fixture: string | null;
@@ -285,6 +290,8 @@ interface SeatRow {
   loser_withdrawn: boolean;
   /** W2b X-WD-4: a double walkover with no live event behind it — a departure, never a recorded one (`seatDeparted`). */
   departed_walkover: boolean;
+  /** B4 M-1: the third-place line of a knockout (it feeds no next match, yet X-TP-7 settles it as a double walkover). */
+  third_place: boolean;
 }
 
 /** Push the winners of the lines `awardSeededByes` just settled into the seats
@@ -461,7 +468,7 @@ export async function resolveBracketSeats(tx: Tx, stageId: string): Promise<stri
     const rows = await tx<SeatRow[]>`
       select id, home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
              status, outcome, winner_to_fixture, winner_to_slot,
-             loser_to_fixture, loser_to_slot,
+             loser_to_fixture, loser_to_slot, third_place,
              ${hasActiveAbandonSql(tx, "fixtures")} as has_active_abandon,
              exists (select 1 from entrants e
                      where e.id::text = fixtures.outcome ->> 'loser' and e.status in ${tx([...DEPARTED_STATUSES])})
@@ -502,12 +509,12 @@ export async function resolveBracketSeats(tx: Tx, stageId: string): Promise<stri
         // enough — the other side is still on its way, and stamping now would
         // be exactly the premature hardening the ruling forbids.
         if (!deadHome || !deadAway) continue;
-        if (seatDeparted(byeHome, feedHome) && seatDeparted(byeAway, feedAway)) {
+        if (seatDeparted(byeHome, feedHome, f.third_place) && seatDeparted(byeAway, feedAway, f.third_place)) {
           // W2b X-WD-4: both sides of this line have departed — a double walkover, written as a bye is (no event),
           // which seats nobody and is a dead feeder for the next pass (X-DW-2). A FINAL feeds nothing, and a double
           // walkover needs a next match (D19, X-DW-3): it stays open for W4's vacant title, and nothing is written.
           // (A grand final with a bracket reset feeds only its own rematch, so it is a final too — loop-F I-5.)
-          if (!feedsNextMatch(f)) continue;
+          if (!feedsNextMatch(f) && !f.third_place) continue;
           const [walked] = await tx<{ id: string }[]>`
             update fixtures set status = 'forfeited', outcome = ${tx.json({ kind: "double_walkover" } as never)}
             where id = ${f.id} and stage_id = ${stageId}

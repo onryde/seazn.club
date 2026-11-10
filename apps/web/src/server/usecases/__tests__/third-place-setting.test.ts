@@ -284,6 +284,28 @@ describe.skipIf(!HAS_DB)("X-TP-7 a third-place play-off with players out", () =>
   }, 120_000);
 });
 
+// M-1 (B4 fix round 1; X-TP-7): both semi-finals walked over (one semi-finalist of EACH withdrew after Start) leaves the third-place
+// line with two dead loser edges. That is a departure double walkover, never a void: 3rd vacant, both beaten semi-finalists 4th.
+describe.skipIf(!HAS_DB)("X-TP-7 both semi-finals walked over: the third-place line is a double walkover", () => {
+  it("one semi-finalist of each semi withdraws: the -3p is a departure double walkover, the stage completes, ranks 1, 2, 4, 4", async () => {
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 4, stageConfig: { thirdPlace: true } });
+    const semis = (await rowsOf(s.stageId)).filter((r) => r.home_entrant_id && r.away_entrant_id);
+    expect(semis, "rig: two semi-finals").toHaveLength(2);
+    const [bronze] = await bronzeOf(s.stageId);
+    for (const sf of semis) await withdrawEntrantCascade(s.auth, sf.away_entrant_id!);
+    for (const sf of semis) expect((await fixtureRow(sf.id)).status, "each semi is a walkover").toBe("forfeited");
+    const b = await fixtureRow(bronze!.id);
+    expect(b.status, "the bronze line is settled, not voided").toBe("forfeited");
+    expect(b.outcome, "a departure double walkover").toEqual({ kind: "double_walkover" });
+    const final = (await rowsOf(s.stageId)).find((r) => r.round_no === 2 && r.id !== bronze!.id)!;
+    expect(final.home_entrant_id && final.away_entrant_id, "the two walkover winners meet in the final").toBeTruthy();
+    await playBadminton(s.auth, final.id, true);
+    expect((await completeStage(s.auth, s.stageId)).completed).toBe(true);
+    const ranks = await ranksOf(s.auth, s.stageId);
+    expect([...ranks.values()].sort(), "1, 2, 4, 4").toEqual([1, 2, 4, 4]);
+  }, 240_000);
+});
+
 describe.skipIf(!HAS_DB)("C20 a flip re-validates the cuts that read this stage's third place (both directions)", () => {
   const cut = (from: number, to: number) => ({ sources: [{ stage: "previous", take: [{ kind: "rankRange", from, to }] }], placement: "rank_order", timing: "setup" });
   async function cutRig(source: Record<string, unknown>, from: number, to: number) {
