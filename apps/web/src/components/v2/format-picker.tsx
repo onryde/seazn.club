@@ -123,6 +123,7 @@ export function formatPickerFields({
   view,
   stages,
   guidanceEntrants,
+  thirdPlaceEntrants = guidanceEntrants,
   templateLocks,
   viewerPlan,
 }: {
@@ -140,6 +141,9 @@ export function formatPickerFields({
   stages: StageDraft[];
   /** The field the Swiss rounds guidance is counted for: the builder's plan, the division's entrants. */
   guidanceEntrants: number;
+  /** B4 M-5: the count the Play-off offer is judged on, where it differs from the guidance count (the Format dialog of a division
+   *  with fewer than two entrants guides on the opening plan, but offers the Play-off for the real, smaller field). */
+  thirdPlaceEntrants?: number;
   templateLocks: Readonly<Record<string, string>>;
   viewerPlan: ViewerPlan;
 }): ReactNode {
@@ -296,7 +300,7 @@ export function formatPickerFields({
             <ThirdPlaceChoice
               value={knobs.thirdPlace}
               onChange={knobs.setThirdPlace}
-              offer={thirdPlaceOffer(template, knobs, guidanceEntrants)}
+              offer={thirdPlaceOffer(template, knobs, thirdPlaceEntrants)}
             />
           </div>
         )}

@@ -157,6 +157,7 @@ import type { KnockoutWaitingEntrant } from "@/server/usecases/knockout-desk";
 import type { SwissRoundsRefusal } from "@/components/v2/desk/swiss-rounds-dialog";
 import type { SwissRoundControl } from "@/lib/swiss-rounds-edit";
 import { StageThirdPlace } from "@/components/v2/stage-third-place";
+import { ThirdPlaceUseShared } from "@/components/v2/third-place-use-shared";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 type MsgPlural = (key: string, count: number, vars?: Record<string, string | number>) => string;
@@ -507,6 +508,8 @@ interface Props {
   drawSeeds?: Readonly<Record<string, number>>;
   /** B4 T10 (C35): the stages whose newest seed proposal drew a plate WITHOUT its third-place match (`thirdPlaceDropped`). */
   thirdPlaceDropped?: readonly string[];
+  /** B4 M-7: the knockout stages that have started by the server's rule (`stageHasStarted`); the Third place control is read-only there. */
+  startedKnockoutStageIds?: readonly string[];
 }
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
@@ -624,7 +627,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, knockoutWaiting = [], drawSeeds = {}, thirdPlaceDropped = [] }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, knockoutWaiting = [], drawSeeds = {}, thirdPlaceDropped = [], startedKnockoutStageIds = [] }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -885,20 +888,6 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       (err) => swissFinishRefusal(err, msg, msgPlural, locale),
     );
   };
-
-  /** Owner pick 7A: save Shared, then draw again - a refused PATCH is said by `act`'s own line. */
-  async function switchToSharedThirdPlace(stageId: string) {
-    setBusy(stageId);
-    try {
-      await apiV1(`/api/v1/stages/${stageId}`, { method: "PATCH", json: { thirdPlace: "shared" } });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : msg("schedule.error.failed"));
-      return;
-    } finally {
-      setBusy(null);
-    }
-    await act(stageId, "generate");
-  }
 
   async function act(
     stageId: string,
@@ -1210,15 +1199,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         </p>
       )}
       {error && sharedOffer?.text === error && (
-        <button
-          type="button"
-          data-testid="schedule-use-shared-third-place"
-          disabled={busy !== null}
-          onClick={() => void switchToSharedThirdPlace(sharedOffer.stageId)}
-          className="btn btn-ghost min-h-11 self-start px-3 py-1.5 text-sm"
-        >
-          {msg("thirdPlace.useShared")}
-        </button>
+        <ThirdPlaceUseShared stageId={sharedOffer.stageId} disabled={busy !== null} onDone={() => void act(sharedOffer.stageId, "generate")} />
       )}
       {error && finishOffer?.text === error && (
         <button
@@ -2078,7 +2059,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     stageId={stage.id}
                     config={stage.config}
                     fed={(stage.progression !== null && stage.progression !== undefined) || activeEntrantIds === undefined}
-                    started={stageFixtures.some((f) => !isBye(toRunSheetFixture(f)) && f.status !== "scheduled")}
+                    started={startedKnockoutStageIds.includes(stage.id) || stageFixtures.some((f) => !isBye(toRunSheetFixture(f)) && f.status !== "scheduled")}
                     field={activeEntrantIds?.length ?? 0}
                     dropped={thirdPlaceDropped.includes(stage.id)}
                     canEdit={canEdit}

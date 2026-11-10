@@ -83,7 +83,7 @@ describe("X-SD-9 byes and slotOrder stay API-only", () => {
       for (const swissRounds of span(FORMAT_BOUNDS.swissRounds))
         for (const poolCount of span(FORMAT_BOUNDS.pools))
           for (const legs of span(FORMAT_BOUNDS.legs))
-            for (const standingsCarry of CARRIES) combos.push({ qualified, swissRounds, poolCount, legs, standingsCarry, thirdPlace: "shared" });
+            for (const standingsCarry of CARRIES) for (const thirdPlace of ["shared", "playoff"] as const) combos.push({ qualified, swissRounds, poolCount, legs, standingsCarry, thirdPlace });
 
     let bodies = 0;
     let stages = 0;
@@ -106,7 +106,7 @@ describe("X-SD-9 byes and slotOrder stay API-only", () => {
     expect(leaks, "RB4-D6: a builder-built stage carries byes or slotOrder").toEqual([]);
     // Anti-vacuity: every template × every knob set built, and the bracket family was actually among them.
     expect(STAGE_TEMPLATES.length).toBeGreaterThan(0);
-    expect(combos.length).toBe(3 * 3 * 3 * 2 * 3);
+    expect(combos.length).toBe(3 * 3 * 3 * 2 * 3 * 2);
     expect(bodies).toBe(STAGE_TEMPLATES.length * combos.length);
     expect(stages).toBeGreaterThanOrEqual(bodies);
     expect(knockoutFamily, "the sweep reached knockout stages").toBeGreaterThan(0);

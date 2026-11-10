@@ -17,6 +17,7 @@ export function ThirdPlaceChoice({
   readOnlyReason,
   busy = false,
   testId = "third-place-choice",
+  storedView = false,
 }: {
   value: ThirdPlaceMode;
   onChange: (mode: ThirdPlaceMode) => void;
@@ -26,11 +27,15 @@ export function ThirdPlaceChoice({
   readOnlyReason?: string | null;
   busy?: boolean;
   testId?: string;
+  /** B4 I-2: the stage settings show what is STORED. A stored Play-off the field can no longer play stays picked (disabled), says
+   *  the count, and offers "Use Shared" (pick 7A); the builder keeps reading it as Shared, since it SENDS Shared there. */
+  storedView?: boolean;
 }) {
   const msg = useMsg();
   const name = useId();
   const readOnly = readOnlyReason != null;
-  const shown: ThirdPlaceMode = !offer.offered && value === "playoff" ? "shared" : value;
+  const stuckPlayoff = storedView && !offer.offered && value === "playoff";
+  const shown: ThirdPlaceMode = !offer.offered && value === "playoff" && !storedView ? "shared" : value;
   const modes: { mode: ThirdPlaceMode; label: string; off: boolean }[] = [
     { mode: "shared", label: msg("thirdPlace.shared"), off: false },
     { mode: "playoff", label: msg("thirdPlace.playoff"), off: !offer.offered },
@@ -71,8 +76,19 @@ export function ThirdPlaceChoice({
         })}
       </div>
       <p id={reasonId} data-testid={`${testId}-note`} className={`mt-1.5 text-xs ${!offer.offered || readOnly ? "text-amber-800" : "text-slate-500"}`}>
-        {readOnly ? readOnlyReason : !offer.offered ? msg("thirdPlace.hiddenBelow4") : msg(shown === "playoff" ? "thirdPlace.playoffHint" : "thirdPlace.sharedHint")}
+        {readOnly
+          ? readOnlyReason
+          : stuckPlayoff && offer.entrants !== null
+            ? msg("thirdPlace.tooFewCount", { count: offer.entrants })
+            : !offer.offered
+              ? msg("thirdPlace.hiddenBelow4")
+              : msg(shown === "playoff" ? "thirdPlace.playoffHint" : "thirdPlace.sharedHint")}
       </p>
+      {stuckPlayoff && !readOnly && (
+        <button type="button" data-testid={`${testId}-use-shared`} disabled={busy} onClick={() => onChange("shared")} className="btn btn-ghost mt-2 min-h-11 px-3 py-1.5 text-sm">
+          {msg("thirdPlace.useShared")}
+        </button>
+      )}
     </fieldset>
   );
 }

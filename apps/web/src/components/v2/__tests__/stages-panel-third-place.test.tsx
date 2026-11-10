@@ -62,14 +62,29 @@ describe("the knockout stage card's Third place control", () => {
     }
   });
 
-  it("below the minimum entrants the Play-off segment is disabled with its reason, and a stored Play-off reads Shared", () => {
+  it("I-2: a STORED Play-off the field can no longer play stays picked and disabled, says the count, and offers Use Shared", () => {
+    let checked = 0;
     for (const n of [0, 1, THIRD_PLACE_MIN - 1]) {
       const h = render({ activeEntrantIds: ids(n) });
-      expect(h, `${n} entrants`).toMatch(/data-third-place="shared"/);
-      expect(h, `${n} entrants`).toContain(en["thirdPlace.hiddenBelow4"]!);
-      expect(count(controlOf(h), 'aria-disabled="true"'), `${n} entrants`).toBe(1);
+      const ctl = controlOf(h);
+      expect(ctl, `${n} entrants: the stored value, not a coerced Shared`).toMatch(/data-third-place="playoff"/);
+      expect(count(ctl, 'aria-disabled="true"'), `${n} entrants: only the Play-off segment is inert`).toBe(1);
+      expect(ctl.split('data-third-place-option="shared"')[1]!.split("</label>")[0], `${n}: Shared is live`).not.toContain("aria-disabled");
+      expect(ctl, `${n}: the count`).toContain(`This stage has ${n} entrants`);
+      expect(ctl, `${n}: Use Shared is offered here`).toContain('data-testid="stage-third-place-choice-use-shared"');
+      checked++;
     }
-    expect(render({ activeEntrantIds: ids(THIRD_PLACE_MIN) })).not.toContain(en["thirdPlace.hiddenBelow4"]!);
+    expect(checked).toBe(3);
+    const ok = controlOf(render({ activeEntrantIds: ids(THIRD_PLACE_MIN) }));
+    expect(ok, "at the minimum nothing is stuck").not.toContain("use-shared");
+    expect(ok).not.toContain("This stage has");
+  });
+
+  it("M-7: the server's started list makes the control read-only even when no line looks played (a called match)", () => {
+    const h = render({ startedKnockoutStageIds: ["s1"] });
+    expect(h).toContain("data-read-only");
+    expect(h).toContain(html(en["knockout.refusal.THIRD_PLACE_LOCKED"]!));
+    expect(render({ startedKnockoutStageIds: ["other"] }), "another stage's start is not this one's").not.toContain("data-read-only");
   });
 
   it("C35: the dropped note shows only on the stage the proposal dropped it for", () => {
