@@ -616,6 +616,17 @@ describe("stageFeedsOf — the stored progression, read as edges", () => {
     expect(src([{ kind: "picks", picks: [{ pool: "A", rank: 2 }] }]).top).toBeUndefined();
   });
 
+  it("B2a carried minor: a MIXED take (a losers' take plus a table cut of rank 1) is the winners' side and NOT top - the schema does not forbid it", () => {
+    const src = (take: unknown[]) => stageFeedsOf([{ id: "a", seq: 1, progression: null }, { id: "b", seq: 2, progression: { sources: [{ stage: "previous", take }] } }]).get("b")![0]!;
+    const mixed = src([{ kind: "roundLosers", round: 1, count: 2 }, { kind: "rankRange", from: 1, to: 2 }]);
+    expect(mixed.side).toBe("winners");
+    // differential: the table cut alone is top; beside a losers' take the source feeds the losers' bracket, which never crowns.
+    expect(src([{ kind: "rankRange", from: 1, to: 2 }]).top).toBe(true);
+    expect(mixed.top).toBeUndefined();
+    // every loser kind alone stays a plain losers' edge
+    expect(src([{ kind: "firstLosses", count: 2 }, { kind: "roundLosers", round: 1, count: 2 }])).toEqual({ stageId: "a", side: "losers" });
+  });
+
   it("a source with no take array is the winners' side (the default), not the losers'", () => {
     const feeds = stageFeedsOf([
       { id: "a", seq: 1, progression: null },

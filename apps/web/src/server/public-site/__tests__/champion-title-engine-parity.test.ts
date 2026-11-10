@@ -243,6 +243,7 @@ describe("parity on double elimination (the reset is where the app reads the res
   it("n = 3…16: WB champion takes GF1 (reset unneeded), LB champion takes GF1 (reset played), and the reset ends champion / joint / vacant", () => {
     let checked = 0;
     let skipped = 0;
+    let unseatedChecked = 0;
     const seen = new Set<string>();
     for (let n = 3; n <= 16; n++) {
       const fixtures = generateDoubleElim({ entrants: names(n), bracketReset: true }).fixtures;
@@ -263,19 +264,25 @@ describe("parity on double elimination (the reset is where the app reads the res
         ...(["joint", "vacant"] as const).map((m): [string, Plan, (id: string) => boolean] => [`gf ${m} reset scheduled`, { finals: { [gf.id]: m, [reset.id]: "scheduled" } }, () => false]),
       ];
       for (const [name, plan, flip] of cases) {
-        if (!seated) {
+        // Only a JOINT or VACANT ruling needs two seated finalists (the engine refuses one over an empty seat); the champion
+        // cases (WB wins GF1 with the reset void, LB wins GF1 and the reset is decided) are compared on every bracket.
+        const rulesOnFinalists = /joint|vacant/.test(name);
+        if (!seated && rulesOnFinalists) {
           skipped++;
           continue;
         }
         const got = compare(`DE n=${n} ${name}`, playAny(fixtures, plan, flip));
         seen.add(got);
         if (name.endsWith("reset scheduled")) expect(got, `n=${n} ${name}`).toBe("none");
+        if (!seated) unseatedChecked++;
         checked++;
       }
     }
     console.log(`double-elimination parity: checked ${checked}, skipped ${skipped}`);
     expect(checked).toBeGreaterThan(0);
     expect(checked + skipped).toBe(14 * 6);
+    // An unseated grand final skips its 4 joint/vacant cases and still checks its 2 champion cases (B2a carried minor).
+    expect(unseatedChecked * 2, "the champion cases of an unseated grand final were compared, not skipped").toBe(skipped);
     expect([...seen].sort(), "every title kind and the withheld case were really compared").toEqual(["champion", "joint", "none", "vacant"]);
   });
 });
