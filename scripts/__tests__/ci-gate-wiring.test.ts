@@ -98,4 +98,22 @@ describe("ci.yml: the docs-only gate and ci-gate", () => {
     expect(changes!.text).toContain("code: ${{ steps.verdict.outputs.code }}");
     expect(changes!.text).toMatch(/id: verdict\n(?:.*\n)*? {8}run: bash scripts\/ci-docs-only\.sh\n/);
   });
+  it("every job with a Postgres service runs scripts/ci-pg-fast.sh before db:apply", () => {
+    // Stated here, not read back: the five database-bound jobs.
+    const DB_JOBS = ["smoke-db", "smoke-db-app", "smoke-db-outliers", "smoke-db-usecases", "smoke-e2e"];
+    const withPg = jobs().filter((j) => j.text.includes("image: postgres:16"));
+    expect(withPg.map((j) => j.id).sort()).toEqual([...DB_JOBS].sort());
+    for (const j of withPg) {
+      const tune = j.text.indexOf("run: bash scripts/ci-pg-fast.sh\n");
+      const apply = j.text.indexOf("run: npm run db:apply");
+      expect(tune, `${j.id} runs the tuning step`).toBeGreaterThan(-1);
+      expect(apply, `${j.id} runs db:apply`).toBeGreaterThan(-1);
+      expect(tune, `${j.id}: tuning precedes db:apply`).toBeLessThan(apply);
+    }
+    const script = readFileSync(join(import.meta.dirname, "..", "ci-pg-fast.sh"), "utf8");
+    for (const g of ["fsync", "full_page_writes", "synchronous_commit"]) {
+      expect(script, `${g} is set off`).toContain(`ALTER SYSTEM SET ${g} = off`);
+    }
+    expect(script, "the script asserts the setting landed").toContain('"$v" != "off"');
+  });
 });

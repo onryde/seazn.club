@@ -899,6 +899,11 @@ jobs:
           path: ~/.cache/seazn-flyway
           key: flyway-cli-10.22.0-linux-x64
 
+      # Throwaway DB: durability off (fsync, full_page_writes, synchronous_commit),
+      # verified by SHOW inside the script. Must precede db:apply.
+      - name: Postgres speed tuning (fsync off, verified)
+        run: bash scripts/ci-pg-fast.sh
+
       - name: Bootstrap database (Flyway migrate)
         run: npm run db:apply
 
@@ -1253,6 +1258,11 @@ jobs:
           path: ~/.cache/seazn-flyway
           key: flyway-cli-10.22.0-linux-x64
 
+      # Throwaway DB: durability off (fsync, full_page_writes, synchronous_commit),
+      # verified by SHOW inside the script. Must precede db:apply.
+      - name: Postgres speed tuning (fsync off, verified)
+        run: bash scripts/ci-pg-fast.sh
+
       - name: Bootstrap database (Flyway migrate)
         run: npm run db:apply
 
@@ -1423,6 +1433,11 @@ jobs:
         with:
           path: ~/.cache/seazn-flyway
           key: flyway-cli-10.22.0-linux-x64
+
+      # Throwaway DB: durability off (fsync, full_page_writes, synchronous_commit),
+      # verified by SHOW inside the script. Must precede db:apply.
+      - name: Postgres speed tuning (fsync off, verified)
+        run: bash scripts/ci-pg-fast.sh
 
       - name: Bootstrap database (Flyway migrate)
         run: npm run db:apply
@@ -1658,6 +1673,11 @@ jobs:
         with:
           path: ~/.cache/seazn-flyway
           key: flyway-cli-10.22.0-linux-x64
+
+      # Throwaway DB: durability off (fsync, full_page_writes, synchronous_commit),
+      # verified by SHOW inside the script. Must precede db:apply.
+      - name: Postgres speed tuning (fsync off, verified)
+        run: bash scripts/ci-pg-fast.sh
 
       - name: Bootstrap database (Flyway migrate)
         run: npm run db:apply
@@ -1934,6 +1954,11 @@ jobs:
         env:
           # tsc gate already ran in the gates job — don't type-check twice.
           SKIP_TYPECHECK: "1"
+
+      # Throwaway DB: durability off (fsync, full_page_writes, synchronous_commit),
+      # verified by SHOW inside the script. Must precede db:apply.
+      - name: Postgres speed tuning (fsync off, verified)
+        run: bash scripts/ci-pg-fast.sh
 
       - name: Bootstrap database (Flyway migrate)
         run: npm run db:apply
