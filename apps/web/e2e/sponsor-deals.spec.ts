@@ -792,8 +792,12 @@ test("add deal sheet: a bottom sheet on a phone, a panel from sm - the cards fit
       for (const id of ["add-deal-submit", "add-deal-cancel", "add-deal-email", "add-deal-scope"]) {
         expect((await page.getByTestId(id).boundingBox())!.height, `${width}: ${id} is a 44px target`).toBeGreaterThanOrEqual(44);
       }
-      // A card is tapped on its body: hit-test the middle of the card, do not trust the paint.
+      // A card is tapped on its body: hit-test the middle of the card, do not trust the paint. The sheet's body scrolls inside a bottom
+      // sheet 85% of the screen high, so these two cards sit BELOW the fold at 320 / 390 (their centres are past the viewport, where
+      // `elementFromPoint` answers null for any element at all): a person scrolls the sheet to reach one, so the test does too - and
+      // then asks what is on top of the card's middle, which still fails for a sibling or the footer overlaying it.
       for (const id of ["add-deal-payment-offline-card", "add-deal-golive-immediate-card"]) {
+        await page.getByTestId(id).scrollIntoViewIfNeeded();
         const hit = await page.getByTestId(id).evaluate((el) => {
           const r = el.getBoundingClientRect();
           const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
