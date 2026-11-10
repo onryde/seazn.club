@@ -535,11 +535,22 @@ async function openAddDealFromRow(page: Page, sponsorId: string): Promise<Locato
   return sheet;
 }
 
-/** Presses the sheet's primary button and returns the create's response (the sheet closes itself on success). */
-async function saveDeal(page: Page, sponsorId: string): Promise<Response> {
+/** Presses the sheet's primary button and returns the create's response (the sheet closes itself on success). When the sponsor already
+ *  has an OPEN deal (one that has not gone live: draft, awaiting payment or approval, or queued) on the same package, the sheet asks
+ *  "Add a second deal?" before it writes - pass `confirmsDuplicateOf` (the sponsor's name) to answer it, which also pins that the
+ *  question was asked. Without it the dialog is not expected, so a write that never arrives is a defect and not a hung wait. */
+async function saveDeal(page: Page, sponsorId: string, opts: { confirmsDuplicateOf?: string } = {}): Promise<Response> {
   const [res] = await Promise.all([
     page.waitForResponse((r) => r.url().includes(`/sponsors/${sponsorId}/deals`) && r.request().method() === "POST", { timeout: 60_000 }),
-    page.getByTestId("add-deal-submit").click(),
+    (async () => {
+      await page.getByTestId("add-deal-submit").click();
+      if (opts.confirmsDuplicateOf === undefined) return;
+      const dialog = page.getByRole("alertdialog", { name: ui("sponsors.dealSheet.dup.title") });
+      await expect(dialog, "a second open deal on the same package is asked about before it is written").toContainText(
+        ui("sponsors.dealSheet.dup.body", { name: opts.confirmsDuplicateOf }),
+      );
+      await dialog.getByRole("button", { name: ui("sponsors.dealSheet.dup.label"), exact: true }).click();
+    })(),
   ]);
   return res;
 }
@@ -734,7 +745,8 @@ test("add deal on a live sponsor: it queues behind the live deal; 'End the curre
   await expect(page.getByTestId("add-deal-end-current")).toBeChecked();
   await expect(page.getByTestId("add-deal-queue-note"), "the note no longer applies").toHaveCount(0);
   await expect(page.getByTestId("add-deal-submit"), "with the current deal ended it goes live on save").toHaveText(ui("sponsors.dealSheet.primary.saveAndGoLive"));
-  const res2 = await saveDeal(page, s.sponsorId);
+  // The queued deal from the first save is still open on this package, so this second deal asks "Add a second deal?" first.
+  const res2 = await saveDeal(page, s.sponsorId, { confirmsDuplicateOf: s.name });
   expect(res2.status(), `create answered ${res2.status()}: ${await res2.text()}`).toBe(201);
   const swapped = ((await res2.json()) as { data: { deal: Deal } }).data.deal;
   expect(JSON.parse(res2.request().postData() ?? "null"), "end_current is sent true").toMatchObject({ end_current: true });
