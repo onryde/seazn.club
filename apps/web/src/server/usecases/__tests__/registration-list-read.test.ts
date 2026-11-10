@@ -133,7 +133,7 @@ describe.skipIf(!HAS_DB)("RS005 W1a: listRegistrations widened read model", () =
     // ranked position 1 — read BEFORE this mutates the winner away from
     // 'waitlisted'.
     // These settings promote straight into a seat, so the promotion is handed the seat gate exactly as the
-    // production callers open it (registrations.ts `promotionSeats`); without one it refuses (fail-closed).
+    // production callers open it (registrations/waitlist.ts `promotionSeats`); without one it refuses (fail-closed).
     const gate = await openRegistrationSeatGate({ divisionId: division.id });
     const promoted = await sql.begin((tx) => promoteOldestWaitlisted(tx, division.id, settings, undefined, gate));
     expect(promoted).toBeTruthy();

@@ -7,7 +7,7 @@
 // refuse at all — so "which paths honour the freeze?" was answerable only by
 // grepping a sentence, and rewording it meant grepping it again.
 //
-// WHY THIS FILE AND NOT `usecases/schedule.ts`: that module opens with
+// WHY THIS FILE AND NOT `usecases/schedule/`: that module opens with
 // `import "server-only"`, which makes anything defined in it unreachable from
 // a Playwright spec. The walkthrough already paid that price once — it
 // HAND-MIRRORS `autoSolverWallMs` (see the comment at
@@ -26,7 +26,7 @@
 
 /** `HttpError.code` on every schedule-lock refusal, so a client can branch on
  *  the refusal without matching prose. The AI-plan gates
- *  (`schedule-ai.ts`, `schedule-ai-preview.ts`, `competition-schedule-ai.ts`)
+ *  (`usecases/schedule-ai/`, `schedule-ai-preview.ts`, `usecases/competition-schedule-ai/`)
  *  answer 409 with this same code; every board-write path answers 422. */
 export const SCHEDULE_LOCKED_CODE = "SCHEDULE_LOCKED";
 

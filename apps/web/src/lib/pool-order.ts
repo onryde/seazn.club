@@ -5,7 +5,7 @@
 //
 // Pools have no position column. Their `key` IS the position: the generator
 // creates the i-th pool as `POOL_KEYS[i]` ("A", "B", …) and names it
-// "Pool " + key (`server/usecases/stages.ts`). So pools order by key, then by
+// "Pool " + key (`server/usecases/stages/`). So pools order by key, then by
 // name, both with a NATURAL collation ("Pool 2" before "Pool 10"), and by id
 // last — only so that two pools a reader cannot tell apart still land in one
 // stable order.

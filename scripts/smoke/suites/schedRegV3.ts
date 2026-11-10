@@ -204,7 +204,7 @@ export async function schedRegV3Suite(
   // division purely to get one unresolved slot. A 4-entrant knockout's final
   // is fed by winnerOf(semi1)/winnerOf(semi2)
   // (bracketToGen/generateStageFixtures,
-  // apps/web/src/server/usecases/stages.ts:1117-1155), so it is written with
+  // apps/web/src/server/usecases/stages/), so it is written with
   // a `slot.winner_match` label and no scheduled_at — resolved at render
   // time to "Winner of {ref}" — exactly the day-one shape both checks below
   // need, and `comp` already carries the `ends_on` the calendar feed anchors
@@ -328,7 +328,7 @@ export async function schedRegV3Suite(
   });
   check("date order: the same window the right way round saves", goodWindow.status === 200);
 
-  // Registration window (`registrations.ts`). `>=`, so the zero-length case
+  // Registration window (`usecases/registrations/`). `>=`, so the zero-length case
   // is refused too — a window that opens and closes at one instant accepts
   // nobody, which is a control that silently does not work.
   const regBase = {

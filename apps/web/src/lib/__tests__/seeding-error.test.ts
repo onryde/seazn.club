@@ -3,7 +3,7 @@
 // code into copy — see docs/superpowers/plans/2026-08-13-p6-progression-ui-plan.md
 // "Owner ruling — SEEDING_* error copy is P6's, scoped"). The wire codes are
 // HttpError codes thrown by computeSeedProposal/confirmSeedProposal
-// (server/usecases/stages.ts), ALL_CAPS_SNAKE by repo convention
+// (server/usecases/stages/), ALL_CAPS_SNAKE by repo convention
 // (schemas.ts:3024-3029) — never i18n keys themselves. This module is the
 // ONE place a code becomes display text.
 import { describe, expect, it } from "vitest";

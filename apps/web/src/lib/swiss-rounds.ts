@@ -7,7 +7,7 @@
 //
 // Client-safe on purpose: the format catalogue (config/format-gallery.tsx,
 // lib/format-templates.ts) and the server generator
-// (server/usecases/stages.ts's swissGen) must agree on the number, and a
+// (server/usecases/stages/swiss-gen.ts's swissGen) must agree on the number, and a
 // `server-only` module could not be imported by the first two.
 
 export interface SwissRoundsBand {
@@ -52,7 +52,7 @@ export function swissRoundsForFieldSize(entrants: number): number {
 //   hard maximum  n − 1 for an even field, n for an odd one — a legal Swiss cannot exist beyond it;
 //   recommended   min(band(n), safe maximum).
 // Between the safe and the hard maximum the round count is allowed with a warning; above the hard maximum it is refused
-// (`SWISS_ROUNDS_ABOVE_MAX`), at every Generate and at Start (`usecases/stages.ts` `swissGen`,
+// (`SWISS_ROUNDS_ABOVE_MAX`), at every Generate and at Start (`usecases/stages/swiss-gen.ts` `swissGen`,
 // `refuseSwissRoundsAboveMaxAtStart`). `n` is always the field paired NOW (`swissFieldForRound`): a latecomer whose
 // first round is still ahead is not in it.
 // ---------------------------------------------------------------------------------------------------------------------

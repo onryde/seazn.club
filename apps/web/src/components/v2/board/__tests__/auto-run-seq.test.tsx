@@ -1,5 +1,5 @@
 // #pins-ui (owner ruling 2026-08-12) — the auto-schedule APPLY never sent
-// `expected_seq`, so `assertFreshSeq` no-oped on it (schedule.ts: `if
+// `expected_seq`, so `assertFreshSeq` no-oped on it (usecases/schedule/board.ts: `if
 // (expectedSeq === undefined) return;`). A lock toggled WHILE the multi-second
 // solve was running was silently overwritten by the stale proposal, because
 // nothing told the server the board had moved on. `moveFixture` bumps the
@@ -81,7 +81,7 @@ function driveHook() {
 }
 
 const solveOk = (fixtureId: string, at: string, court: string) => ({
-  // P9: /schedule/auto returns `court_id` (schedule.ts), not the frozen label.
+  // P9: /schedule/auto returns `court_id` (usecases/schedule/), not the frozen label.
   assignments: [{ fixture_id: fixtureId, scheduled_at: at, court_id: court }],
   conflicts: [],
 });

@@ -249,7 +249,7 @@ describe("groups_ko — cross-pool draw (F3 owner ruling R5, placement per rulin
           take: [
             { kind: "topNPerGroup", n: 2 },
             // A1 (round-4 review, MAJOR): normaliseUnequalPools MUST be set
-            // — snakeDistribute (stages.ts) puts unequal entrant counts into
+            // — snakeDistribute (usecases/stages/generators.ts) puts unequal entrant counts into
             // unequal-sized pools whenever entrants don't divide evenly by
             // poolCount (the common case), and bestNth's cross-pool compare
             // throws SEEDING_BESTNTH_UNEQUAL_POOLS without it (progression.ts)
@@ -317,7 +317,7 @@ describe("groups_ko — cross-pool draw (F3 owner ruling R5, placement per rulin
   it("A1 fix: the emitted bestNth remainder actually resolves against unequal pools, not just an unequal-membership shape check", () => {
     // The shape-check tests above only prove the JSON now carries
     // normaliseUnequalPools:true. This pipes groups_ko's REAL output through
-    // the real engine resolver against pool sizes snakeDistribute (stages.ts)
+    // the real engine resolver against pool sizes snakeDistribute (usecases/stages/generators.ts)
     // actually produces for an entrant count that doesn't divide evenly by
     // poolCount (10 entrants / 4 pools -> [3,3,2,2], sizes.size > 1) — before
     // A1's fix, the missing flag makes this throw SEEDING_BESTNTH_UNEQUAL_
@@ -676,7 +676,7 @@ describe("STAGE_TEMPLATES — every key has dictionary-backed label/help copy (F
 // round robin is offered to no sport (owner ruling 2026-11-01, Match Day D1 legs Option A): the forms offer legs 1-2, so
 // the template stays in STAGE_TEMPLATES only for what already reads it (stored divisions, seeds, the matrix catalogue).
 // Match Day C9 fix round 1 (review I5): the same two formats are offered to no sport whose ENGINE entrant model cannot
-// play them - an americano stage needs individual players to rotate (usecases/stages.ts americanoGen), so a sport whose
+// play them - an americano stage needs individual players to rotate (usecases/stages/generators.ts americanoGen), so a sport whose
 // `entrantModel.kinds` lacks them is offered neither (football, cricket, hockey and ice hockey hold teams only;
 // volleyball teams and pairs). C9 round 3 (controller ruling): individuals are the ONE need, shared with the division
 // builder and Settings; the pairs it mints (pairEntrantsFor) are a registry invariant asserted below, and chess - the

@@ -113,7 +113,7 @@ async function generateStageFixturesWrite(
       // Generating a stage's fixtures IS writing the timetable — the widest
       // schedule write there is — so a frozen division refuses it.
       //
-      // `startDivision` (schedule.ts) already refuses on this exact predicate
+      // `startDivision` (schedule/publish.ts) already refuses on this exact predicate
       // immediately before its own call to this function, and history.ts's
       // undo/redo refuses far earlier in the same call, so neither of them can
       // reach this guard and neither changes behaviour. What could not refuse

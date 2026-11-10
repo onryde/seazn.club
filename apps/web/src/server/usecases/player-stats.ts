@@ -898,7 +898,7 @@ export async function personStats(
  *  allows scheduled/in_play/abandoned/cancelled, none of which count
  *  (`db/migration/v2-engine/tables/V214__fixtures.sql:21-22`). Same three
  *  statuses as divisions.ts's own audit count, org-posts.ts's DECIDED set,
- *  stages.ts's DECIDED set, withdrawal.ts's SETTLED set — each currently its
+ *  stages/swiss-gen.ts's DECIDED set, withdrawal.ts's SETTLED set — each currently its
  *  own local copy (unifying those is out of scope here; this constant only
  *  closes the "matches" duplication below).
  *
@@ -971,7 +971,7 @@ export interface StatsFixture {
  * engine's one reader decides (`playedInStats`, @seazn/engine/stats), under each fixture's own module, over its stored
  * ledger: a walkover, a double walkover, and a disqualification, a withdrawal (ruling 127) or an abandon with nothing
  * played before it (whatever its result or settle) are not; a retirement, an in-match disqualification, a withdrawal
- * after play and an abandon after play are; a fixture with no ledger at all (the byes and double walkovers stages.ts settles without an
+ * after play and an abandon after play are; a fixture with no ledger at all (the byes and double walkovers stages/ settles without an
  * event) is not. The snapshot fold reads the same function, so a person's match count and their snapshot figures
  * cannot disagree about which fixtures were played.
  *

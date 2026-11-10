@@ -6,7 +6,7 @@
 //     replayed Stripe webhook took money AND materialised an entrant for a
 //     registration the organiser had explicitly refused (RULING A).
 //   - RS003 W3b: the registration branch of the dispatch had no
-//     `payment_status` gate while every OTHER kind in billing-events.ts's
+//     `payment_status` gate while every OTHER kind in billing-events/ folder's
 //     dispatch already had one, so a delayed-notification payment method's
 //     `checkout.session.completed` (fired while still `unpaid`) confirmed
 //     and materialised before money actually moved.
@@ -93,7 +93,7 @@ import { seedRegistration, seedSecondEntry, loadWithGroup, fakeSession, stripeRi
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
-/** The three event types the group-checkout path reacts to (billing-events.ts
+/** The three event types the group-checkout path reacts to (billing-events/event-types.ts
  *  HANDLED_EVENT_TYPES). Typed as a closed union, not `string`, so a typo
  *  here is a compile error rather than a silently-unhandled event. */
 type RegistrationEventType =
@@ -259,7 +259,7 @@ describe.skipIf(!HAS_DB)("registration webhook fulfilment (RS002/RS003 regressio
     expect(row.status).toBe("paid"); // NOT confirmed — awaiting a human review
     expect(row.entrant_id).toBeNull();
     // The growth-loop earn grant is keyed on a genuine CONFIRMATION
-    // (registrations.ts, the `if (outcome.kind === "confirmed")` block) —
+    // (registrations/, the `if (outcome.kind === "confirmed")` block) —
     // a paid_awaiting_approval outcome must never reach it.
     expect(await balance(walletId)).toBe(before);
   });
@@ -474,7 +474,7 @@ describe.skipIf(!HAS_DB)("registration webhook fulfilment (RS002/RS003 regressio
     const session = fakeSession([a.registration.id, b.id], 1000);
     (session.metadata as Record<string, string>).destination_account = "acct_whatever_mint_time";
     const errSpy = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
-    // Unique within registrations.ts to checkDestinationAccountDrift's own
+    // Unique within registrations/checkout-completion.ts to checkDestinationAccountDrift's own
     // select (the join to `organizations`) — confirmPaidRegistration never
     // reads that table, and runs its own queries through a tx object from
     // sql.begin(), never through this wrapped `sql`, so it is untouched.

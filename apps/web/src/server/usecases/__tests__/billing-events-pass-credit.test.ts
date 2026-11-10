@@ -120,7 +120,7 @@ describe.skipIf(!HAS_DB)("handleSubscriptionChanged → pass-to-Pro credit wirin
   });
 
   it("customer.subscription.updated carrying org_id also triggers a credit attempt", async () => {
-    // Unconditional by design (see the comment in billing-events.ts): the
+    // Unconditional by design (see the comment in billing-events/): the
     // group's one-lifetime-credit cap is enforced by groupAlreadyRedeemed
     // inside creditPassTowardSubscription, not by gating which event types are
     // allowed to attempt it — so an ordinary .updated (a seat change, a

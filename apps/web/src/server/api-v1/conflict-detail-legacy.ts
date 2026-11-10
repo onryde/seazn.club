@@ -16,7 +16,7 @@
 //   1. `ScheduleConflict.detail` / `AiPlanConflict.detail` — the wire's
 //      back-compat field, kept for existing clients until it is removed.
 //   2. `verifier_conflicts` on the AI repair-round conversation
-//      (schedule-ai.ts, competition-schedule-ai.ts) — the C3 design doc
+//      (usecases/schedule-ai/, usecases/competition-schedule-ai/) — the C3 design doc
 //      rules the model's input stays byte-identical to pre-C3: nothing in
 //      that task measured repair quality, and the request's token weight
 //      feeds AI-credit accounting.
@@ -40,7 +40,7 @@ export function legacyConflictDetail(d: ConflictDetail): string {
 
 /**
  * The AI repair round's own copy of a conflict (`verifier_conflicts` on the
- * conversation, schedule-ai.ts/competition-schedule-ai.ts) — byte-identical
+ * conversation, usecases/schedule-ai/ and usecases/competition-schedule-ai/) — byte-identical
  * to what the model read pre-C3 (C3 design doc ruling: "the prose reaches
  * the model, not just the screen"). Strips the new `details` entirely
  * (JSON.stringify must never see it here — a structured field the model

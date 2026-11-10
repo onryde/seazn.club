@@ -889,7 +889,7 @@ test("the scorebug's LONGEST round label — a double-elimination reset — is w
       kind: "double_elim",
       name: "Double",
       // The reset is generated only on request (`generateDoubleElim`'s
-      // `bracketReset`, read from the stage config in usecases/stages.ts).
+      // `bracketReset`, read from the stage config in usecases/stages/).
       // Every decider off (W2c X-SR-6: a new bracket stage starts with extra
       // time and penalties), so a 0–0 full time is held, as REACH_STATUS needs.
       config: { bracketReset: true, rules: decidersOffRules("football", "11-a-side", "double_elim") },

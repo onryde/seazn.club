@@ -358,7 +358,7 @@ describe("validateConfigState", () => {
     });
   });
 
-  // F15 — mirrors the block above, on the SEPARATE guard registrations.ts
+  // F15 — mirrors the block above, on the SEPARATE guard usecases/registrations/
   // runs for a solo sign-up (it is charged free_agent_fee_cents instead of
   // fee_cents, so passing the block above says nothing about this one).
   describe("solo card fee minimum (server: 'Card entry fees for a solo sign-up must be at least 1.00 (or 0 for free)')", () => {

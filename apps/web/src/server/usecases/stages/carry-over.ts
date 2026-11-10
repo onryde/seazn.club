@@ -394,7 +394,7 @@ export async function seedNextStage(auth: AuthCtx, completedStageId: string): Pr
     // Server-side merge, not a spread of `next.config` read earlier in this
     // transaction (design §T2): any other key written between that read and
     // this write — a per-stage `rules` override, most immediately — would
-    // otherwise be silently reverted. Not `stages.ts`'s write-once `rounds`
+    // otherwise be silently reverted. Not `stages/` folder's write-once `rounds`
     // pattern: that one is guarded `and config->>'rounds' is null`, which is
     // right for a key set once and wrong for one that must stay replaceable.
     await tx`

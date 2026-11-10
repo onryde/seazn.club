@@ -1,6 +1,6 @@
 // Text-pinned copy of apps/web/src/server/usecases/format-gates.ts (it imports
 // "server-only", so it cannot load here). createStages checks the double-elim
-// gate FIRST, then the advanced gate, before any insert (stages.ts:373-382),
+// gate FIRST, then the advanced gate, before any insert (usecases/stages/),
 // and each gate reads every stage of the POST. format-gates-copy.test.ts pins
 // both bodies term by term, their order and the `some` over stages.
 //

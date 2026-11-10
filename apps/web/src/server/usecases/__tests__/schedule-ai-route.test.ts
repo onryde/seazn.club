@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto";
 const { parse, isServerFeatureEnabled, captureServer, incrWindow, rlCounts, MockAPIError } =
   vi.hoisted(() => {
     const rlCounts = new Map<string, number>();
-    // The real SDK exposes `Anthropic.APIError`; schedule-ai.ts branches on it to
+    // The real SDK exposes `Anthropic.APIError`; schedule-ai/ branches on it to
     // tell a provider outage (billing/rate-limit/overload) from a planning
     // failure. The mock must carry it or that branch is unreachable under test.
     class MockAPIError extends Error {
@@ -77,7 +77,7 @@ vi.mock("@/lib/cache", async (importOriginal) => {
 
 // vi.hoisted for the same reason as the block at the top of this file: the
 // vi.mock factory below is hoisted above every import, so a plain top-level
-// const would still be in its TDZ when schedule-ai.ts pulls ai-runs-admin in.
+// const would still be in its TDZ when schedule-ai/ pulls ai-runs-admin in.
 const { maybeAlertExpensiveRun } = vi.hoisted(() => ({
   maybeAlertExpensiveRun: vi.fn().mockResolvedValue(undefined),
 }));

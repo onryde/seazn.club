@@ -32,7 +32,7 @@ export const CLAIM_PREFIX = "pc_";
 const CLAIM_DAYS = 14;
 
 // Both the superuser client and a tx serve createSystemClaimInvite below
-// (registrations.ts's own AnySql precedent). The RS008 sweep
+// (registrations/types.ts's own AnySql precedent). The RS008 sweep
 // (`maybeInviteClaim`) passes a transaction of its OWN, opened on the pool
 // strictly AFTER the registration's transaction has committed, so the claim
 // and the outbox row that mails it commit together; the email itself is
@@ -96,7 +96,7 @@ function requireSessionEditor(auth: AuthCtx): void {
  * B's insert lands and commits, then caller A's OWN insert fails against
  * `person_claims_open_uq` — and because A's revoke had ALREADY committed
  * with nothing transactional to undo it, that failure (silently swallowed by
- * `maybeInviteClaim`'s catch, registrations.ts) could leave a still-open
+ * `maybeInviteClaim`'s catch, registrations/people.ts) could leave a still-open
  * invite from the LOSING side's own revoke with no replacement. One
  * transaction makes the pair atomic: a losing insert now rolls its own
  * revoke back too, so a race always leaves whichever invite the WINNING
@@ -216,7 +216,7 @@ export async function createClaimInvite(
  * claimed) — a caller wiring this into a registration flow must never let a
  * mail-invite outcome affect the write that triggered it. Callers are
  * responsible for their OWN "is there already an open invite" guard before
- * calling this (`registrations.ts`'s `maybeInviteClaim`) — repeated calls
+ * calling this (`registrations/people.ts`'s `maybeInviteClaim`) — repeated calls
  * for the same person across unrelated registrations would otherwise
  * silently revoke-and-replace a still-pending invite (or yank a
  * partially-completed claim flow) every time.

@@ -22,7 +22,7 @@ import { log } from "@/server/logger";
 import { publicDivisionCacheKeys } from "@/server/public-site/division-doc-cache-keys";
 
 // The public-page refresh is asserted by spying on the two helpers an ENTRANT
-// write fires, keeping the rest of the module real (stages.ts, imported by
+// write fires, keeping the rest of the module real (stages/, imported by
 // entrants.ts, still needs `fireDivisionRevalidate`).
 const fireScoreRevalidate = vi.hoisted(() => vi.fn(async () => {}));
 const dropNamedPublicDocuments = vi.hoisted(() => vi.fn());

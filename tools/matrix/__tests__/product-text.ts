@@ -274,7 +274,7 @@ export function nextMatchStartedText(): NextMatchText {
   return { status: Number(thrown[1]), code, notStarted: started[1], cascade: { status: cascade[1], outcomeKind: cascade[2] }, resetExempt, everyAppend, message: (label) => template.replace("${label}", label), wire: { key: thrown[3], idField } };
 }
 
-/** stages.ts bracketToGen: the round_no the product stores for an engine
+/** usecases/stages/generators.ts bracketToGen: the round_no the product stores for an engine
  *  bracket fixture — its lane's offset (a multiple of the lane depth), plus
  *  the engine's 0-based round, plus one. */
 export function bracketRoundNoText(): (lane: string | undefined, round: number, laneDepth: number) => number {
@@ -287,13 +287,13 @@ export function bracketRoundNoText(): (lane: string | undefined, round: number, 
   return (lane, round, laneDepth) => (lane === "LB" ? laneDepth : lane === "GF" ? laneDepth * gf : 0) + round + 1;
 }
 
-/** stages.ts: the two product facts I2's structural terminal keys rest on
+/** usecases/stages/: the two product facts I2's structural terminal keys rest on
  *  (W1-driving Task 9 m-1, scenarios/terminal-finals.ts). Every bracket row's
  *  ext_key is the engine fixture id (bracketToGen `extKey: f.id`), and
  *  generate() lays out page_playoff, double_elim and stepladder with the
  *  engine's own generator — double elim's reset read as `cfg.<key> === true`.
  *  Returns the kinds found and that config key; throws by name otherwise.
- *  `src` is stages.ts's text (a parameter so a test can feed a variant). */
+ *  `src` is usecases/stages/ folder's text (a parameter so a test can feed a variant). */
 export function structuralBracketFrom(src: string): { kinds: string[]; resetKey: string } {
   const body = /\nfunction bracketToGen\(bracket: GeneratedBracket, laneDepth: number\): GenFixture\[\] \{([\s\S]*?)\n\}\n/.exec(src)?.[1];
   if (body === undefined || !/\n\s*extKey: f\.id,\n/.test(body)) {
@@ -358,13 +358,13 @@ export function withdrawalTableKindsText(): string[] {
   return setMembers(/\nconst TABLE_KINDS = new Set\(\[([^\]]*)\]\);/.exec(read("apps/web/src/server/usecases/withdrawal.ts")), "withdrawal.ts TABLE_KINDS");
 }
 
-/** stages.ts BRACKET_WALKOVER_KINDS: the bracket kinds whose withdrawal
+/** usecases/stages/generators.ts BRACKET_WALKOVER_KINDS: the bracket kinds whose withdrawal
  *  forfeits each pending line to the opponent (W1-driving T7). */
 export function bracketWalkoverKindsText(): string[] {
   return setMembers(/\nexport const BRACKET_WALKOVER_KINDS: ReadonlySet<string> = new Set\(\[([\s\S]*?)\]\);/.exec(stagesSource(REPO)), "stages.ts BRACKET_WALKOVER_KINDS");
 }
 
-/** stages.ts departedEntrantIds: the entrant statuses that have LEFT the
+/** usecases/stages/helpers.ts departedEntrantIds: the entrant statuses that have LEFT the
  *  field — a challenge naming one is LADDER_ENTRANT_WITHDRAWN, and the live
  *  ladder is the raw order without them (W1-driving T7). W3 T15 made it
  *  `export async function` (the Swiss cut reads it too): the `export` is optional here. */
@@ -385,7 +385,7 @@ export interface LadderText {
   fieldStatuses: string[];
 }
 
-/** stages.ts issueChallenge (W1-driving T7, D8): what FakeLadderDriver
+/** usecases/stages/ad-hoc.ts issueChallenge (W1-driving T7, D8): what FakeLadderDriver
  *  mirrors, read from the product's text. */
 export function ladderText(): LadderText {
   const src = stagesSource(REPO);

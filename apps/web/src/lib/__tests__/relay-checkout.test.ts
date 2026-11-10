@@ -278,7 +278,7 @@ describe("buildRelayCheckoutParams", () => {
       pack: "5",
     });
     // The AI credit WALLET is a different currency on a different ledger
-    // (billing-events.ts `kind === "credit_pack"` → recordPackPurchase). The
+    // (usecases/billing-events/ `kind === "credit_pack"` → recordPackPurchase). The
     // two discriminators must never collide, or a match-credit purchase tops
     // up the wrong balance.
     expect(params.metadata?.kind).not.toBe("credit_pack");

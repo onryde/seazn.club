@@ -2,7 +2,7 @@
 // place match — as a key that survives a Rebuild that changes the bracket's size. Pure and client-safe, like
 // lib/rebuild-slots.ts, which reads it.
 //
-// Why a role and not a position: a knockout's `round_no` counts from the FIRST round (stages.ts `bracketToGen`: the
+// Why a role and not a position: a knockout's `round_no` counts from the FIRST round (usecases/stages/generators.ts `bracketToGen`: the
 // engine's round index + 1), so a bracket of 8 has its final in round 3 and a bracket of 16 in round 4. Rebuild carried
 // slots by `(pool, round_no, seq)`, so an 8 → 9 Rebuild handed the old final's court and time to a new quarter-final.
 // Counted back from the final instead — the final is depth 0, its semi-finals depth 1 — the final keeps the final's slot
@@ -26,7 +26,7 @@ export class BracketHasNoFinalError extends Error {
 }
 
 /** The third-place match: the engine names it `<prefix>-3p` (scheduling/bracket.ts `generateSingleElim`), and the app
- *  stores the engine's id as `ext_key` (stages.ts `bracketToGen`). It sits in the final's round, so it is told apart by
+ *  stores the engine's id as `ext_key` (usecases/stages/generators.ts `bracketToGen`). It sits in the final's round, so it is told apart by
  *  its key, never by its round. */
 const isThirdPlace = (r: Pick<BracketRoleRow, "ext_key">): boolean => r.ext_key !== null && r.ext_key.endsWith("-3p");
 

@@ -131,7 +131,7 @@ export function capacityRequestFromDraft(
           from: startIso ? zonedTimeToUtc(dayKeyInTz(Date.parse(startIso), orgTz), "00:00", orgTz) : -Infinity,
           to: endIso ? zonedTimeToUtc(ymdAddDays(dayKeyInTz(Date.parse(endIso), orgTz), 1), "00:00", orgTz) : Infinity,
         };
-  // The board's twin of the server's `isMovable` (schedule.ts, server-only): a
+  // The board's twin of the server's `isMovable` (usecases/schedule/board.ts, server-only): a
   // `scheduled` card that holds no result. A `held` one stays where it is, so it
   // is no demand on the capacity the draft would re-plan.
   const movable = fixtures.filter(boardMovable);
@@ -190,7 +190,7 @@ export function StandaloneScheduleSettings(props: {
    *  panel filters to movable itself (see {@link SettingsPanel}'s doc
    *  comment). Optional so no OTHER caller of this wrapper breaks; omitted,
    *  the capacity card simply never renders (report is always null with
-   *  zero fixtures). Structural, matching `FixtureRow` (stages.ts), so the
+   *  zero fixtures). Structural, matching `FixtureRow` (usecases/stages/types.ts), so the
    *  page's already-fetched list passes straight through with no mapping. */
   fixtures?: readonly {
     id: string;
@@ -411,7 +411,7 @@ export function SettingsPanel({
    *  wrong instant and looks correct on the way back out. */
   orgTz: string;
   /** The parent COMPETITION's own `starts_on`/`ends_on`. The server refuses a
-   *  division whose schedule range leaves this window (schedule.ts CONTAINMENT
+   *  division whose schedule range leaves this window (usecases/schedule/ CONTAINMENT
    *  GUARD → 422), so both date fields carry it as `min`/`max` and an unset
    *  start seeds its date half from the competition's opening day. Optional:
    *  omitted, the fields are unbounded exactly as before and the server stays

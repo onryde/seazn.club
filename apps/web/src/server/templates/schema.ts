@@ -99,7 +99,7 @@ export const TemplateStage = z.object({
   size: z.number().int().positive().optional(),
   /** Sugar for a `group` stage's `config.pools.count` — kept separate from
    *  `config` below because it is common enough to want typed and validated
-   *  (1..26, the same POOL_KEYS bound stages.ts's poolCount() enforces). */
+   *  (1..26, the same POOL_KEYS bound usecases/stages/generators.ts's poolCount() enforces). */
   groups: z.number().int().min(1).max(26).optional(),
   /** Same PointsRule the create-stages usecase validates `config.points`
    *  against (@seazn/engine/competition) — reused, not restated. */

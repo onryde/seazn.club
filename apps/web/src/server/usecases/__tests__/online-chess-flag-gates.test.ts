@@ -606,7 +606,7 @@ describe.skipIf(!HAS_DB)("gate: the Lichess link demanded at sign-up", () => {
   });
 
   // M7 (T16 fix round 1): the entries step states online play from a PUBLIC read that cannot know who is looking — it
-  // asks the flag as the club (registrations.ts publicRegistrationInfo). The submit's link demand must ask the SAME
+  // asks the flag as the club (registrations/settings.ts publicRegistrationInfo). The submit's link demand must ask the SAME
   // way, or under a person-targeted rollout the notice and the LICHESS_LINK_REQUIRED gate disagree. Signed in here.
   it("M7: a SIGNED-IN registrant's submit asks the flag as the club, exactly as the entries step did — never as the person", async () => {
     let checked = 0;

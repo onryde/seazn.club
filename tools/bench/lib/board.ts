@@ -96,7 +96,7 @@ import type { PackHistoricalAssignment } from "./pack-schema.ts";
 
 /**
  * Statuses a fixture can be BORN in. A bracket generates a bye already
- * decided — `stages.ts:1351` stamps `forfeited` on any generated game carrying
+ * decided — `usecases/stages/` stamps `forfeited` on any generated game carrying
  * an `award` — and such a fixture is never scheduled and never scored.
  *
  * ONE authority, because two consumers need the same fact and a second copy is

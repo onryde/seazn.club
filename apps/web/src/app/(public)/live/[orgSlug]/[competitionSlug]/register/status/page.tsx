@@ -121,7 +121,7 @@ export default async function RegistrationStatusPage({ params, searchParams }: P
     instructionsHtml,
     currency: view.currency,
     // FIX #13(a): org's own zone (already resolved server-side as refundTz —
-    // registrations.ts) — entry-card.tsx renders every deadline in this,
+    // usecases/registrations/) — entry-card.tsx renders every deadline in this,
     // never a hardcoded UTC.
     timezone: view.org_timezone,
   };

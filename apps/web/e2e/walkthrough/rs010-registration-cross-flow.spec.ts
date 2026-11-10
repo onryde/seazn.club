@@ -231,9 +231,9 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
   // so every "anonymous" registrant below was in fact submitting as the
   // signed-in e2e organiser. That is not cosmetic: a signed-in submitter
   // registering THEMSELVES with an adult dob makes `deriveLinkUserId`
-  // (registrations.ts) link the entry to that account's own
+  // (usecases/registrations/) link the entry to that account's own
   // `(org_id, user_id, 'player')` person, and that upsert is
-  // `do update set full_name = persons.full_name` (registrations.ts:667-676)
+  // `do update set full_name = persons.full_name` (usecases/registrations/)
   // — the EXISTING person's name wins and the name this test submitted is
   // discarded. So the captain rendered on the public Entrants tab under
   // whatever name that shared account's player person already had.

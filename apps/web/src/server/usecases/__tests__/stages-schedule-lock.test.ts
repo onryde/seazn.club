@@ -1,5 +1,5 @@
 // A frozen division (`divisions.schedule_locked`) refuses every board write —
-// and `usecases/stages.ts` had NO division-freeze awareness at all. Four
+// and `usecases/stages/` had NO division-freeze awareness at all. Four
 // organiser-reachable write paths in that file went through a frozen board
 // unrefused, each behind the same `requireResourceAuth(..., "write")` as the
 // routes that DO refuse:
@@ -9,7 +9,7 @@
 //   addFixture             POST /api/v1/stages/{id}/fixtures   inserts scheduled_at + court_id
 //   deleteStage            DELETE /api/v1/stages/{id}          takes the stage and its board
 //
-// DO NOT be misled by `stages.ts`'s own `schedule_locked` matches: every one
+// DO NOT be misled by `stages/` folder's own `schedule_locked` matches: every one
 // of them is `fixtures.schedule_locked`, the PER-FIXTURE pin, in a select list
 // or a row type. Different column, different table, same name.
 //
@@ -143,7 +143,7 @@ describe.skipIf(!HAS_DB)("a frozen division refuses stages.ts's write paths", ()
   // generateStageFixtures — POST /api/v1/stages/{id}/generate
   // -------------------------------------------------------------------------
   // The Critical. `startDivision` guards its OWN call to this
-  // (`schedule.ts:3666`), but the route bypasses `startDivision` entirely, so
+  // (`schedule/`), but the route bypasses `startDivision` entirely, so
   // an organiser could write a whole timetable onto a frozen board by pressing
   // Generate instead of Start — the same walk-around shape as #230 item 2.
   describe("generateStageFixtures", () => {
@@ -281,7 +281,7 @@ describe.skipIf(!HAS_DB)("a frozen division refuses stages.ts's write paths", ()
   // -------------------------------------------------------------------------
   // completeStage — the FIFTH caller of the generator, found while guarding it
   // -------------------------------------------------------------------------
-  // `completeStage` (stages.ts, the `timing: "on_complete"` branch) calls
+  // `completeStage` (stages/completion.ts, the `timing: "on_complete"` branch) calls
   // `generateStageFixtures` for the stage it just seeded — a whole stage's
   // timetable written onto the board through a THIRD door, and the one caller
   // of the generator that was NOT already refusing a frozen division

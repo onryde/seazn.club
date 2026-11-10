@@ -29,7 +29,7 @@ export const QUOTE_MISMATCH_EVENT = "schedule.ai_quote_mismatch" as const;
 /**
  * Compare the card's quote to the charge, record the divergence, return it.
  *
- * Called by all three run paths (`schedule-ai.ts`, `competition-schedule-ai.ts`,
+ * Called by all three run paths (`schedule-ai/`, `competition-schedule-ai/`,
  * `officials-ai.ts`) so they cannot come to different conclusions about what
  * counts as a mismatch — a fork between those three is what produced the
  * divergence #387 is about in the first place.

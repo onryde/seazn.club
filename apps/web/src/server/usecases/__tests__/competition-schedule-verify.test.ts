@@ -519,7 +519,7 @@ describe("verifyJoint — cross-division occupancy (#350)", () => {
   });
 
   it("reports conflicts in domain order — division, then round, then seq — never by fixture UUID", () => {
-    // The determinism contract (schedule-ai.ts:1-12) forbids ordering on a UUID.
+    // The determinism contract (schedule-ai/) forbids ordering on a UUID.
     // The seed is chosen so the two orders DISAGREE: sorted as strings the ids
     // come out F1 < F2 < F3, but F1 belongs to Beta and F3 is Alpha's round 2.
     // Domain order groups the report by division and then by playing order,
@@ -664,7 +664,7 @@ describe("jointStructuralCheck (#350)", () => {
   });
 
   // The remaining return paths. These are verbatim copies of logic tested in
-  // schedule-ai.ts's own suite, and a COPY DOES NOT INHERIT COVERAGE: deleting
+  // schedule-ai/ folder's own suite, and a COPY DOES NOT INHERIT COVERAGE: deleting
   // any one of these branches here left the whole joint suite green.
 
   it("rejects an assignment naming a fixture that is not movable", () => {
@@ -1165,7 +1165,7 @@ describe("verifyConfigFor (#350)", () => {
 // `competition-schedule-apply.ts`'s joint apply calls `verifyConfigFor` with no
 // `rules` bundle at all, by design (#399: apply-time blocking must not extend
 // to the typed-rule families — see the `rules` param's own doc comment a few
-// hundred lines up in competition-schedule-ai.ts). That left the round-order
+// hundred lines up in competition-schedule-ai/). That left the round-order
 // scan permanently inert there too, since it needs `config.tz` and the apply
 // path never supplied one. This 4th parameter closes that gap by carrying
 // `tz` ALONE, independent of `rules` — mirroring the existing `window`

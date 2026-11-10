@@ -316,7 +316,7 @@ export async function withTenant<T>(
  * (`sql(columns)`, `sql.json(x)`), which composes into someone else's query and
  * takes no connection of its own. Only the former is a pool checkout, and
  * conflating the two is what made a static sweep of this file's callers report
- * five registrations.ts sites that were never nesting at all.
+ * five usecases/registrations/ sites that were never nesting at all.
  */
 function isTaggedTemplate(args: unknown[]): boolean {
   const first = args[0];

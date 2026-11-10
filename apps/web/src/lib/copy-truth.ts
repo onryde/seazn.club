@@ -1814,7 +1814,7 @@ export function feeLockStatedFaults(label: string, markdown: string): string[] {
  *
  * The second exemption (#303) is for the OTHER live number:
  * `rateLimit('ai-plan:'+divisionId, {max:5, windowSeconds:3600})` in
- * `schedule-ai.ts` (and its officials twin in `officials-ai.ts`) is a genuine,
+ * `usecases/schedule-ai/` (and its officials twin in `officials-ai.ts`) is a genuine,
  * still-enforced BURST BRAKE — "5 AI runs an hour per division" — and its shape
  * ("<n> runs … per division") is indistinguishable from the retired LIFETIME
  * cap to `RETIRED_AI_RUN_CAP_PATTERNS`, which was written before this rate
@@ -1849,7 +1849,7 @@ export function retiredRunCapProseFaults(label: string, markdown: string): strin
  * restaff as often as you like." That is false on every tier: both AI phases
  * spend the SAME shared credit wallet, one credit per run, reserved-then-settled
  * by the identical `spendCredit(walletId, orgId, 1, …)` call in
- * `schedule-ai.ts:aiPlanForDivision` and `officials-ai.ts:officialsAiPlanForDivision`
+ * `usecases/schedule-ai/orchestrator.ts:aiPlanForDivision` and `officials-ai.ts:officialsAiPlanForDivision`
  * (SPEC-2 §5.2) — including the no-instruction default spread, which makes no
  * model call but still runs through `spendCredit` and is settled on success.
  *

@@ -58,7 +58,7 @@ export const defaultAdvanceTransport: AdvanceTransport = { raw };
 // ---------------------------------------------------------------------------
 // The wire shapes this file sends/reads — hand-declared, matching the
 // product's `SeedProposal` / `ConfirmSeedProposal` / `GenerateOutcome` /
-// `CompleteStageResult` (schemas.ts / usecases/stages.ts) field for field, for
+// `CompleteStageResult` (schemas.ts / usecases/stages/completion.ts) field for field, for
 // the same "cannot import apps/web" reason `import.ts`'s own `IMPORT_CAPS`
 // header comment gives (most of that tree is `server-only`, and no PRODUCTION
 // file under `tools/bench/lib/` imports from `apps/web` — established

@@ -22,7 +22,7 @@ export const OCCUPYING = ["scheduled", "in_play", "decided", "finalized", "forfe
  *  DERIVED, never copied, and derived exactly ONCE — here. A hand-typed list
  *  rots silently the day `OCCUPYING` grows a member, and so does a second
  *  `.filter()` written elsewhere. Both the #350 joint builder
- *  (`competition-schedule-ai.ts`) and the court-removal guard below import
+ *  (`competition-schedule-ai/`) and the court-removal guard below import
  *  this one, so there is no way for them to disagree about what "fixed" means. */
 export const FIXED_OCCUPYING = OCCUPYING.filter((s) => s !== MOVABLE_STATUS);
 
@@ -51,7 +51,7 @@ export function heldInPlace(f: { id: string; status: string } & ByeLineRow, play
 
 /** `isMovable`, as SQL: `scheduled`, holding no result, and not a bye line
  *  (`byeLineSql`, the SQL twin of `isByeLine`). For the counts that price, drop
- *  or size a run (competition-schedule-ai.ts, schedule-ai-preview.ts), so they
+ *  or size a run (competition-schedule-ai/, schedule-ai-preview.ts), so they
  *  count exactly what a builder moves. `on` names the `fixtures` row in the
  *  enclosing query. */
 export function movableFixtureSql(tx: Tx, on = "f") {
@@ -192,7 +192,7 @@ export async function peopleByEntrant(tx: Tx, entrantIds: string[]): Promise<Map
 // crossPersonClash structurally skips a not-yet-filled slot — there is no
 // person to clash on until confirm fills it (design: "Person-level
 // constraints (crossPersonClash) skip TBD slots until filled — recorded
-// limitation, re-validate on fill"). confirmSeedProposal (stages.ts)
+// limitation, re-validate on fill"). confirmSeedProposal (stages/seed-proposal.ts)
 // re-runs validateSchedule straight after its fillSlot commit so a clash that
 // only becomes REAL once real entrants land surfaces as a warning then, not
 // silently forever — this function needs no change for that, since it

@@ -6,7 +6,7 @@ import "server-only";
 // manual; new terminal status rejected").
 //
 // Module topology (RS002 `_INDEX.md`, kept on purpose): this file imports
-// from `registrations.ts` only. Never add an edge back — that is the cycle
+// from `registrations/` only. Never add an edge back — that is the cycle
 // the three-way split (`registration-eligibility.ts` / `registration-
 // submit.ts` / this file) exists to avoid.
 import type postgres from "postgres";
@@ -53,12 +53,12 @@ type Tx = postgres.TransactionSql;
 
 /**
  * Bare `extends`, no redeclared field — `approval` now lives on the base
- * `RegistrationSettingsRow` itself (registrations.ts, RS004 wave 1's
+ * `RegistrationSettingsRow` itself (registrations/types.ts, RS004 wave 1's
  * SETTINGS_COLS extension), so retyping it here would only add a hazard: a
  * redeclared literal union does NOT inherit a future widening of the base
  * (RS004 review finding 3). Still kept as its own name, same precedent as
  * `registration-submit.ts`'s `SubmitSettingsRow` — this wave's file
- * ownership still keeps `registrations.ts`'s shared
+ * ownership still keeps `registrations/lookups.ts`'s shared
  * `SETTINGS_COLS`/`RegistrationSettingsRow` to export-only edits, and
  * `loadApprovalSettings` below hand-writes its own SELECT instead of
  * calling the shared `loadSettings`. An alias, not a subtype, so it stays assignable to
@@ -153,7 +153,7 @@ export async function approveRegistration(
   }, seatGate?.tenant);
   fireDivisionRevalidate(row.division_id);
   // RS008: fire-and-forget, strictly AFTER the transaction above has
-  // committed — see registrations.ts's confirmRegistration for the
+  // committed — see registrations/organiser-actions.ts's confirmRegistration for the
   // identical wiring and its own doc comment for why.
   if (row.entrant_id) void inviteUnclaimedMembers(row.org_id, row.entrant_id);
   log.info(
@@ -177,7 +177,7 @@ export async function approveRegistration(
  * (wave-5 acceptance) — so it audits and promotes only on the FIRST call.
  *
  * `paid` is accepted (whole-branch review MAJOR) because ruling B
- * (`confirmPaidRegistration`, registrations.ts) can leave a Stripe-paid
+ * (`confirmPaidRegistration`, registrations/checkout-completion.ts) can leave a Stripe-paid
  * manual-approval entry sitting at exactly `paid` awaiting review — before
  * this, that state could be APPROVED but never DECLINED, the precise gap
  * ruling B was invented to avoid. Rejecting a paid entry refunds it in the
@@ -327,7 +327,7 @@ export async function rejectRegistration(
  * symmetry with approve/reject/promote — "approval transitions" is meant as
  * the registration lifecycle's whole organiser-facing state-machine surface
  * (wave-5 brief). Delegates to the EXISTING `withdrawRegistrationOrganiser`
- * (registrations.ts) rather than reimplementing withdraw's refund-timing +
+ * (registrations/organiser-actions.ts) rather than reimplementing withdraw's refund-timing +
  * auto-promote + audit logic — that function is already correct, already
  * tested, and (via `withdrawCore` → `promoteOldestWaitlisted`) already
  * carries the SAME sibling-safe promotion fix this wave shipped. Idempotent:
@@ -359,7 +359,7 @@ export interface PromoteFromWaitlistOpts {
  * Organiser-triggered promotion: oldest-first by default
  * (`promoteOldestWaitlisted`), or a specific entry via
  * `opts.registrationId`. Both paths share `promoteWaitlistedRow`
- * (registrations.ts) — the routed wave-4 fix that scopes the cart-level
+ * (registrations/waitlist.ts) — the routed wave-4 fix that scopes the cart-level
  * `payment_method`/`expires_at` write so it cannot clobber a sibling entry
  * still `pending` in the same cart (see the block comment on
  * `promoteWaitlistedRow`). No capacity re-check here, matching
@@ -420,7 +420,7 @@ export async function promoteFromWaitlist(
       }, auth.userId);
       // RS010 fix (a free/auto division must not confirm to `pending` and
       // stay there forever) lives in `promoteWaitlistedRow`/
-      // `promoteOldestWaitlisted` themselves (registrations.ts) — both paths
+      // `promoteOldestWaitlisted` themselves (registrations/waitlist.ts) — both paths
       // above funnel through one of those, so it applies here without being
       // repeated. `/code-review` caught an earlier version of this fix that
       // only patched THIS call site, leaving `withdrawCore` and

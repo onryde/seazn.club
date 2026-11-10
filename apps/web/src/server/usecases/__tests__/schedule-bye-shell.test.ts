@@ -167,7 +167,7 @@ describe.runIf(HAS_DB)("W3 T3 X-SW-29 a Swiss bye shell never takes a court", ()
 
   it("X-SW-29 the AI counts (movableFixtureSql) agree with isMovable: a bye shell is not movable, seated or not", async () => {
     // `movableFixtureSql` is `isMovable` as SQL — the counts that price, drop and size an AI run
-    // (schedule-ai-preview.ts, competition-schedule-ai.ts). They must count exactly what a builder moves.
+    // (schedule-ai-preview.ts, competition-schedule-ai/). They must count exactly what a builder moves.
     const rig = await shells();
     await generateStageFixtures(rig.auth, rig.stageId); // Pair round 1: one seated bye, one unseated
     const { byes } = await split(rig.stageId);

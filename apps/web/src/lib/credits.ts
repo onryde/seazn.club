@@ -844,7 +844,7 @@ export async function recordEarnGrant(
  * (onboarding-complete route + the Event Pass checkout webhook, SPEC-5 §2 B/C).
  * Resolves the wallet and grants, but NEVER throws — a credit-grant failure must
  * not fail the onboarding flow or the money-row webhook it rides on (same
- * discipline as the other post-commit grants in `billing-events.ts` and the
+ * discipline as the other post-commit grants in `usecases/billing-events/` and the
  * bootstrap grant in `createOrgForUser`). Logs and returns 0 on any error.
  *
  * `ref = orgId` for both sources: onboarding is one-per-org, and first_paid is
@@ -1198,7 +1198,7 @@ export async function spentThisPeriodByOrg(
  * **Oversell guard:** the ledger has no counter row to `select ... for
  * update`, so two concurrent reserves against the same wallet are
  * serialized with a `pg_advisory_xact_lock` on the wallet id (the same
- * idiom `schedule.ts`/`stages.ts` use to serialize per-division writes) —
+ * idiom `usecases/schedule/`/`usecases/stages/` use to serialize per-division writes) —
  * without it, two transactions could both read the same prior sum and both
  * insert a `balance_after` that individually satisfies `>= 0` while the
  * true post-insert total goes negative (classic lost-update; the CHECK

@@ -1,6 +1,6 @@
 // W4 app-A Task 16 (SP-UI; RB4-S6 / X-SP-6, owner ruling 269): a stepladder or a page playoff is not offered standalone.
 // Both rank the top of a TABLE (RB4-S1: "top k from a table"; RB4-S2: "exactly 4 from a table"), so a stage of either kind
-// with no progression has nothing to seed from: the stage writers refuse it by name (`usecases/stages.ts`
+// with no progression has nothing to seed from: the stage writers refuse it by name (`usecases/stages/`
 // `assertStageBatchGates`, the one gate both the create and the Format dialog's replace ask before anything is written).
 // They stay offered as FINAL stages (RB4-S7 / X-SP-7): league then stepladder, league or Swiss then page playoff — those
 // carry a progression and this predicate answers null for them.

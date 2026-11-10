@@ -1,6 +1,6 @@
 // The pool label (2026-10-06): one pool's display name, built from its KEY in
 // the reader's dictionary. `pools.name` is only ever stored as the English
-// "Pool " + key (`server/usecases/stages.ts`), so no surface may print it.
+// "Pool " + key (`server/usecases/stages/`), so no surface may print it.
 //
 // Expected words come out of the dictionary FILES (`public` namespace), never
 // through the helper under test. Sport-independent by construction — a pool

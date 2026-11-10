@@ -57,7 +57,7 @@ import { stripeRefund, queueRefundReceipt, errText, maybeAlertRegistrationRefund
  * Review fixup (LOW): also idempotent against a redelivery. This function
  * can run more than once for the SAME session — `checkout.session.completed`
  * and `checkout.session.async_payment_succeeded` both dispatch through
- * `handleRegistrationCheckoutCompleted` (billing-events.ts), and Stripe's own
+ * `handleRegistrationCheckoutCompleted` (billing-events/), and Stripe's own
  * retry re-enters it whenever `billing_events.processed_at` stays null (a
  * later failure elsewhere in the same event, or Stripe's plain at-least-once
  * delivery). Unlike `confirmPaidRegistration`, this path is audit-only and
@@ -131,7 +131,7 @@ async function checkDestinationAccountDrift(
  * The SINGLE gate on `payment_status` for this kind, deliberately, so none of
  * its three callers has to remember one: the `checkout.session.completed`
  * AND `checkout.session.async_payment_succeeded` dispatch branches
- * (billing-events.ts) both call straight through, and so do the two
+ * (billing-events/) both call straight through, and so do the two
  * reconcile-on-return paths below. Before this wave the dispatch branch had
  * NO gate at all — every sibling kind in that file already checked
  * `payment_status`, this one didn't — so a delayed-notification payment

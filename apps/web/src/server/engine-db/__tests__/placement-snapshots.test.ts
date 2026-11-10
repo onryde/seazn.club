@@ -6,7 +6,7 @@
 //
 // Bracket-kind fixtures are seeded with the exact ext_key/round_no/
 // winner_to_fixture shapes packages/engine/src/scheduling/bracket.ts's
-// generators actually produce (never through usecases/stages.ts's own
+// generators actually produce (never through usecases/stages/ folder's own
 // generator, which is pass 3's territory) — these tests prove the DB->engine
 // RECONSTRUCTION path (ext_key parsing, winner/loser derivation, isFinal
 // refinement), not bracketRanks's ranking algorithm itself, which is already
@@ -81,7 +81,7 @@ interface FixtureSeed {
   outcome?: { kind: "win"; winner: string; loser: string };
 }
 
-// Two passes, matching stages.ts's own generator shape: every row first (so
+// Two passes, matching usecases/stages/ folder's own generator shape: every row first (so
 // ext_key -> uuid is known), then winner_to_fixture wiring + outcomes second
 // (winner_to_fixture is itself a fixture id, so it can't be set in pass one).
 async function seedBracketFixtures(

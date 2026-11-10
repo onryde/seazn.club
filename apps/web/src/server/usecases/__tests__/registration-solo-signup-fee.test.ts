@@ -218,7 +218,7 @@ describe.skipIf(!HAS_DB)("free_agent_fee_cents", () => {
   });
 
   // F20 — the `method === "stripe"` conjunct on the Stripe-minimum guard
-  // (registrations.ts:1848) had no witness of its own: every prior case in
+  // (registrations/) had no witness of its own: every prior case in
   // this file either goes through `seedPaidTeamDivision`'s "stripe" default
   // and hits the numeric half, or is offline with a legal fee. Deleting the
   // conjunct alone would make this reject — an offline division has no

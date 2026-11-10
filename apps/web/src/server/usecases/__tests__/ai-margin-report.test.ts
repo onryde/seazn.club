@@ -429,7 +429,7 @@ describe.skipIf(!HAS_DB)("aiMarginReport — per-phase unit economics (v17 gap #
     await seedRunEvent(compId, orgId, "schedule.ai_generated", {
       cost_usd: 400,
       pack_units: 6_000_000,
-      // Exactly the shape schedule-ai.ts writes when the ladder falls through.
+      // Exactly the shape schedule-ai/ writes when the ladder falls through.
       escalated_from: "gemini",
       rungs_tried: ["gemini", "claude-sonnet-5"],
       warnings: 2,

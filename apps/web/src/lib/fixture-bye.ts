@@ -25,7 +25,7 @@ import type { MatchOutcome } from "@seazn/engine/core";
  *
  * A two-sided award (forfeit / retirement) is a board, not a bye, and returns
  * false — destroying it would erase the reason the opponent advanced
- * (`stages.ts` rebuild guard, same rule). Whether its pair MET is another
+ * (`usecases/stages/` rebuild guard, same rule). Whether its pair MET is another
  * question (rulebook P-A2: an unplayed board is not a meeting), answered by
  * `buildSwissHistory`, not here.
  */
@@ -47,7 +47,7 @@ export function isOneSidedAwardBye(f: {
 
 /** W2b C-5 (spec §5.1): a bye is an `award` nobody forfeited — `reason: "bye"`, no loser — which the engine credits
  *  exactly today's bye delta (sport/forfeit-credit.ts; `bye-deltas.json` pins it per sport). ONE shape for the three
- *  server bye writers (usecases/stages.ts: the Swiss bye, the generator's bye, `awardSeededByes`' SQL twin) and
+ *  server bye writers (usecases/stages/bracket-seats.ts: the Swiss bye, the generator's bye, `awardSeededByes`' SQL twin) and
  *  `awardByeDelta`'s synthesised one (engine-db/competition.ts). */
 export function byeAward(winner: string): { kind: "award"; winner: string; loser: null; reason: "bye" } {
   return { kind: "award", winner, loser: null, reason: "bye" };

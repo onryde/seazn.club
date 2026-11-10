@@ -3,7 +3,7 @@ import type { Tx } from "@/lib/db";
 
 // WHO THE SUBMITTER'S OWN ROW BELONGS TO, when the row itself does not say.
 //
-// `deriveLinkUserId` (registrations.ts) ties a self-registered player's `registration_players.user_id` to the signed-in account only for an
+// `deriveLinkUserId` (registrations/helpers.ts) ties a self-registered player's `registration_players.user_id` to the signed-in account only for an
 // adult WITH a date of birth, so the submitter of a division that does not ask for one has an untied row - yet they ARE the account that
 // submitted the cart (`registration_groups.user_id`, written once at submit and never changed), and the submit asked THAT session's Lichess
 // link before it accepted the entry. Two doors need the same answer and must not be able to disagree about it:

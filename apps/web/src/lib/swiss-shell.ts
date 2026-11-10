@@ -8,7 +8,7 @@ import { isOneSidedAwardBye } from "./fixture-bye.ts";
 
 /** `HttpError.code` when a swiss stage is created (or a stage graph replaced)
  *  without a usable `config.rounds`. Lives HERE rather than in
- *  `server/usecases/stages.ts` because that module opens with
+ *  `server/usecases/stages/` because that module opens with
  *  `import "server-only"` — the organiser-facing panels that branch on this
  *  code are client components and could not import it from there. Same reason
  *  `lib/schedule-lock.ts` exists; see its header. */
@@ -245,7 +245,7 @@ export function latestSwissRoundWithAnySeat(
  * (2026-09-22).
  *
  * A bye is written `home = winner, away = null, status = 'forfeited',
- * outcome = {award, winner}` (stages.ts's swiss seating). Delete the winner
+ * outcome = {award, winner}` (usecases/stages/ folder's swiss seating). Delete the winner
  * and the award and the status both survive while the seat does not, so the
  * row reads as a two-sided played result to `swissRoundHasPlayedResult` and as
  * SEATED to `isSwissBoardSeated`. That combination is why deleting the bye
@@ -273,7 +273,7 @@ function isOrphanedAwardShell(f: {
 /**
  * Statuses that are evidence a fixture has been played. Mirrors the status
  * arm of this repo's canonical destructive guard (`rebuildStageFixtures` in
- * `server/usecases/stages.ts`), `abandoned` included — an abandoned match was
+ * `server/usecases/stages/generate.ts`), `abandoned` included — an abandoned match was
  * PLAYED and stopped, and match-reports.ts accepts a report on exactly that
  * status.
  *

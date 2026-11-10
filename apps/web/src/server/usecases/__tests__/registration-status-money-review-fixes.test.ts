@@ -1,7 +1,7 @@
 // RS007 code-review follow-up — findings #8, #10, #13 (docs/superpowers/specs/
 // 2026-08-16-registration-redesign-prompts/_INDEX.md, "### The rest, in the
 // reviewer's own terms"). All three land on the public status page's money
-// state, sourced from registrations.ts:
+// state, sourced from registrations/:
 //
 //  #8  — resumeRegistrationCheckout never re-checked whether the deadline it
 //        was about to mint a Stripe session against had already passed. The
@@ -299,7 +299,7 @@ describe("#10/#13b — notifyPromoted (pure function, offline branch — no DB)"
       promotion_expires_at: null,
       waitlisted_at: null,
       withdrawn_at: null,
-      // #18b (registrations.ts): stamped once a real Stripe charge lands —
+      // #18b (registrations/): stamped once a real Stripe charge lands —
       // every fixture in this describe is a still-'pending'/promoted
       // waitlist entry that has never been charged.
       charged_at: null,

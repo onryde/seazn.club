@@ -995,10 +995,10 @@ async function ticketRegistrationRows(tx: Tx, competitionId: string): Promise<Ti
 }
 
 // Code-review fix (2026-08-30): this file used to carry its own LOCAL copy of
-// `anyOptedOutByRegistration`, near-identical to registrations.ts's own —
+// `anyOptedOutByRegistration`, near-identical to registrations/public-status.ts's own —
 // same SQL/grouping, differing only in which sql/tx client was passed — the
 // exact "two lookup paths drift" defect class this codebase has hit before.
-// Deduped: registrations.ts's version now takes the client as an explicit
+// Deduped: registrations/ folder's version now takes the client as an explicit
 // parameter (`AnySql = Tx | postgres.Sql`), so this file's `tx` (from its own
 // `withTenant` transaction below) passes straight through, imported above.
 

@@ -175,7 +175,7 @@ describe.skipIf(!HAS_DB)("player person get-or-create by (org, name, dob) — no
     expect(members[0]!.person_id).toBe(members[1]!.person_id);
 
     // MAJOR (review): the individual branch's OWN person_id write-back
-    // (registrations.ts ~656-660, guarded by `if (p)`) had no coverage
+    // (registrations/, guarded by `if (p)`) had no coverage
     // anywhere — every other person_id assertion in this file used
     // entrant_kind "team". Pin it here, on the default individual kind.
     const [playerRow] = await sql<{ person_id: string | null }[]>`
@@ -236,7 +236,7 @@ describe.skipIf(!HAS_DB)("player person get-or-create by (org, name, dob) — no
   });
 });
 
-// #22 — email is tried BEFORE dob (registrations.ts findOrCreatePlayerPerson).
+// #22 — email is tried BEFORE dob (registrations/people.ts findOrCreatePlayerPerson).
 // Same "exactly one match reuses, zero or ambiguous creates" conservatism as
 // the dob rule above; never dedupes on name alone, unchanged.
 describe.skipIf(!HAS_DB)("player person get-or-create by EMAIL — tried before dob (#22 ruling)", () => {
@@ -646,7 +646,7 @@ describe.skipIf(!HAS_DB)("materialisation idempotency (pair roster + person reus
 
   // MAJOR (review): the test above never actually re-enters materialise a
   // second time — confirmRegistration's OWN `status === "confirmed"` early
-  // return (registrations.ts ~2082) short-circuits before materialise is
+  // return (registrations/) short-circuits before materialise is
   // even called, so materialise's OWN `if (reg.entrant_id) return` guard
   // (~627) and the `on conflict ... do nothing` writes it protects are
   // never exercised by that test. Deleting materialise's early return

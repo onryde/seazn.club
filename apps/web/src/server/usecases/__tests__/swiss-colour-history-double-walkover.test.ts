@@ -1,7 +1,7 @@
 // W2b Loop R M-8 (a): Swiss chess pairs colours from each player's colour history (spec 05 §2.2: alternate, keep
 // |W−B| ≤ 2, never three in a row; neutral ⇒ the upper board takes White). A game that was never played holds no
 // colour — the engine's own reading: boardgame's `colorOf` gives a forfeited game none (`state.forfeited`), and
-// `colorHistory` skips a game with no colour. The pairing's history (stages.ts) skipped an award, but read a double
+// `colorHistory` skips a game with no colour. The pairing's history (stages/) skipped an award, but read a double
 // walkover — `{kind: "double_walkover"}`, nobody played — as a game: White for home, Black for away. So the next round
 // paired colours against games that never happened.
 //

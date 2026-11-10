@@ -203,20 +203,20 @@ interface FixtureRow {
   venue: string | null;
   court_label: string | null;
   /** P9 pass 4d: the fixture's REAL court identity — mirrors
-   *  `FixtureRow.court_id`/`court_name` (stages.ts's server-side type, which
+   *  `FixtureRow.court_id`/`court_name` (usecases/stages/types.ts's server-side type, which
    *  `FIXTURE_COLS` has selected since pass 3c-2). */
   court_id: string | null;
   /** DERIVED display name for `court_id` — never render `court_id` itself
    *  (a raw uuid). Falls back to `court_label` via `courtDisplayName`. */
   court_name: string | null;
   /** Competition Desk W2 (Task 4) — venue-qualified display name, mirrors
-   *  `FixtureRow.venue_name` (usecases/stages.ts). Optional for the same
+   *  `FixtureRow.venue_name` (usecases/stages/types.ts). Optional for the same
    *  reason `ext_key` etc. below are: pre-existing hand-built test props in
    *  this panel's own `__tests__` predate the field. Feeds the run sheet's
    *  day-header venue clause and `RunSheetRow`'s `courtLabel` fallback. */
   venue_name?: string | null;
   /** Competition Desk W2 (Task 4) — any officials recorded on the fixture,
-   *  mirrors `FixtureRow.officials` (usecases/stages.ts). Optional, same
+   *  mirrors `FixtureRow.officials` (usecases/stages/types.ts). Optional, same
    *  reason as `venue_name` above. `fixtureRowAction`'s "no scorer" input is
    *  `officials.length > 0`, derived at ITS call site (`RunSheetRow`), never
    *  here. */
@@ -224,7 +224,7 @@ interface FixtureRow {
   status: string;
   outcome: unknown;
   /** F1 (2026-08-17) — the engine's bracket-position role, persisted on
-   *  fixtures (V368) and selected by usecases/stages.ts's FIXTURE_COLS.
+   *  fixtures (V368) and selected by usecases/stages/types.ts's FIXTURE_COLS.
    *  Optional here for the same reason it's optional on the shared
    *  FixtureRow this local type otherwise mirrors: real rows always carry
    *  it, but pre-existing hand-built test fixtures in this panel's own
@@ -288,7 +288,7 @@ function toFeedRow(f: FixtureRow): FeedRow {
   };
 }
 
-/** F3 Task 5 (5a) — getStageRosterDrift's wire shape (usecases/stages.ts),
+/** F3 Task 5 (5a) — getStageRosterDrift's wire shape (usecases/stages/roster-drift.ts),
  *  hand-declared like StageRow/FixtureRow above: this panel only ever reads
  *  these two fields. */
 interface RosterDriftEntrant {
@@ -302,7 +302,7 @@ interface RosterDrift {
    *  hand-built props in this panel's own __tests__ predate the field (read as none, `rosterDriftShown`). */
   vacantLines?: number;
   /** Organiser setup that a rebuild clears along with the fixtures — see
-   *  StageRosterDrift.attachments (usecases/stages.ts) for why these do not
+   *  StageRosterDrift.attachments (usecases/stages/types.ts) for why these do not
    *  BLOCK the rebuild the way a recorded result does. Optional: hand-built
    *  props in this panel's own __tests__ predate the field. */
   attachments?: {
@@ -509,7 +509,7 @@ interface Props {
 // americano have their own on-demand mechanisms. Swiss is out (W3 RB3-15 A,
 // X-SW-21): the system pairs its rounds, and the server refuses the match by
 // name; the rail shows that guidance in the trigger's place. Mirrors
-// `ADHOC_STAGE_KINDS` in server/usecases/stages.ts.
+// `ADHOC_STAGE_KINDS` in server/usecases/stages/ad-hoc.ts.
 const ADHOC_STAGE_KINDS = new Set(["league", "group"]);
 
 /**
@@ -532,7 +532,7 @@ const ADHOC_STAGE_KINDS = new Set(["league", "group"]);
  * page exactly as the schedule page already resolves it for the board
  * (`resolveVenueTz(null, page.org.timezone)`). That keeps the governing clock
  * correct without widening this wire — the alternative (adding `orgTz` to the
- * response) means editing schemas.ts, usecases/schedule.ts and the exact-key
+ * response) means editing schemas.ts, usecases/schedule/ and the exact-key
  * assertion in `schedule-settings-wire.test.ts`, for a value the rendering
  * pages already hold.
  */
@@ -1562,7 +1562,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // W4 T20: a drawn knockout's seed, by the card's own stage id (`0` is a seed: an absent one is `undefined`).
         const drawSeed = ROOT_KNOCKOUT_KINDS.includes(stage.kind) ? drawSeeds[stage.id] : undefined;
         // F3 Task 5 (5a) — only ever non-empty for the one stage
-        // getStageRosterDrift finds eligible (usecases/stages.ts); every
+        // getStageRosterDrift finds eligible (usecases/stages/roster-drift.ts); every
         // other stage's entry is absent or both arrays empty, so this is a
         // no-op read for the common case.
         const drift = rosterDrift[stage.id];
@@ -2222,7 +2222,7 @@ export function addStageProgression(topN: number) {
 /**
  * The stage an `on_complete` progression stage is still waiting on, or null.
  *
- * Mirrors the server's own refusal exactly (stages.ts generateStageFixtures'
+ * Mirrors the server's own refusal exactly (usecases/stages/generate.ts generateStageFixtures'
  * pre-flight → STAGE_NOT_READY `previous_stage_incomplete`): a progression
  * whose timing is `on_complete`, not yet seeded (`config.qualified` absent),
  * whose IMMEDIATELY previous stage by seq is not complete. That stage is also
@@ -2368,7 +2368,7 @@ export function AddStageForm({
 /**
  * F3 Task 5 (5b) — the rebuild-click classifier, mirroring
  * generatePreconditionMessage's shape just below (same pure/exported-for-
- * direct-unit-testing rationale). rebuildStageFixtures (usecases/stages.ts)
+ * direct-unit-testing rationale). rebuildStageFixtures (usecases/stages/generate.ts)
  * refuses 409 STAGE_HAS_RESULTS the moment any fixture in the stage already
  * carries a score, is in progress, or is completed — this turns that refusal
  * into the actionable, localized amber banner rather than the generic red
@@ -2613,7 +2613,7 @@ export function classifyActError(
 ): { tone: "warning" | "error"; text: string; refresh: boolean } {
   // F3 ultrareview finding 4 — the completion COMMITTED in its own
   // transaction; only the next stage's seed proposal failed afterwards
-  // (completeStage, usecases/stages.ts). Amber, because the stage really is
+  // (completeStage, usecases/stages/completion.ts). Amber, because the stage really is
   // complete and the organiser has one concrete thing to fix — and a refresh,
   // because otherwise the board keeps showing a completed stage as active and
   // the next click lands on an already-complete stage.
@@ -2816,7 +2816,7 @@ export function generatePreconditionMessage(
     // used to fall back to the PLAIN path's tooFewEntrants copy ("add at
     // least 2 entrants to this stage first") — unactionable here, since a
     // a `.progression` (timing: "setup") stage's entrants are synthetic
-    // slot:N seeds minted from its take rules (stages.ts:1399-1403), not
+    // slot:N seeds minted from its take rules (usecases/stages/), not
     // rows a user can add.
     // The seeded path's real lever is the seeding rules or the source
     // stage's qualifier count, so it gets its own copy, never tooFewEntrants.

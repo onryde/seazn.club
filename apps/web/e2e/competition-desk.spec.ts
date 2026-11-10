@@ -263,7 +263,7 @@ test.describe("competition desk", () => {
   // Enter result" for that very fixture.
   //
   // Built through the real API the whole way — `config.thirdPlace` is a real
-  // production stage-config key (stages.ts:772), and `POST /stages/{id}/
+  // production stage-config key (usecases/stages/), and `POST /stages/{id}/
   // complete` is the organiser's own action, which returned 200 with
   // `division_completed: true` in exactly this state.
   //

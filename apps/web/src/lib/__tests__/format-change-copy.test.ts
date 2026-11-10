@@ -1,4 +1,4 @@
-// FMT5: every format-change refusal the server raises (`replaceStages`, server/usecases/stages.ts) lives in ONE client-safe
+// FMT5: every format-change refusal the server raises (`replaceStages`, server/usecases/stages/stage-graph.ts) lives in ONE client-safe
 // table (`lib/format-change.ts`): its status, the server's English and the `formatChange.err.<CODE>` key the Format dialog
 // says it with. These tests pin the table against the brief's codes and the four dictionaries, so a code added without
 // copy, or copy in one locale only, is red here rather than a raw wire code on an organiser's screen.

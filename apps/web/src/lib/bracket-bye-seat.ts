@@ -25,7 +25,7 @@ export function isSettledBye(fixture: ByeLike): boolean {
 
 /**
  * The dictionary key a bracket tile falls back to for a seat with no entrant and no label: the bye's own word on the
- * empty seat of a settled bye (`bracket.slot.bye`, the label `stages.ts` stamps on every bye it writes), and the tile's
+ * empty seat of a settled bye (`bracket.slot.bye`, the label `usecases/stages/` stamps on every bye it writes), and the tile's
  * "to be decided" (`bracket.tbd`) everywhere else — a seat still waiting on a result is exactly what that word is for.
  */
 // No return-type annotation on purpose: the inferred `"bracket.slot.bye" | "bracket.tbd"` is the same type, and a key

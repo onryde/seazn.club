@@ -21,7 +21,7 @@ const MAX_SEATS = 999;
  * never a second subscription, which would double-invoice the customer. This
  * mutates STRIPE ONLY: the org_addons row is written by the
  * customer.subscription.updated webhook (syncSeatAddonsForSubscription,
- * billing-events.ts), the single writer, so Stripe and the DB can never
+ * billing-events/addon-sync.ts), the single writer, so Stripe and the DB can never
  * diverge. Do NOT write org_addons here.
  *
  * Group-payer gated (`requireBillingOwner`, the same gate the credit-pack

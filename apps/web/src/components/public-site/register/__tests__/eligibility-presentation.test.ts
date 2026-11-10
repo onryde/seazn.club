@@ -62,7 +62,7 @@ describe("selfEligibilityForDivision", () => {
     expect(inBand.eligible).toBe(true);
   });
 
-  // RS007/V380 — registrations.ts's publicRegistrationInfo never selected
+  // RS007/V380 — usecases/registrations/settings.ts's publicRegistrationInfo never selected
   // age_cutoff_month/age_cutoff_day, so this client-side self-check always
   // used the 1-January default and would disagree with the server for any
   // division with a real cutoff (V380's own "two cutoffs disagree" defect,

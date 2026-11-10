@@ -2,11 +2,11 @@ import "server-only";
 // Stripe Connect Express onboarding (doc 16 §1.1, PROMPT-20a): an org connects
 // a Stripe account with the EXPRESS DASHBOARD so entry fees settle to the CLUB,
 // with the platform taking an application fee % (second revenue line). Only the
-// onboarding state lives here; entry-fee checkout is in registrations.ts.
+// onboarding state lives here; entry-fee checkout is in registrations/.
 //
 // Accounts are created through ACCOUNTS V2 (`stripe.v2.core.accounts`); every
-// other Stripe path in this file — and in billing-events.ts, the webhook route
-// and the destination charges in registrations.ts / sponsors.ts — stays on v1,
+// other Stripe path in this file — and in billing-events/, the webhook route
+// and the destination charges in registrations/ / sponsors.ts — stays on v1,
 // which is not a half-migration but the documented interop: a v2 account id
 // passed to `/v1/accounts` returns a v1-shaped Account carrying every field
 // `syncConnectAccount` reads, and v2 accounts still emit v1 `account.updated`.
@@ -482,7 +482,7 @@ export async function syncConnectAccount(account: Stripe.Account): Promise<void>
 // `payouts_enabled: true` throughout. Every one of these events is CONNECT
 // scoped — the object describes the club's own account, and the connected
 // account id arrives on `event.account`, never on the object — so the callers
-// in billing-events.ts pass the id in rather than reading it off the payload.
+// in billing-events/ pass the id in rather than reading it off the payload.
 // ---------------------------------------------------------------------------
 
 /** How loud each alert is. A new alert overwrites a stored one only when it is

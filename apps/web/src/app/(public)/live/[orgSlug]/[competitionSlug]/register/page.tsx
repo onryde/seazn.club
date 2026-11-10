@@ -70,7 +70,7 @@ export default async function RegisterPage({ params, searchParams }: Props) {
   const locale = await resolveLocale();
   const ui = await getDictionary(locale, "ui");
 
-  // `divisions` is filtered on rs.enabled only (registrations.ts) — a
+  // `divisions` is filtered on rs.enabled only (usecases/registrations/) — a
   // division can be enabled but window-closed/payments-unavailable, so
   // `.length === 0` alone let an all-closed competition fall through to the
   // live stepper (fix wave finding #1: stranded on ENTRIES behind a generic

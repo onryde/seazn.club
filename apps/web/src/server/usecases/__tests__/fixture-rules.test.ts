@@ -934,7 +934,7 @@ describe.skipIf(!HAS_DB)("lock order: the batch writer takes its fixtures in bra
 });
 
 // Fix round 1, I1 (ruling): a match with an OUTCOME is started whatever its snapshot says. `awardSeededByes`
-// (stages.ts) decides a tie with no event at all — a bye, or ruling 116's walkover over a withdrawn winner's dead seat
+// (stages/) decides a tie with no event at all — a bye, or ruling 116's walkover over a withdrawn winner's dead seat
 // (`writeAwardedMatchState` writes its credited score) — and leaves `config_snapshot` null. Such a tie was read as
 // unstarted: an override landed with no fit check and no refold, so the walkover's credited score went stale under a
 // format it no longer matched. Now a change to it goes through the live-correction path, fitted by the award's own fold

@@ -217,7 +217,7 @@ export function stripComments(source: string, fileName = "file.tsx"): StrippedSo
     // The literal PARTS only. `isTemplateExpression` spans the whole template
     // INCLUDING its `${…}` expressions, and a comment inside one of those is a
     // real comment that must be blanked — pointing the audit at the wide span
-    // reported two false faults in `server/usecases/schedule-ai.ts` the first
+    // reported two false faults in `server/usecases/schedule-ai/` the first
     // time it ran. Head/middle/tail are the inert text between the holes.
     if (
       ts.isStringLiteralLike(node) ||

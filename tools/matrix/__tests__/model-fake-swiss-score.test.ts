@@ -174,7 +174,7 @@ describe("T5 review m2 - the twin pays a played loser what the declared Swiss ru
   });
 });
 
-// W3 app-B T6 review m4: the twin's pairing HISTORY is the product's (usecases/stages.ts buildSwissHistory), for the two things it
+// W3 app-B T6 review m4: the twin's pairing HISTORY is the product's (usecases/stages/swiss-gen.ts buildSwissHistory), for the two things it
 // rewrote. A two-seated board that was NOT PLAYED is not a meeting (rulebook P-A2, FIDE C.04.2 3.5): the pair may meet again. Its
 // WINNER, though, has scored "a win due to an opponent not appearing", and may not take the pairing-allocated bye (P-A4, FIDE
 // C.04.1(d)) - while a win by retirement AFTER play is a played game and bars nothing. Only a one-seat award is a bye. The twin read

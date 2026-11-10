@@ -8,7 +8,7 @@
 // test (see .superpowers/sdd/2026-08-14-p7-multi-stage-templates-plan/
 // f2-brief.md for the full analysis; no production code changes here).
 //
-// 1. replaceStages (usecases/stages.ts) is the ONLY writer that
+// 1. replaceStages (usecases/stages/stage-graph.ts) is the ONLY writer that
 //    mutates kind/seeding/structural config on an existing stage row. FMT5
 //    (2026-11-03): it no longer refuses on any fixture. A division with
 //    unplayed fixtures is cleared and rebuilt — fixtures DELETED with the

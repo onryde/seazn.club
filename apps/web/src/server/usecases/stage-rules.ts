@@ -37,7 +37,7 @@ import { lockedStageIdsAmong } from "./rule-locks";
  * the lock, for the fixtures panel's "Match format" row (design §T5, D7).
  *
  * The division page cannot derive this itself: `FIXTURE_COLS` does not select
- * `config_snapshot` (and `stages.ts:147-162` records a payload-budget ruling
+ * `config_snapshot` (and `stages/types.ts` records a payload-budget ruling
  * against widening it), and `score_events` reaches no page prop at all. The
  * only client-visible signal is `fixtures.status`, which is exactly the
  * non-monotonic predicate `lockedStageIdsAmong`'s comment (rule-locks.ts) rejects.
@@ -120,7 +120,7 @@ export async function putStageRules(
     assertNotFrozen(frozen, first.competition_id);
 
     // The division advisory lock every sibling stage writer takes
-    // (`stages.ts` replaceStages/deleteStage, overrideStandings, issueChallenge).
+    // (`stages/stage-graph.ts` replaceStages/deleteStage, overrideStandings, issueChallenge).
     // It pairs with `patchDivision`'s lock on the SAME key (divisions.ts, "division:<id>", taken before it reads the
     // division's config): a division config or variant save and a stage rules save serialise on it, so the division
     // config this save validates against, and the variant its allowlist reads, are the ones that stand when it commits.
@@ -314,7 +314,7 @@ export async function putStageRules(
     };
   });
 
-  // AFTER the transaction commits, and not voided. `stages.ts` used to `void`
+  // AFTER the transaction commits, and not voided. `stages/` used to `void`
   // its `fireStageRevalidate(...)` calls (a recorded defect, now awaited;
   // stage-revalidate-settles.test.ts); this is deliberately neither of those
   // shapes. `fireStageRevalidate` is

@@ -638,7 +638,7 @@ test.describe("RS004 registration hub", () => {
 // refinement in those files cannot silently break this file. Every fact
 // asserted below (join_code stripping, CSV columns, action legality,
 // promote-picks-oldest, resend-refused-on-terminal) was verified by reading
-// the CURRENT server usecases (registrations.ts / registration-approval.ts /
+// the CURRENT server usecases (usecases/registrations/ / registration-approval.ts /
 // registration-submit.ts) and registration-hub-registrant-derive.ts on
 // 2026-08-25, immediately before this file was written.
 // =============================================================================
@@ -1061,7 +1061,7 @@ test.describe("RS005 registrants tab", () => {
       oldestWaitlisted.registration_id,
     );
     // RS010: promoteWaitlistedRow confirms immediately on a FREE + AUTO
-    // division (registrations.ts:1297) — the same shortcut submit-time
+    // division (usecases/registrations/) — the same shortcut submit-time
     // auto-confirm uses — because a pending row on an auto division can
     // never be confirmed by anything downstream (approveRegistration
     // refuses "auto", and there is no Stripe webhook for a $0 fee).

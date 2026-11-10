@@ -92,10 +92,10 @@ type DemoPack = {
  * The priced lines for a recorded run, derived exactly the way the SERVER
  * derives them — same fields, same source.
  *
- *   joint  → competition-schedule-ai.ts:2565, one line per solved division:
+ *   joint  → usecases/competition-schedule-ai/, one line per solved division:
  *            `d.movableIds.length`, `pack.entrants.filter(division_id)`,
  *            `d.settings.courts.length`
- *   single → schedule-ai.ts:2680, one line: `movableIds.size`,
+ *   single → usecases/schedule-ai/, one line: `movableIds.size`,
  *            `pack.entrants.length`, `pack.settings.courts.length`
  *
  * Read from the PACK, never from the board. The board's `courts` is the UNION

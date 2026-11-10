@@ -3,7 +3,7 @@
 // that legacy row directly and keep every assertion, so they pin how a LIVE legacy `adhoc-N` row behaves (open-round,
 // carried-forward C7, the withdrawal reconcile and walkover). ONE helper for all of them, never a copy per suite.
 //
-// The row is exactly what `addFixture` (stages.ts) inserted on a Swiss stage before W3: `ext_key 'adhoc-<n+1>'` (n = the
+// The row is exactly what `addFixture` (stages/ad-hoc.ts) inserted on a Swiss stage before W3: `ext_key 'adhoc-<n+1>'` (n = the
 // stage's fixture count), `round_no` = the given round or max + 1, `seq_in_round` = that round's next seq, both seats,
 // `status 'scheduled'`, `scheduled_at` as given; no pool, venue or court (no caller here passed one). `org_id` and
 // `fixture_no` come from the table's BEFORE INSERT triggers, as they did for `addFixture`.

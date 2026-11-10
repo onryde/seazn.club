@@ -1,7 +1,7 @@
 // #pins-in-build — a `schedule_locked` (or scope-locked) fixture must stay put
 // on EVERY auto-schedule mode, BUILD included.
 //
-// Before this fix, `pinnedIds` in `schedule.ts` only honoured a lock when
+// Before this fix, `pinnedIds` in `schedule/` only honoured a lock when
 // `body.only_unlocked` was true — but the primary "Auto-schedule" button
 // always posts `only_unlocked: false` (it derives `mode: "build"` from that
 // same flag; see `AutoScheduleRequest` in `../../api-v1/schemas`), so the
@@ -262,7 +262,7 @@ async function parkAndLock(
  * coincidence.
  *
  * P9 pass-3a-FIX: `locked_scopes.courts` holds a real `courts.id` now (V374's
- * third migration block) — `scopeLocked` (schedule.ts) matches on
+ * third migration block) — `scopeLocked` (schedule/board.ts) matches on
  * `court_id`, never the legacy free-text `court_label`. The DB-backed tests
  * that call this helper are this fix's own regression: on a revert to the
  * pre-fix `scopeLocked` (matching `court_label`, which nothing writes any
@@ -464,9 +464,9 @@ describe.skipIf(!HAS_DB)(
       // in the ORG zone (`zonedIso`), which may not spell the same offset
       // `at()` does even when it names the same instant.
       expect(Date.parse(drafted!.scheduled_at as string)).toBe(Date.parse(parkedAt));
-      // `.court_label` is `schedule-ai.ts`'s own wire field name (pass 3b,
+      // `.court_label` is `schedule-ai/` folder's own wire field name (pass 3b,
       // not converted by this pass) — but the VALUE flowing through it is
-      // already a real court_id: `toAssignment` (schedule.ts) has fed
+      // already a real court_id: `toAssignment` (schedule/engine-inputs.ts) has fed
       // `f.court_id` into the engine's `Assignment.court` since pass 1, and
       // this field is that same value passed straight through.
       expect(drafted!.court_label).toBe(courts[1]);

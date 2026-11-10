@@ -131,7 +131,7 @@ describe("openStageState (W4 T21) — what the Complete-competition warning says
   });
 
   it("Swiss: a later round's unseated bye shell is never a match left; once seated and awarded it is an ordinary settled row", () => {
-    // The generator mints every declared round's boards and its bye shell up front (stages.ts swissGen). After round 1
+    // The generator mints every declared round's boards and its bye shell up front (usecases/stages/swiss-gen.ts swissGen). After round 1
     // of a five-entrant, two-round Swiss: round 1 played (its bye seated and awarded), round 2's two TBD boards still to
     // play, and its bye shell not yet seated by Pair.
     const award = { status: "decided", outcome: { kind: "award", winner: "h", reason: "bye" }, away_entrant_id: null } as const;

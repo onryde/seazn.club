@@ -3,7 +3,7 @@
 // both slideshows and the organiser console.
 //
 // Never `pools.name`. The generator stores it once, as the English
-// "Pool " + key (`server/usecases/stages.ts`), and nothing renames it, so
+// "Pool " + key (`server/usecases/stages/`), and nothing renames it, so
 // printing it put English in front of every Spanish, French and Dutch reader
 // (2026-10-06). The label is rebuilt from the pool's KEY through the reader's
 // own `public` dictionary instead: "Group A", "Grupo A", "Poule A". The stored

@@ -125,12 +125,12 @@ export function chooseByeLine(lines: readonly ByeLineCandidate[], seeds: Readonl
   return best?.line.lineId ?? null;
 }
 
-/** The division statuses that mean it has started (`DIVISION_STARTED_STATUSES`, usecases/stages.ts; `ENTRANT_LIST_LOCKED_STATUSES`). */
+/** The division statuses that mean it has started (`DIVISION_STARTED_STATUSES`, usecases/stages/helpers.ts; `ENTRANT_LIST_LOCKED_STATUSES`). */
 const DIVISION_STARTED: readonly string[] = ["active", "completed"];
 
 /**
  * W4 B2 fix round 1 (item 6, controller ruling): is Generate — worded "Update draw" — offered on this stage? A ROOT knockout
- * (no progression, no stored `qualified` field: the stage the reconcile serves, stages.ts `reconcileKnockoutGenerate`) that
+ * (no progression, no stored `qualified` field: the stage the reconcile serves, usecases/stages/generate-tx.ts `reconcileKnockoutGenerate`) that
  * already has lines, in a division that has not started, whose active roster no longer matches its seats (`rosterDrifted`: the
  * panel's `getStageRosterDrift` answer has a ghost or an unplaced entrant). Its first Generate made the stage `active`, so the
  * not-started rule alone hid Generate and the in-place reconcile could not be reached from the desk. Once the division has

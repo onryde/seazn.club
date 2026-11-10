@@ -6,19 +6,19 @@ import "server-only";
 // a typed HttpError code, no widening of EngineErrorCode/ENGINE_HTTP; the
 // engine lib itself throws nothing.
 //
-// Deliberately its OWN usecase file, not added to schedule.ts: the live
+// Deliberately its OWN usecase file, not added to schedule/: the live
 // C1 round-ordering work touches that file, and this route needs a
 // STAGE-scoped fixture loader that has no equivalent there today
-// (`divisionFixtures` is division-scoped only) — adding one to schedule.ts
+// (`divisionFixtures` is division-scoped only) — adding one to schedule/
 // for this feature would be an avoidable merge collision for no shared
 // benefit. `stageFixtures` below is intentionally the smallest possible
 // query for this purpose (a handful of columns, not the full `FixtureLite`
-// column set) rather than importing schedule.ts's private column list.
+// column set) rather than importing schedule/ folder's private column list.
 //
 // `computeStageHealth` (below) is the ONE per-stage computation both the
 // single-stage route and the joint competition route call — never a second
 // copy. This is not incidental tidiness: P1's competition-scope capacity
-// guard (`competition-schedule-ai.ts:2482-2489`) built its per-division
+// guard (`competition-schedule-ai/`) built its per-division
 // config with `toSlotConfig` alone, which never sets `.tz`, where
 // `toVerifyConfig` does — the compiler could not catch it (`SlotConfig` is
 // structurally assignable to `VerifyConfig`), and the guard silently
@@ -60,7 +60,7 @@ export const SCHEDULE_NOT_APPLIED_CODE = "SCHEDULE_NOT_APPLIED";
 /** Table-shaped stages only — round-robin's home/away pattern is meaningful
  *  for these and structurally absent for an elimination bracket. Mirrors
  *  the SAME classification already declared locally in six other files
- *  (scoring.ts, org-posts.ts, stages.ts, competition.ts, withdrawal.ts,
+ *  (scoring.ts, org-posts.ts, stages/, competition.ts, withdrawal.ts,
  *  slideshow-data.ts) — this codebase's own convention is a local copy per
  *  file rather than one shared export, so this follows suit rather than
  *  introducing the first centralised one. */
@@ -92,7 +92,7 @@ interface HealthFixtureRow {
  *  and `court_id` both NOT NULL in the WHERE, so every row this returns
  *  maps to a concrete `HealthFixture` with no null-handling left for the
  *  caller. No stage-scoped equivalent of `divisionFixtures` exists yet
- *  (schedule.ts's loader is division-scoped only) — this is deliberately
+ *  (schedule/board.ts's loader is division-scoped only) — this is deliberately
  *  NOT added there; see this file's header. */
 // Review finding #1: `abandoned` IS a status this occupies real court time
 // under — it is a valid state in the canonical enum (api-v1/schemas.ts's

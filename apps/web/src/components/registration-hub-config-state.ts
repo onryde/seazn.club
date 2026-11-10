@@ -198,7 +198,7 @@ export function toRegistrationSettingsPutBody(
 //
 // The server already enforces every one of these (PutRegistrationSettings in
 // server/api-v1/schemas.ts, plus the usecase-level guards in
-// server/usecases/registrations.ts this panel does not own and must not
+// server/usecases/registrations/ this panel does not own and must not
 // reimplement) — this function exists so the organiser learns about a
 // problem BEFORE the round trip, not after. It returns a RULE KEY per field,
 // never a message string: the message is organiser-facing copy and belongs
@@ -225,7 +225,7 @@ const CAPACITY_MIN = 1;
 const CAPACITY_MAX = 10_000;
 /** Mirrors PutRegistrationSettings' fee_cents bound. */
 const FEE_CENTS_MAX = 10_000_000;
-/** Mirrors the card-payment minimum charge (server/usecases/registrations.ts
+/** Mirrors the card-payment minimum charge (server/usecases/registrations/
  *  "Card entry fees must be at least 1.00 (or 0 for free)"). */
 const CARD_FEE_CENTS_MIN = 100;
 
@@ -260,7 +260,7 @@ export function validateConfigState(
     issues.fee_cents = "cardFeeMinimum";
   }
 
-  // F15 — mirrors registrations.ts's OWN solo-sign-up Stripe-minimum guard,
+  // F15 — mirrors usecases/registrations/ folder's OWN solo-sign-up Stripe-minimum guard,
   // which is charged instead of fee_cents for a free-agent entry and so has
   // to pass the same minimum independently (a division can clear the
   // fee_cents check above and still mint a checkout Stripe rejects for the

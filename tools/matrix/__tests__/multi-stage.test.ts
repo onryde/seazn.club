@@ -104,7 +104,7 @@ describe("Step 0 — the product's multi-stage shape, pinned", () => {
 });
 
 // Final review m-5: the source stage's pool count — declaredTake's topNPerGroup multiplier — is the posted body's, as
-// the product reads it (stages.ts poolCount: a group's pools.count, else 1; sourceShapeOf: an ungrouped source is one
+// the product reads it (usecases/stages/generators.ts poolCount: a group's pools.count, else 1; sourceShapeOf: an ungrouped source is one
 // implicit pool). It was the fixtures' distinct pool ids `|| 1`, so a group whose fixtures carried none read as one pool.
 describe("sourcePoolCount — the source's pools, from its posted body (final review m-5)", () => {
   const src = (kind: string, config: Record<string, unknown>) => ({ kind, name: "s", config, seq: 1, progression: null }) as never;

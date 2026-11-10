@@ -84,7 +84,7 @@ interface ZodIssueLike {
   message?: unknown;
 }
 
-/** Plain-message usecase 422s (registrations.ts/divisions.ts), matched by
+/** Plain-message usecase 422s (usecases/registrations/ and divisions.ts), matched by
  *  a stable prefix/substring of the exact strings those `HttpError` calls
  *  throw today. Checked in order; first match wins. A dynamic suffix (the
  *  capacity limit's number) is deliberately left out of the pattern. */

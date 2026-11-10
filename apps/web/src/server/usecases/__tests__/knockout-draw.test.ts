@@ -127,7 +127,7 @@ const drawn = (stageId: string, active: readonly { id: string; seed: number | nu
   swissRoundOneOrder(swissDrawSeed(stageId), active);
 
 /** The ENGINE's bracket over `order` (the engine sorts the seeded first, keeping the input order among the rest), as
- *  ext_key → "home|away" with a bye's real side at home (stages.ts stores `home: f.home ?? f.award`), and the bye
+ *  ext_key → "home|away" with a bye's real side at home (stages/ stores `home: f.home ?? f.award`), and the bye
  *  holders. */
 function engineSeats(
   order: readonly string[],
@@ -332,7 +332,7 @@ describe.skipIf(!HAS_DB)("X-SD-9 an API slotOrder overrides the draw", () => {
 
 describe.skipIf(!HAS_DB)("sequence: a fed knockout is never shuffled", () => {
   it("a fed knockout (league then knockout) is never shuffled: its config.qualified order is the seeding", async () => {
-    // seedNextStage writes the qualified list as `config.qualified`; Generate draws from it in that order (stages.ts) —
+    // seedNextStage writes the qualified list as `config.qualified`; Generate draws from it in that order (stages/) —
     // the published seeding. Every qualifier is unseeded on the roster, so a draw, were it run, would move them.
     const { auth } = await seedOrg("pro");
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "W4 T7 fed " + randomUUID().slice(0, 6), visibility: "private", branding: {} });

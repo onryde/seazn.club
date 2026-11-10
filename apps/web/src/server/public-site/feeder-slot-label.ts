@@ -2,7 +2,7 @@
 //
 // A slot fed by an earlier match stores `{ key: "slot.winner_match" |
 // "slot.loser_match", params: { round, seq } }`: the FEEDER's `round_no` and
-// `seq_in_round` (`usecases/stages.ts`, `matchSlotLabel`). `resolveSlotLabel`
+// `seq_in_round` (`usecases/stages/generate-tx.ts`, `matchSlotLabel`). `resolveSlotLabel`
 // (`lib/slot-label.ts`) renders that as "Winner of R3·2" — `matchRef`, the
 // organiser schedule board's short code, which the board depends on and which
 // means nothing on a public page. A spectator reading a Semi-finals card under
@@ -267,7 +267,7 @@ export function publicRoundNamer(a: {
   // This is a correctness constraint, not a tidiness one. A feed label is
   // `{round, seq}` and nothing else, and `say` below resolves those numbers
   // inside the SEAT's stage. A cross-stage edge — `wireCrossFeeds`
-  // (usecases/stages.ts) writes them, from a league into a knockout — would
+  // (usecases/stages/) writes them, from a league into a knockout — would
   // hand the seat a `{round, seq}` that means something in the SOURCE stage,
   // and the seat's own stage would then either miss it (falling back to
   // `resolveSlotLabel`, which prints the ORGANISER board's "Winner of R1·1"

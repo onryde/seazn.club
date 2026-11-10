@@ -523,7 +523,7 @@ export async function postSignedStripeWebhook(type: string, object: unknown, id?
 }
 
 /** A PAID registration checkout session, in the shape createRegistrationCheckout
- *  stamps (registrations.ts's payment_intent_data / session metadata) and
+ *  stamps (usecases/registrations/checkout.ts's payment_intent_data / session metadata) and
  *  handleRegistrationCheckoutCompleted reads: `metadata.registration_ids`
  *  names which entries to confirm, `metadata.fee_percent` is the rate the
  *  paid transition stamps onto the competition, and `payment_status: "paid"`

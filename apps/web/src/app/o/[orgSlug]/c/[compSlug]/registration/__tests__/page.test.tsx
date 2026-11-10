@@ -111,7 +111,7 @@ vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 
 // RS004 W3c: page.tsx now imports feePercentFor for the config panel's
 // platform-cut copy. Mocked rather than left to hit the real entitlements/
-// cache/DB stack (registrations.ts is a heavy module this page test does
+// cache/DB stack (usecases/registrations/ is a heavy module this page test does
 // not otherwise pull in) — real behaviour is covered by
 // fetch-division-rows.test.ts's real-Postgres suite, same split as
 // fetchDivisionRows/fetchOrgCurrency below.
@@ -125,7 +125,7 @@ vi.mock("@/server/usecases/registrations", () => ({
   // the instant fetchPoolSummary's non-empty path ran ("No 'rosterCapExpr'
   // export is defined on the mock"). Inert stand-ins, not `importOriginal`,
   // to keep this file's own stated reason for mocking the module at all
-  // (avoid pulling in registrations.ts's heavy Stripe/entitlements/DB load).
+  // (avoid pulling in usecases/registrations/ folder's heavy Stripe/entitlements/DB load).
   // `rosterCapExpr`'s return value is only ever embedded as an interpolated
   // VALUE inside a query the @/lib/db fake below dispatches on the query's
   // leading TEXT — it never reads interpolated values, so what this returns
@@ -133,7 +133,7 @@ vi.mock("@/server/usecases/registrations", () => ({
   // `effectivePoolDeadline` DOES need real behaviour: fetchPoolSummary's own
   // JS-side merge calls it directly (not through a SQL template) to compute
   // the `place_by_at` value the test below asserts on — same `?? ` fallback
-  // as the real implementation (registrations.ts, beside rosterCapExpr).
+  // as the real implementation (usecases/registrations/list.ts, beside rosterCapExpr).
   rosterCapExpr: () => "",
   effectivePoolDeadline: (placeByAt: unknown, closesAt: unknown) => placeByAt ?? closesAt,
 }));

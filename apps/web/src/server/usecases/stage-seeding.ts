@@ -6,7 +6,7 @@ import "server-only";
 // into a concrete stage row, reading its real shape/standings, and the
 // proposal bookkeeping (hash, destination-slot lookup) that only makes sense
 // against live fixture rows. Every DB-facing caller (createStages,
-// replaceStages, templates.ts's instantiateTemplate, stages.ts's own
+// replaceStages, templates.ts's instantiateTemplate, stages/stage-graph.ts's own
 // generation/proposal flows) goes through this file rather than querying
 // `pools`/`standings_snapshots`/`fixtures` directly, so the two callers can
 // never drift apart.
@@ -47,7 +47,7 @@ import { poolCount, POOL_KEYS, BRACKET_KINDS, REAL_TABLE_KINDS, loadBracketFixtu
 type Tx = postgres.TransactionSql;
 
 // Re-export the engine's pure surface — existing `import ... from
-// "./stage-seeding"` call sites in stages.ts need no import-path churn even
+// "./stage-seeding"` call sites in stages/ need no import-path churn even
 // though the actual logic now lives in @seazn/engine/competition.
 export {
   descriptorKey,
@@ -336,7 +336,7 @@ export async function validateStageProgression(
 /** Standings fingerprint — changes iff any qualifying rank/entrant changes,
  *  so confirmSeedProposal can detect "standings moved since this proposal
  *  was drafted" (design's Fill algorithm step 1) without re-deriving the
- *  whole proposal. Unchanged from its original body (was stages.ts-private),
+ *  whole proposal. Unchanged from its original body (was stages/-private),
  *  just relocated alongside the tables it hashes. */
 export function standingsHash(tables: readonly PoolTableRows[]): string {
   const material = [...tables]
@@ -393,9 +393,9 @@ export async function sourceStandingsTables(tx: Tx, source: { id: string }): Pro
  *  stage IS a `roundLosers` take under `timing:"setup"` now, so this function
  *  needed `SourceTables.bracket` for real — without it, `resolveProgression`'s
  *  `loserAt` always threw `STAGE_NOT_READY`, silently swallowed by
- *  completeStage's best-effort catch (stages.ts), leaving an organiser's
+ *  completeStage's best-effort catch (stages/completion.ts), leaving an organiser's
  *  plate stuck on TBD forever with no visible error. Mirrors
- *  `tablesForCompletedStage`'s (stages.ts, the `on_complete` flow's own table
+ *  `tablesForCompletedStage`'s (stages/carry-over.ts, the `on_complete` flow's own table
  *  builder) `BRACKET_KINDS.has(kind) ? loadBracketFixtures(...) : undefined`
  *  exactly — same condition, same helper, now shared rather than forked. */
 export async function sourcesToTables(
@@ -428,7 +428,7 @@ export async function sourcesToTables(
     // folds over ephemeral per-round PAIR entrants, so reading it here seats
     // ids the next stage's roster does not contain. Shares the on_complete
     // path's reader rather than re-deriving it (see its doc comment,
-    // stages.ts).
+    // stages/).
     const read =
       source.kind === "americano"
         ? await americanoPlacementTables(tx, source.id, target.division_id)

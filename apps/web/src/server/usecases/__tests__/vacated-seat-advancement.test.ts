@@ -247,7 +247,7 @@ describe.skipIf(!HAS_DB)("a vacated seat's walkover advances its winner (re-revi
     const [stage] = await sql<{ status: string }[]>`
       select status from stages where id = ${rig.koStageId}`;
     // `complete`, not `completed` — the value `seedNextStage`'s own
-    // "every stage <> 'complete'" guard reads (stages.ts).
+    // "every stage <> 'complete'" guard reads (stages/).
     expect(stage!.status).toBe("complete");
   });
 

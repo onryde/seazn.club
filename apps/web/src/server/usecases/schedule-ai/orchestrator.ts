@@ -264,7 +264,7 @@ async function planForDivision(
     };
   });
 
-  // A frozen division rejects every applied plan (schedule.ts applySchedule,
+  // A frozen division rejects every applied plan (schedule/apply.ts applySchedule,
   // 422 "the division schedule is locked"). Running the architect anyway spends
   // a generation, a rate-limit slot and real tokens to produce a proposal the
   // organiser is then blocked from using — the failure only surfaced at Apply,

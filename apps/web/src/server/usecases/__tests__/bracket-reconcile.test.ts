@@ -8,7 +8,7 @@
 // Expected values: the bye a newcomer takes is RB4-L4 over the STORED bye lines (`rb4L4ExpectedLine`, the oracle shared
 // with Task 10 — controller ruling 3); a regenerated bracket's shape is the ENGINE's own bracket of the new field
 // (`engineBracketRows`); the bye award is lib/fixture-bye.ts's (the shape every bye writer shares); the copy is main's
-// own (X-SD-2 quotes stages.ts) or the plan's (KO_GENERATE_AFTER_START, typed here).
+// own (X-SD-2 quotes stages/) or the plan's (KO_GENERATE_AFTER_START, typed here).
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";
@@ -53,7 +53,7 @@ const REDRAW_OVER_SETUP =
   "The bracket would have to be drawn again, which clears match setup already on its lines (officials, team sheets, scoring devices, streams, player availability or court calls). Use Rebuild fixtures — it lists what it clears first.";
 /** Fix round 2 (item 2, controller ruling), typed here: Start reconciles in place only, and names the remedy. */
 const START_NEEDS_UPDATE_DRAW = "The draw needs updating — press Update draw first.";
-/** Main's own copy (stages.ts, the `entrants.length < 2` refusal) — X-SD-1/X-SD-2 are pins: main already refuses both. */
+/** Main's own copy (stages/, the `entrants.length < 2` refusal) — X-SD-1/X-SD-2 are pins: main already refuses both. */
 const NOT_READY = "need at least 2 active entrants to generate";
 
 interface SportPick {
@@ -676,7 +676,7 @@ describe.skipIf(!HAS_DB)("fix round 1 G1: Start reconciles a root knockout that 
     expect(checked).toBe(causes.length);
   });
 
-  // Fix round 2 (item 4): the fourth clause of Start's `roster_drift` read (schedule.ts) — a first-round bye with nobody on
+  // Fix round 2 (item 4): the fourth clause of Start's `roster_drift` read (schedule/) — a first-round bye with nobody on
   // it. Only that clause sees this case: the deleted holder is no entrant at all, so no other clause fires.
   it("a bye HOLDER deleted before Start: Start refuses KO_START_NEEDS_UPDATE_DRAW and starts nothing (a bye with nobody on it is never started)", async () => {
     const r = await rig({ n: 6 });

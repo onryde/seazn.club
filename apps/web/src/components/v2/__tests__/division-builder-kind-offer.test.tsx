@@ -1,6 +1,6 @@
 // C9 review 2, N1, with the owner's n3 "yes" (2026-11-03): the Format step reads the kinds the DIVISION will take - the
 // one kind shown on Who plays, picked or left at the sport's default - not only the sport's. Americano and Mexicano
-// rotate individual players into pairs (stages.ts americanoGen plays one person per entrant), so a division narrowed to
+// rotate individual players into pairs (usecases/stages/generators.ts americanoGen plays one person per entrant), so a division narrowed to
 // Pairs or Teams is not offered them: no card, not ranked or suggested, not the opening, and Next refuses one picked
 // anyway (a stale tap). Expected sets come from the engine's entrant models and the server's pair-minting stage kinds
 // (PAIR_MINTING_STAGE_KINDS), restated here - never from the builder's own offer functions.

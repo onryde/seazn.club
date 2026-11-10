@@ -18,7 +18,7 @@ import type { AiReasoning } from "@/server/ai/provider";
 // reachable, and each round re-sends the prior round's output as input — so the
 // worst case gets more expensive even though the per-round cost is unchanged.
 // ROUND_TIMEOUT_MS / MAX_REPAIR_ROUNDS / MAX_TOKENS below are exported for the
-// #350 joint runner (competition-schedule-ai.ts), which drives the same round
+// #350 joint runner (competition-schedule-ai/), which drives the same round
 // loop over a multi-division pack and must not fork these numbers. Export only —
 // no caller behaviour changes.
 export const ROUND_TIMEOUT_MS = Number(process.env.SCHEDULING_AI_ROUND_TIMEOUT_MS) || 600_000;

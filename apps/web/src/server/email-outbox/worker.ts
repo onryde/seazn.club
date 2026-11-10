@@ -163,7 +163,7 @@ function endExhausted(onlyIds: readonly string[] | undefined): Promise<EndedReco
  * Step 3's claim, one row: the due row whose deadline is earliest (M2: then the one due longest, then the lower id) that no other
  * transaction holds, set to `sending` with `attempts + 1` and a lease in the same statement. The deadline leads because the rows
  * an open writes share one `next_attempt_at` (the transaction's `now()`), so that key alone would take a round's leftovers in uuid
- * order and let a board whose check-in closes first expire behind boards that close later. `for update skip locked` is the registrations.ts pattern: a second tick
+ * order and let a board whose check-in closes first expire behind boards that close later. `for update skip locked` is the usecases/registrations/ pattern: a second tick
  * passes over a row the first is claiming instead of waiting for it.
  *
  * Exported so a test that must stage an interleaving between a worker's claim and `attemptClaimed` (or re-claim a lapsed lease) claims

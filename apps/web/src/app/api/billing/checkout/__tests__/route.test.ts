@@ -6,7 +6,7 @@
 // reaches the session builder.
 //
 // The route no longer calls creditPassTowardSubscription itself — the grant
-// moved to subscription-start (billing-events.ts handleSubscriptionChanged /
+// moved to subscription-start (usecases/billing-events/subscriptions.ts handleSubscriptionChanged /
 // lib/billing.ts reconcileCheckout, 2026-07-26, see
 // docs/superpowers/specs/2026-07-26-pass-credit-redemption-design.md §1), so
 // there is nothing left to assert about it here; only orgHoldsAnyPass remains

@@ -148,7 +148,7 @@ describe("bindStreamFixtures", () => {
     expect(() => bindStreamFixtures([], fixtures)).toThrow(/no ext_key/);
   });
 
-  // B06b — a bracket settles its own BYES at creation (`stages.ts:1351` stamps
+  // B06b — a bracket settles its own BYES at creation (`usecases/stages/` stamps
   // `forfeited` on any generated game carrying an `award`), and a bye cannot
   // be a stream at all: `PackStream` requires BOTH `home` and `away` and its
   // `events` is `.min(1)`. Suite 11 is the first pack with byes — 49 of them

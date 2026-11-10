@@ -2,7 +2,7 @@
 //
 // Before the `status = 'canceled'` arm in orgPlanKey, the only thing degrading a
 // departed org was the `customer.subscription.deleted` handler writing
-// plan_key = 'community' (billing-events.ts). The resolver itself had no arm for
+// plan_key = 'community' (usecases/billing-events/). The resolver itself had no arm for
 // it, so any row that reached status='canceled' with plan_key='pro' — by a missed
 // webhook plus the past_due self-heal re-syncing plan_key from the subscription's
 // price — resolved as Pro for ever, and needsRenewalResync returns false for

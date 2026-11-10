@@ -3,7 +3,7 @@
 // organiser in the loop. On an ONLINE-play division the seat has to answer to the seat gate's bar (a Lichess link that
 // PLAYS), without ever stranding the spot or jamming the queue behind a registrant who cannot play yet.
 //
-// The ruling this file pins (decided here, from how promotion works - registrations.ts `promoteOldestWaitlisted`):
+// The ruling this file pins (decided here, from how promotion works - registrations/waitlist.ts `promoteOldestWaitlisted`):
 //   * SKIP TO THE NEXT. The registrant who cannot be seated stays WAITLISTED, in their place; the next-oldest who can play
 //     is promoted instead. Nothing is thrown at the withdrawal / sweep that freed the spot (it is the registrant's or the
 //     organiser's own act and must not fail for someone else's link), and the queue is never blocked on one person.

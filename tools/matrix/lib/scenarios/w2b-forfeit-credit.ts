@@ -441,7 +441,7 @@ export function tbdSeatWalksOver(r: WdRecord, fixtures: readonly ObservedFixture
   return assertion("w2b-withdrawal-tbd-seat", items);
 }
 
-/** QF4's double walkover beside a3's departure (X-DW-2; loop F's resolver, stages.ts resolveBracketSeats/seatDeparted).
+/** QF4's double walkover beside a3's departure (X-DW-2; loop F's resolver, usecases/stages/bracket-seats.ts resolveBracketSeats/seatDeparted).
  *  - SF2: a3 withdrew while its other seat was TBD (her seat departed), and QF4's RECORDED double walkover feeds that
  *    other seat. Both seats are dead but only one departed — nobody withdrew from QF4 — so SF2 is a void: abandoned,
  *    no outcome, nobody seated. (Both departed would be X-WD-4's double walkover; the matrix cannot drive it — a second
@@ -497,7 +497,7 @@ export const FINAL_VACANT_TITLE = `X-WD-3/${VACANT_TITLE_ROUTE.wave}: finalist w
 
 /** The vacant half (wdCascFinalHalf). a2 withdrew from the final while its other seat was TBD, so her seat there is
  *  dead and departed; SF2's void then killed the other seat, which did not depart. Two dead seats, one departed, is a
- *  void (stages.ts resolveBracketSeats), and a void final crowns nobody (champion.ts). That is the vacant title: the
+ *  void (usecases/stages/bracket-seats.ts resolveBracketSeats), and a void final crowns nobody (champion.ts). That is the vacant title: the
  *  spec hands it to W4, and W2b pins the product's answer without changing it. Both items read what the run observed:
  *  the final's row, and the crown the product's own rule gives the stage's rows. */
 export function finalVacant(r: WdRecord, fixtures: readonly ObservedFixture[]): CheckResult {

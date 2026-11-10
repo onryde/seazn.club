@@ -2,7 +2,7 @@ import "server-only";
 // W2d Task 10 (spec §5.4 "What changes after the pin", "Fixture override coverage", §5.5 "Write paths", §10; D3, D8, D9,
 // D10(a); rule rows X-TB-2, X-TB-3, X-TB-5, X-PT-3, FB-TB-4) — the table-rule questions every writer asks, in one leaf
 // module so the stage PUT (`stage-rules.ts`), the division create and save (`divisions.ts`), the stage doors
-// (`stages.ts`, `templates.ts`) and the match override (`fixture-rules.ts`) read one definition and none imports another's
+// (`stages/`, `templates.ts`) and the match override (`fixture-rules.ts`) read one definition and none imports another's
 // usecase.
 //
 //  1. a tie-break order is the engine's `validateCascade`, refused as 422 TIEBREAK_KEY_INVALID with every refused step in

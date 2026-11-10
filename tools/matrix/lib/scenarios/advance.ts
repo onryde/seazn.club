@@ -10,7 +10,7 @@ import { assertion, type Item } from "./assertions.ts";
 import type { Recorder, StagePlay } from "./common.ts";
 import type { ScenarioContext } from "./types.ts";
 
-/** Pinned at Task 6 Step 0 from usecases/stages.ts confirmSeedProposal (a
+/** Pinned at Task 6 Step 0 from usecases/stages/seed-proposal.ts confirmSeedProposal (a
  *  flagged tie with no edit or tiePick; multi-stage.test.ts reads it from the
  *  product's text). */
 export const SEEDING_TIE_CODE = "SEEDING_TIE_UNRESOLVED";
@@ -41,7 +41,7 @@ export class SourcePoolsDisagree extends Error {
 }
 
 /** Final review m-5: the SOURCE stage's pool count, from its posted body as
- *  the product reads it — a group's pools.count, else 1 (stages.ts poolCount;
+ *  the product reads it — a group's pools.count, else 1 (usecases/stages/generators.ts poolCount;
  *  sourceShapeOf: an ungrouped source is one implicit pool) — held against
  *  the pool ids its fixtures name. The product seats one pool with no pool id;
  *  on N > 1 a pool has fixtures only when the seeded snake gives it two or
@@ -78,7 +78,7 @@ export function takeSeats(t: TakeRule, sourcePools: number): number {
 
 /** FP-2's bound (fix round 1, m-1): the withdrawn entrants the SOURCE stage's
  *  own observed tables rank INSIDE the take — the would-be qualifiers whose
- *  seats the product leaves empty (stages.ts computeSeedProposal: progression
+ *  seats the product leaves empty (usecases/stages/seed-proposal.ts computeSeedProposal: progression
  *  resolves over tables that still carry a departed entrant, then filters
  *  her). A withdrawn entrant ranked outside it excuses nothing.
  *  Per kind, as the engine resolves it (competition/progression.ts):
@@ -190,7 +190,7 @@ export function leftEmptyBound(takes: readonly TakeRule[], seats: readonly numbe
  *  the seeded count is the declared take; seeded entrants come from the
  *  source stage's field and are never withdrawn.
  *  FP-2 (Task 6 Step 0): a departed qualifier is filtered from the proposal
- *  and her seat is LEFT EMPTY (stages.ts computeSeedProposal :4889-4905) — no
+ *  and her seat is LEFT EMPTY (usecases/stages/seed-proposal.ts computeSeedProposal) — no
  *  close-up — so the count may fall short by at most the withdrawn entrants
  *  the source stage's observed tables rank inside the take
  *  (withdrawnQualifiers, m-1), never exceed the take.

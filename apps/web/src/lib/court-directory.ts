@@ -1,17 +1,17 @@
 // The court-name disambiguation rule — CLIENT-SAFE on purpose. Built for the
 // schedule-ai pack (P9 pass 3d) so the model could speak court NAMES again
-// after the uuid cutover; lifted out of schedule-ai.ts (P9 pass 4d) so the
+// after the uuid cutover; lifted out of usecases/schedule-ai/ (P9 pass 4d) so the
 // schedule board (schedule-board.tsx, a "use client" tree) can render the
 // SAME "Name (Venue)" rule for its column headers / swap button / captions
-// instead of re-deriving a second one — schedule-ai.ts imports "server-only"
+// instead of re-deriving a second one — usecases/schedule-ai/ imports "server-only"
 // at its top (DB pool, credits, rate-limit, ...), so nothing in this repo's
 // client bundle can import that file directly. Same split capacity-input.ts's
 // own header documents for capacityInputForFixtures/capacity-guard.ts: one
 // implementation, re-exported by the server-only usecase rather than copied.
 //
-// schedule-ai.ts re-exports `buildCourtDirectory`/`PackCourtInfo` from here
+// usecases/schedule-ai/ re-exports `buildCourtDirectory`/`PackCourtInfo` from here
 // verbatim — every existing server-side caller (buildSchedulePack,
-// buildCompetitionPack, competition-schedule-ai.ts, and both golden-pack
+// buildCompetitionPack, usecases/competition-schedule-ai/pack.ts, and both golden-pack
 // tests) keeps importing from "./schedule-ai" unchanged.
 
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);

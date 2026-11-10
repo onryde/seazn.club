@@ -1563,7 +1563,7 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
 //     has NO pin attached, so the refusal must name a different reason or the
 //     organiser searches for a pin that is not there.
 // That second set is `FIXED_OCCUPYING = OCCUPYING.filter(s => s !== MOVABLE_STATUS)`,
-// derived in schedule.ts and never spelled out as a literal here either — a
+// derived in schedule/ and never spelled out as a literal here either — a
 // hand-typed status list rots silently the day `OCCUPYING` grows a member.
 //
 // The four things a naive "it rejects" test would NOT catch, each with its own
@@ -1992,7 +1992,7 @@ describe("AutoScheduleResult metrics + solver contract", () => {
    *
    * Separate from the enum loop above because the enum loop parses the solver
    * block alone, and the shape that actually leaves `autoSchedule` is the
-   * envelope. `schedule.ts` assigns the engine's `BuildStatus` straight into
+   * envelope. `schedule/` assigns the engine's `BuildStatus` straight into
    * this object, so a member the enum does not list is a board the API cannot
    * describe: the assignment does not compile, and in a build that skipped the
    * typecheck the value reaches the wire as a status no reader has a sentence

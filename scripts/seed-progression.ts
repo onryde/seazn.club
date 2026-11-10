@@ -7,7 +7,7 @@
  * The rule it encodes: **mint the NEXT stage's TBD fixtures BEFORE completing
  * the current one.** Completing a stage resolves its progression into the next
  * stage's destination slots, and `computeSeedProposal` (apps/web
- * server/usecases/stages.ts) refuses when there are none to fill:
+ * server/usecases/stages/) refuses when there are none to fill:
  *
  *     const slotBySeed = await destinationSlotsBySeed(tx, stageId);
  *     if (slotBySeed.size === 0) throw new HttpError(422,
@@ -17,7 +17,7 @@
  * The completion has already committed by then, so `completeStage` re-wraps it
  * as 409 STAGE_COMPLETED_SEEDING_FAILED — which is the shape the seeder failed
  * with. Nothing else mints those slots: `startDivision` generates only
- * `pre.firstStage.id` (usecases/schedule.ts), so the seeder's own
+ * `pre.firstStage.id` (usecases/schedule/publish.ts), so the seeder's own
  * `POST /stages/{next}/generate` is their only source, and it used to be
  * issued AFTER the complete, from inside `playStage`.
  *

@@ -77,7 +77,7 @@ export interface RegistrationBlockConfig {
   entrantKind: EntrantKindValue;
   feeCents: number;
   /** REQUIRED, not optional. `registration_settings.payment_method` is what
-   *  gates hosted Checkout (usecases/registrations.ts:4365), and the product's
+   *  gates hosted Checkout (usecases/registrations/), and the product's
    *  PUT schema defaults an omitted key to "offline" — so an optional field
    *  here would let a caller silently reintroduce the exact bug this closed:
    *  a paid division that Stripe can never charge for. */

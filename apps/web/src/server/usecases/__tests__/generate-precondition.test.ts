@@ -214,7 +214,7 @@ describe.skipIf(!HAS_DB)(
         expect(data.groups).toBe(4);
         expect(data.qualifiers).toBe(6);
         // Minor 2 (P7 fix round, whole-branch review): `required` (the
-        // Math.max(2, groups * 2) computation, stages.ts:1457) was computed
+        // Math.max(2, groups * 2) computation, stages/) was computed
         // but never asserted by the only test that runs the real guard.
         expect(data.required).toBe(8);
         expect(data.stranded).toBe(2);

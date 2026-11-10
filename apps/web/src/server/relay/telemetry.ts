@@ -10,7 +10,7 @@ import { APP_BUILD_SHA, SAMPLES_PER_SESSION_CAP } from "./config";
 import { pathTemplate, sanitise } from "./sanitise";
 
 // `@/lib/db` exports `Tx` but keeps its `Sql` alias private; `postgres.Sql` is
-// the pooled client's type, as in audit.ts / registrations.ts's AnySql.
+// the pooled client's type, as in audit.ts / usecases/registrations/types.ts's AnySql.
 type Exec = postgres.Sql | Tx;
 
 /** Every `fixture_stream_events.source` this module writes — a RUNTIME list so stream-contract.test.ts can pin it against

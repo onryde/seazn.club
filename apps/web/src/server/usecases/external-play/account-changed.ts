@@ -29,7 +29,7 @@ function seatOf(b: { whiteSide: "home" | "away" | null; home: boolean; away: boo
   return side === b.whiteSide ? "white" : "black";
 }
 
-/** Hold `userId`'s live and mid-create boards for the organiser — the boards M-10's lock refuses to clear (stages.ts
+/** Hold `userId`'s live and mid-create boards for the organiser — the boards M-10's lock refuses to clear (stages/swiss-boards.ts
  *  `lockBoardsRefusingOnlineGames`): a create sent (T9's `create_sent_at` marker: a game MAY exist), or a recorded
  *  game no read has seen end on a bridge our side has not closed. A board whose fixture is no longer playable is
  *  refused by the hold itself, and a board already held keeps its first diagnosis (holdForOrganiser). */

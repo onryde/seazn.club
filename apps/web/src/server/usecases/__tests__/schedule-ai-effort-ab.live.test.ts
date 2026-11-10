@@ -124,7 +124,7 @@ const uuid = (tag: string, n: number) =>
 
 // --- realistic draft --------------------------------------------------------
 // PRODUCTION never asks the model to cold-build. buildSchedulePack's `generate`
-// path (schedule-ai.ts) runs the SAME greedy solver used here — slotFixtures —
+// path (schedule-ai/) runs the SAME greedy solver used here — slotFixtures —
 // and ships its output as the pack's `draft`: a legal-but-naive starting
 // schedule the model only has to improve ("The draft is legal but naive:
 // improve it, don't worship it" — SYSTEM_PROMPT). Building these packs with an
@@ -582,7 +582,7 @@ type Arm = {
    *  selectProvider() reads once per run. */
   provider?: "anthropic" | "openrouter";
   /** Overrides SCHEDULING_AI_MAX_TOKENS for this arm. Unset arms fall back to
-   *  schedule-ai.ts's own default (32_000) — nothing about the shipped path
+   *  schedule-ai/ folder's own default (32_000) — nothing about the shipped path
    *  changes unless an arm sets this explicitly. */
   maxTokens?: number;
 };
@@ -636,7 +636,7 @@ async function bench(
   } catch (err) {
     row.error = err instanceof Error ? `${(err as { code?: string }).code ?? ""} ${err.message}`.trim() : String(err);
     // runAiPlan rides accumulated usage on AI_PLAN_FAILED/AI_PLAN_TIMEOUT
-    // (HttpError.extra.usage — schedule-ai.ts's usageNow()) specifically so a
+    // (HttpError.extra.usage — schedule-ai/run.ts's usageNow()) specifically so a
     // failed-but-expensive run can still be metered. The pre-existing catch
     // above never read it, so a real-money round that failed after
     // generating (e.g. a corrective retry that still didn't parse) silently
@@ -907,7 +907,7 @@ describe.skipIf(!LIVE)("effort A/B (live, billed)", () => {
   // matrix and is left untouched. This is a SEPARATE, explicitly-labeled
   // exploratory rerun, scoped only to bracket-16 (the pack that failed for
   // grok-4.5 and ran tight/over-cap for gemini-3.6-flash at 32k) — not a
-  // change to schedule-ai.ts's shipped SCHEDULING_AI_MAX_TOKENS default.
+  // change to schedule-ai/ folder's shipped SCHEDULING_AI_MAX_TOKENS default.
   // Enable with AI_AB_SHOOTOUT_STAGE4=1.
   const RESCUE_40K_ARMS: Arm[] = FINAL_ARMS.map((a) => ({ ...a, maxTokens: 40_000, label: `${a.label}/40k` }));
   if (process.env.AI_AB_SHOOTOUT_STAGE4 === "1") {
@@ -935,7 +935,7 @@ describe.skipIf(!LIVE)("effort A/B (live, billed)", () => {
   }
 
   // --- Stage 6 (2026-08-16): gemini-3.7-flash vs the incumbent 3.6 ----------
-  // google/gemini-3.6-flash is rung 1 of DEFAULT_LADDER (schedule-ai.ts:2366),
+  // google/gemini-3.6-flash is rung 1 of DEFAULT_LADDER (schedule-ai/ladder.ts),
   // so it is what production actually runs wherever OPENROUTER_API_KEY is set.
   // gemini-3.7-flash is its successor at HALF the output rate — $1.875 vs
   // $3.75 per Mtok, verified live 2026-08-16 against /models — on the same

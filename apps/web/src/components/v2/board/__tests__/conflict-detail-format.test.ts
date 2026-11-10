@@ -256,7 +256,7 @@ describe("formatConflictDetail — id fallback (never a full UUID)", () => {
   const UUID = "6be47174-7f41-4030-9c1a-1e2f3a4b5c6d";
 
   it("a synthetic `name:` person id renders the name it carries, not a further-shortened form", () => {
-    // personKeyResolver (schedule-ai.ts:202) mints `name:${normalizedName}`
+    // personKeyResolver (usecases/schedule-ai/identity.ts) mints `name:${normalizedName}`
     // for two person rows sharing a display name in a joint AI pack.
     const d: ConflictDetail = { kind: "person_overlap", personIds: ["name:alice smith"], otherFixtureId: "f1" };
     const text = formatConflictDetail(d, baseCtx); // no personNames map in scope

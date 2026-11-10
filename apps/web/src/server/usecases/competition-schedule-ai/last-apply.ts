@@ -18,14 +18,14 @@ export const JOINT_RUN_EVENT = "schedule.ai_generated_multi";
  *   payload `{ source: "ai" | "manual", ai?: { instruction, summary } }`
  *
  * Mirrors the division twin's `schedule_applied` + `payload->>'source' = 'ai'`
- * exactly (schedule.ts:618-622), for the same reason: the same event records a
+ * exactly (schedule/), for the same reason: the same event records a
  * manual multi-division apply, and only an AI-sourced one is a recall.
  */
 export const JOINT_APPLY_EVENT = "schedule.applied_multi";
 
 /**
  * GET /competitions/{id}/schedule/ai-last — the joint twin of `lastAiApply`
- * (schedule.ts:607), field for field.
+ * (schedule/apply.ts), field for field.
  *
  * IT RECALLS THE LAST APPLY, NOT THE LAST PROPOSAL, and that is not a shortfall
  * of the joint flow — the single-division board has never persisted a proposal

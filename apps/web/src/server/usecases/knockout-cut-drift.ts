@@ -1,6 +1,6 @@
 import "server-only";
 // W4 T14 (FX-G16, X-QM-4, RB4-Q5, signed S3): the reads behind a correction inside a completed knockout source. Before the
-// destination starts the proposal goes stale and its seats go back (stages.ts `correctBracketDependent`); after, the bracket
+// destination starts the proposal goes stale and its seats go back (stages/seed-stale.ts `correctBracketDependent`); after, the bracket
 // stands and the desk warns (`getKnockoutCutDrift`, the Swiss read's sibling: swiss-cut-drift.ts).
 //
 // Both ask the same thing of a proposal's slate: is the cut it names still the cut? Two readings, one per state of the source:

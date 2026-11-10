@@ -1,10 +1,10 @@
 import "server-only";
 // Registration eligibility (doc 06 §2; V364 "eligibility becomes first-class").
 //
-// Split out of `registrations.ts` (RS002 wave 2 — that file was 2431 lines,
+// Split out of `registrations/` (RS002 wave 2 — that file was 2431 lines,
 // past the ~600-line split trigger the RS002 prompt sets). This module is
-// deliberately a LEAF: it imports nothing from `registrations.ts` or any
-// other usecase, so `registrations.ts` — and the submit/approval modules
+// deliberately a LEAF: it imports nothing from `registrations/` or any
+// other usecase, so `registrations/` — and the submit/approval modules
 // RS002 adds next — can import THIS module without a cycle.
 //
 // RS006 W1 split this AGAIN, narrower: the pure, DB-free predicates
@@ -64,9 +64,9 @@ import "server-only";
 // in this file — the DB-writing wrapper (throw 422 `ELIGIBILITY_VIOLATION` /
 // audit-and-proceed) around `rosterIssues`. This is now the LEAF's one
 // deliberate exception: the file's original header called it a leaf because
-// it "imports nothing from registrations.ts or any other usecase" — it now
+// it "imports nothing from registrations/ or any other usecase" — it now
 // imports `./audit`, ALSO a leaf (imports nothing from any other usecase),
-// specifically so `registrations.ts` importing `ageAt`/`isMinor`/
+// specifically so `registrations/` importing `ageAt`/`isMinor`/
 // `requiresDob`/`requiresGender` FROM here never becomes a real cycle (a
 // second import the other way, eligibility → registrations, would be).
 // `createEntrants`/`insertMembers`/`patchEntrant`/`syncEntrantRosterFromSquad`

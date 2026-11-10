@@ -8,7 +8,7 @@
 //   engine-db/system-bye-sql.ts declares (W2b C-5: a bye names its reason and no loser). The orphan (both seats empty,
 //   its holder deleted) is still one; a two-seated award, a `withdrew` walkover (ruling 116) and a reasonless award are not.
 // - A PRE-AWARD bye line is a `scheduled` line with no outcome whose EMPTY side carries the bye slot label — the marker
-//   the generator stamps on the phantom side nobody ever occupies (stages.ts `awardSeededByes`' own reading). A seated
+//   the generator stamps on the phantom side nobody ever occupies (usecases/stages/bracket-seats.ts `awardSeededByes`' own reading). A seated
 //   side is not a phantom, whatever its label says.
 // - A Swiss bye shell (`sw-r{N}-bye`) is a bye seated or not (lib/swiss-shell.ts); a Swiss BOARD shell is not.
 //

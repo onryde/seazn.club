@@ -21,7 +21,7 @@
 //      `select key from pools where stage_id = ... order by key`
 //      (apps/web/src/server/usecases/stage-seeding.ts:134), with the
 //      pool-less fallback `POOL_KEYS.slice(0, count).split("")` over
-//      `"ABCDEFGHIJKLMNOPQRSTUVWXYZ"` (usecases/stages.ts:745). Both branches
+//      `"ABCDEFGHIJKLMNOPQRSTUVWXYZ"` (usecases/stages/). Both branches
 //      are ascending by key, which is what `expectedQualifierRefs` sorting by
 //      `poolKey` mirrors.
 //

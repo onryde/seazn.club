@@ -633,7 +633,7 @@ export async function unarchiveCourt(auth: AuthCtx, id: string): Promise<CourtRo
 /** Per-division inputs `usableWindows` needs beyond the court's own calendar:
  *  match duration, session windows and blackouts. These live in
  *  `schedule_settings.config` (the SAME jsonb column, parsed by the SAME
- *  `ScheduleConfig` zod schema `loadSettings`, schedule.ts, uses for the
+ *  `ScheduleConfig` zod schema `loadSettings`, schedule/settings.ts, uses for the
  *  board itself) — read directly here rather than through `loadSettings`,
  *  which takes a `Tx`: this advisory count runs on the pooled `sql` proxy
  *  outside any `withTenant` block (see `strandedFixtureIdsFor` below), and
@@ -695,7 +695,7 @@ function toCourtCalendarShape(
  *  which tested only a fixture's START minute (so an overrunning fixture
  *  counted as fitting), ignored blackouts and session windows entirely, and
  *  read `organizations.timezone` raw instead of through `resolveVenueTz` —
- *  the same resolver `settings.orgTz` uses (schedule.ts's `loadSettings`).
+ *  the same resolver `settings.orgTz` uses (schedule/settings.ts's `loadSettings`).
  *  `usableWindows` returns windows in EPOCH MS, not local minutes — every
  *  comparison below is an instant comparison over the fixture's WHOLE span,
  *  start through end, not just its start.

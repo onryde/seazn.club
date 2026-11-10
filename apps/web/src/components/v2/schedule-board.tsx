@@ -416,7 +416,7 @@ interface Props {
   fixtures: BoardFixture[];
   entrantNames: Record<string, string>;
   /** Per division, the entrants an AI run is PRICED on — `status not in
-   *  ('withdrawn','disqualified')`, mirroring schedule-ai.ts:505. Distinct from
+   *  ('withdrawn','disqualified')`, mirroring usecases/schedule-ai/. Distinct from
    *  `entrantNames`, which is a competition-wide id→name map for card titles
    *  and must keep naming withdrawn entrants' existing fixtures. */
   activeEntrantCounts: Record<string, number>;

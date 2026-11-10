@@ -941,7 +941,7 @@ describe("RegistrationHubConfigPanel — the panel does not make claims that are
 
 // ---------------------------------------------------------------------------
 // RS005 F4 — editing a fee re-prices everyone still on the waitlist:
-// promoteWaitlistedRow (registrations.ts, ~:875) reads the LIVE fee at
+// promoteWaitlistedRow (usecases/registrations/waitlist.ts) reads the LIVE fee at
 // promotion time, never what a waitlisted entrant saw when they joined
 // (they hold amount_cents = 0, so there is no earlier quote to honour). The
 // panel has no way to tell the organiser that except this warning, so it is

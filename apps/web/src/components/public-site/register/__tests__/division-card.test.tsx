@@ -10,7 +10,7 @@
 // timezone is not plumbed to this client at ALL today —
 // `PublicRegistrationDivision`/`PublicRegistrationInfo` (schemas.ts:2312,
 // :2346) carry no tz field, and `publicRegistrationInfo`'s own SQL query
-// (registrations.ts:~1382) never selects `organizations.timezone` even
+// (usecases/registrations/) never selects `organizations.timezone` even
 // though that column exists and already governs scheduling elsewhere
 // (`settings.orgTz`, #397/#448). Inventing that plumbing is out of scope
 // for a "smaller" fix (a server-schema change touching files this task

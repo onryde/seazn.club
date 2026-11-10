@@ -57,7 +57,7 @@ export interface PairRoundObs { roundNo: number; seated: number; refused?: strin
  *  (null on a refusal). */
 export interface FinishObs { status: number; code: string | null; finishedAfter: number | null; shellsRemoved: number | null; message?: string }
 /** `seedProposal` (W1-driving Task 6): the next stage's draft proposal the
- *  /complete minted (usecases/stages.ts progressCompletedStage) — null when
+ *  /complete minted (usecases/stages/completion.ts progressCompletedStage) — null when
  *  none was (the last stage, a refusal, a seeding failure). Optional so the
  *  model's and the tests' literals that predate it still type. */
 export interface CompleteObs { status: number; code: string | null; completed: boolean; finalRanks: string[] | null; seedProposal?: { id: string; status: string } | null }
@@ -233,14 +233,14 @@ export const LOCKED_STATUSES: readonly string[] = Object.freeze(["finalized", "c
 /** W1-driving Task 7 (false premise 16): the stage kinds whose withdrawal
  *  walkover FORFEITS each pending fixture to the opponent — the withdrawal
  *  module's TABLE_KINDS (withdrawal.ts:37) ∪ BRACKET_WALKOVER_KINDS
- *  (stages.ts:880-884). Every other kind takes the open-format branch
+ *  (usecases/stages/generators.ts). Every other kind takes the open-format branch
  *  (withdrawal.ts:213-217): pending fixtures are voided, nothing forfeited.
  *  ladder-loop.test.ts holds it equal to the product's two sets, read as text. */
 export const FORFEIT_MODEL_KINDS: readonly string[] = Object.freeze(["league", "group", "swiss", "knockout", "double_elim", "stepladder"]);
 /** W2b X-WD-2 (ruling 90): the open formats whose withdrawal walks the remaining fixtures over as knockout does, never
  *  voiding them — named by the rule row, so the harness expects it before the product's kind sets move (loop F). */
 export const X_WD_2_KINDS: readonly string[] = Object.freeze(["page_playoff", "ladder"]);
-/** W1-driving Task 7: entrant statuses that have LEFT the field (stages.ts
+/** W1-driving Task 7: entrant statuses that have LEFT the field (usecases/stages/helpers.ts
  *  departedEntrantIds) — off the live ladder, refused as a challenge side. */
 export const DEPARTED_STATUSES: readonly string[] = Object.freeze(["withdrawn", "disqualified"]);
 

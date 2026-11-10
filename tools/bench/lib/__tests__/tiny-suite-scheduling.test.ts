@@ -647,7 +647,7 @@ describe("runTinySuite — a --keep short circuit and the engine artifact/delta"
 
 describe("isRoundRobinStage", () => {
   it("is true for the two kinds the product generates a round robin for, and false for the rest", () => {
-    // `usecases/stages.ts`'s generator switch falls `league` and `group` into
+    // `usecases/stages/` folder's generator switch falls `league` and `group` into
     // `roundRobinGen`; every other kind builds a bracket or a ladder.
     expect(isRoundRobinStage("league")).toBe(true);
     expect(isRoundRobinStage("group")).toBe(true);
@@ -1064,7 +1064,7 @@ describe("crossDivisionCourtClashes", () => {
 
 describe("runTinySuite — the cross-division gate, end to end", () => {
   it("is CLEAN on _tiny, because the fake models what the product models", async () => {
-    // Not clean by luck. `siblingAssignments` (`usecases/schedule.ts:839-884`)
+    // Not clean by luck. `siblingAssignments` (`usecases/schedule/engine-inputs.ts`)
     // is COMPETITION-scoped: it selects every placed fixture of the same
     // competition outside this division and hands it to the placer and to
     // `validateAssignments` as `existing`, where the court-clash rule runs over

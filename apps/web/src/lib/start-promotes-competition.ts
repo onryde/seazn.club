@@ -1,6 +1,6 @@
 // Does starting a division also move its PARENT competition's status?
 //
-// `startDivision` (`server/usecases/schedule.ts`) ends its status transaction
+// `startDivision` (`server/usecases/schedule/publish.ts`) ends its status transaction
 // with `update competitions set status = 'live' where id = ${…} and status =
 // 'published'`. The guard is the `where`, so the promotion happens for exactly
 // ONE prior status and for no other: a `draft` competition is left alone (to

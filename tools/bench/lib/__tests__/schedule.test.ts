@@ -805,7 +805,7 @@ describe("runScheduleLayer — the board", () => {
   });
 
   // B06b — a bracket BYE is born `forfeited` with an award
-  // (`stages.ts:1351`) and is never scheduled. Counting it as unplaced redded
+  // (`usecases/stages/`) and is never scheduled. Counting it as unplaced redded
   // suite 11 with "unplaced fixtures = 32" on a board where every real fixture
   // was placed. `_tiny` has no byes, so nothing could see this before.
   it("does NOT count a generator-settled bye as unplaced", async () => {

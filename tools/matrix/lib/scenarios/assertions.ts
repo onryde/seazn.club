@@ -106,7 +106,7 @@ export function builtAsPosted(built: BuiltReadback, observed: ObservedRun): Chec
     }
   }
   // W1-driving Task 8: Start's generate on an americano stage mints `pair`
-  // entrants (stages.ts pairEntrantsFor), and the entrant list carries them
+  // entrants (usecases/stages/generators.ts pairEntrantsFor), and the entrant list carries them
   // (entrants.ts listEntrants has no kind filter). They are the PRODUCT's,
   // never posted (the harness refuses a pair-kind americano division), so they
   // are neither counted as stored nor owed a seat. Only on an americano body:
@@ -376,7 +376,7 @@ export function lineupsPut(rec: Recorder, setup: Pick<DivisionSetup, "kind" | "r
   if (setup.kind !== "team") return assertion("life-lineups-put", [], `${setup.kind} entrants carry no lineup`);
   if (setup.rosterless) return assertion("life-lineups-put", [], "rosterless team entrants (PADPROOF, D3) carry no lineup");
   // W1-driving Task 8: an americano stage seats only the pair entrants it
-  // mints (stages.ts pairEntrantsFor), which carry no roster and take no
+  // mints (usecases/stages/generators.ts pairEntrantsFor), which carry no roster and take no
   // lineup (ensureLineups skips them by name) — no item could exist.
   if (setup.stages !== undefined && setup.stages.length > 0 && setup.stages.every((s) => s.kind === "americano")) {
     return assertion("life-lineups-put", [], "an americano stage seats product-minted pair entrants, which carry no lineup");

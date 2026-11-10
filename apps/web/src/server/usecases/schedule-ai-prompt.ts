@@ -89,7 +89,7 @@ if a wish was impossible.`;
 // as the H/S rules: terse, imperative, numbered J1-J7.
 //
 // The split matters as much as the rules, and it must match `isBlocking`
-// (schedule-ai.ts), which blocks on `court` and direct `order` and NOTHING else:
+// (schedule-ai/), which blocks on `court` and direct `order` and NOTHING else:
 //   HARD (rejects the answer)  J1 (structural gate), J2, and the occupancy half
 //                              of J3 — matchMinutes/gapMinutes decide how long a
 //                              fixture holds a court, so a violation surfaces as
@@ -124,7 +124,7 @@ if a wish was impossible.`;
 // An earlier draft warned that the shared-player map could not see across
 // divisions and promised a rejection naming the person. Both halves were wrong:
 // the promise cannot be kept — `person_overlap` is a warn (calendar.ts:102) and
-// `isBlocking` (schedule-ai.ts:831-833) covers only `court` and direct `order`,
+// `isBlocking` (schedule-ai/verify.ts) covers only `court` and direct `order`,
 // so a plan whose sole flaw is a person clash returns clean and never triggers a
 // repair round. Fixed in the PACK rather than the prompt: buildCompetitionPack
 // now builds `people` over the run's whole entrant set, so the sharers are in the

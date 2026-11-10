@@ -1,7 +1,7 @@
 // schedule-stranded-drag-target.test.ts — code-review fix (findings 1 & 2,
 // 2026-08-25 review of feat/p10-venues-calendars).
 //
-// `moveFixture`'s `assignedCourtIds` (schedule.ts, above its own
+// `moveFixture`'s `assignedCourtIds` (schedule/move.ts, above its own
 // `verifyConfigForDivision` call) and `applySchedule`'s twin were built ONLY
 // from STORED fixtures (`all.map(f => f.court_id)`) — never from the court
 // the caller is actively dragging onto (`moveFixture`'s `nextCourtId`) or

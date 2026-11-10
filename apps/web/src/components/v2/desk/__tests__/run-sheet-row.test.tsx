@@ -544,7 +544,7 @@ describe("a declined scorer is still no scorer, on the rendered row", () => {
 // W2 fix — the inline editor's refusal copy. `patchSchedule`'s catch used to
 // render `err.message`, i.e. the SERVER's own English sentence ("schedule
 // change hits a blocking conflict", the EngineError raised by
-// `assertNoNewBlocking` in server/usecases/schedule.ts), to an organiser who
+// `assertNoNewBlocking` in server/usecases/schedule/conflicts.ts), to an organiser who
 // may be reading the console in es/fr/nl. The branch is on the wire CODE now
 // and the raw message is never read on any path.
 //

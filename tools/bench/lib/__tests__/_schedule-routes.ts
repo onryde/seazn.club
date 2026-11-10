@@ -41,7 +41,7 @@ export interface FakeFixtureRow {
   court_id: string | null;
   officials: unknown[];
   schedule_locked: boolean;
-  /** B06b — a bracket BYE is born `forfeited` (`stages.ts:1351`) and is never
+  /** B06b — a bracket BYE is born `forfeited` (`usecases/stages/`) and is never
    *  scheduled. Absent means `scheduled`, which is the strict side, so every
    *  test written before byes existed keeps its old meaning. */
   status?: string;
@@ -120,7 +120,7 @@ export interface FakeScheduleOptions {
    *  i.e. exactly what this fake did before it modelled `siblingAssignments`.
    *
    *  The product does NOT behave this way: `siblingAssignments`
-   *  (`usecases/schedule.ts:839-884`) selects every already-placed fixture of
+   *  (`usecases/schedule/engine-inputs.ts`) selects every already-placed fixture of
    *  the same COMPETITION and hands it to the placer and the verifier as fixed
    *  occupancy, so a real `auto` cannot land on a court another division is
    *  already using. This knob restores the blind behaviour on purpose, and for
@@ -401,7 +401,7 @@ export function makeScheduleWorld(options: FakeScheduleOptions = {}): FakeSchedu
     // WHAT ANOTHER DIVISION HAS ALREADY BOOKED.
     //
     // Modelled because the product models it: `siblingAssignments`
-    // (`usecases/schedule.ts:839-884`) selects every placed fixture of the same
+    // (`usecases/schedule/`) selects every placed fixture of the same
     // COMPETITION outside this division and feeds it to the placer AND to
     // `validateAssignments` as `existing` — where the court-clash rule runs
     // over `board = [...existing, ...assignments]` (`calendar.ts:1719`). So a

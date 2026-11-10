@@ -116,7 +116,7 @@ export async function rig(
 }
 export type RigResult = Awaited<ReturnType<typeof rig>>;
 
-/** r.* ∪ g.* — now built from `regGroupCols` itself (registrations.ts), which
+/** r.* ∪ g.* — now built from `regGroupCols` itself (registrations/lookups.ts), which
  *  is exported for exactly this reason.
  *
  *  It used to be a second, hand-copied list, with a note admitting "nothing
@@ -133,7 +133,7 @@ export async function loadWithGroup(regId: string): Promise<RegistrationWithGrou
   // V387's `entry_payment_intent_id`, which is what surfaced it. A fixture
   // that silently returns `undefined` for a column the production type says
   // exists makes a real defect look like a passing test, so this now shares
-  // the ONE list `registrations.ts` maintains.
+  // the ONE list `registrations/` maintains.
   const [row] = await sql<RegistrationWithGroupRow[]>`
     select ${regGroupCols(sql)}
     from registrations r join registration_groups g on g.id = r.group_id
@@ -197,7 +197,7 @@ export async function seedRegistration(
   const rawToken = REGISTRATION_TOKEN_PREFIX + randomUUID().replace(/-/g, "");
   const status = over.status ?? "pending";
   // Waitlisted rows hold amount 0 and no pay window — same invariant
-  // `promoteOldestWaitlisted` relies on (registrations.ts:624).
+  // `promoteOldestWaitlisted` relies on (registrations/waitlist.ts).
   const waitlisted = status === "waitlisted";
   const amountCents = waitlisted ? 0 : (over.amountCents ?? settings.fee_cents);
   const method = waitlisted ? null : settings.payment_method;

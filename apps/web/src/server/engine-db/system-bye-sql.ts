@@ -40,7 +40,7 @@ export function swissByeShellSql(tx: Tx | postgres.Sql, on = "f") {
  * W4 T3 (K2; X-SD-5): a bye line, as SQL over the fixtures row `on` — the SQL twin of `isByeLine` (lib/bye-line.ts),
  * held to the same table of shapes (lib/__tests__/bye-line-shapes.ts). A Swiss bye shell, a system bye, or a pre-award
  * bye line: `scheduled`, no outcome, and an EMPTY side carrying the bye slot label. A bye is not played, so it takes no
- * court and no time: `movableFixtureSql` and the quick Start's rolling times (usecases/schedule.ts) and history's
+ * court and no time: `movableFixtureSql` and the quick Start's rolling times (usecases/schedule/board.ts) and history's
  * placement replays (`slotTaker`, usecases/history.ts) read it. Never null: each arm is coalesced, so a reader's
  * `not (...)` keeps every other row (three-valued logic).
  */
@@ -66,7 +66,7 @@ function phantomSlotSql(tx: Tx | postgres.Sql, on: string) {
 /**
  * W4 B1b fix round 1 (Q1): who held a bye line's DEAD SEAT, as SQL over the fixtures row `on` — the winner its phantom side's
  * feeder handed on (`winner_to_fixture` / `winner_to_slot`), when that entrant has since withdrawn (owner ruling 116) — or
- * null. THE one answer to "walkover or bye": `awardSeededByes` (usecases/stages.ts) writes the award from it (non-null: a
+ * null. THE one answer to "walkover or bye": `awardSeededByes` (usecases/stages/bracket-seats.ts) writes the award from it (non-null: a
  * `withdrew` walkover over her seat, a match; null: a `bye`, no match), and `awaitsWalkoverSql` below tells the run sheet and
  * the desk the same thing BEFORE the award, so the count and the award cannot disagree. A day-one setup bye has no feeder; a
  * feeder that handed on nobody (a double walkover, a void) has no winner; a disqualified winner is not `withdrawn` — each null.

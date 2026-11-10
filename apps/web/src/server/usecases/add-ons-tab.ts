@@ -111,7 +111,7 @@ export async function getAddOnsTab(
     // because two concurrent calls can each create one, so a duplicate is a
     // representable state and reading one row would understate what the
     // customer is paying for. `target_org_id is null` matches what the webhook
-    // writes for a group-wide rider (billing-events.ts), so a seat or a
+    // writes for a group-wide rider (billing-events/), so a seat or a
     // competition-scoped grant on the same wallet can never be counted here.
     sql<{ qty: number }[]>`
       select coalesce(sum(qty), 0)::int as qty from org_addons
