@@ -1294,7 +1294,8 @@ test("T19 break: a viewer opens a sponsor and its deal and sees every fact - and
   // "no evidence link" can only mean something beside a deal that HAS one. The dispute is faked in SQL (Stripe is not reachable here):
   // an online order carrying a payment intent and a dispute, which is all `disputed` reads (`disputed_at` set, not lost).
   const disputedSponsor = await newSponsor(request, s.org.orgId, "Ridge Cycles");
-  const disputedDeal = await newDeal(request, s.org.orgId, disputedSponsor, { package_id: s.pkg });
+  // The email is the order's own: an ONLINE order must carry one (CHECK sponsor_orders_online_has_email), and the update below makes it online.
+  const disputedDeal = await newDeal(request, s.org.orgId, disputedSponsor, { package_id: s.pkg, sponsor_email: "pay@ridge-cycles.e2e.test" });
   const stamp = Math.random().toString(36).slice(2, 8);
   await withDb(async (sql) => {
     await sql`update sponsor_orders
