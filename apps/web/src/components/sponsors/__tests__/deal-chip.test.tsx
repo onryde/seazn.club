@@ -183,9 +183,12 @@ describe("the chip wears the status-chip vocabulary and invents no colour", () =
     for (const t of CHIP_STYLE.archived.split(/\s+/).filter((x) => x !== "text-slate-400")) expect(tokens, t).toContain(t);
     // ... and the status chip's own archived is left as it was (other screens wear it).
     expect(CHIP_STYLE.archived).toContain("text-slate-400");
-    // Its pair: a deal's chip that is not "No deal" is not touched by the swap.
-    expect(classOf(html(deal({ deal_status: "ended" }))).split(/\s+/)).toContain("text-slate-500");
-    expect(classOf(html(deal({ deal_status: "draft" }))).split(/\s+/)).toContain("text-slate-600");
+    // Its pair: a deal's chip that is not "No deal" is not touched by the swap. A DRAFT is the witness: its own recipe is slate-600, so
+    // a swap that leaked onto every chip would move it. (An ended chip is slate-500 already - the swap could not change it, so it
+    // cannot witness anything; T14 re-review m1.)
+    const draft = classOf(html(deal({ deal_status: "draft" }))).split(/\s+/);
+    expect(draft, "a draft keeps its own slate-600").toContain("text-slate-600");
+    expect(draft, "and did not take the No-deal swap").not.toContain("text-slate-500");
   });
 
   it("a live deal keeps the status chip's pulse dot; a parked one does not (it is not live on the pages)", () => {

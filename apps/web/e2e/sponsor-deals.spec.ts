@@ -99,9 +99,13 @@ const PRICE = "£250";
 async function openMarkPaidConfirm(page: Page, sponsorId: string, name: string): Promise<Locator> {
   const dialog = page.getByRole("alertdialog", { name: ui("sponsors.deal.markPaid.title", { amount: PRICE, name }) });
   await expect(async () => {
-    await rowOf(page, sponsorId).getByTestId("sponsor-row-action").click();
-    await expect(dialog, `${name}: Mark as paid asks first, naming the sponsor and the amount`).toBeVisible({ timeout: 1_000 });
-  }).toPass({ timeout: 15_000 });
+    // Never click while the dialog is open (T14 re-review m3): a tap that landed late opens it AFTER the 1s check below gave up, and the
+    // retry would then click a button that sits behind the overlay and wait on it. Look first; and cap the click, so a retry that
+    // still loses that race fails fast and the next pass finds the dialog open.
+    if (await dialog.isVisible()) return;
+    await rowOf(page, sponsorId).getByTestId("sponsor-row-action").click({ timeout: 2_000 });
+    await expect(dialog, `${name}: Mark as paid asks first, naming the sponsor and the amount`).toBeVisible({ timeout: 3_000 });
+  }).toPass({ timeout: 20_000 });
   await expect(dialog).toContainText(ui("sponsors.deal.markPaid.body"));
   return dialog;
 }

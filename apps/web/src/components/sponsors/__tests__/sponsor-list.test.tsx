@@ -573,6 +573,61 @@ describe("Move: neighbours in one group swap only when they share a STORED tier 
   });
 });
 
+describe("Move: two rows drawn side by side in a group may sit APART in the stored order (the display_order gap; T14 re-review)", () => {
+  // All three are STORED gold, in the server's order X (0), B (5), Z (9). B has a SILVER deal, so it is drawn in Silver, and the Gold
+  // group is [X, Z]: neighbours on screen with B between them in the stored list. They share a stored tier, so they CAN swap - the swap
+  // exchanges their two positions in the whole list and leaves B where it is.
+  const X = sponsor({ id: "x", name: "Gold X", tier: "gold", display_order: 0 });
+  const B = sponsor({
+    id: "b", name: "Gold B With Silver Deal", tier: "gold", display_order: 5, status: "inactive", has_open_deal: true,
+    deal: deal({ id: "db", sponsor_id: "b", deal_status: "awaiting_payment", payment_status: "pending", tier: "silver", package_name: "Silver Season" }),
+  });
+  const Z = sponsor({ id: "z", name: "Gold Z", tier: "gold", display_order: 9 });
+  const GAP = [X, B, Z];
+  /** Is the arrow ENABLED? */
+  const enabled = (markup: string, id: string, key: "moveUp" | "moveDown", name: string): boolean => {
+    const label = msg(`settings.org.sponsors.${key}`, { name });
+    const tag = [...rowOf(markup, id).matchAll(/<button\b[^>]*>/g)].map((m) => m[0]).find((b) => attrOf(b, "aria-label") === label);
+    if (!tag) throw new Error(`no ${key} for ${name}`);
+    return attrOf(tag, "disabled") === undefined;
+  };
+
+  it("premise: X and Z are drawn together in Gold while B sits alone in Silver, and the stored order has a gap between X and Z", () => {
+    const groups = findAll(listHtml(GAP), "sponsor-group");
+    expect(groups.map((g) => attrOf(g.open, "data-tier"))).toEqual(["gold", "silver"]);
+    expect(findAll(groups[0]!.outer, "sponsor-row").map((r) => attrOf(r.open, "data-sponsor-id"))).toEqual(["x", "z"]);
+    expect(findAll(groups[1]!.outer, "sponsor-row").map((r) => attrOf(r.open, "data-sponsor-id"))).toEqual(["b"]);
+    expect(GAP.map((s) => s.display_order), "the stored order: X, then B, then Z").toEqual([0, 5, 9]);
+  });
+
+  it("X can move down and Z can move up; every other arrow is disabled - B's both included (6 checked)", () => {
+    const markup = listHtml(GAP);
+    expect(enabled(markup, "x", "moveDown", X.name), "X down: its drawn neighbour Z shares the stored tier").toBe(true);
+    expect(enabled(markup, "z", "moveUp", Z.name), "Z up: its drawn neighbour X shares the stored tier").toBe(true);
+    expect(enabled(markup, "x", "moveUp", X.name), "X is first in Gold").toBe(false);
+    expect(enabled(markup, "z", "moveDown", Z.name), "Z is last in Gold").toBe(false);
+    expect(enabled(markup, "b", "moveUp", B.name), "B up: alone in Silver").toBe(false);
+    expect(enabled(markup, "b", "moveDown", B.name), "B down: alone in Silver").toBe(false);
+  });
+
+  it("X down posts the whole order with X and Z exchanged and B left in the middle: ids [z, b, x]", async () => {
+    const m = mount(GAP);
+    m.click(msg("settings.org.sponsors.moveDown", { name: X.name }));
+    await flush();
+    const reorder = calls.filter((c) => c.url.endsWith("/sponsors/reorder"));
+    expect(reorder).toHaveLength(1);
+    expect(reorder[0]!.body).toEqual({ ids: ["z", "b", "x"] });
+  });
+
+  it("B's arrows send nothing even when called past the disabled button (it has no neighbour to swap with)", async () => {
+    const m = mount(GAP);
+    m.click(msg("settings.org.sponsors.moveUp", { name: B.name }));
+    m.click(msg("settings.org.sponsors.moveDown", { name: B.name }));
+    await flush();
+    expect(calls.filter((c) => c.url.endsWith("/sponsors/reorder"))).toHaveLength(0);
+  });
+});
+
 // --- the island: the writes the actions make ---------------------------------------------------------------------------------------
 
 const HUB: SponsorsHubData = {
