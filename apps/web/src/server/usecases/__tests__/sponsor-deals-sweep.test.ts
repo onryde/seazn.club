@@ -73,7 +73,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
-import { createDeal, endDealNow, markDealPaid, sweepSponsorDeals, type CreateDealInput } from "../sponsor-deals";
+import { createDeal, endDealNow, finishedPackageCompetitions, markDealPaid, sweepSponsorDeals, type CreateDealInput } from "../sponsor-deals";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
@@ -903,5 +903,119 @@ describe.skipIf(!HAS_DB)("sweepSponsorDeals: the public page (F1: the sweep defe
     expect(out.checked).toBeGreaterThanOrEqual(1);
     expect(out.expired).toBeGreaterThanOrEqual(1);
     expect((await row(id)).ended_reason).toBe("expired");
+  });
+});
+
+// Batch F review m4 (controller ruling): a package whose competition has FINISHED is not sold. The sweep would end such a deal
+// within the hour (the competition-finished rule above) and expire its emailed pay link, so `createDeal` refuses it up front,
+// 409 `competition_finished`, by the SAME authority the sweep uses (the derived phase, `competitionPhase(getCompetitionDesk)`),
+// before anything is written or minted. The rig is the sweep's own (`competition(o, phase)`, asked of the desk). Expected
+// values: the ruling's code and status; "nothing written" is read back from the tables, "nothing minted" from the Stripe stub.
+describe.skipIf(!HAS_DB)("createDeal refuses a package whose competition has finished (batch F review m4)", () => {
+  /** A package for ONE competition (the sweep's `pkg` is for the whole org). */
+  async function compPkg(o: Org, competitionId: string): Promise<string> {
+    const [r] = await sql<{ id: string }[]>`
+      insert into sponsor_packages (org_id, competition_id, name, price_cents, currency, tier)
+      values (${o.orgId}, ${competitionId}, ${`Cup Pkg ${uniq()}`}, 25000, 'gbp', 'partner') returning id`;
+    return r!.id;
+  }
+  const dealsOf = async (sponsorId: string) => (await sql<{ n: number }[]>`select count(*)::int as n from sponsor_orders where sponsor_id = ${sponsorId}`)[0]!.n;
+
+  it("a finished competition's package: 409 competition_finished, online or not, twice in a row - no deal, no Checkout, the sponsor untouched", async () => {
+    const o = await org();
+    const comp = await competition(o, "finished");
+    const p = await compPkg(o, comp);
+    const s = await sponsor(o);
+    let refused = 0;
+    for (const over of [
+      { competition_id: comp, payment_method: "online", go_live: "on_payment", sponsor_email: `pay-${uniq()}@test.local` },
+      { competition_id: comp, payment_method: "online", go_live: "on_payment", sponsor_email: `pay-${uniq()}@test.local` }, // a second call
+      { competition_id: comp }, // complimentary, straight away
+    ] as Partial<CreateDealInput>[]) {
+      await expect(createDeal(o.auth, s, input(p, over), ORIGIN)).rejects.toMatchObject({ status: 409, code: "competition_finished" });
+      refused++;
+    }
+    expect(refused).toBe(3);
+    expect(await dealsOf(s), "nothing written").toBe(0);
+    expect(stripe.create, "nothing minted").not.toHaveBeenCalled();
+    expect(stripe.retrieve).not.toHaveBeenCalled();
+    expect(await sponsorOf(s), "the sponsor is as the club left it").toMatchObject({ status: "active", tier: "partner", competition_id: null });
+    expect(await listed(o, s), "and still on the public strip").toBe(true);
+  });
+
+  it("its positive pairs: the same kind of package sells while its competition is in progress, and on one with no divisions yet (counted)", async () => {
+    const o = await org();
+    let sold = 0;
+    for (const phase of ["in_progress", "no_divisions"] as const) {
+      const comp = await competition(o, phase);
+      const s = await sponsor(o);
+      const id = await onlineDeal(o, s, await compPkg(o, comp), { competition_id: comp });
+      expect((await row(id)).deal_status, phase).toBe("awaiting_payment");
+      sold++;
+    }
+    expect(sold).toBe(2);
+    expect(stripe.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("a package for the whole org is not asked about any competition: it sells, and the desk is never read for it", async () => {
+    const o = await org();
+    await competition(o, "finished"); // the org HAS a finished competition; the package is not for it
+    h.deskFault = true; // reading the desk now throws, so a read would fail the create
+    const id = await deal(o, await sponsor(o), await pkg(o));
+    expect((await row(id)).deal_status).toBe("live");
+  });
+
+  it("a competition whose phase cannot be read sells nothing: the create fails before any row or Checkout (never a guess)", async () => {
+    const o = await org();
+    const comp = await competition(o, "in_progress");
+    const p = await compPkg(o, comp);
+    const s = await sponsor(o);
+    h.deskFault = true;
+    await expect(
+      createDeal(o.auth, s, input(p, { competition_id: comp, payment_method: "online", go_live: "on_payment", sponsor_email: `pay-${uniq()}@test.local` }), ORIGIN),
+    ).rejects.toThrow("the desk cannot be read");
+    expect(await dealsOf(s)).toBe(0);
+    expect(stripe.create).not.toHaveBeenCalled();
+  });
+});
+
+// The same authority, for the console: the Packages tab hides Send invoice on a package whose competition has finished. The page
+// asks `finishedPackageCompetitions` which of the org's ACTIVE packages' competitions have finished.
+describe.skipIf(!HAS_DB)("finishedPackageCompetitions: the finished competitions of the org's active packages (batch F review m4)", () => {
+  async function compPkg(o: Org, competitionId: string, active = true): Promise<void> {
+    await sql`
+      insert into sponsor_packages (org_id, competition_id, name, price_cents, currency, tier, active)
+      values (${o.orgId}, ${competitionId}, ${`Cup Pkg ${uniq()}`}, 25000, 'gbp', 'partner', ${active})`;
+  }
+
+  it("empty first: an org with no packages, and one with only a whole-org package, has none (and reads no desk)", async () => {
+    const o = await org();
+    h.deskFault = true; // any desk read would throw
+    expect(await finishedPackageCompetitions(o.orgId)).toEqual([]);
+    await pkg(o);
+    expect(await finishedPackageCompetitions(o.orgId)).toEqual([]);
+  });
+
+  it("a finished competition's active package is listed once; in progress, no divisions, a retired package's and another org's are not", async () => {
+    const o = await org();
+    const finished = await competition(o, "finished");
+    const retiredOnly = await competition(o, "finished");
+    const running = await competition(o, "in_progress");
+    const fresh = await competition(o, "no_divisions");
+    await compPkg(o, finished);
+    await compPkg(o, finished); // two packages, one competition: listed once
+    await compPkg(o, retiredOnly, false);
+    await compPkg(o, running);
+    await compPkg(o, fresh);
+    const other = await org();
+    await compPkg(other, await competition(other, "finished"));
+    expect(await finishedPackageCompetitions(o.orgId)).toEqual([finished]);
+  });
+
+  it("a competition whose phase cannot be read is not listed (the create's own guard still refuses it), and the read does not throw", async () => {
+    const o = await org();
+    await compPkg(o, await competition(o, "finished"));
+    h.deskFault = true;
+    expect(await finishedPackageCompetitions(o.orgId)).toEqual([]);
   });
 });

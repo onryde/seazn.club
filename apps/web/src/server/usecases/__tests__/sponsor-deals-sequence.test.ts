@@ -493,6 +493,8 @@ const cover = {
   refused409: 0,
   refused422: 0,
   paidOnlineRefusal: 0,
+  /** Batch F review m4: a one-competition package whose competition has finished is not sold (409 competition_finished). */
+  finishedPackageRefusal: 0,
   sessionCarriedOver: 0,
   /** F32: an accepted send on a deal whose open session is stored reuses it (no second payable link). */
   sendReusedSession: 0,
@@ -798,6 +800,7 @@ function verdict(label: string, res: Attempt<unknown>, applicable: readonly Refu
   const key = `refused${err.status}` as Cover;
   if (key in cover) cover[key]++;
   if (err.code === "deal_paid_online") cover.paidOnlineRefusal++;
+  if (err.code === "competition_finished") cover.finishedPackageRefusal++;
   return true;
 }
 
@@ -863,11 +866,14 @@ async function exec(w: World, m: Model, c: Prim, label: string): Promise<Step> {
       const sp = m.sponsors[c.s]!;
       const pkg = PACKAGES[c.p]!;
       const scope = c.scoped ? m.compId : null;
-      // createDeal's declared order (plan Task 6, steps 1–6): the scope inside the package's, the placement, online selling,
-      // the rule. A gone sponsor is a 404. The end date is always today or later here, and Connect is live.
+      // createDeal's declared order (plan Task 6, steps 1–6): the scope inside the package's, a one-competition package whose
+      // competition has finished (batch F review m4), the placement, online selling, the rule. A gone sponsor is a 404. The end
+      // date is always today or later here, and Connect is live. The finished guard reads the PACKAGE's competition: a
+      // whole-org package scoped to finished C is still sold (and the sweep ends it).
       const refusals: Refusal[] = [];
       if (!sp.alive) refusals.push({ status: 404 });
       if (pkg.scopedToC && !c.scoped) refusals.push({ status: 422, code: "scope_outside_package" });
+      if (pkg.scopedToC && m.finished) refusals.push({ status: 409, code: "competition_finished" });
       if (needsTiers(pkg.tier, c.scoped) && !planGrants(m.plan, c.scoped)) refusals.push({ status: 402 });
       if (c.m === "online" && !planGrants(m.plan, c.scoped)) refusals.push({ status: 402 });
       if (!SPEC_RULES[c.m].includes(c.r)) refusals.push({ status: 422, code: "on_payment_needs_payment" });
@@ -1670,14 +1676,15 @@ describe.skipIf(!HAS_DB)("sponsor deals, model-based: named scenarios (DB)", () 
       { plan: "pro", finished: true },
       [
         C({ m: "complimentary", r: "immediate", ends: 1 }), // live, ends in two days
-        C({ p: 2, scoped: true, m: "complimentary", r: "immediate" }), // queued; C is finished and it has no end date
+        C({ p: 2, scoped: true, m: "complimentary", r: "immediate" }), // C's own package: C has finished, 409 competition_finished
+        C({ p: 0, scoped: true, m: "complimentary", r: "immediate" }), // a whole-org package on C: queued, no end date
         C({ ends: 3 }), // offline When-paid, awaiting payment
         { k: "sweep", days: 0 }, // the queued deal on finished C ends (competition_finished)
         { k: "sweep", days: 2 }, // the live deal expires; nothing to promote; the open deal hides the sponsor
         { k: "sweep", days: 9 }, // the open deal expires: the sponsor's last deal ended — the reset
         { k: "sweep", days: 9 }, // a second call: nothing
       ],
-      ["sweepFinished", "sweepExpired", "transitionReset"],
+      ["finishedPackageRefusal", "refused409", "sweepFinished", "sweepExpired", "transitionReset"],
     );
   }, 180_000);
 
@@ -1686,7 +1693,7 @@ describe.skipIf(!HAS_DB)("sponsor deals, model-based: named scenarios (DB)", () 
       { plan: "pro", finished: true },
       [
         C({ m: "complimentary", r: "immediate" }),
-        C({ p: 2, scoped: true, m: "complimentary", r: "immediate" }),
+        C({ p: 0, scoped: true, m: "complimentary", r: "immediate" }), // a whole-org package on finished C (its own is not sold)
         { k: "endNow", d: 0 },
         { k: "sweep", days: 0 },
       ],

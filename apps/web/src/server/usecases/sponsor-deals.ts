@@ -17,6 +17,7 @@ import "server-only";
 import { deferred } from "@/lib/deferred";
 import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { sponsorRefusal } from "@/lib/sponsor-refusals";
 import {
   allowedActions,
   DealRuleError,
@@ -71,8 +72,8 @@ async function atBoundary<T>(fn: () => Promise<T>): Promise<T> {
   } catch (err) {
     if (err instanceof DealRuleError) {
       throw err.code === "on_payment_needs_payment"
-        ? new HttpError(422, "a complimentary deal has no payment to go live on: pick Straight away or After I approve", err.code)
-        : new HttpError(409, err.message, err.code);
+        ? sponsorRefusal(422, "a complimentary deal has no payment to go live on: pick Straight away or After I approve", err.code)
+        : sponsorRefusal(409, err.message, err.code);
     }
     throw err;
   }
@@ -90,26 +91,26 @@ function notOffered(d: ServerDeal, action: DealAction): HttpError {
   switch (action) {
     case "mark_paid":
       if (d.payment_status === "paid" || d.payment_status === "refunded") {
-        return new HttpError(409, "this deal is already paid", "deal_already_paid");
+        return sponsorRefusal(409, "this deal is already paid", "deal_already_paid");
       }
-      if (d.deal_status === "ended") return new HttpError(409, "this deal has ended", "deal_ended");
-      return new HttpError(409, "this deal has no payment to mark: it is complimentary, or its invoice is not sent yet", "deal_not_payable");
+      if (d.deal_status === "ended") return sponsorRefusal(409, "this deal has ended", "deal_ended");
+      return sponsorRefusal(409, "this deal has no payment to mark: it is complimentary, or its invoice is not sent yet", "deal_not_payable");
     case "approve":
-      return new HttpError(409, "this deal is not waiting for approval", "deal_not_awaiting_approval");
+      return sponsorRefusal(409, "this deal is not waiting for approval", "deal_not_awaiting_approval");
     case "end_now":
-      return new HttpError(409, "this deal has ended", "deal_ended");
+      return sponsorRefusal(409, "this deal has ended", "deal_ended");
     case "refund":
       if (d.disputed_at) {
-        return new HttpError(
+        return sponsorRefusal(
           409,
           "This payment has been charged back — a disputed payment can't be refunded. Respond to the dispute instead.",
           "deal_disputed",
         );
       }
-      return new HttpError(409, "only a paid deal can be refunded, once", "deal_not_refundable");
+      return sponsorRefusal(409, "only a paid deal can be refunded, once", "deal_not_refundable");
     case "send_invoice":
     case "resend_invoice":
-      return new HttpError(409, "this deal has no invoice to send", "deal_not_invoiceable");
+      return sponsorRefusal(409, "this deal has no invoice to send", "deal_not_invoiceable");
   }
 }
 
@@ -129,7 +130,7 @@ async function preflight(auth: AuthCtx, dealId: string, accept: readonly DealAct
 
 /** The deal moved on between its unlocked read and its lock (a concurrent send minted another session, or a payment landed):
  *  the action is refused rather than leave a session it never retired. */
-const dealChanged = () => new HttpError(409, "this deal changed while it was being updated; reload it and try again", "deal_changed");
+const dealChanged = () => sponsorRefusal(409, "this deal changed while it was being updated; reload it and try again", "deal_changed");
 
 /**
  * The session rule before a write that abandons a deal's stored session (F3, F37), outside any transaction: an open session is
@@ -157,7 +158,7 @@ async function checkoutOrg(orgId: string): Promise<DealCheckoutOrg> {
   const [org] = await sql<{ slug: string; stripe_account_id: string | null; stripe_charges_enabled: boolean }[]>`
     select slug, stripe_account_id, stripe_charges_enabled from organizations where id = ${orgId}`;
   if (!org?.stripe_account_id || !org.stripe_charges_enabled) {
-    throw new HttpError(409, "Connect Stripe (Get paid) before selling sponsorship packages", "connect_required");
+    throw sponsorRefusal(409, "Connect Stripe (Get paid) before selling sponsorship packages", "connect_required");
   }
   return { id: orgId, slug: org.slug, stripe_account_id: org.stripe_account_id };
 }
@@ -228,7 +229,7 @@ export async function createDeal(
         select id, competition_id, name, price_cents, currency, tier, active, includes_on_stream
           from sponsor_packages where id = ${input.package_id}`;
       if (!row) throw new HttpError(404, "package not found");
-      if (!row.active) throw new HttpError(422, "This package is no longer on sale", "package_retired");
+      if (!row.active) throw sponsorRefusal(422, "This package is no longer on sale", "package_retired");
       const [sp] = await tx`select 1 from sponsors where id = ${sponsorId}`;
       if (!sp) throw new HttpError(404, "sponsor not found");
       return row;
@@ -237,11 +238,17 @@ export async function createDeal(
     // The scope is inside the package's: a one-competition package fixes it.
     const scope = input.competition_id;
     if (pkg.competition_id !== null && scope !== pkg.competition_id) {
-      throw new HttpError(422, "this package is for one competition: the deal must be scoped to it", "scope_outside_package");
+      throw sponsorRefusal(422, "this package is for one competition: the deal must be scoped to it", "scope_outside_package");
     }
     if (scope !== null) {
       const found = await withTenant(auth.orgId, (tx) => tx`select 1 from competitions where id = ${scope}`);
       if (found.length === 0) throw new HttpError(404, "competition not found");
+    }
+    // A package for a competition that has FINISHED is not sold (batch F review m4): the sweep would end the deal within the
+    // hour (§8a) and expire the pay link it emailed. The same authority as the sweep, the derived phase; a phase nobody can read
+    // throws, so nothing is sold on a guess.
+    if (pkg.competition_id !== null && (await isCompetitionFinished(auth.orgId, pkg.competition_id, new Date()))) {
+      throw sponsorRefusal(409, "this package's competition has finished: it can no longer be sold", "competition_finished");
     }
 
     // The plan: the placement (D17), then online selling and Connect.
@@ -251,10 +258,10 @@ export async function createDeal(
     if (method === "online") {
       await assertOnlineAllowed(auth.orgId, scope);
       if (!org?.stripe_account_id || !org.stripe_charges_enabled) {
-        throw new HttpError(409, "Connect Stripe (Get paid) before selling sponsorship packages", "connect_required");
+        throw sponsorRefusal(409, "Connect Stripe (Get paid) before selling sponsorship packages", "connect_required");
       }
       if (!input.sponsor_email) {
-        throw new HttpError(422, "an online deal needs the sponsor's billing email: its invoice goes there", "sponsor_email_required");
+        throw sponsorRefusal(422, "an online deal needs the sponsor's billing email: its invoice goes there", "sponsor_email_required");
       }
       // P-W2-1: refuse now, before the deal and its Checkout session, if this box cannot queue the invoice.
       assertOutboxCanQueue();
@@ -269,7 +276,7 @@ export async function createDeal(
         select ${input.ends_on}::date >= (now() at time zone tz)::date as ok,
                (${input.ends_on}::date + 1)::timestamp at time zone tz as ends_at
           from (select coalesce(${org?.timezone ?? null}::text, 'UTC') as tz) z`;
-      if (!end?.ok) throw new HttpError(422, "a deal cannot end on a day that has passed", "ends_on_in_past");
+      if (!end?.ok) throw sponsorRefusal(422, "a deal cannot end on a day that has passed", "ends_on_in_past");
       endsAt = end.ends_at;
     }
 
@@ -568,12 +575,36 @@ export async function sweepSponsorDeals(now: Date = new Date(), opts: { orgIds?:
   return result;
 }
 
-/** A competition's derived phase, read as an org's viewer (the context this repo synthesizes elsewhere). A read that throws is
- *  `unreadable` — never `finished`. */
+/** THE authority on "this competition has finished" for sponsor deals (§8a): its derived phase, read as an org's viewer (the
+ *  context this repo synthesizes elsewhere). The sweep ends a deal on it, `createDeal` refuses a package on it, and the
+ *  Packages tab hides Send invoice by it. Throws when the desk cannot be read. */
+async function isCompetitionFinished(orgId: string, competitionId: string, now: Date): Promise<boolean> {
+  const desk = await getCompetitionDesk({ orgId, via: "session", userId: null, role: "viewer", keyId: null }, competitionId, now);
+  return competitionPhase(desk).kind === "finished";
+}
+
+/**
+ * The competitions of the org's ACTIVE packages that have finished (`isCompetitionFinished`), each once: the Packages tab offers
+ * no Send invoice on those packages (batch F review m4; `createDeal` refuses them anyway). A competition whose phase cannot be
+ * read is left out here (a display hint, logged), and the create's own guard still refuses it. Whole-org packages ask nothing.
+ */
+export async function finishedPackageCompetitions(orgId: string, now: Date = new Date()): Promise<string[]> {
+  const rows = await withTenant(orgId, (tx) => tx<{ competition_id: string }[]>`
+    select distinct competition_id from sponsor_packages
+     where active and competition_id is not null
+     order by competition_id`);
+  const finished: string[] = [];
+  for (const { competition_id } of rows) {
+    if ((await competitionPhaseOf(orgId, competition_id, now)) === "finished") finished.push(competition_id);
+  }
+  return finished;
+}
+
+/** A competition's derived phase for the sweep (`isCompetitionFinished`). A read that throws is `unreadable` — never
+ *  `finished`. */
 async function competitionPhaseOf(orgId: string, competitionId: string, now: Date): Promise<"finished" | "not_finished" | "unreadable"> {
   try {
-    const desk = await getCompetitionDesk({ orgId, via: "session", userId: null, role: "viewer", keyId: null }, competitionId, now);
-    return competitionPhase(desk).kind === "finished" ? "finished" : "not_finished";
+    return (await isCompetitionFinished(orgId, competitionId, now)) ? "finished" : "not_finished";
   } catch (err) {
     log.error({ err, orgId, competitionId }, "sponsor deals sweep: the competition desk could not be read");
     return "unreadable";
