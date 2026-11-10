@@ -10,7 +10,7 @@
 // kernel's own `settleApplies` (controller ruling C12); a TABLE stage (W2c P-7 / X-AB-5) is held only by an abandon that
 // decided nobody. The server's settle guard (append-event.ts) calls the SAME function, so the block can never offer a
 // settle the server would refuse for a reason the block could have known - nor withhold one it would take.
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { SETTLE_METHODS, forbidsLevelResult, settleOffered, type MatchOutcome, type SettleMethod } from "@seazn/engine/core";
 import type { MessageKey } from "@/lib/messages";
 
@@ -147,6 +147,8 @@ interface BlockProps {
   busy: boolean;
   /** Sends `core.settle` and reports the server's answer — the localized refusal on a 4xx. */
   settle: (payload: { winner: string; method: SettleMethod; note?: string }) => Promise<SettleResult>;
+  /** W4 B5b (pick 4A): a control that sits BESIDE Settle in the action row - "Declare joint winners" on a held final. */
+  extra?: ReactNode;
 }
 
 /** The pad's Tie-break tile (`TIEBREAK_TILE_ID` in scorepad/v3/skins/boardgame.tsx), opened from the console banner.
@@ -197,6 +199,7 @@ export function NeedsDecisionBlock(props: BlockProps) {
             {msg("score.needsDecision.recordTiebreak")}
           </button>
         )}
+        {props.extra}
         <button
           type="button"
           data-testid="settle-open"

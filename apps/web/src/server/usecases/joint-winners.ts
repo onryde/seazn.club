@@ -95,6 +95,7 @@ export async function declareJointWinners(auth: AuthCtx, fixtureId: string): Pro
         is_final: f.is_final,
         third_place: f.third_place,
         conditional: f.conditional,
+        stage_kind: f.stage_kind,
         status: f.status,
         home_entrant_id: f.home_entrant_id,
         away_entrant_id: f.away_entrant_id,
