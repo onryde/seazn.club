@@ -156,21 +156,6 @@
   ]
  },
  {
-  "id": "t12-carry-passed",
-  "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "return insertStageBatch(tx, divisionId, inputs, stageCap, frozen, keep);",
-  "replace": "return insertStageBatch(tx, divisionId, inputs, stageCap, frozen);",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/stage-defaults.test.ts"
-    ],
-    "name": "a slot whose seq:kind matched keeps its edits over the preset"
-   }
-  ]
- },
- {
   "id": "t12-template-validates",
   "file": "apps/web/src/server/usecases/templates.ts",
   "find": "const stageConfig = validatedStageConfig(",
