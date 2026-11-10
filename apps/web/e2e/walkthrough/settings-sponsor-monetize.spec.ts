@@ -484,7 +484,9 @@ test("sell: the Sponsors hub's Packages tab creates a priced package, at the val
   const priceInput = sheet.getByTestId("package-create-price");
   const currency = sheet.getByTestId("package-create-currency");
   const tier = sheet.getByTestId("package-create-tier");
-  const create = sheet.getByTestId("package-create-submit");
+  // The submit is the modal's FOOTER button, a sibling of the body that carries `package-create-sheet` - so it is found on the page,
+  // not inside the sheet (found inside it, the locator matches nothing and every assertion on it reads "element(s) not found").
+  const create = page.getByTestId("package-create-submit");
 
   // What the controls OPEN AT, read off the live DOM — never a table typed in
   // here (AGENTS.md class 19). These two values are then the EXPECTATION the
