@@ -8013,7 +8013,7 @@
   "sponsors.error.notInvoiceable": "Deze deal heeft geen factuur om te versturen: hij is betaald, beëindigd of wordt niet online betaald.",
   "sponsors.error.disputeParked": "Een openstaande betwisting van een betaling houdt deze sponsor van je openbare pagina's. Hij komt vanzelf terug als de betwisting wordt gewonnen.",
   "sponsors.error.invoiceSavedNoLink": "De deal is opgeslagen, maar Stripe antwoordde niet, dus er is nog geen factuur verstuurd. Open de deal en druk op Factuur versturen om het opnieuw te proberen.",
-  "sponsors.error.invoiceSavedResend": "De deal is opgeslagen, maar Stripe antwoordde niet, dus er is nog geen factuur verstuurd. Druk op de deal op Factuur opnieuw versturen om het opnieuw te proberen.",
+  "sponsors.error.invoiceSavedResend": "De deal is opgeslagen, maar Stripe antwoordde niet, dus er is nog geen factuur verstuurd. Druk bij de deal op Factuur opnieuw versturen om het opnieuw te proberen.",
   "sponsors.error.resendStripeUnavailable": "Stripe antwoordde niet, dus de factuur is niet verstuurd. Probeer het zo meteen opnieuw.",
   "sponsors.error.resendPaidOnline": "De sponsor heeft deze factuur al online betaald, dus hij is niet opnieuw verstuurd. De betaling wordt verwerkt; laad de pagina zo meteen opnieuw.",
   "sponsors.order.resend": "Factuur opnieuw versturen",

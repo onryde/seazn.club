@@ -29,6 +29,8 @@
 //   F4  waiting deal       `promotesWaiting` always false                                  -> "an earlier deal waiting"
 //   F5  waiting deal       the sponsor filter dropped                                      -> "another sponsor's waiting deal"
 //   F6  nothing saved      the page-level words used for an offline create                 -> "ends the current deal and sends no invoice"
+// Batch H re-review (batch I first commit):
+//   F7  opening method     the useState initialiser reads `hasMonetize` for `monetizeFor(firstOpen scope)` -> "the FIRST package's scope"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
@@ -638,6 +640,51 @@ describe("Online is offered only for a scope the plan sells it on: an Event Pass
     expect(has(none.island, "add-deal-payment-lock-scope")).toBe(false);
     checked++;
     expect(checked).toBe(5);
+  });
+});
+
+describe("the opening method is the plan's best choice for the FIRST package's scope, and stays the person's pick when the package or scope moves (D22; batch H re-review)", () => {
+  // The useState initialiser reads `monetizeFor(firstOpen scope)`. Every test above asserts the method AT OPENING, where
+  // `hasMonetize` (reachable on SOME scope) and `monetizeFor(first scope)` agree on a paid plan and differ only on a pass org,
+  // and the shown method is DERIVED (`pickedMethod === "online" && !onlineOpen ? "offline"`), so a wrong initialiser only
+  // shows once the person MOVES the package or the scope after opening. An Event Pass org: only c1 is lifted.
+  const PASS = { hasMonetize: true, monetizeOrgWide: false, monetizeCompetitionIds: ["c1"], chargesEnabled: true } as const;
+
+  it("opens on Offline (the whole organisation is not lifted); moving to the pass's competition by SCOPE leaves it Offline - nobody picked Online", async () => {
+    const { island, p } = mount({ ...PASS, packages: [PARTNER] });
+    expect(methodOf(island)).toEqual(["offline"]);
+    chooseScope(island, "c1");
+    expect(isDisabled(island, "add-deal-payment-online"), "premise: Online is open on c1").toBe(false);
+    expect(methodOf(island), "the method the sheet opened on is kept; it was never turned Online").toEqual(["offline"]);
+    await submit(island);
+    expect(p.onCreate).toHaveBeenLastCalledWith(expect.objectContaining({ payment_method: "offline", competition_id: "c1" }));
+  });
+
+  it("opens on Offline; moving to the pass's competition by PACKAGE leaves it Offline, and what is sent is Offline", async () => {
+    const { island, p } = mount({ ...PASS, packages: [PARTNER, CUP] });
+    expect(packageOf(island)).toEqual(["p-partner"]);
+    expect(methodOf(island)).toEqual(["offline"]);
+    pick(island, "add-deal-package-p-cup");
+    expect(scopeOf(island), "premise: the package fixed the scope at c1").toBe("c1");
+    expect(isDisabled(island, "add-deal-payment-online"), "premise: Online is open on c1").toBe(false);
+    expect(methodOf(island)).toEqual(["offline"]);
+    await submit(island);
+    expect(p.onCreate).toHaveBeenLastCalledWith(expect.objectContaining({ payment_method: "offline", competition_id: "c1" }));
+  });
+
+  it("the pair: opens on Online when the FIRST package's scope is lifted; moving to the whole organisation falls to Offline, and moving back is Online again (counted)", () => {
+    const { island } = mount({ ...PASS, packages: [CUP, PARTNER] });
+    let checked = 0;
+    expect(packageOf(island)).toEqual(["p-cup"]);
+    expect(methodOf(island)).toEqual(["online"]);
+    checked++;
+    pick(island, "add-deal-package-p-partner");
+    expect(methodOf(island), "not lifted on the whole organisation: derived Offline").toEqual(["offline"]);
+    checked++;
+    pick(island, "add-deal-package-p-cup");
+    expect(methodOf(island), "the person's pick was never changed").toEqual(["online"]);
+    checked++;
+    expect(checked).toBe(3);
   });
 });
 
