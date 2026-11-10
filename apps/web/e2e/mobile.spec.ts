@@ -342,6 +342,34 @@ let publicCricketPlayerId = "";
  *  renders the LIST - a 200 with no overflow - so "console routes" names a test id it must see on each, and null here fails that test. */
 let sponsorsSweep: { sponsorId: string; dealId: string; packageId: string; orgId: string } | null = null;
 
+/** Seeds the sponsor, package and open offline deal the two sponsor pages below render (the sponsor's own page and the deal's own page need
+ *  a real sponsor and a real deal to render at all). It runs at the top of the ONE test that needs it ("console routes"), never in the
+ *  serial file's setup test: a sponsor API regression there would abort every test after it - roughly 110, across seven width
+ *  projects - where here it reds the one test that is about sponsors (batch J review m8). */
+async function seedSponsorsSweep(page: Page, request: APIRequestContext): Promise<NonNullable<typeof sponsorsSweep>> {
+  // A retry of the test reuses the sponsor it already made, so a flaky run does not pile a second one into the org.
+  if (sponsorsSweep !== null && sponsorsSweep.dealId !== "") return sponsorsSweep;
+  const org = await activeOrg(page);
+  const sweepPackage = await apiJson<{ id: string }>(request, `/api/v1/orgs/${org.id}/sponsor-packages`, "POST", {
+    name: `Mobile Gate partner board ${TAG}`, price_cents: 25_000, currency: "gbp", tier: "partner",
+  });
+  expect(sweepPackage.status, `sponsor package -> ${sweepPackage.status} ${JSON.stringify(sweepPackage.error)}`).toBe(201);
+  const sweepSponsor = await apiJson<{ id: string }>(request, `/api/v1/orgs/${org.id}/sponsors`, "POST", {
+    name: "Harbourside Building Supplies and Timber Co", tier: "partner", url: "https://sponsor.example/",
+  });
+  expect(sweepSponsor.status, `sponsor -> ${sweepSponsor.status} ${JSON.stringify(sweepSponsor.error)}`).toBe(201);
+  // Recorded as soon as the package and the sponsor exist (the deal id follows), so the afterAll cleanup finds them even when the deal's
+  // own create is the red step.
+  const seeded = { sponsorId: sweepSponsor.data!.id, dealId: "", packageId: sweepPackage.data!.id, orgId: org.id };
+  sponsorsSweep = seeded;
+  const sweepDeal = await apiJson<{ deal: { id: string } }>(request, `/api/v1/orgs/${org.id}/sponsors/${sweepSponsor.data!.id}/deals`, "POST", {
+    package_id: sweepPackage.data!.id, competition_id: null, payment_method: "offline", go_live: "on_payment",
+  });
+  expect(sweepDeal.status, `sponsor deal -> ${sweepDeal.status} ${JSON.stringify(sweepDeal.error)}`).toBe(201);
+  seeded.dealId = sweepDeal.data!.deal.id;
+  return seeded;
+}
+
 // The sponsor is removed with its deal (an open offline deal holds no money, so the delete is allowed) and the package is retired, so
 // a re-run against the same database does not pile sponsors into the shared org. Never throws: a teardown must not fail a green run.
 test.afterAll(async ({ request }) => {
@@ -572,21 +600,6 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
   publicCricketFixturePath = `/live/${orgSlug}/${mcCompSlug.data!.slug}/${mcDivSlug.data!.slug}/fixtures/${mcFx.fixtureId}`;
   publicCricketCompSlug = mcCompSlug.data!.slug;
   publicCricketPlayerId = mcFx.personIds[`MC Home 1 ${TAG}`]!;
-
-  // Sponsor deals PR 2 (Batch J) - the sponsor's page and the deal's page need a real sponsor and a real deal to render at all.
-  const sweepPackage = await apiJson<{ id: string }>(request, `/api/v1/orgs/${org.id}/sponsor-packages`, "POST", {
-    name: `Mobile Gate partner board ${TAG}`, price_cents: 25_000, currency: "gbp", tier: "partner",
-  });
-  expect(sweepPackage.status, `sponsor package -> ${sweepPackage.status} ${JSON.stringify(sweepPackage.error)}`).toBe(201);
-  const sweepSponsor = await apiJson<{ id: string }>(request, `/api/v1/orgs/${org.id}/sponsors`, "POST", {
-    name: "Harbourside Building Supplies and Timber Co", tier: "partner", url: "https://sponsor.example/",
-  });
-  expect(sweepSponsor.status, `sponsor -> ${sweepSponsor.status} ${JSON.stringify(sweepSponsor.error)}`).toBe(201);
-  const sweepDeal = await apiJson<{ deal: { id: string } }>(request, `/api/v1/orgs/${org.id}/sponsors/${sweepSponsor.data!.id}/deals`, "POST", {
-    package_id: sweepPackage.data!.id, competition_id: null, payment_method: "offline", go_live: "on_payment",
-  });
-  expect(sweepDeal.status, `sponsor deal -> ${sweepDeal.status} ${JSON.stringify(sweepDeal.error)}`).toBe(201);
-  sponsorsSweep = { sponsorId: sweepSponsor.data!.id, dealId: sweepDeal.data!.deal.id, packageId: sweepPackage.data!.id, orgId: org.id };
 });
 
 // "load" + a short settle instead of networkidle — the dev server's HMR
@@ -665,9 +678,9 @@ async function mergeDivisionConfig(
 }
 
 test("console routes: no horizontal scroll", async ({ page, request }) => {
-  // The sponsor and deal the setup test seeded: without them the two pages below would silently render the list.
-  expect(sponsorsSweep, "the setup test seeded a sponsor and a deal for the sponsor pages").not.toBeNull();
-  const sweep = sponsorsSweep!;
+  // The sponsor and deal the two sponsor pages below render: without them they would silently render the list.
+  const sweep = await seedSponsorsSweep(page, request);
+  expect(sweep.sponsorId, "the sponsor for the sponsor pages was seeded").toBeTruthy();
   const routes: Array<{ path: string; allowancePx?: number; requireTestId?: string }> = [
     { path: "/dashboard" },
     // These six used to be legacy id-routes (/competitions/{id},

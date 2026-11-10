@@ -508,14 +508,17 @@ async function dealSetup(request: APIRequestContext, label: string, plan: "commu
 }
 
 /** Whether the public competition page names the sponsor. Polled to the wanted answer: the page is cached per org and busted by the
- *  write, and a bust that is tail work lands a beat after the response - so "it changed" is waited for, never read once. */
+ *  write, and a bust that is tail work lands a beat after the response - so "it changed" is waited for, never read once. The page must
+ *  ANSWER 200 either way: "off the page" is a page that loaded and does not name the sponsor, never a 404 or a 500 that names nobody
+ *  (batch J review m5) - a non-200 reads "HTTP n" and fails the wait, whichever answer was wanted. */
 async function expectPublic(request: APIRequestContext, s: { org: SeededOrg; comp: { slug: string }; name: string }, shown: boolean, why: string): Promise<void> {
   await expect
     .poll(async () => {
       const res = await request.get(`/live/${s.org.slug}/${s.comp.slug}`);
-      return res.status() === 200 && (await res.text()).includes(s.name);
+      if (res.status() !== 200) return `HTTP ${res.status()}`;
+      return (await res.text()).includes(s.name) ? "names the sponsor" : "does not name the sponsor";
     }, { message: why, timeout: 40_000, intervals: [500, 1_000, 2_000, 3_000, 5_000] })
-    .toBe(shown);
+    .toBe(shown ? "names the sponsor" : "does not name the sponsor");
 }
 
 /** Opens the Add deal sheet from the sponsor's row (a sponsor with no live deal has an Add deal on its row). */
@@ -986,8 +989,9 @@ test("packages: a package's used-by count follows its deals, and Retire takes it
 // through the real API.
 
 /** Where a text breaks onto a new line, read character by character from the laid-out page: two LETTERS (non-space characters next to
- *  each other in the source) that sit on different lines are a mid-word break. `chars` is how many characters were measured, so a
- *  check that looked at nothing says so (a name that measured 0 characters proves nothing). */
+ *  each other in the source) that sit on different lines are a mid-word break. `chars` is how many letters were measured and `lines`
+ *  how many distinct lines they sit on, so a check that looked at nothing says so (a name that measured 0 characters proves nothing).
+ *  It THROWS on a letter with no box: an element that is hidden, or the server's not-yet-hydrated phone twin, has none. */
 async function lineBreaks(el: Locator): Promise<{ chars: number; lines: number; midWord: string[] }> {
   return el.evaluate((root) => {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -999,7 +1003,12 @@ async function lineBreaks(el: Locator): Promise<{ chars: number; lines: number; 
         range.setStart(text, i);
         range.setEnd(text, i + 1);
         const box = range.getBoundingClientRect();
-        seen.push({ ch: text.data.charAt(i), top: box.top, bottom: box.bottom });
+        const ch = text.data.charAt(i);
+        // A letter with no box was never laid out (the element is hidden, or not hydrated yet - the server's phone twin is `md:hidden`
+        // from 768): every pair would then read "on different lines" and the measure would blame the name for a page that was not
+        // ready. Refuse to measure it rather than report a false mid-word break (batch J review I2). A space may have no box (collapsed).
+        if (/\S/.test(ch) && box.height === 0) throw new Error(`lineBreaks: "${ch}" at ${i} has no box - the text is not laid out (hidden, or the page has not hydrated)`);
+        seen.push({ ch, top: box.top, bottom: box.bottom });
       }
     }
     const letters = seen.filter((c) => /\S/.test(c.ch));
@@ -1153,9 +1162,15 @@ test("T19 break: a blank sponsor name is refused - the button waits, nothing is 
     // Enter in the field is the other way to send a form: it must not get round the button either.
     await nameInput.press("Enter");
   }
-  // The API is the guard behind the page: an empty name is a validation refusal, and nothing is created.
-  const refused = await apiJson(request, `/api/v1/orgs/${org.orgId}/sponsors`, "POST", { name: "" });
-  expect(refused.status, `an empty name answered ${refused.status}: ${JSON.stringify(refused.error)}`).toBe(400);
+  // The API is the guard behind the page: an empty name AND a name of only spaces (the page's own blank) are validation refusals, and
+  // nothing is created. The spaces were accepted before the server trimmed the name (batch J review m3).
+  let refusedCount = 0;
+  for (const blank of ["", "   "]) {
+    const refused = await apiJson(request, `/api/v1/orgs/${org.orgId}/sponsors`, "POST", { name: blank });
+    expect(refused.status, `the name ${JSON.stringify(blank)} answered ${refused.status}: ${JSON.stringify(refused.error)}`).toBe(400);
+    refusedCount++;
+  }
+  expect(refusedCount, "both blanks were sent").toBe(2);
 
   // A real add at the end is the sentinel that proves the blanks above sent NOTHING: it is the only request, and the only sponsor.
   await nameInput.fill("Sentinel Sponsor");
@@ -1257,7 +1272,14 @@ test("T19 break: Back from a deal lands on its sponsor, and from the sponsor on 
   await expect(page).toHaveURL(urlIs(sponsorPage));
   await expect(sheet, "Escape from the deal: its sponsor's panel").toBeVisible();
   await expect(deal).toHaveCount(0);
-  await page.keyboard.press("Escape");
+  // The first Escape was a client navigation: the panel that replaced the deal's has to be focus-trapped before it hears the key, so a
+  // single press can land a beat early and do nothing. Press until the URL moves (idempotent: once it has moved the loop is done), and
+  // only THEN assert it - never one press and a hope (batch J review m9).
+  await expect(async () => {
+    if (urlIs(listUrl)(new URL(page.url()))) return;
+    await page.keyboard.press("Escape");
+    await expect(page).toHaveURL(urlIs(listUrl), { timeout: 2_000 });
+  }).toPass({ timeout: 30_000 });
   await expect(page).toHaveURL(urlIs(listUrl));
   await expect(sheet, "Escape from the sponsor: the list").toHaveCount(0);
   await expect(listView).toBeVisible();
@@ -1268,6 +1290,17 @@ test("T19 break: a viewer opens a sponsor and its deal and sees every fact - and
   const s = await dealSetup(request, "t19-viewer", "community");
   const dealId = await newDeal(request, s.org.orgId, s.sponsorId, { package_id: s.pkg });
   expect(await dealStatus(request, s.org.orgId, dealId), "premise: an offline deal waiting for its money - an editor has actions on it").toBe("awaiting_payment");
+  // A deal in dispute, for the one control the awaiting deal above never draws: the evidence link answers an OPEN dispute, so a viewer's
+  // "no evidence link" can only mean something beside a deal that HAS one. The dispute is faked in SQL (Stripe is not reachable here):
+  // an online order carrying a payment intent and a dispute, which is all `disputed` reads (`disputed_at` set, not lost).
+  const disputedSponsor = await newSponsor(request, s.org.orgId, "Ridge Cycles");
+  const disputedDeal = await newDeal(request, s.org.orgId, disputedSponsor, { package_id: s.pkg });
+  const stamp = Math.random().toString(36).slice(2, 8);
+  await withDb(async (sql) => {
+    await sql`update sponsor_orders
+                 set payment_method = 'online', payment_intent_id = ${`pi_viewer_${stamp}`}, disputed_at = now(), dispute_id = ${`dp_viewer_${stamp}`}
+               where id = ${disputedDeal} and org_id = ${s.org.orgId}`;
+  });
   const editorOnly = ["sponsor-sheet-edit", "sponsor-sheet-add-deal", "sponsor-sheet-deal-action", "sponsor-sheet-deal-open", "sponsor-sheet-stream", "sponsor-sheet-report"];
 
   // --- The pair: the owner has every one of them, so a viewer's absence below is the role's doing and not a page that never drew them.
@@ -1278,6 +1311,8 @@ test("T19 break: a viewer opens a sponsor and its deal and sees every fact - and
   for (const id of editorOnly) await expect(ownerDialog.getByTestId(id).first(), `the owner has ${id}`).toBeVisible();
   await page.goto(dealUrl(s.org.slug, s.sponsorId, dealId));
   await expect(page.getByTestId("deal-page-action").first(), "the owner has the deal's actions").toBeVisible();
+  await page.goto(dealUrl(s.org.slug, disputedSponsor, disputedDeal));
+  await expect(page.getByRole("dialog").getByTestId("deal-page-evidence"), "the owner has the evidence link on a deal in dispute").toBeVisible();
 
   const member = await seedMemberIdentity(browser, request, s.org.orgId, "viewer");
   try {
@@ -1298,7 +1333,14 @@ test("T19 break: a viewer opens a sponsor and its deal and sees every fact - and
       await expect(deal, `${width}: the viewer sees the deal`).toBeVisible();
       await expect(deal.getByTestId("deal-page-step").first(), `${width}: and its timeline`).toBeVisible();
       await expect(vp.getByTestId("deal-page-action"), `${width}: a viewer has no deal action`).toHaveCount(0);
-      await expect(vp.getByTestId("deal-page-evidence"), `${width}: nor the dispute evidence`).toHaveCount(0);
+      await expectNoHorizontalScroll(vp);
+
+      // The dispute: the viewer sees the deal that is in dispute, and not the evidence link the owner has on it.
+      await vp.goto(dealUrl(s.org.slug, disputedSponsor, disputedDeal));
+      const disputed = vp.getByTestId("deal-page");
+      await expect(disputed, `${width}: the viewer sees the deal in dispute`).toBeVisible();
+      await expect(disputed.getByTestId("deal-page-step").first(), `${width}: and its timeline (the page has drawn)`).toBeVisible();
+      await expect(vp.getByTestId("deal-page-evidence"), `${width}: nor the dispute evidence the owner has on this very deal`).toHaveCount(0);
       await expectNoHorizontalScroll(vp);
     }
   } finally {
@@ -1345,20 +1387,39 @@ test("T19 widths: list, sponsor page, Add deal sheet and deal page fit 320 / 768
     }
     sets.set(width, perRow);
     await expectNoHorizontalScroll(page);
-    const listName = await lineBreaks(rowOf(page, longId).getByTestId("sponsor-row-name-text"));
+    const listNameEl = rowOf(page, longId).getByTestId("sponsor-row-name-text");
+    await expect(listNameEl, `${width}: the list's name is laid out before it is measured`).toBeVisible();
+    const listName = await lineBreaks(listNameEl);
     expect(listName.chars, `${width}: the list measured every letter of the name`).toBe(LONG.replace(/\s/g, "").length);
     expect(listName.midWord, `${width}: the list's name never breaks inside a word`).toEqual([]);
+    // The list's name is CUT, not wrapped (the other half of "a long name fits"): one line at every width, built to end in an ellipsis,
+    // and at 320 the 43 characters really do not fit, so they are clipped.
+    expect(listName.lines, `${width}: the list's name is ONE line - cut with an ellipsis, never wrapped onto a second`).toBe(1);
+    const cut = await listNameEl.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return { overflow: cs.overflowX, ellipsis: cs.textOverflow, clipped: el.scrollWidth > el.clientWidth };
+    });
+    expect({ overflow: cut.overflow, ellipsis: cut.ellipsis }, `${width}: the list's name is built to truncate`).toEqual({ overflow: "hidden", ellipsis: "ellipsis" });
+    if (width === 320) expect(cut.clipped, "320: the 43 characters do not fit the row, so the name is cut").toBe(true);
     measured++;
     screens++;
 
     // --- The sponsor's page (a page below 768, a side panel from it).
     await page.goto(sponsorUrl(org.slug, longId));
-    const sheetName = page.getByTestId("sponsor-sheet-name");
+    // From 768 the sponsor's page is a side panel (a dialog) that REPLACES the server's phone twin once the page hydrates, and that twin
+    // is `md:hidden`: a bare test id can resolve to it first, with every letter unboxed. So from 768 the name is looked for INSIDE the
+    // dialog (which exists only after hydration) and must be visible before a single letter is measured (batch J review I2).
+    const panel = width >= 768 ? page.getByRole("dialog") : page;
+    const sheetName = panel.getByTestId("sponsor-sheet-name");
     await expect(sheetName, `${width}: the sponsor's page names it`).toHaveText(LONG);
+    await expect(sheetName, `${width}: and it is laid out before it is measured`).toBeVisible();
     await expectNoHorizontalScroll(page);
     const pageName = await lineBreaks(sheetName);
     expect(pageName.chars, `${width}: the sponsor page measured every letter`).toBe(LONG.replace(/\s/g, "").length);
     expect(pageName.midWord, `${width}: the sponsor page's name never breaks inside a word`).toEqual([]);
+    // The wrapped half: a page's name WRAPS by words (never cut). At 320 the 43 characters cannot fit one 288px line, so it is more than one.
+    expect(pageName.lines, `${width}: the sponsor page's name sits on at least one line`).toBeGreaterThanOrEqual(1);
+    if (width === 320) expect(pageName.lines, "320: 43 characters wrap onto more than one line").toBeGreaterThanOrEqual(2);
     measured++;
     screens++;
 
@@ -1375,14 +1436,22 @@ test("T19 widths: list, sponsor page, Add deal sheet and deal page fit 320 / 768
 
     // --- The deal's page.
     await page.goto(dealUrl(org.slug, longId, liveDeal));
-    await expect(page.getByTestId("deal-page"), `${width}: the deal's page`).toBeVisible();
+    // Same wrapper as the sponsor's page: from 768 a dialog, below it the page itself; the server's phone twin is never measured.
+    const dealPanel = width >= 768 ? page.getByRole("dialog") : page;
+    await expect(dealPanel.getByTestId("deal-page"), `${width}: the deal's page`).toBeVisible();
     await expectNoHorizontalScroll(page);
-    const dealSponsor = await lineBreaks(page.getByTestId("deal-page-sponsor"));
+    const dealSponsorEl = dealPanel.getByTestId("deal-page-sponsor");
+    await expect(dealSponsorEl, `${width}: the deal page's sponsor is laid out before it is measured`).toBeVisible();
+    const dealSponsor = await lineBreaks(dealSponsorEl);
     expect(dealSponsor.chars, `${width}: the deal page measured every letter of the sponsor`).toBe(LONG.replace(/\s/g, "").length);
     expect(dealSponsor.midWord, `${width}: the deal page's sponsor name never breaks inside a word`).toEqual([]);
-    const dealName = await lineBreaks(page.getByTestId("deal-page-name"));
+    expect(dealSponsor.lines, `${width}: the deal page's sponsor name sits on at least one line`).toBeGreaterThanOrEqual(1);
+    const dealNameEl = dealPanel.getByTestId("deal-page-name");
+    await expect(dealNameEl, `${width}: the deal's heading is laid out before it is measured`).toBeVisible();
+    const dealName = await lineBreaks(dealNameEl);
     expect(dealName.chars, `${width}: the deal page measured its heading`).toBeGreaterThan(0);
     expect(dealName.midWord, `${width}: the deal's heading never breaks inside a word`).toEqual([]);
+    expect(dealName.lines, `${width}: the deal's heading sits on at least one line`).toBeGreaterThanOrEqual(1);
     measured += 2;
     screens++;
   }
