@@ -520,6 +520,27 @@ describe.skipIf(!HAS_DB)("sponsor deals schema — the constraints are real", ()
     for (const r of rows) expect(r.indexed, r.col).toBe(true);
   });
 
+  it("final review m6: the hourly sweep's query walks the open-deals partial index in its own order - no scan of ended rows, no sort (MUTATE: drop the index, or change its predicate)", async () => {
+    // The sweep's query as sweepSponsorDeals issues it from the route (no org scope). Pinned against the source first, so a
+    // change to the sweep's WHERE or ORDER BY reds here, where the index has to change with it.
+    const source = readFileSync(resolve(__dirname, "../../usecases/sponsor-deals.ts"), "utf8");
+    expect(source, "the sweep still reads open deals by this predicate, in this order").toMatch(
+      /from sponsor_orders\s+where deal_status <> 'ended' \$\{scope\}\s+order by created_at, id`/,
+    );
+    const SWEEP =
+      "select id, org_id, deal_status, competition_id, ends_at, checkout_session_id from sponsor_orders where deal_status <> 'ended' order by created_at, id";
+    // A test database is too small for the planner to prefer any index on cost, so the seq scan and the bitmap scan (which
+    // reads in heap order and sorts after) are priced out: what is left is whether an index CAN serve the query - its predicate
+    // implied by the WHERE, its key the ORDER BY.
+    const plan = await sql.begin(async (tx) => {
+      await tx`set local enable_seqscan = off`;
+      await tx`set local enable_bitmapscan = off`;
+      return JSON.stringify(await tx.unsafe(`explain (format json) ${SWEEP}`));
+    });
+    expect(plan).toContain('"Index Name":"sponsor_orders_open_sweep_idx"');
+    expect(plan, "keyed on the sweep's order: nothing to sort").not.toContain('"Node Type":"Sort"');
+  });
+
   // D6: the legacy block is the file's own text between its markers, run as the migration runs it, in a transaction that
   // is rolled back. In the migration it runs BEFORE the NOT NULLs and before every CHECK on the table, so the test lifts
   // them (each CHECK's catalog definition is kept), plants a pre-migration row (no deal columns, no sponsor: V283's set

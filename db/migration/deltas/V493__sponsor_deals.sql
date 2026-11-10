@@ -198,3 +198,8 @@ create unique index sponsor_orders_one_live_per_sponsor on sponsor_orders (spons
 -- a user delete is rare and scans the table once (the V492 convention).
 create index sponsor_orders_sponsor_idx on sponsor_orders (sponsor_id);
 create index sponsor_orders_competition_idx on sponsor_orders (competition_id) where competition_id is not null;
+-- The hourly sweep (sweepSponsorDeals, usecases/sponsor-deals.ts) reads every org's open and live deals:
+--   where deal_status <> 'ended' order by created_at, id
+-- Ended and legacy rows only accumulate, so without this the sweep scans the whole table each hour. Partial on the sweep's own
+-- predicate (verbatim, so the planner can prove it) and keyed on its order, so the scan walks only the open deals, in order.
+create index sponsor_orders_open_sweep_idx on sponsor_orders (created_at, id) where deal_status <> 'ended';
