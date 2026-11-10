@@ -477,11 +477,18 @@ describe("bracketTitleOf — champion, joint winners, vacant (X-CH-1, X-CH-3)", 
     expect(bracketTitleOf([finalRow({ status: "scheduled", outcome: { kind: "double_walkover" } })])).toBeNull();
   });
 
-  it("a vacant first grand final does not owe a reset: the reset withholds only for a result that makes it owed", () => {
+  it("a vacant first grand final with its conditional reset still scheduled: the title is WITHHELD (the reset cannot be proven unnecessary)", () => {
     // DE: a double-walkover grand final has no winner, so a later CONDITIONAL reset is not provably unnecessary → withheld.
     const gf = ko("gf", { round_no: 4, is_final: true, home_entrant_id: "wb", away_entrant_id: "lb", status: "forfeited", outcome: { kind: "double_walkover" } });
     const reset = ko("reset", { round_no: 5, is_final: true, conditional: true, status: "scheduled" });
     expect(bracketTitleOf([gf, reset])).toBeNull();
+  });
+
+  it("a joint ruling on a final with an EMPTY seat titles nobody (the guard: a joint pair needs both sides seated)", () => {
+    // The engine throws joint_winners_side_missing; the read must never invent a one-sided pair.
+    for (const seats of [{ away_entrant_id: null }, { home_entrant_id: null }, { away_entrant_id: undefined }]) {
+      expect(bracketTitleOf([finalRow({ outcome: null, joint_winners_at: "2026-11-10T10:00:00Z", ...seats })]), JSON.stringify(seats)).toBeNull();
+    }
   });
 
   it("titleEntrantIds: null and every kind (the empty case first)", () => {
@@ -547,6 +554,17 @@ describe("C16 — the decisive stage comes from the progression graph, not from 
     expect(decisiveStageOf([group, ko, pl])?.id).toBe("ko");
   });
 
+  it("m5 (PO ruling): a group feeding a Cup (ranks 1-4) AND a Bowl (ranks 5-8, higher seq) is titled by the CUP", () => {
+    const group = stage({ id: "g", seq: 1, kind: "group", status: "complete" });
+    const cup = stage({ id: "cup", seq: 2, kind: "knockout", feeds_from: [{ stageId: "g", side: "winners", top: true }] });
+    const bowl = stage({ id: "bowl", seq: 3, kind: "knockout", feeds_from: [{ stageId: "g", side: "winners" }] });
+    expect(decisiveStageOf([group, cup, bowl])?.id).toBe("cup");
+    expect(decisiveStageOf([bowl, group, cup])?.id, "any input order").toBe("cup");
+    // Still ambiguous (neither takes rank 1): the highest seq, as before.
+    const a = stage({ id: "a", seq: 2, kind: "knockout", feeds_from: [{ stageId: "g", side: "winners" }] });
+    expect(decisiveStageOf([group, a, bowl])?.id).toBe("bowl");
+  });
+
   it("no feed declared anywhere → the highest seq, as before; empty list → undefined", () => {
     expect(decisiveStageOf([stage({ id: "a", seq: 1 }), stage({ id: "b", seq: 2 })])?.id).toBe("b");
     expect(decisiveStageOf([])).toBeUndefined();
@@ -573,7 +591,7 @@ describe("stageFeedsOf — the stored progression, read as edges", () => {
 
   it("'previous' resolves by seq, an explicit stageId by id; roundLosers is the losers' side, a cut the winners'", () => {
     const feeds = stageFeedsOf(rows);
-    expect(feeds.get("ko")).toEqual([{ stageId: "g", side: "winners" }]);
+    expect(feeds.get("ko")).toEqual([{ stageId: "g", side: "winners", top: true }]);
     expect(feeds.get("pl")).toEqual([{ stageId: "ko", side: "losers" }]);
     expect(feeds.size, "edges checked").toBe(2);
   });
@@ -588,11 +606,21 @@ describe("stageFeedsOf — the stored progression, read as edges", () => {
     expect(feeds.size).toBe(0);
   });
 
+  it("top: a rankRange 1-4 cut and a rankRange 5-8 cut are told apart, per take kind", () => {
+    const src = (take: unknown[]) => stageFeedsOf([{ id: "a", seq: 1, progression: null }, { id: "b", seq: 2, progression: { sources: [{ stage: "previous", take }] } }]).get("b")![0]!;
+    expect(src([{ kind: "rankRange", from: 1, to: 4 }]).top).toBe(true);
+    expect(src([{ kind: "rankRange", from: 5, to: 8 }]).top).toBeUndefined();
+    expect(src([{ kind: "topNPerGroup", n: 2 }]).top).toBe(true);
+    expect(src([{ kind: "bestNth", nth: 3, count: 2 }]).top).toBeUndefined();
+    expect(src([{ kind: "picks", picks: [{ pool: "A", rank: 1 }] }]).top).toBe(true);
+    expect(src([{ kind: "picks", picks: [{ pool: "A", rank: 2 }] }]).top).toBeUndefined();
+  });
+
   it("a source with no take array is the winners' side (the default), not the losers'", () => {
     const feeds = stageFeedsOf([
       { id: "a", seq: 1, progression: null },
       { id: "b", seq: 2, progression: { sources: [{ stage: "previous" }] } },
     ]);
-    expect(feeds.get("b")).toEqual([{ stageId: "a", side: "winners" }]);
+    expect(feeds.get("b")).toEqual([{ stageId: "a", side: "winners", top: true }]);
   });
 });

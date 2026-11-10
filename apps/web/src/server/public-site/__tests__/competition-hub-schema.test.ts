@@ -230,6 +230,9 @@ describe("CompetitionHubDoc — knockouts", () => {
     expect(parsed).toBe(3);
     expect(issuesOf(view({ title: null }))).toEqual([{ path: "knockouts.0.title", code: "custom" }]);
     expect(issuesOf(view({ championFixtureId: null }))).toEqual([{ path: "knockouts.0.title", code: "custom" }]);
+    // m6: a joint title's winners must be the deciding final's two sides (f1's sides are e1 and e2).
+    expect(issuesOf(view({ title: { kind: "joint", winners: ["e1", "e9"] } }))).toEqual([{ path: "knockouts.0.title.winners", code: "custom" }]);
+    expect(issuesOf(view({ title: { kind: "joint", winners: ["e2", "e1"] } })), "order is free").toEqual([]);
     // A joint title names exactly two winners; a champion names one id.
     expect(issuesOf(view({ title: { kind: "joint", winners: ["e1"] } })).length).toBeGreaterThan(0);
     expect(issuesOf(view({ title: { kind: "champion" } })).length).toBeGreaterThan(0);

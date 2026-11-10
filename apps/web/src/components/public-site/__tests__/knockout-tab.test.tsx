@@ -1853,6 +1853,17 @@ describe("KnockoutTab — the title banner: joint winners and a vacant title", (
     for (const id of ["champion", "joint", "vacant"]) expect(h).not.toContain(`data-testid="mh-knockout-${id}-${VIEW}"`);
   });
 
+  it("m1: a document cached BEFORE W4 has no `title` at all (undefined, not null): no banner, no throw", () => {
+    const old = doneDoc("f1");
+    const noTitle = {
+      ...old,
+      knockouts: old.knockouts.map((k) => Object.fromEntries(Object.entries(k).filter(([key]) => key !== "title"))),
+    } as unknown as CompetitionHubDocT;
+    expect(noTitle.knockouts[0]).not.toHaveProperty("title");
+    const h = render(noTitle);
+    for (const id of ["champion", "joint", "vacant"]) expect(h).not.toContain(`data-testid="mh-knockout-${id}-${VIEW}"`);
+  });
+
   it("JOINT: both finalists named under ONE crown, with the Joint winners label, and no 'Beat X' line", () => {
     const h = render(titled({ kind: "joint", winners: ["dev", "eli"] }));
     const banner = sliceFrom(h, `mh-knockout-joint-${VIEW}`);
