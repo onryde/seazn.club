@@ -81,16 +81,49 @@ async function division(auth: AuthCtx, compId: string, slug: string) {
 }
 
 type Snap = [stageId: string, poolId: string | null, order: string[]];
-/** The snapshots, written in the order given, by ONE backend: a pooled statement each could land on two connections,
- *  whose different target pages would make the physical order something other than the write order. */
-async function writeInOrder(snaps: Snap[]) {
-  await sql.begin(async (tx) => {
-    for (const [stageId, poolId, order] of snaps) {
-      await tx`
-        insert into standings_snapshots (stage_id, pool_id, rows, computed_through_seq)
-        values (${stageId}, ${poolId}, ${tx.json(placementTable(order).rows as never)}, 0)`;
+
+/** Thrown inside the write transaction to roll it back when the heap did not lay the rows out as written. */
+class Misplaced extends Error {}
+
+/** The physical (ctid) order of the stored snapshots, as the stage/pool labels the caller gave. */
+async function physicalOrder(q: typeof sql, stageIds: string[], label: (stageId: string, poolId: string | null) => string) {
+  const rows = await q<{ stage_id: string; pool_id: string | null }[]>`
+    select stage_id, pool_id from standings_snapshots where stage_id in ${q(stageIds)} order by ctid`;
+  return rows.map((r) => label(r.stage_id, r.pool_id));
+}
+
+/**
+ * The snapshots, written in the order given, by ONE backend, with the heap order PROVEN rather than assumed.
+ *
+ * Physical order is where the heap puts a tuple, not the order it was written: `standings_snapshots` is shared by ~20
+ * DB test files in one CI job, and once rows are deleted and vacuumed a new tuple may take a free slot on an EARLIER
+ * page (CI saw ["A","KO","B"] for a KO, B, A write). So the table is locked against concurrent writers for the write,
+ * the stored order is read back inside the same transaction, and a layout that is not the written order is rolled back
+ * and retried. Never assumed to have worked: after MAX_ATTEMPTS it refuses, naming the order it got.
+ */
+const MAX_ATTEMPTS = 25;
+async function writeInOrder(snaps: Snap[], label: (stageId: string, poolId: string | null) => string) {
+  const want = snaps.map(([stageId, poolId]) => label(stageId, poolId));
+  const stageIds = [...new Set(snaps.map(([stageId]) => stageId))];
+  let got: string[] = [];
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      await sql.begin(async (tx) => {
+        await tx`lock table standings_snapshots in share row exclusive mode`;
+        for (const [stageId, poolId, order] of snaps) {
+          await tx`
+            insert into standings_snapshots (stage_id, pool_id, rows, computed_through_seq)
+            values (${stageId}, ${poolId}, ${tx.json(placementTable(order).rows as never)}, 0)`;
+        }
+        got = await physicalOrder(tx as unknown as typeof sql, stageIds, label);
+        if (got.join() !== want.join()) throw new Misplaced();
+      });
+      return attempt;
+    } catch (e) {
+      if (!(e instanceof Misplaced)) throw e;
     }
-  });
+  }
+  throw new Error(`the heap never stored the snapshots in write order [${want}] in ${MAX_ATTEMPTS} attempts (last: [${got}])`);
 }
 
 beforeAll(async () => {
@@ -117,11 +150,15 @@ beforeAll(async () => {
   const ids = entrants.map((e) => e.id);
 
   // The worst write order: the knockout's placement snapshot, then Pool B, then Pool A.
-  await writeInOrder([
-    [ko!.id, null, ids.slice(0, 4)],
-    [group!.id, pools.find((p) => p.key === "B")!.id, [ids[1]!, ids[3]!, ids[5]!]],
-    [group!.id, pools.find((p) => p.key === "A")!.id, [ids[0]!, ids[2]!, ids[4]!]],
-  ]);
+  const poolKey = (id: string | null) => pools.find((p) => p.id === id)?.key ?? "?";
+  await writeInOrder(
+    [
+      [ko!.id, null, ids.slice(0, 4)],
+      [group!.id, pools.find((p) => p.key === "B")!.id, [ids[1]!, ids[3]!, ids[5]!]],
+      [group!.id, pools.find((p) => p.key === "A")!.id, [ids[0]!, ids[2]!, ids[4]!]],
+    ],
+    (stageId, poolId) => (stageId === ko!.id ? "KO" : poolKey(poolId)),
+  );
 
   scene = { auth, orgSlug, compSlug: comp.slug, groupId: group!.id, koId: ko!.id, pools: [...pools] };
 }, 120_000);
