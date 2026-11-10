@@ -80,7 +80,7 @@ async function drive(n: number, opts: { qualified?: number } = {}): Promise<stri
     const drafts =
       opts.qualified !== undefined
         ? buildTemplateStages("qualifying_main", { qualified: opts.qualified, swissRounds: 5, poolCount: 2, legs: 1 })
-        : formatStagesFor("qualifying_main", { qualified: 99, swissRounds: 5, poolCount: 2, legs: 1, standingsCarry: "none" });
+        : formatStagesFor("qualifying_main", { qualified: 99, swissRounds: 5, poolCount: 2, legs: 1, standingsCarry: "none", thirdPlace: "shared" });
     const ids: string[] = [];
     for (const [i, d] of drafts.entries()) {
       const [stage] = await createStages(auth, division.id, CreateStage.parse({ seq: i + 1, kind: d.kind, name: d.name, config: d.config, progression: d.progression }));

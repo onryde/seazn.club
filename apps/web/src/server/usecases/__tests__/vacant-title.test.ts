@@ -144,7 +144,9 @@ describe.skipIf(!HAS_DB)("W4 B5a T11: both finalists out leaves the title vacant
     expect(final.status).toBe("scheduled");
   });
 
-  it("X-CH-3 only the deciding final goes vacant: a third-place match with both sides out stays open", async () => {
+  it("X-CH-3 only the deciding final is the TITLE's: a third-place match with both sides out is X-TP-7's departure double walkover, never a vacant title", async () => {
+    // B4 T9 (X-TP-7) supersedes the hold this test used to pin ("stays open"): the bronze match is settled by the same
+    // no-event write, and the deciding final is untouched - nobody's title is vacant while its finalists are in.
     const s = await seedBracket({
       sport: "badminton",
       variant: declaredVariant("badminton", "bwf"),
@@ -160,7 +162,9 @@ describe.skipIf(!HAS_DB)("W4 B5a T11: both finalists out leaves the title vacant
     expect([b.home_entrant_id, b.away_entrant_id].every((x) => x !== null), "rig: both bronze seats filled").toBe(true);
     await bothOut(s, b.home_entrant_id!, b.away_entrant_id!);
     const after = await fixtureRow(b.id);
-    expect([after.status, after.outcome], "the bronze match is Task 9's, not this task's").toEqual(["scheduled", null]);
+    expect(after.outcome, "the bronze match is a departure double walkover").toEqual({ kind: "double_walkover" });
+    const final = await finalOf(s.stageId);
+    expect([final.status, final.outcome], "the deciding final is untouched").toEqual(["scheduled", null]);
   });
 
   it("X-CH-3 reinstating one finalist reverses it: a walkover to them, champion; reinstating the other re-opens the final", async () => {
