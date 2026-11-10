@@ -231,14 +231,15 @@ export function SponsorPackages({
     [orgId],
   );
 
-  /** Packages and deals (the orders list), as data — no state. */
+  /** Packages and deals (the orders list), as data — no state. Without the plan only the deals are read: their exits stay
+   *  (final review m1), the packages are selling and are not shown. */
   const fetchSponsorship = useCallback(
     () =>
       Promise.all([
-        api("/sponsor-packages") as Promise<PackageItem[]>,
+        hasMonetize ? (api("/sponsor-packages") as Promise<PackageItem[]>) : Promise.resolve([] as PackageItem[]),
         api("/sponsor-deals") as Promise<SponsorDeal[]>,
       ]),
-    [api],
+    [api, hasMonetize],
   );
 
   /** Re-read after an action (an event, so awaiting in place is fine). */
@@ -248,11 +249,11 @@ export function SponsorPackages({
     setDeals(rows);
   }, [fetchSponsorship]);
 
-  // The first read, for a plan that has the feature: set from the request's
+  // The first read, on every plan (final review m1: an org that lost the
+  // feature still reads its deals, to exit them): set from the request's
   // own callback (never synchronously in the effect), ignored once
   // superseded. A failed first read stays silent, as before.
   useEffect(() => {
-    if (!hasMonetize) return;
     let ignore = false;
     fetchSponsorship().then(
       ([pkgs, rows]) => {
@@ -265,7 +266,7 @@ export function SponsorPackages({
     return () => {
       ignore = true;
     };
-  }, [hasMonetize, fetchSponsorship]);
+  }, [fetchSponsorship]);
 
   async function run(fn: () => Promise<void>, opts: { write?: SponsorWrite; dealWrite?: boolean } = {}) {
     setBusy(true);
@@ -437,14 +438,112 @@ export function SponsorPackages({
   const priceInvalid = draft.price.trim() !== "" && !(Number.parseFloat(draft.price) > 0);
   const sentUrl = sent && payLinkStillOpen(deals, sent.deal) ? sent.url : null;
 
-  if (!hasMonetize) {
-    return (
-      <p className="text-sm text-slate-500">
-        {msg("sponsors.sell.upsell")}{" "}
-        <Link href={billingHref} className="text-purple-600 underline">
-          {msg("settings.upgrade.link")}
-        </Link>
+  // The Orders list: every deal and the exits it offers (End now, Refund, the evidence pack). It renders on ANY plan (final
+  // review m1): an org that lost `sponsors.monetize` must still be able to take a live sponsor off its pages, and neither
+  // /end nor /refund asks the plan. Only what sells needs it - the package form, Send invoice and Resend (the server refuses
+  // an invoice without the plan, 402).
+  const ordersList = (
+    <div>
+      <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+        {msg("sponsors.orders.title")}
       </p>
+      {deals.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-slate-200 p-4 text-center text-sm text-slate-400">
+          {msg("sponsors.orders.empty")}
+        </p>
+      ) : (
+        <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">
+          {deals.map((deal) => {
+            const actions = allowedActions(deal);
+            const chip = paymentChip(deal);
+            return (
+              <li key={deal.id} className="flex flex-wrap items-center gap-3 px-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-slate-800">{deal.sponsor_name}</p>
+                  {deal.sponsor_email ? (
+                    <p className="truncate text-xs text-slate-400">{deal.sponsor_email}</p>
+                  ) : null}
+                </div>
+                <span className="text-sm tabular-nums text-slate-600">
+                  {money(deal.amount_cents, deal.currency)}
+                </span>
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${chip.className}`}>
+                  {msg(chip.key)}
+                </span>
+                {/* The row's actions wrap as one group under the name on a phone. */}
+                <div className="flex flex-wrap items-center gap-1">
+                  {hasMonetize && (actions.includes("send_invoice") || actions.includes("resend_invoice")) ? (
+                    <button
+                      type="button"
+                      data-testid={`order-resend-${deal.id}`}
+                      disabled={busy}
+                      onClick={() => resendInvoice(deal)}
+                      className="btn flex items-center gap-1.5 text-xs"
+                    >
+                      <Send className="h-3.5 w-3.5" />
+                      {msg("sponsors.order.resend")}
+                    </button>
+                  ) : null}
+                  {actions.includes("end_now") ? (
+                    <button
+                      type="button"
+                      data-testid={`order-end-${deal.id}`}
+                      disabled={busy}
+                      onClick={() => endDealNow(deal)}
+                      className="btn flex items-center gap-1.5 text-xs text-red-500 hover:bg-red-50"
+                    >
+                      <CircleStop className="h-3.5 w-3.5" />
+                      {msg("sponsors.order.endNow")}
+                    </button>
+                  ) : null}
+                  {actions.includes("refund") ? (
+                    <button
+                      type="button"
+                      data-testid={`order-refund-${deal.id}`}
+                      disabled={busy}
+                      onClick={() => refundDeal(deal)}
+                      className="btn flex items-center gap-1.5 text-xs text-red-500 hover:bg-red-50"
+                    >
+                      <Undo2 className="h-3.5 w-3.5" />
+                      {msg("sponsors.order.refund")}
+                    </button>
+                  ) : null}
+                  {deal.disputed_at || deal.dispute_id ? (
+                    // Same rail as registrations: one document, mapped to
+                    // Stripe's evidence fields, downloaded from the flagged row.
+                    <a
+                      data-testid={`order-evidence-${deal.id}`}
+                      href={`/api/v1/orgs/${orgId}/sponsor-deals/${deal.id}/evidence`}
+                      download
+                      className="btn btn-ghost text-xs font-medium text-rose-700"
+                      title={msg("sponsors.order.evidenceTitle")}
+                    >
+                      {msg("sponsors.order.evidence")}
+                    </a>
+                  ) : null}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+
+  if (!hasMonetize) {
+    // The upsell, then the deals the org already has with their exits - and nothing below the upsell when it has none (the
+    // Orders empty line invites a Send this plan cannot make).
+    return (
+      <div data-testid="sponsor-packages" className="space-y-4">
+        <p className="text-sm text-slate-500">
+          {msg("sponsors.sell.upsell")}{" "}
+          <Link href={billingHref} className="text-purple-600 underline">
+            {msg("settings.upgrade.link")}
+          </Link>
+        </p>
+        {error && <p className="text-sm text-red-600">{error}</p>}
+        {deals.length > 0 ? ordersList : null}
+      </div>
     );
   }
 
@@ -687,92 +786,7 @@ export function SponsorPackages({
         </ul>
       )}
 
-      {/* Orders (the deals) */}
-      <div>
-        <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-          {msg("sponsors.orders.title")}
-        </p>
-        {deals.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-slate-200 p-4 text-center text-sm text-slate-400">
-            {msg("sponsors.orders.empty")}
-          </p>
-        ) : (
-          <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">
-            {deals.map((deal) => {
-              const actions = allowedActions(deal);
-              const chip = paymentChip(deal);
-              return (
-                <li key={deal.id} className="flex flex-wrap items-center gap-3 px-3 py-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-slate-800">{deal.sponsor_name}</p>
-                    {deal.sponsor_email ? (
-                      <p className="truncate text-xs text-slate-400">{deal.sponsor_email}</p>
-                    ) : null}
-                  </div>
-                  <span className="text-sm tabular-nums text-slate-600">
-                    {money(deal.amount_cents, deal.currency)}
-                  </span>
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${chip.className}`}>
-                    {msg(chip.key)}
-                  </span>
-                  {/* The row's actions wrap as one group under the name on a phone. */}
-                  <div className="flex flex-wrap items-center gap-1">
-                    {actions.includes("send_invoice") || actions.includes("resend_invoice") ? (
-                      <button
-                        type="button"
-                        data-testid={`order-resend-${deal.id}`}
-                        disabled={busy}
-                        onClick={() => resendInvoice(deal)}
-                        className="btn flex items-center gap-1.5 text-xs"
-                      >
-                        <Send className="h-3.5 w-3.5" />
-                        {msg("sponsors.order.resend")}
-                      </button>
-                    ) : null}
-                    {actions.includes("end_now") ? (
-                      <button
-                        type="button"
-                        data-testid={`order-end-${deal.id}`}
-                        disabled={busy}
-                        onClick={() => endDealNow(deal)}
-                        className="btn flex items-center gap-1.5 text-xs text-red-500 hover:bg-red-50"
-                      >
-                        <CircleStop className="h-3.5 w-3.5" />
-                        {msg("sponsors.order.endNow")}
-                      </button>
-                    ) : null}
-                    {actions.includes("refund") ? (
-                      <button
-                        type="button"
-                        data-testid={`order-refund-${deal.id}`}
-                        disabled={busy}
-                        onClick={() => refundDeal(deal)}
-                        className="btn flex items-center gap-1.5 text-xs text-red-500 hover:bg-red-50"
-                      >
-                        <Undo2 className="h-3.5 w-3.5" />
-                        {msg("sponsors.order.refund")}
-                      </button>
-                    ) : null}
-                    {deal.disputed_at || deal.dispute_id ? (
-                      // Same rail as registrations: one document, mapped to
-                      // Stripe's evidence fields, downloaded from the flagged row.
-                      <a
-                        data-testid={`order-evidence-${deal.id}`}
-                        href={`/api/v1/orgs/${orgId}/sponsor-deals/${deal.id}/evidence`}
-                        download
-                        className="btn btn-ghost text-xs font-medium text-rose-700"
-                        title={msg("sponsors.order.evidenceTitle")}
-                      >
-                        {msg("sponsors.order.evidence")}
-                      </a>
-                    ) : null}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
+      {ordersList}
     </div>
   );
 }

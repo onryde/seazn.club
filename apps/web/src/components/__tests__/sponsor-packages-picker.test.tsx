@@ -26,6 +26,9 @@
 // Batch G (New-1, New-2, New-3, m1 remainder):
 //   K12 intent      `has_payment_intent` -> `marked_paid_by === null` (the old twin)  -> "on the SAME fact the server refunds on"
 //   K13 banner      drop payLinkStillOpen (show every sent link)                      -> "the Invoice sent banner shows a pay link only while"
+// Final fix (final review m1):
+//   K16 exits       no-plan view back to the upsell alone                            -> "keeps every exit from the deals it already has"
+//   K17 resend gate drop `hasMonetize &&` from Resend                                -> "...: no Resend without the plan"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 
@@ -511,16 +514,81 @@ describe("a refusal reads the dictionary's words for its CODE, never the server'
   });
 });
 
-describe("the gate and the first read are unchanged", () => {
-  it("a plan without sponsors.monetize reads nothing and shows the upsell (the empty case of the whole console)", async () => {
+describe("the gate and the first read", () => {
+  it("a plan without sponsors.monetize and no deals reads only the deal list, shows the upsell, and no Orders (the empty case of the whole console; final review m1)", async () => {
     const m = await mount({ hasMonetize: false });
-    expect(net.calls).toEqual([]);
+    expect(net.calls.map((c) => `${c.method} ${c.url}`), "the deals are read to offer their exits; packages are not").toEqual([
+      `GET ${API}/sponsor-deals`,
+    ]);
     expect(m.text()).toContain(msg("sponsors.sell.upsell"));
+    expect(m.text(), "no Orders heading for an org with nothing to exit").not.toContain(msg("sponsors.orders.title"));
+    expect(m.text(), "and never the 'send a package invoice' empty line it cannot act on").not.toContain(msg("sponsors.orders.empty"));
   });
 
   it("the first read is packages + deals - the packages and the deal list, nothing else (counted)", async () => {
     await mount();
     expect(net.calls.map((c) => `${c.method} ${c.url}`).sort()).toEqual([`GET ${API}/sponsor-deals`, `GET ${API}/sponsor-packages`]);
+  });
+});
+
+describe("a plan without sponsors.monetize keeps every exit from the deals it already has (final review m1)", () => {
+  // The exits are not the plan's: POST /end and /refund ask no feature (server/usecases/sponsor-deals.ts endDealNow,
+  // refundDeal), while an invoice does (sendDealInvoice -> assertOnlineAllowed, 402). So after a downgrade the Orders rows
+  // offer End now, Refund and the evidence pack exactly as allowedActions says, and nothing that sells: no package form, no
+  // Send invoice, no Resend. Typed from the spec's action table (§5.2), not read from the component.
+  const LIVE = deal({ id: "d-live", deal_status: "live", payment_status: "paid", has_payment_intent: true });
+  const OPEN = deal({ id: "d-open", sponsor_id: "sp-c", sponsor_name: "Quay Chandlers", deal_status: "awaiting_payment" });
+  const LOST = deal({ id: "d-lost", sponsor_id: "sp-b", sponsor_name: "Ridge Cycles", deal_status: "ended", ended_reason: "dispute_lost", payment_status: "refunded", dispute_id: "dp_1" });
+
+  it("a live paid deal, an unpaid open one and a lost dispute: End now and Refund where offered, the evidence link, no Resend, no Send invoice (all three rows)", async () => {
+    answerWith("GET", "/sponsor-deals", { body: { data: [LIVE, OPEN, LOST] } });
+    const m = await mount({ hasMonetize: false });
+    expect(m.text()).toContain(msg("sponsors.sell.upsell"));
+    expect(m.text()).toContain(msg("sponsors.orders.title"));
+    const ROWS: [string, { end: boolean; refund: boolean; evidence: boolean }][] = [
+      ["d-live", { end: true, refund: true, evidence: false }],
+      ["d-open", { end: true, refund: false, evidence: false }],
+      ["d-lost", { end: false, refund: false, evidence: true }],
+    ];
+    let checked = 0;
+    for (const [id, want] of ROWS) {
+      expect(m.has(`order-end-${id}`), `${id} End now`).toBe(want.end);
+      expect(m.has(`order-refund-${id}`), `${id} Refund`).toBe(want.refund);
+      expect(m.has(`order-evidence-${id}`), `${id} evidence`).toBe(want.evidence);
+      expect(m.has(`order-resend-${id}`), `${id}: no Resend without the plan (the server would answer 402)`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    // Nothing that sells: neither package's Send invoice opener, the form, nor the package create.
+    for (const id of ["invoice-open-p1", "invoice-open-p2", "invoice-send", "invoice-sponsor"]) expect(m.has(id), id).toBe(false);
+    expect(m.text()).not.toContain(msg("sponsors.pkg.create"));
+    expect(callsTo("GET", "/sponsor-packages"), "the packages are not read").toEqual([]);
+  });
+
+  it("the pair: with the plan, the same unpaid open deal DOES offer Resend (so the gate, not the deal, hid it)", async () => {
+    answerWith("GET", "/sponsor-deals", { body: { data: [OPEN] } });
+    const m = await mount();
+    expect(m.has("order-resend-d-open")).toBe(true);
+  });
+
+  it("End now still asks, POSTs /sponsor-deals/{id}/end and re-reads the deals; a refusal reads its own words", async () => {
+    answerWith("GET", "/sponsor-deals", { body: { data: [LIVE] } });
+    answerWith("POST", "/sponsor-deals/d-live/end", { body: { ok: true, data: { ...LIVE, deal_status: "ended", ended_reason: "ended_now" } } });
+    const m = await mount({ hasMonetize: false });
+    const readsBefore = callsTo("GET", "/sponsor-deals").length;
+    answerWith("GET", "/sponsor-deals", { body: { data: [{ ...LIVE, deal_status: "ended", ended_reason: "ended_now" }] } });
+    m.click("order-end-d-live");
+    await flush();
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(callsTo("POST", "/end").map((c) => c.url)).toEqual([`${API}/sponsor-deals/d-live/end`]);
+    expect(callsTo("GET", "/sponsor-deals").length, "re-read").toBe(readsBefore + 1);
+    expect(m.has("order-end-d-live"), "ended: nothing left to end").toBe(false);
+    expect(m.has("order-refund-d-live"), "a paid deal ended by End now can still be refunded").toBe(true);
+
+    answerWith("POST", "/sponsor-deals/d-live/refund", refuseWith(409, "deal_not_refundable"));
+    m.click("order-refund-d-live");
+    await flush();
+    expect(m.text()).toContain(msg("sponsors.error.notRefundable"));
   });
 });
 
