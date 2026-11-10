@@ -42,7 +42,7 @@ import { FakeDeniedDriver, FakeKnockoutDriver, FakeLeagueDriver, FakeSwissDriver
 import { FakeMultiStageDriver, type FakeMultiStageOptions } from "./fake-formats-driver.ts";
 import { ModelFakeDriver } from "./model-fake-driver.ts";
 import { finishRefusal, finishRowsOf, judgeFinish, swissRefusedCall, type FinishRow } from "./swiss-finish-twin.ts";
-import { wireCodeFor } from "./product-text.ts";
+import { schemasText, wireCodeFor } from "./product-text.ts";
 import { deps } from "./run-deps.ts";
 import { denied } from "../lib/scenarios/denied.ts";
 import { expectedGate } from "../lib/format-gates-copy.ts";
@@ -1585,7 +1585,7 @@ describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in benea
     expect(/\nexport async function gateRosterEligibility\([\s\S]*?\n\}\n/.exec(read("apps/web/src/server/usecases/registration-eligibility.ts"))?.[0]).toMatch(/throw new HttpError\(\s*422,[^;]*"ELIGIBILITY_VIOLATION"/);
     expect(/\nexport async function gateLineupSuspensions\([\s\S]*?\n\}\n/.exec(read("apps/web/src/server/usecases/discipline.ts"))?.[0]).toMatch(/throw new HttpError\(\s*422,[^;]*"SUSPENDED_PLAYER"/);
     // A malformed person id never reaches the usecase: a Uuid in the schema, a ZodError answered 400 VALIDATION.
-    expect(read("apps/web/src/server/api-v1/schemas.ts")).toMatch(/export const LineupSlotInput = z\.object\(\{\s*person_id: Uuid,/);
+    expect(schemasText()).toMatch(/export const LineupSlotInput = z\.object\(\{\s*person_id: Uuid,/);
     expect(zodBranchFlaws(zodErrorBranch(read("apps/web/src/server/api-v1/http.ts")), zodBranchNamedRows())).toEqual([]);
     // A second PUT replaces the first: delete, then insert.
     const del = put.indexOf("delete from lineups where fixture_id = ${fixtureId} and entrant_id = ${entrantId}");

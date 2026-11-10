@@ -15,7 +15,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { RelayHeartbeat, RelayHeartbeatReply, RelayJobSession, RelayPhaseEndpoint, RelayPhaseReply } from "../apps/web/src/server/api-v1/schemas.ts";
+import { RelayHeartbeat, RelayHeartbeatReply, RelayJobSession, RelayPhaseEndpoint, RelayPhaseReply } from "../apps/web/src/server/api-v1/schemas/index.ts";
 
 type Json = Record<string, unknown>;
 

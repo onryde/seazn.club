@@ -18,7 +18,7 @@ import { describe, expect, it } from "vitest";
 // hypothesis, not evidence). Parsing the built body THROUGH this schema is
 // the only assertion that can catch "the API 400s/422s this shape" — a
 // hand-typed expectation of the wire shape would just restate the bug.
-import { PublicRegisterGroupRequest } from "../../../../apps/web/src/server/api-v1/schemas.ts";
+import { PublicRegisterGroupRequest } from "../../../../apps/web/src/server/api-v1/schemas/index.ts";
 import { toWireSubmitBody } from "../drivers/http.ts";
 import type { Captain, Organiser, PayableEntry, RegistrationDivisionTarget } from "../drivers/types.ts";
 import type { PackPerson, PackRegistrationBlock, PackRegistrationEntry } from "../pack-schema.ts";

@@ -7,7 +7,7 @@
 // NOT server-only: also imported by scripts/openapi-gen.ts (the CI drift gate)
 // and the vitest route-coverage test.
 import { z, type ZodType } from "zod";
-import * as S from "./schemas.ts";
+import * as S from "./schemas/index.ts";
 import { matchKeyRoute } from "./key-scopes.ts";
 // Spectator surface W2, Task 5 — imported directly rather than routed through
 // schemas.ts's `S.` namespace (unlike W1's MatchCentreDoc, which schemas.ts
