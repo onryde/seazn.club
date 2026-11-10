@@ -99,7 +99,9 @@ const COLS = [
 ] as const;
 
 export const CreateSponsorInput = z.object({
-  name: z.string().min(1).max(80),
+  // Trimmed BEFORE it is measured (sponsor deals batch J review m3): "   " is no name, and the v1 API is not the form that trims in the
+  // browser. patchOf below makes the same field the patch's.
+  name: z.string().trim().min(1).max(80),
   // http(s) only (R4 S10 fix round 1, m1): zod's `.url()` alone accepts `javascript:` and `data:`, and this url is a
   // redirect target (`/s/[key]`) and a board's href.
   url: z.string().url().max(500).refine(isRedirectableUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),

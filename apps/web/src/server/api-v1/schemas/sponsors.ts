@@ -123,7 +123,8 @@ export const Sponsor = z.object({
 });
 
 export const CreateSponsor = z.object({
-  name: z.string().min(1).max(80),
+  // Trimmed before it is measured, as the runtime twin (usecases/sponsors.ts) does (batch J review m3).
+  name: z.string().trim().min(1).max(80),
   // http(s) only (R4 S10 fix round 1, m1): zod's `.url()` alone accepts `javascript:` and `data:`.
   url: z.string().url().max(500).refine(isRedirectableUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
   logo_path: z.string().max(500).nullish(),
