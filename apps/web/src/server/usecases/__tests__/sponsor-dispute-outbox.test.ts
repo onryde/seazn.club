@@ -378,9 +378,9 @@ describe.skipIf(!HAS_DB)("a card inquiry leaves the sponsor live; the money take
     expect((await orderState(o.orderId)).sponsor_status, "premise: the withdrawal parked the placement").toBe("pending");
 
     expect((await consoleRow(o)).dispute_parked, "parked by the dispute").toBe(true);
-    await expect(patchSponsor(ownerAuth(o), o.sponsorId!, { status: "active" }), "not straight back on").rejects.toMatchObject({ status: 409 });
+    await expect(patchSponsor(ownerAuth(o), o.sponsorId!, { status: "active" }), "not straight back on").rejects.toMatchObject({ status: 409, code: "sponsor_dispute_parked" });
     // Nor the long way round: switched off by hand, the placement would no longer read as parked, and `active` would then pass.
-    await expect(patchSponsor(ownerAuth(o), o.sponsorId!, { status: "inactive" }), "nor off, then on").rejects.toMatchObject({ status: 409 });
+    await expect(patchSponsor(ownerAuth(o), o.sponsorId!, { status: "inactive" }), "nor off, then on").rejects.toMatchObject({ status: 409, code: "sponsor_dispute_parked" });
     expect((await orderState(o.orderId)).sponsor_status, "the placement stays parked").toBe("pending");
   });
 

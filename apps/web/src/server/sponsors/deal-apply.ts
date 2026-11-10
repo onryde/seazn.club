@@ -11,7 +11,7 @@ import "server-only";
 // This module fires no public-page bust (F1): a console caller awaits `expirePublicSponsors` after its commit, and the
 // webhook, dispute and sweep callers keep `deferred`. It exports nothing bust-shaped.
 import type { Tx } from "@/lib/db";
-import { HttpError } from "@/lib/errors";
+import { sponsorRefusal } from "@/lib/sponsor-refusals";
 import { pickRowDeal, type SponsorDeal } from "@/lib/sponsor-deals";
 import type { SponsorTier } from "@/lib/sponsor-tiers";
 import { ensureOrgStreamSettings } from "./stream-settings";
@@ -247,14 +247,14 @@ const LOCKED_BY_LIVE_DEAL = ["tier", "competition_id", "on_stream", "status"] as
 export function assertSponsorPatchAllowed(deals: readonly ServerDeal[], fields: readonly string[]): void {
   const current = deals.filter((d) => !isLegacyDeal(d));
   if (current.some(isLive) && LOCKED_BY_LIVE_DEAL.some((f) => fields.includes(f))) {
-    throw new HttpError(
+    throw sponsorRefusal(
       409,
       "this sponsor has a live deal: its tier, scope, stream and visibility come from the deal — end the deal or add a new one to change them",
       "sponsor_locked_by_deal",
     );
   }
   if (current.some(isOpen) && fields.includes("status")) {
-    throw new HttpError(
+    throw sponsorRefusal(
       409,
       "this sponsor has a deal waiting to go live: it shows once that deal is live",
       "sponsor_has_open_deal",

@@ -11,6 +11,7 @@ import type Stripe from "stripe";
 import { z } from "zod";
 import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { sponsorRefusal } from "@/lib/sponsor-refusals";
 import { requireFeature } from "@/lib/entitlements";
 import { isRedirectableUrl, SPONSOR_URL_HTTP_ONLY } from "@/lib/sponsor-clicks";
 import { patchOf } from "@/lib/zod-patch";
@@ -296,9 +297,10 @@ export async function patchSponsor(
     if (patch.status !== undefined && patch.status !== "pending") {
       const openDispute = locked.deals.some((o) => o.payment_status === "paid" && o.disputed_at !== null);
       if (locked.sponsor.status === "pending" && openDispute) {
-        throw new HttpError(
+        throw sponsorRefusal(
           409,
           "this placement is parked by an open payment dispute — it comes back automatically if the dispute is won",
+          "sponsor_dispute_parked",
         );
       }
     }
@@ -332,13 +334,13 @@ function dealHoldsHistory(d: ServerDeal): boolean {
 }
 
 const holdsHistory = () =>
-  new HttpError(
+  sponsorRefusal(
     409,
     "this sponsor has deal history (money paid or refunded, or a pre-deals order) — end its deals instead",
     "sponsor_has_deal_history",
   );
 const holdsOpenCheckout = () =>
-  new HttpError(
+  sponsorRefusal(
     409,
     "this sponsor has a deal whose payment link could not be closed, or was just paid — try again in a moment, or end the deal instead",
     "sponsor_has_open_checkout",
@@ -614,7 +616,7 @@ const SESSION_REUSE_MARGIN_MS = 10 * 60_000;
 /** Stripe could not do what the deal needs; the deal is left exactly as it was. */
 function stripeUnavailable(what: string, err: unknown, deal: { id: string }): HttpError {
   log.error({ err, dealId: deal.id }, `sponsors: Stripe could not ${what}`);
-  return new HttpError(502, `Stripe could not ${what}, so nothing was changed; try again`, "stripe_unavailable");
+  return sponsorRefusal(502, `Stripe could not ${what}, so nothing was changed; try again`, "stripe_unavailable");
 }
 
 /**
@@ -736,7 +738,7 @@ export async function retireDealSession(
 
 /** A completed session: the sponsor has paid at Stripe and the webhook is on its way (F37). */
 export function paidOnline(): HttpError {
-  return new HttpError(
+  return sponsorRefusal(
     409,
     "The sponsor has already paid this deal online; the payment is being recorded. Refresh in a moment.",
     "deal_paid_online",
@@ -1060,12 +1062,12 @@ export async function refundSponsorOrder(
   });
   // A refund that lost the race to another (or to Stripe's own charge.refunded) is the deal's refusal, coded (review m2).
   if (order.status !== "paid" || !order.payment_intent_id) {
-    throw new HttpError(409, "Only a paid deal can be refunded, and only once", "deal_not_refundable");
+    throw sponsorRefusal(409, "Only a paid deal can be refunded, and only once", "deal_not_refundable");
   }
   // Stripe refuses refunds on charged-back charges; surface the state in our
   // own words before ever calling out (raw Stripe text leaked to the console).
   if (order.disputed_at) {
-    throw new HttpError(
+    throw sponsorRefusal(
       409,
       "This payment has been charged back — a disputed payment can't be refunded. Respond to the dispute instead.",
       "deal_disputed",
