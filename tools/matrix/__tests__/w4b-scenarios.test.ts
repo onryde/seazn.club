@@ -11,8 +11,9 @@ import { DriverMisuse, type FixtureRow, type JointWinnersOut } from "../lib/driv
 import { ATOMIC } from "../lib/scenario-catalogue.ts";
 import { identityOf, planL1Grid } from "../lib/layers.ts";
 import { apiOnlyUiRoute } from "../lib/api-only-ui.ts";
-import type { CompleteObs, ObservedOutcome, ObservedPlace, ObservedTitle } from "../lib/observed.ts";
-import { assertion } from "../lib/scenarios/assertions.ts";
+import type { CompleteObs, ObservedOutcome, ObservedPlace, ObservedRun, ObservedTitle } from "../lib/observed.ts";
+import { assertion, resultsAsPosted } from "../lib/scenarios/assertions.ts";
+import { Recorder } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { ROW_MODE, modeOfBody, thirdPlaceItems, type Q3Obs } from "../lib/scenarios/q3-third-place.ts";
 import { jointWinnersItems, jLineOf, type JLine, type JointObs } from "../lib/scenarios/q4a-joint-winners.ts";
@@ -372,5 +373,27 @@ describe("Q5b: a main-draw loser declines (withdraws) before the plate is propos
     const left = declinesObs({ plateLines: [line("p1", 1, "E5", "E6", "scheduled")] });
     expect(failing(plateDeclinesItems(left)).join("|")).toMatch(/first loser E7 is not seated in the plate/);
     expect(plateDeclinesItems(left).length).toBe(plateDeclinesItems(declinesObs()).length);
+  });
+});
+
+// --- life-results-as-posted and the product's own writes (local selection run: a withdrawal of TWO entrants, a declared joint final) -----------------------
+
+describe("Recorder.productActs: a result the product wrote after a scenario's own organiser act explains itself - and only that one", () => {
+  const obs = (): ObservedRun => ({
+    caseId: "c", facts: [], withdrawal: null, configEdit: null,
+    stages: [{
+      id: "s1", seq: 1, kind: "knockout", config: {}, field: ["a", "b"], fieldSource: "division", generates: [], pairRounds: [], standings: [], complete: null,
+      fixtures: [{ id: "f1", stageId: "s1", poolId: null, roundNo: 1, home: "a", away: "b", status: "forfeited", outcome: { kind: "award", winner: "a", loser: "b", reason: "withdrew" }, declared: null }],
+    }],
+  });
+  it("unexplained, the harness never posted it (red); with the act recorded for THAT fixture it passes; for another fixture it still reds", () => {
+    const rec = new Recorder();
+    const bare = resultsAsPosted(rec, obs());
+    expect(bare).toMatchObject({ verdict: "fail", checked: 1 });
+    rec.productActs.set("other", "the withdrawal of seed 3");
+    expect(resultsAsPosted(rec, obs()).verdict).toBe("fail");
+    rec.productActs.set("f1", "the withdrawal of seed 3");
+    const ok = resultsAsPosted(rec, obs());
+    expect(ok).toMatchObject({ verdict: "pass", checked: 1 });
   });
 });

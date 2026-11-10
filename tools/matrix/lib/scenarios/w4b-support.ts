@@ -52,3 +52,14 @@ export async function playOut(ctx: ScenarioContext, rec: Recorder, setup: Divisi
   }
   throw new Error(`scenario: playOut on stage ${stage.id} still had open lines after ${MAX_PASSES} passes`);
 }
+
+const isDone = (f: FixtureRow): boolean => f.status === "decided" || f.status === "forfeited" || f.status === "abandoned" || f.status === "finalized";
+
+/** Run one organiser act (a withdrawal, a joint-winners declaration) and record every fixture it newly finished - the product wrote those, the harness never
+ *  posted them (Recorder.productActs, read by life-results-as-posted). The act's own result is returned. */
+export async function watchProductWrites<T>(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, what: string, act: () => Promise<T>): Promise<T> {
+  const before = new Set((await ctx.driver.listFixtures(setup.division.id)).filter(isDone).map((f) => f.id));
+  const out = await act();
+  for (const f of await ctx.driver.listFixtures(setup.division.id)) if (isDone(f) && !before.has(f.id)) rec.productActs.set(f.id, what);
+  return out;
+}
