@@ -94,6 +94,12 @@ export function hasOpenDealOn(deals: readonly SponsorDeal[], sponsorId: string, 
   );
 }
 
+/** Is this sponsor under a LIVE deal right now? A live deal keeps the sponsor on the public pages whatever is queued behind it;
+ *  without one, a deal waiting for its payment hides the sponsor until it is live (server/sponsors/deal-apply.ts, step 4). */
+export function hasLiveDeal(deals: readonly SponsorDeal[], sponsorId: string): boolean {
+  return deals.some((d) => d.sponsor_id === sponsorId && d.deal_status === "live");
+}
+
 export function SponsorPackages({
   orgId,
   competitions,
@@ -502,6 +508,13 @@ export function SponsorPackages({
                     >
                       {busy ? "…" : msg("sponsors.order.send")}
                     </button>
+                    {/* The invoice is always a "live when paid" deal, so until it is paid the sponsor drops off the public pages -
+                        unless a live deal is already keeping it there. The club is told, in the form that does it. */}
+                    {hasLiveDeal(deals, chosen.id) ? null : (
+                      <p data-testid="invoice-hidden-note" className="text-xs text-slate-500 sm:col-span-3">
+                        {msg("sponsors.order.hiddenUntilPaid")}
+                      </p>
+                    )}
                   </div>
                 ) : (
                   // An invoice goes to one of the org's sponsors, so an org with none starts there.

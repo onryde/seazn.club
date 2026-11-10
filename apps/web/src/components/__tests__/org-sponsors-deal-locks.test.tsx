@@ -96,6 +96,25 @@ describe("the form: a live deal owns the tier and the competition (sponsor deals
     expect(isDisabled(/<button\b[^>]*>(?:(?!<\/button>)[\s\S])*Save<\/button>/.exec(html)![0].match(/^<button\b[^>]*>/)![0])).toBe(false);
   });
 
+  it("locked: the reason is the selects' accessible description - both selects point at the one note that exists (fix round 1, m1)", () => {
+    const html = formMarkup({ lockedByDeal: true });
+    const noteTag = /<p\b[^>]*data-testid="sponsor-locked-note"[^>]*>/.exec(html)?.[0];
+    expect(noteTag, "premise: the locked form carries the note").toBeDefined();
+    const noteId = /\sid="([^"]+)"/.exec(noteTag!)?.[1];
+    expect(noteId, "the note has an id to be pointed at").toBeTruthy();
+    expect(html.split(`id="${noteId}"`).length - 1, "and exactly one element carries it").toBe(1);
+    const describedBy = (tag: string) => /\saria-describedby="([^"]+)"/.exec(tag)?.[1];
+    expect(describedBy(selectTagHolding(html, msg("sponsors.tier.gold"))), "tier").toBe(noteId);
+    expect(describedBy(selectTagHolding(html, "Spring Cup")), "competition").toBe(noteId);
+  });
+
+  it("unlocked: no note, and the selects describe nothing (a dangling aria-describedby would name an element that is not there)", () => {
+    const html = formMarkup({ lockedByDeal: false });
+    expect(html).not.toContain("sponsor-locked-note");
+    expect(selectTagHolding(html, msg("sponsors.tier.gold"))).not.toContain("aria-describedby");
+    expect(selectTagHolding(html, "Spring Cup")).not.toContain("aria-describedby");
+  });
+
   it("unlocked: the selects are enabled and no reason is shown (the pair)", () => {
     const html = formMarkup({ lockedByDeal: false });
     expect(isDisabled(selectTagHolding(html, msg("sponsors.tier.gold")))).toBe(false);
@@ -205,6 +224,34 @@ describe("Edit hands the form the ROW's lock (the join between the list and the 
     await flush();
     expect(m.text()).toContain(msg("sponsors.error.lockedByDeal"));
     expect(m.text()).not.toContain(SERVER);
+  });
+});
+
+describe("a refused logo upload reads the dictionary's words, never the server's (fix round 1, m6)", () => {
+  it("the upload route's refusal - a sentence, or a structured validation error - shows 'Upload not allowed' and saves nothing (both checked)", async () => {
+    const CASES: [string, unknown][] = [
+      ["Unsupported image type", { ok: false, error: "Unsupported image type" }],
+      ["Invalid input: content_type", { ok: false, error: { code: "VALIDATION", message: "Invalid input: content_type" } }],
+    ];
+    let checked = 0;
+    for (const [serverText, body] of CASES) {
+      calls.length = 0;
+      answer = (url, method) =>
+        url.includes("/content-upload") && method === "POST" ? { status: 415, body } : { status: 200, body: { data: [] } };
+      const m = mount([row({ id: "a", name: "Quay Chandlers" })]);
+      m.edit("Quay Chandlers");
+      const file = new File(["x"], "logo.png", { type: "image/png" });
+      (propsOf(m.form()).onChange as (fn: (p: typeof DRAFT) => unknown) => void)((p) => ({ ...p, file }));
+      (propsOf(m.form()).onSubmit as () => void)();
+      await flush();
+      expect(calls.some((c) => c.url.includes("/content-upload")), `${serverText}: the upload was attempted`).toBe(true);
+      expect(m.text(), serverText).toContain(msg("settings.org.sponsors.uploadNotAllowed"));
+      expect(m.text(), serverText).not.toContain(serverText);
+      expect(m.text(), serverText).not.toContain("[object Object]");
+      expect(calls.filter((c) => c.method === "PATCH"), `${serverText}: nothing was saved`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(CASES.length);
   });
 });
 

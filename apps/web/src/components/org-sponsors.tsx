@@ -5,7 +5,7 @@
 // everything — logo included, uploaded on submit — for both add and edit.
 // Tiers above partner and per-competition scoping are Pro (`sponsors.tiers`);
 // without it the manager is the free un-tiered strip with an upsell note.
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import Link from "@/components/ui/console-link";
 import {
   ArrowDown, ArrowUp, ImagePlus, MousePointerClick, Pencil, Trash2,
@@ -117,6 +117,8 @@ export function SponsorForm({
   // House uploader pattern (org-logo, prose-editor): a real button clicks a
   // ref'd hidden input — label-wrapped file inputs misfire in some browsers.
   const fileRef = useRef<HTMLInputElement>(null);
+  // The deal-lock note's id: the disabled selects point at it so the reason is announced with them, not only shown.
+  const lockNoteId = useId();
   const urlInvalid = value.url.trim() !== "" && !isValidSponsorUrl(value.url);
   return (
       <div className="flex flex-wrap items-start gap-4">
@@ -181,6 +183,7 @@ export function SponsorForm({
                 <select
                   value={value.tier}
                   disabled={busy || lockedByDeal}
+                  aria-describedby={lockedByDeal ? lockNoteId : undefined}
                   onChange={(e) =>
                     onChange((prev) => ({ ...prev, tier: e.target.value as SponsorTier }))
                   }
@@ -200,6 +203,7 @@ export function SponsorForm({
                 <select
                   value={value.competition_id}
                   disabled={busy || lockedByDeal}
+                  aria-describedby={lockedByDeal ? lockNoteId : undefined}
                   onChange={(e) =>
                     onChange((prev) => ({ ...prev, competition_id: e.target.value }))
                   }
@@ -215,7 +219,7 @@ export function SponsorForm({
               </label>
             ) : null}
             {hasTiers && lockedByDeal ? (
-              <p className="text-xs text-slate-500 sm:col-span-2" data-testid="sponsor-locked-note">
+              <p id={lockNoteId} className="text-xs text-slate-500 sm:col-span-2" data-testid="sponsor-locked-note">
                 {msg("sponsors.deal.lockedNote")}
               </p>
             ) : null}
@@ -320,9 +324,9 @@ export function OrgSponsors({
     const json = (await res.json().catch(() => ({}))) as {
       // handler() envelope: { ok, data } — same unwrap as api().
       data?: { upload_url?: string; public_url?: string };
-      error?: string;
     };
-    if (!res.ok) throw new Error(json.error ?? msg("settings.org.sponsors.uploadNotAllowed"));
+    // The envelope's `error` is the server's English sentence (or a structured object): never shown, whatever the status.
+    if (!res.ok) throw new Error(msg("settings.org.sponsors.uploadNotAllowed"));
     const grant = json.data;
     if (!grant?.upload_url || !grant.public_url) {
       throw new Error(msg("settings.org.sponsors.uploadNotAllowed"));

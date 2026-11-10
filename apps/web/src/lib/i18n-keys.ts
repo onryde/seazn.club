@@ -7768,6 +7768,7 @@ export type DictionaryKey =
   | "sponsors.order.email"
   | "sponsors.order.evidence"
   | "sponsors.order.evidenceTitle"
+  | "sponsors.order.hiddenUntilPaid"
   | "sponsors.order.noSponsors"
   | "sponsors.order.refund"
   | "sponsors.order.refundConfirm.body"

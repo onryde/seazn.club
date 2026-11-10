@@ -315,6 +315,11 @@ test("a sponsor under a live deal: On stream tick, tier and competition are lock
     await expect(picker, `${width}: the invoice form picks a sponsor`).toBeVisible();
     await expect(picker.locator("option"), `${width}: one option per sponsor`).toHaveCount(2);
     await expect(picker.locator(`option[value="${lockedId}"]`), `${width}: the 43-character name is listed whole`).toHaveText(LONG);
+    // The form says an unpaid invoice hides the sponsor, unless a live deal already keeps it on the public pages.
+    await picker.selectOption(freeId);
+    await expect(page.getByTestId("invoice-hidden-note"), `${width}: a sponsor with no live deal is told the invoice hides it`).toHaveText(ui("sponsors.order.hiddenUntilPaid"));
+    await picker.selectOption(lockedId);
+    await expect(page.getByTestId("invoice-hidden-note"), `${width}: a sponsor under a live deal is not`).toHaveCount(0);
     await expectNoHorizontalScroll(page);
     checked++;
   }

@@ -312,7 +312,7 @@ export function OnStreamTab(props: OnStreamTabProps) {
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm text-slate-800">{s.name}</span>
                         {s.locked_by_deal && (
-                          <span id={lockedId} className="block text-xs text-slate-500">
+                          <span id={lockedId} data-testid={lockedId} className="block text-xs text-slate-500">
                             {msg("sponsors.deal.lockedNote")}
                           </span>
                         )}

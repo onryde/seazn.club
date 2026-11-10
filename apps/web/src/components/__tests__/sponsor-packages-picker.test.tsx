@@ -23,12 +23,15 @@ const confirmMock = vi.hoisted(() => vi.fn(async (_opts?: unknown) => true));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMock }));
 
 import { SponsorPackages } from "@/components/sponsor-packages";
-import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { DEAL_STATUSES, type DealStatus } from "@/lib/sponsor-deals";
 import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
 import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
 
 const en = uiEn as unknown as Dict;
 const msg = (key: MessageKey, vars?: Record<string, string | number>) => t(en, key, vars);
@@ -497,5 +500,108 @@ describe("the gate and the first read are unchanged", () => {
   it("the first read is packages + deals - the packages and the deal list, nothing else (counted)", async () => {
     await mount();
     expect(net.calls.map((c) => `${c.method} ${c.url}`).sort()).toEqual([`GET ${API}/sponsor-deals`, `GET ${API}/sponsor-packages`]);
+  });
+});
+
+describe("a selection the page no longer lists falls back to the first sponsor - never to an empty or stale form (fix round 1, m5)", () => {
+  it("the picked sponsor leaves the list while the form is open: the picker shows the first sponsor, and Send goes to THAT one", async () => {
+    answerWith("POST", "/sponsors/sp-a/deals", { status: 201, body: { ok: true, data: { deal: deal({ id: "d7" }), checkout_url: null } } });
+    const m = await mount();
+    m.click("invoice-open-p1");
+    m.pick("sp-b");
+    expect(m.pickerValue(), "premise: the pick took").toBe("sp-b");
+    // The page hands fresh data down (a refresh after the sponsor was deleted elsewhere): sp-b is gone.
+    m.island.rerender(baseProps({ sponsors: SPONSORS.filter((s) => s.id !== "sp-b") }) as Parameters<typeof SponsorPackages>[0]);
+    expect(m.pickerOptions(), "premise: the stale sponsor is no longer offered").toEqual(["sp-a", "sp-c"]);
+    expect(m.pickerValue(), "the form falls back to the first sponsor by display_order").toBe(SPONSOR_ORDER[0]);
+    m.typeEmail("pay@harbourside.test");
+    m.click("invoice-send");
+    await flush();
+    expect(callsTo("POST", "/deals").map((c) => c.url), "the invoice goes to the sponsor the form shows, not the stale pick").toEqual([`${API}/sponsors/sp-a/deals`]);
+  });
+});
+
+describe("the form says an unpaid invoice hides the sponsor, unless a live deal keeps it on the pages (fix round 1, item 7)", () => {
+  // The invoice form has no go-live choice: every invoice is `go_live: "on_payment"` (asserted above), so the line follows the
+  // sponsor, not an option. Spec: a sponsor whose only deal awaits payment is hidden on the public pages until it is live.
+  const note = (m: Awaited<ReturnType<typeof mount>>) => (m.has("invoice-hidden-note") ? flat(textOf(m.find("invoice-hidden-note"))) : null);
+
+  it("a sponsor with no deal, or only a deal that has not gone live, is told it stays off the public pages until the invoice is paid (both checked)", async () => {
+    let checked = 0;
+    for (const d of [[], [deal({ sponsor_id: "sp-a", deal_status: "awaiting_payment" })], [deal({ sponsor_id: "sp-a", deal_status: "scheduled" })]]) {
+      answerWith("GET", "/sponsor-deals", { body: { data: d } });
+      const m = await mount();
+      m.click("invoice-open-p1");
+      expect(m.pickerValue(), "premise: the form is on sp-a").toBe("sp-a");
+      expect(note(m), `${d.length} deal(s)`).toBe(msg("sponsors.order.hiddenUntilPaid"));
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("a sponsor already under a LIVE deal is not told it will be hidden - the live deal keeps it shown (the pair)", async () => {
+    answerWith("GET", "/sponsor-deals", { body: { data: [deal({ id: "d-live", sponsor_id: "sp-a", package_id: "p2", deal_status: "live", payment_status: "paid" })] } });
+    const m = await mount();
+    m.click("invoice-open-p1");
+    expect(m.pickerValue()).toBe("sp-a");
+    expect(m.has("invoice-hidden-note"), "no line for the sponsor with a live deal").toBe(false);
+  });
+
+  it("the line follows the PICKED sponsor: live-dealt sponsor none, a free sponsor has it, back again none (derived, not copied)", async () => {
+    answerWith("GET", "/sponsor-deals", { body: { data: [deal({ id: "d-live", sponsor_id: "sp-a", package_id: "p2", deal_status: "live", payment_status: "paid" })] } });
+    const m = await mount();
+    m.click("invoice-open-p1");
+    expect(m.has("invoice-hidden-note")).toBe(false);
+    m.pick("sp-c");
+    expect(note(m)).toBe(msg("sponsors.order.hiddenUntilPaid"));
+    m.pick("sp-a");
+    expect(m.has("invoice-hidden-note")).toBe(false);
+  });
+
+  it("an org with no sponsors shows the Add a sponsor first link and no such line", async () => {
+    const m = await mount({ sponsors: [] });
+    m.click("invoice-open-p1");
+    expect(m.has("invoice-no-sponsors")).toBe(true);
+    expect(m.has("invoice-hidden-note")).toBe(false);
+  });
+});
+
+describe("the copy fixed in fix round 1 (m2, m3) says what is true now, in all four locales (counted)", () => {
+  const LOCALES = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as Record<string, Record<string, string>>;
+
+  it("a deal-locked sponsor's refusal does not point at an End-deal control that does not exist until PR 2", () => {
+    const FORBIDDEN: Record<string, RegExp> = { en: /end the deal|add a new one/i, es: /finaliza|a(ñ|n)ade uno nuevo/i, fr: /terminez|ajoutez-en un nouveau/i, nl: /beëindig|voeg een nieuwe toe/i };
+    let checked = 0;
+    for (const [loc, dict] of Object.entries(LOCALES)) {
+      const text = dict["sponsors.error.lockedByDeal"];
+      expect(text, loc).toBeTruthy();
+      expect(text, loc).not.toMatch(FORBIDDEN[loc]!);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("a disputed payment says disputed, not charged back, in every locale", () => {
+    const DISPUTED: Record<string, RegExp> = { en: /disputed/i, es: /disputa/i, fr: /contestation|litige/i, nl: /betwist/i };
+    const CHARGEBACK: Record<string, RegExp> = { en: /charged back/i, es: /contracargo/i, fr: /rétrofacturé|rétrofacturation/i, nl: /teruggeboekt/i };
+    let checked = 0;
+    for (const [loc, dict] of Object.entries(LOCALES)) {
+      const text = dict["sponsors.error.dealDisputed"];
+      expect(text, loc).toMatch(DISPUTED[loc]!);
+      expect(text, loc).not.toMatch(CHARGEBACK[loc]!);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("the hidden-until-paid line exists in all four locales and is not the English one outside en (counted)", () => {
+    let checked = 0;
+    for (const [loc, dict] of Object.entries(LOCALES)) {
+      const text = dict["sponsors.order.hiddenUntilPaid"];
+      expect(text, loc).toBeTruthy();
+      if (loc !== "en") expect(text, loc).not.toBe(LOCALES.en!["sponsors.order.hiddenUntilPaid"]);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 });

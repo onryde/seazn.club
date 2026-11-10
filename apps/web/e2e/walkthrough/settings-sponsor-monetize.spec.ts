@@ -562,6 +562,10 @@ test("invoice: Send invoice picks a sponsor and mints a REAL Stripe Checkout Ses
     sponsorId,
   );
   await picker.selectOption(sponsorId);
+  // The form tells the club what an unpaid invoice does to the sponsor: off the public pages until it is paid.
+  await expect(panel.getByTestId("invoice-hidden-note"), "a sponsor with no live deal is told the invoice hides it").toHaveText(
+    ui("sponsors.order.hiddenUntilPaid"),
+  );
 
   const send = panel.getByTestId("invoice-send");
   await expect(send, "an unaddressed invoice must not be sendable").toBeDisabled();
