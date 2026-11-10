@@ -71,6 +71,9 @@ const nextConfig = {
   // hash. toolchain.test.ts pins both halves.
   experimental: {
     turbopackFileSystemCacheForBuild: process.env.NEXT_BUILD_FS_CACHE === "1",
+    // Do not load every page's JS at boot: idle RSS 266 -> 145 MB measured
+    // (docs: guides/memory-usage). Pinned by next-config-memory.test.ts.
+    preloadEntriesOnStart: false,
   },
   // Monorepo: trace from the workspace root so hoisted node_modules land in
   // .next/standalone (Next docs: config/output caveats).
