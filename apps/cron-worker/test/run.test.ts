@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { handleManual } from "../src/manual";
 import { RUN_DEADLINE_MS, runDue, type Env, type RunDeps } from "../src/run";
 import { FAST_TRIGGER, FIVE_MINUTES, JOBS, TRIGGER_CRON } from "../src/schedule";
+import { HOURLY_DAILY_ROWS, HOURLY_EVERY_ROWS, HOURLY_WEEKLY_ROWS } from "./hourly-rows";
 
 const MONDAY_0817 = new Date("2026-09-28T08:17:00Z");
 const TUESDAY_1417 = new Date("2026-09-29T14:17:00Z");
@@ -71,29 +72,34 @@ function harness(
   };
 }
 
+/** What an ordinary hourly firing (TUESDAY_1417: no daily or weekly row is due) runs, in table order: the every-firing rows,
+ *  read from the table's own declarations (./hourly-rows); schedule.test.ts pins WHICH rows they are, typed from the spec. */
+const HOURLY_IDS = HOURLY_EVERY_ROWS.map((j) => j.id);
+const HOURLY_COUNT = HOURLY_EVERY_ROWS.length;
+/** The first hourly row: the one the deadline case lets eat the whole run budget. */
+const FIRST_HOURLY = HOURLY_EVERY_ROWS[0]!;
+
 describe("runDue: jobs and the run log", () => {
+  it("anti-vacuity: the every-firing hourly set the cases below derive their counts from is not empty", () => {
+    expect(HOURLY_COUNT, "every-firing hourly rows checked").toBeGreaterThan(0);
+    expect(new Set(HOURLY_IDS).size, "distinct ids").toBe(HOURLY_COUNT);
+  });
+
   it("runs the due jobs in table order: one result and one job line each, then one run line", async () => {
     const h = harness();
     const results = await runDue(TUESDAY_1417, TRIGGER_CRON, env(), h.deps);
-    expect(results.map((r) => [r.job, r.status])).toEqual([
-      ["registrations", "ok"],
-      ["billing-events", "ok"],
-      ["funnel-remind", "ok"],
-    ]);
-    expect(h.posts()).toEqual([
-      "https://seazn.club/api/cron/registrations",
-      "https://seazn.club/api/cron/billing-events",
-      "https://seazn.club/api/funnel/remind",
-    ]);
-    expect(h.lines.filter((l) => l.event === "job")).toHaveLength(3);
-    expect(h.lines.at(-1)).toMatchObject({ event: "run", run: "scheduled", cron: TRIGGER_CRON, jobs: 3, notOk: [], sentry: "on" });
+    expect(results.map((r) => [r.job, r.status])).toEqual(HOURLY_EVERY_ROWS.map((j) => [j.id, "ok"]));
+    expect(h.posts()).toEqual(HOURLY_EVERY_ROWS.map((j) => `https://seazn.club${j.path}`));
+    expect(h.lines.filter((l) => l.event === "job")).toHaveLength(HOURLY_COUNT);
+    expect(h.lines.at(-1)).toMatchObject({ event: "run", run: "scheduled", cron: TRIGGER_CRON, jobs: HOURLY_COUNT, notOk: [], sentry: "on" });
     expect(h.sentry()).toEqual([]); // nothing failed, so nothing to report
   });
 
   it("one failing job does not stop the rest, and raises ONE error event tagged with that job", async () => {
     const h = harness((u) => (u.endsWith("/api/cron/registrations") ? new Response("no", { status: 401 }) : new Response(HEALTHY)));
     const results = await runDue(TUESDAY_1417, TRIGGER_CRON, env(), h.deps);
-    expect(results.map((r) => r.status)).toEqual(["error", "ok", "ok"]);
+    expect(results.map((r) => r.status)).toEqual(HOURLY_IDS.map((id) => (id === "registrations" ? "error" : "ok")));
+    expect(results.filter((r) => r.status === "error").length, "exactly one job failed").toBe(1);
     expect(h.lines.find((l) => l.job === "registrations")).toMatchObject({ event: "job", status: "error", httpStatus: 401, env: "prod" });
     expect(h.events()).toEqual([
       expect.objectContaining({ level: "error", environment: "prod", tags: expect.objectContaining({ job: "registrations", reason: "http", run: "scheduled" }) }),
@@ -121,35 +127,34 @@ describe("runDue: jobs and the run log", () => {
   ])("a Sentry event that is not delivered (%s) is logged, and never stops the next job", async (_why, reply) => {
     const h = harness(() => new Response("down", { status: 500 }), reply);
     const results = await runDue(TUESDAY_1417, TRIGGER_CRON, env(), h.deps);
-    expect(results.map((r) => [r.job, r.status, r.sentryDelivered])).toEqual([
-      ["registrations", "error", false],
-      ["billing-events", "error", false],
-      ["funnel-remind", "error", false],
-    ]);
-    expect(h.posts(), "every job still ran").toHaveLength(3);
-    expect(h.lines.filter((l) => l.event === "job").map((l) => l.sentryDelivered)).toEqual([false, false, false]);
-    expect(h.lines.at(-1)).toMatchObject({ event: "run", sentry: "on", sentryUndelivered: ["registrations", "billing-events", "funnel-remind"] });
+    expect(results.map((r) => [r.job, r.status, r.sentryDelivered])).toEqual(HOURLY_IDS.map((id) => [id, "error", false]));
+    expect(h.posts(), "every job still ran").toHaveLength(HOURLY_COUNT);
+    expect(h.lines.filter((l) => l.event === "job").map((l) => l.sentryDelivered)).toEqual(Array(HOURLY_COUNT).fill(false));
+    expect(h.lines.at(-1)).toMatchObject({ event: "run", sentry: "on", sentryUndelivered: HOURLY_IDS });
   });
 
   it("an accepted event reads sentryDelivered:true, and a job that is ok attempts none (the field is absent)", async () => {
     const h = harness((u) => (u.endsWith("/api/cron/registrations") ? new Response("no", { status: 401 }) : new Response(HEALTHY)));
     const results = await runDue(TUESDAY_1417, TRIGGER_CRON, env(), h.deps);
-    expect(results.map((r) => r.sentryDelivered)).toEqual([true, undefined, undefined]);
+    expect(results.map((r) => r.sentryDelivered)).toEqual(HOURLY_IDS.map((id) => (id === "registrations" ? true : undefined)));
+    expect(results.filter((r) => r.sentryDelivered === true).length, "exactly one event was attempted").toBe(1);
     expect(h.lines.at(-1)).toMatchObject({ event: "run", sentryUndelivered: [] });
   });
 
   it("past the run deadline: the remaining jobs report error/deadline and raise events, never silence", async () => {
+    // The FIRST hourly row eats the whole run budget; every row after it is past the deadline (at least one, or this proves nothing).
+    const rest = HOURLY_IDS.slice(1);
+    expect(rest.length, "rows left past the deadline").toBeGreaterThan(0);
     const h = harness((u) => {
-      if (u.endsWith("/api/cron/registrations")) h.advance(RUN_DEADLINE_MS);
+      if (u.endsWith(FIRST_HOURLY.path)) h.advance(RUN_DEADLINE_MS);
       return new Response(HEALTHY);
     });
     const results = await runDue(TUESDAY_1417, TRIGGER_CRON, env(), h.deps);
     expect(results.map((r) => [r.job, r.status, r.reason])).toEqual([
-      ["registrations", "ok", undefined],
-      ["billing-events", "error", "deadline"],
-      ["funnel-remind", "error", "deadline"],
+      [FIRST_HOURLY.id, "ok", undefined],
+      ...rest.map((id) => [id, "error", "deadline"]),
     ]);
-    expect(h.events().map((e) => e.tags.job)).toEqual(["billing-events", "funnel-remind"]);
+    expect(h.events().map((e) => e.tags.job)).toEqual(rest);
   });
 
   it.each([
@@ -158,9 +163,9 @@ describe("runDue: jobs and the run log", () => {
   ])("SENTRY_DSN %j: jobs still run and the run line says sentry=%s", async (dsn, state) => {
     const h = harness(() => new Response("down", { status: 500 }));
     const results = await runDue(TUESDAY_1417, TRIGGER_CRON, env({ SENTRY_DSN: dsn }), h.deps);
-    expect(results.map((r) => r.status)).toEqual(["error", "error", "error"]);
+    expect(results.map((r) => r.status)).toEqual(Array(HOURLY_COUNT).fill("error"));
     expect(h.sentry()).toEqual([]);
-    expect(h.lines.at(-1)).toMatchObject({ event: "run", notOk: ["registrations", "billing-events", "funnel-remind"], sentry: state });
+    expect(h.lines.at(-1)).toMatchObject({ event: "run", notOk: HOURLY_IDS, sentry: state });
   });
 });
 
@@ -172,9 +177,9 @@ describe("runDue: outbound request hygiene (M-3, M-6)", () => {
     const timeout = vi.spyOn(AbortSignal, "timeout");
     try {
       const h = harness(() => new Response("down", { status: 500 }));
-      await runDue(TUESDAY_1417, TRIGGER_CRON, env(), h.deps); // 3 failing jobs, 3 Sentry events
+      await runDue(TUESDAY_1417, TRIGGER_CRON, env(), h.deps); // every hourly job failing, one Sentry event each
       await runDue(TUESDAY_1417, TRIGGER_CRON, env({ ACTIVE: "false" }), h.deps); // the probe
-      expect(h.calls, "calls made: 3 jobs + 3 events + 1 probe").toHaveLength(7);
+      expect(h.calls, `calls made: ${HOURLY_COUNT} jobs + ${HOURLY_COUNT} events + 1 probe`).toHaveLength(2 * HOURLY_COUNT + 1);
       expect(h.calls.filter((c) => c.init?.redirect !== "manual")).toEqual([]);
       expect([...new Set(timeout.mock.calls.map((c) => c[0]))].sort((a, b) => a - b)).toEqual([5_000, 10_000, 60_000]);
     } finally {
@@ -533,8 +538,11 @@ describe("R5: cron monitoring is deferred, so the Worker never calls a Sentry ch
     let firings = 0;
     for (let i = 0; i < 168; i++, firings++) await runDue(new Date(start + i * 3_600_000), TRIGGER_CRON, env(), h.deps);
     expect(firings, "firings checked").toBe(168);
-    // Spec §4 + R1: 3 every-firing rows × 168 + 4 daily rows × 7 + the weekly digest × 1. A 500 is never retried.
-    expect(h.events(), "one event per failed job").toHaveLength(3 * 168 + 4 * 7 + 1);
+    // Spec §4 + R1: each every-firing row × 168 + each daily row × 7 + each weekly row (the digest) × 1, the counts of each kind
+    // read from the table (./hourly-rows). A 500 is never retried.
+    const expectedEvents = HOURLY_COUNT * 168 + HOURLY_DAILY_ROWS.length * 7 + HOURLY_WEEKLY_ROWS.length * 1;
+    expect(HOURLY_DAILY_ROWS.length + HOURLY_WEEKLY_ROWS.length, "daily + weekly rows checked").toBeGreaterThan(0);
+    expect(h.events(), "one event per failed job").toHaveLength(expectedEvents);
     const paths = h.sentry().map((c) => new URL(c.url).pathname);
     expect(paths.filter((p) => !/^\/api\/9\/envelope\/$/.test(p)), "non-envelope Sentry calls").toEqual([]);
     expect(h.sentry().filter((c) => /\/cron\/|check_in/.test(c.url)), "check-in calls").toEqual([]);

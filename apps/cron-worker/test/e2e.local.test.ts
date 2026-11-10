@@ -2,16 +2,17 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { HOURLY_EVERY_ROWS } from "./hourly-rows";
 
 const BASE = process.env.CRON_E2E_BASE_URL; // e.g. http://localhost:3000 (a local PROD build)
 const DB = process.env.DATABASE_URL;
 const SECRET = process.env.CRON_SECRET ?? "";
 const PORT = 8799;
-// A8: pin the firing instant. A Tuesday 14:17 UTC slot runs only the three
-// every-firing rows (spec §4). It never runs billing-quantity's Stripe calls
+// A8: pin the firing instant. A Tuesday 14:17 UTC slot runs only the every-firing
+// rows (spec §4), read from the schedule table. It never runs billing-quantity's Stripe calls
 // (06), relay-sweep (04) or a Monday 08 digest, whatever the wall clock says.
 const SLOT = Date.parse("2026-09-29T14:17:00Z");
-const SLOT_JOBS = ["registrations", "billing-events", "funnel-remind"];
+const SLOT_JOBS = HOURLY_EVERY_ROWS.map((j) => j.id);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 describe.skipIf(!BASE || !DB || !SECRET)("cron Worker E2E (wrangler dev → local Next → DB)", () => {
