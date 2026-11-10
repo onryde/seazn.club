@@ -20,6 +20,7 @@ import { w2eRefusalsSuite } from "./suites/w2eRefusals.ts";
 import { w3SwissASuite } from "./suites/w3SwissA.ts";
 import { w3SwissBSuite } from "./suites/w3SwissB.ts";
 import { w4KnockoutASuite } from "./suites/w4KnockoutA.ts";
+import { w4KnockoutBSuite } from "./suites/w4KnockoutB.ts";
 import { divisionSettingsSuite } from "./suites/divisionSettings.ts";
 import { funnelReminderSuite } from "./suites/funnelReminder.ts";
 import { v1Suite } from "./suites/v1.ts";
@@ -62,6 +63,7 @@ const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
   w3SwissA: () => w3SwissASuite(),
   w3SwissB: () => w3SwissBSuite(),
   w4KnockoutA: () => w4KnockoutASuite(),
+  w4KnockoutB: () => w4KnockoutBSuite(),
   youtubeConnect: () => youtubeConnectSuite(),
   deviceLinkFootball: () => deviceLinkFootballSuite(),
 };
