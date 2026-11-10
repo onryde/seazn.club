@@ -162,7 +162,7 @@ type MsgPlural = (key: string, count: number, vars?: Record<string, string | num
 
 /** The `reshaped` half of POST /stages/{id}/generate — Swiss only, and absent
  *  unless the shell set actually moved. Mirrors `SwissReshapeResult`
- *  (api-v1/schemas.ts); snake_case because it is the wire, not a view model. */
+ *  (api-v1/schemas/generation.ts); snake_case because it is the wire, not a view model. */
 export interface SwissReshapeWire {
   matches_added: number;
   matches_removed: number;
@@ -532,7 +532,7 @@ const ADHOC_STAGE_KINDS = new Set(["league", "group"]);
  * page exactly as the schedule page already resolves it for the board
  * (`resolveVenueTz(null, page.org.timezone)`). That keeps the governing clock
  * correct without widening this wire — the alternative (adding `orgTz` to the
- * response) means editing schemas.ts, usecases/schedule/ and the exact-key
+ * response) means editing api-v1/schemas/, usecases/schedule/ and the exact-key
  * assertion in `schedule-settings-wire.test.ts`, for a value the rendering
  * pages already hold.
  */
@@ -2556,7 +2556,7 @@ export function reshapeNotice(
     : head;
 }
 
-/** The part of POST /stages/{id}/rebuild's answer the notice reads (`RebuildResult`, schemas.ts). */
+/** The part of POST /stages/{id}/rebuild's answer the notice reads (`RebuildResult`, api-v1/schemas/generation.ts). */
 export interface RebuiltOutcome {
   removed: number;
   slots: { kept: number; freed: number; unscheduled: number };

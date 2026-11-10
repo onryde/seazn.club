@@ -268,7 +268,7 @@ with `model: opus`.
 | `apps/web/src/lib/pricing-matrix.ts:191,199` | `buildPricingSections` | renders only `ENTITLEMENT_DOMAINS` keys |
 | `apps/web/src/app/api/v1/fixtures/[id]/route.ts:17` | `PATCH` | `parseBody(req, PatchFixture)`, `requireResourceAuth(req, "fixture", id, "write")` |
 | `apps/web/src/server/api-v1/auth.ts:352` | `requireResourceAuth(req, kind, id, scope): Promise<AuthCtx>` | reusable gate |
-| `apps/web/src/server/usecases/fixtures.ts:136` | `patchFixture(auth, id, patch)` | schema `PatchFixture` at `schemas.ts:964` |
+| `apps/web/src/server/usecases/fixtures.ts:136` | `patchFixture(auth, id, patch)` | schema `PatchFixture` at `api-v1/schemas/` |
 | `apps/web/src/server/api-v1/openapi.ts:57` | `ROUTES: RouteSpec[]` | hand-maintained; generator `scripts/openapi-gen.ts` writes `openapi/v1.json` and `openapi/v1.public.json`; CI drift `.github/workflows/ci.yml:94-98` |
 | `apps/web/src/server/public-site/revalidate.ts:13` | `fireDivisionRevalidate(divisionId, competitionId?)` | tags `division:<id>`, `competition:<id>`, `org-public:<slug>` |
 | `apps/web/src/components/v2/scorepad/__tests__/view-model.test.ts:8-12` | fold pattern | `foldMatch` from `@seazn/engine/core`, `defaultLineupPair`, `makeEnvelope` from `@seazn/engine/testkit` |

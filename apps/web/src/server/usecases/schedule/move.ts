@@ -60,7 +60,7 @@ import { mapConflicts, assertNoNewBlocking } from "./conflicts";
 
 export interface MoveInput {
   scheduled_at?: string | null;
-  // P9 pass 3a: court_id/venue_id — see PatchFixture (schemas.ts). Mirrors
+  // P9 pass 3a: court_id/venue_id — see PatchFixture (api-v1/schemas/fixtures.ts). Mirrors
   // that schema's post-`.strict()`/`.partial()` shape structurally:
   // fixtures.ts's `patchFixture` destructures `{ officials, ...move }` off
   // an already-parsed `PatchFixture` and hands `move` straight to

@@ -21,7 +21,7 @@ per-sport pipeline.
   added fixture is scored through the normal path once it exists.
 - `apps/web/src/app/api/v1/fixtures/[id]/route.ts` — `PatchFixture`
   (`scheduled_at`, venue, …) already edits a fixture after creation.
-- `apps/web/src/server/api-v1/schemas.ts` — add the `AddFixture` body schema.
+- `apps/web/src/server/api-v1/schemas/` — add the `AddFixture` body schema.
 
 **Depends:** none. **Migration:** none.
 
@@ -77,7 +77,7 @@ export async function addFixture(auth, stageId, input: {
 ### 3. Route + schema
 
 - `POST /api/v1/stages/[id]/fixtures` → `addFixture` (mirror the challenges
-  route). `AddFixture` zod body in `schemas.ts`.
+  route). `AddFixture` zod body in `api-v1/schemas/`.
 - (Optional) a console affordance: an "Add match" action on the stage panel for
   league/group/swiss stages; out of scope if UI is deferred — the API is the core.
 

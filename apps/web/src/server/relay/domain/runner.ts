@@ -30,7 +30,7 @@ export interface ExitInfo { exitCode: number | null; oomKilled: boolean | null; 
  *  So each is kept as its own LOWER BOUND on this attempt's crashes and the attempt counts their MAX, never their sum: one
  *  crash seen both ways is one crash, by construction, whichever arrives first. Mixed evidence (one crash seen only by its
  *  beat, another only by its exit) can undercount — the safe direction: the cap then fires a few crashes late, never early.
- *  Persisted in V450's four runner_crash_* columns (stream-sessions.ts `persist`). */
+ *  Persisted in V450's four runner_crash_* columns (usecases/stream-sessions/persist.ts `persist`). */
 export interface CrashTally {
   /** The SESSION's crashes, summed over its attempts (it spans the ONE retry) — what RUNNER_CRASH_CAP reads. */
   count: number;
@@ -58,7 +58,7 @@ export interface CrashTally {
  *  counts their MAX, never their sum: one restart seen both ways (the beat and its exit, whichever arrives first) is ONE
  *  restart, by construction. Mixed evidence (one restart seen only by its beat, another only by its exit) can undercount —
  *  the safe direction: the cap then ends the session a restart late, never early. Persisted in V468's four runner_restart_*
- *  columns (stream-sessions.ts `persist`). */
+ *  columns (usecases/stream-sessions/persist.ts `persist`). */
 export interface RestartTally {
   /** The SESSION's restarts, summed over its attempts (it spans the ONE retry) — what RUNNER_RESTART_CAP reads. */
   count: number;
@@ -192,7 +192,7 @@ export function stoppedBeatTrigger(exitReason: BeatExitReason | null | undefined
 /** Does Fly bring a process of THIS attempt back after a final beat with this reason (so its later beats must still be
  *  written, and a non-final beat after it is not a straggler)? `fatal` and `restart` — both restarted in place on the SAME
  *  Machine (`on-failure`); every other reason ends the run, the attempt or the session (`stoppedBeatTrigger`), and no reason
- *  is the legacy runner whose retry is a NEW attempt. The Owed 37 guard (stream-sessions.ts `closesAttempt`) reads it. */
+ *  is the legacy runner whose retry is a NEW attempt. The Owed 37 guard (usecases/stream-sessions/heartbeat.ts `closesAttempt`) reads it. */
 export function restartsInPlaceAfter(exitReason: BeatExitReason | null | undefined): boolean {
   return exitReason === "fatal" || exitReason === "restart";
 }

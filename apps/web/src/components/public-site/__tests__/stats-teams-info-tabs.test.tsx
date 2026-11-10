@@ -589,7 +589,7 @@ describe("TeamsTab", () => {
     // `style="background:123456"` is a declaration the browser DROPS. The tile
     // paints transparent and the monogram is white initials on the card's white
     // ground: invisible, and invisible only for the entrants whose colour
-    // arrived without a hash. `server/api-v1/schemas.ts:3169,3180` take club
+    // arrived without a hash. `server/api-v1/schemas/` take club
     // `colors` as an unvalidated `z.record(z.string(), z.string())`, so that is
     // a value the product accepts today.
     //
@@ -1797,7 +1797,7 @@ describe("InfoTab", () => {
 
     // Re-review N1 — the UNDERSCORE, and the case that earns it. A bare
     // `String(index)` was called "unique by construction" and is not: `Slug`
-    // (`api-v1/schemas.ts:56-60`) permits a bare "0" and it is client-settable
+    // (`api-v1/schemas/`) permits a bare "0" and it is client-settable
     // at `CreateDivision.slug`. So a division genuinely slugged "0", beside an
     // unmatched entry at index 0, collided all over again — the same defect one
     // rung further down, because moving a guard does not re-earn its rationale.

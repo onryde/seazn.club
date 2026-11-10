@@ -77,7 +77,7 @@ Copied from the spec. Every task's requirements implicitly include this section.
   (`guard.ts:238`) selects `e.display_name` raw and falls back to the entrant **UUID**
   (`:251`). Fix it at source in T14; never paper over it in a view.
 - **`core.settle` does not exist** anywhere in apps/packages/db. Use the shipped
-  `POST /fixtures/{id}/external-play/resolve` (`schemas.ts:1329`, kinds
+  `POST /fixtures/{id}/external-play/resolve` (`api-v1/schemas/`, kinds
   `home_forfeit | away_forfeit | draw | no_result`).
 - **`ui.json` is FLAT, not nested**, `externalPlay.lobby.*` (10 keys + `playOnLichess`)
   is still live at 33/33 per locale, and no `externalPlay.room.*` exists yet.
@@ -8937,7 +8937,7 @@ against the tree at `8afdd8b42` / `origin/main` `e201fab8f`, read 2026-10-09):
 - `fixtures.is_final` and `fixtures.third_place` exist
   (`V368__fixture_round_role.sql:38-39`). `StageKind` is
   `["league","group","swiss","knockout","double_elim","stepladder","page_playoff","americano","ladder"]`
-  (`apps/web/src/server/api-v1/schemas.ts:105`) — "last rung" means the last
+  (`apps/web/src/server/api-v1/schemas/`) — "last rung" means the last
   round of a `stepladder`.
 
 **Verify command for every B3 task** (scoped; never the full suite — AGENTS.md
@@ -10703,7 +10703,7 @@ stays as it is.
       expect(resultIdempotencyKey("fx", base)).toBe(resultIdempotencyKey("fx", { ...base }));
       expect(resultIdempotencyKey("fx", base)).not.toBe(resultIdempotencyKey("fx", { ...base, gameId: "BBB" }));
       expect(resultIdempotencyKey("fx", base)).not.toBe(resultIdempotencyKey("fx", { ...base, status: "resign" }));
-      expect(resultIdempotencyKey("fx", base).length).toBeLessThanOrEqual(200); // schemas.ts:1841
+      expect(resultIdempotencyKey("fx", base).length).toBeLessThanOrEqual(200); // api-v1/schemas/
     });
   });
   ```
@@ -10803,7 +10803,7 @@ stays as it is.
 
   `fixtureInStage(kind)` is a local helper over `seedOnlineChessFixture`: it
   seeds the same way, then `update stages set kind = ${kind}` — `StageKind`'s
-  members are pinned at `apps/web/src/server/api-v1/schemas.ts:105`.
+  members are pinned at `apps/web/src/server/api-v1/schemas/`.
 
 - [ ] **Step 12 (GREEN + mutate):** derive "is this a bracket?" from the stage's
   `kind` against a declared set, not from a hand-typed list inside the branch.
@@ -11495,7 +11495,7 @@ were false; each is corrected here and the task that owns it carries the repair.
 | P4 | `apps/web/src/components/v2/arbiter-panel.tsx` exists | **Absent.** T15 creates it. `arbiter` appears nowhere in `apps/web/src` as a product concept (only as the English word in unrelated comments), confirming spec §12's "no new role". |
 | P5 | `externalPlay.lobby.*` was deleted and `externalPlay.room.*` added | **Neither.** `en/ui.json` still carries **33** `externalPlay.*` keys including all ten `externalPlay.lobby.*` (`:5679`–`:5687`) and `externalPlay.playOnLichess` (`:5678`). There is **no** `externalPlay.room.*` key. T14 adds them; T16 deletes the lobby ones. All four locales are at 33/33 and 17/17 (`lichess`), so parity holds today. |
 | P6 | `apps/web/src/lib/run-sheet*` holds the run sheet | Only `apps/web/src/lib/run-sheet-groups.ts` is under `lib/` (`RunSheetFixture:35`, `isBye:123`, `buildRunSheet:132`). The components are `apps/web/src/components/v2/desk/run-sheet.tsx` (`runSheetKeeps:80`, `RunSheet:93`) and `…/desk/run-sheet-row.tsx`. |
-| P7 | The run sheet has an organiser **Settle** action; `core.settle` is an event | **`core.settle` does not exist anywhere** in `apps`, `packages` or `db`. `core.forfeit` does (212 matches). The nearest shipped thing is `POST /fixtures/{id}/external-play/resolve` (`resolve/route.ts:10`) with kinds `home_forfeit | away_forfeit | draw | no_result` (`schemas.ts:1329`). **T16 wires the existing resolve action and names it "Settle"; it must not reference `core.settle`.** |
+| P7 | The run sheet has an organiser **Settle** action; `core.settle` is an event | **`core.settle` does not exist anywhere** in `apps`, `packages` or `db`. `core.forfeit` does (212 matches). The nearest shipped thing is `POST /fixtures/{id}/external-play/resolve` (`resolve/route.ts:10`) with kinds `home_forfeit | away_forfeit | draw | no_result` (`api-v1/schemas/`). **T16 wires the existing resolve action and names it "Settle"; it must not reference `core.settle`.** |
 | P8 | `apps/web/src/lib/organiser-only-events.ts` / `isOrganiserOnlyEvent` (skeleton "Sequencing gates") | **Absent.** W2a's, unmerged. No B4 step may import it. |
 | P9 | main's `getPublicFixture` rewrite left the external-play seam inert | **The seam is present and wired**: `data.ts:35-36` imports, `:1117` the `externalPlay` field, `:1258` `externalPlay: await loadPublicExternalPlay(fixtureId)`, and the page mounts it at `page.tsx:372` and `:392`. The real hazard is different and worse — see F3 below. |
 
@@ -11637,7 +11637,7 @@ must step over deliberately:**
   tail `"POST /capture/codes/:code/scoring-link"` at `:353`
 - `apps/web/src/server/api-v1/openapi.ts` — `ROUTES` external-play block
   `:193-196`
-- `apps/web/src/server/api-v1/schemas.ts` — after `ResolveExternalPlayOut:1336-1345`
+- `apps/web/src/server/api-v1/schemas/` — after `ResolveExternalPlayOut`
 - `apps/web/src/lib/routes.ts` — after `sharedFixture:72-73`
 - `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json` — `externalPlay.*` block
   begins `en:5678`
@@ -12712,7 +12712,7 @@ sharedFixturePlay: (orgSlug: Slug, compSlug: Slug, divSlug: Slug, fixtureId: str
   than adding a migration here.
 
 - [ ] **Step 27: Red → Green — the act route.**
-  New `apps/web/src/server/api-v1/schemas.ts` entry, after
+  New `apps/web/src/server/api-v1/schemas/` entry, after
   `ResolveExternalPlayOut` (`:1336-1345`):
   ```ts
   export const RoomAct = z
@@ -13197,7 +13197,7 @@ Plus shipped: `NeedsReason` `server/external-play/types.ts:14-21`;
 `LichessLinkCard` `components/lichess-link-card.tsx:13`; `ConfirmDialog`
 `components/v2/confirm-dialog.tsx:48`; `plural` `lib/i18n.ts:26`;
 `useMsgPlural` `components/i18n/dict-provider.tsx:114`;
-`ResolveExternalPlay` `server/api-v1/schemas.ts:1329`.
+`ResolveExternalPlay` `server/api-v1/schemas/`.
 
 *Produces:*
 ```ts

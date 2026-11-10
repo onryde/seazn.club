@@ -34,7 +34,7 @@
 // number (see the drift guard at the end of the `encodeConstraints` block).
 // `board.ts` itself must NOT gain that dependency — it is the runtime, and it
 // stays import-free apart from two `import type`s. Two consequences worth
-// knowing: this suite now fails to COLLECT if `schemas.ts` ever throws at
+// knowing: this suite now fails to COLLECT if `api-v1/schemas/` ever throws at
 // module scope, and a collection failure contributes ZERO failures to the JSON
 // reporter — so judge this file on `numTotalTests`, never on `numFailedTests`.
 import { describe, expect, it } from "vitest";
@@ -248,7 +248,7 @@ describe("encodeConstraints", () => {
               // `court` is `.optional()`, not `.nullish()` — a `null` fails the
               // product's own parse. Reading it as "no court" turns ONE court's
               // blackout into a venue-wide one that blocks every court for the
-              // window, which is precisely what `schemas.ts`'s `blackouts` doc
+              // window, which is precisely what `api-v1/schemas/`'s `blackouts` doc
               // comment says must never happen: an entry whose court cannot be
               // identified is DROPPED, never widened.
               court: null,
@@ -267,7 +267,7 @@ describe("encodeConstraints", () => {
   it("keeps null meaning ABSENT for startAt/endAt, which the product declares nullish", () => {
     const out = encodeConstraints({
       divisionRef: "d-tiny",
-      // `schemas.ts:1284`/`:1286` are `.nullish()`, so a stored config
+      // `api-v1/schemas/` are `.nullish()`, so a stored config
       // round-trips these as nulls and refusing one would red every division
       // that never set a window.
       scheduleConfig: { startAt: null, endAt: null },
@@ -656,8 +656,8 @@ describe("encodeConstraints", () => {
   });
 
   // Ruling R14 — the numeric twin of the null-blackout-court fix. None of the
-  // three knobs is `.nullish()` in the product (`schemas.ts:1287`/`:1288`/
-  // `:1303` are all `z.number().int()...default(n)`), so a `null` is invalid
+  // three knobs is `.nullish()` in the product (`ScheduleConfig` in
+  // `api-v1/schemas/scheduling.ts`: all `z.number().int()...default(n)`), so a `null` is invalid
   // product-side and the bench must not launder it into a valid default. A
   // present-but-wrong value is strictly MORE dangerous than an absent one: the
   // absent knob falls through to the right number, while the null one measures
@@ -741,7 +741,7 @@ describe("encodeConstraints", () => {
   });
 
   // perEntrantMinRest and constraints.restMin are DIFFERENT knobs
-  // (`schemas.ts:1303` vs `:1332`) and neither covers for the other. A reader
+  // (both in `ScheduleConfig`, `api-v1/schemas/scheduling.ts`) and neither covers for the other. A reader
   // that treated the encoded one as discharging the declared one would report
   // clean on a rest rule it never checked.
   it("does not let perEntrantMinRest stand in for constraints.restMin", () => {
@@ -838,8 +838,8 @@ describe("encodeConstraints", () => {
   // `PackJsonValue` admits `null` explicitly (`pack-schema.ts:154-171`), so a
   // pack can reach every one of these. None of the containers below is
   // `.nullish()` in the product — `constraints` and `constraints.hard` are
-  // `.optional()` (`schemas.ts:1330`, `:1357`), `courts` / `blackouts` /
-  // `sessionWindows` are `.default([])` (`:1302`, `:1318`, `:1322`) — so a null
+  // `.optional()` (`api-v1/schemas/scheduling.ts`), `courts` / `blackouts` /
+  // `sessionWindows` are `.default([])` — so a null
   // is a present-but-invalid value, not an absence.
   //
   // This is the same defect as the null blackout court and the null numeric
@@ -935,7 +935,7 @@ describe("encodeConstraints", () => {
       isRoundRobin: true,
       pins: [],
     });
-    // A null `roundMinutes` is genuinely "not set" (`schemas.ts:1327`), so
+    // A null `roundMinutes` is genuinely "not set" (`api-v1/schemas/`), so
     // reporting it as a declared-but-unmodelled knob would be a false claim
     // about what the pack asked for.
     expect(out.unmodelled).toEqual([]);

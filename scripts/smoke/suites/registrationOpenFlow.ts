@@ -10,7 +10,7 @@ import { newSession, call, check, signIn, tag, checkOutboxRow, smokeDb, v1, v1da
 // page probe left over from before RS006 shipped a submit endpoint at all;
 // gapSuite: device links/lineups). Nothing here resurrects their old code —
 // every request below is built fresh against `PublicRegisterGroupRequest`/
-// `PublicJoinRequest` (schemas.ts), the group shape, not the deleted flat
+// `PublicJoinRequest` (api-v1/schemas/registration.ts), the group shape, not the deleted flat
 // single-entry one. `delivered+selflink_${tag}@resend.dev` was already present,
 // orphaned, in cleanup()'s emails array with a #402/gapSuite comment naming
 // exactly this suite's shape — reused rather than renamed.

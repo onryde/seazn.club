@@ -16,7 +16,7 @@
 // Consent-asymmetry follow-up (2026-08-28): `privacy_consent` was optional
 // at the wire and enforced ONLY by the join form's own client-side gate — a
 // direct API call could join with no consent recorded, indistinguishable
-// from a refusal. Now REQUIRED (schemas.ts) and gated server-side in
+// from a refusal. Now REQUIRED (api-v1/schemas/) and gated server-side in
 // joinTeamEntry (mirrors submitRegistrationGroup:547), identically on both
 // branches. The "omitting privacy_consent" cases below now assert the
 // refusal (422, nothing written) rather than a silent null stamp.

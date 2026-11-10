@@ -3,12 +3,12 @@
 //
 // Three places need them: `CapacityPrecheckInput` (capacity-guard.ts, what
 // the route actually parses with), its wire twin `CapacityPrecheck`
-// (api-v1/schemas.ts, what the generated spec publishes), and the CLIENT
+// (api-v1/schemas/schedule-analysis.ts, what the generated spec publishes), and the CLIENT
 // hooks (use-capacity-report.ts), which must not send a body they can
 // already prove the server will reject.
 //
 // The obvious home was `capacity-input.ts` — both sides import it already —
-// but `schemas.ts` is imported by fourteen `"use client"` components, and
+// but `api-v1/schemas/` is imported by fourteen `"use client"` components, and
 // capacity-input.ts pulls in real engine runtime code (`usableWindows`,
 // `resolveSelector`, the tz helpers). Routing the bounds through it would
 // have put that chain in reach of every one of those client bundles and left

@@ -366,7 +366,7 @@ describe("buildSeedPlan — the lane ruling on persons/officials", () => {
 
   // `SeedPlanPerson.gender` was `"m" | "f"` while the product's own
   // `CreatePerson.gender` has been `z.enum(["m","f","x"]).nullish()`
-  // (`apps/web/src/server/api-v1/schemas.ts:502`) since RS002. The bench was
+  // (`apps/web/src/server/api-v1/schemas/`) since RS002. The bench was
   // therefore narrower than the API it writes to: no pack could seed a
   // non-binary person, so the product's "x never blocks a category gate"
   // exemption (`lib/registration-rules.ts:172-190`) was unreachable from any
@@ -497,10 +497,10 @@ describe("buildSeedPlan — fields the create bodies actually accept", () => {
     expect(league && "progression" in league).toBe(false);
   });
 
-  // `CreateStage` is `.strict()` (schemas.ts:821), so a stage body carrying a
+  // `CreateStage` is `.strict()` (api-v1/schemas/), so a stage body carrying a
   // key the schema does not declare is REJECTED rather than ignored —
   // unlike `CreateDivision`, which is non-strict and silently drops unknown
-  // keys (the RS007/V380 comment at schemas.ts:233 records a wizard that lost
+  // keys (the RS007/V380 comment at api-v1/schemas/ records a wizard that lost
   // its whole eligibility block exactly that way). Sending an undefined-valued
   // key is therefore not free here, which is why absence is asserted above as
   // a MISSING KEY and not merely as `undefined`.
@@ -517,7 +517,7 @@ describe("buildSeedPlan — fields the create bodies actually accept", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildSeedPlan — person consent", () => {
-  // `CreatePerson.consent` is `Consent` (schemas.ts:480-485), which is
+  // `CreatePerson.consent` is `Consent` (api-v1/schemas/persons.ts), which is
   // `.default({})` — so omitting it is legal and lands `{}`. That is the
   // trap: `public_players_v` is OPT-IN, not opt-out. Its predicate is
   // `where coalesce((p.consent->>'public_name')::boolean, false)`, unchanged

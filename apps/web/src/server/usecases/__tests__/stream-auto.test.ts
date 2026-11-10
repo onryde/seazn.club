@@ -253,7 +253,7 @@ describe("the tunable is read at the call site (AGENTS.md #20)", () => {
   // The walkthrough shortens these two through tunable(); a raw constant at a call site would silently ignore it.
   const SRC = resolve(import.meta.dirname, "..");
   const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-  // The auto STOP call site (stream-sessions.ts) is guarded the same way in stream-auto-stop.test.ts.
+  // The auto STOP call site (usecases/stream-sessions/) is guarded the same way in stream-auto-stop.test.ts.
   it.each([
     ["stream-auto.ts", "AUTO_START_RETRY_SECONDS"],
   ])("%s reads %s only through tunable(NAME, NAME)", (file, name) => {

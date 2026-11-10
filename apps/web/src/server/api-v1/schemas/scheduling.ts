@@ -28,7 +28,7 @@ import { Fixture } from "./scoring.ts";
  *  no rename). Lives here, not in the server-only capacity-guard.ts,
  *  because openapi.ts documents it too and openapi.ts is NOT server-only
  *  (it's imported by /api/v1/openapi.json/route.ts, a live bundled route,
- *  as well as the CI drift script) — schemas.ts is the one home both
+ *  as well as the CI drift script) — api-v1/schemas/ is the one home both
  *  capacity-guard.ts and openapi.ts can import without crossing that
  *  boundary. A P1 review finding: the throw site, the OpenAPI doc and
  *  smoke.ts's assertion had each spelled this differently (`report` vs

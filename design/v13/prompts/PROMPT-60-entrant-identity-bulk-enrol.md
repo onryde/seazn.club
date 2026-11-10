@@ -10,7 +10,7 @@ entrant is shown, for all sports.
   `EntrantMemberInput`, the entrant `STAGE_COLS`/`COLS` select lists,
   `dropPositions` (sport-position cleaning). Crest column + inline members land
   here.
-- `apps/web/src/server/api-v1/schemas.ts` — `CreateEntrant` (`kind`,
+- `apps/web/src/server/api-v1/schemas/entrants.ts` — `CreateEntrant` (`kind`,
   `display_name`, `team_id`, `seed`, `members`, `copy_roster_from_entrant_id`),
   `EntrantMemberInput` (`person_id`, `squad_number`, `default_position_key`,
   `is_captain`, `roles`). Add `badge_url` + inline-person member variant.

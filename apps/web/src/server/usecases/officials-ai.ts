@@ -829,7 +829,7 @@ function draftAsPlan(pack: OfficialsPack): AiOfficialsPlan {
   };
 }
 
-/** Assignment diff vs the baseline (schemas.ts AiOfficialsPlanResponse.diff):
+/** Assignment diff vs the baseline (api-v1/schemas/ai-planning.ts AiOfficialsPlanResponse.diff):
  *  the prior proposal when given, else the locked assignments. Each element is
  *  a bare fixture id — `unchanged` when that fixture's (role, official) set in
  *  the plan exactly matches its set in the baseline, `changed` otherwise
@@ -1400,7 +1400,7 @@ export async function officialsAiPlanForDivision(
     },
   });
 
-  // Public shape is pinned to AiOfficialsPlanResponse.usage in api-v1/schemas.ts
+  // Public shape is pinned to AiOfficialsPlanResponse.usage in api-v1/schemas/ai-planning.ts
   // — exactly these three fields. cost_usd lives on OfficialsPlanResult["usage"]
   // for the ledger (recordOfficialsRun above) but must not leak into the API
   // response, so it is built explicitly here rather than by spreading result.

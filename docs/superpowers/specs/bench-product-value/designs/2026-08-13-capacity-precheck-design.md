@@ -64,7 +64,7 @@ involved; full polish bar. Mobile 320/768/1280, no horizontal scroll.
 ## Arithmetic (normative)
 
 Let m = `matchMinutes`, g = `gapMinutes`, slot = m + g. (Both are the
-real `ScheduleConfig` field names, confirmed at `schemas.ts:743-793`;
+real `ScheduleConfig` field names, confirmed at `api-v1/schemas/`;
 `perEntrantMinRest` is r.)
 
 - **Supply**: per court c, per day d: usable windows W_{c,d} (config
@@ -141,7 +141,7 @@ server consumer only — never in the pure lib, never in `src/core/**`.
 
 ## Risks / re-pin
 
-`ScheduleConfig` field names cited from `api-v1/schemas.ts:743` predate
+`ScheduleConfig` field names cited from `api-v1/schemas/` predate
 C1/C2 landings — scout re-pin at plan time. OpenAPI regen owed (new 422
 code + report schema on the auto route).
 

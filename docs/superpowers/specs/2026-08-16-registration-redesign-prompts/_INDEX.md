@@ -27,7 +27,7 @@ registrant nobody ever placed.
 **RS011** (organiser-side eligibility gates, re-homed from the scoringpad-v2
 `L1`/#412 on 2026-08-17) depends only on RS002 and is file-disjoint from
 RS004–RS009, so it runs alongside either lane, before RS010. It writes
-`api-v1/schemas.ts`, which `L2`/#413 (date hardening, in the scoringpad-v2
+`api-v1/schemas/`, which `L2`/#413 (date hardening, in the scoringpad-v2
 prompts dir) also writes — those two are **sequential, never parallel**.
 
 | Session | Prompt file | Depends on | Status |
@@ -784,7 +784,7 @@ claim below carries its `path:line`.
    (`registration-submit.ts:710`). The group insert, `ref_code` retry loop,
    `access_token` minting and per-entry `join_code` (team, non-free-agent only)
    are all already inside the usecase — the endpoint must not re-do them.
-8. **`schemas.ts` is 3502 lines** and already carries a comment at `L1841-1846`
+8. **`api-v1/schemas/` is 3502 lines** and already carries a comment at `L1841-1846`
    stating the old single-entry public request/response pair was deleted and that
    RS003 owns defining the group-shaped replacements. Public registration schemas
    sit at `L1803-1871`, org-authed ones at `L1690-1802`. OpenAPI generator entry:
@@ -1167,7 +1167,7 @@ are FALSE. Each was verified with `git grep -a`/`git show`, not assumed.**
    settings.
 5. **TRUE, and it is the whole of W1:** none of the five columns RS001/RS002
    added has an organiser-facing API. `PutRegistrationSettings`
-   (`api-v1/schemas.ts:1972-1998`) has no `approval`/`allow_free_agents`;
+   (`api-v1/schemas/`) has no `approval`/`allow_free_agents`;
    `PatchDivision` (`:169-206`) has no `category`/`age_min`/`age_max`. All five
    are READ in usecases already (`registration-eligibility.ts:75-77,244-278`,
    `registration-approval.ts:121,188`, `registration-submit.ts:367,622`), so
@@ -1363,10 +1363,10 @@ as a terminal status and `V364:90` allows it, but:
   allowlist is `pending|paid|confirmed|waitlisted|withdrawn`, so
   `?status=rejected` — and `?status=expired` — return **400 today**. The
   organiser cannot list the entries they refused.
-- `api-v1/schemas.ts:2082` `RegistrationStatus` omits `rejected` for the same
+- `api-v1/schemas/registration.ts` `RegistrationStatus` omits `rejected` for the same
   reason, and `openapi.ts:189` repeats the short list a third time. Three
   hand-maintained copies of one enum; the DB CHECK is the only complete one.
-- `api-v1/schemas.ts:2169` `Registration` still declares `dob`, `gender`,
+- `api-v1/schemas/registration.ts` `Registration` still declares `dob`, `gender`,
   `guardian_name` and `guardian_consent` — all four DROPPED from `registrations`
   by RS001 (they moved to `registration_players`). The published OpenAPI
   contract advertises four fields the table no longer has, and omits
@@ -2099,7 +2099,7 @@ it** — repointing `eligibilityIsYouth` at `age_max` is one line of this
 change, and doing the standalone fix first means writing it twice.
 
 **Blocked on W5 while it was in flight**: W5 held `dictionaries/*/ui.json`,
-`i18n-keys.ts`, `schemas.ts`, `registration-submit.ts` and both `openapi/*`
+`i18n-keys.ts`, `api-v1/schemas/`, `registration-submit.ts` and both `openapi/*`
 files dirty — every file this change needs. Only `_INDEX.md` and the new
 migration were conflict-free, which is why they went first.
 
@@ -2188,7 +2188,7 @@ file the RS lanes touch and is now `RS011-organiser-eligibility-gates.md`. Issue
 **#412 stays the issue**; the old `L1` row is marked SUPERSEDED with a pointer
 here. `L2`/#413's "needs L1 merged first" dependency was **file-overlap
 sequencing only** and is deleted; `L2` now sequences against RS
-(`api-v1/schemas.ts`), not against `L1`. `L3`/#414 was never related to either.
+(`api-v1/schemas/`), not against `L1`. `L3`/#414 was never related to either.
 
 ## False premises found
 
@@ -2301,7 +2301,7 @@ Recorded earlier this session as a CRITICAL defect, repeated in the PR body, and
 used as the reasoning that made V380's lossy gender backfill look harmless. It
 is wrong, and the correction matters more than the original claim.
 
-`origin/main:apps/web/src/server/api-v1/schemas.ts:183` declares, on
+`origin/main:apps/web/src/server/api-v1/schemas/` declares, on
 `CreateDivision`:
 
     eligibility: z.array(z.record(z.string(), z.unknown())).default([])
@@ -2594,7 +2594,7 @@ fourth (invite-pay-cancel walkthrough) was already running and owns
 | --- | --- | --- |
 | money | #1, #2, #5, #7, #9, #12 | `registrations.ts` + its tests, `register/status/**` if a per-entry field must reach the UI |
 | migration | #3 | `V380__…consolidation.sql`, new `__tests__/v380-age-band-backfill.test.ts` |
-| join | #4, #15 | `register/join/**`, `registration-submit.ts`, `schemas.ts`, `openapi/*`, dicts |
+| join | #4, #15 | `register/join/**`, `registration-submit.ts`, `api-v1/schemas/`, `openapi/*`, dicts |
 
 **Flyway V-numbers pre-allocated, because this programme has already shipped
 two V367s through a clean rebase:** high-water is **V382**; money lane takes
@@ -2993,7 +2993,7 @@ permanently on a roster reading Alice and Robert.
 asserted a fallback to `partner_name` "while the second roster row is
 blank". That state does not exist: a pair is fixed at exactly two players
 (`registration-submit.ts`) and `full_name` is `z.string().min(1)`
-(`schemas.ts`), so `players[1]` is always present and non-empty by the time
+(`api-v1/schemas/`), so `players[1]` is always present and non-empty by the time
 a display name is composed. **The `partner_name` fallback is unreachable at
 submit** — it is kept as defence only, and the comment now says so instead
 of describing behaviour that cannot happen. A test pins the 422 that makes
@@ -3996,7 +3996,7 @@ Rulings taken at session open, before any code.
    fall back to `fee_cents`**, so every existing division keeps
    today's behaviour and no backfill is owed. This widens RS009 past
    its brief into the RS004 settings panel, the stepper's line items,
-   `api-v1/schemas.ts` + `openapi:gen`, and 4 dictionaries — asked and
+   `api-v1/schemas/` + `openapi:gen`, and 4 dictionaries — asked and
    approved before starting, per `_RULES.md` §1.
 2. **Assignment notifies, but nobody gets a veto.** The solo sign-up
    and the receiving captain are both emailed; neither can block it.
@@ -4652,11 +4652,11 @@ brief premises are stale enough to change scope, not just line numbers.
   itself moved to `:247-256`, text unchanged/still false). Raises the value
   case for this session, doesn't change scope: ship the claim true, don't
   soften the copy.
-- Schema check: `server/api-v1/schemas.ts` `CreateDivision`/`PatchDivision`
+- Schema check: `server/api-v1/schemas/divisions.ts` `CreateDivision`/`PatchDivision`
   (`:225-309`) already first-class-only, no untyped array to replace, has
   `eligibility_note`. No `EligibilityOverride` shape anywhere yet — confirmed
   net-new on `CreateEntrant`/`PatchEntrant`/`PutLineup`/roster-sync bodies.
-  `NewPersonMemberInput` (`schemas.ts:358-364`) and `resolveInlineMembers`
+  `NewPersonMemberInput` (`api-v1/schemas/`) and `resolveInlineMembers`
   (`entrants.ts:36-59`, inserts only `org_id, full_name, consent`) confirmed
   missing `dob`/`gender` — net-new work, matches brief.
 

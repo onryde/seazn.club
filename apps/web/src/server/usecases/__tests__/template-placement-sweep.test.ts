@@ -38,7 +38,7 @@
 // (INVALID_REQUEST "neither entrant_indices nor person_indices") and BUILD falls back to greedy for that stage. The
 // verdicts read what was placed, never which placer placed it, so they hold under both.
 //
-// The rest between a player's matches is the settings' own default (`perEntrantMinRest` 0, ScheduleConfig in schemas.ts).
+// The rest between a player's matches is the settings' own default (`perEntrantMinRest` 0, ScheduleConfig in api-v1/schemas/scheduling.ts).
 // A rest above 0 is OUT OF SCOPE here, pending engine 6.0.1 (the finding routed in task-26c-report.md: with a rest of 30,
 // BUILD leaves every line fed by an undecided line unplaced - blocking `warn.order` H6 "starts inside feeder's rest" -
 // 4 of a bracket of 8's 7 lines placed, which also hides G1, since the owed third-place lines are fed lines). Add those

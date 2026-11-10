@@ -322,7 +322,7 @@ git commit -m "refactor(bench): the phase pipeline leaves tiny.ts and becomes th
 
 **Two facts that shape this comparator — do not design around a scoreline scalar:**
 
-- `GET /api/v1/divisions/{id}/fixtures` (`app/api/v1/divisions/[id]/fixtures/route.ts:14`, usecase `usecases/fixtures.ts:68`, **no query params**) returns per fixture: `ext_key`, `status` (`scheduled|in_play|decided|finalized|abandoned|forfeited|cancelled`), `outcome` (jsonb, typed `z.unknown().nullable()` on the wire at `server/api-v1/schemas.ts:1161`+36), `round_no`, `seq_in_round`, `home_entrant_id`/`away_entrant_id`, `court_id`, `scheduled_at`. **There is no score field.** The route also strips `venue` and `court_label` (`route.ts:19`).
+- `GET /api/v1/divisions/{id}/fixtures` (`app/api/v1/divisions/[id]/fixtures/route.ts:14`, usecase `usecases/fixtures.ts:68`, **no query params**) returns per fixture: `ext_key`, `status` (`scheduled|in_play|decided|finalized|abandoned|forfeited|cancelled`), `outcome` (jsonb, typed `z.unknown().nullable()` on the wire at `server/api-v1/schemas/`+36), `round_no`, `seq_in_round`, `home_entrant_id`/`away_entrant_id`, `court_id`, `scheduled_at`. **There is no score field.** The route also strips `venue` and `court_label` (`route.ts:19`).
 - The engine's `MatchOutcome` (`packages/engine/src/core/types.ts`) is a discriminated union on `kind`: `win {winner, loser, method?}`, `draw`, `tie`, `no_result`, `award {winner, score?}`. So the outcome comparison is kind + winner + method, and `pack-schema.ts` already pins that the pack's kinds are the engine's (`OUTCOME_KINDS_ARE_ENGINE_KINDS`).
 - Scorelines, where a pack declares `perSide`, come from `GET /api/v1/fixtures/{id}/state` (`app/api/v1/fixtures/[id]/state/route.ts:8` → `getFixtureState`), which returns summary + fold + status. Fetch it ONLY for fixtures whose expected entry declares `perSide`, or a 95-match suite pays 95 extra round trips for nothing.
 
@@ -710,7 +710,7 @@ git commit -m "feat(bench): claims are accepted, not just minted"
 | its two preconditions | `divisions.auto_posts` must be on AND the org must hold `hasFeature("news.auto")`. **Seed both, or `drafted` is legitimately 0 and the step proves nothing** |
 | rows | `insert into org_posts … 'draft'` (`org-posts.ts:689`); `PostStatus = "draft" \| "published" \| "archived"` (`:61`) |
 | list | `GET /api/v1/orgs/{id}/posts?status=` (`app/api/v1/orgs/[id]/posts/route.ts:13` → `listPosts` `:156`). No competition filter — filter client-side on the `competition_id`/`division_id` fields of `toApiPost` (`server/api-v1/posts.ts:10`) |
-| publish | `PATCH /api/v1/posts/{id}`, body `PatchPost` `{title?, body_md?, action: "publish" \| "archive"}` (`schemas.ts:4635`) |
+| publish | `PATCH /api/v1/posts/{id}`, body `PatchPost` `{title?, body_md?, action: "publish" \| "archive"}` (`api-v1/schemas/`) |
 | the effect | `shouldFirePostPublished` (`org-posts.ts:100`) is `action === "publish" && prevStatus !== "published"`, and its side effect is **a PostHog `captureServer` call** (`:318-325`) — **no table row, no outbox** |
 
 **Consequence, and the design decision it forces:** "observed exactly once" is not observable over HTTP, because the observable is analytics. Do not assert PostHog. Assert the PREDICATE's behaviour instead — publish a post, then PATCH `action: "publish"` a second time and assert `published_at` is unchanged, which is the only thing `prevStatus !== "published"` protects that a client can see. Record in the PR body that the fire-once effect itself is analytics-only and therefore asserted by proxy.
@@ -795,7 +795,7 @@ B06 becomes B06a (this wave) and B06b (the pack), with the PackSchema freeze att
 
 - [ ] **Step 4: Add the untyped-config finding to §17**
 
-`CreateStage.config` is `z.record(z.string(), z.unknown())` (`api-v1/schemas.ts:980`) inside a `.strict()` envelope (`:983`), so a misspelled `byes`/`slotOrder` is dropped in silence and the product seeds its own draw. Note the separate PR that types it.
+`CreateStage.config` is `z.record(z.string(), z.unknown())` (`api-v1/schemas/`) inside a `.strict()` envelope (`:983`), so a misspelled `byes`/`slotOrder` is dropped in silence and the product seeds its own draw. Note the separate PR that types it.
 
 - [ ] **Step 5: Commit**
 

@@ -198,7 +198,7 @@ order, `expectedDoublesServer` would return `null` for both sides, and:
 - the doubles e2e's serve-dot assertion would be vacuous, or would have to
   assert the pip's ABSENCE and pass for the wrong reason.
 
-The API side already supports it: `schemas.ts:941` declares
+The API side already supports it: `api-v1/schemas/` declares
 `pair_order: z.number().int().positive().nullish()`, and the lineup editor
 already sends it through `toPutSlot(s, i, pairShaped)`. So the fix is small and
 belongs BEFORE the e2e and gallery work, not inside it:

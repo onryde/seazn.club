@@ -549,7 +549,7 @@ describe("CreateDivision — eligibility columns (RS007 wizard rewire)", () => {
 // RS011 review fix 6: every `entrants-eligibility.test.ts` case calls the
 // usecase functions directly, bypassing Zod entirely — a future
 // `min(3)`→`min(4)` (or `max(500)`→`max(50)`) typo in `EligibilityOverride`
-// (schemas.ts) would go uncaught by any DB test. This pins the boundary
+// (api-v1/schemas/divisions.ts) would go uncaught by any DB test. This pins the boundary
 // through the ACTUAL schema, the way every other write-body test in this
 // file does.
 describe("EligibilityOverride — reason length boundary (RS011 review fix 6)", () => {

@@ -128,7 +128,7 @@ the same data the HTTP run uses.
 
 ## 5. Scheduling scenarios
 
-Per-suite `ScheduleConfig` (apps/web `api-v1/schemas.ts:743` vocabulary):
+Per-suite `ScheduleConfig` (apps/web `api-v1/schemas/` vocabulary):
 every knob covered by ≥2 suites —
 
 - `sessionWindows` (afternoon-only chess; two-session darts),
@@ -317,7 +317,7 @@ knob (1), draws + half points (4).
    includes swiss (ladder/americano explicitly rejected at
    `stages.ts:3238-3242`, brackets rejected generically at
    `:3244-3245`). Request shape `AddFixture`
-   (`server/api-v1/schemas.ts:753`, `.strict()`): `home_entrant_id`,
+   (`server/api-v1/schemas/`, `.strict()`): `home_entrant_id`,
    `away_entrant_id`, optional `round_no`, `scheduled_at`, `venue_id`,
    `court_id`. Body does round/seq bookkeeping (`stages.ts:3291-3296`)
    then a plain `insert into fixtures (...) returning id`
@@ -353,7 +353,7 @@ knob (1), draws + half points (4).
    per request. Batch path: `POST /api/v1/divisions/{id}/events/import`
    (`app/api/v1/divisions/[id]/events/import/route.ts:24-32`), shipped
    by P11 (D6, merged `ee5aa1a01` #653) — `EventImportRequest`
-   (`server/api-v1/schemas.ts:962-990`) takes `streams[]`, each a
+   (`server/api-v1/schemas/`) takes `streams[]`, each a
    fixture + its events; server assigns `seq`, `core.void` refused.
    Hard caps in `usecases/event-import.ts:40` (`IMPORT_CAPS`): `streams:
    50`, `eventsPerFixture: 1_000`, `eventsPerCall: 10_000` (413 on
@@ -541,7 +541,7 @@ not inside B04.
    with its UI and dictionaries, in its own change.
 
 4. **No one can request or require a scheduling engine.** `AutoScheduleRequest`
-   (`schemas.ts:1643-1688`) has no engine field, and no env var, flag, setting
+   (`api-v1/schemas/`) has no engine field, and no env var, flag, setting
    or column selects one: `build.ts:1165-1204` always attempts the solver and
    falls back to greedy only on `MAX_SOLVER_QUEUE`, `canSolveWithin`, or an
    unreachable placement service. A customer cannot ask for a fast greedy
@@ -764,7 +764,7 @@ implicit failure-mode with a deliberate one. Its own PR, after B06a's T7.
 
 ### 18.2 A stage's `config` is unvalidated inside a strict envelope
 
-`CreateStage` (`api-v1/schemas.ts:975-983`) is `.strict()` — an unrecognised
+`CreateStage` (`api-v1/schemas/`) is `.strict()` — an unrecognised
 TOP-LEVEL key 400s, and the comment above it explains exactly why that
 strictness was added (a `qualification: {topN}` typo created a stage with
 `progression: null`, returned 201, and generated nobody). But `config` itself
@@ -827,7 +827,7 @@ not at the moment the toggle is flipped.
 `app/api/v1/orgs/[id]/posts/route.ts:19` passes `status` through only when it
 matches `draft|published|archived` and otherwise drops the filter, returning
 every post with a 200. A client with a typo gets a superset and no signal. The
-strict-envelope reasoning at `schemas.ts:971-974` argues the opposite way for
+strict-envelope reasoning at `api-v1/schemas/` argues the opposite way for
 `CreateStage`; this route predates that argument.
 
 ### 18.6 The fire-once publish effect is analytics-only

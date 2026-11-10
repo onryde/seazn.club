@@ -261,7 +261,7 @@ beforeEach(() => {
 /**
  * COMPILE-TIME bridge between the domain type and the wire contract. Nothing
  * else binds them: `competition-schedule-ai/` declares an interface and
- * `api-v1/schemas.ts` declares a Zod schema, both named
+ * `api-v1/schemas/` declares a Zod schema, both named
  * `AiCompetitionPlanResponse`, and the route hands the first to a client that
  * was promised the second.
  *

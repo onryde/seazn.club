@@ -28,7 +28,7 @@
 | File | Responsibility |
 |---|---|
 | `apps/web/src/server/usecases/stages.ts` | Shared carry helper; call from `seedNextStage` + `confirmSeedProposal`; propose-time guard in `computeSeedProposal` |
-| `apps/web/src/server/api-v1/schemas.ts` | Drop setup+carry refine |
+| `apps/web/src/server/api-v1/schemas/` | Drop setup+carry refine |
 | `apps/web/src/lib/format-templates.ts` | `StageDraft.progression.carry?` |
 | `apps/web/src/components/v2/division-builder.tsx` | Carry control on progression-bearing templates |
 | `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json` | Picker labels/help |
@@ -42,7 +42,7 @@
 ### Task 1: Schema — allow `setup` + carry
 
 **Files:**
-- Modify: `apps/web/src/server/api-v1/schemas.ts` (ProgressionSchema refine ~954–970)
+- Modify: `apps/web/src/server/api-v1/schemas/stages.ts` (ProgressionSchema refine ~954–970)
 - Test: `apps/web/src/server/usecases/__tests__/progression-schema.test.ts` (~222–250)
 
 **Interfaces:**

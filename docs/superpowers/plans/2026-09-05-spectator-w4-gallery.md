@@ -59,7 +59,7 @@
 **API**
 - `apps/web/src/app/api/v1/competitions/[id]/gallery/route.ts` — NEW (`POST`, `GET`).
 - `apps/web/src/app/api/v1/gallery/[photoId]/route.ts` — NEW (`DELETE`).
-- `apps/web/src/server/api-v1/schemas.ts` — MODIFY: `GalleryPhoto`, `GalleryUploadResult`, `GalleryConsentSummary`.
+- `apps/web/src/server/api-v1/schemas/` — MODIFY: `GalleryPhoto`, `GalleryUploadResult`, `GalleryConsentSummary`.
 - `apps/web/src/server/api-v1/openapi.ts` — MODIFY: three `ROUTES` rows.
 - `apps/web/src/server/api-v1/key-scopes.ts` — MODIFY: the two mutations join `NEVER_KEY_ROUTES` (`:296-345`, beside `"POST /divisions/:id/logo-upload-url"` at `:331`).
 - Regenerate: `npm run openapi:gen` → `openapi/v1.json`, `openapi/v1.public.json`.
@@ -102,7 +102,7 @@ Every line number below was opened on 2026-09-05 on `feat/spectator-surface` (HE
 | P11 | Multipart precedent: `POST /api/v1/persons/[id]/photo` reads `req.formData()`, requires a `File` entry named `file`, and 400s otherwise (`app/api/v1/persons/[id]/photo/route.ts:14-16`); bytes reach storage through `supabaseAdmin().storage.from(PHOTO_BUCKET).upload(path, bytes, { contentType, upsert: true })` with a 502 on error (`usecases/persons.ts:95-105`). No body-size limit is configured for Route Handlers anywhere — `bodySizeLimit` is a Server Actions option. Confirm at execution that a 10 MB multipart POST is accepted by the standalone server, not just by `next dev`. | as cited | Next upgrade |
 | P12 | Session-only route precedent: `"POST /divisions/:id/logo-upload-url"` sits in `NEVER_KEY_ROUTES` (`server/api-v1/key-scopes.ts:331`) with the comment "signed URLs are a console UX, not an API surface". The OpenAPI drift gate is a `ci.yml` step (`:94-98`: `npm run openapi:gen` then `git diff --exit-code openapi/v1.json openapi/v1.public.json`), and `openapi-coverage.test.ts` asserts `ROUTES` matches the route files on disk **exactly**. | as cited | — |
 | P13 | Migration style: explicit `org_id`, `enable`+`force` RLS, one tenant policy `using (org_id = current_org_id()) with check (...)`, grants to `app_user`, **every FK gets its own index** (`V376__event_imports.sql:33-54`). Highest delta on the branch: `V391__official_availability_org_write.sql` (149 files in `db/migration/deltas/`). Public reads bypass RLS on the superuser connection and filter through the `public_*_v` views instead (`usecases/public.ts:1-6`; `V295__org_news.sql:10-13` states the same rule for posts). | as cited | any new delta |
-| P14 | `org_posts` (`V295__org_news.sql:17-38`) carries exactly ONE `hero_image_path`, a per-org unique `slug`, a `draft/published/archived` lifecycle, path-based ISR (`revalidate.ts:63-71`) and a Pro `news.auto` entitlement. `PostKind = ["news","result","round_recap","announcement","weekly_digest"]` (`schemas.ts:4384`). Evidence for Q3. | as cited | — |
+| P14 | `org_posts` (`V295__org_news.sql:17-38`) carries exactly ONE `hero_image_path`, a per-org unique `slug`, a `draft/published/archived` lifecycle, path-based ISR (`revalidate.ts:63-71`) and a Pro `news.auto` entitlement. `PostKind = ["news","result","round_recap","announcement","weekly_digest"]` (`api-v1/schemas/`). Evidence for Q3. | as cited | — |
 | P15 | Playwright `walkthrough` project uses `storageState: AUTH_STATE` — it is **SIGNED IN** (`apps/web/playwright.config.ts:164-168`), which is what W4's staff context needs; the anonymous context must be created explicitly (`browser.newContext({ storageState: { cookies: [], origins: [] } })`). Helpers: `apiJson(request, path, method, body)` (`e2e/helpers.ts:122` — sets `Content-Type: application/json`, so it **cannot** do multipart), `expectNoHorizontalScroll(page, { allowancePx })` (`:43`), `screenshotAtWidths` (`:240`), `competitionPath`/`divisionPath`/`fixturePath` (`:1314,:1330,:1347`), `createStageAndGenerate` (`:1383`), `addEntrantsViaApi` (`:1366`), `TAG` (`:111`); `dismissCookieBanner` (`e2e/scorepad-a11y-kit.ts:409`); `auditRoute` (`e2e/mobile.spec.ts:502`), `overflowingIn` (`:91`), `projectViewport` (`:44`). `mobile.spec.ts` is `describe.configure({ mode: "serial" })` (`:39`) — a red count is a FLOOR. | as cited | — |
 | P16 | Smoke: `check(label, cond)` (`scripts/smoke.ts:91`), `expectFail(label, fn)` (`:95`). W1 Task 15 adds a public-fixture check; W4's checks go beside it. | as cited | W1 Task 15 |
 | P17 | i18n: `public.json` has **194 keys** in each of `{en,es,fr,nl}` (196 lines each) today; keys are flat and dotted (`"org.competitionsBy"`, `dictionaries/en/public.json:5`). `npm run i18n:gen-keys` → `scripts/i18n/gen-keys.ts` (`package.json:39`); `apps/web/src/lib/i18n-keys.ts` is GENERATED. `npm run i18n:check` is the parity gate (`package.json:41`). | as cited | — |
@@ -1036,7 +1036,7 @@ export async function softDeleteGalleryPhoto(
 **Files:**
 - Create: `apps/web/src/app/api/v1/competitions/[id]/gallery/route.ts`
 - Create: `apps/web/src/app/api/v1/gallery/[photoId]/route.ts`
-- Modify: `apps/web/src/server/api-v1/schemas.ts`
+- Modify: `apps/web/src/server/api-v1/schemas/`
 - Modify: `apps/web/src/server/api-v1/openapi.ts:57+` (`ROUTES`)
 - Modify: `apps/web/src/server/api-v1/key-scopes.ts:296` (`NEVER_KEY_ROUTES`)
 - Test: `apps/web/src/app/api/v1/competitions/[id]/gallery/__tests__/route.test.ts`
@@ -1240,7 +1240,7 @@ and in `key-scopes.ts` `NEVER_KEY_ROUTES` (beside `:331`):
   "DELETE /gallery/:photoId",
 ```
 
-- [ ] **Step 5: Add the schemas** (`schemas.ts`, beside the post schemas at `:4384`):
+- [ ] **Step 5: Add the schemas** (`api-v1/schemas/`, beside the post schemas at `:4384`):
 
 ```ts
 export const GalleryPhoto = z.object({

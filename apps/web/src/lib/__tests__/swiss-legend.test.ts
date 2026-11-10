@@ -151,7 +151,7 @@ describe("swissStageLegend", () => {
 describe("swissStageLegend — a COMPLETE stage keeps its history, not a live claim", () => {
   // A STAGE's own status vocabulary is `pending | active | complete` — the
   // check constraint on `stages.status` (V210__stages.sql) and `Stage.status`
-  // in api-v1/schemas.ts. It is NOT the DIVISION's `active | completed`
+  // in api-v1/schemas/stages.ts. It is NOT the DIVISION's `active | completed`
   // (`DIVISION_STARTED_STATUSES`, usecases/stages/helpers.ts): a different column with
   // a different spelling, and copying that set here would have matched nothing
   // at all, leaving this gate silently inert.

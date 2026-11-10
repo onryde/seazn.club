@@ -231,7 +231,7 @@ export interface AiCompetitionPlanResponse
    * One row per SOLVED division, in pack order: what it is AND what it cost.
    *
    * Deliberately ONE array. `RunMeterStamp.divisions` (lib/ai-rung.ts, mirrored
-   * by `AiRunPriceFields` in api-v1/schemas.ts) already keys a per-division
+   * by `AiRunPriceFields` in api-v1/schemas/ai-planning.ts) already keys a per-division
    * price breakdown by division id, and the board needs the division's name and
    * movable count against the same ids — two sibling arrays over one key is a
    * join the client would have to do on every render, and the plan's own

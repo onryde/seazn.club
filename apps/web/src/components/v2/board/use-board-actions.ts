@@ -420,7 +420,7 @@ export function useBoardActions(
           method: "PATCH",
           json: {
             scheduled_at: atIso,
-            // P9 pass 4a: PatchFixture (schemas.ts) is `.strict()` and dropped
+            // P9 pass 4a: PatchFixture (api-v1/schemas/fixtures.ts) is `.strict()` and dropped
             // court_label from its shape when the cutover landed — sending the
             // old key 400s every drag instead of moving the fixture.
             court_id: court,
@@ -767,7 +767,7 @@ export function useBoardActions(
         // anything scheduled since the cutover, so this could no longer
         // match either side; `a`/`b` are court ids (BoardConfig.courts).
         const target = f.court_id === a ? b : f.court_id === b ? a : null;
-        // PatchFixture (schemas.ts) is `.strict()` — court_label 400s.
+        // PatchFixture (api-v1/schemas/fixtures.ts) is `.strict()` — court_label 400s.
         return target ? { court_id: target } : null;
       }),
     [bulkMove],

@@ -5,8 +5,8 @@ import { z } from "zod";
 // RS007 review fix L1 — the SAME every-year-safe days-per-month predicate
 // ageBandEligibilityIssues (registration-rules.ts) uses to fail loudly on
 // the read side; pure and DB-free, so it is safe to reuse here. RELATIVE,
-// with the explicit .ts extension (matching this file's own sibling
-// openapi.ts, e.g. `from "./schemas.ts"`) — NOT the `@/` alias: this module
+// with the explicit .ts extension (matching the openapi.ts beside this
+// folder, e.g. `from "./schemas/index.ts"`) — NOT the `@/` alias: this module
 // is shared with the standalone OpenAPI generator script
 // (scripts/openapi-gen.ts), which runs via bare
 // `node --experimental-strip-types` with no bundler and no tsconfig `paths`

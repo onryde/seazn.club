@@ -3,7 +3,7 @@
 // The route returns `getScheduleSettings` / `putScheduleSettings` unmapped, so
 // whatever key those two functions emit IS the public payload. That payload is
 // pinned twice over: by the `ScheduleSettings` response schema in
-// api-v1/schemas.ts, and by openapi/v1.json, which documents GET's `data` as
+// api-v1/schemas/, and by openapi/v1.json, which documents GET's `data` as
 // exactly { division_id, config, tz, updated_at }.
 //
 // The INTERNAL settings object (`ScheduleSettingsOut`, what `loadSettings`

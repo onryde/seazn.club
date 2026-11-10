@@ -6,11 +6,11 @@
 import { describe, expect, it } from "vitest";
 // The B03r live-crash fix (register.ts's own header comment): the real
 // product schema, imported DIRECTLY — `apps/web/src/server/api-v1/
-// schemas.ts` is deliberately engineered to be importable from a plain
+// schemas/` is deliberately engineered to be importable from a plain
 // `node --experimental-strip-types` script with no bundler/tsconfig `paths`
 // resolution ("NOT server-only ... shared with the OpenAPI generator
-// script", schemas.ts's own header; its one internal import that could have
-// needed the `@/` alias is RELATIVE on purpose, see schemas.ts:11-19).
+// script", api-v1/schemas/ folder's own header; its one internal import that could have
+// needed the `@/` alias is RELATIVE on purpose, see api-v1/schemas/).
 // `scripts/openapi-gen.ts` already imports this file's sibling
 // (`openapi.ts`) the identical way — confirmed by actually running this
 // import under both `node --experimental-strip-types` and vitest before
@@ -494,7 +494,7 @@ describe("captainEmail", () => {
 
 // ---------------------------------------------------------------------------
 // buildRegistrationEntry — the B03r live-crash fix. `PublicRegisterGroupRequest`'s
-// superRefine (schemas.ts) 400s any self-registering entry lacking
+// superRefine (api-v1/schemas/) 400s any self-registering entry lacking
 // contact.dob; registration-submit.ts separately 422s a self-registering
 // MINOR lacking guardian consent/name. Every case here parses the built
 // entry's WIRE body (`toWireSubmitBody`, the SAME function `enter()` itself

@@ -80,7 +80,7 @@ Division, fixture, kiosk, embed, ICS and poster have no draft-specific test. The
   - The status-suggestion button.
   - The API v1 PATCH (`app/api/v1/competitions/[id]/route.ts:21`, the single caller).
   - There is no staff or admin status tool.
-- Create never accepts `status` (`CreateCompetition`, `schemas.ts:135`), and `templates.ts:221` inserts a draft. So creating never lists anything.
+- Create never accepts `status` (`CreateCompetition`, `api-v1/schemas/`), and `templates.ts:221` inserts a draft. So creating never lists anything.
 - **Reach of the `orgTag` expiry:**
   - The hub, division, fixture and player-card metadata all read `competition.status` from the `pub-comp` shell (`data.ts:702-703`, tagged `orgTag`). One expiry therefore flips noindex on all four pages, and the Upcoming rows on sibling cards (`pub-player-v17` carries `orgTag`, `data.ts:1656`).
   - Discovery is covered by `discoveryTouched` (`competitions.ts:667-670`), which includes `patch.status` on a discoverable row.
@@ -173,7 +173,7 @@ None.
 
 **M3: Stale contract and doc text.**
 - **Where:**
-  - `schemas.ts:5104`: `PublicOrgLive` doc, "LISTED (`visibility = 'public'`)".
+  - `api-v1/schemas/public.ts`: `PublicOrgLive` doc, "LISTED (`visibility = 'public'`)".
   - `openapi.ts:224`: the discovery summary "opted-in public competitions". Public-API consumers see drafts vanish with no contract note.
   - `app/(public)/shared/[orgSlug]/page.tsx:1-2`: the header comment.
 - **Fix:** add "past draft". Regenerating OpenAPI is owed per RULES (Pre-commit).

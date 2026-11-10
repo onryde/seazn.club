@@ -247,7 +247,7 @@ export class Recorder {
 
 /** W1-driving Task 13: the end date a template case's competition is
  *  created with. Synthetic and far past any run (the product requires one,
- *  schemas.ts CreateFromTemplate `ends_on`), and the same day the builder
+ *  api-v1/schemas/stages.ts CreateFromTemplate `ends_on`), and the same day the builder
  *  path's createCompetition sends (http-driver.ts), so both create paths end
  *  on one day. Ruling 28's DRIVING_ROUTE / DRIVING_WAVE are gone: no route
  *  names the driving wave any more (scenario-catalogue.test.ts). */

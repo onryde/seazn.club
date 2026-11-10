@@ -9,7 +9,7 @@ verifying every prompt against current code, and defines the build shape.
 1. **One wave branch, single PR.** `feat/v13-real-competition-fidelity` in its own
    worktree off `40de2a4`. PROMPT-61 is built **first in-branch** (no separate hotfix PR).
 2. **Build order:** 61 → 59 → 66 → 60 → 62 → 63 → 64 → 65 → closing pass → FIFA capstone.
-   Rationale: 61/59/66 share `stages.ts`/`schemas.ts`/overlay plumbing; 62 before 64
+   Rationale: 61/59/66 share `stages.ts`/`api-v1/schemas/`/overlay plumbing; 62 before 64
    (bracket slide); 63/65 independent.
 3. **PROMPT-65 pricing:** public profile stat block = **free for consented players, all
    tiers**; the leaderboard *table* stays Pro (`stats.player`, V112). Mirrors the
@@ -25,7 +25,7 @@ verifying every prompt against current code, and defines the build shape.
 
 - Corpus is design-only; **nothing built**: `supportsDraws` invoked nowhere;
   `QualificationSpec` still `TakePicks | TopN | BestOfRank` (`qualification.ts:39`);
-  `CreateStage.qualification` still free `z.record` (`schemas.ts`); no `slotOrder` in
+  `CreateStage.qualification` still free `z.record` (`api-v1/schemas/`); no `slotOrder` in
   `SingleElimOptions`; zero `badge_url` hits; `getPublicPlayer` stat-less
   (`public-site/data.ts`); `me/persons/[id]/` has only `consent/`; no
   `stages/[id]/fixtures` route (`issueChallenge` now at `stages.ts:1349`); public

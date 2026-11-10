@@ -195,9 +195,9 @@ describe("stream-session-view — state, step and pill", () => {
 });
 
 describe("stream-session-view — create refusals off the real wire (D1)", () => {
-  // The rulebook: D1's mapping, one row per refusal createSession produces (server/usecases/stream-sessions.ts
-  // `refuse` :944-954, `targetInUse` :935-941, the index race :1078, the saved-target re-check :1027-1031, the ingest
-  // refusal :1095, the actor/fixture guards :950/:967), plus the codes D1 names as "anything else".
+  // The rulebook: D1's mapping, one row per refusal createSession produces (server/usecases/stream-sessions/:
+  // `refuse` in refusals.ts, `targetInUse` in holders.ts, the index race, the saved-target re-check, the ingest
+  // refusal, the actor/fixture guards), plus the codes D1 names as "anything else".
   const ROWS: [string, Error, CreateErrorCode][] = [
     ["no_credits 402", new HttpError(402, "This organisation has no match credits", "no_credits", { featureKey: "streaming.relay" }), "no_credits"],
     ["overlay_required 409", new HttpError(409, "phone streaming needs the overlay tier", "overlay_required"), "overlay_required"],
@@ -397,7 +397,7 @@ describe("stream-session-view — health, elapsed, the paste code", () => {
   it("health chips, the empty and edge cases: no ingest read → 'unknown'; a composed session has no ingest chip; no beat yet → its OWN copy, stale; a beat stamped ahead of this clock reads 0 s, never negative", () => {
     expect(healthChips(view({ ingest: null }), msg, NOW, "en").map((c) => c.text)).toEqual([msg("stream.health.ingest.unknown")]);
     expect(healthChips(view({ ingest: { state: "disconnected", protocol: null } }), msg, NOW, "en").map((c) => c.text)).toEqual([msg("stream.health.ingest.disconnected")]);
-    // Composed: the server never reads the ingest for it (stream-sessions.ts currentSession), so "unknown" would be a
+    // Composed: the server never reads the ingest for it (usecases/stream-sessions/current.ts currentSession), so "unknown" would be a
     // permanent false alarm — the heartbeat chips alone describe the relay.
     const composed = healthChips(view({ mode: "composed", ingest: null, health: { fps: 25, bitrateKbps: 4000, lastBeatAt: NOW.toISOString() } }), msg, NOW, "en");
     expect(composed.map((c) => c.text)).toEqual([msg("stream.health.fps", { n: 25 }), msg("stream.health.bitrate", { n: "4.0" }), msg("stream.health.beat", { s: 0 })]);
@@ -581,7 +581,7 @@ describe("I-1 — which D3 box: phone first (owner 2026-10-01, option a)", () =>
   });
 
   // The chain's N1 rule: a null ingest decides nothing, so it is not no-signal. (The server never answers this shape — a
-  // failed read nulls ingest AND output together, stream-sessions.ts — so it is the rule's case, not a failed read's.)
+  // failed read nulls ingest AND output together, usecases/stream-sessions/ — so it is the rule's case, not a failed read's.)
   it("the N1 rule: a null ingest beside an output is not no-signal — past the hold it is the key box", () => {
     expect(d3Warning(v("live", null, "connecting", W))).toBe("destination");
   });

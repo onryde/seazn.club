@@ -14,7 +14,7 @@
 
 - Work in the worktree `/Users/ashokhein/github/seazn.club-fxc` on branch `feat/fixture-console-redesign`. Prefix every command with `cd /Users/ashokhein/github/seazn.club-fxc &&` (or `cd .../seazn.club-fxc/apps/web &&`). Never touch the main checkout.
 - Local env label `fxc`: `eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label fxc)"` exports `DATABASE_URL` (fresh Postgres on :54652) and `SMOKE_BASE` (prod server :3364). After code changes to the app: `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh rebuild --label fxc`.
-- `divisions.status` ∈ `setup | scheduled | active | completed` (V209). `stages.status` ∈ `pending | active | complete` (V210). `fixtures.status` ∈ `scheduled | in_play | decided | finalized | abandoned | forfeited | cancelled` (schemas.ts:1018).
+- `divisions.status` ∈ `setup | scheduled | active | completed` (V209). `stages.status` ∈ `pending | active | complete` (V210). `fixtures.status` ∈ `scheduled | in_play | decided | finalized | abandoned | forfeited | cancelled` (api-v1/schemas/).
 - Governing clock for "today" = `resolveVenueTz(null, organizations.timezone)` from `@/lib/tz`. Never `schedule_settings.tz` (display lane).
 - Every user-facing string → all four dictionaries (`en`, `es`, `fr`, `nl`) under `desk.*`, then `npm run i18n:gen-keys` (regenerates `i18n-keys.ts`; tsc fails on an unknown key until then) and `npm run i18n:check` (parity).
 - Sport icon on every division row (`sportEmoji(d.sport_key)` from `@/components/discovery-cards`, or the uploaded logo); none on the competition masthead.

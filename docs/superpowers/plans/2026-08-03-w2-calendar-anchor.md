@@ -115,7 +115,7 @@ are explicit organiser calendar statements and must never contradict the window.
 | `apps/web/src/server/usecases/schedule-ai.ts` | modify | `BuildPackOptions.now`; pack `tz`/`clock`/`window`/`sessionHours`; org-zoned rendering; real draft anchor; sentinel kill; `verifyConfig` window. |
 | `apps/web/src/server/usecases/competition-schedule-ai.ts` | modify | Joint twin of all of the above; `canonicalTz` → org zone; `verifyConfigFor` takes the window. |
 | `apps/web/src/server/usecases/schedule-ai-prompt.ts` | modify | `J6` rewritten. `SYSTEM_PROMPT` untouched. |
-| `apps/web/src/server/api-v1/schemas.ts` | modify | `ScheduleConflict.code` gains `"warn.window"`. |
+| `apps/web/src/server/api-v1/schemas/` | modify | `ScheduleConflict.code` gains `"warn.window"`. |
 | `apps/web/src/components/v2/board/types.ts` | modify | `CONFLICT_LABEL` / `CONFLICT_HELP` gain the `warn.window` entry. |
 | `apps/web/src/dictionaries/{en,nl,fr,es}/ui.json` | modify | Two new keys each. |
 | `content/help/**` | modify | Closing pass — document the org-clock rule and the window. |
@@ -1600,7 +1600,7 @@ Refs #397"
 ## Task 6: Surface the reason — wire enum, labels, four locales
 
 **Files:**
-- Modify: `apps/web/src/server/api-v1/schemas.ts:748-758` (`ScheduleConflict.code`)
+- Modify: `apps/web/src/server/api-v1/schemas/scheduling.ts` (`ScheduleConflict.code`)
 - Modify: `apps/web/src/components/v2/board/types.ts:66-83`
   (`CONFLICT_LABEL`, `CONFLICT_HELP`)
 - Modify: `apps/web/src/dictionaries/{en,nl,fr,es}/ui.json`
@@ -1612,7 +1612,7 @@ A `window` conflict reaches the organiser through `ai-diff-panel.tsx:63-67` and
 `CONFLICT_LABEL`. Without an entry it renders the raw code.
 
 **Found, not fixed:** `"conflict.start_window"` is already a valid wire code
-(`schemas.ts:752`) with no entry in `CONFLICT_LABEL`, `CONFLICT_HELP` or any of
+(`api-v1/schemas/`) with no entry in `CONFLICT_LABEL`, `CONFLICT_HELP` or any of
 the four dictionaries — it renders raw today. That is a pre-existing bug outside
 #397's scope; note it in the PR body and file it, do not fix it here.
 
@@ -1635,7 +1635,7 @@ Expected: FAIL — `undefined`.
 
 - [ ] **Step 3: Add the code, the labels and the four locales**
 
-1. `schemas.ts:748-758` — add `"warn.window"` to the `z.enum([...])`, keeping the
+1. `api-v1/schemas/` — add `"warn.window"` to the `z.enum([...])`, keeping the
    file's existing `warn.` / `conflict.` prefix convention. Confirm which prefix
    a warn-level reason uses by reading the neighbouring entries; `window` is a
    warning this wave.

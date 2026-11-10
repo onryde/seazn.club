@@ -297,7 +297,7 @@ describe("FlyRunner", () => {
 
   // R2004 PR 0 (coordinator decision I4): OUR stop is SIGINT, so C06 holds the Final scene; a stop Fly starts is SIGTERM
   // (the create's stop_config), so C06 drains at once. Driven from the domain's own STOP effect — the producer — through
-  // the adapter to the wire, the way stream-sessions.ts's `stop_machine` arm hands it over ({ signal, timeoutSeconds }).
+  // the adapter to the wire, the way usecases/stream-sessions/ folder's `stop_machine` arm hands it over ({ signal, timeoutSeconds }).
   // The empty case first: a runner with no Machine yet (`creating`) owes NO signal stop — the create's return tears it down.
   it("R2004 PR 0: our stop, from the domain's STOP effect to the wire — booting or playing × the organiser's stop or the deadline POSTs { signal: SIGINT, timeout: <grace>s } once; a second stop sends nothing; creating sends none", async () => {
     const T = new Date("2026-10-15T20:00:00Z");
@@ -705,7 +705,7 @@ describe("FlyRunner", () => {
       const runner = new FlyRunner({ client: scripted(reply).client, image: "img" });
       return runner.create(SPEC).then(() => null, (e: unknown) => e);
     };
-    // The usecase's ONE reading of a create rejection (stream-sessions.ts), built here exactly as it builds it.
+    // The usecase's ONE reading of a create rejection (usecases/stream-sessions/), built here exactly as it builds it.
     const triggerOf = (e: unknown) => ({ type: "create_failed" as const, ...createFailureOf(e) });
 
     // 1. UNESTABLISHED: the POST could not be settled by the lookup. Fly may hold `NAME`.

@@ -296,7 +296,7 @@ export function entryDisplayName(
  * The captain's claim link. The join PAGE itself is a later wave's build
  * (not this one's), so this only mints the href — using the register/join
  * API's own field names (`join_code`, `player_id`, PublicJoinRequest in
- * schemas.ts) so that page can read the query string with no remapping.
+ * api-v1/schemas/registration.ts) so that page can read the query string with no remapping.
  * Omitting `playerId` is the generic entry-level link (previewJoinEntry/
  * joinTeamEntry's own "no player_id → insert a new player" fallback).
  */

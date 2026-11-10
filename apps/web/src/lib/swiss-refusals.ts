@@ -13,10 +13,10 @@
 // before it had a name (a strict object's unknown-key 400).
 //
 // Client-safe AND strip-types-safe: no runtime import at all, and only `import type` for `MessageKey`, so
-// `api-v1/schemas.ts` (loaded by `scripts/openapi-gen.ts` under bare `node --experimental-strip-types`) may import it
+// `api-v1/schemas/` (loaded by `scripts/openapi-gen.ts` under bare `node --experimental-strip-types`) may import it
 // by relative path. `lib/__tests__/swiss-refusals.test.ts` pins the table against the plan's code list and the four
 // dictionaries; the English here must equal `en/ui.json` for the same key.
-// `@/lib/messages`, not `./messages`: schemas.ts (W3 T18) reaches this file from the scripts program (tsconfig.scripts.json,
+// `@/lib/messages`, not `./messages`: api-v1/schemas/ (W3 T18) reaches this file from the scripts program (tsconfig.scripts.json,
 // nodenext), where a bare relative specifier is TS2835 and `@/lib/messages` is redirected to the MessageKey stub.
 import type { MessageKey } from "@/lib/messages";
 
@@ -40,7 +40,7 @@ export type SwissRefusalCode =
   | "SWISS_NO_LEGAL_PAIRING";
 
 /** W3 T18 (RB3-7(c), X-SW-18): the sentence a stage config naming `requestedByes` is refused with. A constant of its own
- *  because `api-v1/schemas.ts` puts it on the key's `z.never({ error })` and `api-v1/http.ts` recognises the zod issue by
+ *  because `api-v1/schemas/` puts it on the key's `z.never({ error })` and `api-v1/http.ts` recognises the zod issue by
  *  it: the schema, the reader and the table row below cannot say different sentences. */
 export const SWISS_REQUESTED_BYES_DEFERRED_MESSAGE =
   "Requested half-point or zero-point byes aren't offered yet. If a player must miss a round, record a walkover on their board.";

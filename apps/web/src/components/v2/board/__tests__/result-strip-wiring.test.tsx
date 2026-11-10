@@ -284,7 +284,7 @@ describe("a board write clears the previous run's report", () => {
 /**
  * `ignore_locks` (#pins-ui) — the ONLY thing that can make a run move a
  * `schedule_locked` fixture (owner ruling, 2026-08-12). The wire contract is
- * `.optional()`, never `.default(false)` (schemas.ts): the key must be ABSENT
+ * `.optional()`, never `.default(false)` (api-v1/schemas/): the key must be ABSENT
  * on every ordinary call, not present-and-false, so a server reading `body
  * .ignore_locks ?? false` cannot tell "the caller explicitly declined" from
  * "an older client never heard of this field" — those have to stay the same

@@ -1,6 +1,6 @@
 // lib/stream-plan-gates.ts — the plan gates a relay create refuses on, in ONE place.
 //
-// createSession (server/usecases/stream-sessions.ts `refuse`) throws
+// createSession (server/usecases/stream-sessions/ `refuse`) throws
 // PaymentRequiredError(<key>) for an org whose plan lacks the overlay tier or the
 // relay; the v1 envelope carries that key as `extra.feature_key`; and the Phone
 // tab's view model (lib/stream-session-view.ts `createErrorCode`) reads it back as

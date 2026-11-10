@@ -216,7 +216,7 @@ These were re-pinned against `origin/main` 770bdca07 on 2026-09-30. Each item sa
    :589-594) and `checkoutReturnFor` exist only for the checkout return and are removed in T6.
 4. **Archived refusal at createSession.** "`targetBelongsToOrg` adds `archived_at IS NULL`" is only half the fix.
    `targetBelongsToOrg` is a boolean computed from a query in a `Promise.all` **outside** the admission transaction
-   (`stream-sessions.ts` :1054-1062), and the spec also wants the row lock there. T2b moves that read into the
+   (`usecases/stream-sessions/`), and the spec also wants the row lock there. T2b moves that read into the
    admission transaction as `select … and archived_at is null for update`.
 5. **D6 and the host allowlist.** The owner-asks D6 note says to narrow `STREAM_DESTINATION_HOSTS`, but spec §5.4
    requires stored legacy kinds to "keep listing and streaming", and `createSession` re-checks the stored url. So the
@@ -280,10 +280,10 @@ These were re-pinned against `origin/main` 770bdca07 on 2026-09-30. Each item sa
 |---|---|---|
 | `apps/web/src/server/relay/secret-columns.ts` | `insertStreamTarget` order, `archiveStreamTarget`, `replaceTargetKey`, `readKeyHints`, `keyHintOf`, and a `lockStreamTarget` read | T1, T2b |
 | `apps/web/src/lib/stream-destinations.ts` | `STREAM_PLATFORMS`, `STREAM_PLATFORM_PRESETS` | T2a |
-| `apps/web/src/server/api-v1/schemas.ts` | the create kind narrows; `PatchStreamTarget`, `StreamTargetHolder`, `StreamOutput`; `StreamTarget` and `StreamSessionCurrent` gain fields | T2a, T2b, T4 |
+| `apps/web/src/server/api-v1/schemas/` | the create kind narrows; `PatchStreamTarget`, `StreamTargetHolder`, `StreamOutput`; `StreamTarget` and `StreamSessionCurrent` gain fields | T2a, T2b, T4 |
 | `apps/web/src/server/usecases/stream-targets.ts` | create by preset; list excludes archived plus `keyHint`/`inUse`; `patchStreamTarget` (rename or replace key), `removeStreamTarget`, `targetHeld` | T2a, T2b |
 | `apps/web/src/server/relay/domain/session.ts` | `holdStateOf` | T2a |
-| `apps/web/src/server/usecases/stream-sessions.ts` | `targetHolderFor`/`targetInUse` use the holders module; target lock in admission; provider meta; `output` projection; `openStreamStates` | T2b, T3, T4, T6 |
+| `apps/web/src/server/usecases/stream-sessions/` | `targetHolderFor`/`targetInUse` use the holders module; target lock in admission; provider meta; `output` projection; `openStreamStates` | T2b, T3, T4, T6 |
 | `apps/web/src/server/relay/ports.ts`, `ingest-cf.ts`, `fakes.ts` | `OutputState` gains `connecting`; `ProviderCallMeta`; fake key prefixes | T2a, T4 |
 | `apps/web/src/server/api-v1/openapi.ts`, `key-scopes.ts` | two routes plus 409 extras | T2b, T3 |
 | `apps/web/src/lib/stream-session-view.ts` | holder copy; `OUTPUT_WARNING_AFTER_MS`, `destinationWarning` | T3, T4 |
@@ -738,7 +738,7 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream && git ad
 
 **Files:**
 - Modify: `apps/web/src/lib/stream-destinations.ts` (append after `STREAM_DESTINATION_HOSTS`, ~:103)
-- Modify: `apps/web/src/server/api-v1/schemas.ts:1306-1382` (`CreateStreamTarget`, `StreamTarget`; new `StreamTargetHolder`)
+- Modify: `apps/web/src/server/api-v1/schemas/streaming.ts` (`CreateStreamTarget`, `StreamTarget`; new `StreamTargetHolder`)
 - Modify: `apps/web/src/server/relay/domain/session.ts:20` (add `holdStateOf` after `isActive`)
 - Create: `apps/web/src/server/usecases/stream-target-holders.ts`
 - Modify: `apps/web/src/server/usecases/stream-targets.ts` (whole file)
@@ -765,7 +765,7 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream && git ad
     - `STREAM_PLATFORMS = ["youtube","twitch"] as const`, and `type StreamPlatform`;
     - `STREAM_PLATFORM_PRESETS: Readonly<Record<StreamPlatform, string>>`.
   - `domain/session.ts`: `type HoldState = "live" | "waiting"`, `holdStateOf(state: SessionState): HoldState | null`.
-  - `schemas.ts`:
+  - `api-v1/schemas/`:
     - `CreateStreamTarget = {kind: StreamPlatform, label, streamKey, watchUrl?}` (strict);
     - `StreamTargetHolder = {sessionId, fixtureId: string|null, href: string|null, matchNo: number|null, courtName: string|null, state: "live"|"waiting"}`;
     - `StreamTarget` gains `keyHint: string | null` and `inUse: StreamTargetHolder | null`.
@@ -1024,9 +1024,9 @@ export function holdStateOf(state: SessionState): HoldState | null {
 }
 ```
 
-`schemas.ts`: add the import `import { STREAM_PLATFORMS } from "../../lib/stream-destinations.ts";` (check whether the
-file already imports from it). **Relative with `.ts`, never `@/`:** `scripts/openapi-gen.ts` loads schemas.ts under bare
-`node --experimental-strip-types`, which has no `@/` alias (the file's own header, schemas.ts:11-20 and :33-48, says so;
+`api-v1/schemas/`: add the import `import { STREAM_PLATFORMS } from "../../lib/stream-destinations.ts";` (check whether the
+file already imports from it). **Relative with `.ts`, never `@/`:** `scripts/openapi-gen.ts` loads api-v1/schemas/ under bare
+`node --experimental-strip-types`, which has no `@/` alias (the file's own header, api-v1/schemas/, says so;
 openapi.ts:27 imports this same file this way). An `@/` import passes vitest and tsc and then kills `pnpm openapi:gen`
 with ERR_MODULE_NOT_FOUND. Replace `CreateStreamTarget` and `StreamTarget` (:1361-1382):
 
@@ -1291,10 +1291,10 @@ Expected: EXIT=0, with the passed count equal to the file's test count. Paste th
 ### Task 2b: Rename, replace key, remove — the routes, the row locks and the contract
 
 **Files:**
-- Modify: `apps/web/src/server/api-v1/schemas.ts` (after `StreamTarget`: `PatchStreamTarget`, `StreamTargetRemoved`)
+- Modify: `apps/web/src/server/api-v1/schemas/` (after `StreamTarget`: `PatchStreamTarget`, `StreamTargetRemoved`)
 - Modify: `apps/web/src/server/usecases/stream-targets.ts` (append `patchStreamTarget`, `removeStreamTarget`, `targetHeld`)
 - Create: `apps/web/src/app/api/v1/orgs/[id]/stream-targets/[targetId]/route.ts`
-- Modify: `apps/web/src/server/usecases/stream-sessions.ts`:
+- Modify: `apps/web/src/server/usecases/stream-sessions/`:
   - :1054-1069: drop the target read from the `Promise.all`;
   - :1071-1078: lock inside the admission transaction;
   - append `expireTargetHolders`.
@@ -1323,7 +1323,7 @@ Expected: EXIT=0, with the passed count equal to the file's test count. Paste th
   - `removeStreamTarget(auth, orgId, targetId): Promise<{removed: true}>`.
   - 409 `TARGET_IN_USE` with extra `{holder: wireHolder}`; 409 `DESTINATION_DUPLICATE` with extra
     `{other: {id, label}}`; 404 for an archived, foreign or absent target; 422 for an empty key.
-  - `expireTargetHolders(orgId, targetId, deps): Promise<void>` (stream-sessions.ts), which the route calls before
+  - `expireTargetHolders(orgId, targetId, deps): Promise<void>` (usecases/stream-sessions/), which the route calls before
     the use-case.
 
 - [ ] **Step 1: Write the failing use-case tests** (append to `stream-targets.test.ts`). For the "held" cases, seed a
@@ -1513,7 +1513,7 @@ Append to `stream-sessions.test.ts`, beside the G-T6 race test (:2973), and reus
 
 `rig()` (:199) is the file's own; it returns `target` (use `r.target.id`), `ingest`, `runner`, `deps`, `auth` and
 `fixtureId`. The archived test does **not** assert "zero provider calls": the refusal is inside the admission
-transaction, after `storageUsage()` in `createSession`'s `Promise.all` (stream-sessions.ts:1054-1069), which G-T1's idiom
+transaction, after `storageUsage()` in `createSession`'s `Promise.all` (usecases/stream-sessions/), which G-T1's idiom
 counts as a provider call. Spec §5.2 asks only for "the existing not-found shape", and the test pins exactly that, plus
 no live input, no Machine and no row. T2a already replaced `rig()`'s `targetHost` option with `streamKey` (see T2a
 Step 5).
@@ -1571,7 +1571,7 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream/apps/web 
 
 - [ ] **Step 4: Implement.**
 
-`schemas.ts` (after `StreamTarget`):
+`api-v1/schemas/` (after `StreamTarget`):
 
 ```ts
 /** Spec §5.2 — Rename (`{label}`, allowed at any time) or Replace key (`{streamKey}`, refused while held). Exactly one. */
@@ -1643,7 +1643,7 @@ export async function removeStreamTarget(auth: AuthCtx, orgId: string, targetId:
 
 Add `PatchStreamTarget` to the schemas type import.
 
-`stream-sessions.ts`:
+`usecases/stream-sessions/`:
 - In `createSession`'s `Promise.all` (:1054-1069), delete the element
   `` sql<{ id: string }[]>`select id from org_stream_targets where id = ${body.targetId} and org_id = ${orgId}`, ``
   and `target` from the destructuring.
@@ -1947,7 +1947,7 @@ Expected: exit 0, the `SMOKE_ONLY: ran 1 suite(s): streamTargets` line, the suit
 ### Task 3: "In use" names the match — holder enrichment and its client copy
 
 **Files:**
-- Modify: `apps/web/src/server/usecases/stream-sessions.ts:830-855` (`targetHolderFor`), :975-982 (`Holder`, `targetInUse`), and the terminal-holder builders in `tearDownPriorMachines` (:889) and `releasePriorOutputs` (:938)
+- Modify: `apps/web/src/server/usecases/stream-sessions/holders.ts` (`targetHolderFor`), :975-982 (`Holder`, `targetInUse`), and the terminal-holder builders in `tearDownPriorMachines` (:889) and `releasePriorOutputs` (:938)
 - Modify: `apps/web/src/server/api-v1/openapi.ts:619-632` (the `STREAM_SESSION_CREATE_ERRORS` 409 holder: reuse `STREAM_TARGET_HOLDER_PROPERTIES` from T2b)
 - Modify: `apps/web/src/lib/stream-session-view.ts:150-200` (`createErrorHolder`, `createErrorText`)
 - Modify: `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json` + regenerate `apps/web/src/lib/i18n-keys.ts`
@@ -2106,7 +2106,7 @@ const terminalHolder = (r: { id: string; court_name: string | null; fixture_id: 
 });
 ```
 
-Every read of `holder.holderFixtureId` in stream-sessions.ts becomes `holder.fixtureId` (use
+Every read of `holder.holderFixtureId` in usecases/stream-sessions/ becomes `holder.fixtureId` (use
 `rtk proxy grep -naE "holderFixtureId"` to find them). Import `routes` from `@/lib/routes`, and
 `TargetHolder` and `wireHolder` from `./stream-target-holders`.
 
@@ -2123,7 +2123,7 @@ export type CreateErrorHolder = {
   courtName: string | null; label: string; matchNo: number | null; href: string | null; state: "live" | "waiting";
 };
 
-/** Who holds the destination on a `target_in_use` (`extra.holder`, stream-sessions.ts `targetInUse`); `null` on the
+/** Who holds the destination on a `target_in_use` (`extra.holder`, usecases/stream-sessions/holders.ts `targetInUse`); `null` on the
  *  index-race variant `{ holder: null }`, on any other refusal, and on a holder without a label. A holder with no
  *  `state` (a pre-T3 server) reads "live": that server refused only for a destination already on air. */
 export function createErrorHolder(err: unknown): CreateErrorHolder | null {
@@ -2196,14 +2196,14 @@ Then run `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream
 - Modify: `apps/web/src/server/relay/ingest-cf.ts:238-300` (four methods: meta passed through `call`; the `outputState` mapping)
 - Modify: `apps/web/src/server/relay/fakes.ts:115-187` (four methods take meta and record `sessionId`; add `FAKE_CONNECTING_KEY_PREFIX`)
 - Modify: `apps/web/src/server/relay/drivers.ts:45` (the disabled driver's four methods take and ignore meta)
-- Modify: `apps/web/src/server/usecases/stream-sessions.ts` call sites:
+- Modify: `apps/web/src/server/usecases/stream-sessions/` call sites:
   - `releaseOutput` :480 (`removeOutput`);
   - `observeIngestBeforeExpiry` :527 (`inputStatus`);
   - the `add_output` effect :615 (`addOutput`);
   - `currentSession` :1258 (`inputStatus` + `outputState`);
   - every further call the grep in Step 3 lists;
   - the projection :1338-1360 (`output`).
-- Modify: `apps/web/src/server/api-v1/schemas.ts:1323-1357` (`StreamOutput`; `StreamSessionCurrent.output`)
+- Modify: `apps/web/src/server/api-v1/schemas/streaming.ts` (`StreamOutput`; `StreamSessionCurrent.output`)
 - Modify: `apps/web/src/lib/stream-session-view.ts` (`OUTPUT_WARNING_AFTER_MS`, `outputElapsedMs`, `destinationWarning`)
 - Test: `ingest-cf.test.ts`, `fakes.test.ts`, `stream-sessions.test.ts`, `stream-session-view.test.ts`
 - Test: every test that builds a `StreamSessionCurrent` literal gains `output: null`. Find them with
@@ -2216,7 +2216,7 @@ Then run `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream
     - `interface ProviderCallMeta { sessionId?: string | null }`;
     - `inputStatus(inputId, meta?)`, `addOutput(inputId, target, meta?)`, `outputState(inputId, meta?)`,
       `removeOutput(inputId, outputId, meta?)`.
-  - `schemas.ts`:
+  - `api-v1/schemas/`:
     - `StreamOutput = {state: OutputState, since: string}`;
     - `StreamSessionCurrent.output: StreamOutput | null`.
   - `stream-session-view.ts`:
@@ -2450,11 +2450,11 @@ export const FAKE_CONNECTING_KEY_PREFIX = "connecting-";
 
 `drivers.ts:45`: the disabled driver's four methods gain the unused `_meta?: ProviderCallMeta` parameter.
 
-`stream-sessions.ts`: every call site from Step 3's grep passes `{ sessionId: <that session's id> }`: `sessionId` in
+`usecases/stream-sessions/`: every call site from Step 3's grep passes `{ sessionId: <that session's id> }`: `sessionId` in
 `releaseOutput`, the session id in `observeIngestBeforeExpiry` and in the effect runner, and `row.id` in
 `currentSession`. A sweep call with no session (if the grep shows one) passes nothing, with a comment saying why.
 
-`schemas.ts` (after `StreamIngest`):
+`api-v1/schemas/` (after `StreamIngest`):
 
 ```ts
 /** D3 (spec §5.6) — the destination's side of a passthrough broadcast: `since` is when the CURRENT state began. */
@@ -2596,7 +2596,7 @@ Expected: `f: 0` and `n: 25`, with every path present in `files`. Also run the t
 **Interfaces:**
 - Consumes:
   - `StreamPanelContext`, `StreamPanelFixture`, `FixtureStreamPanel`, `PhoneStopProbe` (fixture-stream-panel.tsx);
-  - `openStreamFixtureIds(auth, ids): Promise<string[]>` (stream-sessions.ts :1228, still present in this task);
+  - `openStreamFixtureIds(auth, ids): Promise<string[]>` (usecases/stream-sessions/, still present in this task);
   - `routes.fixture(org, comp, div, no)`.
 - Produces:
   - `server/stream-panel-context.ts`: `loadStreamPanelContext(args: {auth: AuthCtx; competitionId: string; sportKey: string; fixtureIds: readonly string[]; locale: Locale; offered: boolean; checkout?: {status?: string; sessionId?: string}}): Promise<StreamPanelContext | undefined>`, which is undefined when `!offered`.
@@ -3227,7 +3227,7 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream/apps/web 
 - Modify: `apps/web/src/components/v2/fixture-stream-panel.tsx`:
   - delete `checkoutReturnFor` (:232), `FixtureStreamToggle` (:242-280) and the `checkoutReturnFor` fallback in `returnedHere`;
   - `RETURN_PARAMS` drops `fixture`.
-- Modify: `apps/web/src/server/usecases/stream-sessions.ts:1228-1236` (`openStreamFixtureIds` becomes `openStreamStates`)
+- Modify: `apps/web/src/server/usecases/stream-sessions/` (`openStreamFixtureIds` becomes `openStreamStates`)
 - Modify: `apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx`:
   - drop `loadStreamPanelContext`, `frozenOnAir`, the `frozen-stream-probes` block (:803-816) and the `PhoneStopProbe` import;
   - the `checkoutReturn` and `stream` props;
@@ -3370,7 +3370,7 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream/apps/web 
 
 - [ ] **Step 4: Implement.**
 
-`stream-sessions.ts` (replacing :1228-1236; import `holdStateOf` and `HoldState`):
+`usecases/stream-sessions/` (replacing :1228-1236; import `holdStateOf` and `HoldState`):
 
 ```ts
 /** Spec 2026-09-30 §2 — each listed fixture with a session still up, as a person reads it (live | waiting). Feeds the

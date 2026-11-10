@@ -3,7 +3,7 @@
 // driver implements the same surface in memory.
 //
 // Wire shapes are the api-v1 rows, trimmed to what the harness reads
-// (apps/web/src/server/api-v1/schemas.ts: Stage, Entrant, Fixture,
+// (apps/web/src/server/api-v1/schemas/: Stage, Entrant, Fixture,
 // FixtureState, AppendEventResponse, CompleteResult; usecases/withdrawal.ts
 // WithdrawCascadeOut; usecases/public.ts publicStandings).
 import type { LedgerRow } from "../../../bench/lib/ledger.ts";
@@ -14,7 +14,7 @@ import type { ForfeitReason, StreamEvent } from "../streams/types.ts";
 export type EntrantKind = "individual" | "pair" | "team";
 /** One roster member as the harness writes it (D2): a synthetic person
  *  ("Matrix Player <entrant>.<m>", R14a), created by name — inline on the
- *  create (schemas.ts NewPersonMemberInput) or as filler (persons, then the
+ *  create (api-v1/schemas/entrants.ts NewPersonMemberInput) or as filler (persons, then the
  *  entrant's PATCH). */
 export interface MemberInput { readonly fullName: string; readonly squadNumber: number; readonly isCaptain: boolean }
 /** An entrant to add. `members` absent: no roster, and no `members` key on
@@ -23,7 +23,7 @@ export interface EntrantInput { readonly displayName: string; readonly seed: num
 /** A stored roster member, trimmed to what the harness reads (entrants.ts
  *  withMembers serves more: name, dob, gender, roles). */
 export interface EntrantMember { readonly person_id: string; readonly squad_number: number | null; readonly is_captain: boolean }
-/** One lineup slot on the wire (schemas.ts LineupSlotInput). */
+/** One lineup slot on the wire (api-v1/schemas/scoring.ts LineupSlotInput). */
 export interface LineupSlotWire { readonly person_id: string; readonly slot: "starting" | "bench"; readonly position_key?: string; readonly order_no?: number; readonly roles?: readonly string[] }
 
 /** A roster in the product's order — squad number, nulls last (entrants.ts
@@ -37,7 +37,7 @@ export function inSquadOrder(members: readonly EntrantMember[]): EntrantMember[]
 export interface CompetitionRef { id: string; slug: string; orgId: string }
 export interface DivisionRef { id: string; slug: string; sportKey: string; variantKey: string; config: Record<string, unknown> }
 export interface StageRef { id: string; seq: number; kind: string; config: Record<string, unknown>; status: string }
-/** POST /api/v1/competitions/from-template's answer (api-v1/schemas.ts
+/** POST /api/v1/competitions/from-template's answer (api-v1/schemas/stages.ts
  *  FromTemplateResult, W1-driving Task 13): ids and the APPLIED visibility —
  *  no org id, no sport, no stage kind, so the caller reads those back. */
 export interface FromTemplateAnswer {
@@ -57,11 +57,11 @@ export interface FromTemplateOut { readonly competition: CompetitionRef; readonl
  *  Optional: the fakes' plain rows omit it, which reads as not a pair. */
 export interface EntrantRow {
   id: string; display_name: string; seed: number | null; status: string; kind?: string;
-  /** W4 T24: a late add into a started root knockout answers HOW the newcomer joined (usecases/entrants.ts createEntrants, schemas.ts
+  /** W4 T24: a late add into a started root knockout answers HOW the newcomer joined (usecases/entrants.ts createEntrants, api-v1/schemas/entrants.ts
    *  LateEntryResult); absent on every other add and on the fakes' rows, which read as "not a late entry". */
   late_entry?: LateEntryWire;
 }
-/** W4 T24: a knockout's late-entry answer as the product serves it (schemas.ts KnockoutLateEntryResult), the fields the W4A scenarios
+/** W4 T24: a knockout's late-entry answer as the product serves it (api-v1/schemas/entrants.ts KnockoutLateEntryResult), the fields the W4A scenarios
  *  read. `format` is kept as a string: a Swiss answer shares the field and a scenario narrows on it before it reads a case. */
 export interface LateEntryWire {
   format: string; case: string; entrant_id?: string; stage_id?: string;
@@ -251,7 +251,7 @@ export interface OrganiserDriver {
    *  The browser driver has the method but no Finish: it throws NoOrganiserPath (a layer that does not drive the path, M-4). */
   finishSwiss?(stageId: string): Promise<FinishSwissOut>;
   /** Confirms a draft seed proposal (POST /stages/:id/seed-proposal/confirm,
-   *  schemas.ts ConfirmSeedProposal): fills the stage's TBD rows through
+   *  api-v1/schemas/seeding-discipline.ts ConfirmSeedProposal): fills the stage's TBD rows through
    *  fillSlot. A refusal (stale, already confirmed, an unresolved tie, a
    *  withdrawn qualifier, nothing to fill) throws RefusedCall. */
   confirmSeedProposal(stageId: string, body: { proposalId: string; tiePicks?: readonly { slots: readonly string[]; order: readonly string[] }[] }): Promise<SeedConfirmOut>;

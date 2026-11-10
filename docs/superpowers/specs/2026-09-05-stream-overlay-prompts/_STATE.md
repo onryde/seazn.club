@@ -700,7 +700,7 @@ gitignored SDD ledger). 66 rows re-taken against current `main`: **SAME 63, MOVE
 GONE 0, SPLIT 0.** The three moves are folded into the table above — `requireResourceAuth`
 362→352, `seedRosteredFixture` 1860→1867, first `"stream.` key 5083→5084; both code moves were
 confirmed by opening the file at the new line, not by grep alone. #787 (scorer retirement)
-reshaped `server/usecases/scorers.ts`, `stages.ts`, `api-v1/schemas.ts` and the members role
+reshaped `server/usecases/scorers.ts`, `stages.ts`, `api-v1/schemas/` and the members role
 route but touched no pinned symbol; `api-v1/**`, the panel, `run-sheet-row.tsx` and the division
 gate are byte-stable at their pinned lines. Three counted facts, all confirming the FT rows:
 `ui.stream.*` = **31** keys (`en/ui.json:5084-5114`; locales are `en`/`es`/`fr`/`nl`, no `de`);

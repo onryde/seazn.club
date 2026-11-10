@@ -1531,7 +1531,7 @@ export const LockInput = z.object({
   schedule_locked: z.boolean().optional(),
   // P9 pass-3a-FIX: courts/venues are real ids (V374's locked_scopes
   // migration) — `scopeLocked` (schedule/board.ts) matches on court_id/venue_id,
-  // not organiser-typed names. Kept identical by hand to api-v1/schemas.ts's
+  // not organiser-typed names. Kept identical by hand to api-v1/schemas/officiating.ts's
   // `DivisionLocks` (the OpenAPI doc schema for this same route) — that file
   // is not the runtime validator here, this one is (see the route handler),
   // but the two must not drift.

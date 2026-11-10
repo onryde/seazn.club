@@ -209,7 +209,7 @@ describe("httpOrganiser().configureRegistration()", () => {
     expect(patch!.body).toEqual({ category: "mixed", age_min: 12, age_max: 18 });
     // `toEqual`, not `toMatchObject`: an OMITTED key is the whole failure mode
     // here. `PutRegistrationSettings` defaults every field it does not receive
-    // (api-v1/schemas.ts:2334), so a driver that stops sending
+    // (api-v1/schemas/), so a driver that stops sending
     // `payment_method` does not leave the division alone — it sets it to
     // "offline" on every configure, and hosted Checkout becomes unmintable.
     // A `toMatchObject` listing the other five keys stayed green through

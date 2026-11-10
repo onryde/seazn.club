@@ -1,7 +1,7 @@
 // The relay-job.v1 web↔compositor contract (compositor spec 2026-10-14 §5.3; R2002).
 //
 // docs/contracts/relay-job.v1.json is the cross-repo authority: the compositor vendors it byte for byte (C07). Its zod
-// twins are RelayJobSession, RelayHeartbeat, RelayHeartbeatReply, RelayPhaseReply and RelayPhaseEndpoint (schemas.ts).
+// twins are RelayJobSession, RelayHeartbeat, RelayHeartbeatReply, RelayPhaseReply and RelayPhaseEndpoint (api-v1/schemas/streaming.ts).
 // This file pins:
 //   * the file's sha256 — a change is a deliberate bump that moves the constant in the same commit, and C07 re-vendors;
 //   * the BARE root: only $schema, $id, title, description and $defs {session, heartbeat, heartbeatReply, phaseReply,
@@ -742,7 +742,7 @@ describe("R2007 PR B: the programme phase gains `final`, the beat carries its ph
     expect(defOf(contract(), "phaseReply").description as string).toContain("?after=");
   });
 
-  // Review M3: the overlay page is a client component and cannot import schemas.ts (it reaches the engine's scheduler),
+  // Review M3: the overlay page is a client component and cannot import api-v1/schemas/ (it reaches the engine's scheduler),
   // so the loopback reply's client-safe reader lives in lib/relay-phase.ts. It must agree with the twin AND the published
   // bytes on every vector, or the page would act on a reply the contract refuses (or drop one it admits).
   it("lib/relay-phase's parseRelayPhaseReply agrees with the twin and the file on every vector (counted, both answers witnessed), and returns the twin's own parse", () => {

@@ -51,7 +51,7 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 - **Sponsor logos are not in this wave, and not in W2 (owner answer 20 / Q9: *"ok for own wave as put it last"*).** They become their own wave, scheduled LAST in the programme, after W1 and W2. Nothing in this plan designs, reserves a slot for, or leaves a seam for them — a reserved-but-empty slab is an inert seam, and the sizing, placement and per-tier rules are that wave's job.
 - Do NOT touch: `components/v2/scorepad/**` (read `sport-theme.ts`, import from it, never edit), **the whole of `packages/engine`** (amended 2026-09-07: Task 0 reads the folded STATE the engine already holds; there is no engine edit anywhere in this programme, and `/usr/bin/git status --porcelain packages` must print nothing at every gate), `components/v2/fixture-console.tsx`, `ENTITLEMENT_DOMAINS`, other keys' matrix rows, any pricing surface, `LiveScoreBody`'s render and props, `MatchCentre`, and the hook's subscribe effect, `proxy.ts` CSP, `app/embed/**`, `app/slideshow/**`, `.github/workflows/e2e.yml`, T1b's harness files (`e2e/visual/capture.spec.ts`, `asserts.ts`, `manifest.ts` — this wave appends to `manifest.json` and adds one seed kind to `seeds.ts`, nothing else), and anything in `desk/run-sheet-row.tsx` beyond one import plus one conditional line, or in `desk/run-sheet.tsx` / `stages-panel.tsx` beyond threading two props (R11; re-pinned 2026-09-07 @ fb99bbd4c — `FixtureLine` was retired by desk W2 #725; **desk W3** `feat/competition-desk-w3-band-and-phone` is editing `run-sheet-row.tsx` now, so Task 6 rebases after any W3 merge and never races it).
 - **Owner checklist (`docs/superpowers/RULES.md` §"Owner checklist (2026-09-07)")** binds every task below; each task's acceptance names the rows it satisfies, and the reviewer checks the rows, not the prose.
-- **Patterns this plan invokes, with exemplars (design §9a):** parse → authorize → delegate (`lib/http.ts:69`, `auth.ts:352`, `app/api/v1/fixtures/[id]/route.ts`); zod at `server/api-v1/schemas.ts`; privacy folds in VIEWS (`public_fixtures_v`); fire-and-forget side channels (`fireDivisionRevalidate`); one authority per fact (`resolveVenueTz`, `fixtureStatusLabel`/`VOID_STATUSES`, the five `lib/public-site.ts` derivations, `globals.css` for colour via T1's `overlay-tokens.ts`); registry over branching (`OVERLAY_THEMES`); pure projections with strings via `msg` (`overlayModel`); deny by default (`notFound()`, exact-host allowlist); the client never decides (`hasFeature` on the page and the division page); one DOM branched for phone.
+- **Patterns this plan invokes, with exemplars (design §9a):** parse → authorize → delegate (`lib/http.ts:69`, `auth.ts:352`, `app/api/v1/fixtures/[id]/route.ts`); zod at `server/api-v1/schemas/`; privacy folds in VIEWS (`public_fixtures_v`); fire-and-forget side channels (`fireDivisionRevalidate`); one authority per fact (`resolveVenueTz`, `fixtureStatusLabel`/`VOID_STATUSES`, the five `lib/public-site.ts` derivations, `globals.css` for colour via T1's `overlay-tokens.ts`); registry over branching (`OVERLAY_THEMES`); pure projections with strings via `msg` (`overlayModel`); deny by default (`notFound()`, exact-host allowlist); the client never decides (`hasFeature` on the page and the division page); one DOM branched for phone.
 
 ## File Structure
 
@@ -82,7 +82,7 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 | `db/migration/deltas/V402__streaming_entitlements.sql` | Create (re-pinned 2026-09-07) | BOTH keys — `streaming.overlay` and `streaming.relay` — `false` on every plan key (dark rollout, design §10.4; the GA flip to §5.1's split is a later migration). |
 | `apps/web/src/server/public-site/data.ts` | Modify (`PublicFixture` `:207`, the `getPublicFixture` SELECT `:722-729`, new export after the function's closing brace `:759`; re-pinned 2026-09-08 @ b2244879f) | `PublicFixture.stream_url`; the fixture SELECT gains it; `publicFixtureSlugs(fixtureId)`. |
 | `apps/web/src/server/usecases/public.ts` | Modify (`publicFixture` `:279`; `Pick<>` `:284-302`; SELECT `:304-308` — re-pinned 2026-09-08 @ b2244879f) | `publicFixture()`'s `Pick<>` and SELECT gain `stream_url`. |
-| `apps/web/src/server/api-v1/schemas.ts` | Modify (after `PatchFixture` — `export const PatchFixture = z` at `:1118`, its `export type` at `:1144` on b2244879f; the file is 4,600+ lines, anchor on the symbol — review 2026-09-08 finding 28) | `PutFixtureStream`, `FixtureStream`. |
+| `apps/web/src/server/api-v1/schemas/` | Modify (after `PatchFixture` — `export const PatchFixture = z` at `:1118`, its `export type` at `:1144` on b2244879f; the file is 4,600+ lines, anchor on the symbol — review 2026-09-08 finding 28) | `PutFixtureStream`, `FixtureStream`. |
 | `apps/web/src/server/usecases/fixtures.ts` | Modify (after `:176`) | `setFixtureStreamUrl(auth, id, streamUrl)`. |
 | `apps/web/src/server/usecases/__tests__/fixture-stream-url.test.ts` | Create | DB-backed usecase test (`_rig.ts`, `HAS_DB` skip idiom). |
 | `apps/web/src/app/api/v1/fixtures/[id]/stream/route.ts` | Create | `PUT` — `parseBody` + `requireResourceAuth(req, "fixture", id, "write")`. |
@@ -1969,7 +1969,7 @@ export function overlayStartLabel(iso: string | null, locale: string, tz: string
 - Create: `db/migration/deltas/V401__fixture_stream_url.sql`
 - Modify: `apps/web/src/server/public-site/data.ts` — `PublicFixture` (`:207`), the `getPublicFixture` SELECT (`:722-729`) (re-pinned 2026-09-08 @ b2244879f)
 - Modify: `apps/web/src/server/usecases/public.ts` — `publicFixture()`'s `Pick<>` and SELECT (`:263-297`)
-- Modify: `apps/web/src/server/api-v1/schemas.ts` — after `PatchedFixture`'s neighbourhood, next to `PatchFixture` (`:1118-1144` on b2244879f)
+- Modify: `apps/web/src/server/api-v1/schemas/` — after `PatchedFixture`'s neighbourhood, next to `PatchFixture` (`:1118-1144` on b2244879f)
 - Modify: `apps/web/src/server/usecases/fixtures.ts` — after `patchFixture` (`:136-176`)
 - Create: `apps/web/src/app/api/v1/fixtures/[id]/stream/route.ts`
 - Modify: `apps/web/src/server/api-v1/openapi.ts` (after `:142`), `apps/web/src/server/api-v1/key-scopes.ts` (after `:175`)
@@ -1982,8 +1982,8 @@ export function overlayStartLabel(iso: string | null, locale: string, tz: string
   - `export const STREAM_HOSTS: readonly string[]` (the **eleven** hostnames — R16's ten plus `m.youtube.com`, owner answer 16 / Q5: *"Agree"*. R16 was written before that answer and says ten; this plan wins, and `_INDEX.md` records the widening.)
   - `export const streamUrlSchema: z.ZodType<string | null, string | null>` — parses `string | null`, returns `string | null`
   - `export function isStreamUrl(value: string): boolean`
-  - `export const PutFixtureStream` / `export type PutFixtureStream = { streamUrl: string | null }` (schemas.ts)
-  - `export const FixtureStream` / `export type FixtureStream = { id: string; stream_url: string | null }` (schemas.ts)
+  - `export const PutFixtureStream` / `export type PutFixtureStream = { streamUrl: string | null }` (api-v1/schemas/)
+  - `export const FixtureStream` / `export type FixtureStream = { id: string; stream_url: string | null }` (api-v1/schemas/)
   - `export async function setFixtureStreamUrl(auth: AuthCtx, id: string, streamUrl: string | null): Promise<FixtureStreamOut>` where `export interface FixtureStreamOut { id: string; stream_url: string | null }` (usecases/fixtures.ts)
   - `PublicFixture.stream_url: string | null`
 
@@ -2222,7 +2222,7 @@ create or replace view public_fixtures_v as
              summary, last_seq, stream_url
 ```
 
-- [ ] **Step 9: Add the wire schemas.** In `apps/web/src/server/api-v1/schemas.ts`, immediately after `export type PatchFixture = z.infer<typeof PatchFixture>;` (`:989`):
+- [ ] **Step 9: Add the wire schemas.** In `apps/web/src/server/api-v1/schemas/`, immediately after `export type PatchFixture = z.infer<typeof PatchFixture>;` (`:989`):
 
 ```ts
 /** PUT /fixtures/{id}/stream (stream overlay W1). `.strict()` for the reason
@@ -2406,7 +2406,7 @@ export async function PUT(req: Request, { params }: Ctx) {
   Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git status --porcelain apps/web/openapi` — expected: both files modified, and re-running `openapi:gen` leaves no further diff (CI's drift gate).
 
 - [ ] **Step 17: Commit.**
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/src/lib/stream-url.ts apps/web/src/lib/__tests__/stream-url.test.ts db/migration/deltas/V401__fixture_stream_url.sql apps/web/src/server/public-site/data.ts apps/web/src/server/usecases/public.ts apps/web/src/server/api-v1/schemas.ts apps/web/src/server/usecases/fixtures.ts apps/web/src/server/usecases/__tests__/fixture-stream-url.test.ts apps/web/src/app/api/v1/fixtures/[id]/stream/route.ts apps/web/src/server/api-v1/openapi.ts apps/web/src/server/api-v1/key-scopes.ts apps/web/openapi/v1.json apps/web/openapi/v1.public.json`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/src/lib/stream-url.ts apps/web/src/lib/__tests__/stream-url.test.ts db/migration/deltas/V401__fixture_stream_url.sql apps/web/src/server/public-site/data.ts apps/web/src/server/usecases/public.ts apps/web/src/server/api-v1/schemas/ apps/web/src/server/usecases/fixtures.ts apps/web/src/server/usecases/__tests__/fixture-stream-url.test.ts apps/web/src/app/api/v1/fixtures/[id]/stream/route.ts apps/web/src/server/api-v1/openapi.ts apps/web/src/server/api-v1/key-scopes.ts apps/web/openapi/v1.json apps/web/openapi/v1.public.json`
   then
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(data): fixtures.stream_url, the exact-host allowlist and PUT /fixtures/{id}/stream" -m "V401 appends stream_url to public_fixtures_v (append-only, R6); both hand-maintained PublicFixture column lists gain it; the DB-backed usecase test proves the value reaches the public view rather than assuming it." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01LJGBoVPAWczYB9c45TD1aw"`
 
@@ -4379,7 +4379,7 @@ export function StreamRowSlot(props: {
 // Task 3 Step 8's third list).
 
 /** The seven values of `fixtures.status` — read off the wire schema, never
- *  typed here (server/api-v1/schemas.ts: `status: z.enum([...])` at :1188 on
+ *  typed here (server/api-v1/schemas/: `status: z.enum([...])` at :1188 on
  *  b2244879f), so a new status joins the table by itself. */
 const STATUSES = Fixture.shape.status.options; // no cast: `Fixture` is a plain z.object
 
@@ -4437,7 +4437,7 @@ describe("the stream toggle opens at EVERY fixture status (owner Q6: the replay 
 });
 ```
 
-  RE-PIN: `Fixture.shape.status.options` — `Fixture` is `export const Fixture = z.object({` at `schemas.ts:1154` and its `status: z.enum([...])` is `:1188` on `b2244879f`. If a later commit wraps `Fixture` (`.partial()`, `.refine()`), `.shape` disappears: then import the status enum by its own name (grep `z.enum(["scheduled", "in_play"`) — the point is that the table is DERIVED, and a module-scope throw here collects zero tests and reports green, so Step 3a's run-it-fails step must show the `it.each` rows being COUNTED. `outcome`'s shape for a decided row: copy the file's own `outcome` fixture from its `:160` case.
+  RE-PIN: `Fixture.shape.status.options` — `Fixture` is `export const Fixture = z.object({` at `api-v1/schemas/` and its `status: z.enum([...])` is `:1188` on `b2244879f`. If a later commit wraps `Fixture` (`.partial()`, `.refine()`), `.shape` disappears: then import the status enum by its own name (grep `z.enum(["scheduled", "in_play"`) — the point is that the table is DERIVED, and a module-scope throw here collects zero tests and reports green, so Step 3a's run-it-fails step must show the `it.each` rows being COUNTED. `outcome`'s shape for a decided row: copy the file's own `outcome` fixture from its `:160` case.
 
   `run-sheet-row.test.tsx` already mounts `RunSheetRow` to markup (read its helper before writing); if a status the row's fixture type refuses is in the list above, drop that one row and record it. If the row is somehow not mountable, assert the same three facts through `stream-overlay.spec.ts` in Task 8 instead and record WHICH here — but do not drop the decided-status row: it is the whole point of the ruling.
 

@@ -29,7 +29,7 @@
 //    the batch import synthesises `seq: i + 1` from the array index
 //    (apps/web/src/server/usecases/event-import.ts:287-295), and the
 //    single-event path takes an OPTIMISTIC `expected_seq` and 409s on a
-//    mismatch (`AppendEventRequest`, api-v1/schemas.ts). A `seq` recorded in
+//    mismatch (`AppendEventRequest`, api-v1/schemas/scoring.ts). A `seq` recorded in
 //    the pack would therefore be a SECOND source of truth for the same fact
 //    as array order, free to drift from it silently. So: **array order IS
 //    the sequence**, and any consumer that needs envelopes mints
@@ -195,7 +195,7 @@ export const PackModuleVersion = z
 export const PackPersonLane = z.enum(["player", "official", "coach", "staff"]);
 export type PackPersonLane = z.infer<typeof PackPersonLane>;
 
-/** `entrants.kind` (api-v1/schemas.ts's `EntrantKind`). */
+/** `entrants.kind` (api-v1/schemas/common.ts's `EntrantKind`). */
 export const PackEntrantKind = z.enum(["team", "individual", "pair"]);
 export type PackEntrantKind = z.infer<typeof PackEntrantKind>;
 
@@ -523,7 +523,7 @@ export const PackDivision = z.strictObject({
   // "apply the pack's `ScheduleConfig` per division"
   // (`bench-prompts/B04-scheduling-layer.md` §1); the knob vocabulary is
   // bench design §5, whose authority is `ScheduleConfig` in
-  // `apps/web/src/server/api-v1/schemas.ts`.
+  // `apps/web/src/server/api-v1/schemas/`.
   //
   // Carried OPAQUE, exactly like `stages[].config` and `stages[].progression`,
   // and for the same reason: a second copy of that vocabulary here is how two
@@ -774,7 +774,7 @@ export type PackStream = z.infer<typeof PackStream>;
 /** One weekly opening range on one court, from `CourtHourRangeInput`
  *  (`apps/web/src/server/usecases/venues.ts:132-141`) — the schema the
  *  `PUT /orgs/{id}/courts/{courtId}/calendar` route actually validates with,
- *  not `schemas.ts`'s OpenAPI mirror of it.
+ *  not `api-v1/schemas/`'s OpenAPI mirror of it.
  *
  *  camelCase where the wire is snake_case, and that is the ONLY difference:
  *  `PackSchema` carries no snake_case key anywhere, and the camelCase spelling
@@ -834,7 +834,7 @@ export const PackCourtException = z
 export type PackCourtException = z.infer<typeof PackCourtException>;
 
 /** One court. Fields from `CreateCourt` (`apps/web/src/server/api-v1/
- *  schemas.ts`): `name`, `sort`, `tags` — the last bounded by
+ *  schemas/org-admin.ts`): `name`, `sort`, `tags` — the last bounded by
  *  `RequiredCourtTags`, `z.array(z.string().min(1).max(40)).max(50)`.
  *
  *  `hours`/`exceptions` are NOT part of `CreateCourt`: the product has no
@@ -979,7 +979,7 @@ export const PackOfficialAssignment = z.strictObject({
 });
 
 /** A real match official. Fields from `CreateOfficial`
- *  (`api-v1/schemas.ts`): `display_name`, `person_id`, `role_keys`
+ *  (`api-v1/schemas/`): `display_name`, `person_id`, `role_keys`
  *  (default `["referee"]`), `max_per_day`. Consumers: B03 §4 seeds officials
  *  and their blackouts; B04 §2's checker asserts no official double-booking;
  *  bench design §9 P1 owns the scenarios.
@@ -1009,7 +1009,7 @@ export type PackOfficial = z.infer<typeof PackOfficial>;
 /** A player-claim invite for one of the suite's stars. Bench design §9 P2:
  *  "`pc_` claim invites for ~3 stars/suite; accepted via magic-link as fresh
  *  users; claimed profile shows the real stats". The request body is
- *  `CreateClaimInvite = z.object({ email })` (`api-v1/schemas.ts:553`); the
+ *  `CreateClaimInvite = z.object({ email })` (`api-v1/schemas/`); the
  *  `pc_` prefix is `CLAIM_PREFIX` (`usecases/person-claims.ts:14`) and is
  *  minted server-side, so it is not a pack field.
  *
@@ -1540,9 +1540,9 @@ export const PackRegistrationBlock = z.strictObject({
   entrantKind: PackEntrantKind,
   feeCents: z.number().int().nonnegative(),
   /** How the division COLLECTS its fee — `registration_settings.payment_method`
-   *  (`RegistrationPaymentMethod`, api-v1/schemas.ts:2292). Defaulted to
+   *  (`RegistrationPaymentMethod`, api-v1/schemas/registration.ts). Defaulted to
    *  "offline" to match the product's own PUT default
-   *  (schemas.ts:2334), so every pack written before this field existed keeps
+   *  (api-v1/schemas/), so every pack written before this field existed keeps
    *  meaning exactly what it meant.
    *
    *  This is not cosmetic and it is not inferrable. `resumeRegistrationCheckout`

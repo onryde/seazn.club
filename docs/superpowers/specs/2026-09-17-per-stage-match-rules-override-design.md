@@ -82,7 +82,7 @@ guard that must be built and tested:
 - Freeze on first event: `append-event.ts:255` (`lastSeq === 0`), written
   `:328`; carve-out at `:250-255` — a JSON-`null` division config records
   events and freezes nothing.
-- `StageConfig` — `schemas.ts:994-1035`, `.strictObject` (`:995`);
+- `StageConfig` — `api-v1/schemas/`, `.strictObject` (`:995`);
   `pairing:1018`, `points:1027`, `shootout:1032`, `extraTime:1033`.
   `rules` inserts after `:1033`.
 - **A mirrored resolver exists**: `scripts/bench/lib/validate-pack.ts:394-406`
@@ -422,10 +422,10 @@ becomes an ordinary `setTo` set. Intended behaviour; surprising if unstated.
 
 `match-rules.tsx:1` is `"use client"` and `:10` imports the dict provider;
 its only importers today are client components and tests. A server module
-importing it receives client references, not values — and `schemas.ts`
+importing it receives client references, not values — and `api-v1/schemas/`
 cannot hold the table either, because `scripts/openapi-gen.ts` runs that
 file under bare `node --experimental-strip-types`, which parses neither
-`@/` imports (`schemas.ts:4-20`, `:1013-1015`) nor JSX. **A vitest unit
+`@/` imports (`api-v1/schemas/`) nor JSX. **A vitest unit
 test of the derivation passes regardless** (node env, no RSC boundary), so
 getting this wrong ships green and inert.
 

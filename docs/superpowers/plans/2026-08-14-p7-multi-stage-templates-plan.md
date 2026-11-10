@@ -240,7 +240,7 @@ Re-pinned targets (all live at `cdcc3bef`):
 - `components/v2/template-gallery.tsx:88` `TemplateDetailSheet`,
   per-stage render `:178-193`.
 - `StageSeedingSchema` / `StageSeedingInput` —
-  `api-v1/schemas.ts:543-555`. **Import it; never redeclare.**
+  `api-v1/schemas/`. **Import it; never redeclare.**
 
 **`page_playoff` is DB-checked** (`V298__page_playoff_stage_kind.sql`;
 the api-v1 `StageKind` enum's 9 values match the CHECK). The design

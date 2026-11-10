@@ -4,7 +4,7 @@
 // is unit-testable without a DB row.
 import { fmtDateTime, fmtZoneAbbrev } from "@/lib/format";
 
-// Mirrors `DivisionCategory` (server/api-v1/schemas.ts's
+// Mirrors `DivisionCategory` (server/api-v1/schemas/divisions.ts's
 // `z.enum(["open","mens","womens","mixed"])`) as a plain literal union —
 // deliberately not imported from there: this is a presentational derivation
 // and has no business depending on the zod schema module.

@@ -30,7 +30,7 @@ or count once it has.
 | Checkout refuses with **410**, not 400 | `apps/web/src/app/api/billing/pass-checkout/route.ts:180` |
 | `passLockReason`: `archived`/`completed` → `terminal`; `ends_on + grace < today` → `past_ends_on`; **null `ends_on` → never locks** | `apps/web/src/lib/entitlements.ts:176-201` |
 | `ends_on` column is nullable | `db/migration/v2-engine/tables/V207__competitions.sql:10` |
-| API create takes `ends_on` as `.nullish()`; PATCH as `.nullable()` + `.partial()` | `apps/web/src/server/api-v1/schemas.ts:44,71` |
+| API create takes `ends_on` as `.nullish()`; PATCH as `.nullable()` + `.partial()` | `apps/web/src/server/api-v1/schemas/` |
 | Division quota counts only `archived_at is null` — deliberate, "archiving frees the slot (v3/09 §4)" | `apps/web/src/server/usecases/divisions.ts:110-114` |
 | `restoreDivision` DOES re-check quota — the restore direction is already closed | `apps/web/src/server/usecases/divisions.ts:359-368` |
 | `archiveDivision` guards only on `assertRegistrationClosed` | `apps/web/src/server/usecases/divisions.ts:336` |

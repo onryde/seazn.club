@@ -82,7 +82,7 @@ export const AiSchedulePlan = z.object({
 
 `AiConstraintDelta` = partial of the existing `constraints{}` schema (restMin,
 noBackToBack, startWindows, fieldFairness, parallelism, crossPersonClash) — reuse the
-schema objects from `server/api-v1/schemas.ts`, do not redeclare shapes.
+schema objects from `server/api-v1/schemas/`, do not redeclare shapes.
 
 ## §4 System prompt (verbatim)
 

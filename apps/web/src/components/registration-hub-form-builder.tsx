@@ -12,8 +12,8 @@
 //
 // The FormField shape is FROZEN (pre-deletion registrations-panel.tsx
 // :26-32, `export interface FormField`) and mirrors the wire schema
-// (`RegistrationFormField` in server/api-v1/schemas.ts) exactly — declared
-// locally rather than imported from schemas.ts, which is DO-NOT-TOUCH for
+// (`RegistrationFormField` in server/api-v1/schemas/) exactly — declared
+// locally rather than imported from api-v1/schemas/, which is DO-NOT-TOUCH for
 // this task and carries value-level imports this client bundle has no
 // business pulling in.
 import { useMsg } from "@/components/i18n/dict-provider";

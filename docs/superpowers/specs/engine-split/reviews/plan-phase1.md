@@ -333,7 +333,7 @@ in a scratch directory (pnpm 10.34.5 `--prod` peer resolution, turbo 2.10.8 alia
   `@seazn/web#typecheck` → `@onryde/seazn-engine#build`).
 - The phone closure is 46 modules: no `node:*`, no `process`, nothing from `scheduling`, zod the only bare import (measured).
 - vitest 4 `list --json` yields `{name: "a > b", file, projectName?, location?}`, matching the fixture apart from the skipped-test gap (4).
-- `MATRIX_RUNNER` is unset; `AppendEventRequest` is at `schemas.ts:1839-1844`; ZodError → 400 `VALIDATION` (`http.ts:169-170`), so
+- `MATRIX_RUNNER` is unset; `AppendEventRequest` is at `api-v1/schemas/`; ZodError → 400 `VALIDATION` (`http.ts:169-170`), so
   the e2e's `engine_epoch: 0 → 400` holds; there is no 426 anywhere today.
 - Every line anchor checked in `build.ts`, `repair-decompose-cpsat.ts`, `stryker.groups.mjs`, `runtime-deps.test.ts`, `ci.yml`
   (:105/:126/:130/:304-311/:811), `Dockerfile:13-16`, `placement-ci.yml:36-37/:297-305/:405` and `rules-reference.test.ts` holds.

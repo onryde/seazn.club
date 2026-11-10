@@ -125,7 +125,7 @@ Recorded, not asked (this session cannot ask the owner). Each carries the produc
 4. **`PlayerStatsModel` declares no leaderboard floor** (W2 P9 — `packages/engine/src/stats/stats.ts:106-200`) — respected: count metrics only.
 5. **`sortHubMatches` already orders completed matches newest-first and upcoming soonest-first** (W2 Task 1) — the recent list needs no second sort; a second sort here would be a second authority.
 6. **Roster edits fire no public revalidation** (Q10).
-7. **The division-create API response carries `slug`** (`apps/web/src/server/api-v1/schemas.ts:315`) — the mobile seed can build the team route without a second lookup.
+7. **The division-create API response carries `slug`** (`apps/web/src/server/api-v1/schemas/`) — the mobile seed can build the team route without a second lookup.
 8. **W2's Teams tab links to `?tab=entrants` because the spec said "No public team page"** — W5 repoints `TeamCard.href` and amends W2's walkthrough step 7 assertion ("click one → the division page opens at `?tab=entrants`" becomes "→ the team page opens").
 
 ---
@@ -199,7 +199,7 @@ Every line number below was opened on 2026-09-05 on `feat/spectator-surface`; W1
 | P9 | `positionLabel(key, m: MsgFn, engineLabel?)` resolves through the `ui` namespace (`scoring-vocab.ts:1191`); `MsgFn = (key: MessageKey, vars?) => string` (`:1147`); `msgFor(locale, key, vars)` (`messages-i18n.ts:24`). | `scoring-vocab.ts` | — |
 | P10 | `calendar.ics?entrant=<id>` exists and names the feed after the entrant (`calendar.ics/route.ts:26,116-118`). | route file | — |
 | P11 | `public_entrants_v` hides `withdrawn`/`disqualified` entrants (`V350:51-52`) → a withdrawn team's page 404s (Q3). | `V350` | owner ruling |
-| P12 | Division-create API response carries `slug` (`schemas.ts:311-315`); `addEntrantsViaApi(request, divisionId, names, kind?, seedOffset?)` returns `{ status, ids }` (`e2e/helpers.ts:1366-1372`). | `schemas.ts`; `helpers.ts` | — |
+| P12 | Division-create API response carries `slug` (`api-v1/schemas/`); `addEntrantsViaApi(request, divisionId, names, kind?, seedOffset?)` returns `{ status, ids }` (`e2e/helpers.ts:1366-1372`). | `api-v1/schemas/`; `helpers.ts` | — |
 | P13 | `invalidatePublicCache` fires `fireDivisionRevalidate(division_id, competition_id)` on every scoring write (`scoring.ts:507-511`) → the squad cache (tagged `division:{id}`) re-derives after a result; `entrants.ts` fires nothing (Q10). | `scoring.ts`; `entrants.ts` | — |
 | P14 | W1's `MatchCentre` root reads the `?tab=` param from a server prop (`match-centre.tsx:47-50`) while W2's `CompetitionLanding` reads it on the client in a mount effect (W2 Task 11 Step 6) to keep the ISR contract. This plan follows W2; if W2 landed a different client-side read (e.g. to satisfy `react-hooks/set-state-in-effect`), copy THAT pattern into Task 6. | `match-centre.tsx`; W2 Task 11 | W2 merge |
 | P15 | The island harness `renderIsland` (`apps/web/src/components/__tests__/_hook-harness.tsx`) supports `useState`/`useEffect`/`useMemo`/`useCallback`/`useRef`/`useContext`; `stubFetch`/`stubInterval` are file-local in `public-site/__tests__/live-score.test.tsx:26-55` (W2 P16). `window` is undefined in the harness — every `window.` read in a client root is guarded. | `_hook-harness.tsx:1-60` | — |

@@ -500,7 +500,7 @@ The only branch allowed to list V417 is this one.
 - Modify: `apps/web/src/lib/rate-limit.ts` (export `DEVICE_LINK_MINT_LIMIT` beside `MUTATION_LIMIT`, ~:86)
 - Modify: `apps/web/src/app/api/v1/fixtures/[id]/device-links/route.ts:11-29`
 - Create: `apps/web/src/app/api/v1/fixtures/[id]/device-links/reissue/route.ts`
-- Modify: `apps/web/src/server/api-v1/schemas.ts:1563-1576`, `apps/web/src/server/api-v1/openapi.ts:170-172`, `apps/web/src/server/api-v1/key-scopes.ts:332-334`; regenerate `openapi/v1.json`, `openapi/v1.public.json`
+- Modify: `apps/web/src/server/api-v1/schemas/`, `apps/web/src/server/api-v1/openapi.ts:170-172`, `apps/web/src/server/api-v1/key-scopes.ts:332-334`; regenerate `openapi/v1.json`, `openapi/v1.public.json`
 
 **Interfaces:**
 - Consumes: `sealWith`, `openWith` (Task 1).
@@ -938,7 +938,7 @@ export async function POST(req: Request, { params }: Ctx) {
 ```
 Before writing it, read `node_modules/next/dist/docs/01-app/03-api-reference/03-file-conventions/route.md` (Next 16.2) and confirm a static `reissue/` segment beside the dynamic `[linkId]/` resolves to the static one.
 
-- [ ] **Step 6: Contracts.** `schemas.ts`: `expires_at: z.string().nullable(),` in `DeviceLink`. `openapi.ts:170` summary becomes `"The fixture's device link (editor session only): re-shows the live sealed link (200, same secret) or mints one (201); never revokes a sealed link. Lives until the fixture is over. 503 DEVICE_LINK_KEK_MISSING when the server has no key."`. Its `errors` become `[402, 403, 404, 422, 429, 503]`. `schemas.ts:1574`'s `CreatedDeviceLink.secret` doc comment ("returned exactly once, at mint") is now false: replace it with `/** The dl_ secret. Re-shown unchanged by ensure (sealed, scorer sheets §4.1); replaced only by reissue. QR payload = /score/{secret}. */`. Add after :172:
+- [ ] **Step 6: Contracts.** `api-v1/schemas/`: `expires_at: z.string().nullable(),` in `DeviceLink`. `openapi.ts:170` summary becomes `"The fixture's device link (editor session only): re-shows the live sealed link (200, same secret) or mints one (201); never revokes a sealed link. Lives until the fixture is over. 503 DEVICE_LINK_KEK_MISSING when the server has no key."`. Its `errors` become `[402, 403, 404, 422, 429, 503]`. `api-v1/schemas/scoring.ts`'s `CreatedDeviceLink.secret` doc comment ("returned exactly once, at mint") is now false: replace it with `/** The dl_ secret. Re-shown unchanged by ensure (sealed, scorer sheets §4.1); replaced only by reissue. QR payload = /score/{secret}. */`. Add after :172:
 
 ```ts
   { path: "/fixtures/{id}/device-links/reissue", method: "post", summary: "Revoke & reissue: every live device link for the fixture dies (including a printed scorer sheet's QR) and a fresh one is minted", tag: "device-links", request: S.CreateDeviceLink, response: S.CreatedDeviceLink, status: 201, errors: [402, 403, 404, 422, 429, 503] },

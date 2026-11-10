@@ -56,7 +56,7 @@ export type SwissLegend = {
  *
  * THE VOCABULARY IS THE STAGE'S OWN: `pending | active | complete` — the check
  * constraint on `stages.status` (db/migration/v2-engine/tables/V210__stages.sql)
- * and `Stage.status` in `server/api-v1/schemas.ts`. It is NOT the DIVISION's
+ * and `Stage.status` in `server/api-v1/schemas/`. It is NOT the DIVISION's
  * `active | completed` (`DIVISION_STARTED_STATUSES`, `usecases/stages/helpers.ts`):
  * different column, different spelling, and copying that set here would have
  * matched nothing at all, leaving this gate inert and green.
@@ -64,7 +64,7 @@ export type SwissLegend = {
  * both directions, so a fourth stage status reds there rather than landing in
  * the live arm unexamined.
  *
- * Spelled here rather than imported from `api-v1/schemas.ts` for the same
+ * Spelled here rather than imported from `api-v1/schemas/` for the same
  * reason the rest of this module is: the desk panel is a client component, and
  * that module is 5,000 lines of Zod nobody wants in the browser bundle for one
  * string.

@@ -195,9 +195,9 @@ rarely fires, and the same null makes a live competition hold a
 
 ### The design
 
-- `CreateCompetition.ends_on` (`apps/web/src/server/api-v1/schemas.ts:44`)
+- `CreateCompetition.ends_on` (`apps/web/src/server/api-v1/schemas/`)
   changes from `z.iso.date().nullish()` to required `z.iso.date()`.
-- `PatchCompetition.ends_on` (`schemas.ts:71`) changes from
+- `PatchCompetition.ends_on` (`api-v1/schemas/`) changes from
   `z.iso.date().nullable()` to `z.iso.date()`. The object stays
   `.partial()`, so the field remains **optional to send** — that is what
   "changeable" means — but it may no longer be set back to `null`.
@@ -463,7 +463,7 @@ prop as `"$undefined"`, so a bare `data-*` probe passes in both states.
 
 - `openapi:gen` **and** `i18n:gen-keys`, then `git status --porcelain`
   must be empty. Both are CI-only drift gates and both have bitten this
-  repo repeatedly. Part B changes `schemas.ts`, so OpenAPI **will** drift.
+  repo repeatedly. Part B changes `api-v1/schemas/`, so OpenAPI **will** drift.
 - All new/changed strings in `en`, `es`, `fr`, `nl`.
 - UI verified at desktop and 375px with no horizontal page scroll.
 - Help pages updated where behaviour changes (`content/help/**`, one

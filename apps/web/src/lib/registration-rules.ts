@@ -42,7 +42,7 @@
 
 /**
  * RS011 review round 3, finding 4: an organiser's override reason
- * (`EligibilityOverrideDialog`, `api-v1/schemas.ts`'s `EligibilityOverride`)
+ * (`EligibilityOverrideDialog`, `api-v1/schemas/divisions.ts`'s `EligibilityOverride`)
  * must be long enough to be worth auditing but short enough to fit the
  * ledger — defined ONCE here, client-safe, so the client-side dialog's
  * `armed`/`maxLength` check and the server-side Zod schema's
@@ -218,7 +218,7 @@ const DAYS_IN_MONTH: readonly number[] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31
 /**
  * Whether `day` is a real day-of-month for `month` (1-12), by the
  * every-year-safe table above. Exported so the write path
- * (`api-v1/schemas.ts`'s `checkAgeCutoff`) can reject an impossible
+ * (`api-v1/schemas/divisions.ts`'s `checkAgeCutoff`) can reject an impossible
  * age_cutoff_month/age_cutoff_day combination BEFORE it is ever stored —
  * same "validate once, reuse everywhere" shape as every other predicate in
  * this file. `ageBandEligibilityIssues` below uses it too, as a read-side
@@ -271,7 +271,7 @@ export function ageBandEligibilityIssues(
   const cutoffMonth = division.age_cutoff_month ?? 1;
   const cutoffDay = division.age_cutoff_day ?? 1;
   // RS007 review fix L1 ORIGINALLY threw here — the write path
-  // (checkAgeCutoff, api-v1/schemas.ts) rejects a day that does not exist in
+  // (checkAgeCutoff, api-v1/schemas/divisions.ts) rejects a day that does not exist in
   // its month for every NEW write, so a throw was meant to be unreachable,
   // catching a stored row that reached the column some other way rather than
   // let `Date.UTC` silently roll it into the next month (31 September

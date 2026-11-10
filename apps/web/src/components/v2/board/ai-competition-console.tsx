@@ -351,7 +351,7 @@ export function jointApplyDivisions(
     if (!p.court_label) continue; // the wire requires a court id
     const list = byDivision.get(p.division_id);
     // P9 pass 3b: outgoing key is `court_id` (`JointApplyDivision`/
-    // `ApplyCompetitionScheduleRequest`, schemas.ts) — `p.court_label` is the
+    // `ApplyCompetitionScheduleRequest`, api-v1/schemas/ai-planning.ts) — `p.court_label` is the
     // AI plan response's own field name, which has carried a real `courts.id`
     // value (never a display label) since pass 1; this is a key rename at
     // the wire boundary, not a value lookup.

@@ -403,7 +403,7 @@ git commit -m "feat(desk): the fixtures tab becomes sheet plus rail at lg"
 **Files:**
 - Modify: `apps/web/src/server/usecases/competition-desk.ts` (types ~35-72; the fixture query ~226-270)
 - Create: `apps/web/src/app/api/v1/competitions/[id]/desk/route.ts`
-- Modify: `apps/web/src/server/api-v1/schemas.ts`
+- Modify: `apps/web/src/server/api-v1/schemas/`
 - Modify: `apps/web/src/server/api-v1/openapi.ts` (the `ROUTES` array)
 - Test: `apps/web/src/server/usecases/__tests__/competition-desk.test.ts`
 
@@ -463,7 +463,7 @@ Add the two fields, derived from rows already in hand. `up_next` is the soonest 
 
 - [ ] **Step 4: Add the Zod schema**
 
-`S.CompetitionDesk` in `schemas.ts`, mirroring the interface. `S.Fixture` already declares the status enum `["scheduled","in_play","decided","finalized","abandoned","forfeited","cancelled"]` — reuse it rather than retyping the members.
+`S.CompetitionDesk` in `api-v1/schemas/`, mirroring the interface. `S.Fixture` already declares the status enum `["scheduled","in_play","decided","finalized","abandoned","forfeited","cancelled"]` — reuse it rather than retyping the members.
 
 - [ ] **Step 5: Add the route**
 

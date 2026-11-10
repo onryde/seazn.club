@@ -244,7 +244,7 @@ LIKELY / UNVERIFIED gaps (K1, K2, K3, K4, K7, K13, QM-2, SL-1, FX-G7 on a final 
 **Gap:** K5 (PRESENT): KO generate reads `swissActiveEntrants` ordered `seed nulls last, created_at, id` (`stages.ts:1596-1601`) and the engine keeps input order for the unseeded, so byes go to the earliest registrants.
 
 **Files:**
-- Modify: `stages.ts` — the root-knockout branch of `generateStageFixturesTx` (`:3481-`) orders `entrants` through the draw before `generate()` (`:2607`), and the `fixtures_generated` payload records `draw_seed`; `apps/web/src/server/api-v1/schemas.ts` `StageConfig` (`:1230-`) gains `countrySeparation`; `lib/knockout-refusals.ts` (+ `COUNTRY_SEPARATION_NOT_OFFERED`, 400, "Country separation isn't offered: Seazn holds no country for players or teams.").
+- Modify: `stages.ts` — the root-knockout branch of `generateStageFixturesTx` (`:3481-`) orders `entrants` through the draw before `generate()` (`:2607`), and the `fixtures_generated` payload records `draw_seed`; `apps/web/src/server/api-v1/schemas/stages.ts` `StageConfig` (`:1230-`) gains `countrySeparation`; `lib/knockout-refusals.ts` (+ `COUNTRY_SEPARATION_NOT_OFFERED`, 400, "Country separation isn't offered: Seazn holds no country for players or teams.").
 - Test: `apps/web/src/server/usecases/__tests__/knockout-draw.test.ts`; `apps/web/src/lib/__tests__/stage-config-api-only.test.ts`.
 
 **Interfaces:**
@@ -313,10 +313,10 @@ LIKELY / UNVERIFIED gaps (K1, K2, K3, K4, K7, K13, QM-2, SL-1, FX-G7 on a final 
 ## Task 9: LateEntryResult gains a format; the client mirror and the Start copy say the knockout truth (LE-1, LE-2)
 
 **Rules:** X-LE-1, X-LE-2.
-**Gap:** LE-2 (`schemas.ts:795-803` is Swiss-shaped: `case a|b|c`, `round ≥ 1`); LE-1 (`entrants.ts:421-431` answers a bare 422; `lib/open-entry-stages.ts` agrees with it, and the Start dialog says "Entrant list closes", `en/ui.json:3025`).
+**Gap:** LE-2 (`api-v1/schemas/` is Swiss-shaped: `case a|b|c`, `round ≥ 1`); LE-1 (`entrants.ts:421-431` answers a bare 422; `lib/open-entry-stages.ts` agrees with it, and the Start dialog says "Entrant list closes", `en/ui.json:3025`).
 
 **Files:**
-- Modify: `schemas.ts` (`LateEntryResult` → a discriminated union; every Swiss producer adds `format: "swiss"`: `swiss-late-entry.ts` and its callers); `lib/open-entry-stages.ts`; `components/v2/start-confirm-dialog.tsx` (the `startEntrantsLine` branch); `entrants.ts:421-431` (the lock reads the new predicate); `lib/knockout-refusals.ts` (+ `KO_LATE_ENTRY_FED_STAGE`, 422, "This knockout is filled from {stage}. Add the player there."); `swiss-late-entry.ts` `hasRootSwissStage` neighbour `hasRootKnockoutStage`.
+- Modify: `api-v1/schemas/entrants.ts` (`LateEntryResult` → a discriminated union; every Swiss producer adds `format: "swiss"`: `swiss-late-entry.ts` and its callers); `lib/open-entry-stages.ts`; `components/v2/start-confirm-dialog.tsx` (the `startEntrantsLine` branch); `entrants.ts:421-431` (the lock reads the new predicate); `lib/knockout-refusals.ts` (+ `KO_LATE_ENTRY_FED_STAGE`, 422, "This knockout is filled from {stage}. Add the player there."); `swiss-late-entry.ts` `hasRootSwissStage` neighbour `hasRootKnockoutStage`.
 - Test: extend `apps/web/src/lib/__tests__/open-entry-stages.test.ts` (the drift test); `apps/web/src/server/usecases/__tests__/knockout-entry-stage.test.ts`; `components/v2/__tests__/start-confirm-dialog.test.tsx` (or the file that pins the line; grep `startEntrantsLine`).
 
 **Interfaces:**

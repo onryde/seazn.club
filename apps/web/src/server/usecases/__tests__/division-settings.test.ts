@@ -185,7 +185,7 @@ describe.skipIf(!HAS_DB)("eligibility columns: category/age_min/age_max (V364/RS
     expect(patched.age_max).toBe(18);
   });
 
-  // RS004 review finding 1 (MAJOR): checkAgeBand (schemas.ts) only compares
+  // RS004 review finding 1 (MAJOR): checkAgeBand (api-v1/schemas/divisions.ts) only compares
   // age_min/age_max when BOTH are in the SAME patch body, so a single-field
   // PATCH used to reach the DB untouched and violate divisions_age_band_check
   // (V364) — surfacing as an unhandled 500 with raw constraint text instead
@@ -237,7 +237,7 @@ describe.skipIf(!HAS_DB)("eligibility columns: category/age_min/age_max (V364/RS
   });
 
   // W8/F12. The cutoff pair gets the same merge-and-validate as the age band
-  // above, for the same reason: `checkAgeCutoff` (schemas.ts) is a
+  // above, for the same reason: `checkAgeCutoff` (api-v1/schemas/divisions.ts) is a
   // `superRefine` on the request BODY and its `!= null` cannot tell an
   // OMITTED field from an explicit `null`, so `{ age_cutoff_day: null }`
   // against a stored month used to answer 200 and store an orphan half.

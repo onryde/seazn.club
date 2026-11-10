@@ -21,7 +21,7 @@
 export const ROSTER_NAME_SEPARATOR = " & ";
 
 /** The longest `entrants.display_name` the API accepts — `CreateEntrant` and
- *  `PatchEntrant` (server/api-v1/schemas.ts) read it from here, and so does the
+ *  `PatchEntrant` (server/api-v1/schemas/entrants.ts) read it from here, and so does the
  *  console's Name field, so the input cannot offer a name the PATCH refuses. */
 export const ENTRANT_NAME_MAX = 200;
 

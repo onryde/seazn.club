@@ -1110,7 +1110,7 @@ iframe-both, is DROPPED** — not deferred, and no stg measurement is owed for i
 
 **The wire (the re-review's N4).** Today `POST …/external-play/arbiter` takes no body and
 answers `{ authToken, participantId, white[], black[] }` (`ArbiterJoinOut`,
-`schemas.ts:1372-1377`), and an arbiter who arrives first CREATES the meeting (`arbiter.ts:524`
+`api-v1/schemas/`), and an arbiter who arrives first CREATES the meeting (`arbiter.ts:524`
 → `ensureMeeting`). Per player it becomes:
 - **The request names a side.** The body is `{ side: "home" | "away" }` (a strict
   `ArbiterJoinInput` beside `ArbiterJoinOut`); a missing or other value is a 400. It is the
@@ -2636,7 +2636,7 @@ player in line well before the deadline has all the time before it as well.
   trace today.
 - **The wire.** `queued` and `checkin_not_open` join `SEAT_REFUSAL_REASONS`, `SeatRefusal`, the room's
   `REFUSAL_SCREEN` (total over `SeatRefusal`, so a missed one fails compilation: `queued →
-  "checkin"`, `checkin_not_open → "batchWait"`), `schemas.ts` and the OpenAPI entry of `POST
+  "checkin"`, `checkin_not_open → "batchWait"`), `api-v1/schemas/` and the OpenAPI entry of `POST
   …/external-play/room` (m6). `line.left` is `null | "silent" | "camera"` in the schema, the reducer
   and the card, and it exists only inside `line` (§5.7.3). **Generated artefacts (the re-review 2's
   M3):** the build regenerates `openapi/v1.json` with `pnpm openapi:gen` once `queued`,

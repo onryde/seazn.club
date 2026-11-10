@@ -4,7 +4,7 @@ import { competitionLifecycleEvent } from "../competitions";
 
 // v17 #289: `statusChangedTo === "active" || statusChangedTo === "complete"`
 // compared against CompetitionStatus values that never exist — "live" and
-// "completed" are the real enum members (schemas.ts's CompetitionStatus) —
+// "completed" are the real enum members (api-v1/schemas/common.ts's CompetitionStatus) —
 // so COMPETITION_STARTED/COMPETITION_COMPLETED never fired. Pure decision
 // helper, mirrors shouldFireMadePublic — no DB needed.
 describe("competitionLifecycleEvent", () => {

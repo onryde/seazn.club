@@ -5681,7 +5681,7 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — group-scoped Stripe session (RS0
   });
 
   it("a maximal 10-entry cart keeps the joined registration_ids metadata value under Stripe's 500-char limit", async () => {
-    // Must track schemas.ts's PublicRegisterGroupRequest.entries.max(10)
+    // Must track api-v1/schemas/registration.ts's PublicRegisterGroupRequest.entries.max(10)
     // (RS003 W1) — so a future cap raise fails HERE, not in production
     // (owner ruling 2).
     const { competition, division, settings } = await stripeRig();

@@ -9,7 +9,7 @@ Programme index issue: #411. Design: `../2026-08-03-scoringpad-v2-design.md`.
 ## Order
 
 Main chain is sequential. The `L` lane is a disjoint file set — run it whenever,
-interleaved or in parallel. ~~`L2` waits on `L1` (shared `schemas.ts`)~~ — see
+interleaved or in parallel. ~~`L2` waits on `L1` (shared `api-v1/schemas/`)~~ — see
 the L-lane note below: `L1` is gone, and `L2` now sequences against the RS
 programme instead.
 
@@ -60,11 +60,11 @@ as `../2026-08-16-registration-redesign-prompts/RS011-organiser-eligibility-gate
 depends on RS002, and still closes **#412** and #407 WS1.
 
 **`L2`/#413 no longer depends on `L1`.** That dependency was file-overlap
-sequencing on `schemas.ts` / `registrations.ts`, never logic. `L2` now sequences
+sequencing on `api-v1/schemas/` / `registrations.ts`, never logic. `L2` now sequences
 against the RS programme for the same reason: run it **after RS003 merges**, and
-never in parallel with RS011 (both write `api-v1/schemas.ts`). Note for `L2`:
+never in parallel with RS011 (both write `api-v1/schemas/`). Note for `L2`:
 `PutRegistrationSettings` on `main` still has **no** window-order or
-refund-lock refine (`api-v1/schemas.ts:1687-1710` — RS001b only removed
+refund-lock refine (`api-v1/schemas/` — RS001b only removed
 `currency`), so that scope item is still `L2`'s to build, not RS's.
 
 **`L3`/#414 — DONE (3 passes: engine, engine-db, server+UI).** Qualification now
@@ -860,7 +860,7 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   criterion is met" when nothing calls it with real data.**
   Closed in the same review round: V357 adds `lineups.role`; `putLineup`/
   `getLineup` (`fixtures.ts`) and their zod schemas
-  (`api-v1/schemas.ts`'s `LineupSlotInput.role`, `.optional()` not
+  (`api-v1/schemas/scoring.ts`'s `LineupSlotInput.role`, `.optional()` not
   `.default()` — a `.default()` makes it a REQUIRED key on the inferred TS
   type and breaks every direct `putLineup()` caller that builds a slots
   array without it) read/write it; `engine-db/lineups.ts` threads it into
@@ -896,7 +896,7 @@ Append one line per ruling: date, session, decision, reason. Never delete.
   collision) and by a new DB-backed regression test.
 
   **Unplanned fix** (RULES.md §1 — found, fixed inline, not deferred): the
-  api-v1 `AccumulationRule` zod schema (`schemas.ts`) is a plain `z.object`,
+  api-v1 `AccumulationRule` zod schema (`api-v1/schemas/`) is a plain `z.object`,
   which STRIPS an unrecognized key rather than rejecting it — without adding
   `reason` there too, a real PUT to the discipline-rules endpoint would have
   silently dropped it before reaching the usecase, leaving the new capability
@@ -2524,7 +2524,7 @@ Append one line per ruling: date, session, decision, reason. Never delete.
 - 2026-08-13 — S12/#421 pass D — **the shared-worktree sweep hazard fired
   TWICE, live, during this pass — no data lost, but every file-ownership
   split in this session's dispatch depends on knowing it happens.** Pass D's
-  own dirty files (V361, `fixtures.ts`, `schemas.ts`, `fixture-console.tsx`'s
+  own dirty files (V361, `fixtures.ts`, `api-v1/schemas/`, `fixture-console.tsx`'s
   `LineupSlotIn`, `registry.tsx`'s `toLineupSlot`, both files' tests) went
   missing from `git status` mid-session; they were not lost — `git diff HEAD`
   against each was byte-**zero**, because two OTHER concurrent agents'

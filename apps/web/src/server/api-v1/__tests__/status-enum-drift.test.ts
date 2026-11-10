@@ -8,7 +8,7 @@
 // the caller believed the filter had applied — drafts served as published,
 // waived suspensions served as pending. And the accepted values were written
 // out three times: the route's Set, the OpenAPI query enum, and the zod enum
-// in schemas.ts that neither of them used.
+// in api-v1/schemas/ that neither of them used.
 //
 // `/divisions/{id}/registrations` had already been through this (RS005 W1b:
 // a hand-copied five-value array missing `expired`/`rejected`, so a legal

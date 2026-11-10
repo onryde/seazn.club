@@ -195,7 +195,7 @@ the live engine sessions before it merges, so they rebase once.
   get. After 2b no consumer sees source.
 - **Manifest.** Drop `"private": true`. `zod` becomes `peerDependencies` +
   `devDependencies` only (today both peer and dependency, facts #3 — two zod
-  copies break schema composition in `apps/web/src/server/api-v1/schemas.ts`).
+  copies break schema composition in `apps/web/src/server/api-v1/schemas/`).
   `files: ["dist"]` (no `proto` after D11). The plan's first step for this PR
   greps for any runtime read of `rules/`; only if one exists is `rules` added
   to `files`.

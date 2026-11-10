@@ -391,7 +391,7 @@ EOF
 - Modify: `apps/web/src/server/usecases/stages.ts` — add `unpairSwissRound`
 - Create: `apps/web/src/app/api/v1/stages/[id]/unpair/route.ts`
 - Modify: `apps/web/src/server/api-v1/openapi.ts`
-- Modify: `apps/web/src/server/api-v1/schemas.ts` if needed for response shape
+- Modify: `apps/web/src/server/api-v1/schemas/` if needed for response shape
 - Modify: `apps/web/src/server/usecases/__tests__/swiss-shell-fixtures.test.ts`
 
 **Interfaces:**

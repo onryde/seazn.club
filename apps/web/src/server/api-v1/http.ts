@@ -388,7 +388,7 @@ const pathText = (path: readonly PropertyKey[]): string =>
 
 /**
  * The first top-level stage decider (any whole decider a sport declares, `TOP_LEVEL_STAGE_DECIDERS`, refused
- * `STAGE_DECIDER_MOVED` by schemas.ts) in a refusal,
+ * `STAGE_DECIDER_MOVED` by api-v1/schemas/) in a refusal,
  * walked through union arms (POST /stages takes one stage or a list): the field as sent and a sentence naming it and the
  * place it goes — `config.rules.<key>` on a stage, `rules.<key>` in the stage PUT's body. Null for any other refusal.
  */

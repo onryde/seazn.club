@@ -42,7 +42,7 @@ const UNPLAYED_FIXTURE_STATUSES = ["scheduled", "in_play"] as const;
 
 // ---------------------------------------------------------------------------
 // Typed error codes (repo convention: ALL_CAPS_SNAKE — see capacity-guard.ts's
-// CAPACITY_IMPOSSIBLE_CODE and schemas.ts:3107's ruling. The design doc's
+// CAPACITY_IMPOSSIBLE_CODE and api-v1/schemas/ folder's ruling. The design doc's
 // `court.in_use`/`venue.not_empty` are i18n-key-shaped, not this tree's typed
 // HttpError code convention; ported to the repo's actual spelling).
 // ---------------------------------------------------------------------------
@@ -110,7 +110,7 @@ export interface VenueWithCourts extends VenueRow {
 // ---------------------------------------------------------------------------
 
 // G6 (bench B03 product-gaps, 2026-09-02): these used to be their own
-// z.objects, field-for-field identical to schemas.ts's Create/Patch Venue
+// z.objects, field-for-field identical to api-v1/schemas/ folder's Create/Patch Venue
 // and Court but maintained separately — openapi.ts published one, this
 // route validated with the other, so they could silently drift. Import the
 // same objects instead of a second copy. (The reverse direction —

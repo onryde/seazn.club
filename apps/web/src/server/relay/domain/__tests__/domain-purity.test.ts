@@ -73,7 +73,7 @@ describe("server/relay/domain is pure", () => {
     expect(files.some((f) => /\btunable\(/.test(f.text) && !/\btunable\(/.test(codeOf(f.text)))).toBe(true);
   });
 
-  // PR-2 T6: api-v1/schemas.ts is also loaded by the standalone OpenAPI generator (node --experimental-strip-types, no resolver,
+  // PR-2 T6: api-v1/schemas/ is also loaded by the standalone OpenAPI generator (node --experimental-strip-types, no resolver,
   // so no extensionless or `@/` import can be followed). The domain files it takes constants from must therefore import NOTHING.
   it("every domain file api-v1/schemas.ts imports (the generator loads it with no resolver) imports nothing at all", () => {
     // api-v1/schemas/ is a folder of modules (one level deeper than the old file, hence the extra `../`): read them all.

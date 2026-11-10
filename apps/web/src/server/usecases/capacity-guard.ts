@@ -168,7 +168,7 @@ export const CapacityPrecheckInput = z.object({
     // default span (calendar.ts's `horizonMinutes ?? 365 * 24 * 60`) — so an
     // over-large window is a clear 400 here, never a silently-truncated,
     // still-expensive 200. Mirrored on the wire-side CapacityPrecheck twin
-    // (schemas.ts) for the same reason every other bound in this object is
+    // (api-v1/schemas/) for the same reason every other bound in this object is
     // duplicated there.
     window: z
       .object({ from: z.number(), to: z.number() })

@@ -59,7 +59,7 @@ PR-1 plan (house style, FP numbering continues its habit but restarts at FP1 her
 | B7 | T10 + T11 + T12 | **Build to approved Option A.** T10–T12 scope commands, then `mobile.spec.ts` whole |
 | B8 | T13 | Walkthrough whole, visual per-screen verdicts against Option A, final Opus review |
 
-**Re-pin `stream-sessions.ts` and `capture-phone.ts` line anchors at each batch start**: T4 and T5 both move lines in them.
+**Re-pin `usecases/stream-sessions/` and `capture-phone.ts` line anchors at each batch start**: T4 and T5 both move lines in them.
 
 ## Owner-gated steps (OG) and rulings owed
 
@@ -160,9 +160,9 @@ Inputs the spec implies but no task's tests would otherwise exercise, most likel
 | FP4 | The panel's `PUT {targetId}` is the only caller. | `routes.test.ts:202` pins `{ targetId: null, autoStream: true }` and `{}` as **rejected** bodies; `PutStreamSettings` is `{targetId: uuid\|null}` strict, required. Both flip, and the panel's `{targetId}` body must keep working. `writeStreamSettings` also always writes `target_id` (it would clear the pick on an `{autoStream}`-only PUT). | T3 |
 | FP5 | `domain/auto-stream.ts` is a free file name. | `domain-purity.test.ts` pins **exactly twelve** domain files by name; adding `auto-stream.ts` and `phone-health.ts` reds it until the list moves. | T2 |
 | FP6 | `AUTO_START_RETRY_SECONDS` / `AUTO_STOP_AFTER_RESULT_SECONDS` exist as constants. | Neither is in `relay/config.ts`; they appear only in the spec text. `config.test.ts` pins `TUNABLE_NAMES` to a hand-listed `SPEC_DEFAULTS` and reads each constant back out of the spec. The e2e needs the 180 s to be shortened, so both are made tunable (§6.15 / AGENTS.md #20) — a plan decision, not a ruling. | T1, T8 |
-| FP7 | Auto stop is "evaluated on beats, on the organiser poll and in the sweep". | The three are one function: `tickSession(sessionId, deps, cause)` (`stream-sessions.ts:1600`), called by the organiser poll (`currentSession`), `postBeat` (for the session's phone naming its sid only), `tickOpenSessions` (the `stream-tick` job) and `relay-sweep.ts:233`. One insertion point after `endIfPhoneLost` covers all four. | T5 |
+| FP7 | Auto stop is "evaluated on beats, on the organiser poll and in the sweep". | The three are one function: `tickSession(sessionId, deps, cause)` (`usecases/stream-sessions/`), called by the organiser poll (`currentSession`), `postBeat` (for the session's phone naming its sid only), `tickOpenSessions` (the `stream-tick` job) and `relay-sweep.ts:233`. One insertion point after `endIfPhoneLost` covers all four. | T5 |
 | FP8 | `appendEvent` writes `fixtures.status` and `finished_at` for every scoring surface. | `status` yes: `append-event.ts:408-414` (`update fixtures set status = …`) on the console, the device-link page (`app/score/[token]/page.tsx:334` passes `deviceLinkId`), `event-import.ts` and `history.ts`. **`finished_at` is not written by `appendEvent`**; it is stamped by V430's `fixtures_track_finished` trigger (BEFORE INSERT OR UPDATE OF status). So an UPDATE that names `finished_at` alone never fires it — a test must set `finished_at` itself (after the status write), and the "revert" test must change `status`. | T4, T5, T7 |
-| FP9 | A12 is stamped "by Stop". | The organiser Stop is `stopSession` (`stream-sessions.ts:1950`) with three exits (repeated-stop branch, `relay_disabled`, the normal `apply`). There is no settings row to stamp when the switch was never touched, and inserting one hits FP1. | T4 |
+| FP9 | A12 is stamped "by Stop". | The organiser Stop is `stopSession` (`usecases/stream-sessions/`) with three exits (repeated-stop branch, `relay_disabled`, the normal `apply`). There is no settings row to stamp when the switch was never touched, and inserting one hits FP1. | T4 |
 | FP10 | Auto start is "evaluated on every beat from the current phone". | `postBeat` has no "current phone" variable; the decided object carries `mine` (non-null for accept/takeover/none). An operator's `ended` beat (T21) ALSO has `mine` non-null while its pairing is ended in the same transaction; auto start must skip it, and a beat that stops a session. The pairing's code issuer, not `resolved.issuedBy`, must attribute the start (C-2: the holder may sit on a reissued code and `startBroadcast` refuses any actor other than the pairing's code `issued_by`). | T4 |
 | FP11 | Only the beat and tick files are affected. | `stopSession`, `tickSession`, `captureCommon` and `fixtureStreamTarget` have callers across `capture-beat`, `capture-get`, `capture-start`, `stream-tick`, `relay-sweep`, `stream-sessions`, `stream-phone` tests; each batch gate lists them. | batches |
 | FP12 | (unstated) "the organiser's Stop" is one thing. | Also: the panel's Cancel posts the same stop route; `expireTargetHolders`, the sweep and the tick end sessions without being an organiser's intent and must NOT stamp. | T4, R-3 |
@@ -172,7 +172,7 @@ Inputs the spec implies but no task's tests would otherwise exercise, most likel
 | FP16 | (Capture lane) `notReady` is a clean "Phone not ready" signal. | It is null only when camera, sound, network and held all pass, is not phase-gated, reads "camera" before the first reading, and flapped 27 sound / 11 held / 3 camera times in 10 min on staging. PR-1 stores only the latest value (`not_ready` overwritten each beat), so a debounce cannot be done from the row. V431 adds `fixture_stream_pairings.not_ready_since` and the read model serves `notReadyForMs` and `notReadyShown` (held ≥ `PHONE_NOT_READY_SHOW_AFTER_SECONDS` = 20, **owner ruling R-2, 2026-10-07**). `notReady` never gates auto start beyond the spec's predicate. | T1, T6, T11 |
 | FP17 | (Capture lane) `startFailed` needs PR-2 storage. | PR-1 already records `start_failed` on the pairing and serves `phone.startFailed`; capture clears it on the next Go live or arm. Nothing owed server-side. | T6 |
 | FP18 | The brief's verify command is `npx vitest run`. | In a worktree `npx` resolves the main checkout's packages (PR-1 FP16). This plan uses `pnpm exec vitest run`. | all |
-| FP19 | The panel reads `auto` and `phoneStatus` as new props. | `StreamPhone.auto` is `z.null()` today (`schemas.ts`), and `SignalChain` already has the reserved `phoneStatus?: string` prop (`stream-signal-chain.tsx:155-166`, `void phoneStatus`); `stream.phone.ended.reason.auto_stopped` copy and the `auto_stopped` wire reason already shipped in PR-1 (`lib/stream-session-view.ts:127`, `end-reason.ts:25`, `session.ts` `StopEndReason`). | T6, T11 |
+| FP19 | The panel reads `auto` and `phoneStatus` as new props. | `StreamPhone.auto` is `z.null()` today (`api-v1/schemas/`), and `SignalChain` already has the reserved `phoneStatus?: string` prop (`stream-signal-chain.tsx:155-166`, `void phoneStatus`); `stream.phone.ended.reason.auto_stopped` copy and the `auto_stopped` wire reason already shipped in PR-1 (`lib/stream-session-view.ts:127`, `end-reason.ts:25`, `session.ts` `StopEndReason`). | T6, T11 |
 | FP20 | The spec's §11.2 says "the PR-1 model gains `toggleAuto`, `setPhoneMode`, …". | `capture-model.test.ts` is 84 KB with twelve money-scoped invariants; extending it collides with its own anti-vacuity counters. The plan adds a sibling file on the same rig (`_capture-rig.ts`). A deviation, not a ruling. | T7 |
 | FP21 | The brief says "heartbeat silence" fields are new. | `last_beat`, `last_beat_at`, `answered_poll_seconds`, `phone_beat`, `phone_beat_at` and `isNotResponding` exist (V430, `domain/pairing.ts`); the history `flags` already carry `battery_low | hot | stalled | not_ready | not_responding` via `flagsOf` (`capture-phone.ts:360`). T2 moves that derivation to `domain/phone-health.ts` so the history and the panel cannot disagree. | T2 |
 | FP22 | §7.4: data used and the app version go "inside the existing Details disclosure". | A `<details data-testid="stream-details">` exists (`fixture-stream-panel.tsx:2149`) but renders **only in Live/Ending** (inside the `state === "live" \|\| "ending"` block) and holds the *runner's* health chips (`healthChips(p.view, …)`), not the phone's. Option A has no other home. So the data lands there in Live/Ending; nothing shows pre-live. | T11, Q-D |
@@ -180,7 +180,7 @@ Inputs the spec implies but no task's tests would otherwise exercise, most likel
 **Correct premises, kept:** V431 is free on every local and remote branch (`ls db/migration/deltas | sort -V | tail -1` is V430);
 `fixture_stream_settings` has the V430 columns `fixture_id` (PK), `org_id`, `target_id`, `updated_by`, `updated_at`;
 `stream-tick` exists (`app/api/cron/stream-tick/route.ts`, `tickOpenSessions`); `capture-phone.ts` owns beats at
-`postBeat:429`; `stream-sessions.ts` owns `startBroadcast:1251`, `stopSession:1950`, `tickSession:1600`, `endIfPhoneLost:1793`;
+`postBeat:429`; `usecases/stream-sessions/` owns `startBroadcast`, `stopSession`, `tickSession`, `endIfPhoneLost`;
 `StartActor.source` already admits `"auto"` and `StartCause` `"automatic"`; the `V431__auto_stream.sql` name matches
 `_stream-migration.ts`'s fold filter (`/stream|capture/`).
 
@@ -204,9 +204,9 @@ Inputs the spec implies but no task's tests would otherwise exercise, most likel
 - `server/relay/__tests__/config.test.ts`
 - `server/usecases/stream-codes.ts` (settings writers, `fixtureStreamTarget`)
 - `server/usecases/capture-phone.ts` (`autoAllowed`, step 6, `flagsOf`, `not_ready_since`)
-- `server/usecases/stream-sessions.ts` (`endIfAutoStopDue`, `stopSession` stamp)
+- `server/usecases/stream-sessions/` (`endIfAutoStopDue`, `stopSession` stamp)
 - `server/usecases/stream-phone.ts` (`auto`, `health`, `notReady*`)
-- `server/api-v1/schemas.ts`, `server/api-v1/openapi.ts`, `openapi/v1.json`, `openapi/v1.public.json`
+- `server/api-v1/schemas/`, `server/api-v1/openapi.ts`, `openapi/v1.json`, `openapi/v1.public.json`
 - `app/api/v1/fixtures/[id]/stream-code/__tests__/routes.test.ts` (flip the rejected bodies)
 - `.github/workflows/e2e.yml` and `e2e-ci-wiring.test.ts` (OG-E)
 - `scripts/smoke.ts` (`captureV2Suite` gains the auto case)
@@ -447,7 +447,7 @@ Domain-purity: the unit list gains `auto-stream.ts` and `phone-health.ts` ("has 
 
 **Files:**
 
-- Modify: `apps/web/src/server/api-v1/schemas.ts` (`PutStreamSettings`, `StreamSettings`),
+- Modify: `apps/web/src/server/api-v1/schemas/streaming.ts` (`PutStreamSettings`, `StreamSettings`),
   `apps/web/src/server/api-v1/openapi.ts` (the route's summary), `apps/web/src/server/usecases/stream-codes.ts`
   (`saveStreamSettings`, new `writeAutoStream`), `apps/web/src/server/usecases/capture-phone.ts` (`captureCommon`),
   `openapi/v1.json`, `openapi/v1.public.json` (regenerated)
@@ -510,7 +510,7 @@ export async function markAutoStartBlocked(orgId: string, fixtureId: string, at:
 
 - Create: `apps/web/src/server/usecases/stream-auto.ts`
 - Modify: `apps/web/src/server/usecases/capture-phone.ts` (step 6 call, `not_ready_since` write is T6),
-  `apps/web/src/server/usecases/stream-sessions.ts` (`stopSession`)
+  `apps/web/src/server/usecases/stream-sessions/stop.ts` (`stopSession`)
 - Test: `apps/web/src/server/usecases/__tests__/stream-auto.test.ts`
 
 **Interfaces:**
@@ -616,7 +616,7 @@ if (decided.mine !== null && body.state !== "ended" && decided.stop === null) {
 
 **Files:**
 
-- Modify: `apps/web/src/server/usecases/stream-sessions.ts` (`tickSession`, new `endIfAutoStopDue`, `autoStopFactsOf`)
+- Modify: `apps/web/src/server/usecases/stream-sessions/` (`tickSession`, new `endIfAutoStopDue`, `autoStopFactsOf`)
 - Test: `apps/web/src/server/usecases/__tests__/stream-auto-stop.test.ts`
 
 **Interfaces:**
@@ -686,7 +686,7 @@ select coalesce(st.auto_stream, false) as auto_stream, p.mode, f.finished_at, s.
 
 **Files:**
 
-- Modify: `apps/web/src/server/api-v1/schemas.ts` (`StreamPhone`), `apps/web/src/server/usecases/stream-phone.ts`,
+- Modify: `apps/web/src/server/api-v1/schemas/streaming.ts` (`StreamPhone`), `apps/web/src/server/usecases/stream-phone.ts`,
   `apps/web/src/server/usecases/capture-phone.ts` (the pairing update writes `not_ready_since`), `openapi/v1*.json`
 - Test: `usecases/__tests__/stream-phone.test.ts`, `usecases/__tests__/capture-beat.test.ts`
 

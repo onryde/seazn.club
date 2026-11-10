@@ -1,5 +1,5 @@
 // R2005 review round 1, item 1: the compositor's relay PAGE token rides a URL the way the overlay key does. The composed
-// session's `overlayUrl` (`/overlay/fixtures/{id}?sid=…&st=…&host=compositor…`, stream-sessions.ts) carries it, and the
+// session's `overlayUrl` (`/overlay/fixtures/{id}?sid=…&st=…&host=compositor…`, usecases/stream-sessions/) carries it, and the
 // relay page's live-data poll (`/api/v1/public/fixtures/{id}/overlay?sid=…&st=…`, `overlayPollPath`) sends it again
 // every STREAM_POLL_MS. `st` is a live credential — a `relay-page` token opens a NON-public fixture's overlay until its
 // session ends — so every `st=` QUERY PARAMETER value becomes `[st]`, plain or URL-encoded, exactly as `key=` does.
@@ -20,7 +20,7 @@ const OTHER_SID = "7e6d5c4b-3a29-4817-a605-f4e3d2c1b0a9";
 let ST = "";
 let OTHER_ST = "";
 
-/** The composed session's page URL, as `stream-sessions.ts` builds it (`new URLSearchParams({ sid, st, host, … })`). */
+/** The composed session's page URL, as `usecases/stream-sessions/` builds it (`new URLSearchParams({ sid, st, host, … })`). */
 const pageUrl = (sid: string, st: string) =>
   `https://seazn.club/overlay/fixtures/${FIXTURE}?${new URLSearchParams({ sid, st, host: "compositor", delay: "3000", template: "bar" }).toString()}`;
 

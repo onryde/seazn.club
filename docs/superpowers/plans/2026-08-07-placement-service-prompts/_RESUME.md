@@ -284,7 +284,7 @@ next task, so they are recorded here rather than left in a transcript.
 > (all five `PlacementError` failure kinds plus a plain `Error`) returns
 > `solver_unavailable`. Both members are in the union (`build.ts:338`,
 > `:384`) AND in the hand-written zod mirror
-> (`apps/web/src/server/api-v1/schemas.ts:1029`, `:1059`). Copy exists in
+> (`apps/web/src/server/api-v1/schemas/`). Copy exists in
 > all four locales as `board.result.busy` / `board.result.unavailable`
 > (`ui.json:3225-3226`). **So there is no union to widen, no `openapi:gen`
 > to run, and no i18n owed.** `_INDEX.md`'s 06b row said so ("obligation
@@ -312,7 +312,7 @@ one. Read `build.ts:1439-1484` before believing any claim about this path.
 **The costs this section warned about are already paid**, and are recorded
 here only so a future union change remembers them: a status added to
 `BuildResult` widens a union that
-`apps/web/src/server/api-v1/schemas.ts` hand-mirrors as a zod enum — which
+`apps/web/src/server/api-v1/schemas/` hand-mirrors as a zod enum — which
 reds `apps/web` tsc while the engine's own tsc stays green — and it drives
 `openapi:gen`. Both are CI-only gates this repo has been bitten by
 repeatedly. New user-facing strings need all four locale dictionaries.
@@ -423,7 +423,7 @@ rename pays its own stub regen now, and #21 pays a second one later.
 ## Traps this session paid for
 
 - **A union widened in `packages/engine` reds `apps/web` tsc while the
-  engine's own tsc stays green.** `schemas.ts` hand-mirrors it as a zod
+  engine's own tsc stays green.** `api-v1/schemas/` hand-mirrors it as a zod
   enum. It was red at base for two whole tasks past two reviews and the
   coordinator's own gate.
 - **A test whose win condition is a constraint the solver never receives is

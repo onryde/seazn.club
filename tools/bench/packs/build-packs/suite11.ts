@@ -595,7 +595,7 @@ const isoAt = (date: string, minutes: number): string => {
 function worldsCourtHours(): CourtHoursInput[] {
   // Two ranges per weekday on the ONE court — afternoon and evening. NOT
   // `sessionWindows`: that field is venue-wide with no court key
-  // (api-v1/schemas.ts:1633-1636), so it cannot express "this court, twice a
+  // (api-v1/schemas/), so it cannot express "this court, twice a
   // day". The product allows multiple ranges per weekday and 422s only on
   // overlap (usecases/venues.ts:191-200), and 1080 < 1140 so these two do not.
   const hours: CourtHoursInput[] = [];

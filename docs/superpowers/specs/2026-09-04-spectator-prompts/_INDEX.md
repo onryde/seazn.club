@@ -1039,7 +1039,7 @@ on every one, confirmed by eye at 320 and 1280.
 ### TZ round — re-pinned against the tree; m6 is FIXED, m1/m2/m3 still queued
 Two logged line numbers were stale and one item was REFRAMED; the logged version
 would have produced the wrong fix.
-- **m2 CONFIRMED.** `api-v1/schemas.ts:1729` (logged as 1753) takes
+- **m2 CONFIRMED.** `api-v1/schemas/` (logged as 1753) takes
   `tz: z.string().min(1).max(64).nullish()` — length only, never IANA, while
   `lib/types.ts:148` and `api/orgs/[id]/route.ts:37` both `.refine(isValidIana)`.
   `isValidIana` already exists at `lib/tz.ts:15`, so the write-side fix is one

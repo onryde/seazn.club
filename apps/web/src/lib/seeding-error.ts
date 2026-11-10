@@ -10,7 +10,7 @@
 // The codes in SEEDING_ERROR_CODES below are HttpError codes thrown by
 // computeSeedProposal / confirmSeedProposal (server/usecases/stages/seed-proposal.ts) and
 // resolveQualifiers (server/usecases/stage-seeding.ts) — ALL_CAPS_SNAKE wire
-// codes by repo convention (schemas.ts:3024-3029's comment), never i18n keys
+// codes by repo convention (api-v1/schemas/ folder's comment), never i18n keys
 // themselves. Read the count off that array, never off this comment: the "13"
 // in the ruling quoted above is the ruling's own figure and has been stale
 // since F3 added a 14th.

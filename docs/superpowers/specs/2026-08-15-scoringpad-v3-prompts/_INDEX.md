@@ -2061,7 +2061,7 @@ This is the R2c lesson in a new place: there, the gallery could not SEE the
 wave's change because no state opened the picker; here, the fixture cannot
 PRODUCE the change at all. A recapture fixes neither.
 
-The API already accepts it (`schemas.ts:941`, `pair_order` nullish) and the
+The API already accepts it (`api-v1/schemas/`, `pair_order` nullish) and the
 lineup editor already sends it, so the fix is three lines in the seeder and it
 lands BEFORE the e2e and gallery work rather than inside it. Spread-omit the
 field rather than sending an explicit `null`, so individual-entrant fixtures

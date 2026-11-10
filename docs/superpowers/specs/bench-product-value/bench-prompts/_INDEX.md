@@ -166,7 +166,7 @@ fall back from, is live — no B-prompt needs its fallback path.
 | Calendar compiler (D5c) | P10 | MERGED #644 (`027fd535a`) | — |
 | D6 batch import (seeding speed) | P11 | MERGED `ee5aa1a01` #653 | `POST /api/v1/divisions/{id}/events/import` — **feature-gated, no `plan_entitlements` row yet**; bench needs a `setPlan`-style override to use it (spec §11 risk 5/8) |
 | Venues/courts schema+API (D5a) | P8 | DONE 2026-08-17 | V367, 4 tables, RLS forced |
-| Scheduler integration (D5b) | P9 | MERGED #621+#623+#633 | `ScheduleConfig.courts` = court UUIDs (`schemas.ts:1155`) |
+| Scheduler integration (D5b) | P9 | MERGED #621+#623+#633 | `ScheduleConfig.courts` = court UUIDs (`api-v1/schemas/`) |
 | Templates (D1a/D1b) | P4, P7 | MERGED `e35efff1`/`98e95c9e` #548/#582 | 2 known open defects (`uniqueSlug` race, modal 320 fold) — not bench-relevant |
 | News enrichment (D7) | P3 | MERGED `51601495` #545 | `generateWeeklyDigest` (`org-posts.ts:1506`), `draftPostsForDecidedFixture` (`:449`) — for B03 seeding if news items get seeded |
 

@@ -6,7 +6,7 @@
 
 **Architecture:** New migration V276 (`person_claims` + `fixture_availability`, house RLS). Claim tokens are random secrets hashed at rest (device-links pattern); check-in tokens are HS256 JWTs signed with `AUTH_SECRET` (stateless, fixture-scoped, die at local midnight). `/me` reads are superuser cross-org queries mirroring `listAssignedFixtures`; organiser-side reads stay inside `withTenant`. Consent writes by the player fire the existing division/competition tag revalidation so the public card flips immediately.
 
-**Tech Stack:** Next 16.2.9 (App Router), postgres.js tagged SQL, zod schemas in `server/api-v1/schemas.ts`, jose JWT, qrcode, Resend via `lib/email.ts` + `lib/email-templates/compose.ts`, vitest (DB-backed suites skip without `DATABASE_URL`), Playwright e2e.
+**Tech Stack:** Next 16.2.9 (App Router), postgres.js tagged SQL, zod schemas in `server/api-v1/schemas/`, jose JWT, qrcode, Resend via `lib/email.ts` + `lib/email-templates/compose.ts`, vitest (DB-backed suites skip without `DATABASE_URL`), Playwright e2e.
 
 ## Global Constraints
 
@@ -166,7 +166,7 @@ grant select on fixture_availability to app_user;
 - Create: `apps/web/src/app/api/claims/[token]/route.ts` (GET status view — non-v1, token IS the auth, like `/api/invites`)
 - Create: `apps/web/src/app/api/claims/[token]/accept/route.ts` (POST — `requireUser()` + `claimPerson`)
 - Create: `apps/web/src/app/api/checkin/[token]/route.ts` (POST — `requireUser()` + verify + `checkInToFixture`; returns `{ checked_in: true }` or `{ needs_claim: true }`)
-- Modify: `apps/web/src/server/api-v1/schemas.ts` — `putAvailabilitySchema` (`status: z.enum(["in","out","maybe"])`, `note: z.string().max(280).nullish()`), `patchMyConsentSchema` (`public_name?: boolean, public_photo?: boolean`), `createClaimInviteSchema` (`email: z.email()`)
+- Modify: `apps/web/src/server/api-v1/schemas/` — `putAvailabilitySchema` (`status: z.enum(["in","out","maybe"])`, `note: z.string().max(280).nullish()`), `patchMyConsentSchema` (`public_name?: boolean, public_photo?: boolean`), `createClaimInviteSchema` (`email: z.email()`)
 - Modify: `apps/web/src/server/api-v1/key-scopes.ts` — add ALL seven v1 routes to `NEVER_KEY_ROUTES` (claim minting = credential minting; /me = session-bound)
 - Modify: `apps/web/src/server/api-v1/openapi.ts` ROUTES + run `npm run openapi:gen`, commit JSON
 - Test: `apps/web/src/server/api-v1/__tests__/` enumeration suites must stay green (they fail on any unregistered route — that IS the test)

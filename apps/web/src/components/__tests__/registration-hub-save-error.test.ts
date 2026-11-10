@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { ApiV1Error } from "@/lib/client-v1";
 import { mapSaveError } from "@/components/registration-hub-save-error";
 import { ENTRANT_KIND_NOT_ALLOWED } from "@/lib/division-entrant-kinds";
-// RS004 review finding 2: schemas.ts is explicitly NOT server-only (pure
+// RS004 review finding 2: api-v1/schemas/ is explicitly NOT server-only (pure
 // Zod, shared with the OpenAPI generator — see its own file header), and
 // AGE_MAX_BEFORE_MIN is exported specifically so callers can raise/assert
 // the SAME message rather than a hand-typed copy. Other client-side tests
@@ -56,7 +56,7 @@ describe("mapSaveError — structured zod issues (400 VALIDATION)", () => {
 // here would catch it.
 //
 // AGE_MAX_BEFORE_MIN is now IMPORTED (see the import above) — a reword in
-// schemas.ts flows into this test automatically, and it fails unless
+// api-v1/schemas/ flows into this test automatically, and it fails unless
 // mapSaveError's pattern is updated to match. The other five are
 // HttpError(422, "...") string literals inline in
 // server/usecases/registrations/, a genuinely server-only file (raw DB

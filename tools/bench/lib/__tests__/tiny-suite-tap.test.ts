@@ -107,7 +107,7 @@ function fakeServer(opts: TapWorldOptions): {
   const fixtureDivisionId = new Map<string, string>();
   const fixtureOfficials = new Map<string, unknown[]>();
   // T10 — the per-division ordinal the `/f/{no}` console URL segment uses
-  // (`schemas.ts` `Fixture.fixture_no`), and the live status a tap moves.
+  // (`api-v1/schemas/scoring.ts` `Fixture.fixture_no`), and the live status a tap moves.
   const fixtureNoById = new Map<string, number>();
   const fixtureCountByDivision = new Map<string, number>();
   const statusById = new Map<string, string>();

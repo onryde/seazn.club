@@ -76,7 +76,7 @@ describe("rosterCompositionIssues", () => {
 // `new Date(Date.UTC(seasonStartYear, cutoffMonth - 1, cutoffDay))` silently
 // rolled an out-of-range day into the next month (31 September -> 1
 // October, 30 February -> 1/2 March) — eligibility shifted by days with no
-// error anywhere. The write path (checkAgeCutoff, api-v1/schemas.ts) now
+// error anywhere. The write path (checkAgeCutoff, api-v1/schemas/divisions.ts) now
 // rejects the combination before it is ever stored; these pin the shared
 // predicate it uses, and this file's own read-side backstop.
 describe("isValidCutoffDay (RS007 review fix L1)", () => {

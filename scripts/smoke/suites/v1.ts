@@ -229,7 +229,7 @@ export async function v1Suite(admin: Session, orgId: string, orgSlug: string): P
     // An hour past the last slot was the first attempt and it 409s too — it
     // lands outside the competition window. The edit that is clash-free BY
     // CONSTRUCTION is unplacing the card: `PatchFixture.court_id` is nullable
-    // (schemas.ts), a tray card occupies no slot, and the point of the check
+    // (api-v1/schemas/), a tray card occupies no slot, and the point of the check
     // is only that the board still accepts a change after refusing one.
     const legal = await v1(admin, `/api/v1/fixtures/${sharer.fixture_id}`, "PATCH", {
       court_id: null,

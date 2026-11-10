@@ -728,7 +728,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Create: `apps/web/src/app/api/v1/orgs/[id]/divisions/[divisionId]/capacity/route.ts`
 - Modify: `apps/web/src/server/usecases/capacity-guard.ts` (add the usecase)
-- Modify: `apps/web/src/server/api-v1/schemas.ts`, `apps/web/src/server/api-v1/openapi.ts:152` area
+- Modify: `apps/web/src/server/api-v1/schemas/`, `apps/web/src/server/api-v1/openapi.ts:152` area
 - Test: `apps/web/src/server/usecases/capacity-endpoint.test.ts` (create)
 
 **Interfaces:**
@@ -878,7 +878,7 @@ Confirm the existing `divisions/[divisionId]` route directory name before creati
 
 - [ ] **Step 5: Register the wire schema**
 
-`schemas.ts` holds wire schemas separately from usecase schemas (the sponsors pair proves they are not shared). Add a `CapacityPrecheck` request schema and a `CapacityReport` response schema there, then register the path in `openapi.ts` beside its neighbours at `:152`.
+`api-v1/schemas/` holds wire schemas separately from usecase schemas (the sponsors pair proves they are not shared). Add a `CapacityPrecheck` request schema and a `CapacityReport` response schema there, then register the path in `openapi.ts` beside its neighbours at `:152`.
 
 - [ ] **Step 6: Run tests and the drift gate**
 

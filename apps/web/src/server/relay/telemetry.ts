@@ -1,7 +1,7 @@
 // server/relay/telemetry.ts — the only SQL that WRITES a capture table
 // (enc-boundary.test.ts claim 4). Every payload passes sanitise() HERE, so a
 // caller cannot skip it. recordEvent takes a Tx on purpose: an event is part of
-// the state change that caused it, and stream-sessions.ts calls it inside the
+// the state change that caused it, and usecases/stream-sessions/ calls it inside the
 // row-lock transaction — a failure here rolls the state back (atomicity test,
 // Task 10).
 import type postgres from "postgres";
@@ -133,7 +133,7 @@ export async function recordSample(exec: Exec, s: SampleInput): Promise<"written
 }
 
 /** The rung of a session's newest NON-final heartbeat sample after `since` (null = the whole session) — the sizing
- *  alarm's read THROUGH a final beat to the attempt's last live one (stream-sessions.ts `previousRungOf`). A READ, kept
+ *  alarm's read THROUGH a final beat to the attempt's last live one (usecases/stream-sessions/heartbeat.ts `previousRungOf`). A READ, kept
  *  beside the writer of the same table. It runs on whatever handle it is given: the beat passes its row-lock
  *  transaction's savepoint (#983 r2), so the alarm decision reads the samples under the lock. */
 export async function latestLiveRung(exec: Exec, sessionId: string, since: string | Date | null): Promise<string | null> {
@@ -147,7 +147,7 @@ export async function latestLiveRung(exec: Exec, sessionId: string, since: strin
 
 /** R2008 (owner ruling 2026-10-19): the `type` of the event the beat route writes when the compositor's programme phase CHANGES,
  *  and the phase that says the camera is IN. ONE definition of "the camera was live" for every reader of the log: the
- *  composed phone-lost rules (`cameraFactsOf`'s `live_once_at`, stream-sessions.ts) and W23's restart count
+ *  composed phone-lost rules (`cameraFactsOf`'s `live_once_at`, usecases/stream-sessions/) and W23's restart count
  *  (`sessionsWhoseCameraWasLive`, below) — so the refund and the allowance can never disagree about whether video arrived. */
 export const PROGRAMME_PHASE_EVENT = "programme_phase";
 export const CAMERA_LIVE_PHASE = "live";

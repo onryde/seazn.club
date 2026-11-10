@@ -43,7 +43,7 @@ import type { CourtCalendar } from "@seazn/engine/scheduling/court-windows";
 // Re-exported for continuity — this module is the one both sides of the
 // capacity wire already reach for, so the bounds stay findable from here.
 // They are DEFINED in `capacity-bounds.ts` (a leaf with no imports) rather
-// than in this file: `schemas.ts` needs them too and is imported by fourteen
+// than in this file: `api-v1/schemas/` needs them too and is imported by fourteen
 // `"use client"` components, and this file carries real engine runtime code
 // that must not become reachable from those bundles. See that file's header.
 export {

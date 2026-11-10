@@ -3,10 +3,10 @@
 // top is read by nothing (stage-cfg.ts), so it is a client's mistake, refused by name rather than silently ignored.
 //
 // ONE authority for both refusals that use it: the create door (`usecases/stage-defaults.ts`, any caller) and the API
-// schema (`api-v1/schemas.ts`, `StageConfig` / `PutStageRules`, whose `z.never` message `http.ts` turns into a named
+// schema (`api-v1/schemas/`, `StageConfig` / `PutStageRules`, whose `z.never` message `http.ts` turns into a named
 // 400). From the engine's declarations, never a list kept here: a decider a sport adds is refused at both with no edit.
 //
-// Loaded bare by `scripts/openapi-gen.ts` (node --experimental-strip-types, no resolver) through schemas.ts: bare
+// Loaded bare by `scripts/openapi-gen.ts` (node --experimental-strip-types, no resolver) through api-v1/schemas/: bare
 // package imports only, no `@/`, no JSX. That no decider collides with a stage config key of its own is a guard in
 // usecases/__tests__/stage-defaults.test.ts.
 import { deciderKeysFor } from "@seazn/engine/sport";

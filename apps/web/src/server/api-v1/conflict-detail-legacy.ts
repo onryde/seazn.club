@@ -73,7 +73,7 @@ export function legacyVerifierConflict(c: Conflict): Omit<Conflict, "details"> &
 /**
  * Restores the deprecated `detail` string onto a wire response that carries
  * an engine `Conflict` verbatim (the camelCase `AiPlanConflict` shape —
- * see its comment in schemas.ts: the orchestrator returns `Conflict[]`
+ * see its comment in api-v1/schemas/: the orchestrator returns `Conflict[]`
  * unchanged, by design, so a client reading `warnings`/`blocking` off an
  * AI-plan response keeps working). Unlike `legacyVerifierConflict`, `details`
  * stays — it is additive on THIS path, not the model's.

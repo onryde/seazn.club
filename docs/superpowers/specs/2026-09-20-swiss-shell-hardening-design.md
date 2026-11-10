@@ -571,7 +571,7 @@ ad-hoc row survives.
 
 **Note added 2026-09-20 — this task is NOT closed by Task 1.0, and a report
 from that task nearly read as if it were.** Task 1.0's reconcile cannot eat an
-ad-hoc fixture: `AddFixture` (`api-v1/schemas.ts:1133`) requires both entrant
+ad-hoc fixture: `AddFixture` (`api-v1/schemas/`) requires both entrant
 ids as UUIDs under `.strict()`, so every ad-hoc row is SEATED, and the
 reconcile's unseated guard refuses rather than deleting. Verified at the schema,
 not inferred from the TypeScript input type. That settles the hazard for

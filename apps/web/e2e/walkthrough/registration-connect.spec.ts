@@ -136,7 +136,7 @@ test("RS006 — organiser settings, team entry, Stripe Connect payment", async (
       entrant_kind: "team",
       capacity: 16,
       fee_cents: 2500,
-      // WITHOUT this the field defaults to "offline" (schemas.ts:2181) and the
+      // WITHOUT this the field defaults to "offline" (api-v1/schemas/) and the
       // cart never mints a checkout — submit succeeds, the entry sits at
       // "pending £25", and nothing ever redirects to Stripe.
       payment_method: "stripe",

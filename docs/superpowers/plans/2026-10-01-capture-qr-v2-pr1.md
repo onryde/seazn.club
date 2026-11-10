@@ -20,7 +20,7 @@ phone is paired.
 - **Pure domain tables, no I/O.** Code, pairing, slot, beat answer, poll cadence, end reasons and both phone-lost
   rules are pure modules under `server/relay/domain/`, decided by tables, with `now` passed in.
 - **Thin use-cases.** `stream-codes.ts` mints and resolves codes. `capture-phone.ts` serves the three phone routes.
-  `stream-sessions.ts` gains `startBroadcast` (one start path for organiser and operator) and `tickSession` (one tick
+  `usecases/stream-sessions/` gains `startBroadcast` (one start path for organiser and operator) and `tickSession` (one tick
   for organiser polls, phone beats and the sweep).
 - **One V430 migration.** `relay/secret-columns.ts` stays the only SQL over sealed columns, `tok_enc` included. Its four
   new tables follow V410's RLS model (R1): enable plus force, no policy, and access only through the non-tenant `sql`.
@@ -77,7 +77,7 @@ per task**, in task order, so each commit stays bisectable and each task's own g
 A batch's review runs over the batch's commits (`git diff <batch base>..HEAD`), with this plan's task text as the
 brief. Fixes from that review land in the owning task's files as a follow-up commit in the same batch, and the batch
 gate is re-run before the next batch starts. **Every batch gate is scoped, never the full suite** (owner, 2026-09-28).
-**Re-pin `stream-sessions.ts` line anchors at each batch start** (A14): B3 and B4 move its lines for B5.
+**Re-pin `usecases/stream-sessions/` line anchors at each batch start** (A14): B3 and B4 move its lines for B5.
 
 **Batch adjustments from the pre-flight (2026-10-01).** The ten batches keep their composition. No task moves
 between batches. What changed is the gates and one division of work:
@@ -232,7 +232,7 @@ authority, and never on a peer session's word.
 them verbatim:**
 
 > B0 (its four fixes merged in #909 81d1f3d73 on top of #908's coalescing; FP28) owns four things: the single-statement coalesced read (`latestPollSampleWithSince`,
-> `stream-sessions.ts:580`), the one-tx sample+event, `expireTargetHolders`' per-holder catch (`:1759`), and the
+> `usecases/stream-sessions/`), the one-tx sample+event, `expireTargetHolders`' per-holder catch (`:1759`), and the
 > ingest-cf output word map (`server/relay/ingest-cf.ts`). No task edits their text; extraction moves them verbatim.
 
 Its constants stay as they are: `POLL_CLAIM_WINDOW_MS` (`:615`) and `COALESCED_SAMPLE_MAX_AGE_MS = 2 * STREAM_POLL_MS`
@@ -388,10 +388,10 @@ does about it.
     competitions. W25's "competition's locale" is therefore the organisation's default, which the public league pages
     already read. T8a uses it.
 14. **`reuseWindowOpen` has three callers** that must agree (`stream-credits.ts:125`): admission's balance waiver
-    (`stream-sessions.ts:1216`), `consumeForSession` (`stream-credits.ts:169`) and the panel's `restartFree`
-    (`stream-sessions.ts:1611`). T6b replaces all three with `restartAllowance`, and its tests prove they agree.
+    (`usecases/stream-sessions/`), `consumeForSession` (`stream-credits.ts:169`) and the panel's `restartFree`
+    (`usecases/stream-sessions/`). T6b replaces all three with `restartAllowance`, and its tests prove they agree.
     (Line anchors corrected by FP5. `createSession` is at `:1140`. `:1402` is `openStreamStates`. The poll block is
-    inside `currentSession` at `:1446-1530`, with the claim at `:1457`. The QR transaction is at `:1534-1553`.)
+    inside `currentSession`30`, with the claim at `:1457`. The QR transaction is at `:1534-1553`.)
 
 ### False premises found by the pre-flight (FP1–FP23), and five found while amending (FP24–FP28)
 
@@ -406,7 +406,7 @@ does about it.
 | FP8 | T7 and T10 add `FakeIngest.setConnected` | `FakeIngest.setState(inputId, state)` already exists (`relay/fakes.ts:130-134`) and overrides the timer. | T7, T10 (A26) |
 | FP9 | T3 should copy "V410's tenant policy" with `trg_set_org` | V410 creates **no policy, no trigger and no grant** (`V410:17-23`, enable+force `:407-422`). `rls-static.test.ts` asserts "creates no policy and no grant". The trigger+policy+GRANT pattern is V117 (`V117__device_links.sql:33-42`). | T3 (R1) |
 | FP10 | Retry-After goes through the existing seam | The seam returns a count only (P4). | T8c (A15, R4) |
-| FP11 | Domain files and `tok_enc` naming are free | `domain-purity.test.ts:15` pins **exactly five** domain files. `enc-boundary.test.ts` claim 2 (`:56-63`) already forbids `tok_enc` in every file outside `server/relay/`, tests included. Claim 4 (`:86-100`) lets only `telemetry.ts`, `relay-sweep.ts` and `stream-sessions.ts` name `fixture_stream_events`/`_samples` outside `__tests__`. | T3, T4a, T4b, T5 (A5, A6) |
+| FP11 | Domain files and `tok_enc` naming are free | `domain-purity.test.ts:15` pins **exactly five** domain files. `enc-boundary.test.ts` claim 2 (`:56-63`) already forbids `tok_enc` in every file outside `server/relay/`, tests included. Claim 4 (`:86-100`) lets only `telemetry.ts`, `relay-sweep.ts` and `usecases/stream-sessions/` name `fixture_stream_events`/`_samples` outside `__tests__`. | T3, T4a, T4b, T5 (A5, A6) |
 | FP12 | `source 'phone'` is a DB-only change | The TS `EventSource` (`server/relay/telemetry.ts:16`) has no `"phone"`. | T6 (A6) |
 | FP13 | `holdWindowSeconds.srt` comes from the capability | The capability says SRT is unmeasured and stays null (`relay/ports.ts:67-68`, `ingest-cf.ts:114`, the fake's `{rtmps:183, srt:null}`). Spec §6.4 sanctions 183 on the wire. | T8a (A17) |
 | FP14 | Reuse `relay/bearer.ts` | It answers the wrong 401 shape, and misses the missing-header case (P9). | T8a (A17) |
@@ -416,7 +416,7 @@ does about it.
 | FP18 | Redaction is the logger only | Spec §10.2 also drops the request body from Sentry captures. `lib/scrub-score-url.ts` scrubs only `dl_` tokens and the overlay `key=`. | T8c (A18) |
 | FP19 | The deploy has `STREAM_INGEST_HOST`, `STREAM_PLAYBACK_HOST` | Neither is in `fly.toml` or `fly.stg.toml` `[env]`. `RELAY_DRIVERS` may be a Fly secret (unverified). | OG9, T13 |
 | FP20 | `at: z.iso.datetime()` | zod v4's default admits `Z` only, and refuses an offset. | T1 (R5, A2) |
-| FP21 | The label fits the contract | Entrant and team names reach 200 (`api-v1/schemas.ts:615` and siblings), so `"{A} v {B}"` reaches 403. A target `label` is capped at 80 at create, but the DB has no CHECK. | T8a (R7) |
+| FP21 | The label fits the contract | Entrant and team names reach 200 (`api-v1/schemas/` and siblings), so `"{A} v {B}"` reaches 403. A target `label` is capped at 80 at create, but the DB has no CHECK. | T8a (R7) |
 | FP22 | `forEachSportAsync` drives each sport's finishing events through `appendEvent`, counted against the testkit's `builtinModules` | The testkit barrel does not export `builtinModules` (it lives in `packages/engine/src/sports/index.ts`). No helper drives per-sport finishing events through `appendEvent` (`append-event.ts:449`). | T3 (R8, A20) |
 | FP23 | (unstated) W5 is local to T6 | Every existing organiser start has **no phone**: 233 `createSession(` calls in `stream-sessions.test.ts`, more in five other suites, and three Go-live walkthroughs. | T6, T12 (A7) |
 | FP24 | A7's caller list includes `lib/__tests__/auth-session-audience.test.ts` | That file calls `lib/auth.ts`'s **login** `createSession(userId)` (`:54`, `:120`), not the stream one. A bare-name grep for `createSession(` also hits seven auth routes. The re-pin keys on the stream import or the stream route module instead. | T6 |
@@ -448,7 +448,7 @@ and `:169`. Also kept:
 | Path | Responsibility | Task |
 |---|---|---|
 | `docs/contracts/capture-qr.v2.json`, `capture-descriptor.v1.json`, `capture-beat.v1.json`, `capture-start.v1.json` + `fixtures/capture-*/…` | the cross-repo contract | T1 |
-| `apps/web/src/server/api-v1/capture-schemas.ts` | zod twins of the four contracts (re-exported from `schemas.ts`) | T1 |
+| `apps/web/src/server/api-v1/capture-schemas.ts` | zod twins of the four contracts (re-exported from `api-v1/schemas/`) | T1 |
 | `apps/web/src/server/api-v1/__tests__/capture-contract.test.ts` | checksums, zod ↔ JSON parity, fixtures | T1 |
 | out of tree (never committed, owner 2026-10-05): `option-{a,b}.html` | the two Ready-state options | T2 |
 | `db/migration/deltas/V430__capture_stream_codes.sql` | spec §8.1 | T3 |
@@ -488,8 +488,8 @@ and `:169`. Also kept:
 | `apps/web/src/server/relay/domain/expiry.ts` + `domain/__tests__/expiry.test.ts` | the warming timeout anchors on `warmingAt ?? createdAt` (A8) | T6 |
 | `apps/web/src/server/relay/telemetry.ts` | `EventSource` gains `"phone"` (A6) | T6 |
 | `apps/web/src/server/relay/__tests__/_session-rig.ts` | `pairPresentPhone(fixtureId)` (A7) | T6, re-pointed in T8b |
-| `apps/web/src/server/usecases/stream-sessions.ts` | the QR writer re-pointed to the renamed columns (T3); `startBroadcast` (T6); `tickSession`, `tickOpenSessions` (T7, T7b); v1 QR removed (T11) | T3, T6, T7, T7b, T11 |
-| `apps/web/src/server/api-v1/schemas.ts` | `StreamEndReason` widens; `StreamSessionCurrent` gains `startCause` (T6) and `restart` beside a derived `restartFree` (T6b); loses `qr` and `restartFree` (T11) | T6, T6b, T11 |
+| `apps/web/src/server/usecases/stream-sessions/` | the QR writer re-pointed to the renamed columns (T3); `startBroadcast` (T6); `tickSession`, `tickOpenSessions` (T7, T7b); v1 QR removed (T11) | T3, T6, T7, T7b, T11 |
+| `apps/web/src/server/api-v1/schemas/` | `StreamEndReason` widens; `StreamSessionCurrent` gains `startCause` (T6) and `restart` beside a derived `restartFree` (T6b); loses `qr` and `restartFree` (T11) | T6, T6b, T11 |
 | `apps/web/src/lib/errors.ts`, `lib/http.ts`, `server/api-v1/http.ts`, `lib/rate-limit.ts`, `lib/cache.ts` | `HttpError.headers`; `Retry-After` from the Lua TTL; the capture presets (A15) | T8c |
 | `apps/web/src/lib/scrub-score-url.ts` | `scrubSentryEvent` redacts capture codes and the Bearer, and drops capture request bodies (A18) | T8c |
 | `apps/web/src/server/logger.ts` | pino `redact` paths | T8c |
@@ -522,7 +522,7 @@ and `:169`. Also kept:
 - Create: `scripts/gen-capture-contracts.ts`, a one-off generator that stays in the tree for the next v-bump
 - Modify:
   - `apps/web/src/lib/capture-qr.ts` (add the v2 schema and parser; v1 stays until T11);
-  - `apps/web/src/server/api-v1/schemas.ts` (re-export the twins).
+  - `apps/web/src/server/api-v1/schemas/` (re-export the twins).
 - Delete:
   - `docs/contracts/capture-qr.v1.json` and `docs/contracts/fixtures/capture-qr.v1/`;
   - `apps/web/src/lib/__tests__/capture-qr.v1.test.ts`.
@@ -540,7 +540,7 @@ and `:169`. Also kept:
 
 **Interfaces:**
 
-- Produces, from `server/api-v1/capture-schemas.ts`, every name below, also re-exported from `schemas.ts`:
+- Produces, from `server/api-v1/capture-schemas.ts`, every name below, also re-exported from `api-v1/schemas/`:
   - `CAPTURE_CODE_RE = /^[0-9a-hjkmnp-tv-z]{12}$/`
   - `CaptureEndReason`, `CaptureStartedBy`, `CaptureCause`, `CapturePhoneState`, `CaptureNotReady`,
     `CaptureStartFailed`
@@ -843,7 +843,7 @@ cd $WT/apps/web && rm -f $SCRATCH/cq1-t1.json && pnpm vitest run src/server/api-
     proves the inline literal is load-bearing (A1).
 
 - [ ] **Step 8: Commit.** Use `git add` for the four contracts, the four fixture directories, the twins, the
-  generator, `capture-qr.ts`, `schemas.ts`, the new test, the deleted v1 files and the three edited tests. Message:
+  generator, `capture-qr.ts`, `api-v1/schemas/`, the new test, the deleted v1 files and the three edited tests. Message:
   `feat(capture): publish capture QR v2 contracts; remove v1 (PR-1 T1)`. The body lists:
   - the mutations;
   - the removed v1 cases;
@@ -910,7 +910,7 @@ Owes: nothing executable. This is the house "≥2 UI options" gate.
   - `rls-static.test.ts` (R1). This is **no longer "only if"**. Its `STREAM_TABLES` is derived from V410 alone
     today, and it now derives from the fold. Each of the four V430 tables is asserted enable plus force, and the case
     "creates no policy and no grant" scans V430 too;
-  - **the live QR writer, `apps/web/src/server/usecases/stream-sessions.ts:1534-1553` (A3, R3, critical).**
+  - **the live QR writer, `apps/web/src/server/usecases/stream-sessions/` (A3, R3, critical).**
     - Delete the `qr_issued_first_at` update (`:1548`). The code's `first_shown_at` supersedes it (spec §6.13).
     - Rename the two credential columns in the update at `:1551-1552`.
     - `opts.reveal`'s semantics stay until T11.
@@ -1455,9 +1455,9 @@ Owes: use-case and unit.
     (A8, FP7). **This file, not `session.ts`, holds the warming deadline;**
   - **`apps/web/src/server/relay/telemetry.ts:16`.** `EventSource` gains `"phone"` (A6, FP12). V430 admits it in the
     DB, and without this edit `tsc` reds here;
-  - `apps/web/src/server/usecases/stream-sessions.ts`: `createSession` (`:1140`, re-pin at batch start) →
+  - `apps/web/src/server/usecases/stream-sessions/start.ts`: `createSession` (`:1140`, re-pin at batch start) →
     `startBroadcast`, plus a thin organiser wrapper;
-  - `apps/web/src/server/api-v1/schemas.ts`: `StreamEndReason` widens to the five DB reasons, and
+  - `apps/web/src/server/api-v1/schemas/streaming.ts`: `StreamEndReason` widens to the five DB reasons, and
     `StreamSessionCurrent` gains `startCause`;
   - `apps/web/src/app/api/v1/fixtures/[id]/stream-sessions/route.ts`: saves the pre-pick on success;
   - **`apps/web/src/server/relay/__tests__/_session-rig.ts`: a new `pairPresentPhone(fixtureId, opts?)` (A7).**
@@ -1574,7 +1574,7 @@ cd $WT/apps/web && rm -f $SCRATCH/cq1-t6.json && pnpm vitest run src/server/rela
   Add any further caller that the re-pin grep finds, and confirm it appears in `.files`.
 
 - [ ] **Step 3: Implement.**
-  - Move the body of `createSession` (`stream-sessions.ts:1140`, to the end of its admission and provisioning) into
+  - Move the body of `createSession` (`usecases/stream-sessions/`, to the end of its admission and provisioning) into
     `startBroadcast` **unchanged**, except that it takes the actor and the new opts. B0's one-tx sample+event path
     moves verbatim (A27).
   - `createSession` becomes:
@@ -1621,9 +1621,9 @@ Owes:
   - `apps/web/src/server/relay/domain/credits.ts` (`restartIsFree`);
   - `apps/web/src/server/relay/config.ts` (`FREE_RESTARTS_PER_WINDOW = 3`);
   - `apps/web/src/server/usecases/stream-credits.ts` (`restartAllowance`; `consumeForSession` uses it);
-  - `apps/web/src/server/usecases/stream-sessions.ts`: admission at `:1216` and the read at `:1611` use it. Re-pin
+  - `apps/web/src/server/usecases/stream-sessions/`: admission at `:1216` and the read at `:1611` use it. Re-pin
     both after T6, which moves the lines;
-  - `apps/web/src/server/api-v1/schemas.ts`: `StreamSessionCurrent` **gains `restart` beside `restartFree`** (A9,
+  - `apps/web/src/server/api-v1/schemas/streaming.ts`: `StreamSessionCurrent` **gains `restart` beside `restartFree`** (A9,
     option (a)).
 - **Not modified here (A9(a)):**
   - `fixture-stream-panel.tsx`, with its five `restartFree` sites (`:1047`, `:1136-1138`, `:1282`, `:1320`,
@@ -1727,7 +1727,7 @@ Owes: unit, use-case, money and the sequence test.
 
 **Files:**
 
-- Modify: `apps/web/src/server/usecases/stream-sessions.ts`. Extract `tickSession` from `currentSession`'s
+- Modify: `apps/web/src/server/usecases/stream-sessions/`. Extract `tickSession` from `currentSession`'s
   reconcile-and-poll block (`:1446-1530`, with the claim at `:1457`; re-pin at batch start, A14). `currentSession`
   calls it. **This is B0 code. A10 and the Global Constraints' B0 paragraph bind every line of the extraction.**
 - Modify: `apps/web/src/app/api/cron/relay-sweep/route.ts`, and the sweep use-case it calls. Every open session is
@@ -1735,7 +1735,7 @@ Owes: unit, use-case, money and the sequence test.
 - Create: `apps/web/src/app/api/internal/relay/fake-ingest/[inputId]/route.ts`. It drives the **existing**
   `FakeIngest.setState(inputId, state)` (`relay/fakes.ts:130-134`), which already overrides the timer.
   **`fakes.ts` is not modified, and no `setConnected` twin is added** (FP8).
-- **Not touched:** `server/relay/ingest-cf.ts`, `expireTargetHolders` (`stream-sessions.ts:1759`), the text of
+- **Not touched:** `server/relay/ingest-cf.ts`, `expireTargetHolders` (`usecases/stream-sessions/`), the text of
   `latestPollSampleWithSince` (`:580`), `claimIngestPoll` (`:600`), `POLL_CLAIM_WINDOW_MS` (`:615`) and
   `COALESCED_SAMPLE_MAX_AGE_MS` (`:621`) (A27).
 - Test:
@@ -1871,7 +1871,7 @@ difference in the commit body.
 
 - Create `apps/web/src/app/api/cron/stream-tick/route.ts`, and a sibling `route.test.ts` (the relay-sweep
   convention).
-- Modify `apps/web/src/server/usecases/stream-sessions.ts`:
+- Modify `apps/web/src/server/usecases/stream-sessions/`:
   - add `export type StreamTickResult = { ticked: number; ended: number; failed: number; deferred: number }`,
     **written out literally**. `drift.test.ts:56-69` greps the route's `@/` imports for a `failed: number` field,
     and an inferred return type fails that check;
@@ -2482,7 +2482,7 @@ Owes: use-case, unit and money.
 - Create:
   - `apps/web/src/server/usecases/stream-phone.ts`;
   - `apps/web/src/app/api/v1/fixtures/[id]/stream-phone/route.ts`.
-- Modify: `apps/web/src/server/api-v1/schemas.ts` (`StreamPhone`), `key-scopes.ts` and `openapi.ts`.
+- Modify: `apps/web/src/server/api-v1/schemas/streaming.ts` (`StreamPhone`), `key-scopes.ts` and `openapi.ts`.
 - Test:
   - `server/usecases/__tests__/stream-phone.test.ts`;
   - `app/api/v1/fixtures/[id]/stream-phone/__tests__/route.test.ts`.
@@ -2609,8 +2609,8 @@ Owes: the sequence test and the mutation table.
   - `apps/web/src/lib/stream-session-view.ts` (pure view helpers for the states).
 - Modify, for the v1 removal (§6.13):
   - `lib/capture-qr.ts` (delete `CaptureQrV1` and `parseCaptureQr`);
-  - `schemas.ts` (`StreamSessionCurrent.qr` removed);
-  - `stream-sessions.ts`: `currentSession`'s `reveal` and the QR transaction (`:1534-1553` at T3, re-pinned now) are
+  - `api-v1/schemas/streaming.ts` (`StreamSessionCurrent.qr` removed);
+  - `usecases/stream-sessions/current.ts`: `currentSession`'s `reveal` and the QR transaction (`:1534-1553` at T3, re-pinned now) are
     removed. **Keep the diff to the QR transaction.** Do not reflow `:1580-1600`, which is next to B0's hunk (A27);
   - `app/api/v1/fixtures/[id]/stream-sessions/current/route.ts` (`?reveal=1` → 400);
   - the two renamed columns' readers **are already re-pointed by T3** (R3). T11 only removes the reveal path's write,
@@ -2624,7 +2624,7 @@ Owes: the sequence test and the mutation table.
   - `fixture-stream-panel.test.tsx`;
   - `stream-contract.test.ts:176-206`;
   - `stream-sessions.test.ts:679-717`;
-  - `schemas.ts:1371-1373`;
+  - `api-v1/schemas/`;
   - the i18n key `stream.phone.restartFree`, which is replaced by the `stream.restart.*` keys in all four locale
     dictionaries, then `gen-keys`.
 

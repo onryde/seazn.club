@@ -24,7 +24,7 @@ portfolio — the stored-config migration.**
 
 ## Files (scout re-pins first)
 
-- new data migration, `apps/web/src/server/api-v1/schemas.ts`,
+- new data migration, `apps/web/src/server/api-v1/schemas/`,
   `apps/web/src/server/usecases/schedule.ts`,
   `packages/engine/src/scheduling/build.ts`, every reader on the scout
   list, schedule setup components, 4 dictionaries

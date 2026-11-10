@@ -70,7 +70,7 @@ const DARK_INK = "#0f172a";
  * public-site documents as `team_display_v.colors.home_primary`
  * (`server/public-site/competition-hub.ts:335-340`, `primaryColour`) and the v1
  * API takes club `colors` as an unvalidated `z.record(z.string(), z.string())`
- * on both write paths (`server/api-v1/schemas.ts:3257` `CreateClub`, `:3268`
+ * on both write paths (`server/api-v1/schemas/clubs.ts` `CreateClub`,
  * `PatchClub`). The club-hub picker is an `<input type="color">`; the API is
  * not.
  *

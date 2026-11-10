@@ -64,7 +64,7 @@ Copy these values verbatim. Every task's requirements implicitly include this se
 **Modify:**
 - `apps/web/src/server/usecases/schedule-ai.ts` — export the pieces the joint module needs; add `JOINT_RULES` usage. Do not restructure it.
 - `apps/web/src/server/usecases/schedule-ai-prompt.ts` — add `JOINT_RULES`.
-- `apps/web/src/server/api-v1/schemas.ts` — joint request/response schemas.
+- `apps/web/src/server/api-v1/schemas/` — joint request/response schemas.
 - `apps/web/src/server/api-v1/openapi.ts` — register the three new routes.
 - `apps/web/src/components/v2/schedule-board.tsx:149` — the `aiAvailable` gate.
 - `apps/web/src/components/v2/board/ai-console.tsx` — mount the quote card; pass `rung`.
@@ -479,7 +479,7 @@ export function verifyJoint(plan: AiSchedulePlan, pack: CompetitionPack): Confli
 ## Task 5: Schemas + routes + OpenAPI
 
 **Files:**
-- Modify: `apps/web/src/server/api-v1/schemas.ts`
+- Modify: `apps/web/src/server/api-v1/schemas/`
 - Modify: `apps/web/src/server/api-v1/openapi.ts` (competition routes are registered at `:46-51`; the division ai-plan entry is at `:226` — follow both patterns)
 - Create: `apps/web/src/app/api/v1/competitions/[id]/schedule/ai-plan/route.ts`
 - Create: `apps/web/src/app/api/v1/competitions/[id]/schedule/ai-last/route.ts`
@@ -511,11 +511,11 @@ export const AiCompetitionPlanResponse = z.object({
   divisions: z.array(z.object({ id: z.string(), name: z.string(), movable: z.number().int() })),
   summary: z.string(),
   usage: z.object({ input_tokens: z.number().int(), output_tokens: z.number().int(), repair_rounds: z.number().int() }),
-  ...AiRunPriceFields,     // already declares discount + divisions[] — schemas.ts:1562-1590
+  ...AiRunPriceFields,     // already declares discount + divisions[] — api-v1/schemas/
 });
 ```
 
-`RungLiteral` already exists in `schemas.ts` (added for #348). `AiRunPriceFields` already exists and already carries the joint fields — reuse both, do not redeclare.
+`RungLiteral` already exists in `api-v1/schemas/` (added for #348). `AiRunPriceFields` already exists and already carries the joint fields — reuse both, do not redeclare.
 
 Routes follow `apps/web/src/app/api/v1/divisions/[id]/schedule/ai-plan/route.ts:14` exactly — the `v1()` wrapper is load-bearing (it propagates `HttpError.code` and `extra.usage`, which the generic handler drops). Auth: `requireResourceAuth(req, "competition", id, "write")` for the plan, `"read"` for `ai-last`. `requireResourceAuth` already supports `"competition"` (`apps/web/src/server/api-v1/auth.ts:303-318`).
 

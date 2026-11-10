@@ -2,7 +2,7 @@
 // rules, as the approved mock (A5) draws it, and Create sends it.
 //
 // Class 19 - what the control OPENS AT: the server's own default. CreateDivision's camera_policy is "absent or null ⇒
-// inherit the competition's" (schemas.ts), so the select opens on "Competition setting" and an untouched builder sends
+// inherit the competition's" (api-v1/schemas/), so the select opens on "Competition setting" and an untouched builder sends
 // no camera_policy at all - the division stores NULL, exactly as one created before the control existed. Expected values
 // come from that declaration, the camera vocabulary (lib/camera-policy.ts) and the dictionaries, never the builder.
 //

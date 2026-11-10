@@ -65,7 +65,7 @@ export interface KnockoutRefusalRow {
   key: MessageKey;
 }
 
-/** RB4-D9 (X-SD-10): the stage-config schema's never-key carries this sentence (`api-v1/schemas.ts` `StageConfig`), and
+/** RB4-D9 (X-SD-10): the stage-config schema's never-key carries this sentence (`api-v1/schemas/stages.ts` `StageConfig`), and
  *  `api-v1/http.ts` names the refusal by it. One literal, so the schema, the envelope and the table row say one thing. */
 export const COUNTRY_SEPARATION_NOT_OFFERED_MESSAGE =
   "Country separation isn't offered: Seazn holds no country for players or teams.";

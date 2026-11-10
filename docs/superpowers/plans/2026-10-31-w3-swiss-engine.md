@@ -567,7 +567,7 @@ it("X-SW-5 second call: paying the same bye twice gives the same delta", …);
 - Modify: `rules/cross-sport.md` (append X-SW-6)
 
 **Interfaces:**
-- Produces: `BoardgameCfg` without `byeScore` and `SwissConstraints` without `byeScore`. App consumers (`apps/web/src/server/usecases/rule-locks.ts:39`, `api-v1/schemas.ts`) are the app plan's work.
+- Produces: `BoardgameCfg` without `byeScore` and `SwissConstraints` without `byeScore`. App consumers (`apps/web/src/server/usecases/rule-locks.ts:39`, `api-v1/schemas/`) are the app plan's work.
 
 - [ ] **Step 1: Write the failing tests** in `w3-bye-score.test.ts`:
 

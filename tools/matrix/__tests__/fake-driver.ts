@@ -237,7 +237,7 @@ export class FakeLeagueDriver implements OrganiserDriver {
       this.log("addEntrants");
       // `kind`: the product serves it on every row (entrants.ts COLS), as posted (T12-R1).
       this.entrants = es.map((e, i) => ({ id: `e${i + 1}`, display_name: e.displayName, seed: e.seed, status: "registered", kind: e.kind }));
-      // Inline members (schemas.ts CreateEntrant): stored with the entrant they came on.
+      // Inline members (api-v1/schemas/entrants.ts CreateEntrant): stored with the entrant they came on.
       this.members = new Map(es.flatMap((e, i) => (e.members === undefined ? [] : [[`e${i + 1}`, this.rosterOf(`e${i + 1}`, e.members)] as const])));
       return this.entrants.map((e) => ({ ...e }));
     });

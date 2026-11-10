@@ -14,7 +14,7 @@
 // every other file's. It deletes its two orgs afterwards: the events the sweep writes at that clock are append-only.
 //
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): every rig rides seedOrg's `generic` division. Relay is sport-agnostic —
-// nothing in relay-sweep.ts or the stream-sessions.ts paths it drives reads the sport.
+// nothing in relay-sweep.ts or the usecases/stream-sessions/ paths it drives reads the sport.
 //
 // Clocks: each rig's clock is FROZEN at creation and tickable (the fake ingest connects on it). A fixture seeded with the
 // database's now() is judged on the rig's clock, which by then lags the database by however long the rig took to build,

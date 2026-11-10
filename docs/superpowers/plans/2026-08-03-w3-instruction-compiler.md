@@ -81,7 +81,7 @@ the repo's `AiProvider` seam, `packages/engine` (pure) + `apps/web` (impure).
 | `apps/web/src/server/usecases/competition-schedule-ai.ts` | Joint twin of all of the above; `verifyJoint` supplies `restByDivision` so cross-division rest is the MAX. |
 | `apps/web/src/server/usecases/schedule-ai-prompt.ts` | New additive `INSTRUCTION_RULES` constant + `SINGLE_SYSTEM_PROMPT`; `JOINT_SYSTEM_PROMPT` recomposed. |
 | `apps/web/src/lib/ai-rung.ts` | `RunMeterStamp.parse_tokens` / `parse_failed`; `meterStamp(quote, meter, parse?)`. |
-| `apps/web/src/server/api-v1/schemas.ts` | Response stamp gains `parse_tokens` / `parse_failed`. → regen OpenAPI. |
+| `apps/web/src/server/api-v1/schemas/` | Response stamp gains `parse_tokens` / `parse_failed`. → regen OpenAPI. |
 | `scripts/smoke.ts` | Assert a compiled-instruction run reports `parse_tokens`. |
 | `content/help/**` | Document what the organiser's instruction can now express. |
 
@@ -1340,7 +1340,7 @@ git commit -m "feat(schedule-ai): stage-1 instruction compiler with symbolic dat
 - Modify: `apps/web/src/server/usecases/schedule-ai.ts`
 - Modify: `apps/web/src/server/usecases/schedule-ai-prompt.ts`
 - Modify: `apps/web/src/lib/ai-rung.ts`
-- Modify: `apps/web/src/server/api-v1/schemas.ts`
+- Modify: `apps/web/src/server/api-v1/schemas/`
 - Test: `apps/web/src/server/usecases/__tests__/schedule-ai-pack.test.ts`,
   `schedule-ai-ledger.test.ts`, `schedule-ai-prompt.test.ts` (extend each)
 
@@ -1578,7 +1578,7 @@ argument at all three call sites (`:2215`, `:2276`, `:2369`).
 
 Add optional `parse_tokens: z.number().int().nonnegative().optional()` and
 `parse_failed: z.boolean().optional()` to whichever response schema in
-`apps/web/src/server/api-v1/schemas.ts` mirrors `RunMeterStamp`, then:
+`apps/web/src/server/api-v1/schemas/` mirrors `RunMeterStamp`, then:
 
 ```bash
 npm run openapi:gen

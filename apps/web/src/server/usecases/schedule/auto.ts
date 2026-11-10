@@ -94,7 +94,7 @@ export interface AutoScheduleOut {
     scheduled_at: string;
     ends_at: string;
     court_id: string;
-    /** DERIVED, read-only (P9 pass 3a) — see `ScheduleAssignment` in schemas.ts. */
+    /** DERIVED, read-only (P9 pass 3a) — see `ScheduleAssignment` in api-v1/schemas/scheduling.ts. */
     court_name: string | null;
   }[];
   conflicts: ScheduleConflict[];
@@ -268,7 +268,7 @@ export async function autoSchedule(
     //
     // `only_unlocked` used to gate this filter too, which was the bug: the
     // primary Auto-schedule button always posts `only_unlocked: false` (to
-    // derive `mode: "build"` — see `AutoScheduleRequest` in schemas.ts), so
+    // derive `mode: "build"` — see `AutoScheduleRequest` in api-v1/schemas/scheduling.ts), so
     // the gate silently zeroed this set on every BUILD call and a locked
     // fixture entered the solve fully movable. `only_unlocked` now steers
     // ONLY `mode` derivation, nowhere else; a lock is honoured regardless of

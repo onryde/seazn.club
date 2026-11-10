@@ -99,4 +99,4 @@ trusting it — it will age.
   silently reset here before.
 - **Reviewer (sonnet, xhigh)** — gap list only.
 - Parallel only when file sets are provably disjoint. `stages.ts` and
-  `api-v1/schemas.ts` are single-writer files across this whole programme.
+  `api-v1/schemas/` are single-writer files across this whole programme.

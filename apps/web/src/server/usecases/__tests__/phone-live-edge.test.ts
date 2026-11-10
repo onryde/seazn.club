@@ -2,7 +2,7 @@
 //
 // Producer: the phone's own beat (`postBeat`, capture-phone.ts), pairing and session started through the real paths
 // (`pairPresentPhone`, `createSession` — a COMPOSED session, the only mode with a relay). Consumer: the relay's heartbeat
-// (`heartbeat`, stream-sessions.ts, and the real route handler once) whose reply carries `phoneLiveEdge`. A fixture on both
+// (`heartbeat`, usecases/stream-sessions/heartbeat.ts, and the real route handler once) whose reply carries `phoneLiveEdge`. A fixture on both
 // ends would prove the fixture (AGENTS.md class 1): nothing here writes the counter by hand, and every value read back is
 // read from the reply the relay would receive or from the row the producer wrote.
 //

@@ -51,7 +51,7 @@ export interface RegistrationConfigState {
 }
 
 /** The GET response shape (RegistrationSettingsRow & OrgPaymentDefaults on
- *  the server, `RegistrationSettings` in server/api-v1/schemas.ts — declared
+ *  the server, `RegistrationSettings` in server/api-v1/schemas/registration.ts — declared
  *  locally rather than imported from that DO-NOT-TOUCH, value-heavy file,
  *  same precedent as FormField). No category/age_min/age_max, no cutoff
  *  fields, no eligibility_note: those all live on `divisions`, not
@@ -197,7 +197,7 @@ export function toRegistrationSettingsPutBody(
 // ---------------------------------------------------------------------------
 //
 // The server already enforces every one of these (PutRegistrationSettings in
-// server/api-v1/schemas.ts, plus the usecase-level guards in
+// server/api-v1/schemas/registration.ts, plus the usecase-level guards in
 // server/usecases/registrations/ this panel does not own and must not
 // reimplement) — this function exists so the organiser learns about a
 // problem BEFORE the round trip, not after. It returns a RULE KEY per field,
@@ -220,7 +220,7 @@ export type ConfigValidationIssue =
   | "duplicateFormFieldKeys"
   | "selectNeedsOptions";
 
-/** Mirrors PutRegistrationSettings' capacity bound (server/api-v1/schemas.ts). */
+/** Mirrors PutRegistrationSettings' capacity bound (server/api-v1/schemas/). */
 const CAPACITY_MIN = 1;
 const CAPACITY_MAX = 10_000;
 /** Mirrors PutRegistrationSettings' fee_cents bound. */

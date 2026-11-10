@@ -10,7 +10,7 @@ Design: `../2026-08-16-registration-redesign-design.md` (eligibility, owner
 ruling 3) + `../2026-08-03-scoringpad-v2-design.md` Part I, WS1. Closes #407 WS1.
 
 **Depends on RS002** (the evaluator). File-disjoint from RS004–RS009, so it may
-run alongside either lane — but it writes `api-v1/schemas.ts`, which `L2`
+run alongside either lane — but it writes `api-v1/schemas/`, which `L2`
 (date hardening, #413) also writes, so those two are **sequential**, never
 parallel. Run before RS010 closeout.
 
@@ -88,7 +88,7 @@ both close it now: **block, with an audited override-with-reason.**
      with `override.reason`, writes **one** `competition_events` row of type
      `eligibility.overridden` (via `audit.ts`, moved from `registrations.ts:313`
      — re-pin) naming actor + reason, then proceeds.
-2. **Zod (`server/api-v1/schemas.ts`)**: typed `AgeRuleS` / `GenderRuleS` /
+2. **Zod (`server/api-v1/schemas/`)**: typed `AgeRuleS` / `GenderRuleS` /
    `OtherRuleS` union replacing the untyped eligibility arrays on
    CreateDivision / PatchDivision (**write-time only**, and additive to the
    first-class `category`/`age_min`/`age_max` fields RS001 added — do not

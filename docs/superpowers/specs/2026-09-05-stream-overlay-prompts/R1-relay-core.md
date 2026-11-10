@@ -83,7 +83,7 @@ clean rebase and reds late, far from the change that caused it (three times in
 this repo).
 Then re-pin: `hasFeature` (`lib/entitlements.ts:456` at `fb99bbd4c`, the
 design says `:454` at `ac85c70` — MOVED, cite the symbol); `requireResourceAuth`
-(`server/api-v1/auth.ts:352`); `server/api-v1/schemas.ts`; the cron pair
+(`server/api-v1/auth.ts:352`); `server/api-v1/schemas/`; the cron pair
 (`app/api/cron/registrations/route.ts:13-16`; workflow
 `.github/workflows/registrations-sweep.yml`, hourly `cron: "37 * * * *"`,
 ONE `CRON_SECRET` mirrored into both Fly apps, prod leg gated on
@@ -267,7 +267,7 @@ the design's DDL verbatim.
    "stream_credits"` → `recordPurchase`. Stripe **sandbox** product with three
    prices (£6 / £25 / £80 placeholders, design §5.2) created by a documented
    one-off script under `scripts/` and their lookup keys in env.
-7. **Session API** under `v1()`/`handler()`, zod at `server/api-v1/schemas.ts`,
+7. **Session API** under `v1()`/`handler()`, zod at `server/api-v1/schemas/`,
    OpenAPI `ROUTES` in the same change (R7): `POST /api/v1/fixtures/[id]/stream-sessions`
    (gates in §6.3 order: `requireResourceAuth(fixture, write)` → overlay key →
    relay key (409 `overlay_required` if relay without overlay) → balance ≥ 1
@@ -308,7 +308,7 @@ the design's DDL verbatim.
    Internal `GET /api/internal/relay/sessions/[sid]` and `POST …/heartbeat`
    (job token; heartbeat body → `{ desiredState }`; the beat is the control
    channel).
-   State machine `server/usecases/stream-sessions.ts` — every §6.4 transition
+   State machine `server/usecases/stream-sessions/` — every §6.4 transition
    as one function over the ports, `live` transition wrapping
    `consumeForSession` in the SAME transaction; passthrough's `live` fires on
    `inputStatus == 'connected'` polled by the Phone tab's `current` call

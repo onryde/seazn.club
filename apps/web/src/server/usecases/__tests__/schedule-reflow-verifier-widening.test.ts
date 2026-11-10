@@ -532,7 +532,7 @@ describe.skipIf(!HAS_DB)(
             blocking: true,
             // P9 pass 3a: `court` is the real courts.id; `court_name` is the
             // DERIVED display name the usecase resolves before this leaves
-            // the server (schemas.ts ScheduleConflictDetail) — present
+            // the server (api-v1/schemas/scheduling.ts ScheduleConflictDetail) — present
             // alongside `court` whenever the resolver can name it, which it
             // always can here (the court was just created, never archived).
             details: {

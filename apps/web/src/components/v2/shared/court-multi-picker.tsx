@@ -3,7 +3,7 @@
 // Court multi-picker (P9 scope item 5) — replaces the free-text court list in
 // schedule setup (settings-panel.tsx, division-builder.tsx) with a multi-select
 // of the org's REAL courts (`courts.id`, since P9 pass 1's CourtId cutover —
-// `ScheduleConfig.courts` is `z.array(CourtId)`, schemas.ts). Grouped by
+// `ScheduleConfig.courts` is `z.array(CourtId)`, api-v1/schemas/). Grouped by
 // venue, archived courts hidden, selection ORDER preserved and shown —
 // `config.courts`' array position IS the wire index the solver reads, so it
 // is never sorted by id.

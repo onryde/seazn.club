@@ -499,7 +499,7 @@ git commit -m "docs(settings): F3+F4 — correct two stale add-ons catalog comme
 
 **Files:**
 - Modify: `apps/web/src/server/usecases/competitions.ts`
-- Modify: `apps/web/src/server/api-v1/schemas.ts` (comment only — the code
+- Modify: `apps/web/src/server/api-v1/schemas/` (comment only — the code
   is unchanged, but the comment becomes TRUE once this task lands, so
   re-read it and confirm it no longer needs a correction rather than leaving
   it stale in the other direction)
@@ -507,7 +507,7 @@ git commit -m "docs(settings): F3+F4 — correct two stale add-ons catalog comme
 
 **Interfaces:**
 - Consumes: `ENDS_BEFORE_STARTS` (exported constant,
-  `apps/web/src/server/api-v1/schemas.ts:71` — re-confirm the exact line),
+  `apps/web/src/server/api-v1/schemas/` — re-confirm the exact line),
   the `HttpError` class already imported in `competitions.ts`.
 - Produces: nothing later tasks depend on.
 
@@ -549,9 +549,9 @@ if (patch.starts_on !== undefined || patch.ends_on !== undefined) {
 Import `ENDS_BEFORE_STARTS` from `../api-v1/schemas` if not already imported
 in this file (check the existing import block first).
 
-- [ ] **Step 4: Confirm `schemas.ts`'s comment no longer needs a correction**
+- [ ] **Step 4: Confirm `api-v1/schemas/`'s comment no longer needs a correction**
 
-`api-v1/schemas.ts:65-68` (re-confirm) already SAYS a re-check exists in the
+`api-v1/schemas/` (re-confirm) already SAYS a re-check exists in the
 use-case — that was false before this task and becomes TRUE after it. Read
 the comment fresh once Step 3 lands; if its wording still accurately
 describes the merge-check you just wrote, leave it. If it describes a
@@ -754,9 +754,9 @@ already imported into `divisions.ts` (they should be, for
 `isAgeCutoffCheckViolation`'s own use at `:842` — reuse that import, do not
 add a duplicate).
 
-- [ ] **Step 2: Correct `schemas.ts`'s comment the same way Task 4 did for `ENDS_BEFORE_STARTS`**
+- [ ] **Step 2: Correct `api-v1/schemas/`'s comment the same way Task 4 did for `ENDS_BEFORE_STARTS`**
 
-`api-v1/schemas.ts:263-267` (re-confirm) currently claims a merge-and-validate
+`api-v1/schemas/` (re-confirm) currently claims a merge-and-validate
 backstop exists for the cutoff pair (via `isAgeCutoffCheckViolation`) — that
 claim is now TRUE for the both-or-neither half (Step 1 adds it), but the
 comment's SPECIFIC reasoning ("no merge-and-validate/DB-race backstop is

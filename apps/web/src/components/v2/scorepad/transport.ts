@@ -54,7 +54,7 @@ import { isDivisionGateReason } from "../../../lib/division-phase";
 // R5 — `voids_event_id` is now KEPT, not validated-then-dropped. Dropping it
 // here was the wire half of a real defect: the server has always sent the
 // field (`EventOut`, server/usecases/fixtures.ts; `ScoreEvent`,
-// server/api-v1/schemas.ts), but every void this pad learned about through a
+// server/api-v1/schemas/scoring.ts), but every void this pad learned about through a
 // POLL rather than through its own submission arrived with no target at all,
 // so use-pad-pipeline.ts's `ledgerSlotToEnvelope` widened it into a
 // `core.void` naming nothing and the engine's `resolveVoids` rejected the
@@ -137,7 +137,7 @@ export interface FixtureStateResult {
 }
 
 /** W2c Task 15 (X-SR-7, owner P-1) — `GET /api/v1/fixtures/{id}/rules`: the rules a match plays by now. Mirrors
- *  `FixtureCurrentRules` (api-v1/schemas.ts) without importing it, for the same reason as `FixtureStateResult`. */
+ *  `FixtureCurrentRules` (api-v1/schemas/stages.ts) without importing it, for the same reason as `FixtureStateResult`. */
 export interface FixtureRulesResult {
   cfg: unknown;
   rules_version: number;

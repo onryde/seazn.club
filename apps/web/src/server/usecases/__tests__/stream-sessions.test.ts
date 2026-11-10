@@ -14,7 +14,7 @@
 // A19/A20 (one destination one row; the stored url re-checked at provision).
 //
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): every rig rides seedOrg's `generic` division. Relay is sport-agnostic
-// because nothing in stream-sessions.ts reads the sport except the admission SNAPSHOT, which copies `divisions.sport_key`
+// because nothing in usecases/stream-sessions/ reads the sport except the admission SNAPSHOT, which copies `divisions.sport_key`
 // verbatim — and the Db test compares that copy to its source row rather than to a sport literal.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
@@ -6329,7 +6329,7 @@ describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewe
         await new Promise((res) => setTimeout(res, 20));
       }
     };
-    const SPEND_READ = "%as net from org_stream_credits%";   // the spend read's own text (stream-sessions.ts currentSession)
+    const SPEND_READ = "%as net from org_stream_credits%";   // the spend read's own text (usecases/stream-sessions/current.ts currentSession)
     const FOREIGN_APP = "m5 another suite";
     const B_LATE_MS = 750;
     const anyWaiters = async () => (await sql<{ n: number }[]>`

@@ -273,7 +273,7 @@ describe("acceptClaimInvites", () => {
 //     decided/finalized/forfeited (`:483-485`). Miss any and the call returns
 //     `[]` — a legitimate zero, indistinguishable from a broken step.
 //  2. `auto_posts` IS settable over the API (`PATCH /api/v1/divisions/{id}`,
-//     `schemas.ts:429`), but setting it TRUE itself requires `news.auto`
+//     `api-v1/schemas/`), but setting it TRUE itself requires `news.auto`
 //     (`usecases/divisions.ts:652-654`). So the plan has to be provisioned
 //     before drafting can even be turned on — and because drafting is a side
 //     effect of FOLDING, there is no later moment at which a run could notice

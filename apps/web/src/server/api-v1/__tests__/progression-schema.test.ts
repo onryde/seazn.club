@@ -1,5 +1,5 @@
 // F2 (unified progression field) — one ProgressionSchema replaces
-// QualificationSpecSchema and StageSeedingSchema (schemas.ts). Mirrors the
+// QualificationSpecSchema and StageSeedingSchema (api-v1/schemas/). Mirrors the
 // engine's ProgressionSpec (@seazn/engine/competition/progression.ts)
 // field-for-field, plus the apps/web-only `timing` field (Decision 1, F2
 // plan) that neither prior vocabulary nor the design doc's own proposed

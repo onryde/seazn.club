@@ -64,7 +64,7 @@
 // marker a later `--keep` run looks for cannot hang off the org; it hangs off
 // the COMPETITION instead: a hash of the pack's own content
 // (`lib/pack-hash.ts`), sent as `CreateCompetition.branding` (jsonb,
-// ungated — schemas.ts:95, written at usecases/competitions.ts:202-209) on
+// ungated — api-v1/schemas/, written at usecases/competitions.ts:202-209) on
 // the SAME create call that seeds the competition, and read back with
 // `GET /api/v1/competitions`, matched against the pack's own declared
 // competition slug. NOT `description`: that field is markdown rendered on
@@ -1440,7 +1440,7 @@ export interface ScheduleLockResolution {
  * with no `scheduled_at` and no `court_id`, because nothing is placed yet — so
  * `snapshotPins` carries no pin, design §3.3's pin-integrity rule has nothing
  * to check, and it reports clean forever. `PatchFixture` takes `scheduled_at`,
- * `court_id` and `schedule_locked` in one body (`schemas.ts:964-979`), so the
+ * `court_id` and `schedule_locked` in one body (`api-v1/schemas/`), so the
  * slot and the lock are one call. `expected_seq` is never sent: the schema is
  * `.partial()` so omitting it is legal, and a stale value 409s SEQ_CONFLICT.
  *
@@ -2388,13 +2388,12 @@ export async function runPackSuite(
     // Three things the old walk could not do, and why they are not optional:
     //
     //  * `body: {}` on `schedule/auto` silently asked for a REFLOW.
-    //    `AutoScheduleRequest` (`apps/web/src/server/api-v1/schemas.ts:1643-1688`
-    //    — 1643 is the `z.preprocess` WRAPPER, and the derivation itself is at
-    //    :1651) reads `only_unlocked === false ? "build" : "reflow"`, with the
+    //    `AutoScheduleRequest` (`apps/web/src/server/api-v1/schemas/scheduling.ts`
+    //    — the `z.preprocess` WRAPPER holds the derivation itself) reads `only_unlocked === false ? "build" : "reflow"`, with the
     //    strict `=== false` there precisely because an absent flag defaults to
     //    `true`. So a first-time build was being reported for a call that asked
     //    to re-flow a stage nothing had ever scheduled. `schedule.ts` sends the
-    //    flag. (This comment also replaces a stale `schemas.ts:1496-1542` pin —
+    //    flag. (This comment also replaces a stale `api-v1/schemas/` pin —
     //    design finding F5; the type has moved twice, so it is cited by NAME
     //    with the line range beside it rather than by line alone.)
     //  * `--engine` was logged as "not honoured" and nothing asserted it.

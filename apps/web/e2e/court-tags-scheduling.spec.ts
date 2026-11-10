@@ -53,7 +53,7 @@ interface FixtureRow {
   court_id: string | null;
   court_name: string | null;
   /** #622 — the round-scoped spec sorts a knockout's fixtures by round to tell
-   *  the final from the semis. Always served (`Fixture` in schemas.ts); the
+   *  the final from the semis. Always served (`Fixture` in api-v1/schemas/scoring.ts); the
    *  original spec above simply had no use for it. */
   round_no: number;
 }

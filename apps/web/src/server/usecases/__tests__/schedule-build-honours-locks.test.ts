@@ -292,7 +292,7 @@ describe.skipIf(!HAS_DB)("BUILD honours a lock (owner report, 2026-08-12)", () =
 
     // Click 1: "Auto-schedule" — `only_unlocked: false` is exactly what the
     // primary button posts (`use-board-actions.ts`'s `autoRun`, which
-    // `schemas.ts` derives `mode: "build"` from). Applied for real so the
+    // `api-v1/schemas/` derives `mode: "build"` from). Applied for real so the
     // park-and-lock below has a board to act on.
     const first = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
     expect(first.assignments).toHaveLength(created);

@@ -30,7 +30,7 @@ const posts = (calls: Call[]) => calls.filter((c) => c.method === "POST");
 
 // POST /competitions answers the row plus, on a degrade, a NOTE OBJECT
 // (apps/web/src/server/usecases/competitions.ts createCompetition,
-// api-v1/schemas.ts PublicQuotaDegraded) — never a bare `true`. The row's own
+// api-v1/schemas/competitions.ts PublicQuotaDegraded) — never a bare `true`. The row's own
 // `visibility` is the applied one.
 const created = (over: Record<string, unknown> = {}) => ({ id: "c1", slug: "m-1", org_id: "org-1", visibility: "unlisted", ...over });
 
@@ -56,7 +56,7 @@ describe("HttpDriver — org pinning (Review Focus 4)", () => {
 });
 
 // W1-driving Task 13: POST /competitions/from-template answers FromTemplateResult
-// (api-v1/schemas.ts:1205-1226) — ids and the applied visibility, no org id and
+// (api-v1/schemas/stages.ts) — ids and the applied visibility, no org id and
 // no sport — so the driver reads the competition, division and stages back.
 describe("HttpDriver — createFromTemplate (W1-driving Task 13)", () => {
   const answer = (over: Record<string, unknown> = {}) => ({ competitionId: "c9", slug: "box-league", visibility: "public", divisions: [{ id: "d9", stages: [{ id: "s1", fixtureCount: 0 }] }], templateKey: "box-league", templateVersion: 1, ...over });

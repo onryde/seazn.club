@@ -94,7 +94,7 @@ A reviewer pre-flight checked this plan against main @ `3177614179` (PR A merged
 
 **True:**
 - `handleSponsorPaymentSucceeded` inserts a new sponsor row, with name only, from the order (`server/usecases/sponsors.ts:633`, insert :654-662).
-- `paid_order_id` is the only link back to the order (`listSponsorRows` :168, `paid_order_id` :171-173). It stays on `SponsorRow` (:64); its consumers are `server/api-v1/schemas.ts:5154` and `components/org-sponsors.tsx:37,372,508`.
+- `paid_order_id` is the only link back to the order (`listSponsorRows` :168, `paid_order_id` :171-173). It stays on `SponsorRow` (:64); its consumers are `server/api-v1/schemas/` and `components/org-sponsors.tsx:37,372,508`.
 - The "invoice" is a `sponsor_invoice` outbox email that carries a Checkout URL.
 - There is no offline payment, no mark-paid and no approval step.
 - The hub tabs are `overview, sponsors, on_stream, packages` (`lib/sponsors-hub.ts` `SPONSORS_TABS`). The Packages tab is labelled "Packages and orders" (`sponsors.hub.tab.packages`).
@@ -218,7 +218,7 @@ AGENTS.md class 1. Each seam is proven by driving its REAL producer and its REAL
 - `apps/web/src/server/usecases/sponsors.ts`: webhook handlers, disputes, refund, the patch lock, the delete guard, list fields, `assertTierAllowed` (calls `placementNeedsTiers`, F14), `expirePublicSponsors` (exported, F1); `startSponsorCheckout` is removed.
 - `apps/web/src/server/usecases/competitions.ts` (the delete guard, :905-918).
 - `apps/web/src/app/api/v1/orgs/[id]/sponsor-packages/route.ts`.
-- `apps/web/src/server/api-v1/{openapi.ts,schemas.ts,key-scopes.ts}`, and `openapi/v1.json` (generated).
+- `apps/web/src/server/api-v1/{openapi.ts,schemas/,key-scopes.ts}`, and `openapi/v1.json` (generated).
 - `apps/web/src/app/o/[orgSlug]/sponsors/page.tsx` and `_components/hub-chrome.tsx`; `apps/web/src/lib/sponsors-hub.ts`.
 - `apps/web/src/components/{org-sponsors.tsx,sponsor-packages.tsx}`, `components/sponsors/on-stream-tab.tsx`, `components/modal.tsx` (a `placement` prop).
 - `apps/web/src/lib/email.ts` (`sponsorInvoiceEmail`), `apps/web/src/server/email-outbox/{constants.ts,hooks.ts}`.
@@ -448,7 +448,7 @@ export async function assertOnlineAllowed(orgId: string, competitionId: string |
 
 **Files:**
 - Modify: `apps/web/src/server/usecases/sponsors.ts` (`CreateSponsorPackageInput` :396, `createSponsorPackage` :413 (its `requireFeature("sponsors.monetize")` is :417), `listSponsorPackages` :434, `SponsorPackageRow` :379, `PKG_COLS` :391)
-- Modify: `apps/web/src/server/api-v1/{schemas.ts,openapi.ts}`, `openapi/v1.json`
+- Modify: `apps/web/src/server/api-v1/{schemas/,openapi.ts}`, `openapi/v1.json`
 - Test: `apps/web/src/server/usecases/__tests__/sponsor-packages-plans.test.ts` (new); modify `scripts/smoke/suites/sponsors.ts` (the gated row is :439) and `scripts/smoke/suites/passGrants.ts` (:371-373, F8)
 
 **Interfaces:**
@@ -562,7 +562,7 @@ export async function applyDealsToSponsor(tx: Tx, sponsorId: string, actorUserId
 **Files:**
 - Create: `apps/web/src/server/usecases/sponsor-deals.ts`
 - Create: `apps/web/src/app/api/v1/orgs/[id]/sponsors/[sponsorId]/deals/route.ts`, `apps/web/src/app/api/v1/orgs/[id]/sponsor-deals/route.ts`, `apps/web/src/app/api/v1/orgs/[id]/sponsor-deals/[dealId]/route.ts`, `apps/web/src/app/api/v1/orgs/[id]/sponsor-deals/[dealId]/{mark-paid,approve,end,refund}/route.ts`
-- Modify: `apps/web/src/server/api-v1/{schemas.ts,openapi.ts,key-scopes.ts}` (the new routes go in `NEVER_KEY_ROUTES`, `key-scopes.ts:341-357`, beside today's sponsor rows), `openapi/v1.json`
+- Modify: `apps/web/src/server/api-v1/{schemas/,openapi.ts,key-scopes.ts}` (the new routes go in `NEVER_KEY_ROUTES`, `key-scopes.ts:341-357`, beside today's sponsor rows), `openapi/v1.json`
 - Modify: `apps/web/src/server/usecases/sponsors.ts`: export `expirePublicSponsors` (:150-152, private today), so the deal usecases await the same in-request expiry (F1). `bustPublicSponsors` stays private.
 - Test: `apps/web/src/server/usecases/__tests__/sponsor-deals.test.ts`, `apps/web/src/app/api/v1/orgs/[id]/sponsor-deals/__tests__/routes.test.ts`, `apps/web/e2e/sponsor-deals-api.spec.ts` (new), `scripts/smoke/suites/sponsorDeals.ts` (new) plus `scripts/smoke/main.ts` (register after `sponsors`, :81 and :741); extend `apps/web/src/server/usecases/__tests__/sponsors-public-expiry.test.ts` (F1)
 
@@ -674,7 +674,7 @@ Online deals are created `draft`; Task 7 sends the invoice and fills `checkout_u
   - `deleteSponsor` (:283) expires an online deal's open session before deleting it (F3).
 - Create: `apps/web/src/app/api/v1/orgs/[id]/sponsor-deals/[dealId]/send-invoice/route.ts`, and `…/[dealId]/evidence/route.ts` (moved from `sponsor-orders/[orderId]/evidence`)
 - Delete: `apps/web/src/app/api/v1/orgs/[id]/sponsor-orders/**` (`route.ts`, `[orderId]/refund/route.ts`, `[orderId]/evidence/route.ts`)
-- Modify: `apps/web/src/server/api-v1/{schemas.ts,openapi.ts,key-scopes.ts}` (the sponsor rows: `openapi.ts:257-263`; `key-scopes.ts:341-357` and the evidence row :442), `openapi/v1.json`, `apps/web/src/app/developers/changelog/page.tsx`, `docs/api-v1-breaking-changes.md`
+- Modify: `apps/web/src/server/api-v1/{schemas/,openapi.ts,key-scopes.ts}` (the sponsor rows: `openapi.ts:257-263`; `key-scopes.ts:341-357` and the evidence row :442), `openapi/v1.json`, `apps/web/src/app/developers/changelog/page.tsx`, `docs/api-v1-breaking-changes.md`
 - Test: `apps/web/src/server/usecases/__tests__/sponsor-deals-online.test.ts`; modify `apps/web/src/server/usecases/__tests__/{sponsor-checkout.test.ts,sponsor-outbox.test.ts,sponsors-public-expiry.test.ts}` and `apps/web/src/server/email-outbox/__tests__/outbox-kind-sweep.test.ts`
 - Modify (F8): `apps/web/src/server/usecases/__tests__/sponsors-public-expiry.test.ts` imports `startSponsorCheckout` at :109; move that case onto `createDeal` online. `apps/web/e2e/walkthrough/settings-sponsor-monetize.spec.ts`: the "paid" leg (:609) and the "refund" leg (:746) read `/sponsor-orders` (:706, :777, :788); repoint those API reads to `/sponsor-deals`. `scripts/smoke/suites/sponsors.ts` checkout rows :329-366, including the keyless row :342.
 
@@ -849,7 +849,7 @@ export async function sweepSponsorDeals(now?: Date): Promise<{ checked: number; 
 - A live deal with `ends_at <= now` → `ended`/`expired`, then apply (with `endedDealId`).
 - **An OPEN deal (draft, awaiting payment or approval, scheduled) with `ends_at <= now` is ended too (F19),** as `expired`. For an online deal, first expire any open Checkout session outside the transaction, with Task 7's session rule (F3): `retrieve`, then `expire` only when `open`; if it cannot be expired, count the deal in `failed` and leave it for the next run.
 - **A scheduled deal whose `ends_at` has passed is never promoted (F19):** it is ended as `expired` instead, and the next scheduled deal (if any) is considered.
-- A live deal with a competition, no `ends_at`, and `competitionPhase(desk).kind === "finished"` → `competition_finished`, then apply. Call `getCompetitionDesk(ctx, compId)` (`server/usecases/competition-desk.ts:314`; `competitionPhase` :781) BEFORE opening the per-deal transaction: it calls `withTenant` on its own connection. The context is `{ orgId, via: "session", userId: null, role: "viewer", keyId: null }`; this repo synthesizes contexts the same way in `lib/funnel.ts`, `stream-sessions.ts` and `youtube/end-step.ts`.
+- A live deal with a competition, no `ends_at`, and `competitionPhase(desk).kind === "finished"` → `competition_finished`, then apply. Call `getCompetitionDesk(ctx, compId)` (`server/usecases/competition-desk.ts:314`; `competitionPhase` :781) BEFORE opening the per-deal transaction: it calls `withTenant` on its own connection. The context is `{ orgId, via: "session", userId: null, role: "viewer", keyId: null }`; this repo synthesizes contexts the same way in `lib/funnel.ts`, `usecases/stream-sessions/` and `youtube/end-step.ts`.
 - A competition with 0 divisions is `setting_up` forever (`competition-desk.ts:787`), so its deal never ends by phase. That is accepted (End now still works) and pinned by a test, so a change is a decision, not an accident.
 - A deal that throws is counted in `failed` and logged, and the sweep moves on.
 - `checked` counts the live AND open deals examined.

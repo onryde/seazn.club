@@ -105,7 +105,7 @@ function fixtureLabel(id: string | undefined, fixtureTitles: Readonly<Record<str
  *  every kind that carries it (court_double_booking, locked_slot_clash,
  *  court_tag_mismatch — see the engine's own ConflictDetail doc) and must
  *  never render directly. `d.courtName` is the server-resolved, venue-
- *  qualified display name for it (schemas.ts's ScheduleConflictDetail.
+ *  qualified display name for it (api-v1/schemas/scheduling.ts's ScheduleConflictDetail.
  *  court_name, via courtNamesById -> buildCourtDirectory — the SAME
  *  directory rule every other court-facing surface uses, not a second
  *  implementation of it). A miss degrades to the shared "Unknown court"

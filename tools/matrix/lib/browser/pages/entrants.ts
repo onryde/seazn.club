@@ -33,7 +33,7 @@ import { actBudget, attrEquals, awaitScreen, entrantNameMatcher, exactPath, navB
 import { paths } from "./paths.ts";
 
 export interface EntrantIn { displayName: string; seed: number | null; kind: EntrantKind }
-/** The product's Entrant row (api-v1 schemas.ts Entrant). */
+/** The product's Entrant row (api-v1 api-v1/schemas/ Entrant). */
 export type EntrantOut = EntrantRow & { kind: string };
 
 export class EntrantNotAsTyped extends Error {

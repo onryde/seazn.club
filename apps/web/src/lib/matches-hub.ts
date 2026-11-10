@@ -34,14 +34,14 @@ const TERMINAL = new Set<string>(["decided", "finalized", "abandoned", "forfeite
 
 /**
  * Which list a fixture belongs in, from its v1 wire status (`Fixture.status`,
- * `server/api-v1/schemas.ts:1195`).
+ * `server/api-v1/schemas/`).
  *
  * Deliberately takes a bare `string`, not the enum: the enum is declared inline
  * in that file and is not exported, and — more to the point — an unknown status
  * must be LISTED, never dropped. Anything that is not `in_play` and not
  * terminal is UPCOMING, so a status added to the wire tomorrow appears on the
  * page (in the wrong list, visibly) instead of vanishing from it. The suite's
- * drift guard reads the enum out of `schemas.ts`'s source text and reds when a
+ * drift guard reads the enum out of `api-v1/schemas/`'s source text and reds when a
  * new member appears, so "wrong list" is a caught bug rather than a shipped one.
  *
  * Note this ladder is NOT the same question as `match-centre.ts`'s `statusOf`,

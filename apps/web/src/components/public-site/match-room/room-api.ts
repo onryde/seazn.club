@@ -1,6 +1,6 @@
 // The match room's five calls to OUR server (design §3.4: the browser never
 // talks to Lichess). Client-safe: no server module is imported — the wire
-// types below mirror `RoomAct` / `RoomActOut` (api-v1/schemas.ts), the
+// types below mirror `RoomAct` / `RoomActOut` (api-v1/schemas/fixtures.ts), the
 // room usecase's `SeatWire` and T9's `CreateOutcome`, and room-api.test.ts
 // pins each mirror against
 // its source at the type level, so the two cannot drift silently.
@@ -39,7 +39,7 @@ export type SeatAnswer =
    *  also a reason of). `line` is the player's place and the cadence to ask again at. */
   | { seated: false; reason: "queued"; participant: null; line: LineWire };
 
-/** The camera route's answer (`RoomCameraAnswer`, api-v1/schemas.ts): the token, or null; `retry` says whether to ask
+/** The camera route's answer (`RoomCameraAnswer`, api-v1/schemas/fixtures.ts): the token, or null; `retry` says whether to ask
  *  again (the budget was spent again) or to stop (null and final: the policy, an override or a closed window). */
 export type CameraAnswer = { participant: ParticipantWire | null; retry: boolean };
 

@@ -41,7 +41,7 @@ export function aiCheckpointLabel(at: Date = new Date()): string {
  *  stage-scoped and rejects cross-stage fixtures).
  *
  *  P9 pass 3b: `court_id` — the apply route's own `ApplyScheduleRequest`
- *  item is `.strict()` and requires `court_id` (schemas.ts), so a payload
+ *  item is `.strict()` and requires `court_id` (api-v1/schemas/), so a payload
  *  still keyed `court_label` 400s outright rather than silently applying. */
 export type ScheduleAssignmentInput = z.infer<typeof ApplyScheduleRequest>["assignments"][number] & {
   /** Not part of the apply payload — the caller groups by stage before POSTing

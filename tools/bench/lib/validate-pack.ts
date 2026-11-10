@@ -140,7 +140,7 @@
 // ---------------------------------------------------------------------------
 // Stage 0 shares its fold-then-trust shape with the batch import's internal
 // dry run. There is NO client-facing dry run — `EventImportRequest`
-// (apps/web/src/server/api-v1/schemas.ts) has no `dryRun` field; the dry run
+// (apps/web/src/server/api-v1/schemas/scoring.ts) has no `dryRun` field; the dry run
 // is an internal phase that always runs and is always followed by the write,
 // in the same call, inside a read-only `withTenant`. So it cannot be called
 // offline and it is deliberately NOT extracted: the two stay parallel
@@ -1072,7 +1072,7 @@ function checkStripeEntrantMustPay(
  *  `registeringSelf: true` UNCONDITIONALLY for every entry of an
  *  "individual" division — the captain IS the entrant for that entrant
  *  kind, by construction. `PublicRegisterGroupRequest`'s superRefine
- *  (apps/web/src/server/api-v1/schemas.ts) 400s ANY self-registering entry
+ *  (apps/web/src/server/api-v1/schemas/) 400s ANY self-registering entry
  *  lacking `contact.dob`, INDEPENDENT of whether the division declares an
  *  age band — so an `open`, no-age-band, individual-kind division used to
  *  be a LEGAL pack that crashed live (nothing above required a dob for

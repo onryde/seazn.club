@@ -632,7 +632,7 @@ Branch `feat/format-matrix-w2e-b` from `origin/main` after PR A merges. Tasks 27
 - Modify:
   - `apps/web/src/app/api/v1/stages/[id]/standings/route.ts:8-14`
   - `apps/web/src/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/divisions/[divisionSlug]/standings/route.ts`
-  - `apps/web/src/server/api-v1/schemas.ts:1469` (`rank: z.number().nullable().optional()`)
+  - `apps/web/src/server/api-v1/schemas/` (`rank: z.number().nullable().optional()`)
   - `apps/web/src/server/api-v1/openapi.ts:154,285` (text)
   - `openapi/v1.json`, `openapi/v1.public.json` (`npm run openapi:gen`)
   - `apps/web/src/server/public-site/division-doc-cache-keys.ts:20-22` (`standings-v2`)

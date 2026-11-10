@@ -1,7 +1,7 @@
 import "server-only";
 // server/usecases/relay-sweep.ts — the DAILY sweep behind POST /api/cron/relay-sweep (design §6.3 row; owner ruling
 // 2026-09-14: "just run every day is fine"). Because it runs once a day it owns NOTHING time-critical: every timeout,
-// the retry and the wall clock fire lazily on reads (stream-sessions.ts, recommendation B). Here, in this order:
+// the retry and the wall clock fire lazily on reads (usecases/stream-sessions/, recommendation B). Here, in this order:
 //   1. BACKSTOP — every non-terminal session is TICKED (capture QR v2 T7, §6.11: tickSession — expiry, one Machine
 //      observation, the ingest read and the phone-lost ends), and every terminal one whose runner is still alive (C27) gets
 //      the same reconcileSession (expiry PLUS one Machine observation), for the session nobody reads; per-session
@@ -16,7 +16,7 @@ import "server-only";
 //       be the camera's own before it is deleted (never the programme's, which is the product), then the input row is
 //       marked so the next pass asks the provider nothing. A delete that fails or a recording still finalising leaves the
 //       row unmarked, and tomorrow's pass retries it.
-//   2. ORPHANS — every Machine the runner lists that its session does not own is destroyed through stream-sessions.ts's
+//   2. ORPHANS — every Machine the runner lists that its session does not own is destroyed through usecases/stream-sessions/ folder's
 //      shared forceDestroy (A22(b)): no session, a TERMINAL session (A22(a), on every pass), or a live session whose row
 //      names another Machine — and ONLY a Machine stamped with this environment's identity (I1): an untagged or foreign
 //      one is counted and reported, never destroyed. Then MARK every terminal composed session whose Machine is absent
@@ -326,7 +326,7 @@ export async function sweepStreamSessions(
   // 1c. CAMERA RECORDINGS (R2004, owner ruling 2026-10-18, option (a)). Both of a composed session's inputs record: the
   //     camera (A) because Cloudflare serves an input's HLS only while it records and the phone's delivery watch reads
   //     A's, the programme (B) because its recording is the product. A's is a by-product, so it goes at the first pass
-  //     after the session ends — and the storage it held stays reserved until then (stream-sessions.ts
+  //     after the session ends — and the storage it held stays reserved until then (usecases/stream-sessions/storage.ts
   //     `storageReservations`). Selected by ROLE: a programme row is never listed here. Listed by INPUT through the
   //     documented filtered listing (`GET /stream?live_input_id=`, PR #981 review I2), and each listed recording must
   //     NAME the camera input (its own `liveInput`) before it is deleted — the B-guard: a recording that names any other

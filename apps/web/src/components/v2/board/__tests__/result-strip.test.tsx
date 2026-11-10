@@ -529,7 +529,7 @@ describe("ScheduleResultStrip — lost slots are not the same as unplaced cards"
  * `locked_kept` (#pins-ui, owner ruling 2026-08-12) — how many of this stage's
  * fixtures the run held fixed because they were locked. Always present on a
  * current server ("this server always sends a real number, never undefined" —
- * schemas.ts), so 0 and absent are tested as the same case throughout.
+ * api-v1/schemas/), so 0 and absent are tested as the same case throughout.
  */
 describe("ScheduleResultStrip — locked fixtures were kept (#pins-ui)", () => {
   it("reports the count when the run was not infeasible", () => {

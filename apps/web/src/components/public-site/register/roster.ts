@@ -8,7 +8,7 @@
 // past the first name candidate, same post-loop parts[0] fallback quirk for
 // a line with no name-shaped token at all. Renamed `Player.name` ->
 // `full_name` to match the wire field (`PublicRegisterGroupPlayer.full_name`,
-// schemas.ts:2381) rather than inventing a second name for the same thing,
+// api-v1/schemas/registration.ts) rather than inventing a second name for the same thing,
 // and returns full RosterPlayerState rows (picking up gender/email/
 // is_captain from EMPTY_ROSTER_PLAYER's defaults) instead of the old
 // narrower `{name, dob, squad_number}` shape.
@@ -65,7 +65,7 @@ export function serializeRoster(players: readonly RosterPlayerState[]): string {
 }
 
 /** One roster row -> `PublicRegisterGroupPlayer`'s wire shape
- *  (schemas.ts:2380-2387). Pure mapping, called by `toGroupPlayers` below —
+ *  (api-v1/schemas/). Pure mapping, called by `toGroupPlayers` below —
  *  not wired into an actual submit call this session (step 5 doesn't exist
  *  yet), provided so that seam is proven trivial once it does, the same
  *  reason `cart.ts`'s `toGroupEntry` was built ahead of its own caller. */

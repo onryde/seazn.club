@@ -88,7 +88,7 @@ describe.skipIf(!HAS_DB)("scoreEvent — an answer cached before event_id existe
 });
 
 // Batch-5 m-2: the Redis fast path answers a retry from the cached `ScoreOutcome`, which carries the ORIGINAL write's
-// `rules_version`. The contract (schemas.ts `AppendEventResponse`, `ScoreOutcome`) and the durable replay (`replay.ts`) say a
+// `rules_version`. The contract (api-v1/schemas/scoring.ts `AppendEventResponse`, `ScoreOutcome`) and the durable replay (`replay.ts`) say a
 // replayed answer carries the version NOW - so a lost-ack retry after a correction is what tells the pad to reload. Served
 // from the cache it said nothing, and the pad's next new tap was refused instead. Same answer whichever tier serves it.
 describe.skipIf(!HAS_DB)("scoreEvent - a retry served from the Redis fast path carries the rules version NOW (batch-5 m-2)", () => {

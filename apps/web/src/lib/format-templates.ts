@@ -4,7 +4,7 @@
 // Match rules live in match-rules.tsx; this file is only the graph.
 //
 // F2 (unified progression field): `qualification` is gone — every template
-// below emits `progression` (mirrors api-v1/schemas.ts's ProgressionSchema
+// below emits `progression` (mirrors api-v1/schemas/stages.ts's ProgressionSchema
 // field-for-field: sources[].take[]/placement/map?/timing). Collapse (owner
 // ruling 4, F2 plan Decision 2): `topN: n` is now `rankRange{from:1,to:n}`;
 // `losersOfRound` is now `roundLosers`.
@@ -22,7 +22,7 @@
 // `take`'s element type reuses the engine's own TakeRule (rather than a
 // hand-rolled `unknown[]`/`{kind:string}[]` restated here) so this file and
 // detectTemplate's own parameter type below can't drift apart. api-v1/
-// schemas.ts's zod TakeRuleSchema is tied to the same TakeRule at compile
+// schemas/stages.ts's zod TakeRuleSchema is tied to the same TakeRule at compile
 // time (ruling 55); take-rule-schema.test.ts parses these templates' rules.
 //
 // F3 Task 6 (i18n): this array used to carry its own English `label`/`help`
