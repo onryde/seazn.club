@@ -2731,6 +2731,7 @@
   "knockout.refusal.KO_GENERATE_AFTER_START": "Het spel is begonnen, dus Genereren verandert het schema niet. Gebruik Toevoegen aan schema.",
   "knockout.refusal.KO_REDRAW_WOULD_CLEAR_SETUP": "Het schema zou opnieuw geloot moeten worden, en dat wist wat al bij de wedstrijden is ingesteld (officials, teamopstellingen, scoreapparaten, streams, beschikbaarheid van spelers of baanoproepen). Gebruik Wedstrijden herbouwen — dat laat eerst zien wat het wist.",
   "knockout.refusal.KO_START_NEEDS_UPDATE_DRAW": "Het schema moet worden bijgewerkt — druk eerst op Schema bijwerken.",
+  "knockout.refusal.KO_START_NEEDS_UPDATE_DRAW_FROZEN": "Het schema moet worden bijgewerkt en de planning is bevroren: ontdooi de planning op de pagina Planning, druk op Schema bijwerken en start daarna.",
   "knockout.refusal.KO_LATE_ENTRY_FED_STAGE": "Dit schema wordt gevuld vanuit {stage}. Voeg de speler daar toe.",
   "knockout.refusal.KO_LATE_ENTRY_NO_SLOT": "Ronde 1 is vol; er is geen plek meer.",
   "knockout.refusal.KO_LATE_ENTRY_NOT_UNDOABLE": "Een late speler toevoegen kan niet ongedaan worden gemaakt. Trek de speler in plaats daarvan terug.",

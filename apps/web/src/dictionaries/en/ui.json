@@ -2731,6 +2731,7 @@
   "knockout.refusal.KO_GENERATE_AFTER_START": "Play has started, so Generate won't change the bracket. Use Add to bracket.",
   "knockout.refusal.KO_REDRAW_WOULD_CLEAR_SETUP": "The bracket would have to be drawn again, which clears match setup already on its lines (officials, team sheets, scoring devices, streams, player availability or court calls). Use Rebuild fixtures — it lists what it clears first.",
   "knockout.refusal.KO_START_NEEDS_UPDATE_DRAW": "The draw needs updating — press Update draw first.",
+  "knockout.refusal.KO_START_NEEDS_UPDATE_DRAW_FROZEN": "The draw needs updating, and the schedule is frozen: unfreeze it on the Schedule page, press Update draw, then Start.",
   "knockout.refusal.KO_LATE_ENTRY_FED_STAGE": "This knockout is filled from {stage}. Add the player there.",
   "knockout.refusal.KO_LATE_ENTRY_NO_SLOT": "Round 1 complete; no slot left.",
   "knockout.refusal.KO_LATE_ENTRY_NOT_UNDOABLE": "Adding a late player can't be undone. Withdraw the player instead.",

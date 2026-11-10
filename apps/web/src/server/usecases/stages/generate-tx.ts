@@ -90,6 +90,15 @@ async function readStageFixtureRows(tx: Tx, stageId: string): Promise<FixtureRow
  *  progression's, for a seat a proposal's confirm fills. */
 const ROOT_BRACKET_LABEL_KEYS: readonly string[] = [BYE_SLOT_LABEL.key, "slot.winner_match", "slot.loser_match"];
 
+/** A seated entrant is never "waiting": clear the mark on everyone now holding a round-1 seat of the stage. */
+async function clearSeatedWaitingMarks(tx: Tx, stageId: string): Promise<void> {
+  await tx`
+    update entrants set knockout_waiting_stage_id = null
+     where knockout_waiting_stage_id = ${stageId}
+       and id in (select home_entrant_id from fixtures where stage_id = ${stageId} and round_no = 1 and home_entrant_id is not null
+                  union select away_entrant_id from fixtures where stage_id = ${stageId} and round_no = 1 and away_entrant_id is not null)`;
+}
+
 async function reconcileKnockoutGenerate(
   tx: Tx,
   auth: AuthCtx,
@@ -127,7 +136,8 @@ async function reconcileKnockoutGenerate(
     // B2 fix round 2 (item 2): Start reconciles in place only. A redraw deletes every line — the slots move, printed
     // sheets stop, public pages hold the old lines — and Start has no notice to say so; Update draw (this same Generate,
     // pressed) does. So Start refuses it by name, before any write, and names the button.
-    if (inPlaceOnly) throw knockoutRefusal("KO_START_NEEDS_UPDATE_DRAW");
+    // Review I2: on a frozen Start (`waitNewcomers`) Update draw is refused too, so the refusal says unfreeze first.
+    if (inPlaceOnly) throw knockoutRefusal(waitNewcomers ? "KO_START_NEEDS_UPDATE_DRAW_FROZEN" : "KO_START_NEEDS_UPDATE_DRAW");
     // B2 fix round 1 (I1): a redraw deletes every line, and the delete cascades into the organiser's setup on them (every
     // kind `stageAttachmentCounts` counts). Generate has no confirm, so it never takes them silently: refused by name,
     // pointing to Rebuild, whose confirm lists what it clears. Read before the delete (the counts Rebuild's dialog reads).
@@ -140,6 +150,7 @@ async function reconcileKnockoutGenerate(
       throw knockoutRefusal("KO_REDRAW_WOULD_CLEAR_SETUP", { attachments });
     }
     const regen = await regenerateStageInTx(tx, auth, stage.id, stage);
+    if (!started) await clearSeatedWaitingMarks(tx, stage.id);
     return {
       ...regen.generated,
       outcome: {
@@ -161,6 +172,9 @@ async function reconcileKnockoutGenerate(
     // Generate writes one only when it creates fixtures (`fixture_ids` is Undo's delete list), and this creates none.
     await tx`update divisions set edit_watermark = null where id = ${stage.division_id}`;
   }
+  // Review I1 (defensive): an entrant seated before Start never carries a waiting mark - a mark left by an earlier Start that
+  // was refused, or by the desk, must not outlive the seat.
+  if (!started) await clearSeatedWaitingMarks(tx, stage.id);
   // Cross-format feeds (Jul3/08 §4), as every other Generate's trailing pass wires them: a declared edge whose target was
   // generated after this bracket is wired by this Generate, a no-op or not (`wireCrossFeeds` fills NULL edges only, so
   // it never overwrites). The regenerate branch above runs the full Generate, which wires them itself.
