@@ -1492,11 +1492,11 @@ describe.skipIf(!HAS_DB)("ruling D-G3, answered by W2b (spec §5.4), and the tab
     expect(rungs, "both rungs played").toBe(2);
     const won = await fixtureRow(final.id);
     expect([won.status, won.outcome], "the climber walks over her seat").toEqual(["forfeited", { kind: "award", winner: e2, loser: null, reason: "bye" }]);
-    // Completed with the climber champion and the field in rung order. Where the departed seed ranks — absent (she
-    // holds no seat now) or last — is not ruled; never above a field entrant (the D-G1 guard's property).
+    // Completed with the climber champion. X-SP-4 (RB4-S4; W4 app PR B, C1/C12): the departed seed is ranked as the loser of
+    // the rung she was due to enter - seed 1 enters at the FINAL, so she is 2nd, above every other rung's loser. (Before PR B
+    // she held no seat, was not declared, and ranked nowhere.)
     const done = (await completionOrRefusal(r.auth, r.stageId)) as { completed: boolean; ranks: string[] };
-    expect([done.completed, done.ranks.filter((id) => id !== e1)]).toEqual([true, [e2, e3, e4]]);
-    expect([-1, 3], "the departed seed is unranked or last").toContain(done.ranks.indexOf(e1!));
+    expect([done.completed, done.ranks]).toEqual([true, [e2, e1, e3, e4]]);
   });
 
   it("W2b X-WD-2 (was the D-G3 characterisation): a ladder holder's withdrawal walks her pending challenge over to the challenger, and the ladder completes with no settle", async () => {

@@ -4,10 +4,12 @@ import "server-only";
 
 import { withTenant } from "@/lib/db";
 import { EngineError } from "@seazn/engine/core";
-import { carryDeltas, placementTable, resolveProgression, type BracketFixture, type PoolTable, type ProgressionSpec, type SourceShape, type SourceTables, type StandingsRow } from "@seazn/engine/competition";
+import { carryDeltas, placementTable, type BracketFixture, type PoolTable, type ProgressionSpec, type SourceShape, type SourceTables, type StandingsRow } from "@seazn/engine/competition";
 import { parseExtKey, bracketWinnerLoser, loadCrossGroupRules } from "@/server/engine-db/competition";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { engineFixtureStatus as toBracketFixtureStatus } from "@/lib/fixture-engine-status";
+import { resolveStoredProgression } from "../stored-progression";
+import { attachFeedRefs, engineRoundOf, laneDepthOf } from "@/server/engine-db/bracket-rounds";
 import { personalPointsLeaderboard } from "../americano";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
@@ -143,7 +145,8 @@ export async function loadBracketFixtures(tx: Tx, stageId: string): Promise<Brac
     where f.stage_id = ${stageId}
     order by f.round_no, f.seq_in_round`;
   const seats = new Map(rows.map((r) => [r.id, [r.home_entrant_id, r.away_entrant_id] as const]));
-  return rows.map((f) => {
+  const laneDepth = laneDepthOf(rows.map((r) => ({ lane: parseExtKey(r.ext_key).bracket, roundNo: r.round_no })));
+  const built = rows.map((f) => {
     // X-BR-1: the completed-bracket rebuild seats from these rows too (level-seat.ts).
     assertNoLevelSeat({ fixtureId: f.id, stageKind: f.stage_kind, status: f.status, outcome: f.outcome });
     // W2b D20: …and a double walkover in them seated nobody.
@@ -158,7 +161,9 @@ export async function loadBracketFixtures(tx: Tx, stageId: string): Promise<Brac
     const { winner, loser, walkedOver } = bracketWinnerLoser(f.outcome, f.home_entrant_id, f.away_entrant_id);
     return {
       id: f.id,
-      round: f.round_no,
+      // C5/C9: the ENGINE's round - 0-based per lane. A stored `roundLosers.round` is translated at the
+      // `resolveProgression` boundary (`resolveStoredProgression`), so the stored take rule keeps its meaning.
+      round: engineRoundOf(f.round_no, bracket, laneDepth),
       status: toBracketFixtureStatus(f.status),
       ...(bracket !== undefined ? { bracket } : {}),
       ...(thirdPlace ? { thirdPlace: true } : {}),
@@ -167,8 +172,12 @@ export async function loadBracketFixtures(tx: Tx, stageId: string): Promise<Brac
       ...(winner !== undefined ? { winner } : {}),
       ...(loser !== undefined ? { loser } : {}),
       ...(walkedOver !== undefined ? { walkedOver } : {}),
-    };
+    } satisfies BracketFixture as BracketFixture;
   });
+  // C6/C14: the feed of every seat (`homeFrom`/`awayFrom`), inverted from the stored forward edges, so `firstLossField` and
+  // the ranks can attribute a seat a withdrawal emptied.
+  attachFeedRefs(new Map(built.map((b) => [b.id, b])), rows);
+  return built;
 }
 
 export interface SeededStage {
@@ -333,7 +342,7 @@ export async function seedNextStage(auth: AuthCtx, completedStageId: string): Pr
     // (seedNextStage seeds INTO it), so `next.kind` is the real targetKind
     // ruling 13's snake/bracket-target guard needs on this resolution path
     // too, not just at createStages' save-time validateStageProgression call.
-    const { qualifiers, newLotsDraws } = resolveProgression(
+    const { qualifiers, newLotsDraws } = resolveStoredProgression(
       progression,
       shapes,
       departedLoseBestNth(sourceTables, resolvedSources, await departedEntrantIds(tx, current.division_id)),

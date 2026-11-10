@@ -20,7 +20,8 @@ import "server-only";
 // otherwise play the wrong seeding (a flipped final). Who a correction moved after it starts is people alone: the same four are
 // the same four, nobody is named, the Swiss reading.
 import type postgres from "postgres";
-import { resolveProgression, type ProgressionSpec } from "@seazn/engine/competition";
+import { type ProgressionSpec } from "@seazn/engine/competition";
+import { resolveStoredProgression } from "./stored-progression";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -60,7 +61,7 @@ const onSource = (slate: Slate, sourceStageId: string) =>
  *  `withoutLuckyLoser`, what the results alone make it. */
 async function cutToday(tx: Tx, dependent: BracketDependent, opts: { withoutLuckyLoser?: boolean } = {}): Promise<string[]> {
   const { shapes, tables } = await sourcesToTables(tx, dependent, dependent.progression.sources, opts);
-  const { qualifiers } = resolveProgression(dependent.progression, shapes, tables, dependent.kind as never);
+  const { qualifiers } = resolveStoredProgression(dependent.progression, shapes, tables, dependent.kind as never);
   const departed = await departedEntrantIds(tx, dependent.division_id);
   return [...qualifiers].sort((a, b) => a.seed - b.seed).map((q) => q.entrantId).filter((id) => !departed.has(id));
 }
