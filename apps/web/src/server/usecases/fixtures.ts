@@ -55,6 +55,11 @@ function rejectDeviceLink(auth: AuthCtx): void {
  *  not yet migrated off them. */
 export type FixtureOut = Omit<FixtureRow, "venue" | "court_label">;
 
+/** W4 B5b (V499): `fixtures.joint_winners_at` is a timestamptz (a `Date` here); the wire says an ISO string or null, and
+ *  the console's `jointWinnersOffered` reads `=== null`, so an undefined from a hand-built row never reads as ruled. */
+const isoOrNull = (v: Date | string | null | undefined): string | null =>
+  v === null || v === undefined ? null : new Date(v).toISOString();
+
 export async function getFixture(auth: AuthCtx, id: string): Promise<FixtureOut> {
   rejectDeviceLink(auth);
   return withTenant(auth.orgId, async (tx) => {
@@ -63,7 +68,7 @@ export async function getFixture(auth: AuthCtx, id: string): Promise<FixtureOut>
              f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
              f.scheduled_at, f.court_id, f.venue_id, ven.name as venue_name,
              f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
-             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
+             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional, f.joint_winners_at
       from fixtures f
       left join venues ven on ven.id = f.venue_id
       where f.id = ${id}`;
@@ -75,6 +80,7 @@ export async function getFixture(auth: AuthCtx, id: string): Promise<FixtureOut>
     const courtNames = await courtNamesById(tx);
     return {
       ...row,
+      joint_winners_at: isoOrNull(row.joint_winners_at),
       court_name: row.court_id !== null ? (courtNames.get(row.court_id) ?? row.court_id) : null,
     };
   });
@@ -378,7 +384,7 @@ export async function listDivisionFixtures(auth: AuthCtx, divisionId: string): P
              f.scheduled_at, f.venue, f.court_label, f.court_id,
              f.venue_id, ven.name as venue_name,
              f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
-             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional,
+             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional, f.joint_winners_at,
              f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot,
              ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged,
              ${activeAbandonReasonSql(tx, "f")} as abandon_reason,
@@ -397,6 +403,7 @@ export async function listDivisionFixtures(auth: AuthCtx, divisionId: string): P
     const courtNames = await courtNamesById(tx);
     return rows.map((r) => ({
       ...r,
+      joint_winners_at: isoOrNull(r.joint_winners_at),
       court_name: r.court_id !== null ? (courtNames.get(r.court_id) ?? r.court_id) : null,
     }));
   });
@@ -519,7 +526,7 @@ export async function patchFixture(
              f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
              f.scheduled_at, f.court_id, f.venue_id, ven.name as venue_name,
              f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
-             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
+             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional, f.joint_winners_at
       from fixtures f
       left join venues ven on ven.id = f.venue_id
       where f.id = ${id}`;
@@ -528,6 +535,7 @@ export async function patchFixture(
     const courtNames = await courtNamesById(tx);
     return {
       ...row,
+      joint_winners_at: isoOrNull(row.joint_winners_at),
       court_name: row.court_id !== null ? (courtNames.get(row.court_id) ?? row.court_id) : null,
       conflicts,
     };

@@ -280,6 +280,12 @@ export default async function FixturePage({
             home_unseated_name: homeUnseatedName,
             away_unseated_name: awayUnseatedName,
             feeds_next_match: feedsNext,
+            // W4 B5b (X-CH-6): what the organiser's "Declare joint winners" gate reads - the role flags the wire already
+            // carries and the ruling (`joint_winners_at`, V499). Dropped here, the offer would silently never show.
+            is_final: fixture.is_final === true,
+            third_place: fixture.third_place === true,
+            conditional: fixture.conditional === true,
+            joint_winners_at: fixture.joint_winners_at ?? null,
             // W2b Task 11 (D19, X-DW-3): the server's own reading of "a double walkover is refused here" — the forfeit
             // dialog shows the guidance instead of "Neither" (a reset grand final and a 2-entrant DE winners' match included).
             no_next_match: doubleWalkoverRefused(stageKind, feedsNext),

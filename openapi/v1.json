@@ -9847,6 +9847,16 @@
                           },
                           "conditional": {
                             "type": "boolean"
+                          },
+                          "joint_winners_at": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -26004,6 +26014,16 @@
                               },
                               "conditional": {
                                 "type": "boolean"
+                              },
+                              "joint_winners_at": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -28484,6 +28504,16 @@
                               },
                               "conditional": {
                                 "type": "boolean"
+                              },
+                              "joint_winners_at": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -33957,6 +33987,16 @@
                               },
                               "conditional": {
                                 "type": "boolean"
+                              },
+                              "joint_winners_at": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -45036,6 +45076,16 @@
                         },
                         "conditional": {
                           "type": "boolean"
+                        },
+                        "joint_winners_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -45609,6 +45659,16 @@
                         },
                         "conditional": {
                           "type": "boolean"
+                        },
+                        "joint_winners_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         },
                         "conflicts": {
                           "type": "array",
@@ -91583,6 +91643,16 @@
                               "type": "integer",
                               "minimum": -9007199254740991,
                               "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "joint_winners_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
                             },
                             {
                               "type": "null"
