@@ -5,6 +5,7 @@ import Stripe from "stripe";
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { TAG, apiJson, setBoolEntitlementOverrideSql } from "../helpers";
 import {
+  seedCompetition,
   seedSettingsOrg,
   releaseSettingsOrg,
   sponsorsUrl,
@@ -41,7 +42,9 @@ import {
  * whole of the first generation's run, which is a hang rather than a defect
  * but is no better; and the
  * four legs below are ONE money trail (package -> order -> payment -> refund),
- * where leg N+1 has nothing to assert without leg N's Stripe object. Same
+ * where leg N+1 has nothing to assert without leg N's Stripe object. Leg 5
+ * (batch F fix round 1) sells leg 1's package again, to a second sponsor who
+ * never pays, and ends that deal from its order. Same
  * reason `registration-connect.spec.ts` and the rs007 specs are each their own
  * self-contained serial file rather than sharing a project-wide serial mode.
  *
@@ -235,6 +238,9 @@ const RUN = randomBytes(3).toString("hex");
 const PKG_NAME = `Gold Match Sponsor ${TAG}-${RUN}`;
 const SPONSOR_NAME = `Riverside Sports Ltd ${RUN}`;
 const SPONSOR_EMAIL = `delivered+sponsor-${TAG}-${RUN}@resend.dev`;
+/** Leg 5's sponsor: invoiced, never paid, ended from its order. */
+const SECOND_NAME = `Quay Chandlers ${RUN}`;
+const SECOND_EMAIL = `delivered+sponsor2-${TAG}-${RUN}@resend.dev`;
 /** The test's own input and the cents it must arrive as. Small on purpose:
  *  legs 3 and 4 move this for real. */
 const PRICE_MAJOR = "2.50";
@@ -259,6 +265,7 @@ interface OrderRow {
   currency: string;
   payment_status: "pending" | "paid" | "failed" | "refunded" | "none";
   deal_status: string;
+  ended_reason: string | null;
   paid_at: string | null;
   sponsor_id: string | null;
 }
@@ -850,6 +857,8 @@ test("refund: the console reverses the charge, and the placement comes off the p
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toBeVisible();
   await expect(dialog.getByText(ui("sponsors.order.refundConfirm.title"))).toBeVisible();
+  // Paid at Stripe Checkout (leg 3's real charge), never marked by hand: the card body, not the recorded-only one (review m1).
+  await expect(dialog.getByText(uiPattern("sponsors.order.refundConfirm.body", { amount: ".+", name: SPONSOR_NAME }))).toBeVisible();
   const confirm = dialog.getByRole("button", {
     // "Refund {amount}" — the amount is browser-locale currency formatting, so
     // the sentence is pinned and the money is left open (see `uiPattern`).
@@ -943,4 +952,134 @@ test("refund: the console reverses the charge, and the placement comes off the p
   await expect(remove, "the refused sponsor is still listed").toBeVisible();
   const kept = await apiJson<SponsorRow[]>(request, `/api/v1/orgs/${org.orgId}/sponsors`);
   expect(kept.data?.some((s) => s.id === sponsorId), "and still exists server-side").toBe(true);
+});
+
+// ---------------------------------------------------------------------------
+// Leg 5 — END NOW (batch F fix round 1, review I2): the console exits a deal it created
+// ---------------------------------------------------------------------------
+
+test("end now: an invoice the sponsor never pays is resent, then ended from its order - its link dies at Stripe, the sponsor stays off the public page, and is switched back on by hand", async ({
+  page,
+  request,
+}: {
+  page: Page;
+  request: APIRequestContext;
+}) => {
+  // Navs: the console, the public page read five times, the outbox poll. Stripe: the send, the resend, the end, the runner's read.
+  test.setTimeout(budget(7, 4));
+  expect(packageId, "leg 1 must have sold a package").not.toBe("");
+
+  // A public competition, so the sponsor's public view can be read back: an org-wide sponsor's board shows on its page.
+  const comp = await seedCompetition(request, org.orgId, { name: `Deals end-now ${RUN}`, visibility: "public" });
+  const onPublicPage = async (): Promise<boolean> => {
+    const res = await request.get(`/live/${org.slug}/${comp.slug}`);
+    expect(res.status(), "the public competition page answers").toBe(200);
+    return (await res.text()).includes(SECOND_NAME);
+  };
+  const added = await apiJson<SponsorRow>(request, `/api/v1/orgs/${org.orgId}/sponsors`, "POST", {
+    name: SECOND_NAME,
+    url: "https://quay-chandlers.example/",
+  });
+  expect(added.status, `POST /sponsors answered ${added.status}: ${JSON.stringify(added.error)}`).toBe(201);
+  const secondId = added.data!.id;
+  expect(added.data!.status, "premise: a sponsor added by hand is on").toBe("active");
+  await expect
+    .poll(onPublicPage, { timeout: READ_MS, message: "premise: a sponsor added by hand shows on the public page" })
+    .toBe(true);
+
+  // Send it an invoice from the console (a real Checkout Session on the fixture account).
+  await page.goto(sponsorsUrl(org.slug, "packages"));
+  const panel = page.getByTestId("sponsor-packages");
+  await expect(panel).toBeVisible({ timeout: READ_MS });
+  await panel.getByTestId(`invoice-open-${packageId}`).click();
+  await panel.getByTestId("invoice-sponsor").selectOption(secondId);
+  await expect(panel.getByTestId("invoice-hidden-note"), "no live deal: the invoice hides the sponsor until it is paid").toHaveText(
+    ui("sponsors.order.hiddenUntilPaid"),
+  );
+  await panel.getByTestId("invoice-email").fill(SECOND_EMAIL);
+  const [sent] = await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().endsWith(`/api/v1/orgs/${org.orgId}/sponsors/${secondId}/deals`) && r.request().method() === "POST",
+      { timeout: STRIPE_MS },
+    ),
+    panel.getByTestId("invoice-send").click(),
+  ]);
+  expect(sent.status(), `POST /sponsors/{id}/deals answered ${sent.status()}: ${await sent.text()}`).toBe(201);
+  const created = (await sent.json()) as { data: { deal: { id: string }; checkout_url: string } };
+  const dealId = created.data.deal.id;
+  const payLink = created.data.checkout_url;
+  expect(payLink, "a real hosted checkout URL").toMatch(/^https:\/\/checkout\.stripe\.com\//);
+  await expect.poll(onPublicPage, { timeout: READ_MS, message: "a deal waiting for its money hides the sponsor" }).toBe(false);
+
+  // The deal now holds the sponsor's status (D9): switching it back on by hand is refused while the deal waits.
+  const held = await apiJson(request, `/api/v1/orgs/${org.orgId}/sponsors/${secondId}`, "PATCH", { status: "active" });
+  expect(held.status, "an open deal holds the sponsor's status").toBe(409);
+  expect(held.error?.code).toBe("sponsor_has_open_deal");
+
+  // RESEND, tapped: the open link is reused (F32 - one payable link, never two) and a second invoice email is queued.
+  const resend = panel.getByTestId(`order-resend-${dealId}`);
+  await expect(resend).toHaveText(ui("sponsors.order.resend"));
+  const [resent] = await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().endsWith(`/api/v1/orgs/${org.orgId}/sponsor-deals/${dealId}/send-invoice`) && r.request().method() === "POST",
+      { timeout: STRIPE_MS },
+    ),
+    resend.click(),
+  ]);
+  expect(resent.status(), `POST send-invoice answered ${resent.status()}: ${await resent.text()}`).toBe(200);
+  const again = (await resent.json()) as { data: { checkout_url: string } };
+  expect(again.data.checkout_url, "the stored open session is reused, not a second link").toBe(payLink);
+  await expect(panel.getByTestId("invoice-link"), "the console shows the link it resent").toHaveText(payLink);
+  await expect
+    .poll(async () => (await outboxRows("sponsor_invoice", "sponsor_order", dealId)).length, {
+      timeout: READ_MS,
+      message: "the send and the resend: two invoice emails for the deal",
+    })
+    .toBe(2);
+
+  // END NOW, tapped: the confirm says what the public page will do, and confirming ends the deal.
+  await panel.getByTestId(`order-end-${dealId}`).click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog, "End now asks first").toBeVisible();
+  await expect(dialog.getByText(ui("sponsors.order.endConfirm.title"))).toBeVisible();
+  await expect(dialog.getByText(ui("sponsors.order.endConfirm.bodyHidden", { name: SECOND_NAME }))).toBeVisible();
+  const [ended] = await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().endsWith(`/api/v1/orgs/${org.orgId}/sponsor-deals/${dealId}/end`) && r.request().method() === "POST",
+      { timeout: STRIPE_MS },
+    ),
+    dialog.getByRole("button", { name: ui("sponsors.order.endConfirm.label"), exact: true }).click(),
+  ]);
+  expect(ended.status(), `POST /end answered ${ended.status()}: ${await ended.text()}`).toBe(200);
+  await expect(dialog).toHaveCount(0);
+
+  const deals = await apiJson<OrderRow[]>(request, `/api/v1/orgs/${org.orgId}/sponsor-deals`);
+  expect(deals.status, "GET /sponsor-deals").toBe(200);
+  expect(deals.data?.find((d) => d.id === dealId), "the deal reads back ended now, never paid").toMatchObject({
+    deal_status: "ended",
+    ended_reason: "ended_now",
+    payment_status: "pending",
+  });
+  // The console reads it back: ended and unpaid (review m3), with nothing left to resend or end.
+  await expect(panel.getByText(ui("sponsors.order.status.endedUnpaid"))).toBeVisible();
+  await expect(panel.getByTestId(`order-end-${dealId}`)).toHaveCount(0);
+  await expect(panel.getByTestId(`order-resend-${dealId}`)).toHaveCount(0);
+
+  // The link it emailed is dead, read from STRIPE: a sponsor who opens the old email cannot pay an ended deal.
+  const sessionId = /\/(cs_(?:test|live)_[A-Za-z0-9]+)/.exec(payLink)?.[1] ?? "";
+  expect(sessionId, `a Checkout Session id in ${payLink}`).not.toBe("");
+  const session = await runnerStripe().checkout.sessions.retrieve(sessionId);
+  expect(session.status, "End now expired the session it sent").toBe("expired");
+
+  // The confirm said the sponsor stays off the public page; it does, and it is still switched off.
+  const off = await apiJson<SponsorRow[]>(request, `/api/v1/orgs/${org.orgId}/sponsors`);
+  expect(off.data?.find((s) => s.id === secondId)?.status, "the sponsor's last deal ended: it stays off").toBe("inactive");
+  expect(await onPublicPage(), "and is not on the public page").toBe(false);
+
+  // Spec §10.3: once every deal has ended the club may switch the sponsor back on by hand. This console has no status
+  // control (PR 1), so the sponsor API does it - and the refusal above is now an accept.
+  const back = await apiJson<SponsorRow>(request, `/api/v1/orgs/${org.orgId}/sponsors/${secondId}`, "PATCH", { status: "active" });
+  expect(back.status, `PATCH answered ${back.status}: ${JSON.stringify(back.error)}`).toBe(200);
+  expect(back.data!.status).toBe("active");
+  await expect.poll(onPublicPage, { timeout: READ_MS, message: "switched back on, it shows again" }).toBe(true);
 });

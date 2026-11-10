@@ -255,7 +255,7 @@ test("deleting a competition a deal is scoped to answers 409 with the archive hi
   expect(deleted.status, JSON.stringify(deleted.error)).toBe(200);
 });
 
-test("a sponsor under a live deal: On stream tick, tier and competition are locked with a note, and the invoice picker names it, at 320 / 768 / 1280", async ({ page, request }) => {
+test("a sponsor under a live deal: On stream tick, tier and competition are locked with a note, the invoice picker names it and says the new deal queues, and the live deal's order offers End now, at 320 / 768 / 1280", async ({ page, request }) => {
   // Nine page loads (three tabs at three widths) plus the seeding.
   test.setTimeout(180_000);
   const org = await seedSettingsOrg(request, { plan: "pro", label: "deal-locks" });
@@ -318,8 +318,16 @@ test("a sponsor under a live deal: On stream tick, tier and competition are lock
     // The form says an unpaid invoice hides the sponsor, unless a live deal already keeps it on the public pages.
     await picker.selectOption(freeId);
     await expect(page.getByTestId("invoice-hidden-note"), `${width}: a sponsor with no live deal is told the invoice hides it`).toHaveText(ui("sponsors.order.hiddenUntilPaid"));
+    await expect(page.getByTestId("invoice-queued-note"), `${width}: and nothing queues`).toHaveCount(0);
     await picker.selectOption(lockedId);
     await expect(page.getByTestId("invoice-hidden-note"), `${width}: a sponsor under a live deal is not`).toHaveCount(0);
+    // Batch F fix 1: behind a live deal the new one queues (spec §8a), and the form says so.
+    await expect(page.getByTestId("invoice-queued-note"), `${width}: it is told the new deal starts after the current one`).toHaveText(ui("sponsors.order.queuedAfterCurrent"));
+    // The live deal's order row offers End now (review I2), with its long sponsor name; a complimentary deal has no invoice to resend.
+    const dealId = deal.data!.deal.id;
+    await expect(page.getByTestId(`order-end-${dealId}`), `${width}: the live deal can be ended from its order`).toBeVisible();
+    await expect(page.getByTestId(`order-end-${dealId}`)).toHaveText(ui("sponsors.order.endNow"));
+    await expect(page.getByTestId(`order-resend-${dealId}`), `${width}: nothing to resend on a complimentary deal`).toHaveCount(0);
     await expectNoHorizontalScroll(page);
     checked++;
   }
