@@ -64,7 +64,7 @@ import { w4KnockoutAPublicStandingsOrderSmoke } from "./w4KnockoutA-public-check
  * T25 (T8-f; RB4-Q1/Q3/Q6, RB4-S1/S2/S7): the three formats whose final stage is a bracket fed by a stage before it, driven
  * through the builder's own stage drafts (`buildTemplateStages`, the catalogue the builder sends) and played out with
  * UPSETS, so a right answer differs from "the better seed". qualifying_main: three entrants are refused by name at Generate
- * and at Start, eight qualify four (the quarter-final winners, ranked by the qualifying final's own result) who are seated
+ * and at Start, eight qualify four (the quarter-final winners, ranked by the qualifying final's own result; the semi-final losers share 3rd, so the bare confirm is refused SEEDING_TIE_UNRESOLVED and the desk's edits[] seat the better seed 3rd) who are seated
  * into the main draw rank 1 v 4 and 2 v 3, and the main draw completes the division. group_stepladder (generic, a league of
  * six into a top five): the rungs seat RB4-S1's lowest two seeds first and one climber per rung, and the stage ranks every
  * qualifier once (RB4-R1: a permutation of the five; the sixth finisher in none). group_playoffs
@@ -1013,7 +1013,27 @@ export async function w4KnockoutASuite(): Promise<void> {
       const qFinal = qLines.find((f) => f.round_no === 3);
       const doneQual = await complete(qualId);
       const ranks = doneQual.ranks;
-      const confirmed = await seatFrom(mainId);
+      // Engine 5.0.0 (ruling 270): the two semi-final losers SHARE 3rd, so a bare confirm is refused SEEDING_TIE_UNRESOLVED naming
+      // exactly them. Then resolve it as the desk does (progression-panel: per-slot edits[]): the better ORIGINAL seed takes seed 3.
+      const proposal = v1data<{ id: string; computed: { ties: { slots: string[]; entrantIds: string[] }[] } } | undefined>(
+        await v1(owner, `/api/v1/stages/${mainId}/seed-proposal`, "POST"),
+      );
+      const tie = proposal?.computed.ties[0];
+      const bareConfirm = proposal ? await v1(owner, `/api/v1/stages/${mainId}/seed-proposal/confirm`, "POST", { proposalId: proposal.id }) : undefined;
+      const refusedIds = (bareConfirm?.json as { error?: { entrantIds?: string[] } } | undefined)?.error?.entrantIds ?? [];
+      const seatedAfterRefusal = (await linesOf(divId, mainId)).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((x) => x !== null).length;
+      const tiedByRank = [ranks[2], ranks[3]]; // the semi-final losers, from the completed stage's own ranks
+      const pickOrder = tie ? [...tie.entrantIds].sort((a, b) => (seedOf.get(a) ?? 99) - (seedOf.get(b) ?? 99)) : [];
+      const confirmedRes =
+        proposal && tie
+          ? await v1(owner, `/api/v1/stages/${mainId}/seed-proposal/confirm`, "POST", {
+              proposalId: proposal.id,
+              edits: tie.slots.map((destinationSlot, i) => ({ destinationSlot, entrantId: pickOrder[i] })),
+            })
+          : undefined;
+      const confirmed = { ties: proposal?.computed.ties.length ?? -1, status: confirmedRes?.status };
+      const seed3 = pickOrder[0];
+      const seed4 = pickOrder[1];
       const mainLines = await linesOf(divId, mainId);
       const mainOne = mainLines.filter((f) => f.round_no === 1);
       const seatedInMain = new Set(mainLines.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((x): x is string => x !== null));
@@ -1039,8 +1059,13 @@ export async function w4KnockoutASuite(): Promise<void> {
         [...ranks.slice(2, 4)].sort().join() === semis.map((f) => f.outcome?.loser ?? "-").sort().join() &&
         [...(await standingsOrder(qualId))].sort().join() === [...ranks].sort().join() &&
         // seated by rank: 1 v 4 and 2 v 3, four seated, the round-1 losers nowhere
-        confirmed.ties === 0 && confirmed.status === 200 && mainOne.length === 2 &&
-        mainOne.map((f) => pairKey(f.home_entrant_id, f.away_entrant_id)).sort().join() === [pairKey(ranks[0], ranks[3]), pairKey(ranks[1], ranks[2])].sort().join() &&
+        // the shared 3rd: one tie, the two semi-final losers, a bare confirm refused 422 SEEDING_TIE_UNRESOLVED naming exactly them, nobody seated
+        confirmed.ties === 1 && tie !== undefined && tie.entrantIds.length === 2 && [...tie.entrantIds].sort().join() === [...tiedByRank].sort().join() &&
+        bareConfirm?.status === 422 && errorCode(bareConfirm) === "SEEDING_TIE_UNRESOLVED" &&
+        [...refusedIds].sort().join() === [...tiedByRank].sort().join() && seatedAfterRefusal === 0 &&
+        // resolved by edits, the better original seed as seed 3: 1 v 4 and 2 v 3
+        confirmed.status === 200 && (seedOf.get(seed3!) ?? 99) < (seedOf.get(seed4!) ?? 99) && mainOne.length === 2 &&
+        mainOne.map((f) => pairKey(f.home_entrant_id, f.away_entrant_id)).sort().join() === [pairKey(ranks[0], seed4), pairKey(ranks[1], seed3)].sort().join() &&
         seatedInMain.size === 4 && ranks.slice(0, 4).every((id) => seatedInMain.has(id)) &&
         quarters.every((f) => !seatedInMain.has(f.outcome?.loser ?? "-")) &&
         // played out and completed: the rank-4 qualifier wins the main draw over the rank-2, and the division completes
@@ -1051,8 +1076,8 @@ export async function w4KnockoutASuite(): Promise<void> {
         // the second call: nothing more is emitted
         again.status === 200 && again.completed && again.events === 0;
       w4Check(
-        "w4a T25 qualifying_main: three are refused by name; eight qualify four by their qualifying rank, seated 1 v 4 and 2 v 3, and the main draw completes the division" +
-          (ok ? "" : ` — small ${smallStages.status}/${refusedGenerate.status} ${errorCode(refusedGenerate)}/${refusedStart.status} ${errorCode(refusedStart)}/${smallLines} lines; stages ${stages.status}, gen ${generated.map((g) => g.status).join(",")}, start ${started.status}, day-one ${mainDayOne.length}; qualifying played ${qualPlayed.played}/${qualPlayed.missed}, quarters ${quarters.length}, semis ${semis.length}, final ${qFinal?.outcome?.winner === ids[0]}/${qFinal?.outcome?.loser === upset}; complete ${doneQual.status} ranks ${ranks.map((id) => seedOf.get(id)).join(",")}; confirm ${confirmed.status}/${confirmed.ties}; main round 1 ${mainOne.map((f) => `${seedOf.get(f.home_entrant_id ?? "")}v${seedOf.get(f.away_entrant_id ?? "")}`).join(",")}, seated ${seatedInMain.size}; main played ${mainPlayed.played}/${mainPlayed.missed}, complete ${doneMain.status} ${doneMain.ranks.map((id) => seedOf.get(id)).join(",")} division ${doneMain.divisionCompleted}; again ${again.status}/${again.events}`),
+        "w4a T25 qualifying_main: three are refused by name; eight qualify four by their qualifying rank, the shared 3rd is refused until resolved (better original seed takes seed 3), seated 1 v 4 and 2 v 3, and the main draw completes the division" +
+          (ok ? "" : ` — small ${smallStages.status}/${refusedGenerate.status} ${errorCode(refusedGenerate)}/${refusedStart.status} ${errorCode(refusedStart)}/${smallLines} lines; stages ${stages.status}, gen ${generated.map((g) => g.status).join(",")}, start ${started.status}, day-one ${mainDayOne.length}; qualifying played ${qualPlayed.played}/${qualPlayed.missed}, quarters ${quarters.length}, semis ${semis.length}, final ${qFinal?.outcome?.winner === ids[0]}/${qFinal?.outcome?.loser === upset}; complete ${doneQual.status} ranks ${ranks.map((id) => seedOf.get(id)).join(",")}; bare ${bareConfirm?.status} ${errorCode(bareConfirm ?? {})} ${refusedIds.length} seated-after ${seatedAfterRefusal}; confirm ${confirmed.status}/${confirmed.ties}; main round 1 ${mainOne.map((f) => `${seedOf.get(f.home_entrant_id ?? "")}v${seedOf.get(f.away_entrant_id ?? "")}`).join(",")}, seated ${seatedInMain.size}; main played ${mainPlayed.played}/${mainPlayed.missed}, complete ${doneMain.status} ${doneMain.ranks.map((id) => seedOf.get(id)).join(",")} division ${doneMain.divisionCompleted}; again ${again.status}/${again.events}`),
         ok,
       );
     }
