@@ -173,7 +173,7 @@ describe("stageGraphSizeRefusal", () => {
 describe("X-QM-1 qualifying_main is two knockout stages joined by rankRange", () => {
   it("the template, at the q the builder sends whatever the box says", () => {
     for (const qualified of [4, 99, 0]) {
-      const drafts = formatStagesFor("qualifying_main", { ...KNOBS, qualified, standingsCarry: "none" });
+      const drafts = formatStagesFor("qualifying_main", { ...KNOBS, qualified, standingsCarry: "none", thirdPlace: "shared" });
       expect(drafts.map((d) => d.kind)).toEqual(["knockout", "knockout"]);
       expect(drafts[0]!.progression).toBeNull();
       expect(drafts[1]!.progression?.sources).toEqual([{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: QUALIFYING_MAIN_MIN }] }]);

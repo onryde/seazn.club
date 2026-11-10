@@ -204,3 +204,51 @@ test.describe("X-PL-8 the plate completes at n=6, 7, 9", () => {
     });
   }
 });
+
+// ─── B4 (Task 10; X-TP-2, X-TP-1, X-TP-6): the organiser's Third place choice, over the real HTTP API ─────────────────────────────
+// What the stage settings' control sends: PATCH /stages/{id} { thirdPlace }. Before Start the bracket is drawn again for the new
+// setting (Play-off adds a flagged line, Shared removes it); a field under four refuses with its count; once the division starts
+// the setting is locked (409). Expected: the rulebook's (a third-place match needs two semi-finals, so four entrants).
+test.describe("X-TP-2 the organiser picks Play-off match and the bracket holds a third-place match", () => {
+  async function draftKnockout(request: APIRequestContext, label: string, n: number) {
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W4 B3P ${label} ${TAG}`, visibility: "private" });
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: `Open ${label}`, sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    const added = await addEntrantsViaApi(request, div.data!.id, Array.from({ length: n }, (_, i) => `E${i + 1} ${TAG}`));
+    expect(added.ids).toHaveLength(n);
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind: "knockout", name: "Main", config: {} });
+    expect(stage.status, JSON.stringify(stage.error)).toBe(201);
+    expect((await apiJson(request, `/api/v1/stages/${stage.data!.id}/generate`, "POST")).status).toBe(200);
+    return { divisionId: div.data!.id, stageId: stage.data!.id };
+  }
+
+  test("n=4: Play-off adds exactly one third-place line, Shared takes it away, Start locks the choice", async ({ request }) => {
+    test.setTimeout(120_000);
+    const { divisionId, stageId } = await draftKnockout(request, "n4", 4);
+    const thirds = async () => (await linesOf(request, divisionId, stageId)).filter((l) => l.third_place === true).length;
+    expect(await thirds(), "Shared: no third-place line").toBe(0);
+    const playoff = await apiJson(request, `/api/v1/stages/${stageId}`, "PATCH", { thirdPlace: "playoff" });
+    expect(playoff.status, JSON.stringify(playoff.error)).toBe(200);
+    expect(await thirds(), "Play-off: one third-place line").toBe(1);
+    const shared = await apiJson(request, `/api/v1/stages/${stageId}`, "PATCH", { thirdPlace: "shared" });
+    expect(shared.status, JSON.stringify(shared.error)).toBe(200);
+    expect(await thirds(), "back to Shared: none").toBe(0);
+    expect((await apiJson(request, `/api/v1/stages/${stageId}`, "PATCH", { thirdPlace: "playoff" })).status).toBe(200);
+    expect((await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST")).status).toBeLessThan(300);
+    const locked = await apiJson(request, `/api/v1/stages/${stageId}`, "PATCH", { thirdPlace: "shared" });
+    expect(locked.status, "locked once started").toBe(409);
+    expect(JSON.stringify(locked.error)).toContain("THIRD_PLACE_LOCKED");
+    expect(await thirds(), "the started bracket keeps its third-place line").toBe(1);
+  });
+
+  test("n=3: Play-off is refused with the count, and the bracket is unchanged", async ({ request }) => {
+    test.setTimeout(120_000);
+    const { divisionId, stageId } = await draftKnockout(request, "n3", 3);
+    const before = (await linesOf(request, divisionId, stageId)).length;
+    const refused = await apiJson(request, `/api/v1/stages/${stageId}`, "PATCH", { thirdPlace: "playoff" });
+    expect(refused.status).toBe(422);
+    expect(JSON.stringify(refused.error)).toContain("KO_THIRD_PLACE_TOO_FEW");
+    expect((await linesOf(request, divisionId, stageId)).length).toBe(before);
+  });
+});
