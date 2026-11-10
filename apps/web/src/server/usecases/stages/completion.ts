@@ -32,7 +32,7 @@ import { markDependentSeedProposalsStale } from "./seed-stale";
  *  - a bye line (`isByeLine`) — a seat padded out or left dead by a departure, e.g. a third-place line whose BOTH semi
  *    losers have left (withdrawal-w2b's R-1 consequence: the stage completes on its final);
  *  - a double-elimination reset (`conditional`) that the grand final did not trigger: owed only when the grand final's
- *    winner is not its home entrant, the winners' champion (champion.ts `bracketChampion`, the engine harness's rule).
+ *    winner is not its home entrant, the winners' champion (champion.ts `bracketTitleOf`, the engine harness's rule).
  *    Until that grand final has a winner it is not owed either; the grand final itself is.
  * App PR B aliases the engine's same-named export against this one (controller ruling R15).
  */

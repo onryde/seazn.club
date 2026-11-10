@@ -49513,6 +49513,72 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "title": {
+                                "anyOf": [
+                                  {
+                                    "oneOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "const": "champion"
+                                          },
+                                          "champion": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "champion"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "const": "joint"
+                                          },
+                                          "winners": {
+                                            "type": "array",
+                                            "prefixItems": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "string"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "winners"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "const": "vacant"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -49525,7 +49591,8 @@
                               "kind",
                               "rounds",
                               "drawable",
-                              "championFixtureId"
+                              "championFixtureId",
+                              "title"
                             ],
                             "additionalProperties": false
                           }
@@ -50064,7 +50131,11 @@
                           }
                         ],
                         "drawable": true,
-                        "championFixtureId": "example"
+                        "championFixtureId": "example",
+                        "title": {
+                          "kind": "champion",
+                          "champion": "example"
+                        }
                       }
                     ],
                     "leaders": [
