@@ -23,6 +23,7 @@ import { createCourt, createVenue } from "../venues";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { writeEntrantPatch } from "../entrants";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
+import { attachStageSetup } from "./_stage-setup-rig";
 import { confirmSeedProposal } from "../stages";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -415,4 +416,73 @@ describe.skipIf(!HAS_DB)("I-1 a SEATED fed knockout stays editable until a match
     expect(await lineKeys(mainId)).toEqual(before);
     expect((await configOf(mainId)).thirdPlace, "config untouched").not.toBe(true);
   }, 240_000);
+});
+
+// M-3 (B4 fix round 2; PO ruling 2026-11-10): before the first match starts, switching to Shared ALWAYS succeeds. It never draws the
+// bracket again: the -3p line goes in place (its court/time slot with it) and every other line keeps its organiser setup.
+describe.skipIf(!HAS_DB)("M-3 Shared before the first match never redraws and never refuses over setup", () => {
+  const officialsOn = async (stageId: string, thirdPlace: boolean) =>
+    (await sql<{ n: number }[]>`
+      select count(*)::int as n from fixture_officials fo join fixtures f on f.id = fo.fixture_id
+       where f.stage_id = ${stageId} and f.third_place = ${thirdPlace}`)[0]!.n;
+
+  /** A Play-off bracket of four, one player withdrawn (three left), organiser setup on a semi AND on the -3p line, the -3p line timed. */
+  async function stuckRig() {
+    const r = await rig(SPORTS[0], 4, { thirdPlace: true });
+    await writeEntrantPatch(r.auth, r.ids[3]!, { status: "withdrawn" });
+    const rows = await rowsOf(r.stageId);
+    const semi = rows.find((x) => x.round_no === 1 && !x.ext_key?.endsWith("-3p") && x.home_entrant_id && x.away_entrant_id)!;
+    const [bronze] = await bronzeOf(r.stageId);
+    expect(bronze, "rig: a -3p line").toBeTruthy();
+    await attachStageSetup(r.auth, "official", semi.id);
+    await attachStageSetup(r.auth, "official", bronze!.id);
+    await sql`update fixtures set scheduled_at = '2030-01-01T10:00:00Z', court_label = 'C1' where id = ${bronze!.id}`;
+    expect(await officialsOn(r.stageId, false), "rig: setup on a semi").toBe(1);
+    return { ...r, semi, bronzeId: bronze!.id };
+  }
+
+  it("(a) the repro: stored Play-off under 4 with setup present - PATCH Shared succeeds, the other lines keep their setup and ids, no -3p line, its slot is gone", async () => {
+    const r = await stuckRig();
+    const others = (await rowsOf(r.stageId)).filter((x) => x.id !== r.bronzeId).map((x) => x.id).sort();
+    const out = await patchKnockoutStage(r.auth, r.stageId, { thirdPlace: "shared" });
+    expect(out.thirdPlace).toBe("shared");
+    expect((await configOf(r.stageId)).thirdPlace).toBe(false);
+    expect(await bronzeOf(r.stageId), "no -3p line").toHaveLength(0);
+    expect((await rowsOf(r.stageId)).map((x) => x.id).sort(), "every other line is the very same row (no redraw)").toEqual(others);
+    expect(await officialsOn(r.stageId, false), "setup on the other lines intact").toBe(1);
+    expect((await sql`select 1 from fixtures where id = ${r.bronzeId}`).length, "the -3p row and its court/time slot are freed").toBe(0);
+    expect((await rowsOf(r.stageId)).filter((x) => x.loser_to_fixture !== null), "no loser edge into a gone line").toHaveLength(0);
+  }, 180_000);
+
+  it("(b) the 7A path end to end: Generate refuses by name with the stage, one PATCH Shared, Generate then proceeds", async () => {
+    const r = await rig(SPORTS[0], 4, { thirdPlace: true, generate: false });
+    await writeEntrantPatch(r.auth, r.ids[3]!, { status: "withdrawn" });
+    const err = await refusal(generateStageFixtures(r.auth, r.stageId));
+    expect([err.code, err.extra?.stageId]).toEqual(["KO_THIRD_PLACE_TOO_FEW", r.stageId]);
+    expect((await patchKnockoutStage(r.auth, (err.extra as { stageId: string }).stageId, { thirdPlace: "shared" })).thirdPlace).toBe("shared");
+    await generateStageFixtures(r.auth, r.stageId);
+    expect(await lineKeys(r.stageId), "the engine's three-entrant Shared bracket").toEqual(engineBracketRows(3, false).map((x) => x.ext_key).sort());
+  }, 180_000);
+
+  it("(c) sequence: Shared -> Play-off -> (setup attached) -> Shared succeeds; the semis keep their setup", async () => {
+    const r = await rig(SPORTS[0], 4);
+    expect((await patchKnockoutStage(r.auth, r.stageId, { thirdPlace: "playoff" })).regenerated).toBe(true);
+    const semi = (await rowsOf(r.stageId)).find((x) => x.round_no === 1 && !x.ext_key?.endsWith("-3p"))!;
+    await attachStageSetup(r.auth, "official", semi.id);
+    const out = await patchKnockoutStage(r.auth, r.stageId, { thirdPlace: "shared" });
+    expect(out).toEqual({ stage_id: r.stageId, thirdPlace: "shared", regenerated: true });
+    expect(await lineKeys(r.stageId)).toEqual(engineBracketRows(4, false).map((x) => x.ext_key).sort());
+    expect(await officialsOn(r.stageId, false)).toBe(1);
+  }, 180_000);
+
+  it("(d) once a match has started the same PATCH is still THIRD_PLACE_LOCKED, with setup present", async () => {
+    const r = await rig(SPORTS[0], 4, { thirdPlace: true });
+    const semi = (await rowsOf(r.stageId)).find((x) => x.round_no === 1 && !x.ext_key?.endsWith("-3p"))!;
+    await attachStageSetup(r.auth, "official", semi.id);
+    await startDivision(r.auth, r.divisionId);
+    await playBadminton(r.auth, semi.id, true);
+    const err = await refusal(patchKnockoutStage(r.auth, r.stageId, { thirdPlace: "shared" }));
+    expect([err.status, err.code]).toEqual([409, "THIRD_PLACE_LOCKED"]);
+    expect(await bronzeOf(r.stageId), "the -3p line stays").toHaveLength(1);
+  }, 180_000);
 });
