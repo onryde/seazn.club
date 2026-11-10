@@ -317,6 +317,8 @@ let divisionId = "";
  *  picker has somewhere to place someone. */
 let teamDivisionId = "";
 let orgSlug = "";
+/** The active org's id, recorded by the setup test beside `orgSlug` - the sponsors seed below reuses it instead of resolving the org again. */
+let setupOrgId = "";
 /** RS007's two new public surfaces, with the query strings that make them
  *  render populated rather than their (also valid, but far simpler) empty
  *  state. Filled by the setup test below. */
@@ -338,7 +340,8 @@ let publicCricketFixturePath = "";
 let publicCricketCompSlug = "";
 let publicCricketPlayerId = "";
 /** Sponsor deals PR 2 (Batch J) - the sponsor's own page and the deal's own page, which the hub picks by `?sponsor=` / `?deal=`. One
- *  sponsor (a realistic 43-character name) holding one open offline deal, seeded by the setup test below. An id the hub does not know
+ *  sponsor (a realistic 43-character name) holding one open offline deal, seeded by the "console routes" test itself (`seedSponsorsSweep`,
+ *  never the serial setup test). An id the hub does not know
  *  renders the LIST - a 200 with no overflow - so "console routes" names a test id it must see on each, and null here fails that test. */
 let sponsorsSweep: { sponsorId: string; dealId: string; packageId: string; orgId: string } | null = null;
 
@@ -346,10 +349,13 @@ let sponsorsSweep: { sponsorId: string; dealId: string; packageId: string; orgId
  *  a real sponsor and a real deal to render at all). It runs at the top of the ONE test that needs it ("console routes"), never in the
  *  serial file's setup test: a sponsor API regression there would abort every test after it - roughly 110, across seven width
  *  projects - where here it reds the one test that is about sponsors (batch J review m8). */
-async function seedSponsorsSweep(page: Page, request: APIRequestContext): Promise<NonNullable<typeof sponsorsSweep>> {
+async function seedSponsorsSweep(request: APIRequestContext): Promise<NonNullable<typeof sponsorsSweep>> {
   // A retry of the test reuses the sponsor it already made, so a flaky run does not pile a second one into the org.
   if (sponsorsSweep !== null && sponsorsSweep.dealId !== "") return sponsorsSweep;
-  const org = await activeOrg(page);
+  // The org the setup test resolved (this file is serial, so it has run): a blank id means setup never got that far, and a request to
+  // `/orgs//sponsors` would only read as a 404 about something else.
+  expect(setupOrgId, "the setup test recorded the active org's id").not.toBe("");
+  const org = { id: setupOrgId };
   const sweepPackage = await apiJson<{ id: string }>(request, `/api/v1/orgs/${org.id}/sponsor-packages`, "POST", {
     name: `Mobile Gate partner board ${TAG}`, price_cents: 25_000, currency: "gbp", tier: "partner",
   });
@@ -434,6 +440,7 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
   expect(published.data?.status, JSON.stringify(published.error)).toBe("published");
   const org = await activeOrg(page);
   orgSlug = org.slug;
+  setupOrgId = org.id;
 
   // RS007. The two surfaces this wave ADDED — the group status page and the
   // public join page — had zero width coverage, which in this repo means a
@@ -679,7 +686,7 @@ async function mergeDivisionConfig(
 
 test("console routes: no horizontal scroll", async ({ page, request }) => {
   // The sponsor and deal the two sponsor pages below render: without them they would silently render the list.
-  const sweep = await seedSponsorsSweep(page, request);
+  const sweep = await seedSponsorsSweep(request);
   expect(sweep.sponsorId, "the sponsor for the sponsor pages was seeded").toBeTruthy();
   const routes: Array<{ path: string; allowancePx?: number; requireTestId?: string }> = [
     { path: "/dashboard" },
