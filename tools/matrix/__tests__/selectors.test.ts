@@ -45,6 +45,9 @@ describe("selectors are pinned to the product's text", () => {
         const suffix = /^`\$\{testId\}(-[\w-]+)`$/.exec(p.via.needle)?.[1];
         if (prop === undefined || suffix === undefined || `${prop}${suffix}` !== p.id) wrong.push(`${k}: ${p.needle} + ${p.via.needle} is not ${p.id}`);
         if (!src(p.via.file).includes(`data-testid={testId ? ${p.via.needle} : undefined}`)) wrong.push(`${k}: ${p.via.file} no longer composes ${p.via.needle}`);
+      } else if (p.needle === `testId = "${p.id}"`) {
+        // W4 T15: a component whose testid is its prop's DEFAULT (third-place-choice.tsx): the needle is the default, and the element must render the prop.
+        if (!src(p.file).includes("data-testid={testId}")) wrong.push(`${k}: ${p.file} no longer renders data-testid={testId}`);
       } else if (p.needle !== `data-testid="${p.id}"`) {
         wrong.push(`${k}: needle ${p.needle} is not data-testid="${p.id}"`);
       }
@@ -61,7 +64,7 @@ describe("selectors are pinned to the product's text", () => {
       if (tag !== undefined && !d.needle.includes(`<${tag} `)) out.push(`${k}: element ${tag} not in needle ${d.needle}`);
       return out;
     });
-    expect(Object.keys(DATA).length).toBe(14);
+    expect(Object.keys(DATA).length).toBe(15);
     expect(wrong).toEqual([]);
   });
 

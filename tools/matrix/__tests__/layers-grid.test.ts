@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import { effectiveEntrantModel } from "@seazn/engine/sport";
-import { API_ONLY_ROWS, ROW_KEYS, SPORT_KEYS, TEMPLATE_ROW_KEYS, cellId, type ApiOnlyRowKey } from "../lib/catalogue.ts";
+import { API_ONLY_ROWS, ROW_KEYS, SPORT_KEYS, TEMPLATE_ROW_KEYS, cellId, isKnobRow, type ApiOnlyRowKey } from "../lib/catalogue.ts";
 import { API_ONLY_UI_WAVE } from "../lib/api-only-ui.ts";
 import { TEMPLATE_ROW } from "../lib/templates.ts";
 import { ATOMIC, HARNESS_SCENARIO, l2NoPathFor } from "../lib/scenario-catalogue.ts";
@@ -55,6 +55,9 @@ const cellOf = (c: LayerCase): string => { const i = identityOf(c); return cellI
 /** A variantFor that is NOT a builder default, so a case's variant visibly comes from the argument. */
 const stubVariant = (s: string): string => `v-${s}`;
 
+/** W4 app PR B, Task 15: knockout_third_place is a builder knob row now, so each of its non-refused cells is DRIVEN at L1 (the plan said 11; measured: every sport). */
+const KNOB_DRIVEN = API_ONLY_ROWS.filter((r) => isKnobRow(r)).length * SPORT_KEYS.length;
+
 describe("the full L1 grid (ruling 64: 231 cells @1280, ruling 39; 207 offered since the follow-up to #1027 and W4 T16)", () => {
   const cases = planL1Grid(offlineBuilderDefault);
 
@@ -94,9 +97,9 @@ describe("the full L1 grid (ruling 64: 231 cells @1280, ruling 39; 207 offered s
     expect(REFUSED_TEMPLATE_CELLS).toBe(CHESS_REFUSED_CELLS.length);
     expect(REFUSED_API_ONLY_CELLS).toBe(STANDALONE_REFUSED_CELLS.length);
     expect(NO_PATH_TEMPLATE_CELLS).toBe(NO_ORGANISER_PATH_CELLS.length);
-    expect(driven(cases)).toHaveLength(TEMPLATE_ROW_KEYS.length * SPORT_KEYS.length - REFUSED_TEMPLATE_CELLS - NO_PATH_TEMPLATE_CELLS + TEMPLATE_CELLS.size); // 155
+    expect(driven(cases)).toHaveLength(TEMPLATE_ROW_KEYS.length * SPORT_KEYS.length - REFUSED_TEMPLATE_CELLS - NO_PATH_TEMPLATE_CELLS + TEMPLATE_CELLS.size + KNOB_DRIVEN); // 166 (155 + the 11 knockout_third_place cells)
     const p = planned(cases);
-    expect(p).toHaveLength(API_ONLY_ROWS.length * SPORT_KEYS.length - REFUSED_API_ONLY_CELLS - TEMPLATE_CELLS.size + NO_PATH_TEMPLATE_CELLS); // 52
+    expect(p).toHaveLength(API_ONLY_ROWS.length * SPORT_KEYS.length - REFUSED_API_ONLY_CELLS - TEMPLATE_CELLS.size + NO_PATH_TEMPLATE_CELLS - KNOB_DRIVEN); // 41
     expect(driven(cases).length + p.length).toBe(OFFERED);
     let checked = 0;
     for (const c of p) {
@@ -279,8 +282,12 @@ describe("the full L2 grid (ruling 64: every run of l2-pairs.json)", () => {
     expect(RAW.filter((r) => r.scenario === "D4a" || r.scenario === "D4b").filter(onNoPath).length).toBe(6);
     expect(RAW.filter((r) => (r.scenario === "D4a" || r.scenario === "D4b") && RETIRED_ROW_CELLS.includes(cellId(r.row, r.sport))).length).toBe(2);
     for (const c of settled) expect(c.settled!.state, layerCaseId(c)).toBe(SETTLED_STATE[c.run!.scenario]);
-    // Q4a (joint winners) is not settled: it stays 🚫 naming W4, and so does the rest of D4's and Q4's parent.
-    expect(noPath.filter((c) => c.run!.scenario === "Q4a" && !onNoPath(c.run!)).length).toBe(RAW.filter((r) => r.scenario === "Q4a" && !onNoPath(r)).length);
+    // W4 app PR B, Task 15: Q4a (joint winners) has an organiser path now (the W4B_Q4A opt-in script drives it, w4b-cells.ts), so it is no longer
+    // 🚫 off the no-path cells: each such run is ░ naming its atom, counted against the committed pair file.
+    const q4aRuns = RAW.filter((r) => r.scenario === "Q4a" && !onNoPath(r)).length;
+    expect(q4aRuns).toBeGreaterThan(0);
+    expect(noPath.filter((c) => c.run!.scenario === "Q4a" && !onNoPath(c.run!)).length).toBe(0);
+    expect(notRun.filter((c) => c.run!.scenario === "Q4a").length).toBe(q4aRuns);
     for (const c of d) expect(c.spec!.scenario, layerCaseId(c)).toBe(HARNESS_SCENARIO[c.run!.scenario]);
     for (const c of noPath) expect(c.noPath!.wave, layerCaseId(c)).toBe(onNoPath(c.run!) ? noPathWaveOf(cellId(c.run!.row, c.run!.sport)) : owningWave(c.run!));
     expect(noPath.filter((c) => !onNoPath(c.run!) && ["Q4b", "D4a", "D4b"].includes(c.run!.scenario))).toEqual([]); // a settled atom is never 🚫 off the no-path cells
@@ -304,7 +311,8 @@ describe("the full L2 grid (ruling 64: every run of l2-pairs.json)", () => {
     // already 🚫 are W4's settled D4a@430 / D4b@768 on triple_rr|cricket, which a no-organiser-path cell keeps 🚫 - so settled
     // 45 -> 43 (⛔ 27, ⏳ 16), driven 51 -> 48, 🚫 222 -> 222 + 3 + 67 + 2 = 294, ░ 1,271 -> 1,204, 1,589 runs in all.
     expect(RAW.filter((r) => RETIRED_ROW_CELLS.includes(cellId(r.row, r.sport))).length, "runs on the retired row").toBe(77);
-    expect({ driven: d.length, noPath: noPath.length, notRun: notRun.length, settled: settled.length, all: cases.length }).toEqual({ driven: 48, noPath: 294, notRun: 1204, settled: 43, all: 1589 });
+    // W4 app PR B, Task 15: Q4a's 12 runs off the no-path cells are ░ (an atom with an organiser path and no HARNESS_SCENARIO script): 🚫 294 -> 282, ░ 1,204 -> 1,216.
+    expect({ driven: d.length, noPath: noPath.length, notRun: notRun.length, settled: settled.length, all: cases.length }).toEqual({ driven: 48, noPath: 282, notRun: 1216, settled: 43, all: 1589 });
     expect(settled.filter((c) => c.settled!.state === "refused").length).toBe(27);
     expect(settled.filter((c) => c.settled!.state === "later").length).toBe(16);
     console.log(`L2 grid: ${d.length} driven, ${noPath.length} no_path, ${notRun.length} not_run, ${settled.length} settled of ${cases.length}`);
@@ -363,12 +371,12 @@ describe("the grid takes no filter: the whole grid is the plan (refused by name,
 });
 
 describe("committed-plans.ts reads the scope: --scope grid is the grid, a bare --layer is the slice (the second call: the default did not move)", () => {
-  it("--layer L1 --scope grid is the 207 offered cells (155 driven, 52 planned); --layer L1 is still the slice's 6", () => {
+  it("--layer L1 --scope grid is the 207 offered cells (166 driven, 41 planned); --layer L1 is still the slice's 6", () => {
     const grid = livePlan("--layer L1 --scope grid");
     expect(grid.plan).toBe("--layer L1 --scope grid");
     expect(grid.layered).toBe(true);
-    expect(grid.driven.size).toBe(TEMPLATE_ROW_KEYS.length * SPORT_KEYS.length - REFUSED_TEMPLATE_CELLS - NO_PATH_TEMPLATE_CELLS + TEMPLATE_CELLS.size);
-    expect(grid.planned.size).toBe(API_ONLY_ROWS.length * SPORT_KEYS.length - REFUSED_API_ONLY_CELLS - TEMPLATE_CELLS.size + NO_PATH_TEMPLATE_CELLS);
+    expect(grid.driven.size).toBe(TEMPLATE_ROW_KEYS.length * SPORT_KEYS.length - REFUSED_TEMPLATE_CELLS - NO_PATH_TEMPLATE_CELLS + TEMPLATE_CELLS.size + KNOB_DRIVEN);
+    expect(grid.planned.size).toBe(API_ONLY_ROWS.length * SPORT_KEYS.length - REFUSED_API_ONLY_CELLS - TEMPLATE_CELLS.size + NO_PATH_TEMPLATE_CELLS - KNOB_DRIVEN);
     expect(grid.driven.size + grid.planned.size).toBe(OFFERED);
     const slice = livePlan("--layer L1");
     expect(slice.driven.size).toBe(SLICE_ROWS.length * SLICE_SPORTS.length);

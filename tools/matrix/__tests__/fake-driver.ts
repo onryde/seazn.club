@@ -1133,9 +1133,9 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
           return [w, w === row.home_entrant_id ? row.away_entrant_id! : row.home_entrant_id!];
         };
         const top = [...pair(this.fixtures.find((x) => x.is_final === true)), ...pair(this.fixtures.find((x) => x.third_place === true))];
-        return { completed: true, events: [{ type: "stage_completed", finalRanks: [...top, ...out.map((x) => x.id).filter((e) => !top.includes(e))] }] };
+        return { completed: true, events: [{ type: "stage_completed", finalRanks: [...top, ...out.map((x) => x.id).filter((e) => !top.includes(e))], title: top[0] === undefined ? { kind: "vacant", finalists: [] } : { kind: "champion", champion: top[0] } }] };
       }
-      return { completed: true, events: [{ type: "stage_completed", finalRanks: [...(champion === null ? [] : [champion]), ...out.map((x) => x.id)] }] };
+      return { completed: true, events: [{ type: "stage_completed", finalRanks: [...(champion === null ? [] : [champion]), ...out.map((x) => x.id)], title: champion === null ? { kind: "vacant", finalists: [] } : { kind: "champion", champion } }] };
     });
   }
 }

@@ -32,7 +32,8 @@
 import type { GeneratePath } from "../generate-path.ts";
 import type { LedgerRow } from "../../../bench/lib/ledger.ts";
 import { apiOnlyUiPath, apiOnlyUiRoute } from "../api-only-ui.ts";
-import { API_ONLY_ROWS, type ApiOnlyRowKey, type StagePostBody } from "../catalogue.ts";
+import type { ObservedTitle } from "../observed.ts";
+import { API_ONLY_ROWS, isKnobRow, type ApiOnlyRowKey, type KnobRowKey, type StagePostBody } from "../catalogue.ts";
 import { SLACK_MS, budgetMs } from "../browser/budget.ts";
 import { createCompetitionUi, createFromTemplateUi } from "../browser/pages/competition.ts";
 import { boundActions, navBudget, shoot, type DivisionWhere, type PageCtx } from "../browser/pages/ctx.ts";
@@ -456,8 +457,9 @@ function padCheck(items: readonly Item[]): CheckResult {
 }
 
 const toStageRef = (s: StageOut): StageRef => ({ id: s.id, seq: s.seq, kind: s.kind, config: s.config, status: s.status });
-const isApiOnly = (row: string): row is ApiOnlyRowKey => (API_ONLY_ROWS as readonly string[]).includes(row);
-type ChampionWant = { kind: "abstain"; reason: string } | { kind: "fail"; note: string } | { kind: "name"; name: string };
+/** An API-only row with no builder control: a knob row (catalogue.ts KNOB_ROWS) is built by the builder, so the browser drives it. */
+const isApiOnly = (row: string): row is Exclude<ApiOnlyRowKey, KnobRowKey> => (API_ONLY_ROWS as readonly string[]).includes(row) && !isKnobRow(row);
+type ChampionWant = { kind: "abstain"; reason: string } | { kind: "fail"; note: string } | { kind: "name"; name: string } | { kind: "none" };
 
 export class BrowserDriver implements OrganiserDriver {
   readonly #http: HttpSide;
@@ -494,6 +496,8 @@ export class BrowserDriver implements OrganiserDriver {
   readonly #completed = new Set<string>();
   /** stage id → the finalRanks its completion answered (null: none). */
   readonly #finalRanks = new Map<string, readonly string[] | null>();
+  /** stage id → the title its completion answered (W4 T3; null: none served, e.g. a table stage or a fake that predates it). */
+  readonly #titles = new Map<string, ObservedTitle | null>();
   #uiCalls = 0;
   /** The first rail visit of the case has told the driver what it saw (W1d Task 14): the fold's branch is judged
    *  once, and the match-day default filter is read on that visit only — the sheet's own default exists on the
@@ -1170,7 +1174,9 @@ export class BrowserDriver implements OrganiserDriver {
     }
     if (out.completed) {
       this.#completed.add(stageId);
-      this.#finalRanks.set(stageId, out.events.find((ev) => ev.type === STAGE_COMPLETED)?.finalRanks ?? null);
+      const done = out.events.find((ev) => ev.type === STAGE_COMPLETED);
+      this.#finalRanks.set(stageId, done?.finalRanks ?? null);
+      this.#titles.set(stageId, done?.title ?? null);
     }
     return out;
   }
@@ -1235,14 +1241,21 @@ export class BrowserDriver implements OrganiserDriver {
     return w;
   }
 
-  /** Who the public banner must crown: a bracket's champion is finalRanks[0]
-   *  of its completion (champion.ts crowns a bracket by its final); a table
-   *  stage's banner is proven by its table. */
+  /** Who the public banner must crown: what the completion's `title` says the final crowned (W4 T15 - champion.ts crowns a bracket by
+   *  its final, and a joint final has TWO winners and a vacant one NONE, so `finalRanks[0]` is no longer the champion). A
+   *  completion that served no title (a fake that predates it) falls back to finalRanks[0]; a table stage's banner is proven by its
+   *  table. A joint title abstains: the banner's wording for two winners is the Q4a script's own check, not this one's. */
   #championWant(stages: readonly StageRef[], names: ReadonlyMap<string, string>): ChampionWant {
     const decisive = [...stages].sort((a, b) => b.seq - a.seq)[0];
     if (decisive === undefined) return { kind: "abstain", reason: "the division has no stage" };
     if (!PUBLIC_BRACKET_KINDS.has(decisive.kind)) return { kind: "abstain", reason: `the decisive stage is a ${decisive.kind} — its table is the proof` };
     if (!this.#finalRanks.has(decisive.id)) return { kind: "abstain", reason: `the decisive ${decisive.kind} stage was not completed by this case` };
+    const title = this.#titles.get(decisive.id) ?? null;
+    if (title !== null) {
+      if (title.kind === "champion") return { kind: "name", name: names.get(title.champion) ?? title.champion };
+      if (title.kind === "vacant") return { kind: "none" };
+      return { kind: "abstain", reason: "the final ended in joint winners: the banner's two names are judged by the joint-winners script (title.kind joint)" };
+    }
     const ranks = this.#finalRanks.get(decisive.id);
     if (ranks === null || ranks === undefined || ranks.length === 0) return { kind: "fail", note: `the decisive ${decisive.kind} stage completed with no finalRanks — nothing names its champion` };
     return { kind: "name", name: names.get(ranks[0]) ?? ranks[0] };
@@ -1280,7 +1293,7 @@ export class BrowserDriver implements OrganiserDriver {
       const startedAt = this.#clock.now();
       const view = await this.#ui((p) => p.readPublicUi(this.#ctx, where));
       const tables = compareTables(api, view.tables);
-      const crowned = want.kind !== "name" || view.champion === want.name;
+      const crowned = want.kind === "name" ? view.champion === want.name : want.kind !== "none" || view.champion === null;
       const elapsed = startedAt - since;
       if (!(tables.ok && crowned) && elapsed < window) {
         await this.#clock.sleep(SLACK_MS);
@@ -1298,6 +1311,7 @@ export class BrowserDriver implements OrganiserDriver {
           : { id: "ui-public-standings-match", kind: "assertion", verdict: "fail", checked: tables.checked, reason: `the public page still differs from the API ${late}: ${tables.evidence[0]}`, evidence: tables.evidence });
       this.#checks.push(want.kind === "abstain" ? assertion("ui-champion-shown", [], want.reason)
         : want.kind === "fail" ? assertion("ui-champion-shown", [{ ok: false, note: want.note }])
+        : want.kind === "none" ? assertion("ui-champion-shown", [{ ok: crowned, note: crowned ? "the title is vacant and the banner names nobody" : `the title is vacant, but the banner names ${view.champion ?? "nobody"} — still ${late}` }])
         : crowned ? assertion("ui-champion-shown", [{ ok: true, note: `the banner names ${want.name}` }])
         : assertion("ui-champion-shown", [{ ok: false, note: `the banner names ${view.champion ?? "nobody"}; want ${want.name} — still ${late}` }]));
       return;
