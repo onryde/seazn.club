@@ -7,11 +7,27 @@
 // follow-up): an americano or mexicano stage rotates its players into pair
 // entrants, so the division builder offers chess (sport key `boardgame`)
 // neither format, and creating such a stage answers 422 CHESS_INDIVIDUAL_ONLY.
-// Those two cells are planned in no layer; every other cell of the 231 is.
+// Those two cells are planned in no layer.
+//
+// W4 T16 (owner ruling 269, W4 rulebook RB4-S6): a stepladder or page playoff is not offered standalone — it needs a
+// table to seed from, so the stage create answers 422 STEPLADDER_NEEDS_TABLE_SOURCE / PAGE_PLAYOFF_NEEDS_TABLE_SOURCE
+// on every sport. The two API-only rows that build one standalone (`stepladder_only`, `page_playoff_only`) are refused
+// on all 11 sports: 22 cells, ⛔ refused, not 🚫 missing (RB4-S6). Every other cell of the 231 is planned.
+
 import { builtinModules } from "@seazn/engine/sports";
 
+/** The 11 sports, in the grid's (engine registry) order, as the rulings name them. */
+const SPORTS_11 = ["football", "cricket", "boardgame", "carrom", "generic", "volleyball", "badminton", "tabletennis", "tennis", "icehockey", "hockey"] as const;
+
+/** The chess cells (ruling 2026-10-26). */
+export const CHESS_REFUSED_CELLS: readonly string[] = Object.freeze(["americano|boardgame", "mexicano|boardgame"]);
+/** The standalone cells (ruling 269), row-major. */
+export const STANDALONE_REFUSED_CELLS: readonly string[] = Object.freeze(
+  (["page_playoff_only", "stepladder_only"] as const).flatMap((row) => SPORTS_11.map((s) => `${row}|${s}`)),
+);
+
 /** Every refused cell, `row|sport`. */
-export const REFUSED_CELLS: readonly string[] = Object.freeze(["americano|boardgame", "mexicano|boardgame"]);
+export const REFUSED_CELLS: readonly string[] = Object.freeze([...CHESS_REFUSED_CELLS, ...STANDALONE_REFUSED_CELLS]);
 
 /** Is this `row|sport` cell one the product refuses? */
 export function isRefusedCell(cell: string): boolean {
@@ -28,8 +44,15 @@ export function offeredRows(rows: readonly string[], sport: string): string[] {
   return rows.filter((r) => !isRefusedCell(`${r}|${sport}`));
 }
 
-/** A refused cell's drop reason names the ruling and the refusal code. */
+/** A refused cell's drop reason names the ruling and the refusal code: the chess one, */
 export const REFUSED_REASON = /chess is individual-only \(owner ruling 2026-10-26\)[\s\S]*CHESS_INDIVIDUAL_ONLY/;
+/** and the standalone one. */
+export const STANDALONE_REASON = /not offered standalone[\s\S]*ruling 269[\s\S]*STEPLADDER_NEEDS_TABLE_SOURCE[\s\S]*PAGE_PLAYOFF_NEEDS_TABLE_SOURCE/;
+
+/** The reason pattern the oracle expects on a refused cell. */
+export function refusedReasonOf(cell: string): RegExp {
+  return CHESS_REFUSED_CELLS.includes(cell) ? REFUSED_REASON : STANDALONE_REASON;
+}
 
 // Match Day C9 review I5, option 2 (controller ruling 2026-11-03): the same two formats are not OFFERED to a sport
 // whose engine entrant model holds no individuals (round 3's shared rule) - the stage rotates individual players into pair

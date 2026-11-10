@@ -695,7 +695,9 @@ describe.skipIf(!HAS_DB)("D4a/P5 — a bye seed owns TWO destination slots (#554
 });
 
 describe.skipIf(!HAS_DB)("D4a/P5 — bye-award bulk UPDATE guards against stranding a slot_label", () => {
-  it("refuses rather than silently stranding a slot_label if a plain-stage bye-award winner-feed target ever carries one", async () => {
+  it("refuses rather than silently stranding a slot_label if a root bracket's line ever carries a progression's", async () => {
+    // Since W4 T8 a second Generate of a root knockout is the reconcile (stages.ts), which never reaches the bulk update this
+    // was written against; the guard moved to its door, before any write. Its own bye and feeder labels pass: the next test.
     // Review finding: generateStageFixtures' bye-award-into-winner-feed pass
     // (the PLAIN, non-`.seeding` path, unlike generateSeededStageFixtures'
     // OWN third pass) writes home/away_entrant_id via a raw bulk UPDATE that
@@ -768,6 +770,49 @@ describe.skipIf(!HAS_DB)("D4a/P5 — bye-award bulk UPDATE guards against strand
     >`select home_entrant_id, away_entrant_id, home_slot_label, away_slot_label from fixtures where id = ${final!.id}`;
     expect(side === "home" ? after.home_entrant_id : after.away_entrant_id).toBeNull();
     expect(side === "home" ? after.home_slot_label : after.away_slot_label).not.toBeNull();
+  });
+
+  it("a root bracket's own labels pass that guard: a bye's and a feeder's, on a second Generate that changes nothing", async () => {
+    // single-sport: the reconcile's label guard (ROOT_BRACKET_LABEL_KEYS) reads slot-label keys only; no sport field reaches it.
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "ByeGuardOwn " + randomUUID().slice(0, 6),
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    await createEntrants(auth, division.id, [
+      { kind: "individual" as const, display_name: "One", seed: 1, members: [] },
+      { kind: "individual" as const, display_name: "Two", seed: 2, members: [] },
+      { kind: "individual" as const, display_name: "Three", seed: 3, members: [] },
+    ]);
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "knockout", name: "KO", config: {} });
+    await generateStageFixtures(auth, stage!.id);
+    // Stamped on a seat that holds nobody, as the writers leave it (bracket-lines.ts, fed-seats.ts): the final's open side.
+    let checked = 0;
+    for (const label of [
+      { key: "bracket.slot.bye", params: {} },
+      { key: "slot.winner_match", params: { round: 1, seq: 1 } },
+      { key: "slot.loser_match", params: { round: 1, seq: 1 } },
+    ]) {
+      const stamped = await sql`
+        update fixtures set
+          home_slot_label = case when home_entrant_id is null then ${sql.json(label as never)} else home_slot_label end,
+          away_slot_label = case when home_entrant_id is null then away_slot_label else ${sql.json(label as never)} end
+        where stage_id = ${stage!.id} and is_final and (home_entrant_id is null or away_entrant_id is null)
+        returning id`;
+      expect(stamped.length, `premise: the final has an open seat for ${label.key}`).toBe(1);
+      await expect(generateStageFixtures(auth, stage!.id), `${label.key} is the bracket's own`).resolves.toBeTruthy();
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(3);
   });
 });
 

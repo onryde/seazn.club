@@ -74,6 +74,13 @@ type Claim = {
   swissRare: RegExp;
   /** Swiss never voids their results. */
   swissNever: RegExp;
+  /** W4 T13 (review #4): a qualifier from a knockout who has not begun is replaced by the best loser below the cut. */
+  luckyLoser: RegExp;
+  /** And a replacement keeps that place if they come back. */
+  replacementStays: RegExp;
+  /** The blanket promise this replaces, as it shipped: bringing them back does not take the seat back. */
+  blanketUndoWas: string;
+  blanketUndo: RegExp;
 };
 
 const CLAIMS: Record<string, Claim> = {
@@ -87,6 +94,10 @@ const CLAIMS: Record<string, Claim> = {
       "In a running table stage their results stand and remaining games walk over to opponents — unless more of their games are still to play than they've played, counting only what's scheduled so far; then those results are voided too. Swiss pairs a round at a time, so that's rare. In a bracket, opponents advance; in a ladder or americano, remaining games are voided and earned standings stand. All of it rides the normal scoring ledger, so each can be undone.",
     swissRare: /so that's rare/i,
     swissNever: /in Swiss they never are/i,
+    luckyLoser: /best loser below the cut/i,
+    replacementStays: /replacement keeps/i,
+    blanketUndoWas: "All of it rides the normal scoring ledger, so each can be undone.",
+    blanketUndo: /each can be undone/i,
   },
   es: {
     retiredBody:
@@ -98,6 +109,10 @@ const CLAIMS: Record<string, Claim> = {
       "En una fase de liga en curso sus resultados se mantienen y los partidos restantes se otorgan a los oponentes — salvo que le queden más partidos por jugar de los que ya ha jugado, contando solo lo programado hasta ahora; entonces esos resultados también se anulan. El suizo empareja una ronda cada vez, así que ahí es raro. En un cuadro, los oponentes avanzan; en una escalera o un americano, los partidos restantes se anulan y la clasificación lograda se mantiene. Todo pasa por el registro de puntuación normal, así que cada uno se puede deshacer.",
     swissRare: /ahí es raro/i,
     swissNever: /en el suizo, nunca/i,
+    luckyLoser: /mejor perdedor por debajo del corte/i,
+    replacementStays: /sustituto conserva/i,
+    blanketUndoWas: "Todo pasa por el registro de puntuación normal, así que cada uno se puede deshacer.",
+    blanketUndo: /cada uno se puede deshacer/i,
   },
   fr: {
     retiredBody:
@@ -109,6 +124,10 @@ const CLAIMS: Record<string, Claim> = {
       "Dans une phase de poule en cours, leurs résultats sont conservés et les matchs restants sont attribués par forfait aux adversaires — sauf s'il leur reste plus de matchs à jouer qu'ils n'en ont joué, en ne comptant que ce qui est programmé jusqu'ici ; ces résultats sont alors invalidés eux aussi. Le suisse apparie une ronde à la fois, c'est donc rare. Dans un tableau, les adversaires progressent ; dans une échelle ou un americano, les matchs restants sont invalidés et le classement acquis est conservé. Tout passe par le registre de scores habituel, chacun peut donc être annulé.",
     swissRare: /c'est donc rare/i,
     swissNever: /en système suisse, jamais/i,
+    luckyLoser: /meilleur perdant sous la barre/i,
+    replacementStays: /remplaçant garde/i,
+    blanketUndoWas: "Tout passe par le registre de scores habituel, chacun peut donc être annulé.",
+    blanketUndo: /chacun peut donc être annulé/i,
   },
   nl: {
     retiredBody:
@@ -120,8 +139,29 @@ const CLAIMS: Record<string, Claim> = {
       "In een lopende tabelfase blijven hun resultaten staan en gaan de resterende wedstrijden als walk-over naar de tegenstanders — tenzij ze nog meer wedstrijden te spelen hebben dan ze al gespeeld hebben, geteld over alleen wat tot nu toe is ingepland; dan worden die resultaten ook ongeldig verklaard. Het Zwitserse systeem paart één ronde per keer, dus daar is dat zeldzaam. In een schema gaan de tegenstanders door; in een ladder of americano worden resterende wedstrijden ongeldig verklaard en blijft de behaalde stand staan. Alles verloopt via het normale scoreregister, dus elk kan ongedaan worden gemaakt.",
     swissRare: /dus daar is dat zeldzaam/i,
     swissNever: /in het Zwitserse systeem nooit/i,
+    luckyLoser: /beste verliezer onder de lijn/i,
+    replacementStays: /houdt de vervanger/i,
+    blanketUndoWas: "Alles verloopt via het normale scoreregister, dus elk kan ongedaan worden gemaakt.",
+    blanketUndo: /dus elk kan ongedaan/i,
   },
 };
+
+describe(`${KEY} is truthful about the lucky loser (W4 T13, review #4)`, () => {
+  it("every locale says who takes the place and that the replacement keeps it", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const claim = CLAIMS[locale];
+      expect(claim, `${locale}: this file names what its copy owes`).toBeDefined();
+      expect(body(locale), `${locale}: the best loser takes the place`).toMatch(claim!.luckyLoser);
+      expect(body(locale), `${locale}: and keeps it`).toMatch(claim!.replacementStays);
+      expect(claim!.blanketUndoWas, `${locale}: the retired pattern bites what it retired`).toMatch(claim!.blanketUndo);
+      expect(body(locale), `${locale}: the blanket promise is gone`).not.toMatch(claim!.blanketUndo);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every locale").toBe(LOCALES.length);
+    expect(checked).toBeGreaterThan(3);
+  });
+});
 
 describe(`${KEY} tells the truth in every locale`, () => {
   // Anti-vacuity. Every loop below is over LOCALES; an empty or one-entry list

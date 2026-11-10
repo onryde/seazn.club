@@ -18,7 +18,7 @@ import {
   planW1Driving, readDropIndex, readVariantsFile,
 } from "../lib/w1-driving-set.ts";
 import { slicePlanner } from "../run.ts";
-import { REFUSED_CELLS, REFUSED_REASON, isRefusedCell } from "./refused-cells.ts";
+import { CHESS_REFUSED_CELLS, REFUSED_CELLS, isRefusedCell, refusedReasonOf } from "./refused-cells.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const variantFor = offlineBuilderDefault;
@@ -29,6 +29,10 @@ const dropFile = (): { groups: DropGroup[] } => JSON.parse(readFileSync(join(REP
 const variantsFile = (): { sports: { sport: string; cases: VariantCase[] }[] } =>
   JSON.parse(readFileSync(join(REPO, "tools/matrix/catalogue/variants.json"), "utf8")) as { sports: { sport: string; cases: VariantCase[] }[] };
 const cricketTests = (): VariantCase[] => variantsFile().sports.find((s) => s.sport === "cricket")!.cases.filter((c) => c.preset === "test");
+/** W4 T24 (option A keeps a refused row as a variant level): the cricket `test` cases the set PLANS - a case on a cell the product
+ *  refuses (the standalone stepladder / page playoff, ruling 269) is held in variants.json and never planned, the stage create
+ *  answering 422. The oracle is the ruling's refused-cell list, never the planner. */
+const plannedCricketTests = (): VariantCase[] => cricketTests().filter((c) => !isRefusedCell(`${c.row}|cricket`));
 /** Each script's catalogue atom (the brief's map); cross-checked below against
  *  the scenario catalogue's own HARNESS_SCENARIO. */
 const ATOM_OF = { LIFECYCLE: LIFECYCLE_ID, M1: "M1", R4: "R4a", F1: "F1" } as const;
@@ -53,17 +57,24 @@ describe("planW1Driving — empty and unknown first", () => {
     expect(() => planW1Driving(variantFor, { only: "page_playoff_only|generic", scenario: "F1" })).toThrow(W1DrivingPlansNothing);
     expect(() => planW1Driving(variantFor, { only: "page_playoff_only|generic", scenario: "F1" })).toThrow(g!.reason);
   });
-  it("a cell the product refuses (chess americano/mexicano, owner ruling 2026-10-26) is refused by name with the refusal as the reason, every scenario — and its row still plans for badminton", () => {
+  it("a cell the product refuses (chess americano/mexicano, owner ruling 2026-10-26; the standalone stepladder / page playoff, ruling 269) is refused by name with its own refusal as the reason, every scenario - and a chess row still plans for badminton", () => {
     let checked = 0;
+    let chessRowsPlanned = 0;
     for (const cell of REFUSED_CELLS) {
+      const reason = refusedReasonOf(cell);
       expect(() => planW1Driving(variantFor, { only: cell }), cell).toThrow(W1DrivingPlansNothing);
-      expect(() => planW1Driving(variantFor, { only: cell }), cell).toThrow(REFUSED_REASON);
-      for (const scenario of W1_DRIVING_SCENARIOS) expect(() => planW1Driving(variantFor, { only: cell, scenario }), `${cell} ${scenario}`).toThrow(REFUSED_REASON);
+      expect(() => planW1Driving(variantFor, { only: cell }), cell).toThrow(reason);
+      for (const scenario of W1_DRIVING_SCENARIOS) expect(() => planW1Driving(variantFor, { only: cell, scenario }), `${cell} ${scenario}`).toThrow(reason);
       const row = cell.split("|")[0]!;
-      expect(planW1Driving(variantFor, { only: `${row}|badminton` }).map((c) => c.scenario), row).toEqual(["LIFECYCLE", "M1", "R4", "F1"]);
+      if (CHESS_REFUSED_CELLS.includes(cell)) {
+        expect(planW1Driving(variantFor, { only: `${row}|badminton` }).map((c) => c.scenario), row).toEqual(["LIFECYCLE", "M1", "R4", "F1"]);
+        chessRowsPlanned++;
+      }
       checked++;
     }
-    expect(checked).toBe(2);
+    // 2 chess cells + 22 standalone cells (2 rows x 11 sports); the standalone rows are refused on every sport, so no sport plans them.
+    expect(checked).toBe(24);
+    expect(chessRowsPlanned).toBe(2);
   });
   it("the set's scenarios are the four scripted ones, each the script of its catalogue atom", () => {
     expect([...W1_DRIVING_SCENARIOS]).toEqual(["LIFECYCLE", "M1", "R4", "F1"]);
@@ -80,17 +91,19 @@ describe("planW1Driving — the whole set", () => {
       if (dropped(ATOM_OF[s], row, sport)) drops++;
       else expected++;
     }
-    const testCases = cricketTests().filter((c) => c.scorable === null).length;
+    const testCases = plannedCricketTests().filter((c) => c.scorable === null).length;
     const plan = planW1Driving(variantFor, {});
-    // 11 F1 page_playoff_only drops (Task 2) + the four scripts on each cell the product refuses (follow-up to #1027).
-    expect(drops).toBe(11 + REFUSED_CELLS.length * W1_DRIVING_SCENARIOS.length);
-    expect(testCases).toBe(25);
-    expect(cricketTests().length).toBe(testCases);
+    // The four scripts on each cell the product refuses (24: chess's two, ruling 2026-10-26, and the 22 standalone stepladder / page
+    // playoff cells, ruling 269). The 11 F1 page_playoff_only odd-field drops of Task 2 are among them now, not a group of their own.
+    expect(drops).toBe(REFUSED_CELLS.length * W1_DRIVING_SCENARIOS.length);
+    expect(REFUSED_CELLS.length).toBe(24);
+    // 25 committed cricket `test` cases; 2 sit on a refused row and are held, never planned (option A).
+    expect(cricketTests().length).toBe(25);
+    expect(testCases).toBe(23);
     expect(plan.length).toBe(expected + testCases);
-    // 231×4 − 11 (F1 page_playoff_only, Task 2) − 2×4 (chess americano/mexicano, refused) + 25 (cricket `test` cases since the W2e
-    // catalogue regen; 24 before) — the typed pin must equal the derivation.
+    // 231×4 − 24×4 (the refused cells) + 23 (the cricket `test` cases of an offered row) — the typed pin must equal the derivation.
     expect(ROW_KEYS.length * SPORT_KEYS.length).toBe(231);
-    expect(plan.length).toBe(930);
+    expect(plan.length).toBe(851);
     expect(plan.filter((c) => isRefusedCell(`${c.row}|${c.sport}`))).toEqual([]);
     expect(new Set(plan.map((c) => c.caseId)).size).toBe(plan.length);
   });
@@ -112,19 +125,21 @@ describe("planW1Driving — the whole set", () => {
     for (const row of ROW_KEYS) for (const sport of SPORT_KEYS) for (const s of W1_DRIVING_SCENARIOS) {
       if (!dropped(ATOM_OF[s], row, sport)) grid.push(`${row}|${sport}|${variantFor(sport)}|${s}`);
     }
-    const tail = cricketTests().map((vc) => `${vc.row}|cricket|test|LIFECYCLE|${vc.id}`);
+    const tail = plannedCricketTests().map((vc) => `${vc.row}|cricket|test|LIFECYCLE|${vc.id}`);
     expect(plan.map((c) => c.caseId)).toEqual([...grid, ...tail]);
     expect(planW1Driving(variantFor, {}).map((c) => c.caseId)).toEqual(plan.map((c) => c.caseId));
   });
   it("each cricket test case carries its committed override on the wire, exactly probe-set's variant shape", () => {
     const byId = new Map(planW1Driving(variantFor, {}).filter((c) => c.variant === "test").map((c) => [c.caseId, c]));
     let checked = 0;
-    for (const vc of cricketTests()) {
+    for (const vc of plannedCricketTests()) {
       const c = byId.get(`${vc.row}|cricket|test|LIFECYCLE|${vc.id}`);
       expect(c, vc.id).toEqual({ caseId: `${vc.row}|cricket|test|LIFECYCLE|${vc.id}`, row: vc.row, sport: "cricket", variant: "test", scenario: "LIFECYCLE", canary: false, overrides: vc.overrides });
       checked++;
     }
-    expect(checked).toBe(25);
+    expect(checked).toBe(23);
+    // The 2 held ones are planned nowhere.
+    expect(cricketTests().filter((vc) => byId.has(`${vc.row}|cricket|test|LIFECYCLE|${vc.id}`)).length).toBe(23);
     // The grid's cricket cases ride the builder default, not `test` (else the count above would double-count).
     expect(variantFor("cricket")).not.toBe("test");
   });
@@ -144,7 +159,15 @@ describe("planW1Driving — the whole set", () => {
 describe("planW1Driving — --only and --scenario", () => {
   it("--only a non-slice cell plans that cell's four scenarios (and its test cases if cricket); --scenario narrows", () => {
     expect(planW1Driving(variantFor, { only: "league_ko|football" }).map((c) => c.scenario)).toEqual(["LIFECYCLE", "M1", "R4", "F1"]);
-    expect(planW1Driving(variantFor, { only: "page_playoff_only|generic" }).map((c) => c.scenario)).toEqual(["LIFECYCLE", "M1", "R4"]);
+    // No cell drops only SOME of the four scripts any more (the 11 F1 odd-field drops of page_playoff_only went with the row's refusal), so
+    // a --only plan is all four or refused by name - counted over the committed drop list, never assumed.
+    let cellsSeen = 0;
+    for (const row of ROW_KEYS) for (const sport of SPORT_KEYS) {
+      const drops = W1_DRIVING_SCENARIOS.filter((s) => dropped(ATOM_OF[s], row, sport)).length;
+      expect([0, W1_DRIVING_SCENARIOS.length], `${row}|${sport} drops ${drops} of the four scripts`).toContain(drops);
+      cellsSeen++;
+    }
+    expect(cellsSeen).toBe(231);
     const leagueTests = cricketTests().filter((c) => c.row === "league");
     expect(leagueTests.length).toBe(3);
     const lc = planW1Driving(variantFor, { only: "league|cricket", scenario: "LIFECYCLE" });
@@ -156,11 +179,12 @@ describe("planW1Driving — --only and --scenario", () => {
     expect(planW1Driving(variantFor, { only: "league|cricket", scenario: "M1" }).map((c) => c.caseId)).toEqual([`league|cricket|${variantFor("cricket")}|M1`]);
   });
   it("--scenario alone narrows the whole grid to that scenario (and keeps the test cases only for LIFECYCLE)", () => {
-    // The offered cells: every cell but the ones the product refuses (chess americano/mexicano).
+    // The offered cells: every cell but the 24 the product refuses (chess americano/mexicano, the standalone stepladder / page playoff).
     const cells = ROW_KEYS.length * SPORT_KEYS.length - REFUSED_CELLS.length;
+    expect(cells).toBe(207);
     expect(planW1Driving(variantFor, { scenario: "M1" }).length).toBe(cells);
-    expect(planW1Driving(variantFor, { scenario: "F1" }).length).toBe(cells - 11);
-    expect(planW1Driving(variantFor, { scenario: "LIFECYCLE" }).length).toBe(cells + 25);
+    expect(planW1Driving(variantFor, { scenario: "F1" }).length).toBe(cells);
+    expect(planW1Driving(variantFor, { scenario: "LIFECYCLE" }).length).toBe(cells + plannedCricketTests().length);
   });
   it("every sport of the registry, one row: --only <row>|<sport> plans its four scenarios on that sport's variant (and cricket its test case)", () => {
     let checked = 0;
@@ -267,7 +291,7 @@ describe("the w1-driving planner (run.ts --set w1-driving) and the slice planner
     const whole = makeW1DrivingPlanner()({});
     expect([...whole.sports]).toEqual([...SPORT_KEYS]);
     expect(whole.deniesFeatures).toBe(false);
-    expect(whole.plan(variantFor).length).toBe(930);
+    expect(whole.plan(variantFor).length).toBe(851);
     const one = makeW1DrivingPlanner()({ only: "league_ko|football", scenario: "LIFECYCLE" });
     expect([...one.sports]).toEqual(["football"]);
     expect(one.plan(variantFor).map((c) => c.caseId)).toEqual([`league_ko|football|${variantFor("football")}|LIFECYCLE`]);

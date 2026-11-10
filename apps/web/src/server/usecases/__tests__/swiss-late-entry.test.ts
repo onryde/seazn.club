@@ -18,6 +18,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import { pairRound, type Colour } from "@seazn/engine/scheduling";
 import type { AnySportModule } from "@seazn/engine/sport";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import type { SwissLateEntryResult } from "@/server/api-v1/schemas";
 import { resolveModule } from "@/server/engine-db";
 import { appendEventInTx } from "@/server/engine-db/append-event";
 import { forfeitPlayedFacts } from "@/server/engine-db/forfeit-played";
@@ -169,7 +170,16 @@ async function playRound(rig: Rig, r: number): Promise<void> {
 /** The organiser's Add of one unseeded player — the product path, `createEntrants`. */
 async function addLate(rig: Rig, name: string) {
   const [row] = await createEntrants(rig.auth, rig.divisionId, [{ kind: rig.kind, display_name: name, members: [] }]);
-  return row!;
+  return swissCreated(row!);
+}
+
+/** W4 T9: `late_entry` is a union by format; a late add here joins a Swiss, so a knockout answer is refused by name. */
+type SwissCreated = Awaited<ReturnType<typeof createEntrants>>[number] & { late_entry?: SwissLateEntryResult };
+function swissCreated(row: Awaited<ReturnType<typeof createEntrants>>[number]): SwissCreated {
+  if (row.late_entry !== undefined && row.late_entry.format !== "swiss") {
+    throw new Error(`a Swiss late add answered format ${row.late_entry.format}`);
+  }
+  return row as SwissCreated;
 }
 
 async function lateRows(divisionId: string) {
@@ -496,7 +506,7 @@ for (const s of SPORTS) {
       await startBoard(rig, boardsOf(await rowsOf(rig.stageId), 1)[0]!);
       const before = await rowsOf(rig.stageId);
       const late = await addLate(rig, "Late");
-      expect(late.late_entry).toEqual({ entrant_id: late.id, stage_id: rig.stageId, case: "c", round: 2 });
+      expect(late.late_entry).toEqual({ format: "swiss", entrant_id: late.id, stage_id: rig.stageId, case: "c", round: 2 });
       expect(await rowsOf(rig.stageId), "nothing moved").toEqual(before);
       expect(await firstRoundOf(late.id)).toEqual({ swiss_first_round: 2, swiss_first_round_stage_id: rig.stageId });
       await playRound(rig, 1);
@@ -736,7 +746,7 @@ for (const s of SPORTS) {
       for (const [i, id] of rig.entrants.entries()) await sql`update entrants set seed = ${i + 2} where id = ${id}`;
       await pair(rig);
       const before = roundOf(await rowsOf(rig.stageId), 1);
-      const [row] = await createEntrants(rig.auth, rig.divisionId, [{ kind: rig.kind, display_name: "Top seed", seed: 1, members: [] }]);
+      const row = swissCreated((await createEntrants(rig.auth, rig.divisionId, [{ kind: rig.kind, display_name: "Top seed", seed: 1, members: [] }]))[0]!);
       expect(row!.late_entry).toMatchObject({ case: "a", round: 1 });
       const after = roundOf(await rowsOf(rig.stageId), 1);
       const opp = (rows: readonly Row[], id: string) => {
@@ -788,7 +798,7 @@ for (const s of SPORTS) {
 
       const late = await addLate(rig, "Late");
       // The round has started and its bye is held by someone gone: nothing to take — the next round.
-      expect(late.late_entry).toEqual({ entrant_id: late.id, stage_id: rig.stageId, case: "c", round: 3 });
+      expect(late.late_entry).toEqual({ format: "swiss", entrant_id: late.id, stage_id: rig.stageId, case: "c", round: 3 });
       const after = await rowsOf(rig.stageId);
       expect(after.find((f) => f.id === byeRow.id), "the departed player's bye and point stand, byte for byte").toEqual(byeBefore);
       expect(after, "nothing moved at all").toEqual(before);

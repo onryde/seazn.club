@@ -35,6 +35,7 @@ import { bracketRootRows } from "../lib/w2a-cells.ts";
 import { W2eOverridesNameNoVariant, overridesToVariant, w2eApplies, w2eBracketCfgOf, w2eCells, w2eNameVariant, w2eOverridesFor, w2eOverridesSetsFor } from "../lib/w2e-cells.ts";
 import type { FixtureStateOut } from "../lib/driver/types.ts";
 import { FakeKnockoutDriver } from "./fake-driver.ts";
+import { isRefusedCell, offeredRows } from "./refused-cells.ts";
 import { capBinds, decidingSetReachable, setSportsOf, type SetCfg, type SetFoldState } from "./set-oracles.ts";
 import { tbIsClosestFinish, type TennisCfg, type TennisFoldState } from "./tennis-oracles.ts";
 
@@ -135,9 +136,16 @@ describe("the W2e keys: frozen names, registered, opt-in", () => {
     expect(all.filter((c) => (W2E_SCENARIO_KEYS as readonly string[]).includes(c.scenario))).toEqual([]);
     let planned = 0;
     let overridden = 0;
+    let refusedLeftOut = 0;
+    // W4 T16 (ruling 269, refused-cells.ts): a cell the product refuses - the standalone stepladder and page playoff rows, on
+    // every sport - is planned in no layer. The rows a sport is planned on are the bracket rows the ruling OFFERS it.
+    const offeredBracketRows = (sport: string): string[] => offeredRows(bracketRootRows(), sport);
     for (const k of W2E_SCENARIO_KEYS) {
       const cases = planW1Driving(variantFor, { scenario: k });
-      expect(cases.length, k).toBe(w2eCells(k).length);
+      const refusedCells = w2eCells(k).filter((c) => isRefusedCell(`${c.row}|${c.sport}`));
+      expect(cases.length, k).toBe(w2eCells(k).length - refusedCells.length);
+      expect(cases.filter((c) => isRefusedCell(`${c.row}|${c.sport}`)).map((c) => c.caseId), `${k}: no case on a refused cell`).toEqual([]);
+      refusedLeftOut += refusedCells.length;
       expect(cases.length, k).toBeGreaterThan(0);
       expect(new Set(cases.map((c) => c.scenario)), k).toEqual(new Set([k]));
       // A case plays the builder default's variant; where the default builds none of the key's paths (tennis's short-set tie-break) it
@@ -161,27 +169,31 @@ describe("the W2e keys: frozen names, registered, opt-in", () => {
       }
       for (const sport of SPORT_KEYS) {
         const per = cases.filter((c) => c.sport === sport);
-        expect(per.length, `${k}/${sport}`).toBe(w2eApplies(k, sport) ? bracketRootRows().length * playedCount(k, sport) : 0);
+        expect(per.length, `${k}/${sport}`).toBe(w2eApplies(k, sport) ? offeredBracketRows(sport).length * playedCount(k, sport) : 0);
       }
       expect(new Set(cases.map((c) => c.caseId)).size, `${k}: case ids are unique`).toBe(cases.length);
       planned += cases.length;
     }
     expect(planned).toBeGreaterThan(0);
+    // Anti-vacuity for the refusal: the cell functions do reach refused cells (every applicable sport's two standalone rows), and
+    // the planner left every one of them out.
+    expect(refusedLeftOut, "refused cells the cell functions reach and the planner leaves out").toBeGreaterThan(0);
+    expect(bracketRootRows().length - offeredBracketRows("tennis").length, "the standalone stepladder and page playoff rows").toBe(2);
     // Exactly tennis's tie-break cells that play a variant other than the default carry overrides: the slam's and the doubles norm's
-    // for W2E_TB_SET, Fast4's and the short-sets variant's for W2E_SHORT_SETS (the engine's declarations: tennisPlayed), on each of the
-    // eight bracket rows - and each of those ids names the variant it plays, where no other id has a fifth segment.
+    // for W2E_TB_SET, Fast4's and the short-sets variant's for W2E_SHORT_SETS (the engine's declarations: tennisPlayed), on each
+    // bracket row tennis is offered - and each of those ids names the variant it plays, where no other id has a fifth segment.
     const otherVariants = TB_KEYS.flatMap((k) => tennisPlayed(k).filter((v) => v !== variantFor("tennis")));
     expect(otherVariants, "the engine's non-default tie-break variants").toEqual(["grand-slam", "doubles-noad-mtb10", "fast4", "short-sets"]);
-    expect(overridden).toBe(bracketRootRows().length * otherVariants.length);
+    expect(overridden).toBe(offeredBracketRows("tennis").length * otherVariants.length);
     // The guard is reached: overrides that play no declared variant are refused by name, and the real ones name theirs.
     expect(() => w2eNameVariant("tennis", { bestOf: 99 })).toThrow(W2eOverridesNameNoVariant);
     expect(w2eNameVariant("tennis", w2eOverridesFor("W2E_SHORT_SETS", "tennis")!), "the first declared variant with a short-set margin").toBe(variantKeys("tennis").find((v) => v !== variantFor("tennis") && nestedSet(resolveSportCfg("tennis", v))?.tiebreakWinBy !== undefined));
     const shortIds = planW1Driving(variantFor, { scenario: "W2E_SHORT_SETS" }).map((c) => c.caseId);
-    expect(shortIds.length).toBe(bracketRootRows().length * tennisPlayed("W2E_SHORT_SETS").length);
+    expect(shortIds.length).toBe(offeredBracketRows("tennis").length * tennisPlayed("W2E_SHORT_SETS").length);
     expect(shortIds.every((id) => id.split("|").length === 5 && id.split("|")[4]!.startsWith("as-")), "an overrides case id has its trailing segment").toBe(true);
     expect(new Set(shortIds.map((id) => id.split("|")[4])), "...and names each short-set variant").toEqual(new Set(tennisPlayed("W2E_SHORT_SETS").map((v) => `as-${v}`)));
     const tbIds = planW1Driving(variantFor, { scenario: "W2E_TB_SET" }).map((c) => c.caseId);
-    expect(tbIds.filter((id) => id.split("|").length === 4).length, "the default as it is has four segments, on each row").toBe(bracketRootRows().length);
+    expect(tbIds.filter((id) => id.split("|").length === 4).length, "the default as it is has four segments, on each row").toBe(offeredBracketRows("tennis").length);
     expect(new Set(tbIds.filter((id) => id.split("|").length === 5).map((id) => id.split("|")[4])), "the other tie-break variants are named").toEqual(new Set(["as-grand-slam", "as-doubles-noad-mtb10"]));
   });
 

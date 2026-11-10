@@ -69,7 +69,7 @@ import { blockingConflictKey, type AiConsoleFixture } from "./ai-diff";
 import { JOINT_UNDO_SUPERSEDED_CODE } from "@/lib/joint-undo";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
-import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
+import { isUndoRefusalCode, undoRefusalKey } from "@/lib/undo-refusals";
 import { AiReviewPanel } from "./ai-review-panel";
 import { buildReviewRows } from "./ai-review";
 import { formatConflictDetail } from "./conflict-detail-format";
@@ -634,14 +634,21 @@ export function JointReviewStep({
         if (f.code === JOINT_UNDO_SUPERSEDED_CODE) return msg("board.ai.joint.reasonSuperseded");
         if (f.code === PLAYED_REFUSAL_CODE) return msg("board.ai.joint.reasonPlayed");
         // W3 T5 review m2: a rewind that reaches a Swiss undo barrier, or a paired round a board has started, is
-        // refused by name (history.ts `swissRefusal`); its copy is the same row the division's Undo shows.
-        if (isSwissRefusalCode(f.code)) return msg(swissRefusalKey(f.code));
+        // refused by name (history.ts `swissRefusal`); its copy is the same row the division's Undo shows. W4 B1b review
+        // finding 2: so is a knockout one (a confirmed draw, `SEED_CONFIRM_NOT_UNDOABLE`) - both families, one dispatch.
+        if (isUndoRefusalCode(f.code)) return msg(undoRefusalKey(f.code));
         return f.reason;
       };
       // Grouped on the CODE where there is one, so two divisions frozen for the
       // same reason stay ONE line even if the server worded their two messages
       // differently — the sentence they are given is identical either way.
       const groupKey = (f: JointUndoFailure): string => f.code || f.reason;
+      // W4 B1b N2: an undo barrier (a confirmed draw, a Swiss late entry or rounds change, a started paired round) refuses
+      // the same way on every retry and every Restore, so its divisions get no "try again, or restore them" advice and
+      // no retry button - only the sentence that they stay, and the refusal's own sentence below. Every other failure
+      // (a freeze that can lift, a lost call, a rewind a newer apply overtook) keeps the advice and the button.
+      const final = undoFailed.filter((f) => isUndoRefusalCode(f.code));
+      const retryable = undoFailed.filter((f) => !isUndoRefusalCode(f.code));
       const grouped: { key: string; reason: string; divisions: string[] }[] = [];
       for (const f of undoFailed) {
         const reason = localReason(f);
@@ -657,11 +664,20 @@ export function JointReviewStep({
             <span aria-hidden>⚠</span>
             {msg("board.ai.joint.undonePartialTitle")}
           </p>
-          <p className="text-[11px] text-amber-900">
-            {msg("board.ai.joint.undonePartial", {
-              divisions: undoFailed.map((f) => named(f.divisionId)).join(", "),
-            })}
-          </p>
+          {retryable.length > 0 && (
+            <p className="text-[11px] text-amber-900">
+              {msg("board.ai.joint.undonePartial", {
+                divisions: retryable.map((f) => named(f.divisionId)).join(", "),
+              })}
+            </p>
+          )}
+          {final.length > 0 && (
+            <p className="text-[11px] text-amber-900">
+              {msg("board.ai.joint.undonePartialFinal", {
+                divisions: final.map((f) => named(f.divisionId)).join(", "),
+              })}
+            </p>
+          )}
           {grouped.length > 0 && (
             <div className="text-[11px] text-amber-900">
               <p className="font-semibold">{msg("board.ai.joint.undoneWhy")}</p>
@@ -677,14 +693,16 @@ export function JointReviewStep({
               </ul>
             </div>
           )}
-          <button
-            type="button"
-            disabled={undoing}
-            onClick={onUndo}
-            className="btn btn-ghost px-3 py-1.5 text-xs font-semibold text-violet-700 disabled:opacity-50"
-          >
-            {undoing ? msg("board.ai.apply.undoing") : msg("board.ai.joint.undoRetry")}
-          </button>
+          {retryable.length > 0 && (
+            <button
+              type="button"
+              disabled={undoing}
+              onClick={onUndo}
+              className="btn btn-ghost px-3 py-1.5 text-xs font-semibold text-violet-700 disabled:opacity-50"
+            >
+              {undoing ? msg("board.ai.apply.undoing") : msg("board.ai.joint.undoRetry")}
+            </button>
+          )}
         </div>
       );
     }

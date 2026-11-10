@@ -496,6 +496,15 @@ body {
   .bracket-bleed {
     width: calc(100% + max(0px, (100vw - 64rem) / 2));
   }
+  /* ...but an embedded widget (/embed/*, `embed-canvas` on its layout) has no
+     max-w-5xl shell, so there is no margin to reclaim: the same arithmetic
+     pushed the bracket's own scroller 116px past a 1280px iframe's right edge,
+     where its last column and its scrollbar end could not be reached (W4 app A
+     B6b — the embed's standings widget draws a finished knockout as its
+     bracket; its bracket widget always had this). The scroller fills its box. */
+  .embed-canvas .bracket-bleed {
+    width: 100%;
+  }
 
   /* Pattern 2: primary page action docks to a safe-area-aware bottom bar on
      phones, renders inline on desktop. */

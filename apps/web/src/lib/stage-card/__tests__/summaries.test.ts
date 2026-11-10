@@ -422,7 +422,7 @@ describe("stageCounts", () => {
     let checked = 0;
     for (const status of Fixture.shape.status.options) {
       const got = stageActions({
-        status: "active", ...stageCounts([{ status }]), hasFixtures: true, adhoc: false, pairNext: false, canUnpair: false,
+        status: "active", ...stageCounts([{ status }]), hasFixtures: true, adhoc: false, pairNext: false, canUnpair: false, updateDraw: false,
       });
       if ((SETTLED as readonly string[]).includes(status)) {
         expect(got, status).toEqual({ primary: { action: "complete", enabled: true }, secondary: [] });
@@ -461,7 +461,7 @@ describe("stageCounts - held fixtures (a plain abandon awaiting its settle keeps
 
   it("feeds stageActions: a stage whose only unsettled match is a held abandon has Complete disabled, not leading", () => {
     const fixtures = [{ id: "a", status: "decided" }, { id: "b", status: "abandoned" }];
-    const input = { status: "active", hasFixtures: true, adhoc: false, pairNext: false, canUnpair: false };
+    const input = { status: "active", hasFixtures: true, adhoc: false, pairNext: false, canUnpair: false, updateDraw: false };
     expect(stageActions({ ...input, ...stageCounts(fixtures) }), "no held list: the old answer").toEqual({ primary: { action: "complete", enabled: true }, secondary: [] });
     expect(stageActions({ ...input, ...stageCounts(fixtures, new Set(["b"])) })).toEqual({ primary: null, secondary: [{ action: "complete", enabled: false }] });
   });
@@ -469,7 +469,7 @@ describe("stageCounts - held fixtures (a plain abandon awaiting its settle keeps
 
 describe("stageActions", () => {
   const base: StageActionInput = {
-    status: "active", played: 0, inPlay: 0, unplayed: 0, hasFixtures: true, adhoc: true, pairNext: false, canUnpair: false,
+    status: "active", played: 0, inPlay: 0, unplayed: 0, hasFixtures: true, adhoc: true, pairNext: false, canUnpair: false, updateDraw: false,
   };
   const of = (over: Partial<StageActionInput>) => stageActions({ ...base, ...over });
   const on = (action: StageAction): StageButton => ({ action, enabled: true });
@@ -603,7 +603,7 @@ describe("stageActions", () => {
   // rather than recomputed from the function's own branches.
   it("sweeps the lifecycle: every button's presence, lead and enabled flag follow the stated rules", () => {
     let checked = 0;
-    const seen = { completeLed: 0, generateLed: 0, pairNextLed: 0, completeDisabled: 0, unpair: 0 };
+    const seen = { completeLed: 0, generateLed: 0, pairNextLed: 0, completeDisabled: 0, unpair: 0, updateDrawLed: 0 };
     for (const status of ["pending", "active", "complete"]) {
       for (const played of [0, 2]) {
         for (const inPlay of [0, 1]) {
@@ -612,7 +612,8 @@ describe("stageActions", () => {
               for (const adhoc of [false, true]) {
                 for (const pairNext of [false, true]) {
                   for (const canUnpair of [false, true]) {
-                    const s: StageActionInput = { status, played, inPlay, unplayed, hasFixtures, adhoc, pairNext, canUnpair };
+                   for (const updateDraw of [false, true]) {
+                    const s: StageActionInput = { status, played, inPlay, unplayed, hasFixtures, adhoc, pairNext, canUnpair, updateDraw };
                     const got = stageActions(s);
                     const at = JSON.stringify(s);
                     const actions = named(got);
@@ -625,8 +626,14 @@ describe("stageActions", () => {
                     // A lead is always pressable; a button never appears twice.
                     if (got.primary !== null) expect(got.primary.enabled, at).toBe(true);
                     expect(new Set(actions).size, `${at}: no action twice`).toBe(actions.length);
-                    // Generate: only before the start, and not in place of a round to pair.
-                    expect(actions.includes("generate"), at).toBe(live && !started && !pairing);
+                    // Generate: before the start, and not in place of a round to pair. W4 B2 fix round 1 (item 6): also on a stage
+                    // the panel says owes an Update draw (a root knockout whose roster moved before the DIVISION started), so
+                    // long as no match on it is played or being scored — a draw is never redone under a result.
+                    // A bye is stored `forfeited` and counts as played, so `played` cannot say "a result exists" for a bracket:
+                    // the panel's own answer (`knockoutUpdateDrawOffered`, byes out) does; stageActions keeps only the in-play bar.
+                    const updateOwed = updateDraw && hasFixtures && inPlay === 0;
+                    expect(actions.includes("generate"), at).toBe(live && (!started || updateOwed) && !pairing);
+                    if (live && updateOwed && !pairing) expect(got.primary?.action, `${at}: Update draw leads`).toBe("generate");
                     // Pair next: whenever a round waits and the stage has fixtures; it leads.
                     expect(actions.includes("pair_next"), at).toBe(live && pairing);
                     if (live && pairing) expect(got.primary?.action, at).toBe("pair_next");
@@ -650,7 +657,9 @@ describe("stageActions", () => {
                     if (got.primary?.action === "generate") seen.generateLed++;
                     if (got.primary?.action === "pair_next") seen.pairNextLed++;
                     if (actions.includes("unpair")) seen.unpair++;
+                    if (live && started && updateOwed && !pairing) seen.updateDrawLed++;
                     checked++;
+                   }
                   }
                 }
               }
@@ -659,8 +668,30 @@ describe("stageActions", () => {
         }
       }
     }
-    expect(checked, "anti-vacuity: every combination ran").toBe(3 * 2 * 2 * 2 * 2 * 2 * 2 * 2);
+    expect(checked, "anti-vacuity: every combination ran").toBe(3 * 2 * 2 * 2 * 2 * 2 * 2 * 2 * 2);
     for (const [what, n] of Object.entries(seen)) expect(n, `some state: ${what}`).toBeGreaterThan(0);
+  });
+
+  // W4 B2 fix round 1 (item 6): after its first Generate a root knockout is `active` before the DIVISION starts, so the
+  // not-started rule alone hid Generate and the in-place reconcile was unreachable from the desk. The panel's `updateDraw`
+  // (lib/bracket-reconcile.ts `knockoutUpdateDrawOffered`: root knockout, division not started, roster drifted) brings it back.
+  describe("Update draw (a knockout drawn before its roster moved)", () => {
+    const ko = { status: "active", unplayed: 7, adhoc: false } as const;
+    it("drift before Start: Generate leads again on the active stage, Complete stays present but disabled", () => {
+      expect(of({ ...ko, updateDraw: true })).toEqual({ primary: on("generate"), secondary: [off("complete")] });
+    });
+    it("no drift: the active stage offers no Generate (the old answer)", () => {
+      expect(of({ ...ko, updateDraw: false })).toEqual({ primary: null, secondary: [off("complete")] });
+    });
+    it("a match being scored: no Generate, drift or not", () => {
+      expect(named(of({ ...ko, unplayed: 6, inPlay: 1, updateDraw: true }))).not.toContain("generate");
+    });
+    it("a bracket with a bye (stored forfeited, counted as played): Update draw still leads — the panel already ruled out a real result", () => {
+      expect(of({ ...ko, unplayed: 6, played: 1, updateDraw: true })).toEqual({ primary: on("generate"), secondary: [off("complete")] });
+    });
+    it("a complete stage offers nothing, drift or not", () => {
+      expect(of({ ...ko, status: "complete", unplayed: 0, played: 7, updateDraw: true })).toEqual({ primary: null, secondary: [] });
+    });
   });
 
   it("refuses a status it does not know and counts that are no counts (a guard, not a comment)", () => {

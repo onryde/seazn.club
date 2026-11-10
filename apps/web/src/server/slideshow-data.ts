@@ -13,6 +13,7 @@ import { BRACKET_SLIDE_KINDS, bracketSlideLaysOut } from "@/components/v2/slides
 import { resolveLogoUrl } from "@/server/public-site/data";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
+import { bracketSeatFallbackKey } from "@/lib/bracket-bye-seat";
 import { creditsNobody, forfeitLedgerOfReason, unseatedForfeitLoser } from "@/lib/forfeit-tag";
 import { outcomeTagWords } from "@/lib/outcome-text";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
@@ -529,12 +530,13 @@ export async function buildDivisionSlides(
           id: f.id,
           round_no: f.round_no,
           seq_in_round: f.seq_in_round,
+          // N-1 (rulings 116/117): a settled bye's unlabelled empty seat reads the bye's word, never "to be decided".
           home: f.home_entrant_id
             ? (names[f.home_entrant_id] ?? null)
-            : (unseatedName(f, "home") ?? resolveSlotLabel(f.home_slot_label ?? null, lookup, "bracket.tbd")),
+            : (unseatedName(f, "home") ?? resolveSlotLabel(f.home_slot_label ?? null, lookup, bracketSeatFallbackKey(f, "home"))),
           away: f.away_entrant_id
             ? (names[f.away_entrant_id] ?? null)
-            : (unseatedName(f, "away") ?? resolveSlotLabel(f.away_slot_label ?? null, lookup, "bracket.tbd")),
+            : (unseatedName(f, "away") ?? resolveSlotLabel(f.away_slot_label ?? null, lookup, bracketSeatFallbackKey(f, "away"))),
           home_slot_label: f.home_slot_label,
           away_slot_label: f.away_slot_label,
           ...scoreOf(f),
@@ -721,6 +723,10 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
   for (const snap of data.standings) {
     const stage = stageById.get(snap.stage_id);
     if (!stage || snap.rows.length === 0) continue;
+    // ST-G7 (W4 app A Task 23): a bracket stage is drawn as its bracket slide below, never as a table. Its standings
+    // snapshot is the placement table it writes when it completes (rank only, every count zero), which read here as an
+    // all-zero "table" beside the bracket. The organiser board has always walked table stages only.
+    if (BRACKET_SLIDE_KINDS.has(stage.kind)) continue;
     const pool = snap.pool_id !== null ? poolById.get(snap.pool_id) : undefined;
     const { columns, rows, level, tiebreakColumns } = standingsSlideRows(snap.rows, stageShape(sportModule, stage.table_rules, stage.kind), names, (key) => t(publicDict, key));
     slides.push({
@@ -755,7 +761,10 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
     if (named !== null) return named;
     const stored = (which === "home" ? f.home_slot_label : f.away_slot_label) ?? null;
     const label = namer.seatLabelOf(f.id, which, stored);
-    return label === null ? resolveSlotLabel(null, lookup, "bracket.tbd") : namer.seat(f.id, which, label);
+    // N-1 (rulings 116/117): a settled bye's empty seat with no label reads the bye's word, never "to be decided".
+    return label === null
+      ? resolveSlotLabel(null, lookup, bracketSeatFallbackKey({ ...f, outcome: f.outcome ?? null }, which))
+      : namer.seat(f.id, which, label);
   };
 
   // Design review I-1 (audit 3.1): a double walkover credits nobody — no 0 / 0 on the TV; its tag in the score's place.

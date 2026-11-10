@@ -48,6 +48,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 });
 
 import { LaunchActions } from "../launch-actions";
+import { buildTemplateStages } from "@/lib/format-templates";
 import { StartConfirmDialog } from "../start-confirm-dialog";
 
 const enDict = en as unknown as Dict;
@@ -230,6 +231,44 @@ describe("Start tournament confirms first", () => {
     );
     await pressStart(fed);
     expect(confirmProps(fed.tree()).entrantsLine).toBe("closes");
+  });
+
+  it("W4 T9 (X-LE-1, X-LE-2): on a root knockout says late players can join round 1; on a fed knockout the list closes", async () => {
+    // A root knockout takes a late player into round 1 while it has a free slot, so "no one new can be added" would be
+    // false there. The rulebook's three templates (rules/cross-sport.md X-LE-1) say the knockout line in every locale;
+    // league_ko's knockout is fed (X-LE-2) and says the closes line. Stages as the builder makes them, `seq` from 1.
+    const KNOBS = { qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 };
+    const templateStages = (key: string) =>
+      buildTemplateStages(key, KNOBS).map((d, i) => ({ kind: d.kind, progression: d.progression, config: d.config, seq: i + 1 }));
+    let checked = 0;
+    for (const key of ["knockout", "ko_plate", "qualifying_main"]) {
+      const island = renderIsland(LaunchActions, baseProps({ stages: templateStages(key) }));
+      await pressStart(island);
+      const props = confirmProps(island.tree());
+      expect(props.entrantsLine, key).toBe("knockout_late");
+      for (const locale of Object.keys(DICTS)) {
+        const html = renderDialog(props, locale);
+        const label = `${key} ${locale}`;
+        expect(html, label).toContain(esc(DICTS[locale]!["launch.confirm.entrantsKnockout"] as string));
+        expect(html, label).toContain('data-testid="start-confirm-entrants-knockout"');
+        expect(html, label).not.toContain(esc(DICTS[locale]!["launch.confirm.entrants"] as string));
+        expect(html, label).not.toContain('data-testid="start-confirm-entrants"');
+        expect(html, label).not.toContain('data-testid="start-confirm-entrants-swiss"');
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: three templates in every locale").toBe(3 * Object.keys(DICTS).length);
+    expect(Object.keys(DICTS).length).toBe(4);
+
+    for (const key of ["league_ko", "groups_ko"]) {
+      const fed = renderIsland(LaunchActions, baseProps({ stages: templateStages(key) }));
+      await pressStart(fed);
+      const props = confirmProps(fed.tree());
+      expect(props.entrantsLine, key).toBe("closes");
+      const html = renderDialog(props);
+      expect(html, key).toContain('data-testid="start-confirm-entrants"');
+      expect(html, key).not.toContain('data-testid="start-confirm-entrants-knockout"');
+    }
   });
 
   it("names the competition promotion only when the competition is published", async () => {

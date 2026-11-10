@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { SWISS_REFUSALS } from "@/lib/swiss-refusals";
+import { KNOCKOUT_REFUSALS } from "@/lib/knockout-refusals";
 import enUi from "@/dictionaries/en/ui.json";
 import frUi from "@/dictionaries/fr/ui.json";
 import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
@@ -117,5 +118,36 @@ describe.each(["en", "fr"] as const)("LaunchActions — Start refused above a Sw
     net.answer = { status: 422, code: "SOMETHING_ELSE", message: "division has no stages to start", extra: {} };
     const island = await pressStart();
     expect(redLines(island.tree())).toEqual(["division has no stages to start"]);
+  });
+});
+
+// W4 B2 fix round 1 (G1) and round 2 (item 2): Start reconciles a root knockout drawn before its roster moved IN PLACE only,
+// and refuses by name when the bracket would have to be drawn again (KO_START_NEEDS_UPDATE_DRAW — Update draw is the door that
+// redraws, with its notice). Same door, same rule as the Swiss refusal above: the reader's language, never the server's
+// English sentence.
+describe.each(["en", "fr"] as const)("LaunchActions — Start refused: the knockout draw needs updating first [%s]", (locale) => {
+  const D = DICTS[locale];
+  beforeEach(() => {
+    active.locale = locale;
+  });
+
+  it("says the knockout table's refusal in the reader's language", async () => {
+    const row = KNOCKOUT_REFUSALS.KO_START_NEEDS_UPDATE_DRAW;
+    net.answer = { status: row.status, code: "KO_START_NEEDS_UPDATE_DRAW", message: row.en, extra: {} };
+    const island = await pressStart();
+    expect(redLines(island.tree())).toEqual([D[row.key]]);
+    if (locale !== "en") expect(redLines(island.tree())[0], "never the server's English").not.toBe(row.en);
+  });
+
+  // W4 T15 (X-PL-1, X-QM-5): the first knockout refusal with a hole in its sentence at this door. The bound rides on the envelope.
+  it("says a size refusal with its bound filled, for Knockout + Plate and for a qualifying cut's depth", async () => {
+    const plate = KNOCKOUT_REFUSALS.KO_PLATE_TOO_FEW;
+    net.answer = { status: plate.status, code: "KO_PLATE_TOO_FEW", message: plate.en, extra: { min: 4 } };
+    expect(redLines((await pressStart()).tree())).toEqual([D[plate.key]]);
+    const main = KNOCKOUT_REFUSALS.QUALIFYING_MAIN_TOO_FEW;
+    net.answer = { status: main.status, code: "QUALIFYING_MAIN_TOO_FEW", message: fill(main.en, { min: 8 }), extra: { min: 8 } };
+    const lines = redLines((await pressStart()).tree());
+    expect(lines).toEqual([fill(D[main.key]!, { min: 8 })]);
+    expect(lines[0], "no hole left in the sentence").not.toContain("{min}");
   });
 });

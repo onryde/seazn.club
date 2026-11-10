@@ -10,8 +10,10 @@
 //   1. she is not offered in a ladder challenge picker;
 //   2. she cannot be seeded into a bracket;
 //   3. her standings row stays, and is MARKED;
-//   4. her line in a drawn bracket resolves as a walkover — the survivors do
-//      NOT slide up into new pairings.
+//   4. while the seeding is still a DRAFT, the table closes up over her and
+//      the next-ranked takes her place (RB4-V6, W4 rulebook §5, OWNER 274);
+//      once the draw is CONFIRMED, a departure's line resolves as a walkover —
+//      the survivors do NOT slide up into new pairings.
 //
 // WHY A WALKTHROUGH, given #820 already shipped specs. `withdrawn-entrant-
 // seeding.spec.ts`, `withdrawn-entrant-public-board.spec.ts` and
@@ -31,15 +33,18 @@
 // above are done and read in the browser.
 //
 // THE DIFFERENTIAL THAT MAKES §4 REAL. The organiser withdraws the
-// SECOND-placed qualifier, never the last. With four qualifiers a bracket
-// pairs 1v4 and 2v3, so:
-//   - keeping the published positions leaves 1v4 an ordinary match and turns
-//     2v3 into a walkover for 3;
-//   - re-seeding the survivors 1..3 would pair them 1-v-bye and 2v3 — where
-//     "2" and "3" are now the OLD third and fourth, a pairing that never
-//     existed in the published draw.
-// Withdrawing the LAST qualifier produces the same shape either way, which is
-// why this file does not do that.
+// SECOND-placed qualifier from the DRAFT, never the last. With four qualifiers
+// a bracket pairs 1v4 and 2v3, so:
+//   - RB4-V6 closes the league table up over her — Ada 1, Cleo 2, Dot 3, and
+//     rank 4 empty (four entrants, four places: nobody below the cut) — so
+//     R1·1 is the top qualifier's bye and R1·2 pairs the OLD third and fourth;
+//   - keeping the published positions (the pre-W4 answer) would have left
+//     1v4 an ordinary match and turned 2v3 into a walkover for 3.
+// The two answers differ on BOTH lines. Withdrawing the LAST qualifier
+// produces the same shape either way, which is why this file does not do that.
+// Then, after the Confirm, a SECOND qualifier leaves the DRAWN bracket: her
+// line walks over to her opponent, naming her (ruling 116), the top
+// qualifier's bye is untouched, and nobody slides into a new pairing.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
@@ -76,6 +81,8 @@ const CUP_NAVIGATIONS = [
   "?tab=fixtures — the proposal, after she leaves",
   "?tab=fixtures — after the short draw is confirmed",
   "?tab=standings — her row, marked",
+  "?tab=entrants — where a second qualifier withdraws, after the Confirm",
+  "?tab=fixtures — her line walked over, the bye untouched",
 ] as const;
 const LADDER_NAVIGATIONS = [
   "?tab=fixtures — both pickers offer her",
@@ -112,7 +119,7 @@ interface FixtureRow {
   home_entrant_id: string | null;
   away_entrant_id: string | null;
   status: string;
-  outcome: { kind?: string; winner?: string } | null;
+  outcome: { kind?: string; winner?: string; loser?: string | null; reason?: string } | null;
 }
 
 async function fixturesOf(request: APIRequestContext, divisionId: string): Promise<FixtureRow[]> {
@@ -194,7 +201,7 @@ async function withdrawThroughTheScreen(page: Page, name: string): Promise<void>
 
 test.describe.configure({ mode: "serial" });
 
-test("an organiser withdraws a qualifier, and the draw walks her line over instead of reseeding", async ({
+test("an organiser withdraws a qualifier from the draft and the survivors close up; a second one leaves the drawn bracket and her line walks over", async ({
   page,
   request,
 }) => {
@@ -323,39 +330,44 @@ test("an organiser withdraws a qualifier, and the draw walks her line over inste
   expect(semis.length, "the Finals lost its first round").toBe(2);
   const seats = (f: FixtureRow) => [f.home_entrant_id, f.away_entrant_id];
 
-  // THE CLAIM. R1·1 still holds the first and fourth qualifiers, as published
-  // — the pairing a reseed would have destroyed…
+  // THE CLAIM (RB4-V6). She left the DRAFT, so the table closed up over her:
+  // Ada 1, Cleo 2, Dot 3, rank 4 empty. R1·1 (1v4) is the top qualifier's
+  // bye — its empty seat stamped a bye at the Confirm and settled to the side
+  // that holds the line…
   expect(
-    seats(semis[0]!).filter((x) => x !== null).sort(),
-    "the survivors were reseeded: the top qualifier is no longer facing the fourth",
-  ).toEqual([idOf.get(names[0]!)!, idOf.get(names[3]!)!].sort());
-  expect(semis[0]!.status, "R1·1 is not an ordinary match any more").toBe("scheduled");
-  expect(semis[0]!.outcome).toBeNull();
-  // …and R1·2, which held her, is a settled walkover to the third qualifier,
-  // not a match waiting for a draw.
-  expect(seats(semis[1]!), "her seat was refilled from somewhere").not.toContain(quitterId);
-  expect(seats(semis[1]!).filter((x) => x !== null)).toEqual([idOf.get(names[2]!)!]);
-  expect(semis[1]!.status, "her line is still a match to play").toBe("forfeited");
-  expect(semis[1]!.outcome?.kind).toBe("award");
-  expect(semis[1]!.outcome?.winner).toBe(idOf.get(names[2]!)!);
+    seats(semis[0]!).filter((x) => x !== null),
+    "R1·1 is not the top qualifier's bye: the table did not close up over her",
+  ).toEqual([idOf.get(names[0]!)!]);
+  expect(semis[0]!.status, "the top qualifier's bye is not settled").toBe("forfeited");
+  expect(semis[0]!.outcome?.kind).toBe("award");
+  expect(semis[0]!.outcome?.winner).toBe(idOf.get(names[0]!)!);
+  // …and R1·2 (2v3) pairs the OLD third and fourth, an ordinary match to play —
+  // a line the published positions (Ada v Dot, Cleo walked over) never had.
+  expect(
+    seats(semis[1]!).filter((x) => x !== null).sort(),
+    "the survivors did not close up: R1·2 is not the old third against the old fourth",
+  ).toEqual([idOf.get(names[2]!)!, idOf.get(names[3]!)!].sort());
+  expect(semis[1]!.status, "R1·2 is not a match to play").toBe("scheduled");
+  expect(semis[1]!.outcome).toBeNull();
+  expect(semis.flatMap(seats), "a seat was filled with the player who left").not.toContain(quitterId);
 
   // And what the organiser SEES of it: the surviving name on that line, and
   // no seat anywhere still advertising a qualifier who has gone.
   await visit(page, fixturesUrl);
-  // A settled walkover does NOT render as an ordinary draw-list row: it takes
-  // `run-sheet-row.tsx`'s bye branch, which has no `data-fixture-no` at all.
-  // (Looking for one is how this assertion first failed — worth recording,
-  // because "the row is missing" and "the row is a bye" look identical to a
-  // `data-fixture-no` probe, and only one of them is the correct outcome.)
+  // A settled bye does NOT render as an ordinary draw-list row: it takes
+  // `desk/run-sheet-row.tsx`'s bye branch, which has no `data-fixture-no` at
+  // all. (Looking for one is how this assertion first failed — worth
+  // recording, because "the row is missing" and "the row is a bye" look
+  // identical to a `data-fixture-no` probe, and only one of them is correct.)
   const byeLine = page.getByTestId("run-sheet-bye");
-  await expect(byeLine, "her line is not rendered as a settled bye").toHaveCount(1);
-  await expect(byeLine, "the survivor is not named on the line he was awarded").toContainText(names[2]!);
+  await expect(byeLine, "R1·1 is not rendered as the top qualifier's settled bye").toHaveCount(1);
+  await expect(byeLine, "the top qualifier is not named on her bye").toContainText(names[0]!);
   await expect(byeLine, "the departed qualifier is still printed in the draw").not.toContainText(quitter);
-  // The OTHER semi is still an ordinary, schedulable row — so the walkover is
-  // one line, not a stage-wide settle.
-  const liveRow = page.locator(`[data-fixture-no="${semis[0]!.fixture_no}"]`);
-  await expect(liveRow, `no draw-list row for fixture ${semis[0]!.fixture_no}`).toHaveCount(1);
-  await expect(liveRow).toContainText(names[0]!);
+  // The OTHER semi is an ordinary, schedulable row — so the bye is one line,
+  // not a stage-wide settle.
+  const liveRow = page.locator(`[data-fixture-no="${semis[1]!.fixture_no}"]`);
+  await expect(liveRow, `no draw-list row for fixture ${semis[1]!.fixture_no}`).toHaveCount(1);
+  await expect(liveRow).toContainText(names[2]!);
   await expect(liveRow).toContainText(names[3]!);
 
   // §3 — her standings row STAYS, and carries the product's own word for it.
@@ -377,6 +389,58 @@ test("an organiser withdraws a qualifier, and the draw walks her line over inste
     await expectNoHorizontalScroll(page);
   }
   await page.setViewportSize({ width: 1280, height: 900 });
+
+  // §4, the DRAWN bracket — a second qualifier leaves after the Confirm. The
+  // draw is published now, so her line is not re-seeded: it walks over to her
+  // opponent and names her as the side that withdrew (ruling 116; the
+  // cascade's `core.forfeit {reason: "withdrew"}`). Nobody is left below the
+  // league's cut to take her seat, so no replacement can mask the walkover.
+  const second = names[3]!;
+  const secondId = idOf.get(second)!;
+  await visit(page, await divisionPath(request, divisionId, "?tab=entrants"));
+  await withdrawThroughTheScreen(page, second);
+  const roundOne = async () =>
+    (await fixturesOf(request, divisionId))
+      .filter((f) => f.stage_id === finalsId && f.round_no === 1)
+      .sort((a, b) => a.seq_in_round - b.seq_in_round);
+  await expect
+    .poll(async () => (await roundOne())[1]?.outcome ?? null, { timeout: STEP_MS, message: "her line did not walk over" })
+    .toEqual({ kind: "award", winner: idOf.get(names[2]!)!, loser: secondId, reason: "withdrew" });
+  const walked = await roundOne();
+  expect(walked.map((f) => f.id), "the first round is the same two lines").toEqual(semis.map((f) => f.id));
+  expect(walked[1]!.status, "her line is still a match to play").toBe("forfeited");
+  // Nobody slid into a new pairing: both names stay in the seats they were
+  // drawn into, hers included (ruling 116 names her where she stood)…
+  expect(seats(walked[1]!).filter((x) => x !== null).sort(), "R1·2 was re-seeded").toEqual(
+    [idOf.get(names[2]!)!, secondId].sort(),
+  );
+  // …and the top qualifier's bye is exactly as the Confirm left it.
+  expect(
+    { seats: seats(walked[0]!), status: walked[0]!.status, outcome: walked[0]!.outcome },
+    "the other line moved",
+  ).toEqual({ seats: seats(semis[0]!), status: semis[0]!.status, outcome: semis[0]!.outcome });
+  // The drawn bracket carries both winners on: the final is Ada v Cleo.
+  await expect
+    .poll(
+      async () => {
+        const f = (await fixturesOf(request, divisionId)).find((x) => x.stage_id === finalsId && x.round_no === 2);
+        return f === undefined ? null : seats(f).filter((x) => x !== null).sort();
+      },
+      { timeout: STEP_MS, message: "the final does not hold the two first-round winners" },
+    )
+    .toEqual([idOf.get(names[0]!)!, idOf.get(names[2]!)!].sort());
+
+  // What the organiser SEES of it: the walkover is an ordinary row (a
+  // withdrawal's walkover is not a bye), naming both sides; the bye is still
+  // the sheet's only bye row.
+  await visit(page, fixturesUrl);
+  const walkedRow = page.locator(`[data-fixture-no="${semis[1]!.fixture_no}"]`);
+  await expect(walkedRow, `no draw-list row for fixture ${semis[1]!.fixture_no}`).toHaveCount(1, { timeout: STEP_MS });
+  await expect(walkedRow, "the walkover does not name who it went to").toContainText(names[2]!);
+  await expect(walkedRow, "the walkover does not name who withdrew (ruling 116)").toContainText(second);
+  await expect(byeLine, "the bye stopped being the sheet's one bye row").toHaveCount(1);
+  await expect(byeLine, "the bye no longer names the top qualifier").toContainText(names[0]!);
+  await expect(byeLine, "the walkover was drawn as a bye").not.toContainText(second);
 
   // The budget's premise, against what this test ACTUALLY did.
   expect(visits, "the cup navigation list no longer describes this journey").toBe(

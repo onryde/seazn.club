@@ -50,11 +50,12 @@ export function tableWithdrawalInputs(
   };
 }
 
-/** W3 T15 Carry A (controller ruling 2026-11-02): the source stage kinds whose CUT a departed entrant leaves. A
- *  withdrawn or disqualified entrant is taken out of a Swiss table before its cut is read, so the next eligible entrant
- *  backfills her place; the table itself keeps her row, marked departed. Every other kind keeps her: a group or league
- *  cut leaves her seat dead (setup: confirm stamps it a bye; on_complete: generation walks her opponent over) — W4/W5's
- *  to rule on. The ONE reading of that scope, shared by the seeding cut (usecases/stage-seeding.ts `cutEligiblePools`)
- *  and the public table's cut line (server/public-site/qualification-view.ts) — two readings could draw the line in one
- *  place and seat the knockout from another. */
-export const CUT_SKIPS_DEPARTED_KINDS: ReadonlySet<string> = new Set(["swiss"]);
+/** W3 T15 Carry A (controller ruling 2026-11-02), widened by W4 T13 (RB4-V6, X-LL-5): the source stage kinds whose CUT
+ *  a departed entrant leaves. A withdrawn or disqualified entrant is taken out of a Swiss, league or group table before
+ *  its cut is read, so the next eligible entrant of that table backfills her place; the table itself keeps her row,
+ *  marked departed. A knockout source has its own answer, the lucky loser in her place (RB4-V2; usecases/stage-seeding.ts
+ *  `luckyLoserCut`); any other kind keeps her (setup: confirm stamps her seat a bye; on_complete: generation walks her
+ *  opponent over). The ONE reading of that scope, shared by the seeding cut (usecases/stage-seeding.ts
+ *  `cutEligiblePools`) and the public table's cut line (server/public-site/qualification-view.ts) — two readings could
+ *  draw the line in one place and seat the knockout from another. */
+export const CUT_SKIPS_DEPARTED_KINDS: ReadonlySet<string> = new Set(["swiss", "league", "group"]);

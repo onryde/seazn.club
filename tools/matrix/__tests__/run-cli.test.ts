@@ -29,7 +29,7 @@ import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "..
 import { LOCAL_BASE } from "../lib/redact.ts";
 import { slugRunId } from "../lib/run-id.ts";
 import { baseLiteralsIn } from "./loopback-literals.ts";
-import { isNoOrganiserPathCell, NO_ORGANISER_PATH_CELLS, offeredCells, REFUSED_CELLS } from "./refused-cells.ts";
+import { isNoOrganiserPathCell, NO_ORGANISER_PATH_CELLS, offeredCells, REFUSED_CELLS, STANDALONE_REFUSED_CELLS } from "./refused-cells.ts";
 import { renderMatrix } from "../lib/render-matrix.ts";
 import { main as renderMain } from "../render.ts";
 import { parseResults, type CaseResult, type CheckResult, type RunResults } from "../lib/results.ts";
@@ -1903,6 +1903,10 @@ describe("runSlice — --layer and the layered sets (W1c Task 12, ruling 39)", (
   const SLICE_L2 = RAW_L2.filter((r) => SLICE_CELLS.has(`${r.row}|${r.sport}`));
   const scripted = (r: RawRun) => Object.hasOwn(HARNESS_SCENARIO, r.scenario);
   const owningWave = (r: RawRun) => { const a = ATOMIC.find((x) => x.id === r.scenario)!; return a.knownNoPath ?? l2NoPathFor(a, r.sport); };
+  // W4 T24: the three settled atoms (Q4b / D4b refused, D4a deferred to the clubs follow-up) are recorded ⛔ / ⏳ where an organiser path
+  // exists; the cell with none stays 🚫. The states are the brief's, typed here (never read off ATOMIC's own `settled`).
+  const SETTLED_STATE: Readonly<Record<string, "refused" | "later">> = { Q4b: "refused", D4b: "refused", D4a: "later" };
+  const settledState = (r: RawRun): "refused" | "later" | null => (SETTLED_STATE[r.scenario] !== undefined && l2NoPathFor(ATOMIC.find((x) => x.id === r.scenario)!, r.sport) === null ? SETTLED_STATE[r.scenario]! : null);
   /** The fake DB's builder defaults (deps(): generic → score, badminton → bwf-3x15 by the table (owner D2), every other sport → bwf). */
   const fakeDefault = (s: string) => (s === "generic" ? "score" : s === "badminton" ? "bwf-3x15" : "bwf");
   const vacuousLine = (out: string) => /vacuous: (.*)/.exec(out)?.[1] ?? "(no summary line)";
@@ -2006,12 +2010,17 @@ describe("runSlice — --layer and the layered sets (W1c Task 12, ruling 39)", (
     expect(fb.opts.map((o) => o.evidenceId)).toEqual(driven.map((r) => `case-${SLICE_L2.indexOf(r) + 1}`));
     expect(d.orgs).toHaveLength(driven.length);
     // Recorded: the catalogue's split, no check, zero counts.
-    const noPath = SLICE_L2.filter((r) => !scripted(r) && owningWave(r) !== null);
-    const notRun = SLICE_L2.filter((r) => !scripted(r) && owningWave(r) === null);
+    const settled = SLICE_L2.filter((r) => !scripted(r) && settledState(r) !== null);
+    const noPath = SLICE_L2.filter((r) => !scripted(r) && settledState(r) === null && owningWave(r) !== null);
+    const notRun = SLICE_L2.filter((r) => !scripted(r) && settledState(r) === null && owningWave(r) === null);
     expect(noPath.length).toBeGreaterThan(0);
     expect(notRun.length).toBeGreaterThan(0);
-    const recorded = raw.cases.filter((c) => c.state === "no_path" || c.state === "not_run");
-    expect(recorded).toHaveLength(noPath.length + notRun.length);
+    expect(settled.length, "the slice holds a settled atom (counted: zero would leave the ⛔ / ⏳ arm unproven)").toBeGreaterThan(0);
+    const recorded = raw.cases.filter((c) => c.state === "no_path" || c.state === "not_run" || c.state === "refused" || c.state === "later");
+    expect(recorded).toHaveLength(noPath.length + notRun.length + settled.length);
+    for (const r of settled) {
+      expect(raw.cases.find((c) => c.caseId.startsWith(`${r.row}|${r.sport}|${r.preset}|${r.scenario}@`))?.state, `${r.row}|${r.sport} ${r.scenario}`).toBe(settledState(r));
+    }
     expect(raw.cases.filter((c) => c.state === "no_path")).toHaveLength(noPath.length);
     expect(raw.cases.filter((c) => c.state === "not_run")).toHaveLength(notRun.length);
     for (const c of recorded) {
@@ -2076,20 +2085,24 @@ describe("runSlice — --layer and the layered sets (W1c Task 12, ruling 39)", (
 
   it("--set api-only-browser --driver browser: one 🚫 per API-only row, in catalogue order, naming W4/W5 (D7 as ruled) — no browser, no org; exit 0; never vacuous, never an error red", async () => {
     const io = capture();
-    const WAVE: Readonly<Record<string, string>> = { knockout_third_place: "W4", page_playoff_only: "W4", stepladder_only: "W4", group_only: "W5", group_group_ko: "W5" };
+    const WAVE: Readonly<Record<string, string>> = { knockout_third_place: "W4", group_only: "W5", group_group_ko: "W5" };
+    // W4 T16 (ruling 269): the refused standalone rows are in no layer, so the set holds one 🚫 per OFFERED API-only row.
+    const refusedRows = [...new Set(STANDALONE_REFUSED_CELLS.map((c) => c.split("|")[0]!))];
+    const owed = API_ONLY_ROWS.filter((r) => !refusedRows.includes(r));
+    expect(owed.length).toBe(API_ONLY_ROWS.length - 2);
     const dir = dirFor();
     let opened = 0;
     const d = deps({ openBrowserRun: async () => { opened++; return fakeBrowserRun().run; } });
     expect(await runSlice(d, ["--set", "api-only-browser", "--driver", "browser", "--run-id", "ao", "--report-dir", dir])).toBe(0);
     const raw = JSON.parse(readFileSync(join(dir, "ao", "results.json"), "utf8")) as RunResults;
     expect(raw.layer).toBe("L1");
-    expect(raw.cases.map((c) => c.row)).toEqual([...API_ONLY_ROWS]);
+    expect(raw.cases.map((c) => c.row)).toEqual([...owed]);
     let checked = 0;
     for (const c of raw.cases) {
       expect(c).toMatchObject({ state: "no_path", reason: `${WAVE[c.row]}: no organiser control builds ${c.row}`, checks: [], caseId: `${c.row}|generic|score|LIFECYCLE@1280`, width: 1280, layer: "L1", driver: "browser" });
       checked++;
     }
-    expect(checked).toBe(API_ONLY_ROWS.length);
+    expect(checked).toBe(owed.length);
     expect(opened).toBe(0);
     expect(d.orgs).toEqual([]);
     expect(io.out()).toMatch(/vacuous: none/);
@@ -2352,7 +2365,7 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(checked).toBe(rows.length);
   });
 
-  it("--layer L1 --scope grid, through the real planner and runner: the 229 offered cells (231 less chess americano/mexicano) at 1280, the 74 with no organiser path (53 API-only, 21 the builder does not offer: C9 review I5's ten and the retired Triple round robin's eleven) recorded 🚫 and never driven, every sport's variant order read once", async () => {
+  it("--layer L1 --scope grid, through the real planner and runner: the 207 offered cells (231 less chess americano/mexicano and the 22 refused standalone cells) at 1280, the 52 with no organiser path (31 API-only, 21 the builder does not offer: C9 review I5's ten and the retired Triple round robin's eleven) recorded 🚫 and never driven, every sport's variant order read once", async () => {
     capture();
     const dir = dirFor();
     const { d, reads, opened } = gridDeps();
@@ -2360,14 +2373,14 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     const r = runIn(dir, "g1");
     expect(r.cases).toHaveLength(OFFERED);
     expect(CELLS).toBe(231);
-    expect(OFFERED).toBe(229);
+    expect(OFFERED).toBe(207);
     expect(r.cases.every((c) => c.layer === "L1" && c.width === 1280 && c.caseId.endsWith("@1280"))).toBe(true);
     expect(new Set(r.cases.map((c) => c.caseId)).size).toBe(OFFERED);
     expect(r.cases.map((c) => `${c.row}|${c.sport}`)).toEqual(offeredCells(ROW_KEYS, SPORT_KEYS));
     const planned = r.cases.filter((c) => c.planned === true);
-    // 53 API-only cells no builder control builds, plus the cells the builder does not offer (C9 review I5, option 2; the
-    // retired Triple round robin on every sport, owner ruling 2026-11-01).
-    const noPathPlanned = 53 + NO_ORGANISER_PATH_CELLS.length;
+    // 31 API-only cells no builder control builds (53 less the 22 the product refuses, W4 T16), plus the cells the builder does not
+    // offer (C9 review I5, option 2; the retired Triple round robin on every sport, owner ruling 2026-11-01).
+    const noPathPlanned = 31 + NO_ORGANISER_PATH_CELLS.length;
     expect(planned).toHaveLength(noPathPlanned);
     expect(planned.every((c) => c.state === "no_path" && ((API_ONLY_ROWS as readonly string[]).includes(c.row) || isNoOrganiserPathCell(`${c.row}|${c.sport}`)))).toBe(true);
     expect(planned.filter((c) => isNoOrganiserPathCell(`${c.row}|${c.sport}`)).map((c) => `${c.row}|${c.sport}`)).toEqual([...NO_ORGANISER_PATH_CELLS]);
@@ -2379,7 +2392,7 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(opened()).toBe(1);
   }, 120_000);
 
-  it("--layer L2 --scope grid, through the real planner and runner: 1,729 runs at their own widths — 53 driven, 349 🚫, 1,327 ░ — each recording the pair-run it is", async () => {
+  it("--layer L2 --scope grid, through the real planner and runner: 1,589 runs at their own widths — 48 driven, 294 🚫, 1,204 ░, 27 ⛔, 16 ⏳ — each recording the pair-run it is", async () => {
     capture();
     const dir = dirFor();
     const { d, reads } = gridDeps();
@@ -2392,10 +2405,18 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     // path (🚫 164 -> 145, ░ 1,503 -> 1,522; layers-grid.test.ts). Match Day C9 review I5, option 2: every run on the ten
     // no-organiser-path cells is 🚫 (driven 62 -> 56, 🚫 145 -> 279, ░ 1,522 -> 1,394; layers-grid.test.ts). The retired
     // Triple round robin's 77 runs are 🚫 too (driven 56 -> 53, 🚫 279 -> 349, ░ 1,394 -> 1,327; layers-grid.test.ts).
-    expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(53);
-    expect(r.cases.filter((c) => c.state === "no_path")).toHaveLength(349);
-    expect(r.cases.filter((c) => c.state === "not_run")).toHaveLength(1327);
-    expect(r.cases.filter((c) => c.planned === true)).toHaveLength(349 + 1327);
+    // W4 T16 + T24 (on the pre-triple_rr figures): the 22 refused standalone cells leave (driven 56 -> 51, 🚫 279 -> 222,
+    // ░ 1,394 -> 1,271) and the settled atoms Q4b, D4b (⛔ 11 + 17) and D4a (⏳ 17) leave 🚫 - recorded as planned, never driven.
+    // Both together: triple_rr's 77 runs go 🚫 on top of W4's figures, 2 of them W4's settled D4a/D4b on triple_rr|cricket
+    // (a no-organiser-path cell keeps them 🚫): driven 48, 🚫 294, ░ 1,204, ⛔ 27 (11 + 16), ⏳ 16 (layers-grid.test.ts).
+    expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(48);
+    expect(r.cases.filter((c) => c.state === "no_path")).toHaveLength(294);
+    expect(r.cases.filter((c) => c.state === "not_run")).toHaveLength(1204);
+    expect(r.cases.filter((c) => c.state === "refused" && c.planned === true)).toHaveLength(27);
+    expect(r.cases.filter((c) => c.state === "later" && c.planned === true)).toHaveLength(16);
+    expect(r.cases.filter((c) => c.planned === true)).toHaveLength(294 + 1204 + 27 + 16);
+    expect(r.cases.filter((c) => c.state === "refused").every((c) => ["Q4b", "D4b"].includes(c.scenario))).toBe(true);
+    expect(r.cases.filter((c) => c.state === "later").every((c) => c.scenario === "D4a")).toBe(true);
     expect(r.cases.filter((c) => isNoOrganiserPathCell(`${c.row}|${c.sport}`)).every((c) => c.state === "no_path")).toBe(true);
     // Only the driven runs' sports were asked for: a planned run posts nothing.
     expect(reads.length).toBeGreaterThan(0);

@@ -23,6 +23,8 @@ import { docModelToPdf, docModelToXlsx } from "@/server/doc-render";
 import { msgFor } from "@/lib/messages-i18n";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import { createStagesWithLegacy } from "./_legacy-standalone-stage";
+
 const HAS_DB = !!process.env.DATABASE_URL;
 
 const GENERIC_CONFIG = {
@@ -1018,7 +1020,7 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
         members: [],
       })),
     );
-    const [stage] = await createStages(auth, division.id, {
+    const [stage] = await createStagesWithLegacy(auth, division.id, {
       seq: 1,
       kind: "page_playoff",
       name: "Playoffs",
@@ -1072,7 +1074,7 @@ describe.skipIf(!HAS_DB)("rich exports (Jul3/06)", () => {
         members: [],
       })),
     );
-    const [stage] = await createStages(auth, division.id, {
+    const [stage] = await createStagesWithLegacy(auth, division.id, {
       seq: 1,
       kind: "stepladder",
       name: "Stepladder",

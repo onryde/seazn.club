@@ -29,14 +29,18 @@ export interface Fence { readonly id: string; readonly issue: string | null; rea
  *  over. */
 const WITHDRAW_ON_TBD_KINDS: readonly string[] = Object.freeze(["knockout", "stepladder", "double_elim"]);
 /** ko-generate-after-roster-change's stage kinds, per trigger branch
- *  (T16-R3): after an ADDED entrant, knockout (MB-005) and double elim
- *  (MB-007, w1drv-model-m6); after a WITHDRAWAL, knockout (MB-004) and double
- *  elim (MB-010, found by w1drv-t16fr1-model-de once T16-R3 lifted this
- *  branch there). Both are generateStageFixtures' bye-award path, which reads
- *  the same BRACKET_WALKOVER_KINDS. Stepladder is in that list too, but no
- *  committed case shows it on either branch, so it still reports NEW. */
-const GENERATE_AFTER_ADDED_KINDS: readonly string[] = Object.freeze(["knockout", "double_elim"]);
-const GENERATE_AFTER_WITHDRAWN_KINDS: readonly string[] = Object.freeze(["knockout", "double_elim"]);
+ *  (T16-R3): after an ADDED entrant, double elim (MB-007, w1drv-model-m6);
+ *  after a WITHDRAWAL, double elim (MB-010, found by w1drv-t16fr1-model-de
+ *  once T16-R3 lifted this branch there). Both are generateStageFixtures'
+ *  bye-award path, which reads the same BRACKET_WALKOVER_KINDS. Stepladder is
+ *  in that list too, but no committed case shows it on either branch, so it
+ *  still reports NEW. Knockout (MB-005 added, MB-004 withdrawn) is LIFTED by
+ *  W4 app-A Task 8 (FX-G2): a root knockout's Generate over existing lines now
+ *  reconciles before Start; after it, an added entrant is refused by name
+ *  (KO_GENERATE_AFTER_START — commands.ts Generate expects that refusal) and a
+ *  withdrawal is the named no-op, so both cases are `fixed`. */
+const GENERATE_AFTER_ADDED_KINDS: readonly string[] = Object.freeze(["double_elim"]);
+const GENERATE_AFTER_WITHDRAWN_KINDS: readonly string[] = Object.freeze(["double_elim"]);
 
 export const FENCES: readonly Fence[] = Object.freeze([
   {
@@ -72,12 +76,11 @@ export const FENCES: readonly Fence[] = Object.freeze([
     id: "ko-generate-after-roster-change",
     issue: null,
     blocks: "Generate",
-    // MB-004/005 (knockout), MB-007/010 (double elim). stages.ts
+    // MB-007/010 (double elim; knockout's MB-004/005 fixed by W4 T8). stages.ts
     // generateStageFixtures: a Generate over a bracket whose fixtures exist,
-    // after the roster changed — an entrant added (MB-005, MB-007, before
-    // Start) or one withdrawn (MB-004, MB-010, after) — 500s: the bye-award bulk
-    // UPDATE would strand home_slot_label. Each branch only on the kinds its
-    // cases show. An added entrant is lifted once an accepted Rebuild or
+    // after the roster changed — an entrant added (MB-007, before Start) or one
+    // withdrawn (MB-010, after) — 500s: the bye-award bulk UPDATE would strand
+    // home_slot_label. Each branch only on the kinds its cases show. An added entrant is lifted once an accepted Rebuild or
     // Generate re-seats the field (lateEntry); a withdrawal is never undone.
     applies: (m: ModelState) => m.fixtures.size > 0 &&
       ((m.lateEntry && GENERATE_AFTER_ADDED_KINDS.includes(m.stageKind)) || (m.withdrawn.size > 0 && GENERATE_AFTER_WITHDRAWN_KINDS.includes(m.stageKind))),

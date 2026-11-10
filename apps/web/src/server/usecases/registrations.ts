@@ -62,6 +62,7 @@ import { queueStaffAlert } from "./staff-alert";
 // names the registrant (review finding F3).
 import { markFieldChangeSeedProposalsStale } from "./stages";
 // W3 T9 (X-SW-13): a confirmed entry or a promotion into a running Swiss is an automatic arrival — case (c) only.
+import { admitKnockoutLateEntrant } from "./knockout-late-entry";
 import { admitSwissLateEntrant } from "./swiss-late-entry";
 import {
   FIRST_PAID_EARN,
@@ -1102,7 +1103,11 @@ export async function materialise(
   // so case (c) only: they join the next round's Pair and no published pairing moves. Never refused: with no round
   // left, or the Swiss over, the arrival is recorded as joining after the last round (Review Focus 4: a payment that has
   // moved cannot be un-taken by a 409). Null before Start, or with no running Swiss.
-  await admitSwissLateEntrant(tx, null, reg.division_id, entrant.id, arrival);
+  // W4 T11 (X-LE-10, K7, ruling 271): or its started root knockout — where the arrival WAITS, flagged on the desk for the
+  // organiser's one tap, never placed by the app and never refused. A division's entry stage is one or the other.
+  if ((await admitSwissLateEntrant(tx, null, reg.division_id, entrant.id, arrival)) === null) {
+    await admitKnockoutLateEntrant(tx, null, reg.division_id, entrant.id, arrival);
+  }
   await tx`
     update registrations
     set entrant_id = ${entrant.id}, status = 'confirmed', updated_at = now()

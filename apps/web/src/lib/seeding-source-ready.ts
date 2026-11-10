@@ -28,11 +28,11 @@ export interface SeedingSourceStage {
   status: string;
 }
 
-export function resolveSeedingSourceStage(
-  stages: readonly SeedingSourceStage[],
+export function resolveSeedingSourceStage<S extends SeedingSourceStage>(
+  stages: readonly S[],
   target: { division_id: string; seq: number },
   stage: ProgressionSource["stage"],
-): SeedingSourceStage | undefined {
+): S | undefined {
   if (stage === "previous") {
     return stages
       .filter((st) => st.division_id === target.division_id && st.seq < target.seq)
@@ -53,4 +53,30 @@ export function seedingSourceReady(
   return progression.sources.every(
     (src) => resolveSeedingSourceStage(stages, target, src.stage)?.status === "complete",
   );
+}
+
+/** A stage as `confirmedDrawReopens` reads it: the source-ready shape plus the kind. */
+export interface SeedingKindStage extends SeedingSourceStage {
+  kind: string;
+}
+
+/** The ONE stage kind whose completed-stage correction reopens a CONFIRMED draw: scoring.ts calls
+ *  `markDependentSeedProposalsStale(.., { includeConfirmed: true })` for `context.kind === "knockout"` only (W4 T14); a
+ *  table source's correction marks drafts stale but never a confirmed one, and `computeSeedProposal` answers a confirmed
+ *  stage 409 SEEDING_ALREADY_CONFIRMED for good. */
+const REOPENING_SOURCE_KIND = "knockout";
+
+/**
+ * W4 B6a fix round 1 (review #1): whether the Confirm warning may promise "you can recompute it" - true only when the
+ * target's progression names at least one source and EVERY source resolves (`resolveSeedingSourceStage`, the same rule as
+ * `seedingSourceReady`) to a knockout stage. An empty source list is false: `[].every()` is vacuously true, and the empty
+ * set answers yes to every question (it must not promise a recompute nobody can run).
+ */
+export function confirmedDrawReopens(
+  stages: readonly SeedingKindStage[],
+  target: { division_id: string; seq: number },
+  progression: Pick<ProgressionSpec, "sources">,
+): boolean {
+  if (progression.sources.length === 0) return false;
+  return progression.sources.every((src) => resolveSeedingSourceStage(stages, target, src.stage)?.kind === REOPENING_SOURCE_KIND);
 }

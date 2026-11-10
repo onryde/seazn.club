@@ -43,6 +43,24 @@ describe("undoRefusalMessage — StagesPanel's Undo-last refusal", () => {
     expect(checked).toBe(3);
   });
 
+  it("says the confirmed-draw barrier (a KNOCKOUT code) with the dictionary's sentence (W4 T5, K1)", () => {
+    // Undo-last after a seed confirm: the server refuses with SEED_CONFIRM_NOT_UNDOABLE (409, the plan's) — a knockout
+    // refusal, not a Swiss one, so a Swiss-only branch let its English through.
+    const local = EN["knockout.refusal.SEED_CONFIRM_NOT_UNDOABLE"];
+    expect(typeof local, "en/ui.json has its sentence").toBe("string");
+    const text = undoRefusalMessage(new ApiV1Error("server: SEED_CONFIRM_NOT_UNDOABLE", 409, "SEED_CONFIRM_NOT_UNDOABLE"), msg);
+    expect(text).toBe(local);
+  });
+
+  it("fills a knockout sentence's fields from the envelope: QUALIFYING_MAIN_TOO_FEW says its {min}, never a literal hole", () => {
+    // The History panel fills these (knockoutRefusalText); Undo-last beside a notice is the same refusal and must say the same
+    // sentence. The bound rides on the envelope beside the code (`knockoutRefusal(code, { min })` → `err.extra`).
+    expect(msg("knockout.refusal.QUALIFYING_MAIN_TOO_FEW"), "premise: the dictionary's sentence has a hole to fill").toContain("{min}");
+    const text = undoRefusalMessage(new ApiV1Error("server: needs 4", 422, "QUALIFYING_MAIN_TOO_FEW", { min: 4 }), msg);
+    expect(text).toBe("Qualifying + Main draw needs at least 4 entrants.");
+    expect(text).not.toContain("{");
+  });
+
   it("keeps an unrecognised refusal's own message", () => {
     expect(undoRefusalMessage(new ApiV1Error("division is mid-solve", 409, "BUSY"), msg)).toBe(
       "division is mid-solve",

@@ -28,7 +28,10 @@ import { divisionQualification, qualificationFixtures } from "@/server/public-si
 import { formatLockedStageIds } from "@/server/usecases/stage-rules";
 import { listSwissRoundControls } from "@/server/usecases/swiss-rounds-admin";
 import { getSwissCutDrift } from "@/server/usecases/swiss-cut-drift";
+import { listKnockoutWaiting, listStageDrawSeeds } from "@/server/usecases/knockout-desk";
 import { swissCutDriftStageIds } from "@/lib/swiss-cut-drift";
+import { getKnockoutCutDrift } from "@/server/usecases/knockout-cut-drift";
+import { knockoutCutDriftStageIds } from "@/lib/knockout-cut-drift";
 import { divisionLockedFields } from "@/server/usecases/rule-locks";
 // From the DB-free module, not through the server-only usecase above: this
 // page's tests mock `@/server/usecases/stages` wholesale, and a mocked
@@ -67,7 +70,7 @@ import { tableOrderOf } from "@/server/engine-db/table-rules";
 import { lineupCatalogFor } from "@/server/usecases/lineup-catalog";
 import { effectiveEntrantModel, type TableStageKind, type TiebreakerKey } from "@seazn/engine/sport";
 import type { ProgressionSpec } from "@seazn/engine/competition";
-import { seedingSourceReady } from "@/lib/seeding-source-ready";
+import { confirmedDrawReopens as confirmedDrawReopensFor, seedingSourceReady } from "@/lib/seeding-source-ready";
 import { sql, withTenant } from "@/lib/db";
 import { DivisionDangerZone } from "@/components/v2/division-danger-zone";
 import { EmbedSnippet } from "@/components/v2/embed-snippet";
@@ -82,7 +85,7 @@ import { redirect } from "next/navigation";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { EntrantsPanel } from "@/components/v2/entrants-panel";
 import { EntrantKindsSettings } from "@/components/v2/entrant-kinds-settings";
-import { divisionTakesSwissLateEntry, entrantListLocked } from "@/lib/open-entry-stages";
+import { ROOT_KNOCKOUT_KINDS, divisionTakesKnockoutLateEntry, divisionTakesSwissLateEntry, entrantListLocked } from "@/lib/open-entry-stages";
 import { roundOpensOfDivisions } from "@/server/external-play/round-open";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { ArbiterEntryCard } from "@/components/v2/arbiter-entry-card";
@@ -322,6 +325,12 @@ export default async function DivisionPage({
       s.progression as unknown as Pick<ProgressionSpec, "sources">,
     ),
   );
+  // W4 B6a fix round 1 (review #1): the Confirm warning promises "you can recompute it" only where the server reopens a
+  // confirmed draw - every source a knockout stage (lib/seeding-source-ready.ts `confirmedDrawReopens`, the same source
+  // resolution as the readiness above). A table source's confirmed draw is refused for good.
+  const confirmedDrawReopens = seedingStages.map((s) =>
+    confirmedDrawReopensFor(stages, s, s.progression as unknown as Pick<ProgressionSpec, "sources">),
+  );
   // F3 Task 5c (ruling 14 — seeding stays propose-and-confirm, no
   // auto-confirm). Fetched on EVERY tab, not just fixtures: ruling 14's whole
   // consequence is that a stage now fills only when the organiser confirms, so
@@ -395,6 +404,29 @@ export default async function DivisionPage({
         ).flatMap(([stageId, drift]) => (drift === null ? [] : [[stageId, drift] as const]))
       : [],
   );
+  // W4 T14 (RB4-Q5, X-QM-4): the same warning on a COMPLETED knockout whose correction moved its cut after the stage it
+  // feeds started. Absent from the map until then, and read on the same tab, for the same reader.
+  const knockoutCutDrift = Object.fromEntries(
+    tab === "fixtures" && editable
+      ? (
+          await Promise.all(
+            stages
+              .filter((s) => s.kind === "knockout" && s.status === "complete")
+              .map(async (s) => [s.id, await getKnockoutCutDrift(auth, s.id)] as const),
+          )
+        ).flatMap(([stageId, drift]) => (drift === null ? [] : [[stageId, drift] as const]))
+      : [],
+  );
+  // W4 T19 (X-LE-10; R24 pick 1A): the players who arrived after a knockout's draw and wait to join it — the stage card's
+  // "Waiting to join the bracket" strip. An organiser's control, read on this tab only, and only when the division holds a
+  // knockout kind a late player can wait on (`ROOT_KNOCKOUT_KINDS` is the server's own gate; the read itself answers none
+  // for a division nobody waits in).
+  const knockoutWaiting =
+    tab === "fixtures" && editable && stages.some((s) => ROOT_KNOCKOUT_KINDS.includes(s.kind)) ? await listKnockoutWaiting(auth, id) : [];
+  // W4 T20 (K5 "shown"; R24 pick 3A): the seed each knockout stage's newest Generate drew with, shown under its header as "Random draw · #…".
+  // Information, so read for a viewer as well as an organiser; this tab only, and only where a knockout-family stage exists.
+  const drawSeeds =
+    tab === "fixtures" && stages.some((s) => ROOT_KNOCKOUT_KINDS.includes(s.kind)) ? await listStageDrawSeeds(auth, id) : {};
   // W2d final review I1: the points each PINNED table stage pays - its pin's, which a division points save after generate
   // never reaches (`rule-locks.ts` lets that save through). The stage points card says these, never `division.config`.
   // Read for the stages the card is mounted on (`stageTakesPoints`), for an organiser and a viewer alike (both see it).
@@ -600,6 +632,9 @@ export default async function DivisionPage({
           openOnlineRounds: division.sport_key === "boardgame" ? [...(await roundOpensOfDivisions(sql, [id])).keys()] : [],
         }
       : null;
+  // W4 T19 (X-LE-3): and on a started division whose entry stage is a root knockout still running, an add takes a free place
+  // in round 1 or is refused by name — the same form says so (`divisionTakesKnockoutLateEntry`, the rail's own rule).
+  const knockoutLateEntry = tab === "entrants" && editable && divisionTakesKnockoutLateEntry(division.status, stages);
   // T20: the controls that START online chess (turning it on, the camera policy) render only while the club is
   // offered it (the PostHog flag `online-chess`). Asked only where one of them can render: a chess division's settings
   // here, and (above) the fixtures tab's entry into the panel of a division that plays online.
@@ -906,6 +941,7 @@ export default async function DivisionPage({
               viewerPlan={viewerPlan}
               divisionStatus={division.status}
               swissLateEntry={swissLateEntry}
+              knockoutLateEntry={knockoutLateEntry}
             />
           </div>
         )}
@@ -972,6 +1008,7 @@ export default async function DivisionPage({
                 entrantNames={entrantNames}
                 stageNames={stageNames}
                 departedEntrantIds={departedEntrantIds}
+                confirmedDrawReopens={confirmedDrawReopens[i] ?? false}
                 locale={locale}
                 canEdit={editable}
               />
@@ -1043,10 +1080,13 @@ export default async function DivisionPage({
               divisionStatus={division.status}
               swissRoundControls={swissRoundControls}
               swissCutDrift={swissCutDrift}
+              knockoutWaiting={knockoutWaiting}
+              drawSeeds={drawSeeds}
+              knockoutCutDrift={knockoutCutDrift}
               // Match Day PB1 x W3 T17: a COMPLETED stage's card starts as one line, and the cut-drift warning lives on a completed
-              // Swiss - so the cards that carry it are listed here and start open. `swissCutDriftStageIds` reads the SAME predicate
-              // the card draws the notice from (`swissCutDriftOf`), so the two cannot disagree.
-              attentionStageIds={swissCutDriftStageIds(stages, editable, swissCutDrift)}
+              // Swiss (W4 T14: or knockout) - so the cards that carry it are listed here and start open. Each list reads the SAME
+              // predicate the card draws its notice from, so the two cannot disagree.
+              attentionStageIds={[...swissCutDriftStageIds(stages, editable, swissCutDrift), ...knockoutCutDriftStageIds(stages, editable, knockoutCutDrift)]}
               matchDayHref={matchDayHref}
               rulesStrip={{
                 divisionId: id,

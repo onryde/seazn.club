@@ -203,6 +203,26 @@ export function needsYouItems(
           });
           break;
         }
+        // W4 T11 (X-LE-10; R24 pick 1A): late players waiting to join a started knockout — one row per division, its
+        // stage named; "Open bracket" lands on the Fixtures tab, where the stage card offers Add to bracket per player.
+        case "late_players_waiting":
+          items.push({
+            key: needsYouKey(d.id, "late_players_waiting"), severity: sev, kind: a.kind,
+            title: plural(dict, "knockout.lateWaiting", a.count, locale),
+            sub: t(dict, "knockout.lateWaiting.sub", { division: d.name, stage: a.stageName }),
+            action: { label: t(dict, "knockout.lateWaiting.action"), href: routes.division(org, comp, d.slug, "fixtures") },
+          });
+          break;
+        // W4 T21 (AN-1, X-CH-8): a bracket played out and never completed. The action is the fixtures tab's own
+        // Complete stage — its label is that button's key, so the row and the button it points at cannot drift.
+        case "final_decided":
+          items.push({
+            key: needsYouKey(d.id, "final_decided"), severity: sev, kind: a.kind,
+            title: t(dict, "desk.needsYou.final_decided", { division: d.name, stage: a.stageName }),
+            sub: t(dict, "desk.needsYou.final_decided.sub"),
+            action: { label: t(dict, "schedule.complete"), href: routes.division(org, comp, d.slug, "fixtures") },
+          });
+          break;
         case "registrations_waiting":
           waiting += a.count; // one competition-level row, not one per division
           break;

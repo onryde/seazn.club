@@ -688,7 +688,8 @@ export function ScheduleBoard({
   );
 
   const scheduled = board.filter((f) => f.scheduled_at !== null);
-  // `inBoardTray`: an untimed scheduled card, never a Swiss bye shell (W3 T3, X-SW-29).
+  // `inBoardTray`: an untimed scheduled card, never a bye line (`bye_line` — a Swiss bye shell, W3 T3 X-SW-29; a
+  // bracket's pre-award bye or a dead seat's tie, W4 X-SD-5): the server never places one (BYE_LINE_NOT_PLACEABLE).
   const unscheduled = board.filter(inBoardTray);
 
   // --------------------------------------------------- auto-schedule confirm

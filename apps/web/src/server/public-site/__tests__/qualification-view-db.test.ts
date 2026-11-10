@@ -222,9 +222,12 @@ async function engineStatuses(
   const fixtures = await fixturesOf(r);
   expect(rows.length).toBeGreaterThan(0);
   const active = (id: string) => statuses[id] === "registered" || statuses[id] === "confirmed";
+  // The race is run over the entrants still in the field: a departed entrant leaves a Swiss cut (W3 T15 Carry A) and,
+  // since W4 T13 (RB4-V6), a league's or a group's — every table kind this file rigs — so she is no rival and gets null.
+  const field = rows.filter((x) => active(x.entrantId));
   const res = qualificationStatus({
-    rows: rows.map((x) => ({ entrantId: x.entrantId, points: x.points, active: active(x.entrantId) })),
-    remaining: new Map(rows.map((x) => [x.entrantId, remaining(x.entrantId, fixtures)])),
+    rows: field.map((x) => ({ entrantId: x.entrantId, points: x.points, active: true })),
+    remaining: new Map(field.map((x) => [x.entrantId, remaining(x.entrantId, fixtures)])),
     perMatch: divisionPointsBounds(builtinModules.find((m) => m.key === "generic"), GENERIC_CONFIG)!,
     cut,
     anyPlayed: true,

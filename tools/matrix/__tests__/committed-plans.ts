@@ -37,7 +37,9 @@ export type CaseKind = "checked" | "errored" | "planned" | "deferred";
 export function judgeCase(c: CaseResultV2): { kind: CaseKind; wrong: string | null } {
   const differs = (d: { state: string; reason: string }): string | null =>
     d.state === c.state && d.reason === c.reason ? null : `${c.caseId}: stored ${c.state} "${c.reason}", checks decide ${d.state} "${d.reason}"`;
-  if (c.state === "no_path" || c.state === "not_run" || c.state === "later") {
+  // W4 app PR A Task 24: a planned ⛔ (a settled atom, marked `planned`) is judged like a planned 🚫/░: no check, nothing to re-decide.
+  const plannedRefused = c.state === "refused" && (c as { planned?: unknown }).planned === true;
+  if (c.state === "no_path" || c.state === "not_run" || c.state === "later" || plannedRefused) {
     const kind: CaseKind = c.state === "later" ? "deferred" : "planned";
     return { kind, wrong: c.checks.length > 0 ? `${c.caseId}: ${c.state} carries ${c.checks.length} check(s) — a planned or deferred row carries none (N-3)` : null };
   }
@@ -159,7 +161,7 @@ export function planFor(dir: string, recorded: string | undefined): string | { r
 // change reds unchanged W1c evidence as class 6, and the easy wrong repairs
 // are re-running or deleting evidence.
 export const LOCK_PATH = `${TRUTH_RUNS}/plans.lock.json`;
-const PlannedRow = z.strictObject({ state: z.enum(["no_path", "not_run"]), reason: z.string().min(1) });
+const PlannedRow = z.strictObject({ state: z.enum(["no_path", "not_run", "refused", "later"]), reason: z.string().min(1) });
 const LockEntry = z.strictObject({
   plan: z.string().min(1),
   layered: z.boolean(),

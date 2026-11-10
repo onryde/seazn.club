@@ -1,5 +1,6 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP/DB helpers, tag): see the header of that file.
 import { type Session, check, tag, v1, v1data } from "../harness.ts";
+import { insertLegacyStandaloneStage } from "../legacy-standalone-stage.ts";
 
 // --- Page playoffs (IPL / spec 2026-07-19): template stages, feed wiring,
 // second-life resolution — Q1's loser must land in Q2.
@@ -27,13 +28,8 @@ export async function pagePlayoffSuite(admin: Session): Promise<void> {
       members: [],
     })),
   );
-  const stage = v1data<{ id: string }>(
-    await v1(admin, `/api/v1/divisions/${div.id}/stages`, "POST", {
-      seq: 1,
-      kind: "page_playoff",
-      name: "Playoffs",
-    }),
-  );
+  // W4 T16 (C5): the API refuses a standalone page playoff since X-SP-6; the legacy rows that stand still play.
+  const stage = { id: await insertLegacyStandaloneStage(div.id, { seq: 1, kind: "page_playoff", name: "Playoffs" }) };
   const gen = await v1(admin, `/api/v1/stages/${stage.id}/generate`, "POST");
   const fixtures = v1data<{
     fixtures: {

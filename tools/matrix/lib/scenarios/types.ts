@@ -37,7 +37,14 @@ export const W2E_SCENARIO_PATHS: Readonly<Record<W2eScenarioKey, readonly Decidi
   W2E_SANCTION_END: [],
 });
 
-export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED" | "PADPROOF" | "VOIDPROOF" | W2aScenarioKey | W2bScenarioKey | W2eScenarioKey;
+/** W4 app PR A (Task 24): the opt-in late-entry and lucky-loser scripts - R2 (a late add after Start), R10 (a Reinstate waits for the
+ *  organiser's tap) and R6 (a departed qualifier's seat goes to the best loser below the cut). Planned ONLY by
+ *  `--set w1-driving --scenario <key>`, as W2a's, W2b's and W2e's are; w4a-late-entry.ts re-exports the list as W4A_SCENARIOS and
+ *  w4a-cells.ts holds their rows. */
+export const W4A_SCENARIO_KEYS = ["W4A_R2", "W4A_R10", "W4A_R6"] as const;
+export type W4aScenarioKey = (typeof W4A_SCENARIO_KEYS)[number];
+
+export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED" | "PADPROOF" | "VOIDPROOF" | W2aScenarioKey | W2bScenarioKey | W2eScenarioKey | W4aScenarioKey;
 
 /** W2c Task 12 fix round 1 (R-T12-3): the scenarios whose premise is "a level knockout is HELD for the organiser"
  *  (BRACKET_SETTLE_LEVEL's level settle, WD-CASC's held line). Since Task 12 a new bracket stage plays its sport's

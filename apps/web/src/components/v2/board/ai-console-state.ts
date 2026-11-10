@@ -13,7 +13,7 @@ import type {
 } from "@/server/api-v1/schemas";
 import { COMMUNITY_GRANTED_FEATURES } from "@/lib/feature-copy";
 import type { MessageKey } from "@/lib/messages";
-import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
+import { isUndoRefusalCode, undoRefusalKey, undoRefusalText } from "@/lib/undo-refusals";
 import type { ApplyOutcome } from "./ai-apply";
 
 export type AiStep = "brief" | "schedule" | "officials" | "apply";
@@ -493,12 +493,27 @@ export function aiErrorKey(status: number, code?: string): AiErrorKey {
 
 /**
  * W3 T5 (batch-1): the copy for a refused one-tap AI Undo, which is a checkpoint restore — a loop of division Undos that
- * can stop on a Swiss refusal (a paired round with a started match, an undo barrier). Said in that refusal's own
+ * can stop on a Swiss refusal (a paired round with a started match, an undo barrier) or, since W4 T5 (K1), a knockout one
+ * (SEED_CONFIRM_NOT_UNDOABLE: a confirmed draw). Said in that refusal's own
  * sentence, the same row the division's History panel shows; through `aiErrorKey` its 422 read "That instruction
  * couldn't be used", which is about a prompt the organiser never typed. Everything else is `aiErrorKey`'s.
  */
 export function aiUndoErrorKey(status: number, code?: string): MessageKey {
-  return isSwissRefusalCode(code) ? swissRefusalKey(code) : aiErrorKey(status, code);
+  return isUndoRefusalCode(code) ? undoRefusalKey(code) : aiErrorKey(status, code);
+}
+
+/**
+ * The same refusal as a SENTENCE, its fields filled: a knockout sentence can name something (QUALIFYING_MAIN_TOO_FEW's
+ * `{min}`), which the server sends beside the code (the envelope's `extra`), and the key alone prints the hole. The console
+ * keeps `aiUndoErrorKey` for the state's `key` (it branches on a few keys) and renders this as the message.
+ */
+export function aiUndoErrorText(
+  status: number,
+  code: string | undefined,
+  extra: Readonly<Record<string, unknown>> | undefined,
+  msg: (key: MessageKey, vars?: Record<string, string | number>) => string,
+): string {
+  return isUndoRefusalCode(code) ? undoRefusalText(code, extra, msg) : msg(aiUndoErrorKey(status, code));
 }
 
 /**

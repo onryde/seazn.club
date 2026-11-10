@@ -62,6 +62,10 @@ export interface PhaseStage {
   sourceReady: boolean;
   /** @see SeedProposalState — the action LABEL only, never the phase. */
   proposal: SeedProposalState;
+  /** W4 T21 (AN-1, X-CH-8): a BRACKET stage whose matches are all settled, so its final is decided and the one action
+   *  left is Complete stage (`bracketAwaitsCompletion`, server/engine-db/stage-finals.ts). Resolved by the caller from
+   *  the stage's own rows, like `sourceReady`, so this module stays pure. False for every other stage kind. */
+  finalDecided: boolean;
 }
 
 export interface PhaseFixture {
@@ -211,6 +215,11 @@ export interface PhaseInput {
    *  with a discipline model (a Discipline tab to review them on). The caller resolves both conditions and passes 0
    *  otherwise; nothing here is ever enabled or confirmed. */
   bansToReview: number;
+  /** W4 T11 (X-LE-10, K7, ruling 271): late players WAITING to join a started root knockout — automatic arrivals (a paid
+   *  registration, a waitlist promotion, an import, a Reinstate) the app never places — one entry per stage with any,
+   *  its count of waiting entrants still in the field. The caller counts `entrants.knockout_waiting_stage_id` on stages
+   *  not complete; empty for every other division. */
+  lateWaiting: readonly { stageName: string; count: number }[];
 }
 
 /** WHICH control the seed-proposal panel is showing for a stage that owes
@@ -275,11 +284,17 @@ export type Attention =
   // W2a (addendum 9): held fixtures — a level bracket result or a recorded abandon that decided nobody — each owed
   // the organiser's settle. Aggregated per division like `result_missing`; `fixtureIds` deep-links a single one.
   | { kind: "needs_decision"; count: number; fixtureIds: string[] }
+  // W4 T21 (AN-1, X-CH-8): a bracket whose final is decided and nothing else owed, its stage still open — auto-advance
+  // off, so nothing completes it and nobody is ranked. ONE per division, naming the lowest such open stage.
+  | { kind: "final_decided"; stageName: string }
   | { kind: "registrations_waiting"; count: number }
   // Discipline (owner-approved 3A): pending bans the organiser has not reviewed. Raised in every division status — a
   // manual ban can be recorded before Start, a card's after the season ends — and only ever as a prompt: a pending ban
   // blocks nobody until the organiser confirms it.
-  | { kind: "bans_waiting"; count: number };
+  | { kind: "bans_waiting"; count: number }
+  // W4 T11 (X-LE-10, ruling 271): late players waiting to join a started knockout's bracket — the organiser's one tap
+  // places each (the bye, a withdrawn slot). Raised per stage, only after Start (the marker is written only then).
+  | { kind: "late_players_waiting"; count: number; stageName: string };
 
 export type Severity = "red" | "amber" | "slate";
 
@@ -294,6 +309,9 @@ export const ATTENTION_SEVERITY: Record<Attention["kind"], Severity> = {
   // Red for the same reason as the two above: the bracket cannot finish — no later round seats its winner, and the
   // stage cannot complete — until the organiser settles it, and nothing else on the desk asks.
   needs_decision: "red",
+  // Red for `needs_decision`'s reason: the bracket never ranks until the organiser acts, and nothing else on the desk
+  // asks — alone, the phase reads Finished (the AN-1 desk).
+  final_decided: "red",
   no_scorer: "red",
   // AMBER, not red, and the grace period is why. `no_scorer` is red because
   // nobody is even nominated: the organiser must act or the match goes
@@ -307,6 +325,9 @@ export const ATTENTION_SEVERITY: Record<Attention["kind"], Severity> = {
   // AMBER: time-bound (an unreviewed ban lets the player take the next match) but it never stops a match being played,
   // so it must never outrank the phase the way the stage-blocking reds do.
   bans_waiting: "amber",
+  // AMBER: the player is owed a place before round 1 runs out of slots, but every match already drawn can be played —
+  // it never blocks the bracket the way the stage-blocking reds do.
+  late_players_waiting: "amber",
   registrations_waiting: "slate",
 };
 
@@ -382,6 +403,8 @@ const KIND_ORDER: Attention["kind"][] = [
   "needs_fixtures",
   // W2a: beside the two stage-blocking rows, for the same reason — the bracket stops here until the organiser acts.
   "needs_decision",
+  // W4 T21: the last of the stage-level reds — the stage is played out, only its completion is owed.
+  "final_decided",
   "no_scorer",
   // Directly after `no_scorer`, and the position is the MEANING, not a
   // formatting choice: the two describe the same failure — a live match going
@@ -393,6 +416,9 @@ const KIND_ORDER: Attention["kind"][] = [
   "not_recording",
   "unscheduled",
   "result_missing",
+  // W4 T11: after the match ambers — it is about people, not a match — and before bans: a late player's bye or slot
+  // closes as round 1 is played, so this one runs on the bracket's clock.
+  "late_players_waiting",
   // Last of the ambers: the three above are about MATCHES (a live one unrecorded, one undated, one without a result);
   // this one is about a person and is reviewed from a different tab.
   "bans_waiting",
@@ -509,9 +535,14 @@ export function hasPlayedFixture(fixtures: readonly { status: string; awaitsSett
  * about the fixture, never about the reader's write rights.
  *
  * Deliberately says nothing about byes: a bye has no time and never will,
- * and every caller already applies its own `isBye` rule (the run sheet keeps
- * byes visible under every filter; the panel's section excludes them). One
- * fact per predicate.
+ * so every caller drops byes BEFORE asking — the run sheet's chip, filter and
+ * the stage rail's badge through `isBye` (lib/run-sheet-groups.ts), the desk
+ * through its `work` filter (`isWaitingByeLine`, lib/bye-line.ts, which
+ * `isBye` reads too). Both count a bye line nobody has settled — a bracket's
+ * pre-award bye, a dead seat's tie — as a bye, because the server never
+ * places one (BYE_LINE_NOT_PLACEABLE; W4 B1a review N1). The run sheet
+ * keeps byes visible under "All"; every work filter drops them. One fact per
+ * predicate.
  */
 export function isUnscheduledFixture(f: { status: string; scheduledAt: string | null }): boolean {
   return f.status === "scheduled" && f.scheduledAt === null;
@@ -981,12 +1012,24 @@ export function resolveAttention(input: PhaseInput): Attention[] {
   // a held fixture is never `in_play` or `scheduled`, so no fixture can raise both this and a recording row.
   const held = input.fixtures.filter(isHeldFixture).map((f) => f.id);
   if (held.length > 0) out.push({ kind: "needs_decision", count: held.length, fixtureIds: held });
+  // W4 T21 (AN-1, X-CH-8): the lowest OPEN stage whose final is decided (the caller's `finalDecided`). Empty case
+  // first: no open stage, or none decided, finds nothing and raises nothing. Not gated by divisionStatus: a decided
+  // final means a played match, which a `setup` division cannot hold.
+  const decided = openStages(input.stages).find((s) => s.finalDecided);
+  if (decided) out.push({ kind: "final_decided", stageName: decided.name });
   if (input.awaitingRegistrations > 0) {
     out.push({ kind: "registrations_waiting", count: input.awaitingRegistrations });
   }
   // Not gated by divisionStatus, like the registrations row above: a pending ban is owed its review in every status.
   if (input.bansToReview > 0) {
     out.push({ kind: "bans_waiting", count: input.bansToReview });
+  }
+  // W4 T11: gated on Start — a waiting marker is written only after it (`admitKnockoutLateEntrant`), so a setup division
+  // that somehow carried one would be asking the organiser to place a player into a bracket that has not been drawn.
+  if (input.divisionStatus !== "setup") {
+    for (const w of input.lateWaiting) {
+      if (w.count > 0) out.push({ kind: "late_players_waiting", count: w.count, stageName: w.stageName });
+    }
   }
   return out.sort(
     (a, b) =>

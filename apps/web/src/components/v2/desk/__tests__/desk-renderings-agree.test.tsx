@@ -4,7 +4,7 @@ import en from "@/dictionaries/en/ui.json";
 import { PhasePill, AttentionChip } from "@/components/v2/desk/phase-pill";
 import { needsYouItems } from "@/components/v2/desk/needs-you";
 import { ProgressionPanel, type SeedProposal } from "@/components/v2/progression-panel";
-import { statusLine } from "@/lib/division-status-line";
+import { statusLine, finalDecidedStageName } from "@/lib/division-status-line";
 import { leadingAttention,
   ATTENTION_SEVERITY, DIVISION_PHASES, DRAW_DOORS, resolveAttention, resolvePhase,
   type Attention, type DivisionPhase, type DrawDoor, type PhaseFixture, type PhaseInput, type PhaseStage,
@@ -52,6 +52,10 @@ type Leading = (typeof LEADING)[number];
 
 /** Pairs the model makes impossible, each with the rule that forbids it. */
 const UNREACHABLE: Record<string, string> = {
+  // W4 T11: a waiting marker is written only after Start, and the row is never raised in a `setup` division. A started
+  // division reads `setting_up` only by rule 4 — an open stage owing work, whose red row leads — or by rule 6, nothing
+  // dated and nothing played, where every match still to play is undated and `unscheduled` (ordered first) leads.
+  "setting_up/late_players_waiting": "raised only after Start, where setting_up means a red row or unscheduled leads",
   // Rule 2 refuses `finished` while any open stage owes work, and both of
   // these rows ARE an open stage owing work.
   "finished/needs_draw": "an open stage owing its draw blocks rule 2",
@@ -87,6 +91,10 @@ const UNREACHABLE: Record<string, string> = {
   // W2a (addendum 9): a HELD fixture — `needs_decision`, or a recorded abandon awaiting its settle — is live
   // (`isLiveFixture`), so rule 2 refuses `finished` while one exists. That is the whole point of the row.
   "finished/needs_decision": "a held fixture is live, which blocks rule 2",
+  // W4 T21: a decided final is a PLAYED match. Rule 1's `setup` division has none; rule 4 needs the lowest open stage to
+  // owe work, and the stage whose final is decided owes none (it has fixtures and no draw); rule 6 falls back to
+  // `setting_up` only when nothing has been played.
+  "setting_up/final_decided": "a decided final is played, and the stage holding it owes no work",
 };
 
 type Shape = {
@@ -98,6 +106,8 @@ type Shape = {
   awaitingRegistrations?: number;
   /** Pending bans in a division whose discipline rules are on (owner-approved 3A). */
   bansToReview?: number;
+  /** W4 T11: late players waiting to join a started root knockout, per stage. */
+  lateWaiting?: PhaseInput["lateWaiting"];
   entrants?: number;
 };
 
@@ -109,7 +119,7 @@ const FUTURE = "2026-09-19T09:00:00Z";
 
 const st = (o: Partial<PhaseStage> = {}): PhaseStage => ({
   id: "s1", name: "League", seq: 1, status: "active", hasFixtures: true,
-  timing: null, sourceReady: false, proposal: "none", ...o,
+  timing: null, sourceReady: false, proposal: "none", finalDecided: false, ...o,
 });
 /** A stage whose TBD bracket is generated and whose sources are complete —
  *  the ONLY state in which the panel's draw door both renders and works. */
@@ -266,6 +276,23 @@ const SHAPES: Shape[] = [
     fixtures: [fxt({ id: "a", stageId: "ko", status: "needs_decision", scheduledAt: null }),
                fxt({ id: "b", stageId: "ko", status: "in_play", hasScorer: true })],
   },
+  // W4 T21 (AN-1, X-CH-8): the main draw's final decided, its stage never completed (auto-advance off). Alone it reads
+  // Finished — the AN-1 desk; beside a Plate still being played or dated it reads match day or scheduled.
+  {
+    why: "finished/final_decided — AN-1: every match of the knockout decided, the stage never completed",
+    stages: [st({ id: "ko", name: "Knockout", finalDecided: true })],
+    fixtures: [fxt({ id: "a", stageId: "ko" }), fxt({ id: "b", stageId: "ko" }), fxt({ id: "c", stageId: "ko" })],
+  },
+  {
+    why: "match_day/final_decided — the main draw decided and never completed, its Plate being played",
+    stages: [st({ id: "ko", name: "Knockout", finalDecided: true }), st({ id: "pl", name: "Plate", seq: 2 })],
+    fixtures: [fxt({ id: "a", stageId: "ko" }), fxt({ id: "b", stageId: "pl", status: "in_play", hasScorer: true })],
+  },
+  {
+    why: "scheduled/final_decided — the main draw decided and never completed, its Plate final dated",
+    stages: [st({ id: "ko", name: "Knockout", finalDecided: true }), st({ id: "pl", name: "Plate", seq: 2 })],
+    fixtures: [fxt({ id: "a", stageId: "ko" }), fxt({ id: "b", stageId: "pl", status: "scheduled", scheduledAt: FUTURE })],
+  },
   {
     why: "finished/registrations_waiting — the season is over and an entry was never dealt with",
     stages: [st({ status: "complete" })],
@@ -277,6 +304,25 @@ const SHAPES: Shape[] = [
     stages: [st({ status: "complete" })],
     fixtures: [fxt({ id: "a" })],
     divisionStatus: "completed", bansToReview: 1,
+  },
+  // W4 T11 (X-LE-10): a paid player waiting to join a started knockout's bracket, in each phase the row can lead.
+  {
+    why: "scheduled/late_players_waiting — a knockout under way, the next round dated, a paid player not yet in the bracket",
+    stages: [st({ id: "ko", name: "Cup" })],
+    fixtures: [fxt({ id: "a", stageId: "ko" }), fxt({ id: "b", stageId: "ko", status: "scheduled", scheduledAt: FUTURE })],
+    lateWaiting: [{ stageName: "Cup", count: 1 }],
+  },
+  {
+    why: "match_day/late_players_waiting — round 1 being played today, two late arrivals waiting",
+    stages: [st({ id: "ko", name: "Cup" })],
+    fixtures: [fxt({ id: "a", stageId: "ko", status: "in_play", hasScorer: true })],
+    lateWaiting: [{ stageName: "Cup", count: 2 }],
+  },
+  {
+    why: "finished/late_players_waiting — every bracket match played, the stage not completed, a reinstated player still waiting",
+    stages: [st({ id: "ko", name: "Cup" })],
+    fixtures: [fxt({ id: "a", stageId: "ko" })],
+    lateWaiting: [{ stageName: "Cup", count: 1 }],
   },
   {
     why: "finished/none — a completed season",
@@ -295,6 +341,7 @@ function resolve(shape: Shape) {
     stages: shape.stages, fixtures: shape.fixtures, now: NOW, tz: TZ,
     awaitingRegistrations: shape.awaitingRegistrations ?? 0,
     bansToReview: shape.bansToReview ?? 0,
+    lateWaiting: shape.lateWaiting ?? [],
   };
   const phase = resolvePhase(input);
   const attention = resolveAttention(input);
@@ -416,6 +463,7 @@ const inPlayFixtures = (n: number, divisionId = "d1"): DeskInPlayFixture[] =>
         phase: r.phase, played: r.played, total: r.desk.total, unscheduled: r.desk.unscheduled,
         inPlay: r.desk.in_play, entrants: r.desk.entrants, next: null,
         needsDrawStageName: r.desk.needs_draw_stage?.name ?? null,
+        finalDecidedStageName: finalDecidedStageName(r.desk.attention),
         locale: "en", displayTz: TZ, now: NOW,
       });
       if (r.played > 0 || r.desk.total > 0) expect(line).not.toContain("entrants");
@@ -424,6 +472,12 @@ const inPlayFixtures = (n: number, divisionId = "d1"): DeskInPlayFixture[] =>
       // `setting_up` word.
       if (r.desk.needs_draw_stage && r.desk.in_play === 0) {
         expect(line).toContain(`${r.desk.needs_draw_stage.name} not drawn`);
+      }
+      // W4 T21 M2: a decided final whose stage is still open never reads "complete" beside its red pill.
+      const decided = finalDecidedStageName(r.desk.attention);
+      if (decided !== null && !r.desk.needs_draw_stage && r.desk.in_play === 0) {
+        expect(line).toContain(`${decided} not completed`);
+        expect(line).not.toContain("· complete");
       }
     });
 
@@ -490,7 +544,8 @@ describe("the needs_draw action names a button the seed-proposal panel is showin
       <ProgressionPanel stageId="ko1" stageName="Finals" proposal={PANEL_PROPOSAL[door]} sourceReady
         fixtures={[{ id: "f1", home_slot_label: { key: "slot.winner_group", params: { g: "A" } },
                      away_slot_label: { key: "slot.winner_group", params: { g: "B" } } }]}
-        entrantNames={{ e1: "Alice", e2: "Bob" }} stageNames={{ grp: "Groups" }} departedEntrantIds={[]} locale="en" canEdit />,
+        entrantNames={{ e1: "Alice", e2: "Bob" }} stageNames={{ grp: "Groups" }} departedEntrantIds={[]}
+        confirmedDrawReopens={false} locale="en" canEdit />,
     );
     const buttons = [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g)]
       .map((m) => m[1]!.replace(/<[^>]*>/g, "").trim())

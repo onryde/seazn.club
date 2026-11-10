@@ -79,7 +79,7 @@
   - Then `npm run i18n:gen-keys` and `npm run i18n:check`. Never hand-edit `lib/i18n-keys.ts`.
   - Refusal copy: a row in app-A's `apps/web/src/lib/knockout-refusals.ts` table (`KNOCKOUT_REFUSALS`, `knockoutRefusalKey`), thrown through `knockoutRefusal(code, details?)` (`server/usecases/knockout-refusal.ts`). Never a typed literal status.
 - **Migrations:**
-  - `db/migration/deltas/V<next>__<name>.sql`. App A takes V492 and V493, so this plan expects **V494** (Task 12, schema), **V495** (Task 7, plate progressions, LOUD) and **V496** (Task 6, Q8 re-rank, LOUD).
+  - `db/migration/deltas/V<next>__<name>.sql`. App A takes V492 and V493, so this plan expects **V494** (Task 12, schema), **V495** (Task 7, plate progressions, LOUD) and **V496** (Task 6, Q8 re-rank, LOUD). **Moved 2026-11-09:** R4 took V492 on main, so app A now holds **V493 and V494**; app B's three shift to the next free numbers after app A merges (V495 onwards; `feat/swiss-auto-advance` holds an unmerged V497, so check every open branch, not only main).
   - Re-check the next free number on `origin/main` at task time. A clash is renumbered, never reordered.
   - A data-moving delta opens with a `-- DATA CHANGE (LOUD)` header in V481/V490's shape: count first, then write, in one block, idempotent.
   - It is listed in the PR body's "Data changes", runs pre-deploy (owner rule 2026-10-28), and never ships a compat shim.

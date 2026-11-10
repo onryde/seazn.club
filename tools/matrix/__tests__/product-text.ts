@@ -62,6 +62,9 @@ export interface RosterLockText {
   /** W3 ruling 250 (T9): a root Swiss stage also exempts the division (`hasRootSwissStage`); swiss-late-entry.ts then
    *  admits the late player while that Swiss runs and refuses it by name (SWISS_OVER) once it is over. */
   rootSwiss: boolean;
+  /** W4 T9 (X-LE-1, ruling 263): a ROOT knockout exempts the division too (`hasRootKnockoutStage`); knockout-late-entry.ts
+   *  then places the late player, parks them or refuses by name (KO_LATE_ENTRY_NO_SLOT) — never the roster lock. */
+  rootKnockout: boolean;
   status: number;
   /** The HttpError's own code, or null (none: the wire carries wireCode). */
   code: string | null;
@@ -72,19 +75,25 @@ export interface RosterLockText {
 
 /** entrants.ts createEntrants: a started tournament's entrant list is locked
  *  unless one of its stages is an open-window format — or, since W3 T9 (ruling
- *  250), the division holds a root Swiss: `!openFormat && !(await
- *  hasRootSwissStage(tx, divisionId))`. Strict: any other condition shape is
- *  drift and throws. */
+ *  250), the division holds a root Swiss, or, since W4 T9 (ruling 263), a root
+ *  knockout: `!openFormat && !(await hasRootSwissStage(tx, divisionId)) &&
+ *  !(await hasRootKnockoutStage(tx, divisionId))`. The two exemptions are read
+ *  in either order and each is optional; any other condition term is drift and
+ *  throws. */
 export function rosterLockText(): RosterLockText {
   const src = read("apps/web/src/server/usecases/entrants.ts");
-  const m = /\n\s*if \(((?:division\.status === "[a-z_]+"(?: \|\| )?)+)\) \{\s*const \[openFormat\] = await tx`[\s\S]*?kind in \(([^)]*)\)[\s\S]*?if \(!openFormat( && !\(await hasRootSwissStage\(tx, divisionId\)\))?\) \{\s*throw new HttpError\(\s*(\d{3}),\s*"([^"]*)",?\s*(?:("[A-Z_]+"|[A-Za-z_]\w*),?\s*)?\);/.exec(src);
+  const m = /\n\s*if \(((?:division\.status === "[a-z_]+"(?: \|\| )?)+)\) \{\s*const \[openFormat\] = await tx`[\s\S]*?kind in \(([^)]*)\)[\s\S]*?if \(\s*!openFormat((?:\s*&&\s*!\(await hasRoot(?:Swiss|Knockout)Stage\(tx, divisionId\)\))*),?\s*\) \{\s*throw new HttpError\(\s*(\d{3}),\s*"([^"]*)",?\s*(?:("[A-Z_]+"|[A-Za-z_]\w*),?\s*)?\);/.exec(src);
   if (m === null) throw new Error("product-text: entrants.ts roster lock not found in the expected shape — re-read it and update the model's ROSTER_LOCK");
   const statuses = [...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);
   const openKinds = [...m[2].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]);
-  const rootSwiss = m[3] !== undefined;
-  // The exemption is the product's root-Swiss read, not a look-alike: imported from swiss-late-entry.ts.
+  const rootSwiss = m[3].includes("hasRootSwissStage");
+  const rootKnockout = m[3].includes("hasRootKnockoutStage");
+  // Each exemption is the product's own read, not a look-alike: imported from the module that defines it.
   if (rootSwiss && !/\nimport \{[^}]*\bhasRootSwissStage\b[^}]*\} from "\.\/swiss-late-entry";/.test(src)) {
     throw new Error("product-text: entrants.ts's hasRootSwissStage is not swiss-late-entry.ts's — re-read it and update the model's ROSTER_LOCK");
+  }
+  if (rootKnockout && !/\nimport \{[^}]*\bhasRootKnockoutStage\b[^}]*\} from "\.\/knockout-late-entry";/.test(src)) {
+    throw new Error("product-text: entrants.ts's hasRootKnockoutStage is not knockout-late-entry.ts's — re-read it and update the model's ROSTER_LOCK");
   }
   const status = Number(m[4]);
   const arg = m[6];
@@ -97,7 +106,7 @@ export function rosterLockText(): RosterLockText {
       code = def[1];
     }
   }
-  return { statuses, openKinds, rootSwiss, status, code, wireCode: code ?? wireCodeFor(status), message: m[5] };
+  return { statuses, openKinds, rootSwiss, rootKnockout, status, code, wireCode: code ?? wireCodeFor(status), message: m[5] };
 }
 
 /** schedule.ts ROUND_ROBIN_STAGE_KINDS: the stage kinds the product generates
@@ -250,8 +259,11 @@ export function nextMatchStartedText(): NextMatchText {
   const lib = read(`apps/web/src/${from[1]}.ts`);
   const code = new RegExp(`\\bexport const ${thrown[2]} = "([A-Z_]+)";`).exec(lib)?.[1];
   if (code === undefined) throw new Error(`product-text: ${thrown[2]} is not a string constant in ${from[1]}.ts`);
-  const started = /\nfunction hasStarted\(t: Node\): boolean \{\s*return t\.status !== "([a-z_]+)" \|\| t\.outcome !== null \|\| t\.live_events > 0;\s*\}/.exec(fed);
-  if (started === null) throw new Error("product-text: fed-seats.ts hasStarted is not the three-term rule the model mirrors — re-read it");
+  // The ruling's three terms, then W4 T2's fourth (X-LE-9): a live Match Day call. No driver here ever calls a fixture to a
+  // court (the matrix plays results through the pad's routes), so the fourth term never holds on a matrix board and the
+  // model mirrors the three; the shape is still pinned whole, so a fifth term reds here and is read.
+  const started = /\nfunction hasStarted\(t: Node\): boolean \{\s*return t\.status !== "([a-z_]+)" \|\| t\.outcome !== null \|\| t\.live_events > 0 \|\| t\.called;\s*\}/.exec(fed);
+  if (started === null) throw new Error("product-text: fed-seats.ts hasStarted is not the three-term rule (plus W4 T2's live call) the model mirrors — re-read it");
   const cascade = /\nfunction isCascadeWalkover\(t: Node\): boolean \{\s*return t\.status === "([a-z_]+)" && \(t\.outcome as \{ kind\?: string \} \| null\)\?\.kind === "([a-z_]+)" && t\.live_events === 0;\s*\}/.exec(fed);
   if (cascade === null) throw new Error("product-text: fed-seats.ts isCascadeWalkover is not the three-term exemption the model mirrors — re-read it");
   const resetExempt = /\n\s*const reset = isCascadeWalkover\(t\);\s*if \(!reset && hasStarted\(t\)\) \{/.test(fed);

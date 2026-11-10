@@ -4,9 +4,10 @@
 import { ImageResponse } from "next/og";
 import { sql } from "@/lib/db";
 import { getPublicDivision } from "@/server/public-site/data";
-import { standingsCardModel } from "@/server/og/model";
+import { CHAMPION_NAME_WIDTH, standingsCardModel } from "@/server/og/model";
 import { CardFrame, OG_SIZE } from "@/server/og/card";
 import { posterImageDataUrl } from "@/server/og/poster-image";
+import { BRACKET_KINDS, divisionChampion } from "@/server/public-site/champion";
 import type { StandingsSnapshotRow } from "@/server/public-site/data";
 import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
@@ -31,7 +32,17 @@ export default async function Image({ params }: Props) {
     ? await sql<{ youth: boolean }[]>`select youth from divisions where id = ${data.division.id}`
     : [];
 
-  const table = data?.standings[0];
+  // ST-G26 (W4 app A Task 23): the first TABLE snapshot, in the read's stage-then-pool order. A bracket's snapshot is
+  // the placement table it writes on completion (rank only, every count zero) — never a table to show.
+  // Owner ruling (OG pick A, R24 item 6; B6b fix round 1): a division whose FINAL stage is a bracket — bracket-only, or
+  // a group/league feeding it — names its champion instead, once that bracket is complete: its final decided
+  // (`divisionChampion`, the moment the division page's banner crowns). Until then a division with a table keeps its
+  // table, and a bracket-only one its empty line. A final stage that is a table never crowns here.
+  const stages = data?.stages ?? [];
+  const isBracket = (stageId: string) => BRACKET_KINDS.has(stages.find((s) => s.id === stageId)?.kind ?? "");
+  const table = data?.standings.find((s) => !isBracket(s.stage_id));
+  const finalStage = stages.reduce<(typeof stages)[number] | undefined>((last, s) => (!last || s.seq > last.seq ? s : last), undefined);
+  const championId = data && finalStage && BRACKET_KINDS.has(finalStage.kind) ? divisionChampion(data.stages, data.fixtures, data.standings) : null;
   const rows = (table?.rows ?? []) as StandingsSnapshotRow[];
   // W2d T17: the table's own stage's rules — how its points print (RB2B-17).
   const rules = data?.stages.find((s) => s.id === table?.stage_id)?.table_rules ?? null;
@@ -56,6 +67,7 @@ export default async function Image({ params }: Props) {
     })),
     names: Object.fromEntries((data?.entrants ?? []).map((e) => [e.id, e.display_name])),
     rules,
+    championId,
   });
   const theme = model.theme;
 
@@ -91,7 +103,15 @@ export default async function Image({ params }: Props) {
             marginTop: 22,
           }}
         >
-          {model.fallbackKey ? (
+          {model.champion ? (
+            <ChampionLine
+              name={model.champion.name}
+              size={model.champion.size}
+              label={t(dict, "table.champion")}
+              accent={theme.accent}
+              muted={theme.muted}
+            />
+          ) : model.fallbackKey ? (
             <div
               style={{
                 display: "flex",
@@ -142,5 +162,38 @@ export default async function Image({ params }: Props) {
       </CardFrame>
     ),
     size,
+  );
+}
+
+/**
+ * ST-G26 — the champion of a bracket-only division (owner pick, R24 item 6, option A): the name large beside a trophy,
+ * the word "Champion" beneath it, aligned with the name. It reads at thumbnail size, where most people see the card (a
+ * chat preview is about 240px wide). The trophy is an SVG in the card's accent, so satori needs no emoji font.
+ */
+function ChampionLine({ name, size, label, accent, muted }: { name: string; size: number; label: string; accent: string; muted: string }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", flexGrow: 1, justifyContent: "center" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 30 }}>
+        <svg width={120} height={120} viewBox="0 0 64 64" style={{ flexShrink: 0 }}>
+          <path d="M20 8h24v14a12 12 0 0 1-24 0z" fill={accent} />
+          <path d="M20 12H10v4a10 10 0 0 0 10 10M44 12h10v4a10 10 0 0 1-10 10" fill="none" stroke={accent} strokeWidth={4} />
+          <rect x={29} y={34} width={6} height={10} fill={accent} />
+          <rect x={20} y={44} width={24} height={6} rx={2} fill={accent} />
+        </svg>
+        <div
+          style={{
+            display: "flex",
+            maxWidth: CHAMPION_NAME_WIDTH,
+            fontSize: size,
+            fontWeight: 800,
+            lineHeight: 1.04,
+            letterSpacing: size >= 96 ? -2 : -1,
+          }}
+        >
+          {name}
+        </div>
+      </div>
+      <div style={{ display: "flex", fontSize: 30, color: muted, margin: "14px 0 0 150px" }}>{label}</div>
+    </div>
   );
 }

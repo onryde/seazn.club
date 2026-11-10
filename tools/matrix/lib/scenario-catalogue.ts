@@ -142,15 +142,27 @@ const L2_EXCLUDED = new Set(["E2"]);
 
 /** Design §4 "Known 🚫 at design time" (no route or screen today), keyed by
  *  PARENT, with the route to the wave that owes each a build-or-refuse ruling
- *  ("division-level D1, D2, R13 in W9; D4 in W4; Q4 in W4; C5 in W5"). */
+ *  ("division-level D1, D2, R13 in W9; D4 in W4; Q4 in W4; C5 in W5"). An atom named in
+ *  SETTLED below is no longer 🚫 and is read from there: Q4 keeps this route for Q4a alone,
+ *  and D4 has none left (both its atoms were settled). */
 const KNOWN_NO_PATH: Readonly<Record<string, Route>> = Object.freeze({
   D1: routeTo("W9", "division merge: build-or-refuse ruling (design §4)"),
   D2: routeTo("W9", "division split: build-or-refuse ruling (design §4)"),
   R13: routeTo("W9", "entrant moved to another division after the draw: build-or-refuse ruling (design §4)"),
-  D4: routeTo("W4", "separation: build-or-refuse ruling (design §4)"),
-  Q4: routeTo("W4", "final not played: build-or-refuse ruling (design §4)"),
+  Q4: routeTo("W4", "final not played, joint winners (Q4a): build-or-refuse ruling (design §4)"),
   C5: routeTo("W5", "points deduction: carry_deltas exists only through stage PUT, FORMAT_LOCKED once fixtures exist; build-or-refuse ruling (design §4)"),
 });
+/** W4 app PR A, Task 24: a design-time 🚫 atom the W4 rulebook has since SETTLED (rulebook §14: "🚫 → ⛔" and "🚫 → ⏳"), keyed by
+ *  ATOM. `refused` (⛔) is a refusal the product names; `later` (⏳) is work owed to a follow-up that is not a programme wave (the
+ *  clubs follow-up, ruling 272), so its owner is a plain label and no route names a wave. A settled atom is not `knownNoPath`:
+ *  the L2 planner records it in its settled state, never as 🚫. Q4a stays 🚫 (joint winners have no path), so it is NOT here. */
+export interface Settled { readonly state: "refused" | "later"; readonly reason: string }
+export const SETTLED: Readonly<Record<string, Settled>> = Object.freeze({
+  Q4b: Object.freeze({ state: "refused", reason: "an unplayed final is never decided by seed or table automatically (X-CH-5)" }),
+  D4a: Object.freeze({ state: "later", reason: "clubs follow-up: same-club separation waits for a club on persons and pairs, only teams carry one today (ruling 272)" }),
+  D4b: Object.freeze({ state: "refused", reason: "country separation is not offered, Seazn holds no country for a player or a team, and a request for it is refused by name (X-SD-10)" }),
+});
+
 /** Design §4 "Known UI-only 🚫" (ruling 30), keyed by ATOM: an HTTP route
  *  exists (L3 runs), but no screen sends it (the L2 run records 🚫). M12b's
  *  `core.lineup.retirement` has a pad control since W2e Task 32 in football,
@@ -177,6 +189,8 @@ export interface AtomicScenario {
   readonly l3Excluded: string | null;
   readonly knownNoPath: string | null;
   readonly l2NoPath: string | null;
+  /** W4 app PR A, Task 24: the settled state of an atom that was a design-time 🚫 (SETTLED), else null. */
+  readonly settled: Settled | null;
 }
 
 export const ATOMIC: readonly AtomicScenario[] = Object.freeze(PARENTS.flatMap((p) => {
@@ -193,8 +207,9 @@ export const ATOMIC: readonly AtomicScenario[] = Object.freeze(PARENTS.flatMap((
       title: a.title,
       layers: Object.freeze(layers),
       l3Excluded,
-      knownNoPath: KNOWN_NO_PATH[p.id]?.wave ?? null,
+      knownNoPath: Object.hasOwn(SETTLED, a.id) ? null : KNOWN_NO_PATH[p.id]?.wave ?? null,
       l2NoPath: KNOWN_UI_NO_PATH[a.id]?.wave ?? null,
+      settled: SETTLED[a.id] ?? null,
     });
   });
 }));

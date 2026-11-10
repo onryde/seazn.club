@@ -48,6 +48,8 @@ export interface Counts {
     generatorUnsupported: CaseList;
     noOp: CaseList;
     uncoverablePairs: number;
+    /** W4 T24 (option A): variant cases on a cell the product refuses - kept in variants.json (a level the committed streams depend on), never run. */
+    heldOnRefusedCells: number;
   };
 }
 
@@ -88,7 +90,11 @@ export function computeCounts(input: {
     if (vc.scorable === null) continue;
     (unscorableClass({ ...vc, scorable: vc.scorable }) === "engine" ? engine : generator).push(vc.id);
   }
+  // W4 T24 (option A): a refused row stays a variant LEVEL (the committed streams depend on it), so the file holds cases on cells the
+  // product refuses. They are held, not run: only a case on an offered cell is an L3 case.
+  const onRefused = all.filter((vc) => refusedCell(vc.row, vc.sport) !== null);
   const scorable = all.length - engine.length - generator.length;
+  const scorableOffered = scorable - onRefused.filter((vc) => vc.scorable === null).length;
   const noOp = input.variants.flatMap((v) => v.cases.filter((c) => Object.keys(c.overrides).length === 0 && c.preset === offlineBuilderDefault(v.sport)).map((c) => c.id));
   // Q-B / ruling 29 and the format gate: one denied case per gated row, on generic.
   const denied = ROW_KEYS.filter((r) => cellFacts(r, "generic").gate !== null).length;
@@ -112,11 +118,11 @@ export function computeCounts(input: {
       lifecycle,
       atomicApplicable,
       bound: input.l3.cases.filter((c) => c.bound !== null).length,
-      variantCasesScorable: scorable,
+      variantCasesScorable: scorableOffered,
       variantCasesUnscorable: engine.length + generator.length,
       denied,
       regressions,
-      value: lifecycle + atomicApplicable + scorable + denied + regressions,
+      value: lifecycle + atomicApplicable + scorableOffered + denied + regressions,
     },
     drops: {
       total: input.l3.drops.length,
@@ -135,6 +141,7 @@ export function computeCounts(input: {
       generatorUnsupported: { count: generator.length, routedTo: GENERATOR_BREADTH.wave, why: `the stream generator does not build this cfg yet (GeneratorUnsupported): ${GENERATOR_BREADTH.why}, owed by ${GENERATOR_BREADTH.wave}`, ids: generator },
       noOp: { count: noOp.length, why: "no overrides at the sport's builder-default preset: the case runs the builder-default cfg again (listed, not removed from the variant set)", ids: noOp },
       uncoverablePairs: input.variants.reduce((n, v) => n + v.uncoverable.length, 0),
+      heldOnRefusedCells: onRefused.length,
     },
   };
 }

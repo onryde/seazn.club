@@ -12,6 +12,7 @@ import { TOP_LEVEL_STAGE_DECIDERS } from "../../../apps/web/src/lib/top-level-st
 import { FORMAT_BOUNDS } from "../../../apps/web/src/lib/format-bounds.ts";
 import { swissRoundsDefault } from "../../../apps/web/src/lib/swiss-rounds.ts";
 import { STAGE_DECIDER_MOVED, StageConfig } from "../../../apps/web/src/server/api-v1/schemas.ts";
+import { COUNTRY_SEPARATION_NOT_OFFERED_MESSAGE } from "../../../apps/web/src/lib/knockout-refusals.ts";
 import { SWISS_REQUESTED_BYES_DEFERRED_MESSAGE } from "../../../apps/web/src/lib/swiss-refusals.ts";
 import {
   API_ONLY_ROWS, BUILDER_DEFAULT_KNOBS, BUILDER_KNOB_BOUNDS, BUILDER_PREFERRED_VARIANT, ROW_KEYS,
@@ -249,6 +250,12 @@ const ENGINE_DECIDER_KEYS = [...new Set((builtinModules as readonly AnySportModu
  *  conscious edit of this list, and a row that posts one fails the "not refused" loop below like any decider. */
 const DEFERRED_CONFIG_KEYS = ["requestedByes"];
 
+/** The refused keys that are NOT whole deciders and NOT deferred: W4 T7 (RB4-D9, X-SD-10) does not offer country separation -
+ *  Seazn holds no country for a player or a team - so the key is declared only to be REFUSED, by name (http.ts answers 400
+ *  COUNTRY_SEPARATION_NOT_OFFERED). Typed here from that ruling, not read from the schema under test; a second such key is a
+ *  conscious edit of this list, and a row that posts one fails the "not refused" loop below like any decider. */
+const NOT_OFFERED_CONFIG_KEYS = ["countrySeparation"];
+
 describe("API-only rows — bodies derived from product authorities", () => {
   it("empty case first: an unknown row is still refused, never a silent league", () => {
     expect(() => stagesForRow("nope")).toThrow(UnknownRow);
@@ -351,10 +358,12 @@ describe("API-only rows — bodies derived from product authorities", () => {
     const refused = refusedConfigKeys();
     // The refused set is the decider set the ENGINE declares (R-13b-1), however the schema spells it, plus the deferred keys.
     const deferred = refused.filter((k) => DEFERRED_CONFIG_KEYS.includes(k));
-    const deciders = refused.filter((k) => !DEFERRED_CONFIG_KEYS.includes(k));
+    const notOffered = refused.filter((k) => NOT_OFFERED_CONFIG_KEYS.includes(k));
+    const deciders = refused.filter((k) => !DEFERRED_CONFIG_KEYS.includes(k) && !NOT_OFFERED_CONFIG_KEYS.includes(k));
     expect(ENGINE_DECIDER_KEYS.length, "anti-vacuity: the engine declares deciders").toBeGreaterThan(2);
     expect(deciders.sort()).toEqual(ENGINE_DECIDER_KEYS);
     expect(deferred.sort(), "the deferred keys the schema refuses are exactly the ruled ones").toEqual([...DEFERRED_CONFIG_KEYS].sort());
+    expect(notOffered.sort(), "the not-offered keys the schema refuses are exactly the ruled ones").toEqual([...NOT_OFFERED_CONFIG_KEYS].sort());
     for (const key of refused) expect(declared).toContain(key); // declared-but-refused: why the declared list alone is not enough
     // And the live schema refuses each one saying where it went — the text scan above is not left to vouch for itself.
     for (const key of deciders) {
@@ -365,6 +374,13 @@ describe("API-only rows — bodies derived from product authorities", () => {
       const said = StageConfig.safeParse({ [key]: false }).error?.issues.map((i) => i.message) ?? [];
       expect(said, `StageConfig.${key}`).toContain(SWISS_REQUESTED_BYES_DEFERRED_MESSAGE);
       expect(said, `StageConfig.${key} is a deferral, not a moved decider`).not.toContain(STAGE_DECIDER_MOVED);
+    }
+    expect(notOffered.length, "anti-vacuity: the schema refuses a not-offered key").toBeGreaterThan(0);
+    for (const key of notOffered) {
+      const said = StageConfig.safeParse({ [key]: false }).error?.issues.map((i) => i.message) ?? [];
+      expect(said, `StageConfig.${key}`).toContain(COUNTRY_SEPARATION_NOT_OFFERED_MESSAGE);
+      expect(said, `StageConfig.${key} is a not-offered key, not a moved decider`).not.toContain(STAGE_DECIDER_MOVED);
+      expect(said, `StageConfig.${key} is not a deferral`).not.toContain(SWISS_REQUESTED_BYES_DEFERRED_MESSAGE);
     }
     expect(declared).toContain("rules"); // W2c Task 12: a create takes config.rules (validated by the usecase)
     let checked = 0;

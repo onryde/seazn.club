@@ -9910,7 +9910,7 @@
         ]
       },
       "post": {
-        "summary": "Register entrant(s) — object or bulk array. After Start a division whose Swiss is running takes a late player (W3, ruling 250): the reply's late_entry says whether the unstarted round was re-paired (a), the newcomer plays the round's bye holder (b), or joins the next round (c); with the last round started it is 409 SWISS_NO_ROUND_LEFT (details.canAddRound, and details.stageId — the Swiss to `POST /stages/{id}/swiss/add-round` on), and a finished Swiss is 422 SWISS_OVER. A pair or team entrant in a chess division is 422 CHESS_INDIVIDUAL_ONLY (chess takes individual players only). A multipart CSV/XLSX upload is the division-pinned import preview; its plan lists a blocking CHESS_INDIVIDUAL_ONLY issue for each row that would enter a team into a chess division. A person already on another entrant of the division (in the field) is 409 PERSON_ON_OTHER_TEAM, its error.conflicts naming each person and the entrant that holds them, and nothing of the batch is written: one person, one entrant per division (an americano division's rotation pairs excepted)",
+        "summary": "Register entrant(s) — object or bulk array. After Start a division whose Swiss is running takes a late player (W3, ruling 250): the reply's late_entry says whether the unstarted round was re-paired (a), the newcomer plays the round's bye holder (b), or joins the next round (c); with the last round started it is 409 SWISS_NO_ROUND_LEFT (details.canAddRound, and details.stageId — the Swiss to `POST /stages/{id}/swiss/add-round` on), and a finished Swiss is 422 SWISS_OVER. A division whose entry stage is a drawn knockout takes a late player into round 1 (W4, ruling 263): late_entry.format 'knockout', case 'bye' (the newcomer plays the lowest-seeded holder's bye) or 'withdrawn_slot' (a withdrawn entrant's seat, the withdrawal's walkover reversed); with neither open and nothing in the stage started, the player is KEPT and waits (201, late_entry case 'rebuild_offered', reason KO_LATE_ENTRY_NO_SLOT; no line moves and no undo barrier is written; the desk's 'Waiting to join the bracket' strip lists them and Rebuild fixtures draws the field again with them in it, RB4-L6); once any match has started it is 409 KO_LATE_ENTRY_NO_SLOT (details.can_rebuild: false) and nothing is written. A late player is never seated beyond round 1, and the add is an undo barrier (409 KO_LATE_ENTRY_NOT_UNDOABLE: withdraw instead). A pair or team entrant in a chess division is 422 CHESS_INDIVIDUAL_ONLY (chess takes individual players only). A multipart CSV/XLSX upload is the division-pinned import preview; its plan lists a blocking CHESS_INDIVIDUAL_ONLY issue for each row that would enter a team into a chess division. A person already on another entrant of the division (in the field) is 409 PERSON_ON_OTHER_TEAM, its error.conflicts naming each person and the entrant that holds them, and nothing of the batch is written: one person, one entrant per division (an americano division's rotation pairs excepted)",
         "tags": [
           "entrants"
         ],
@@ -10534,79 +10534,149 @@
                               ]
                             },
                             "late_entry": {
-                              "type": "object",
-                              "properties": {
-                                "entrant_id": {
-                                  "type": "string",
-                                  "format": "uuid",
-                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                                },
-                                "stage_id": {
-                                  "type": "string",
-                                  "format": "uuid",
-                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                                },
-                                "case": {
-                                  "type": "string",
-                                  "enum": [
-                                    "a",
-                                    "b",
-                                    "c"
-                                  ]
-                                },
-                                "round": {
-                                  "type": "integer",
-                                  "minimum": 1,
-                                  "maximum": 9007199254740991
-                                },
-                                "repaired": {
+                              "oneOf": [
+                                {
                                   "type": "object",
                                   "properties": {
-                                    "changed_entrant_ids": {
-                                      "type": "array",
-                                      "items": {
-                                        "type": "string",
-                                        "format": "uuid",
-                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                                      }
+                                    "format": {
+                                      "type": "string",
+                                      "const": "swiss"
+                                    },
+                                    "entrant_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    },
+                                    "stage_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    },
+                                    "case": {
+                                      "type": "string",
+                                      "enum": [
+                                        "a",
+                                        "b",
+                                        "c"
+                                      ]
+                                    },
+                                    "round": {
+                                      "type": "integer",
+                                      "minimum": 1,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "repaired": {
+                                      "type": "object",
+                                      "properties": {
+                                        "changed_entrant_ids": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "format": "uuid",
+                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "changed_entrant_ids"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "new_board": {
+                                      "type": "object",
+                                      "properties": {
+                                        "fixture_id": {
+                                          "type": "string",
+                                          "format": "uuid",
+                                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                        },
+                                        "scheduled": {
+                                          "type": "boolean"
+                                        }
+                                      },
+                                      "required": [
+                                        "fixture_id",
+                                        "scheduled"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "bye_holder_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                     }
                                   },
                                   "required": [
-                                    "changed_entrant_ids"
+                                    "format",
+                                    "entrant_id",
+                                    "stage_id",
+                                    "case",
+                                    "round"
                                   ],
                                   "additionalProperties": false
                                 },
-                                "new_board": {
+                                {
                                   "type": "object",
                                   "properties": {
+                                    "format": {
+                                      "type": "string",
+                                      "const": "knockout"
+                                    },
+                                    "entrant_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    },
+                                    "stage_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    },
+                                    "case": {
+                                      "type": "string",
+                                      "enum": [
+                                        "bye",
+                                        "withdrawn_slot",
+                                        "waiting",
+                                        "refused",
+                                        "rebuild_offered"
+                                      ]
+                                    },
                                     "fixture_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    },
+                                    "opponent_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    },
+                                    "withdrawn_id": {
                                       "type": "string",
                                       "format": "uuid",
                                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                     },
                                     "scheduled": {
                                       "type": "boolean"
+                                    },
+                                    "schedule_frozen": {
+                                      "type": "boolean",
+                                      "const": true
+                                    },
+                                    "reason": {
+                                      "type": "string"
                                     }
                                   },
                                   "required": [
-                                    "fixture_id",
-                                    "scheduled"
+                                    "format",
+                                    "entrant_id",
+                                    "stage_id",
+                                    "case"
                                   ],
                                   "additionalProperties": false
-                                },
-                                "bye_holder_id": {
-                                  "type": "string",
-                                  "format": "uuid",
-                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                 }
-                              },
-                              "required": [
-                                "entrant_id",
-                                "stage_id",
-                                "case",
-                                "round"
-                              ],
-                              "additionalProperties": false
+                              ]
                             }
                           },
                           "required": [
@@ -10710,79 +10780,149 @@
                                 ]
                               },
                               "late_entry": {
-                                "type": "object",
-                                "properties": {
-                                  "entrant_id": {
-                                    "type": "string",
-                                    "format": "uuid",
-                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                                  },
-                                  "stage_id": {
-                                    "type": "string",
-                                    "format": "uuid",
-                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                                  },
-                                  "case": {
-                                    "type": "string",
-                                    "enum": [
-                                      "a",
-                                      "b",
-                                      "c"
-                                    ]
-                                  },
-                                  "round": {
-                                    "type": "integer",
-                                    "minimum": 1,
-                                    "maximum": 9007199254740991
-                                  },
-                                  "repaired": {
+                                "oneOf": [
+                                  {
                                     "type": "object",
                                     "properties": {
-                                      "changed_entrant_ids": {
-                                        "type": "array",
-                                        "items": {
-                                          "type": "string",
-                                          "format": "uuid",
-                                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                                        }
+                                      "format": {
+                                        "type": "string",
+                                        "const": "swiss"
+                                      },
+                                      "entrant_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      },
+                                      "stage_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      },
+                                      "case": {
+                                        "type": "string",
+                                        "enum": [
+                                          "a",
+                                          "b",
+                                          "c"
+                                        ]
+                                      },
+                                      "round": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "repaired": {
+                                        "type": "object",
+                                        "properties": {
+                                          "changed_entrant_ids": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "format": "uuid",
+                                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "changed_entrant_ids"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      "new_board": {
+                                        "type": "object",
+                                        "properties": {
+                                          "fixture_id": {
+                                            "type": "string",
+                                            "format": "uuid",
+                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                          },
+                                          "scheduled": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "fixture_id",
+                                          "scheduled"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      "bye_holder_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                       }
                                     },
                                     "required": [
-                                      "changed_entrant_ids"
+                                      "format",
+                                      "entrant_id",
+                                      "stage_id",
+                                      "case",
+                                      "round"
                                     ],
                                     "additionalProperties": false
                                   },
-                                  "new_board": {
+                                  {
                                     "type": "object",
                                     "properties": {
+                                      "format": {
+                                        "type": "string",
+                                        "const": "knockout"
+                                      },
+                                      "entrant_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      },
+                                      "stage_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      },
+                                      "case": {
+                                        "type": "string",
+                                        "enum": [
+                                          "bye",
+                                          "withdrawn_slot",
+                                          "waiting",
+                                          "refused",
+                                          "rebuild_offered"
+                                        ]
+                                      },
                                       "fixture_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      },
+                                      "opponent_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      },
+                                      "withdrawn_id": {
                                         "type": "string",
                                         "format": "uuid",
                                         "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                       },
                                       "scheduled": {
                                         "type": "boolean"
+                                      },
+                                      "schedule_frozen": {
+                                        "type": "boolean",
+                                        "const": true
+                                      },
+                                      "reason": {
+                                        "type": "string"
                                       }
                                     },
                                     "required": [
-                                      "fixture_id",
-                                      "scheduled"
+                                      "format",
+                                      "entrant_id",
+                                      "stage_id",
+                                      "case"
                                     ],
                                     "additionalProperties": false
-                                  },
-                                  "bye_holder_id": {
-                                    "type": "string",
-                                    "format": "uuid",
-                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                   }
-                                },
-                                "required": [
-                                  "entrant_id",
-                                  "stage_id",
-                                  "case",
-                                  "round"
-                                ],
-                                "additionalProperties": false
+                                ]
                               }
                             },
                             "required": [
@@ -11658,6 +11798,33 @@
                                 "format": "uuid",
                                 "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                               }
+                            },
+                            "lucky_loser": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "entrant_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    },
+                                    "fixture_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    }
+                                  },
+                                  "required": [
+                                    "entrant_id",
+                                    "fixture_id"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -11668,9 +11835,155 @@
                             "voided",
                             "skipped_finalized",
                             "walked_over_held",
-                            "left_to_organiser"
+                            "left_to_organiser",
+                            "lucky_loser"
                           ],
                           "additionalProperties": false
+                        },
+                        "late_entry": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "format": {
+                                  "type": "string",
+                                  "const": "swiss"
+                                },
+                                "entrant_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "stage_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "case": {
+                                  "type": "string",
+                                  "enum": [
+                                    "a",
+                                    "b",
+                                    "c"
+                                  ]
+                                },
+                                "round": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                },
+                                "repaired": {
+                                  "type": "object",
+                                  "properties": {
+                                    "changed_entrant_ids": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "changed_entrant_ids"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "new_board": {
+                                  "type": "object",
+                                  "properties": {
+                                    "fixture_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    },
+                                    "scheduled": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "fixture_id",
+                                    "scheduled"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "bye_holder_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                }
+                              },
+                              "required": [
+                                "format",
+                                "entrant_id",
+                                "stage_id",
+                                "case",
+                                "round"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "format": {
+                                  "type": "string",
+                                  "const": "knockout"
+                                },
+                                "entrant_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "stage_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "case": {
+                                  "type": "string",
+                                  "enum": [
+                                    "bye",
+                                    "withdrawn_slot",
+                                    "waiting",
+                                    "refused",
+                                    "rebuild_offered"
+                                  ]
+                                },
+                                "fixture_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "opponent_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "withdrawn_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "scheduled": {
+                                  "type": "boolean"
+                                },
+                                "schedule_frozen": {
+                                  "type": "boolean",
+                                  "const": true
+                                },
+                                "reason": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "format",
+                                "entrant_id",
+                                "stage_id",
+                                "case"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -12179,7 +12492,7 @@
     },
     "/api/v1/entrants/{id}/withdraw": {
       "post": {
-        "summary": "Withdraw with fixture surgery (spec 05 §5): tables expunge (<50% played) or walk over remaining; brackets walk over; open formats void remaining",
+        "summary": "Withdraw with fixture surgery (spec 05 §5): tables expunge (<50% played) or walk over remaining; brackets walk over; open formats void remaining. A qualifier holding a round-1 seat of a knockout fed by a knockout source's rank cut, whose line has not started (a score, live play, a result or a Match Day call), is replaced by a LUCKY LOSER instead (W4, RB4-V2): the source's best loser below the cut — latest knock-out round first, then seed, then a lot drawn with the destination's own seed; a walkover, withdrawal or disqualification loser is never eligible — and the reply's `lucky_loser` names them and the line; with nobody eligible, or the line started, the opponent walks over and `lucky_loser` is null",
         "tags": [
           "entrants"
         ],
@@ -16825,6 +17138,9 @@
                           "bracketReset": {
                             "type": "boolean"
                           },
+                          "countrySeparation": {
+                            "not": {}
+                          },
                           "mode": {
                             "type": "string",
                             "enum": [
@@ -17253,6 +17569,9 @@
                             },
                             "bracketReset": {
                               "type": "boolean"
+                            },
+                            "countrySeparation": {
+                              "not": {}
                             },
                             "mode": {
                               "type": "string",
@@ -18219,6 +18538,9 @@
                           "bracketReset": {
                             "type": "boolean"
                           },
+                          "countrySeparation": {
+                            "not": {}
+                          },
                           "mode": {
                             "type": "string",
                             "enum": [
@@ -18647,6 +18969,9 @@
                             },
                             "bracketReset": {
                               "type": "boolean"
+                            },
+                            "countrySeparation": {
+                              "not": {}
                             },
                             "mode": {
                               "type": "string",
@@ -19934,6 +20259,69 @@
                           "type": "integer",
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
+                        },
+                        "reconcile": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "noop",
+                                "in_place",
+                                "regenerated"
+                              ]
+                            },
+                            "placed": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "vacated": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "vacated_seats": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "slots": {
+                              "type": "object",
+                              "properties": {
+                                "kept": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "freed": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "unscheduled": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "kept",
+                                "freed",
+                                "unscheduled"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "placed",
+                            "vacated",
+                            "vacated_seats"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -21873,6 +22261,69 @@
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
                         },
+                        "reconcile": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "noop",
+                                "in_place",
+                                "regenerated"
+                              ]
+                            },
+                            "placed": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "vacated": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "vacated_seats": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "slots": {
+                              "type": "object",
+                              "properties": {
+                                "kept": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "freed": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "unscheduled": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "kept",
+                                "freed",
+                                "unscheduled"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "placed",
+                            "vacated",
+                            "vacated_seats"
+                          ],
+                          "additionalProperties": false
+                        },
                         "removed": {
                           "type": "integer",
                           "minimum": -9007199254740991,
@@ -22208,9 +22659,363 @@
         ]
       }
     },
+    "/api/v1/stages/{id}/late-entrants/{entrantId}/place": {
+      "post": {
+        "summary": "W4 T11 (X-LE-10, ruling 271) — the organiser's one tap on a late player WAITING to join a started root knockout: an automatic arrival (a confirmed or paid registration, a waitlist promotion, an import, a Reinstate) is never placed by the app — it waits, flagged on the desk (late_players_waiting). No body. Runs the cases Add late player runs: the lowest-seeded holder's bye (case 'bye'), else a withdrawn entrant's seat with the walkover reversed (case 'withdrawn_slot'); a reinstated player only gets their own walked-over seat back. Placed: the marker clears and an undo barrier is written. No slot: 200 with case 'refused', or 'rebuild_offered' when nothing in the stage has started, reason KO_LATE_ENTRY_NO_SLOT — the player keeps waiting; with nothing started but the division's schedule frozen, case 'refused' with reason KO_LATE_ENTRY_SCHEDULE_FROZEN (Rebuild refuses a frozen schedule: unfreeze first) — the player keeps waiting. 409 KO_LATE_ENTRY_NOT_WAITING when the entrant does not wait on this stage; 422 KO_LATE_ENTRY_FED_STAGE when this knockout is filled from the stage the player waits on",
+        "tags": [
+          "stages"
+        ],
+        "x-required-scope": "manage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "entrantId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "format": {
+                          "type": "string",
+                          "const": "knockout"
+                        },
+                        "entrant_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "stage_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "case": {
+                          "type": "string",
+                          "enum": [
+                            "bye",
+                            "withdrawn_slot",
+                            "waiting",
+                            "refused",
+                            "rebuild_offered"
+                          ]
+                        },
+                        "fixture_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "opponent_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "withdrawn_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "scheduled": {
+                          "type": "boolean"
+                        },
+                        "schedule_frozen": {
+                          "type": "boolean",
+                          "const": true
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "format",
+                        "entrant_id",
+                        "stage_id",
+                        "case"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "format": "knockout",
+                    "entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "case": "bye"
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
     "/api/v1/stages/{id}/complete": {
       "post": {
-        "summary": "Guarded stage completion / progression",
+        "summary": "Guarded stage completion / progression. A bracket stage whose final is settled but which still owes another line — a third-place match, or a bracket reset the losers' champion earned — that is scheduled, in play, or abandoned and held for its settle is refused 409 STAGE_HAS_UNDECIDED_FIXTURES with `fixture_ids` (W4 T6, AN-2) and nothing is written; a bye line, a cancelled line and a reset nobody owes are never owed. A bracket whose final is not yet settled answers `{completed: false}` as before",
         "tags": [
           "stages"
         ],
@@ -22403,6 +23208,50 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -26370,7 +27219,7 @@
     },
     "/api/v1/stages/{id}/seed-proposal/confirm": {
       "post": {
-        "summary": "Confirm a draft proposal: fills the stage's TBD fixtures via the same slot-fill pathway as intra-bracket advancement, never regenerates. 409 SEEDING_PROPOSAL_STALE/SEEDING_ALREADY_CONFIRMED/SEEDING_FIXTURES_ALREADY_FILLED, 422 SEEDING_EDIT_UNKNOWN_SLOT/SEEDING_SLOT_DOUBLE_ASSIGNED/SEEDING_SLOT_FOREIGN_FIXTURE/SEEDING_ENTRANT_FOREIGN/SEEDING_ENTRANT_WITHDRAWN (an entrant about to be filled has withdrawn or been disqualified — recompute the proposal; her seat is left empty, nobody is promoted into it)/SEEDING_TIE_UNRESOLVED",
+        "summary": "Confirm a draft proposal: fills the stage's TBD fixtures via the same slot-fill pathway as intra-bracket advancement, never regenerates. 409 SEEDING_PROPOSAL_STALE/SEEDING_ALREADY_CONFIRMED/SEEDING_FIXTURES_ALREADY_FILLED/SEEDING_SOURCE_INCOMPLETE (a correction has a knockout source undecided again), 422 SEEDING_EDIT_UNKNOWN_SLOT/SEEDING_SLOT_DOUBLE_ASSIGNED/SEEDING_SLOT_FOREIGN_FIXTURE/SEEDING_ENTRANT_FOREIGN/SEEDING_ENTRANT_WITHDRAWN (an entrant about to be filled has withdrawn or been disqualified — recompute the proposal: from a Swiss, league or group source the next-ranked entrant takes her place, from a knockout source the lucky loser does (W4, RB4-V2/V6); only when nobody is left below the cut is her seat left empty)/SEEDING_TIE_UNRESOLVED. A confirm appends a `seed_confirmed` ledger row (W4 T5, K1): an undo barrier — Undo, Redo and Restore across it are 409 SEED_CONFIRM_NOT_UNDOABLE, and Recompute is 409 SEEDING_ALREADY_CONFIRMED from then on. A confirmed draw stands once it starts; before that, a correction that moves a completed knockout source's qualifiers or their seed order stales it, empties its seats and proposes again",
         "tags": [
           "stages"
         ],
@@ -75575,7 +76424,7 @@
     },
     "/api/v1/divisions/{id}/undo": {
       "post": {
-        "summary": "Undo the last structural edit: appends the inverse event, moves the watermark (results-guarded)",
+        "summary": "Undo the last structural edit: appends the inverse event, moves the watermark (results-guarded). Refused by name at an undo barrier, writing nothing: 409 SEED_CONFIRM_NOT_UNDOABLE (a confirmed seed proposal, `seed_confirmed`); 422 SWISS_LATE_ENTRY_NOT_UNDOABLE, SWISS_ROUNDS_CHANGE_NOT_UNDOABLE",
         "tags": [
           "history"
         ],
@@ -75876,7 +76725,7 @@
     },
     "/api/v1/divisions/{id}/redo": {
       "post": {
-        "summary": "Redo the next edit (Word-like linear history)",
+        "summary": "Redo the next edit (Word-like linear history). Refused by name across an undo barrier, as Undo is (409 SEED_CONFIRM_NOT_UNDOABLE for a confirmed seed proposal)",
         "tags": [
           "history"
         ],
@@ -77028,7 +77877,7 @@
     },
     "/api/v1/divisions/{id}/restore": {
       "post": {
-        "summary": "Undo back to a checkpoint (confirm: true; results-guarded)",
+        "summary": "Undo back to a checkpoint (confirm: true; results-guarded). A loop of Undos, so it stops at an undo barrier and is refused by name (409 SEED_CONFIRM_NOT_UNDOABLE at a confirmed seed proposal); the steps taken before it stay",
         "tags": [
           "history"
         ],
@@ -77195,6 +78044,50 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {

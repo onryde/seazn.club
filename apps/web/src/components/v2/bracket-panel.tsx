@@ -24,6 +24,7 @@ import { routes } from "@/lib/routes";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { creditsNobody, unseatedForfeitLoser } from "@/lib/forfeit-tag";
+import { bracketSeatFallbackKey } from "@/lib/bracket-bye-seat";
 // `seatLabel` is SHARED with the draw list's `RunSheetRow`: both panels sit on
 // ?tab=fixtures and must answer the same way about the same seat, so the
 // precedence lives in one place rather than once per surface.
@@ -156,6 +157,23 @@ function nodeHeadlines(
   return { ...stored, ...Object.fromEntries(dw.map((f) => [f.id, doubleWalkoverTag])) };
 }
 
+/** N-1 (W4 app A Task 22; owner rulings 116/117) — a decided tile's result, in ITS OWN ROW under the two names. It was
+ *  drawn `absolute right-2 top-1.5`, on top of the first name: a badminton headline is the engine's whole racquet
+ *  scoreline ("2 — 1 · 21–15, 18–21, 21–19"), so it hid most of the name under it, at every width. In normal flow it
+ *  can never cover a name; a headline wider than the tile truncates in its row (the tile links to the match page,
+ *  which carries the whole score). The muted classes END the class list — the double walkover's tag takes this same
+ *  slot (review M-1), whose test counts the tag's text once, so no attribute repeats it. */
+function TileHeadline({ headline }: { headline: string }) {
+  return (
+    <span
+      data-testid="bracket-tile-headline"
+      className="block min-w-0 truncate leading-none font-display text-[11px] tabular-nums text-[color:var(--app-fg-muted,#94a3b8)]"
+    >
+      {headline}
+    </span>
+  );
+}
+
 export function BracketPanel({
   kind,
   fixtures,
@@ -257,9 +275,11 @@ export function BracketPanel({
     slotLabel: SlotLabel | null | undefined,
     winner: string | null,
     live: boolean,
+    /** N-1: a settled bye's empty seat reads the bye word, never "to be decided" (`bracketSeatFallbackKey`). */
+    fallbackKey: ReturnType<typeof bracketSeatFallbackKey>,
   ) => {
     const name = entrantId ? (entrantNames[entrantId] ?? entrantId) : null;
-    const label = name ?? resolveSlotLabel(slotLabel ?? null, msg, "bracket.tbd");
+    const label = name ?? resolveSlotLabel(slotLabel ?? null, msg, fallbackKey);
     const badge = entrantId ? entrantBadges?.[entrantId] : null;
     const isWinner = winner !== null && winner === entrantId;
     const muted = winner !== null && winner !== entrantId;
@@ -351,15 +371,11 @@ export function BracketPanel({
                   height: NODE_H,
                 }}
               >
-                <span className="flex h-full flex-col justify-center gap-0.5">
-                  {side(seatEntrant(f, "home"), seatLabel(f.home_slot_label, feeds[f.id], "home"), winner, live)}
-                  {side(seatEntrant(f, "away"), seatLabel(f.away_slot_label, feeds[f.id], "away"), winner, live)}
+                <span className="flex h-full min-w-0 flex-col justify-center gap-0.5">
+                  {side(seatEntrant(f, "home"), seatLabel(f.home_slot_label, feeds[f.id], "home"), winner, live, bracketSeatFallbackKey(f, "home"))}
+                  {side(seatEntrant(f, "away"), seatLabel(f.away_slot_label, feeds[f.id], "away"), winner, live, bracketSeatFallbackKey(f, "away"))}
+                  {headline !== undefined && <TileHeadline headline={headline} />}
                 </span>
-                {headline !== undefined && (
-                  <span className="absolute right-2 top-1.5 font-display text-[11px] tabular-nums text-[color:var(--app-fg-muted,#94a3b8)]">
-                    {headline}
-                  </span>
-                )}
               </Link>
             );
           })}
@@ -445,9 +461,9 @@ function DoubleElimPanel({
     const winner = (f.outcome as { winner?: string } | null)?.winner ?? null;
     const live = f.status === "in_play";
     const headline = headlines?.[f.id];
-    const sideRow = (entrantId: string | null, slotLabel: SlotLabel | null | undefined) => {
+    const sideRow = (entrantId: string | null, slotLabel: SlotLabel | null | undefined, seat: "home" | "away") => {
       const name = entrantId ? (entrantNames[entrantId] ?? entrantId) : null;
-      const label = name ?? resolveSlotLabel(slotLabel ?? null, msg, "bracket.tbd");
+      const label = name ?? resolveSlotLabel(slotLabel ?? null, msg, bracketSeatFallbackKey(f, seat));
       const badge = entrantId ? entrantBadges?.[entrantId] : null;
       const isWinner = winner !== null && winner === entrantId;
       const mutedRow = winner !== null && winner !== entrantId;
@@ -482,15 +498,11 @@ function DoubleElimPanel({
         className="absolute block rounded-lg border border-[color:var(--app-hairline,#334155)] bg-[color:var(--app-card,#1e293b)] px-2.5 py-1.5 shadow-sm transition hover:-translate-y-0.5 hover:shadow"
         style={{ left, top, width: NODE_W, height: NODE_H }}
       >
-        <span className="flex h-full flex-col justify-center gap-0.5">
-          {sideRow(seatEntrant(f, "home"), seatLabel(f.home_slot_label, feeds[f.id], "home"))}
-          {sideRow(seatEntrant(f, "away"), seatLabel(f.away_slot_label, feeds[f.id], "away"))}
+        <span className="flex h-full min-w-0 flex-col justify-center gap-0.5">
+          {sideRow(seatEntrant(f, "home"), seatLabel(f.home_slot_label, feeds[f.id], "home"), "home")}
+          {sideRow(seatEntrant(f, "away"), seatLabel(f.away_slot_label, feeds[f.id], "away"), "away")}
+          {headline !== undefined && <TileHeadline headline={headline} />}
         </span>
-        {headline !== undefined && (
-          <span className="absolute right-2 top-1.5 font-display text-[11px] tabular-nums text-[color:var(--app-fg-muted,#94a3b8)]">
-            {headline}
-          </span>
-        )}
       </Link>
     );
   };
@@ -608,10 +620,10 @@ function StepladderPanel({
   const msg = useMsg();
   if (fixtures.length === 0) return null;
   const rungs = [...fixtures].sort((a, b) => a.round_no - b.round_no);
-  const row = (f: FixtureLike, entrantId: string | null, slotLabel: SlotLabel | null | undefined) => {
+  const row = (f: FixtureLike, entrantId: string | null, slotLabel: SlotLabel | null | undefined, seat: "home" | "away") => {
     const winner = (f.outcome as { winner?: string } | null)?.winner ?? null;
     const name = entrantId ? (entrantNames[entrantId] ?? entrantId) : null;
-    const label = name ?? resolveSlotLabel(slotLabel ?? null, msg, "bracket.tbd");
+    const label = name ?? resolveSlotLabel(slotLabel ?? null, msg, bracketSeatFallbackKey(f, seat));
     const badge = entrantId ? entrantBadges?.[entrantId] : null;
     const isWinner = winner !== null && winner === entrantId;
     const muted = winner !== null && winner !== entrantId;
@@ -656,15 +668,11 @@ function StepladderPanel({
               href={routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no)}
               className="relative block max-w-md rounded-lg border border-[color:var(--app-hairline,#334155)] bg-[color:var(--app-card,#1e293b)] px-2.5 py-1.5 shadow-sm transition hover:-translate-y-0.5 hover:shadow"
             >
-              <span className="flex flex-col gap-0.5">
-                {row(f, seatEntrant(f, "home"), seatLabel(f.home_slot_label, feeds[f.id], "home"))}
-                {row(f, seatEntrant(f, "away"), seatLabel(f.away_slot_label, feeds[f.id], "away"))}
+              <span className="flex min-w-0 flex-col gap-0.5">
+                {row(f, seatEntrant(f, "home"), seatLabel(f.home_slot_label, feeds[f.id], "home"), "home")}
+                {row(f, seatEntrant(f, "away"), seatLabel(f.away_slot_label, feeds[f.id], "away"), "away")}
+                {headlines?.[f.id] !== undefined && <TileHeadline headline={headlines[f.id]!} />}
               </span>
-              {headlines?.[f.id] !== undefined && (
-                <span className="absolute right-2 top-1.5 font-display text-[11px] tabular-nums text-[color:var(--app-fg-muted,#94a3b8)]">
-                  {headlines[f.id]}
-                </span>
-              )}
             </Link>
           </div>
         ))}
@@ -716,10 +724,10 @@ function PagePlayoffPanel({
     q2: { kind: "qualifier2" },
     final: { kind: "final" },
   };
-  const row = (f: FixtureLike, entrantId: string | null, slotLabel: SlotLabel | null | undefined) => {
+  const row = (f: FixtureLike, entrantId: string | null, slotLabel: SlotLabel | null | undefined, seat: "home" | "away") => {
     const winner = (f.outcome as { winner?: string } | null)?.winner ?? null;
     const name = entrantId ? (entrantNames[entrantId] ?? entrantId) : null;
-    const label = name ?? resolveSlotLabel(slotLabel ?? null, msg, "bracket.tbd");
+    const label = name ?? resolveSlotLabel(slotLabel ?? null, msg, bracketSeatFallbackKey(f, seat));
     const badge = entrantId ? entrantBadges?.[entrantId] : null;
     const isWinner = winner !== null && winner === entrantId;
     const mutedRow = winner !== null && winner !== entrantId;
@@ -774,15 +782,11 @@ function PagePlayoffPanel({
                   className="absolute block rounded-lg border border-[color:var(--app-hairline,#334155)] bg-[color:var(--app-card,#1e293b)] px-2.5 py-1.5 shadow-sm transition hover:-translate-y-0.5 hover:shadow"
                   style={{ left: p.x, top: p.y, width: NODE_W, height: NODE_H }}
                 >
-                  <span className={`flex h-full flex-col justify-center gap-0.5 ${headlines?.[f.id] !== undefined ? "pr-12" : ""}`}>
-                    {row(f, seatEntrant(f, "home"), seatLabel(f.home_slot_label, feeds[f.id], "home"))}
-                    {row(f, seatEntrant(f, "away"), seatLabel(f.away_slot_label, feeds[f.id], "away"))}
+                  <span className="flex h-full min-w-0 flex-col justify-center gap-0.5">
+                    {row(f, seatEntrant(f, "home"), seatLabel(f.home_slot_label, feeds[f.id], "home"), "home")}
+                    {row(f, seatEntrant(f, "away"), seatLabel(f.away_slot_label, feeds[f.id], "away"), "away")}
+                    {headlines?.[f.id] !== undefined && <TileHeadline headline={headlines[f.id]!} />}
                   </span>
-                  {headlines?.[f.id] !== undefined && (
-                    <span className="absolute right-2 top-1/2 -translate-y-1/2 font-display text-[11px] tabular-nums text-[color:var(--app-fg-muted,#94a3b8)]">
-                      {headlines[f.id]}
-                    </span>
-                  )}
                 </Link>
               </span>
             );

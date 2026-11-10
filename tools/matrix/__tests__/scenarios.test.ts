@@ -32,7 +32,7 @@ import { cascadeItems, expectedPolicy, policyFamilyFor, skippedItem } from "../l
 import { SIDE_SIZE_ROUTE, entrantName, rosterSize } from "../lib/scenarios/rosters.ts";
 import { entrantInput } from "../lib/model/state.ts";
 import { BRACKET_KINDS, BRACKET_OF, STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "../lib/scenarios/terminal-finals.ts";
-import { W2A_SCENARIO_KEYS, W2B_SCENARIO_KEYS, W2E_SCENARIO_KEYS } from "../lib/scenarios/types.ts";
+import { W2A_SCENARIO_KEYS, W2B_SCENARIO_KEYS, W2E_SCENARIO_KEYS, W4A_SCENARIO_KEYS } from "../lib/scenarios/types.ts";
 import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
 import { START } from "../lib/streams/types.ts";
 import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "../lib/variants.ts";
@@ -81,7 +81,7 @@ const failed = (checks: { id: string; verdict: string }[]) => checks.filter((c) 
  *  void-proof.test.ts is its suite. */
 // The slice's scripts: not the gated ones, and not the W2a bracket-finish or W2b forfeit-credit scenarios (opt-in:
 // w2a-scenarios.test.ts, w2b-scenarios.test.ts).
-const OPT_IN: readonly string[] = [...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS, ...W2E_SCENARIO_KEYS];
+const OPT_IN: readonly string[] = [...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS, ...W2E_SCENARIO_KEYS, ...W4A_SCENARIO_KEYS];
 const SCENARIO_KEYS = (Object.keys(SCENARIOS) as ScenarioKey[]).filter((k) => k !== "DENIED" && k !== "PADPROOF" && k !== "VOIDPROOF" && !OPT_IN.includes(k));
 
 describe("assertion helper — empty first (R25)", () => {
@@ -1053,7 +1053,7 @@ describe("pilots on the fake league", () => {
     expect(r.checks.find((c) => c.id === "f1-everyone-drawn")).toMatchObject({ verdict: "fail", checked: 7, evidence: [`${driver.entrants.at(-1)!.id} appears in no fixture`] });
   });
   it("every scenario is registered under its own key and the three pilots name their canary check", () => {
-    expect(Object.keys(SCENARIOS).sort()).toEqual(["DENIED", "F1", "LIFECYCLE", "M1", "PADPROOF", "R4", "VOIDPROOF", ...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS, ...W2E_SCENARIO_KEYS].sort());
+    expect(Object.keys(SCENARIOS).sort()).toEqual(["DENIED", "F1", "LIFECYCLE", "M1", "PADPROOF", "R4", "VOIDPROOF", ...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS, ...W2E_SCENARIO_KEYS, ...W4A_SCENARIO_KEYS].sort());
     expect(SCENARIO_KEYS.sort()).toEqual(["F1", "LIFECYCLE", "M1", "R4"]);
     for (const k of Object.keys(SCENARIOS) as ScenarioKey[]) expect(SCENARIOS[k].key).toBe(k);
     expect(SCENARIOS.LIFECYCLE.canaryCheck).toBeNull();
@@ -1272,11 +1272,13 @@ function zodBranchFlaws(branch: string, namedRows: Readonly<Record<string, numbe
   if (returns.length === 0) flaws.push("the branch answers nothing");
   for (const r of returns) {
     if (/^ *return errorResponse\(requestId, 400, "VALIDATION", /.test(r[0])) continue;
-    // W3 T18 (RB3-7(c), X-SW-18): the one other answer, a NAMED refusal whose status is its SWISS_REFUSALS row's - sound only
-    // when the code is a declared one, the branch binds the variable to THAT row (`const row = SWISS_REFUSALS.<CODE>;`), and the
-    // row's status is 400, so every path still answers 400.
+    // W3 T18 (RB3-7(c), X-SW-18) and W4 T7 (RB4-D9, X-SD-10): the other answers, a NAMED refusal whose status is its refusal-table
+    // row's (ZOD_BRANCH_NAMED: SWISS_REFUSALS, KNOCKOUT_REFUSALS) - sound only when the code is a declared one, the branch binds
+    // the variable to THAT row of THAT table (`const row = <TABLE>.<CODE>;`), and the row's status is 400, so every path still
+    // answers 400.
     const named = /^ *return errorResponse\(requestId, (\w+)\.status, "([A-Z_]+)", /.exec(r[0]);
-    if (named !== null && namedRows[named[2]!] === 400 && new RegExp(`\\bconst ${named[1]!} = SWISS_REFUSALS\\.${named[2]!};`).test(code)) continue;
+    const table = named === null ? undefined : (ZOD_BRANCH_NAMED as Readonly<Record<string, { table: string } | undefined>>)[named[2]!]?.table;
+    if (named !== null && table !== undefined && namedRows[named[2]!] === 400 && new RegExp(`\\bconst ${named[1]!} = ${table}\\.${named[2]!};`).test(code)) continue;
     flaws.push(`not a 400 VALIDATION: ${r[0].trim().slice(0, 70)}`);
   }
   if ((code.match(/\breturn\b/g) ?? []).length !== returns.length) flaws.push("a return that does not start its own line");
@@ -1286,15 +1288,18 @@ function zodBranchFlaws(branch: string, namedRows: Readonly<Record<string, numbe
   return flaws;
 }
 
-/** The named refusals the ZodError branch may answer besides 400 VALIDATION, with the status their SWISS_REFUSALS row carries.
- *  The CODES are declared here (W3 T18: a requested bye is deferred, refused by name); the STATUS is read off the table row, so a
- *  row moved off 400 reds the pin that says every path answers 400. THROWS on a code the table does not hold. */
-const ZOD_BRANCH_NAMED = ["SWISS_REQUESTED_BYES_DEFERRED"] as const;
+/** The named refusals the ZodError branch may answer besides 400 VALIDATION, with the status their refusal-table row carries.
+ *  The CODES and the TABLE each lives in are declared here (W3 T18: a requested bye is deferred; W4 T7: country separation is not
+ *  offered - each refused by name); the STATUS is read off the table row, so a row moved off 400 reds the pin that says every
+ *  path answers 400. THROWS on a code the table does not hold. */
+const ZOD_BRANCH_NAMED = {
+  SWISS_REQUESTED_BYES_DEFERRED: { table: "SWISS_REFUSALS", file: "swiss-refusals.ts" },
+  COUNTRY_SEPARATION_NOT_OFFERED: { table: "KNOCKOUT_REFUSALS", file: "knockout-refusals.ts" },
+} as const;
 function zodBranchNamedRows(): Record<string, number> {
-  const table = read("apps/web/src/lib/swiss-refusals.ts");
-  return Object.fromEntries(ZOD_BRANCH_NAMED.map((c) => {
-    const status = new RegExp(`\\n  ${c}: \\{\\s*status: (\\d{3}),`).exec(table)?.[1];
-    if (status === undefined) throw new Error(`swiss-refusals.ts: no ${c} row with a literal status`);
+  return Object.fromEntries(Object.entries(ZOD_BRANCH_NAMED).map(([c, { file }]) => {
+    const status = new RegExp(`\\n  ${c}: \\{\\s*status: (\\d{3}),`).exec(read(`apps/web/src/lib/${file}`))?.[1];
+    if (status === undefined) throw new Error(`${file}: no ${c} row with a literal status`);
     return [c, Number(status)];
   }));
 }
@@ -1629,7 +1634,14 @@ describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in benea
     // The VARIABLE half of the binding: `row` is the variable bound to the declared row, `other` is bound to nothing - its
     // status is whatever it is. Without it the check reads `const \w+ = SWISS_REFUSALS.<CODE>` and any variable passes.
     expect(zodBranchFlaws(zodErrorBranch(branch(deferred.replace("row.status", "other.status"), generic)), rows)).toEqual([expect.stringMatching(/^not a 400 VALIDATION: return errorResponse\(requestId, other\.status/)]); // a variable that is not the bound one
-    expect(zodBranchNamedRows(), "the table's ruled status, read").toEqual({ SWISS_REQUESTED_BYES_DEFERRED: 400 });
+    // W4 T7: the same shape for the second declared refusal, bound to ITS table - the Swiss table does not vouch for it.
+    const country = '      const row = KNOCKOUT_REFUSALS.COUNTRY_SEPARATION_NOT_OFFERED;\n      if (c !== null) {\n        return errorResponse(requestId, row.status, "COUNTRY_SEPARATION_NOT_OFFERED", row.en, { field: 1 });\n      }\n';
+    const both = { SWISS_REQUESTED_BYES_DEFERRED: 400, COUNTRY_SEPARATION_NOT_OFFERED: 400 };
+    expect(zodBranchFlaws(zodErrorBranch(branch(deferred, country, generic)), both), "the shape http.ts has now").toEqual([]);
+    expect(zodBranchFlaws(zodErrorBranch(branch(deferred, country, generic)), rows), "its row undeclared").toEqual([expect.stringMatching(/^not a 400 VALIDATION: return errorResponse\(requestId, row\.status/)]);
+    expect(zodBranchFlaws(zodErrorBranch(branch(country, generic)), { COUNTRY_SEPARATION_NOT_OFFERED: 422 })).toEqual([expect.stringMatching(/^not a 400 VALIDATION/)]); // the row moved off 400
+    expect(zodBranchFlaws(zodErrorBranch(branch(country.replace("KNOCKOUT_REFUSALS", "SWISS_REFUSALS"), generic)), both)).toEqual([expect.stringMatching(/^not a 400 VALIDATION/)]); // bound to the other table
+    expect(zodBranchNamedRows(), "the tables' ruled statuses, read (two codes: anti-vacuity)").toEqual(both);
     expect(zodBranchFlaws(zodErrorBranch(branch("      if (x) return errorResponse(requestId, 500, \"X\");\n", generic)))).toEqual(["a return that does not start its own line"]);
     expect(zodBranchFlaws(zodErrorBranch(branch("      throw err;\n")))).toEqual(["the branch answers nothing", "the branch throws"]);
     expect(zodBranchFlaws(zodErrorBranch(branch("      log(err);\n")))).toEqual(["the branch answers nothing"]);

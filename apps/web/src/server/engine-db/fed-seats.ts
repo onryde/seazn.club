@@ -80,6 +80,9 @@ interface Node {
   status: string;
   outcome: unknown;
   live_events: number;
+  /** W4 T2 (K4, X-LE-9; owner ruling 257): a Match Day call still holds on it (`fixtureCalledSql`). A call writes a court
+   *  and a time and no status, outcome or event, so none of the three terms below sees it. */
+  called: boolean;
   /** The seats' slot-label keys — a dead seat carries the cascade's bye key (Review Focus 1's revive reads it). */
   home_key: string | null;
   away_key: string | null;
@@ -160,12 +163,12 @@ export function advancingSides(outcome: unknown): { winner: string | undefined; 
   }
 }
 
-/** Has the next match started, in the ruling's own three terms. Each is
- *  checked on its own because each can hold alone: a `core.note` leaves a
- *  fixture `scheduled` with a live event; a recorded walkover carries an
- *  outcome with a single `core.forfeit` behind it. */
+/** Has the next match started, in the ruling's own three terms — and, since W4 T2 (X-LE-9), a live Match Day call: a
+ *  final called to a court has its players standing at it, so taking a name off it is refused like any started match.
+ *  Each is checked on its own because each can hold alone: a `core.note` leaves a fixture `scheduled` with a live
+ *  event; a recorded walkover carries an outcome with a single `core.forfeit` behind it; a call writes none of them. */
 function hasStarted(t: Node): boolean {
-  return t.status !== "scheduled" || t.outcome !== null || t.live_events > 0;
+  return t.status !== "scheduled" || t.outcome !== null || t.live_events > 0 || t.called;
 }
 
 /** A walkover the SYSTEM awarded, which nobody played: `awardSeededByes`
@@ -229,6 +232,9 @@ function drawnLabel(src: Node, side: Side): Step["label"] {
 }
 
 async function readNode(tx: Tx, id: string): Promise<Node | undefined> {
+  // Imported lazily, as `departedOf` imports entrants: the predicate sits in usecases, ABOVE this file
+  // (match-day-call → engine-db → append-event → here), and a static edge back up reorders the cycle's evaluation.
+  const { fixtureCalledSql } = await import("@/server/usecases/fixture-started-sql");
   const [n] = await tx<Node[]>`
     select f.id, f.stage_id, f.round_no, f.seq_in_round, f.home_entrant_id, f.away_entrant_id,
            f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot,
@@ -237,7 +243,8 @@ async function readNode(tx: Tx, id: string): Promise<Node | undefined> {
            (select count(*)::int from score_events e
             where e.fixture_id = f.id and e.type <> 'core.void'
               and not exists (select 1 from score_events v
-                              where v.fixture_id = e.fixture_id and v.voids_event_id = e.id)) as live_events
+                              where v.fixture_id = e.fixture_id and v.voids_event_id = e.id)) as live_events,
+           ${fixtureCalledSql(tx, "f")} as called
     from fixtures f join stages s on s.id = f.stage_id
     where f.id = ${id}`;
   return n;
@@ -682,4 +689,49 @@ async function writeRevives(tx: Tx, revives: readonly Revive[]): Promise<string[
     if (row && !changed.includes(row.id)) changed.push(row.id);
   }
   return changed;
+}
+
+/**
+ * W4 T14 (FX-G18, X-QM-4, RB4-Q5): a correction took a confirmed proposal's qualifier away before the destination started,
+ * so every seat that confirm filled goes back: the stage's lines stand exactly as its generator wrote them — seats empty,
+ * `scheduled`, the labels restored — and a new draft keys its seats off those labels (`destinationSlotsBySeed`), so they
+ * are load-bearing, not cosmetic. A confirm's own writes go with them: a walkover it awarded over a vacated seat, the winner
+ * that walkover advanced, a vacated seat's bye stamp, a doubly vacated line's void. The schedule stays: nothing is regenerated
+ * (the labels are re-derived by the generator's own pass over the existing rows, one authority for a label, keyed by
+ * `ext_key`), so courts and times survive for the re-confirm.
+ *
+ * THE started guard is here, under the locks (stage seats, then each line's append lock in bracket order, the house order):
+ * a destination with any started line (`stageHasStarted`: a score, a result, a Match Day call; a bye is no start) gives
+ * nothing back and returns [], and the bracket stands (RB4-Q5). A scorer's first event either commits first and is seen, or
+ * waits and finds the seat empty. The caller holds the division lock. Returns the lines that changed, for the publish; an
+ * unknown proposal throws (a caller holding a row id it just read has a bug, never an empty result).
+ */
+export async function unfillProposalSeats(tx: Tx, proposalId: string): Promise<string[]> {
+  const [proposal] = await tx<{ stage_id: string }[]>`select stage_id from stage_seed_proposals where id = ${proposalId}`;
+  if (!proposal) throw new Error(`unfillProposalSeats: no such proposal ${proposalId}`);
+  const stageId = proposal.stage_id;
+  // Imported lazily, as `departedOf` imports entrants: usecases sit ABOVE this file.
+  const { stageHasStarted } = await import("@/server/usecases/fixture-started-sql");
+  const { lockSwissBoardAppends, writeProgressionSetupFixtures } = await import("@/server/usecases/stages");
+  await lockStageSeats(tx, stageId);
+  const lines = await tx<{ id: string; round_no: number }[]>`select id, round_no from fixtures where stage_id = ${stageId}`;
+  for (const round of [...new Set(lines.map((l) => l.round_no))].sort((a, b) => a - b)) {
+    await lockSwissBoardAppends(tx, lines.filter((l) => l.round_no === round).map((l) => l.id));
+  }
+  if (await stageHasStarted(tx, stageId)) return [];
+  const changed = await tx<{ id: string; awarded: boolean }[]>`
+    select id, outcome is not null as awarded from fixtures
+     where stage_id = ${stageId}
+       and (home_entrant_id is not null or away_entrant_id is not null or status <> 'scheduled' or outcome is not null)`;
+  await tx`
+    update fixtures set
+      home_entrant_id = null, away_entrant_id = null,
+      home_slot_label = null, away_slot_label = null,
+      status = 'scheduled', outcome = null,
+      config_snapshot = null, config_snapshot_at = null
+    where stage_id = ${stageId}`;
+  // A walkover that froze a match state goes with its line (a `withdrew` award does, `writeAwardedMatchState`).
+  for (const line of changed) if (line.awarded) await clearAwardedMatchState(tx, line.id);
+  await writeProgressionSetupFixtures(tx, stageId);
+  return changed.map((l) => l.id);
 }

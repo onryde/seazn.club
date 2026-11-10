@@ -20,7 +20,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { ROW_KEYS, SPORT_KEYS, type RowKey } from "./catalogue.ts";
+import { ROW_KEYS, SPORT_KEYS, STANDALONE_REFUSED_REASON, refusedCell, type RowKey } from "./catalogue.ts";
 import { MissingRule, RULES, decide, gapReason, type Rule } from "./applicability.ts";
 import { l2Atomic } from "./scenario-catalogue.ts";
 import type { SportVariants } from "./variants.ts";
@@ -54,6 +54,9 @@ export interface L2Plan {
    *  run's `covers`. counts.json reports their sum as `pairTargets`. */
   targets: { rowScenario: number; sportScenario: number };
   perScenario: Record<string, number>;
+  /** W4 T24: the picks held back - a standalone-refused pick keeps its slot (its n and its width) and writes no run. The
+   *  rotation's slot count is `runs.length + held`; `n` skips exactly the held slots. */
+  held: number;
 }
 
 export class UnknownL2Scenario extends Error {
@@ -98,18 +101,39 @@ export class GapUnbound extends Error {
   }
 }
 
-interface Owed { readonly row: RowKey; readonly sport: string; readonly preset: string; readonly bound: string | null; readonly l3Gap: string | null }
+/** `held`: the cell is one the product refuses standalone (catalogue.ts refusedCell, STANDALONE_REFUSED_REASON; W4 T16,
+ *  ruling 269). Its pick keeps its SLOT - the run number and the width the committed rotation gave it - but emits no run:
+ *  nothing can be driven on a refused cell (W4 T24, owner option A: no re-baseline of the committed evidence). */
+interface Owed { readonly row: RowKey; readonly sport: string; readonly preset: string; readonly bound: string | null; readonly l3Gap: string | null; readonly held: boolean }
+
+/** A held pick covered a sport: that sport's only coverage would vanish with the run it never emits. The committed rotation
+ *  never does (every held pick covers its row alone); a plan that does is refused by name rather than silently under-cover. */
+export class HeldPickCoversSport extends Error {
+  readonly scenario: string;
+  readonly row: string;
+  readonly sport: string;
+  constructor(scenario: string, row: string, sport: string) {
+    super(`pairs: ${scenario} at ${row}|${sport} is a held pick (the cell is refused by the product) yet it would cover its sport - no run is emitted for it, so ${sport} would be uncovered for ${scenario}`);
+    this.name = "HeldPickCoversSport";
+    this.scenario = scenario;
+    this.row = row;
+    this.sport = sport;
+  }
+}
 
 /** Applies (L3 plans it too), or its only drop is the gap: bound as decide
- *  binds the rule with the gap lifted. Else null (genuinely inapplicable). */
+ *  binds the rule with the gap lifted. Else null (genuinely inapplicable).
+ *  A standalone-refused cell is judged as if offered and marked `held` (W4 T24). */
 function owed(id: string, r: Rule, row: RowKey, sport: string, variants: readonly SportVariants[]): Owed | null {
-  const d = decide(r, row, sport, variants);
-  if (d.applies) return { row, sport, preset: d.preset, bound: d.bound, l3Gap: null };
+  const held = refusedCell(row, sport) === STANDALONE_REFUSED_REASON;
+  const refusal = held ? null : refusedCell(row, sport);
+  const d = decide(r, row, sport, variants, refusal);
+  if (d.applies) return { row, sport, preset: d.preset, bound: d.bound, l3Gap: null, held };
   const { gap, ...lifted } = r;
   if (gap === undefined || d.gapped.length === 0) return null;
-  const u = decide(lifted, row, sport, variants);
+  const u = decide(lifted, row, sport, variants, refusal);
   if (!u.applies) throw new GapUnbound(id, row, sport, d.gapped);
-  return { row, sport, preset: u.preset, bound: u.bound, l3Gap: gapReason(gap) };
+  return { row, sport, preset: u.preset, bound: u.bound, l3Gap: gapReason(gap), held };
 }
 
 export function planL2(input: { rules?: Readonly<Record<string, Rule>>; variants: readonly SportVariants[]; only?: readonly string[] }): L2Plan {
@@ -127,6 +151,9 @@ export function planL2(input: { rules?: Readonly<Record<string, Rule>>; variants
     if (bad.length > 0) throw new UnknownL2Scenario(bad);
   }
   const runs: L2Run[] = [];
+  /** The rotation's run number so far: the runs written PLUS the held picks (a standalone-refused pick keeps its slot). */
+  let slot = 0;
+  let held = 0;
   const targets = { rowScenario: 0, sportScenario: 0 };
   const perScenario: Record<string, number> = {};
   /** Earlier scenarios whose run count is a multiple of 7 (see the width). */
@@ -142,15 +169,22 @@ export function planL2(input: { rules?: Readonly<Record<string, Rule>>; variants
     }
     const byRow = ROW_KEYS.map((row) => grid.filter((o) => o.row === row)).filter((os) => os.length > 0);
     const bySport = SPORT_KEYS.map((s) => grid.filter((o) => o.sport === s)).filter((os) => os.length > 0);
-    targets.rowScenario += byRow.length;
+    // A row every cell of which is held owes no target: nothing is emitted to cover it (W4 T24, option A).
+    targets.rowScenario += byRow.filter((os) => os.some((o) => !o.held)).length;
     targets.sportScenario += bySport.length;
     const sportsLeft = new Set(bySport.map((os) => os[0].sport));
     const picks: { readonly o: Owed; readonly covers: ("row" | "sport")[] }[] = [];
     for (const os of byRow) {
       const o = os.find((x) => sportsLeft.has(x.sport)) ?? os[0];
-      picks.push({ o, covers: sportsLeft.delete(o.sport) ? ["row", "sport"] : ["row"] });
+      const covers: ("row" | "sport")[] = sportsLeft.delete(o.sport) ? ["row", "sport"] : ["row"];
+      if (o.held && covers.includes("sport")) throw new HeldPickCoversSport(a.id, o.row, o.sport);
+      picks.push({ o, covers });
     }
-    for (const os of bySport) if (sportsLeft.has(os[0].sport)) picks.push({ o: os[0], covers: ["sport"] });
+    for (const os of bySport) {
+      if (!sportsLeft.has(os[0].sport)) continue;
+      if (os[0].held) throw new HeldPickCoversSport(a.id, os[0].row, os[0].sport);
+      picks.push({ o: os[0], covers: ["sport"] });
+    }
     // Widths rotate by run number, (n - 1) % 7: run 1 is at 320, the split
     // across widths is within one, and a scenario's runs take consecutive
     // widths. A scenario of 7m runs puts m runs on every width wherever it
@@ -159,13 +193,18 @@ export function planL2(input: { rules?: Readonly<Record<string, Rule>>; variants
     // (one-per-row) scenarios all start on the same width and each row meets
     // the same few widths: 12 (row, width) pairs never ran (T7 review I-1).
     const shift = picks.length % L2_WIDTHS.length === 0 ? laps++ % L2_WIDTHS.length : 0;
+    // `slot` is the pick's place in the whole rotation, held or not: a held pick takes its n and its width but writes no run,
+    // so every later run keeps the n and the width the committed file gave it (W4 T24, option A).
+    let emitted = 0;
     for (const { o, covers } of picks) {
-      const n = runs.length + 1;
+      const n = ++slot;
+      if (o.held) { held++; continue; }
       runs.push({ n, scenario: a.id, row: o.row, sport: o.sport, preset: o.preset, bound: o.bound, width: L2_WIDTHS[(n - 1 + shift) % L2_WIDTHS.length], covers, l3Gap: o.l3Gap });
+      emitted++;
     }
-    perScenario[a.id] = picks.length;
+    perScenario[a.id] = emitted;
   }
-  return { runs, targets, perScenario };
+  return { runs, targets, perScenario, held };
 }
 
 // --- the committed file, read back (W1c Task 12) ------------------------------

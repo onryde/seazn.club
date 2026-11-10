@@ -25,9 +25,10 @@ import { cardTitle } from "@/components/v2/board/types";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
-import { createStages, generateStageFixtures, listStages } from "../stages";
+import { generateStageFixtures, listStages } from "../stages";
 import { listDivisionFixtures, listDivisionFixturesForBoard } from "../fixtures";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
+import { createStagesWithLegacy } from "./_legacy-standalone-stage";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -72,7 +73,7 @@ async function seedGeneratedStage(
       members: [],
     })),
   );
-  const [stage] = await createStages(auth, division.id, { seq: 1, kind, name: kind, config });
+  const [stage] = await createStagesWithLegacy(auth, division.id, { seq: 1, kind, name: kind, config });
   await generateStageFixtures(auth, stage!.id);
   return { auth, divisionId: division.id };
 }

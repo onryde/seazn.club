@@ -6,6 +6,38 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 // and dated; this page IS the versioning promise (v3/08 §3).
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
+    date: "2026-11-09",
+    title: "A page playoff the field cannot fill is refused up front; a frozen late entry says why it waits",
+    lines: [
+      "A league or Swiss that feeds a page playoff needs at least 4 active entrants, the page playoff's four seats. Below that, POST /divisions/{id}/start, POST /stages/{id}/rebuild and, before start, POST /stages/{id}/generate on the league or Swiss answer 422 PAGE_PLAYOFF_TOO_FEW with the bound in `min`.",
+      "A knockout late entry placed while the division's schedule is frozen is left without a time and court, as before, and its answer now also carries `schedule_frozen: true` beside `scheduled: false`.",
+    ],
+  },
+  {
+    date: "2026-11-09",
+    title: "A knockout format the field cannot play is refused up front",
+    lines: [
+      "A root knockout that feeds a plate needs at least 4 active entrants, and one that feeds a main draw needs enough to fill the cut. Below that, POST /divisions/{id}/start, POST /stages/{id}/generate and POST /stages/{id}/rebuild answer 422 KO_PLATE_TOO_FEW or QUALIFYING_MAIN_TOO_FEW with the bound in `min`. A bracket already drawn and started is left alone by start and generate; rebuild below the minimum is still refused after start.",
+      "A rank cut from a knockout must cover whole finishing bands: each rank rule starts on 1st, 2nd, 3rd, 5th, 9th ... and ends on 1st, 2nd, 4th, 8th, 16th ... (1-2, 1-4, 3-8 and 5-8 are whole; 2-3, 4-5 and 1-3 are not). Where the source plays a third-place match (`thirdPlace: true`) 3rd and 4th are places of their own, so 1-3, 3-3 and 4-4 are whole there. Writing stages with any other rule answers 422 KO_CUT_NOT_WHOLE_ROUND with that rule in `from`, `to` and `width`; each rank rule is judged alone. Stages stored before this rule keep running.",
+    ],
+  },
+  {
+    date: "2026-11-08",
+    title: "A correction inside a completed knockout reaches the stage it feeds",
+    lines: [
+      "When a voided or re-recorded result moves the qualifiers of a completed knockout, or their seed order, the next stage's seed proposal goes stale, a confirmed one included, and the knockout's placement is recomputed. If the next stage has not started (a result, live play or a Match Day call), its seats go back to TBD and its schedule stays, and a fresh draft is proposed once the source is decided again. If it has started, the bracket stands.",
+      "POST /stages/{id}/seed-proposal and its confirm now answer 409 SEEDING_SOURCE_INCOMPLETE while a knockout source has an undecided match, even if that stage reads complete.",
+    ],
+  },
+  {
+    date: "2026-11-08",
+    title: "A departed qualifier's knockout seat takes a lucky loser; table cuts close up",
+    lines: [
+      "POST /entrants/{id}/withdraw on a qualifier who holds a round-1 seat of a knockout fed by a knockout's rank cut, before that match has started (a score, live play, a result or a Match Day call), now seats a lucky loser in her place instead of walking the opponent over: the source's best loser below the cut — the latest knock-out round first, then seed, then a lot drawn with the destination stage's own seed. A loser by walkover, withdrawal or disqualification is never eligible. The report gains lucky_loser ({entrant_id, fixture_id}, or null when nobody was seated: no such seat, the match had started, or nobody was eligible — then the opponent walks over as before).",
+      "Before the draw is confirmed, the seed proposal (POST /stages/{id}/seed-proposal) offers that lucky loser in the departed qualifier's rank; from a league or group source the next-ranked entrant now takes it, as a Swiss source already did. Only when nobody is left below the cut is her seat left empty.",
+    ],
+  },
+  {
     date: "2026-11-02",
     title: "Breaking: PATCH /entrants/{id} to disqualified walks the entrant's open matches over",
     lines: [

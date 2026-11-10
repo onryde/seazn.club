@@ -69,7 +69,7 @@
       "fencesOn": true,
       "fence": "ko-generate-after-roster-change",
       "match": "would strand home_slot_label",
-      "status": "open",
+      "status": "fixed",
       "found": "2026-09-29",
       "runId": "w1b-model-0929d"
     },
@@ -87,7 +87,7 @@
       "fencesOn": true,
       "fence": "ko-generate-after-roster-change",
       "match": "would strand home_slot_label",
-      "status": "open",
+      "status": "fixed",
       "found": "2026-09-29",
       "runId": "w1b-model-0929b"
     },

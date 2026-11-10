@@ -37,6 +37,7 @@ import { w2cStageRulesSuite } from "./suites/w2cStageRules.ts";
 import { w2dTablesSuite } from "./suites/w2dTables.ts";
 import { w2eRefusalsSuite } from "./suites/w2eRefusals.ts";
 import { w3SwissASuite } from "./suites/w3SwissA.ts";
+import { w4KnockoutASuite } from "./suites/w4KnockoutA.ts";
 import { w3SwissBSuite } from "./suites/w3SwissB.ts";
 import { w4aTimeModelSuite } from "./suites/w4aTimeModel.ts";
 import { cricketDlsSuite } from "./suites/cricketDls.ts";
@@ -1261,6 +1262,12 @@ export async function main() {
   // own header lists each. After w3SwissA, as the plan places it. Own fresh owner; keyless; SQL seeds (the S6 history, the
   // 1.x byeScore) and the delta's own block through DATABASE_URL.
   await suite("w3SwissB", () => w3SwissBSuite());
+
+  // Format matrix W4 knockout app-A: counted checks for the tasks that owe one (T2: a called final survives a void of its
+  // feeder, X-LE-9; T3: an awarded bye holds no court, X-SD-5; T4: Rebuild keeps the final's slot by bracket role,
+  // X-RB-1); the suite's own header lists each. After w3SwissB, as the plan places every new suite after the last.
+  // Own fresh owner; keyless; every read and write a v1 route.
+  await suite("w4KnockoutA", () => w4KnockoutASuite());
 }
 
 async function smokePlanMatrix(): Promise<void> {

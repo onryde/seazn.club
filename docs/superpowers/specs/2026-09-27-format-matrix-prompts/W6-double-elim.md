@@ -67,6 +67,42 @@ case (no `formats.double_elim`) is observed as ⛔ with guidance.
 5. **The reset prints like any match** (SH-G17) — that is W8's. If your fix
    changes `conditional`, tell the W8 lane rather than editing sheet code.
 
+## Carried from W4 (2026-11-09)
+
+Owner ruling 2026-11-09: double elimination is W6's. Two W4 findings land here
+unfixed (W4 app PR A #1152, T26c).
+
+1. **A losers'-bracket line fed by a bye line's loser is scheduled like a match**
+   (audit G1, `.superpowers/sdd/2026-11-05-w4-knockout-app-a/placeholder-placement-audit.md`).
+   On every non-power-of-two field (5-7, 9-15, ...) a winners'-bracket round-1
+   bye hands on no loser, so the losers'-bracket seat it feeds can never be
+   filled. While that line's OTHER seat still waits on a live feeder,
+   `resolveBracketSeats` leaves it alone (`stages.ts:5743`, "both seats open,
+   only one dead"), and `isByeLine` (`lib/bye-line.ts`) has no feeder arm, so
+   `isMovable` (`schedule.ts:197-199`) is true and Auto-schedule BUILD gives it
+   a time and a court. The slot is freed only when the live side's award lands.
+   Fix at the ONE authority (`isByeLine` / `byeLineSql` / `system-bye-sql.ts`),
+   never a second copy, and keep V493's SQL-equivalence test holding.
+   Smallest test: double_elim n=5, Generate, `autoSchedule` BUILD +
+   `applySchedule`, then every line with a seat fed by a bye line's loser holds
+   neither `scheduled_at` nor `court_id` (count > 0, predicted red today).
+   The all-format sweep `apps/web/src/server/usecases/__tests__/template-placement-sweep.test.ts`
+   excludes `double_elim` by key, naming W6: remove that key (and lower
+   `EXCLUDED_COUNT`) when this lands, and teach its engine oracle
+   (`engineBracket`) `generateDoubleElim` — `bracketFates` already judges a
+   seat fed by a bye's loser as dead.
+2. **Rebuild carries a double elimination's slots by POSITION.** `carrySlots`
+   keys by bracket role (`bracketRoleKey`) for knockout, stepladder and
+   page_playoff only (`stages.ts`, the `regenerateStageInTx` carry); a
+   double elimination still matches `(pool, round_no, seq)`, and its lanes'
+   round numbers move when the field changes, so a 4 -> 5 Rebuild hands the
+   grand final's time and court to another line (the K3 shape). Pinned as a
+   known defect by `rebuild-one-transaction.test.ts` ("a double-elimination
+   Rebuild still carries by position"), which flips when this is fixed. The
+   Rebuild confirm says "Times and courts stay with each match's place in the
+   draw" — false for double elimination until it carries by role (each lane
+   counted back from its own final).
+
 ## Output and handoff
 
 Update the W6 row, decision log and "False premises found" in `_INDEX.md` as

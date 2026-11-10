@@ -19,7 +19,7 @@ import {
   swissLatecomerLines,
   type LateEntryNoticeLine,
 } from "@/lib/swiss-late-entry-notice";
-import type { LateEntryResult } from "@/server/api-v1/schemas";
+import type { LateEntryResult, SwissLateEntryResult } from "@/server/api-v1/schemas";
 import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
@@ -39,7 +39,8 @@ const BEN = "e-ben";
 const CAI = "e-cai";
 const NAMES: Record<string, string> = { [ELIF]: "Elif", [ANA]: "Ana", [BEN]: "Ben", [CAI]: "Cai" };
 
-const result = (o: Partial<LateEntryResult> & Pick<LateEntryResult, "case" | "round">): LateEntryResult => ({
+const result = (o: Partial<SwissLateEntryResult> & Pick<SwissLateEntryResult, "case" | "round">): SwissLateEntryResult => ({
+  format: "swiss",
   entrant_id: ELIF,
   stage_id: STAGE,
   ...o,
@@ -370,7 +371,43 @@ describe("swiss late-entry copy in all four locales", () => {
         checked += 1;
       }
     }
-    // 7 plain keys + 3 plural bases × 2 forms, × 4 locales.
-    expect(checked).toBe((7 + 3 * 2) * 4);
+    // 7 Swiss + 9 knockout (W4 T19: tookBye, tookWithdrawnSlot, backInPlace, rebuildOffered, playedOn, luckyLoser, the no-slot refusal;
+    // final review m1: unfreezeFirst; T26c I2: unscheduledFrozen) plain keys, 3 Swiss + 1 knockout plural bases × 2 forms, × 4 locales.
+    expect(checked).toBe((7 + 9 + (3 + 1) * 2) * 4);
+  });
+});
+
+// W4 T9 (pre-flight C8): `LateEntryResult` is a union by format, and a knockout late entry's `case` is its own
+// vocabulary. W4 T19 (R24 pick 2B) gives the knockout its own lines in this same notice (knockout-late-entry-notice.test.ts
+// holds that table); what stays pinned HERE is C8 itself: a knockout result never reads as a Swiss case — no Swiss
+// sentence comes off it (Swiss's "1 new match is unscheduled." is the one line both formats share, by the brief) — and
+// beside a Swiss (c) in one batch the Swiss line is said exactly once.
+describe("swiss late-entry notice: a knockout result is not a Swiss one", () => {
+  const KNOCKOUT_RESULTS: LateEntryResult[] = [
+    { format: "knockout", entrant_id: BEN, stage_id: STAGE, case: "bye", opponent_id: ANA, scheduled: false },
+    { format: "knockout", entrant_id: BEN, stage_id: STAGE, case: "bye", opponent_id: ANA, scheduled: false, schedule_frozen: true },
+    { format: "knockout", entrant_id: BEN, stage_id: STAGE, case: "withdrawn_slot", opponent_id: ANA, withdrawn_id: CAI, scheduled: false },
+    { format: "knockout", entrant_id: BEN, stage_id: STAGE, case: "waiting" },
+    { format: "knockout", entrant_id: BEN, stage_id: STAGE, case: "refused", reason: "KO_LATE_ENTRY_NO_SLOT" },
+    { format: "knockout", entrant_id: BEN, stage_id: STAGE, case: "rebuild_offered", reason: "KO_LATE_ENTRY_NO_SLOT" },
+  ];
+  const SHARED = "swiss.lateEntry.newMatchUnscheduled";
+  it("reads no Swiss case off any knockout case, alone or in a batch", () => {
+    let checked = 0;
+    for (const ko of KNOCKOUT_RESULTS) {
+      const label = ko.format === "knockout" ? ko.case : "?";
+      const alone = lateEntryNotice([ko], NAMES, { locale: "en" });
+      expect(alone.length, `${label}: the knockout says something of its own`).toBeGreaterThan(0);
+      for (const line of alone) {
+        const key = "key" in line ? line.key : line.plural;
+        expect(key === SHARED || !key.startsWith("swiss."), `${label}: ${key} is no Swiss sentence`).toBe(true);
+      }
+      // Beside a Swiss (c): the knockout's own lines, then the Swiss line, once.
+      const batch = render(lateEntryNotice([ko, result({ case: "c", round: 2 })], NAMES, { locale: "en" }));
+      expect(batch.filter((l) => l.text === "Elif joins from round 2.").length, label).toBe(1);
+      expect(batch.slice(0, alone.length), label).toEqual(render(alone));
+      checked++;
+    }
+    expect(checked).toBe(KNOCKOUT_RESULTS.length);
   });
 });

@@ -15,8 +15,15 @@
 //
 // VOCABULARY. A field member is an "entrant" (the desk's noun: a doubles pair or a team is one); a board is a "match"
 // on screen — `board` is internal vocabulary, as in `reshapeNotice` and `swiss-legend.ts`.
-import type { LateEntryResult } from "@/server/api-v1/schemas";
+//
+// W4 T19 (X-LE-10 UI half; R24 pick 2B, preflight P26: this file, no sibling): a KNOCKOUT late entry's answer is said
+// here too, in the same block and tones — "Add to bracket" on the Entrants tab, the waiting strip's tap, a Reinstate.
+// The bye (case 1), a withdrawn player's place (case 2: a reinstated player's own seat is "back in their place"), the
+// unscheduled match (Swiss's own line), the T11 waiting flag's sentence, the refusals (no slot; a reinstated player whose
+// place has been played on, K13) and the Rebuild offer when nothing has started.
+import type { KnockoutLateEntryResult, LateEntryResult, SwissLateEntryResult } from "@/server/api-v1/schemas";
 import type { MessageKey } from "@/lib/messages";
+import { KO_LATE_ENTRY_PLAYED_ON, KO_LATE_ENTRY_SCHEDULE_FROZEN } from "@/lib/knockout-late-entry";
 import { swissFirstRoundIn } from "@/lib/swiss-late-entry";
 import { nextUnseatedSwissRound } from "@/lib/swiss-shell";
 
@@ -29,6 +36,18 @@ export const LATE_ENTRY_MESSAGE_KEYS = [
   "swiss.lateEntry.tookBye",
   "swiss.lateEntry.inviteOwed",
   "swiss.lateEntry.nextRound",
+  // W4 T19 — a knockout late entry.
+  "knockout.lateEntry.tookBye",
+  "knockout.lateEntry.tookWithdrawnSlot",
+  "knockout.lateEntry.backInPlace",
+  "knockout.lateEntry.rebuildOffered",
+  "knockout.lateEntry.playedOn",
+  "knockout.lateEntry.luckyLoser",
+  "knockout.refusal.KO_LATE_ENTRY_NO_SLOT",
+  // Final review m1 (owner ruling 2026-11-09): no slot, nothing started, but the schedule is frozen — unfreeze first.
+  "knockout.lateEntry.unfreezeFirst",
+  // T26c fix round 1 (I2): placed, but left unscheduled because the schedule is frozen.
+  "knockout.lateEntry.unscheduledFrozen",
 ] as const satisfies readonly MessageKey[];
 export type LateEntryMessageKey = (typeof LATE_ENTRY_MESSAGE_KEYS)[number];
 
@@ -37,6 +56,8 @@ export const LATE_ENTRY_PLURAL_KEYS = [
   "swiss.lateEntry.repaired",
   "swiss.lateEntry.joinNextRound",
   "swiss.lateEntry.joinedAfterLast",
+  // W4 T19 — the T11 desk flag's own sentence ("1 late player waiting — add to bracket").
+  "knockout.lateWaiting",
 ] as const;
 export type LateEntryPluralKey = (typeof LATE_ENTRY_PLURAL_KEYS)[number];
 
@@ -64,7 +85,8 @@ export interface LateEntryNoticeOptions {
 /**
  * The notice for one "Add late player" press: one result per created entrant (a CSV batch has several), each case's
  * lines in turn. Empty in, empty out. A line repeated across the batch (two re-pairs of one round both owe the same
- * reprint) is said once.
+ * reprint) is said once. A knockout result (W4 T19) is said in its OWN vocabulary (`knockoutLines`), never read as a Swiss
+ * case (pre-flight C8: its `case` is `bye`, `withdrawn_slot`, …); waiting players are counted once, on one line.
  */
 export function lateEntryNotice(
   results: readonly LateEntryResult[],
@@ -84,13 +106,24 @@ export function lateEntryNotice(
     said.add(id);
     out.push(line);
   };
-  const unscheduled = (r: LateEntryResult) => {
+  const unscheduled = (r: SwissLateEntryResult) => {
     if (r.new_board !== undefined && !r.new_board.scheduled) {
       push({ key: "swiss.lateEntry.newMatchUnscheduled", params: {}, tone: "todo" });
     }
   };
 
+  const waiting = results.filter((r) => r.format === "knockout" && r.case === "waiting").length;
+  let waitingSaid = false;
   for (const r of results) {
+    if (r.format === "knockout") {
+      if (r.case === "waiting") {
+        if (!waitingSaid) push({ plural: "knockout.lateWaiting", count: waiting, params: {}, tone: "todo" });
+        waitingSaid = true;
+        continue;
+      }
+      for (const line of knockoutLines(r, nameOf)) push(line);
+      continue;
+    }
     const name = nameOf(r.entrant_id);
     switch (r.case) {
       case "a": {
@@ -127,6 +160,66 @@ export function lateEntryNotice(
     }
   }
   return out;
+}
+
+/** One knockout result's lines (not `waiting`, counted by the caller). A case missing what its sentence names is refused by
+ *  name — never a sentence with a hole in it. */
+function knockoutLines(r: KnockoutLateEntryResult, nameOf: (id: string) => string): LateEntryNoticeLine[] {
+  const name = nameOf(r.entrant_id);
+  const refuse = (why: string) => new Error(`knockout late entry ${r.case} ${why}`);
+  // T26c fix round 1 (I2): a match left unscheduled by a FROZEN schedule says what it waits on. The flag is only ever set
+  // beside `scheduled: false`; with a slot it is a contradiction, refused by name rather than said.
+  if (r.schedule_frozen === true && r.scheduled !== false) throw refuse("frozen off the timetable yet scheduled");
+  const unscheduled: LateEntryNoticeLine[] =
+    r.scheduled === false
+      ? [
+          { key: "swiss.lateEntry.newMatchUnscheduled", params: {}, tone: "todo" },
+          ...(r.schedule_frozen === true ? [{ key: "knockout.lateEntry.unscheduledFrozen" as const, params: {}, tone: "todo" as const }] : []),
+        ]
+      : [];
+  switch (r.case) {
+    case "bye":
+      if (r.opponent_id === undefined) throw refuse("without the bye's holder");
+      return [{ key: "knockout.lateEntry.tookBye", params: { name, holder: nameOf(r.opponent_id) }, tone: "done" }, ...unscheduled];
+    case "withdrawn_slot": {
+      if (r.withdrawn_id === undefined) throw refuse("without whose place it took");
+      if (r.opponent_id === undefined) throw refuse("without the opponent");
+      const opponent = nameOf(r.opponent_id);
+      // A reinstated player's tap gives back THEIR seat: they are back in their place, never "taking their own place".
+      const line: LateEntryNoticeLine =
+        r.withdrawn_id === r.entrant_id
+          ? { key: "knockout.lateEntry.backInPlace", params: { name, opponent }, tone: "done" }
+          : { key: "knockout.lateEntry.tookWithdrawnSlot", params: { name, withdrawn: nameOf(r.withdrawn_id), opponent }, tone: "done" };
+      return [line, ...unscheduled];
+    }
+    case "refused":
+      if (r.reason === KO_LATE_ENTRY_PLAYED_ON) return [{ key: "knockout.lateEntry.playedOn", params: { name }, tone: "todo" }];
+      if (r.reason === "KO_LATE_ENTRY_NO_SLOT") return [{ key: "knockout.refusal.KO_LATE_ENTRY_NO_SLOT", params: {}, tone: "todo" }];
+      // m1: nothing started, so Rebuild would be the way in — but the schedule is frozen and Rebuild refuses it.
+      if (r.reason === KO_LATE_ENTRY_SCHEDULE_FROZEN) return [{ key: "knockout.lateEntry.unfreezeFirst", params: { name }, tone: "todo" }];
+      throw refuse(`with ${r.reason === undefined ? "no reason" : `an unknown reason ${r.reason}`}`);
+    case "rebuild_offered":
+      return [{ key: "knockout.lateEntry.rebuildOffered", params: { name }, tone: "todo" }];
+    case "waiting":
+      throw refuse("is counted by the caller, never said one by one");
+  }
+}
+
+/**
+ * W4 T13 (RB4-V2, X-LL-1; review #4, b6a carry): the line a WITHDRAWAL or DISQUALIFICATION says when a lucky loser took the
+ * departed qualifier's main-draw seat — the cascade report's `lucky_loser` (`WithdrawCascadeReport`). Said in the same block
+ * and tones as a late entry's (green: it happened). Nothing when no lucky loser took a seat (the line walked over as before,
+ * or the reply is from a server that predates the field): a line for a thing that did not happen would be the false one.
+ * `departedName` is the withdrawn player's (the caller holds it; the lucky loser's is looked up in `names`).
+ */
+export function luckyLoserNotice(
+  cascade: { lucky_loser?: { entrant_id: string; fixture_id: string } | null } | null | undefined,
+  departedName: string,
+  names: Readonly<Record<string, string>>,
+): LateEntryNoticeLine[] {
+  const lucky = cascade?.lucky_loser;
+  if (!lucky) return [];
+  return [{ key: "knockout.lateEntry.luckyLoser", params: { lucky: names[lucky.entrant_id] ?? "?", name: departedName }, tone: "done" }];
 }
 
 export interface SwissLatecomerCounts {

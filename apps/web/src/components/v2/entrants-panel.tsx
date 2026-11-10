@@ -44,7 +44,8 @@ import {
   type SwissFinishAnswer,
   type SwissFinishPlan,
 } from "@/lib/swiss-finish-plan";
-import { lateEntryNotice, lateEntryNoticeText, type LateEntryNoticeLine } from "@/lib/swiss-late-entry-notice";
+import { lateEntryNotice, lateEntryNoticeText, luckyLoserNotice, type LateEntryNoticeLine } from "@/lib/swiss-late-entry-notice";
+import { knockoutRefusalText } from "@/lib/knockout-refusals";
 import type { LateEntryResult } from "@/server/api-v1/schemas";
 
 /** RS007/V380 — the division columns this panel badges above the roster.
@@ -188,6 +189,10 @@ interface Props {
    *  as the late-entry notice. `openOnlineRounds` are the (stage, round) keys already opened for online play
    *  (`roundKey`, `${stageId}:${round}`): a bye taken in one owes the pair an invite. Absent ⇒ an ordinary add. */
   swissLateEntry?: { openOnlineRounds: readonly string[] } | null;
+  /** W4 T19 (X-LE-3; `divisionTakesKnockoutLateEntry`) — set when the division has started and its entry stage is a root
+   *  knockout still running: an entrant added here takes a free place in round 1 (a bye or a withdrawn player's place) or
+   *  is refused by name, so the form says so. The same add form and the same notice as a Swiss's — never a second form. */
+  knockoutLateEntry?: boolean;
 }
 
 /** The late-entry answers on a create's response: the POST answers one row for an object body, an array for a batch. */
@@ -238,6 +243,7 @@ export function EntrantsPanel({
   viewerPlan,
   divisionStatus,
   swissLateEntry,
+  knockoutLateEntry = false,
 }: Props) {
   const msg = useMsg();
   const msgPlural = useMsgPlural();
@@ -250,6 +256,10 @@ export function EntrantsPanel({
   const [busy, setBusy] = useState(false);
   // W3 T10 — the late-entry notice for the LAST add (replaced by the next one, cleared by a refusal).
   const [lateNotice, setLateNotice] = useState<LateEntryNoticeLine[]>([]);
+  // W4 T19 — what the LAST Reinstate / Withdraw / Disqualify did to a started knockout (how a reinstated player rejoins it;
+  // the lucky loser who took a withdrawn qualifier's seat). Its own line, drawn whether or not the add form is: a lucky
+  // loser seats in a FED knockout, whose division's roster is locked and has no add form at all.
+  const [departureNotice, setDepartureNotice] = useState<LateEntryNoticeLine[]>([]);
   // W3 T12 Phase 2 — the recovery on a SWISS_NO_ROUND_LEFT refusal: the Swiss its details name, while the server says
   // "Add a round" goes through there (`canAddRound`, ruling C11); and the round it added, said until the next add.
   const [addRoundFor, setAddRoundFor] = useState<string | null>(null);
@@ -374,6 +384,13 @@ export function EntrantsPanel({
         setError(door);
         return;
       }
+      // W4 T19 (b6a carry B3 #3): a knockout late add refused (no slot left; the knockout is filled from another stage) — said by
+      // its code in the organiser's language, its placeholders filled from the envelope, never the server's English.
+      const knockout = err instanceof ApiV1Error ? knockoutRefusalText(err.code, err.extra, msg) : null;
+      if (knockout !== null) {
+        setError(knockout);
+        return;
+      }
       // An online-play division refuses a player without a Lichess link that can play: the server's words are English
       // only, so the code is said in the organiser's language, naming the people the payload names.
       const lichess =
@@ -490,6 +507,7 @@ export function EntrantsPanel({
    *  `late_entry` results become the new one. Every add, late or not: an ordinary add simply answers none. */
   async function addEntrants<T>(fn: (override?: { reason: string }) => Promise<T>): Promise<T | undefined> {
     setLateNotice([]);
+    setDepartureNotice([]);
     setRoundAdded(null);
     setSwissFinished(null);
     const res = await runGated(fn);
@@ -511,6 +529,21 @@ export function EntrantsPanel({
       fail(err);
     }
     return res;
+  }
+
+  /** The division's entrants by id — what the late-entry and departure notices name. */
+  const namesById = Object.fromEntries(entrants.map((e) => [e.id, e.display_name]));
+
+  /** W4 T19 (K13): a Reinstate's reply, said. Only a KNOCKOUT answer (`late_entry.format`) is read here; any other reply (an
+   *  ordinary reinstate, a Swiss one) says nothing, as it always did. A notice that cannot be said truthfully is an error. */
+  function sayReinstated(entrantId: string, reply: unknown) {
+    const late = (reply as { late_entry?: LateEntryResult } | null)?.late_entry;
+    if (late === undefined || late.format !== "knockout") return;
+    try {
+      setDepartureNotice(lateEntryNotice([late], { ...namesById, [entrantId]: namesById[entrantId] ?? "?" }, { locale }));
+    } catch (err) {
+      fail(err);
+    }
   }
 
   const eligibilityBadgeList = eligibilityBadges(eligibility, msg);
@@ -543,6 +576,14 @@ export function EntrantsPanel({
               className="rounded-lg border border-purple-200 bg-purple-50 px-3 py-2 text-sm text-purple-800"
             >
               {msg("entrants.swissLate.note")}
+            </p>
+          )}
+          {knockoutLateEntry && (
+            <p
+              data-testid="entrants-knockout-late-note"
+              className="rounded-lg border border-purple-200 bg-purple-50 px-3 py-2 text-sm text-purple-800"
+            >
+              {msg("entrants.knockoutLate.note")}
             </p>
           )}
           <AddEntrantForm
@@ -744,6 +785,22 @@ export function EntrantsPanel({
           {msg("entrants.lateEntry.roundAdded", { round: roundAdded })}
         </p>
       )}
+      {canEdit && (
+        <div role="status" data-testid="entrants-departure-notice" className="space-y-1.5 empty:hidden">
+          {departureNotice.map((line, i) => (
+            <p
+              key={i}
+              data-testid="entrants-departure-line"
+              data-tone={line.tone}
+              className={`rounded-md px-3 py-2 text-sm ${
+                line.tone === "todo" ? "bg-amber-50 text-amber-900" : "bg-emerald-50 text-emerald-700"
+              }`}
+            >
+              {lateEntryNoticeText(line, { t: msg, plural: msgPlural })}
+            </p>
+          ))}
+        </div>
+      )}
 
       {clubs.length > 0 && (
         <label className="flex items-center gap-2 text-sm text-slate-600">
@@ -809,14 +866,18 @@ export function EntrantsPanel({
                 otherTeamsFor={otherTeamsFor}
                 deletable={divisionStatus === "setup"}
                 onRename={(display_name) => saveName(e.id, display_name)}
-                onPatch={(patch) =>
-                  runGated((override) =>
+                onPatch={async (patch) => {
+                  setDepartureNotice([]);
+                  const res = await runGated((override) =>
                     apiV1(`/api/v1/entrants/${e.id}`, {
                       method: "PATCH",
                       json: withOverride(patch, override),
                     }),
-                  )
-                }
+                  );
+                  // W4 T19 (K13): a REINSTATE into a started knockout answers how the player rejoins it — waiting for the
+                  // organiser's Add to bracket, or back on the list with their place played on. Said, never a silent flip.
+                  if (res !== undefined && patch.status === "registered") sayReinstated(e.id, res);
+                }}
                 onWithdraw={async () => {
                   // Withdrawal mid-tournament does fixture surgery (spec 05
                   // §5) — spell out the policy before firing.
@@ -827,9 +888,12 @@ export function EntrantsPanel({
                     tone: "danger",
                   });
                   if (!ok) return;
-                  await run(() =>
+                  setDepartureNotice([]);
+                  const report = await run(() =>
                     apiV1(`/api/v1/entrants/${e.id}/withdraw`, { method: "POST", json: {} }),
                   );
+                  // W4 T13 review #4: a qualifier's seat taken by a lucky loser is named, not left for the organiser to find.
+                  if (report !== undefined) setDepartureNotice(luckyLoserNotice(report as { lucky_loser?: never }, e.display_name, namesById));
                 }}
                 onDisqualify={async () => {
                   // Ruling 258 (RB3-17 / X-SW-23): a disqualification cascades like a withdrawal, but it is a
@@ -846,9 +910,14 @@ export function EntrantsPanel({
                     tone: "danger",
                   });
                   if (!ok) return;
-                  await run(() =>
+                  setDepartureNotice([]);
+                  const patched = await run(() =>
                     apiV1(`/api/v1/entrants/${e.id}`, { method: "PATCH", json: { status: "disqualified" } }),
                   );
+                  // The disqualification's cascade runs the withdrawal's own lucky-loser step (T13): the same line.
+                  if (patched !== undefined) {
+                    setDepartureNotice(luckyLoserNotice((patched as { cascade?: { lucky_loser?: never } }).cascade, e.display_name, namesById));
+                  }
                 }}
                 onBadge={(file) => void run(() => badgeRequest(e.id, file))}
                 onDelete={async () => {

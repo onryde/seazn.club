@@ -38,7 +38,8 @@ const AUTO_HEIGHT = `
 
 export default function EmbedLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className={`${displayFont.variable} min-h-4 bg-white p-3`}>
+    // `embed-canvas`: globals.css turns `.bracket-bleed` off inside a widget (no shell margin to bleed into).
+    <div className={`${displayFont.variable} embed-canvas min-h-4 bg-white p-3`}>
       {/* No words here: this layout has no org in scope, so it cannot choose a
           language. The attribution renders from the widget page, which does. */}
       {children}

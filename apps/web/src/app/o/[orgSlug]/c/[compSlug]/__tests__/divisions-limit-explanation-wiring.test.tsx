@@ -19,7 +19,12 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { propsOf, walk } from "@/components/__tests__/_hook-harness";
 import type { ReactElement } from "react";
 
-const h = vi.hoisted(() => ({ explain: false }));
+const h = vi.hoisted(() => ({
+  explain: false,
+  // W4 T21: what `openStagesOf` answers, so the wiring test below can tell a passed answer from a default.
+  openStages: [] as { stageId: string; competitionId?: string }[],
+  openStagesAskedFor: [] as string[],
+}));
 
 vi.mock("@/server/page-auth", () => ({
   requireCompetitionPage: async () => ({
@@ -31,6 +36,11 @@ vi.mock("@/server/page-auth", () => ({
 }));
 
 vi.mock("@/server/usecases/competitions", () => ({
+  // W4 T21: the settings page reads the open stages its Complete-competition warning lists.
+  openStagesOf: async (_auth: unknown, competitionId: string) => {
+    h.openStagesAskedFor.push(competitionId);
+    return h.openStages;
+  },
   getCompetition: async () => ({
     id: "comp-1",
     org_id: "org-1",
@@ -131,6 +141,20 @@ async function builder(): Promise<ReactElement> {
 
 beforeEach(() => {
   h.explain = false;
+  h.openStages = [];
+  h.openStagesAskedFor = [];
+});
+
+// W4 T21 (X-CH-8): the warning's list is a server read handed down as a prop — and a missing prop defaults to an empty
+// list, which renders NO warning at all. So the wiring is pinned the same way as the explanation above.
+describe("the Complete-competition warning's open stages are wired from the server", () => {
+  it("competition settings asks for THIS competition's open stages and hands them to CompetitionSettings unchanged", async () => {
+    const rows = [{ stageId: "s-1" }, { stageId: "s-2" }];
+    h.openStages = rows;
+    const page = walk(await SettingsPage({ params }));
+    expect(h.openStagesAskedFor).toEqual(["comp-1"]);
+    expect(propsOf(find(page, CompetitionSettings)).openStages).toBe(rows);
+  });
 });
 
 describe("the archived-slot explanation is wired from the server on both surfaces", () => {

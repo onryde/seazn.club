@@ -14,15 +14,16 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { ROW_KEYS, SPORT_KEYS, type RowKey } from "./catalogue.ts";
+import { ROW_KEYS, SPORT_KEYS, refusedCell, type RowKey } from "./catalogue.ts";
 import { requireScorable } from "./probe-set.ts";
 import { HARNESS_SCENARIO, LIFECYCLE_ID } from "./scenario-catalogue.ts";
-import { W2A_SCENARIO_KEYS, W2B_SCENARIO_KEYS, W2E_SCENARIO_KEYS, type CaseSpec, type ScenarioKey, type W2aScenarioKey, type W2bScenarioKey, type W2eScenarioKey } from "./scenarios/types.ts";
+import { W2A_SCENARIO_KEYS, W2B_SCENARIO_KEYS, W2E_SCENARIO_KEYS, W4A_SCENARIO_KEYS, type CaseSpec, type ScenarioKey, type W2aScenarioKey, type W2bScenarioKey, type W2eScenarioKey, type W4aScenarioKey } from "./scenarios/types.ts";
 import { UnknownFilter, checkCellFilter } from "./slice.ts";
 import { scorable, type VariantCase } from "./variants.ts";
 import { w2aCells } from "./w2a-cells.ts";
 import { w2bCells } from "./w2b-cells.ts";
 import { w2eCells } from "./w2e-cells.ts";
+import { w4aCells } from "./w4a-cells.ts";
 // Type-only: run.ts value-imports this module, and an erased import cannot cycle.
 import type { PlanCases } from "../run.ts";
 
@@ -127,7 +128,7 @@ export interface W1DrivingDeps {
   rescore?: (vc: VariantCase) => string | null;
 }
 
-type PlannedScenario = W1DrivingScenario | W2aScenarioKey | W2bScenarioKey | W2eScenarioKey;
+type PlannedScenario = W1DrivingScenario | W2aScenarioKey | W2bScenarioKey | W2eScenarioKey | W4aScenarioKey;
 
 interface Selection {
   readonly cells: readonly { readonly row: RowKey; readonly sport: string; readonly scenario: PlannedScenario; readonly overrides?: Readonly<Record<string, unknown>>; readonly asVariant?: string }[];
@@ -137,7 +138,7 @@ interface Selection {
 /** The four scripts, or (opt-in) one of the bracket-finish (W2a), forfeit-credit (W2b) or deciding-path (W2e)
  *  scenarios — which only an explicit `--scenario` plans. */
 const scenarioOf = (s: string): PlannedScenario => {
-  const known = [...W1_DRIVING_SCENARIOS, ...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS, ...W2E_SCENARIO_KEYS];
+  const known = [...W1_DRIVING_SCENARIOS, ...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS, ...W2E_SCENARIO_KEYS, ...W4A_SCENARIO_KEYS];
   const k = known.find((x) => x === s);
   if (k === undefined) throw new UnknownFilter("--scenario", s, known);
   return k;
@@ -145,6 +146,7 @@ const scenarioOf = (s: string): PlannedScenario => {
 const isW2a = (s: PlannedScenario): s is W2aScenarioKey => (W2A_SCENARIO_KEYS as readonly string[]).includes(s);
 const isW2b = (s: PlannedScenario): s is W2bScenarioKey => (W2B_SCENARIO_KEYS as readonly string[]).includes(s);
 const isW2e = (s: PlannedScenario): s is W2eScenarioKey => (W2E_SCENARIO_KEYS as readonly string[]).includes(s);
+const isW4a = (s: PlannedScenario): s is W4aScenarioKey => (W4A_SCENARIO_KEYS as readonly string[]).includes(s);
 
 /** Everything but the variant names: checked filters, the drops applied, the
  *  bound test cases re-scored — all before the DB, at planner construction. */
@@ -181,6 +183,14 @@ function select(filter: W1DrivingFilter, deps: W1DrivingDeps): Selection {
     if (cells.length === 0) throw new W1DrivingPlansNothing(filter, reasons);
     return { cells, tests: [] };
   }
+  // W4 app PR A (Task 24): a late-entry / lucky-loser script likewise, on w4a-cells.ts's cells.
+  if (scenario !== null && isW4a(scenario)) {
+    for (const c of w4aCells(scenario, (row, sport) => drops.has(atoms.LIFECYCLE, row, sport))) {
+      if (cell === null || (cell.row === c.row && cell.sport === c.sport)) cells.push({ ...c, scenario });
+    }
+    if (cells.length === 0) throw new W1DrivingPlansNothing(filter, reasons);
+    return { cells, tests: [] };
+  }
   for (const row of ROW_KEYS) for (const sport of SPORT_KEYS) {
     if (cell !== null && (cell.row !== row || cell.sport !== sport)) continue;
     for (const s of W1_DRIVING_SCENARIOS) {
@@ -196,7 +206,9 @@ function select(filter: W1DrivingFilter, deps: W1DrivingDeps): Selection {
   if (wantsTests) {
     const all = ((deps.variants ?? readVariantsFile)().sports.find((x) => x.sport === TEST_SPORT)?.cases ?? []).filter((c) => c.preset === TEST_PRESET);
     if (cell === null && all.length === 0) throw new NoTestVariantCases();
-    tests = all.filter((c) => cell === null || c.row === cell.row).map((c) => requireScorable(c, deps.rescore ?? scorable));
+    // W4 T24 (option A keeps a refused row as a variant level): a test case on a cell the product refuses (the standalone
+    // stepladder / page playoff, ruling 269) is not planned - the stage create would answer 422 and nothing can be driven.
+    tests = all.filter((c) => (cell === null || c.row === cell.row) && refusedCell(c.row, c.sport) === null).map((c) => requireScorable(c, deps.rescore ?? scorable));
   }
   if (cells.length + tests.length === 0) throw new W1DrivingPlansNothing(filter, reasons);
   return { cells, tests };

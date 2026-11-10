@@ -32,6 +32,7 @@ const GENERIC_CONFIG = {
 
 interface Rig {
   divisionId: string;
+  groupStageId: string;
   koStageId: string;
   entrants: { id: string; display_name: string }[];
 }
@@ -118,7 +119,7 @@ async function seedToProposal(request: APIRequestContext, tag: string): Promise<
   const completed = await apiJson(request, `/api/v1/stages/${groupStageId}/complete`, "POST");
   expect(completed.status, JSON.stringify(completed.error)).toBe(200);
 
-  return { divisionId, koStageId, entrants: entrants.data! };
+  return { divisionId, groupStageId, koStageId, entrants: entrants.data! };
 }
 
 async function proposalQualifierIds(request: APIRequestContext, koStageId: string): Promise<string[]> {
@@ -161,9 +162,27 @@ test("the seeding proposal screen does not offer a withdrawn qualifier", async (
   // AFTER: the organiser just reloads. No recompute button is pressed —
   // there ISN'T one on a draft panel (progression-panel.tsx renders
   // Recompute on its null and stale branches only), which is precisely why
-  // the status flip has to refresh the draft server-side. Her seat is left
-  // EMPTY rather than closed up (nobody is promoted into the vacancy), so
-  // the table is one row shorter.
+  // the status flip has to refresh the draft server-side.
+  //
+  // RB4-V6 (W4 rulebook §5, OWNER 274): a departed qualifier from a TABLE
+  // source is replaced by the next-ranked eligible entrant of THAT table. Her
+  // table is her pool of 2, so her pool-mate — read off the rig's own group
+  // fixture, never off the proposal — takes her place, and the vacancy moves
+  // to the pool-mate's old seat (a pool of 2 has nobody below the cut). The
+  // table is one row shorter and nobody from another pool moves.
+  const groupFixtures = await apiJson<{ stage_id: string; home_entrant_id: string | null; away_entrant_id: string | null }[]>(
+    request,
+    `/api/v1/divisions/${rig.divisionId}/fixtures`,
+  );
+  expect(groupFixtures.status, JSON.stringify(groupFixtures.error)).toBe(200);
+  const herPool = groupFixtures.data!.filter(
+    (f) => f.stage_id === rig.groupStageId && (f.home_entrant_id === departing || f.away_entrant_id === departing),
+  );
+  expect(herPool, "premise: a pool of 2 plays her exactly once").toHaveLength(1);
+  const mate = herPool[0]!.home_entrant_id === departing ? herPool[0]!.away_entrant_id : herPool[0]!.home_entrant_id;
+  const mateName = byId.get(mate ?? "");
+  expect(mateName, "premise: her pool-mate is one of the rig's entrants").toBeDefined();
+  expect(namesBefore, "premise: her pool-mate qualified too").toContain(mateName);
   await page.goto(url);
   await expect(panel).toBeVisible();
   await expect(panel.locator("tbody tr")).toHaveCount(7);
@@ -171,8 +190,12 @@ test("the seeding proposal screen does not offer a withdrawn qualifier", async (
     els.map((el) => (el as HTMLSelectElement).selectedOptions[0]?.textContent?.trim() ?? ""),
   );
   expect(namesAfter).not.toContain(departingName);
-  // The other seven are untouched — this is a removal, not a reshuffle.
-  expect(namesAfter).toEqual(namesBefore.filter((n) => n !== departingName));
+  // Her place taken by her pool-mate, the pool-mate's old row gone, every
+  // other row unchanged: neither the pre-W4 removal (her row dropped, nobody
+  // promoted) nor a whole-table reshuffle reads this way.
+  expect(namesAfter).toEqual(
+    namesBefore.filter((n) => n !== mateName).map((n) => (n === departingName ? mateName! : n)),
+  );
 
   // …and she is not OFFERED either. The row that named her is gone, but every
   // remaining row's <select> lists candidates for its own slot, and that list

@@ -105,6 +105,23 @@ function positionOf(k: SlotKey): string {
   return `${k.pool_id ?? ""}|${k.round_no}|${k.seq_in_round}`;
 }
 
+/** A row `carrySlots` reads. `bye` says the row is a bye line (`isByeLine`, lib/bye-line.ts — W4 T4): a caller that
+ *  holds the whole row passes it. Absent, it is read off the Swiss bye shell's `ext_key` alone — the bye-line predicate
+ *  of a Swiss stage, whose only bye is that shell; the round-count admin reads nothing more. */
+type CarryRow = SlotKey & { ext_key: string | null; bye?: boolean };
+export type CarryBeforeRow = CarryRow & CarriedSlot;
+export type CarryAfterRow = CarryRow & { id: string };
+
+/** W4 T4 (K3): how each side's rows are matched. Default: the position, `(pool, round, seq)`. A knockout, a stepladder
+ *  and a page playoff (T26c) pass their bracket ROLE (`bracketRoleKey`, lib/bracket-role.ts), each side against its own
+ *  final, because their round numbers count from the first round and move when the bracket changes size. */
+export interface CarryKeys<B, A> {
+  before: (row: B) => string;
+  after: (row: A) => string;
+}
+
+const isByeRow = (r: CarryRow): boolean => r.bye ?? isSwissByeShellExtKey(r.ext_key);
+
 const roundOf = (k: Pick<SlotKey, "pool_id" | "round_no">) => `${k.pool_id ?? ""}|${k.round_no}`;
 
 /**
@@ -121,11 +138,17 @@ const roundOf = (k: Pick<SlotKey, "pool_id" | "round_no">) => `${k.pool_id ?? ""
  * bare b3 is the one that goes. The survivors' re-packed seqs are the
  * positions matched against the regenerated boards.
  *
- * A Swiss bye shell (`isSwissByeShellExtKey`) never gives or takes a slot
- * (RB3-23: a bye is never on a court). A new board at a position an old bye
- * held starts unscheduled; an old bye's own slot is not reported freed,
- * because a bye's slot was never a real one (W3 T3 clears and forbids them).
- * A bye is never in `unscheduled` either — it needs no slot.
+ * A bye line (the row's `bye`; absent, a Swiss bye shell by `ext_key`) never
+ * gives or takes a slot (RB3-23, X-SD-5: a bye is never on a court). A new line
+ * at a position an old bye held starts unscheduled; an old bye's own slot is
+ * not reported freed, because a bye's slot was never a real one (W3 T3 and
+ * W4 T3 clear and forbid them). A bye is never in `unscheduled` either — it
+ * needs no slot. A line that BECOMES a bye frees the slot its position held.
+ *
+ * A knockout, a stepladder and a page playoff match by bracket role instead of
+ * position (`keys`, W4 T4 K3, T26c): the final keeps the final's slot whatever
+ * size the bracket is rebuilt to. A double elimination still matches by
+ * position (owed to W6).
  *
  * Positions are unique per pool by construction (every generator numbers
  * `seq_in_round` per pool and round; `addFixture` takes the round's next seq).
@@ -133,10 +156,13 @@ const roundOf = (k: Pick<SlotKey, "pool_id" | "round_no">) => `${k.pool_id ?? ""
  * row's slot is reported freed and a second new row is unscheduled, so nothing
  * is dropped without being counted.
  */
-export function carrySlots(
-  before: ReadonlyArray<SlotKey & CarriedSlot & { ext_key: string | null }>,
-  after: ReadonlyArray<SlotKey & { id: string; ext_key: string | null }>,
+export function carrySlots<B extends CarryBeforeRow, A extends CarryAfterRow>(
+  before: readonly B[],
+  after: readonly A[],
+  keys?: CarryKeys<B, A>,
 ): CarrySlotsResult {
+  const keyBefore: (row: B) => string = keys?.before ?? positionOf;
+  const keyAfter: (row: A) => string = keys?.after ?? positionOf;
   // Swiss rounds: how many boards each regenerated round has, and which old
   // boards keep a slot there. An old row is named by its index in `before`.
   const newBoards = new Map<string, number>();
@@ -163,7 +189,7 @@ export function carrySlots(
   const claimed = new Set<string>();
   let laidOut = false;
   before.forEach((row, i) => {
-    if (isSwissByeShellExtKey(row.ext_key)) return;
+    if (isByeRow(row)) return;
     const slot: CarriedSlot = {
       scheduled_at: row.scheduled_at,
       court_id: row.court_id,
@@ -176,7 +202,7 @@ export function carrySlots(
       if (holdsSlot(slot)) freed.push(slot);
       return;
     }
-    const at = positionOf({ ...row, seq_in_round: seq });
+    const at = keyBefore({ ...row, seq_in_round: seq });
     if (claimed.has(at)) {
       if (holdsSlot(slot)) freed.push(slot);
       return;
@@ -188,8 +214,8 @@ export function carrySlots(
   const assign = new Map<string, CarriedSlot>();
   const unscheduled: string[] = [];
   for (const row of after) {
-    if (isSwissByeShellExtKey(row.ext_key)) continue;
-    const at = positionOf(row);
+    if (isByeRow(row)) continue;
+    const at = keyAfter(row);
     if (!free.has(at)) {
       if (laidOut) unscheduled.push(row.id);
       continue;

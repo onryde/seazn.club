@@ -4092,6 +4092,13 @@ fold.
     TN-TB-2, CA-TB-1, GN-TB-1) were proved only by data-driven cases whose titles the rules checker cannot read
     (`it(c.title)`); their group and test titles now name them (controller rulings, the fold).
 
+### W4 app A, Task 15: format gates (2026-11-09)
+
+- **`QUALIFYING_MAIN_MIN = 4`** (`lib/format-size-gates.ts`), named by the QM-2 driving sweep (`qualifying-main-sizes.test.ts`, n = 2..17, badminton, q = 4 as the builder sends): before the gate, n = 2 and 3 played the whole qualifying stage and failed at Complete ("the previous stage takes rank 3/4, but only 2/3 entrants are available"); n = 4..17 complete. The server's bound reads the cut's own depth (`to`), so an API-built q = 2 still runs on 2-3 and q = 8 is refused below 8.
+- **False premises (T15).** "A knockout source accepts width 1": from one source, width 1 is the engine's own SEEDING_RULES_MISSING, so 1 is accepted only beside another source. "Start and Generate are the doors": Rebuild draws the root too and is gated as a third. `components/v2/__tests__/format-picker*.test.tsx` did not exist; `format-picker-size-gate.test.tsx` is new. The builder cannot send a cut through a round: `qualifying_main` shows no Qualify knob (`formatKnobsShown`), so X-QM-2 reaches a person only through Add stage and the API.
+- **Fix round 1 (2026-11-09).** The cut rule judges finishing BANDS, not the width (RB4-Q2): each rank rule starts on a band's first place (1, 2, 3, 5, 9 ...) and ends on a band's last (1, 2, 4, 8 ...), each rule alone; a source with `config.thirdPlace: true` ranks 3rd and 4th apart, so 3 and 4 are bands there (1-3, 3-3, 4-4 are whole). `isWholeRoundCut(from, to, thirdPlaceMatch)`; the refusal's envelope carries the offending rule's `from`, `to` and `width`. A width-only check had accepted 2-3 and 4-5. The refusal sentence ("qualify a whole round: 1, 2, 4, 8 ...") is unchanged: the UI's Add stage only ever sends 1..q, for which it is exact.
+- **Residues.** `topNPerGroup` from a knockout is not read by the cut rule. A History regen through Generate on a root below the bound could be refused after commit (rare); the History panel now says it with its `{min}` filled.
+
 ### False premises found (W2e)
 
 Items 1–31 are the W2e spec's §4 (E1–E31), in its numbering (E11–E13 sit out of order there); items 32 onward were found

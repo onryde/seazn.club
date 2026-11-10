@@ -228,7 +228,9 @@ export interface StageButton {
  *  - `pairNext`: a Swiss stage with a round still waiting to be paired - the panel's `swissHasUnseated`
  *    (`nextUnseatedSwissRound(...) !== null`, already false for every other kind).
  *  - `canUnpair`: a Swiss stage whose latest round has a seat and no played result - the panel's `canUnpairSwiss`
- *    (the predicate the server's `unpairSwissRound` uses, already false for every other kind). */
+ *    (the predicate the server's `unpairSwissRound` uses, already false for every other kind).
+ *  - `updateDraw`: a root knockout whose roster moved before the division started - the panel's
+ *    `knockoutUpdateDrawOffered` (lib/bracket-reconcile.ts; W4 B2 fix round 1, item 6), already false for every other kind. */
 export interface StageActionInput {
   readonly status: string;
   readonly played: number;
@@ -238,6 +240,7 @@ export interface StageActionInput {
   readonly adhoc: boolean;
   readonly pairNext: boolean;
   readonly canUnpair: boolean;
+  readonly updateDraw: boolean;
 }
 
 /** The stage's lifecycle (`stages.status`: pending -> active when its fixtures are generated -> complete). */
@@ -254,7 +257,11 @@ const isCount = (n: unknown): n is number => typeof n === "number" && Number.isI
  *   Complete is then never the lead (the rail's 2026-09-20 defect: Complete led over Pair next).
  * - **Generate** leads a stage that has not started and has no round to pair, and is offered on no other: once the stage has
  *   started - it left `pending`, or a match is already played or being scored (contradictory input counts as started, so
- *   Generate, which builds fixtures, is never offered over a result) - it is gone.
+ *   Generate, which builds fixtures, is never offered over a result) - it is gone. One exception (W4 B2 fix round 1, item 6):
+ *   `updateDraw` brings it back, as the lead, on a stage with fixtures and no match being scored - a root knockout's first
+ *   Generate made it `active`, and its roster moved before the division started ("Update draw"). `played` is not asked: a
+ *   bye line is stored `forfeited`, so every bracket with a bye counts one played; the panel's `knockoutUpdateDrawOffered`
+ *   already rules out a REAL match begun, byes out.
  * - **Complete** is offered once the stage has started and has fixtures, always in the menu or as the lead, and ENABLED only
  *   when no match is open (`inPlay + unplayed === 0`): "Complete stage unlocks when all N matches are played". It leads only
  *   then, and only when no round waits to be paired. While any match is open it is present but disabled, so the card shows
@@ -280,7 +287,7 @@ export function stageActions(s: StageActionInput): { primary: StageButton | null
 
   let primary: StageButton | null = null;
   if (pairing) primary = on("pair_next");
-  else if (!started) primary = on("generate");
+  else if (!started || (s.updateDraw && s.hasFixtures && s.inPlay === 0)) primary = on("generate");
   else if (s.hasFixtures && nothingOpen) primary = on("complete");
 
   const secondary: StageButton[] = [];

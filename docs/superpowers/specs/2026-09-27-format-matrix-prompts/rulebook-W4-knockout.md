@@ -105,6 +105,8 @@ consume it then. The rows keep Q6's shape for that follow-up. The random draw (R
 | RB4-L13 | "Add late player" has no Undo. Undo answers with a named refusal that points to Withdraw. | product rule (W3 design §10.8) | OWNER 274 (designer's call) |
 | RB4-L14 | A late entrant in ko_plate's main bracket feeds the plate with their first loss, like anyone else (RB4-P1). | product rule (rulings 263, 265) | OWNER 274 |
 
+> **RB4-L6 amendment.** Amended 2026-11-09 (W4 app PR A, product decision under the owner's no-check-in delegation — owner-approved 2026-11-09): an organiser's manual add into a full knockout where no match has started keeps the entrant, marks them waiting and answers 201 `rebuild_offered` (the waiting strip offers Rebuild fixtures), the same as the automatic door; once any match has started the add is refused with 409 KO_LATE_ENTRY_NO_SLOT. A tap still answers `rebuild_offered`. While the division's schedule is frozen, Rebuild refuses (422 SCHEDULE_LOCKED), so the Rebuild offer is replaced by "unfreeze the schedule first": the add and the tap answer `refused` with KO_LATE_ENTRY_SCHEDULE_FROZEN and the entrant keeps waiting (owner-approved 2026-11-09, final review m1). A late add into a bye seat (RB4-L3) reopens that bye line: no new fixture is made, and the bye holder's advance into round 2 is retracted — she must win the reopened match first — which is what the matrix scenario R2 asserts.
+
 ---
 
 ## 5. Vacated seat: walkover or lucky loser

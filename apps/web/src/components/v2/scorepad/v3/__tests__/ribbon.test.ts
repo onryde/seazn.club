@@ -13,7 +13,7 @@
 //     `@/lib/scoring-vocab` is the only way to reach it without registering
 //     a real key, which is out of this task's scope.
 import { describe, it, expect, vi } from "vitest";
-import { buildRibbon, FORFEIT_RIBBON_KEY, ribbonKeyFor, type MsgFn } from "../ribbon";
+import { buildRibbon, disqualifiedForfeiters, FORFEIT_RIBBON_KEY, ribbonKeyFor, type MsgFn } from "../ribbon";
 import { messages } from "@/lib/messages";
 
 vi.mock("@/lib/scoring-vocab", () => ({
@@ -161,22 +161,47 @@ describe("buildRibbon — detail parameter (D2)", () => {
 });
 
 // W3 T15 ruling 2 (controller, 2026-11-02): a disqualification runs the withdrawal cascade, which records
-// `core.forfeit{by: <her seat>, reason: "withdrew"}` against her open board. The organiser's console lists that row in its
-// Activity panel, and must never label her as having withdrawn: a forfeit BY a seat the caller names as disqualified reads
-// as the disqualification. Expected keys come from the declared map (`FORFEIT_RIBBON_KEY`), never from the branch.
+// `core.forfeit{by: <her entrant id>, reason: "withdrew"}` against her open board. The organiser's console lists that row in
+// its Activity panel, and must never label her as having withdrawn: a forfeit BY an entrant the caller names as
+// disqualified reads as the disqualification. Expected keys come from the declared map (`FORFEIT_RIBBON_KEY`), never from
+// the branch.
+//
+// W4 T18 (K12): `by` is the forfeiting ENTRANT (engine `CoreForfeit.by: EntrantId`), so the set is built from the sides'
+// ids by `disqualifiedForfeiters` — the console's own builder. These cases used to name SEATS ("home"/"away") on both ends,
+// which proved the fixture: the console keyed its set by seat, no real payload ever matched, and every DQ walkover read
+// "Withdrawal recorded" in the product.
 describe("buildRibbon — a disqualified side's cascade forfeit reads as a disqualification (W3 T15 ruling 2)", () => {
   const tKey: MsgFn = (k, v) => (k === "pad.ribbon.fallback" ? `${v!.event} recorded` : `KEY:${k}`);
   const cascade = (by: string) => ({ by, reason: "withdrew" });
+  const HOME = { id: "e-home" };
+  const AWAY = { id: "e-away" };
 
-  it("both seats: disqualified reads the disqualification line; withdrawn (and no statuses) keep the withdrawal line", () => {
+  it("disqualifiedForfeiters: the empty case first, then only a DISQUALIFIED side's ENTRANT id, never a seat", () => {
+    expect([...disqualifiedForfeiters([])], "no sides").toEqual([]);
+    expect([...disqualifiedForfeiters([null, undefined])], "two empty seats name nobody").toEqual([]);
     let checked = 0;
-    for (const seat of ["home", "away"] as const) {
-      const dq = buildRibbon("core.forfeit", cascade(seat), (id) => id, tKey, undefined, new Set([seat]));
-      expect(dq.text, `${seat}: disqualified`).toBe(`KEY:${FORFEIT_RIBBON_KEY.disqualified}`);
-      // The pair: the other seat disqualified, and no seats named — both today's withdrawal line.
-      const other = seat === "home" ? "away" : "home";
-      expect(buildRibbon("core.forfeit", cascade(seat), (id) => id, tKey, undefined, new Set([other])).text, `${seat}: the OTHER seat disqualified`).toBe(`KEY:${FORFEIT_RIBBON_KEY.withdrew}`);
-      expect(buildRibbon("core.forfeit", cascade(seat), (id) => id, tKey).text, `${seat}: nothing held`).toBe(`KEY:${FORFEIT_RIBBON_KEY.withdrew}`);
+    for (const status of ["registered", "withdrawn", undefined] as const) {
+      const side = status === undefined ? HOME : { ...HOME, status };
+      expect([...disqualifiedForfeiters([side, AWAY])], `${status ?? "no status"}: not disqualified`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect([...disqualifiedForfeiters([{ ...HOME, status: "disqualified" }, AWAY])]).toEqual([HOME.id]);
+    expect([...disqualifiedForfeiters([HOME, { ...AWAY, status: "disqualified" }])]).toEqual([AWAY.id]);
+    const both = disqualifiedForfeiters([{ ...HOME, status: "disqualified" }, { ...AWAY, status: "disqualified" }]);
+    expect([...both].sort()).toEqual([AWAY.id, HOME.id].sort());
+    expect(both.has("home") || both.has("away"), "never a seat name").toBe(false);
+  });
+
+  it("both sides: disqualified reads the disqualification line; withdrawn (and no statuses) keep the withdrawal line", () => {
+    let checked = 0;
+    for (const [me, other] of [[HOME, AWAY], [AWAY, HOME]] as const) {
+      const dq = buildRibbon("core.forfeit", cascade(me.id), (id) => id, tKey, undefined, disqualifiedForfeiters([{ ...me, status: "disqualified" }, other]));
+      expect(dq.text, `${me.id}: disqualified`).toBe(`KEY:${FORFEIT_RIBBON_KEY.disqualified}`);
+      // The pair: the other side disqualified, the forfeiter withdrawn, and none named — each today's withdrawal line.
+      expect(buildRibbon("core.forfeit", cascade(me.id), (id) => id, tKey, undefined, disqualifiedForfeiters([me, { ...other, status: "disqualified" }])).text, `${me.id}: the OTHER side disqualified`).toBe(`KEY:${FORFEIT_RIBBON_KEY.withdrew}`);
+      expect(buildRibbon("core.forfeit", cascade(me.id), (id) => id, tKey, undefined, disqualifiedForfeiters([{ ...me, status: "withdrawn" }, other])).text, `${me.id}: withdrawn`).toBe(`KEY:${FORFEIT_RIBBON_KEY.withdrew}`);
+      expect(buildRibbon("core.forfeit", cascade(me.id), (id) => id, tKey).text, `${me.id}: nothing held`).toBe(`KEY:${FORFEIT_RIBBON_KEY.withdrew}`);
       checked++;
     }
     expect(checked).toBe(2);
@@ -186,7 +211,7 @@ describe("buildRibbon — a disqualified side's cascade forfeit reads as a disqu
     const REASONS = ["walkover", "retired", "disqualified"] as const;
     let checked = 0;
     for (const reason of REASONS) {
-      expect(buildRibbon("core.forfeit", { by: "home", reason }, (id) => id, tKey, undefined, new Set(["home"])).text, reason).toBe(`KEY:${FORFEIT_RIBBON_KEY[reason]}`);
+      expect(buildRibbon("core.forfeit", { by: HOME.id, reason }, (id) => id, tKey, undefined, disqualifiedForfeiters([{ ...HOME, status: "disqualified" }, AWAY])).text, reason).toBe(`KEY:${FORFEIT_RIBBON_KEY[reason]}`);
       checked++;
     }
     expect(checked).toBe(REASONS.length);

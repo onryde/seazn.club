@@ -6,6 +6,7 @@
 // exactly as the server sizes a later stage. The oracle is the real draw (format-estimate.test.ts compares every drawn
 // stage with previewDivisionFixtures, and americano with the engine's generateAmericano); Swiss and the double
 // elimination's non-power-of-two fields are pinned to the rulebook. Pure, so the client can call it on every keystroke.
+import { stageGraphSizeRefusal } from "@/lib/format-size-gates";
 import { buildTemplateStages, type StageDraft, type TemplateKnobs } from "@/lib/format-templates";
 
 export interface StageEstimate {
@@ -111,9 +112,13 @@ function qualifiers(d: StageDraft, prev: StageEstimate, prevDraft: StageDraft): 
 
 const sumOrNull = (xs: (number | null)[]) => (xs.some((x) => x === null) ? null : (xs as number[]).reduce((a, b) => a + b, 0));
 
-/** Estimate a stage graph for `entrants` players or teams. */
+/** Estimate a stage graph for `entrants` players or teams. A field the server refuses this graph for has no draw to count (W4 T15,
+ *  FX-G14: the estimate and the server agree), so its stages are listed with nothing on them. */
 export function estimateStages(drafts: StageDraft[], entrants: number): FormatEstimate {
   const n = Math.max(0, Math.floor(entrants));
+  if (stageGraphSizeRefusal(drafts, n) !== null) {
+    return { stages: drafts.map((d) => ({ kind: d.kind, name: d.name, entrants: n, matches: null, rounds: null, minGames: null })), matches: null, rounds: null, minGames: null };
+  }
   const stages: StageEstimate[] = [];
   drafts.forEach((d, i) => {
     const k = i === 0 ? n : qualifiers(d, stages[i - 1]!, drafts[i - 1]!);

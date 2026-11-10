@@ -145,4 +145,29 @@ describe.skipIf(!HAS_DB)("fixture generation round-trip budget", () => {
     // ~12 pairs; the batched resolver does it in 4 regardless of pair count.
     expect(used).toBeLessThanOrEqual(40);
   });
+
+  // T26c (I1): the page playoff size gate (PAGE_PLAYOFF_TOO_FEW) runs at a NON-knockout root's Generate only where the
+  // division feeds a page playoff - every other root pays no round trip for it. A differential, not an absolute count: two
+  // divisions of eight with the same shape (a league feeding a Top 4), one into a knockout and one into a page playoff; the
+  // league root's Generate in the page-playoff division pays for the gate, the other does not. Gating every root makes the
+  // two equal, which the americano budget above cannot see (two statements of headroom).
+  it("a root whose division feeds no page playoff pays nothing for the page playoff gate", async () => {
+    const TOP_FOUR = { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }], placement: "rank_order", timing: "setup" };
+    const usedFor = async (finals: "knockout" | "page_playoff") => {
+      const { auth } = await seedOrg();
+      const { division } = await seedDivision(auth, Array.from({ length: 8 }, (_, i) => `${finals} ${i + 1}`));
+      const stages = await createStages(auth, division.id, [
+        { seq: 1, kind: "league", name: "League", config: { legs: 1 } },
+        { seq: 2, kind: finals, name: "Finals", config: {}, progression: TOP_FOUR },
+      ] as never);
+      const league = stages.find((st) => st.kind === "league")!;
+      const before = statementCount();
+      const { created } = await generateStageFixtures(auth, league.id);
+      expect(created, `${finals}: a league of 8 draws 28 matches`).toBe(28);
+      return statementCount() - before;
+    };
+    const plain = await usedFor("knockout");
+    const paged = await usedFor("page_playoff");
+    expect(paged, `the page playoff division's league pays for the gate (${paged}), the knockout one's does not (${plain})`).toBeGreaterThan(plain);
+  });
 });

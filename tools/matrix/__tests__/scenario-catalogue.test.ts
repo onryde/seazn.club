@@ -220,13 +220,34 @@ describe("atomic cases", () => {
     for (const m of text.matchAll(/((?:[RMFDPQXCE]\d{1,2}(?:, )?)+) in (W\d+)/g)) {
       for (const id of m[1]!.split(/,\s*/).filter((s) => s.length > 0)) owner.set(id, m[2]!);
     }
-    const marked = new Set(ATOMIC.filter((a) => a.knownNoPath !== null).map((a) => a.parent));
+    // W4 app PR A, Task 24: three of the listed atoms were SETTLED by the W4 rulebook (§14: Q4b "🚫 → ⛔", D4b "🚫 → ⛔", D4a "🚫 → ⏳"),
+    // so they are no longer known-🚫 atoms; their parents stay listed by the design (the design text is the 2026-09 design, not
+    // rewritten). Every other atom of a listed parent keeps its owner: Q4a stays 🚫 -> W4 (no path for a joint-winner outcome).
+    const SETTLED_BY_RULEBOOK = new Map([["Q4b", "refused"], ["D4a", "later"], ["D4b", "refused"]]);
+    const marked = new Set(ATOMIC.filter((a) => a.knownNoPath !== null || a.settled !== null).map((a) => a.parent));
     expect(listed.size).toBeGreaterThan(0);
     expect(new Set(owner.keys())).toEqual(listed);
     expect(marked).toEqual(listed);
     let judged = 0;
     for (const a of ATOMIC.filter((x) => x.knownNoPath !== null)) { judged++; expect(a.knownNoPath, a.id).toBe(owner.get(a.parent)); }
-    expect(judged).toBeGreaterThanOrEqual(listed.size);
+    expect(judged).toBeGreaterThanOrEqual(listed.size - 1); // D4 has no 🚫 atom left
+    // The cells moved off 🚫, counted by id: exactly the rulebook's three, in the rulebook's states, none of them also 🚫 or a UI-only gap.
+    const settledNow = ATOMIC.filter((a) => a.settled !== null);
+    expect(Object.fromEntries(settledNow.map((a) => [a.id, a.settled!.state]))).toEqual(Object.fromEntries(SETTLED_BY_RULEBOOK));
+    expect(settledNow.length).toBe(3);
+    for (const a of settledNow) {
+      expect(a.knownNoPath, a.id).toBeNull();
+      expect(a.l2NoPath, a.id).toBeNull();
+      expect(a.settled!.reason.length, a.id).toBeGreaterThan(20);
+    }
+    // The reasons quote the brief / rulebook: Q4b names X-CH-5, D4b X-SD-10, D4a ruling 272 and the clubs follow-up (no programme wave).
+    const byId = new Map(settledNow.map((a) => [a.id, a.settled!]));
+    expect(byId.get("Q4b")!.reason).toBe("an unplayed final is never decided by seed or table automatically (X-CH-5)");
+    expect(byId.get("D4b")!.reason).toContain("(X-SD-10)");
+    expect(byId.get("D4a")!.reason).toContain("ruling 272");
+    expect(byId.get("D4a")!.reason.startsWith("clubs follow-up: ")).toBe(true);
+    // The siblings that were NOT settled keep their route: Q4a is still 🚫 -> W4.
+    expect(ATOMIC.find((a) => a.id === "Q4a")).toMatchObject({ knownNoPath: "W4", settled: null });
   });
   it("ruling 30: the design's UI-only 🚫 atoms carry l2NoPath with the named wave, and stay in both layers", () => {
     const from = design.slice(design.indexOf("**Known UI-only 🚫"));
@@ -459,6 +480,9 @@ describe("regression cases (R29)", () => {
    *  shrinks and harness fixes, committed as history and never as cases
    *  (MB-001..005 were committed from W1b fix round 1's later runs). */
   const PRE_FIX_HISTORY_RUNS: readonly string[] = ["w1b-model-0928a", "w1b-model-0928b"];
+  /** Cases a product fix closed: still committed (their evidence still holds the failure), status `fixed` — and only
+   *  these. W4 app-A Task 8 (FX-G2): a knockout's Generate after a roster change reconciles (MB-004, MB-005). */
+  const FIXED_CASES: ReadonlyMap<string, string> = new Map([["MB-004", "W4 app-A T8"], ["MB-005", "W4 app-A T8"]]);
   it("T15-R5: every new failure in a committed model report is a committed open case — its cell, check, seed, path, replayPath, bound and fences — save the named pre-fix W1b history (T16-R4 m-7)", () => {
     type Cell = { cell: string; verdict: string; maxCommands: number; fences: boolean; failure: { check: string; seed: number; path: string; replayPath: string | null } | null };
     const found: { runId: string; cell: Cell; failure: NonNullable<Cell["failure"]> }[] = [];
@@ -484,10 +508,12 @@ describe("regression cases (R29)", () => {
       const r = cases.find((c) => c.cell === cell.cell && c.check === failure.check && c.seed === failure.seed && c.path === failure.path);
       expect(r, `${runId} ${cell.cell}: NEW ${failure.check} (seed ${failure.seed}, path ${failure.path}) is not a committed case`).toBeDefined();
       expect({ replayPath: r?.replayPath, maxCommands: r?.maxCommands, fencesOn: r?.fencesOn, runId: r?.runId, status: r?.status }, r?.id)
-        .toEqual({ replayPath: failure.replayPath, maxCommands: cell.maxCommands, fencesOn: cell.fences, runId, status: "open" });
+        .toEqual({ replayPath: failure.replayPath, maxCommands: cell.maxCommands, fencesOn: cell.fences, runId, status: r !== undefined && FIXED_CASES.has(r.id) ? "fixed" : "open" });
       checked++;
     }
     expect(checked).toBe(found.length);
+    // Every fixed case is one a fix names, and every named fix is a committed fixed case.
+    expect(cases.filter((c) => c.status === "fixed").map((c) => c.id).sort()).toEqual([...FIXED_CASES.keys()].sort());
     console.info(`T15-R5: ${checked} NEW failure(s), each a committed case; exempt ${JSON.stringify(Object.fromEntries(exempted))}`);
   });
   // Controller ruling Q1 (W1c Task 2): a fence named for a case post-dates its

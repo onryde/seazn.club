@@ -29,7 +29,7 @@ import { fenceBlocking } from "./fences.ts";
 import { ledgerEnvelopes, liveEntries, type LedgerEntry } from "./ledger-fold.ts";
 import {
   COMMAND_KINDS, FORFEIT_REFUSAL_CHECK, OPT_IN_KINDS, SETTLE_REFUSAL_CHECK, ModelViolation, NEXT_MATCH_CHECK, NEXT_MATCH_LOCK, REFUSAL_NAMED, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL,
-  absorbFixtures, checkStep, ensureModelLineups, entrantInput, fedCandidates, fedMatchStarted, inLastRound, lastRoundReadDiverges, markUnknown, readRoster, recordFinding, rosterLocked,
+  absorbFixtures, checkStep, ensureModelLineups, entrantInput, fedCandidates, fedMatchStarted, inLastRound, lastRoundReadDiverges, markUnknown, modelHoldsRootKnockout, readRoster, recordFinding, rosterLocked,
   type AnyCommandKind, type CommandCounts, type CommandKind, type FixtureModel, type ModelState, type OptInKind, type StepVerdict,
 } from "./state.ts";
 
@@ -260,24 +260,62 @@ function winStream(m: ModelState, f: FixtureModel, winner: "home" | "away"): Str
   return generateStream({ sportKey: m.sport, cfg: stageCfg(m.sport, m.cfg, m.stageKind as StageKind, m.variant, m.stageRules), stageKind: m.stageKind as never, home, away, outcome: { kind: "win", winner } });
 }
 
+/** W4 B2 fix round 2 (item 2): would a knockout's Start have to draw its bracket again? Start reconciles a root knockout
+ *  IN PLACE only (schedule.ts startDivision): newcomers take the first round's byes (a bye: a first-round line with one
+ *  seat, stored `forfeited`), and more newcomers than byes is a redraw, refused by name. The model's roster changes
+ *  before Start only by AddEntrant (Withdraw waits for Start), so the newcomers are the entrants on no first-round seat. */
+function knockoutStartNeedsRedraw(m: ModelState): boolean {
+  const firstRound = [...m.fixtures.values()].filter((f) => f.round === 1);
+  const seated = new Set(firstRound.flatMap((f) => [f.home, f.away]).filter((id): id is string => id !== null));
+  const byes = firstRound.filter((f) => f.status === "forfeited" && (f.home === null) !== (f.away === null)).length;
+  const newcomers = m.entrants.filter((id) => !seated.has(id) && !m.withdrawn.has(id)).length;
+  return newcomers > byes;
+}
 class Start extends Cmd {
   readonly kind = "Start" as const;
   protected ready(m: ModelState) { return !m.started; }
+  /** W4 B2 fix round 2 (item 2): a knockout whose lines were drawn before an entrant was added, where seating the late
+   *  entries needs the bracket drawn again — Start refuses (KO_START_NEEDS_UPDATE_DRAW) and the late entry waits for
+   *  Generate (Update draw) or Rebuild. The model's knockout rows are single-stage, so their stage is the root. */
+  protected override expectsRefusal(m: ModelState) {
+    return !m.started && m.stageKind === "knockout" && m.fixtures.size > 0 && m.lateEntry && knockoutStartNeedsRedraw(m);
+  }
+  /** The code the product refused with, when it refused (read by afterExpectedRefusal; one command per step). */
+  #refusedCode: string | null = null;
+  /** Where the model expects the refusal it expects THAT one — the knockout table's KO_START_NEEDS_UPDATE_DRAW
+   *  (apps/web lib/knockout-refusals.ts) — not any named refusal. */
+  protected override afterExpectedRefusal(): Promise<void> {
+    if (this.#refusedCode === "KO_START_NEEDS_UPDATE_DRAW") return Promise.resolve();
+    return Promise.reject(new ModelViolation(this.expectedCheck(), [`${this.toString()}: a knockout Start that would redraw its bracket was refused with ${this.#refusedCode ?? "no code"}, not KO_START_NEEDS_UPDATE_DRAW`]));
+  }
   protected async act(m: ModelState, d: OrganiserDriver) {
     // The field is laid out here, once (Withdraw waits for Start; a later entrant meets the roster lock).
     const read = lastRoundReadDiverges(m.stageKind, m.stageConfig, m.entrants.length);
     if (read.diverges.length > 0) {
       throw new Error(`model: a ${m.stageKind} of ${m.entrants.length} (${JSON.stringify(m.stageConfig)}) lays out ${read.diverges.join(", ")}, where the model's last-round read of X-DW-3 is not the product's next-match rule (loop F I-5: both lines into one fixture) — the model holds no feed edges, so it cannot judge this shape`);
     }
-    await d.start(m.divisionId);
+    const hadLines = m.fixtures.size > 0;
+    await d.start(m.divisionId).catch((e: unknown) => {
+      if (e instanceof RefusedCall) this.#refusedCode = e.code;
+      throw e;
+    });
     m.started = true;
+    // W4 B2 fix round 1 (G1): Start reconciles a root knockout that already has its lines (schedule.ts startDivision —
+    // the model's knockout rows are single-stage, so their stage is the root): an entrant added over them is placed here
+    // in place (a Start that would redraw is refused above), so the late entry is spent and a Generate after Start is the
+    // named no-op. A league's Start draws nothing over its existing lines (#879's fence still reads the late entry).
+    if (m.stageKind === "knockout" && hadLines) m.lateEntry = false;
     absorbFixtures(m, await d.listFixtures(m.divisionId));
   }
 }
 class AddEntrant extends Cmd {
   readonly kind = "AddEntrant" as const;
-  protected ready(m: ModelState) { return m.entrants.length < MAX_ENTRANTS && !m.completed; }
-  // After Start the product locks the roster (entrants.ts): offered, EXPECTED
+  // W4 T9 (X-LE-1): a started ROOT knockout is not roster-locked — the product's late-entry door answers the add (placed
+  // in a bye or a withdrawn seat, parked, or refused by name when no seat is left), outcomes this model does not
+  // simulate, so it does not offer the add there. The late-entry door is driven by the W4A scripts (R2 / R10 / R6,
+  // lib/scenarios/w4a-late-entry.ts), which read the seat the entrant takes off the product.
+  protected ready(m: ModelState) { return m.entrants.length < MAX_ENTRANTS && !m.completed && !(m.started && modelHoldsRootKnockout(m)); }
+  // After Start the product locks the roster (entrants.ts) of every other kind: offered, EXPECTED
   // to be refused, the roster judged unchanged.
   protected override expectsRefusal(m: ModelState) { return rosterLocked(m); }
   protected override expectedCheck() { return ROSTER_LOCK_CHECK; }
@@ -370,8 +408,28 @@ class Generate extends Cmd {
   // (stages.ts generateStageFixturesWrite), and it is how fixtures come to
   // exist before Start — the first half of #879's sequence.
   protected ready(m: ModelState) { return !m.completed; }
+  /** W4 app-A T8 (FX-G2; spec 2026-11-04 §6.5): after Start a root knockout is never reshaped — a Generate over its
+   *  lines with an entrant added since they were drawn (before Start: the roster lock refuses AddEntrant after it) is
+   *  refused by name, 409 KO_GENERATE_AFTER_START. A withdrawal is NOT (MB-004's sequence): its cascade already walked
+   *  the line over, so Generate is the named no-op and answers the bracket. The model's knockout rows are single-stage,
+   *  so their stage is the root. Before Start the product reconciles (places, vacates or regenerates), which the model
+   *  accepts. */
+  protected override expectsRefusal(m: ModelState) {
+    return m.started && m.stageKind === "knockout" && m.fixtures.size > 0 && m.lateEntry;
+  }
+  /** The code the product refused with, when it refused (read by afterExpectedRefusal; one command per step). */
+  #refusedCode: string | null = null;
+  /** B2 fix round 1 (m3): where the model expects the refusal it expects THAT one — the knockout table's
+   *  KO_GENERATE_AFTER_START (apps/web lib/knockout-refusals.ts) — not any named refusal. */
+  protected override afterExpectedRefusal(): Promise<void> {
+    if (this.#refusedCode === "KO_GENERATE_AFTER_START") return Promise.resolve();
+    return Promise.reject(new ModelViolation(this.expectedCheck(), [`${this.toString()}: a knockout Generate after Start over a late entry was refused with ${this.#refusedCode ?? "no code"}, not KO_GENERATE_AFTER_START`]));
+  }
   protected async act(m: ModelState, d: OrganiserDriver) {
-    const g = await d.generate(m.stageId);
+    const g = await d.generate(m.stageId).catch((e: unknown) => {
+      if (e instanceof RefusedCall) this.#refusedCode = e.code;
+      throw e;
+    });
     // I8 judges what is recorded here: `total` is the stage's full list, so a
     // 2xx answering zero fixtures is an empty generate (R13, carry b).
     m.generates.push({ status: 200, code: null, total: g.fixtures.length, created: g.created });

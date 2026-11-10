@@ -23,15 +23,18 @@
 //     - the joint builder's fixed occupancy (competition-schedule-ai.ts)
 //     - the board read's `held` flag (`listDivisionFixturesForBoard`,
 //       fixtures.ts)
-//     - swiss-rounds-admin.ts (W3 T12): inside `swissBoardStartedSql`, the
-//       Swiss "a board has started" predicate (late entry's case decision and
-//       the rounds lock, X-SW-17), and the "Swiss is over" read (a later
-//       stage under way) that late entry and Add a round share. That
-//       predicate has one arm this file does not own: a Match Day call that
-//       still holds (`liveCallSql`, match-day-call.ts; ruling 257, a called
-//       board is a started board). A call writes no status and no event, so
-//       `fixtureHasResultSql` cannot see it; `clearSwissFixtureSeats` ends
-//       the calls of the boards it empties (`endCallsOn`)
+//     - fixture-started-sql.ts (W4 T2, X-LE-9): inside `fixtureStartedSql`,
+//       every format's "a match has started" predicate, re-exported as
+//       swiss-rounds-admin.ts's `swissBoardStartedSql` (late entry's case
+//       decision and the rounds lock, X-SW-17). That predicate has an arm
+//       this file does not own: a Match Day call that still holds
+//       (`fixtureCalledSql` over `liveCallSql`, match-day-call.ts; ruling 257,
+//       a called board is a started board). A call writes no status and no
+//       event, so `fixtureHasResultSql` cannot see it — Rebuild's guard reads
+//       that arm beside this predicate; `clearSwissFixtureSeats` ends the
+//       calls of the boards it empties (`endCallsOn`)
+//     - swiss-rounds-admin.ts (W3 T12): the "Swiss is over" read (a later
+//       stage under way) that late entry and Add a round share
 //     - swiss-cut-drift.ts (W3 T17, RB3-19): `getSwissCutDrift`'s "the knockout has begun" read - a fixture of the stage after
 //       a complete Swiss that holds a result, on every Fixtures-tab render for an organiser and on GET /stages/{id}/swiss-cut.
 //       The evidence half is monotonic, so taking a knockout result back does not un-begin the bracket (the warning stays)
@@ -44,9 +47,14 @@
 //   `systemByeSql` (W3 T3; defined in engine-db/system-bye-sql.ts, below every
 //     reader): the snapshot exemption inside `fixtureEvidenceSql` and `playedSql`
 //     (engine-db/format-standing.ts)
-//   `swissByeShellSql` (W3 T3, X-SW-29): `movableFixtureSql` and the quick
-//     Start's rolling times (schedule.ts), the sheet day list (scorer-sheets.ts),
-//     history.ts's placement replays (`slotTaker`, W3 T5)
+//   `swissByeShellSql` (W3 T3, X-SW-29; defined in engine-db/system-bye-sql.ts
+//     since W4 T3): the sheet day list (scorer-sheets.ts),
+//     fixture-started-sql.ts, and `byeLineSql`
+//   `byeLineSql` (W4 T3, K2, X-SD-5; engine-db/system-bye-sql.ts — the Swiss
+//     shell, the system bye and the pre-award bye line): `movableFixtureSql` and
+//     the quick Start's rolling times (schedule.ts), history.ts's placement
+//     replays (`slotTaker`), the board read's `bye_line` flag (fixtures.ts,
+//     B1a review #1), and V493's shape
 //   NEITHER, a status list only
 //     - stages.ts: `deleteStage` refuses `in_play`/`decided`/`finalized` and
 //       deletes every other row with its evidence, an abandoned match or a
@@ -99,14 +107,10 @@ export function fixtureEvidenceSql(tx: Tx, on = "f") {
     or exists (select 1 from suspensions s where s.fixture_id = ${f}.id)`;
 }
 
-/**
- * W3 T3 (SW-M13, X-SW-29; RB3-23): a Swiss stage's bye row, seated or not, as SQL over the fixtures row `on` — the
- * SQL twin of `isSwissByeShellExtKey` (lib/swiss-shell.ts), the one bye-shell predicate. A bye is not played, so it
- * takes no court, no time and no sheet. Never null (a row with no ext_key reads false).
- */
-export function swissByeShellSql(tx: Tx | postgres.Sql, on = "f") {
-  return tx`coalesce(${tx(on)}.ext_key ~ '^sw-r[0-9]+-bye$', false)`;
-}
+// W3 T3 (SW-M13, X-SW-29; RB3-23): `swissByeShellSql`, a Swiss stage's bye row as SQL. It lives in engine-db
+// (system-bye-sql.ts) since W4 T3, beside `systemByeSql`, so `byeLineSql` there can read it without importing usecases;
+// re-exported here for its readers.
+export { swissByeShellSql } from "@/server/engine-db/system-bye-sql";
 
 /**
  * A fixture that holds a result: `rebuildStageFixtures`' refusal set, which

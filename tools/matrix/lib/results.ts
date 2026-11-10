@@ -48,11 +48,12 @@ export const GLYPH: Readonly<Record<CaseState, string>> = Object.freeze({
   works: "✅", refused: "⛔", red: "❌", later: "⏳", needs_ruling: "⬜", no_path: "🚫", not_run: "░",
 });
 
-/** The states run.ts recordPlanned writes (🚫 and ░): a case planned, never driven. */
-const PLANNED_STATES: ReadonlySet<CaseState> = new Set<CaseState>(["no_path", "not_run"]);
+/** The states run.ts recordPlanned writes (🚫 and ░, and since W4 app PR A Task 24 the two a settled atom carries, ⛔ and ⏳): a case
+ *  planned, never driven. */
+const PLANNED_STATES: ReadonlySet<CaseState> = new Set<CaseState>(["no_path", "not_run", "refused", "later"]);
 
 /** W1d ruling T2-PRED: the ONE predicate for "this case has the shape recordPlanned
- *  writes" — state 🚫 or ░, and no check. Every reader that must tell a planned case
+ *  writes" — state 🚫, ░, ⛔ or ⏳ (the last two for a settled atom), and no check. Every reader that must tell a planned case
  *  from a driven one asks this (parity.ts, committed-plans.ts, merge.ts, and the
  *  readers after them), never a copy of it: two predicates drifted once already.
  *
@@ -334,16 +335,21 @@ export interface DecideInput {
   /** ░ (W1c Task 3): planned, never run (no scenario script yet). Same rank
    *  as noPath, below it. Never set together with noPath. */
   notRun?: string | null;
+  /** ⛔ or ⏳ (W4 app PR A Task 24): a planned case whose atom the rulebook settled (scenario-catalogue.ts SETTLED) - never
+   *  driven. Same rank as notRun; never set together with noPath or notRun. */
+  settled?: { state: "refused" | "later"; reason: string } | null;
 }
 
 export function decideState(input: DecideInput): { state: CaseState; reason: string } {
   // A planner bug, refused whatever else is set: an error or a deferral must
   // not launder it into a red or a ⏳.
   if (input.noPath != null && input.notRun != null) throw new Error("decideState: noPath and notRun both set");
+  if (input.settled != null && (input.noPath != null || input.notRun != null)) throw new Error("decideState: settled set together with noPath or notRun");
   if (input.error !== null) return { state: "red", reason: `error: ${input.error}` };
   if (input.deferred !== null) return { state: "later", reason: `${input.deferred.wave}: ${input.deferred.reason}` };
   if (input.noPath != null) return { state: "no_path", reason: `${input.noPath.wave}: ${input.noPath.reason}` };
   if (input.notRun != null) return { state: "not_run", reason: input.notRun };
+  if (input.settled != null) return { state: input.settled.state, reason: input.settled.reason };
   if (input.checks.length === 0) return { state: "red", reason: VACUOUS_REASONS.none };
   const failed = input.checks.filter((c) => c.verdict === "fail");
   if (failed.length > 0) return { state: "red", reason: failed.map((c) => `${c.id}: ${c.reason}`).join("; ") };

@@ -52,6 +52,10 @@ vi.mock("@/lib/realtime", async (importOriginal) => {
 
 import { sql } from "@/lib/db";
 import { applySchedule, moveFixture, publishSchedule, putScheduleSettings, startDivision } from "../schedule";
+import { createCompetition } from "../competitions";
+import { createDivision } from "../divisions";
+import { createEntrants } from "../entrants";
+import { createStages, generateStageFixtures } from "../stages";
 import { createCourt, createVenue } from "../venues";
 import { divisionRig, seedOrg } from "./_rig";
 
@@ -227,5 +231,46 @@ describe.skipIf(!HAS_DB)("a real schedule write drops the fixture documents it c
     expect(probe.fixturePushes.map(([id]) => id).sort()).toEqual(all);
     expect(new Set(probe.fixturePushes.map(([, reason]) => reason))).toEqual(new Set(["schedule"]));
     expect(probe.divisionPushes).toEqual([[rig.divisionId, "start"]]);
+  }, 120_000);
+
+  // W4 B2 fix round 1 (m4): a knockout's Generate over lines it already has creates nothing, yet changes seats in place. It
+  // names the lines it WROTE (`changedFixtureIds`): the bye the newcomer took, and the next line, whose seat the bye's holder
+  // was carried into and is now the winner of that match. Read from the stored bracket after the write, not from the answer.
+  it("a knockout Generate that places a newcomer in a bye: that line and the line it feeds, and ONLY those, then one push each", async () => {
+    const { auth } = await seedOrg();
+    const competition = await createCompetition(auth, {
+      ends_on: "2030-12-31", name: "KO Cup " + Math.random().toString(36).slice(2, 8), visibility: "public", branding: {},
+    });
+    const division = await createDivision(auth, competition.id, {
+      name: "Open", sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    await createEntrants(auth, division.id, ["A", "B", "C", "D", "E", "F"].map((n, i) => ({
+      kind: "individual" as const, display_name: n, seed: i + 1, members: [],
+    })));
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "knockout", name: "KO", config: {} });
+    await generateStageFixtures(auth, stage!.id);
+    const [late] = await createEntrants(auth, division.id, [{ kind: "individual" as const, display_name: "G", members: [] }]);
+    const lines = await fixtureIdsOf(division.id);
+    await quiesce();
+
+    probe.hold = true;
+    const out = await generateStageFixtures(auth, stage!.id);
+    expect(out.reconcile?.kind, "premise: placed in place").toBe("in_place");
+    const [seat] = await sql<{ id: string; winner_to_fixture: string | null }[]>`
+      select id, winner_to_fixture from fixtures
+      where stage_id = ${stage!.id} and round_no = 1 and ${late!.id} in (home_entrant_id, away_entrant_id)`;
+    expect(seat?.winner_to_fixture, "premise: the newcomer's line feeds a next line").toBeTruthy();
+    const wrote = [seat!.id, seat!.winner_to_fixture!].sort();
+    expect(lines.length - wrote.length, "the bracket holds lines this Generate does not touch").toBeGreaterThan(0);
+
+    const del = theOneDel();
+    expect(del.first).toBe(hubKey(competition.id));
+    expect(del.rest).toEqual([...wrote.map(fixtureKey), ...divisionKeys(division.id)].sort());
+    await sleep(20);
+    expect(probe.fixturePushes, "fixture push before the DEL settled").toEqual([]);
+
+    await releaseDel();
+    expect(probe.fixturePushes.map(([id]) => id).sort()).toEqual(wrote);
+    expect(probe.divisionPushes).toEqual([[division.id, "schedule"]]);
   }, 120_000);
 });

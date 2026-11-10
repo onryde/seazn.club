@@ -17,8 +17,13 @@
 //   - confirmSeedProposal must REFUSE one, whatever route it arrives by
 //     (the computed slate, an `edits[]` override, or a `tiePicks[]` order).
 //
-// Out of scope by owner ruling: promoting the next-ranked entrant into the
-// vacated place. A smaller bracket is the accepted behaviour today.
+// Promoting the next-ranked entrant into the vacated place was out of scope by
+// owner ruling here ("a smaller bracket"); W4 T13 (RB4-V6, X-LL-5) rules it in
+// for a league or group source, as W3 did for Swiss — so a qualifier's seat now
+// vacates only on a SHORTFALL (nobody below the cut left in her pool). The
+// cases that need a vacated seat build that shortfall through the real cascade
+// (`departIntoShortfall`: her pool below the cut withdraws first, then her);
+// the tied-league cases below pin what RB4-V6 does to a tie instead.
 import { describe, expect, it, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
@@ -36,6 +41,7 @@ import {
   getSeedProposal,
 } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
+import { departIntoShortfall } from "./_table-shortfall";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -186,22 +192,22 @@ describe.skipIf(!HAS_DB)("a withdrawn entrant is not seedable (timing: 'setup')"
     expect(before).toHaveLength(2);
 
     const departing = before[0]!;
-    await withdrawEntrantCascade(auth, departing);
+    await departIntoShortfall(auth, koStageId, departing);
     expect(await statusOf(departing)).toBe("withdrawn");
 
     const after = await offeredIds(auth, koStageId);
     expect(after).not.toContain(departing);
     // The surviving qualifier keeps her place — a smaller bracket, not an
-    // empty one, and nobody is promoted into the vacancy (owner ruling).
+    // empty one: on a shortfall nobody is left to promote into the vacancy.
     expect(after).toEqual([before[1]!]);
   });
 
-  it("computeSeedProposal keeps the surviving qualifier's SEED and destination slot unchanged — the vacancy is left open, not closed up", async () => {
+  it("computeSeedProposal keeps the surviving qualifier's SEED and destination slot unchanged — on a shortfall the vacancy is left open, not closed up", async () => {
     const { auth, koStageId } = await setup();
     const full = await computeSeedProposal(auth, koStageId);
     const survivor = full.computed.qualifiers[1]!;
 
-    await withdrawEntrantCascade(auth, full.computed.qualifiers[0]!.entrantId);
+    await departIntoShortfall(auth, koStageId, full.computed.qualifiers[0]!.entrantId);
 
     const after = await computeSeedProposal(auth, koStageId);
     expect(after.computed.qualifiers).toHaveLength(1);
@@ -282,9 +288,23 @@ describe.skipIf(!HAS_DB)("a withdrawn entrant is not seedable (timing: 'setup')"
     // itself still names her. The guard is the last line and must hold
     // regardless of how she got there — this is also the disqualified half of
     // the departed-status pair.
-    const { auth, koStageId } = await setup();
-    const proposal = await computeSeedProposal(auth, koStageId);
-    const target = proposal.computed.qualifiers[0]!.entrantId;
+    // W4 RB4-V6: her pool's runner-up withdraws first (through the cascade, which refreshes the draft), so the raw write
+    // below leaves her pool with nobody to promote — the cut, and so the draft's hash, stands and the draft still names
+    // her. With the runner-up in the field the cut would move and the confirm would refuse SEEDING_PROPOSAL_STALE first.
+    const { auth, divisionId, koStageId } = await setup();
+    const full = await computeSeedProposal(auth, koStageId);
+    const target = full.computed.qualifiers[0]!.entrantId;
+    const offered = new Set(full.computed.qualifiers.map((q) => q.entrantId));
+    const [{ pool }] = await sql<{ pool: string }[]>`
+      select f.pool_id as pool from fixtures f join stages s on s.id = f.stage_id
+       where s.division_id = ${divisionId} and s.kind = 'group' and ${target} in (f.home_entrant_id, f.away_entrant_id) limit 1`;
+    const [{ id: runnerUp }] = await sql<{ id: string }[]>`
+      select distinct e.id from fixtures f join entrants e on e.id in (f.home_entrant_id, f.away_entrant_id)
+       where f.pool_id = ${pool} and e.id <> ${target}`;
+    expect(offered.has(runnerUp), "premise: her pool's other entrant is below the cut").toBe(false);
+    await withdrawEntrantCascade(auth, runnerUp);
+    const proposal = (await getSeedProposal(auth, koStageId))!;
+    expect(proposal.computed.qualifiers.map((q) => q.entrantId), "premise: the refreshed draft still names her").toContain(target);
     await sql`update entrants set status = 'disqualified' where id = ${target}`;
 
     const err = await confirmSeedProposal(auth, koStageId, { proposalId: proposal.id }).catch(
@@ -331,7 +351,7 @@ describe.skipIf(!HAS_DB)("a status flip refreshes the draft proposal the organis
     const before = await computeSeedProposal(auth, koStageId);
     const departing = before.computed.qualifiers[0]!.entrantId;
 
-    await withdrawEntrantCascade(auth, departing);
+    await departIntoShortfall(auth, koStageId, departing);
 
     // Read it the way the page does — getSeedProposal, no recompute.
     const shown = await getSeedProposal(auth, koStageId);
@@ -348,7 +368,7 @@ describe.skipIf(!HAS_DB)("a status flip refreshes the draft proposal the organis
     const { auth, koStageId } = await setup();
     const before = await computeSeedProposal(auth, koStageId);
     const departing = before.computed.qualifiers[0]!.entrantId;
-    await withdrawEntrantCascade(auth, departing);
+    await departIntoShortfall(auth, koStageId, departing);
     expect((await getSeedProposal(auth, koStageId))!.computed.qualifiers).toHaveLength(1);
 
     await patchEntrant(auth, departing, { status: "registered" });
@@ -419,25 +439,30 @@ describe.skipIf(!HAS_DB)("a flagged tie never becomes a dead end when one of the
     expect(after.computed.qualifiers).toHaveLength(2);
   });
 
-  it("drops the VACATED seat from the tie's slots, so no tie asks about a seat with no candidate", async () => {
+  it("W4 RB4-V6: a tied qualifier's departure promotes from her tie — both seats stay contested by the three left, and a pick confirms", async () => {
+    // Until W4 her seat vacated and the tie had to drop it (no tie may ask about a seat with no candidate). RB4-V6
+    // promotes from the table, as W3 does for Swiss, so the seat is never empty while tied rivals stay: the tie keeps
+    // both seats over the three left. Dropping a vacated seat from a tie is now reachable from a league only on a
+    // shortfall, where no candidate is left either (W4 T13 report, routed).
     const { auth, koStageId } = await setupTiedLeague();
     const before = await computeSeedProposal(auth, koStageId);
-    const [keep, vacate] = before.computed.qualifiers;
-    await withdrawEntrantCascade(auth, vacate!.entrantId);
+    const [, leaving] = before.computed.qualifiers;
+    await withdrawEntrantCascade(auth, leaving!.entrantId);
 
     const after = await computeSeedProposal(auth, koStageId);
-    expect(after.computed.qualifiers).toHaveLength(1);
+    expect(after.computed.qualifiers, "both seats filled").toHaveLength(2);
+    expect(after.computed.qualifiers.map((q) => q.entrantId)).not.toContain(leaving!.entrantId);
+    expect(after.computed.ties).toHaveLength(1);
     const tie = after.computed.ties[0]!;
-    expect(tie.slots).toEqual([keep!.destinationSlot]);
-    expect(tie.slots).not.toContain(vacate!.destinationSlot);
+    expect([...tie.slots].sort(), "both seats are still asked about").toEqual([...before.computed.ties[0]!.slots].sort());
+    expect([...tie.entrantIds].sort(), "over the three left").toEqual(before.computed.ties[0]!.entrantIds.filter((id) => id !== leaving!.entrantId).sort());
 
-    // And the organiser can actually finish: resolving the one remaining
-    // tied seat confirms, rather than 422ing on a seat nobody can fill.
+    // And the organiser can finish: a pick over the tie confirms both seats.
     const out = await confirmSeedProposal(auth, koStageId, {
       proposalId: after.id,
-      edits: [{ destinationSlot: keep!.destinationSlot, entrantId: tie.entrantIds[0]! }],
+      tiePicks: [{ slots: tie.slots, order: [...tie.entrantIds] }],
     });
-    expect(out.filled).toBe(1);
+    expect(out.filled).toBe(2);
   });
 
   it("drops the tie ENTIRELY once one candidate is left, and the confirm then goes through", async () => {

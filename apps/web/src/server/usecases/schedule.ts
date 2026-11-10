@@ -9,9 +9,12 @@ import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
-import { fixtureHasResultSql, playedFixtureIds, swissByeShellSql } from "./fixture-results-sql";
+import { fixtureHasResultSql, playedFixtureIds } from "./fixture-results-sql";
+import { byeLineSql } from "@/server/engine-db/system-bye-sql";
 import { isSwissByeShellExtKey } from "@/lib/swiss-shell";
+import { isByeLine, type ByeLineRow } from "@/lib/bye-line";
 import { swissRefusal } from "./swiss-refusal";
+import { knockoutRefusal } from "./knockout-refusal";
 import { requireFeature } from "@/lib/entitlements";
 import { cacheDel, sendAfterDeleteOrBound } from "@/lib/cache";
 import { rateLimit, type RateLimitConfig } from "@/lib/rate-limit";
@@ -91,7 +94,7 @@ import {
 import { buildEngineConstraints } from "./engine-constraints";
 import { autoBuildSchedule, fallbackBoard } from "./schedule-solver-rest";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
-import { generateStageFixturesUnpublished, refuseSwissRoundsAboveMaxAtStart } from "./stages";
+import { generateStageFixturesUnpublished, refuseFormatTooSmall, refuseSwissRoundsAboveMaxAtStart } from "./stages";
 import { schedulingAiModel, toRuleFixture } from "./schedule-ai";
 
 type Tx = postgres.TransactionSql;
@@ -181,33 +184,35 @@ export const OCCUPYING = ["scheduled", "in_play", "decided", "finalized", "forfe
 export const FIXED_OCCUPYING = OCCUPYING.filter((s) => s !== MOVABLE_STATUS);
 
 /** Whether the board, the solver and an apply may move `f`: `scheduled`,
- *  holding no result, and not a Swiss bye shell. `played` is history's played
+ *  holding no result, and not a bye line. `played` is history's played
  *  set (`playedFixtureIds`, ./fixture-results-sql.ts). The status alone cannot
  *  say it: a start taken back walks the status to `scheduled` and leaves its
  *  events behind. History refuses to undo any step that touches such a row, so
  *  a move written to one would leave an Undo that nothing can get past (review
- *  3 of #857, N1). A Swiss stage mints its round's bye row as a `scheduled`
- *  shell before Pair (`sw-r{N}-bye`), and a bye is not played: it takes no
- *  court and no time (W3 T3, SW-M13, X-SW-29; `isSwissByeShellExtKey`, the one
- *  bye-shell predicate). */
-export function isMovable(f: { id: string; status: string; ext_key: string | null }, played: ReadonlySet<string>): boolean {
-  return f.status === MOVABLE_STATUS && !played.has(f.id) && !isSwissByeShellExtKey(f.ext_key);
+ *  3 of #857, N1). A bye is not played: it takes no court and no time — a Swiss
+ *  stage's `scheduled` bye shell before Pair (W3 T3, SW-M13, X-SW-29) and a
+ *  bracket's bye line before its award (W4 T3, K2, X-SD-5) alike (`isByeLine`,
+ *  lib/bye-line.ts, the one bye-line predicate). Every caller passes a
+ *  `divisionFixtures` row (`FixtureLite`), which carries the columns it reads. */
+export function isMovable(f: { id: string; status: string } & ByeLineRow, played: ReadonlySet<string>): boolean {
+  return f.status === MOVABLE_STATUS && !played.has(f.id) && !isByeLine(f);
 }
 
 /** A `scheduled` fixture no builder may move all the same: one that holds a
- *  result, or a Swiss bye shell (`isMovable`). An apply skips it silently, the
+ *  result, or a bye line (`isMovable`). An apply skips it silently, the
  *  way a rain-delay shift does, and counts it — so a stale proposal naming a
- *  bye shell writes nothing to it and the rest of the apply lands. */
-export function heldInPlace(f: { id: string; status: string; ext_key: string | null }, played: ReadonlySet<string>): boolean {
+ *  bye line writes nothing to it and the rest of the apply lands. */
+export function heldInPlace(f: { id: string; status: string } & ByeLineRow, played: ReadonlySet<string>): boolean {
   return f.status === MOVABLE_STATUS && !isMovable(f, played);
 }
 
-/** `isMovable`, as SQL: `scheduled`, holding no result, and not a Swiss bye
- *  shell. For the counts that price, drop or size a run
- *  (competition-schedule-ai.ts, schedule-ai-preview.ts), so they count exactly
- *  what a builder moves. `on` names the `fixtures` row in the enclosing query. */
+/** `isMovable`, as SQL: `scheduled`, holding no result, and not a bye line
+ *  (`byeLineSql`, the SQL twin of `isByeLine`). For the counts that price, drop
+ *  or size a run (competition-schedule-ai.ts, schedule-ai-preview.ts), so they
+ *  count exactly what a builder moves. `on` names the `fixtures` row in the
+ *  enclosing query. */
 export function movableFixtureSql(tx: Tx, on = "f") {
-  return tx`(${tx(on)}.status = ${MOVABLE_STATUS} and not ${fixtureHasResultSql(tx, on)} and not ${swissByeShellSql(tx, on)})`;
+  return tx`(${tx(on)}.status = ${MOVABLE_STATUS} and not ${fixtureHasResultSql(tx, on)} and not ${byeLineSql(tx, on)})`;
 }
 
 /** The English sentence behind a refused board move or pin. Clients say it in
@@ -584,6 +589,11 @@ export interface FixtureLite {
   ext_key: string | null;
   home_entrant_id: string | null;
   away_entrant_id: string | null;
+  /** W4 T3 (K2): read with the seats, ext_key and status by `isByeLine` (via `isMovable`/`heldInPlace`) — a bracket's
+   *  bye line is told by its outcome and the bye slot label on its empty side. */
+  outcome: unknown;
+  home_slot_label: unknown;
+  away_slot_label: unknown;
   scheduled_at: string | Date | null;
   /** P9 pass 3a (venues/courts cutover): the REAL identity now — every
    *  "does this fixture have a placed court/is it occupying one" question
@@ -887,6 +897,8 @@ export function roundRobinSequenceSiblings(
 const FIXTURE_LITE_COLS = [
   "id", "stage_id", "division_id", "pool_id", "round_no", "seq_in_round", "ext_key",
   "home_entrant_id", "away_entrant_id",
+  // W4 T3 (K2): `isByeLine`'s other inputs (see FixtureLite).
+  "outcome", "home_slot_label", "away_slot_label",
   // P9 pass 3a: court_id/venue_id are the real identity; court_label/venue
   // ride along read-only, for scopeLocked alone (see FixtureLite's comment).
   "scheduled_at", "court_id", "venue_id", "court_label", "venue", "status", "schedule_locked",
@@ -3265,7 +3277,8 @@ export async function moveFixture(
       (FixtureLite & { competition_id: string })[]
     >`
       select f.id, f.stage_id, f.division_id, f.round_no, f.ext_key, f.home_entrant_id,
-             f.away_entrant_id, f.scheduled_at, f.court_id, f.venue_id,
+             f.away_entrant_id, f.outcome, f.home_slot_label, f.away_slot_label,
+             f.scheduled_at, f.court_id, f.venue_id,
              f.court_label, f.venue, f.pool_id,
              f.status, f.schedule_locked, f.winner_to_fixture, f.loser_to_fixture,
              d.competition_id
@@ -3295,6 +3308,8 @@ export async function moveFixture(
       || (patch.venue_id !== undefined && patch.venue_id !== null)
       || patch.schedule_locked === true;
     if (places && isSwissByeShellExtKey(fixture.ext_key)) throw swissRefusal("SWISS_BYE_NOT_PLACEABLE");
+    // W4 T3 (K2, X-SD-5): every other bye line — a bracket's, before or after its award — likewise, by its own name.
+    if (places && isByeLine(fixture)) throw knockoutRefusal("BYE_LINE_NOT_PLACEABLE");
     if (movesTimetable && fixture.status !== MOVABLE_STATUS) {
       throw new HttpError(422, `fixture is ${fixture.status} — decided fixtures are immutable`);
     }
@@ -4110,8 +4125,25 @@ export async function startDivision(
     if (!division) throw new HttpError(404, "division not found");
     assertNotFrozen(frozen, division.competition_id);
     if (division.status === "completed") throw new HttpError(422, "division is completed");
-    const [firstStage] = await tx<{ id: string; n: number }[]>`
-      select s.id, (select count(*)::int from fixtures f where f.stage_id = s.id) as n
+    // W4 B2 fix round 1 (G1): `roster_drift` — a ROOT knockout (no progression, no fed `qualified` list) whose first round no
+    // longer matches the field: an active entrant in no first-round seat, a seated one no longer active, a match with an
+    // empty seat (its entrant was deleted), or a bye with nobody on it (its holder was deleted). Only then does Start
+    // reconcile: a bracket whose roster is unchanged is never redrawn here, whatever else changed since it was drawn.
+    const [firstStage] = await tx<{ id: string; n: number; roster_drift: boolean }[]>`
+      select s.id, (select count(*)::int from fixtures f where f.stage_id = s.id) as n,
+             (s.kind = 'knockout' and s.progression is null
+               and jsonb_typeof(s.config->'qualified') is distinct from 'array'
+               and (exists (select 1 from entrants e
+                             where e.division_id = s.division_id and e.status in ('registered', 'confirmed')
+                               and not exists (select 1 from fixtures f
+                                                where f.stage_id = s.id and f.round_no = 1
+                                                  and e.id in (f.home_entrant_id, f.away_entrant_id)))
+                 or exists (select 1 from fixtures f join entrants e on e.id in (f.home_entrant_id, f.away_entrant_id)
+                             where f.stage_id = s.id and f.round_no = 1 and e.status not in ('registered', 'confirmed'))
+                 or exists (select 1 from fixtures f
+                             where f.stage_id = s.id and f.round_no = 1
+                               and ((f.status = 'scheduled' and (f.home_entrant_id is null or f.away_entrant_id is null))
+                                    or (f.home_entrant_id is null and f.away_entrant_id is null))))) as roster_drift
       from stages s where s.division_id = ${divisionId}
       order by s.seq limit 1`;
     if (!firstStage) throw new HttpError(422, "division has no stages to start");
@@ -4119,6 +4151,8 @@ export async function startDivision(
     // quick-start Generate below runs in its own transaction). A withdrawal racing past this read is caught by the Pair's
     // own judgement (`swissGen`), which every Generate runs. An active division's Start is a no-op, never refused.
     if (division.status !== "active") await refuseSwissRoundsAboveMaxAtStart(tx, divisionId);
+    // W4 T15 (X-PL-1, X-QM-5): a format this field cannot play is refused here, not after a whole qualifying stage is played.
+    if (division.status !== "active") await refuseFormatTooSmall(tx, divisionId);
     // Read here, ACTED ON below — see the two guards further down. The freeze
     // does not bind the start TRANSITION (that is deliberate: the design's own
     // customer story is freeze-then-publish, and `schedule-board.tsx` gates its
@@ -4149,6 +4183,17 @@ export async function startDivision(
     // fixture of the division, the generated ones included.
     const outcome = await generateStageFixturesUnpublished(auth, pre.firstStage.id);
     generated = outcome.created;
+  } else if (pre.firstStage.roster_drift && !pre.scheduleFrozen) {
+    // W4 B2 fix round 1 (G1): a pre-Start withdrawal is a status flip only (withdrawal.ts) and an arrival seats nobody,
+    // so a root knockout drawn before them still names a withdrawn player on a match, or leaves a newcomer out. Start is
+    // the last moment before play: when the first round no longer matches the field (`roster_drift`, read above) it runs
+    // the reconcile Generate does (stages.ts `reconcileKnockoutGenerate`) — IN PLACE ONLY (fix round 2, item 2): a
+    // newcomer into a bye, a departed entrant's match to a bye. A change that needs the bracket drawn again is refused by
+    // name, KO_START_NEEDS_UPDATE_DRAW, and the start with it, before any write: the redraw is Update draw's, whose notice
+    // says what moved. So Start deletes no fixture, and its one publish below names every fixture there is. A frozen
+    // board is left as the organiser froze it.
+    const outcome = await generateStageFixturesUnpublished(auth, pre.firstStage.id, { inPlaceOnly: true });
+    generated = outcome.created;
   }
 
   const out = await withTenant(auth.orgId, async (tx) => {
@@ -4173,10 +4218,11 @@ export async function startDivision(
         ? ms(settings.config.startAt)
         : roundToMinute(Date.now());
       const step = settings.config.roundMinutes * MS_PER_MIN;
-      // A Swiss bye shell takes no rolling time (W3 T3, X-SW-29): a bye is not played.
+      // A bye line takes no rolling time: a bye is not played — a Swiss bye shell (W3 T3, X-SW-29) and a bracket's
+      // bye, which a plain knockout bakes `forfeited` at generation (W4 T3, K2, X-SD-5), alike (`byeLineSql`).
       const rounds = await tx<{ round_no: number }[]>`
         select distinct round_no from fixtures
-        where stage_id = ${pre.firstStage.id} and scheduled_at is null and not ${swissByeShellSql(tx, "fixtures")}
+        where stage_id = ${pre.firstStage.id} and scheduled_at is null and not ${byeLineSql(tx, "fixtures")}
         order by round_no`;
       // The sweep below writes `scheduled_at` across the first stage, which is
       // a schedule edit whatever door it came through — so a frozen board
@@ -4192,7 +4238,7 @@ export async function startDivision(
         await tx`
           update fixtures set scheduled_at = ${iso(startAt + i * step)}, schedule_source = 'auto'
           where stage_id = ${pre.firstStage.id} and round_no = ${r.round_no}
-            and scheduled_at is null and not ${swissByeShellSql(tx, "fixtures")}`;
+            and scheduled_at is null and not ${byeLineSql(tx, "fixtures")}`;
       }
     }
 

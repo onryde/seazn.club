@@ -1322,6 +1322,15 @@ test("pin: a started stage's public table does not move after the division defau
   await pointsPanel.getByTestId("division-points-save").click();
   await expect(pointsPanel.getByText(say("divset.notice.rulesSaved"))).toBeVisible({ timeout: STEP_MS });
   await expect(pointsPanel.getByTestId(`division-kept-pinned-${stageId}`)).toHaveText(say("divset.keptPinned", { stage: "League" }));
+  // The save's `router.refresh()` is not awaited by the strip, and when its new props land the strip re-reads EVERY form
+  // from them (`division-rules-strip.tsx`'s one signature over variant, config and order) — an order edited before that
+  // is reset, its Save unmounts, and the click below waits out the test (flaky on main too, e2e 42650132551). So wait
+  // for the refresh itself: the Points Save is offered only while the form differs from the STORED points
+  // (`divisionPointsDirty`), so it goes away exactly when the refreshed division (a win now pays 4) has been rendered.
+  await expect(pointsPanel.getByTestId("division-points-save"), "the Points save's refresh landed: the stored points read 4").toHaveCount(0, {
+    timeout: STEP_MS,
+  });
+  await expect(win, "and the form re-read the stored value").toHaveValue("4");
   // The order, in its Tie-breaks panel (the division's own order editor, spec §12 C2): goals for moved above the difference
   // with the same arrow the stage editor uses, saved through the strip's one door, PATCH /divisions/{id} {tiebreakers}.
   const orderPanel = strip.getByTestId("division-rules-panel-tiebreaks");

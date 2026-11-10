@@ -257,12 +257,14 @@ const SAMPLE: { [K in Attention["kind"]]: Extract<Attention, { kind: K }> } = {
   needs_draw: { kind: "needs_draw", stageName: "Finals", door: "compute" },
   needs_fixtures: { kind: "needs_fixtures", stageName: "Finals" },
   needs_decision: { kind: "needs_decision", count: 1, fixtureIds: ["f1"] },
+  final_decided: { kind: "final_decided", stageName: "Finals" },
   no_scorer: { kind: "no_scorer", count: 1, fixtureIds: ["f1"], minutesSinceKickoff: 5 },
   not_recording: { kind: "not_recording", count: 1, fixtureIds: ["f1"], minutesSinceKickoff: 40 },
   unscheduled: { kind: "unscheduled", count: 3 },
   result_missing: { kind: "result_missing", count: 2, fixtureIds: ["f1", "f2"] },
   registrations_waiting: { kind: "registrations_waiting", count: 2 },
   bans_waiting: { kind: "bans_waiting", count: 1 },
+  late_players_waiting: { kind: "late_players_waiting", count: 1, stageName: "Cup" },
 };
 
 const SIDES = [

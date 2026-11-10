@@ -19,6 +19,7 @@ import { refusedFieldsOf } from "@/lib/rule-errors";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { featureReason } from "@/lib/feature-copy";
 import { SWISS_REFUSALS, SWISS_REQUESTED_BYES_DEFERRED_MESSAGE } from "@/lib/swiss-refusals";
+import { COUNTRY_SEPARATION_NOT_OFFERED_MESSAGE, KNOCKOUT_REFUSALS } from "@/lib/knockout-refusals";
 import { STAGE_DECIDER_MOVED } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { runRequestContext } from "@/server/request-context";
@@ -206,6 +207,13 @@ async function v1Inner<T>(
       if (deferred !== null) {
         const row = SWISS_REFUSALS.SWISS_REQUESTED_BYES_DEFERRED;
         return errorResponse(requestId, row.status, "SWISS_REQUESTED_BYES_DEFERRED", row.message, { field: deferred.field, issues: err.issues });
+      }
+      // W4 T7 (RB4-D9, X-SD-10): a country-separation request is refused by NAME, the same way. The table row's status
+      // and sentence.
+      const country = countrySeparationOf(err.issues);
+      if (country !== null) {
+        const row = KNOCKOUT_REFUSALS.COUNTRY_SEPARATION_NOT_OFFERED;
+        return errorResponse(requestId, row.status, "COUNTRY_SEPARATION_NOT_OFFERED", row.en, { field: country.field, issues: err.issues });
       }
       return errorResponse(requestId, 400, "VALIDATION", "Invalid input", {
         issues: err.issues,
@@ -398,6 +406,14 @@ export function stageDeciderMovedOf(issues: readonly IssueLike[], prefix: readon
  *  (`config.requestedByes`, `[0].config.requestedByes`, `requestedByes`). Null for any other refusal. */
 export function swissRequestedByesOf(issues: readonly IssueLike[]): { field: string } | null {
   const path = pathOfIssueMessage(issues, SWISS_REQUESTED_BYES_DEFERRED_MESSAGE, []);
+  return path === null ? null : { field: pathText(path) };
+}
+
+/** W4 T7 (X-SD-10): the `countrySeparation` never-key in a refusal (`StageConfig`), walked through union arms as
+ *  `swissRequestedByesOf` is: the field as the client sent it (`config.countrySeparation`, `[0].config.countrySeparation`).
+ *  Null for any other refusal. */
+export function countrySeparationOf(issues: readonly IssueLike[]): { field: string } | null {
+  const path = pathOfIssueMessage(issues, COUNTRY_SEPARATION_NOT_OFFERED_MESSAGE, []);
   return path === null ? null : { field: pathText(path) };
 }
 

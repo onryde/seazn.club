@@ -48,6 +48,7 @@ import {
 } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
+import { createStagesWithLegacy } from "./_legacy-standalone-stage";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const BYE_KEY = "bracket.slot.bye";
@@ -124,7 +125,7 @@ async function seedQualifiedStage(
       members: [],
     })),
   );
-  const [stage] = await createStages(auth, division.id, [
+  const [stage] = await createStagesWithLegacy(auth, division.id, [
     { seq: 1, kind, name: "Finals", config: {} },
   ]);
   const qualified = entrants.map((e) => e.id);
@@ -1443,7 +1444,7 @@ async function qualifiedStepladder() {
     division.id,
     Array.from({ length: 4 }, (_, i) => ({ kind: "individual" as const, display_name: `E${i + 1}`, seed: i + 1, members: [] })),
   );
-  const [stage] = await createStages(auth, division.id, [{ seq: 1, kind: "stepladder" as never, name: "Finals", config: {} }]);
+  const [stage] = await createStagesWithLegacy(auth, division.id, [{ seq: 1, kind: "stepladder" as never, name: "Finals", config: {} }]);
   const qualified = entrants.map((e) => e.id);
   await sql`update stages set config = ${sql.json({ qualified } as never)} where id = ${stage!.id}`;
   return { auth, divisionId: division.id, stageId: stage!.id, bySeed: qualified };

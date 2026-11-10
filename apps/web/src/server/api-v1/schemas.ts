@@ -34,6 +34,8 @@ import { FIXTURE_STATUSES } from "../../lib/fixture-status.ts";
 // W3 T18 (RB3-7(c)): the sentence a requested half/zero bye is refused with — the table's own constant (client-safe and
 // strip-types-safe: its only import is `import type`), so this schema, `http.ts`'s reader and the table row say one thing.
 import { SWISS_REQUESTED_BYES_DEFERRED_MESSAGE } from "../../lib/swiss-refusals.ts";
+// W4 T7 (RB4-D9, X-SD-10): the same pattern for a country-separation request — the knockout table owns the sentence.
+import { COUNTRY_SEPARATION_NOT_OFFERED_MESSAGE } from "../../lib/knockout-refusals.ts";
 // A PATCH twin whose omitted fields stay omitted (zod 4's `.partial()` fills a `.default()`); pure zod, relative + `.ts`.
 import { patchOf } from "../../lib/zod-patch.ts";
 // The entrant name limit, shared with the console's Name field (entrants-panel.tsx).
@@ -785,16 +787,16 @@ export const WithdrawCascadeReport = z.object({
   /** Fixtures the cascade wrote nothing to, each still the organiser's to void or settle (an abandoned Swiss board
    *  holds the next round until it is settled, X-AB-5). */
   left_to_organiser: z.array(Uuid),
+  /** W4 T13 (RB4-V2): the lucky loser who took the departed qualifier's main-draw round-1 seat, and that line; null when
+   *  none did (the line walked over). */
+  lucky_loser: z.object({ entrant_id: Uuid, fixture_id: Uuid }).nullable(),
 });
-/** `PATCH /entrants/{id}`'s reply: the entrant, plus `cascade` when the patch disqualified an entrant still in the field
- *  (the withdrawal's fixture surgery ran, W3 T15). */
-export const PatchedEntrant = Entrant.extend({ cascade: WithdrawCascadeReport.optional() });
-
 /** W3 T9 (ruling 250, X-SW-12/13/14): what "Add late player" did with an entrant added to a division whose Swiss is
  *  running. (a) re-paired the unstarted round with the newcomer (`repaired`: the players whose opponent changed; a
  *  board the odd→even field needed is `new_board`); (b) seated the newcomer against the round's bye holder
  *  (`bye_holder_id`, ruling C3) on a new board (`new_board`); (c) the newcomer joins round `round`'s Pair. */
-export const LateEntryResult = z.object({
+export const SwissLateEntryResult = z.object({
+  format: z.literal("swiss"),
   entrant_id: Uuid,
   stage_id: Uuid,
   case: z.enum(["a", "b", "c"]),
@@ -803,9 +805,57 @@ export const LateEntryResult = z.object({
   new_board: z.object({ fixture_id: Uuid, scheduled: z.boolean() }).optional(),
   bye_holder_id: Uuid.optional(),
 });
+export type SwissLateEntryResult = z.infer<typeof SwissLateEntryResult>;
+
+/** W4 T9/T10 (rules X-LE-3…X-LE-13, design 2026-11-04 §4.1): what "Add late player" did with an entrant added to a
+ *  division whose root knockout is drawn. `bye` — the newcomer took the lowest-seeded holder's round-1 bye and plays
+ *  `opponent_id` on `fixture_id`; `withdrawn_slot` — the newcomer took a withdrawn entrant's round-1 seat (its walkover
+ *  reversed) against `opponent_id`; `waiting` — an automatic arrival (registration, import, Reinstate) is held for one
+ *  organiser tap (ruling 271); `refused` / `rebuild_offered` — round 1 has no slot left (`reason`), and when nothing has
+ *  started a Rebuild is offered (`rebuild_offered`: on an organiser's add the player is KEPT and waits, RB4-L6). `refused`
+ *  answers a tap (no slot, a match has started: KO_LATE_ENTRY_NO_SLOT) or a Reinstate whose place has been played on
+ *  (KO_LATE_ENTRY_PLAYED_ON, T19) — never an organiser's add, which once a match has started is a 409 instead.
+ *  `scheduled`: the new match found a free slot (else it is unscheduled and flagged, X-LE-12). */
+export const KnockoutLateEntryResult = z.object({
+  format: z.literal("knockout"),
+  entrant_id: Uuid,
+  stage_id: Uuid,
+  case: z.enum(["bye", "withdrawn_slot", "waiting", "refused", "rebuild_offered"]),
+  fixture_id: Uuid.optional(),
+  opponent_id: Uuid.optional(),
+  /** `withdrawn_slot` only (W4 T19): whose departed seat the late player took — themself, for a reinstated player whose
+   *  own walkover was reversed. The desk's notice names them ("… takes {withdrawn}'s place against {opponent}"). */
+  withdrawn_id: Uuid.optional(),
+  scheduled: z.boolean().optional(),
+  /** T26c fix round 1 (I2): set (true) only with `scheduled: false` when the division's schedule is frozen - a frozen
+   *  timetable gives a late entry no time or court, so the match waits for one until the schedule is unfrozen, and the
+   *  notice says so (`knockout.lateEntry.unscheduledFrozen`). Absent otherwise. */
+  schedule_frozen: z.literal(true).optional(),
+  /** `refused` / `rebuild_offered`: why — KO_LATE_ENTRY_NO_SLOT (round 1 has no slot left), KO_LATE_ENTRY_SCHEDULE_FROZEN (no
+   *  slot, nothing started, but the division's schedule is frozen: Rebuild refuses a frozen schedule, so none is offered and
+   *  the player waits until it is unfrozen — final review m1), or KO_LATE_ENTRY_PLAYED_ON (a reinstated player whose place in
+   *  the bracket has been played on: back on the list, never back in the bracket). */
+  reason: z.string().optional(),
+});
+export type KnockoutLateEntryResult = z.infer<typeof KnockoutLateEntryResult>;
+
+/** A late add's answer, by the entry stage's FORMAT: a running root Swiss (W3) or a drawn root knockout (W4). Every
+ *  reader narrows on `format` before it reads a case. */
+export const LateEntryResult = z.discriminatedUnion("format", [SwissLateEntryResult, KnockoutLateEntryResult]);
 export type LateEntryResult = z.infer<typeof LateEntryResult>;
 
-/** POST /divisions/{id}/entrants response row: the entrant, plus `late_entry` when it joined a running Swiss. */
+/** `PATCH /entrants/{id}`'s reply: the entrant, plus `cascade` when the patch disqualified an entrant still in the field
+ *  (the withdrawal's fixture surgery ran, W3 T15). */
+export const PatchedEntrant = Entrant.extend({
+  cascade: WithdrawCascadeReport.optional(),
+  /** W4 T19 (K13): a REINSTATEMENT into a division whose entry stage is a running Swiss or a started root knockout — how
+   *  the player rejoins it (a knockout: `waiting` for the organiser's Add to bracket, or `refused` with
+   *  KO_LATE_ENTRY_PLAYED_ON when their place has been played on). Absent on every other patch. */
+  late_entry: LateEntryResult.optional(),
+});
+
+/** POST /divisions/{id}/entrants response row: the entrant, plus `late_entry` when it joined a running Swiss or a
+ *  drawn root knockout. */
 export const CreatedEntrant = Entrant.extend({ late_entry: LateEntryResult.optional() });
 
 // ---------------------------------------------------------------------------
@@ -1245,6 +1295,10 @@ export const StageConfig = z
     byes: z.array(z.string()).optional(),
     slotOrder: z.array(z.number().int().nullable()).optional(),
     bracketReset: z.boolean().optional(),
+    // W4 T7 (RB4-D9, X-SD-10): country separation is not offered — Seazn holds no country for a player or a team — so the
+    // one key a client would reach for refuses by NAME (`http.ts` answers 400 COUNTRY_SEPARATION_NOT_OFFERED). Any value
+    // fails: the key accepts nothing. Club separation (RB4-D7/D8) is deferred (ruling 272) and has no key at all.
+    countrySeparation: z.never({ error: COUNTRY_SEPARATION_NOT_OFFERED_MESSAGE }).optional(),
     // Americano / Mexicano.
     mode: z.enum(["americano", "mexicano"]).optional(),
     courtCount: z.number().int().min(1).optional(),
@@ -3074,6 +3128,22 @@ export const GenerateResult = z.object({
   swiss_next_round: z.enum(["unpairable", "unknown"]).optional(),
   /** The round this Pair seated, sent with `swiss_next_round` so a client names both rounds from one number. */
   swiss_paired_round: z.number().int().optional(),
+  /** W4 T8 (FX-G2; spec 2026-11-04 §6.5): a root knockout's Generate over a bracket that already has its lines — ABSENT
+   *  on a first Generate and on every other kind. `noop`: nothing changed. `in_place`: each entrant id in `placed` took a
+   *  bye, each in `vacated` left and their opponent now holds a bye; no line was inserted or deleted. `regenerated`: the
+   *  field crossed a power of two (or a change in place could not express the departures), so the bracket was drawn again,
+   *  slots carried by bracket role (`slots`, as Rebuild reports them) — refused 409 KO_REDRAW_WOULD_CLEAR_SETUP when its
+   *  lines carry any match setup (stages.ts `stageAttachmentCounts`). After Start an arrival is refused 409 KO_GENERATE_AFTER_START. */
+  reconcile: z
+    .object({
+      kind: z.enum(["noop", "in_place", "regenerated"]),
+      placed: z.array(z.string()),
+      vacated: z.array(z.string()),
+      /** Every seat emptied: a departed entrant's, and one whose entrant was deleted (no id left to list). */
+      vacated_seats: z.number().int(),
+      slots: z.object({ kept: z.number().int(), freed: z.number().int(), unscheduled: z.number().int() }).optional(),
+    })
+    .optional(),
 });
 
 /** POST /stages/{id}/generate body. `pairing` = a ROUND-1-ONLY Swiss override

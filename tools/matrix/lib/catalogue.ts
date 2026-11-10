@@ -26,6 +26,9 @@ import { effectiveEntrantModel } from "@seazn/engine/sport";
 // The product's own stage-kind rules (chess is individual-only; a pair-minting stage needs individual players),
 // import-free so plain node loads them (boundary.test.ts).
 import { entrantKindsRefuseStageKind, sportRefusesStageKind } from "../../../apps/web/src/lib/chess-individual-only-rule.ts";
+// The product's standalone-stage rule (W4 T16, X-SP-6): a stepladder or page playoff with no progression is refused by the
+// stage writers. Import-free, so plain node loads it (boundary.test.ts).
+import { standaloneStageRefusal } from "../../../apps/web/src/lib/stage-standalone.ts";
 import { routeTo, type Route } from "./routing.ts";
 import {
   STAGE_TEMPLATES,
@@ -188,19 +191,35 @@ export function stagesForRow(row: string, knobs: TemplateKnobs = BUILDER_DEFAULT
 export const REFUSED_CELL_REASON =
   "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)";
 
+/** The drop reason of a cell whose row the product refuses on EVERY sport: a standalone stepladder or page playoff
+ *  (W4 T16; RB4-S6 / X-SP-6, owner ruling 269). The matrix cells are ⛔ refused, not 🚫 missing (RB4-S6). */
+export const STANDALONE_REFUSED_REASON =
+  "the product refuses this format: a stepladder or page playoff is not offered standalone, it needs a table to seed from (owner ruling 269, the knockout rulebook's RB4-S6), so the builder does not offer it and the stage create answers 422 STEPLADDER_NEEDS_TABLE_SOURCE / PAGE_PLAYOFF_NEEDS_TABLE_SOURCE (knockout app PR A, Task 16)";
+
 const refusedMemo = new Map<string, string | null>();
-/** Why the PRODUCT refuses this cell, or null when it is offered: a stage of the row's own bodies (stagesForRow, the
- *  builder's or the API-only derivation) is a kind the sport refuses, by the product's rule (sportRefusesStageKind —
- *  the same predicate the builder's offer and the stage create read). A refused cell has no organiser path and no API
- *  path, so no layer plans a case on it (applicability.ts decide, layers.ts planL1Grid). */
+/** Why the PRODUCT refuses this cell, or null when it is offered. Two product rules, each the predicate the stage create
+ *  reads, over the row's own bodies (stagesForRow, the builder's or the API-only derivation): a stage is a kind the
+ *  sport refuses (sportRefusesStageKind, chess is individual-only), or a stage is a stepladder or page playoff with no
+ *  progression (standaloneStageRefusal, W4 T16 — on every sport). A refused cell has no organiser path and no API path,
+ *  so no layer plans a case on it (applicability.ts decide, layers.ts planL1Grid). */
 export function refusedCell(row: RowKey, sport: string): string | null {
   const id = cellId(row, sport);
   let out = refusedMemo.get(id);
   if (out === undefined) {
-    out = stagesForRow(row).some((s) => sportRefusesStageKind(sport, s.kind)) ? REFUSED_CELL_REASON : null;
+    const stages = stagesForRow(row);
+    if (stages.some((s) => sportRefusesStageKind(sport, s.kind))) out = REFUSED_CELL_REASON;
+    else if (stages.some((s) => standaloneStageRefusal({ kind: s.kind, progression: s.progression ?? null }) !== null)) out = STANDALONE_REFUSED_REASON;
+    else out = null;
     refusedMemo.set(id, out);
   }
   return out;
+}
+
+/** The rows a floor is owed for (gen-catalogue.ts floors.perRow): every row with at least one cell the product offers.
+ *  A row EVERY sport refuses (the standalone stepladder and page playoff, W4 T16) plans no case by design, so its floor
+ *  would be zero, which gen-catalogue refuses (trap 1) — it is left out instead, and any other zero is still refused. */
+export function rowsOwingFloors(): RowKey[] {
+  return ROW_KEYS.filter((row) => SPORT_KEYS.some((sport) => refusedCell(row, sport) === null));
 }
 
 /** The entrant kinds the sport's ENGINE module declares (`effectiveEntrantModel(module.entrantModel, null).kinds`): what

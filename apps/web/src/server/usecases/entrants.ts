@@ -39,6 +39,8 @@ import { openRosterSeatGate } from "./online-seat-gate";
 import type { LateEntryResult } from "@/server/api-v1/schemas";
 // W3 T9: an entrant added (or reinstated) while the division's Swiss is running is a late player.
 import { admitSwissLateEntrant, afterSwissLateEntry, hasRootSwissStage } from "./swiss-late-entry";
+// W4 T9: and while its root knockout is drawn (X-LE-1).
+import { admitKnockoutLateEntrant, afterKnockoutLateEntry, hasRootKnockoutStage } from "./knockout-late-entry";
 // Type-only: withdrawal.ts imports this module, so its value is reached by a dynamic import (`patchEntrant`).
 import type { WithdrawCascadeOut } from "./withdrawal";
 
@@ -416,14 +418,20 @@ export async function createEntrants(
     // bracket). Open-window formats are the exception: ladders and americano
     // sessions take late joiners by design (Jul3/08 §6), and a running Swiss
     // takes a late player (W3 T9, ruling 250 — `admitSwissLateEntrant` below
-    // decides how, or refuses by name when no round is left or it is over).
+    // decides how, or refuses by name when no round is left or it is over),
+    // and so does a drawn ROOT knockout, into its round 1 (W4 T9, X-LE-1 —
+    // `isRootKnockoutStage`; a fed knockout never takes one, X-LE-2).
     // Withdrawals stay available in every state.
     if (division.status === "active" || division.status === "completed") {
       const [openFormat] = await tx`
         select 1 from stages
         where division_id = ${divisionId} and kind in ('ladder', 'americano')
         limit 1`;
-      if (!openFormat && !(await hasRootSwissStage(tx, divisionId))) {
+      if (
+        !openFormat &&
+        !(await hasRootSwissStage(tx, divisionId)) &&
+        !(await hasRootKnockoutStage(tx, divisionId))
+      ) {
         throw new HttpError(
           422,
           "This tournament has started — the entrant list is locked. Withdrawing entrants still works.",
@@ -536,7 +544,12 @@ export async function createEntrants(
       // W3 T9 (ruling 250): an organiser's "Add late player", one entrant at a time in creation order and each before
       // the next is inserted — a re-pair (case (a)) reads the active field, and a batch-mate not yet admitted must not
       // be seated in it as if from round 1. Null before Start or with no running Swiss; a refusal rolls the batch back.
-      const late = await admitSwissLateEntrant(tx, auth, divisionId, row.id, "organiser");
+      // W4 T10: or its drawn root knockout — the bye, a withdrawn slot, or no slot (X-LE-3…X-LE-6): unstarted, the entrant is
+      // kept waiting and the answer is `rebuild_offered` (RB4-L6); started, KO_LATE_ENTRY_NO_SLOT refuses. A division's
+      // entry stage is one or the other, so at most one of the two answers.
+      const late =
+        (await admitSwissLateEntrant(tx, auth, divisionId, row.id, "organiser")) ??
+        (await admitKnockoutLateEntrant(tx, auth, divisionId, row.id, "organiser"));
       // The row as stored after admission: the first round it wrote is part of the entrant (ruling C4).
       if (late) [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${row.id}`;
       rows.push({
@@ -555,6 +568,8 @@ export async function createEntrants(
   );
   // A late player who re-paired a round or took its bye moved seats: the push and the table refold run after commit.
   await afterSwissLateEntry(auth.orgId, divisionId, competitionId, rows.map((r) => r.late_entry));
+  // W4 T10: a late player seated in the knockout moved a line (and the next line's seat): told as a schedule write.
+  await afterKnockoutLateEntry(auth.orgId, divisionId, competitionId, rows.map((r) => r.late_entry));
   return rows;
 }
 
@@ -959,7 +974,7 @@ export async function patchEntrant(
   auth: AuthCtx,
   id: string,
   patch: PatchEntrant,
-): Promise<EntrantWithMembers & { cascade?: WithdrawCascadeOut }> {
+): Promise<EntrantWithMembers & { cascade?: WithdrawCascadeOut; late_entry?: LateEntryResult }> {
   if (patch.status === "disqualified") {
     const [current] = await withTenant(auth.orgId, (tx) => tx<{ status: string }[]>`select status from entrants where id = ${id}`);
     if (current !== undefined && !DEPARTED_STATUSES.has(current.status)) {
@@ -986,7 +1001,7 @@ export async function writeEntrantPatch(
   auth: AuthCtx,
   id: string,
   patch: PatchEntrant,
-): Promise<EntrantWithMembers> {
+): Promise<EntrantWithMembers & { late_entry?: LateEntryResult }> {
   // A roster replace seats people: on an online division each must hold a Lichess link that plays, as `createEntrants` demands.
   // Asked out here, before the transaction (see online-seat-gate.ts); a patch that names no roster seats nobody and asks nothing.
   const [home] = patch.members
@@ -1038,10 +1053,17 @@ export async function writeEntrantPatch(
     // statuses, or between two active ones, is not.
     const fieldChanged =
       prior !== undefined && DEPARTED_STATUSES.has(prior.status) !== DEPARTED_STATUSES.has(row.status);
+    // W4 T19 (K13): how a reinstated player rejoins the division's running entry stage — the reply carries it, so the
+    // desk can say "waiting to join the bracket" or "their place has been played on" instead of a silent flip.
+    let late: LateEntryResult | null = null;
     // An automatic arrival (case (c) only, never a refusal): the rounds they were away for are missed and score 0
     // (ruling 251), and they rejoin at the next round's Pair. Null before Start or with no running Swiss.
     if (reinstating && !DEPARTED_STATUSES.has(row.status)) {
-      const late = await admitSwissLateEntrant(tx, auth, row.division_id, id, "reinstate");
+      // W4 T11 (K13): into a started root knockout the reinstated entrant WAITS — their walked-over seat is not given back
+      // by the flip; the organiser's tap reverses their own walkover (`placeWaitingKnockoutEntrant`).
+      late =
+        (await admitSwissLateEntrant(tx, auth, row.division_id, id, "reinstate")) ??
+        (await admitKnockoutLateEntrant(tx, auth, row.division_id, id, "reinstate"));
       if (late) [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${id}`;
     }
     if (members) {
@@ -1102,7 +1124,7 @@ export async function writeEntrantPatch(
       }
     }
     return {
-      out: await withMembers(tx, row),
+      out: { ...(await withMembers(tx, row)), ...(late ? { late_entry: late } : {}) },
       fieldChanged,
       refresh: await entrantPublicScope(tx, row),
     };

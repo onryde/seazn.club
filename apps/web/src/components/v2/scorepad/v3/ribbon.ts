@@ -140,21 +140,34 @@ export const FORFEIT_RIBBON_KEY: Readonly<Record<ForfeitCopyKind, MessageKey>> =
   double_walkover: "pad.ribbon.core.forfeit.doubleWalkover",
 };
 
+/** W4 T18 (K12): the ENTRANT ids among `sides` whose status is `disqualified` — the ids a withdrawal cascade's
+ *  `core.forfeit` names in its `by`, which the engine declares as the forfeiting ENTRANT (`CoreForfeit.by: EntrantId`,
+ *  engine core/events.ts), never a seat. The console used to key this set by seat ("home"/"away"), so it never matched
+ *  a real cascade payload and every disqualification walkover read "Withdrawal recorded" (driven 2026-11-07). The one
+ *  builder, so the console and its tests cannot key it two ways. A side with no status (an older caller) is not
+ *  disqualified; an empty seat names nobody. */
+export function disqualifiedForfeiters(
+  sides: readonly ({ readonly id: string; readonly status?: string } | null | undefined)[],
+): ReadonlySet<string> {
+  return new Set(sides.flatMap((s) => (s?.status === "disqualified" ? [s.id] : [])));
+}
+
 /** The `core.*` line, read from the payload where the payload changes what was recorded (a forfeit's kind, an
  *  expunge abandon — W2b D5), else `CORE_RIBBON_KEY`'s per-type line.
  *
  *  W3 T15 ruling 2 (controller, 2026-11-02): a disqualification runs the withdrawal cascade, which records
- *  `core.forfeit{by: <her seat>, reason: "withdrew"}` (the engine has no unplayed `disqualified` forfeit, PF-2). A
- *  withdrawal forfeit BY a seat the caller names in `disqualifiedSides` reads as the disqualification, never as a
- *  withdrawal. No seats named — every caller but the organiser's console — reads by the payload alone, as before. */
+ *  `core.forfeit{by: <her entrant id>, reason: "withdrew"}` (the engine has no unplayed `disqualified` forfeit, PF-2). A
+ *  withdrawal forfeit BY an entrant the caller names in `disqualifiedEntrants` (`disqualifiedForfeiters`) reads as the
+ *  disqualification, never as a withdrawal. None named — every caller but the organiser's console — reads by the payload
+ *  alone, as before. */
 function coreRibbonKey(
   eventType: string,
   payload: Record<string, unknown>,
-  disqualifiedSides?: ReadonlySet<string>,
+  disqualifiedEntrants?: ReadonlySet<string>,
 ): MessageKey | undefined {
   if (eventType === "core.forfeit") {
     const kind = forfeitCopyKind(payload);
-    if (kind === "withdrew" && typeof payload.by === "string" && disqualifiedSides?.has(payload.by) === true) {
+    if (kind === "withdrew" && typeof payload.by === "string" && disqualifiedEntrants?.has(payload.by) === true) {
       return FORFEIT_RIBBON_KEY.disqualified;
     }
     if (kind !== null) return FORFEIT_RIBBON_KEY[kind];
@@ -203,10 +216,10 @@ export function buildRibbon(
   names: (personId: string) => string,
   t: MsgFn,
   detail?: string,
-  /** W3 T15 ruling 2: the seats ("home"/"away") whose entrant is DISQUALIFIED (`coreRibbonKey`). */
-  disqualifiedSides?: ReadonlySet<string>,
+  /** W3 T15 ruling 2 / W4 T18: the ENTRANT ids that are DISQUALIFIED (`disqualifiedForfeiters`, `coreRibbonKey`). */
+  disqualifiedEntrants?: ReadonlySet<string>,
 ): Ribbon {
-  const coreKey = coreRibbonKey(eventType, payload, disqualifiedSides);
+  const coreKey = coreRibbonKey(eventType, payload, disqualifiedEntrants);
   let base: string;
   if (coreKey) {
     base = t(coreKey);

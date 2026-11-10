@@ -24,15 +24,17 @@ import type postgres from "postgres";
 import { pairKey, pairRound } from "@seazn/engine/scheduling";
 import { EngineError } from "@seazn/engine/core";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { ScheduleConfig, type LateEntryResult } from "@/server/api-v1/schemas";
+import { ScheduleConfig, type LateEntryResult, type SwissLateEntryResult } from "@/server/api-v1/schemas";
 import { decideSwissLateEntry, type LateEntryBoard } from "@/lib/swiss-late-entry";
 import { isRootSwissStage } from "@/lib/open-entry-stages";
 import { isSwissByeShellExtKey, mintSwissBoardExtKeys } from "@/lib/swiss-shell";
+import { isByeLine, type ByeLineRow } from "@/lib/bye-line";
 import { SWISS_PAIRINGS, type SwissPairingMode } from "@/lib/swiss-pairing";
 import { resolveModule } from "@/server/engine-db";
 import { forfeitPlayedFacts } from "@/server/engine-db/forfeit-played";
 import { withTenant } from "@/lib/db";
 import { swissRefusal } from "./swiss-refusal";
+import type { UndoBarrierType } from "./history";
 import { swissAddRoundState, swissBoardStartedSql, swissFinishDetails, swissFinishState } from "./swiss-rounds-admin";
 import { OCCUPYING, afterScheduleWrite, courtVenueIds, divisionLockState } from "./schedule";
 import {
@@ -50,7 +52,7 @@ import {
 
 type Tx = postgres.TransactionSql;
 
-export type { LateEntryResult };
+export type { LateEntryResult, SwissLateEntryResult };
 
 /** Who brought the entrant in. Only `"organiser"` is an "Add late player" (an Undo barrier, and the only source that
  *  may re-pair or take the bye); every other source is an automatic arrival and takes case (c). */
@@ -161,23 +163,45 @@ async function roundOnePairingOverride(tx: Tx, divisionId: string, stageId: stri
 
 const iso = (v: Date | string): string => (v instanceof Date ? v : new Date(v)).toISOString();
 
+/** A round's row as `nextFreeRoundSlot` reads it: a Swiss board carries no slot labels (its bye is a shell, named by
+ *  `ext_key`), a knockout line does (a bye line's phantom side). */
+type RoundSlotRow = Pick<SwissExistingFixture, "round_no" | "scheduled_at" | "ext_key"> &
+  Partial<Pick<ByeLineRow, "status" | "outcome" | "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label">>;
+
 /**
  * The first `(time, court)` a board added to `round` can take: the round's own distinct kick-off times (earliest first)
  * × the division's schedule-settings courts (in their configured order), the first pair no occupying fixture of ANY
  * division holds. Null when the round has no time, the division names no court, every pair is taken, or the division's
  * timetable is frozen — the new board is then left unscheduled for the organiser to place.
+ *
+ * W4 T10 (X-LE-12): shared with a knockout late entry. A bye is not played and has no time to share (`isByeLine`, which
+ * also covers a Swiss bye shell), and `from` drops a time already gone — a knockout's round 1 is under way when a late
+ * player joins it, and a slot in the past is no slot.
  */
 export async function nextFreeRoundSlot(
   tx: Tx,
   divisionId: string,
   round: number,
-  boardRows: readonly Pick<SwissExistingFixture, "round_no" | "scheduled_at" | "ext_key">[],
+  boardRows: readonly RoundSlotRow[],
+  opts: { from?: Date } = {},
 ): Promise<{ scheduled_at: string; court_id: string } | null> {
+  const isBye = (f: RoundSlotRow) =>
+    isByeLine({
+      ext_key: f.ext_key,
+      status: f.status ?? "",
+      outcome: f.outcome ?? null,
+      home_entrant_id: f.home_entrant_id ?? null,
+      away_entrant_id: f.away_entrant_id ?? null,
+      home_slot_label: f.home_slot_label ?? null,
+      away_slot_label: f.away_slot_label ?? null,
+    });
+  const from = opts.from === undefined ? null : opts.from.toISOString();
   const times = [
     ...new Set(
       boardRows
-        .filter((f) => f.round_no === round && !isSwissByeShellExtKey(f.ext_key) && f.scheduled_at !== null)
-        .map((f) => iso(f.scheduled_at!)),
+        .filter((f) => f.round_no === round && !isBye(f) && f.scheduled_at !== null)
+        .map((f) => iso(f.scheduled_at!))
+        .filter((t) => from === null || t >= from),
     ),
   ].sort();
   if (times.length === 0) return null;
@@ -196,9 +220,15 @@ export async function nextFreeRoundSlot(
   return null;
 }
 
-async function appendLateEntryRow(
+/**
+ * Append one undo-barrier ledger row (history.ts `UNDO_BARRIER_TYPES`) — the ONE writer of such a row (W4 pre-flight
+ * drift R4: exported once rather than copied): an organiser's late entry here, and since W4 T5 (K1) a seed confirm
+ * (`seed_confirmed`, stages.ts `confirmSeedProposal`).
+ */
+export async function appendUndoBarrierRow(
   tx: Tx,
   divisionId: string,
+  type: UndoBarrierType,
   payload: Record<string, unknown>,
   actorId: string | null,
 ): Promise<void> {
@@ -209,9 +239,12 @@ async function appendLateEntryRow(
     select coalesce(max(seq), 0)::int as seq from division_events where division_id = ${divisionId}`;
   await tx`
     insert into division_events (division_id, seq, type, payload, actor_id)
-    values (${divisionId}, ${last + 1}, 'swiss_late_entry', ${tx.json(payload as never)}, ${actorId})`;
+    values (${divisionId}, ${last + 1}, ${type}, ${tx.json(payload as never)}, ${actorId})`;
   await tx`update divisions set seq = ${last + 1} where id = ${divisionId}`;
 }
+
+const appendLateEntryRow = (tx: Tx, divisionId: string, payload: Record<string, unknown>, actorId: string | null) =>
+  appendUndoBarrierRow(tx, divisionId, "swiss_late_entry", payload, actorId);
 
 async function stampFirstRound(tx: Tx, entrantId: string, stageId: string, round: number): Promise<void> {
   await tx`
@@ -232,7 +265,7 @@ export async function admitSwissLateEntrant(
   divisionId: string,
   entrantId: string,
   source: LateEntrySource,
-): Promise<LateEntryResult | null> {
+): Promise<SwissLateEntryResult | null> {
   // T9 review m7: most arrivals land in a division with no running Swiss (setup, or another format) and must not queue on
   // its lock, so both questions are read BEFORE it. Started is one-way (no write moves a division back from active or
   // completed), so a "started" read here stays true under the lock; the stage itself is re-read under it below. A Start
@@ -349,10 +382,10 @@ export async function admitSwissLateEntrant(
     newcomer: entrantId,
   });
 
-  const recordC = async (round: number): Promise<LateEntryResult> => {
+  const recordC = async (round: number): Promise<SwissLateEntryResult> => {
     await stampFirstRound(tx, entrantId, stage.id, round);
     await appendLateEntryRow(tx, divisionId, { stage_id: stage.id, entrant_id: entrantId, case: "c", round, source }, actorId);
-    return { entrant_id: entrantId, stage_id: stage.id, case: "c", round };
+    return { format: "swiss", entrant_id: entrantId, stage_id: stage.id, case: "c", round };
   };
 
   switch (decision.kind) {
@@ -394,7 +427,7 @@ interface ApplyCtx {
 }
 
 /** Case (a): clear the round's seats, then pair it again with the newcomer in its field — `swissGen`, the one Pair. */
-async function repairRound(tx: Tx, ctx: ApplyCtx): Promise<LateEntryResult> {
+async function repairRound(tx: Tx, ctx: ApplyCtx): Promise<SwissLateEntryResult> {
   const { divisionId, stage, entrantId, round } = ctx;
   const inRound = ctx.rows.filter((f) => f.round_no === round);
   const before = places(inRound);
@@ -421,7 +454,7 @@ async function repairRound(tx: Tx, ctx: ApplyCtx): Promise<LateEntryResult> {
   const after = (await stageRows(tx, stage.id)).filter((f) => f.round_no === round);
   // A board the odd→even field needed (`reconcileSwissRoundShells` mints it) takes the round's next free slot.
   const minted = after.filter((f) => !beforeIds.has(f.id) && !isSwissByeShellExtKey(f.ext_key));
-  let newBoard: LateEntryResult["new_board"];
+  let newBoard: SwissLateEntryResult["new_board"];
   for (const f of minted) {
     const slot = await nextFreeRoundSlot(tx, divisionId, round, after);
     if (slot) await placeBoard(tx, f.id, slot);
@@ -452,6 +485,7 @@ async function repairRound(tx: Tx, ctx: ApplyCtx): Promise<LateEntryResult> {
     ctx.actorId,
   );
   return {
+    format: "swiss",
     entrant_id: entrantId,
     stage_id: stage.id,
     case: "a",
@@ -463,7 +497,7 @@ async function repairRound(tx: Tx, ctx: ApplyCtx): Promise<LateEntryResult> {
 
 /** A slot the system chose is an `auto` placement (T9 review m9; V214 `schedule_source`), as Start's sweep writes it —
  *  never `manual`, which is the organiser's hand. */
-async function placeBoard(tx: Tx, fixtureId: string, slot: { scheduled_at: string; court_id: string }): Promise<void> {
+export async function placeBoard(tx: Tx, fixtureId: string, slot: { scheduled_at: string; court_id: string }): Promise<void> {
   const venues = await courtVenueIds(tx);
   await tx`
     update fixtures set scheduled_at = ${slot.scheduled_at}, court_id = ${slot.court_id},
@@ -475,7 +509,7 @@ async function placeBoard(tx: Tx, fixtureId: string, slot: { scheduled_at: strin
 async function takeBye(
   tx: Tx,
   ctx: ApplyCtx & { bye: SwissExistingFixture; pairing: { home: string; away: string } },
-): Promise<LateEntryResult> {
+): Promise<SwissLateEntryResult> {
   const { divisionId, stage, entrantId, round, bye, pairing } = ctx;
   const inRound = ctx.rows.filter((f) => f.round_no === round);
   const boards = inRound.filter((f) => !isSwissByeShellExtKey(f.ext_key));
@@ -512,6 +546,7 @@ async function takeBye(
     ctx.actorId,
   );
   return {
+    format: "swiss",
     entrant_id: entrantId,
     stage_id: stage.id,
     case: "b",
@@ -533,7 +568,11 @@ export async function afterSwissLateEntry(
   competitionId: string,
   results: readonly (LateEntryResult | null | undefined)[],
 ): Promise<void> {
-  const moved = results.filter((r): r is LateEntryResult => r != null && (r.case === "a" || r.case === "b"));
+  // W4 T9 (C8): a knockout late entry carries its own after-write (`afterKnockoutLateEntry`); only a Swiss (a) or (b)
+  // moved a Swiss round.
+  const moved = results.filter(
+    (r): r is SwissLateEntryResult => r != null && r.format === "swiss" && (r.case === "a" || r.case === "b"),
+  );
   if (moved.length === 0) return;
   const rounds = [...new Map(moved.map((r) => [`${r.stage_id}|${r.round}`, r])).values()];
   const fixtureIds = await withTenant(orgId, async (tx) => {

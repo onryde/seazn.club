@@ -36,6 +36,8 @@ import { createStages, generateStageFixtures } from "../stages";
 import { listDivisionFixtures, listDivisionFixturesForBoard } from "../fixtures";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import { createStagesWithLegacy } from "./_legacy-standalone-stage";
+
 const HAS_DB = !!process.env.DATABASE_URL;
 
 const GENERIC_CONFIG = {
@@ -181,7 +183,7 @@ describe.skipIf(!HAS_DB)("F1 follow-up — board fixture read: round-role column
     const { auth, divisionId } = await seedFixtureWithRoundRole();
     // A fourth entrant: a page playoff takes exactly four.
     await createEntrants(auth, divisionId, [{ kind: "individual", display_name: "D", seed: 4, members: [] }]);
-    const [stage] = await createStages(auth, divisionId, {
+    const [stage] = await createStagesWithLegacy(auth, divisionId, {
       seq: 2,
       kind: "page_playoff",
       name: "Playoffs",

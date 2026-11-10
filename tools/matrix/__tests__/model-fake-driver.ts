@@ -49,7 +49,7 @@ import { BRACKET_STAGE_KINDS, swissDrawFactsOf } from "@seazn/engine/competition
 import { EngineError, playRecorded, type StageKind } from "@seazn/engine/core";
 import { generateRoundRobin, pairKey as swissPairKey, pairRound, type SwissStanding } from "@seazn/engine/scheduling";
 import { feedsNextMatch } from "../../../apps/web/src/lib/bracket-next-match.ts";
-import { isRunningRootSwiss } from "../../../apps/web/src/lib/open-entry-stages.ts";
+import { isRootKnockoutStage, isRunningRootSwiss } from "../../../apps/web/src/lib/open-entry-stages.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
 import { envelopes, tableContribution, unplayedBoard } from "../lib/fold.ts";
 import { sportModule, stageCfg } from "../lib/sport-cfg.ts";
@@ -235,7 +235,14 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       // swiss-late-entry.ts admits into only while it runs.
       const runningSwiss = LOCK.rootSwiss && this.stage !== null &&
         isRunningRootSwiss({ kind: this.stage.kind, progression: null, config: this.stage.config, status: this.completed ? "complete" : this.stage.status });
-      const locked = LOCK.statuses.includes(this.#divisionStatus) && !LOCK.openKinds.includes(this.stage?.kind ?? "") && !runningSwiss;
+      // W4 T9 (X-LE-1): a root knockout is exempt as well — the product's late-entry door places, parks or refuses the add.
+      // This fake simulates none of those outcomes (the model never offers the add there), so a call that reaches it is the
+      // test's mistake, said loudly rather than answered with an entrant that has no seat.
+      const only = this.stage === null ? null : { kind: this.stage.kind, progression: null, config: this.stage.config };
+      const rootKnockout = LOCK.rootKnockout && only !== null && isRootKnockoutStage(only, [only]);
+      const started = LOCK.statuses.includes(this.#divisionStatus);
+      if (started && rootKnockout) throw new Error(`fake: a late add into a started ${this.stage?.kind ?? "knockout"} is the product's late-entry door, which this fake does not simulate (the model never offers it — commands.ts AddEntrant.ready)`);
+      const locked = started && !LOCK.openKinds.includes(this.stage?.kind ?? "") && !runningSwiss;
       if (locked && this.opts.rosterLock !== "open") {
         const code = this.opts.rosterLock === "named" ? "ROSTER_LOCKED" : LOCK.wireCode;
         throw new RefusedCall("POST", `/api/v1/divisions/${divisionId}/entrants`, LOCK.status, code, LOCK.message);

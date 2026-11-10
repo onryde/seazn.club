@@ -119,10 +119,14 @@ export function openingTemplate(offered: readonly string[], matchMinutes: number
 /** What a collapsed picker (Format or Sport) shows: the first SUGGESTED_COUNT of its order, and the one picked never
  *  folded away - outside them, it takes the last of those slots (C9 R2). A pick the order does not hold (a format the
  *  sport no longer offers) is not shown. */
-export function collapsedPicks(order: readonly string[], picked: string | null): string[] {
+export function collapsedPicks(order: readonly string[], picked: string | null, keep: ReadonlySet<string> = new Set()): string[] {
   const head = order.slice(0, SUGGESTED_COUNT);
   if (picked === null || head.includes(picked) || !order.includes(picked)) return head;
-  return [...order.slice(0, SUGGESTED_COUNT - 1), picked];
+  // W4 T15 (5A): the pick takes the last slot no size-gated card needs (`keepSizeGatedInView` puts those in the last slots). If they
+  // hold every slot it is shown beside them, one over: an organiser's own pick is never lost to a card they cannot choose.
+  let give = head.length - 1;
+  while (give >= 0 && keep.has(head[give]!)) give--;
+  return give < 0 ? [...head, picked] : [...head.slice(0, give), ...head.slice(give + 1), picked];
 }
 
 /** A partner-rotation format (Americano, Mexicano): one whose stages mint pair entrants (PAIR_MINTING_STAGE_KINDS). */
@@ -157,6 +161,17 @@ export function pickAfterChange(picked: string | null, offer: readonly string[])
  *  the partner-rotation formats after every other; each side keeps the ranking's order. */
 export function formatPickerOrder(ranked: readonly string[]): string[] {
   return [...ranked.filter((k) => !isPairRotationTemplate(k)), ...ranked.filter((k) => isPairRotationTemplate(k))];
+}
+
+/** W4 T15 (owner pick 5A, 2026-11-05): a card the field is too small for is shown disabled with its reason, never folded away, so
+ *  the organiser learns it exists and what unlocks it. It takes the last of the suggested five, the rest keeping their order; the
+ *  partner-rotation formats, behind every other, stay there. EMPTY CASE FIRST: nothing gated, nothing moves. */
+export function keepSizeGatedInView(order: readonly string[], gated: ReadonlySet<string>): string[] {
+  if (gated.size === 0) return [...order];
+  const open = order.filter((k) => !gated.has(k));
+  const shut = order.filter((k) => gated.has(k));
+  const head = Math.max(0, SUGGESTED_COUNT - shut.length);
+  return [...open.slice(0, head), ...shut, ...open.slice(head)];
 }
 
 /** The owner's popular sports, in his order (C9 R2, 2026-11-03): after the organisation's own, before the rest. */

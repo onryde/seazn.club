@@ -88,6 +88,7 @@ import { ApiV1Error } from "@/lib/client-v1";
 import { JOINT_UNDO_SUPERSEDED_CODE } from "@/lib/joint-undo";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
+import { KNOCKOUT_REFUSALS, knockoutRefusalKey, type KnockoutRefusalCode } from "@/lib/knockout-refusals";
 import { SWISS_REFUSALS, swissRefusalKey, type SwissRefusalCode } from "@/lib/swiss-refusals";
 import type { AiParsePreviewResponse } from "@/server/api-v1/schemas";
 import { AiCompetitionConsole, JointReviewStep, type JointDivision } from "../ai-competition-console";
@@ -740,6 +741,127 @@ describe("the review step is wired to the console's own state", () => {
     expect(codes, "anti-vacuity: the three Undo refusals are among them").toEqual(
       expect.arrayContaining(["SWISS_UNDO_ROUND_STARTED", "SWISS_LATE_ENTRY_NOT_UNDOABLE", "SWISS_ROUNDS_CHANGE_NOT_UNDOABLE"]),
     );
+  });
+
+  // W4 B1b review finding 2: the knockout family reaches this card too. Since W4 T5 a division's rewind stops at a confirmed
+  // draw (history.ts `UNDO_BARRIER_TYPES.seed_confirmed` → `knockoutRefusal("SEED_CONFIRM_NOT_UNDOABLE")`), and the joint Undo
+  // is a `restoreCheckpoint` per division, so that code lands in `failed[]`. Swept over every knockout code, as the Swiss
+  // case above is; the server's sentence is a sentinel for the same reason.
+  it("says every knockout refusal in the reader's own copy, never the server's sentence", async () => {
+    const codes = Object.keys(KNOCKOUT_REFUSALS) as KnockoutRefusalCode[];
+    let checked = 0;
+    for (const code of codes) {
+      const LOCAL = enText[knockoutRefusalKey(code)];
+      expect(typeof LOCAL, `${knockoutRefusalKey(code)} is missing from en/ui.json`).toBe("string");
+      const SERVER = `server sentence for ${code}`;
+      const ctx = await applied(() => ({
+        restored: [{ division_id: "d1", watermark: 3, steps: 1 }],
+        failed: [{ division_id: "d2", reason: SERVER, code }],
+        ok: false,
+      }));
+      ctx.undo();
+      await flush();
+      const html = renderToStaticMarkup(typed(ctx.island.tree(), JointReviewStep));
+      expect(html, `${code}: the division is still named`).toContain("Under 14s");
+      expect(html, `${code}: the refusal is not said in the reader's language`).toContain(esc(LOCAL!));
+      expect(html, `${code}: the server's sentence leaked into a translated card`).not.toContain(SERVER);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every knockout code was rendered").toBe(codes.length);
+    expect(codes, "anti-vacuity: the Undo barrier is among them").toContain("SEED_CONFIRM_NOT_UNDOABLE");
+  });
+
+  // W4 B1b fix-round-1 review N2: an undo barrier refuses for good. A confirmed draw (`SEED_CONFIRM_NOT_UNDOABLE`) and the
+  // Swiss barriers since W3 answer the same way on every retry and every Restore, so the card that told the organiser to
+  // "try them again, or restore them" beside that refusal sent them round a loop. Ruling: for an undo-refusal code the card
+  // drops the retry and the restore advice and shows the refusal's own sentence; a failure that can succeed on a second
+  // call (a freeze lifted, a lost network) keeps today's copy. The advice and the button text come from the dictionary,
+  // never typed in, so a reworded sentence moves the test with it.
+  describe("a refusal that can't succeed offers no retry (W4 B1b N2)", () => {
+    const PARTIAL = enText["board.ai.joint.undonePartial"]!;
+    const FINAL = enText["board.ai.joint.undonePartialFinal"]!;
+    const RETRY = enText["board.ai.joint.undoRetry"]!;
+    const ADVICE = (PARTIAL ?? "").split("{divisions}")[1]!.replace(/^\.\s*/, "");
+    const partialFor = (names: string) => esc(PARTIAL.replace("{divisions}", names));
+    const finalFor = (names: string) => esc(FINAL.replace("{divisions}", names));
+
+    it("the copy exists: the retry advice, the button and the no-retry sentence", () => {
+      expect(typeof PARTIAL, "board.ai.joint.undonePartial is missing from en/ui.json").toBe("string");
+      expect(typeof FINAL, "board.ai.joint.undonePartialFinal is missing from en/ui.json").toBe("string");
+      expect(typeof RETRY, "board.ai.joint.undoRetry is missing from en/ui.json").toBe("string");
+      expect(ADVICE.length, "the advice clause after the division list").toBeGreaterThan(10);
+      expect(FINAL, "the no-retry sentence carries no advice").not.toContain(ADVICE);
+    });
+
+    it("every undo-refusal code, alone: no retry button, no restore advice, the refusal's own sentence", async () => {
+      const codes: { code: string; key: string }[] = [
+        ...(Object.keys(SWISS_REFUSALS) as SwissRefusalCode[]).map((code) => ({ code, key: swissRefusalKey(code) })),
+        ...(Object.keys(KNOCKOUT_REFUSALS) as KnockoutRefusalCode[]).map((code) => ({ code, key: knockoutRefusalKey(code) })),
+      ];
+      let checked = 0;
+      for (const { code, key } of codes) {
+        const ctx = await applied(() => ({
+          restored: [{ division_id: "d1", watermark: 3, steps: 1 }],
+          failed: [{ division_id: "d2", reason: `server sentence for ${code}`, code }],
+          ok: false,
+        }));
+        ctx.undo();
+        await flush();
+        const html = renderToStaticMarkup(typed(ctx.island.tree(), JointReviewStep));
+        expect(html, `${code}: the refusal's own sentence`).toContain(esc(enText[key]!));
+        expect(html, `${code}: the division is named as one that stays`).toContain(finalFor("Under 14s"));
+        expect(html, `${code}: no restore advice`).not.toContain(ADVICE);
+        expect(html, `${code}: no retry button`).not.toContain(esc(RETRY));
+        checked++;
+      }
+      expect(checked, "anti-vacuity: every code of both families was rendered").toBe(codes.length);
+      expect(codes.map((c) => c.code), "anti-vacuity: the barriers are among them").toEqual(
+        expect.arrayContaining(["SEED_CONFIRM_NOT_UNDOABLE", "SWISS_LATE_ENTRY_NOT_UNDOABLE", "SWISS_ROUNDS_CHANGE_NOT_UNDOABLE"]),
+      );
+    });
+
+    it("beside a freeze: the retry advice and button name only the frozen division; the confirmed draw stays", async () => {
+      const ctx = await applied(() => ({
+        restored: [],
+        failed: [
+          { division_id: "d1", reason: SCHEDULE_LOCKED_MESSAGE, code: SCHEDULE_LOCKED_CODE },
+          { division_id: "d2", reason: "server sentence", code: "SEED_CONFIRM_NOT_UNDOABLE" },
+        ],
+        ok: false,
+      }));
+      ctx.undo();
+      await flush();
+      const html = renderToStaticMarkup(typed(ctx.island.tree(), JointReviewStep));
+      expect(html, "the frozen division keeps today's advice").toContain(partialFor("Under 12s"));
+      expect(html, "the confirmed draw is not offered a retry").not.toContain(partialFor("Under 12s, Under 14s"));
+      expect(html, "the confirmed draw stays, by name").toContain(finalFor("Under 14s"));
+      expect(html, "the freeze can lift: the retry stays").toContain(esc(RETRY));
+      expect(html.split(ADVICE).length - 1, "the advice is said once").toBe(1);
+    });
+
+    it("a retryable failure alone keeps today's copy, and so does a call that failed whole (a second call can succeed)", async () => {
+      const frozen = await applied(() => ({
+        restored: [{ division_id: "d1", watermark: 3, steps: 1 }],
+        failed: [{ division_id: "d2", reason: SCHEDULE_LOCKED_MESSAGE, code: SCHEDULE_LOCKED_CODE }],
+        ok: false,
+      }));
+      frozen.undo();
+      await flush();
+      const one = renderToStaticMarkup(typed(frozen.island.tree(), JointReviewStep));
+      expect(one).toContain(partialFor("Under 14s"));
+      expect(one).toContain(esc(RETRY));
+      expect(one, "no division is said to stay").not.toContain(esc(FINAL.split("{divisions}")[0]!));
+
+      const down = await applied(() => {
+        throw new Error("network down");
+      });
+      down.undo();
+      await flush();
+      const both = renderToStaticMarkup(typed(down.island.tree(), JointReviewStep));
+      expect(both).toContain(partialFor("Under 12s, Under 14s"));
+      expect(both).toContain(esc(RETRY));
+      expect(both, "no division is said to stay").not.toContain(esc(FINAL.split("{divisions}")[0]!));
+    });
   });
 
   it("still shows an unrecognised refusal's own message, rather than swallowing it", async () => {

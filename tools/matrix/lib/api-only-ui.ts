@@ -12,11 +12,11 @@ import { API_ONLY_ROWS, type ApiOnlyRowKey } from "./catalogue.ts";
 import { routeTo, type Route } from "./routing.ts";
 import { templateFor } from "./templates.ts";
 
-/** The route to the wave that owns the organiser control each API-only row lacks. */
-export const API_ONLY_UI_WAVE: Readonly<Record<ApiOnlyRowKey, Route>> = Object.freeze({
+/** The route to the wave that owns the organiser control each API-only row lacks. A row the PRODUCT refuses on every
+ *  sport has none: `page_playoff_only` and `stepladder_only` are refused standalone (W4 T16; RB4-S6, ruling 269 —
+ *  catalogue.ts refusedCell, STANDALONE_REFUSED_REASON), so no wave owes them a control and no layer plans them. */
+export const API_ONLY_UI_WAVE: Readonly<Partial<Record<ApiOnlyRowKey, Route>>> = Object.freeze({
   knockout_third_place: routeTo("W4", "no builder control for a third-place match (design §8)"),
-  page_playoff_only: routeTo("W4", "no builder control for a first-stage page playoff (design §8)"),
-  stepladder_only: routeTo("W4", "no builder control for a first-stage stepladder (design §8)"),
   group_only: routeTo("W5", "no builder control for a group stage with no knockout (design §8)"),
   group_group_ko: routeTo("W5", "no builder control for two group stages (design §8)"),
 });
@@ -34,12 +34,28 @@ export class NotApiOnlyRow extends Error {
   }
 }
 
+/** An API-only row the product refuses (no route: API_ONLY_UI_WAVE) has no organiser path to judge and no wave owing
+ *  one; a layer that reaches it planned a refused cell (catalogue.ts refusedCell), which is a harness bug. */
+export class RefusedApiOnlyRow extends Error {
+  constructor(row: string) {
+    super(`api-only-ui: '${row}' is refused by the product (catalogue.ts refusedCell) — no wave owes it an organiser control, and no layer plans it`);
+    this.name = "RefusedApiOnlyRow";
+  }
+}
+
+/** The route of an API-only row the product offers. Own keys only, and refused by name: under strip-types a template
+ *  row would otherwise read `undefined` as its wave, and so would a refused row. */
+export function apiOnlyUiRoute(row: ApiOnlyRowKey): Route {
+  const route = Object.prototype.hasOwnProperty.call(API_ONLY_UI_WAVE, row) ? API_ONLY_UI_WAVE[row] : undefined;
+  if (route !== undefined) return route;
+  if ((API_ONLY_ROWS as readonly string[]).includes(row)) throw new RefusedApiOnlyRow(row);
+  throw new NotApiOnlyRow(row);
+}
+
 export function apiOnlyUiPath(row: ApiOnlyRowKey, sport: string): ApiOnlyUiPath {
-  // Own keys only, and refused by name: under strip-types a template row would
-  // otherwise read `undefined` as its wave.
-  if (!Object.prototype.hasOwnProperty.call(API_ONLY_UI_WAVE, row)) throw new NotApiOnlyRow(row);
+  const route = apiOnlyUiRoute(row);
   const template = templateFor(row, sport);
   return template === null
-    ? { reachable: false, wave: API_ONLY_UI_WAVE[row].wave, template: null, reason: `no organiser control builds ${row}` }
+    ? { reachable: false, wave: route.wave, template: null, reason: `no organiser control builds ${row}` }
     : { reachable: true, wave: null, template, reason: `built through catalog template ${template} (template-card-${template})` };
 }

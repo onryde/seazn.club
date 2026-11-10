@@ -174,8 +174,21 @@ describe.runIf(HAS_DB)("W3 T3 X-SW-29 a Swiss bye shell never takes a court", ()
     expect(byes.map((b) => b.status).sort(), "premise: one bye seated, one still a shell").toEqual(["forfeited", "scheduled"]);
     const { sqlIds, jsIds } = await sql.begin(async (tx) => {
       const played = await playedFixtureIds(tx, rig.divisionId);
-      const all = await tx<{ id: string; status: string; ext_key: string | null }[]>`
-        select id, status, ext_key from fixtures where stage_id = ${rig.stageId}`;
+      // Every column `isMovable` reads (its bye-line arm, W4 T3, reads the outcome, seats and slot labels too).
+      const all = await tx<
+        {
+          id: string;
+          status: string;
+          ext_key: string | null;
+          outcome: unknown;
+          home_entrant_id: string | null;
+          away_entrant_id: string | null;
+          home_slot_label: unknown;
+          away_slot_label: unknown;
+        }[]
+      >`
+        select id, status, ext_key, outcome, home_entrant_id, away_entrant_id, home_slot_label, away_slot_label
+        from fixtures where stage_id = ${rig.stageId}`;
       const viaSql = await tx<{ id: string }[]>`select f.id from fixtures f where f.stage_id = ${rig.stageId} and ${movableFixtureSql(tx)}`;
       return { sqlIds: viaSql.map((r) => r.id).sort(), jsIds: all.filter((f) => isMovable(f, played)).map((f) => f.id).sort() };
     });
@@ -191,10 +204,10 @@ describe.runIf(HAS_DB)("W3 T3 X-SW-29 a Swiss bye shell never takes a court", ()
     const { byes, boards } = await split(rig.stageId);
     const rows = await listDivisionFixturesForBoard(rig.auth, rig.divisionId);
     expect(rows.length, "anti-vacuity: the board read every row").toBe(6);
-    const marked = rows.filter((r) => r.bye_shell === true).map((r) => r.id).sort();
+    const marked = rows.filter((r) => r.bye_line === true).map((r) => r.id).sort();
     expect(marked, "both bye rows are marked, seated or not").toEqual(byes.map((b) => b.id).sort());
-    for (const r of rows.filter((x) => x.bye_shell !== true)) {
-      expect(Object.prototype.hasOwnProperty.call(r, "bye_shell"), `${r.id}: sent only when true`).toBe(false);
+    for (const r of rows.filter((x) => x.bye_line !== true)) {
+      expect(Object.prototype.hasOwnProperty.call(r, "bye_line"), `${r.id}: sent only when true`).toBe(false);
     }
     const unseated = rows.find((r) => r.id === byes.find((b) => b.status === "scheduled")!.id)!;
     expect([boardMovable(unseated), inBoardTray(unseated)], "the unseated shell: no drag, no tray").toEqual([false, false]);

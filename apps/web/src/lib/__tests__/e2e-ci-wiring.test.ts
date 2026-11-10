@@ -424,6 +424,14 @@ const WALKTHROUGH_SPECS: string[] = [
   // is read-only, and round 2 pairs off the table. It is the only test that
   // proves the pick reaches the POST body — the unit suite cannot press it.
   "swiss-round-one-pairing.spec.ts",
+  // W4 knockout late entry — an organiser adds a player to a started bracket
+  // from the desk: the seat a bye or a withdrawal left, the waiting strip's
+  // "Add to bracket" tap, and the Rebuild offer on a full bracket.
+  "w4-knockout-late-entry.spec.ts",
+  // W4 final stages — an organiser builds League + Stepladder and League +
+  // Playoffs through the real builder, plays them out and withdraws a
+  // finalist; the only test that drives those finals end to end in a browser.
+  "w4-final-stages.spec.ts",
 
   // Device-link write path W1 — the realtime propagation flows §6b of the
   // design surveyed and found uncovered: a courtside device's goal reaching

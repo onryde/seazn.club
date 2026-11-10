@@ -210,6 +210,11 @@ export interface ProgressionPanelProps {
    *  division page's own roster read. Supplied rather than derived here: this
    *  panel only ever receives id -> NAME, which cannot tell the two apart. */
   departedEntrantIds: string[];
+  /** W4 B6a fix round 1 (review #1): whether a result this stage's draw was taken from, corrected before play starts, can
+   *  reopen the CONFIRMED draw - true only when EVERY source is a knockout stage (`confirmedDrawReopens`,
+   *  lib/seeding-source-ready.ts: the server's own gate). Required, not defaulted: Confirm's warning promises a recompute
+   *  only on a yes, and a caller that forgets it should fail to compile rather than quietly go back to promising. */
+  confirmedDrawReopens: boolean;
   locale: Locale;
   canEdit: boolean;
 }
@@ -223,6 +228,7 @@ export function ProgressionPanel({
   entrantNames,
   stageNames,
   departedEntrantIds,
+  confirmedDrawReopens,
   locale,
   canEdit,
 }: ProgressionPanelProps) {
@@ -480,6 +486,16 @@ export function ProgressionPanel({
         )}
         {notice && <p className="text-sm text-emerald-700">{notice}</p>}
         <div className="flex-1" />
+        {/* W4 B1b M11: a confirmed draw is an undo barrier (Undo, Redo and Restore stop at it), so the organiser is told before
+            pressing Confirm - the Swiss rounds dialog says its own barrier before Save the same way. B6a fix round 1: the
+            recompute sentence is said only where the server reopens a confirmed draw (every source a knockout); a table
+            source is refused SEEDING_ALREADY_CONFIRMED for good, and promising it there would be false. One string, one text
+            node: two adjacent text children would serialise with a comment between them. */}
+        <p data-testid="progression-confirm-final" className="min-w-0 text-xs text-slate-600">
+          {confirmedDrawReopens
+            ? `${msg("progression.confirmFinal")} ${msg("progression.confirmFinalRecompute")}`
+            : msg("progression.confirmFinal")}
+        </p>
         <button
           type="button"
           disabled={busy !== null || !ready}

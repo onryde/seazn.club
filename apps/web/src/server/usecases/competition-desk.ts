@@ -26,11 +26,15 @@ import {
   type PhaseStage,
 } from "@/lib/division-phase";
 import { seedingSourceReady } from "@/lib/seeding-source-ready";
-import { isUnseatedSwissByeShell } from "@/lib/swiss-shell";
+import { isWaitingByeLine } from "@/lib/bye-line";
 import { rowAwaitsSettle, hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
+import { awaitsWalkoverSql } from "@/server/engine-db/system-bye-sql";
 import { kickoffsOf } from "@/server/engine-db/kickoff";
+import { bracketAwaitsCompletion } from "@/server/engine-db/stage-finals";
 import type { ProgressionSpec } from "@seazn/engine/competition";
-import { listDivisionCardStats, type NextFixture } from "./card-stats";
+import { cardStatsCountsPlayed, listDivisionCardStats, type NextFixture } from "./card-stats";
+import { DEPARTED_STATUSES } from "./entrants";
+import { countsAsMatch } from "@/lib/run-sheet-groups";
 import { listDivisions } from "./divisions";
 
 /** The desk's own "next" fact (`resolveDivisionNext` below) is a SEPARATE
@@ -188,7 +192,8 @@ export async function listFixturesAwaitingSettle(auth: AuthCtx, divisionId: stri
 type StageRaw = {
   id: string;
   division_id: string;
-  /** W2a: read only to tell a bracket stage (whose recorded abandon awaits a settle) from a table one. */
+  /** W2a: read only to tell a bracket stage (whose recorded abandon awaits a settle) from a table one; W4 T21: and to
+   *  ask whether a bracket's final is decided (`bracketAwaitsCompletion`). */
   kind: string;
   name: string;
   seq: number;
@@ -203,7 +208,8 @@ type FixtureRaw = {
   division_id: string;
   status: string;
   scheduled_at: string | null;
-  /** Read only to tell an unseated Swiss bye shell (`isUnseatedSwissByeShell`), which is no scheduling work. */
+  /** The Swiss bye shell's key — one input of `isWaitingByeLine` (lib/bye-line.ts), which tells a bye line nobody has
+   *  settled: no scheduling work. */
   ext_key: string | null;
   fixture_no: number;
   stage_id: string;
@@ -215,13 +221,21 @@ type FixtureRaw = {
   away_entrant_id: string | null;
   /** `{key, params, seed}` while the matching entrant id is null and the
    *  slot is one THIS stage's draw fills; cleared by `fillSlot`. A slot fed
-   *  by an earlier fixture of the same bracket never carries one. */
+   *  by an earlier fixture of the same bracket never carries one. Also read
+   *  by `isWaitingByeLine`: an empty side stamped with the bye label
+   *  (`BYE_SLOT_LABEL`) is a bye line's phantom side. */
   home_slot_label: unknown;
   away_slot_label: unknown;
   /** `{kind: "award", winner}` for a bye baked by `awardSeededByes`, and the
-   *  decided outcome of any played fixture. Read only as "is this row
-   *  already resolved?". */
+   *  decided outcome of any played fixture. Read as "is this row already
+   *  resolved?" AND by `isWaitingByeLine` (a system bye's award, a pre-award
+   *  line's absent outcome) — with the status, ext_key, both entrant ids and
+   *  both slot labels, every column it reads; trim none of them, or a
+   *  waiting bye line counts as unscheduled again (B1a review #1). */
   outcome: unknown;
+  /** W4 B1b fix round 1 (Q1): `awaitsWalkoverSql` - a bye line still waiting on its award whose award will be a walkover, a
+   *  match owed. The "N of M played" counts it as the round bar does (`countsAsMatch`). */
+  awaits_walkover: boolean;
   home: string | null;
   away: string | null;
   event_count: number;
@@ -329,7 +343,7 @@ export async function getCompetitionDesk(
   // A dynamic import, not a static one: match-day.ts reads this desk (`getMatchDay` → `getCompetitionDesk`), so a static import
   // here would close a module cycle — and a test mocking this module through `importOriginal` would wait on itself.
   const { countFixturesToday } = await import("./match-day");
-  const { orgTz, stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday } = await withTenant(auth.orgId, async (tx) => {
+  const { orgTz, stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting } = await withTenant(auth.orgId, async (tx) => {
     const [org] = await tx<{ timezone: string | null }[]>`select timezone from organizations where id = ${auth.orgId}`;
     const stages = ids.length
       ? await tx<StageRaw[]>`
@@ -380,6 +394,8 @@ export async function getCompetitionDesk(
                  -- tagged template literal, where a backtick ENDS the SQL.
                  f.home_entrant_id, f.away_entrant_id,
                  f.home_slot_label, f.away_slot_label, f.outcome,
+                 -- W4 B1b fix round 1 (Q1): a waiting bye line whose award will be a walkover (countsAsMatch counts it).
+                 ${awaitsWalkoverSql(tx, "f")} as awaits_walkover,
                  ${hasActiveAbandonSql(tx)} as has_active_abandon,
                  ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged,
                  ${hasActiveAbandonSql(tx, "f", { noResult: true })} as no_result,
@@ -483,7 +499,20 @@ export async function getCompetitionDesk(
              and (dl.expires_at is null or dl.expires_at > ${now})`
       : [];
     const fixturesToday = await countFixturesToday(tx, competitionId, now);
-    return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday };
+    // W4 T11 (X-LE-10, K7): late players waiting to join a started root knockout — entrants still in the field whose
+    // marker names a stage not yet complete (a complete stage has no round 1 left to join), counted per stage.
+    const lateWaiting = ids.length
+      ? await tx<{ division_id: string; stage_name: string; count: number }[]>`
+          select e.division_id, s.name as stage_name, count(*)::int as count
+            from entrants e
+            join stages s on s.id = e.knockout_waiting_stage_id
+           where e.division_id = any(${ids})
+             and s.status <> 'complete'
+             and e.status not in ${tx([...DEPARTED_STATUSES])}
+           group by e.division_id, s.id, s.name, s.seq
+           order by s.seq`
+      : [];
+    return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting };
   });
   const fixturesWithScorer = new Set([...fixturesWithOfficial, ...fixturesWithLink].map((a) => a.fixture_id));
   // T16 fix round 1, R4 (D12): which online rounds are open. stage_round_opens is SEALED (no app_user grant), so it is
@@ -562,12 +591,19 @@ export async function getCompetitionDesk(
               )
             : false,
         proposal: (x.proposal_status ?? "none") as SeedProposalState,
+        // W4 T21 (AN-1, X-CH-8): every match of this bracket settled, so its final is decided and only Complete stage
+        // is left — asked of this stage's own rows, by the ONE rule the settings warning reads too (stage-finals.ts).
+        finalDecided: bracketAwaitsCompletion(x.kind, fixtures.filter((f) => f.stage_id === x.id)),
       }));
     const rows = fixtures.filter((x) => x.division_id === d.id);
-    // W3 T3 (X-SW-29): an unseated Swiss bye shell is `scheduled` with no time, but no one can ever give it one
-    // (SWISS_BYE_NOT_PLACEABLE), so it is no fixture to the phase or the attentions — counting it would leave a red
-    // "unscheduled" on the division that no action clears. Once Pair seats it, it is a settled bye like any other.
-    const work = rows.filter((x) => !isUnseatedSwissByeShell(x));
+    // W3 T3 (X-SW-29), W4 B1a review #1 (X-SD-5): a bye line nobody has settled yet — an unseated Swiss bye shell, a
+    // bracket's pre-award bye line, a dead seat's tie — is `scheduled` with no time, but no one can ever give it one
+    // (SWISS_BYE_NOT_PLACEABLE, BYE_LINE_NOT_PLACEABLE), so it is no fixture to the phase or the attentions — counting
+    // it would leave an "unscheduled" on the division that no action clears. Once settled (Pair seats the shell, the
+    // seed confirm awards the bye, the walkover lands) it is a decided line like any other (`isWaitingByeLine`).
+    const work = rows.filter((x) => !isWaitingByeLine(x));
+    // The rows "N of M played" leaves out (`countsAsMatch`, below): every bye line but one awaiting its walkover.
+    const notMatches = rows.filter((x) => !countsAsMatch(x));
     const stageKindById = new Map(divisionStages.map((x) => [x.id, x.kind]));
     const phaseFixtures: PhaseFixture[] = work.map((x) => ({
       id: x.id,
@@ -602,6 +638,7 @@ export async function getCompetitionDesk(
       // any sport, and without a model there is no Discipline tab for "Review" to open. The module is resolved only for
       // a division with something to show.
       bansToReview: disciplineEntitled && (s?.bans_to_review ?? 0) > 0 && hasDisciplineTab(d) ? s!.bans_to_review : 0,
+      lateWaiting: lateWaiting.filter((w) => w.division_id === d.id).map((w) => ({ stageName: w.stage_name, count: w.count })),
     };
     const attention = resolveAttention(input);
     const needsDraw = attention.find((a) => a.kind === "needs_draw");
@@ -627,8 +664,14 @@ export async function getCompetitionDesk(
     out.set(d.id, {
       phase: resolvePhase(input),
       attention,
-      played: s?.played ?? 0,
-      total: s?.total ?? rows.length,
+      // W4 B1b fix round 1 (Q1, controller ruling; supersedes the B1a quirk): "N of M played" counts by the round bar's own rule,
+      // `countsAsMatch` (lib/run-sheet-groups.ts) - a bye line is no match (a setup bye waiting on the confirm, a bye award, a
+      // Swiss bye) except one awaiting its walkover, which is owed: in the total, never played. card-stats counts every
+      // non-cancelled row in `total` and a bye award in `played`, so each row the rule leaves out comes back out of exactly the
+      // number(s) card-stats put it in. The desk and the bars therefore say the same M, and the same N wherever their "settled"
+      // agrees (a double walkover, a held settle and a cancellation are counted differently, outside this rule).
+      played: (s?.played ?? rows.filter(cardStatsCountsPlayed).length) - notMatches.filter(cardStatsCountsPlayed).length,
+      total: (s?.total ?? rows.filter((x) => x.status !== "cancelled").length) - notMatches.filter((x) => x.status !== "cancelled").length,
       unscheduled: work.filter((x) => x.status === "scheduled" && x.scheduled_at === null).length,
       in_play: inPlay,
       entrants: s?.entrants ?? 0,

@@ -26,6 +26,9 @@ import { ABANDONED_MATCHES_REASON, heldMatchesOf } from "@/lib/abandoned-matches
 import { rulesWriteErrorText } from "@/lib/config-issue-copy";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
+import { isUndoRefusalCode, undoRefusalText } from "@/lib/undo-refusals";
+import { isKnockoutRefusalCode, knockoutRefusalText } from "@/lib/knockout-refusals";
+import { knockoutUpdateDrawOffered } from "@/lib/bracket-reconcile";
 import { swissRoundsWarnNotice, type SwissRoundsNotice } from "@/lib/swiss-rounds";
 import { swissRefusalText } from "@/lib/swiss-refusal-text";
 import { nextRoundNoticeOf, nextRoundText, type NextRoundNotice } from "@/lib/swiss-next-round";
@@ -108,7 +111,7 @@ import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import { zonedTimeInput } from "@/lib/zoned-datetime";
 // W3 item 6 — one definition of "this swiss stage is between rounds, not
 // drifted", shared with the page's tests rather than restated in each.
-import { swissAwaitingPairing } from "@/lib/roster-drift-eligibility";
+import { rosterDriftShown, swissAwaitingPairing } from "@/lib/roster-drift-eligibility";
 import {
   latestSwissRoundWithAnySeat,
   nextUnseatedSwissRound,
@@ -121,6 +124,7 @@ import {
 import { swissLegendRound, swissStageLegend, swissLegendText } from "@/lib/swiss-legend";
 import { lateEntryNoticeText, swissLatecomerCounts, swissLatecomerLines } from "@/lib/swiss-late-entry-notice";
 import { swissCutDriftOf, swissCutDriftText, type SwissCutDrift } from "@/lib/swiss-cut-drift";
+import { knockoutCutDriftOf, knockoutCutDriftText, type KnockoutCutDrift } from "@/lib/knockout-cut-drift";
 // Swiss round-1 pairing (spec 2026-09-22-swiss-round-one-pairing, "UI") — the
 // split button's menu. Client-safe leaves only: never the
 // `@seazn/engine/scheduling` barrel (the whole solver; `@seazn/scheduler` is the grpc side).
@@ -131,7 +135,7 @@ import {
 } from "@/lib/swiss-pairing";
 import { swissPairingMenuFor, swissUnpairChangeHint, type EntrantSwissFirstRounds } from "@/lib/swiss-pairing-menu";
 import { swissDoorRefusalText } from "@/lib/swiss-door-refusal";
-import { isRunningRootSwiss } from "@/lib/open-entry-stages";
+import { ROOT_KNOCKOUT_KINDS, isRunningRootSwiss } from "@/lib/open-entry-stages";
 // Competition Desk W2 (Task 4) — the run sheet's grouping builder + the
 // component that renders it. `isBye` (and, inside `buildRunSheet` itself,
 // `BRACKET_STAGE_KINDS`) are the SINGLE authorities now (R2a/R10,
@@ -148,6 +152,8 @@ import { OnlineGameExistsNotice } from "@/components/v2/online-game-exists-notic
 // action controls (Generate/Complete/Delete). See stage-rail.tsx's own
 // header for why it stays presentational (props only, no data hook).
 import { StageRail, stageRailActions } from "@/components/v2/desk/stage-rail";
+import { KnockoutWaitingStrip } from "@/components/v2/desk/knockout-waiting-strip";
+import type { KnockoutWaitingEntrant } from "@/server/usecases/knockout-desk";
 import type { SwissRoundsRefusal } from "@/components/v2/desk/swiss-rounds-dialog";
 import type { SwissRoundControl } from "@/lib/swiss-rounds-edit";
 
@@ -292,11 +298,22 @@ interface RosterDriftEntrant {
 interface RosterDrift {
   ghosts: RosterDriftEntrant[];
   unplaced: RosterDriftEntrant[];
+  /** A root knockout's first-round lines with an empty place (an entrant deleted) — StageRosterDrift.vacantLines. Optional:
+   *  hand-built props in this panel's own __tests__ predate the field (read as none, `rosterDriftShown`). */
+  vacantLines?: number;
   /** Organiser setup that a rebuild clears along with the fixtures — see
    *  StageRosterDrift.attachments (usecases/stages.ts) for why these do not
    *  BLOCK the rebuild the way a recorded result does. Optional: hand-built
    *  props in this panel's own __tests__ predate the field. */
-  attachments?: { officials: number; lineups: number; deviceLinks: number };
+  attachments?: {
+    officials: number;
+    lineups: number;
+    deviceLinks: number;
+    streams: number;
+    youtubeBroadcasts: number;
+    availability: number;
+    calls: number;
+  };
 }
 
 interface Props {
@@ -468,6 +485,9 @@ interface Props {
    *  (`getSwissCutDrift`, read by the division page for an organiser on this tab; a stage with no drift is absent). Drives
    *  the amber "the bracket stands" notice in that stage's card. Optional: absent ⇒ none (a viewer; the older panel tests). */
   swissCutDrift?: Readonly<Record<string, SwissCutDrift>>;
+  /** W4 T14 (RB4-Q5, X-QM-4): who a correction inside a completed knockout moved across its cut, by stage id, once the stage
+   *  it feeds has started (`getKnockoutCutDrift`). Absent, or no entry: no notice. */
+  knockoutCutDrift?: Readonly<Record<string, KnockoutCutDrift>>;
   /** Match Day B2 (spec 2026-10-31 §9): Match Day's address, handed down ONLY on a match day to an organiser who can edit (the
    *  division page asks the one `needsYouHome` rule the competition page's Open Match Day asks). The run sheet's unscheduled
    *  rows then carry "Find a court" (the word follows `sportKey`: pitch, table, board, rink). null/absent ⇒ not a match day: no link. */
@@ -475,6 +495,13 @@ interface Props {
   /** Match Day C2: the Division rules strip at the top of the tab (the division's match format, points and tie-break order).
    *  Built by the page, which reads what it needs; absent, no strip. */
   rulesStrip?: DivisionRulesStripProps;
+  /** W4 T19 (X-LE-10; R24 pick 1A) — the players waiting to join a started root knockout (`listKnockoutWaiting`, read by the
+   *  division page for an organiser on this tab): each stage card lists its own in a "Waiting to join the bracket" strip with
+   *  one "Add to bracket" tap. Optional: absent ⇒ no strip (a viewer; the pre-existing panel tests). */
+  knockoutWaiting?: readonly KnockoutWaitingEntrant[];
+  /** W4 T20 (K5 "shown"; R24 pick 3A): each stage's draw seed, stage id -> the seed its newest Generate drew with
+   *  (`listStageDrawSeeds`). A stage that drew nothing is absent; only a knockout-family card shows one. */
+  drawSeeds?: Readonly<Record<string, number>>;
 }
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
@@ -592,7 +619,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, knockoutWaiting = [], drawSeeds = {} }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1529,12 +1556,29 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // W3 T17 (RB3-19): the cut-drift warning this card carries, if any - the ONE predicate (`swissCutDriftOf`) the page's
         // `attentionStageIds` is built from too, so the card that has the notice is the card that starts open.
         const cutDrift = swissCutDriftOf(stage, canEdit, swissCutDrift);
+        const knockoutDrift = knockoutCutDriftOf(stage, canEdit, knockoutCutDrift);
+        // W4 T19: this card's waiting players (`listKnockoutWaiting` already leaves out a finished stage and a departed player).
+        const waitingHere = knockoutWaiting.filter((w) => w.stageId === stage.id);
+        // W4 T20: a drawn knockout's seed, by the card's own stage id (`0` is a seed: an absent one is `undefined`).
+        const drawSeed = ROOT_KNOCKOUT_KINDS.includes(stage.kind) ? drawSeeds[stage.id] : undefined;
         // F3 Task 5 (5a) — only ever non-empty for the one stage
         // getStageRosterDrift finds eligible (usecases/stages.ts); every
         // other stage's entry is absent or both arrays empty, so this is a
         // no-op read for the common case.
         const drift = rosterDrift[stage.id];
-        const hasDrift = Boolean(drift && (drift.ghosts.length > 0 || drift.unplaced.length > 0));
+        // W4 B2 fix round 2 (item 1): an empty first-round place (a deleted entrant) is drift too — `rosterDriftShown` is the
+        // one test, read by the banner below and by Update draw's offer.
+        const hasDrift = rosterDriftShown(drift);
+        // W4 B2 fix round 1 (item 6): a root knockout drawn before its roster moved is `active` before Start, so Generate comes
+        // back as "Update draw" (place a newcomer / vacate a withdrawal in place) until the division starts.
+        const updateDraw = knockoutUpdateDrawOffered({
+          stage,
+          divisionStatus,
+          fixtureCount: stageFixtures.length,
+          // Byes out: a bye line is stored `forfeited`, so `counts.played` reads every bracket with a bye as begun.
+          matchesBegun: stageFixtures.filter((f) => !isBye(toRunSheetFixture(f)) && f.status !== "scheduled").length,
+          rosterDrifted: hasDrift,
+        });
         // The stage's required court tags: built ONCE and drawn once, at the card's foot, for an editor and a viewer alike (Match Day E1
         // item 1 - it used to ride in the rail's sheet for an editor, which is now the header's actions group and has no room for it).
         const courtTagsEditor = (
@@ -1570,6 +1614,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
             canUnpairSwiss,
             deletable,
             swissRounds: swissRoundsRail,
+            updateDraw,
           }).hasActions;
         const railEl = canEdit ? (
           <div data-testid="stage-rail" className="min-w-0 max-md:w-full md:flex md:items-center">
@@ -1611,9 +1656,12 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     divisionStatus,
                     roundSeated: latestSwissRoundWithAnySeat(swissShellFixtures) !== null,
                     href: `${routes.division(orgSlug, compSlug, divSlug, "entrants")}#add-entrant`,
+                    // W4 T19 (X-LE-3): the division's stages, so a started ROOT knockout offers the same item as "Add to bracket".
+                    division: stages,
                   }
             }
             swissRounds={swissRoundsRail}
+            updateDraw={updateDraw}
             toolsSlot={
               settingsTools.length > 0 ? (
                 <div data-testid="stage-sheet-tools" className="flex flex-col gap-2 md:hidden">
@@ -1759,12 +1807,44 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                       {lateEntryNoticeText(line, { t: msg, plural: msgPlural })}
                     </p>
                   ))}
+                  {/* W4 T20 (K5 "shown"; R24 pick 3A): the draw's seed, one muted line under the header like the legend - the number
+                      that replays this bracket (RB4-D4), so an organiser can say which draw they are looking at. Information, not an
+                      action: both viewers see it. Only a knockout that DREW at random has one (a seeded or fed bracket has none). */}
+                  {/* Owner option B (2026-11-09): "Random draw · #…", with what the number means beside it as a second muted line -
+                      plain text, always shown (no tooltip to reach by hover or keyboard), wrapping at any width. */}
+                  {!folded && drawSeed !== undefined && (
+                    <>
+                      <p data-testid="stage-draw-seed" data-draw-seed={drawSeed} className="w-full min-w-0 text-xs text-slate-500">
+                        {msg("knockout.drawSeed", { seed: drawSeed })}
+                      </p>
+                      <p data-testid="stage-draw-seed-hint" className="w-full min-w-0 text-xs text-slate-500">
+                        {msg("knockout.drawSeedHint")}
+                      </p>
+                    </>
+                  )}
                 </header>
 
                 {/* Match Day PB1: the card's body, one element so the toggle has something to control. `hidden` (not unmounted) while the
                     card is folded: the run sheet inside keeps its filter and its round toggles, and the panels keep their drafts. Not indented
                     with the blocks it holds, to keep this change to two lines of a file other branches are editing. */}
                 <div id={stageBodyId} hidden={folded}>
+                {/* W4 T19 (X-LE-10; R24 pick 1A): the players who arrived after the draw and wait to join this knockout, each with
+                    one "Add to bracket". An organiser's strip, drawn only while someone waits here; a tap that seats them says so in
+                    the panel's own notice line (it outlives the strip), one that cannot leaves its reason and exits in the row. */}
+                {canEdit && waitingHere.length > 0 && (
+                  <KnockoutWaitingStrip
+                    stageId={stage.id}
+                    waiting={waitingHere}
+                    names={entrantNames}
+                    registrationsHref={routes.competitionRegistration(orgSlug, compSlug, "registrants", divisionId)}
+                    onRebuild={() => void rebuildStage(stage.id)}
+                    onPlaced={(said) => {
+                      setError(null);
+                      setNotice(said.done.length > 0 ? said.done.join(" ") : null);
+                      setWarning(said.todo.length > 0 ? said.todo.join(" ") : null);
+                    }}
+                  />
+                )}
                 {/* W3 T17 (RB3-19, X-SW-25) — a result of this Swiss was corrected after its knockout began: the bracket
                     stands (no seat moves), and the desk says who today's table would have cut instead. The house amber
                     notice (the roster-drift banner's treatment), polite (role="status"), never a dialog. The sentence and
@@ -1779,6 +1859,19 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   >
                     <p className="min-w-0 break-words text-xs font-medium leading-relaxed text-amber-900">
                       {swissCutDriftText(cutDrift, entrantNames, locale, msgPlural)}
+                    </p>
+                  </div>
+                )}
+                {/* W4 T14 (RB4-Q5, X-QM-4): the same notice for a corrected knockout, whose bracket stands once the stage it feeds has
+                    started (before that, the correction re-proposes it). Same treatment, same place, same fold rule. */}
+                {knockoutDrift && (
+                  <div
+                    role="status"
+                    data-testid="knockout-cut-drift-warning"
+                    className="border-b border-dashed border-amber-200 bg-amber-50 px-4 py-3"
+                  >
+                    <p className="min-w-0 break-words text-xs font-medium leading-relaxed text-amber-900">
+                      {knockoutCutDriftText(knockoutDrift, entrantNames, locale, msgPlural)}
                     </p>
                   </div>
                 )}
@@ -1805,7 +1898,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                         ? "ghosts"
                         : swissAwaitingPairing(stage.kind, drift)
                           ? "swiss-awaiting-pairing"
-                          : "unplaced"
+                          : drift.unplaced.length > 0
+                            ? "unplaced"
+                            : "vacant"
                     }
                   >
                     <p
@@ -1841,6 +1936,11 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                             : "progression.rosterDrift.unplacedLabel",
                         )}{" "}
                         {drift.unplaced.map((e) => e.display_name).join(", ")}
+                      </p>
+                    )}
+                    {(drift.vacantLines ?? 0) > 0 && (
+                      <p className="mt-1 text-xs text-amber-800" data-testid="roster-drift-vacant">
+                        {msg("progression.rosterDrift.vacantLabel", { count: drift.vacantLines ?? 0 })}
                       </p>
                     )}
                     {swissAwaitingPairing(stage.kind, drift) && (
@@ -2207,7 +2307,7 @@ export function AddStageForm({
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
         onPaywall(String(err.extra.feature_key ?? ""));
       } else {
-        onError(err instanceof Error ? err.message : msg("schedule.error.failed"));
+        onError(addStageErrorText(err, msg));
       }
     } finally {
       setBusy(false);
@@ -2300,6 +2400,11 @@ export function attachmentWarning(drift: RosterDrift | undefined, msg: Msg, loca
     a.officials > 0 ? msg("progression.rosterDrift.alsoOfficials", { count: a.officials }) : null,
     a.lineups > 0 ? msg("progression.rosterDrift.alsoLineups", { count: a.lineups }) : null,
     a.deviceLinks > 0 ? msg("progression.rosterDrift.alsoDevices", { count: a.deviceLinks }) : null,
+    // W4 B2 fix round 2 (item 5): the rest of the setup a match can carry before Start, each a cascade of the delete.
+    a.streams > 0 ? msg("progression.rosterDrift.alsoStreams", { count: a.streams }) : null,
+    a.youtubeBroadcasts > 0 ? msg("progression.rosterDrift.alsoBroadcasts", { count: a.youtubeBroadcasts }) : null,
+    a.availability > 0 ? msg("progression.rosterDrift.alsoAvailability", { count: a.availability }) : null,
+    a.calls > 0 ? msg("progression.rosterDrift.alsoCalls", { count: a.calls }) : null,
   ].filter((p): p is string => p !== null);
   if (parts.length === 0) return "";
   const items = new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(parts);
@@ -2319,6 +2424,15 @@ export type GenerateNoticeWire = {
    *  `nextRoundNoticeOf`, which drops a verdict it cannot name a round for. */
   swiss_next_round?: "unpairable" | "unknown";
   swiss_paired_round?: number;
+  /** W4 T8 (FX-G2): a root knockout's Generate over existing lines — what it reconciled (`GenerateResult.reconcile`). */
+  reconcile?: {
+    kind: "noop" | "in_place" | "regenerated";
+    placed: string[];
+    vacated: string[];
+    /** Every seat emptied, a deleted entrant's included (no id to list) — fix round 1, I2. */
+    vacated_seats: number;
+    slots?: { kept: number; freed: number; unscheduled: number };
+  };
 };
 
 /**
@@ -2328,9 +2442,10 @@ export type GenerateNoticeWire = {
  */
 export function generateNoticeText(out: GenerateNoticeWire, msg: Msg, msgPlural: MsgPlural, locale: string): string {
   return [
-    out.created > 0
-      ? msg("schedule.notice.generated", { created: out.created, existing: out.existing })
-      : msg("schedule.notice.nothingNew"),
+    reconcileNotice(out.reconcile, msg, msgPlural) ??
+      (out.created > 0
+        ? msg("schedule.notice.generated", { created: out.created, existing: out.existing })
+        : msg("schedule.notice.nothingNew")),
     // Swiss pre-Start: this press may also have resized rounds nobody
     // paired, deleting boards along with the times and courts pinned on
     // them. Silent before this; `reshapeNotice` returns null when
@@ -2339,6 +2454,37 @@ export function generateNoticeText(out: GenerateNoticeWire, msg: Msg, msgPlural:
   ]
     .filter((line): line is string => line !== null)
     .join(" ");
+}
+
+/**
+ * W4 T8 (FX-G2): what a knockout's Generate over existing lines did, in the organiser's words — or null, so the ordinary
+ * line stands: a first Generate (no `reconcile`), and the named no-op, which IS "up to date". A redraw says so (the old
+ * line counted only what it created, as if nothing had been taken away); a change in place counts the newcomers placed
+ * and the departed taken out, each clause dropped at zero.
+ */
+export function reconcileNotice(reconcile: GenerateNoticeWire["reconcile"], msg: Msg, msgPlural: MsgPlural): string | null {
+  if (reconcile === undefined || reconcile.kind === "noop") return null;
+  if (reconcile.kind === "regenerated") {
+    // B2 fix round 1 (I1): a redraw deletes every line and draws new ones, so it says what became of the slots (Rebuild's
+    // own line, dropped for a bracket nobody laid out — the server then reports 0/0/0) and that printed sheets, which name
+    // the old lines, stop working. It never claims every match kept its time: a redraw's new lines have none to keep.
+    const slots = reconcile.slots;
+    return [
+      msg("schedule.notice.reconcileRedrawn"),
+      slots && slots.kept + slots.freed + slots.unscheduled > 0
+        ? msg("progression.rosterDrift.rebuiltSlots", { kept: slots.kept, freed: slots.freed, unscheduled: slots.unscheduled })
+        : null,
+      msg("progression.rosterDrift.sheetsStop"),
+    ]
+      .filter((c): c is string => c !== null)
+      .join(" ");
+  }
+  const clauses = [
+    reconcile.placed.length > 0 ? msgPlural("schedule.notice.reconcilePlaced", reconcile.placed.length) : null,
+    // The SEATS emptied, not the ids listed: a deleted entrant's seat has no id left (fix round 1, I2).
+    reconcile.vacated_seats > 0 ? msgPlural("schedule.notice.reconcileVacated", reconcile.vacated_seats) : null,
+  ].filter((c): c is string => c !== null);
+  return clauses.length > 0 ? clauses.join(" ") : null;
 }
 
 /**
@@ -2496,6 +2642,14 @@ export function classifyActError(
   if (err instanceof ApiV1Error && err.code === "STAGE_SEAT_DEPARTED") {
     return { tone: "warning", text: scoringErrorText(err.code, err.message, msg, "schedule.error.failed", err.extra), refresh: false };
   }
+  // W4 T6 (AN-2): Complete refused because a line of the bracket is still owed a result (STAGE_HAS_UNDECIDED_FIXTURES:
+  // a third-place match unplayed beside a decided final). Amber — matches to finish — in the reader's language, never
+  // the server's English sentence.
+  // B3 fix round 1 (review #6): a sentence that names something (KO_LATE_ENTRY_FED_STAGE's `{stage}`) takes it from the
+  // envelope's fields, which the server sends beside the code (`knockoutRefusal(code, details)` → `err.extra`).
+  if (err instanceof ApiV1Error && isKnockoutRefusalCode(err.code)) {
+    return { tone: "warning", text: knockoutRefusalText(err.code, err.extra, msg), refresh: false };
+  }
   const precondition = generatePreconditionMessage(err, msg, stageName, matchName);
   if (precondition) return { tone: "warning", text: precondition, refresh: false };
   // F3 ultrareview finding 10 — was `err.message` verbatim, i.e. raw English
@@ -2524,8 +2678,9 @@ export function classifyActError(
  *  keeps its own message, which is the one an organiser can quote. */
 export function undoRefusalMessage(err: unknown, msg: Msg): string {
   if (err instanceof ApiV1Error && err.code === PLAYED_REFUSAL_CODE) return msg("history.error.played");
-  // W3 T5 (X-SW-28): Undo of Pair next over a started round, or across an undo barrier.
-  if (err instanceof ApiV1Error && isSwissRefusalCode(err.code)) return msg(swissRefusalKey(err.code));
+  // W3 T5 (X-SW-28): Undo of Pair next over a started round, or across an undo barrier — a Swiss one, or since W4 T5
+  // (K1) a confirmed draw (SEED_CONFIRM_NOT_UNDOABLE), each through its own family's key.
+  if (err instanceof ApiV1Error && isUndoRefusalCode(err.code)) return undoRefusalText(err.code, err.extra, msg);
   return ruleRefusalOf(err, msg) ?? (err instanceof Error ? err.message : msg("schedule.error.undoFailed"));
 }
 
@@ -2562,7 +2717,16 @@ function ruleRefusalOf(err: unknown, msg: Msg): string | null {
  *  do next — never the server's English sentence. */
 export function rebuildErrorText(err: unknown, msg: Msg, msgPlural: MsgPlural): string {
   if (err instanceof ApiV1Error && isSwissRefusalCode(err.code)) return swissRefusalText(err.code, err.extra, msg, msgPlural);
+  // W4 T15 (X-PL-1, X-QM-5): a Rebuild draws the root again, so it can be refused for the field's size.
+  if (err instanceof ApiV1Error && isKnockoutRefusalCode(err.code)) return knockoutRefusalText(err.code, err.extra, msg);
   return ruleRefusalOf(err, msg) ?? (err instanceof Error ? err.message : msg("schedule.error.failed"));
+}
+
+/** Add stage's red line, exported pure for the reason `rebuildErrorText` is. A Top N from a knockout that is no whole round (W4 T15,
+ *  X-QM-2) is said in the reader's language; any other refusal keeps its own message. */
+export function addStageErrorText(err: unknown, msg: Msg): string {
+  if (err instanceof ApiV1Error && isKnockoutRefusalCode(err.code)) return knockoutRefusalText(err.code, err.extra, msg);
+  return err instanceof Error ? err.message : msg("schedule.error.failed");
 }
 
 /** Stage id → its name on this board, or undefined when the board does not

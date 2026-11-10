@@ -59,7 +59,10 @@ import type { MessageKey } from "@/lib/messages";
 import { nextMatchLabel, nextMatchRefOf, type NextMatchRef } from "@/lib/next-match-started";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { resnapshotFixtureConfig } from "../admin-fixture-config";
+import { callFixtureToCourt, LIVE_CALL_ALIASES, liveCallSql, undoCall } from "../match-day-call";
+import { createCourt, createVenue } from "../venues";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
+import { createStagesWithLegacy } from "./_legacy-standalone-stage";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -1205,7 +1208,7 @@ async function pagePlayoff() {
     division.id,
     ["A", "B", "C", "D"].map((name, i) => ({ kind: "individual" as const, display_name: name, seed: i + 1, members: [] })),
   );
-  const [stage] = await createStages(auth, division.id, [{ seq: 1, kind: "page_playoff", name: "Playoffs", config: {} }]);
+  const [stage] = await createStagesWithLegacy(auth, division.id, [{ seq: 1, kind: "page_playoff", name: "Playoffs", config: {} }]);
   await generateStageFixtures(auth, stage!.id);
   await sql`update divisions set status = 'active' where id = ${division.id}`;
   const byKey = async (key: string) => {
@@ -1363,5 +1366,74 @@ describe.skipIf(!HAS_DB)("fix round 2: the un-fill's locks", () => {
 
     expect(filled).toContain(rig.final.id);
     expect(seat(await row(rig.final.id), line.winner_to_slot)).toBe(line.home_entrant_id);
+  });
+});
+
+// W4 Task 2 (K4, X-LE-9; owner ruling 257: a Match Day call is a start). A call writes a court and a time and no status,
+// outcome or score event, so the take-back's "has the next match started" test (scheduled, no outcome, no live event) read a
+// final called to a court as still waiting, and the void of its feeder emptied a seat under players standing at the court.
+// Badminton, one sport: neither the take-back nor the call reads a sport column — the sport only decides how a line is won
+// (its own two-game summary, through the real `scoreEvent`).
+describe.skipIf(!HAS_DB)("X-LE-9 a called match is started", () => {
+  const BADMINTON = { sport_key: "badminton", variant_key: "bwf", config: {} };
+
+  /** Start and win `fixtureId` for the HOME side, two games to love; returns the deciding event's id. */
+  async function badmintonDecide(auth: AuthCtx, fixtureId: string): Promise<string> {
+    await append(auth, fixtureId, "core.start", {});
+    await append(auth, fixtureId, "badminton.game.summary", { home: 21, away: 10 });
+    const out = await append(auth, fixtureId, "badminton.game.summary", { home: 21, away: 12 });
+    expect(out.outcome, "two games to love decided the line").not.toBeNull();
+    return out.event_id;
+  }
+
+  /** Whether a Match Day call still holds on `fixtureId`, read through Match Day's own liveness test (`liveCallSql`). */
+  async function callHolds(fixtureId: string): Promise<boolean> {
+    const fc = sql(LIVE_CALL_ALIASES.call);
+    const g = sql(LIVE_CALL_ALIASES.fixture);
+    const [r] = await sql<{ live: boolean }[]>`
+      select ${liveCallSql(sql as never)} as live
+        from fixture_calls ${fc} join fixtures ${g} on ${g}.id = ${fc}.fixture_id
+       where ${fc}.fixture_id = ${fixtureId}`;
+    return r?.live === true;
+  }
+
+  it("X-LE-9 take-back never re-seats a next match called to a court", async () => {
+    const rig = await knockout({}, BADMINTON);
+    const [sf1, sf2] = rig.r1 as [Row, Row];
+    const decider = await badmintonDecide(rig.auth, sf1.id);
+    await badmintonDecide(rig.auth, sf2.id);
+    const venue = await createVenue(rig.auth, { name: "Hall " + randomUUID().slice(0, 4), sort: 0 });
+    const court = await createCourt(rig.auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+    await callFixtureToCourt(rig.auth, rig.final.id, court.id);
+
+    const finalBefore = await row(rig.final.id);
+    expect(
+      [finalBefore.status, finalBefore.outcome, await eventCount(rig.final.id)],
+      "premise: the call wrote no status, outcome or event",
+    ).toEqual(["scheduled", null, 0]);
+    expect(seat(finalBefore, sf1.winner_to_slot), "premise: SF1's winner is seated in the final").toBe(sf1.home_entrant_id);
+    expect(seat(finalBefore, sf2.winner_to_slot), "premise: SF2's winner too").toBe(sf2.home_entrant_id);
+    expect(await callHolds(rig.final.id), "premise: the call holds").toBe(true);
+    const eventsBefore = await eventCount(sf1.id);
+
+    // The refusal the take-back already answers for a next match that has started (ruling 2026-09-23).
+    const err = await refusal(voidEvent(rig.auth, sf1.id, decider));
+    expect(err.status).toBe(409);
+    expect(err.code).toBe("NEXT_MATCH_STARTED");
+    await expectNamesTheBoardsWay(rig.auth, err, rig.final.id);
+
+    expect(await eventCount(sf1.id), "no void was written").toBe(eventsBefore);
+    const finalAfter = await row(rig.final.id);
+    expect([finalAfter.home_entrant_id, finalAfter.away_entrant_id], "the called final's seats are unchanged").toEqual([
+      finalBefore.home_entrant_id,
+      finalBefore.away_entrant_id,
+    ]);
+    expect(await callHolds(rig.final.id), "and the call still holds").toBe(true);
+
+    // The sequence's other half: Undo call, and the same void goes through and takes the name back.
+    await undoCall(rig.auth, rig.final.id);
+    expect(await callHolds(rig.final.id), "premise: Undo call ended the call").toBe(false);
+    await voidEvent(rig.auth, sf1.id, decider);
+    expect(seat(await row(rig.final.id), sf1.winner_to_slot), "an uncalled final gives the name back").toBeNull();
   });
 });

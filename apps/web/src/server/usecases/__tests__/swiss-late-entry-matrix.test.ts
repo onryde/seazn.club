@@ -29,7 +29,7 @@ import { defaultSwissChess } from "@/lib/swiss-draw";
 import type { LateEntryDecision } from "@/lib/swiss-late-entry";
 import { sportStageRule } from "@/lib/stage-points-splits";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { CreateStage, EntrantKind } from "@/server/api-v1/schemas";
+import { CreateStage, EntrantKind, type SwissLateEntryResult } from "@/server/api-v1/schemas";
 import { resolveModule } from "@/server/engine-db";
 import { forfeitPlayedFacts } from "@/server/engine-db/forfeit-played";
 import { stageTablePoints } from "@/server/engine-db/competition";
@@ -283,7 +283,16 @@ async function playRound(rig: Rig, r: number, winnerOf: (f: Row) => string = (f)
 /** The organiser's Add of one unseeded entrant of the rig's kind — the product path, `createEntrants`. */
 async function addLate(rig: Rig, name: string) {
   const [row] = await createEntrants(rig.auth, rig.divisionId, [entrantInput(rig.kind, name)]);
-  return row!;
+  return swissCreated(row!);
+}
+
+/** W4 T9: `late_entry` is a union by format; a late add here joins a Swiss, so a knockout answer is refused by name. */
+type SwissCreated = Awaited<ReturnType<typeof createEntrants>>[number] & { late_entry?: SwissLateEntryResult };
+function swissCreated(row: Awaited<ReturnType<typeof createEntrants>>[number]): SwissCreated {
+  if (row.late_entry !== undefined && row.late_entry.format !== "swiss") {
+    throw new Error(`a Swiss late add answered format ${row.late_entry.format}`);
+  }
+  return row as SwissCreated;
 }
 
 async function entrantCount(divisionId: string): Promise<number> {
@@ -535,7 +544,7 @@ async function cellC(rig: Rig): Promise<void> {
   const tailBefore = await tailRowsOf(rig);
 
   const late = await addLate(rig, "Late");
-  expect(late.late_entry).toEqual({ entrant_id: late.id, stage_id: rig.swissStageId, case: "c", round: 2 });
+  expect(late.late_entry).toEqual({ format: "swiss", entrant_id: late.id, stage_id: rig.swissStageId, case: "c", round: 2 });
   expect(await rowsOf(rig.swissStageId), "nothing moved").toEqual(before);
   expect(await tailRowsOf(rig), "the tail never takes a latecomer").toEqual(tailBefore);
   expect(await firstRoundOf(late.id)).toEqual({ kind: rig.kind, swiss_first_round: 2, swiss_first_round_stage_id: rig.swissStageId });

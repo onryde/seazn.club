@@ -41,6 +41,7 @@ import {
   type EligibilityIssue,
   type EligibilityRosterPlayer,
 } from "./registration-eligibility";
+import { admitKnockoutLateEntrant } from "./knockout-late-entry";
 import { admitSwissLateEntrant } from "./swiss-late-entry";
 import { heldMemberships, personOnOtherTeamError, type HeldMembershipRow } from "./entrants";
 
@@ -729,7 +730,10 @@ async function executePlan(tx: Tx, auth: AuthCtx, ops: ImportOp[]): Promise<stri
         ids.set(op.ref, row!.id);
         divisionIds.add(op.divisionId);
         // W3 T9 (X-SW-13): into a running Swiss an import is an automatic arrival — case (c), never a refusal.
-        await admitSwissLateEntrant(tx, auth, op.divisionId, row!.id, "import");
+        // W4 T11 (X-LE-10, K7): into a started root knockout it waits for the organiser's tap, never placed by the import.
+        if ((await admitSwissLateEntrant(tx, auth, op.divisionId, row!.id, "import")) === null) {
+          await admitKnockoutLateEntrant(tx, auth, op.divisionId, row!.id, "import");
+        }
         break;
       }
       case "squad.add": {

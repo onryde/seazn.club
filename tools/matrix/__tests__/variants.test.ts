@@ -12,7 +12,7 @@ import {
   SPORT_RULES, buildRuleOverride, ruleContextFor, showsOnePointsField, visibleRuleFields, type RuleField,
 } from "../../../apps/web/src/lib/match-rules/index.ts";
 import { BUILDER_PREFERRED_VARIANT, ROW_KEYS, SPORT_KEYS } from "../lib/catalogue.ts";
-import { REFUSED_CELLS, offeredRows } from "./refused-cells.ts";
+import { CHESS_REFUSED_CELLS, STANDALONE_REFUSED_CELLS } from "./refused-cells.ts";
 import { CfgInvalid, UnknownSport, UnknownVariant, resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
 import { KNOWN_UNSUPPORTED } from "../lib/streams/known-unsupported.ts";
@@ -431,15 +431,22 @@ describe("the pair-wise cover", () => {
     expect(judged).toBe(SPORT_KEYS.length);
     expect(witnesses).toBeGreaterThan(0);
   });
-  it("covers every row: each sport has a case on each of the 21 rows it is offered, and none on a refused cell (chess americano/mexicano)", () => {
+  it("covers every row: each sport has a case on each of the 21 rows but a chess americano/mexicano one; the standalone stepladder / page playoff rows keep their variant levels (held, option A)", () => {
     expect(ROW_KEYS.length).toBe(21);
-    let refusedRows = 0;
+    let chessCells = 0;
+    let heldCases = 0;
     for (const v of ALL) {
-      const want = offeredRows(ROW_KEYS, v.sport);
+      // Chess's two cells (ruling 2026-10-26) carry no case. The 22 standalone cells (ruling 269) DO: option A (W4 T24) keeps a refused
+      // row a variant level so no committed pick moves; its cases are held (never planned - w1-driving-set.ts, counts.ts heldOnRefusedCells).
+      const want = ROW_KEYS.filter((r) => !CHESS_REFUSED_CELLS.includes(`${r}|${v.sport}`));
       expect([...new Set(v.cases.map((c) => c.row))].sort(), v.sport).toEqual([...want].sort());
-      refusedRows += ROW_KEYS.length - want.length;
+      chessCells += ROW_KEYS.length - want.length;
+      const held = v.cases.filter((c) => STANDALONE_REFUSED_CELLS.includes(`${c.row}|${v.sport}`)).length;
+      expect(held, `${v.sport}: its two standalone rows keep a variant level`).toBeGreaterThan(0);
+      heldCases += held;
     }
-    expect(refusedRows).toBe(REFUSED_CELLS.length);
+    expect(chessCells).toBe(CHESS_REFUSED_CELLS.length);
+    expect(heldCases).toBe(98);
   });
   it("case ids are unique per sport and ordered", () => {
     let n = 0;

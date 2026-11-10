@@ -34,9 +34,14 @@ import {
 } from "@seazn/engine/competition";
 import { EngineError } from "@seazn/engine/core";
 import { HttpError } from "@/lib/errors";
+import { isWholeRoundCut } from "@/lib/format-size-gates";
+import { luckyLoserOrder } from "@/lib/lucky-loser";
+import { swissDrawSeed } from "@/lib/swiss-draw";
 import { CUT_SKIPS_DEPARTED_KINDS } from "@/lib/table-withdrawal";
-import { loadCrossGroupRules } from "@/server/engine-db/competition";
+import { bracketStageIsDecided, loadCrossGroupRules } from "@/server/engine-db/competition";
 import { persistLotsDraws } from "@/server/engine-db/table-rules";
+import { knockoutRefusal } from "./knockout-refusal";
+import { LUCKY_LOSER_SOURCE_KINDS, luckyLoserPool, qualifiersOfCut, rankCutOf } from "./lucky-loser";
 import { poolCount, POOL_KEYS, BRACKET_KINDS, REAL_TABLE_KINDS, loadBracketFixtures, americanoPlacementTables, departedEntrantIds } from "./stages";
 
 type Tx = postgres.TransactionSql;
@@ -72,7 +77,8 @@ export interface PoolTableRows {
 }
 
 /** The tables a progression's CUT reads from one source (W3 T15 Carry A, controller rulings 2026-11-02, fix round 1 I3):
- *  for a source kind in `CUT_SKIPS_DEPARTED_KINDS` (lib/table-withdrawal.ts — Swiss alone; the scope guard), every
+ *  for a source kind in `CUT_SKIPS_DEPARTED_KINDS` (lib/table-withdrawal.ts — Swiss, and since W4 T13 league and group,
+ *  RB4-V6; the scope guard), every
  *  departed row moves to the BOTTOM of its table: the eligible rows first, renumbered 1..m in their table order, then
  *  the departed ones, renumbered m+1..n in theirs. So the cut takes every eligible entrant before any departed one —
  *  the next eligible entrant backfills a departed qualifier's place — and only a true shortfall (fewer eligible
@@ -111,6 +117,81 @@ export function cutEligiblePools<P extends PoolTableRows>(
       return row;
     });
     return { ...p, rows: [...eligibleRows, ...departedRows] };
+  });
+}
+
+/** Far below any record a table can hold. */
+const DEPARTED_RECORD = -1_000_000_000_000;
+
+/** Review #1 (RB4-V6, X-LL-5): `cutEligiblePools` closes a pool up and keeps her row at the bottom, since a table is never
+ *  shortened (a pool with no rank-N row is the engine's STAGE_NOT_READY). So a pool with no eligible Nth finisher hands
+ *  best-Nth HER, with the record that made her a pool winner, and she takes a place from an eligible Nth beside it. What the
+ *  engine compares there starts from the sport's primary key by its own rule (`primaryTableKey`, `validateCascade`'s "first"),
+ *  points or wins: both are sunk, and the ledgers go so that a stored order that predates the rule finds nothing either.
+ *
+ *  A copy for `resolveProgression` alone: the proposal's hash and the carry read her real record. Only a shortfall reaches her,
+ *  and only where a cut skips the departed (`CUT_SKIPS_DEPARTED_KINDS`): a knockout's cut is `luckyLoserCut`'s. `sources` is
+ *  parallel to `tables`. */
+export function departedLoseBestNth(
+  tables: readonly SourceTables[],
+  sources: readonly { kind: string }[],
+  departed: ReadonlySet<string>,
+): SourceTables[] {
+  return tables.map((table, i) => {
+    if (departed.size === 0 || !CUT_SKIPS_DEPARTED_KINDS.has(sources[i]!.kind)) return table;
+    return {
+      ...table,
+      pools: table.pools.map((p) => ({
+        ...p,
+        rows: p.rows.map((r) => (departed.has(r.entrantId) ? { ...r, points: DEPARTED_RECORD, won: DEPARTED_RECORD, metrics: {} } : r)),
+      })),
+    };
+  });
+}
+
+/** W4 T13 (K9; RB4-V2, RB4-E7; X-LL-1): a KNOCKOUT source's cut, `cut` wide, with every departed qualifier's place taken
+ *  by the next lucky loser — `lucky` is the source's eligible losers in lucky-loser order (lib/lucky-loser.ts,
+ *  `luckyLoserOrder`). The lucky loser takes her RANK, so every other qualifier keeps the seed the table gave them (the
+ *  seat she would have had, RB4-V2 "takes the slot"); a table source instead closes the gap (`cutEligiblePools`,
+ *  RB4-V6). Below the cut: the rest of the table in its order, then the departed, renumbered. A departed qualifier
+ *  with nobody left to replace her keeps her place (RB4-E7: her seat resolves as a departed qualifier's does — the
+ *  proposal leaves it empty and the confirm walks the opponent over). Tie flags on a moved row go; nothing else of a
+ *  row changes. A table with no departed qualifier is returned as it was. */
+export function luckyLoserCut<P extends PoolTableRows>(
+  pools: readonly P[],
+  cut: number,
+  departed: ReadonlySet<string>,
+  lucky: readonly string[],
+): P[] {
+  const byRank = (a: StandingsRow, b: StandingsRow) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER);
+  const untied = (r: StandingsRow): StandingsRow => {
+    const row = { ...r };
+    delete row.tieBreak;
+    delete row.tieUnbroken;
+    return row;
+  };
+  return pools.map((p) => {
+    const ordered = [...p.rows].sort(byRank);
+    const top = ordered.slice(0, cut);
+    if (!top.some((r) => departed.has(r.entrantId))) return p;
+    const qualifiers = new Set(top.map((r) => r.entrantId));
+    const rowOf = new Map(p.rows.map((r) => [r.entrantId, r] as const));
+    const queue = lucky.filter((id) => !departed.has(id) && !qualifiers.has(id) && rowOf.has(id));
+    const promoted = new Set<string>();
+    const sunk: StandingsRow[] = [];
+    const head = top.map((r) => {
+      if (!departed.has(r.entrantId)) return r;
+      const id = queue.shift();
+      if (id === undefined) return r;
+      promoted.add(id);
+      sunk.push(r);
+      return { ...untied(rowOf.get(id)!), rank: r.rank };
+    });
+    const below = ordered.slice(cut).filter((r) => !promoted.has(r.entrantId));
+    const rest = [...below.filter((r) => !departed.has(r.entrantId)), ...sunk, ...below.filter((r) => departed.has(r.entrantId))].map(
+      (r, i): StandingsRow => (promoted.size === 0 ? r : { ...untied(r), rank: cut + i + 1 }),
+    );
+    return { ...p, rows: [...head, ...rest] };
   });
 }
 
@@ -188,6 +269,13 @@ export async function sourceShapeOf(
   return { poolKeys: POOL_KEYS.slice(0, count).split("") };
 }
 
+/** A stage's stored config, for the one setting a cut is judged by (`thirdPlace`). {} when the row is gone: resolveProgressionSource
+ *  has just found it, so that is a stage deleted under us, and a cut judged without the playoff is the stricter reading. */
+async function sourceConfigOf(tx: Tx, source: { id: string }): Promise<Record<string, unknown>> {
+  const [row] = await tx<{ config: Record<string, unknown> | null }[]>`select config from stages where id = ${source.id}`;
+  return row?.config ?? {};
+}
+
 /** Validate a progression rule at SAVE time (createStages/replaceStages,
  *  templates.ts's instantiateTemplate) — a bad `seeded_map` reference, an
  *  illegal snake-into-a-bracket-target combo (F3 round-3 review, Task 1,
@@ -215,10 +303,17 @@ export async function validateStageProgression(
   presetSources?: readonly ({ kind: string; config: Record<string, unknown> } | undefined)[],
 ): Promise<void> {
   const shapes: SourceShape[] = [];
+  const sourceKinds: string[] = [];
+  const thirdPlaceMatches: boolean[] = [];
   for (let i = 0; i < progression.sources.length; i++) {
     const preset = presetSources?.[i];
     const source = preset ?? (await resolveProgressionSource(tx, target, progression.sources[i]!.stage));
     shapes.push(await sourceShapeOf(tx, source));
+    sourceKinds.push(source.kind);
+    // Only a knockout source's cut is judged by bands, so only its setting is read (a preset already carries its config).
+    thirdPlaceMatches.push(
+      source.kind === "knockout" && ((preset?.config ?? (await sourceConfigOf(tx, source as { id: string }))).thirdPlace === true),
+    );
   }
   try {
     validateProgressionAgainstShapes(shapes, progression, target.kind);
@@ -226,6 +321,16 @@ export async function validateStageProgression(
     if (EngineError.is(err)) throw new HttpError(422, err.message, err.code, err.data as never);
     throw err;
   }
+  // W4 T15 (X-QM-2, RB4-Q2): a rank cut from a knockout covers whole finishing bands (isWholeRoundCut). Asked here, at save time,
+  // and nowhere at run time: a stored cut that predates the rule keeps running. Each rank rule is judged alone, against whether
+  // the SOURCE plays a third-place match (its `config.thirdPlace`), which ranks 3rd and 4th apart.
+  progression.sources.forEach((source, i) => {
+    if (sourceKinds[i] !== "knockout") return;
+    for (const rule of source.take) {
+      if (rule.kind !== "rankRange" || isWholeRoundCut(rule.from, rule.to, thirdPlaceMatches[i] === true)) continue;
+      throw knockoutRefusal("KO_CUT_NOT_WHOLE_ROUND", { from: rule.from, to: rule.to, width: rule.to - rule.from + 1 });
+    }
+  });
 }
 
 /** Standings fingerprint — changes iff any qualifying rank/entrant changes,
@@ -295,8 +400,11 @@ export async function sourceStandingsTables(tx: Tx, source: { id: string }): Pro
  *  exactly — same condition, same helper, now shared rather than forked. */
 export async function sourcesToTables(
   tx: Tx,
-  target: { division_id: string; seq: number },
+  target: { id: string; division_id: string; seq: number },
   sources: readonly ProgressionSource[],
+  /** Read a knockout's cut as its results make it, with no lucky loser in a departed qualifier's rank: who a CORRECTION moved
+   *  (`getKnockoutCutDrift`), where a withdrawal is not a correction. */
+  opts: { withoutLuckyLoser?: boolean } = {},
 ): Promise<{
   shapes: SourceShape[];
   tables: SourceTables[];
@@ -307,7 +415,9 @@ export async function sourcesToTables(
   const resolved: { id: string; kind: string; status: string }[] = [];
   for (const s of sources) {
     const source = await resolveProgressionSource(tx, target, s.stage);
-    if (source.status !== "complete") {
+    // W4 T14 (X-QM-4): a completed knockout with a decision taken back still reads `complete` (nothing reopens a stage), and
+    // its stored ranks are the ones the correction is about to change: nothing is seeded from them until it is decided again.
+    if (source.status !== "complete" || (source.kind === "knockout" && !(await bracketStageIsDecided(tx, source.id)))) {
       throw new HttpError(409, "the source stage isn't complete yet", "SEEDING_SOURCE_INCOMPLETE", {
         sourceStageId: source.id,
       });
@@ -323,15 +433,34 @@ export async function sourcesToTables(
       source.kind === "americano"
         ? await americanoPlacementTables(tx, source.id, target.division_id)
         : await sourceStandingsTables(tx, source);
-    // W3 T15 Carry A: a Swiss source's departed entrants leave its cut (the next eligible entrant backfills). The hash
-    // the proposal stores is over these tables, so a departure or a return after a draft stales it.
-    const pools = cutEligiblePools(source.kind, read, await departedEntrantIds(tx, target.division_id));
+    // W3 T15 Carry A: a Swiss source's departed entrants leave its cut (the next eligible entrant backfills) — and since
+    // W4 T13 a league's or a group's (RB4-V6). A knockout source's departed qualifier takes a lucky loser in her place
+    // (RB4-V2, `luckyLoserCut`). The hash the proposal stores is over these tables, so a departure or a return after a
+    // draft stales it.
+    const departed = await departedEntrantIds(tx, target.division_id);
+    const cut = LUCKY_LOSER_SOURCE_KINDS.has(source.kind) && opts.withoutLuckyLoser !== true ? rankCutOf(s.take) : null;
+    const pools =
+      cut === null
+        ? cutEligiblePools(source.kind, read, departed)
+        : luckyLoserCut(read, cut, departed, await luckyLoserOrderFor(tx, source.id, target.id, read, cut));
     const bracket = BRACKET_KINDS.has(source.kind) ? await loadBracketFixtures(tx, source.id) : undefined;
     // W2d T12 (spec §5.9, X-TB-7): the source's pinned cross-group order and stored draws — as tablesForCompletedStage.
     const crossGroup = REAL_TABLE_KINDS.has(source.kind) ? await loadCrossGroupRules(tx, source.id) : undefined;
     tables.push({ pools, ...(bracket ? { bracket } : {}), ...(crossGroup ? { crossGroup } : {}) });
   }
   return { shapes, tables, resolved };
+}
+
+/** The source's losers below its cut, in lucky-loser order with the destination's draw seed (RB4-V5); `luckyLoserCut`
+ *  skips the departed. */
+async function luckyLoserOrderFor(
+  tx: Tx,
+  sourceId: string,
+  destinationId: string,
+  pools: readonly PoolTableRows[],
+  cut: number,
+): Promise<string[]> {
+  return luckyLoserOrder(await luckyLoserPool(tx, sourceId, qualifiersOfCut(pools, cut)), swissDrawSeed(destinationId));
 }
 
 /** W2d T12 (spec §5.9, X-TB-7): store the cross-group draws best-Nth made, each under its source stage's pool null

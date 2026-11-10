@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 // Competition settings — moved off the overview into its own page.
 import { requireCompetitionPage } from "@/server/page-auth";
 import { routes } from "@/lib/routes";
-import { getCompetition } from "@/server/usecases/competitions";
+import { getCompetition, openStagesOf } from "@/server/usecases/competitions";
 import { listDivisions } from "@/server/usecases/divisions";
 import { CompetitionSettings } from "@/components/v2/competition-settings";
 import { ArchivedDivisions } from "@/components/v2/archived-divisions";
@@ -43,6 +43,7 @@ export default async function CompetitionSettingsPage({
     [subRow],
     explainArchivedSlots,
     planKey,
+    openStages,
   ] = await Promise.all([
       getCompetition(auth, id),
       hasFeature(auth.orgId, "discovery.branding"),
@@ -69,6 +70,8 @@ export default async function CompetitionSettingsPage({
       // rows doing the charging are the ones this page is about to list.
       archivedSlotsExplainRefusal(auth, id),
       orgPlanKey(auth.orgId),
+      // W4 T21 (X-CH-8): what the Complete-competition warning lists. Only an editor is ever shown it.
+      canEdit ? openStagesOf(auth, id) : Promise.resolve([]),
     ]);
   const viewerPlan = viewerPlanFrom(planKey);
   const archivedDivisions = allDivisions.filter((d) => d.archived_at !== null);
@@ -165,6 +168,7 @@ export default async function CompetitionSettingsPage({
           sharePath={routes.publicHub(orgSlug, competition.slug)}
           hasYouthDivisions={youthRow?.youth ?? false}
           archivedCount={archivedDivisions.length}
+          openStages={openStages}
           archivedPanel={
             /* v3/09 §4 — restore/purge surface for archived divisions. */
             <ArchivedDivisions

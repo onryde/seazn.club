@@ -18,6 +18,10 @@ import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
+import { roundRoleKey } from "@seazn/engine/competition";
+import { isByeLine } from "@/lib/bye-line";
+import { roundRoleFor } from "@/lib/round-role-label";
+import { holdsSlot } from "@/lib/rebuild-slots";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
 import { createCompetition } from "../competitions";
@@ -26,7 +30,9 @@ import { createEntrants, patchEntrant } from "../entrants";
 import { setDivisionLocks } from "../history";
 import { startDivision } from "../schedule";
 import { createStages, generateStageFixtures, rebuildStageFixtures } from "../stages";
+import { callFixtureToCourt, undoCall } from "../match-day-call";
 import { createCourt, createVenue } from "../venues";
+import { createStagesWithLegacy } from "./_legacy-standalone-stage";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -377,5 +383,276 @@ describe.skipIf(!HAS_DB)("X-RB-1 Rebuild is one transaction", () => {
     }
     expect(checked).toBe(before.length);
     expect(out.slots).toEqual({ kept: before.length, freed: 0, unscheduled: 0 });
+  });
+});
+
+// W4 Task 2 (K4, X-LE-9; owner ruling 257). A Match Day call writes a court and a time and nothing Rebuild's result guard
+// read, so a stage whose only start was a called match rebuilt — the delete cascades into `fixture_calls`
+// (V484__match_day_fixture_calls.sql), so the players standing at the court lost their match and its call. Badminton, one
+// sport: neither the guard nor the call reads a sport column.
+describe.skipIf(!HAS_DB)("X-LE-9 a called match is started", () => {
+  it("X-LE-9 Rebuild refuses a stage whose only start is a live call", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedDivision(auth, BADMINTON, 4);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "knockout", name: "Cup", config: {}, progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    const before = await rowsOf(stage!.id);
+    const r1 = before.filter((r) => r.round_no === 1);
+    expect(r1.length, "premise: two seated round-one lines").toBe(2);
+    expect(r1.every((r) => r.home_entrant_id !== null && r.away_entrant_id !== null)).toBe(true);
+    const { courts } = await twoCourts(auth);
+    const called = r1[0]!;
+    await callFixtureToCourt(auth, called.id, courts[0]);
+    const [{ n: events }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from score_events e join fixtures f on f.id = e.fixture_id where f.stage_id = ${stage!.id}`;
+    const [{ status }] = await sql<{ status: string }[]>`select status from fixtures where id = ${called.id}`;
+    expect([events, status], "premise: nothing recorded, the call wrote no status").toEqual([0, "scheduled"]);
+
+    await expect(rebuildStageFixtures(auth, stage!.id)).rejects.toMatchObject({ status: 409, code: "STAGE_HAS_RESULTS" });
+    expect((await rowsOf(stage!.id)).map((r) => r.id), "nothing deleted").toEqual(before.map((r) => r.id));
+    const calls = await sql<{ court_id: string }[]>`select court_id from fixture_calls where fixture_id = ${called.id}`;
+    expect(calls, "the call row survives").toEqual([{ court_id: courts[0] }]);
+
+    // The positive pair: Undo call, and the stage nobody has started rebuilds.
+    await undoCall(auth, called.id);
+    const out = await rebuildStageFixtures(auth, stage!.id);
+    expect(out.removed, "an uncalled stage rebuilds").toBe(before.length);
+  });
+});
+
+// W4 app-A Task 4 (gap K3; X-RB-1). A knockout's `round_no` counts from its FIRST round (stages.ts `bracketToGen`), so a
+// Rebuild that carried slots by position handed an 8-bracket's final slot to a 16-bracket's semi-final, and a line that
+// became a bye inherited a court. Rebuild now carries a knockout's slots by bracket ROLE (`bracketRoleKey`), and a bye
+// line (`isByeLine`) neither gives nor takes a slot. Roles are read off what the engine stored — `is_final`, and the
+// semi-finals are the round before it — and the expected slots are the ones each test writes, never values read back
+// from `carrySlots`. single-sport: badminton (the brief's rig); the carry reads no sport field.
+interface FullRow extends Row {
+  is_final: boolean;
+  status: string;
+  outcome: unknown;
+  home_slot_label: unknown;
+  away_slot_label: unknown;
+}
+
+const fullRowsOf = (stageId: string) =>
+  sql<FullRow[]>`
+    select id, pool_id, round_no, seq_in_round, ext_key, home_entrant_id, away_entrant_id, scheduled_at, court_id,
+           venue_id, schedule_locked, is_final, status, outcome, home_slot_label, away_slot_label
+    from fixtures where stage_id = ${stageId}
+    order by pool_id nulls first, round_no, seq_in_round`;
+
+const NO_SLOT = { scheduled_at: null, court_id: null, venue_id: null, schedule_locked: false };
+const bySlotTime = (a: ReturnType<typeof slotOf>, b: ReturnType<typeof slotOf>) =>
+  String(a.scheduled_at).localeCompare(String(b.scheduled_at));
+
+/** A badminton knockout of `n`, generated and laid out (a distinct time and court on every line). */
+async function laidOutKnockout(n: number, kind: "knockout" | "double_elim" = "knockout") {
+  const { auth } = await seedOrg();
+  const { divisionId, entrants } = await seedDivision(auth, BADMINTON, n);
+  const [stage] = await createStages(auth, divisionId, { seq: 1, kind, name: "Cup", config: {}, progression: null });
+  await generateStageFixtures(auth, stage!.id);
+  const before = await fullRowsOf(stage!.id);
+  const { venueId, courts } = await twoCourts(auth);
+  const written = await layOut(before, venueId, courts);
+  return { auth, divisionId, entrants, stageId: stage!.id, before, written };
+}
+
+describe.skipIf(!HAS_DB)("X-RB-1 knockout Rebuild carries by bracket role (W4 T4, K3)", () => {
+  it("X-RB-1 knockout 8→9 Rebuild: the final keeps the final's slot", async () => {
+    const rig = await laidOutKnockout(8);
+    const oldFinal = rig.before.find((r) => r.is_final)!;
+    expect([rig.before.length, oldFinal.round_no], "rig: a bracket of 8 — seven lines, the final in round 3").toEqual([7, 3]);
+    const slotsOfRound = (rows: FullRow[], round: number, written: Map<string, ReturnType<typeof slotOf>>) =>
+      rows.filter((r) => r.round_no === round).map((r) => written.get(position(r))!).sort(bySlotTime);
+
+    await createEntrants(rig.auth, rig.divisionId, [{ kind: "individual", display_name: "E9", seed: 9, members: [] }]);
+    const out = await rebuildStageFixtures(rig.auth, rig.stageId);
+
+    const after = await fullRowsOf(rig.stageId);
+    const newFinal = after.find((r) => r.is_final)!;
+    expect([after.length, newFinal.round_no], "premise: a bracket of 16 — the final moved to round 4").toEqual([15, 4]);
+    expect(slotOf(newFinal), "the new final holds the old final's slot").toEqual(rig.written.get(position(oldFinal)));
+    expect(
+      after.filter((r) => r.round_no === newFinal.round_no - 1).map(slotOf).sort(bySlotTime),
+      "each semi-final holds a semi-final's slot",
+    ).toEqual(slotsOfRound(rig.before, oldFinal.round_no - 1, rig.written));
+    expect(
+      after.filter((r) => r.round_no === newFinal.round_no - 2).map(slotOf).sort(bySlotTime),
+      "each quarter-final holds a quarter-final's slot",
+    ).toEqual(slotsOfRound(rig.before, oldFinal.round_no - 2, rig.written));
+    const roundOne = after.filter((r) => r.round_no === 1);
+    expect(roundOne.length, "anti-vacuity: the new first round").toBe(8);
+    for (const r of roundOne) expect(slotOf(r), `new round-one line ${r.seq_in_round} is unscheduled`).toEqual(NO_SLOT);
+    const byes = roundOne.filter((r) => isByeLine(r));
+    expect(byes.length, "premise: seven of the new first round are byes").toBe(7);
+    expect(out.slots, "kept seven, freed none, the one real new line unscheduled").toEqual({ kept: 7, freed: 0, unscheduled: 1 });
+  });
+
+  it("X-RB-1 knockout 8→6 Rebuild: a line that becomes a bye frees its slot", async () => {
+    const rig = await laidOutKnockout(8);
+    const oldFinal = rig.before.find((r) => r.is_final)!;
+    await patchEntrant(rig.auth, rig.entrants[6]!, { status: "withdrawn" });
+    await patchEntrant(rig.auth, rig.entrants[7]!, { status: "withdrawn" });
+
+    const out = await rebuildStageFixtures(rig.auth, rig.stageId);
+
+    const after = await fullRowsOf(rig.stageId);
+    const byes = after.filter((r) => isByeLine(r));
+    expect([after.length, byes.length], "premise: six in a bracket of 8 — two quarter-finals are byes").toEqual([7, 2]);
+    let checked = 0;
+    for (const b of byes) {
+      expect(holdsSlot(b), `bye line ${b.seq_in_round} holds no slot`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(slotOf(after.find((r) => r.is_final)!), "positive pair: the final keeps its slot").toEqual(rig.written.get(position(oldFinal)));
+    const real = after.filter((r) => !isByeLine(r));
+    for (const r of real) expect(holdsSlot(r), `real line ${position(r)} keeps a slot`).toBe(true);
+    expect(out.slots, "the two bye lines' slots are reported freed").toEqual({ kept: 5, freed: 2, unscheduled: 0 });
+  });
+
+  it("X-RB-1 knockout 6→8 Rebuild: a bye that becomes a real line has nothing to inherit, and is counted unscheduled", async () => {
+    // The other direction. A bye line holds no slot (X-SD-5), so the two quarter-finals that were byes for six are new
+    // matches for eight with nothing laid out on them: the answer must say so (the organiser places them), not count them
+    // carried. Only the real lines are laid out — a bye cannot be placed.
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedDivision(auth, BADMINTON, 6);
+    const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "knockout", name: "Cup", config: {}, progression: null });
+    await generateStageFixtures(auth, stage!.id);
+    const before = await fullRowsOf(stage!.id);
+    const oldByes = before.filter((r) => isByeLine(r));
+    expect([before.length, oldByes.length], "premise: six in a bracket of 8 — two quarter-finals are byes").toEqual([7, 2]);
+    const { venueId, courts } = await twoCourts(auth);
+    const written = await layOut(before.filter((r) => !isByeLine(r)), venueId, courts);
+    await createEntrants(auth, divisionId, [7, 8].map((n) => ({ kind: "individual" as const, display_name: `E${n}`, seed: n, members: [] })));
+
+    const out = await rebuildStageFixtures(auth, stage!.id);
+
+    const after = await fullRowsOf(stage!.id);
+    expect([after.length, after.filter((r) => isByeLine(r)).length], "premise: eight — no byes").toEqual([7, 0]);
+    let checked = 0;
+    for (const r of after) {
+      expect(slotOf(r), position(r)).toEqual(written.get(position(r)) ?? NO_SLOT);
+      checked++;
+    }
+    expect(checked).toBe(7);
+    expect(out.slots, "five kept, none freed, the two former byes unscheduled").toEqual({ kept: 5, freed: 0, unscheduled: 2 });
+  });
+
+  it("X-RB-1 a double-elimination Rebuild still carries by position (knockout, stepladder and page playoff read roles; double elimination does not)", async () => {
+    // 4 → 5 changes the lanes' depth, so position and role disagree here: a role carry would move every lower-bracket
+    // and grand-final slot. Expected = the rule as it stood (position), with a bye line holding nothing (X-SD-5).
+    // KNOWN DEFECT PINNED (B1a review #6, parked): this freezes today's position carry for double elimination, which is
+    // K3's own defect — the new grand final does NOT inherit the old grand final's slot. It flips when double
+    // elimination gets role keys; until then a red here means the carry changed, not that it was fixed or broke.
+    const rig = await laidOutKnockout(4, "double_elim");
+    await createEntrants(rig.auth, rig.divisionId, [{ kind: "individual", display_name: "E5", seed: 5, members: [] }]);
+
+    const out = await rebuildStageFixtures(rig.auth, rig.stageId);
+
+    const after = await fullRowsOf(rig.stageId);
+    let checked = 0;
+    let carried = 0;
+    let unscheduled = 0;
+    for (const r of after) {
+      const want = isByeLine(r) ? undefined : rig.written.get(position(r));
+      expect(slotOf(r), `${position(r)} ${r.ext_key}`).toEqual(want ?? NO_SLOT);
+      if (want) carried++;
+      else if (!isByeLine(r)) unscheduled++;
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every rebuilt line checked").toBe(after.length);
+    expect(carried, "premise: some positions survive").toBeGreaterThan(0);
+    expect(out.slots).toEqual({ kept: carried, freed: rig.before.length - carried, unscheduled });
+    // Position and role really disagree on this rig, or the case could not tell them apart.
+    const oldGf = rig.before.filter((r) => r.is_final).map(position);
+    const newGf = after.filter((r) => r.is_final).map(position);
+    expect(newGf, "premise: the grand final moved position").not.toEqual(oldGf);
+  });
+});
+
+// T26c item B (controller ruling 2026-11-09, re-review): a stepladder and a page playoff carry by bracket ROLE too. A
+// stepladder's `round_no` counts from its bottom rung (the engine's `generateStepladder`: game j in round j + 1), so a
+// 4 -> 5 Rebuild that carried by position handed the final's time and court to a rung. Expected values come from the
+// engine, never from `carrySlots`: each line's role is the engine's own name for it (`roundRole`, through
+// `roundRoleFor`, the namer every surface reads), and a stepladder game's home seat is the seed waiting on it
+// (`generateStepladder`), so "the game seed 2 waits on" is the same game at 4 and at 5. Both are legacy standalone
+// stages, the only kind of root stepladder or page playoff a Rebuild reaches since X-SP-6. single-sport: badminton (the
+// K3 rig above); the carry reads no sport field.
+/** The engine's role key for each line of a stage, by fixture id. */
+async function engineRolesOf(stageId: string, kind: string): Promise<Map<string, string>> {
+  const rows = await sql<
+    { id: string; round_no: number; lane: "WB" | "LB" | "GF" | null; is_final: boolean; third_place: boolean; conditional: boolean; ext_key: string | null }[]
+  >`select id, round_no, lane, is_final, third_place, conditional, ext_key from fixtures where stage_id = ${stageId}`;
+  return new Map(rows.map((r) => [r.id, roundRoleKey(roundRoleFor(rows, r, kind, r.ext_key))]));
+}
+
+/** A legacy root stepladder or page playoff of `n`, generated and laid out (a distinct time and court on every line). */
+async function laidOutLegacy(kind: "stepladder" | "page_playoff", n: number) {
+  const { auth } = await seedOrg();
+  const { divisionId, entrants } = await seedDivision(auth, BADMINTON, n);
+  const [stage] = await createStagesWithLegacy(auth, divisionId, { seq: 1, kind, name: "Playoff", config: {}, progression: null });
+  await generateStageFixtures(auth, stage!.id);
+  const before = await fullRowsOf(stage!.id);
+  const { venueId, courts } = await twoCourts(auth);
+  const written = await layOut(before, venueId, courts);
+  return { auth, divisionId, entrants, stageId: stage!.id, before, written, roles: await engineRolesOf(stage!.id, kind) };
+}
+
+describe.skipIf(!HAS_DB)("X-RB-1 stepladder and page playoff Rebuild carry by bracket role (T26c)", () => {
+  it("X-RB-1 stepladder 4→5 Rebuild: the final keeps the final's slot, each waiting seed's game keeps its slot, the new bottom rung is unscheduled", async () => {
+    const rig = await laidOutLegacy("stepladder", 4);
+    const oldFinal = rig.before.filter((r) => rig.roles.get(r.id) === "final");
+    expect([rig.before.length, oldFinal.length], "rig: four climb in three games, one of them the final").toEqual([3, 1]);
+    await createEntrants(rig.auth, rig.divisionId, [{ kind: "individual", display_name: "E5", seed: 5, members: [] }]);
+
+    const out = await rebuildStageFixtures(rig.auth, rig.stageId);
+
+    const after = await fullRowsOf(rig.stageId);
+    const roles = await engineRolesOf(rig.stageId, "stepladder");
+    const newFinal = after.filter((r) => roles.get(r.id) === "final");
+    expect([after.length, newFinal.length], "premise: five climb in four games, one of them the final").toEqual([4, 1]);
+    // Position and role really disagree on this rig, or the case could not tell them apart.
+    const atOldFinalsPlace = after.find((r) => position(r) === position(oldFinal[0]!))!;
+    expect(roles.get(atOldFinalsPlace.id), "premise: the old final's place holds a rung after the Rebuild").toMatch(/^rung_\d+$/);
+    expect(slotOf(newFinal[0]!), "the new final holds the old final's slot").toEqual(rig.written.get(position(oldFinal[0]!)));
+
+    let checked = 0;
+    for (const r of after) {
+      expect(r.home_entrant_id, `premise: ${roles.get(r.id)} seats its waiting seed`).not.toBeNull();
+      const was = rig.before.find((b) => b.home_entrant_id === r.home_entrant_id);
+      expect(slotOf(r), `${roles.get(r.id)}: the slot of the game its seed waited on`).toEqual(was ? rig.written.get(position(was)) : NO_SLOT);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every rebuilt game").toBe(4);
+    const fresh = after.filter((r) => !rig.before.some((b) => b.home_entrant_id === r.home_entrant_id));
+    expect(fresh.map((r) => roles.get(r.id)), "the one game nobody waited on before is the new bottom rung").toEqual(["rung_1"]);
+    expect(out.slots, "kept three, freed none, the new bottom rung unscheduled").toEqual({ kept: 3, freed: 0, unscheduled: 1 });
+  });
+
+  it("X-RB-1 page playoff Rebuild after a roster swap: Q1, the Eliminator, Q2 and the final each keep their slot", async () => {
+    // A page playoff is always four (the engine refuses any other count), so its lines never change place and role and
+    // position agree here: this pins the role carry for the kind; the stepladder case above is the differential.
+    const rig = await laidOutLegacy("page_playoff", 4);
+    expect([...rig.roles.values()].sort(), "rig: the four roles").toEqual(["eliminator", "final", "qualifier1", "qualifier2"]);
+    const slotByRole = new Map(rig.before.map((r) => [rig.roles.get(r.id)!, rig.written.get(position(r))!]));
+    const gone = rig.entrants[3]!;
+    await patchEntrant(rig.auth, gone, { status: "withdrawn" });
+    await createEntrants(rig.auth, rig.divisionId, [{ kind: "individual", display_name: "E5", seed: 5, members: [] }]);
+
+    const out = await rebuildStageFixtures(rig.auth, rig.stageId);
+
+    const after = await fullRowsOf(rig.stageId);
+    const roles = await engineRolesOf(rig.stageId, "page_playoff");
+    expect(after.some((r) => r.home_entrant_id === gone || r.away_entrant_id === gone), "premise: the withdrawn seed is out of the new draw").toBe(false);
+    let checked = 0;
+    for (const r of after) {
+      expect(slotOf(r), roles.get(r.id)).toEqual(slotByRole.get(roles.get(r.id)!));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every rebuilt line").toBe(4);
+    expect(out.slots).toEqual({ kept: 4, freed: 0, unscheduled: 0 });
   });
 });

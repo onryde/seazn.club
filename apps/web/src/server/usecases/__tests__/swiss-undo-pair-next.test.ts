@@ -33,7 +33,8 @@ import { canonicalJson } from "@/lib/canonical-json";
 import { SWISS_REFUSALS, type SwissRefusalCode } from "@/lib/swiss-refusals";
 import { builtinModules } from "@seazn/engine/sports";
 import type { AnySportModule } from "@seazn/engine/sport";
-import type { LedgerEvent } from "@seazn/engine/history";
+import { undo as engineUndo, type LedgerEvent } from "@seazn/engine/history";
+import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEventInTx } from "@/server/engine-db/append-event";
 import { resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
@@ -43,6 +44,7 @@ import { createDivision } from "../divisions";
 import { createEntrants, deleteEntrant } from "../entrants";
 import {
   UNDO_BARRIER_TYPES,
+  barrierOfRefusedStep,
   createCheckpoint,
   invertedStepSeq,
   redoDivision,
@@ -71,10 +73,14 @@ afterAll(async () => {
   await client?.end();
 });
 
-/** The plan's interface table (Task 5 "Produces"), typed here as the oracle — never read back from history.ts. */
+/** The plan's interface table (Task 5 "Produces"), typed here as the oracle — never read back from history.ts. W4 app-A
+ *  Task 5 (K1) adds the seed confirm's barrier, a knockout code (its own driving tests: seed-confirm-undo.test.ts), and
+ *  Task 10 (X-LE-13) the knockout late entry's (knockout-late-entry.test.ts). */
 const PLAN_BARRIERS = {
   swiss_late_entry: "SWISS_LATE_ENTRY_NOT_UNDOABLE",
   swiss_rounds_changed: "SWISS_ROUNDS_CHANGE_NOT_UNDOABLE",
+  seed_confirmed: "SEED_CONFIRM_NOT_UNDOABLE",
+  knockout_late_entry: "KO_LATE_ENTRY_NOT_UNDOABLE",
 } as const;
 
 /** The refusal a test expects, with the status the refusal table declares for it. */
@@ -152,6 +158,69 @@ describe("invertedStepSeq — the ledger row an Undo or Redo steps over", () => 
     expect(() => invertedStepSeq("undo", {})).toThrow(/history step names no ledger row/);
     expect(() => invertedStepSeq("redo", { __undo_of: 3 })).toThrow(/history step names no ledger row/);
     expect(() => invertedStepSeq("undo", { __undo_of: "3" })).toThrow(/history step names no ledger row/);
+  });
+});
+
+// W4 T12 follow-up (review item 3): the probe behind "a step the engine refused for a result still answers by name when it
+// crosses a barrier" must swallow ONLY the engine's own "no step to take" (HistoryError) and let anything else out — an
+// invertedStepSeq contract guard (HttpError 500) or a malformed ledger payload. A bare catch turned both into "no barrier",
+// the very absence-skips-the-check that invertedStepSeq's own guard exists to forbid. The probe runs the REAL engine.
+describe("barrierOfRefusedStep — the barrier a results-refused Undo or Redo would have crossed (no DB)", () => {
+  const ev = (seq: number, type: string, payload: Record<string, unknown> = {}): LedgerEvent => ({ seq, type, payload });
+  const gen = (seq: number) => ev(seq, "fixtures_generated", { stage_id: "s", fixture_ids: [] });
+  /** A ledger row of each barrier type (the plan's table), written after a generation: the step over `gen(1)` crosses it. */
+  const barrierRow = (type: keyof typeof PLAN_BARRIERS) =>
+    ev(2, type, type === "swiss_late_entry" ? { stage_id: "s", entrant_id: "e", case: "c", round: 2, source: "organiser" } : { stage_id: "s" });
+  const thrown = (fn: () => unknown): unknown => {
+    try {
+      fn();
+    } catch (e) {
+      return e;
+    }
+    return undefined;
+  };
+
+  it("names the barrier the step would cross — every barrier type, Undo and Redo", () => {
+    let checked = 0;
+    for (const type of Object.keys(PLAN_BARRIERS) as (keyof typeof PLAN_BARRIERS)[]) {
+      const ledger = [gen(1), barrierRow(type)];
+      // Undo walks back from the head over gen(1); Redo, parked before it (watermark 0), walks forward over it.
+      expect(barrierOfRefusedStep("undo", ledger, null), `undo, ${type}`).toBe(PLAN_BARRIERS[type]);
+      expect(barrierOfRefusedStep("redo", ledger, 0), `redo, ${type}`).toBe(PLAN_BARRIERS[type]);
+      checked += 2;
+    }
+    expect(checked, "anti-vacuity: four barrier types × two directions").toBe(Object.keys(PLAN_BARRIERS).length * 2);
+    expect(checked).toBe(8);
+  });
+
+  it("answers null — the caller then gives the engine's own refusal — when the engine has no step, or the step crosses nothing", () => {
+    // HistoryError NOTHING_TO_UNDO / NOTHING_TO_REDO: the legitimate swallow. Empty ledger, a ledger with only a barrier
+    // row (nothing reversible to step over), and a watermark parked before the only edit (nothing to undo).
+    expect(barrierOfRefusedStep("undo", [], null), "empty ledger, undo").toBeNull();
+    expect(barrierOfRefusedStep("redo", [], null), "empty ledger, redo").toBeNull();
+    expect(barrierOfRefusedStep("undo", [barrierRow("knockout_late_entry")], null), "a barrier row and nothing to step over").toBeNull();
+    expect(barrierOfRefusedStep("undo", [gen(1)], 0), "parked before the only edit: nothing to undo").toBeNull();
+    // A real step that crosses no barrier is null too — the positive pair of the case above.
+    expect(barrierOfRefusedStep("undo", [gen(1)], null), "a step over a bare generation crosses nothing").toBeNull();
+    expect(barrierOfRefusedStep("redo", [gen(1)], 0), "a redo over a bare generation crosses nothing").toBeNull();
+  });
+
+  it("lets everything else out: a contract guard (HttpError 500) and a malformed payload are defects, never 'no barrier'", () => {
+    // A ledger row whose seq is not a number: the real engine still returns a step, stamped `__undo_of: "1"`, which is
+    // the broken contract invertedStepSeq refuses by name. (The engine stamps a real ledger's number; this is the only
+    // way to reach the guard through the real engine, and loadLedger's Number() makes it a corrupt-ledger case.)
+    const corrupt = [{ seq: "1" as unknown as number, type: "fixtures_generated", payload: { stage_id: "s", fixture_ids: [] } }];
+    const stamped = engineUndo(corrupt, null, new Set());
+    expect(stamped.event.payload.__undo_of, "premise: the engine returned a step stamped with a non-number").toBe("1");
+    const contract = thrown(() => barrierOfRefusedStep("undo", corrupt, null));
+    expect(contract, "invertedStepSeq's HttpError 500 reaches the caller").toBeInstanceOf(HttpError);
+    expect(contract).toMatchObject({ status: 500, message: expect.stringMatching(/history step names no ledger row \(__undo_of\)/) });
+
+    // A reversible row whose payload the engine cannot read: its own TypeError, not a HistoryError.
+    const garbage = [ev(1, "schedule_applied", { moves: 5 })];
+    expect(thrown(() => engineUndo(garbage, null, new Set())), "premise: the engine itself throws on this ledger").toBeInstanceOf(TypeError);
+    expect(thrown(() => barrierOfRefusedStep("undo", garbage, null)), "the engine's TypeError reaches the caller").toBeInstanceOf(TypeError);
+    expect(thrown(() => barrierOfRefusedStep("redo", garbage, 0)), "and on the Redo side").toBeInstanceOf(TypeError);
   });
 });
 

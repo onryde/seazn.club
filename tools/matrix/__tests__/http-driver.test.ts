@@ -1109,3 +1109,38 @@ describe("HttpDriver — divisionPhase (W1d Task 14, item 15c)", () => {
     await expect(drv(none.t).divisionPhase("c1", "d1")).rejects.toThrow(/phase/);
   });
 });
+
+// W4 app PR A Task 24: the two organiser acts the late-entry scripts (w4a-late-entry.ts) drive beyond the add - a Reinstate (an AUTOMATIC arrival,
+// PATCH /entrants/{id} {status:"confirmed"}) and the organiser's tap that places a waiting one (POST /stages/{id}/late-entrants/{entrantId}/place) -
+// and the `late_entry` the add itself answers, which the driver must hand on as served.
+describe("HttpDriver — the late-entry acts (W4 app PR A, Task 24)", () => {
+  const waiting = { format: "knockout", case: "waiting", entrant_id: "e3", stage_id: "s1" };
+  it("reinstate PATCHes status confirmed on the entrant and returns the late_entry the product served (null when it served none)", async () => {
+    const withEntry = fake([(c) => (c.method === "PATCH" && c.path === "/api/v1/entrants/e3" ? ok({ id: "e3", status: "confirmed", late_entry: waiting }) : undefined)]);
+    expect(await drv(withEntry.t).reinstate("e3")).toEqual({ entrant_id: "e3", status: "confirmed", late_entry: waiting });
+    expect(withEntry.calls).toHaveLength(1);
+    expect(withEntry.calls[0]).toMatchObject({ method: "PATCH", path: "/api/v1/entrants/e3", body: { status: "confirmed" } });
+    const without = fake([(c) => (c.method === "PATCH" ? ok({ id: "e3", status: "confirmed" }) : undefined)]);
+    expect(await drv(without.t).reinstate("e3")).toEqual({ entrant_id: "e3", status: "confirmed", late_entry: null });
+  });
+  it("placeLateEntrant POSTs the stage's place route for that entrant and returns the product's outcome as served", async () => {
+    const placed = { format: "knockout", case: "withdrawn_slot", entrant_id: "e3", stage_id: "s1", fixture_id: "f3", opponent_id: "e6", withdrawn_id: "e3" };
+    const { t, calls } = fake([(c) => (c.method === "POST" && c.path === "/api/v1/stages/s1/late-entrants/e3/place" ? ok(placed) : undefined)]);
+    expect(await drv(t).placeLateEntrant("s1", "e3")).toEqual(placed);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ method: "POST", path: "/api/v1/stages/s1/late-entrants/e3/place", body: {} });
+  });
+  it("a refusal on the tap is the product's, named: RefusedCall with its status and code", async () => {
+    const { t } = fake([() => err(409, "KO_LATE_ENTRY_NO_SLOT")]);
+    const refused = await drv(t).placeLateEntrant("s1", "e3").catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(RefusedCall);
+    expect(refused).toMatchObject({ status: 409, code: "KO_LATE_ENTRY_NO_SLOT" });
+  });
+  it("addEntrants hands the add's late_entry on untouched, beside the row", async () => {
+    const answer = { id: "e7", display_name: "Matrix Player 7", seed: 7, status: "confirmed", kind: "individual", late_entry: { format: "knockout", case: "bye", entrant_id: "e7", stage_id: "s1", fixture_id: "f4", opponent_id: "e2" } };
+    const { t } = fake([(c) => (c.method === "POST" && c.path === "/api/v1/divisions/d1/entrants" ? ok(answer, 201) : undefined)]);
+    const rows = await drv(t).addEntrants("d1", [{ displayName: "Matrix Player 7", seed: 7, kind: "individual" }]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.late_entry).toEqual(answer.late_entry);
+  });
+});

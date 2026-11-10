@@ -16,8 +16,8 @@ import { errorOf, is2xx, unwrapEnvelope } from "./envelope.ts";
 import {
   DESK_PHASES, DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VOID_EVENT, VisibilityDegraded, idempotencyKey, inSquadOrder, requireVoidTarget, retryKey,
   type AmericanoViewOut, type ChallengeOut, type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
-  type FinishSwissOut, type FixtureStateOut, type FromTemplateAnswer, type FromTemplateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
-  type PublicStandingsOut, type ScheduledOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type VoidedOut, type WithdrawOut,
+  type FinishSwissOut, type FixtureStateOut, type FromTemplateAnswer, type FromTemplateOut, type GenerateOut, type LateEntryWire, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  type PublicStandingsOut, type ReinstateOut, type ScheduledOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type VoidedOut, type WithdrawOut,
 } from "./types.ts";
 
 export interface Transport {
@@ -307,6 +307,17 @@ export class HttpDriver implements OrganiserDriver {
     const path = `/api/v1/fixtures/${fixtureId}/events`;
     await this.#call<PostedEvent>(path, "POST", { expected_seq: tip, type: VOID_EVENT, payload: { event_id: target.id }, idempotency_key: idempotencyKey(`void:${fixtureId}`, tip) });
     return { voidedEventId: target.id, voidedType: target.type };
+  }
+
+  /** W4 app PR A Task 24 (R10): an AUTOMATIC arrival - the organiser's Reinstate of a withdrawn entrant (PATCH status "confirmed"). The product
+   *  answers the entrant and, in a started knockout, the `late_entry` outcome (usecases/knockout-late-entry.ts) - null when it answers none. */
+  async reinstate(entrantId: string): Promise<ReinstateOut> {
+    const out = await this.#call<{ id: string; status: string; late_entry?: LateEntryWire }>(`/api/v1/entrants/${entrantId}`, "PATCH", { status: "confirmed" });
+    return { entrant_id: out.id, status: out.status, late_entry: out.late_entry ?? null };
+  }
+
+  async placeLateEntrant(stageId: string, entrantId: string): Promise<LateEntryWire> {
+    return this.#call<LateEntryWire>(`/api/v1/stages/${stageId}/late-entrants/${entrantId}/place`, "POST", {});
   }
 
   /** W1d Task 14 (item 15c): dates the fixture at this instant — which is today in every venue time zone, so the

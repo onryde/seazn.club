@@ -256,7 +256,7 @@ describe("the seam, end to end: the runner's own shard files, folded through the
     expect(merged.cases.every((c) => c.l2 !== undefined)).toBe(true);
   });
 
-  it("--layer L1 --scope grid (the 229 offered cells: 231 less chess americano/mexicano, refused; another scope and another layer): four shards merge equal per case to the unsharded run, the five uneven stripes sized by the rulebook", async () => {
+  it("--layer L1 --scope grid (the 207 offered cells: 231 less chess americano/mexicano and the 22 standalone stepladder/page playoff cells, refused; another scope and another layer): four shards merge equal per case to the unsharded run, the five uneven stripes sized by the rulebook", async () => {
     capture();
     const dir = dirFor();
     const live = (): RunDeps => {
@@ -266,10 +266,11 @@ describe("the seam, end to end: the runner's own shard files, folded through the
     const args = ["--driver", "browser", "--layer", "L1", "--scope", "grid"];
     expect(await runSlice(live(), [...args, "--run-id", "g1whole", "--report-dir", dir])).toBe(0);
     const whole = runIn(dir, "g1whole");
-    expect(whole.cases).toHaveLength(229);
+    expect(whole.cases).toHaveLength(207);
     const { inputs, runs } = await runShards((k) => [...args, "--shard", `${k}/4`], 4, live, "g1");
-    // 229 = 4 x 57 + 1: shard 1 holds 58 and shards 2..4 hold 57 — written by hand from the plan size, not from stripeSize.
-    expect(runs.map((r) => r.cases.length)).toEqual([58, 57, 57, 57]);
+    // 207 = 4 x 51 + 3 (W4 T16 refused 22 of the 229, ruling 269): shards 1..3 hold 52 and shard 4 holds 51 — written by
+    // hand from the plan size, not from stripeSize.
+    expect(runs.map((r) => r.cases.length)).toEqual([52, 52, 52, 51]);
     const { merged } = mergeShards(inputs, "g1-merged");
     expect(merged.scope).toBe("L1 (grid)");
     expect(merged.shards).toBe(4);

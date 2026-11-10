@@ -3,12 +3,12 @@ import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
-import { statusLine, whenLabel, type StatusLineInput } from "@/lib/division-status-line";
+import { finalDecidedStageName, statusLine, whenLabel, type StatusLineInput } from "@/lib/division-status-line";
 
 const base: StatusLineInput = {
   phase: "scheduled", played: 10, total: 15, unscheduled: 0, inPlay: 0, entrants: 6,
   next: { scheduledAt: "2026-09-12T09:00:00Z", home: "Lakeside FC", away: "Harbour CC" },
-  needsDrawStageName: null, locale: "en", displayTz: "Europe/London",
+  needsDrawStageName: null, finalDecidedStageName: null, locale: "en", displayTz: "Europe/London",
   // G1 fix: `now` fixed well before `next.scheduledAt` above, so the
   // existing "scheduled leads with the next kick-off" cases below keep
   // reading as future without each one having to restate it.
@@ -46,6 +46,46 @@ describe("statusLine", () => {
   it("the unscheduled suffix still rides on the needs-draw sentence", () => {
     expect(statusLine(en, { ...base, phase: "scheduled", played: 6, total: 9, unscheduled: 3, needsDrawStageName: "Finals", next: null }))
       .toBe("6 of 9 played · Finals not drawn · 3 unscheduled");
+  });
+  // W4 T21 review M2: a played-out bracket whose stage was never completed read "3 of 3 played · complete" beside its
+  // red "Final decided" pill — the desk's three-fact contradiction. Like a pending draw, it names the stage instead.
+  describe("final decided, stage not completed (W4 T21 M2)", () => {
+    it("empty case first: no decided final leaves the finished sentence", () => {
+      expect(statusLine(en, { ...base, phase: "finished", played: 3, total: 3, next: null })).toBe("3 of 3 played · complete");
+    });
+    it("a finished division names the stage still to complete, never 'complete'", () => {
+      const s = statusLine(en, { ...base, phase: "finished", played: 3, total: 3, finalDecidedStageName: "Knockout", next: null });
+      expect(s).toBe("3 of 3 played · Knockout not completed");
+      expect(s).not.toContain("· complete");
+    });
+    it("it names the stage in every phase a live match does not own", () => {
+      for (const phase of ["finished", "scheduled", "match_day"] as const) {
+        expect(statusLine(en, { ...base, phase, played: 3, total: 5, finalDecidedStageName: "Knockout", next: null }), phase)
+          .toBe("3 of 5 played · Knockout not completed");
+      }
+    });
+    it("a LIVE match outranks it, and a pending draw (earlier in KIND_ORDER) outranks it", () => {
+      expect(statusLine(en, { ...base, phase: "match_day", played: 3, total: 5, inPlay: 1, finalDecidedStageName: "Knockout", next: null }))
+        .toBe("3 of 5 played · 1 in play");
+      expect(statusLine(en, { ...base, phase: "scheduled", played: 3, total: 5, needsDrawStageName: "Plate", finalDecidedStageName: "Knockout", next: null }))
+        .toBe("3 of 5 played · Plate not drawn");
+    });
+    it("every locale words it with the stage name (no key leaks)", () => {
+      let checked = 0;
+      for (const dict of [en, es, fr, nl]) {
+        const s = statusLine(dict, { ...base, phase: "finished", played: 3, total: 3, finalDecidedStageName: "Knockout", next: null });
+        expect(s).toContain("Knockout");
+        expect(s).not.toContain("desk.status");
+        expect(s).not.toBe(statusLine(dict, { ...base, phase: "finished", played: 3, total: 3, next: null }));
+        checked++;
+      }
+      expect(checked).toBe(4);
+    });
+    it("finalDecidedStageName reads the division's own final_decided attention, and nothing else", () => {
+      expect(finalDecidedStageName([])).toBeNull();
+      expect(finalDecidedStageName([{ kind: "needs_fixtures", stageName: "Plate" }])).toBeNull();
+      expect(finalDecidedStageName([{ kind: "needs_fixtures", stageName: "Plate" }, { kind: "final_decided", stageName: "Knockout" }])).toBe("Knockout");
+    });
   });
   it("setting up without a draw counts entrants", () => {
     expect(statusLine(en, { ...base, phase: "setting_up", played: 0, total: 0, next: null })).toBe("Setting up · 6 entrants");

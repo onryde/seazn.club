@@ -22,6 +22,11 @@
 // advances, nobody is promoted — so the vacated side is stamped as a bye and
 // `awardSeededByes` settles it.
 //
+// W4 T13 (RB4-V6, X-LL-5) narrows both to a SHORTFALL: a group's next-ranked entrant now takes a departed qualifier's
+// place (as W3 ruled for Swiss), so a seat vacates only when nobody below the cut is left in her pool. F1 and F2 build
+// that shortfall through the real cascade (`departIntoShortfall`); M8's premise — a seat gone while her tied rivals stay —
+// is no longer reachable from a group source, and its case below now pins what RB4-V6 does instead.
+//
 // Every expectation here is read through the predicates the SCREENS use
 // (`isBye`) or off the persisted row, never off the code that wrote it.
 import { afterAll, describe, expect, it } from "vitest";
@@ -42,6 +47,7 @@ import {
 } from "../stages";
 import { withdrawRegistrationPublic } from "../registrations";
 import { withdrawEntrantCascade } from "../withdrawal";
+import { departIntoShortfall } from "./_table-shortfall";
 import { seedRegistration } from "./_registration-fixtures";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
@@ -132,7 +138,7 @@ describe.skipIf(!HAS_DB)("confirming a draw with a seat nobody will take", () =>
     const full = await computeSeedProposal(auth, koStageId);
     expect(full.computed.qualifiers, "the control: a full slate has two qualifiers").toHaveLength(2);
 
-    for (const q of full.computed.qualifiers) await withdrawEntrantCascade(auth, q.entrantId);
+    for (const q of full.computed.qualifiers) await departIntoShortfall(auth, koStageId, q.entrantId);
 
     // The status flips recomputed the draft; it is now empty. That is the
     // state the organiser's screen was showing a lone Confirm button over.
@@ -179,7 +185,7 @@ describe.skipIf(!HAS_DB)("confirming a draw with a seat nobody will take", () =>
     expect(control.outcome).toBeNull();
     expect(isBye(control as unknown as RunSheetFixture)).toBe(false);
 
-    await withdrawEntrantCascade(auth, departing);
+    await departIntoShortfall(auth, koStageId, departing);
     const short = await getSeedProposal(auth, koStageId);
     expect(short!.computed.qualifiers).toHaveLength(1);
     await confirmSeedProposal(auth, koStageId, { proposalId: short!.id });
@@ -416,15 +422,12 @@ describe.skipIf(!HAS_DB)("a tie whose seat nobody is left to take", () => {
     return { auth, koStageId };
   }
 
-  it("M8: drops the tie whose slots all vacated, and KEEPS the one that did not", async () => {
-    // Mutant M8 (reviewer): dropping `t.slots.length > 0` from the tie filter
-    // left the suite green, because no existing test had a tie whose SEAT
-    // went away while two of its candidates stayed. That is the state here:
-    // the provisional qualifier of one pool withdraws, so her destination
-    // slot is no longer offered, but the two entrants she was tied with are
-    // still in the field. Offering that tie asks the organiser to choose
-    // between two people for a seat that is not on the table, and whichever
-    // she picks is then double-assigned against her own surviving slot.
+  it("M8 (W4 RB4-V6): a tie-holder who withdraws is replaced from her own tie — the two left are asked about HER seat, and the other pool's tie is untouched", async () => {
+    // Until W4 her seat vacated while the two she was tied with stayed, and the tie had to drop that seat (mutant M8:
+    // dropping `t.slots.length > 0` from the tie filter). RB4-V6 promotes from her pool, as W3 does for Swiss, so the
+    // seat stays contested: the tie re-forms over the two left, for the same seat. From a group source the M8 clause is
+    // now defensive — a seat vacates only when her whole pool has gone, and then no candidate is left either (W4 T13
+    // report, routed).
     const { auth, koStageId } = await tiedSetup();
     const before = await computeSeedProposal(auth, koStageId);
     expect(before.computed.ties, "the rig did not produce two three-way ties").toHaveLength(2);
@@ -437,16 +440,22 @@ describe.skipIf(!HAS_DB)("a tie whose seat nobody is left to take", () => {
     // whose destinationSlot is that tie's only slot.
     const doomedSlot = before.computed.ties[0]!.slots[0]!;
     const holder = before.computed.qualifiers.find((q) => q.destinationSlot === doomedSlot)!;
+    const partners = before.computed.ties[0]!.entrantIds.filter((id) => id !== holder.entrantId).sort();
+    expect(partners, "premise: two tied rivals stay in the field").toHaveLength(2);
+    const other = before.computed.ties[1]!;
     await withdrawEntrantCascade(auth, holder.entrantId);
 
     const after = await getSeedProposal(auth, koStageId);
-    // Exactly ONE tie left — not zero. The surviving pool's ambiguity is
-    // still owed, so "drop every tie" would pass a bare `toHaveLength(0)`.
-    expect(after!.computed.ties, "the surviving pool's tie was dropped too").toHaveLength(1);
-    expect(after!.computed.ties[0]!.slots, "a tie was offered for a seat nobody can take").not.toHaveLength(
-      0,
-    );
-    expect(after!.computed.ties[0]!.slots).not.toContain(doomedSlot);
-    expect(after!.computed.ties[0]!.entrantIds).not.toContain(holder.entrantId);
+    expect(after!.computed.ties, "both pools still owe a pick").toHaveLength(2);
+    const reformed = after!.computed.ties.find((t) => t.slots.includes(doomedSlot));
+    expect(reformed, "her seat is still asked about").toBeTruthy();
+    expect(reformed!.slots).toEqual([doomedSlot]);
+    expect([...reformed!.entrantIds].sort(), "over the two she was tied with, never her").toEqual(partners);
+    const kept = after!.computed.ties.find((t) => !t.slots.includes(doomedSlot))!;
+    expect({ slots: kept.slots, entrantIds: [...kept.entrantIds].sort() }, "the other pool's tie is untouched").toEqual({
+      slots: other.slots,
+      entrantIds: [...other.entrantIds].sort(),
+    });
+    expect(partners, "the seat is offered to one of them").toContain(after!.computed.qualifiers.find((q) => q.destinationSlot === doomedSlot)?.entrantId);
   });
 });

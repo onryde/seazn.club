@@ -27,7 +27,7 @@ const TZ = "Europe/London";
 
 const stage = (o: Partial<PhaseStage> = {}): PhaseStage => ({
   id: "st1", name: "League", seq: 1, status: "active", hasFixtures: true,
-  timing: null, sourceReady: false, proposal: "none", ...o,
+  timing: null, sourceReady: false, proposal: "none", finalDecided: false, ...o,
 });
 const fx = (o: Partial<PhaseFixture> = {}): PhaseFixture => ({
   id: "f1", status: "scheduled", scheduledAt: "2026-09-12T09:00:00Z", startedAt: null, eventCount: 0, matchMinutes: 90,
@@ -49,7 +49,7 @@ const drawable = (o: Partial<PhaseStage> = {}): PhaseStage =>
 const seedSlotFx = (stageId: string, o: Partial<PhaseFixture> = {}): PhaseFixture =>
   fx({ id: `${stageId}-slot`, stageId, awaitsSeedDraw: true, status: "scheduled", scheduledAt: null, ...o });
 const input = (o: Partial<PhaseInput> = {}): PhaseInput => ({
-  divisionStatus: "active", stages: [stage()], fixtures: [fx()], now: NOW, tz: TZ, awaitingRegistrations: 0, bansToReview: 0, ...o,
+  divisionStatus: "active", stages: [stage()], fixtures: [fx()], now: NOW, tz: TZ, awaitingRegistrations: 0, bansToReview: 0, lateWaiting: [], ...o,
 });
 
 describe("localDateKey", () => {
@@ -789,6 +789,69 @@ describe("resolveAttention", () => {
         .toBeGreaterThan(ledgerRank({ phase: "match_day", attention: [] }));
     });
   });
+  // W4 T11 (X-LE-10, K7, ruling 271): late players waiting to join a started root knockout — automatic arrivals the app
+  // never places. One row per stage the desk counted; copy "{count} late player(s) waiting — add to bracket".
+  describe("late_players_waiting (W4 T11)", () => {
+    it("the empty case first: no waiting list, or a stage counted at zero, raises nothing", () => {
+      expect(resolveAttention(input({ lateWaiting: [] })).some((a) => a.kind === "late_players_waiting")).toBe(false);
+      expect(resolveAttention(input({ lateWaiting: [{ stageName: "Cup", count: 0 }] })).some((a) => a.kind === "late_players_waiting")).toBe(false);
+    });
+    it("is raised from each counted stage, with its count and name", () => {
+      expect(resolveAttention(input({ lateWaiting: [{ stageName: "Cup", count: 2 }] }))).toContainEqual({
+        kind: "late_players_waiting",
+        count: 2,
+        stageName: "Cup",
+      });
+      expect(resolveAttention(input({ lateWaiting: [{ stageName: "Main", count: 1 }] }))).toContainEqual({
+        kind: "late_players_waiting",
+        count: 1,
+        stageName: "Main",
+      });
+    });
+    it("is AMBER — the player is owed a place, but every match already drawn can be played", () => {
+      expect(ATTENTION_SEVERITY.late_players_waiting).toBe("amber");
+    });
+    it("is never raised before Start: a waiting marker is written only after it (and a setup division reads setting_up)", () => {
+      expect(resolveAttention(input({ divisionStatus: "setup", lateWaiting: [{ stageName: "Cup", count: 1 }] })).some((a) => a.kind === "late_players_waiting")).toBe(false);
+      let checked = 0;
+      for (const divisionStatus of ["scheduled", "active", "completed"] as const) {
+        expect(resolveAttention(input({ divisionStatus, lateWaiting: [{ stageName: "Cup", count: 1 }] })), divisionStatus).toContainEqual({
+          kind: "late_players_waiting",
+          count: 1,
+          stageName: "Cup",
+        });
+        checked++;
+      }
+      expect(checked).toBe(3);
+    });
+    it("never outranks a red: a stage owing its fixtures leads, and the ledger rank is the red one", () => {
+      const o = { stages: [stage({ hasFixtures: false })], fixtures: [], lateWaiting: [{ stageName: "Cup", count: 3 }] };
+      const kinds = resolveAttention(input(o)).map((a) => a.kind);
+      expect(kinds[0]).toBe("needs_fixtures");
+      expect(kinds).toContain("late_players_waiting");
+      const late = { kind: "late_players_waiting", count: 3, stageName: "Cup" } as const;
+      expect(ledgerRank({ phase: "scheduled", attention: [late] })).toBe(ledgerRank({ phase: "scheduled", attention: [] }));
+    });
+    it("sits after the match ambers and before bans and registrations (KIND_ORDER)", () => {
+      const fixtures = [fx({ id: "u", status: "scheduled", scheduledAt: null })];
+      const kinds = resolveAttention(input({ fixtures, lateWaiting: [{ stageName: "Cup", count: 1 }], bansToReview: 1, awaitingRegistrations: 1 })).map((a) => a.kind);
+      expect(kinds).toEqual(["unscheduled", "late_players_waiting", "bans_waiting", "registrations_waiting"]);
+    });
+    it("never moves the phase", () => {
+      const shapes: Partial<PhaseInput>[] = [
+        {},
+        { fixtures: [fx({ id: "a", status: "in_play", hasScorer: true })] },
+        { divisionStatus: "completed", stages: [stage({ status: "complete" })], fixtures: [fx({ id: "a", status: "decided" })] },
+      ];
+      const phases = new Set<string>();
+      for (const o of shapes) {
+        const without = resolvePhase(input({ ...o, lateWaiting: [] }));
+        expect(resolvePhase(input({ ...o, lateWaiting: [{ stageName: "Cup", count: 2 }] }))).toBe(without);
+        phases.add(without);
+      }
+      expect(phases.size).toBeGreaterThanOrEqual(3);
+    });
+  });
   it("orders red before amber before slate", () => {
     const stages = [drawable()];
     const fixtures = [seedSlotFx("fin"), fx({ id: "u", scheduledAt: null })];
@@ -1038,7 +1101,7 @@ describe("isUnscheduledFixture", () => {
     ];
     const row = resolveAttention({
       divisionStatus: "active", stages: [], fixtures,
-      now: "2026-09-05T18:00:00Z", tz: "UTC", awaitingRegistrations: 0, bansToReview: 0,
+      now: "2026-09-05T18:00:00Z", tz: "UTC", awaitingRegistrations: 0, bansToReview: 0, lateWaiting: [],
     }).find((a) => a.kind === "unscheduled");
     expect(row?.kind === "unscheduled" ? row.count : 0).toBe(fixtures.filter(isUnscheduledFixture).length);
   });
@@ -1081,7 +1144,7 @@ describe("isResultMissing", () => {
     const nowIso = "2026-09-05T18:00:00Z";
     const row = resolveAttention({
       divisionStatus: "active", stages: [], fixtures,
-      now: nowIso, tz: "UTC", awaitingRegistrations: 0, bansToReview: 0,
+      now: nowIso, tz: "UTC", awaitingRegistrations: 0, bansToReview: 0, lateWaiting: [],
     }).find((a) => a.kind === "result_missing");
     expect(row?.kind === "result_missing" ? row.fixtureIds : []).toEqual(
       fixtures.filter((f) => isResultMissing(f, Date.parse(nowIso))).map((f) => f.id),
@@ -1352,5 +1415,69 @@ describe("held fixtures — needs_decision attention and never Finished (W2a)", 
     );
     expect(attention.some((a) => a.kind === "needs_fixtures" && a.stageName === "Next")).toBe(false);
     expect(attention.some((a) => a.kind === "needs_decision")).toBe(true);
+  });
+});
+
+// W4 T21 (AN-1, X-CH-8; competition-desk _RULES: empty case first, a red attention outranks the phase). Prod held a
+// knockout whose final was decided but whose stage was never completed (auto-advance off), so the bracket never ranked —
+// and the desk read "Finished" with nothing asking for the one action that ranks it. `finalDecided` is the caller's
+// answer (the engine's own bracket-completion predicate over the stage's rows, server/engine-db/stage-finals.ts); this
+// module only decides what the desk says about it.
+describe("final_decided — a decided final on an open stage asks to complete it (W4 T21, X-CH-8)", () => {
+  const ko = (o: Partial<PhaseStage> = {}) => stage({ id: "ko", name: "Knockout", status: "active", ...o });
+  const played = (id: string) => fx({ id, stageId: "ko", status: "decided", scheduledAt: null });
+  const finalDecided = (attention: readonly Attention[]) => attention.filter((a) => a.kind === "final_decided");
+
+  it("empty case first: no stages, and an open bracket whose final is NOT decided, raise no final_decided", () => {
+    expect(finalDecided(resolveAttention(input({ stages: [], fixtures: [] })))).toEqual([]);
+    expect(finalDecided(resolveAttention(input({ stages: [ko()], fixtures: [] })))).toEqual([]);
+    // Every match played but the caller says the final is not decided (a bronze-only bracket, a void final): no row.
+    expect(finalDecided(resolveAttention(input({ stages: [ko({ finalDecided: false })], fixtures: [played("sf"), played("final")] })))).toEqual([]);
+  });
+
+  it('X-CH-8 a decided final on an active stage raises "Final decided — complete the stage": ONE red row naming the stage, outranking Finished', () => {
+    const shape = input({ stages: [ko({ finalDecided: true })], fixtures: [played("sf1"), played("sf2"), played("final")] });
+    const attention = resolveAttention(shape);
+    expect(finalDecided(attention)).toEqual([{ kind: "final_decided", stageName: "Knockout" }]);
+    expect(ATTENTION_SEVERITY.final_decided).toBe("red");
+    // The AN-1 shape exactly: the phase alone reads Finished, so only the red row tells the organiser.
+    expect(resolvePhase(shape)).toBe("finished");
+    expect(ledgerRank({ phase: resolvePhase(shape), attention }), "red outranks the phase").toBe(-1);
+    expect(leadingAttention([{ attention }])).toEqual({ kind: "final_decided", stageName: "Knockout" });
+  });
+
+  it("sequence: once the stage is completed the row is gone, whatever the stale flag says", () => {
+    const done = input({ stages: [ko({ status: "complete", finalDecided: true })], fixtures: [played("final")] });
+    expect(finalDecided(resolveAttention(done))).toEqual([]);
+  });
+
+  it("names the LOWEST open stage whose final is decided — one row per division, never one per stage", () => {
+    const stages = [
+      stage({ id: "pl", name: "Plate", seq: 2, finalDecided: true }),
+      ko({ seq: 1, finalDecided: true }),
+      stage({ id: "c", name: "Consolation", seq: 3, finalDecided: false }),
+    ];
+    const rows = finalDecided(resolveAttention(input({ stages, fixtures: [played("final")] })));
+    expect(rows).toEqual([{ kind: "final_decided", stageName: "Knockout" }]);
+    // A completed lower stage is skipped, not named.
+    const later = finalDecided(resolveAttention(input({
+      stages: [ko({ seq: 1, status: "complete", finalDecided: true }), stage({ id: "pl", name: "Plate", seq: 2, finalDecided: true })],
+      fixtures: [played("final")],
+    })));
+    expect(later).toEqual([{ kind: "final_decided", stageName: "Plate" }]);
+  });
+
+  it("KIND_ORDER: inside the red band it sits after needs_decision and before no_scorer", () => {
+    // A Plate stage still being played (a live, unscored match, and a held one) beside the main draw's decided final.
+    const attention = resolveAttention(input({
+      stages: [ko({ seq: 1, finalDecided: true }), stage({ id: "pl", name: "Plate", seq: 2 })],
+      fixtures: [
+        played("final"),
+        fx({ id: "pl-live", stageId: "pl", status: "in_play", eventCount: 0, hasScorer: false }),
+        fx({ id: "pl-held", stageId: "pl", status: "needs_decision", scheduledAt: null }),
+      ],
+    }));
+    const red = attention.filter((a) => ATTENTION_SEVERITY[a.kind] === "red").map((a) => a.kind);
+    expect(red).toEqual(["needs_decision", "final_decided", "no_scorer"]);
   });
 });

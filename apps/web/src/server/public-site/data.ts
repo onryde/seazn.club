@@ -41,6 +41,7 @@ import { loadPublicExternalPlay, loadPublicPairedWhiteSide, loadPublicRoundOpene
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 import type { PublicExternalPlay } from "@/server/external-play/public-view";
 import { routes } from "@/lib/routes";
+import { inStageThenPoolOrder } from "@/lib/pool-order";
 
 /**
  * `{count}`-pluralized org-default-locale copy — the `public-site/data.ts`
@@ -1091,7 +1092,7 @@ export async function readPublicDivisionDetail(
   const [{ stages, pools }, fixtures, { standings, tz }, entrants] = sequential
     ? ([await readStagesAndPools(), await readFixtures(), await readStandingsAndTz(), await readEntrants()] as const)
     : await Promise.all([readStagesAndPools(), readFixtures(), readStandingsAndTz(), readEntrants()]);
-  return { stages, pools, fixtures, standings, entrants, tz };
+  return { stages, pools, fixtures, standings: inStageThenPoolOrder(standings, stages, pools), entrants, tz };
 }
 
 /** Division home: schedule + standings + entrants + stage skeleton. */

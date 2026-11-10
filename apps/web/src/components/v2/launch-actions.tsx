@@ -15,6 +15,7 @@ import { PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED } from "@/lib/schedule-board";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { isSwissRefusalCode } from "@/lib/swiss-refusals";
 import { swissRefusalText } from "@/lib/swiss-refusal-text";
+import { isKnockoutRefusalCode, knockoutRefusalText } from "@/lib/knockout-refusals";
 import { ScheduleGateDialog } from "@/components/v2/board/schedule-gate-dialog";
 import { StartConfirmDialog } from "@/components/v2/start-confirm-dialog";
 import { startEntrantsLine, type EntryStage } from "@/lib/open-entry-stages";
@@ -132,6 +133,10 @@ export function LaunchActions({
         // W3 T11 (X-SW-16): a Swiss with more rounds than its field can pair — the refusal and the field's guidance in
         // the reader's language, never the server's English sentence.
         setError(swissRefusalText(err.code, err.extra, msg, msgPlural));
+      } else if (err instanceof ApiV1Error && isKnockoutRefusalCode(err.code)) {
+        // W4 B2 fix round 1 (G1): Start reconciles a root knockout drawn before its roster moved, and refuses by name when
+        // that would redraw over organiser setup — the knockout table's sentence, in the reader's language.
+        setError(knockoutRefusalText(err.code, err.extra, msg));
       } else {
         setError(err instanceof Error ? err.message : msg("launch.failedStart"));
       }

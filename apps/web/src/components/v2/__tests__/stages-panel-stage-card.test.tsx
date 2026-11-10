@@ -962,6 +962,56 @@ describe("the stage's fixtures are in the card (item 9)", () => {
   });
 });
 
+// W4 B2 fix round 1 (item 6, controller ruling): a root knockout drawn before its roster moved is `active` before the division
+// starts, and the not-started rule alone hid Generate — the in-place reconcile was unreachable from the desk. Through the real panel:
+// its own `rosterDrift` and `divisionStatus` props decide (lib/bracket-reconcile.ts `knockoutUpdateDrawOffered`), and the rail draws
+// the same `stage-generate` control, worded "Update draw".
+describe("Update draw: a knockout whose roster moved before Start offers Generate again - through the real panel", () => {
+  // As the product stores a bracket of seven: a bye line is `forfeited` with its award (the holder walks on), so a stage's
+  // counts read it as played — the e2e on next dev found the first version of this offer hidden by exactly that.
+  const BYE = { ...fixture(A, 1, { status: "forfeited", outcome: { kind: "award", winner: "e1", loser: null, reason: "bye" } }), away_entrant_id: null };
+  const KO_FIXTURES = [BYE, fixture(A, 2), fixture(A, 3)];
+  const NONE = { officials: 0, lineups: 0, deviceLinks: 0, streams: 0, youtubeBroadcasts: 0, availability: 0, calls: 0 };
+  const drifted = { [A]: { ghosts: [{ id: "e9", display_name: "Gone" }], unplaced: [], vacantLines: 0, attachments: NONE } };
+  const quiet = { [A]: { ghosts: [], unplaced: [], vacantLines: 0, attachments: NONE } };
+  // Fix round 2 (item 1): a deleted entrant's empty first-round place — nobody named, nobody unplaced.
+  const vacant = { [A]: { ghosts: [], unplaced: [], vacantLines: 1, attachments: NONE } };
+  const ko = (over: Record<string, unknown>) =>
+    panel({ stages: [stageRow({ kind: "knockout", name: "Knockout" })], fixtures: KO_FIXTURES, stageTableRules: {}, ...over });
+
+  it("drifted, division in setup: stage-generate leads, worded Update draw", () => {
+    const html = ko({ rosterDrift: drifted, divisionStatus: "setup" });
+    expect(tag(html, "stage-generate"), "the control is drawn").not.toBeNull();
+    expect(tag(html, "stage-generate")).toMatch(/\bbtn-primary\b/);
+    expect(text(html)).toContain(UI["schedule.updateDraw"]!);
+  });
+
+  it("an empty first-round place alone (an entrant DELETED, nobody named): Update draw leads, and the banner keeps its Rebuild (fix round 2, item 1)", () => {
+    const html = ko({ rosterDrift: vacant, divisionStatus: "setup" });
+    expect(tag(html, "stage-generate"), "Update draw").not.toBeNull();
+    expect(text(html)).toContain(UI["schedule.updateDraw"]!);
+    expect(html).toContain('data-testid="roster-drift-banner"');
+    expect(html).toContain('data-testid="roster-drift-rebuild"');
+  });
+
+  it("each of: no drift, a started division, a finished division, another kind - hides it", () => {
+    const cases: [string, Record<string, unknown>][] = [
+      ["no drift", { rosterDrift: quiet, divisionStatus: "setup" }],
+      ["division started", { rosterDrift: drifted, divisionStatus: "active" }],
+      ["division finished", { rosterDrift: drifted, divisionStatus: "completed" }],
+      ["a league", { rosterDrift: drifted, divisionStatus: "setup", stages: [stageRow({ name: "League" })], stageTableRules: { [A]: tableRulesOf(sport("badminton"), "league") } }],
+      ["a real match already decided", { rosterDrift: drifted, divisionStatus: "setup", fixtures: [BYE, fixture(A, 2, { status: "decided", outcome: DECIDED }), fixture(A, 3)] }],
+      ["a real match being scored", { rosterDrift: drifted, divisionStatus: "setup", fixtures: [BYE, fixture(A, 2, { status: "in_play" }), fixture(A, 3)] }],
+    ];
+    let checked = 0;
+    for (const [why, over] of cases) {
+      expect(tag(ko(over), "stage-generate"), why).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(6);
+  });
+});
+
 describe("the buttons follow the stage's state (item 8) - through the real panel", () => {
   it("the mock's case (1 in play, 2 to schedule): no Generate; Complete present but disabled with its reason; Add match is there", () => {
     const html = panel();

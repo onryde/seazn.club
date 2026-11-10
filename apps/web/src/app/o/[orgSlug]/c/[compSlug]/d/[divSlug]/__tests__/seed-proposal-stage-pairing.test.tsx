@@ -87,7 +87,11 @@ vi.mock("@/server/usecases/fixtures", () => ({
   listDivisionFixtures: vi.fn(async () => []),
   listFixtureHeadlines: vi.fn(async () => ({})),
 }));
-vi.mock("@/server/usecases/entrants", () => ({ listEntrants: vi.fn(async () => []) }));
+// The real module under the one stub: the page reads `DEPARTED_STATUSES` from it (the knockout desk's waiting list).
+vi.mock("@/server/usecases/entrants", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/usecases/entrants")>()),
+  listEntrants: vi.fn(async () => []),
+}));
 vi.mock("@/server/usecases/schedule", () => ({
   getScheduleSettings: vi.fn(async () => ({ config: { courts: [] }, tz: "UTC" })),
 }));

@@ -68,6 +68,7 @@ import { v1 } from "@/server/api-v1/http";
 import { ApiV1Error, apiV1 } from "@/lib/client-v1";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
+import { createStagesWithLegacy } from "./_legacy-standalone-stage";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -178,7 +179,7 @@ async function seedGeneratedStage(
   config: Record<string, unknown>,
 ) {
   const { auth, divisionId } = await seedDivision(n);
-  const [main] = await createStages(auth, divisionId, { seq: 1, kind, name: kind, config });
+  const [main] = await createStagesWithLegacy(auth, divisionId, { seq: 1, kind, name: kind, config });
   const [later] = await createStages(auth, divisionId, { seq: 2, kind: "league", name: "Later", config: {} });
   await generateStageFixtures(auth, main!.id);
   return { auth, divisionId, mainId: main!.id, laterId: later!.id };
@@ -1359,7 +1360,7 @@ describe.skipIf(!HAS_DB)("a restore respects what the roster lost since the snap
 // made outside the ledger after the restore was deleted and the next restore
 // quietly put the OLD row back. Now every delete-side event re-reads the rows.
 describe.skipIf(!HAS_DB)("a change made outside the ledger after a restore survives the next round trip", () => {
-  it("a seed fill made after a knockout was restored: undoing that restore and restoring it again brings back the FILLED seats", async () => {
+  it("a seed fill made after a knockout was restored is an undo barrier since W4 T5 (K1): the round trip that once deleted the FILLED knockout is refused by name, and its seats stand", async () => {
     const { auth, divisionId } = await seedDivision(4);
     const created = await createStages(auth, divisionId, [
       { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } },
@@ -1392,24 +1393,24 @@ describe.skipIf(!HAS_DB)("a change made outside the ledger after a restore survi
     await undoes("fixtures_cleared", "fixtures_generated");
     expect((await wholeRows("stage_id", ko.id)).every((r) => r.home_entrant_id === null)).toBe(true);
 
-    // The seed fill — it appends no reversible event.
+    // The seed fill — no reversible event, but (W4 T5, K1) a `seed_confirmed` undo barrier.
     const proposal = await computeSeedProposal(auth, ko.id);
     expect(await confirmSeedProposal(auth, ko.id, { proposalId: proposal.id })).toMatchObject({ filled: 2 });
     const filled = await wholeRows("stage_id", ko.id);
     expect(filled.every((r) => r.home_entrant_id !== null && r.away_entrant_id !== null)).toBe(true);
 
-    // Make that restore history; undo it (the KO goes again), then restore it.
+    // A fresh edit after the fill still undoes. The Undo past it would invert the KO's restore — deleting the filled
+    // knockout, which is the round trip this test drove before W4 T5 — and is refused by name: the barrier holds.
     await generateStageFixtures(auth, later.id);
-    await undoes("fixtures_cleared", "fixtures_cleared");
-    expect(await wholeRows("stage_id", ko.id)).toEqual([]);
-    await generateStageFixtures(auth, later.id);
-    await undoes("fixtures_cleared", "fixtures_generated");
+    await undoes("fixtures_cleared");
+    await expect(undoDivision(auth, divisionId)).rejects.toMatchObject({ status: 409, code: "SEED_CONFIRM_NOT_UNDOABLE" });
 
     expect(await wholeRows("stage_id", ko.id)).toEqual(filled);
   });
 
   // Any writer that appends no division event stands in here (the seed fill
-  // above is the real one): a direct UPDATE to a row the Undo put back.
+  // above was the real one until W4 T5 made it an undo barrier): a direct
+  // UPDATE to a row the Undo put back.
   it("a pool row changed outside the ledger after an Undo put it back: Redo clears it as it now stands, and the next Undo restores THAT", async () => {
     const { auth, divisionId } = await seedDivision(8);
     const [stage] = await createStages(auth, divisionId, {

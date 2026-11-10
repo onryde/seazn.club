@@ -13,7 +13,7 @@ import {
   API_ONLY_BROWSER_SET, L1_WIDTH, LAYER_GRID_PLANNERS, LAYER_PLANNERS, L2BoundRun, NoLayerForWidth, L2TakesNoScenario, TemplateReachable, UnknownL2Atom, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, apiOnlyNoPath, identityOf, l1Planner, l2Planner,
   layerCaseId, layerOfWidth, planL1, planL2, planW1DrivingL1, w1DrivingL1Planner, widthSweepPlanner, type LayerCase,
 } from "../lib/layers.ts";
-import { NotApiOnlyRow, apiOnlyUiPath } from "../lib/api-only-ui.ts";
+import { NotApiOnlyRow, RefusedApiOnlyRow, apiOnlyUiPath, apiOnlyUiRoute } from "../lib/api-only-ui.ts";
 import { templateField } from "../lib/templates.ts";
 import { loadL2Pairs, parseL2Pairs, type L2Run } from "../lib/pairs.ts";
 import { SetTakesNoFilter } from "../lib/probe-set.ts";
@@ -21,7 +21,7 @@ import { decideState } from "../lib/results.ts";
 import { ATOMIC, HARNESS_SCENARIO, l2NoPathFor } from "../lib/scenario-catalogue.ts";
 import { SLICE_ROWS, SLICE_SPORTS, UnknownFilter } from "../lib/slice.ts";
 import { BROWSER_WIDTHS, L2_WIDTHS, type BrowserWidth } from "../lib/widths.ts";
-import { isNoOrganiserPathCell, noPathWaveOf } from "./refused-cells.ts";
+import { STANDALONE_REFUSED_CELLS, isNoOrganiserPathCell, noPathWaveOf } from "./refused-cells.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 /** The committed file, read as plain JSON: never through layers.ts or pairs.ts. */
@@ -111,23 +111,34 @@ describe("planL2 — the committed rotation, filtered, never re-planned", () => 
     // The expected split, from the catalogue's own declarations.
     const exec = SLICE_RUNS.filter((r) => Object.hasOwn(HARNESS_SCENARIO, r.scenario));
     const owning = (r: L2Run) => { const a = ATOM.get(r.scenario)!; return a.knownNoPath ?? l2NoPathFor(a, r.sport); };
-    const noPath = SLICE_RUNS.filter((r) => !exec.includes(r) && owning(r) !== null);
-    const notRun = SLICE_RUNS.filter((r) => !exec.includes(r) && owning(r) === null);
+    // W4 T24: Q4b, D4a and D4b are settled (⛔ / ⏳), not 🚫 and not ░ - the rulebook's table, stated here.
+    const SETTLED: Readonly<Record<string, "refused" | "later">> = { Q4b: "refused", D4b: "refused", D4a: "later" };
+    const settled = SLICE_RUNS.filter((r) => !exec.includes(r) && Object.hasOwn(SETTLED, r.scenario));
+    const noPath = SLICE_RUNS.filter((r) => !exec.includes(r) && !settled.includes(r) && owning(r) !== null);
+    const notRun = SLICE_RUNS.filter((r) => !exec.includes(r) && !settled.includes(r) && owning(r) === null);
     // Non-vacuity: every branch has a run to witness it.
     expect(exec.length).toBeGreaterThan(0);
     expect(noPath.length).toBeGreaterThan(0);
     expect(notRun.length).toBeGreaterThan(0);
+    expect(settled.length).toBeGreaterThan(0);
     const byN = new Map(cases.map((c) => [c.run!.n, c]));
     const hist: Record<string, number> = {};
     for (const r of SLICE_RUNS) {
       const c = byN.get(r.n)!;
       const atom = ATOM.get(r.scenario)!;
-      const d = decideState({ checks: [], deferred: null, error: null, noPath: c.noPath, notRun: c.notRun });
+      const d = decideState({ checks: [], deferred: null, error: null, noPath: c.noPath, notRun: c.notRun, settled: c.settled ?? null });
       if (exec.includes(r)) {
         expect(c.spec, `n ${r.n} ${r.scenario} is driven`).not.toBeNull();
         expect(c.spec).toEqual({ caseId: `${r.row}|${r.sport}|${r.preset}|${r.scenario}`, row: r.row, sport: r.sport, variant: r.preset, scenario: HARNESS_SCENARIO[r.scenario], canary: false });
         expect([c.noPath, c.notRun]).toEqual([null, null]);
         hist.driven = (hist.driven ?? 0) + 1;
+      } else if (settled.includes(r)) {
+        expect(c.spec).toBeNull();
+        expect([c.noPath, c.notRun]).toEqual([null, null]);
+        expect(c.settled?.state, `n ${r.n} ${r.scenario}`).toBe(SETTLED[r.scenario]);
+        expect(d.state).toBe(SETTLED[r.scenario]);
+        expect(d.reason).toBe(c.settled!.reason);
+        hist.settled = (hist.settled ?? 0) + 1;
       } else if (noPath.includes(r)) {
         expect(c.spec).toBeNull();
         expect(c.notRun).toBeNull();
@@ -145,8 +156,8 @@ describe("planL2 — the committed rotation, filtered, never re-planned", () => 
       }
     }
     console.info(`layers: slice L2 ${cases.length} runs — ${JSON.stringify(hist)}`);
-    expect(hist).toEqual({ driven: exec.length, no_path: noPath.length, not_run: notRun.length });
-    expect(exec.length + noPath.length + notRun.length).toBe(cases.length);
+    expect(hist).toEqual({ driven: exec.length, settled: settled.length, no_path: noPath.length, not_run: notRun.length });
+    expect(exec.length + settled.length + noPath.length + notRun.length).toBe(cases.length);
   });
 
   // Review I-1: the slice holds knownNoPath atoms only, so the classifier's
@@ -211,16 +222,21 @@ describe("planL2 — the committed rotation, filtered, never re-planned", () => 
     const cases = planL2(committed, SLICE_CELLS);
     let checked = 0;
     for (const c of cases) {
-      const set = [c.noPath !== null, c.notRun !== null].filter(Boolean).length;
+      const set = [c.noPath !== null, c.notRun !== null, c.settled !== undefined].filter(Boolean).length;
       expect(set, `n ${c.run!.n}`).toBe(c.spec === null ? 1 : 0);
       checked++;
     }
     expect(checked).toBe(SLICE_RUNS.length);
     const np = cases.find((c) => c.noPath !== null);
     const nr = cases.find((c) => c.notRun !== null);
+    const st = cases.find((c) => c.settled !== undefined);
     expect(np).toBeDefined();
     expect(nr).toBeDefined();
+    expect(st).toBeDefined();
     expect(() => decideState({ checks: [], deferred: null, error: null, noPath: np!.noPath, notRun: nr!.notRun })).toThrow(/noPath and notRun both set/);
+    // W4 T24: a settled atom never rides with a 🚫 or a ░ either.
+    expect(() => decideState({ checks: [], deferred: null, error: null, noPath: np!.noPath, settled: st!.settled })).toThrow(/settled set together with noPath or notRun/);
+    expect(() => decideState({ checks: [], deferred: null, error: null, notRun: nr!.notRun, settled: st!.settled })).toThrow(/settled set together with noPath or notRun/);
   });
 
   it("a run whose atom the catalogue does not hold is refused by name, never planned ░", () => {
@@ -360,11 +376,16 @@ describe("the layered sets", () => {
 
   it("api-only browser set: one case per API_ONLY row, in catalogue order — each planned 🚫 naming its owning wave (D7 as ruled), never driven", () => {
     // Design §8 via plan D7, restated here rather than read from the harness.
-    const WAVE: Readonly<Record<string, string>> = { knockout_third_place: "W4", page_playoff_only: "W4", stepladder_only: "W4", group_only: "W5", group_group_ko: "W5" };
+    const WAVE: Readonly<Record<string, string>> = { knockout_third_place: "W4", group_only: "W5", group_group_ko: "W5" };
+    // W4 T16 (ruling 269): the standalone stepladder and page playoff are refused, so no wave owes them a control and the set holds no case for them.
+    const REFUSED_ROWS = [...new Set(STANDALONE_REFUSED_CELLS.map((c) => c.split("|")[0]!))];
+    expect(REFUSED_ROWS.sort()).toEqual(["page_playoff_only", "stepladder_only"]);
     const p = apiOnlyBrowserPlanner({ set: API_ONLY_BROWSER_SET });
     const cases = p.layered(v);
     console.info(`layers: api-only browser set ${cases.length} cases`);
-    expect(cases.map((c) => identityOf(c).row)).toEqual([...API_ONLY_ROWS]);
+    const owed = API_ONLY_ROWS.filter((r) => !REFUSED_ROWS.includes(r));
+    expect(owed.length).toBe(API_ONLY_ROWS.length - 2);
+    expect(cases.map((c) => identityOf(c).row)).toEqual([...owed]);
     let checked = 0;
     for (const c of cases) {
       const id = identityOf(c);
@@ -376,7 +397,7 @@ describe("the layered sets", () => {
       expect(decideState({ checks: [], deferred: null, error: null, noPath: c.noPath, notRun: c.notRun })).toEqual({ state: "no_path", reason: `${WAVE[id.row]}: no organiser control builds ${id.row}` });
       checked++;
     }
-    expect(checked).toBe(API_ONLY_ROWS.length);
+    expect(checked).toBe(owed.length);
     expect({ sports: p.sports, layer: p.layer, acceptsWidth: p.acceptsWidth }).toEqual({ sports: ["generic"], layer: "L1", acceptsWidth: 1280 });
     for (const cli of [{ only: "league|generic" }, { scenario: "LIFECYCLE" }, { canary: "M1" }]) expect(() => apiOnlyBrowserPlanner(cli), JSON.stringify(cli)).toThrow(SetTakesNoFilter);
   });
@@ -389,6 +410,28 @@ describe("the layered sets", () => {
     expect(apiOnlyUiPath("group_only", "generic")).toEqual({ reachable: false, wave: "W5", template: null, reason: "no organiser control builds group_only" });
     // A row the builder does build is refused by name, never answered `undefined` (strip-types runs no tsc).
     for (const row of ["league", "toString", "__proto__"]) expect(() => apiOnlyUiPath(row as ApiOnlyRowKey, "generic"), row).toThrow(NotApiOnlyRow);
+  });
+
+  it("W4 T16: an API-only row the product refuses on every sport (ruling 269: the standalone stepladder and page playoff) has no route — refused by name, never `undefined`, and no other API-only row is (counted)", () => {
+    // The oracle's rows (refused-cells.ts, from the ruling), never refusedCell read back.
+    const refusedRows = new Set(STANDALONE_REFUSED_CELLS.map((c) => c.split("|")[0]!));
+    expect([...refusedRows].sort()).toEqual(["page_playoff_only", "stepladder_only"]);
+    let refused = 0;
+    let routed = 0;
+    for (const row of API_ONLY_ROWS) {
+      if (refusedRows.has(row)) {
+        expect(() => apiOnlyUiRoute(row), row).toThrow(RefusedApiOnlyRow);
+        expect(() => apiOnlyUiPath(row, "generic"), row).toThrow(RefusedApiOnlyRow);
+        refused++;
+      } else {
+        expect(apiOnlyUiRoute(row).wave, row).toMatch(/^W\d/);
+        routed++;
+      }
+    }
+    expect([refused, routed]).toEqual([refusedRows.size, API_ONLY_ROWS.length - refusedRows.size]);
+    expect(routed).toBeGreaterThan(0);
+    // The refused one is never mistaken for a builder row, nor a builder row for a refused one.
+    expect(() => apiOnlyUiRoute("league" as ApiOnlyRowKey)).toThrow(NotApiOnlyRow);
   });
 
   it("guard: a 🚫 is never planned for a cell a template reaches — apiOnlyNoPath refuses it by name (the api-only set plans generic only, so only this reaches it)", () => {

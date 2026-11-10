@@ -21,9 +21,10 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { putStageRules } from "../stage-rules";
-import { createStages, generateStageFixtures } from "../stages";
+import { generateStageFixtures } from "../stages";
 import { builtFor, engineValueFor } from "./_stage-probe";
 import { CHESS_INDIVIDUAL_ONLY, sportRefusesStageKind } from "@/lib/chess-individual-only";
+import { createStagesWithLegacy } from "./_legacy-standalone-stage";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -80,7 +81,7 @@ async function seedDivision(
 async function seedStage(auth: AuthCtx, divisionId: string, seq: number, kind: StageKind = "league"): Promise<string> {
   // A swiss stage must declare its round count (assertSwissRoundsDeclared); every other kind takes an empty config.
   const config = kind === "swiss" ? { rounds: 3 } : {};
-  const [stage] = await createStages(auth, divisionId, { seq, kind, name: "S" + seq, config, progression: null });
+  const [stage] = await createStagesWithLegacy(auth, divisionId, { seq, kind, name: "S" + seq, config, progression: null });
   return stage!.id;
 }
 

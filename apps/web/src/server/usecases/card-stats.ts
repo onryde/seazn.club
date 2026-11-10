@@ -96,6 +96,16 @@ export interface DivisionCardStats {
 // `abandoned`; this SQL count cannot see that it is held, so it stays out here and the phase alone counts it.)
 const PLAYED = ["decided", "finalized", "needs_decision"] as const;
 
+/** The SQL `played` clause of `listDivisionCardStats` below, for one row in TS: a played status, or a forfeit with an empty
+ *  seat (a bye award, a walkover over a dead seat). The desk reads it (W4 B1b fix round 1, Q1) to take a row its "N of M
+ *  played" does not count back out of exactly the number this file put it in. Keep it beside the SQL it restates. */
+export function cardStatsCountsPlayed(f: { status: string; home_entrant_id: string | null; away_entrant_id: string | null }): boolean {
+  return (
+    (PLAYED as readonly string[]).includes(f.status) ||
+    (f.status === "forfeited" && (f.home_entrant_id === null || f.away_entrant_id === null))
+  );
+}
+
 // RS004 W2b review finding 1 — declared locally, NOT imported from
 // registrations.ts (which has its own, slightly different-purposed
 // SPOT_HOLDERS: "holds a capacity spot", pending|paid|confirmed, no

@@ -50,7 +50,7 @@ import { apiOnlyUiPath } from "./api-only-ui.ts";
 import { onTemplate, templateField, templateRow } from "./templates.ts";
 import { loadL2Pairs, type L2Run } from "./pairs.ts";
 import { SetTakesNoFilter } from "./probe-set.ts";
-import { ATOMIC, HARNESS_SCENARIO, l2NoPathFor, type AtomicScenario } from "./scenario-catalogue.ts";
+import { ATOMIC, HARNESS_SCENARIO, l2NoPathFor, type AtomicScenario, type Settled } from "./scenario-catalogue.ts";
 import { SLICE_ROWS, SLICE_SPORTS, checkSliceFilter, planSliceCases } from "./slice.ts";
 import { L2_WIDTHS, type BrowserWidth } from "./widths.ts";
 import type { CaseSpec, ScenarioKey } from "./scenarios/types.ts";
@@ -97,10 +97,12 @@ interface LayerCaseBase {
   readonly run: L2Run | null;
 }
 /** Driven through the browser at `width`. */
-export interface DrivenLayerCase extends LayerCaseBase { readonly spec: CaseSpec; readonly noPath: null; readonly notRun: null }
-/** Recorded without a driver: 🚫 or ░, exactly one of them. */
+export interface DrivenLayerCase extends LayerCaseBase { readonly spec: CaseSpec; readonly noPath: null; readonly notRun: null; readonly settled?: undefined }
+/** Recorded without a driver: 🚫, ░, or (W4 app PR A Task 24) the ⛔/⏳ a settled atom carries, exactly one of them. */
 export type PlannedLayerCase = LayerCaseBase & { readonly spec: null; readonly identity: CaseIdentity }
-  & ({ readonly noPath: NoPath; readonly notRun: null } | { readonly noPath: null; readonly notRun: string });
+  & ({ readonly noPath: NoPath; readonly notRun: null; readonly settled?: undefined }
+    | { readonly noPath: null; readonly notRun: string; readonly settled?: undefined }
+    | { readonly noPath: null; readonly notRun: null; readonly settled: Settled });
 export type LayerCase = DrivenLayerCase | PlannedLayerCase;
 
 export const identityOf = (c: LayerCase): CaseIdentity => (c.spec !== null ? c.spec : c.identity);
@@ -171,6 +173,11 @@ export function planL2(pairs: { readonly runs: readonly L2Run[] }, cells: Readon
     if (script !== null) {
       if (run.bound !== null) throw new L2BoundRun(run);
       out.push({ ...base, spec: { ...identity, scenario: script, canary: false }, noPath: null, notRun: null });
+      continue;
+    }
+    // W4 app PR A Task 24: an atom the W4 rulebook settled is recorded as ⛔ or ⏳, never 🚫 (scenario-catalogue.ts SETTLED).
+    if (atom.settled !== null) {
+      out.push({ ...base, spec: null, identity, noPath: null, notRun: null, settled: atom.settled });
       continue;
     }
     // W2e Task 32: per sport -- M12b is a screen path in football, volleyball, hockey and ice hockey now.
@@ -334,7 +341,8 @@ export function apiOnlyNoPath(row: (typeof API_ONLY_ROWS)[number], sport: string
 }
 
 /** D7 as ruled: each API-only row, on generic, at 1280 — planned 🚫 naming the
- *  wave that owns its organiser control (api-only-ui.ts). */
+ *  wave that owns its organiser control (api-only-ui.ts). A row the product refuses
+ *  (refusedCell; the standalone stepladder and page playoff since W4 T16) is not planned. */
 export const apiOnlyBrowserPlanner: PlanLayers = (cli: PlannerCli) => {
   refuseFilters(API_ONLY_BROWSER_SET, cli);
   const sport = "generic";
@@ -342,7 +350,9 @@ export const apiOnlyBrowserPlanner: PlanLayers = (cli: PlannerCli) => {
     sports: [sport], deniesFeatures: false, layer: "L1", label: `--set ${API_ONLY_BROWSER_SET}`, acceptsWidth: L1_WIDTH,
     layered: (variantFor) => {
       const variant = variantFor(sport);
-      return API_ONLY_ROWS.map((row): PlannedLayerCase => ({
+      // A row the product refuses (catalogue.ts refusedCell: the standalone stepladder and page playoff, W4 T16) owes no
+      // organiser path, so it is not planned 🚫 either.
+      return API_ONLY_ROWS.filter((row) => refusedCell(row, sport) === null).map((row): PlannedLayerCase => ({
         spec: null, identity: { caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE },
         layer: "L1", width: L1_WIDTH, noPath: apiOnlyNoPath(row, sport), notRun: null, run: null,
       }));

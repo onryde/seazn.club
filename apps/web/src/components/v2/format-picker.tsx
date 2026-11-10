@@ -156,19 +156,28 @@ export function formatPickerFields({
             const est = picked ? estimate : row.estimate;
             const mins = picked ? estimateMins : row.minutes;
             const locked = templateLocks[key] !== undefined;
+            // W4 T15 (X-PL-1, X-QM-5; owner pick 5A): a format this field cannot play stays on show, greyed and unpickable, saying
+            // what unlocks it. A pick made before the plan shrank keeps its picked look, and Next says why it cannot go on.
+            const sizeGate = view.sizeGate(t.key);
+            const gated = sizeGate !== null;
+            const surface = picked
+              ? "border-purple-500 bg-purple-50 text-purple-900"
+              : gated
+                ? "border-dashed border-slate-300 bg-slate-50 text-slate-500"
+                : "border-slate-200 bg-white text-slate-700 hover:border-purple-200";
             return (
               <label
                 key={t.key}
                 data-template={t.key}
                 data-suggested={suggested.includes(t.key) ? "" : undefined}
-                className={`${folded(t.key) ? "hidden" : "flex"} group min-h-11 min-w-0 cursor-pointer gap-3 rounded-lg border p-3 text-sm transition has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-purple-600 ${
-                  picked ? "border-purple-500 bg-purple-50 text-purple-900" : "border-slate-200 bg-white text-slate-700 hover:border-purple-200"
-                }`}
+                data-size-gated={sizeGate?.code}
+                aria-disabled={gated ? "true" : undefined}
+                className={`${folded(t.key) ? "hidden" : "flex"} group min-h-11 min-w-0 ${gated ? "cursor-not-allowed" : "cursor-pointer"} gap-3 rounded-lg border p-3 text-sm transition has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-purple-600 ${surface}`}
               >
-                <input type="radio" name="template" checked={picked} onChange={() => knobs.setTemplatePicked(t.key)} className="sr-only" />
+                <input type="radio" name="template" checked={picked} disabled={gated} onChange={() => knobs.setTemplatePicked(t.key)} className="sr-only" />
                 <FormatShape
                   stages={t.build({ qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 })}
-                  className={`shrink-0 ${TILE_ICON_MOTION} ${picked ? TILE_ICON_PICKED : `text-slate-400 ${TILE_ICON_LIVE}`}`}
+                  className={`shrink-0 ${TILE_ICON_MOTION} ${picked ? TILE_ICON_PICKED : gated ? "text-slate-300" : `text-slate-400 ${TILE_ICON_LIVE}`}`}
                 />
                 <span className="min-w-0">
                   <span className="flex flex-wrap items-center gap-x-2">
@@ -178,13 +187,19 @@ export function formatPickerFields({
                     {locked && <span className="rounded bg-amber-100 px-1.5 text-[11px] font-semibold text-amber-800">{msg("divBuilder.card.pro")}</span>}
                   </span>
                   <span className="mt-0.5 block text-xs text-slate-500">{msg(`format.template.${t.key}.help` as MessageKey)}</span>
-                  <span className="mt-1 block text-xs font-medium text-slate-700" data-testid={`division-builder-estimate-${t.key}`}>
-                    {est.matches === null
-                      ? msg("divBuilder.card.noDraw")
-                      : [msgPlural("divBuilder.card.matches", est.matches, { count: est.matches }), mins === null ? null : msg("divBuilder.card.about", { time: hoursText(mins) })]
-                          .filter((x) => x !== null)
-                          .join(" · ")}
-                  </span>
+                  {gated ? (
+                    <span className="mt-1 block text-xs font-semibold text-amber-800" data-testid={`division-builder-size-reason-${t.key}`}>
+                      {msg("divBuilder.card.needsEntrants", { min: sizeGate.min, count: view.planEntrants })}
+                    </span>
+                  ) : (
+                    <span className="mt-1 block text-xs font-medium text-slate-700" data-testid={`division-builder-estimate-${t.key}`}>
+                      {est.matches === null
+                        ? msg("divBuilder.card.noDraw")
+                        : [msgPlural("divBuilder.card.matches", est.matches, { count: est.matches }), mins === null ? null : msg("divBuilder.card.about", { time: hoursText(mins) })]
+                            .filter((x) => x !== null)
+                            .join(" · ")}
+                    </span>
+                  )}
                 </span>
               </label>
             );

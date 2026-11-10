@@ -195,9 +195,9 @@ const bestOfOneEditor: Predicate = (f) => showsOnePointsField(f.sport, {}, { ...
 
 /** A decider switched on in the resolved cfg. The keys each reads are
  *  recorded by a Proxy and pinned against each sport's committed
- *  <sport>.schema.json (applicability.test.ts). boardgame has none: KO chess
- *  ties resolve at the fixture layer (boardgame.ts:767-769) — false premise 9,
- *  routed to W4. */
+ *  <sport>.schema.json (applicability.test.ts). boardgame has none: a KO chess
+ *  tie is closed at the fixture layer by its tie-break rung (BG-KO-1; M6's reason
+ *  below says where that is proven and why the case is not driven here). */
 export const DECIDERS: Readonly<Record<string, (cfg: Readonly<Record<string, unknown>>) => boolean>> = Object.freeze({
   football: (c) => (c.extraTime as { enabled?: unknown } | undefined)?.enabled === true || c.shootout === true,
   cricket: (c) => c.superOver === true,
@@ -288,10 +288,9 @@ const LADDER = "ladder|generic";
 const NO_TEAM = "no team entrants in this sport's model";
 const NO_PAIR = "no pair entrants in this sport's model";
 const NO_TABLE = "no points-table stage in this row (brackets place by elimination; a ladder orders by position)";
-/** False premise 9: a boardgame KO tie resolves at the fixture layer, which the
- *  knockout wave owns. M6's drop reason names it through this route (T1-R2),
- *  in the same bytes drop-list.json commits. */
-const KO_TIE_AT_FIXTURE = routeTo("W4", "boardgame knockout ties resolve at the fixture layer (false premise 9)");
+/** T8-g (W4 app PR A, Task 24): who owes boardgame's M6 drive - the wave's PR B, as a prod-build e2e, since `next dev` cannot serve the
+ *  public standings API that run ends in. Named through this route (T1-R2), in the same bytes drop-list.json commits. */
+const M6_BOARDGAME_OWED = routeTo("W4", "boardgame's M6 case is driven end to end by a prod-build e2e that reads the public standings (next dev cannot serve them)");
 
 export const RULES: Readonly<Record<string, Rule>> = Object.freeze({
   [LIFECYCLE_ID]: ALWAYS,
@@ -325,7 +324,12 @@ export const RULES: Readonly<Record<string, Rule>> = Object.freeze({
     "no level result the sport can reach under this config lands in a stage that cannot take it: draws (supportsDraws) are allowed in every stage of the row or in none, and a tie (a real fold of level scores) cannot happen here or meets no bracket stage (outside a bracket a tie has a place: a points table pays a tie, and a ladder's order moves only on a winner, so a tie leaves it standing)",
     ["knockout|football", "knockout|cricket"], "knockout|badminton", true,
   ),
-  M6: rule(decider, `the sport declares no tie decider (DECIDERS: it never finishes level, or — boardgame — KO ties resolve at the fixture layer, false premise 9, ${KO_TIE_AT_FIXTURE.wave}), or none is switched on under this config`, "knockout|icehockey", "knockout|badminton", true),
+  // T8-g (W4 app PR A, Task 24): boardgame's M6 case stays DROPPED, and the reason says why and who owes it. Its tie rule is proven
+  // below the HTTP layer - BG-KO-1, a drawn chess knockout game sits in phase tiebreak and is closed by its rung
+  // (apps/web settle-seating.test.ts) - and the matrix's BRACKET_TIEBREAK scenario is unit-proven against the fake driver
+  // (tools/matrix w2a-scenarios.test.ts). Driving it through the real product ends in the public standings API, which `next dev`
+  // cannot serve (404 on /api/v1/public/orgs/.../divisions/...), so it was NOT driven locally; a prod build serves it.
+  M6: rule(decider, `the sport declares no tie decider (DECIDERS: it never finishes level, or — boardgame — a KO tie is closed by the fixture's tie-break rung, BG-KO-1, unit-proven in apps/web settle-seating.test.ts and tools/matrix w2a-scenarios.test.ts; boardgame's M6 case is not driven end to end because that run ends in the public standings API, which next dev cannot serve — owed: ${M6_BOARDGAME_OWED.wave} app PR B, a prod-build e2e), or none is switched on under this config`, "knockout|icehockey", "knockout|badminton", true),
   M7a: ALWAYS, M7b: ALWAYS,
   M8a: rule(not(scoreless), "generic win_loss records a winner only: there is no score to correct while keeping the winner", T, { cell: T, preset: "win_loss" }, true),
   M8b: ALWAYS, M9a: ALWAYS, M9b: ALWAYS, M10: ALWAYS, M11: ALWAYS,
@@ -391,11 +395,12 @@ export interface Decision {
  *  score, else dropped. A case under the rule's harness gap is never planned,
  *  and nothing is planned on a cell the product refuses (refusedCell): asked
  *  first, so neither L3 (planL3) nor L2 (pairs.ts owed) ever plans one. */
-export function decide(r: Rule, row: RowKey, sport: string, variants: readonly SportVariants[]): Decision {
+export function decide(r: Rule, row: RowKey, sport: string, variants: readonly SportVariants[], refusal: string | null = refusedCell(row, sport)): Decision {
   const def = offlineBuilderDefault(sport);
   const unscorable: string[] = [];
   const gapped: string[] = [];
-  const refused = refusedCell(row, sport);
+  // `refusal` is the cell's refusal, asked by every caller; only pairs.ts passes another (null: it HOLDS the slot a standalone-refused pick had, W4 T24 option A).
+  const refused = refusal;
   if (refused !== null) return { applies: false, bound: null, preset: def, unscorable, gapped, refused };
   const atDefault = cellFacts(row, sport, def);
   if (r.when(atDefault)) {

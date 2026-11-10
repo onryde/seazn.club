@@ -156,6 +156,36 @@ async function abandonedKnockout(request: APIRequestContext) {
   return { compSlug: comp.data!.slug, divSlug: div.data!.slug };
 }
 
+/** W4 T21 (AN-1, X-CH-8): a generic knockout of four played out through the scoring API — both semis, then the final
+ *  they seat — with auto-advance off (the default), so the stage stays open with nothing left but its completion. */
+async function decidedKnockout(request: APIRequestContext) {
+  const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+    name: `Actions decided ${TAG} ${Math.random().toString(36).slice(2, 6)}`, visibility: "public", ends_on: "2030-12-31",
+  });
+  expect(comp.status, "create competition").toBe(201);
+  const div = await apiJson<{ id: string; slug: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`,
+    "POST", { name: "Cup", sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false } });
+  expect(div.status, "create division").toBe(201);
+  const added = await addEntrantsViaApi(request, div.data!.id, ["Final A", "Final B", "Final C", "Final D"]);
+  expect(added.ids, "four entrants").toHaveLength(4);
+  const { stageId, fixtureIds } = await createStageAndGenerate(request, div.data!.id, { kind: "knockout", name: "Cup" });
+  expect((await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST")).status).toBe(200);
+  const read = async (id: string) =>
+    (await apiJson<{ status: string; home_entrant_id: string | null; away_entrant_id: string | null }>(request, `/api/v1/fixtures/${id}`)).data!;
+  // Two passes: the semis first, then the final they seat.
+  for (let pass = 0; pass < 2; pass++) {
+    for (const id of fixtureIds) {
+      const f = await read(id);
+      if (f.status === "scheduled" && f.home_entrant_id && f.away_entrant_id) await scoreFixture(request, id, 2, 1);
+    }
+  }
+  const statuses = await Promise.all(fixtureIds.map(async (id) => (await read(id)).status));
+  expect(statuses, "every match of the bracket decided").toEqual(fixtureIds.map(() => "decided"));
+  const stage = await apiJson<{ status: string }>(request, `/api/v1/stages/${stageId}`);
+  expect(stage.data?.status, "auto-advance off: the stage stays open").toBe("active");
+  return { compSlug: comp.data!.slug, divSlug: div.data!.slug };
+}
+
 async function addStage(request: APIRequestContext, divisionId: string, progression: unknown) {
   const r = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
     seq: 2, kind: "knockout", name: "Finals", config: {}, progression,
@@ -381,6 +411,18 @@ const ROWS: Row[] = [
     },
   },
   {
+    // W4 T21 (AN-1, X-CH-8): a bracket played out and never completed. The row's label is the fixtures tab's own
+    // Complete stage key, so the row and the button it points at read the same string.
+    id: "final_decided",
+    kind: "final_decided",
+    label: en["schedule.complete"],
+    build: async (request) => decidedKnockout(request),
+    land: async (page) => {
+      await expect(page).toHaveURL(/tab=fixtures/);
+      await assertUsable(page, '[data-testid="stage-complete"]', "complete stage");
+    },
+  },
+  {
     id: "registrations_waiting",
     kind: "registrations_waiting",
     label: en["desk.needsYou.registrations_waiting.action"],
@@ -431,6 +473,57 @@ const ROWS: Row[] = [
     land: async (page) => {
       await expect(page).toHaveURL(/tab=discipline/);
       await assertUsable(page, '[data-testid="pending-row"] button', "confirm or waive the ban");
+    },
+  },
+  {
+    // W4 T11 (X-LE-10, R24 pick 1A): a reinstated player waits to join a started knockout — the automatic arrival the app
+    // never places. Eight Started through the real doors, one withdrawn (the walkover) and reinstated through PATCH.
+    // "Open bracket" lands on the division's Fixtures tab, on the knockout's stage card, where the waiting strip's "Add to
+    // bracket" is PRESSED (W4 T19, b6a merge gate): the reinstated player's tap gives back their own walked-over seat, the
+    // answer is said and the strip goes — a row that only proved the landing signed off a control nobody had built.
+    id: "late_players_waiting",
+    kind: "late_players_waiting",
+    label: en["knockout.lateWaiting.action"],
+    build: async (request) => {
+      const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+        name: `Actions late ${TAG} ${Math.random().toString(36).slice(2, 6)}`, visibility: "public", ends_on: "2030-12-31",
+      });
+      expect(comp.status, "create competition").toBe(201);
+      const div = await apiJson<{ id: string; slug: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`,
+        "POST", { name: "Open", sport_key: "badminton", variant_key: "bwf", config: {} });
+      expect(div.status, "create division").toBe(201);
+      const ents = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${div.data!.id}/entrants`, "POST",
+        Array.from({ length: 8 }, (_, i) => ({ kind: "individual", display_name: `Seed ${i + 1} ${TAG}`, seed: i + 1 })));
+      expect(ents.status, "add eight players").toBe(201);
+      const stageName = `Late Cup ${Math.random().toString(36).slice(2, 6)}`;
+      const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST",
+        { seq: 1, kind: "knockout", name: stageName, config: {} });
+      expect(stage.status, "create the knockout").toBe(201);
+      expect((await apiJson(request, `/api/v1/stages/${stage.data!.id}/generate`, "POST")).status, "draw").toBe(200);
+      expect((await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST")).status, "Start").toBe(200);
+      const leaver = ents.data![0]!.id;
+      expect((await apiJson(request, `/api/v1/entrants/${leaver}/withdraw`, "POST")).status, "withdraw").toBe(200);
+      expect((await apiJson(request, `/api/v1/entrants/${leaver}`, "PATCH", { status: "registered" })).status, "reinstate").toBe(200);
+      return { compSlug: comp.data!.slug, divSlug: div.data!.slug, landText: stageName };
+    },
+    land: async (page) => {
+      await expect(page).toHaveURL(/tab=fixtures/);
+      const strip = page.locator('[data-testid="knockout-waiting"]');
+      await expect(strip, "the stage card lists the waiting player").toBeVisible();
+      await expect(strip).toContainText(en["knockout.waiting.title"]!);
+      const tap = strip.getByTestId("knockout-waiting-place");
+      await expect(tap, "the named control is there").toHaveText(en["knockout.addToBracket"]!);
+      // Hit-testable, not merely measured: nothing sits over the button (and only an element in view can be hit).
+      await tap.scrollIntoViewIfNeeded();
+      expect(await tap.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === el
+          || el.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2));
+      }), "the button is hit-testable").toBe(true);
+      await tap.click();
+      // The answer is said in the panel's notice line (the strip has gone by then) and the strip is gone.
+      await expect(page.getByText(/is back in their place against/), "the tap says what it did").toBeVisible({ timeout: 20_000 });
+      await expect(page.locator('[data-testid="knockout-waiting"]'), "the waiting strip goes once they are placed").toHaveCount(0, { timeout: 20_000 });
     },
   },
 ];

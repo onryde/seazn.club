@@ -188,7 +188,8 @@ describe("RunSheetRow — an unfilled seat is named by its feeder", () => {
       fx({ id: "bye-line", home_entrant_id: "e1", away_slot_label: { key: "bracket.slot.bye", params: {} } }),
       feedMapFor(rows),
     );
-    expect(html).toContain(BYE);
+    // B1a review N1: the line is a bye row now ("{name} has a bye"), which is the stored label doing its job.
+    expect(html).toContain(msg("schedule.bye", { name: "" }).trim());
     expect(html).not.toContain(WINNER_R1_1);
   });
 

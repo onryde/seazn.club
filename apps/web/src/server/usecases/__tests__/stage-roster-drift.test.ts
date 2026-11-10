@@ -15,7 +15,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
-import { createEntrants, patchEntrant } from "../entrants";
+import { createEntrants, deleteEntrant, patchEntrant } from "../entrants";
 import { startDivision } from "../schedule";
 import {
   createStages,
@@ -26,6 +26,7 @@ import {
 } from "../stages"; // isRosterDriftEligible is re-exported from lib/roster-drift-eligibility
 import { withdrawEntrantCascade } from "../withdrawal";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
+import { ATTACHMENT_OF, STAGE_SETUP_KINDS, attachStageSetup } from "./_stage-setup-rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -33,7 +34,7 @@ const HAS_DB = !!process.env.DATABASE_URL;
  *  StageRosterDrift.attachments, spelled once so a whole-object toEqual
  *  stays a whole-object toEqual (a partial match would stop noticing a
  *  field appearing that should not be there). */
-const NO_ATTACH = { officials: 0, lineups: 0, deviceLinks: 0 };
+const NO_ATTACH = { officials: 0, lineups: 0, deviceLinks: 0, streams: 0, youtubeBroadcasts: 0, availability: 0, calls: 0 };
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -203,7 +204,7 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5a) — getStageRosterDrift", () => {
     const fixtureId = fixtures[0]!.id;
 
     const clean = await getStageRosterDrift(auth, stage!.id);
-    expect(clean.attachments).toEqual({ officials: 0, lineups: 0, deviceLinks: 0 });
+    expect(clean.attachments).toEqual(NO_ATTACH);
 
     const [person] = await sql<{ id: string }[]>`
       insert into persons (org_id, full_name) values (${auth.orgId}, 'Ref X') returning id`;
@@ -221,7 +222,7 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5a) — getStageRosterDrift", () => {
                       ${auth.userId}, now() + interval '1 day')`;
 
     const drift = await getStageRosterDrift(auth, stage!.id);
-    expect(drift.attachments).toEqual({ officials: 1, lineups: 1, deviceLinks: 1 });
+    expect(drift.attachments).toEqual({ ...NO_ATTACH, officials: 1, lineups: 1, deviceLinks: 1 });
 
     // Scoped to THIS stage's fixtures — a second stage's attachments never
     // inflate the warning the organiser reads for this one.
@@ -230,7 +231,7 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5a) — getStageRosterDrift", () => {
     });
     await generateStageFixtures(auth, other!.id);
     const otherDrift = await getStageRosterDrift(auth, other!.id);
-    expect(otherDrift.attachments).toEqual({ officials: 0, lineups: 0, deviceLinks: 0 });
+    expect(otherDrift.attachments).toEqual(NO_ATTACH);
 
     // …and none of them blocks: this is a warning, not a guard. The rebuild
     // goes through, and takes them with it (the CASCADE this warns about).
@@ -238,6 +239,73 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5a) — getStageRosterDrift", () => {
     const [{ count }] = await sql<{ count: number }[]>`
       select count(*)::int as count from fixture_officials where fixture_id = ${fixtureId}`;
     expect(count).toBe(0);
+  });
+
+  // W4 B2 fix round 2 (item 5): the setup that can exist on a match BEFORE Start beyond those three — a stream code or
+  // destination, a YouTube broadcast, a player's availability answer, a Match Day court call. Each cascades with the
+  // fixture, so Rebuild's confirm has to be able to name it.
+  it("counts every other kind of match setup a rebuild would clear: streams, YouTube broadcasts, availability, court calls", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedDivision(auth, ["A", "B", "C", "D"]);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "league", name: "L", config: {}, progression: null,
+    });
+    const { fixtures } = await generateStageFixtures(auth, stage!.id);
+    const [f1, f2] = fixtures;
+    const kinds = STAGE_SETUP_KINDS.filter((k) => !["official", "lineup", "device"].includes(k));
+    expect(kinds).toEqual(["stream_code", "stream_settings", "youtube", "availability", "call"]);
+    let checked = 0;
+    for (const kind of kinds) {
+      const before = (await getStageRosterDrift(auth, stage!.id)).attachments;
+      await attachStageSetup(auth, kind, f1!.id);
+      const after = (await getStageRosterDrift(auth, stage!.id)).attachments;
+      const field = ATTACHMENT_OF[kind];
+      const moved = Object.keys(after).filter((k) => after[k as keyof typeof after] !== before[k as keyof typeof before]);
+      // A stream code and a destination on ONE match are one match with stream setup: the second adds nothing.
+      if (kind === "stream_settings") expect(moved, kind).toEqual([]);
+      else expect([moved, after[field] - before[field]], kind).toEqual([[field], 1]);
+      checked++;
+    }
+    expect(checked).toBe(5);
+    // The destination alone on another match counts that match.
+    await attachStageSetup(auth, "stream_settings", f2!.id);
+    expect((await getStageRosterDrift(auth, stage!.id)).attachments).toEqual({
+      ...NO_ATTACH, streams: 2, youtubeBroadcasts: 1, availability: 1, calls: 1,
+    });
+    // Rebuild takes them all with the fixtures (the CASCADE the confirm warns about).
+    await rebuildStageFixtures(auth, stage!.id);
+    expect((await getStageRosterDrift(auth, stage!.id)).attachments).toEqual(NO_ATTACH);
+  });
+
+  // W4 B2 fix round 2 (item 1): `vacantLines` is a ROOT KNOCKOUT's count. A Swiss whose round one went back to shells (an
+  // entrant deleted before Start clears the round, stages.ts) has first-round rows with nobody on them by design: counted,
+  // they would add a false "empty place" line to the Swiss banner.
+  it("a Swiss whose round one went back to shells reports no empty first-round place — that count is a root knockout's", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, entrantByName } = await seedDivision(auth, ["A", "B", "C", "D"]);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 2 }, progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    await deleteEntrant(auth, entrantByName.get("D")!);
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixtures
+       where stage_id = ${stage!.id} and round_no = 1 and home_entrant_id is null and away_entrant_id is null`;
+    expect(n, "premise: first-round rows with nobody on them").toBeGreaterThan(0);
+    expect((await getStageRosterDrift(auth, stage!.id)).vacantLines).toBe(0);
+  });
+
+  it("an ENDED stream code is history, not setup: it is not counted (the positive pair: the same code live is)", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedDivision(auth, ["A", "B"]);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "league", name: "L", config: {}, progression: null,
+    });
+    const { fixtures } = await generateStageFixtures(auth, stage!.id);
+    await attachStageSetup(auth, "stream_code", fixtures[0]!.id);
+    expect((await getStageRosterDrift(auth, stage!.id)).attachments.streams, "live").toBe(1);
+    await sql`update fixture_stream_codes set ended_at = now(), end_cause = 'reissued' where fixture_id = ${fixtures[0]!.id}`;
+    expect((await getStageRosterDrift(auth, stage!.id)).attachments.streams, "ended").toBe(0);
   });
 
   it("a stage with a progression source (not the root) reports no drift at all", async () => {
@@ -261,7 +329,7 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5a) — getStageRosterDrift", () => {
     await generateStageFixtures(auth, koStage.id); // TBD placeholders, no entrant refs
 
     const drift = await getStageRosterDrift(auth, koStage.id);
-    expect(drift).toEqual({ ghosts: [], unplaced: [], attachments: NO_ATTACH });
+    expect(drift).toEqual({ ghosts: [], unplaced: [], vacantLines: 0, attachments: NO_ATTACH });
   });
 
   // W3 item 6 follow-up — swissGen persists pairRound's `bye` as a real
@@ -643,7 +711,7 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5b) — rebuildStageFixtures", () => {
     expect(referenced.has(added[0]!.id)).toBe(true);
 
     const after = await getStageRosterDrift(auth, stage!.id);
-    expect(after).toEqual({ ghosts: [], unplaced: [], attachments: NO_ATTACH });
+    expect(after).toEqual({ ghosts: [], unplaced: [], vacantLines: 0, attachments: NO_ATTACH });
     // W3 T1 (X-RB-1): nothing was laid out, and every position survived (3 → 3).
     expect(out.slots).toEqual({ kept: 0, freed: 0, unscheduled: 0 });
   });

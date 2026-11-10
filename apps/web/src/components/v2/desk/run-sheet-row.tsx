@@ -28,6 +28,7 @@ import { courtDisplayName } from "@/components/v2/board/types";
 import { courtOptionsFor, type Venue } from "@/components/v2/shared/court-multi-picker";
 import { canEditFixtureTime, fixtureRowAction, hasAssignedScorer, type RowAction } from "@/lib/fixture-row-action";
 import { isBye, type RunSheetFixture, type RunSheetOnlinePlay } from "@/lib/run-sheet-groups";
+import { byePhantomSide, isWaitingByeLine } from "@/lib/bye-line";
 import { queueRowAnchor } from "@/components/v2/external-play-held-copy";
 import type { HoldState } from "@/server/relay/domain/session";
 import { fixtureStatusLabel, VOID_STATUSES } from "@/components/v2/stages-panel";
@@ -307,11 +308,26 @@ export function RunSheetRow({
   // Swiss Pair sits the award on the bye shell (`forfeited` + outcome.award).
   // Showing only "{name} has a bye" hid that the sit-out was already decided
   // — Gus looked awarded after the points fix, then Finn's R2 bye looked like
-  // a bare sit-out again. `isBye` requires an award outcome, so always pair
-  // the bye label with the walkover result (`schedule.outcome.wonWo`).
+  // a bare sit-out again. An awarded bye carries an award outcome, so always
+  // pair the bye label with the walkover result (`schedule.outcome.wonWo`).
+  //
+  // W4 B1a review N1: a bye line before its award (`isWaitingByeLine`) is a bye
+  // too, with no award yet — and often no seat: a bracket's day-one bye, or a
+  // dead seat waiting on its feeder. It names the side that sits out by that
+  // side's own label (stored, then feed edge — `seatLabel`, as every undrawn
+  // seat below reads), never "?" and never the phantom side's "Bye".
   if (isBye(fixture)) {
     const who = fixture.home_entrant_id ?? fixture.away_entrant_id;
-    const name = entrantNames[who ?? ""] ?? "?";
+    const phantom = who === null && isWaitingByeLine({ ...fixture, ext_key: fixture.ext_key ?? null }) ? byePhantomSide(fixture) : null;
+    const sitter = phantom === "home" ? "away" : "home";
+    const name =
+      phantom === null
+        ? (entrantNames[who ?? ""] ?? "?")
+        : resolveSlotLabel(
+            seatLabel(sitter === "home" ? fixture.home_slot_label : fixture.away_slot_label, feedLabels?.[fixture.id], sitter),
+            msg,
+            "schedule.tbd",
+          );
     const awarded = outcomeText(msg, fixture.outcome, entrantNames);
     return (
       <li className="px-4 py-2 text-sm text-slate-500 italic" data-testid="run-sheet-bye">

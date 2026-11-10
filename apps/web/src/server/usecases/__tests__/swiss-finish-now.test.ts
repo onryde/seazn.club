@@ -1240,7 +1240,9 @@ describe.runIf(HAS_DB)("T15 Carry A: a departed entrant leaves the Swiss cut; th
     expect(qualifierIds(await draftProposal(rig.koStageId!)), "reinstated: the full table's top 4 again").toEqual(idsOf(table).slice(0, 4));
   }, 300_000);
 
-  it("Swiss only: a LEAGUE cut keeps today's rule — a withdrawn leader's seat is dead and nobody backfills (badminton — the scope guard reads the source stage kind, never the sport)", async () => {
+  it("X-LL-5 a LEAGUE cut backfills too since W4 (RB4-V6) — a withdrawn leader leaves the cut and rank 5 is promoted (badminton — the scope reads the source stage kind, never the sport)", async () => {
+    // Until W4 this pinned the opposite (Swiss only: a league's departed leader kept a dead seat). RB4-V6 rules a league
+    // or group source as W3 ruled Swiss; the expected cut is the table less the departed, top 4 (`cutLess`).
     const { auth } = await seedOrg("pro");
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "League cut " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
     const division = await createDivision(auth, comp.id, { name: "Open", slug: "open-" + randomUUID().slice(0, 6), sport_key: "badminton", variant_key: "bwf", config: {} });
@@ -1266,8 +1268,9 @@ describe.runIf(HAS_DB)("T15 Carry A: a departed entrant leaves the Swiss cut; th
     await withdrawEntrantCascade(auth, leader);
     expect(await completeStage(auth, league!.id, { publish: false })).toMatchObject({ completed: true });
     const qualifiers = [...(await draftProposal(ko!.id)).computed.qualifiers].sort((a, b) => a.rank - b.rank);
-    expect(qualifiers.map((q) => q.entrantId), "the top 4 less the departed — rank 5 is NOT promoted").toEqual(idsOf(table).slice(1, 4));
-    expect(qualifiers.map((q) => q.rank), "seed 1's place is dead").toEqual([2, 3, 4]);
+    expect(qualifiers.map((q) => q.entrantId), "the top 4 less the departed — rank 5 IS promoted").toEqual(cutLess(table, [leader], 4));
+    expect(qualifiers.map((q) => q.rank), "the table closes up: no dead place").toEqual([1, 2, 3, 4]);
+    expect(qualifiers.map((q) => q.entrantId), "premise: the promoted entrant is the table's fifth").toContain(table[4]!.entrantId);
   }, 300_000);
 });
 

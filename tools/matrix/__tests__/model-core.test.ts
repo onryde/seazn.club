@@ -18,6 +18,8 @@ import { generateDoubleElim, generatePagePlayoff, generateRoundRobin, generateSi
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { engineFixtureStatus } from "../../../apps/web/src/lib/fixture-engine-status.ts";
+import { KNOCKOUT_REFUSALS } from "../../../apps/web/src/lib/knockout-refusals.ts";
+import { ROOT_KNOCKOUT_KINDS } from "../../../apps/web/src/lib/open-entry-stages.ts";
 import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import { BUILDER_DEFAULT_KNOBS, ROW_KEYS, SPORT_KEYS, stagesForRow, type RowKey, type StagePostBody } from "../lib/catalogue.ts";
 import { RefusedCall, RequestTimedOut, nextMatchFixtureId, type EntrantInput, type EntrantRow, type FixtureRow, type GenerateOut, type LineupChecked, type LineupSlotWire, type OrganiserDriver, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
@@ -29,7 +31,7 @@ import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-f
 import {
   LINEUP_LOCKED_FINDING, LINEUP_SIDE_SIZE_FINDING, LINEUP_WARNED_CHECK, LINEUPS_CHECK, MODEL_FAMILY_ROUTE, ModelUnsupported,
   NEXT_MATCH_CHECK, NEXT_MATCH_LOCK, NEXT_MATCH_UNHELD_FINDING, ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, REFUSAL_NAMED, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, VOID_STATUSES,
-  absorbFixtures, ensureModelLineups, fedCandidates, fedMatchStarted, informativeSteps, modelRowRefusal, orientationBound, rosterLocked, type FixtureModel,
+  absorbFixtures, ensureModelLineups, fedCandidates, fedMatchStarted, informativeSteps, modelHoldsRootKnockout, modelRowRefusal, orientationBound, rosterLocked, type FixtureModel,
 } from "../lib/model/state.ts";
 import { PENDING_STATUSES, TERMINAL_STATUSES, isNamedRefusal, sameOutcome, toObservedOutcome } from "../lib/observed.ts";
 import { NotAWave } from "../lib/routing.ts";
@@ -223,6 +225,9 @@ describe("the roster lock after Start (entrants.ts) — an EXPECTED refusal, nev
     expect(lock.statuses).toEqual(["active", "completed"]);
     expect([...ROSTER_LOCK.openKinds]).toEqual(lock.openKinds);
     expect(ROSTER_LOCK.rootSwiss, "W3 ruling 250: a root Swiss exempts the division (hasRootSwissStage)").toBe(lock.rootSwiss);
+    expect(ROSTER_LOCK.rootKnockout, "W4 T9 (X-LE-1): a root knockout exempts the division (hasRootKnockoutStage)").toBe(lock.rootKnockout);
+    // Anti-vacuity: the text really carries both exemptions, so the two equalities above are not null == null.
+    expect([lock.rootSwiss, lock.rootKnockout]).toEqual([true, true]);
     expect(ROSTER_LOCK.status).toBe(lock.status);
     expect(lock.openKinds.length).toBeGreaterThan(0);
     // RR-2 tripwire: without it, a product fix silently moves the finding count to 0 and the register never hears.
@@ -313,6 +318,48 @@ describe("the roster lock after Start (entrants.ts) — an EXPECTED refusal, nev
     expect(at({ stageKind: "swiss", stageConfig: { rounds: 3, qualified: [] } }), "a Swiss seeded by a cut is not a root Swiss").toBe(true);
     expect(at({ stageKind: "swiss", stageConfig: { rounds: 3 }, started: false }), "before Start nothing is locked").toBe(false);
   });
+  it("W4 T9: a started ROOT knockout is not roster-locked (the product's late-entry door answers) and the model does not offer the add there; every other closed kind still is", async () => {
+    // single-sport: the lock reads stage kinds and the stage's state, not a sport.
+    const { m, d } = await fresh();
+    await play(m, d, [["Start", 0]]);
+    const at = (over: Partial<ModelState>) => ({ ...m, ...over });
+    // The product's own list of root-knockout kinds, not a copy of it: the sweep is over what open-entry-stages.ts declares.
+    expect(ROOT_KNOCKOUT_KINDS.length, "anti-vacuity: the product declares root knockout kinds").toBeGreaterThan(0);
+    let checked = 0;
+    for (const kind of ROOT_KNOCKOUT_KINDS) {
+      const s = at({ stageKind: kind });
+      expect(modelHoldsRootKnockout(s), kind).toBe(true);
+      expect(rosterLocked(s), `${kind}: a started root knockout is not roster-locked`).toBe(false);
+      expect(commandOf("AddEntrant", 0, 0, true).check(s), `${kind}: the model does not offer the add (late-entry outcomes are not modelled)`).toBe(false);
+      expect(rosterLocked(at({ stageKind: kind, started: false })), `${kind}: before Start nothing is locked`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(ROOT_KNOCKOUT_KINDS.length);
+    // A knockout fed by a cut is X-LE-2's: not a root, locked and offered-to-be-refused like any closed format.
+    const fed = at({ stageKind: "knockout", stageConfig: { qualified: [] } });
+    expect(modelHoldsRootKnockout(fed)).toBe(false);
+    expect(rosterLocked(fed)).toBe(true);
+    expect(commandOf("AddEntrant", 0, 0, true).check(fed)).toBe(true);
+    // A league, a double elimination and a complete Swiss stay locked, and the add stays offered (to be refused).
+    for (const kind of ["league", "double_elim"]) {
+      expect(ROOT_KNOCKOUT_KINDS, `premise: ${kind} is no root knockout kind`).not.toContain(kind);
+      const s = at({ stageKind: kind });
+      expect(modelHoldsRootKnockout(s), kind).toBe(false);
+      expect(rosterLocked(s), kind).toBe(true);
+      expect(commandOf("AddEntrant", 0, 0, true).check(s), kind).toBe(true);
+    }
+  });
+  it("W4 T9: the model's fake refuses loudly, not with a seatless entrant, if a test posts a late add into a started root knockout", async () => {
+    // single-sport: the lock reads the stage kind, not a sport.
+    const { m, d } = await fresh();
+    await play(m, d, [["Start", 0]]);
+    if (d.stage === null) throw new Error("test: no stage");
+    d.stage.kind = "knockout";
+    const before = (await d.listEntrants()).length;
+    await expect(d.addEntrants(m.divisionId, [{ displayName: "Late Player", seed: 99, kind: "individual" }])).rejects.toThrow(/late-entry door/);
+    expect((await d.listEntrants()).length, "the refused add changed nothing").toBe(before);
+    expect(before).toBeGreaterThan(0);
+  });
 });
 
 describe("#879 — roster growth while fixtures exist, BEFORE Start (issue #879; ruling C-1 supersedes R-PF8)", () => {
@@ -394,7 +441,7 @@ describe("#879 — roster growth while fixtures exist, BEFORE Start (issue #879;
   });
 });
 
-describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk off MB-002..005 and MB-007..010's triggers, and nothing else", () => {
+describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk off MB-002/003 and MB-007..010's triggers (MB-004/005 fixed by W4 T8), and nothing else", () => {
   const KO_TBD = "ko-withdraw-waiting-on-tbd";
   const KO_GEN = "ko-generate-after-roster-change";
   const TRUTH_RUNS = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs");
@@ -489,7 +536,7 @@ describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk 
     expect(checked).toBe(2 * PENDING_STATUSES.length);
     expect(PENDING_STATUSES.length).toBeGreaterThan(0);
   });
-  it("G-1 (T15-R8, T16-R3): each bracket fence applies on exactly the stage kinds × trigger branches its committed cases' finding commands show — withdraw while waiting on a TBD seat: knockout (MB-002/003), stepladder (MB-008), double elim (MB-009); generate after an added entrant: knockout (MB-005), double elim (MB-007); generate after a withdrawal: knockout (MB-004), double elim (MB-010) — each kind one the product's bracket withdrawal and generation share (stages.ts BRACKET_WALKOVER_KINDS)", async () => {
+  it("G-1 (T15-R8, T16-R3): each bracket fence applies on exactly the stage kinds × trigger branches its committed cases' finding commands show — withdraw while waiting on a TBD seat: knockout (MB-002/003), stepladder (MB-008), double elim (MB-009); generate after an added entrant: double elim (MB-007); generate after a withdrawal: double elim (MB-010) — knockout's MB-004/005 are fixed (W4 T8), so no open case witnesses it there — each kind one the product's bracket withdrawal and generation share (stages.ts BRACKET_WALKOVER_KINDS)", async () => {
     const walkover = bracketWalkoverKindsText();
     expect(walkover.length, "BRACKET_WALKOVER_KINDS read empty").toBeGreaterThan(0);
     // A started knockout where e1 waits on a TBD seat in the final. Each
@@ -573,32 +620,158 @@ describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk 
     expect(checked).toBeGreaterThan(TERMINAL_STATUSES.length + 2);
     expect(s.fenced.get(KO_TBD) ?? 0).toBe(0);
   });
-  it("MB-004/005: Generate is withheld on a knockout with fixtures once the roster changed — an entrant added (MB-005) or one withdrawn (MB-004)", async () => {
+  it("MB-004/005 FIXED (W4 T8, FX-G2): Generate is offered on a knockout with fixtures once the roster changed — an entrant added (MB-005) or one withdrawn (MB-004) — and double elim keeps the fence (MB-007/010 open)", async () => {
     const s = await ko();
-    expect(commandOf("Generate", 0, 0, true).check(s), "no roster change").toBe(true);
-    const added: ModelState = { ...s, lateEntry: true, fenced: new Map() };
-    expect(commandOf("Generate", 0, 0, true).check(added)).toBe(false);
-    expect(added.fenced.get(KO_GEN)).toBe(1);
     const e2 = s.entrants[1];
     if (e2 === undefined) throw new Error("test: four entrants");
-    const withdrawn: ModelState = { ...s, withdrawn: new Set([e2]), fenced: new Map() };
-    expect(commandOf("Generate", 0, 0, true).check(withdrawn)).toBe(false);
-    expect(withdrawn.fenced.get(KO_GEN)).toBe(1);
-    expect(fenceBlocking(withdrawn, "Generate", false)).toBeNull();
+    // The premise, read from the committed file: both cases are fixed, their double-elim twins open.
+    const status = new Map(loadRegressions().map((r) => [r.id, r.status]));
+    expect(["MB-004", "MB-005", "MB-007", "MB-010"].map((id) => status.get(id))).toEqual(["fixed", "fixed", "open", "open"]);
+    let checked = 0;
+    for (const [label, over] of [["added", { lateEntry: true }], ["withdrawn", { withdrawn: new Set([e2]) }]] as const) {
+      const ko2: ModelState = { ...s, ...over, fenced: new Map() };
+      expect(commandOf("Generate", 0, 0, true).check(ko2), `knockout ${label}`).toBe(true);
+      expect(ko2.fenced.get(KO_GEN) ?? 0, `knockout ${label}: not fenced`).toBe(0);
+      const de: ModelState = { ...s, ...over, stageKind: "double_elim", fenced: new Map() };
+      expect(commandOf("Generate", 0, 0, true).check(de), `double elim ${label}`).toBe(false);
+      expect(de.fenced.get(KO_GEN), `double elim ${label}: still fenced`).toBe(1);
+      checked += 2;
+    }
+    expect(checked).toBe(4);
   });
-  it("MB-004/005: …and offered with no fixtures yet; after an added entrant, on the other kinds a committed case witnesses (MB-007) it is this fence, on the round robins #879's own, and on every other kind none", async () => {
+  it("MB-004/005: on every other kind the Generate fences are what their committed cases witness — the round robins #879's, the open double-elim cases this fence, knockout and the rest none", async () => {
     const s: ModelState = { ...(await ko()), lateEntry: true };
     expect(commandOf("Generate", 0, 0, true).check({ ...s, fixtures: new Map(), fenced: new Map() }), "no fixtures").toBe(true);
     const rr = roundRobinKindsText();
     const fencedOn = witnessed(KO_GEN).get("added") ?? [];
     expect(fencedOn.length, "no committed case shows the added-entrant branch").toBeGreaterThan(0);
+    expect(fencedOn, "knockout's case is fixed: nothing open witnesses the fence there").not.toContain("knockout");
     let checked = 0;
-    for (const stageKind of [...[...BRACKET_STAGE_KINDS].filter((k) => k !== "knockout"), "swiss", ...rr]) {
+    for (const stageKind of [...BRACKET_STAGE_KINDS, "swiss", ...rr]) {
       const want = rr.includes(stageKind) ? "late-entry-then-generate" : fencedOn.includes(stageKind) ? KO_GEN : null;
       expect(fenceBlocking({ ...s, stageKind }, "Generate", true)?.id ?? null, stageKind).toBe(want);
       checked++;
     }
-    expect(checked).toBeGreaterThan(rr.length);
+    expect(checked).toBe(BRACKET_STAGE_KINDS.size + 1 + rr.length);
+  });
+  it("W4 T8: after Start the model expects a knockout's Generate refused (KO_GENERATE_AFTER_START) exactly when an entrant was added since the lines were drawn — never after a withdrawal (the named no-op), before Start, with no lines, or on another kind", async () => {
+    const s = await ko();
+    const e2 = s.entrants[1];
+    if (e2 === undefined) throw new Error("test: four entrants");
+    const expects = (m: ModelState): boolean =>
+      (commandOf("Generate", 0, 0, true) as unknown as { expectsRefusal(m: ModelState): boolean }).expectsRefusal(m);
+    const TABLE: [string, ModelState, boolean][] = [
+      ["started, added", { ...s, lateEntry: true }, true],
+      ["started, withdrawn (MB-004's sequence)", { ...s, withdrawn: new Set([e2]) }, false],
+      ["started, added and withdrawn", { ...s, lateEntry: true, withdrawn: new Set([e2]) }, true],
+      ["started, unchanged", s, false],
+      ["not started, added", { ...s, started: false, lateEntry: true }, false],
+      ["started, added, no lines", { ...s, lateEntry: true, fixtures: new Map() }, false],
+      ["double elim, started, added", { ...s, stageKind: "double_elim", lateEntry: true }, false],
+      ["league, started, added", { ...s, stageKind: "league", lateEntry: true }, false],
+    ];
+    let checked = 0;
+    for (const [label, m, want] of TABLE) {
+      expect(expects(m), label).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(TABLE.length);
+  });
+  // B2 fix round 1 (m3): where the model expects the refusal, it expects THAT refusal — the knockout table's own code
+  // (apps/web lib/knockout-refusals.ts), never any named one. Another code there is the model's expected-refusal violation.
+  it("m3: an expected knockout Generate refusal must carry KO_GENERATE_AFTER_START — another named code is a violation, that code is not", async () => {
+    let checked = 0;
+    for (const code of ["STAGE_NOT_READY", "KO_REDRAW_WOULD_CLEAR_SETUP", "KO_GENERATE_AFTER_START"]) {
+      const m = { ...(await ko()), lateEntry: true };
+      if (code.startsWith("KO_")) expect(KNOCKOUT_REFUSALS[code as keyof typeof KNOCKOUT_REFUSALS], `premise: ${code} is the knockout table's`).toBeDefined();
+      const d = { generate: () => Promise.reject(new RefusedCall("POST", "/api/v1/stages/s1/generate", 409, code, "refused")) } as unknown as OrganiserDriver;
+      const out = await commandOf("Generate", 0, 0, true).run(m, d as never).then(() => null, (x: unknown) => x);
+      if (code === "KO_GENERATE_AFTER_START") {
+        // The pin passed; the step then goes on to judge the (hand-built) state, which this stub driver cannot answer.
+        expect(out instanceof ModelViolation ? out.check : null, code).not.toBe("model-expected-refusal");
+        expect(m.counts.Generate.expected, code).toBe(1);
+      } else {
+        expect(out, code).toBeInstanceOf(ModelViolation);
+        expect((out as ModelViolation).check, code).toBe("model-expected-refusal");
+        expect((out as ModelViolation).message, code).toContain(code);
+      }
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+  // B2 fix round 2 (item 2): Start reconciles IN PLACE only (schedule.ts startDivision). It seats newcomers in the bracket's
+  // first-round byes; when they outnumber the byes the bracket would have to be drawn again, and Start refuses by name
+  // (KO_START_NEEDS_UPDATE_DRAW) — the late entry then waits for a Generate (Update draw) or a Rebuild. Expected values from
+  // the product's rule as the rulings state it: newcomers > byes, a bye being a first-round line with one seat, forfeited.
+  it("fix round 2: the model expects a knockout's Start refused exactly when the newcomers outnumber the first-round byes — never otherwise, never on another kind", async () => {
+    const s = await ko();
+    const [e1, e2, e3, e4] = s.entrants;
+    if (e1 === undefined || e2 === undefined || e3 === undefined || e4 === undefined) throw new Error("test: four entrants");
+    const fx = (id: string, round: number, home: string | null, away: string | null, status: string): [string, FixtureModel] => [id, { id, round, home, away, status, ledger: null }];
+    // A bracket of three, drawn: e1 holds the bye, e2 v e3, the final waits on both.
+    const ofThree = new Map([fx("b1", 1, e1, null, "forfeited"), fx("b2", 1, e2, e3, "scheduled"), fx("b3", 2, e1, null, "scheduled")]);
+    const setup: ModelState = { ...s, started: false, lateEntry: true, fixtures: ofThree, entrants: [e1, e2, e3, e4] };
+    const expects = (m: ModelState): boolean =>
+      (commandOf("Start", 0, 0, true) as unknown as { expectsRefusal(m: ModelState): boolean }).expectsRefusal(m);
+    const TABLE: [string, ModelState, boolean][] = [
+      ["3 drawn, 1 newcomer, 1 bye: placed in place", setup, false],
+      ["3 drawn, 2 newcomers, 1 bye: a redraw", { ...setup, entrants: [e1, e2, e3, e4, "x5"] }, true],
+      ["4 drawn (no bye), 1 newcomer: a redraw", { ...s, started: false, lateEntry: true, entrants: [e1, e2, e3, e4, "x5"] }, true],
+      ["no late entry", { ...setup, entrants: [e1, e2, e3, e4, "x5"], lateEntry: false }, false],
+      ["no lines yet (Start draws the bracket)", { ...setup, entrants: [e1, e2, e3, e4, "x5"], fixtures: new Map() }, false],
+      ["a league", { ...setup, entrants: [e1, e2, e3, e4, "x5"], stageKind: "league" }, false],
+      ["double elim", { ...setup, entrants: [e1, e2, e3, e4, "x5"], stageKind: "double_elim" }, false],
+    ];
+    let checked = 0;
+    for (const [label, m, want] of TABLE) {
+      expect(expects(m), label).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(TABLE.length);
+  });
+  it("fix round 2: an expected knockout Start refusal must carry KO_START_NEEDS_UPDATE_DRAW — another named code is a violation, that code is not", async () => {
+    let checked = 0;
+    for (const code of ["KO_REDRAW_WOULD_CLEAR_SETUP", "KO_GENERATE_AFTER_START", "KO_START_NEEDS_UPDATE_DRAW"]) {
+      const s = await ko();
+      const [e1, e2, e3, e4] = s.entrants;
+      if (e1 === undefined || e2 === undefined || e3 === undefined || e4 === undefined) throw new Error("test: four entrants");
+      // Two drawn (e1 v e2, no bye), two added: Start would have to draw the bracket again.
+      const m: ModelState = {
+        ...s, started: false, lateEntry: true, entrants: [e1, e2, e3, e4],
+        fixtures: new Map([["k1", { id: "k1", round: 1, home: e1, away: e2, status: "scheduled", ledger: null }]]),
+      };
+      expect(KNOCKOUT_REFUSALS[code as keyof typeof KNOCKOUT_REFUSALS], `premise: ${code} is the knockout table's`).toBeDefined();
+      const d = { start: () => Promise.reject(new RefusedCall("POST", "/api/v1/divisions/d1/start", 409, code, "refused")) } as unknown as OrganiserDriver;
+      const out = await commandOf("Start", 0, 0, true).run(m, d as never).then(() => null, (x: unknown) => x);
+      if (code === "KO_START_NEEDS_UPDATE_DRAW") {
+        expect(out instanceof ModelViolation ? out.check : null, code).not.toBe("model-expected-refusal");
+        expect(m.counts.Start.expected, code).toBe(1);
+        expect([m.started, m.lateEntry], "refused: not started, the late entry still waits").toEqual([false, true]);
+      } else {
+        expect(out, code).toBeInstanceOf(ModelViolation);
+        expect((out as ModelViolation).check, code).toBe("model-expected-refusal");
+        expect((out as ModelViolation).message, code).toContain(code);
+      }
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+  // B2 fix round 1 (G1): Start reconciles a root knockout that already has lines (schedule.ts startDivision), so an entrant
+  // added before Start and seated by it in place spends the late entry, and a Generate after Start is the named no-op, not
+  // refused. A league's Start draws nothing over existing lines (#879's fence still reads its late entry).
+  it("G1: Start spends a knockout's late entry when the stage already has lines — never a league's", async () => {
+    let checked = 0;
+    for (const [kind, spent] of [["knockout", true], ["league", false]] as const) {
+      const { m, d } = await fresh();
+      await play(m, d, [["Generate", 0], ["AddEntrant", 0]], false);
+      expect(m.lateEntry, `premise (${kind}): an entrant added over the lines`).toBe(true);
+      const s: ModelState = { ...m, stageKind: kind };
+      await (commandOf("Start", 0, 0, false) as unknown as { act(m: ModelState, d: OrganiserDriver): Promise<void> }).act(s, d);
+      expect(s.started).toBe(true);
+      expect(s.lateEntry, kind).toBe(!spent);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });
 

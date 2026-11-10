@@ -14,6 +14,8 @@ import { ProseEditor } from "@/components/prose-editor";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { publishWouldList } from "@/lib/competition-listing";
+import { OpenStagesWarning } from "@/components/v2/open-stages-warning";
+import type { OpenStageRow } from "@/lib/open-stages";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -35,6 +37,7 @@ interface CompetitionLite {
 const STATUSES = ["draft", "published", "live", "completed", "archived"];
 /** One settings form per page, so a fixed id is unique. */
 const DRAFT_UNLISTED_HINT_ID = "compset-draft-unlisted-hint";
+const OPEN_STAGES_WARNING_ID = "compset-open-stages-warning";
 
 type SettingsTab = "general" | "branding" | "archived";
 
@@ -67,6 +70,7 @@ export function CompetitionSettings({
   archivedCount = 0,
   sharePath = null,
   hasYouthDivisions = false,
+  openStages = [],
   viewerPlan,
 }: {
   competition: CompetitionLite;
@@ -88,6 +92,8 @@ export function CompetitionSettings({
   archivedPanel?: React.ReactNode;
   /** The Archived tab only shows when there is something to restore. */
   archivedCount?: number;
+  /** W4 T21 (X-CH-8): the competition's open stages (`openStagesOf`), listed by the Complete-competition warning. */
+  openStages?: OpenStageRow[];
   viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
@@ -115,6 +121,15 @@ export function CompetitionSettings({
   const readOnly = !canEdit || competition.frozen;
   const showSuggestion = !readOnly && suggestedStatus && suggestedStatus !== form.status;
   const draftUnlisted = publishWouldList(form);
+  // W4 T21 (AN-1, X-CH-8; owner pick R24 4A): completing WARNS, never refuses. The warning follows the form — it shows
+  // the moment "completed" is chosen, before Save, and Save is never blocked — and beside a "Set to Completed"
+  // suggestion too, since that one-tap button saves without waiting for Save. Only for someone who can change the
+  // status: a viewer is not being asked to decide anything.
+  const completing = form.status === "completed" || (showSuggestion && suggestedStatus === "completed");
+  const showOpenStages = canEdit && openStages.length > 0 && completing;
+  const statusDescribedBy =
+    [draftUnlisted ? DRAFT_UNLISTED_HINT_ID : null, showOpenStages ? OPEN_STAGES_WARNING_ID : null].filter(Boolean).join(" ") ||
+    undefined;
 
   async function applyStatus(next: string) {
     setError(null);
@@ -339,7 +354,7 @@ export function CompetitionSettings({
                     disabled={!canEdit}
                     value={form.status}
                     onChange={(e) => setForm({ ...form, status: e.target.value })}
-                    aria-describedby={draftUnlisted ? DRAFT_UNLISTED_HINT_ID : undefined}
+                    aria-describedby={statusDescribedBy}
                     className="select"
                   >
                     {STATUSES.map((s) => (
@@ -370,6 +385,9 @@ export function CompetitionSettings({
                       {msg("compset.setTo", { status: statusLabel(msg, suggestedStatus!) })}
                     </button>
                   </div>
+                )}
+                {showOpenStages && (
+                  <OpenStagesWarning id={OPEN_STAGES_WARNING_ID} stages={openStages} canComplete={!readOnly} />
                 )}
               </div>
 

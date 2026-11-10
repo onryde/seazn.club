@@ -264,8 +264,14 @@ test.describe("competition desk", () => {
   //
   // Built through the real API the whole way — `config.thirdPlace` is a real
   // production stage-config key (stages.ts:772), and `POST /stages/{id}/
-  // complete` is the organiser's own action, which returns 200 with
+  // complete` is the organiser's own action, which returned 200 with
   // `division_completed: true` in exactly this state.
+  //
+  // W4 T6 (AN-2, X-CH-7): that Complete is now REFUSED — 409
+  // STAGE_HAS_UNDECIDED_FIXTURES naming the playoff — so the state this test
+  // was built around (a completed division beside a missing result) is no
+  // longer reachable. What it still pins: the desk never says Finished while
+  // the playoff is owed, and entering the playoff's result is the way out.
   test("a knockout completed with its third-place playoff unplayed: never Finished beside a missing result", async ({
     page,
     request,
@@ -296,13 +302,11 @@ test.describe("competition desk", () => {
     const completed = await apiJson<{ division_completed?: boolean }>(
       request, `/api/v1/stages/${stageId}/complete`, "POST", {},
     );
-    // Print the asserted CONTENT beside the gate: without these two the test
-    // could be measuring a division that never completed at all, and "not
-    // finished" would then be true for entirely the wrong reason.
-    expect(completed.status).toBe(200);
-    expect(completed.data?.division_completed).toBe(true);
+    // W4 T6: refused by name, the playoff named — and nothing completed.
+    expect(completed.status).toBe(409);
+    expect(completed.error).toMatchObject({ code: "STAGE_HAS_UNDECIDED_FIXTURES", fixture_ids: [playoff] });
     const divRow = await apiJson<{ status: string }>(request, `/api/v1/divisions/${div.data!.id}`);
-    expect(divRow.data?.status).toBe("completed");
+    expect(divRow.data?.status).not.toBe("completed");
     const playoffRow = await apiJson<{ status: string }>(request, `/api/v1/fixtures/${playoff}`);
     expect(playoffRow.data?.status).toBe("scheduled");
 
@@ -311,7 +315,6 @@ test.describe("competition desk", () => {
     // The row and the Needs-you section must not contradict each other.
     await expect(page.getByTestId("desk-needs-you").locator('[data-attention="result_missing"]')).toHaveCount(1);
     await expect(row).not.toHaveAttribute("data-phase", "finished");
-    await expect(row).toHaveAttribute("data-phase", "scheduled");
     await expect(row).toContainText("3 of 4 played");
 
     // And the other direction: entering the result the row asked for takes it
@@ -323,6 +326,10 @@ test.describe("competition desk", () => {
       expected_seq: state.data!.last_seq, type: "generic.result", payload: { p1Score: 1, p2Score: 0 },
     });
     expect(scored.status).toBeLessThan(300);
+    // Every match decided: the same Complete now goes through (a no-op if auto-progress already completed it).
+    const done = await apiJson(request, `/api/v1/stages/${stageId}/complete`, "POST", {});
+    expect(done.status, JSON.stringify(done.error)).toBe(200);
+    expect((await apiJson<{ status: string }>(request, `/api/v1/divisions/${div.data!.id}`)).data?.status).toBe("completed");
     // Match Day B2: the settled division is finished, so the list hides it by default - asked for here.
     await page.goto(`/o/${org.slug}/c/${comp.data!.slug}`);
     await expect(page.getByTestId("desk-ledger-row").filter({ hasText: "Cup" })).toHaveCount(0);

@@ -19,6 +19,38 @@ const DRAWN_KINDS = new Set(["league", "group", "knockout", "double_elim", "page
 /** Kinds whose preview sections are rounds of play (a group's sections are its pools). */
 const ROUND_SECTION_KINDS = new Set(["league", "knockout", "double_elim", "page_playoff", "stepladder"]);
 
+describe("W4 T15 (FX-G14): the estimate and the server agree on a field the format cannot play", () => {
+  const KNOBS: TemplateKnobs = { qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 };
+
+  it.each([
+    ["ko_plate", 4],
+    ["qualifying_main", 4],
+  ])("%s below %i counts nothing, on any stage, and has no playing time", (key, min) => {
+    let checked = 0;
+    for (let n = 0; n < min; n++) {
+      const est = estimateTemplate(key, n, KNOBS);
+      expect(est.matches, `n=${n}`).toBeNull();
+      expect(est.rounds, `n=${n}`).toBeNull();
+      expect(est.stages.length, `n=${n}: the stages are still listed`).toBe(2);
+      expect(est.stages.every((s) => s.matches === null && s.rounds === null), `n=${n}`).toBe(true);
+      expect(estimateMinutes(est, 2, 30), `n=${n}`).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(min);
+    // At the bound there is a draw to count.
+    expect(estimateTemplate(key, min, KNOBS).matches, "at the bound").toBeGreaterThan(0);
+  });
+
+  it("a plain knockout at the same fields is no business of the gate", () => {
+    let checked = 0;
+    for (const n of [2, 3]) {
+      expect(estimateTemplate("knockout", n, KNOBS).matches, `n=${n}`).toBe(n - 1);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
 function knobGrid(n: number): TemplateKnobs[] {
   const out: TemplateKnobs[] = [];
   for (const qualified of [2, 4, 8]) {

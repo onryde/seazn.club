@@ -315,10 +315,13 @@ describe("the division page feeds the Swiss cut-drift warning to the stages pane
     const stages = value("stages");
     const canEdit = value("canEdit");
     const driftValue = value("swissCutDrift");
-    if (stages === undefined || canEdit === undefined || driftValue === undefined) {
-      problems.push("does not hand stages= / canEdit= / swissCutDrift= as plain {values}");
-    } else if (!mount.includes(`attentionStageIds={swissCutDriftStageIds(${stages}, ${canEdit}, ${driftValue})}`)) {
-      problems.push(`attentionStageIds is not {swissCutDriftStageIds(${stages}, ${canEdit}, ${driftValue})}`);
+    // W4 T14: the knockout's warning lives in a completed card too, so its stages join the list, by its own helper and map.
+    const knockoutValue = value("knockoutCutDrift");
+    if (stages === undefined || canEdit === undefined || driftValue === undefined || knockoutValue === undefined) {
+      problems.push("does not hand stages= / canEdit= / swissCutDrift= / knockoutCutDrift= as plain {values}");
+    } else {
+      const expected = `attentionStageIds={[...swissCutDriftStageIds(${stages}, ${canEdit}, ${driftValue}), ...knockoutCutDriftStageIds(${stages}, ${canEdit}, ${knockoutValue})]}`;
+      if (!mount.includes(expected)) problems.push(`attentionStageIds is not ${expected}`);
     }
     return problems;
   }
@@ -336,18 +339,23 @@ describe("the division page feeds the Swiss cut-drift warning to the stages pane
       if (/\battentionStageIds=/.test(mount)) expect(/\bswissCutDrift=/.test(mount), `${file} names attentionStageIds= without swissCutDrift=`).toBe(true);
     }
     expect(page).toMatch(/import \{ swissCutDriftStageIds \} from "@\/lib\/swiss-cut-drift"/);
+    expect(page).toMatch(/import \{ knockoutCutDriftStageIds \} from "@\/lib\/knockout-cut-drift"/);
   });
 
   it("the scan sees what it exists for: the attention list dropped, a literal, a wrong editability, another map, a duplicate (mutants against a clean control)", () => {
-    const clean = '<StagesPanel stages={stages} canEdit={editable} swissCutDrift={swissCutDrift} attentionStageIds={swissCutDriftStageIds(stages, editable, swissCutDrift)} />';
+    const list = "[...swissCutDriftStageIds(stages, editable, swissCutDrift), ...knockoutCutDriftStageIds(stages, editable, knockoutCutDrift)]";
+    const clean = `<StagesPanel stages={stages} canEdit={editable} swissCutDrift={swissCutDrift} knockoutCutDrift={knockoutCutDrift} attentionStageIds={${list}} />`;
     expect(cutDriftProblems(clean), "control: a clean mount").toEqual([]);
     const killed: Array<[string, string]> = [
-      ["attention list dropped", clean.replace(" attentionStageIds={swissCutDriftStageIds(stages, editable, swissCutDrift)}", "")],
-      ["empty literal", clean.replace("swissCutDriftStageIds(stages, editable, swissCutDrift)", "[]")],
+      ["attention list dropped", clean.replace(` attentionStageIds={${list}}`, "")],
+      ["empty literal", clean.replace(list, "[]")],
       ["editability hardcoded", clean.replace("(stages, editable, swissCutDrift)", "(stages, true, swissCutDrift)")],
       ["another map", clean.replace("(stages, editable, swissCutDrift)", "(stages, editable, {})")],
       ["a second, overriding list", clean.replace(" />", " attentionStageIds={[]} />")],
       ["drift dropped, list kept", clean.replace(" swissCutDrift={swissCutDrift}", "")],
+      ["the knockout's stages dropped from the list", clean.replace(", ...knockoutCutDriftStageIds(stages, editable, knockoutCutDrift)", "")],
+      ["the knockout's drift dropped, list kept", clean.replace(" knockoutCutDrift={knockoutCutDrift}", "")],
+      ["the knockout's list built from another map", clean.replace("(stages, editable, knockoutCutDrift)", "(stages, editable, {})")],
     ];
     let checked = 0;
     for (const [name, mount] of killed) {

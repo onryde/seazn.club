@@ -22,8 +22,11 @@ import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./forma
 import { validatedStageConfig } from "./stage-defaults";
 import { refuseNewStageTable } from "./table-rule-guards";
 import { swissRefusal } from "./swiss-refusal";
+import { stageGraphSizeGate } from "@/lib/format-size-gates";
+import { knockoutRefusal } from "./knockout-refusal";
 import { judgeSwissRounds, swissRoundsGuidance, swissRoundsNoticeOf, type SwissRoundsJudgement, type SwissRoundsNotice, type SwissRoundsShrunk } from "@/lib/swiss-rounds";
 import { isRootSwissStage } from "@/lib/open-entry-stages";
+import { standaloneStageRefusal } from "@/lib/stage-standalone";
 import { advancesNobody, EngineError, type MatchOutcome } from "@seazn/engine/core";
 import {
   generateRoundRobin,
@@ -68,11 +71,12 @@ import { maxRoundPoints } from "@/server/engine-db/swiss-max-round-points";
 // but these two ARE exported from the module itself (pass 2); reuse them
 // rather than re-deriving lane/thirdPlace from round/position (never
 // arithmetic — see parseExtKey's own comment).
-import { parseExtKey, bracketWinnerLoser, loadCrossGroupRules, rankedStageStandings, stageTablePoints } from "@/server/engine-db/competition";
+import { parseExtKey, bracketStageIsDecided, bracketWinnerLoser, loadCrossGroupRules, rankedStageStandings, stageTablePoints } from "@/server/engine-db/competition";
 import { pinStageTableRules, stageTableRulesDocs, type StageTableRulesDoc } from "@/server/engine-db/table-rules";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
-import { killsLoserEdge, lockDivisionConfigShared, lockStageSeats } from "@/server/engine-db/fed-seats";
-import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
+import { killsLoserEdge, lockDivisionConfigShared, lockStageSeats, unfillProposalSeats } from "@/server/engine-db/fed-seats";
+import { completionEngineStatus, hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
+import { deadSeatLeaverSql } from "@/server/engine-db/system-bye-sql";
 import { forfeitPlayedFacts, playedFor } from "@/server/engine-db/forfeit-played";
 import { FIXTURE_DELETED_REASON, ROUND_VOIDED_REASON } from "@/server/email-outbox/cancel";
 import { cancelBoardInvites } from "./external-play/cancel-invites";
@@ -102,6 +106,8 @@ import {
 } from "@/lib/swiss-pairing";
 import { ONLINE_GAME_EXISTS_CODE } from "@/lib/open-round";
 import { byeAward, isOneSidedAwardBye } from "@/lib/fixture-bye";
+import { BYE_SLOT_LABEL, isByeLine, type ByeLineRow } from "@/lib/bye-line";
+import { bracketRoleKey, finalRoundOf, type BracketRoleRow } from "@/lib/bracket-role";
 import { engineFixtureStatus as toBracketFixtureStatus } from "@/lib/fixture-engine-status";
 import { personalPointsLeaderboard } from "./americano";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -137,6 +143,7 @@ import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lo
 import { VENUE_NOT_FOUND_CODE, COURT_NOT_FOUND_CODE } from "./venues";
 import {
   cutEligiblePools,
+  departedLoseBestNth,
   descriptorKey,
   descriptorLabel,
   destinationSlotsBySeed,
@@ -154,6 +161,10 @@ import {
   type SlotLabel,
 } from "./stage-seeding";
 import { fixtureEvidenceSql, fixtureHasResultSql, fixtureHoldsStandingResultSql } from "./fixture-results-sql";
+import { fixtureCalledSql, stageHasStarted } from "./fixture-started-sql";
+import { slateStands, type BracketDependent } from "./knockout-cut-drift";
+// W4 T8 (FX-G2): a root knockout's Generate over existing lines reconciles them (bracket-reconcile.ts).
+import { reconcileRootBracket } from "./bracket-reconcile";
 import { carriedSlotCounts, carrySlots, chooseDoomedBoards } from "@/lib/rebuild-slots";
 import { firstOwnFormat, matchName, ownFormatLoss, refuseOwnFormatLoss } from "./fixture-override-guards";
 import { FORMAT_CHANGE_REFUSALS, type FormatChangePreview } from "@/lib/format-change";
@@ -246,8 +257,9 @@ export type BoardFixtureRow = Omit<
    *  a start taken back, a walkover recorded in play), which every board
    *  write refuses to move (review 4 of #857). Sent only when true. */
   held?: true;
-  /** W3 T3 (X-SW-29): a Swiss bye row (`swissByeShellSql`), which no board write places. Sent only when true. */
-  bye_shell?: true;
+  /** W3 T3 (X-SW-29), W4 T3 (X-SD-5): a bye line (`byeLineSql` — a Swiss bye shell, a bracket's system bye, or a
+   *  pre-award bye line), which no board write places. Sent only when true. */
+  bye_line?: true;
 };
 
 export const BOARD_FIXTURE_COLS = [
@@ -344,6 +356,11 @@ export interface FixtureRow {
   /** W2c Task 19 (S4): the match has a format of its own over its stage's (`fixtures.rules_override is not null`) - the run
    *  sheet's "Format changed" chip reads it. Read by `listDivisionFixtures` only; the v1 list route strips it. */
   format_changed?: boolean;
+  /** W4 B1b fix round 1 (Q1): a bye line still waiting on its award whose award will be a WALKOVER - its dead seat's feeder
+   *  handed on a winner who has withdrawn (`awaitsWalkoverSql`, the fragment `awardSeededByes` writes the award from) - so a
+   *  match owed. The run sheet's round bar counts it in its total (never as done); every other waiting bye line becomes a
+   *  bye and is no match. Read by `listDivisionFixtures` only; the v1 list route strips it. */
+  awaits_walkover?: boolean;
 }
 
 export async function listStages(auth: AuthCtx, divisionId: string): Promise<StageRow[]> {
@@ -523,6 +540,15 @@ export async function assertStageBatchGates(
   // orgs are kept out before either is called, by the route's `requireResourceAuth(req, "division", id, "write")`.
   // A division that does not exist reads undefined and refuses nothing here; the insert transaction answers it 404.
   if (divComp !== undefined) assertStageKindsAllowed(divComp.sport_key, inputs.map((s) => s.kind));
+  // W4 T16 (X-SP-6 / RB4-S6, ruling 269): a stepladder or page playoff that names no progression has no table to seed
+  // from — refused by name, the whole batch, before any plan gate (a format the product refuses is never an upgrade
+  // prompt). Both writers ask it here: the create, and the Format dialog's replace, the one write that can take a stage's
+  // progression away (pre-flight D11). A stage that already stands without one (stg held 11) keeps playing: only a new
+  // write is refused. Fed from a league or Swiss (RB4-S7), neither kind is refused.
+  for (const s of inputs) {
+    const refusal = standaloneStageRefusal({ kind: s.kind, progression: s.progression ?? null });
+    if (refusal !== null) throw knockoutRefusal(refusal, { seq: s.seq, kind: s.kind });
+  }
   // Doc 10 §1: `formats.double_elim` is Pro — gate before any insert.
   if (inputs.some((s) => stageNeedsDoubleElimGate(s.kind))) {
     await requireFeature(auth.orgId, "formats.double_elim", divComp?.competition_id);
@@ -1428,14 +1454,8 @@ function walkoverDepartedQualifiers(
 /** A board whose result is in (W3 T9 reads it too: a late player's "current round" is the one with a board not in it). */
 export const DECIDED: ReadonlySet<string> = new Set(["decided", "finalized", "forfeited"]);
 
-/** The slot label stamped on a bye's PHANTOM side — the seat the bracket pads
- *  out and nobody ever occupies. One authority, shared by the two generation
- *  paths (`generateStageFixtures`' own insert and the `timing: "setup"`
- *  progression path's label pass) and by `awardSeededByes` below, which reads
- *  it back as the marker that says "this line is a walkover, not a match still
- *  waiting on an opponent". The public hub already keys its own bye detection
- *  on the same string (public-site/competition-hub.ts's BYE_SLOT_KEY). */
-const BYE_SLOT_LABEL = { key: "bracket.slot.bye", params: {} } as const;
+// `BYE_SLOT_LABEL` — the slot label stamped on a bye's PHANTOM side — lives in lib/bye-line.ts since W4 T3 (ruling D7:
+// one authority a client-safe reader can import), beside `isByeLine`, which reads it.
 
 /** The generator's baked award (`g.award`): a structural bye (one seat) is a bye; F14's departed-qualifier pairing
  *  (both seats filled) is the walkover a withdrawal records — `reason: "withdrew"`, the departed side the loser —
@@ -1554,6 +1574,21 @@ export function judgeSwissPairAt(
 }
 
 /**
+ * W4 T15 (FX-G14's gate half, QM-2; X-PL-1, X-QM-5): a format the division's field cannot play is refused up front and by name,
+ * off the stored stage graph, so an API-built division is gated too. Before this a qualifying draw of three played its whole
+ * qualifying stage and only then failed at Complete. Asked at the doors that draw the root: Start, Generate and Rebuild. The field
+ * is the division's active entrants, as the generator reads them (`swissActiveEntrants`).
+ */
+export async function refuseFormatTooSmall(tx: Tx, divisionId: string): Promise<void> {
+  const stages = await tx<{ id: string; kind: string; progression: unknown }[]>`
+    select id, kind, progression from stages where division_id = ${divisionId} order by seq`;
+  const [{ n }] = await tx<{ n: number }[]>`
+    select count(*)::int as n from entrants where division_id = ${divisionId} and status in ('registered', 'confirmed')`;
+  const gate = stageGraphSizeGate(stages, n);
+  if (gate !== null) throw knockoutRefusal(gate.code, { min: gate.min });
+}
+
+/**
  * W3 T11 (X-SW-16; rulebook §3.2 "check runs … again at Start"): Start judges every ROOT Swiss of the division
  * (`isRootSwissStage` — a Swiss fed by an earlier stage has no field until that stage ends, and its own Generate judges it)
  * against the field its next Pair would seat: the active roster at that round (`swissFieldForRound` over the per-stage
@@ -1599,6 +1634,44 @@ export async function swissActiveEntrants(tx: Tx, divisionId: string, stageId: s
     where division_id = ${divisionId} and status in ('registered', 'confirmed')
     order by seed nulls last, created_at, id`;
   return rows.map((e) => ({ id: e.id, seed: e.seed, swiss_first_round: swissFirstRoundIn(e, stageId) }));
+}
+
+/**
+ * W4 T7 (K5; RB4-D3, RB4-D6, X-SD-6/X-SD-9): whether a knockout's Generate DRAWS its field — the unseeded entrants placed
+ * at random (`knockoutDrawOrder`), never in registration order. Not when an API `slotOrder` is set (RB4-D6: the slot map
+ * overrides the draw, and it indexes into the field as given), nor when the stage draws from `config.qualified` (a fed
+ * stage: that order IS the seeding), nor when nobody is unseeded (a wholly seeded field is the fold alone, X-SW-22's rule).
+ */
+export function knockoutDraws(active: readonly ActiveEntrant[], cfg: Record<string, unknown>): boolean {
+  return !Array.isArray(cfg.slotOrder) && !Array.isArray(cfg.qualified) && active.some((e) => e.seed === null);
+}
+
+/**
+ * W4 T7 (K5; RB4-D3/D4): a root knockout's field in DRAW order — the seeded first, by seed (the engine folds them,
+ * RB4-D1/D2), then the unseeded shuffled with the stage's own seed (`swissRoundOneOrder(swissDrawSeed(stageId), …)`, the
+ * W3 draw: one PRNG, one seed rule, so the same stage and the same field always draw the same bracket — RB4-D4, and a
+ * Rebuild reuses it, RB4-D5). `active` itself (a copy, in its order) when the stage does not draw (`knockoutDraws`).
+ */
+export function knockoutDrawOrder(stageId: string, active: readonly ActiveEntrant[], cfg: Record<string, unknown>): ActiveEntrant[] {
+  if (!knockoutDraws(active, cfg)) return [...active];
+  const byId = new Map(active.map((e) => [e.id, e]));
+  return swissRoundOneOrder(swissDrawSeed(stageId), active).map((id) => {
+    const e = byId.get(id);
+    if (e === undefined) throw new Error(`knockoutDrawOrder: the draw returned ${id}, which is not in the field`);
+    return e;
+  });
+}
+
+/** W4 T7 (RB4-D4): the draw seed the stage's newest Generate recorded (`fixtures_generated.payload.draw_seed`), or null —
+ *  nothing generated yet, or that Generate drew nothing (a seeded field, an API slot map, a fed stage). The desk shows it
+ *  (Task 20). */
+export async function readStageDrawSeed(tx: Tx, stageId: string): Promise<number | null> {
+  const [row] = await tx<{ seed: unknown }[]>`
+    select e.payload->'draw_seed' as seed from division_events e
+    where e.division_id = (select division_id from stages where id = ${stageId})
+      and e.type = 'fixtures_generated' and e.payload->>'stage_id' = ${stageId}
+    order by e.seq desc limit 1`;
+  return typeof row?.seed === "number" ? row.seed : null;
 }
 
 /** Review m4: a Swiss round's field (`swissFieldForRound`) under 2 is refused exactly as generateStageFixturesTx refuses a
@@ -2921,6 +2994,21 @@ export interface GenerateOutcome {
   /** W3 app-B T7: the round the Pair just seated, sent beside `swiss_next_round` so the desk names the round it follows
    *  ({round}) and the one it warns about ({round} + 1) from ONE number, the server's - never a second count of its own. */
   swiss_paired_round?: number;
+  /** W4 T8 (FX-G2): a root knockout's Generate over a bracket that already has lines — ABSENT on a first Generate and on
+   *  every other kind. `noop`: nothing changed (the desk's "up to date"); `in_place`: newcomers `placed` in byes and the
+   *  departed `vacated` (their opponents now hold byes), no line inserted or deleted; `regenerated`: the bracket crossed a
+   *  power of two, so it was drawn again in this transaction with its slots carried by role (`slots`, as Rebuild says). */
+  reconcile?: ReconcileOutcome;
+}
+
+/** W4 T8: what a root knockout's reconcile did (`GenerateOutcome.reconcile`). `placed`/`vacated` are entrant ids. */
+export interface ReconcileOutcome {
+  kind: "noop" | "in_place" | "regenerated";
+  placed: string[];
+  vacated: string[];
+  /** B2 fix round 1 (I2): every seat emptied — a departed entrant's, and one whose entrant was deleted (in no list). */
+  vacated_seats: number;
+  slots?: { kept: number; freed: number; unscheduled: number };
 }
 
 /**
@@ -2969,6 +3057,9 @@ export interface GenerateWrite {
   /** Only with `ledger: "step"`: the `fixtures_generated` payload this pass did NOT append (`fixture_ids` and, for a
    *  Swiss seating, its seat audit), for the history step that ran it to record on its own row. */
   ledgerPayload?: Record<string, unknown>;
+  /** W4 T8 (FX-G2): the fixtures a knockout reconcile changed in place, or deleted to regenerate — the publish names
+   *  them so their match centres refetch. Absent on every other write (a plain Generate changes no existing fixture). */
+  changedFixtureIds?: string[];
 }
 
 /** What a Generate press may ask for beyond "generate". */
@@ -2978,6 +3069,14 @@ export interface GenerateOptions {
    *  `fixtures_generated` ledger row records it. Refused (422) on any other
    *  stage kind, round, or press. */
   pairing?: SwissPairingMode;
+  /** W4 B2 fix round 2 (item 2): Start's own reconcile of a root knockout drawn before its roster moved — seats change in
+   *  place, and a redraw is refused (KO_START_NEEDS_UPDATE_DRAW) instead of run. Never sent by a client: `startDivision`
+   *  sets it. */
+  inPlaceOnly?: boolean;
+  /** W4 B2 fix round 2 (item 5): the stage's setup in SEALED tables (streams, YouTube broadcasts), read on a privileged
+   *  connection by `generateStageFixturesWrite`'s prelude — a knockout redraw refuses over it as over the rest. Never sent
+   *  by a client. */
+  sealedSetup?: SealedSetupCounts;
 }
 
 /** R10e (review-r10d m1): generate a stage's fixtures and publish the write.
@@ -3001,16 +3100,23 @@ export async function generateStageFixtures(
   opts: GenerateOptions = {},
 ): Promise<GenerateOutcome> {
   const write = await generateStageFixturesWrite(auth, stageId, opts);
-  if (write.outcome.created > 0) {
-    afterScheduleWrite(write.divisionId, write.competitionId, "schedule", []);
+  // W4 T8: a knockout reconcile in place creates nothing yet changes seats, and a regenerate deletes the old lines — both
+  // publish, naming the fixtures they changed or deleted.
+  const changed = write.changedFixtureIds ?? [];
+  if (write.outcome.created > 0 || changed.length > 0) {
+    afterScheduleWrite(write.divisionId, write.competitionId, "schedule", changed);
   }
   return write.outcome;
 }
 
 /** `generateStageFixtures` without its publish, for a caller that publishes
  *  the whole write itself (see above). */
-export async function generateStageFixturesUnpublished(auth: AuthCtx, stageId: string): Promise<GenerateOutcome> {
-  return (await generateStageFixturesWrite(auth, stageId, {})).outcome;
+export async function generateStageFixturesUnpublished(
+  auth: AuthCtx,
+  stageId: string,
+  opts: GenerateOptions = {},
+): Promise<GenerateOutcome> {
+  return (await generateStageFixturesWrite(auth, stageId, opts)).outcome;
 }
 
 // `fixtureEvidenceSql` / `fixtureHasResultSql`: ./fixture-results-sql.ts.
@@ -3338,10 +3444,23 @@ async function generateStageFixturesWrite(
   // time with placeholder slots"), so it short-circuits before this gate
   // rather than going through it. `timing: "on_complete"` reproduces the OLD
   // `.qualification` behaviour exactly.
+  // W4 B2 fr2 carry: whether this Generate can REDRAW a root knockout that already has its lines — the one path that reads
+  // the sealed setup counts (`reconcileKnockoutGenerate`). Set in the pre-flight below, from the same shape test that
+  // routes to that path (`generateStageFixturesTx`); every other Generate — a Swiss, a league, a first draw — never
+  // opens the privileged read, so a failure there cannot stop it.
+  let readsSealedSetup = false;
   {
     const pre = await withTenant(auth.orgId, async (tx) => {
-      const [stage] = await tx<StageRow[]>`
-        select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
+      // T26c (I1, round-trip budget): whether the division holds a FED page playoff - the one size gate a non-knockout root
+      // answers to - and the division's status, read in this same statement, so a root whose division has no page playoff
+      // pays no extra round trip for the gate below (generate-roundtrips.test.ts pins the budget).
+      const [stage] = await tx<(StageRow & { fed_page_playoff: boolean; division_status: string | null })[]>`
+        select ${tx(STAGE_COLS)},
+               exists (select 1 from stages p
+                        where p.division_id = stages.division_id and p.kind = 'page_playoff' and p.progression is not null)
+                 as fed_page_playoff,
+               (select d.status from divisions d where d.id = stages.division_id) as division_status
+          from stages where id = ${stageId}`;
       if (!stage) throw new HttpError(404, "stage not found");
       // A pairing mode means nothing off a Swiss stage. Refused HERE, in the
       // pre-flight, because both paths below that leave this block early
@@ -3375,6 +3494,22 @@ async function generateStageFixturesWrite(
       const lockState = await divisionLockState(tx, stage.division_id);
       if (lockState.frozen) {
         throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+      }
+      const rootKnockout = stage.kind === "knockout" && stage.progression === null;
+      const drawn = rootKnockout && (await tx`select 1 from fixtures where stage_id = ${stageId} limit 1`).length > 0;
+      readsSealedSetup = drawn && !Array.isArray(stage.config.qualified);
+      // W4 T15 (X-PL-1, X-QM-5): a root knockout about to be drawn, or redrawn before Start, on a field its format cannot play. A
+      // bracket drawn and started is left out: after Start a withdrawal is the bracket's to settle, and this Generate reshapes nothing.
+      if (rootKnockout) {
+        const [division] = await tx<{ status: string }[]>`select status from divisions where id = ${stage.division_id}`;
+        if (!drawn || division?.status !== "active") await refuseFormatTooSmall(tx, stage.division_id);
+      } else if (stage.progression === null && stage.fed_page_playoff && stage.division_status !== "active") {
+        // T26c fix round 1 (I1): any other ROOT before Start, in a division with a fed page playoff. A league or a Swiss that
+        // feeds a page playoff is that format's source, as a root knockout is a plate's, so a group_playoffs or swiss_playoff of
+        // three is refused by name here too, never drawn and laid out with a fourth seat no stage can fill. After Start the field
+        // is the bracket's to settle. Only a fed page playoff gates a non-knockout root (a guard in
+        // lib/__tests__/format-size-gates.test.ts sweeps the templates for any other), so no other root pays for the gate.
+        await refuseFormatTooSmall(tx, stage.division_id);
       }
       if (!stage.progression) return null;
       const progression = stage.progression as unknown as ProgressionSpec & { timing: "setup" | "on_complete" };
@@ -3416,7 +3551,17 @@ async function generateStageFixturesWrite(
       await seedNextStage(auth, pre.prev.id);
     }
   }
-  const write = await withTenant(auth.orgId, (tx) => generateStageFixturesTx(tx, auth, stageId, opts));
+  // W4 B2 fix round 2 (item 5): a knockout's redraw refuses over organiser setup, and two kinds of it live in sealed tables
+  // the tenant role cannot read. The prelude reads them on this transaction's own connection, before the role drops —
+  // never a pooled read inside the transaction (lib/db.ts's nesting deadlock).
+  let sealedSetup: SealedSetupCounts | undefined;
+  const write = await withTenant(
+    auth.orgId,
+    (tx) => generateStageFixturesTx(tx, auth, stageId, { ...opts, sealedSetup }),
+    readsSealedSetup
+      ? { privilegedPrelude: async (tx) => { sealedSetup = await sealedStageSetupCounts(tx, auth.orgId, stageId); } }
+      : {},
+  );
   await afterGenerateCommit(auth, stageId, write);
   return write;
 }
@@ -3466,6 +3611,93 @@ async function readStageFixtureRows(tx: Tx, stageId: string): Promise<FixtureRow
     ...f,
     court_name: f.court_id !== null ? (courtNames.get(f.court_id) ?? f.court_id) : null,
   }));
+}
+
+/**
+ * W4 T8 (FX-G2): Generate over a root knockout that already has its lines, in the caller's transaction and lock. The
+ * driver (`reconcileRootBracket`) refuses after Start when the roster changed (KO_GENERATE_AFTER_START), answers a named
+ * no-op when nothing did, or changes lines in place (a newcomer into a bye, a departed entrant's line to a bye); when the
+ * bracket crossed a power of two it asks for a regenerate, which is Rebuild's own body (`regenerateStageInTx`): one
+ * delete and one fresh draw in this transaction, slots carried by role. `entrants` is the field in draw order.
+ */
+/** The labels a root knockout's own lines carry: the bye (`lib/bye-line.ts`) and the feeder (`fed-seats.ts`). Any other key is a
+ *  progression's, for a seat a proposal's confirm fills. */
+const ROOT_BRACKET_LABEL_KEYS: readonly string[] = [BYE_SLOT_LABEL.key, "slot.winner_match", "slot.loser_match"];
+
+async function reconcileKnockoutGenerate(
+  tx: Tx,
+  auth: AuthCtx,
+  stage: StageRow,
+  entrants: ActiveEntrant[],
+  poolIds: Map<string, string>,
+  inPlaceOnly: boolean,
+  sealedSetup: SealedSetupCounts | undefined,
+): Promise<GenerateWrite> {
+  const started = (await divisionHasStarted(tx, stage.division_id)) || (await stageHasStarted(tx, stage.id));
+  const fresh = generate(stage.kind, stage.config, entrants, poolIds).map((g) => ({
+    pool_id: g.poolId ?? null,
+    round_no: g.roundNo,
+    seq_in_round: g.seqInRound,
+    ext_key: g.extKey,
+  }));
+  const decision = await reconcileRootBracket(tx, { stageId: stage.id, started, active: entrants, fresh });
+  if (decision.kind === "regenerate") {
+    // B2 fix round 2 (item 2): Start reconciles in place only. A redraw deletes every line — the slots move, printed
+    // sheets stop, public pages hold the old lines — and Start has no notice to say so; Update draw (this same Generate,
+    // pressed) does. So Start refuses it by name, before any write, and names the button.
+    if (inPlaceOnly) throw knockoutRefusal("KO_START_NEEDS_UPDATE_DRAW");
+    // B2 fix round 1 (I1): a redraw deletes every line, and the delete cascades into the organiser's setup on them (every
+    // kind `stageAttachmentCounts` counts). Generate has no confirm, so it never takes them silently: refused by name,
+    // pointing to Rebuild, whose confirm lists what it clears. Read before the delete (the counts Rebuild's dialog reads).
+    // The sealed kinds were read by `generateStageFixturesWrite`'s privileged prelude, on this transaction's connection.
+    if (sealedSetup === undefined) {
+      throw new Error("reconcileKnockoutGenerate: a redraw's sealed setup counts were not read (generateStageFixturesWrite's privilegedPrelude)");
+    }
+    const attachments = await stageAttachmentCounts(tx, stage.id, sealedSetup);
+    if (Object.values(attachments).some((n) => n > 0)) {
+      throw knockoutRefusal("KO_REDRAW_WOULD_CLEAR_SETUP", { attachments });
+    }
+    const regen = await regenerateStageInTx(tx, auth, stage.id, stage);
+    return {
+      ...regen.generated,
+      outcome: {
+        ...regen.generated.outcome,
+        reconcile: {
+          kind: "regenerated",
+          placed: decision.placed,
+          vacated: decision.vacated,
+          vacated_seats: decision.vacatedSeats,
+          slots: regen.slots,
+        },
+      },
+      changedFixtureIds: regen.removedIds,
+    };
+  }
+  if (decision.kind === "in_place") {
+    // B2 fix round 1 (m6): a change in place moves seats under the division's history, so a Redo waiting on the old board
+    // would re-apply onto a line that is now a bye. Cleared as a Generate that creates clears it. No ledger row: a
+    // Generate writes one only when it creates fixtures (`fixture_ids` is Undo's delete list), and this creates none.
+    await tx`update divisions set edit_watermark = null where id = ${stage.division_id}`;
+  }
+  // Cross-format feeds (Jul3/08 §4), as every other Generate's trailing pass wires them: a declared edge whose target was
+  // generated after this bracket is wired by this Generate, a no-op or not (`wireCrossFeeds` fills NULL edges only, so
+  // it never overwrites). The regenerate branch above runs the full Generate, which wires them itself.
+  await wireCrossFeeds(tx, stage.division_id);
+  const fixtures = await readStageFixtureRows(tx, stage.id);
+  const [division] = await tx<{ competition_id: string }[]>`
+    select competition_id from divisions where id = ${stage.division_id}`;
+  return {
+    outcome: {
+      created: 0,
+      existing: fixtures.length,
+      fixtures,
+      reconcile: { kind: decision.kind, placed: decision.placed, vacated: decision.vacated, vacated_seats: decision.vacatedSeats },
+    },
+    divisionId: stage.division_id,
+    competitionId: division.competition_id,
+    kind: stage.kind,
+    changedFixtureIds: decision.touched,
+  };
 }
 
 /**
@@ -3547,8 +3779,12 @@ export async function generateStageFixturesTx(
       entrants = qualified.filter((id) => activeIds.has(id)).map((id, i) => ({ id, seed: i + 1, swiss_first_round: null }));
     }
   } else {
-    entrants = active;
+    // W4 T7 (K5, X-SD-6): a root knockout draws its unseeded entrants with the stage's own seed — main placed them in the
+    // active select's order (`seed nulls last, created_at, id`), so the byes went to the earliest registrants.
+    entrants = stage.kind === "knockout" ? knockoutDrawOrder(stageId, active, stage.config) : active;
   }
+  // RB4-D4: the seed is recorded on this Generate's ledger row only when the draw was used.
+  const knockoutDrawSeed = stage.kind === "knockout" && qualified === null && knockoutDraws(active, stage.config) ? swissDrawSeed(stageId) : null;
   if (entrants.length < 2) {
     throw new EngineError("STAGE_NOT_READY", "need at least 2 active entrants to generate", {
       stageId,
@@ -3584,6 +3820,25 @@ export async function generateStageFixturesTx(
            scheduled_at, court_id, venue_id, schedule_locked
     from fixtures where stage_id = ${stageId}
     order by round_no, seq_in_round`;
+
+  // W4 T8 (FX-G2, MB-004/005; spec §6.5): a ROOT knockout that already has its lines is reconciled, never inserted into
+  // by `ext_key` (6 → 7 inserted nothing and said "up to date"; 8 → 9 seated the field twice beside a second final; a
+  // line that became a bye 500'd on the bye-award bulk update below). Fed stages (`config.qualified`) keep their path.
+  if (stage.kind === "knockout" && qualified === null && stage.progression === null && existing.length > 0) {
+    // A reconcile never asks a seat what it is waiting for, so a progression's label on a stage that no longer has a
+    // progression would sit beside an empty seat for good. A root bracket's own are the bye's and the feeder's; anything else
+    // is refused before a write, as the bulk updates below refuse theirs.
+    const stranded = await tx<{ id: string }[]>`
+      select id from fixtures
+      where stage_id = ${stage.id}
+        and (home_slot_label ->> 'key' not in ${tx(ROOT_BRACKET_LABEL_KEYS)} or away_slot_label ->> 'key' not in ${tx(ROOT_BRACKET_LABEL_KEYS)})`;
+    if (stranded.length > 0) {
+      throw new Error(
+        `generateStageFixtures: a reconciled Generate would strand a home_slot_label or away_slot_label on fixture(s) ${stranded.map((f) => f.id).join(",")}: a root bracket's lines carry only a bye's or a feeder's label`,
+      );
+    }
+    return reconcileKnockoutGenerate(tx, auth, stage, entrants, poolIds, opts.inPlaceOnly === true, opts.sealedSetup);
+  }
 
   let swissSeatedCount = 0;
   let swissReshaped: SwissReshape | undefined;
@@ -3962,7 +4217,7 @@ export async function generateStageFixturesTx(
     await tx`
       insert into division_events (division_id, seq, type, payload)
       values (${stage.division_id}, ${last + 1}, 'fixtures_generated',
-              ${tx.json({ stage_id: stageId, fixture_ids: createdIds, ...(swissAudit ?? {}) } as never)})`;
+              ${tx.json({ stage_id: stageId, fixture_ids: createdIds, ...(swissAudit ?? {}), ...(knockoutDrawSeed !== null ? { draw_seed: knockoutDrawSeed } : {}) } as never)})`;
     await tx`update divisions set seq = ${last + 1}, edit_watermark = null
              where id = ${stage.division_id}`;
   }
@@ -4009,7 +4264,9 @@ export async function generateStageFixturesTx(
 // function rather than restating it in a mock of this server-only file.
 export { ROSTER_DRIFT_INELIGIBLE_KINDS, isRosterDriftEligible };
 
-const NO_ATTACHMENTS = { officials: 0, lineups: 0, deviceLinks: 0 } as const;
+const NO_ATTACHMENTS = {
+  officials: 0, lineups: 0, deviceLinks: 0, streams: 0, youtubeBroadcasts: 0, availability: 0, calls: 0,
+} as const;
 
 /** The two `fixtures.status` values that still expect their entrants to turn
  *  up. The full vocabulary is eight (`FIXTURE_STATUSES`, lib/fixture-status.ts):
@@ -4037,6 +4294,12 @@ export interface StageRosterDrift {
    *  fixture in this stage — registered after the last Generate, or Generate
    *  has never run since. */
   unplaced: StageRosterDriftEntrant[];
+  /** W4 B2 fix round 2 (item 1): a ROOT knockout's first-round lines with an EMPTY place — a match with a seat nobody is
+   *  on, or a bye with nobody on it. `deleteEntrant` leaves exactly this (the FK nulls the seat), and it is neither a ghost
+   *  (nobody is named) nor an unplaced entrant (nobody is missing), so without it the banner, its Rebuild and Update draw
+   *  all stayed hidden while Start and Generate refused. Zero on every other stage, and on a later round's seats (those
+   *  wait on winners). */
+  vacantLines: number;
   /** Organiser WORK attached to this stage's fixtures that a rebuild would
    *  take with them (F3 ultrareview finding 5). `delete from fixtures`
    *  CASCADEs into all three, and unlike a result none of them BLOCKS the
@@ -4053,6 +4316,19 @@ export interface StageRosterDrift {
     lineups: number;
     /** `device_links` — paired scoring devices (device-links.ts). */
     deviceLinks: number;
+    /** W4 B2 fix round 2 (item 5) — the rest of the setup a match can carry BEFORE Start, each a CASCADE of the fixture
+     *  delete and each written with no gate on the division's status:
+     *  matches with stream setup — a live stream code (`fixture_stream_codes`, minted when the stream panel opens; its
+     *  phone pairings cascade with it) or per-match stream settings (`fixture_stream_settings`, the destination pre-pick).
+     *  One match with both counts once: what the organiser redoes is that match's stream. An ENDED code is history, not
+     *  setup, and is not counted. */
+    streams: number;
+    /** `youtube_broadcasts` — broadcasts Go live created on YouTube (youtube/prepare.ts); the replay link goes with them. */
+    youtubeBroadcasts: number;
+    /** `fixture_availability` — players' availability answers and check-ins (me.ts). */
+    availability: number;
+    /** `fixture_calls` — Match Day court calls (match-day-call.ts). */
+    calls: number;
   };
 }
 
@@ -4061,13 +4337,17 @@ export interface StageRosterDrift {
  *  `created_at` only (no `updated_at`) because "since when" is not needed to
  *  answer "does the board match the roster" (plan, 5a). */
 export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promise<StageRosterDrift> {
-  return withTenant(auth.orgId, async (tx) => {
+  // W4 B2 fix round 2 (item 5): the sealed kinds of setup (streams, YouTube broadcasts) are read on the pooled privileged
+  // client AFTER the tenant transaction closes — never inside it (42501 under app_user, and a second pooled connection
+  // inside `withTenant` is lib/db.ts's self-deadlock). A read for a banner and a confirm: the window between the two reads
+  // is one READ COMMITTED step, the same staleness the page already has.
+  const { drift, boarded } = await withTenant(auth.orgId, async (tx): Promise<{ drift: StageRosterDrift; boarded: boolean }> => {
     const [stage] = await tx<
-      { division_id: string; kind: string; progression: Record<string, unknown> | null }[]
-    >`select division_id, kind, progression from stages where id = ${stageId}`;
+      { division_id: string; kind: string; progression: Record<string, unknown> | null; config: unknown }[]
+    >`select division_id, kind, progression, config from stages where id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
     if (stage.progression !== null || ROSTER_DRIFT_INELIGIBLE_KINDS.has(stage.kind)) {
-      return { ghosts: [], unplaced: [], attachments: NO_ATTACHMENTS };
+      return { drift: { ghosts: [], unplaced: [], vacantLines: 0, attachments: NO_ATTACHMENTS }, boarded: false };
     }
 
     // A stage with NO fixtures has no BOARD, and drift is defined against a
@@ -4080,7 +4360,7 @@ export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promi
     // action there, and stages-panel already renders it prominently.
     const [{ count: fixtureCount }] = await tx<{ count: number }[]>`
       select count(*)::int as count from fixtures where stage_id = ${stageId}`;
-    if (fixtureCount === 0) return { ghosts: [], unplaced: [], attachments: NO_ATTACHMENTS };
+    if (fixtureCount === 0) return { drift: { ghosts: [], unplaced: [], vacantLines: 0, attachments: NO_ATTACHMENTS }, boarded: false };
 
     // Odd-Swiss sit-out (W3 item 6) — CLOSED by the bye-row follow-up.
     // Two suppression heuristics were tried and reviewed out (2026-09-06):
@@ -4133,27 +4413,114 @@ export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promi
     ]);
     const activeIds = new Set(active.map((e) => e.id));
     const referencedIds = new Set(referenced.map((e) => e.id));
-    // One round trip for all three — each is a plain count over the stage's
-    // own fixture ids, and none of them is large enough to want three.
-    const [counts] = await tx<{ officials: number; lineups: number; device_links: number }[]>`
-      select
-        (select count(*) from fixture_officials fo
-           join fixtures f on f.id = fo.fixture_id where f.stage_id = ${stageId})::int as officials,
-        (select count(*) from lineups l
-           join fixtures f on f.id = l.fixture_id where f.stage_id = ${stageId})::int as lineups,
-        (select count(*) from device_links dl
-           join fixtures f on f.id = dl.fixture_id where f.stage_id = ${stageId})::int as device_links`;
     return {
-      ghosts: expectedToPlay.filter((e) => !activeIds.has(e.id)),
-      unplaced: active.filter((e) => !referencedIds.has(e.id)),
-      attachments: {
-        officials: counts?.officials ?? 0,
-        lineups: counts?.lineups ?? 0,
-        deviceLinks: counts?.device_links ?? 0,
+      drift: {
+        ghosts: expectedToPlay.filter((e) => !activeIds.has(e.id)),
+        unplaced: active.filter((e) => !referencedIds.has(e.id)),
+        vacantLines: isRootKnockout(stage) ? await vacantFirstRoundLines(tx, stageId) : 0,
+        attachments: await stageAttachmentCounts(tx, stageId, { streams: 0, youtubeBroadcasts: 0 }),
       },
+      boarded: true,
     };
   });
+  if (!boarded) return drift;
+  const sealed = await sealedStageSetupCounts(sql, auth.orgId, stageId);
+  return { ...drift, attachments: { ...drift.attachments, ...sealed } };
 }
+
+/** A ROOT knockout — no progression and no fed `config.qualified` list: the bracket drawn straight from the roster, the
+ *  one `reconcileRootBracket` reconciles and Start's `roster_drift` read covers (schedule.ts). */
+function isRootKnockout(stage: { kind: string; progression: unknown; config: unknown }): boolean {
+  if (stage.kind !== "knockout" || stage.progression !== null) return false;
+  const config = stage.config;
+  return !(typeof config === "object" && config !== null && Array.isArray((config as { qualified?: unknown }).qualified));
+}
+
+/** W4 B2 fix round 2 (item 1): `StageRosterDrift.vacantLines` — the first-round lines with an empty place: a match still to
+ *  be played with a seat nobody is on, or a bye with nobody on it. The same two shapes Start's `roster_drift` read names
+ *  (schedule.ts), which is what makes Start refuse; this is what lets the desk show the remedy. */
+async function vacantFirstRoundLines(tx: Tx, stageId: string): Promise<number> {
+  const [row] = await tx<{ n: number }[]>`
+    select count(*)::int as n from fixtures f
+     where f.stage_id = ${stageId} and f.round_no = 1
+       and ((f.status = 'scheduled' and (f.home_entrant_id is null or f.away_entrant_id is null))
+            or (f.home_entrant_id is null and f.away_entrant_id is null))`;
+  return row?.n ?? 0;
+}
+
+/** The two kinds of `StageRosterDrift.attachments` kept in SEALED tables (V430, V479: RLS forced, no policy, no app_user
+ *  grant — "every read goes through the app's non-tenant client"), so a `withTenant` transaction cannot count them (42501):
+ *  matches with stream setup, and YouTube broadcasts. W4 B2 fix round 2, item 5. */
+export type SealedSetupCounts = Pick<StageRosterDrift["attachments"], "streams" | "youtubeBroadcasts">;
+
+/** `SealedSetupCounts` for a stage, on a PRIVILEGED client only — the pooled `sql` outside any transaction, or a
+ *  `withTenant` `privilegedPrelude`'s own connection. Org-scoped in SQL (each sealed table carries its `org_id`), as V430
+ *  requires of every read on that client. A match with a live stream code (minted when the stream panel opens; its phone
+ *  pairings cascade with it) or per-match stream settings (the destination pre-pick) counts once; an ENDED code is
+ *  history, not setup. */
+export async function sealedStageSetupCounts(db: Tx | typeof sql, orgId: string, stageId: string): Promise<SealedSetupCounts> {
+  const [counts] = await db<{ streams: number; youtube_broadcasts: number }[]>`
+    select
+      (select count(*) from fixtures f
+        where f.stage_id = ${stageId} and f.org_id = ${orgId}
+          and (exists (select 1 from fixture_stream_codes c
+                        where c.fixture_id = f.id and c.org_id = ${orgId} and c.ended_at is null)
+               or exists (select 1 from fixture_stream_settings st
+                           where st.fixture_id = f.id and st.org_id = ${orgId})))::int as streams,
+      (select count(*) from youtube_broadcasts yb
+         join fixtures f on f.id = yb.fixture_id
+        where f.stage_id = ${stageId} and yb.org_id = ${orgId})::int as youtube_broadcasts`;
+  return { streams: counts?.streams ?? 0, youtubeBroadcasts: counts?.youtube_broadcasts ?? 0 };
+}
+
+/** The organiser work attached to a stage's fixtures that a delete of them CASCADEs into (`StageRosterDrift.attachments`):
+ *  what Rebuild's confirm lists, and what a knockout's Generate refuses to redraw over (W4 B2 fix round 1, I1; every kind
+ *  that can exist before Start since fix round 2, item 5). The tenant-readable kinds in one round trip on `tx` — each a
+ *  plain count over the stage's own fixture ids — joined with the sealed kinds the caller read on a privileged client. */
+export async function stageAttachmentCounts(
+  tx: Tx,
+  stageId: string,
+  sealed: SealedSetupCounts,
+): Promise<StageRosterDrift["attachments"]> {
+  const [counts] = await tx<
+    { officials: number; lineups: number; device_links: number; availability: number; calls: number }[]
+  >`
+    select
+      (select count(*) from fixture_officials fo
+         join fixtures f on f.id = fo.fixture_id where f.stage_id = ${stageId})::int as officials,
+      (select count(*) from lineups l
+         join fixtures f on f.id = l.fixture_id where f.stage_id = ${stageId})::int as lineups,
+      (select count(*) from device_links dl
+         join fixtures f on f.id = dl.fixture_id where f.stage_id = ${stageId})::int as device_links,
+      (select count(*) from fixture_availability fa
+         join fixtures f on f.id = fa.fixture_id where f.stage_id = ${stageId})::int as availability,
+      (select count(*) from fixture_calls fc
+         join fixtures f on f.id = fc.fixture_id where f.stage_id = ${stageId})::int as calls`;
+  return {
+    officials: counts?.officials ?? 0,
+    lineups: counts?.lineups ?? 0,
+    deviceLinks: counts?.device_links ?? 0,
+    streams: sealed.streams,
+    youtubeBroadcasts: sealed.youtubeBroadcasts,
+    availability: counts?.availability ?? 0,
+    calls: counts?.calls ?? 0,
+  };
+}
+
+/** W4 T4 (K3, X-RB-1): a knockout line's role key (`bracketRoleKey`), counted back from ITS bracket's final. The final
+ *  is read on first use, so a side with no rows (nothing generated) never asks; a side with rows and no final refuses by
+ *  name (`BracketHasNoFinalError`), which rolls the Rebuild back. */
+function roleKeyOf(rows: readonly BracketRoleRow[]): (row: BracketRoleRow) => string {
+  let finalRound: number | undefined;
+  return (row) => bracketRoleKey(row, (finalRound ??= finalRoundOf(rows)));
+}
+
+/** The kinds a Rebuild carries by bracket role (`roleKeyOf`): a knockout (W4 T4, K3), and a stepladder and a page playoff
+ *  (T26c), whose `round_no` also counts from the first round, so a stepladder that gains a rung moves its final to a new
+ *  round. A page playoff is always the same four lines, so for it role and position are the SAME key (an equivalent member,
+ *  kept as defence in depth: removing it changes no Rebuild today, and the T26c review measured that mutant surviving). A
+ *  double elimination still carries by position: its lanes need their own role keys (owed to W6, W6-double-elim.md). */
+const ROLE_CARRY_KINDS: ReadonlySet<string> = new Set(["knockout", "stepladder", "page_playoff"]);
 
 export interface RebuildOutcome extends GenerateOutcome {
   /** Fixtures deleted before regenerating (0 only when the stage had none). */
@@ -4216,188 +4583,12 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
         "STAGE_NOT_ROOT",
       );
     }
-    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
-    // A frozen division refuses the rebuild — the same predicate as generate's
-    // pre-flight, read here under the lock. Strictly wider than the
-    // `clearScheduleScoped` the freeze already refuses: this HARD-DELETES
-    // every fixture on the stage, cascading into score_events, match_states,
-    // match_reports, lineups, official_marks, fixture_officials and
-    // device_links (see the guard's own comment below). Refused before the
-    // delete, so `stages-schedule-lock.test.ts`'s `fixtureCount` assertion
-    // reads an untouched board.
-    const lockState = await divisionLockState(tx, stage.division_id);
-    if (lockState.frozen) {
-      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
-    }
-
-    // Never destroy a real result (hard constraint 1). Mirrors deleteStage's
-    // guard above (same three statuses), with one refinement for 'forfeited'.
-    // The status alone covers three different rows: a generation-time BYE
-    // (one side null by construction), the generator's own F14 walkover for a
-    // qualifier who departed before the draw (both seats filled, nothing
-    // played), and a WALKOVER RECORDED IN PLAY (withdrawal.ts's core.forfeit
-    // — append-event.ts maps it to this same status). Only the last holds a
-    // result, and it is the only one with evidence: its core.forfeit is a
-    // score event. So a 'forfeited' fixture blocks through its evidence
-    // alone (review 3 of #857, N2, owner ruling), never through its status.
-    // Status alone is NOT a sufficient test, because `delete from fixtures`
-    // CASCADEs into score_events, match_states, match_reports, lineups,
-    // official_marks, fixture_officials and device_links, and SET NULLs
-    // suspensions.fixture_id. Two holes a status-only guard leaves:
-    //   - 'abandoned' is a match that was PLAYED and stopped. match-reports.ts
-    //     (:40 REPORTABLE) accepts a report on exactly this status, so a
-    //     status-only guard deletes the report along with the fixture.
-    //   - any fixture carrying evidence rows under a status this list does not
-    //     name — the scoring pad writes score_events/match_states, and nothing
-    //     here should depend on WHEN a status flips relative to the first
-    //     event landing.
-    // So block on the evidence itself as well as on status: if a fixture has
-    // anything recorded against it, it is not ours to delete.
-    //
-    // What this deliberately does NOT block on (F3 ultrareview finding 5):
-    // `lineups`, `fixture_officials` and `device_links` also CASCADE away
-    // with the fixtures, but they are organiser SETUP, not a result. An
-    // organiser who has already appointed referees is the one most likely to
-    // need a rebuild before match day, so blocking would disable the feature
-    // exactly when it earns its keep. Destroying them silently is equally
-    // wrong, so `getStageRosterDrift` counts all three and the confirm
-    // dialog names them before the click (progression.rosterDrift.confirm*).
-    // If a future table holds real RESULT data, it belongs in the guard
-    // below, not in that count.
-    //
-    // One latent trapdoor, checked and currently INERT (2026-08-19): fixtures
-    // .parent_fixture_id is a self-FK declared ON DELETE CASCADE (V214:18), so
-    // a fixture that is someone's parent takes its children with it. Nothing
-    // in apps/web writes that column today (zero rows), and its only intended
-    // use — table-tennis rubbers under a tie (sports/setbased/tabletennis.ts)
-    // — is same-stage, where taking the children with the parent is correct.
-    // If a writer ever creates CROSS-STAGE parent links, this delete would
-    // silently remove another stage's board and the guard below would not see
-    // it. Note the cascade RECURSES on a self-FK: a chain deeper than one
-    // level takes the whole subtree, not just direct children, so the blast
-    // radius is not bounded at one hop. Verify with
-    //   select count(*) from fixtures c join fixtures p
-    //     on c.parent_fixture_id = p.id where c.stage_id <> p.stage_id;
-    // (fixtures.court_id is RESTRICT but points OUT at courts, so it
-    // constrains deleting a COURT, never this delete.)
-    // NARROWED 2026-09-21 (the cascade). `abandoned` used to block on its own.
-    // That was written for a match that was PLAYED and stopped, and it is now
-    // ALSO the value the generator's own void writes (walkoverDepartedQualifiers,
-    // re-review C2) — so from the instant a departed pairing was voided at
-    // generation the stage became permanently un-rebuildable, and the organiser
-    // pressing "Rebuild fixtures" on a board nobody had played was told
-    // "this stage already has recorded results". Driven in a browser; the
-    // sentence on screen was false, which is worse than a control that does
-    // nothing.
-    //
-    // A generation-time void has no outcome, no score events, no match report
-    // and no config snapshot — it is a line the regenerate would draw again
-    // identically. A real abandonment has at least the `core.abandon` event
-    // that produced the status, and a cricket-style no-result carries an
-    // outcome; both still block, the first through `fixtureEvidenceSql` below
-    // and the second through the `outcome is not null` clause. That split is
-    // what `dead-feeder-cascade.test.ts`'s two CONTROL cases pin, one per
-    // side.
-    //
-    // The evidence-table list itself lives in `fixtureEvidenceSql` — ONE
-    // literal, shared with `unpairSwissRound`'s guard, because the
-    // 2026-09-20 review found Unpair shipping a SUBSET of this list and
-    // destroying real results through the gap. Only the status clause is
-    // per-caller. (`config_snapshot is not null` joins the list there; it is
-    // implied by `exists(score_events)` for this guard — nothing in apps/web
-    // ever deletes a score event — so it adds no refusal here, only
-    // monotonicity where status is unreliable.)
-    //
-    // This guard's whole set — status clause and evidence — is
-    // `fixtureHasResultSql`, which history reads as its played set (review 2
-    // of #857, I3), so what rebuild refuses history never deletes. A walkover
-    // blocks only through its evidence (review 3 of #857, N2): the one a
-    // scorer records posts `core.forfeit`; the generator's F14 walkover has
-    // nothing played behind it, so a stage holding one rebuilds.
-    const [blocked] = await tx<{ id: string }[]>`
-      select f.id from fixtures f
-      where f.stage_id = ${stageId} and ${fixtureHasResultSql(tx)}
-      limit 1`;
-    if (blocked) {
-      throw new HttpError(
-        409,
-        "this stage has fixtures with a recorded result — rebuild refuses to touch a stage that has already been played, even partly; complete it as it stands, or use Generate to add missing entrants without disturbing what's already been decided",
-        "STAGE_HAS_RESULTS",
-      );
-    }
-
-    // The delete CASCADEs into fixture_external_play, and no result guard
-    // above can see an online game in progress (online chess appends nothing
-    // until the result). A board a game stands behind refuses the rebuild,
-    // under the same lock order as the Swiss seat clear (review M8).
-    const stageFixtureIds = (
-      await tx<{ id: string }[]>`select id from fixtures where stage_id = ${stageId}`
-    ).map((r) => r.id);
-    await lockBoardsRefusingOnlineGames(tx, stageFixtureIds);
-    // W2c Task 14: a match's own format would be regenerated away with its row — refused by name instead.
-    await refuseOwnFormatLoss(tx, tx`stage_id = ${stageId}`);
-    // Phase 3 wave 1 (G-1): the boards go, and their queued invites with them - after every refusal above, before the delete. The
-    // rebuilt boards are new fixtures with new ids, so an invite left queued would mail a board that no longer exists.
-    await cancelBoardInvites(tx, stageFixtureIds, FIXTURE_DELETED_REASON);
-    // X-RB-1: the slots the delete is about to take, read before it.
-    const before = await tx<
-      {
-        pool_id: string | null;
-        round_no: number;
-        seq_in_round: number;
-        ext_key: string | null;
-        scheduled_at: Date | null;
-        court_id: string | null;
-        venue_id: string | null;
-        schedule_locked: boolean;
-      }[]
-    >`
-      select pool_id, round_no, seq_in_round, ext_key, scheduled_at, court_id, venue_id, schedule_locked
-      from fixtures where stage_id = ${stageId}
-      order by pool_id nulls first, round_no, seq_in_round, created_at, id`;
-    const deleted = await tx<{ id: string }[]>`
-      delete from fixtures where stage_id = ${stageId} returning id`;
-
-    const generated = await generateStageFixturesTx(tx, auth, stageId, {});
-
-    const carry = carrySlots(
-      before.map((r) => ({ ...r, scheduled_at: r.scheduled_at === null ? null : r.scheduled_at.toISOString() })),
-      generated.outcome.fixtures.map((f) => ({
-        id: f.id,
-        pool_id: f.pool_id,
-        round_no: f.round_no,
-        seq_in_round: f.seq_in_round,
-        ext_key: f.ext_key ?? null,
-      })),
-    );
-    const carried = [...carry.assign];
-    if (carried.length > 0) {
-      // ONE update for every carried slot, batched the way this file batches
-      // its feed writes: a row of parallel arrays per column. The pins travel as
-      // `text[]` and are cast per element: postgres.js sends a JS boolean
-      // array typed as a scalar `bool` (refused as `boolean[]`), and a string
-      // array cast to `boolean[]` is serialised with the bool serializer,
-      // which reads every "true" as false.
-      await tx`
-        update fixtures f set
-          scheduled_at = v.scheduled_at,
-          court_id = v.court_id,
-          venue_id = v.venue_id,
-          schedule_locked = v.schedule_locked
-        from (select unnest(${carried.map(([id]) => id)}::uuid[])                        as id,
-                     unnest(${carried.map(([, s]) => s.scheduled_at)}::timestamptz[])    as scheduled_at,
-                     unnest(${carried.map(([, s]) => s.court_id)}::uuid[])               as court_id,
-                     unnest(${carried.map(([, s]) => s.venue_id)}::uuid[])               as venue_id,
-                     unnest(${carried.map(([, s]) => String(s.schedule_locked))}::text[])::boolean as schedule_locked) v
-        where f.id = v.id and f.stage_id = ${stageId}`;
-    }
-    const fixtures = carried.length > 0 ? await readStageFixtureRows(tx, stageId) : generated.outcome.fixtures;
-
-    return {
-      generated: { ...generated, outcome: { ...generated.outcome, fixtures } },
-      removedIds: deleted.map((row) => row.id),
-      slots: carriedSlotCounts(carry),
-    };
+    await refuseFormatTooSmall(tx, stage.division_id);
+    const regen = await regenerateStageInTx(tx, auth, stageId, stage);
+    // W4 T11 (X-LE-10): Rebuild draws every active entrant, so nobody waits on this stage any more — the late players the
+    // desk flagged are in the new bracket, and the flag goes with them.
+    await tx`update entrants set knockout_waiting_stage_id = null where knockout_waiting_stage_id = ${stageId}`;
+    return regen;
   });
 
   // After the commit, and only after it. A refusal anywhere above rolled the
@@ -4420,6 +4611,234 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
     }
   }
   return { ...outcome, removed: write.removedIds.length, slots: write.slots };
+}
+
+/**
+ * Rebuild's delete-and-regenerate, in the CALLER's transaction (W4 T8: extracted unchanged so a knockout's Generate can
+ * regenerate when the bracket crosses a power of two — `reconcileKnockoutGenerate`). Takes the division lock, refuses a
+ * frozen division, a played or called line, an online game and a match's own format, cancels the boards' invites,
+ * deletes the stage's fixtures, generates afresh (`generateStageFixturesTx`, its ledger row included), and carries each
+ * old slot to the line that inherits it (a knockout, a stepladder and a page playoff by bracket ROLE — `ROLE_CARRY_KINDS`
+ * — every other kind by position). `stage` is the row
+ * the caller read. Returns the write, the deleted ids and the slot counts; the caller publishes after its commit.
+ */
+export async function regenerateStageInTx(
+  tx: Tx,
+  auth: AuthCtx,
+  stageId: string,
+  stage: { division_id: string; kind: string },
+): Promise<{ generated: GenerateWrite; removedIds: string[]; slots: { kept: number; freed: number; unscheduled: number } }> {
+  await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+  // A frozen division refuses the rebuild — the same predicate as generate's
+  // pre-flight, read here under the lock. Strictly wider than the
+  // `clearScheduleScoped` the freeze already refuses: this HARD-DELETES
+  // every fixture on the stage, cascading into score_events, match_states,
+  // match_reports, lineups, official_marks, fixture_officials and
+  // device_links (see the guard's own comment below). Refused before the
+  // delete, so `stages-schedule-lock.test.ts`'s `fixtureCount` assertion
+  // reads an untouched board.
+  const lockState = await divisionLockState(tx, stage.division_id);
+  if (lockState.frozen) {
+    throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+  }
+
+  // Never destroy a real result (hard constraint 1). Mirrors deleteStage's
+  // guard above (same three statuses), with one refinement for 'forfeited'.
+  // The status alone covers three different rows: a generation-time BYE
+  // (one side null by construction), the generator's own F14 walkover for a
+  // qualifier who departed before the draw (both seats filled, nothing
+  // played), and a WALKOVER RECORDED IN PLAY (withdrawal.ts's core.forfeit
+  // — append-event.ts maps it to this same status). Only the last holds a
+  // result, and it is the only one with evidence: its core.forfeit is a
+  // score event. So a 'forfeited' fixture blocks through its evidence
+  // alone (review 3 of #857, N2, owner ruling), never through its status.
+  // Status alone is NOT a sufficient test, because `delete from fixtures`
+  // CASCADEs into score_events, match_states, match_reports, lineups,
+  // official_marks, fixture_officials and device_links, and SET NULLs
+  // suspensions.fixture_id. Two holes a status-only guard leaves:
+  //   - 'abandoned' is a match that was PLAYED and stopped. match-reports.ts
+  //     (:40 REPORTABLE) accepts a report on exactly this status, so a
+  //     status-only guard deletes the report along with the fixture.
+  //   - any fixture carrying evidence rows under a status this list does not
+  //     name — the scoring pad writes score_events/match_states, and nothing
+  //     here should depend on WHEN a status flips relative to the first
+  //     event landing.
+  // So block on the evidence itself as well as on status: if a fixture has
+  // anything recorded against it, it is not ours to delete.
+  //
+  // What this deliberately does NOT block on (F3 ultrareview finding 5):
+  // `lineups`, `fixture_officials` and `device_links` also CASCADE away
+  // with the fixtures, but they are organiser SETUP, not a result. An
+  // organiser who has already appointed referees is the one most likely to
+  // need a rebuild before match day, so blocking would disable the feature
+  // exactly when it earns its keep. Destroying them silently is equally
+  // wrong, so `getStageRosterDrift` counts all three and the confirm
+  // dialog names them before the click (progression.rosterDrift.confirm*).
+  // If a future table holds real RESULT data, it belongs in the guard
+  // below, not in that count.
+  //
+  // One latent trapdoor, checked and currently INERT (2026-08-19): fixtures
+  // .parent_fixture_id is a self-FK declared ON DELETE CASCADE (V214:18), so
+  // a fixture that is someone's parent takes its children with it. Nothing
+  // in apps/web writes that column today (zero rows), and its only intended
+  // use — table-tennis rubbers under a tie (sports/setbased/tabletennis.ts)
+  // — is same-stage, where taking the children with the parent is correct.
+  // If a writer ever creates CROSS-STAGE parent links, this delete would
+  // silently remove another stage's board and the guard below would not see
+  // it. Note the cascade RECURSES on a self-FK: a chain deeper than one
+  // level takes the whole subtree, not just direct children, so the blast
+  // radius is not bounded at one hop. Verify with
+  //   select count(*) from fixtures c join fixtures p
+  //     on c.parent_fixture_id = p.id where c.stage_id <> p.stage_id;
+  // (fixtures.court_id is RESTRICT but points OUT at courts, so it
+  // constrains deleting a COURT, never this delete.)
+  // NARROWED 2026-09-21 (the cascade). `abandoned` used to block on its own.
+  // That was written for a match that was PLAYED and stopped, and it is now
+  // ALSO the value the generator's own void writes (walkoverDepartedQualifiers,
+  // re-review C2) — so from the instant a departed pairing was voided at
+  // generation the stage became permanently un-rebuildable, and the organiser
+  // pressing "Rebuild fixtures" on a board nobody had played was told
+  // "this stage already has recorded results". Driven in a browser; the
+  // sentence on screen was false, which is worse than a control that does
+  // nothing.
+  //
+  // A generation-time void has no outcome, no score events, no match report
+  // and no config snapshot — it is a line the regenerate would draw again
+  // identically. A real abandonment has at least the `core.abandon` event
+  // that produced the status, and a cricket-style no-result carries an
+  // outcome; both still block, the first through `fixtureEvidenceSql` below
+  // and the second through the `outcome is not null` clause. That split is
+  // what `dead-feeder-cascade.test.ts`'s two CONTROL cases pin, one per
+  // side.
+  //
+  // The evidence-table list itself lives in `fixtureEvidenceSql` — ONE
+  // literal, shared with `unpairSwissRound`'s guard, because the
+  // 2026-09-20 review found Unpair shipping a SUBSET of this list and
+  // destroying real results through the gap. Only the status clause is
+  // per-caller. (`config_snapshot is not null` joins the list there; it is
+  // implied by `exists(score_events)` for this guard — nothing in apps/web
+  // ever deletes a score event — so it adds no refusal here, only
+  // monotonicity where status is unreliable.)
+  //
+  // This guard's status clause and evidence are `fixtureHasResultSql`,
+  // which history reads as its played set (review 2 of #857, I3), so what
+  // rebuild refuses for a RESULT history never deletes. Since W4 T2 the
+  // guard's whole set is wider — results ∪ a live Match Day call (below) —
+  // while history's `unplayed` is still results only. That gap is
+  // unreachable today, not closed: a call appends a `schedule_edited` ledger
+  // row (match-day-call.ts), so Undo inverts the call (moving the match off
+  // the called slot) before it can reach a Generate's `fixtures_cleared`
+  // (B1a review #3). A call that wrote no ledger row would open it. A walkover
+  // blocks only through its evidence (review 3 of #857, N2): the one a
+  // scorer records posts `core.forfeit`; the generator's F14 walkover has
+  // nothing played behind it, so a stage holding one rebuilds.
+  //
+  // W4 T2 (K4, X-LE-9; owner ruling 257): a live Match Day call refuses too. A call writes a court and a time and no
+  // status or event, so nothing above sees it, and the delete cascades into `fixture_calls` (V484) — the players
+  // standing at the court would lose their match and its call. Only the call arm of the one "started" predicate
+  // (`fixtureCalledSql`, fixture-started-sql.ts): its online-game arm is refused below by name (ONLINE_GAME_EXISTS, and
+  // a bridge row with no game rebuilds, M-10), and its decided arm would refuse the F14 walkover N2 keeps rebuildable.
+  const [blocked] = await tx<{ id: string }[]>`
+    select f.id from fixtures f
+    where f.stage_id = ${stageId} and (${fixtureHasResultSql(tx)} or ${fixtureCalledSql(tx)})
+    limit 1`;
+  if (blocked) {
+    throw new HttpError(
+      409,
+      "this stage has fixtures with a recorded result — rebuild refuses to touch a stage that has already been played, even partly; complete it as it stands, or use Generate to add missing entrants without disturbing what's already been decided",
+      "STAGE_HAS_RESULTS",
+    );
+  }
+
+  // The delete CASCADEs into fixture_external_play, and no result guard
+  // above can see an online game in progress (online chess appends nothing
+  // until the result). A board a game stands behind refuses the rebuild,
+  // under the same lock order as the Swiss seat clear (review M8).
+  const stageFixtureIds = (
+    await tx<{ id: string }[]>`select id from fixtures where stage_id = ${stageId}`
+  ).map((r) => r.id);
+  await lockBoardsRefusingOnlineGames(tx, stageFixtureIds);
+  // W2c Task 14: a match's own format would be regenerated away with its row — refused by name instead.
+  await refuseOwnFormatLoss(tx, tx`stage_id = ${stageId}`);
+  // Phase 3 wave 1 (G-1): the boards go, and their queued invites with them - after every refusal above, before the delete. The
+  // rebuilt boards are new fixtures with new ids, so an invite left queued would mail a board that no longer exists.
+  await cancelBoardInvites(tx, stageFixtureIds, FIXTURE_DELETED_REASON);
+  // X-RB-1: the slots the delete is about to take, read before it — with what `isByeLine` reads (W4 T4).
+  const before = await tx<
+    ({
+      pool_id: string | null;
+      round_no: number;
+      seq_in_round: number;
+      scheduled_at: Date | null;
+      court_id: string | null;
+      venue_id: string | null;
+      schedule_locked: boolean;
+    } & ByeLineRow)[]
+  >`
+    select pool_id, round_no, seq_in_round, ext_key, scheduled_at, court_id, venue_id, schedule_locked,
+           status, outcome, home_entrant_id, away_entrant_id, home_slot_label, away_slot_label
+    from fixtures where stage_id = ${stageId}
+    order by pool_id nulls first, round_no, seq_in_round, created_at, id`;
+  const deleted = await tx<{ id: string }[]>`
+    delete from fixtures where stage_id = ${stageId} returning id`;
+
+  const generated = await generateStageFixturesTx(tx, auth, stageId, {});
+
+  // W4 T4 (K3, X-RB-1): a bye line neither gives nor takes a slot (`isByeLine`, every kind), and a knockout carries by
+  // bracket ROLE — its `round_no` counts from the first round, so by position an 8 → 9 Rebuild handed the final's
+  // slot to a semi-final. Each side is keyed against its own final. Every other kind keeps the position.
+  const oldRows = before.map((r) => ({
+    pool_id: r.pool_id,
+    round_no: r.round_no,
+    seq_in_round: r.seq_in_round,
+    ext_key: r.ext_key,
+    scheduled_at: r.scheduled_at === null ? null : r.scheduled_at.toISOString(),
+    court_id: r.court_id,
+    venue_id: r.venue_id,
+    schedule_locked: r.schedule_locked,
+    bye: isByeLine(r),
+  }));
+  const newRows = generated.outcome.fixtures.map((f) => ({
+    id: f.id,
+    pool_id: f.pool_id,
+    round_no: f.round_no,
+    seq_in_round: f.seq_in_round,
+    ext_key: f.ext_key ?? null,
+    bye: isByeLine({ ...f, ext_key: f.ext_key ?? null }),
+  }));
+  const carry = carrySlots(
+    oldRows,
+    newRows,
+    ROLE_CARRY_KINDS.has(stage.kind) ? { before: roleKeyOf(oldRows), after: roleKeyOf(newRows) } : undefined,
+  );
+  const carried = [...carry.assign];
+  if (carried.length > 0) {
+    // ONE update for every carried slot, batched the way this file batches
+    // its feed writes: a row of parallel arrays per column. The pins travel as
+    // `text[]` and are cast per element: postgres.js sends a JS boolean
+    // array typed as a scalar `bool` (refused as `boolean[]`), and a string
+    // array cast to `boolean[]` is serialised with the bool serializer,
+    // which reads every "true" as false.
+    await tx`
+      update fixtures f set
+        scheduled_at = v.scheduled_at,
+        court_id = v.court_id,
+        venue_id = v.venue_id,
+        schedule_locked = v.schedule_locked
+      from (select unnest(${carried.map(([id]) => id)}::uuid[])                        as id,
+                   unnest(${carried.map(([, s]) => s.scheduled_at)}::timestamptz[])    as scheduled_at,
+                   unnest(${carried.map(([, s]) => s.court_id)}::uuid[])               as court_id,
+                   unnest(${carried.map(([, s]) => s.venue_id)}::uuid[])               as venue_id,
+                   unnest(${carried.map(([, s]) => String(s.schedule_locked))}::text[])::boolean as schedule_locked) v
+      where f.id = v.id and f.stage_id = ${stageId}`;
+  }
+  const fixtures = carried.length > 0 ? await readStageFixtureRows(tx, stageId) : generated.outcome.fixtures;
+
+  return {
+    generated: { ...generated, outcome: { ...generated.outcome, fixtures } },
+    removedIds: deleted.map((row) => row.id),
+    slots: carriedSlotCounts(carry),
+  };
 }
 
 interface CrossFeed {
@@ -4494,362 +4913,366 @@ function seedOfSlotId(id: string): number {
 // share ONE implementation instead of two.
 
 async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string): Promise<GenerateWrite> {
-  return withTenant(auth.orgId, async (tx) => {
-    const [stage] = await tx<StageRow[]>`
-      select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
-    if (!stage) throw new HttpError(404, "stage not found");
-    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
-    // `timing` is read by the CALLER (generateStageFixtures' pre-check) —
-    // this function only ever runs for timing === "setup", so it is not
-    // needed again here.
-    const progression = stage.progression as unknown as ProgressionSpec;
+  return withTenant(auth.orgId, (tx) => writeProgressionSetupFixtures(tx, stageId));
+}
 
-    const shapes: SourceShape[] = [];
-    for (const s of progression.sources) {
-      const source = await resolveProgressionSource(tx, stage, s.stage);
-      shapes.push(await sourceShapeOf(tx, source));
-    }
-    const pots = expandSources(progression.sources, (i) => shapes[i]!);
-    // F3 round-3 review, Task 1 — `stage.kind` is THIS stage's own kind (the
-    // progression's target), threaded through so placeDescriptors can refuse
-    // an illegal snake-into-a-bracket-target combo (ruling 13) here too, not
-    // just at createStages/replaceStages' save-time validateStageProgression
-    // call — a `.setup` progression generates from a synthetic seed order
-    // with no live standings, so this direct call is the day-one path ruling
-    // 13's self-pairing draw actually reaches.
-    const placed = placeDescriptors(pots, progression.placement, progression.map, stage.kind);
-    if (placed.length < 2) {
-      throw new EngineError("STAGE_NOT_READY", "this stage's progression rules produce fewer than 2 qualifiers", {
-        stageId,
-        count: placed.length,
-      });
-    }
+/** The body of a `timing: "setup"` Generate, in the caller's transaction. Idempotent over the rows it finds (keyed by
+ *  `ext_key`), so an un-fill runs it to put a line's labels back (fed-seats.ts `unfillProposalSeats`, W4 T14). */
+export async function writeProgressionSetupFixtures(tx: Tx, stageId: string): Promise<GenerateWrite> {
+  const [stage] = await tx<StageRow[]>`
+    select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
+  if (!stage) throw new HttpError(404, "stage not found");
+  await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+  // `timing` is read by the CALLER (generateStageFixtures' pre-check) —
+  // this function only ever runs for timing === "setup", so it is not
+  // needed again here.
+  const progression = stage.progression as unknown as ProgressionSpec;
 
-    // P6 (F3 Task 3) verified: this map does NOT need sourceIndex-qualified
-    // keys. It's keyed by the synthetic per-SEAT id `slot:${i+1}` (i = array
-    // position in `placed`, already unique — never `descriptorKey`), so two
-    // same-keyed descriptors from different sources (the multi-source
-    // collision placeDescriptors now guards, progression.ts) already survive
-    // here untouched: each gets its own seat regardless of what its
-    // descriptor's key is. The actual fix for that collision lives entirely
-    // in placeDescriptors (SEEDING_MAP_SOURCE_AMBIGUOUS) — see its doc
-    // comment and _INDEX.md's P6 entry.
-    const slotOf = new Map<string, SlotDescriptor>();
-    const entrants: ActiveEntrant[] = placed.map((slot, i) => {
-      const id = `slot:${i + 1}`;
-      slotOf.set(id, slot.descriptor);
-      return { id, seed: i + 1, swiss_first_round: null };
+  const shapes: SourceShape[] = [];
+  for (const s of progression.sources) {
+    const source = await resolveProgressionSource(tx, stage, s.stage);
+    shapes.push(await sourceShapeOf(tx, source));
+  }
+  const pots = expandSources(progression.sources, (i) => shapes[i]!);
+  // F3 round-3 review, Task 1 — `stage.kind` is THIS stage's own kind (the
+  // progression's target), threaded through so placeDescriptors can refuse
+  // an illegal snake-into-a-bracket-target combo (ruling 13) here too, not
+  // just at createStages/replaceStages' save-time validateStageProgression
+  // call — a `.setup` progression generates from a synthetic seed order
+  // with no live standings, so this direct call is the day-one path ruling
+  // 13's self-pairing draw actually reaches.
+  const placed = placeDescriptors(pots, progression.placement, progression.map, stage.kind);
+  if (placed.length < 2) {
+    throw new EngineError("STAGE_NOT_READY", "this stage's progression rules produce fewer than 2 qualifiers", {
+      stageId,
+      count: placed.length,
     });
+  }
 
-    // Group-kind target (e.g. a "Super 8" round robin fed by group-stage
-    // qualifiers): materialise ITS pools rows first, same as the plain path.
-    const poolIds = new Map<string, string>();
-    if (stage.kind === "group" && poolCount(stage.config) > 1) {
-      const existingPools = await tx<{ id: string; key: string }[]>`
-        select id, key from pools where stage_id = ${stageId}`;
-      for (const pool of existingPools) poolIds.set(pool.key, pool.id);
-      for (let i = 0; i < poolCount(stage.config); i++) {
-        const key = POOL_KEYS[i];
-        if (poolIds.has(key)) continue;
-        const [row] = await tx<{ id: string }[]>`
-          insert into pools (stage_id, key, name)
-          values (${stageId}, ${key}, ${"Pool " + key}) returning id`;
-        poolIds.set(key, row.id);
-      }
-    }
-
-    const existing = await tx<{ id: string; ext_key: string | null }[]>`
-      select id, ext_key from fixtures where stage_id = ${stageId}`;
-
-    // A `timing: "setup"` progression generates off SYNTHETIC entrants —
-    // score-dependent formats (swiss/americano/ladder) have no seed-order
-    // shape to draw before results exist, same restriction the plain path
-    // has; `generate()` covers every bracket/table kind that DOES have one.
-    const gen: SeededGenFixture[] = generate(stage.kind, stage.config, entrants, poolIds);
-
-    // F2a (P7 follow-up, 2026-08-14): the plain path's `group_too_few_entrants`
-    // guard (:990-999) only fires when `gen.length === 0` — but a
-    // `timing: "setup"` group stage's `entrants` here are the PLACED SEEDS, snake-distributed
-    // into `pools.count` pools the same way the plain path distributes real
-    // entrants. Too few seeds for the configured pool count doesn't
-    // necessarily zero out `gen` overall — it can leave INDIVIDUAL pools with
-    // 0 or 1 seed (roundRobinGen emits nothing for those) while OTHER pools
-    // still generate fine, so `gen.length > 0`. Those stranded seeds never
-    // appear as home/away/award in any `gen` entry, so they never get a
-    // home_slot_label/away_slot_label written below — and because `newRows`
-    // is keyed by ext_key and `generate()` is deterministic, a second call
-    // reproduces the identical (still-partial) `gen` and inserts nothing new.
-    // The only symptom is computeSeedProposal 422ing SEEDING_RULES_MISSING
-    // forever ("regenerate them first" — advice that cannot work, see
-    // destinationSlotsBySeed below). Catch the real condition — a placed seed
-    // with nowhere to land — BEFORE any row is inserted, so the transaction
-    // fails cleanly instead of committing a stage that can never be seeded.
-    const referenced = new Set<string>();
-    for (const g of gen) {
-      if (typeof g.home === "string") referenced.add(g.home);
-      if (typeof g.away === "string") referenced.add(g.away);
-      if (typeof g.award === "string") referenced.add(g.award);
-    }
-    const stranded = entrants.filter((e) => !referenced.has(e.id));
-    if (stranded.length > 0) {
-      const groups = stage.kind === "group" ? poolCount(stage.config) : 1;
-      const required = Math.max(2, groups * 2);
-      throw new EngineError(
-        "STAGE_NOT_READY",
-        groups > 1
-          ? `not enough qualifiers to fill ${groups} groups — each group needs at least 2 (have ${placed.length}, need ${required}); ${stranded.length} would never receive a fixture`
-          : // Reaching here means fixtures WERE generated and some qualifier
-            // still got none — a partial fill, never "no matches at all". Saying
-            // the latter would repeat the unactionable-advice defect this guard
-            // exists to remove. Unreachable today (with one pool stages.ts:655-656
-            // runs a full-field round robin that strands nobody, and every bracket
-            // generator places every seed or throws), so this is the shape a future
-            // generator regression would surface through, not live copy.
-            `${stranded.length} of ${placed.length} qualifiers would never receive a fixture`,
-        {
-          stageId,
-          reason: "seeded_pool_too_few_qualifiers",
-          groups,
-          qualifiers: placed.length,
-          required,
-          stranded: stranded.length,
-        },
-      );
-    }
-
-    // Convert synthetic slot refs into labels. A bye AWARD line propagates
-    // its label into the winner feed too (both resolve to the SAME
-    // descriptor at confirm time) — see the third pass below. A bye seed
-    // therefore legitimately owns TWO destination slots: the bye fixture's
-    // own `home` slot (stamped right here) AND the winner-feed target's slot
-    // (stamped by the third pass). destinationSlotsBySeed() returns every
-    // slot for a given seed, and confirmSeedProposal fills all of them
-    // through fillSlot — #554 fixed a bug where collapsing a seed's slots to
-    // ONE (last-write-wins, no ORDER BY) silently stranded whichever slot
-    // wasn't picked.
-    //
-    // The bye-line fixture itself cannot be auto-decided HERE the way a
-    // live/registered-entrant bye is: there is no real entrant yet to record
-    // the walkover for. It is written 'scheduled' like any other TBD slot and
-    // decided at the moment its seat is filled — confirmSeedProposal's
-    // `awardSeededByes` call, keyed off the `bracket.slot.bye` label stamped
-    // below. Leaving it 'scheduled' after the fill is what shipped the defect
-    // `progression-bye-is-decided.test.ts` pins: unplayable by construction
-    // (one side is empty forever), so the stage never completes, and `isBye`
-    // reads false, so it renders as an open match awaiting a draw.
-    for (const g of gen) {
-      if (typeof g.home === "string" && slotOf.has(g.home)) {
-        g.homeLabel = { ...descriptorLabel(slotOf.get(g.home)!), seed: seedOfSlotId(g.home) };
-        g.home = null;
-      }
-      if (typeof g.away === "string" && slotOf.has(g.away)) {
-        g.awayLabel = { ...descriptorLabel(slotOf.get(g.away)!), seed: seedOfSlotId(g.away) };
-        g.away = null;
-      }
-      if (typeof g.award === "string" && slotOf.has(g.award)) {
-        g.awardLabel = g.homeLabel ?? { ...descriptorLabel(slotOf.get(g.award)!), seed: seedOfSlotId(g.award) };
-      }
-    }
-
-    const byKey = new Map<string, string>();
-    for (const f of existing) if (f.ext_key) byKey.set(f.ext_key, f.id);
-
-    const newRows = gen
-      .filter((g) => !byKey.has(g.extKey))
-      .map((g) => ({
-        id: randomUUID(),
-        stage_id: stageId,
-        division_id: stage.division_id,
-        pool_id: g.poolId ?? null,
-        round_no: g.roundNo,
-        seq_in_round: g.seqInRound,
-        home_entrant_id: null,
-        away_entrant_id: null,
-        ext_key: g.extKey,
-        status: "scheduled",
-        outcome: null,
-        // F1: same role columns as the plain generateStageFixtures path —
-        // seeded (placeholder) brackets must persist a role too, or the
-        // day-one preview path F3 depends on renders with no role at all.
-        lane: g.lane ?? null,
-        is_final: g.isFinal === true,
-        third_place: g.thirdPlace === true,
-        conditional: g.conditional === true,
-      }));
-    if (newRows.length > 0) await tx`insert into fixtures ${tx(newRows)}`;
-    for (const r of newRows) byKey.set(r.ext_key, r.id);
-    const created = newRows.length;
-    const createdIds = newRows.map((r) => r.id);
-
-    // Labels via a direct per-row update with tx.json() (the pattern proven
-    // everywhere else in this file, e.g. wireCrossFeeds/config writes) —
-    // NOT folded into the bulk array-insert above: that helper's per-column
-    // type inference binds a JSON.stringify'd JS string as `text`, and
-    // Postgres has no implicit text->jsonb PARSE cast in that bound-
-    // parameter context, so it lands double-encoded (a jsonb STRING
-    // containing escaped JSON text, not the parsed object) — confirmed
-    // empirically against this exact insert, not assumed.
-    for (const g of gen) {
-      const fixtureId = byKey.get(g.extKey);
-      if (fixtureId === undefined) continue;
-      // I1 (re-review, 2026-09-21) — `byKey` includes rows that ALREADY
-      // exist, so this pass runs again on every re-Generate, over fixtures
-      // that confirm has since filled and settled. Two guards, and they cover
-      // different things:
-      //   - `*_entrant_id is null`: a seated side carries no label at all
-      //     (fillSlot nulls it), and writing the descriptor's TBD text back
-      //     onto a real entrant's seat re-advertises a draw that has happened.
-      //   - not already the BYE stamp: confirm marks a VACATED seat
-      //     `bracket.slot.bye` and `awardSeededByes` settles the line off that
-      //     marker. Reverting it to `slot.winner_group` un-settles the
-      //     walkover — `isBye` goes false and the line reads as an ordinary
-      //     match awaiting a draw again.
-      if (g.homeLabel) {
-        await tx`update fixtures set home_slot_label = ${tx.json(g.homeLabel as never)}
-                 where id = ${fixtureId} and home_entrant_id is null
-                   and coalesce(home_slot_label->>'key', '') <> ${BYE_SLOT_LABEL.key}`;
-      }
-      if (g.awayLabel) {
-        await tx`update fixtures set away_slot_label = ${tx.json(g.awayLabel as never)}
-                 where id = ${fixtureId} and away_entrant_id is null
-                   and coalesce(away_slot_label->>'key', '') <> ${BYE_SLOT_LABEL.key}`;
-      }
-      // A bye's phantom side resolves to nobody, ever — padding the bracket
-      // out to a power of two is the entire reason the seat exists. Without a
-      // label there, resolveSlotLabel falls through to a generic TBD, which
-      // tells the organiser to wait for an opponent who is not coming; the
-      // plain (non-progression) path has stored `bracket.slot.bye` there since
-      // the P5 review (`byeSlotLabel` at its own insert) and this is the same
-      // store on the seeded path, so every renderer already going through
-      // resolveSlotLabel picks it up for free.
-      //
-      // It is also the MARKER `awardSeededByes` reads at confirm time to tell
-      // a walkover line apart from a slot still waiting on a feeder — which is
-      // why it is stamped here, at the one place that knows `g.award`, rather
-      // than re-derived later from a row shape that cannot distinguish them.
-      //
-      // Deliberately carries NO `seed`: destinationSlotsBySeed keys on that
-      // field to decide which slots a qualifier fills, and this seat is not a
-      // destination. Both sides are guarded rather than assuming the engine
-      // always lands the award on `home` (buildSingleElim does today), same
-      // symmetry the plain path keeps.
-      if (g.award !== undefined) {
-        if (g.home === null && !g.homeLabel) {
-          await tx`update fixtures set home_slot_label = ${tx.json(BYE_SLOT_LABEL as never)} where id = ${fixtureId}`;
-        }
-        if (g.away === null && !g.awayLabel) {
-          await tx`update fixtures set away_slot_label = ${tx.json(BYE_SLOT_LABEL as never)} where id = ${fixtureId}`;
-        }
-      }
-    }
-
-    // Feed wiring — identical shape to generateStageFixtures' second pass.
-    const feedUpdates = { winner: [], loser: [] } as Record<
-      "winner" | "loser",
-      { source: string; target: string; slot: number }[]
-    >;
-    for (const g of gen) {
-      const targetId = byKey.get(g.extKey);
-      if (!targetId) continue;
-      for (const [feed, slot] of [
-        [g.homeFrom, 1],
-        [g.awayFrom, 2],
-      ] as const) {
-        if (!feed) continue;
-        const sourceId = byKey.get(feed.extKey);
-        if (!sourceId) continue;
-        feedUpdates[feed.side].push({ source: sourceId, target: targetId, slot });
-      }
-    }
-    if (feedUpdates.winner.length > 0) {
-      const u = feedUpdates.winner;
-      await tx`
-        update fixtures f
-        set winner_to_fixture = v.target_id, winner_to_slot = v.slot
-        from (select unnest(${u.map((x) => x.source)}::uuid[]) as source_id,
-                     unnest(${u.map((x) => x.target)}::uuid[]) as target_id,
-                     unnest(${u.map((x) => x.slot)}::int[])    as slot) v
-        where f.id = v.source_id and f.winner_to_fixture is null`;
-    }
-    if (feedUpdates.loser.length > 0) {
-      const u = feedUpdates.loser;
-      await tx`
-        update fixtures f
-        set loser_to_fixture = v.target_id, loser_to_slot = v.slot
-        from (select unnest(${u.map((x) => x.source)}::uuid[]) as source_id,
-                     unnest(${u.map((x) => x.target)}::uuid[]) as target_id,
-                     unnest(${u.map((x) => x.slot)}::int[])    as slot) v
-        where f.id = v.source_id and f.loser_to_fixture is null`;
-    }
-
-    // Third pass — TBD-aware bye propagation: writes the SAME label into the
-    // winner feed's slot instead of a real entrant id.
-    const awardedLabelled = gen.filter((g) => g.awardLabel !== undefined && byKey.has(g.extKey));
-    if (awardedLabelled.length > 0) {
-      const sources = await tx<
-        { id: string; winner_to_fixture: string | null; winner_to_slot: number | null }[]
-      >`select id, winner_to_fixture, winner_to_slot from fixtures
-        where id in ${tx(awardedLabelled.map((g) => byKey.get(g.extKey)!))}`;
-      const srcOf = new Map(sources.map((s) => [s.id, s]));
-      for (const g of awardedLabelled) {
-        const source = srcOf.get(byKey.get(g.extKey)!);
-        if (!source?.winner_to_fixture) continue;
-        if (source.winner_to_slot === 1) {
-          await tx`update fixtures set home_slot_label = ${tx.json(g.awardLabel as never)}
-                   where id = ${source.winner_to_fixture} and home_entrant_id is null`;
-        } else if (source.winner_to_slot === 2) {
-          await tx`update fixtures set away_slot_label = ${tx.json(g.awardLabel as never)}
-                   where id = ${source.winner_to_fixture} and away_entrant_id is null`;
-        }
-      }
-    }
-
-    if (stage.status === "pending") {
-      await tx`update stages set status = 'active' where id = ${stageId}`;
-      // W2d X-TB-2 (OC2): the table rules are fixed in the transaction that starts the stage.
-      await pinStageTableRules(tx, stageId);
-    }
-
-    const fixtureRows = await tx<Omit<FixtureRow, "court_name">[]>`
-      select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
-             f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
-             f.scheduled_at, f.venue, f.court_label, f.court_id,
-             f.venue_id, ven.name as venue_name,
-             f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
-             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
-      from fixtures f
-      left join venues ven on ven.id = f.venue_id
-      where f.stage_id = ${stageId} order by f.round_no, f.seq_in_round`;
-    // #14: venue-qualified label (a bare joined `courts.name` can't tell two
-    // same-named courts in different venues apart) — same fallback
-    // convention as FixtureRow's own doc comment: fall back to the id
-    // itself on a miss (should not happen; FK-restricted).
-    const courtNames = await courtNamesById(tx);
-    const fixtures = fixtureRows.map((f) => ({
-      ...f,
-      court_name: f.court_id !== null ? (courtNames.get(f.court_id) ?? f.court_id) : null,
-    }));
-
-    if (created > 0) {
-      const [{ seq: last }] = await tx<{ seq: number }[]>`
-        select coalesce(max(seq), 0)::int as seq from division_events
-        where division_id = ${stage.division_id}`;
-      await tx`
-        insert into division_events (division_id, seq, type, payload)
-        values (${stage.division_id}, ${last + 1}, 'fixtures_generated',
-                ${tx.json({ stage_id: stageId, fixture_ids: createdIds } as never)})`;
-      await tx`update divisions set seq = ${last + 1}, edit_watermark = null
-               where id = ${stage.division_id}`;
-    }
-    const [division] = await tx<{ competition_id: string }[]>`
-      select competition_id from divisions where id = ${stage.division_id}`;
-    return {
-      outcome: { created, existing: gen.length - created, fixtures },
-      divisionId: stage.division_id,
-      competitionId: division!.competition_id,
-      kind: stage.kind,
-    };
+  // P6 (F3 Task 3) verified: this map does NOT need sourceIndex-qualified
+  // keys. It's keyed by the synthetic per-SEAT id `slot:${i+1}` (i = array
+  // position in `placed`, already unique — never `descriptorKey`), so two
+  // same-keyed descriptors from different sources (the multi-source
+  // collision placeDescriptors now guards, progression.ts) already survive
+  // here untouched: each gets its own seat regardless of what its
+  // descriptor's key is. The actual fix for that collision lives entirely
+  // in placeDescriptors (SEEDING_MAP_SOURCE_AMBIGUOUS) — see its doc
+  // comment and _INDEX.md's P6 entry.
+  const slotOf = new Map<string, SlotDescriptor>();
+  const entrants: ActiveEntrant[] = placed.map((slot, i) => {
+    const id = `slot:${i + 1}`;
+    slotOf.set(id, slot.descriptor);
+    return { id, seed: i + 1, swiss_first_round: null };
   });
+
+  // Group-kind target (e.g. a "Super 8" round robin fed by group-stage
+  // qualifiers): materialise ITS pools rows first, same as the plain path.
+  const poolIds = new Map<string, string>();
+  if (stage.kind === "group" && poolCount(stage.config) > 1) {
+    const existingPools = await tx<{ id: string; key: string }[]>`
+      select id, key from pools where stage_id = ${stageId}`;
+    for (const pool of existingPools) poolIds.set(pool.key, pool.id);
+    for (let i = 0; i < poolCount(stage.config); i++) {
+      const key = POOL_KEYS[i];
+      if (poolIds.has(key)) continue;
+      const [row] = await tx<{ id: string }[]>`
+        insert into pools (stage_id, key, name)
+        values (${stageId}, ${key}, ${"Pool " + key}) returning id`;
+      poolIds.set(key, row.id);
+    }
+  }
+
+  const existing = await tx<{ id: string; ext_key: string | null }[]>`
+    select id, ext_key from fixtures where stage_id = ${stageId}`;
+
+  // A `timing: "setup"` progression generates off SYNTHETIC entrants —
+  // score-dependent formats (swiss/americano/ladder) have no seed-order
+  // shape to draw before results exist, same restriction the plain path
+  // has; `generate()` covers every bracket/table kind that DOES have one.
+  const gen: SeededGenFixture[] = generate(stage.kind, stage.config, entrants, poolIds);
+
+  // F2a (P7 follow-up, 2026-08-14): the plain path's `group_too_few_entrants`
+  // guard (:990-999) only fires when `gen.length === 0` — but a
+  // `timing: "setup"` group stage's `entrants` here are the PLACED SEEDS, snake-distributed
+  // into `pools.count` pools the same way the plain path distributes real
+  // entrants. Too few seeds for the configured pool count doesn't
+  // necessarily zero out `gen` overall — it can leave INDIVIDUAL pools with
+  // 0 or 1 seed (roundRobinGen emits nothing for those) while OTHER pools
+  // still generate fine, so `gen.length > 0`. Those stranded seeds never
+  // appear as home/away/award in any `gen` entry, so they never get a
+  // home_slot_label/away_slot_label written below — and because `newRows`
+  // is keyed by ext_key and `generate()` is deterministic, a second call
+  // reproduces the identical (still-partial) `gen` and inserts nothing new.
+  // The only symptom is computeSeedProposal 422ing SEEDING_RULES_MISSING
+  // forever ("regenerate them first" — advice that cannot work, see
+  // destinationSlotsBySeed below). Catch the real condition — a placed seed
+  // with nowhere to land — BEFORE any row is inserted, so the transaction
+  // fails cleanly instead of committing a stage that can never be seeded.
+  const referenced = new Set<string>();
+  for (const g of gen) {
+    if (typeof g.home === "string") referenced.add(g.home);
+    if (typeof g.away === "string") referenced.add(g.away);
+    if (typeof g.award === "string") referenced.add(g.award);
+  }
+  const stranded = entrants.filter((e) => !referenced.has(e.id));
+  if (stranded.length > 0) {
+    const groups = stage.kind === "group" ? poolCount(stage.config) : 1;
+    const required = Math.max(2, groups * 2);
+    throw new EngineError(
+      "STAGE_NOT_READY",
+      groups > 1
+        ? `not enough qualifiers to fill ${groups} groups — each group needs at least 2 (have ${placed.length}, need ${required}); ${stranded.length} would never receive a fixture`
+        : // Reaching here means fixtures WERE generated and some qualifier
+          // still got none — a partial fill, never "no matches at all". Saying
+          // the latter would repeat the unactionable-advice defect this guard
+          // exists to remove. Unreachable today (with one pool stages.ts:655-656
+          // runs a full-field round robin that strands nobody, and every bracket
+          // generator places every seed or throws), so this is the shape a future
+          // generator regression would surface through, not live copy.
+          `${stranded.length} of ${placed.length} qualifiers would never receive a fixture`,
+      {
+        stageId,
+        reason: "seeded_pool_too_few_qualifiers",
+        groups,
+        qualifiers: placed.length,
+        required,
+        stranded: stranded.length,
+      },
+    );
+  }
+
+  // Convert synthetic slot refs into labels. A bye AWARD line propagates
+  // its label into the winner feed too (both resolve to the SAME
+  // descriptor at confirm time) — see the third pass below. A bye seed
+  // therefore legitimately owns TWO destination slots: the bye fixture's
+  // own `home` slot (stamped right here) AND the winner-feed target's slot
+  // (stamped by the third pass). destinationSlotsBySeed() returns every
+  // slot for a given seed, and confirmSeedProposal fills all of them
+  // through fillSlot — #554 fixed a bug where collapsing a seed's slots to
+  // ONE (last-write-wins, no ORDER BY) silently stranded whichever slot
+  // wasn't picked.
+  //
+  // The bye-line fixture itself cannot be auto-decided HERE the way a
+  // live/registered-entrant bye is: there is no real entrant yet to record
+  // the walkover for. It is written 'scheduled' like any other TBD slot and
+  // decided at the moment its seat is filled — confirmSeedProposal's
+  // `awardSeededByes` call, keyed off the `bracket.slot.bye` label stamped
+  // below. Leaving it 'scheduled' after the fill is what shipped the defect
+  // `progression-bye-is-decided.test.ts` pins: unplayable by construction
+  // (one side is empty forever), so the stage never completes, and `isBye`
+  // reads false, so it renders as an open match awaiting a draw.
+  for (const g of gen) {
+    if (typeof g.home === "string" && slotOf.has(g.home)) {
+      g.homeLabel = { ...descriptorLabel(slotOf.get(g.home)!), seed: seedOfSlotId(g.home) };
+      g.home = null;
+    }
+    if (typeof g.away === "string" && slotOf.has(g.away)) {
+      g.awayLabel = { ...descriptorLabel(slotOf.get(g.away)!), seed: seedOfSlotId(g.away) };
+      g.away = null;
+    }
+    if (typeof g.award === "string" && slotOf.has(g.award)) {
+      g.awardLabel = g.homeLabel ?? { ...descriptorLabel(slotOf.get(g.award)!), seed: seedOfSlotId(g.award) };
+    }
+  }
+
+  const byKey = new Map<string, string>();
+  for (const f of existing) if (f.ext_key) byKey.set(f.ext_key, f.id);
+
+  const newRows = gen
+    .filter((g) => !byKey.has(g.extKey))
+    .map((g) => ({
+      id: randomUUID(),
+      stage_id: stageId,
+      division_id: stage.division_id,
+      pool_id: g.poolId ?? null,
+      round_no: g.roundNo,
+      seq_in_round: g.seqInRound,
+      home_entrant_id: null,
+      away_entrant_id: null,
+      ext_key: g.extKey,
+      status: "scheduled",
+      outcome: null,
+      // F1: same role columns as the plain generateStageFixtures path —
+      // seeded (placeholder) brackets must persist a role too, or the
+      // day-one preview path F3 depends on renders with no role at all.
+      lane: g.lane ?? null,
+      is_final: g.isFinal === true,
+      third_place: g.thirdPlace === true,
+      conditional: g.conditional === true,
+    }));
+  if (newRows.length > 0) await tx`insert into fixtures ${tx(newRows)}`;
+  for (const r of newRows) byKey.set(r.ext_key, r.id);
+  const created = newRows.length;
+  const createdIds = newRows.map((r) => r.id);
+
+  // Labels via a direct per-row update with tx.json() (the pattern proven
+  // everywhere else in this file, e.g. wireCrossFeeds/config writes) —
+  // NOT folded into the bulk array-insert above: that helper's per-column
+  // type inference binds a JSON.stringify'd JS string as `text`, and
+  // Postgres has no implicit text->jsonb PARSE cast in that bound-
+  // parameter context, so it lands double-encoded (a jsonb STRING
+  // containing escaped JSON text, not the parsed object) — confirmed
+  // empirically against this exact insert, not assumed.
+  for (const g of gen) {
+    const fixtureId = byKey.get(g.extKey);
+    if (fixtureId === undefined) continue;
+    // I1 (re-review, 2026-09-21) — `byKey` includes rows that ALREADY
+    // exist, so this pass runs again on every re-Generate, over fixtures
+    // that confirm has since filled and settled. Two guards, and they cover
+    // different things:
+    //   - `*_entrant_id is null`: a seated side carries no label at all
+    //     (fillSlot nulls it), and writing the descriptor's TBD text back
+    //     onto a real entrant's seat re-advertises a draw that has happened.
+    //   - not already the BYE stamp: confirm marks a VACATED seat
+    //     `bracket.slot.bye` and `awardSeededByes` settles the line off that
+    //     marker. Reverting it to `slot.winner_group` un-settles the
+    //     walkover — `isBye` goes false and the line reads as an ordinary
+    //     match awaiting a draw again.
+    if (g.homeLabel) {
+      await tx`update fixtures set home_slot_label = ${tx.json(g.homeLabel as never)}
+               where id = ${fixtureId} and home_entrant_id is null
+                 and coalesce(home_slot_label->>'key', '') <> ${BYE_SLOT_LABEL.key}`;
+    }
+    if (g.awayLabel) {
+      await tx`update fixtures set away_slot_label = ${tx.json(g.awayLabel as never)}
+               where id = ${fixtureId} and away_entrant_id is null
+                 and coalesce(away_slot_label->>'key', '') <> ${BYE_SLOT_LABEL.key}`;
+    }
+    // A bye's phantom side resolves to nobody, ever — padding the bracket
+    // out to a power of two is the entire reason the seat exists. Without a
+    // label there, resolveSlotLabel falls through to a generic TBD, which
+    // tells the organiser to wait for an opponent who is not coming; the
+    // plain (non-progression) path has stored `bracket.slot.bye` there since
+    // the P5 review (`byeSlotLabel` at its own insert) and this is the same
+    // store on the seeded path, so every renderer already going through
+    // resolveSlotLabel picks it up for free.
+    //
+    // It is also the MARKER `awardSeededByes` reads at confirm time to tell
+    // a walkover line apart from a slot still waiting on a feeder — which is
+    // why it is stamped here, at the one place that knows `g.award`, rather
+    // than re-derived later from a row shape that cannot distinguish them.
+    //
+    // Deliberately carries NO `seed`: destinationSlotsBySeed keys on that
+    // field to decide which slots a qualifier fills, and this seat is not a
+    // destination. Both sides are guarded rather than assuming the engine
+    // always lands the award on `home` (buildSingleElim does today), same
+    // symmetry the plain path keeps.
+    if (g.award !== undefined) {
+      if (g.home === null && !g.homeLabel) {
+        await tx`update fixtures set home_slot_label = ${tx.json(BYE_SLOT_LABEL as never)} where id = ${fixtureId}`;
+      }
+      if (g.away === null && !g.awayLabel) {
+        await tx`update fixtures set away_slot_label = ${tx.json(BYE_SLOT_LABEL as never)} where id = ${fixtureId}`;
+      }
+    }
+  }
+
+  // Feed wiring — identical shape to generateStageFixtures' second pass.
+  const feedUpdates = { winner: [], loser: [] } as Record<
+    "winner" | "loser",
+    { source: string; target: string; slot: number }[]
+  >;
+  for (const g of gen) {
+    const targetId = byKey.get(g.extKey);
+    if (!targetId) continue;
+    for (const [feed, slot] of [
+      [g.homeFrom, 1],
+      [g.awayFrom, 2],
+    ] as const) {
+      if (!feed) continue;
+      const sourceId = byKey.get(feed.extKey);
+      if (!sourceId) continue;
+      feedUpdates[feed.side].push({ source: sourceId, target: targetId, slot });
+    }
+  }
+  if (feedUpdates.winner.length > 0) {
+    const u = feedUpdates.winner;
+    await tx`
+      update fixtures f
+      set winner_to_fixture = v.target_id, winner_to_slot = v.slot
+      from (select unnest(${u.map((x) => x.source)}::uuid[]) as source_id,
+                   unnest(${u.map((x) => x.target)}::uuid[]) as target_id,
+                   unnest(${u.map((x) => x.slot)}::int[])    as slot) v
+      where f.id = v.source_id and f.winner_to_fixture is null`;
+  }
+  if (feedUpdates.loser.length > 0) {
+    const u = feedUpdates.loser;
+    await tx`
+      update fixtures f
+      set loser_to_fixture = v.target_id, loser_to_slot = v.slot
+      from (select unnest(${u.map((x) => x.source)}::uuid[]) as source_id,
+                   unnest(${u.map((x) => x.target)}::uuid[]) as target_id,
+                   unnest(${u.map((x) => x.slot)}::int[])    as slot) v
+      where f.id = v.source_id and f.loser_to_fixture is null`;
+  }
+
+  // Third pass — TBD-aware bye propagation: writes the SAME label into the
+  // winner feed's slot instead of a real entrant id.
+  const awardedLabelled = gen.filter((g) => g.awardLabel !== undefined && byKey.has(g.extKey));
+  if (awardedLabelled.length > 0) {
+    const sources = await tx<
+      { id: string; winner_to_fixture: string | null; winner_to_slot: number | null }[]
+    >`select id, winner_to_fixture, winner_to_slot from fixtures
+      where id in ${tx(awardedLabelled.map((g) => byKey.get(g.extKey)!))}`;
+    const srcOf = new Map(sources.map((s) => [s.id, s]));
+    for (const g of awardedLabelled) {
+      const source = srcOf.get(byKey.get(g.extKey)!);
+      if (!source?.winner_to_fixture) continue;
+      if (source.winner_to_slot === 1) {
+        await tx`update fixtures set home_slot_label = ${tx.json(g.awardLabel as never)}
+                 where id = ${source.winner_to_fixture} and home_entrant_id is null`;
+      } else if (source.winner_to_slot === 2) {
+        await tx`update fixtures set away_slot_label = ${tx.json(g.awardLabel as never)}
+                 where id = ${source.winner_to_fixture} and away_entrant_id is null`;
+      }
+    }
+  }
+
+  if (stage.status === "pending") {
+    await tx`update stages set status = 'active' where id = ${stageId}`;
+    // W2d X-TB-2 (OC2): the table rules are fixed in the transaction that starts the stage.
+    await pinStageTableRules(tx, stageId);
+  }
+
+  const fixtureRows = await tx<Omit<FixtureRow, "court_name">[]>`
+    select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
+           f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
+           f.scheduled_at, f.venue, f.court_label, f.court_id,
+           f.venue_id, ven.name as venue_name,
+           f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
+           f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
+    from fixtures f
+    left join venues ven on ven.id = f.venue_id
+    where f.stage_id = ${stageId} order by f.round_no, f.seq_in_round`;
+  // #14: venue-qualified label (a bare joined `courts.name` can't tell two
+  // same-named courts in different venues apart) — same fallback
+  // convention as FixtureRow's own doc comment: fall back to the id
+  // itself on a miss (should not happen; FK-restricted).
+  const courtNames = await courtNamesById(tx);
+  const fixtures = fixtureRows.map((f) => ({
+    ...f,
+    court_name: f.court_id !== null ? (courtNames.get(f.court_id) ?? f.court_id) : null,
+  }));
+
+  if (created > 0) {
+    const [{ seq: last }] = await tx<{ seq: number }[]>`
+      select coalesce(max(seq), 0)::int as seq from division_events
+      where division_id = ${stage.division_id}`;
+    await tx`
+      insert into division_events (division_id, seq, type, payload)
+      values (${stage.division_id}, ${last + 1}, 'fixtures_generated',
+              ${tx.json({ stage_id: stageId, fixture_ids: createdIds } as never)})`;
+    await tx`update divisions set seq = ${last + 1}, edit_watermark = null
+             where id = ${stage.division_id}`;
+  }
+  const [division] = await tx<{ competition_id: string }[]>`
+    select competition_id from divisions where id = ${stage.division_id}`;
+  return {
+    outcome: { created, existing: gen.length - created, fixtures },
+    divisionId: stage.division_id,
+    competitionId: division!.competition_id,
+    kind: stage.kind,
+  };
 }
 
 /** Fill one side of a fixture (slot 1=home, 2=away) if still open. The ONE
@@ -4937,13 +5360,12 @@ export async function stampDepartedSeat(tx: Tx, fixtureId: string, slot: number)
 async function awardSeededByes(tx: Tx, stageId: string): Promise<string[]> {
   const rows = await tx<{ id: string; withdrew: boolean }[]>`
     with lines as (
+      -- W4 B1b fix round 1 (Q1): who held the dead seat is deadSeatLeaverSql, the same fragment the run sheet and the desk
+      -- read (awaitsWalkoverSql) to count this line before its award. Over the rows below (one seat filled, the other empty
+      -- and bye-labelled) its phantom slot is exactly the empty side, as the inline case it replaces read it.
+      -- NOTE: no backticks in this comment. It lives inside a JS tagged template literal, where a backtick ENDS the SQL.
       select f.id, coalesce(f.home_entrant_id, f.away_entrant_id) as winner,
-             (select src.outcome ->> 'winner' from fixtures src
-                join entrants e on e.id::text = src.outcome ->> 'winner'
-               where src.winner_to_fixture = f.id
-                 and src.winner_to_slot = case when f.home_entrant_id is null then 1 else 2 end
-                 and e.status = 'withdrawn'
-               limit 1) as withdrawn
+             ${deadSeatLeaverSql(tx, "f")} as withdrawn
         from fixtures f
        where f.stage_id = ${stageId}
          and f.status = 'scheduled'
@@ -4960,7 +5382,13 @@ async function awardSeededByes(tx: Tx, stageId: string): Promise<string[]> {
       status = 'forfeited',
       outcome = jsonb_build_object(
         'kind', 'award', 'winner', lines.winner, 'loser', lines.withdrawn,
-        'reason', case when lines.withdrawn is null then 'bye' else 'withdrew' end)
+        'reason', case when lines.withdrawn is null then 'bye' else 'withdrew' end),
+      -- W4 T3 (K2, X-SD-5): a bye is not played, so the award leaves it no court, no time and no pin (a line placed
+      -- before the fix, or pinned on the board). A withdrew walkover keeps its slot: it is no bye line (isByeLine, lib/bye-line.ts).
+      scheduled_at = case when lines.withdrawn is null then null else fixtures.scheduled_at end,
+      court_id = case when lines.withdrawn is null then null else fixtures.court_id end,
+      venue_id = case when lines.withdrawn is null then null else fixtures.venue_id end,
+      schedule_locked = case when lines.withdrawn is null then false else fixtures.schedule_locked end
     from lines
     where fixtures.id = lines.id
     returning fixtures.id, lines.withdrawn is not null as withdrew`;
@@ -5485,6 +5913,65 @@ export async function refoldStageTable(
 // rule — see loadBracketFixtures' own export note below.
 export const BRACKET_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
 
+/**
+ * W4 T6 (AN-2; the app half of engine row X-CH-7): the lines of a BRACKET stage still owed a result, in bracket order
+ * (round, then position) — `[]` for any other kind, an unknown stage, or a bracket with nothing owed.
+ *
+ * Owed means pending as stage completion reads it (`completionEngineStatus`: scheduled or in play, a recorded abandon
+ * held for the organiser's settle included; a cancelled line, a cascade void and a settled abandon are not). Two pending
+ * shapes are NOT owed, because nobody can ever play them:
+ *  - a bye line (`isByeLine`) — a seat padded out or left dead by a departure, e.g. a third-place line whose BOTH semi
+ *    losers have left (withdrawal-w2b's R-1 consequence: the stage completes on its final);
+ *  - a double-elimination reset (`conditional`) that the grand final did not trigger: owed only when the grand final's
+ *    winner is not its home entrant, the winners' champion (champion.ts `bracketChampion`, the engine harness's rule).
+ *    Until that grand final has a winner it is not owed either; the grand final itself is.
+ * App PR B aliases the engine's same-named export against this one (controller ruling R15).
+ */
+export async function undecidedBracketFixtures(tx: Tx, stageId: string): Promise<string[]> {
+  const [stage] = await tx<{ kind: string }[]>`select kind from stages where id = ${stageId}`;
+  if (stage === undefined || !BRACKET_KINDS.has(stage.kind)) return [];
+  const rows = await tx<
+    (ByeLineRow & {
+      id: string;
+      round_no: number;
+      is_final: boolean;
+      third_place: boolean;
+      conditional: boolean;
+      has_active_abandon: boolean;
+      expunged: boolean;
+      no_result: boolean;
+    })[]
+  >`
+    select f.id, f.round_no, f.ext_key, f.status, f.outcome, f.home_entrant_id, f.away_entrant_id,
+           f.home_slot_label, f.away_slot_label, f.is_final, f.third_place, f.conditional,
+           ${hasActiveAbandonSql(tx)} as has_active_abandon,
+           ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged,
+           ${hasActiveAbandonSql(tx, "f", { noResult: true })} as no_result
+      from fixtures f
+     where f.stage_id = ${stageId}
+     order by f.round_no, f.seq_in_round, f.id`;
+  const status = (r: (typeof rows)[number]) => completionEngineStatus(stage.kind, r);
+  const winnerOf = (r: (typeof rows)[number]): string | null =>
+    status(r) === "decided" || status(r) === "walkover" ? ((r.outcome as { winner?: string } | null)?.winner ?? null) : null;
+  // The grand final a reset follows: the latest earlier final, not itself conditional, not a bronze match.
+  const resetOwed = (reset: (typeof rows)[number]): boolean => {
+    const gf = rows
+      .filter((r) => r.is_final && !r.conditional && !r.third_place && r.round_no < reset.round_no)
+      .sort((a, b) => b.round_no - a.round_no)[0];
+    const winner = gf === undefined ? null : winnerOf(gf);
+    return gf !== undefined && winner !== null && winner !== gf.home_entrant_id;
+  };
+  return rows
+    .filter((r) => {
+      const s = status(r);
+      if (s !== "scheduled" && s !== "in_play") return false;
+      if (isByeLine(r)) return false;
+      if (r.conditional && !resetOwed(r)) return false;
+      return true;
+    })
+    .map((r) => r.id);
+}
+
 // F6 (#625) — carry-over has TWO application paths now: seedNextStage (below,
 // `timing:"on_complete"`) and the propose/confirm pair (computeSeedProposal /
 // confirmSeedProposal, `timing:"setup"`). The three helpers here are what both
@@ -5693,7 +6180,16 @@ export async function completeStage(
     if (!stage) throw new HttpError(404, "stage not found");
     return stage;
   });
-  const result = await completeStageIfReady(auth.orgId, stageId);
+  // W4 T6 (AN-2): asked under the division lock, in the completion's own transaction, at exactly the point the engine
+  // says a bracket is complete (every final settled) — so a final not yet settled keeps the soft `{completed: false}`
+  // (controller ruling C4), and a bracket with a third-place line, or any other line, still owed a result is refused by
+  // name instead of completing around it.
+  const result = await completeStageIfReady(auth.orgId, stageId, {
+    beforeBracketComplete: async (tx) => {
+      const owed = await undecidedBracketFixtures(tx, stageId);
+      if (owed.length > 0) throw knockoutRefusal("STAGE_HAS_UNDECIDED_FIXTURES", { fixture_ids: owed });
+    },
+  });
   if (!result.completed) return result;
 
   // R10g (review-r10f m2): from here the stage is complete (its completion
@@ -5997,9 +6493,10 @@ async function tablesForCompletedStage(
     }));
   }
   // W3 T15 Carry A (controller ruling 2026-11-02): a Swiss source's departed entrants leave its cut and the next eligible
-  // entrant backfills — the same tables the `setup` path's proposal reads (stage-seeding.ts `sourcesToTables`). Every
-  // other kind is returned as it was: `config.qualified` keeps a departed group/league qualifier, and generation's
-  // `walkoverDepartedQualifiers` walks her opponent over.
+  // entrant backfills — the same tables the `setup` path's proposal reads (stage-seeding.ts `sourcesToTables`); since W4
+  // T13 (RB4-V6) a league's or a group's too (`CUT_SKIPS_DEPARTED_KINDS`). Every other kind is returned as it was:
+  // `config.qualified` keeps a departed qualifier and generation's `walkoverDepartedQualifiers` walks her opponent over —
+  // a KNOCKOUT source's lucky loser (RB4-V2) is the `setup` path's (every shipped template's timing), not this one's.
   pools = cutEligiblePools(stage.kind, pools, await departedEntrantIds(tx, divisionId));
   // roundLosers (a bracket-kind source's take rule) reads the completed
   // bracket's OWN fixtures, never the standings_snapshot (final ranks only,
@@ -6068,7 +6565,12 @@ async function seedNextStage(auth: AuthCtx, completedStageId: string): Promise<S
     // (seedNextStage seeds INTO it), so `next.kind` is the real targetKind
     // ruling 13's snake/bracket-target guard needs on this resolution path
     // too, not just at createStages' save-time validateStageProgression call.
-    const { qualifiers, newLotsDraws } = resolveProgression(progression, shapes, sourceTables, next.kind);
+    const { qualifiers, newLotsDraws } = resolveProgression(
+      progression,
+      shapes,
+      departedLoseBestNth(sourceTables, resolvedSources, await departedEntrantIds(tx, current.division_id)),
+      next.kind,
+    );
     // W2d T12 (spec §5.9): a cross-group draw best-Nth made is stored with its source, under the division lock held above.
     await persistCrossGroupDraws(tx, resolvedSources, newLotsDraws);
     const entrants = qualifiers.map((q) => q.entrantId);
@@ -6381,7 +6883,12 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // real targetKind ruling 13's snake/bracket-target guard needs to fire
     // on this resolution path too, not just at createStages' save-time
     // validateStageProgression call.
-    const { qualifiers, ties, newLotsDraws } = resolveProgression(progression, shapes, tables, stage.kind);
+    const { qualifiers, ties, newLotsDraws } = resolveProgression(
+      progression,
+      shapes,
+      departedLoseBestNth(tables, resolved, await departedEntrantIds(tx, stage.division_id)),
+      stage.kind,
+    );
     // W2d T12 (spec §5.9): stored under the division lock held above, so a re-proposal seats the same draw.
     await persistCrossGroupDraws(tx, resolved, newLotsDraws);
 
@@ -6451,9 +6958,11 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // (see departedEntrantIds) — so without this an organiser is shown, and
     // pre-ticked into, a bracket seat for someone who has withdrawn.
     //
-    // Except from a SWISS source (W3 T15 Carry A, controller ruling 2026-11-02): `sourcesToTables` has already taken her
-    // out of its tables, so the cut above was read without her and the next eligible entrant holds her place — a tie
-    // at the new boundary is flagged like any other. From any other source:
+    // Except from a SWISS source (W3 T15 Carry A, controller ruling 2026-11-02), a LEAGUE or GROUP source (W4 T13,
+    // RB4-V6) or a KNOCKOUT source (W4 T13, RB4-V2: the lucky loser in her rank): `sourcesToTables` has already taken
+    // her out of its tables, so the cut above was read without her and the next eligible entrant holds her place — a tie
+    // at the new boundary is flagged like any other. Only a shortfall (nobody eligible left) still reaches her here. From
+    // any other source:
     // her SEAT is left empty rather than closed up: nobody is promoted into
     // the vacancy (owner decision pending for a group or league cut — W4/W5), so every surviving qualifier
     // keeps the seed and destination slot the engine gave her and the
@@ -6875,6 +7384,20 @@ export async function confirmSeedProposal(
       await tx`update divisions set seq = ${nextSeq} where id = ${stage.division_id}`;
     }
 
+    // W4 T5 (K1): the confirm is an undo barrier. Its fills went through `fillSlot`, which no ledger step records, so an
+    // Undo after it inverted the step BEFORE it — this bracket's own day-one generation — and deleted the seeded draw.
+    // One `seed_confirmed` row, LAST (after any carry event) and under the `division:` lock taken above: Undo, Redo and
+    // Restore refuse to step across it by name (history.ts `UNDO_BARRIER_TYPES`). Its writer moves the division's token
+    // and never the watermark.
+    const { appendUndoBarrierRow } = await import("./swiss-late-entry");
+    await appendUndoBarrierRow(
+      tx,
+      stage.division_id,
+      "seed_confirmed",
+      { stage_id: stageId, proposal_id: proposal.id, source: "organiser" },
+      auth.userId,
+    );
+
     const fixturesRaw = await tx<Omit<FixtureRow, "court_name">[]>`
       select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
              f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
@@ -6948,41 +7471,37 @@ export async function confirmSeedProposal(
  *  `LOCKED_FIXTURE_STATUSES` (append-event.ts) is only {finalized,
  *  cancelled} — "decided" is not locked — so a correction to an
  *  already-decided fixture via the live scoring path (usecases/scoring.ts
- *  onDecided) is permitted too, and must call this the same way. */
-export async function markDependentSeedProposalsStale(auth: AuthCtx, sourceStageId: string): Promise<void> {
+ *  onDecided) is permitted too, and must call this the same way.
+ *
+ *  W4 T14 (FX-G16, X-QM-4, RB4-Q5) `includeConfirmed`: a correction inside a completed KNOCKOUT source, where a confirmed
+ *  proposal goes stale too and its seats go back before the destination starts (`correctBracketDependent`). A table source
+ *  does not pass it: FX-G16's table half is W5's. Returns the lines of the dependents whose seats went back, for the
+ *  caller's publish; [] without the option. */
+export async function markDependentSeedProposalsStale(
+  auth: AuthCtx,
+  sourceStageId: string,
+  opts: { includeConfirmed?: boolean } = {},
+): Promise<string[]> {
+  const unfilled: string[] = [];
   const dependents = await withTenant(auth.orgId, async (tx) => {
     const [src] = await tx<{ division_id: string }[]>`select division_id from stages where id = ${sourceStageId}`;
     if (!src) return [];
-    // Restricted to timing==='setup' in SQL (not just `progression is not
-    // null`): an `on_complete` stage never has a stage_seed_proposals row,
-    // so including it here would only cost wasted resolveProgressionSource
-    // calls below, never a real match.
-    const rows = await tx<{ id: string; seq: number; progression: Record<string, unknown> | null }[]>`
-      select id, seq, progression from stages
-      where division_id = ${src.division_id}
-        and progression is not null
-        and progression ->> 'timing' = 'setup'`;
-    const matches: string[] = [];
-    for (const row of rows) {
-      const progression = row.progression as unknown as ProgressionSpec;
-      // A dependent may name MULTIPLE sources (Decision 4) — it depends on
-      // sourceStageId if ANY of them resolves to it.
-      for (const s of progression.sources) {
-        try {
-          const source = await resolveProgressionSource(tx, { division_id: src.division_id, seq: row.seq }, s.stage);
-          if (source.id === sourceStageId) {
-            matches.push(row.id);
-            break;
-          }
-        } catch {
-          // an unresolvable source can't depend on this stage
-        }
+    const matches = await setupDependentsOf(tx, sourceStageId, src.division_id);
+    if (opts.includeConfirmed) {
+      await tx`select pg_advisory_xact_lock(hashtext(${"division:" + src.division_id}))`;
+      const recompute: string[] = [];
+      for (const dependent of matches) {
+        const step = await correctBracketDependent(tx, dependent, sourceStageId);
+        unfilled.push(...step.unfilled);
+        if (step.recompute) recompute.push(dependent.id);
       }
+      return recompute;
     }
-    if (matches.length > 0) {
-      await tx`update stage_seed_proposals set status = 'stale' where stage_id in ${tx(matches)} and status = 'draft'`;
+    const ids = matches.map((m) => m.id);
+    if (ids.length > 0) {
+      await tx`update stage_seed_proposals set status = 'stale' where stage_id in ${tx(ids)} and status = 'draft'`;
     }
-    return matches;
+    return ids;
   });
   for (const dependentStageId of dependents) {
     try {
@@ -6990,6 +7509,93 @@ export async function markDependentSeedProposalsStale(auth: AuthCtx, sourceStage
     } catch {
       // best-effort, see docstring
     }
+  }
+  return unfilled;
+}
+
+/** The `timing: "setup"` stages of the division that draw from `sourceStageId`. */
+export async function setupDependentsOf(tx: Tx, sourceStageId: string, divisionId: string): Promise<BracketDependent[]> {
+  // Restricted to timing==='setup' in SQL (not just `progression is not
+  // null`): an `on_complete` stage never has a stage_seed_proposals row,
+  // so including it here would only cost wasted resolveProgressionSource
+  // calls below, never a real match.
+  const rows = await tx<{ id: string; seq: number; kind: string; progression: Record<string, unknown> | null }[]>`
+    select id, seq, kind, progression from stages
+    where division_id = ${divisionId}
+      and progression is not null
+      and progression ->> 'timing' = 'setup'
+    order by seq`;
+  const matches: BracketDependent[] = [];
+  for (const row of rows) {
+    const progression = row.progression as unknown as ProgressionSpec;
+    // A dependent may name MULTIPLE sources (Decision 4) — it depends on
+    // sourceStageId if ANY of them resolves to it.
+    for (const s of progression.sources) {
+      try {
+        const source = await resolveProgressionSource(tx, { division_id: divisionId, seq: row.seq }, s.stage);
+        if (source.id === sourceStageId) {
+          matches.push({ id: row.id, division_id: divisionId, seq: row.seq, kind: row.kind, progression });
+          break;
+        }
+      } catch {
+        // an unresolvable source can't depend on this stage
+      }
+    }
+  }
+  return matches;
+}
+
+/**
+ * RB4-Q5, on one dependent of a knockout source that a decision just moved. The question is the same for a draft and a
+ * confirmed proposal: does its slate still stand (`slateStands`)?
+ *  - CONFIRMED and it does not, the same people in a new seed order included (a flipped final): the seats go back unless the
+ *    destination has started (`unfillProposalSeats`, whose guard that is: then the bracket stands, and the desk warns only if
+ *    the people moved, `getKnockoutCutDrift`), and the row goes stale.
+ *  - DRAFT: while the source is undecided, only if it does not stand; once decided, whenever the stored ranks it was read
+ *    from moved. That is the hash, not the slate: a draft whose hash moved is REFUSED at its confirm (a flipped final is the
+ *    same four in a new order), and the draft panel's only button is Confirm, so leaving it would strand the organiser.
+ *  - NEITHER live, and the source decided: a take-back staled it and the replay ended with the same ranks, so nothing else
+ *    would ever re-propose: this does, rather than leaving a stale row nobody asked for.
+ * The recompute itself runs after this transaction (the caller's), and waits for a decided source
+ * (`sourcesToTables`' refusal, which is why it is not asked for while undecided).
+ */
+async function correctBracketDependent(
+  tx: Tx,
+  dependent: BracketDependent,
+  sourceStageId: string,
+): Promise<{ unfilled: string[]; recompute: boolean }> {
+  const proposals = await tx<{ id: string; status: string; computed: SeedProposalOut["computed"] }[]>`
+    select id, status, computed from stage_seed_proposals where stage_id = ${dependent.id}`;
+  const confirmed = proposals.find((p) => p.status === "confirmed");
+  const draft = proposals.find((p) => p.status === "draft");
+  const decided = await bracketStageIsDecided(tx, sourceStageId);
+  if (confirmed) {
+    if (await slateStands(tx, dependent, confirmed.computed, sourceStageId, decided)) return { unfilled: [], recompute: false };
+    const unfilled = await unfillProposalSeats(tx, confirmed.id);
+    if (unfilled.length === 0) return { unfilled: [], recompute: false };
+    await tx`update stage_seed_proposals set status = 'stale' where id = ${confirmed.id}`;
+    return { unfilled, recompute: decided };
+  }
+  if (draft) {
+    const standing = decided
+      ? await draftHashStands(tx, dependent, draft.computed)
+      : await slateStands(tx, dependent, draft.computed, sourceStageId, false);
+    if (standing) return { unfilled: [], recompute: false };
+    await tx`update stage_seed_proposals set status = 'stale' where id = ${draft.id}`;
+    return { unfilled: [], recompute: decided };
+  }
+  return { unfilled: [], recompute: decided && proposals.some((p) => p.status === "stale") };
+}
+
+/** Would the confirm still take this draft? `confirmSeedProposal`'s own freshness read. A sibling source that is not ready
+ *  cannot be judged here: the draft is left alone, as the confirm's own refusal will say why. */
+async function draftHashStands(tx: Tx, dependent: BracketDependent, computed: SeedProposalOut["computed"]): Promise<boolean> {
+  try {
+    const { tables } = await sourcesToTables(tx, dependent, dependent.progression.sources);
+    return standingsHash(poolTableRowsAcrossSources(tables)) === computed.standingsHash;
+  } catch (err) {
+    if (err instanceof HttpError && err.code === "SEEDING_SOURCE_INCOMPLETE") return true;
+    throw err;
   }
 }
 

@@ -8,7 +8,8 @@ import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { PatchFixture, PutLineup, ScheduleConflict } from "@/server/api-v1/schemas";
 import { type BoardFixtureRow, type FixtureRow } from "./stages";
-import { fixtureHasResultSql, swissByeShellSql } from "./fixture-results-sql";
+import { fixtureHasResultSql } from "./fixture-results-sql";
+import { awaitsWalkoverSql, byeLineSql } from "@/server/engine-db/system-bye-sql";
 import { activeAbandonReasonSql, hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { streamUrlSchema } from "@/lib/stream-url";
 import { feedsNextMatch, type FeedEdges } from "@/lib/bracket-next-match";
@@ -385,7 +386,9 @@ export async function listDivisionFixtures(auth: AuthCtx, divisionId: string): P
              -- Rebase ruling D3: that abandon is the organiser's online No result (the settle; the line is not held).
              ${hasActiveAbandonSql(tx, "f", { noResult: true })} as no_result,
              -- W2c Task 19 (S4): the match plays a format of its own (the run sheet's "Format changed" chip).
-             f.rules_override is not null as format_changed
+             f.rules_override is not null as format_changed,
+             -- W4 B1b fix round 1 (Q1): a waiting bye line whose award will be a walkover (a match owed; the round bar counts it).
+             ${awaitsWalkoverSql(tx, "f")} as awaits_walkover
       from fixtures f
       left join venues ven on ven.id = f.venue_id
       where f.division_id = ${divisionId}
@@ -448,7 +451,7 @@ export async function listDivisionFixturesForBoard(
         third_place: boolean;
         conditional: boolean;
         held: boolean;
-        bye_shell: boolean;
+        bye_line: boolean;
       })[]
     >`
       select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
@@ -460,18 +463,19 @@ export async function listDivisionFixturesForBoard(
              -- refuses to move. The status test comes first, so the evidence
              -- lookups run for scheduled rows only.
              (f.status = 'scheduled' and ${fixtureHasResultSql(tx)}) as held,
-             -- W3 T3 (X-SW-29): a Swiss bye row, which no board write places.
-             ${swissByeShellSql(tx, "f")} as bye_shell
+             -- W3 T3 (X-SW-29), W4 T3 (X-SD-5): a bye line, which no board write places (B1a review #1:
+             -- the server's own predicate, so a knockout bye line is no drag target either).
+             ${byeLineSql(tx, "f")} as bye_line
       from fixtures f
       where f.division_id = ${divisionId}
       order by f.stage_id, f.round_no, f.seq_in_round`;
     // Omitted, not nulled: the RSC flight serialises an undefined value as
     // "$undefined" and a null/false as the key plus its value — only a key
     // that is not there costs nothing.
-    return rows.map(({ ext_key, lane, is_final, third_place, conditional, held, bye_shell, ...row }) => ({
+    return rows.map(({ ext_key, lane, is_final, third_place, conditional, held, bye_line, ...row }) => ({
       ...row,
       ...(held ? { held: true as const } : {}),
-      ...(bye_shell ? { bye_shell: true as const } : {}),
+      ...(bye_line ? { bye_line: true as const } : {}),
       ...(ext_key !== null && ext_key.startsWith("pp-") ? { ext_key } : {}),
       ...(lane !== null ? { lane } : {}),
       ...(is_final ? { is_final } : {}),

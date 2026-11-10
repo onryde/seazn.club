@@ -55,7 +55,20 @@ export interface FromTemplateOut { readonly competition: CompetitionRef; readonl
  *  lists EVERY entrant of the division, the `pair` entrants an americano
  *  stage mints included (entrants.ts listEntrants has no kind filter).
  *  Optional: the fakes' plain rows omit it, which reads as not a pair. */
-export interface EntrantRow { id: string; display_name: string; seed: number | null; status: string; kind?: string }
+export interface EntrantRow {
+  id: string; display_name: string; seed: number | null; status: string; kind?: string;
+  /** W4 T24: a late add into a started root knockout answers HOW the newcomer joined (usecases/entrants.ts createEntrants, schemas.ts
+   *  LateEntryResult); absent on every other add and on the fakes' rows, which read as "not a late entry". */
+  late_entry?: LateEntryWire;
+}
+/** W4 T24: a knockout's late-entry answer as the product serves it (schemas.ts KnockoutLateEntryResult), the fields the W4A scenarios
+ *  read. `format` is kept as a string: a Swiss answer shares the field and a scenario narrows on it before it reads a case. */
+export interface LateEntryWire {
+  format: string; case: string; entrant_id?: string; stage_id?: string;
+  fixture_id?: string; opponent_id?: string; withdrawn_id?: string; scheduled?: boolean; reason?: string;
+}
+/** W4 T24: Reinstate's answer - the entrant's stored status, and how it rejoined a started knockout (`late_entry`, K13). */
+export interface ReinstateOut { entrant_id: string; status: string; late_entry: LateEntryWire | null }
 /** `third_place` (W1b Task 10, T3 review G1): the product's row flag for a
  *  knockout's third-place match (usecases/fixtures.ts listDivisionFixtures
  *  selects it; the division fixtures route serves it). Optional: the fakes
@@ -286,6 +299,13 @@ export interface OrganiserDriver {
    *  how a division reaches its match day (division-phase.ts rule 3: a scheduled
    *  fixture dated today). Optional: a driver without it cannot plan a match day. */
   scheduleFixtureNow?(fixtureId: string): Promise<ScheduledOut>;
+  /** W4 T24 (X-LE-10, K13): the organiser makes a withdrawn player active again (PATCH /entrants/:id {status: "confirmed"}) - an AUTOMATIC
+   *  arrival into a started root knockout, which the app never places by itself: the answer's `late_entry` is `waiting` (or `refused`
+   *  when their place was played on). Optional: only the HTTP driver has it, a layer that does not drive the path says so by name. */
+  reinstate?(entrantId: string): Promise<ReinstateOut>;
+  /** W4 T24 (X-LE-10, ruling 271): the one tap that places a player WAITING on the stage's bracket (POST /stages/:id/late-entrants/:entrantId/place).
+   *  A refusal the product ANSWERS (`refused` / `rebuild_offered`, 200) is returned; a 409 / 422 throws RefusedCall. Optional, as `reinstate`. */
+  placeLateEntrant?(stageId: string, entrantId: string): Promise<LateEntryWire>;
   readonly callCount: number;
 }
 
