@@ -60,8 +60,8 @@ const onSource = (slate: Slate, sourceStageId: string) =>
 /** Today's cut for `dependent`, in seed order, less anyone departed. As it stands, what a re-proposal would offer;
  *  `withoutLuckyLoser`, what the results alone make it. */
 async function cutToday(tx: Tx, dependent: BracketDependent, opts: { withoutLuckyLoser?: boolean } = {}): Promise<string[]> {
-  const { shapes, tables } = await sourcesToTables(tx, dependent, dependent.progression.sources, opts);
-  const { qualifiers } = resolveStoredProgression(dependent.progression, shapes, tables, dependent.kind as never);
+  const { shapes, tables, resolved } = await sourcesToTables(tx, dependent, dependent.progression.sources, opts);
+  const { qualifiers } = resolveStoredProgression(dependent.progression, shapes, tables, dependent.kind as never, resolved.map((r) => r.kind));
   const departed = await departedEntrantIds(tx, dependent.division_id);
   return [...qualifiers].sort((a, b) => a.seed - b.seed).map((q) => q.entrantId).filter((id) => !departed.has(id));
 }

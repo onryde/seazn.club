@@ -1,4 +1,5 @@
 import { EngineError } from "@seazn/engine/core";
+import { HttpError } from "@/lib/errors";
 import {
   resolveProgression,
   type ProgressionSource,
@@ -40,12 +41,30 @@ function specToEngine(spec: ProgressionSpec): ProgressionSpec {
 
 const descriptorToStored = (d: SlotDescriptor): SlotDescriptor => (d.kind === "round_loser" ? { ...d, round: d.round + 1 } : d);
 
+/** Review M4: the engine's round-loser read filters `f.round === round` with no lane, and since PR B a double-elimination
+ *  source's winners' side, losers' side and grand final all number from 0. A `roundLosers` take against one would mix the
+ *  lanes' losers without a word, so it is REFUSED by name instead (prod holds no double-elimination stage). */
+export function refuseRoundLosersFromDoubleElim(spec: ProgressionSpec, sourceKinds: readonly string[]): void {
+  spec.sources.forEach((s, i) => {
+    if (sourceKinds[i] === "double_elim" && s.take.some((t) => t.kind === "roundLosers")) {
+      throw new HttpError(
+        422,
+        "a double-elimination source cannot feed a stage by round losers: its lanes number their rounds separately",
+        "SEEDING_ROUNDLOSERS_DE_SOURCE",
+        { sourceIndex: i },
+      );
+    }
+  });
+}
+
 export function resolveStoredProgression(
   spec: ProgressionSpec,
   shapes: readonly SourceShape[],
   tables: readonly SourceTables[],
-  targetKind?: string,
+  targetKind: string | undefined,
+  sourceKinds: readonly string[],
 ): ReturnType<typeof resolveProgression> {
+  refuseRoundLosersFromDoubleElim(spec, sourceKinds);
   let out: ReturnType<typeof resolveProgression>;
   try {
     out = resolveProgression(specToEngine(spec), shapes, tables, targetKind);
