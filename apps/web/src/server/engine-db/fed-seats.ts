@@ -11,7 +11,8 @@ import {
   type RoundCodeRef,
 } from "@/lib/next-match-started";
 import { boardRoundCodes, type RoundCodeFixture } from "@/components/v2/board/round-codes";
-import { clearAwardedMatchState } from "./awarded-state";
+import { clearAwardedMatchState, writeAwardedMatchState } from "./awarded-state";
+import { knockoutRefusal } from "@/server/usecases/knockout-refusal";
 
 // OWNER RULING 2026-09-23 — a write that takes back a knockout decision takes
 // back the names that decision advanced.
@@ -734,4 +735,102 @@ export async function unfillProposalSeats(tx: Tx, proposalId: string): Promise<s
   for (const line of changed) if (line.awarded) await clearAwardedMatchState(tx, line.id);
   await writeProgressionSetupFixtures(tx, stageId);
   return changed.map((l) => l.id);
+}
+
+/** A final whose line `reviveVacantFinal` reads: both seats held, no live event, forfeited. */
+interface VacantFinalRow {
+  id: string;
+  stage_id: string;
+  division_id: string;
+  stage_status: string;
+  home_entrant_id: string;
+  away_entrant_id: string;
+  outcome: { kind?: string; winner?: string; loser?: string; reason?: string } | null;
+  other_departed: boolean;
+}
+
+/**
+ * B5a T11 (X-CH-3; plan Decision 3): the title a DEPARTURE double walkover left vacant reverses when a finalist is
+ * reinstated - the one exception to ruling 271 (every other knockout Reinstate waits on the desk's flag), because the
+ * finalist's seat was never taken from them: nothing is placed, a departure write is read again.
+ *
+ * Called by the Reinstate write (entrants.ts `writeEntrantPatch`) AFTER the status flipped, under the division lock it
+ * already holds. For the entrant's seat in a knockout's deciding final (`is_final`, never a third-place match) with no live
+ * event behind its forfeit:
+ *  - a departure DOUBLE WALKOVER whose other finalist is still out: a walkover to the reinstated one, the award a
+ *    withdrawal's cascade writes (X-CH-2's shape, `withdrew`, no event; its score is written beside it);
+ *  - a departure double walkover whose other finalist is back too, or a no-event `withdrew` walkover OVER the reinstated
+ *    entrant (the half-reversal above, reinstating the other side): the final is OPEN again (`scheduled`, no outcome). An
+ *    event-backed walkover is the withdrawal cascade's own X-CH-2 result, never this task's: left alone.
+ * A stage that COMPLETED on the vacant title keeps its status when the final is decided again (its snapshot is re-ranked in
+ * this transaction); an open final re-opens the stage (`active`, the pool-null snapshot deleted, a completed division
+ * active again). A stage whose completion already filled another stage's draw refuses VACANT_TITLE_ALREADY_SEEDED (409)
+ * and the whole write rolls back.
+ *
+ * Null: the entrant holds no seat in such a final.
+ */
+export async function reviveVacantFinal(
+  tx: Tx,
+  entrantId: string,
+): Promise<{ fixtureId: string; now: "walkover" | "scheduled" } | null> {
+  const { DEPARTED_STATUSES } = await import("@/server/usecases/entrants");
+  const departed = [...DEPARTED_STATUSES];
+  const [probe] = await tx<{ id: string; stage_id: string }[]>`
+    select f.id, f.stage_id from fixtures f join stages s on s.id = f.stage_id
+     where f.is_final and not f.third_place and s.kind = 'knockout' and f.status = 'forfeited'
+       and (f.home_entrant_id = ${entrantId} or f.away_entrant_id = ${entrantId})
+       and f.home_entrant_id is not null and f.away_entrant_id is not null
+     limit 1`;
+  if (!probe) return null;
+  // The house lock order (stage seats, then the fixture's own, then the format freeze) - the Reinstate holds `division:`.
+  await lockStageSeats(tx, probe.stage_id);
+  await lockFixture(tx, probe.id);
+  await lockDivisionConfigShared(tx, probe.stage_id);
+  const [f] = await tx<VacantFinalRow[]>`
+    select f.id, f.stage_id, f.division_id, s.status as stage_status, f.home_entrant_id, f.away_entrant_id, f.outcome,
+           exists (select 1 from entrants o
+                    where o.id = case when f.home_entrant_id = ${entrantId} then f.away_entrant_id else f.home_entrant_id end
+                      and o.status in ${tx(departed)}) as other_departed
+      from fixtures f join stages s on s.id = f.stage_id
+     where f.id = ${probe.id} and f.status = 'forfeited'
+       and not exists (select 1 from score_events e
+                        where e.fixture_id = f.id and e.type <> 'core.void'
+                          and not exists (select 1 from score_events v where v.fixture_id = e.fixture_id and v.voids_event_id = e.id))`;
+  if (!f) return null;
+  const other = f.home_entrant_id === entrantId ? f.away_entrant_id : f.home_entrant_id;
+  const doubleWalkover = f.outcome?.kind === "double_walkover";
+  const halfReversed = f.outcome?.kind === "award" && f.outcome.reason === "withdrew" && f.outcome.loser === entrantId && f.outcome.winner === other;
+  if (!doubleWalkover && !halfReversed) return null;
+  const now: "walkover" | "scheduled" = doubleWalkover && f.other_departed ? "walkover" : "scheduled";
+  if (!doubleWalkover && f.other_departed) return null; // the winner is out too: nothing to re-open (a departed winner)
+  // Another stage's draw was filled from this one's ranks: they are not ours to change.
+  if (f.stage_status === "complete") {
+    const [seeded] = await tx`
+      select 1 from stages n join stages s on s.division_id = n.division_id and n.seq > s.seq
+       where s.id = ${f.stage_id}
+         and (n.config ? 'qualified'
+              or exists (select 1 from stage_seed_proposals p where p.stage_id = n.id and p.status = 'confirmed'))
+       limit 1`;
+    if (seeded) throw knockoutRefusal("VACANT_TITLE_ALREADY_SEEDED", { stage_id: f.stage_id });
+  }
+  if (now === "walkover") {
+    await tx`
+      update fixtures set outcome = ${tx.json({ kind: "award", winner: entrantId, loser: other, reason: "withdrew" } as never)}
+       where id = ${f.id} and status = 'forfeited' and outcome ->> 'kind' = 'double_walkover'`;
+    await writeAwardedMatchState(tx, f.id);
+  } else {
+    await tx`update fixtures set status = 'scheduled', outcome = null where id = ${f.id} and status = 'forfeited'`;
+    if (halfReversed) await clearAwardedMatchState(tx, f.id);
+  }
+  if (f.stage_status === "complete") {
+    if (now === "walkover") {
+      const { refreshCompletedBracketPlacementTx } = await import("./competition");
+      await refreshCompletedBracketPlacementTx(tx, f.stage_id);
+    } else {
+      await tx`delete from standings_snapshots where stage_id = ${f.stage_id} and pool_id is null`;
+      await tx`update stages set status = 'active' where id = ${f.stage_id}`;
+      await tx`update divisions set status = 'active' where id = ${f.division_id} and status = 'completed'`;
+    }
+  }
+  return { fixtureId: f.id, now };
 }

@@ -59,7 +59,16 @@ export type KnockoutRefusalCode =
   | "STEPLADDER_NEEDS_TABLE_SOURCE"
   | "PAGE_PLAYOFF_NEEDS_TABLE_SOURCE"
   // T8 (X-PL-2): a plate proposal asked of a field under two first-match losers; the plate completes by name instead.
-  | "PLATE_FIELD_TOO_SMALL";
+  | "PLATE_FIELD_TOO_SMALL"
+  // B5a T11 (X-CH-3; T12): reversing a vacant title (a Reinstate) or undoing joint winners on a stage whose completion already
+  // filled another stage's draw - its ranks are not this stage's to change any more.
+  | "VACANT_TITLE_ALREADY_SEEDED"
+  // B5a T12 (X-CH-4, X-CH-6): "Declare joint winners" on a fixture that is no deciding final.
+  | "JOINT_WINNERS_NOT_A_FINAL"
+  // B5a T12: ... on a final that already holds a result (a winner, or a decided/walkover outcome).
+  | "JOINT_WINNERS_FINAL_DECIDED"
+  // B5a T12: Undo on a final that holds no joint-winners declaration.
+  | "JOINT_WINNERS_NOT_DECLARED";
 
 export interface KnockoutRefusalRow {
   status: 400 | 409 | 422;
@@ -172,6 +181,26 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
     status: 422,
     en: "A page playoff needs a table to seed from. Add a league, groups or a Swiss stage first.",
     key: "knockout.refusal.PAGE_PLAYOFF_NEEDS_TABLE_SOURCE",
+  },
+  VACANT_TITLE_ALREADY_SEEDED: {
+    status: 409,
+    en: "This result already seeded the next stage. Correct it there first.",
+    key: "knockout.refusal.VACANT_TITLE_ALREADY_SEEDED",
+  },
+  JOINT_WINNERS_NOT_A_FINAL: {
+    status: 422,
+    en: "Joint winners can only be declared on a final.",
+    key: "knockout.refusal.JOINT_WINNERS_NOT_A_FINAL",
+  },
+  JOINT_WINNERS_FINAL_DECIDED: {
+    status: 409,
+    en: "This final already has a result.",
+    key: "knockout.refusal.JOINT_WINNERS_FINAL_DECIDED",
+  },
+  JOINT_WINNERS_NOT_DECLARED: {
+    status: 409,
+    en: "This final has no joint winners to undo.",
+    key: "knockout.refusal.JOINT_WINNERS_NOT_DECLARED",
   },
 };
 
