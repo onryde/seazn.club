@@ -16,7 +16,9 @@ export type ChipState =
   | "archived"
   | "frozen";
 
-const CHIP_STYLE: Record<ChipState, string> = {
+/** The chip's colour recipes. Exported so a chip that is not a competition's (the Sponsors tab's deal chip) wears the SAME
+ *  vocabulary instead of inventing colours of its own. */
+export const CHIP_STYLE: Record<ChipState, string> = {
   draft: "bg-slate-100 text-slate-600",
   registration: "border border-purple-300 bg-white text-purple-700",
   // UI5 item 6: under way, nothing on court this minute - the floodlit chip's lime, unlit and without its pulse.
@@ -112,6 +114,9 @@ export function divisionChipState(
   return opts.registrationOpen ? "registration" : "draft";
 }
 
+/** The chip's shape: pair it with a `CHIP_STYLE` recipe. */
+export const CHIP_BASE = "inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium";
+
 export function StatusChip({
   state,
   className = "",
@@ -126,7 +131,7 @@ export function StatusChip({
   return (
     <span
       data-chip={state}
-      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${CHIP_STYLE[state]} ${className}`}
+      className={`${CHIP_BASE} ${CHIP_STYLE[state]} ${className}`}
     >
       {state === "live" && (
         <span aria-hidden className="chip-pulse-dot h-1.5 w-1.5 rounded-full bg-lime-400" />

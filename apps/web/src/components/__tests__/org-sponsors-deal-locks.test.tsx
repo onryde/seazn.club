@@ -11,6 +11,11 @@
 // the element's own prop called); the form's markup is read with `renderToStaticMarkup`, which is where `disabled` shows. What
 // neither can see (CSS, widths, tap area) is the e2e's (`e2e/sponsor-deals-api.spec.ts`, run by CI).
 //
+// Since sponsor deals Task 14 the rows are drawn by `SponsorList` (components/sponsors/sponsor-list.tsx), a stateless child of
+// OrgSponsors: the island is mounted with `expandSponsorTree` (components/sponsors/__tests__/_sponsor-tree.tsx), which steps
+// into it, so every click below is still the element's own handler on the tree a person's browser would be handed. Rows
+// carry a FULL deal (`dealOf`), as the server's list sends it - the chip and the row's action read it.
+//
 // Every sweep reports how many it checked (TEST-STRATEGY: zero is a failure).
 //
 // Killers (one at a time, restore from a cp backup):
@@ -27,7 +32,9 @@ const confirmMock = vi.hoisted(() => vi.fn<(opts?: unknown) => Promise<boolean>>
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMock }));
 
 import { OrgSponsors, SponsorForm, type SponsorItem, type SponsorsHubData } from "@/components/org-sponsors";
-import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
+import { expandSponsorTree } from "@/components/sponsors/__tests__/_sponsor-tree";
+import type { PaymentStatus, SponsorDeal } from "@/lib/sponsor-deals";
 import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
@@ -56,7 +63,16 @@ const row = (over: Partial<SponsorItem> & { id: string }): SponsorItem => ({
   has_open_deal: false,
   ...over,
 });
-const DEAL = { id: "d1", payment_status: "none" };
+/** A deal as the server's list sends it (the whole `SponsorDeal`), for a row to show. Live and paid unless a test says otherwise. */
+const dealOf = (id: string, payment_status: PaymentStatus, over: Partial<SponsorDeal> = {}): SponsorDeal => ({
+  id, sponsor_id: "a", package_id: "p1", deal_status: "live", payment_status, payment_method: "online", go_live: "on_payment",
+  package_name: "Gold Season", tier: "gold", includes_on_stream: false, competition_id: null, amount_cents: 60_000, currency: "gbp",
+  sponsor_name: "Sponsor", sponsor_email: null, ends_at: null, created_at: "2026-10-01T09:00:00.000Z", created_by: null,
+  invoice_sent_at: null, paid_at: null, marked_paid_by: null, approved_at: null, approved_by: null, live_at: null, ended_at: null,
+  ended_reason: null, parked_at: null, disputed_at: null, dispute_id: null, has_payment_intent: false, invoice_number: null,
+  ...over,
+});
+const DEAL = dealOf("d1", "none");
 
 const DRAFT = { name: "Name", url: "", tier: "gold" as const, competition_id: "", file: null, preview: null };
 
@@ -69,6 +85,7 @@ function formMarkup(over: Record<string, unknown> = {}): string {
       submitLabel="Save"
       busy={false}
       hasTiers
+      showPlacement
       lockedByDeal={false}
       competitions={COMPETITIONS}
       onPickLogo={() => {}}
@@ -177,7 +194,7 @@ function mount(rows: SponsorItem[], opts: { canEdit?: boolean } = {}) {
     canEdit: opts.canEdit ?? true,
     hub: HUB,
   };
-  const island = renderIsland(OrgSponsors, props);
+  const island = renderIsland(OrgSponsors, props, expandSponsorTree);
   const byLabel = (key: MessageKey, name: string): ReactElement => {
     const label = msg(key, { name });
     const el = island.tree().find((e) => propsOf(e)["aria-label"] === label);
@@ -194,7 +211,7 @@ function mount(rows: SponsorItem[], opts: { canEdit?: boolean } = {}) {
     edit: (name: string) => (propsOf(byLabel("sponsors.edit", name)).onClick as () => void)(),
     remove: (name: string) => (propsOf(byLabel("settings.org.sponsors.remove", name)).onClick as () => void)(),
     form,
-    hasRow: (name: string) => island.text().includes(name),
+    hasRow: (name: string) => island.tree().some((e) => e.type === "li" && textOf(e).includes(name)),
     has: (testId: string) => island.tree().some((e) => propsOf(e)["data-testid"] === testId),
     find: (testId: string): ReactElement => {
       const el = island.tree().find((e) => propsOf(e)["data-testid"] === testId);
@@ -330,13 +347,13 @@ describe("Delete: the confirm says what the server will really do, and a refusal
   it("a sponsor whose shown deal was paid, or refunded, is not asked to confirm a delete that cannot happen either (both checked)", async () => {
     const SERVER = "this sponsor has deal history";
     let checked = 0;
-    for (const payment_status of ["paid", "refunded"]) {
+    for (const payment_status of ["paid", "refunded"] as const) {
       confirmMock.mockClear();
       answer = (_url, method) =>
         method === "DELETE"
           ? { status: 409, body: { ok: false, error: { code: "sponsor_has_deal_history", message: SERVER } } }
           : { status: 200, body: { data: [] } };
-      const m = mount([row({ id: "a", name: "Quay Chandlers", deal: { id: "d1", payment_status } })]);
+      const m = mount([row({ id: "a", name: "Quay Chandlers", deal: dealOf("d1", payment_status) })]);
       m.remove("Quay Chandlers");
       await flush();
       expect(confirmMock, payment_status).not.toHaveBeenCalled();
@@ -348,7 +365,7 @@ describe("Delete: the confirm says what the server will really do, and a refusal
     // The pair: a deal that took no money (complimentary, or unpaid) still asks.
     confirmMock.mockClear();
     answer = () => ({ status: 200, body: { data: null } });
-    mount([row({ id: "b", name: "Ridge Cycles", deal: { id: "d2", payment_status: "pending" } })]).remove("Ridge Cycles");
+    mount([row({ id: "b", name: "Ridge Cycles", deal: dealOf("d2", "pending") })]).remove("Ridge Cycles");
     await flush();
     expect(confirmMock).toHaveBeenCalledTimes(1);
   });
@@ -388,12 +405,12 @@ describe("Show on site again: a hidden sponsor whose deals have all ended is swi
   // live deal refuses it (409 sponsor_locked_by_deal), a deal waiting to go live refuses it (409 sponsor_has_open_deal), and a
   // dispute-parked (`pending`) placement refuses it. Typed here from that rule, never read from the component.
   const CASES: [string, Partial<SponsorItem>, boolean, boolean][] = [
-    ["inactive, its deals all ended", { status: "inactive", deal: { id: "d1", payment_status: "pending" } }, true, true],
+    ["inactive, its deals all ended", { status: "inactive", deal: dealOf("d1", "pending", { deal_status: "ended" }) }, true, true],
     ["inactive, no deal at all", { status: "inactive" }, true, true],
     ["active", { status: "active" }, true, false],
-    ["inactive, a deal waiting to go live", { status: "inactive", deal: { id: "d2", payment_status: "pending" }, has_open_deal: true }, true, false],
-    ["inactive, under a live deal", { status: "inactive", deal: { id: "d3", payment_status: "paid" }, locked_by_deal: true }, true, false],
-    ["parked by a dispute", { status: "pending", dispute_parked: true, deal: { id: "d4", payment_status: "paid" } }, true, false],
+    ["inactive, a deal waiting to go live", { status: "inactive", deal: dealOf("d2", "pending", { deal_status: "awaiting_payment" }), has_open_deal: true }, true, false],
+    ["inactive, under a live deal", { status: "inactive", deal: dealOf("d3", "paid"), locked_by_deal: true }, true, false],
+    ["parked by a dispute", { status: "pending", dispute_parked: true, deal: dealOf("d4", "paid") }, true, false],
     ["inactive, no deal, but the viewer cannot edit", { status: "inactive" }, false, false],
   ];
 
@@ -411,7 +428,7 @@ describe("Show on site again: a hidden sponsor whose deals have all ended is swi
   it("its words: 'Show on site again', named for the sponsor to a screen reader (label in name)", () => {
     const m = mount([row({ id: "a", name: LONG_NAME, status: "inactive" })]);
     const button = m.find("sponsor-show-a");
-    expect(flat(String(m.island.text())), "the visible words").toContain(msg("sponsors.showAgain"));
+    expect(flat(textOf(button)), "the visible words").toBe(msg("sponsors.showAgain"));
     expect(propsOf(button)["aria-label"]).toBe(msg("sponsors.showAgainLabel", { name: LONG_NAME }));
     expect(String(propsOf(button)["aria-label"]).startsWith(msg("sponsors.showAgain")), "the accessible name starts with the visible words").toBe(true);
   });
@@ -421,7 +438,7 @@ describe("Show on site again: a hidden sponsor whose deals have all ended is swi
       method === "PATCH"
         ? { status: 200, body: { ok: true, data: row({ id: "a", name: LONG_NAME, status: "active" }) } }
         : { status: 200, body: { ok: true, data: [row({ id: "a", name: LONG_NAME, status: "active" })] } };
-    const m = mount([row({ id: "a", name: LONG_NAME, status: "inactive", deal: { id: "d1", payment_status: "pending" } })]);
+    const m = mount([row({ id: "a", name: LONG_NAME, status: "inactive", deal: dealOf("d1", "pending", { deal_status: "ended" }) })]);
     (propsOf(m.find("sponsor-show-a")).onClick as () => void)();
     await flush();
     const patches = calls.filter((c) => c.method === "PATCH");
@@ -437,7 +454,7 @@ describe("Show on site again: a hidden sponsor whose deals have all ended is swi
     answer = (_url, method) =>
       method === "PATCH"
         ? { status: 409, body: { ok: false, error: { code: "sponsor_has_open_deal", message: SERVER } } }
-        : { status: 200, body: { ok: true, data: [row({ id: "a", name: LONG_NAME, status: "inactive", has_open_deal: true, deal: { id: "d9", payment_status: "pending" } })] } };
+        : { status: 200, body: { ok: true, data: [row({ id: "a", name: LONG_NAME, status: "inactive", has_open_deal: true, deal: dealOf("d9", "pending", { deal_status: "awaiting_payment" }) })] } };
     const m = mount([row({ id: "a", name: LONG_NAME, status: "inactive" })]);
     (propsOf(m.find("sponsor-show-a")).onClick as () => void)();
     await flush();

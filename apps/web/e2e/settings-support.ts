@@ -1,4 +1,4 @@
-import type { APIRequestContext, Browser, BrowserContext } from "@playwright/test";
+import type { APIRequestContext, Browser, BrowserContext, Locator, Page } from "@playwright/test";
 import { expect } from "@playwright/test";
 import {
   TAG,
@@ -47,6 +47,28 @@ export function settingsUrl(slug: string, tab: string): string {
  */
 export function sponsorsUrl(slug: string, tab: SponsorsTab): string {
   return sponsorsHref(slug, tab);
+}
+
+/**
+ * A sponsor's row on the Sponsors tab, with its edit / move / delete controls reachable. Below `md` those controls (and the
+ * clicks count) are folded behind the row's own ⋯ (`sponsor-row-more`, sponsor deals Task 14); from 768 up the ⋯ is gone and they
+ * are inline. So this opens the fold ONLY where the toggle is on screen - gated on the toggle being visible, never on a width
+ * literal (a width test would be wrong at 768/834 and would click a hidden control). Retried until the island has hydrated: a
+ * click on the server-rendered ⋯ before React attaches does nothing, and `aria-expanded` is what says it took.
+ * Returns the row; `name` must pick out exactly one.
+ */
+export async function openSponsorRowTools(page: Page, name: string): Promise<Locator> {
+  const row = page.getByTestId("sponsor-row").filter({ hasText: name });
+  await expect(row, `the Sponsors tab lists exactly one row naming ${name}`).toHaveCount(1);
+  const more = row.getByTestId("sponsor-row-more");
+  if (await more.isVisible()) {
+    await expect(async () => {
+      if ((await more.getAttribute("aria-expanded")) !== "true") await more.click();
+      await expect(more).toHaveAttribute("aria-expanded", "true", { timeout: 1_000 });
+    }).toPass({ timeout: 15_000 });
+  }
+  await expect(row.getByTestId("sponsor-row-tools"), `${name}: the row's tools are reachable`).toBeVisible();
+  return row;
 }
 
 async function activeOrgCookie(request: APIRequestContext): Promise<string | null> {

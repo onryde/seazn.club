@@ -165,6 +165,30 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
       !foreignHub.body.includes('data-testid="sponsor-sheet"'),
   );
 
+  // --- PR 2 Task 14: the Sponsors tab's list, rendered by the real server for a Pro owner. The row of the sponsor whose offline deal
+  // waits for its money (made above for the viewer check) carries that deal's chip and exactly ONE action - Mark as paid - and the
+  // ADD form above the list asks no tier or scope any more (a deal sets them; the hint says so). A Pro org is the meaningful place for
+  // the second half: a community org never had a tier select to remove. The edit form still has them, and is not open here.
+  const proOrgs = (await call(admin, "/api/orgs")) as { id: string; slug: string }[];
+  const proSlug = proOrgs.find((o) => o.id === proOrgId)?.slug;
+  const proHub = proSlug ? await html(admin, `/o/${proSlug}/sponsors?tab=sponsors`) : null;
+  const rowStart = proHub ? proHub.body.indexOf(`data-sponsor-id="${viewerSponsor}"`) : -1;
+  const row = proHub && rowStart >= 0 ? proHub.body.slice(rowStart, proHub.body.indexOf("</li>", rowStart)) : "";
+  const hintAt = proHub ? proHub.body.indexOf("Add a deal afterwards to set their tier and where they show.") : -1;
+  const listAt = proHub ? proHub.body.indexOf('data-testid="sponsor-group"') : -1;
+  const addForm = proHub && hintAt >= 0 && listAt > hintAt ? proHub.body.slice(hintAt, listAt) : "";
+  check(
+    "sd hub Sponsors tab: a row shows its deal's chip and one next action; the add form asks no tier",
+    proHub?.status === 200 &&
+      viewerDealId !== "" &&
+      row.includes('data-testid="deal-chip"') &&
+      row.includes("Awaiting payment") &&
+      (row.match(/data-testid="sponsor-row-action"/g) ?? []).length === 1 &&
+      row.includes('data-action="mark_paid"') &&
+      addForm.length > 0 &&
+      !addForm.includes("<select"),
+  );
+
   // --- T9, the hourly sweep's route (D20): the cron secret guards it, and the right one answers the sweep's counts. CI sets
   // CRON_SECRET for the smoke job and its server alike (ci.yml), so a wrong secret is exactly a 401.
   const wrongCron = await fetch(`${BASE}/api/cron/sponsor-deals`, { method: "POST", headers: { "x-cron-secret": "definitely-wrong-sponsor-deals" } });

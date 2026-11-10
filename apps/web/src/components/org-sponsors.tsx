@@ -1,19 +1,24 @@
 "use client";
 
 // Sponsors tab manager (v10 PROMPT-56, replaces the blob editor). Rows are
-// first-class `sponsors` table entries grouped by tier. One form captures
-// everything — logo included, uploaded on submit — for both add and edit.
-// Tiers above partner and per-competition scoping are Pro (`sponsors.tiers`);
-// without it the manager is the free un-tiered strip with an upsell note.
+// first-class `sponsors` table entries; the list (components/sponsors/sponsor-list.tsx)
+// groups them by their deal's tier and gives each its deal's chip and one next
+// action (sponsor deals PR 2, Task 14). This island owns the state and every
+// write; the list is stateless. "Add a sponsor" asks for a name, a logo and a
+// link only - the tier and where a sponsor shows come from its deal - while the
+// EDIT form still places a sponsor with no deal by hand. Tiers above partner and
+// per-competition scoping are Pro (`sponsors.tiers`); without it the manager is
+// the free un-tiered strip with an upsell note.
 import { useId, useRef, useState } from "react";
 import Link from "@/components/ui/console-link";
-import {
-  ArrowDown, ArrowUp, Eye, ImagePlus, MousePointerClick, Pencil, Trash2,
-} from "lucide-react";
+import { ImagePlus } from "lucide-react";
+import { useViewerTz } from "@/components/client-time";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
-import { TIER_BADGE, TIER_MSG } from "@/components/sponsors/tier-labels";
+import { TIER_MSG } from "@/components/sponsors/tier-labels";
+import { SponsorList, groupTierOf, type DealWrite } from "@/components/sponsors/sponsor-list";
 import { sponsorSaveErrorKey } from "@/components/sponsors/save-error";
+import type { SponsorWrite } from "@/components/sponsors/save-error";
 import { ApiV1Error } from "@/lib/client-v1";
 import type { SponsorDeal } from "@/lib/sponsor-deals";
 import type { ReportLinkSummary } from "@/lib/sponsor-report";
@@ -24,6 +29,8 @@ const MAX_LOGO_BYTES = 2 * 1024 * 1024;
 
 /** The tier list's one authority is lib/sponsor-tiers.ts; re-exported for the console's own importers. */
 export { SPONSOR_TIERS, type SponsorTier };
+/** Where "Show on site again" is offered lives with the list that draws the button; re-exported for its importers. */
+export { canShowAgain } from "@/components/sponsors/sponsor-list";
 
 /** Client-safe mirror of the usecase SponsorRow. */
 export interface SponsorItem {
@@ -40,17 +47,18 @@ export interface SponsorItem {
   click_count: number;
   /** The paid package order that activated this placement, if any. */
   paid_order_id?: string | null;
-  /** The deal the row shows (sponsor deals D8), or null when the sponsor has none. */
-  deal: { id: string; payment_status: string } | null;
+  /** The deal the row shows (sponsor deals D8: `pickRowDeal` over the sponsor's deals), or null when the sponsor has none - the
+   *  WHOLE deal, as the list reads send it: the chip, the sub-line and the row's one action all read it. */
+  deal: SponsorDeal | null;
   /** A live deal owns this sponsor's tier, competition, stream and status (D9): the form offers none of them. */
   locked_by_deal: boolean;
   /** A deal waits to go live (draft, awaiting payment or approval, scheduled): it holds the sponsor's status (D9). */
   has_open_deal: boolean;
 }
 
-/** What the hub page reads for the Sponsors tab beyond the list (sponsor deals PR 2, Task 13). The sponsor list rows (Task 14),
- *  the sponsor's own page (Task 15), the Add deal sheet (Task 16) and the deal page (Task 17) are its consumers; nothing here
- *  reads it yet. */
+/** What the hub page reads for the Sponsors tab beyond the list (sponsor deals PR 2, Task 13). Its consumers: the sponsor list
+ *  (Task 14, READS `orgSlug` only - a row carries its own deal, so `deals` would be a second authority for it), the sponsor's own
+ *  page (Task 15), the Add deal sheet (Task 16) and the deal page (Task 17). The rest is inert until those land. */
 export interface SponsorsHubData {
   orgSlug: string;
   /** Every deal of the org, newest first (legacy pre-deals rows included: they are ended deals). */
@@ -82,15 +90,6 @@ interface Draft {
 const EMPTY_DRAFT: Draft = {
   name: "", url: "", tier: "partner", competition_id: "", file: null, preview: null,
 };
-
-/** Can the club switch this sponsor back on by hand (spec §10.3: "After all of a sponsor's deals have ended: the club may
- *  switch the sponsor back on by hand, as for a sponsor with no deal")? Exactly where the server takes `PATCH { status:
- *  "active" }` (server/usecases/sponsors.ts `patchSponsor`): the sponsor is off (`inactive`; a dispute-parked one is `pending`
- *  and refused), and no live deal (409 sponsor_locked_by_deal) or deal waiting to go live (409 sponsor_has_open_deal) holds
- *  its status. */
-export function canShowAgain(s: SponsorItem): boolean {
-  return s.status === "inactive" && !s.locked_by_deal && !s.has_open_deal;
-}
 
 /** Is a delete certain to be refused? Money history (paid or refunded) on any of a sponsor's deals is a 409
  *  `sponsor_has_deal_history` (server/usecases/sponsors.ts `dealHoldsHistory`). What the row can see of it is its paid order
@@ -131,6 +130,7 @@ export function SponsorForm({
   submitLabel,
   busy,
   hasTiers,
+  showPlacement,
   lockedByDeal,
   competitions,
   onPickLogo,
@@ -142,6 +142,10 @@ export function SponsorForm({
   submitLabel: string;
   busy: boolean;
   hasTiers: boolean;
+  /** Offer the tier and competition at all (only on a plan with tiers). Off on the ADD form: a new sponsor is a name, a logo and a
+   *  link, and its tier and where it shows come from its first deal (spec §6.1). On when EDITING, where a sponsor with no deal is
+   *  placed by hand. */
+  showPlacement: boolean;
   /** A live deal sets the tier and the competition (D9): both selects are disabled and the form says why. Name, link and logo
    *  stay editable. Always false on the add form. */
   lockedByDeal: boolean;
@@ -212,7 +216,7 @@ export function SponsorForm({
                 </span>
               ) : null}
             </label>
-            {hasTiers ? (
+            {showPlacement && hasTiers ? (
               <label className="block">
                 <span className="label">{msg("sponsors.tierLabel")}</span>
                 <select
@@ -232,7 +236,7 @@ export function SponsorForm({
                 </select>
               </label>
             ) : null}
-            {hasTiers ? (
+            {showPlacement && hasTiers ? (
               <label className="block">
                 <span className="label">{msg("sponsors.scopeLabel")}</span>
                 <select
@@ -253,7 +257,7 @@ export function SponsorForm({
                 </select>
               </label>
             ) : null}
-            {hasTiers && lockedByDeal ? (
+            {showPlacement && hasTiers && lockedByDeal ? (
               <p id={lockNoteId} className="text-xs text-slate-500 sm:col-span-2" data-testid="sponsor-locked-note">
                 {msg("sponsors.deal.lockedNote")}
               </p>
@@ -286,6 +290,7 @@ export function OrgSponsors({
   hasTiers,
   billingHref,
   canEdit,
+  hub,
 }: {
   orgId: string;
   initialSponsors: SponsorItem[];
@@ -298,15 +303,21 @@ export function OrgSponsors({
 }) {
   const msg = useMsg();
   const confirm = useConfirm();
+  const tz = useViewerTz();
   const [sponsors, setSponsors] = useState<SponsorItem[]>(initialSponsors);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [edit, setEdit] = useState<Draft>(EMPTY_DRAFT);
+  /** The row whose ⋯ is open below md (one at a time). */
+  const [moreOpenId, setMoreOpenId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** What a write that changes nothing on screen says it did (Resend invoice: the chip stays "Awaiting payment"). */
+  const [notice, setNotice] = useState<string | null>(null);
 
-  async function api(path: string, init: RequestInit): Promise<unknown> {
-    const res = await fetch(`/api/v1/orgs/${orgId}/sponsors${path}`, {
+  /** A call on the org's v1 API (`path` after `/orgs/{id}`); the envelope's payload back. */
+  async function v1(path: string, init: RequestInit): Promise<unknown> {
+    const res = await fetch(`/api/v1/orgs/${orgId}${path}`, {
       headers: { "Content-Type": "application/json" },
       ...init,
     });
@@ -325,10 +336,15 @@ export function OrgSponsors({
     return data.data ?? data;
   }
 
+  /** A call on the org's sponsors (`/sponsors{path}`). */
+  const api = (path: string, init: RequestInit) => v1(`/sponsors${path}`, init);
 
-  async function run(fn: () => Promise<void>) {
+  /** Run a write: busy while it runs, a refusal shown in the dictionary's words (`write` names the one whose refusal means
+   *  something of its own, `SAVE_ERROR_BY_WRITE`). */
+  async function run(fn: () => Promise<void>, write?: SponsorWrite) {
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
       await fn();
     } catch (err) {
@@ -336,7 +352,7 @@ export function OrgSponsors({
       // big, a failed upload) already carries its own translated sentence.
       setError(
         err instanceof ApiV1Error
-          ? msg(sponsorSaveErrorKey(err))
+          ? msg(sponsorSaveErrorKey(err, write))
           : err instanceof Error
             ? err.message
             : msg("settings.saveFailed"),
@@ -391,14 +407,15 @@ export function OrgSponsors({
     void run(async () => {
       const logo_path = draft.file ? await uploadLogo(draft.file) : null;
       const url = normalizeUrl(draft.url);
+      // A new sponsor is a name, a logo and a link: its tier and where it shows come from its first deal (spec §6.1), so it
+      // starts a partner for the whole organisation - the server's own defaults, said out loud.
       await api("", {
         method: "POST",
         body: JSON.stringify({
           name: draft.name.trim(),
           ...(url ? { url } : {}),
           ...(logo_path ? { logo_path } : {}),
-          tier: hasTiers ? draft.tier : "partner",
-          ...(hasTiers && draft.competition_id ? { competition_id: draft.competition_id } : {}),
+          tier: "partner",
         }),
       });
       setDraft(EMPTY_DRAFT);
@@ -474,11 +491,31 @@ export function OrgSponsors({
     });
   }
 
-  /** Swap within the rendered group, persist the global order. */
+  /** A row's one write (Tasks 6 and 7's routes): the deal the row shows is the one acted on. The list is re-read whatever the
+   *  answer - the chip, the action and the group all follow the deal, and a refusal means it moved under the tap. Resend invoice
+   *  changes nothing on the row, so it says it was sent. */
+  function dealAction(s: SponsorItem, action: DealWrite) {
+    const deal = s.deal;
+    if (deal === null) return; // `rowNextAction(null)` is Add deal, a link: no write is offered for a sponsor with no deal.
+    const route = { resend_invoice: "send-invoice", mark_paid: "mark-paid", approve: "approve" }[action];
+    void run(
+      async () => {
+        try {
+          await v1(`/sponsor-deals/${deal.id}/${route}`, { method: "POST" });
+          if (action === "resend_invoice") setNotice(msg("sponsors.deal.notice.invoiceResent", { name: s.name }));
+        } finally {
+          await refresh().catch(() => {});
+        }
+      },
+      action === "resend_invoice" ? "resend_invoice" : undefined,
+    );
+  }
+
+  /** Swap within the rendered group (the deal's tier, as the list draws it), persist the global order. */
   function move(id: string, delta: -1 | 1) {
     const row = sponsors.find((s) => s.id === id);
     if (!row) return;
-    const group = hasTiers ? sponsors.filter((s) => s.tier === row.tier) : sponsors;
+    const group = hasTiers ? sponsors.filter((s) => groupTierOf(s) === groupTierOf(row)) : sponsors;
     const gi = group.findIndex((s) => s.id === id);
     const target = gi + delta;
     if (gi < 0 || target < 0 || target >= group.length) return;
@@ -492,21 +529,15 @@ export function OrgSponsors({
     });
   }
 
-  const compName = (id: string | null) =>
-    id ? (competitions.find((c) => c.id === id)?.name ?? "…") : null;
-
-  // Render in tier order; free plans see one flat partner group.
-  const grouped: [SponsorTier, SponsorItem[]][] = (hasTiers ? SPONSOR_TIERS : (["partner"] as const))
-    .map((tier): [SponsorTier, SponsorItem[]] => [
-      tier,
-      hasTiers ? sponsors.filter((s) => s.tier === tier) : sponsors,
-    ])
-    .filter(([, rows]) => rows.length > 0);
-
   return (
     <div className="space-y-5">
       <p className="text-sm text-slate-500">{msg("sponsors.line")}</p>
       {error && <p className="text-sm text-red-600">{error}</p>}
+      {notice && (
+        <p role="status" data-testid="sponsor-notice" className="text-sm text-emerald-700">
+          {notice}
+        </p>
+      )}
 
       {canEdit ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
@@ -519,12 +550,13 @@ export function OrgSponsors({
             submitLabel={msg("settings.org.sponsors.add")}
             busy={busy}
             hasTiers={hasTiers}
+            showPlacement={false}
             lockedByDeal={false}
             competitions={competitions}
             onPickLogo={pickLogo}
           />
           {!hasTiers ? (
-            <p className="mt-3 text-xs text-slate-400">
+            <p className="mt-3 text-xs text-slate-500">
               {msg("sponsors.tiersUpsell")}{" "}
               <Link href={billingHref} className="text-purple-600 underline">
                 {msg("settings.upgrade.link")}
@@ -534,150 +566,38 @@ export function OrgSponsors({
         </div>
       ) : null}
 
-      {sponsors.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
-          {msg("sponsors.empty")}
-        </p>
-      ) : null}
-
-      {grouped.map(([tier, rows]) => (
-        <div key={tier}>
-          {hasTiers ? (
-            <p className="mb-1.5 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              {msg(TIER_MSG[tier])}
-              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${TIER_BADGE[tier]}`}>
-                {rows.length}
-              </span>
-            </p>
-          ) : null}
-          <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">
-            {rows.map((s, i) => (
-              <li key={s.id} className="px-3 py-2.5">
-                {editingId === s.id ? (
-                  <SponsorForm
-                    value={edit}
-                    onChange={(fn) => setEdit(fn)}
-                    onSubmit={() => saveEdit(s)}
-                    onCancel={() => setEditingId(null)}
-                    submitLabel={msg("sponsors.save")}
-                    busy={busy}
-                    hasTiers={hasTiers}
-                    lockedByDeal={s.locked_by_deal}
-                    competitions={competitions}
-                    onPickLogo={pickLogo}
-                  />
-                ) : (
-                  <div className="flex flex-wrap items-center gap-3">
-                    {s.logo_path ? (
-                      // Stored via content-upload — an absolute CDN URL.
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={s.logo_path}
-                        alt=""
-                        className="h-9 w-9 rounded object-contain ring-1 ring-slate-200"
-                      />
-                    ) : (
-                      <span className="grid h-9 w-9 place-items-center rounded bg-slate-100 text-xs font-semibold text-slate-400">
-                        {s.name.charAt(0).toUpperCase()}
-                      </span>
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-slate-800">
-                        {s.name}
-                        {s.dispute_lost ? (
-                          // The activating order was written off by a lost
-                          // dispute — the placement stays down; say why.
-                          <span className="ml-2 rounded-full bg-rose-200 px-2 py-0.5 text-[10px] font-semibold uppercase text-rose-900">
-                            {msg("sponsors.lostBadge")}
-                          </span>
-                        ) : s.dispute_parked ? (
-                          // Parked by an open payment dispute — the handler
-                          // took it down; it returns if the dispute is won.
-                          <span className="ml-2 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-rose-700">
-                            {msg("sponsors.parkedBadge")}
-                          </span>
-                        ) : s.paid_order_id ? (
-                          // Bought through a package — ties the sponsor list
-                          // back to the Sell section's orders.
-                          <span className="ml-2 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-700">
-                            {msg("sponsors.paidBadge")}
-                          </span>
-                        ) : null}
-                      </p>
-                      <p className="truncate text-xs text-slate-400">
-                        {compName(s.competition_id) ?? msg("sponsors.scopeAll")}
-                        {s.url ? ` · ${s.url}` : ""}
-                      </p>
-                    </div>
-                    <span
-                      className="flex shrink-0 items-center gap-1 text-xs tabular-nums text-slate-400"
-                      title={msg("sponsors.clicks", { count: s.click_count })}
-                      aria-label={msg("sponsors.clicks", { count: s.click_count })}
-                    >
-                      <MousePointerClick className="h-3.5 w-3.5" strokeWidth={1.75} />
-                      {s.click_count}
-                    </span>
-                    {canEdit && canShowAgain(s) ? (
-                      // Off the public pages with nothing holding it there: its last deal ended (or it never had one).
-                      <button
-                        type="button"
-                        data-testid={`sponsor-show-${s.id}`}
-                        aria-label={msg("sponsors.showAgainLabel", { name: s.name })}
-                        disabled={busy}
-                        onClick={() => showAgain(s)}
-                        className="btn flex shrink-0 items-center gap-1.5 text-xs"
-                      >
-                        <Eye className="h-3.5 w-3.5" />
-                        {msg("sponsors.showAgain")}
-                      </button>
-                    ) : null}
-                    {canEdit ? (
-                      <div className="flex shrink-0 items-center gap-0.5">
-                        <button
-                          type="button"
-                          aria-label={msg("sponsors.edit", { name: s.name })}
-                          disabled={busy}
-                          onClick={() => startEdit(s)}
-                          className="grid h-7 w-7 place-items-center rounded text-slate-400 hover:bg-purple-50 hover:text-purple-700"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={msg("settings.org.sponsors.moveUp", { name: s.name })}
-                          disabled={busy || i === 0}
-                          onClick={() => move(s.id, -1)}
-                          className="grid h-7 w-7 place-items-center rounded text-slate-400 hover:bg-purple-50 hover:text-purple-700 disabled:opacity-30"
-                        >
-                          <ArrowUp className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={msg("settings.org.sponsors.moveDown", { name: s.name })}
-                          disabled={busy || i === rows.length - 1}
-                          onClick={() => move(s.id, 1)}
-                          className="grid h-7 w-7 place-items-center rounded text-slate-400 hover:bg-purple-50 hover:text-purple-700 disabled:opacity-30"
-                        >
-                          <ArrowDown className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={msg("settings.org.sponsors.remove", { name: s.name })}
-                          disabled={busy}
-                          onClick={() => remove(s)}
-                          className="grid h-7 w-7 place-items-center rounded text-red-400 hover:bg-red-50 hover:text-red-600"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))}
+      <SponsorList
+        sponsors={sponsors}
+        hasTiers={hasTiers}
+        canEdit={canEdit}
+        busy={busy}
+        orgSlug={hub.orgSlug}
+        tz={tz}
+        competitions={competitions}
+        editingId={editingId}
+        renderEditor={(s) => (
+          <SponsorForm
+            value={edit}
+            onChange={(fn) => setEdit(fn)}
+            onSubmit={() => saveEdit(s)}
+            onCancel={() => setEditingId(null)}
+            submitLabel={msg("sponsors.save")}
+            busy={busy}
+            hasTiers={hasTiers}
+            showPlacement
+            lockedByDeal={s.locked_by_deal}
+            competitions={competitions}
+            onPickLogo={pickLogo}
+          />
+        )}
+        moreOpenId={moreOpenId}
+        onToggleMore={(id) => setMoreOpenId((open) => (open === id ? null : id))}
+        onEdit={startEdit}
+        onMove={move}
+        onRemove={remove}
+        onShowAgain={showAgain}
+        onAction={dealAction}
+      />
     </div>
   );
 }

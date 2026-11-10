@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { apiJson, expectNoHorizontalScroll, withDb } from "./helpers";
 import { postSignedEvent, stripeEvent, stripeUid } from "./_stripe-events";
-import { releaseSettingsOrg, seedCompetition, seedSettingsOrg, sponsorsUrl, type SeededOrg } from "./settings-support";
+import { openSponsorRowTools, releaseSettingsOrg, seedCompetition, seedSettingsOrg, sponsorsUrl, type SeededOrg } from "./settings-support";
 
 /** Copy read from the dictionary the page renders from, never retyped (this folder's idiom: sponsors-hub.spec.ts). */
 const UI: Record<string, string> = JSON.parse(
@@ -299,6 +299,8 @@ test("a sponsor under a live deal: On stream tick, tier and competition are lock
 
     // Sponsors tab: the edit form's tier and competition are locked, with the same note.
     await page.goto(sponsorsUrl(org.slug, "sponsors"));
+    // Below md the row's Edit sits behind its ⋯ (sponsor deals Task 14); the helper opens the fold only where the ⋯ is on screen.
+    await openSponsorRowTools(page, LONG);
     await page.getByRole("button", { name: ui("sponsors.edit", { name: LONG }) }).click();
     const note = page.getByTestId("sponsor-locked-note");
     await expect(note, `${width}: the locked edit form says why`).toHaveText(ui("sponsors.deal.lockedNote"));
