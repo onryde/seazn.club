@@ -136,7 +136,7 @@ describe("a superseded first read never lands on the panel that replaced it", ()
     expect(island.text()).not.toContain("ZqAlphaKey");
   });
 
-  it("SponsorPackages: no read without the feature (empty case); org A's late packages do not replace org B's", async () => {
+  it("SponsorPackages: without the feature only the deals are read (empty case); org A's late packages do not replace org B's", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn((url: string) =>
@@ -163,7 +163,10 @@ describe("a superseded first read never lands on the panel that replaced it", ()
     };
     const island = renderIsland(SponsorPackages, props);
     await flush();
-    expect(net.pending, "a plan without the feature reads nothing").toEqual([]);
+    // Final review m1: a plan without the feature still reads its DEALS (their End now and Refund stay), never the packages.
+    expect(net.pending.map((d) => d.url), "a plan without the feature reads only its deals").toEqual(["/api/v1/orgs/org-a/sponsor-deals"]);
+    answer("/api/v1/orgs/org-a/sponsor-deals", []);
+    await flush();
 
     island.rerender({ ...props, hasMonetize: true });
     island.rerender({ ...props, hasMonetize: true, orgId: "org-b" });
