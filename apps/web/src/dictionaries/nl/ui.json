@@ -601,6 +601,7 @@
   "sponsors.dealSheet.scopeWhole": "Hele organisatie",
   "sponsors.dealSheet.scopeFixed": "Dit pakket is voor één competitie, dus de deal ook.",
   "sponsors.dealSheet.scopeUnknown": "De competitie van dit pakket",
+  "sponsors.dealSheet.scopeUnknownInline": "de competitie van dit pakket",
   "sponsors.dealSheet.scopeTiersHint": "Een deal voor één competitie vraagt een betaald abonnement of een Event Pass voor die competitie.",
   "sponsors.dealSheet.scopeRuns": "De deal eindigt wanneer {name} afgelopen is, gepland op {date}.",
   "sponsors.dealSheet.scopeRunsNoDate": "De deal eindigt wanneer {name} afgelopen is.",
@@ -8088,7 +8089,7 @@
   "sponsors.pkg.retiredDone": "{name} is ingetrokken. Nieuwe deals kunnen het niet meer gebruiken.",
   "sponsors.pkg.tiersHint": "Andere niveaus dan Partner en pakketten voor één competitie vereisen een betaald abonnement. Een Event Pass geldt alleen voor de eigen competitie.",
   "sponsors.pkg.onlineNote": "Online facturen worden betaald op je Stripe-account, met dezelfde platformkosten als inschrijfgelden.",
-  "sponsors.pkg.onlineLocked": "Online facturen versturen vereist een betaald abonnement.",
+  "sponsors.pkg.onlineLocked": "Online facturen versturen vereist een betaald abonnement. Een Event Pass geldt alleen voor de eigen competitie.",
   "sponsors.showAgain": "Weer tonen op de site",
   "sponsors.showAgainLabel": "Weer tonen op de site: {name}"
 }

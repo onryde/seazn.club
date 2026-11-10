@@ -594,21 +594,32 @@ describe("the Deal block: package and tier, scope, payment, the invoice email, t
     expect(fact(html({ deal: KESTREL }), "scope")).toBe("All competitions");
   });
 
-  it("a deal on a competition the page was not handed names it as this package's competition, never a bare ellipsis (4 places counted)", () => {
+  it("a deal on a competition the page was not handed names it as this package's competition, never a bare ellipsis - capitalised where it starts a sentence, lower-case after \"When\" (5 places counted)", () => {
     // `orgCompetitions` hands the page at most 100 competitions, so a deal can point at one the list does not hold.
     const lost = deal({ ...MARLOW, ends_at: null, competition_id: "c-not-in-the-list" });
     let checked = 0;
+    // The Scope fact is a label's value: the fallback's own, capitalised, words.
     expect(fact(html({ deal: lost }), "scope")).toBe("This package's competition");
     checked++;
-    for (const markup of [html({ deal: lost }), html({ deal: lost, competitionFinished: true })]) {
-      expect(stepWords(markup, "ends")![1], "the ends step names the competition in words").toContain("This package's competition");
-      expect(textOfMarkup(markup), "no placeholder ellipsis anywhere on the page").not.toContain("\u2026");
-      checked++;
-    }
-    // the same page for a competition the list DOES hold still reads the competition's own name
-    expect(fact(html({ deal: deal({ ...MARLOW, ends_at: null, competition_id: "c-season" }) }), "scope")).toBe("Season 2026/27");
+    // Mid-sentence it follows "When": the SAME words, lower-case (batch I re-review: it read "When This package's competition finishes").
+    const open = html({ deal: lost });
+    expect(stepWords(open, "ends")).toEqual(["Ends", "When this package's competition finishes"]);
     checked++;
-    expect(checked).toBe(4);
+    // It BEGINS the sentence once the desk says the competition has finished: capitalised again.
+    const done = html({ deal: lost, competitionFinished: true });
+    expect(stepWords(done, "ends")).toEqual(["Ends", "This package's competition has finished, so this deal ends shortly."]);
+    checked++;
+    for (const markup of [open, done]) {
+      expect(textOfMarkup(markup), "no placeholder ellipsis anywhere on the page").not.toContain("\u2026");
+    }
+    // The pair: a competition the list DOES hold reads its own name, as it always did - in the label, after "When" and as the first word.
+    const known = deal({ ...MARLOW, ends_at: null, competition_id: "c-season" });
+    expect(fact(html({ deal: known }), "scope")).toBe("Season 2026/27");
+    expect(stepWords(html({ deal: known }), "ends")![1]).toBe("When Season 2026/27 finishes, due 31 Aug 2027");
+    checked++;
+    expect(stepWords(html({ deal: known, competitionFinished: true }), "ends")![1]).toBe("Season 2026/27 has finished, so this deal ends shortly.");
+    checked++;
+    expect(checked).toBe(5);
   });
 
   it("the three go-live rules read as the Add deal sheet names them, each differently (3 checked)", () => {

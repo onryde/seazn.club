@@ -601,6 +601,7 @@
   "sponsors.dealSheet.scopeWhole": "Toute l'organisation",
   "sponsors.dealSheet.scopeFixed": "Cette offre est pour une seule compétition, l'accord aussi.",
   "sponsors.dealSheet.scopeUnknown": "La compétition de cette offre",
+  "sponsors.dealSheet.scopeUnknownInline": "la compétition de cette offre",
   "sponsors.dealSheet.scopeTiersHint": "Un accord pour une seule compétition nécessite une offre payante ou un Event Pass pour cette compétition.",
   "sponsors.dealSheet.scopeRuns": "L'accord se termine à la fin de {name}, prévue le {date}.",
   "sponsors.dealSheet.scopeRunsNoDate": "L'accord se termine à la fin de {name}.",
@@ -8088,7 +8089,7 @@
   "sponsors.pkg.retiredDone": "{name} est retirée. Les nouveaux accords ne peuvent plus l'utiliser.",
   "sponsors.pkg.tiersHint": "Les niveaux autres que Partner et les offres pour une seule compétition nécessitent une offre payante. Un Event Pass ne couvre que sa propre compétition.",
   "sponsors.pkg.onlineNote": "Les factures en ligne sont payées sur votre compte Stripe, avec la même commission de plateforme que les frais d'inscription.",
-  "sponsors.pkg.onlineLocked": "L'envoi de factures en ligne nécessite une offre payante.",
+  "sponsors.pkg.onlineLocked": "L'envoi de factures en ligne nécessite une offre payante. Un Event Pass ne couvre que sa propre compétition.",
   "sponsors.showAgain": "Réafficher sur le site",
   "sponsors.showAgainLabel": "Réafficher sur le site : {name}"
 }

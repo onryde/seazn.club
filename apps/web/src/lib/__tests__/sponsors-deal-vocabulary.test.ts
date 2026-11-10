@@ -16,6 +16,10 @@ import uiEn from "@/dictionaries/en/ui.json";
 import uiEs from "@/dictionaries/es/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
 import uiNl from "@/dictionaries/nl/ui.json";
+import mkEn from "@/dictionaries/en/marketing.json";
+import mkEs from "@/dictionaries/es/marketing.json";
+import mkFr from "@/dictionaries/fr/marketing.json";
+import mkNl from "@/dictionaries/nl/marketing.json";
 
 const LOCALES = ["en", "es", "fr", "nl"] as const;
 type Locale = (typeof LOCALES)[number];
@@ -135,15 +139,51 @@ describe("copy that says what the Event Pass lifts for sponsors: tiers and onlin
     expect(checked).toBe(4);
   });
 
-  it("the tier hints say a pass covers its own competition (the Event Pass is named), in every locale (8 counted)", () => {
+  it("the tier hints and the online-invoice hint say a pass covers its own competition (the Event Pass is named), in every locale (12 counted)", () => {
     let checked = 0;
     for (const l of LOCALES) {
-      for (const key of ["sponsors.pkg.tiersHint", "sponsors.dealSheet.scopeTiersHint"]) {
+      // `sponsors.pkg.onlineLocked` is the third sibling (batch J): "needs a paid plan" alone sold the whole organisation to someone an
+      // Event Pass would serve for one competition.
+      for (const key of ["sponsors.pkg.tiersHint", "sponsors.dealSheet.scopeTiersHint", "sponsors.pkg.onlineLocked"]) {
         expect(UI[l][key], `${l} ${key}`).toMatch(EVENT_PASS);
         checked++;
       }
     }
-    expect(checked).toBe(8);
+    expect(checked).toBe(12);
+  });
+
+  it("the Event Pass card's sponsorship bullet (marketing pricing.pass.f6) names tiers and online invoices and never 'paid sponsorship packages' (4 counted)", () => {
+    const MARKETING: Record<Locale, Record<string, string>> = { en: mkEn, es: mkEs, fr: mkFr, nl: mkNl } as Record<Locale, Record<string, string>>;
+    // The pre-deals bullet, per locale: a package is on every plan now, so the card cannot sell it as the pass's.
+    const PAID_SPONSORSHIP: Record<Locale, RegExp> = {
+      en: /paid sponsorship packages/i,
+      es: /paquetes de patrocinio de pago/i,
+      fr: /offres de sponsoring payantes/i,
+      nl: /betaalde sponsorpakketten/i,
+    };
+    let checked = 0;
+    for (const l of LOCALES) {
+      const bullet = MARKETING[l]["pricing.pass.f6"]!;
+      expect(bullet, `${l}: ${bullet}`).not.toMatch(PAID_SPONSORSHIP[l]);
+      expect(bullet, `${l}: names the tiers`).toMatch(TIERS[l]);
+      expect(bullet, `${l}: names the online invoices`).toMatch(INVOICE[l]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("the deal page's in-sentence fallback (scopeUnknownInline) is the stand-alone one (scopeUnknown) with its first letter lower-case, in every locale (4 counted)", () => {
+    let checked = 0;
+    for (const l of LOCALES) {
+      const alone = UI[l]["sponsors.dealSheet.scopeUnknown"]!;
+      const inline = UI[l]["sponsors.dealSheet.scopeUnknownInline"]!;
+      // Derived from the sibling, never typed: the two are one phrase, and the stand-alone one must start a sentence (an upper-case
+      // initial) or the pair says nothing.
+      expect(alone[0], `${l}: the stand-alone fallback starts upper-case`).not.toBe(alone[0]!.toLowerCase());
+      expect(inline, `${l}: the same words, lower-case initial`).toBe(alone[0]!.toLowerCase() + alone.slice(1));
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 
   it("the help pages and the Stripe product descriptions that list what the pass carries do not sell 'paid packages' (4 files counted)", () => {

@@ -7843,6 +7843,7 @@ export type DictionaryKey =
   | "sponsors.dealSheet.scopeRunsNoDate"
   | "sponsors.dealSheet.scopeTiersHint"
   | "sponsors.dealSheet.scopeUnknown"
+  | "sponsors.dealSheet.scopeUnknownInline"
   | "sponsors.dealSheet.scopeWhole"
   | "sponsors.dealSheet.summary.head.complimentary"
   | "sponsors.dealSheet.summary.head.complimentaryAll"

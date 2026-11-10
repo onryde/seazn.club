@@ -601,6 +601,7 @@
   "sponsors.dealSheet.scopeWhole": "Toda la organización",
   "sponsors.dealSheet.scopeFixed": "Este paquete es para una sola competición, así que el acuerdo también.",
   "sponsors.dealSheet.scopeUnknown": "La competición de este paquete",
+  "sponsors.dealSheet.scopeUnknownInline": "la competición de este paquete",
   "sponsors.dealSheet.scopeTiersHint": "Un acuerdo de una sola competición requiere un plan de pago o un Event Pass para esa competición.",
   "sponsors.dealSheet.scopeRuns": "El acuerdo termina cuando {name} finaliza, prevista el {date}.",
   "sponsors.dealSheet.scopeRunsNoDate": "El acuerdo termina cuando {name} finaliza.",
@@ -8088,7 +8089,7 @@
   "sponsors.pkg.retiredDone": "{name} está retirado. Los acuerdos nuevos ya no pueden usarlo.",
   "sponsors.pkg.tiersHint": "Los niveles distintos de Partner y los paquetes de una sola competición requieren un plan de pago. Un Event Pass cubre solo su propia competición.",
   "sponsors.pkg.onlineNote": "Las facturas en línea se pagan a tu cuenta de Stripe, con la misma comisión de plataforma que las cuotas de inscripción.",
-  "sponsors.pkg.onlineLocked": "Enviar facturas en línea requiere un plan de pago.",
+  "sponsors.pkg.onlineLocked": "Enviar facturas en línea requiere un plan de pago. Un Event Pass cubre solo su propia competición.",
   "sponsors.showAgain": "Volver a mostrar en el sitio",
   "sponsors.showAgainLabel": "Volver a mostrar en el sitio: {name}"
 }

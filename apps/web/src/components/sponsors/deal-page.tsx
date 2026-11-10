@@ -111,6 +111,10 @@ export function DealPageBody(props: DealPageBodyProps) {
   const calendarDay = (ymd: string) => fmtPublicDate(locale, "UTC", `${ymd}T12:00:00Z`, DATE);
   const scopeName = (competitionId: string | null) =>
     competitionId ? (competitions.find((c) => c.id === competitionId)?.name ?? msg("sponsors.dealSheet.scopeUnknown")) : msg("sponsors.scopeAll");
+  /** The same name inside a sentence ("When {name} finishes"): a competition the page holds keeps its own name, and the fallback's words
+   *  - which begin a sentence, "This package's competition" - read lower-case there. */
+  const scopeNameInline = (competitionId: string) =>
+    competitions.find((c) => c.id === competitionId)?.name ?? msg("sponsors.dealSheet.scopeUnknownInline");
   const join = (...parts: (string | null)[]) => parts.filter((p): p is string => Boolean(p)).join(" · ");
 
   const complimentary = deal.payment_method === "complimentary";
@@ -208,15 +212,17 @@ export function DealPageBody(props: DealPageBodyProps) {
         // as that day - not as an instant in the viewer's zone, which shows the next day to anyone west of the org's midnight.
         if (s.at !== null) return { title: msg("sponsors.deal.timeline.ends"), line: calendarDay(endsOnOf(s.at, orgTz)) };
         if (deal.competition_id === null) return { title: msg("sponsors.deal.timeline.ends"), line: msg("sponsors.deal.timeline.line.noEnd") };
+        // `competitionFinished` BEGINS with the name ("{name} has finished ..."), the other two follow "When": two forms of one fallback.
         const name = scopeName(deal.competition_id);
+        const inline = scopeNameInline(deal.competition_id);
         const scheduled = s.detail?.competitionEndsOn;
         return {
           title: msg("sponsors.deal.timeline.ends"),
           line: s.detail?.competitionFinished
             ? msg("sponsors.deal.timeline.line.competitionFinished", { name })
             : scheduled
-              ? msg("sponsors.deal.timeline.line.endsWithCompetitionDue", { name, date: calendarDay(scheduled) })
-              : msg("sponsors.deal.timeline.line.endsWithCompetition", { name }),
+              ? msg("sponsors.deal.timeline.line.endsWithCompetitionDue", { name: inline, date: calendarDay(scheduled) })
+              : msg("sponsors.deal.timeline.line.endsWithCompetition", { name: inline }),
         };
       }
       case "ended":
