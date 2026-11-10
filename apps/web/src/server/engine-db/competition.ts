@@ -48,8 +48,15 @@ import { liveCfg, resolveFixtureCfg } from "./fixture-cfg";
 import { forfeitPlayedFacts, playedFor } from "./forfeit-played";
 import { loadLotsDraws, persistLotsDraws, pinStageTableRules, tableRulesOf, type LoadedTableRules } from "./table-rules";
 import { swissAbsentRounds } from "./swiss-absent-rounds";
+import { attachFeedRefs, engineRoundOf, laneDepthOf } from "./bracket-rounds";
+import { bracketRosterOf, drawSeedsOf } from "./bracket-roster";
+import { knockoutDrawOrder } from "@/server/usecases/stages/generators";
 
 type Tx = postgres.TransactionSql;
+
+/** The double-elimination grand final's and bracket reset's ext_keys (`generateDoubleElim`: `gf`, `gf-reset`). */
+const GRAND_FINAL_KEY = "gf";
+const BRACKET_RESET_KEY = "gf-reset";
 
 // americano folds like a table stage (Jul3/08 §3): its pair fixtures feed the
 // standard standings machinery.
@@ -238,6 +245,8 @@ function toBracketFixture(
   f: FixtureRow,
   stageKind: string,
   seatsOf: (fixtureId: string) => readonly [string | null, string | null] | null,
+  /** The stage's winners'-side round count (`laneDepthOf`): the engine's round is 0-based per lane (C5/C9). */
+  laneDepth: number,
 ): BracketFixture {
   assertNoLevelSeat({ fixtureId: f.id, stageKind, status: f.status, outcome: f.outcome }); // X-BR-1
   // W2b D20: a double walkover seated nobody in the seats it feeds.
@@ -246,7 +255,7 @@ function toBracketFixture(
   const { winner, loser, walkedOver } = bracketWinnerLoser(f.outcome, f.home_entrant_id, f.away_entrant_id);
   return {
     id: f.id,
-    round: f.round_no,
+    round: engineRoundOf(f.round_no, bracket, laneDepth),
     isFinal: !thirdPlace,
     // D-G1: a recorded abandon that decided nobody is in play, never the generator's void (recorded-abandon.ts).
     status: completionEngineStatus(stageKind, f),
@@ -900,22 +909,37 @@ export interface CompleteResult {
   events: WireDivisionEvent[];
 }
 
-/** engine 5.0.0 (`BracketStage.entrants`): the entrants the stage DREW, so the ranks cover exactly them (each once; a
- *  finalist who left is ranked 2nd, so she has to be on it).
+/** engine 5.0.0 (`BracketStage.entrants`, `seeds`): the entrants the stage DREW, in the order it was drawn, so the ranks
+ *  cover exactly them (each once; a finalist who left is ranked 2nd, so she has to be on it) - W4 app PR B (C1/C12).
  *
  *  A stage drawn from a previous stage's cut stored its draw order as `config.qualified` (departed qualifiers included -
- *  `generate-tx.ts`); that IS the roster, in draw order, and anyone seated but not on it (a lucky loser) follows. Without it
- *  the roster is the stage's seat-holders (`inputs.entrants`, in fixture order): a departed entrant who held a seat is
- *  there, because the fixtures name her, and one who never held a seat in THIS stage (withdrew before the draw, or never
- *  qualified from a group or league stage) is NOT - declaring her would rank her last in a stage she never played in.
- *  The withdrawal planners (generators.ts, withdrawal.ts) declare the same seated set; app B's T2' replaces all three with
- *  the roster stored at the draw, in `knockoutDrawOrder`. */
-function bracketRoster(inputs: StageInputs): string[] {
+ *  `generate-tx.ts`); that IS the roster. A root stage has no stored list: its draw is rebuilt with the generator's own
+ *  `knockoutDrawOrder` over everyone seated. Either way the seat-holders are in (a departed entrant who held a seat is
+ *  named by the fixtures), and an entrant parked on this stage by a late arrival (`knockout_waiting_stage_id`) is NOT. One who
+ *  never held a seat and is not on the drawn list (withdrew before the draw, or never qualified from a group or league) is
+ *  not declared either: she would rank last in a stage she never played in.
+ *
+ *  `seeds` are the DRAW seeds (position in that order, 1-based) - never a registration seed the draw did not use: a fed
+ *  stage's registration seeds are unrelated to its qualification order, and X-SP-4 reads a stepladder rung from them. */
+async function bracketRosterAndSeeds(tx: Tx, inputs: StageInputs, stageId: string): Promise<{ entrants: string[]; seeds: Map<string, number> }> {
   const seated = inputs.entrants;
   const stored = (inputs.stage.config as { qualified?: unknown } | null)?.qualified;
-  if (!Array.isArray(stored)) return seated;
-  const listed = new Set(stored as string[]);
-  return [...(stored as string[]), ...seated.filter((id) => !listed.has(id))];
+  const waiting = new Set(
+    (await tx<{ id: string }[]>`select id from entrants where knockout_waiting_stage_id = ${stageId}`).map((r) => r.id),
+  );
+  let drawn: string[];
+  if (Array.isArray(stored)) {
+    drawn = stored as string[];
+  } else if (seated.length === 0) {
+    drawn = [];
+  } else {
+    const rows = await tx<{ id: string; seed: number | null }[]>`
+      select id, seed from entrants where id in ${tx(seated)} order by seed nulls last, created_at, id`;
+    const active = rows.map((r) => ({ id: r.id, seed: r.seed, swiss_first_round: null }));
+    drawn = knockoutDrawOrder(stageId, active, (inputs.stage.config ?? {}) as Record<string, unknown>).map((e) => e.id);
+  }
+  const entrants = bracketRosterOf({ drawn, seated, waiting });
+  return { entrants, seeds: drawSeedsOf(entrants) };
 }
 
 /** A bracket stage's engine shape, read for Complete and for a correction after it (`refreshCompletedBracketPlacement`).
@@ -929,47 +953,54 @@ async function readBracketStage(
   inputs: StageInputs,
   stageId: string,
 ): Promise<{ bracketStage: BracketStage; bracketFixtures: BracketFixture[] }> {
+  const roster = await bracketRosterAndSeeds(tx, inputs, stageId);
   const bracketStage: BracketStage = {
     id: stageId,
     kind: inputs.kind as BracketStage["kind"],
-    entrants: bracketRoster(inputs),
-    ...(inputs.seeds.size > 0 ? { seeds: inputs.seeds } : {}),
+    entrants: roster.entrants,
+    ...(roster.seeds.size > 0 ? { seeds: roster.seeds } : {}),
   };
   const seats = new Map(inputs.fixtures.map((f) => [f.id, [f.home_entrant_id, f.away_entrant_id] as const]));
-  const bracketFixtures: BracketFixture[] = inputs.fixtures.map((f) => toBracketFixture(f, inputs.kind, (id) => seats.get(id) ?? null));
+  const laneDepth = laneDepthOf(inputs.fixtures.map((f) => ({ lane: parseExtKey(f.ext_key).bracket, roundNo: f.round_no })));
+  const bracketFixtures: BracketFixture[] = inputs.fixtures.map((f) => toBracketFixture(f, inputs.kind, (id) => seats.get(id) ?? null, laneDepth));
   // Refine: only fixtures with no onward winner feed are finals (a
   // fixture whose winner feeds nowhere is the bracket's deciding game).
   const feeders = await tx<{ id: string }[]>`
     select id from fixtures where stage_id = ${stageId} and winner_to_fixture is not null
   `;
   const feederIds = new Set(feeders.map((r) => r.id));
-  for (const bf of bracketFixtures) if (feederIds.has(bf.id)) bf.isFinal = false;
+  const rowOf = new Map(inputs.fixtures.map((f) => [f.id, f]));
+  // C2/C17 (double elimination): the grand final feeds the bracket reset, but it is a FINAL all the same - the winners'
+  // champion's win there decides the title and the reset is then never played (spec 05 §2.4). Keyed on the grand final's own
+  // ext_key, never on `winner_to_fixture`, which is exactly what made it a feeder.
+  for (const bf of bracketFixtures) if (feederIds.has(bf.id) && rowOf.get(bf.id)!.ext_key !== GRAND_FINAL_KEY) bf.isFinal = false;
   // engine 5.0.0 (`resolveDeadSeats`): which fixture's winner or loser fills each seat. Without it a seat emptied by a
   // withdrawal cannot be attributed, so the walkover over it names no loser and the departed entrant ranks nowhere.
   const feedEdges = await tx<
     { id: string; winner_to_fixture: string | null; winner_to_slot: number | null; loser_to_fixture: string | null; loser_to_slot: number | null }[]
   >`select id, winner_to_fixture, winner_to_slot, loser_to_fixture, loser_to_slot from fixtures where stage_id = ${stageId}`;
   const byFixture = new Map(bracketFixtures.map((bf) => [bf.id, bf]));
-  for (const e of feedEdges) {
-    for (const [to, slot, side] of [
-      [e.winner_to_fixture, e.winner_to_slot, "winner"],
-      [e.loser_to_fixture, e.loser_to_slot, "loser"],
-    ] as const) {
-      const target = to === null ? undefined : byFixture.get(to);
-      if (target === undefined || (slot !== 1 && slot !== 2)) continue;
-      target[slot === 1 ? "homeFrom" : "awayFrom"] = { fixtureId: e.id, side };
-    }
-  }
+  attachFeedRefs(byFixture, feedEdges);
   // R-1: a THIRD-PLACE line that holds nobody and whose every feeder is already settled can never be
   // filled or played - and the app owes no result for it (`undecidedBracketFixtures`: a bye line). Engine 5.0.0 holds
   // completion for every unsettled fixture (X-CH-7), so it is read as the void it is, or the stage would wait on it
   // forever. A voided third place shares 3rd (never a seed split).
-  const rowOf = new Map(inputs.fixtures.map((f) => [f.id, f]));
   for (const bf of bracketFixtures) {
     const row = rowOf.get(bf.id)!;
     if (bf.thirdPlace !== true || bf.status !== "scheduled" || row.outcome !== null || row.home_entrant_id !== null || row.away_entrant_id !== null) continue;
     const feeders = [bf.homeFrom, bf.awayFrom].filter((r): r is NonNullable<typeof r> => r !== undefined);
     if (feeders.length > 0 && feeders.every((r) => SETTLED_FIXTURE_STATUSES.has(byFixture.get(r.fixtureId)!.status))) bf.status = "void";
+  }
+  // C2/C17: a bracket reset the grand final did not trigger can never be played - the winners' champion (the grand final's
+  // HOME entrant, as `undecidedBracketFixtures` reads it) won, so the title is decided. It reads as the void it is, keyed on
+  // the reset's ext_key (a row written before the `conditional` flag holds conditional=false). Owed - the other side won the
+  // grand final - or not yet knowable (the grand final still open): it stays what it is, and holds completion.
+  const grandFinal = bracketFixtures.find((bf) => rowOf.get(bf.id)!.ext_key === GRAND_FINAL_KEY);
+  if (grandFinal !== undefined && SETTLED_FIXTURE_STATUSES.has(grandFinal.status) && grandFinal.winner !== undefined && grandFinal.winner === rowOf.get(grandFinal.id)!.home_entrant_id) {
+    for (const bf of bracketFixtures) {
+      const row = rowOf.get(bf.id)!;
+      if (row.ext_key === BRACKET_RESET_KEY && row.outcome === null && bf.status === "scheduled") bf.status = "void";
+    }
   }
   return { bracketStage, bracketFixtures };
 }

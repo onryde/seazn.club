@@ -1486,12 +1486,13 @@ describe.skipIf(!HAS_DB)("D-G3 corner 3: a stepladder qualifier departed before 
     const after = await fixtureRow(final.id);
     expect([after.status, after.outcome], "the climber walks over the departed seed's seat").toEqual(["forfeited", seatWalkover(e2!)]);
     expect(await activeTypes(final.id), "no organiser step").toEqual([]);
-    // Where the departed seed ranks — absent (she holds no seat) or last — is not ruled; never above a field entrant.
+    // X-SP-4 (RB4-S4; W4 app PR B, C1/C12): a withdrawn stepladder seed is ranked as the loser of the rung she was due to
+    // enter - seed 1 enters at the FINAL, so she is its loser: 2nd, below the climber who walked it over and above every
+    // other rung's loser. (Before PR B she held no seat, was not declared, and ranked nowhere.)
     const done = await completeStage(r.auth, r.stageId);
     const ev = done.events.find((e) => e.type === "stage_completed");
     const ranks = ev?.type === "stage_completed" ? ev.finalRanks : [];
-    expect([done.completed, ranks.filter((id) => id !== e1)]).toEqual([true, [e2, e3, e4]]);
-    expect([-1, 3], "the departed seed is unranked or last").toContain(ranks.indexOf(e1!));
+    expect([done.completed, ranks]).toEqual([true, [e2, e1, e3, e4]]);
   });
 
   it("D-G3 corner 3: a seat that cannot resolve is refused STAGE_SEAT_DEPARTED naming the entrant and the fixture", async () => {
