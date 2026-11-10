@@ -10,6 +10,7 @@ import { ARMAGEDDON_RESULTS, TIEBREAK_RUNGS } from "@seazn/engine/sports/boardga
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { openMatchActions } from "./helpers/match-actions";
+import { DEFAULT_SETTLED_POLL_MS } from "../src/components/public-site/match-centre/use-live-fixture";
 
 // W2a spec §9 (format-matrix W2a, loop H): a bracket always finishes.
 //  - the console: a HELD fixture (a level result in a knockout, or an abandon that decided nobody) shows "Needs a
@@ -1806,8 +1807,9 @@ test.describe("W4 B5b - joint winners on a final (X-CH-4)", () => {
     await page.setViewportSize({ width: 1280, height: 900 });
     await publicCount(page, `${f.base}/fixtures/${f.finalId}`, "mc-status-line", 1);
     await expect(page.getByTestId("mc-status-line")).toHaveText(say("title.joint"));
-    // Wait out a poll (CI shortens the interval) and read it again: the line must survive the poll's own document.
-    await page.waitForTimeout(8_000);
+    // Let the page's own poll answer (the shipped settled interval is the ceiling; CI only shortens it - never a sleep), then
+    // read the line again: it must survive the poll's own document (review I-2).
+    await page.waitForResponse((r) => r.url().includes(`/api/v1/public/fixtures/${f.finalId}`) && r.ok(), { timeout: DEFAULT_SETTLED_POLL_MS + 15_000 });
     await expect(page.getByTestId("mc-status-line")).toHaveText(say("title.joint"));
 
     // Undo, on a page LOADED in the declared state (review I-1: the console's live status must re-seed): the final is open
