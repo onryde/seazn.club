@@ -253,12 +253,17 @@ function toBracketFixture(
   assertAdvancingSeat({ fixtureId: f.id, stageKind, status: f.status, outcome: f.outcome, seatedEntrant: fedSeatOccupant(f, seatsOf) });
   const { bracket, thirdPlace } = parseExtKey(f.ext_key);
   const { winner, loser, walkedOver } = bracketWinnerLoser(f.outcome, f.home_entrant_id, f.away_entrant_id);
+  // W4 T12 (X-CH-4): joint winners are a column, not an outcome kind (the engine's kinds are closed): the final reads decided,
+  // naming no winner and no loser, and the engine's `jointWinners` flag crowns both seats. The shape is guarded in the
+  // engine (`jointWinnersOf`: a final, both seats, decided, no winner/loser/walkover) and in V499's check.
+  const joint = f.joint_winners_at !== null;
   return {
     id: f.id,
     round: engineRoundOf(f.round_no, bracket, laneDepth),
     isFinal: !thirdPlace,
     // D-G1: a recorded abandon that decided nobody is in play, never the generator's void (recorded-abandon.ts).
-    status: completionEngineStatus(stageKind, f),
+    status: joint ? "decided" : completionEngineStatus(stageKind, f),
+    ...(joint ? { jointWinners: true } : {}),
     ...(bracket !== undefined ? { bracket } : {}),
     ...(thirdPlace ? { thirdPlace: true } : {}),
     ...(f.home_entrant_id !== null ? { home: f.home_entrant_id } : {}),
@@ -327,6 +332,8 @@ interface FixtureRow {
   no_result: boolean;
   /** The match's number within its round - names a held match in the refusal (`completeStageIfReady`). */
   seq_in_round: number;
+  /** W4 T12 (V499; X-CH-4): when the organiser ruled this unplayed final joint winners - decided, no outcome, both seats. */
+  joint_winners_at: Date | string | null;
   /** W2b D20 — the feed edges, so the bracket read can assert a double walkover seated nobody. */
   winner_to_fixture: string | null;
   winner_to_slot: number | null;
@@ -383,7 +390,7 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
 
   const fixtures = await tx<FixtureRow[]>`
     select f.id, f.status, f.round_no, f.pool_id, f.home_entrant_id, f.away_entrant_id,
-           f.outcome, f.config_snapshot, f.rules_override, f.ext_key, m.state,
+           f.outcome, f.config_snapshot, f.rules_override, f.ext_key, m.state, f.joint_winners_at,
            f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot, f.seq_in_round,
            ${hasActiveAbandonSql(tx)} as has_active_abandon,
            ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged,
@@ -1069,6 +1076,8 @@ function unbeatenWithNoTitle(inputs: StageInputs, bracketFixtures: readonly Brac
     // PF-5 (X-DW-2): both entrants of a double walkover are out, beaten by absence.
     if (bf.walkedOver === "both") for (const id of [bf.home, bf.away]) if (id !== undefined) lost.add(id);
     if (bf.isFinal === true && bf.winner !== undefined) finalWinners.add(bf.winner);
+    // W4 T12 (X-CH-4): a final ruled joint crowns BOTH seats - otherwise the unbeaten pair would read as "decided nobody".
+    if (bf.isFinal === true && bf.jointWinners === true) for (const id of [bf.home, bf.away]) if (id !== undefined) finalWinners.add(id);
   }
   return inputs.entrants.filter((id) => inputs.field.has(id) && !lost.has(id) && !finalWinners.has(id));
 }
