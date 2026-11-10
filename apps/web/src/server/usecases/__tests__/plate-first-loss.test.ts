@@ -13,6 +13,7 @@ import { createEntrants } from "../entrants";
 import { completeStage, confirmSeedProposal, generateStageFixtures } from "../stages";
 import { confirmResolvingTies } from "./_confirm-with-ties";
 import { withdrawEntrantCascade } from "../withdrawal";
+import { undoDivision } from "../history";
 import { maybeProposePlate, plateCardStateOf } from "../plate-field";
 import { computeSeedProposal, getSeedProposal } from "../stages/seed-proposal";
 import { entrantInput, linesOf, plateRig, plateSeats, playRound, undecide, win, type PlateRig } from "./_plate-rig";
@@ -340,11 +341,17 @@ describe.skipIf(!HAS_DB)("ko_plate Undo sequence (review I4)", () => {
     expect(await plateSeats(rig)).toEqual(P(rig, 3, 5));
   }, 240_000);
 
-  it("a draft whose lines were removed under it (an Undo of the draw's generation) is drawn again by the next trigger", async () => {
+  it("the organiser's REAL Undo (undoDivision) of the plate's generation clears its lines; the next trigger draws them again", async () => {
     const rig = await plateRig(5, { autoProgress: false });
     await playRound(rig, 1);
     await playRound(rig, 2);
-    await sql`delete from fixtures where stage_id = ${rig.plateId}`;
+    expect(await linesOf(rig.plateId), "premise: the plate is drawn").toHaveLength(1);
+    const ledgerTypes = async () => (await sql<{ type: string }[]>`select type from division_events where division_id = ${rig.divisionId} order by seq`).map((r) => r.type);
+    expect((await ledgerTypes()).at(-1), "premise: the plate's draw is the newest ledger step").toBe("fixtures_generated");
+    const undone = await undoDivision(rig.auth, rig.divisionId);
+    expect(undone.applied.type, "the Undo inverts the draw").toBe("fixtures_cleared");
+    expect(await linesOf(rig.plateId), "the real Undo removed the plate's lines").toHaveLength(0);
+    expect((await linesOf(rig.mainId)).length, "and left the main bracket alone").toBe(7);
     const out = await maybeProposePlate(rig.auth, rig.mainId);
     expect(out.proposed, "re-proposed").toBe(true);
     expect(await linesOf(rig.plateId), "the lines are back").toHaveLength(1);
