@@ -806,6 +806,10 @@ describe.skipIf(!HAS_DB)("extra-org allowance alert — at purchase time", () =>
     await setExtraOrgs(extras);
 
     await vi.waitFor(() => expect(allowanceAlertSpy, "premise: both purchases reached the alert").toHaveBeenCalledTimes(2));
+    // The alert having been CALLED twice does not mean its row has landed:
+    // the insert runs deferred after the call. Wait for the first row (the
+    // positive), THEN let the second get its chance to duplicate it.
+    expect(await rowsOnceQueued(walletId, 1)).toEqual([allowanceRow(walletId, extras, 25)]);
     await flushDeferred();
     expect(await staffRows(KIND, "subscription", walletId)).toEqual([allowanceRow(walletId, extras, 25)]);
     expect(drops(), "deduplicated, not dropped").toEqual({ logged: 0, issues: 0 });
