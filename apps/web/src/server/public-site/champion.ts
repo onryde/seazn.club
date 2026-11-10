@@ -243,7 +243,10 @@ export function stageFeedsOf(rows: readonly StageProgressionRow[]): Map<string, 
       if (stageId === undefined || !known.has(stageId) || stageId === row.id) continue;
       const take = Array.isArray(src.take) ? (src.take as { kind?: unknown }[]) : [];
       const losers = take.length > 0 && take.every((t) => typeof t?.kind === "string" && LOSER_TAKES.has(t.kind));
-      feeds.push({ stageId, side: losers ? "losers" : "winners", ...(!losers && takesRankOne(take) ? { top: true } : {}) });
+      // A MIXED take (a losers' take beside a table cut) is not `top` whatever the cut says: the schema allows it, and the
+      // source feeds a losers' bracket as well, so naming the destination the title's cup would crown a consolation.
+      const mixed = !losers && take.some((t) => typeof t?.kind === "string" && LOSER_TAKES.has(t.kind));
+      feeds.push({ stageId, side: losers ? "losers" : "winners", ...(!losers && !mixed && takesRankOne(take) ? { top: true } : {}) });
     }
     if (feeds.length > 0) out.set(row.id, feeds);
   }
