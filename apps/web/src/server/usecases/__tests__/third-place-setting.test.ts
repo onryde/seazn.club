@@ -2,7 +2,7 @@
 // database through the usecases the PATCH, Generate, Withdraw and Complete call. Expected values come from the ENGINE: the
 // lines a bracket draws are `engineBracketRows` (its own generator), the rank places are the rulebook's (1st, 2nd, then the two
 // semi-final losers 4th and 4th when nobody plays the third-place match: X-TP-7).
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { appendEvent } from "@/server/engine-db";
@@ -13,6 +13,12 @@ import { CreateStage } from "@/server/api-v1/schemas";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { fixtureRow, playBadminton, rowsOf } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 import type { AuthCtx } from "@/server/api-v1/auth";
+// m1: spy (pass-through) on the schedule write's invalidation, to see what a Shared switch tells the caches.
+const afterWriteSpy = vi.hoisted(() => vi.fn());
+vi.mock("../schedule", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../schedule")>();
+  return { ...real, afterScheduleWrite: (...a: Parameters<typeof real.afterScheduleWrite>) => { afterWriteSpy(...a); return real.afterScheduleWrite(...a); } };
+});
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -452,6 +458,19 @@ describe.skipIf(!HAS_DB)("M-3 Shared before the first match never redraws and ne
     expect(await officialsOn(r.stageId, false), "setup on the other lines intact").toBe(1);
     expect((await sql`select 1 from fixtures where id = ${r.bronzeId}`).length, "the -3p row and its court/time slot are freed").toBe(0);
     expect((await rowsOf(r.stageId)).filter((x) => x.loser_to_fixture !== null), "no loser edge into a gone line").toHaveLength(0);
+  }, 180_000);
+
+  it("(e) m1: removing the -3p line tells the schedule caches the removed id (a phantom -3p must not linger), and a no-op fires nothing", async () => {
+    const r = await stuckRig();
+    afterWriteSpy.mockClear();
+    await patchKnockoutStage(r.auth, r.stageId, { thirdPlace: "shared" });
+    const [div] = await sql<{ id: string; competition_id: string }[]>`select d.id, d.competition_id from stages s join divisions d on d.id = s.division_id where s.id = ${r.stageId}`;
+    expect(afterWriteSpy.mock.calls.length, "one invalidation for the one write").toBe(1);
+    expect(afterWriteSpy.mock.calls[0]!.slice(0, 3)).toEqual([div!.id, div!.competition_id, "schedule"]);
+    expect(afterWriteSpy.mock.calls[0]![3], "the removed -3p id").toEqual([r.bronzeId]);
+    afterWriteSpy.mockClear();
+    await patchKnockoutStage(r.auth, r.stageId, { thirdPlace: "shared" });
+    expect(afterWriteSpy.mock.calls.length, "the same value again writes nothing").toBe(0);
   }, 180_000);
 
   it("(b) the 7A path end to end: Generate refuses by name with the stage, one PATCH Shared, Generate then proceeds", async () => {

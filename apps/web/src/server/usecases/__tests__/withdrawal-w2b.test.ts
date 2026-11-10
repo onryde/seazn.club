@@ -735,8 +735,9 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
 
   it("R-1 consequence: BOTH semis lost by departed entrants — both third-place seats are departure-dead, so the third-place line is a departure double walkover (B4 M-1, X-TP-7: 3rd vacant; a FINAL feeds nothing and stays open for W4's vacant title, a third-place line does not), and the stage still completes on its final", async () => {
     // single-sport: badminton. Before R-1 a departed loser's seat was dead but unstamped, so this line was VOIDED; the
-    // stamp makes both seats departures, which is X-WD-4's "every side withdrew" — and D19 writes no double walkover on
-    // a line with no next match. Bracket completion ranks an unplayed third-place line by the fallback (bracketRanks).
+    // stamp makes both seats departures, which is X-WD-4's "every side withdrew". D19's no-double-walkover rule is for a
+    // FINAL (it feeds nothing, and stays open for W4's vacant title); a third-place line is not one, so it IS written.
+    // Bracket completion ranks an unplayed third-place line by the fallback (bracketRanks).
     // The departed losers are the LEGACY shape (R-1's note above): a disqualification written without the cascade.
     const s = await seedBracket({ ...badminton, stageKind: "knockout", entrants: 4, stageConfig: { thirdPlace: true } });
     const [a, b] = (await rowsOf(s.stageId)).filter((r) => r.home_entrant_id && r.away_entrant_id);
