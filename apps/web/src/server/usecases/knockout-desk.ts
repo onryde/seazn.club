@@ -58,3 +58,17 @@ export async function listStageDrawSeeds(auth: AuthCtx, divisionId: string): Pro
     return out;
   });
 }
+
+/** B4 T10 (C35): the stages of the division whose newest seed proposal drew a plate WITHOUT the third-place match it was asked
+ *  for (`computed.thirdPlaceDropped`, written by `proposeStageSeeding`). The stage card says so in one line. */
+export async function listThirdPlaceDropped(auth: AuthCtx, divisionId: string): Promise<string[]> {
+  return withTenant(auth.orgId, async (tx) => {
+    const rows = await tx<{ stage_id: string }[]>`
+      select distinct on (p.stage_id) p.stage_id
+        from stage_seed_proposals p join stages s on s.id = p.stage_id
+       where s.division_id = ${divisionId} and p.computed ->> 'thirdPlaceDropped' = 'true'
+         and p.created_at = (select max(q.created_at) from stage_seed_proposals q where q.stage_id = p.stage_id)
+       order by p.stage_id`;
+    return rows.map((r) => r.stage_id);
+  });
+}

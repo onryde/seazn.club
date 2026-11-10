@@ -156,6 +156,7 @@ import { KnockoutWaitingStrip } from "@/components/v2/desk/knockout-waiting-stri
 import type { KnockoutWaitingEntrant } from "@/server/usecases/knockout-desk";
 import type { SwissRoundsRefusal } from "@/components/v2/desk/swiss-rounds-dialog";
 import type { SwissRoundControl } from "@/lib/swiss-rounds-edit";
+import { StageThirdPlace } from "@/components/v2/stage-third-place";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 type MsgPlural = (key: string, count: number, vars?: Record<string, string | number>) => string;
@@ -502,6 +503,8 @@ interface Props {
   /** W4 T20 (K5 "shown"; R24 pick 3A): each stage's draw seed, stage id -> the seed its newest Generate drew with
    *  (`listStageDrawSeeds`). A stage that drew nothing is absent; only a knockout-family card shows one. */
   drawSeeds?: Readonly<Record<string, number>>;
+  /** B4 T10 (C35): the stages whose newest seed proposal drew a plate WITHOUT its third-place match (`thirdPlaceDropped`). */
+  thirdPlaceDropped?: readonly string[];
 }
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
@@ -619,7 +622,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, knockoutWaiting = [], drawSeeds = {} }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, knockoutWaiting = [], drawSeeds = {}, thirdPlaceDropped = [] }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -670,6 +673,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   // W3 T13 — "Finish the Swiss now" under a red line whose Swiss refusal offers it (`canFinish: true` with its plan: a
   // Pair's shrunk-field 409, the More menu's Add a round at the hard maximum). Keyed to the line's own text, so any later
   // line — another refusal, another write — never keeps a stale button.
+  // B4 T10 (owner pick 7A): a Generate refused KO_THIRD_PLACE_TOO_FEW says the count and offers "Use Shared", which saves Shared
+  // and draws again - the recovery sits where the refusal is said.
+  const [sharedOffer, setSharedOffer] = useState<{ stageId: string; text: string } | null>(null);
   const [finishOffer, setFinishOffer] = useState<{ stageId: string; plan: SwissFinishPlan; text: string } | null>(null);
   // W3 app-B T4 (SW-H1 on the desk; X-SW-3) — a Pair next refused SWISS_NO_LEGAL_PAIRING: the amber notice that names the
   // round and the reason with its recovery inside it (Finish after round k). Keys, not text, so the sentence follows the
@@ -878,6 +884,20 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     );
   };
 
+  /** Owner pick 7A: save Shared, then draw again - a refused PATCH is said by `act`'s own line. */
+  async function switchToSharedThirdPlace(stageId: string) {
+    setBusy(stageId);
+    try {
+      await apiV1(`/api/v1/stages/${stageId}`, { method: "PATCH", json: { thirdPlace: "shared" } });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : msg("schedule.error.failed"));
+      return;
+    } finally {
+      setBusy(null);
+    }
+    await act(stageId, "generate");
+  }
+
   async function act(
     stageId: string,
     action: "generate" | "complete" | "delete" | "unpair",
@@ -895,6 +915,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     setNextRound(null);
     setPairingRefusal(null);
     setGameExists(false);
+    setSharedOffer(null);
     setBusy(stageId);
     try {
       if (action === "delete") {
@@ -963,6 +984,11 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           const stageRounds = swissRoundControls?.[stageId]?.rounds ?? stages.find((s) => s.id === stageId)?.config?.rounds;
           const plan = noPairingFinishPlan(noPairing, stageRounds);
           setPairingRefusal({ stageId, notice: noPairingNotice(plan ? noPairing : { ...noPairing, canFinish: false }), plan });
+          setOpenRailFor(null);
+        } else if (err instanceof ApiV1Error && err.code === "KO_THIRD_PLACE_TOO_FEW") {
+          const text = msg("thirdPlace.tooFewCount", { count: Number(err.extra.entrants ?? 0) });
+          setError(text);
+          setSharedOffer({ stageId, text });
           setOpenRailFor(null);
         } else if (err instanceof ApiV1Error && isSwissRefusalCode(err.code)) {
           // W3 T11: a Swiss refusal (SWISS_ROUNDS_ABOVE_MAX on a Generate or Pair next) in the reader's language, with
@@ -1180,6 +1206,17 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600" data-testid="schedule-error">
           {error}
         </p>
+      )}
+      {error && sharedOffer?.text === error && (
+        <button
+          type="button"
+          data-testid="schedule-use-shared-third-place"
+          disabled={busy !== null}
+          onClick={() => void switchToSharedThirdPlace(sharedOffer.stageId)}
+          className="btn btn-ghost min-h-11 self-start px-3 py-1.5 text-sm"
+        >
+          {msg("thirdPlace.useShared")}
+        </button>
       )}
       {error && finishOffer?.text === error && (
         <button
@@ -2029,6 +2066,20 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     pointsOpen={panelOpen(stage.id, "points")}
                     tiebreaksOpen={panelOpen(stage.id, "tiebreaks")}
                     onClose={(panel) => closePanel(stage.id, panel)}
+                  />
+                )}
+
+                {/* B4 T10 (X-TP-2, X-TP-6; picks 1A/7A; C35): a knockout stage's Third place, beside its other settings: editable until a
+                    line has started, then read-only; a plate's dropped third-place match said in one line. */}
+                {stage.kind === "knockout" && (
+                  <StageThirdPlace
+                    stageId={stage.id}
+                    config={stage.config}
+                    fed={(stage.progression !== null && stage.progression !== undefined) || activeEntrantIds === undefined}
+                    started={stageFixtures.some((f) => !isBye(toRunSheetFixture(f)) && f.status !== "scheduled")}
+                    field={activeEntrantIds?.length ?? 0}
+                    dropped={thirdPlaceDropped.includes(stage.id)}
+                    canEdit={canEdit}
                   />
                 )}
 

@@ -28,7 +28,7 @@ import { divisionQualification, qualificationFixtures } from "@/server/public-si
 import { formatLockedStageIds } from "@/server/usecases/stage-rules";
 import { listSwissRoundControls } from "@/server/usecases/swiss-rounds-admin";
 import { getSwissCutDrift } from "@/server/usecases/swiss-cut-drift";
-import { listKnockoutWaiting, listStageDrawSeeds } from "@/server/usecases/knockout-desk";
+import { listKnockoutWaiting, listStageDrawSeeds, listThirdPlaceDropped } from "@/server/usecases/knockout-desk";
 import { swissCutDriftStageIds } from "@/lib/swiss-cut-drift";
 import { getKnockoutCutDrift } from "@/server/usecases/knockout-cut-drift";
 import { knockoutCutDriftStageIds } from "@/lib/knockout-cut-drift";
@@ -433,6 +433,9 @@ export default async function DivisionPage({
   // Information, so read for a viewer as well as an organiser; this tab only, and only where a knockout-family stage exists.
   const drawSeeds =
     tab === "fixtures" && stages.some((s) => ROOT_KNOCKOUT_KINDS.includes(s.kind)) ? await listStageDrawSeeds(auth, id) : {};
+  // B4 T10 (C35): the plate stages that drew without the third-place match they were asked for - one line on the card.
+  const thirdPlaceDropped =
+    tab === "fixtures" && stages.some((s) => s.kind === "knockout") ? await listThirdPlaceDropped(auth, id) : [];
   // W2d final review I1: the points each PINNED table stage pays - its pin's, which a division points save after generate
   // never reaches (`rule-locks.ts` lets that save through). The stage points card says these, never `division.config`.
   // Read for the stages the card is mounted on (`stageTakesPoints`), for an organiser and a viewer alike (both see it).
@@ -1089,6 +1092,7 @@ export default async function DivisionPage({
               swissCutDrift={swissCutDrift}
               knockoutWaiting={knockoutWaiting}
               drawSeeds={drawSeeds}
+              thirdPlaceDropped={thirdPlaceDropped}
               knockoutCutDrift={knockoutCutDrift}
               // Match Day PB1 x W3 T17: a COMPLETED stage's card starts as one line, and the cut-drift warning lives on a completed
               // Swiss (W4 T14: or knockout) - so the cards that carry it are listed here and start open. Each list reads the SAME
