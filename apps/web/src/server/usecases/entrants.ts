@@ -9,6 +9,7 @@ import { HttpError } from "@/lib/errors";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { assertWithinLimit, getLimit } from "@/lib/entitlements";
 import { resolveModule } from "@/server/engine-db/registry";
+import { reviveVacantFinal } from "@/server/engine-db/fed-seats";
 import { entrantKindCap, type EffectiveEntrantModel } from "@seazn/engine/sport";
 import { assertDivisionTakesKind, loadEntrantShape } from "./entrant-shape";
 import { loadTeamSquad } from "./teams";
@@ -1061,9 +1062,14 @@ export async function writeEntrantPatch(
     if (reinstating && !DEPARTED_STATUSES.has(row.status)) {
       // W4 T11 (K13): into a started root knockout the reinstated entrant WAITS — their walked-over seat is not given back
       // by the flip; the organiser's tap reverses their own walkover (`placeWaitingKnockoutEntrant`).
-      late =
-        (await admitSwissLateEntrant(tx, auth, row.division_id, id, "reinstate")) ??
-        (await admitKnockoutLateEntrant(tx, auth, row.division_id, id, "reinstate"));
+      //
+      // W4 B5a T11 (X-CH-3, plan Decision 3): the ONE exception - a finalist of a final the departures left VACANT. Their
+      // seat was never taken, so the reinstate reverses the departure write itself (`reviveVacantFinal`) and nobody waits.
+      const revived = await reviveVacantFinal(tx, id);
+      late = revived
+        ? null
+        : (await admitSwissLateEntrant(tx, auth, row.division_id, id, "reinstate")) ??
+          (await admitKnockoutLateEntrant(tx, auth, row.division_id, id, "reinstate"));
       if (late) [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${id}`;
     }
     if (members) {

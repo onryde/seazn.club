@@ -345,7 +345,7 @@ async function getPublicFixtureBodyBefore(shell: PublicCompetitionShell, divisio
            home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
            scheduled_at, venue, court_label,
            status, outcome, summary, last_seq,
-           lane, is_final, third_place, conditional, stream_url,
+           lane, is_final, third_place, conditional, joint_winners_at, stream_url,
            (select x.winner_to_fixture from fixtures x where x.id = public_fixtures_v.id) as winner_to_fixture,
            (select x.winner_to_slot    from fixtures x where x.id = public_fixtures_v.id) as winner_to_slot,
            (select x.loser_to_fixture  from fixtures x where x.id = public_fixtures_v.id) as loser_to_fixture,
@@ -353,7 +353,12 @@ async function getPublicFixtureBodyBefore(shell: PublicCompetitionShell, divisio
     from public_fixtures_v
     where id = ${fixtureId} and division_id = ${division.id} limit 1`;
   if (!fixtureRow) return null;
-  const fixture = await withCourtVenueName({ ...fixtureRow, scheduled_at: isoDateTime(fixtureRow.scheduled_at) });
+  const fixture = await withCourtVenueName({
+    ...fixtureRow,
+    scheduled_at: isoDateTime(fixtureRow.scheduled_at),
+    // W4 B5a T12 (V499): the additive joint-winners stamp, as an ISO string (null when unruled).
+    joint_winners_at: fixtureRow.joint_winners_at == null ? null : isoDateTime(fixtureRow.joint_winners_at),
+  });
   const rawNames = await sql<{ id: string; kind: string; display_name: string }[]>`
     select id, kind, display_name from public_entrants_v
     where division_id = ${division.id}`;

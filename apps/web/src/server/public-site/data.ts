@@ -61,9 +61,11 @@ function pluralStatMsg(locale: Locale, key: string, count: number): string {
 }
 
 /** timestamptz → ISO string before rows cross into client components. */
-const normalizeFixture = <T extends { scheduled_at: unknown }>(f: T): T => ({
+const normalizeFixture = <T extends { scheduled_at: unknown; joint_winners_at?: unknown }>(f: T): T => ({
   ...f,
   scheduled_at: isoDateTime(f.scheduled_at),
+  // W4 (V499): a joint-winners final carries when it was ruled; null/absent stays null.
+  ...("joint_winners_at" in f ? { joint_winners_at: f.joint_winners_at == null ? null : isoDateTime(f.joint_winners_at) } : {}),
 });
 
 /**
@@ -279,6 +281,8 @@ export interface PublicDivision {
 
 export interface PublicFixture {
   id: string;
+  /** W4 (V499): when the organiser ruled this unplayed final a JOINT title (status decided, outcome null); else null. */
+  joint_winners_at?: string | null;
   division_id: string;
   stage_id: string;
   pool_id: string | null;
@@ -1057,7 +1061,7 @@ export async function readPublicDivisionDetail(
                  v.home_entrant_id, v.away_entrant_id, v.home_slot_label, v.away_slot_label,
                  v.scheduled_at, v.venue, v.court_label,
                  v.status, v.outcome, v.summary, v.last_seq,
-                 v.lane, v.is_final, v.third_place, v.conditional,
+                 v.lane, v.is_final, v.third_place, v.conditional, v.joint_winners_at,
                  e.ext_key, e.winner_to_fixture, e.winner_to_slot, e.loser_to_fixture, e.loser_to_slot, e.expunged,
                  e.abandon_reason, e.has_active_abandon, e.no_result
           from public_fixtures_v v
@@ -1223,7 +1227,7 @@ export async function getPublicFixture(
                v.home_entrant_id, v.away_entrant_id, v.home_slot_label, v.away_slot_label,
                v.scheduled_at, v.venue, v.court_label,
                v.status, v.outcome, v.summary, v.last_seq,
-               v.lane, v.is_final, v.third_place, v.conditional, v.stream_url,
+               v.lane, v.is_final, v.third_place, v.conditional, v.joint_winners_at, v.stream_url,
                -- The feed edges, listed for the same reason as the three other
                -- reads above: PublicFixture declares them OPTIONAL, so a
                -- select that omits them compiles clean and reads undefined at
