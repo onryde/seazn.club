@@ -721,9 +721,11 @@ describe("the Sponsors tab loads what the sponsor and deal screens read (sponsor
 // Batch J, the perf carry: PR 2 grew the Sponsors tab's one `Promise.all` from three reads to eight, and the connection pool holds five
 // (`connectionOptions`, lib/db.ts). Three of the reads pin a connection for a whole transaction, so a sixth just queues. The bound is
 // the pool's own declared size, read from the module that declares it - never a 5 typed here - and what is counted is reads IN FLIGHT
-// at once: each mocked read stays open for one macrotask, so every read a `Promise.all` starts together is open together.
-describe("no tab asks for more reads at once than the connection pool holds (batch J perf carry)", () => {
-  it("each tab's peak of reads in flight is within the pool, with the reads counted and the Sponsors tab shown to overlap (anti-vacuity)", async () => {
+// at once: each mocked read stays open for one macrotask, so every read a `Promise.all` starts together is open together. It counts the
+// reads THE PAGE starts (each mocked usecase is one read): a usecase that fans out inside itself - `finishedPackageCompetitions` asks one
+// desk per competition - is outside what this can see, and the title says so (batch J review m7).
+describe("no tab STARTS more top-level reads at once than the connection pool holds (batch J perf carry; reads inside a usecase are not counted)", () => {
+  it("each tab's peak of top-level reads in flight is within the pool, with the reads counted and the Sponsors tab shown to overlap (anti-vacuity)", async () => {
     const { connectionOptions } = await vi.importActual<typeof import("@/lib/db")>("@/lib/db");
     const POOL = connectionOptions("postgres://u@localhost/x", {}).max;
     expect(POOL, "the pool's declared size").toBeGreaterThan(0);
@@ -779,6 +781,47 @@ describe("no tab asks for more reads at once than the connection pool holds (bat
     // the pool could never break it), and a counter that never saw two open at once was not counting.
     expect(peaks.sponsors!.started, "the Sponsors tab starts more reads than the pool holds").toBeGreaterThan(POOL);
     expect(peaks.sponsors!.peak, "and the counter saw them overlap").toBeGreaterThan(1);
+  });
+
+  // The review (m7): the SLOWEST read is `finishedPackageCompetitions` (one desk read per competition that has a package), so it
+  // starts with the org's own rows in the FIRST wave and overlaps them, and the second wave is only the cheap plan questions and
+  // the Stripe flag. Read from the order the reads open and close in - not from the source - so a read slipped into the wrong wave,
+  // or the two waves collapsed into one `Promise.all` of eight, both show.
+  it("the Sponsors tab reads in two waves: the slowest read starts in the first, the plan questions and the Stripe flag only after it", async () => {
+    const log: string[] = [];
+    async function logged<T>(name: string, value: () => T): Promise<T> {
+      log.push(`${name}:start`);
+      await new Promise<void>((done) => setTimeout(done, 0));
+      log.push(`${name}:end`);
+      return value();
+    }
+    h.listSponsorRows.mockImplementation(() => logged("rows", () => []));
+    h.listDeals.mockImplementation(() => logged("deals", () => []));
+    h.listSponsorPackages.mockImplementation(() => logged("packages", () => []));
+    h.finishedPackageCompetitions.mockImplementation(() => logged("finished", () => []));
+    h.featureScopes.mockImplementation(() => logged("scopes", () => ({ orgWide: true, competitionIds: [] })));
+    h.sql.mockImplementation((strings: TemplateStringsArray) => {
+      const stripe = strings.join("?").includes("stripe_charges_enabled");
+      return logged(stripe ? "stripe" : "competitions", () => (stripe ? [{ stripe_account_id: "acct_1", stripe_charges_enabled: true }] : []));
+    });
+    await render("sponsors", undefined, undefined, undefined);
+
+    const at = (e: string): number[] => log.flatMap((x, i) => (x === e ? [i] : []));
+    const FIRST = ["rows", "deals", "packages", "competitions", "finished"];
+    const SECOND = ["scopes", "stripe"];
+    let checked = 0;
+    for (const name of [...FIRST, ...SECOND]) {
+      expect(at(`${name}:start`).length, `${name} was read (and the log saw it)`).toBeGreaterThan(0);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(FIRST.length + SECOND.length);
+    const lastFirstEnd = Math.max(...FIRST.flatMap((n) => at(`${n}:end`)));
+    const firstSecondStart = Math.min(...SECOND.flatMap((n) => at(`${n}:start`)));
+    const lastFirstStart = Math.max(...FIRST.flatMap((n) => at(`${n}:start`)));
+    const firstFirstEnd = Math.min(...FIRST.flatMap((n) => at(`${n}:end`)));
+    expect(lastFirstStart, "the whole first wave is open together: every first-wave read starts before any of them ends").toBeLessThan(firstFirstEnd);
+    expect(lastFirstEnd, "the second wave starts only after the first has finished").toBeLessThan(firstSecondStart);
+    expect(at("finished:start")[0], "the slowest read opens with the org's own rows, before the first of them ends").toBeLessThan(at("rows:end")[0]!);
   });
 });
 

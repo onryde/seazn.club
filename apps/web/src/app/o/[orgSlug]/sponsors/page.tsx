@@ -97,19 +97,21 @@ export default async function SponsorsHubPage({
     // Two waves, never one `Promise.all` of eight: the pool is `max: 5` (lib/db.ts `connectionOptions`), `listSponsorRows`,
     // `listDeals` and `listSponsorPackages` each pin a connection for a whole transaction, and a sixth read just queues behind them -
     // eight at once made every load of this tab hold the whole pool and queue the other three (batch J perf carry). The first wave is
-    // the five that read the org's own rows; the second the plan questions and the finished-competition desk reads, which only the
-    // Add deal sheet's affordances need.
-    const [sponsorRows, deals, packages, competitions, chargesEnabled] = await Promise.all([
+    // the five TOP-LEVEL reads of the org's own rows and desks - the SLOWEST of them, `finishedPackageCompetitions` (one desk read per
+    // competition that has a package), starts here so it overlaps the rest instead of waiting for them (batch J review m7); the second
+    // is the three cheap ones, the two plan questions and the Stripe flag, which only the Add deal sheet's affordances need. The count
+    // is of reads this page starts: a read that fans out inside its usecase is one here.
+    const [sponsorRows, deals, packages, competitions, finishedCompetitionIds] = await Promise.all([
       listSponsorRows(active.id),
       listDeals(page.auth),
       listSponsorPackages(page.auth),
       orgCompetitions(active.id),
-      orgChargesEnabled(active.id),
+      finishedPackageCompetitions(active.id),
     ]);
-    const [tiers, monetize, finishedCompetitionIds] = await Promise.all([
+    const [tiers, monetize, chargesEnabled] = await Promise.all([
       featureScopes(active.id, "sponsors.tiers"),
       featureScopes(active.id, "sponsors.monetize"),
-      finishedPackageCompetitions(active.id),
+      orgChargesEnabled(active.id),
     ]);
     // Reachable ANYWHERE (an affordance, as before): the plan places tiers / sells online invoices on some scope.
     const hasTiers = tiers.orgWide || tiers.competitionIds.length > 0;
