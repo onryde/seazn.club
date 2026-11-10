@@ -262,8 +262,15 @@ describe.skipIf(!HAS_DB)("L3/#414 pass 2 — placement snapshot per stage kind",
     // upset over D, so a naive "later round = better" fallback with no
     // thirdPlace parsing would have ranked D above B here instead).
     expect(await snapshotRanks(stageId)).toEqual([a, c, b, d]);
+    // W4 T3: finalRanks stays ids; places carries the ranks (a third-place match decided, so four distinct places) and title the champion.
     expect(result.events).toEqual([
-      { type: "stage_completed", stageId, finalRanks: [a, c, b, d] },
+      {
+        type: "stage_completed",
+        stageId,
+        finalRanks: [a, c, b, d],
+        places: [a, c, b, d].map((entrantId, i) => ({ entrantId, rank: i + 1 })),
+        title: { kind: "champion", champion: a },
+      },
     ]);
   });
 
