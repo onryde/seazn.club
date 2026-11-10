@@ -28,7 +28,7 @@ type Tx = postgres.TransactionSql;
 export const LUCKY_LOSER_SOURCE_KINDS: ReadonlySet<string> = new Set(["knockout"]);
 
 /** The width of a knockout source's rank cut: the deepest `rankRange` a destination takes from it, or null (it takes
- *  no ranks — ko_plate's `roundLosers` Plate). */
+ *  no ranks — ko_plate's Plate, a `firstLosses` (or a stored `roundLosers`) take). */
 export function rankCutOf(take: readonly { kind: string; to?: unknown }[]): number | null {
   const ends = take.filter((t) => t.kind === "rankRange" && typeof t.to === "number").map((t) => t.to as number);
   return ends.length > 0 ? Math.max(...ends) : null;
@@ -164,7 +164,7 @@ export async function replaceDepartedQualifier(
 }
 
 /** The knockout source whose rank cut seats `seat`'s stage (RB4-Q1) and the cut's width, or null — a table source (RB4-V6
- *  is the cut's, `cutEligiblePools`), a `roundLosers` take (the Plate), or a source that no longer resolves. */
+ *  is the cut's, `cutEligiblePools`), a `firstLosses`/`roundLosers` take (the Plate), or a source that no longer resolves. */
 async function knockoutRankSource(tx: Tx, seat: SeatRow): Promise<{ id: string; cut: number } | null> {
   for (const s of seat.progression?.sources ?? []) {
     const cut = rankCutOf(s.take ?? []);

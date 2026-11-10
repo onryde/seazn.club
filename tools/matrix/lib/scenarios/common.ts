@@ -22,7 +22,7 @@ import { decidersOffRulesFor, drawsAllowed, entrantKindFor, sportModule, stageCf
 import { STREAM_GENERATORS, forfeitPosting, generateStream, levelReachable, matchesRequest, type RequestMatch } from "../streams/index.ts";
 import { outcomeLabel, type ForfeitReason, type ProductFold, type RequestedOutcome, type Side, type StreamEvent, type StreamLineups } from "../streams/types.ts";
 import { forfeitPlayOf, levelKindOf, loserSeatOf, nextLineOf, type BracketDrive } from "../reference-bracket.ts";
-import { confirmAdvance, sourcePoolCount, type AdvanceObs } from "./advance.ts";
+import { confirmAdvance, plateFieldOf, sourcePoolCount, type AdvanceObs } from "./advance.ts";
 import { playAmericano, playMexicano } from "./americano-loop.ts";
 import { playLadder } from "./ladder-loop.ts";
 import { lineupWarningLine, postedTeamSides, putOwedLineups, type LineupSink } from "./lineup-plan.ts";
@@ -957,9 +957,12 @@ export async function playDivision(
       if (prevBody === undefined) throw new Error(`scenario: stage ${prev.stage.seq} has no posted body — ${setup.built.posted.stages.length} posted, ${setup.stages.length} built`);
       const sourceField = i === 1 ? setup.entrants.length : prev.advance?.filled;
       if (sourceField === undefined) throw new Error(`scenario: stage ${prev.stage.seq} was reached with no advance to size its field`);
-      const named = new Set((await ctx.driver.listFixtures(setup.division.id)).filter((f) => f.stage_id === prev.stage.id && f.pool_id !== null).map((f) => f.pool_id!));
+      const listed = (await ctx.driver.listFixtures(setup.division.id)).filter((f) => f.stage_id === prev.stage.id);
+      const named = new Set(listed.filter((f) => f.pool_id !== null).map((f) => f.pool_id!));
       const pools = sourcePoolCount(prevBody, sourceField, named);
-      advance = await confirmAdvance(ctx, rec, stage, proposal, body, pools);
+      // X-PL-6: a plate's seats are the source's played first losses; read off its own rows, only when the body asks.
+      const plateField = plateFieldOf(body, listed.map((f) => ({ roundNo: f.round_no, home: f.home_entrant_id, away: f.away_entrant_id, outcome: f.outcome, thirdPlace: f.third_place })));
+      advance = await confirmAdvance(ctx, rec, stage, proposal, body, pools, plateField);
       field = advance.seeded;
       if (advance.status !== 200) {
         rec.track(stage.id).exit = "not_reached";

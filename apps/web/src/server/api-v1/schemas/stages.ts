@@ -75,7 +75,17 @@ const PicksTakeS = z.object({ kind: z.literal("picks"), picks: z.array(PoolRankP
 const RoundLosersTakeS = z
   .object({ kind: z.literal("roundLosers"), round: z.number().int().min(1), count: z.number().int().min(1) })
   .strict();
-export const TakeRuleSchema = z.union([RankRangeTakeS, TopNPerGroupTakeS, BestNthTakeS, PicksTakeS, RoundLosersTakeS]);
+// X-PL-6 — the plate takes EVERY first-match loser: no count, no round (the engine reads neither). `.strict()` so a
+// stray `count: 4` is refused rather than silently becoming the old "Top N" cut (PL-1).
+const FirstLossesTakeS = z.object({ kind: z.literal("firstLosses") }).strict();
+export const TakeRuleSchema = z.union([
+  RankRangeTakeS,
+  TopNPerGroupTakeS,
+  BestNthTakeS,
+  PicksTakeS,
+  RoundLosersTakeS,
+  FirstLossesTakeS,
+]);
 
 // The single-source tie (ruling 55, CL-R2): what this schema parses and the
 // engine's TakeRule must be assignable BOTH ways. One direction alone is not
@@ -106,16 +116,11 @@ type WireDeepRequired<T> = T extends readonly (infer E)[]
 type MutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 type AssertTrue<T extends true> = T;
 type TakeRuleWire = z.infer<typeof TakeRuleSchema>;
-// Engine 5.0.0 added `{ kind: "firstLosses" }` (the plate feed). The wire stays CLOSED to it on purpose: nothing in the
-// app can resolve that take yet (app B's T7 does, and admits `FirstLossesTakeS` then), so accepting it now would open an
-// input the resolver cannot handle. The tie is therefore against the engine's TakeRule MINUS that member; a member the
-// engine adds beyond it still fails tsc here.
-type WireTakeRule = Exclude<TakeRule, { kind: "firstLosses" }>;
 export type TakeRuleSchemaMatchesEngine = AssertTrue<
-  MutuallyAssignable<WireDeepReadonly<TakeRuleWire>, WireDeepReadonly<WireTakeRule>>
+  MutuallyAssignable<WireDeepReadonly<TakeRuleWire>, WireDeepReadonly<TakeRule>>
 >;
 export type TakeRuleSchemaMatchesEngineFields = AssertTrue<
-  MutuallyAssignable<WireDeepRequired<TakeRuleWire>, WireDeepRequired<WireTakeRule>>
+  MutuallyAssignable<WireDeepRequired<TakeRuleWire>, WireDeepRequired<TakeRule>>
 >;
 
 // W2d (m8): the API's tie-break vocabularies are the engine's declared ones, exactly — a key or note added to the
