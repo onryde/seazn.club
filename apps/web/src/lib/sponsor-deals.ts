@@ -65,6 +65,10 @@ export interface SponsorDeal {
   parked_at: string | null;
   disputed_at: string | null;
   dispute_id: string | null;
+  /** The deal records a Stripe payment intent (batch G, New-3): the fact `refundDeal` decides a Stripe refund on, so the
+   *  console's refund words key on it too. On a paid deal it means a card payment at Stripe paid it; Mark as paid clears it.
+   *  The intent id itself never leaves the server. */
+  has_payment_intent: boolean;
   /** Always null until PR 3 numbers invoices (D11). */
   invoice_number: number | null;
 }

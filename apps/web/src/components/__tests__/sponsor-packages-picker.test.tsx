@@ -23,6 +23,9 @@
 //   K9  end gate    offer End now on every deal                                      -> "End now is offered on every deal that has not ended"
 //   K10 end body    always the live body                                             -> "the End now confirm says what happens to the public pages"
 //   K11 finished    ignore finishedCompetitionIds                                     -> "a package whose competition has finished offers no Send invoice"
+// Batch G (New-1, New-2, New-3, m1 remainder):
+//   K12 intent      `has_payment_intent` -> `marked_paid_by === null` (the old twin)  -> "on the SAME fact the server refunds on"
+//   K13 banner      drop payLinkStillOpen (show every sent link)                      -> "the Invoice sent banner shows a pay link only while"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 
@@ -92,6 +95,7 @@ const deal = (over: Record<string, unknown> = {}) => ({
   parked_at: null,
   disputed_at: null,
   dispute_id: null,
+  has_payment_intent: false,
   invoice_number: null,
   ...over,
 });
@@ -760,14 +764,16 @@ describe("End now is offered on every deal that has not ended, asks first, and s
   it("the confirm body follows the deal: a live deal; an open one behind the sponsor's live deal; an open one with none (all three, each a different sentence)", async () => {
     // Spec §8a / deal-apply step 4: a live deal keeps the sponsor shown; without one, an open deal hides it.
     const LIVE_OTHER = deal({ id: "d-live", package_id: "p2", deal_status: "live", payment_status: "paid" });
-    const CASES: [string, Record<string, unknown>[], string, MessageKey][] = [
-      ["the live deal itself", [LIVE_OTHER], "d-live", "sponsors.order.endConfirm.bodyLive"],
-      ["an open deal behind a live one", [LIVE_OTHER, deal({ id: "d-open", deal_status: "scheduled", payment_status: "paid" })], "d-open", "sponsors.order.endConfirm.bodyKept"],
-      ["an open deal, nothing live", [deal({ id: "d-open", deal_status: "awaiting_payment" })], "d-open", "sponsors.order.endConfirm.bodyHidden"],
+    // The middle case is PAID and not live, so its body also owes New-2's paid-kept sentence (batch G).
+    const amount = new Intl.NumberFormat(undefined, { style: "currency", currency: "GBP" }).format(250);
+    const CASES: [string, Record<string, unknown>[], string, MessageKey, MessageKey | null][] = [
+      ["the live deal itself", [LIVE_OTHER], "d-live", "sponsors.order.endConfirm.bodyLive", null],
+      ["an open deal behind a live one", [LIVE_OTHER, deal({ id: "d-open", deal_status: "scheduled", payment_status: "paid" })], "d-open", "sponsors.order.endConfirm.bodyKept", "sponsors.order.endConfirm.paidKept"],
+      ["an open deal, nothing live", [deal({ id: "d-open", deal_status: "awaiting_payment" })], "d-open", "sponsors.order.endConfirm.bodyHidden", null],
     ];
     const seen = new Set<string>();
     let checked = 0;
-    for (const [label, rows, target, key] of CASES) {
+    for (const [label, rows, target, key, paid] of CASES) {
       confirmMock.mockClear();
       confirmMock.mockImplementationOnce(async () => false);
       answerWith("GET", "/sponsor-deals", { body: { data: rows } });
@@ -776,7 +782,8 @@ describe("End now is offered on every deal that has not ended, asks first, and s
       await flush();
       expect(confirmMock, label).toHaveBeenCalledTimes(1);
       const opts = confirmMock.mock.calls[0]![0] as { title: string; body: string; confirmLabel: string; tone?: string };
-      expect(opts.body, label).toBe(msg(key, { name: LONG_NAME }));
+      const want = [msg(key, { name: LONG_NAME }), ...(paid ? [msg(paid, { amount, name: LONG_NAME })] : [])].join(" ");
+      expect(opts.body, label).toBe(want);
       expect(opts.title).toBe(msg("sponsors.order.endConfirm.title"));
       expect(opts.confirmLabel).toBe(msg("sponsors.order.endConfirm.label"));
       expect(opts.tone).toBe("danger");
@@ -849,13 +856,17 @@ describe("an ended deal that was never paid says so (review m3)", () => {
   });
 });
 
-describe("the refund confirm says whether money moves through Stripe (review m1)", () => {
-  it("an online deal paid at Stripe: the card body; marked paid by hand, or offline: the recorded-only body (all three)", async () => {
+describe("the refund confirm says whether money moves through Stripe - on the SAME fact the server refunds on (review m1, batch G New-3)", () => {
+  // server/usecases/sponsor-deals.ts refundDeal: a recorded payment intent is refunded through Stripe; none is recorded only.
+  // The list carries that fact as `has_payment_intent` (never the intent id). `marked_paid_by` is NOT it: it is nulled when the
+  // marking user is deleted, and the second case below is exactly that row.
+  it("intent recorded: the card body; no intent - marked by hand (marker since deleted, or still there), or offline: the recorded body (all four)", async () => {
     const amount = new Intl.NumberFormat(undefined, { style: "currency", currency: "GBP" }).format(250);
     const CASES: [string, Record<string, unknown>, MessageKey][] = [
-      ["online, paid at Stripe", { payment_method: "online", marked_paid_by: null }, "sponsors.order.refundConfirm.body"],
-      ["online, marked paid by hand", { payment_method: "online", marked_paid_by: "u-1" }, "sponsors.order.refundConfirm.bodyRecorded"],
-      ["offline", { payment_method: "offline", marked_paid_by: "u-1", sponsor_email: null }, "sponsors.order.refundConfirm.bodyRecorded"],
+      ["online, paid at Stripe", { payment_method: "online", has_payment_intent: true, marked_paid_by: null }, "sponsors.order.refundConfirm.body"],
+      ["online, marked paid by a user since deleted", { payment_method: "online", has_payment_intent: false, marked_paid_by: null }, "sponsors.order.refundConfirm.bodyRecorded"],
+      ["online, marked paid by hand", { payment_method: "online", has_payment_intent: false, marked_paid_by: "u-1" }, "sponsors.order.refundConfirm.bodyRecorded"],
+      ["offline", { payment_method: "offline", has_payment_intent: false, marked_paid_by: "u-1", sponsor_email: null }, "sponsors.order.refundConfirm.bodyRecorded"],
     ];
     let checked = 0;
     for (const [label, over, key] of CASES) {
@@ -865,10 +876,184 @@ describe("the refund confirm says whether money moves through Stripe (review m1)
       const m = await mount();
       m.click("order-refund-d-paid");
       await flush();
-      expect((confirmMock.mock.calls[0]![0] as { body: string }).body, label).toBe(msg(key, { amount, name: LONG_NAME }));
+      const body = (confirmMock.mock.calls[0]![0] as { body: string }).body;
+      expect(body, label).toBe(
+        [
+          msg(key, { amount, name: LONG_NAME }),
+          msg("sponsors.order.refundConfirm.placementLive", { name: LONG_NAME }),
+          msg("sponsors.order.refundConfirm.irreversible"),
+        ].join(" "),
+      );
       checked++;
     }
-    expect(checked).toBe(3);
+    expect(checked).toBe(4);
+  });
+});
+
+describe("the refund confirm says what the public pages do, by the deal's state (review m1 remainder, batch G)", () => {
+  // A refund ends the deal (spec §5.2), so the pages do what ending it does - spec §8a / deal-apply step 4: a live deal hands
+  // over to its queue or comes off; a deal that never went live leaves the sponsor as it was - shown under its live deal, else
+  // hidden; a deal that has already ended changes nothing. Typed from the spec, one sentence per state.
+  const amount = new Intl.NumberFormat(undefined, { style: "currency", currency: "GBP" }).format(250);
+  const LIVE_OTHER = deal({ id: "d-live", package_id: "p2", deal_status: "live", payment_status: "paid", has_payment_intent: true });
+  const CASES: [string, Record<string, unknown>[], MessageKey][] = [
+    ["live", [deal({ id: "d-r", deal_status: "live", payment_status: "paid", has_payment_intent: true })], "sponsors.order.refundConfirm.placementLive"],
+    ["scheduled behind the sponsor's live deal", [LIVE_OTHER, deal({ id: "d-r", deal_status: "scheduled", payment_status: "paid", has_payment_intent: true })], "sponsors.order.refundConfirm.placementKept"],
+    ["awaiting approval, nothing live", [deal({ id: "d-r", deal_status: "awaiting_approval", payment_status: "paid", has_payment_intent: true })], "sponsors.order.refundConfirm.placementHidden"],
+    ["ended (expired), paid", [deal({ id: "d-r", deal_status: "ended", ended_reason: "expired", payment_status: "paid", has_payment_intent: true })], "sponsors.order.refundConfirm.placementEnded"],
+  ];
+
+  it("live -> hands over or comes off; behind a live deal -> kept; nothing live -> stays off; ended -> no change (all four, four different bodies)", async () => {
+    const seen = new Set<string>();
+    let checked = 0;
+    for (const [label, rows, placement] of CASES) {
+      confirmMock.mockClear();
+      confirmMock.mockImplementationOnce(async () => false);
+      answerWith("GET", "/sponsor-deals", { body: { data: rows } });
+      const m = await mount();
+      m.click("order-refund-d-r");
+      await flush();
+      const body = (confirmMock.mock.calls[0]![0] as { body: string }).body;
+      expect(body, label).toBe(
+        [
+          msg("sponsors.order.refundConfirm.body", { amount, name: LONG_NAME }),
+          msg(placement, { name: LONG_NAME }),
+          msg("sponsors.order.refundConfirm.irreversible"),
+        ].join(" "),
+      );
+      seen.add(body);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(seen.size, "four different sentences").toBe(4);
+  });
+
+  it("a recorded refund says the same about the pages (the placement does not depend on how the money moves)", async () => {
+    confirmMock.mockImplementationOnce(async () => false);
+    answerWith("GET", "/sponsor-deals", {
+      body: { data: [LIVE_OTHER, deal({ id: "d-r", deal_status: "scheduled", payment_method: "offline", payment_status: "paid", marked_paid_by: "u-1" })] },
+    });
+    const m = await mount();
+    m.click("order-refund-d-r");
+    await flush();
+    expect((confirmMock.mock.calls[0]![0] as { body: string }).body).toBe(
+      [
+        msg("sponsors.order.refundConfirm.bodyRecorded", { amount, name: LONG_NAME }),
+        msg("sponsors.order.refundConfirm.placementKept", { name: LONG_NAME }),
+        msg("sponsors.order.refundConfirm.irreversible"),
+      ].join(" "),
+    );
+  });
+
+  it("the card body's money sentence no longer promises the placement comes off, in any locale (counted)", () => {
+    const LOCALES = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as Record<string, Record<string, string>>;
+    const PAGES: Record<string, RegExp> = { en: /public pages/i, es: /páginas públicas/i, fr: /pages publiques/i, nl: /openbare pagina/i };
+    let checked = 0;
+    for (const [loc, dict] of Object.entries(LOCALES)) {
+      for (const key of ["sponsors.order.refundConfirm.body", "sponsors.order.refundConfirm.bodyRecorded"]) {
+        expect(dict[key], `${loc} ${key}`).toBeTruthy();
+        expect(dict[key], `${loc} ${key}`).not.toMatch(PAGES[loc]!);
+        checked++;
+      }
+    }
+    expect(checked).toBe(8);
+  });
+});
+
+describe("End now on a deal that is paid but not live says the money stays and a refund is separate (batch G New-2)", () => {
+  // Ending a deal never moves money (server/usecases/sponsor-deals.ts endDealNow); Refund stays offered on a paid deal ended
+  // by End now (lib/sponsor-deals.ts allowedActions). A disputed payment is not the club's to refund, so it is not told to.
+  const amount = new Intl.NumberFormat(undefined, { style: "currency", currency: "GBP" }).format(250);
+  const LIVE_OTHER = deal({ id: "d-live", package_id: "p2", deal_status: "live", payment_status: "paid" });
+  const CASES: [string, Record<string, unknown>[], boolean][] = [
+    ["scheduled, paid, behind a live deal", [LIVE_OTHER, deal({ id: "d-e", deal_status: "scheduled", payment_status: "paid" })], true],
+    ["awaiting approval, paid", [deal({ id: "d-e", deal_status: "awaiting_approval", payment_status: "paid" })], true],
+    ["live, paid (out of scope: the brief's 'paid but not live')", [deal({ id: "d-e", deal_status: "live", payment_status: "paid" })], false],
+    ["awaiting payment, unpaid", [deal({ id: "d-e", deal_status: "awaiting_payment", payment_status: "pending" })], false],
+    ["scheduled, paid, disputed", [LIVE_OTHER, deal({ id: "d-e", deal_status: "scheduled", payment_status: "paid", disputed_at: "2026-11-02T10:00:00.000Z" })], false],
+  ];
+
+  it("paid and not live -> the paid-kept sentence names the amount; live, unpaid or disputed -> none (all five)", async () => {
+    const paidKept = msg("sponsors.order.endConfirm.paidKept", { amount, name: LONG_NAME });
+    let checked = 0;
+    for (const [label, rows, says] of CASES) {
+      confirmMock.mockClear();
+      confirmMock.mockImplementationOnce(async () => false);
+      answerWith("GET", "/sponsor-deals", { body: { data: rows } });
+      const m = await mount();
+      m.click("order-end-d-e");
+      await flush();
+      const body = (confirmMock.mock.calls[0]![0] as { body: string }).body;
+      if (says) expect(body.endsWith(` ${paidKept}`), label).toBe(true);
+      else expect(body, label).not.toContain(paidKept);
+      checked++;
+    }
+    expect(checked).toBe(5);
+    expect(CASES.filter((c) => c[2]).length, "both arms exercised").toBe(2);
+  });
+
+  it("the sentence exists in all four locales, names the amount and the Refund button by its own label (counted)", () => {
+    const LOCALES = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as Record<string, Record<string, string>>;
+    let checked = 0;
+    for (const [loc, dict] of Object.entries(LOCALES)) {
+      const text = dict["sponsors.order.endConfirm.paidKept"];
+      expect(text, loc).toBeTruthy();
+      expect(text, loc).toContain("{amount}");
+      expect(text, loc).toContain(dict["sponsors.order.refund"]!);
+      if (loc !== "en") expect(text, loc).not.toBe(LOCALES.en!["sponsors.order.endConfirm.paidKept"]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+});
+
+describe("the Invoice sent banner shows a pay link only while its deal can still be paid (batch G New-1)", () => {
+  const url = "https://checkout.stripe.com/c/pay/cs_test_banner";
+  const OPEN = deal({ id: "d-new", sponsor_id: "sp-a" });
+  const OTHER = deal({ id: "d-other", sponsor_id: "sp-c", sponsor_name: "Quay Chandlers", package_id: "p2" });
+
+  it("End now on ANOTHER deal leaves it; End now on the sent deal hides it (the pair, keyed on the deal id)", async () => {
+    answerWith("GET", "/sponsor-deals", { body: { data: [OTHER] } });
+    answerWith("POST", "/sponsors/sp-a/deals", { status: 201, body: { ok: true, data: { deal: OPEN, checkout_url: url } } });
+    const m = await mount();
+    m.click("invoice-open-p1");
+    m.typeEmail("pay@harbourside.test");
+    answerWith("GET", "/sponsor-deals", { body: { data: [OPEN, OTHER] } });
+    m.click("invoice-send");
+    await flush();
+    expect(propsOf(m.find("invoice-link")).children, "shown after the send").toBe(url);
+
+    answerWith("GET", "/sponsor-deals", { body: { data: [OPEN, { ...OTHER, deal_status: "ended", ended_reason: "ended_now" }] } });
+    m.click("order-end-d-other");
+    await flush();
+    expect(m.has("invoice-link"), "another deal ending leaves the link").toBe(true);
+
+    answerWith("GET", "/sponsor-deals", { body: { data: [{ ...OPEN, deal_status: "ended", ended_reason: "ended_now" }] } });
+    m.click("order-end-d-new");
+    await flush();
+    expect(callsTo("POST", "/end").map((c) => c.url)).toEqual([`${API}/sponsor-deals/d-other/end`, `${API}/sponsor-deals/d-new/end`]);
+    expect(m.has("invoice-link"), "the sent deal ended: its link is dead").toBe(false);
+    expect(m.text()).not.toContain(msg("sponsors.order.sent"));
+  });
+
+  it("a re-read that shows the resent deal paid, or refunded, hides it (both)", async () => {
+    let checked = 0;
+    for (const settled of [{ payment_status: "paid", deal_status: "live" }, { payment_status: "refunded", deal_status: "ended", ended_reason: "refunded" }]) {
+      const X = deal({ id: "d-x" });
+      answerWith("GET", "/sponsor-deals", { body: { data: [X, OTHER] } });
+      answerWith("POST", "/sponsor-deals/d-x/send-invoice", { body: { ok: true, data: { deal: X, checkout_url: url } } });
+      const m = await mount();
+      m.click("order-resend-d-x");
+      await flush();
+      expect(propsOf(m.find("invoice-link")).children, "shown after the resend").toBe(url);
+      // Any later re-read (here End now on the other deal) brings the settled row.
+      answerWith("GET", "/sponsor-deals", { body: { data: [{ ...X, ...settled }, OTHER] } });
+      m.click("order-end-d-other");
+      await flush();
+      expect(m.has("invoice-link"), JSON.stringify(settled)).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });
 

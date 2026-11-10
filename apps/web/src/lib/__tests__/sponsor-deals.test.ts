@@ -103,6 +103,7 @@ function deal(over: Partial<SponsorDeal> = {}): SponsorDeal {
     parked_at: null,
     disputed_at: null,
     dispute_id: null,
+    has_payment_intent: false,
     invoice_number: null,
     ...over,
   };

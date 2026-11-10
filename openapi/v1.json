@@ -70727,6 +70727,9 @@
                                       }
                                     ]
                                   },
+                                  "has_payment_intent": {
+                                    "type": "boolean"
+                                  },
                                   "invoice_number": {
                                     "anyOf": [
                                       {
@@ -70770,6 +70773,7 @@
                                   "parked_at",
                                   "disputed_at",
                                   "dispute_id",
+                                  "has_payment_intent",
                                   "invoice_number"
                                 ],
                                 "additionalProperties": false
@@ -70867,6 +70871,7 @@
                         "parked_at": "example",
                         "disputed_at": "example",
                         "dispute_id": "example",
+                        "has_payment_intent": true,
                         "invoice_number": -9007199254740991
                       },
                       "locked_by_deal": true,
@@ -71472,6 +71477,9 @@
                                     }
                                   ]
                                 },
+                                "has_payment_intent": {
+                                  "type": "boolean"
+                                },
                                 "invoice_number": {
                                   "anyOf": [
                                     {
@@ -71515,6 +71523,7 @@
                                 "parked_at",
                                 "disputed_at",
                                 "dispute_id",
+                                "has_payment_intent",
                                 "invoice_number"
                               ],
                               "additionalProperties": false
@@ -71610,6 +71619,7 @@
                       "parked_at": "example",
                       "disputed_at": "example",
                       "dispute_id": "example",
+                      "has_payment_intent": true,
                       "invoice_number": -9007199254740991
                     },
                     "locked_by_deal": true,
@@ -72264,6 +72274,9 @@
                                     }
                                   ]
                                 },
+                                "has_payment_intent": {
+                                  "type": "boolean"
+                                },
                                 "invoice_number": {
                                   "anyOf": [
                                     {
@@ -72307,6 +72320,7 @@
                                 "parked_at",
                                 "disputed_at",
                                 "dispute_id",
+                                "has_payment_intent",
                                 "invoice_number"
                               ],
                               "additionalProperties": false
@@ -72402,6 +72416,7 @@
                       "parked_at": "example",
                       "disputed_at": "example",
                       "dispute_id": "example",
+                      "has_payment_intent": true,
                       "invoice_number": -9007199254740991
                     },
                     "locked_by_deal": true,
@@ -75393,6 +75408,9 @@
                                 }
                               ]
                             },
+                            "has_payment_intent": {
+                              "type": "boolean"
+                            },
                             "invoice_number": {
                               "anyOf": [
                                 {
@@ -75436,6 +75454,7 @@
                             "parked_at",
                             "disputed_at",
                             "dispute_id",
+                            "has_payment_intent",
                             "invoice_number"
                           ],
                           "additionalProperties": false
@@ -75496,6 +75515,7 @@
                       "parked_at": "example",
                       "disputed_at": "example",
                       "dispute_id": "example",
+                      "has_payment_intent": true,
                       "invoice_number": -9007199254740991
                     },
                     "checkout_url": "example"
@@ -76113,6 +76133,9 @@
                               }
                             ]
                           },
+                          "has_payment_intent": {
+                            "type": "boolean"
+                          },
                           "invoice_number": {
                             "anyOf": [
                               {
@@ -76156,6 +76179,7 @@
                           "parked_at",
                           "disputed_at",
                           "dispute_id",
+                          "has_payment_intent",
                           "invoice_number"
                         ],
                         "additionalProperties": false
@@ -76200,6 +76224,7 @@
                       "parked_at": "example",
                       "disputed_at": "example",
                       "dispute_id": "example",
+                      "has_payment_intent": true,
                       "invoice_number": -9007199254740991
                     }
                   ],
@@ -76638,6 +76663,9 @@
                             }
                           ]
                         },
+                        "has_payment_intent": {
+                          "type": "boolean"
+                        },
                         "invoice_number": {
                           "anyOf": [
                             {
@@ -76681,6 +76709,7 @@
                         "parked_at",
                         "disputed_at",
                         "dispute_id",
+                        "has_payment_intent",
                         "invoice_number"
                       ],
                       "additionalProperties": false
@@ -76723,6 +76752,7 @@
                     "parked_at": "example",
                     "disputed_at": "example",
                     "dispute_id": "example",
+                    "has_payment_intent": true,
                     "invoice_number": -9007199254740991
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -77160,6 +77190,9 @@
                             }
                           ]
                         },
+                        "has_payment_intent": {
+                          "type": "boolean"
+                        },
                         "invoice_number": {
                           "anyOf": [
                             {
@@ -77203,6 +77236,7 @@
                         "parked_at",
                         "disputed_at",
                         "dispute_id",
+                        "has_payment_intent",
                         "invoice_number"
                       ],
                       "additionalProperties": false
@@ -77245,6 +77279,7 @@
                     "parked_at": "example",
                     "disputed_at": "example",
                     "dispute_id": "example",
+                    "has_payment_intent": true,
                     "invoice_number": -9007199254740991
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -77770,6 +77805,9 @@
                             }
                           ]
                         },
+                        "has_payment_intent": {
+                          "type": "boolean"
+                        },
                         "invoice_number": {
                           "anyOf": [
                             {
@@ -77813,6 +77851,7 @@
                         "parked_at",
                         "disputed_at",
                         "dispute_id",
+                        "has_payment_intent",
                         "invoice_number"
                       ],
                       "additionalProperties": false
@@ -77855,6 +77894,7 @@
                     "parked_at": "example",
                     "disputed_at": "example",
                     "dispute_id": "example",
+                    "has_payment_intent": true,
                     "invoice_number": -9007199254740991
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -78336,6 +78376,9 @@
                             }
                           ]
                         },
+                        "has_payment_intent": {
+                          "type": "boolean"
+                        },
                         "invoice_number": {
                           "anyOf": [
                             {
@@ -78379,6 +78422,7 @@
                         "parked_at",
                         "disputed_at",
                         "dispute_id",
+                        "has_payment_intent",
                         "invoice_number"
                       ],
                       "additionalProperties": false
@@ -78421,6 +78465,7 @@
                     "parked_at": "example",
                     "disputed_at": "example",
                     "dispute_id": "example",
+                    "has_payment_intent": true,
                     "invoice_number": -9007199254740991
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -78946,6 +78991,9 @@
                             }
                           ]
                         },
+                        "has_payment_intent": {
+                          "type": "boolean"
+                        },
                         "invoice_number": {
                           "anyOf": [
                             {
@@ -78989,6 +79037,7 @@
                         "parked_at",
                         "disputed_at",
                         "dispute_id",
+                        "has_payment_intent",
                         "invoice_number"
                       ],
                       "additionalProperties": false
@@ -79031,6 +79080,7 @@
                     "parked_at": "example",
                     "disputed_at": "example",
                     "dispute_id": "example",
+                    "has_payment_intent": true,
                     "invoice_number": -9007199254740991
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -79559,6 +79609,9 @@
                                 }
                               ]
                             },
+                            "has_payment_intent": {
+                              "type": "boolean"
+                            },
                             "invoice_number": {
                               "anyOf": [
                                 {
@@ -79602,6 +79655,7 @@
                             "parked_at",
                             "disputed_at",
                             "dispute_id",
+                            "has_payment_intent",
                             "invoice_number"
                           ],
                           "additionalProperties": false
@@ -79655,6 +79709,7 @@
                       "parked_at": "example",
                       "disputed_at": "example",
                       "dispute_id": "example",
+                      "has_payment_intent": true,
                       "invoice_number": -9007199254740991
                     },
                     "checkout_url": "example"

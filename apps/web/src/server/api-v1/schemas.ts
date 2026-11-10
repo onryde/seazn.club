@@ -5257,6 +5257,9 @@ export const SponsorDeal = z.object({
   parked_at: z.string().nullable(),
   disputed_at: z.string().nullable(),
   dispute_id: z.string().nullable(),
+  /** The deal records a Stripe payment intent. On a paid deal: a card payment at Stripe paid it, so a refund goes back to
+   *  the card through Stripe; false for an offline deal and one marked as paid by hand. The intent id itself is never sent. */
+  has_payment_intent: z.boolean(),
   /** Always null until invoices are numbered. */
   invoice_number: z.number().int().nullable(),
 });

@@ -11,7 +11,9 @@
 // tab keeps today's layout on it - the typed sponsor name became a picker of
 // the org's sponsors - until the deal screens replace it (PR 2). Batch F fix
 // round 1: each order row can Resend its invoice and End now, so the console
-// can exit every deal it creates.
+// can exit every deal it creates. Batch G: the Refund and End now confirms say
+// what happens to the money and to the public pages for the deal in front of
+// them, and the pay-link banner shows only while its deal can still be paid.
 import { useCallback, useEffect, useState } from "react";
 import Link from "@/components/ui/console-link";
 import { CircleStop, Copy, Send, Undo2, XCircle } from "lucide-react";
@@ -126,13 +128,36 @@ export function endConfirmBodyKey(deals: readonly SponsorDeal[], deal: SponsorDe
   return "sponsors.order.endConfirm.bodyHidden";
 }
 
-/** The refund confirm's words (review m1): money goes back through Stripe only for an online deal the sponsor paid at
- *  Checkout. One marked as paid by hand - or paid offline - is recorded as refunded, and the club pays the sponsor back. The
- *  server decides on the payment intent, which the list does not carry; `marked_paid_by` is its visible twin. */
+/** End now never moves money (batch G New-2): a deal the sponsor has paid, that is not live, keeps its payment when it ends,
+ *  and the confirm says so - and that Refund, still offered on it afterwards (lib/sponsor-deals.ts allowedActions), is the
+ *  separate step. A disputed payment is the dispute's, not the club's to refund. */
+export function endKeepsPayment(deal: SponsorDeal): boolean {
+  return deal.payment_status === "paid" && deal.deal_status !== "live" && !deal.disputed_at;
+}
+
+/** The refund confirm's money words (review m1, batch G New-3): back to the card through Stripe only when a card payment at
+ *  Stripe paid the deal - `has_payment_intent`, the SAME fact refundDeal decides on (server/usecases/sponsor-deals.ts). Without
+ *  it (marked as paid by hand, or paid offline) the refund is recorded and the club pays the sponsor back. `marked_paid_by` is
+ *  not that fact: it is nulled when the marking user is deleted. */
 export function refundConfirmBodyKey(deal: SponsorDeal): MessageKey {
-  return deal.payment_method !== "online" || deal.marked_paid_by !== null
-    ? "sponsors.order.refundConfirm.bodyRecorded"
-    : "sponsors.order.refundConfirm.body";
+  return deal.has_payment_intent ? "sponsors.order.refundConfirm.body" : "sponsors.order.refundConfirm.bodyRecorded";
+}
+
+/** The refund confirm's placement words (review m1 remainder, batch G): a refund ends the deal, so the public pages do what
+ *  ending it does (endConfirmBodyKey) - except for a deal that has already ended, where nothing on them changes. */
+export function refundPlacementKey(deals: readonly SponsorDeal[], deal: SponsorDeal): MessageKey {
+  if (deal.deal_status === "ended") return "sponsors.order.refundConfirm.placementEnded";
+  if (deal.deal_status === "live") return "sponsors.order.refundConfirm.placementLive";
+  if (deal.sponsor_id !== null && hasLiveDeal(deals, deal.sponsor_id)) return "sponsors.order.refundConfirm.placementKept";
+  return "sponsors.order.refundConfirm.placementHidden";
+}
+
+/** Can the pay link the console last showed still be paid (batch G New-1)? Only while its deal has not ended and still owes
+ *  money: End now kills the link, and a paid or refunded deal has nothing left to pay. The deal is the list's copy when the
+ *  list has it - every action re-reads it - else the one the send answered (the re-read has not landed yet). */
+export function payLinkStillOpen(deals: readonly SponsorDeal[], sent: SponsorDeal): boolean {
+  const current = deals.find((d) => d.id === sent.id) ?? sent;
+  return current.deal_status !== "ended" && isUnpaid(current.payment_status);
 }
 
 /** The payment chip (review m3): an ended deal that was never paid says so, rather than reading as a live "Pending". */
@@ -176,7 +201,8 @@ export function SponsorPackages({
   });
   const [invoiceFor, setInvoiceFor] = useState<string | null>(null);
   const [invoice, setInvoice] = useState({ sponsorId: "", email: "" });
-  const [sentUrl, setSentUrl] = useState<string | null>(null);
+  // The pay link a send or resend answered, with the deal it pays: the banner shows it only while that deal can still be paid.
+  const [sent, setSent] = useState<{ deal: SponsorDeal; url: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -297,7 +323,12 @@ export function SponsorPackages({
       const amount = money(deal.amount_cents, deal.currency);
       const ok = await confirm({
         title: msg("sponsors.order.refundConfirm.title"),
-        body: msg(refundConfirmBodyKey(deal), { amount, name: deal.sponsor_name }),
+        // What happens to the money, then to the public pages (by the deal's state), then that it is final.
+        body: [
+          msg(refundConfirmBodyKey(deal), { amount, name: deal.sponsor_name }),
+          msg(refundPlacementKey(deals, deal), { name: deal.sponsor_name }),
+          msg("sponsors.order.refundConfirm.irreversible"),
+        ].join(" "),
         confirmLabel: msg("sponsors.order.refundConfirm.label", { amount }),
         tone: "danger",
       });
@@ -321,7 +352,7 @@ export function SponsorPackages({
           deal: SponsorDeal;
           checkout_url: string | null;
         };
-        setSentUrl(result.checkout_url);
+        setSent(result.checkout_url ? { deal: result.deal, url: result.checkout_url } : null);
         await load();
       },
       { write: "resend_invoice", dealWrite: true },
@@ -334,7 +365,12 @@ export function SponsorPackages({
     void (async () => {
       const ok = await confirm({
         title: msg("sponsors.order.endConfirm.title"),
-        body: msg(endConfirmBodyKey(deals, deal), { name: deal.sponsor_name }),
+        body: [
+          msg(endConfirmBodyKey(deals, deal), { name: deal.sponsor_name }),
+          ...(endKeepsPayment(deal)
+            ? [msg("sponsors.order.endConfirm.paidKept", { amount: money(deal.amount_cents, deal.currency), name: deal.sponsor_name })]
+            : []),
+        ].join(" "),
         confirmLabel: msg("sponsors.order.endConfirm.label"),
         tone: "danger",
       });
@@ -354,7 +390,7 @@ export function SponsorPackages({
   function toggleInvoice(pkg: PackageItem) {
     setInvoiceFor(invoiceFor === pkg.id ? null : pkg.id);
     setInvoice({ sponsorId: pickable[0]?.id ?? "", email: "" });
-    setSentUrl(null);
+    setSent(null);
   }
 
   function sendInvoice(pkg: PackageItem) {
@@ -388,7 +424,7 @@ export function SponsorPackages({
             }),
           })) as { deal: SponsorDeal; checkout_url: string | null };
           // F11: the pay link rides beside the deal in the create's answer; the deal itself carries no url.
-          setSentUrl(result.checkout_url);
+          setSent(result.checkout_url ? { deal: result.deal, url: result.checkout_url } : null);
           setInvoice({ sponsorId: "", email: "" });
           setInvoiceFor(null);
           await load();
@@ -399,6 +435,7 @@ export function SponsorPackages({
   }
 
   const priceInvalid = draft.price.trim() !== "" && !(Number.parseFloat(draft.price) > 0);
+  const sentUrl = sent && payLinkStillOpen(deals, sent.deal) ? sent.url : null;
 
   if (!hasMonetize) {
     return (

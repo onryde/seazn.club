@@ -685,6 +685,60 @@ describe.skipIf(!HAS_DB)("Mark as paid, End now, refund and delete apply the ses
     expect(stripe.refund, "nothing was charged at Stripe, so nothing is refunded there").not.toHaveBeenCalled();
   });
 
+  it("batch G New-3: the client deal's has_payment_intent is exactly the fact refundDeal decides on - true iff the refund goes through Stripe (card, hand-marked after a decline, hand-marked, its marker since deleted, offline: all five); the intent id itself never leaves", async () => {
+    // Expected values: refundDeal's own rule (a recorded payment intent is refunded at Stripe, none is recorded only), checked
+    // by WATCHING the refund, not by reading the column the field is computed from.
+    const charged = await onlineDeal();
+    await sql`update sponsor_orders set status = 'paid', paid_at = now(), payment_intent_id = ${`pi_${uniq()}`} where id = ${charged.id}`;
+    const declinedThenMarked = await onlineDeal();
+    await handleSponsorPaymentFailed({
+      id: `pi_declined_${uniq()}`,
+      object: "payment_intent",
+      amount: 25_000,
+      currency: "gbp",
+      status: "requires_payment_method",
+      metadata: { kind: "sponsor", order_id: declinedThenMarked.id, org_id: declinedThenMarked.o.orgId },
+    } as unknown as Stripe.PaymentIntent);
+    stripe.retrieve.mockImplementation(async (id: string) => ({ id, status: "expired" }));
+    await markDealPaid(declinedThenMarked.o.auth, declinedThenMarked.id);
+    const marked = await onlineDeal();
+    await markDealPaid(marked.o.auth, marked.id);
+    // The row the console's old twin got wrong: the user who marked it paid is deleted, and marked_paid_by goes null (ON DELETE
+    // SET NULL) on a deal that still has no intent.
+    const orphaned = await onlineDeal();
+    const [{ id: marker }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified) values (${`marker-${uniq()}@test.local`}, 'Marker', true) returning id`;
+    await markDealPaid({ ...orphaned.o.auth, userId: marker }, orphaned.id);
+    expect((await getDeal(orphaned.o.auth, orphaned.id)).marked_paid_by, "premise: the marker is recorded").toBe(marker);
+    await sql`delete from users where id = ${marker}`;
+    expect((await getDeal(orphaned.o.auth, orphaned.id)).marked_paid_by, "premise: the marker's deletion nulls it").toBeNull();
+    const off = await onlineDeal();
+    const offlineId = (await createDeal(off.o.auth, off.sponsorId, { ...online(off.p), payment_method: "offline", sponsor_email: null }, ORIGIN)).deal.id;
+    await markDealPaid(off.o.auth, offlineId);
+
+    const CASES: [string, AuthCtx, string, boolean][] = [
+      ["paid by card at Stripe", charged.o.auth, charged.id, true],
+      ["declined, then marked as paid by hand", declinedThenMarked.o.auth, declinedThenMarked.id, false],
+      ["marked as paid by hand", marked.o.auth, marked.id, false],
+      ["marked as paid by a user since deleted", orphaned.o.auth, orphaned.id, false],
+      ["offline, marked as paid", off.o.auth, offlineId, false],
+    ];
+    let checked = 0;
+    for (const [label, auth, id, viaStripe] of CASES) {
+      const before = await getDeal(auth, id);
+      expect(before.payment_status, `${label}: premise, paid`).toBe("paid");
+      expect(Object.keys(before), `${label}: no intent id`).not.toContain("payment_intent_id");
+      stripe.refund.mockClear();
+      await refundDeal(auth, id);
+      const refundedAtStripe = stripe.refund.mock.calls.length === 1;
+      expect(refundedAtStripe, `${label}: premise, the refund path`).toBe(viaStripe);
+      expect(before.has_payment_intent, label).toBe(refundedAtStripe);
+      checked++;
+    }
+    expect(checked).toBe(5);
+    expect(CASES.filter((c) => c[3]).length, "both arms").toBe(1);
+  });
+
   it("m2: a Stripe refund failure is the documented 502 stripe_unavailable in our words (never a 500 with Stripe's text), nothing recorded; the twin refunds; a lost refund race is 409 deal_not_refundable", async () => {
     const d = await onlineDeal();
     await sql`update sponsor_orders set status = 'paid', paid_at = now(), payment_intent_id = ${`pi_${uniq()}`} where id = ${d.id}`;

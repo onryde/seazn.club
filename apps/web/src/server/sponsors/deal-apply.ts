@@ -57,7 +57,7 @@ const DEAL_ROW_COLS = [
 ] as const;
 
 type Stamp = Date | string | null;
-type DealRow = Omit<ServerDeal, "payment_status" | "invoice_number" | TimeKey> & {
+type DealRow = Omit<ServerDeal, "payment_status" | "invoice_number" | "has_payment_intent" | TimeKey> & {
   status: ServerDeal["payment_status"];
 } & Record<TimeKey, Stamp>;
 type TimeKey =
@@ -97,6 +97,8 @@ function toServerDeal(r: DealRow): ServerDeal {
     parked_at: iso(r.parked_at),
     disputed_at: iso(r.disputed_at),
     dispute_id: r.dispute_id,
+    // The client-safe twin of the intent (New-3): what a refund decides on, without the id.
+    has_payment_intent: r.payment_intent_id !== null,
     // Numbered invoices are PR 3's (D11): no deal has a number before then.
     invoice_number: null,
     payment_intent_id: r.payment_intent_id,
