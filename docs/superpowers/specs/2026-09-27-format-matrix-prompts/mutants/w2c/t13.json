@@ -515,7 +515,7 @@
  },
  {
   "id": "t13-fr1-replace-gates-removed",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/stage-graph.ts",
   "find": "never in one.\n  const stageCap = await assertStageBatchGates(auth, divComp, inputs);\n",
   "replace": "never in one.\n  const stageCap = await getLimit(auth.orgId, \"stages.per_division.max\", divComp.competition_id);\n",
   "killers": [
@@ -537,7 +537,7 @@
  },
  {
   "id": "t13-fr1-dup-seq",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/stage-graph.ts",
   "find": "if (seen.has(s.seq)) throw new HttpError(409",
   "replace": "if (false) throw new HttpError(409",
   "killers": [
@@ -552,7 +552,7 @@
  },
  {
   "id": "t13-fr1-cap-batch",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/stage-graph.ts",
   "find": "  assertWithinLimit(stageCap, \"stages.per_division.max\", inputs.length);\n",
   "replace": "",
   "killers": [
@@ -567,7 +567,7 @@
  },
  {
   "id": "t13-fr1-replace-404-first",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/stage-graph.ts",
   "find": "    if (!head) throw new HttpError(404, \"division not found\");\n",
   "replace": "",
   "killers": [
@@ -582,7 +582,7 @@
  },
  {
   "id": "t13-fr1-replace-org-scoped",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/stage-graph.ts",
   "find": "  const divComp = await withTenant(auth.orgId, async (tx) => {\n    const [head]",
   "replace": "  const divComp = await sql.begin(async (tx) => {\n    const [head]",
   "killers": [
@@ -597,7 +597,7 @@
  },
  {
   "id": "t13-fr1-carry-read",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/stage-graph.ts",
   "find": "        ...(points !== undefined && points !== null ? { points } : {}),\n",
   "replace": "",
   "killers": [
@@ -745,7 +745,7 @@
  },
  {
   "id": "t13-fr2-lock-before-gates",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/stage-graph.ts",
   "find": "    await assertFormatUnlocked(tx, divisionId);\n    return head;",
   "replace": "    return head;",
   "killers": [

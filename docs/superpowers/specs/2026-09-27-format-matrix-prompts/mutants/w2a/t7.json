@@ -344,7 +344,7 @@
   },
   {
     "id": "occupying",
-    "file": "apps/web/src/server/usecases/schedule.ts",
+    "file": "apps/web/src/server/usecases/schedule/board.ts",
     "find": "\"forfeited\", \"needs_decision\"];",
     "replace": "\"forfeited\"];",
     "killers": [
@@ -359,7 +359,7 @@
   },
   {
     "id": "delete-stage-guard",
-    "file": "apps/web/src/server/usecases/stages.ts",
+    "file": "apps/web/src/server/usecases/stages/stage-graph.ts",
     "find": "'finalized', 'needs_decision') limit 1`;",
     "replace": "'finalized') limit 1`;",
     "killers": [

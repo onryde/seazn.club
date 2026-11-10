@@ -91,7 +91,7 @@
  },
  {
   "id": "r1-i5-resolver-old-skip",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/bracket-seats.ts",
   "find": "          if (!feedsNextMatch(f)) continue;",
   "replace": "          if (f.winner_to_fixture === null && f.loser_to_fixture === null) continue;",
   "killers": [
@@ -121,7 +121,7 @@
  },
  {
   "id": "r1-m1-sql-guard",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/bracket-seats.ts",
   "find": "            and (home_entrant_id = ${entrantId} or away_entrant_id = ${entrantId})\n            and not exists (select 1 from score_events e\n                            where e.fixture_id = fixtures.id and e.type <> 'core.void'\n                              and not exists (select 1 from score_events v\n                                              where v.fixture_id = e.fixture_id and v.voids_event_id = e.id))\n",
   "replace": "            and (home_entrant_id = ${entrantId} or away_entrant_id = ${entrantId})\n",
   "killers": [
@@ -181,7 +181,7 @@
  },
  {
   "id": "r1-m2-stages-loser",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/bracket-seats.ts",
   "find": "where e.id::text = fixtures.outcome ->> 'loser' and e.status in ${tx([...DEPARTED_STATUSES])})",
   "replace": "where e.id::text = fixtures.outcome ->> 'loser' and e.status = 'withdrawn')",
   "killers": [

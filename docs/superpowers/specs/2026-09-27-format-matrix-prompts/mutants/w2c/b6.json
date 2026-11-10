@@ -217,7 +217,7 @@
  },
  {
   "id": "b6-i4-advanced-gate-call-deleted",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/stage-graph.ts",
   "find": "  if (advanced) await requireFeature(auth.orgId, \"formats.advanced\", divComp?.competition_id);\n",
   "replace": "",
   "killers": [
@@ -239,7 +239,7 @@
  },
  {
   "id": "b6-i4-double-elim-gate-call-deleted",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/stage-graph.ts",
   "find": "    await requireFeature(auth.orgId, \"formats.double_elim\", divComp?.competition_id);\n",
   "replace": "",
   "killers": [
@@ -291,7 +291,7 @@
  },
  {
   "id": "b6-i4-replace-stages-stops-asking",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/stage-graph.ts",
   "find": "  // R-T13-2: every gate `createStages` asks of the batch. Pooled reads, so between the two transactions, never in one.\n  const stageCap = await assertStageBatchGates(auth, divComp, inputs);",
   "replace": "  // R-T13-2: every gate `createStages` asks of the batch. Pooled reads, so between the two transactions, never in one.\n  const stageCap: number | null = null;",
   "killers": [
