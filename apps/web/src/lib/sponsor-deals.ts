@@ -104,6 +104,20 @@ export const isOpenDeal = (d: Pick<SponsorDeal, "deal_status">): boolean => d.de
 export const isPastEnd = (endsAt: Date | string | null, now: Date): boolean =>
   endsAt !== null && new Date(endsAt).getTime() <= now.getTime();
 
+/** The day the club typed as "Ends on", read back from the `ends_at` the producer stored (YYYY-MM-DD). `createDeal` writes the START OF
+ *  THE NEXT DAY in the ORG's timezone (`(ends_on::date + 1)::timestamp at time zone <org tz>`, NULL = UTC), so the last day the deal
+ *  runs is that instant minus one millisecond, read in the same zone: never the viewer's, which moves it a day either way. An
+ *  unknown zone (a bad stored value) reads as UTC rather than throwing. */
+export function endsOnOf(endsAt: string, orgTz: string): string {
+  const last = new Date(Date.parse(endsAt) - 1);
+  const read = (timeZone: string) => new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(last);
+  try {
+    return read(orgTz);
+  } catch {
+    return read("UTC");
+  }
+}
+
 /** The deal a sponsor's queue promotes when none is live (spec §8a, deal-apply step 2): the first `scheduled` one, in the order
  *  given (the server's is `created_at, id`), whose own end has not passed. A scheduled deal already past its end is never promoted
  *  (F19): it would go live for the hour until the sweep ends it. Null when nothing waits. */

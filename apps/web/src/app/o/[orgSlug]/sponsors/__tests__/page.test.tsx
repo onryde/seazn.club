@@ -94,6 +94,7 @@ function Marker(p: {
     billingHref: string;
     hub: {
       orgSlug: string;
+      orgTimezone: string | null;
       deals: { id: string }[];
       packages: { id: string }[];
       tiersOrgWide: boolean;
@@ -122,6 +123,7 @@ function Marker(p: {
       data-competition-ends={p.competitions.map((c) => `${c.id}:${c.ends_on ?? "-"}`).join("|")}
       data-billing={p.billingHref}
       data-hub-slug={p.hub.orgSlug}
+      data-hub-org-tz={p.hub.orgTimezone ?? "-"}
       data-hub-deals={p.hub.deals.map((d) => d.id).join("|")}
       data-hub-packages={p.hub.packages.map((k) => k.id).join("|")}
       data-hub-tiers-wide={String(p.hub.tiersOrgWide)}
@@ -233,7 +235,7 @@ import uiNl from "@/dictionaries/nl/ui.json";
 
 const UI_BY_LOCALE = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as Record<string, Record<string, string>>;
 
-const ORG = { id: "org-1", name: "Riverside", slug: "riverside", role: "owner" };
+const ORG = { id: "org-1", name: "Riverside", slug: "riverside", role: "owner", timezone: "America/Los_Angeles" as string | null };
 
 async function render(
   tab?: string,
@@ -634,6 +636,18 @@ describe("the Sponsors tab loads what the sponsor and deal screens read (sponsor
     expect(attr(html, "org-sponsors", "data-hub-deals")).toBe("d1|d2|d3");
     expect(attr(html, "org-sponsors", "data-hub-packages")).toBe("p1|p2");
     expect(attr(html, "org-sponsors", "data-hub-slug")).toBe(ORG.slug);
+    // The org's own zone crosses the page: the deal page reads a deal's "Ends on" day back in it (the club typed it there), never in the viewer's.
+    expect(attr(html, "org-sponsors", "data-hub-org-tz")).toBe("America/Los_Angeles");
+  });
+
+  it("an org with no timezone (V305 allows NULL) hands over null, not a guess - the deal page reads it as UTC, the producer's own fallback", async () => {
+    h.requireOrgPage.mockResolvedValue({
+      user: { id: "u1" },
+      org: { ...ORG, role: "owner", timezone: null },
+      canEdit: true,
+      auth: { orgId: ORG.id, via: "session", userId: "u1", role: "owner", keyId: null },
+    });
+    expect(attr(await render("sponsors"), "org-sponsors", "data-hub-org-tz")).toBe("-");
   });
 
   it("the empty case: an org with no deals and no packages hands over EMPTY lists (not missing ones)", async () => {

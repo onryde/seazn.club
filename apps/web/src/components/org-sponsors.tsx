@@ -79,6 +79,9 @@ export interface SponsorItem {
  *  are the two reads its timeline needs from the server). */
 export interface SponsorsHubData {
   orgSlug: string;
+  /** The org's timezone (V305; null = UTC): the zone a deal's "Ends on" day was typed in (`createDeal` stores the start of the next day
+   *  there), which the deal page reads that day back in. NOT the viewer's. */
+  orgTimezone: string | null;
   /** Every deal of the org, newest first (legacy pre-deals rows included: they are ended deals). */
   deals: SponsorDeal[];
   /** Every package of the org, active first. */
@@ -753,6 +756,7 @@ export function OrgSponsors({
             canEdit={canEdit}
             busy={busy}
             tz={tz}
+            orgTz={hub.orgTimezone ?? "UTC"}
             competitions={competitions}
             createdBy={hub.dealCreatedByName}
             competitionFinished={hub.dealCompetitionFinished}

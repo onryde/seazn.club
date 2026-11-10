@@ -178,6 +178,7 @@ const flush = async () => {
  *  saying so (review M6: a cast hid `hub` from the type-check). */
 const HUB: SponsorsHubData = {
   orgSlug: "harbour-vale",
+  orgTimezone: null,
   deals: [],
   packages: [],
   tiersOrgWide: true,

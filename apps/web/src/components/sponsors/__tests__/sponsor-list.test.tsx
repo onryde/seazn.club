@@ -660,7 +660,7 @@ describe("Move: two rows drawn side by side in a group may sit APART in the stor
 // --- the island: the writes the actions make ---------------------------------------------------------------------------------------
 
 const HUB: SponsorsHubData = {
-  orgSlug: SLUG, deals: [], packages: [], tiersOrgWide: true, tiersCompetitionIds: [], hasMonetize: true, monetizeOrgWide: true, monetizeCompetitionIds: [], finishedCompetitionIds: [],
+  orgSlug: SLUG, orgTimezone: null, deals: [], packages: [], tiersOrgWide: true, tiersCompetitionIds: [], hasMonetize: true, monetizeOrgWide: true, monetizeCompetitionIds: [], finishedCompetitionIds: [],
   chargesEnabled: true, sponsorId: null, dealId: null, dealCreatedByName: null, dealCompetitionFinished: false, reportLinks: [], reportDefaults: null,
 };
 

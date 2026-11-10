@@ -143,7 +143,7 @@ export default async function SponsorsHubPage({
           billingHref={routes.billing(orgSlug)}
           canEdit={canEdit}
           hub={{
-            orgSlug, deals, packages, tiersOrgWide: tiers.orgWide, tiersCompetitionIds: tiers.competitionIds,
+            orgSlug, orgTimezone: active.timezone, deals, packages, tiersOrgWide: tiers.orgWide, tiersCompetitionIds: tiers.competitionIds,
             hasMonetize, monetizeOrgWide: monetize.orgWide, monetizeCompetitionIds: monetize.competitionIds,
             chargesEnabled, finishedCompetitionIds, sponsorId, dealId, dealCreatedByName, dealCompetitionFinished, reportLinks, reportDefaults,
           }}

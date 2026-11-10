@@ -67,7 +67,7 @@ const BASE: SponsorDeal = {
   id: "d0", sponsor_id: "a", package_id: "p0", deal_status: "live", payment_status: "paid", payment_method: "online",
   go_live: "on_payment", package_name: "Silver Season", tier: "silver", includes_on_stream: false, competition_id: "c-season",
   amount_cents: 30_000, currency: "gbp", sponsor_name: "Quay Fisheries", sponsor_email: "accounts@quayfisheries.co.uk",
-  ends_at: "2027-08-31T12:00:00.000Z", created_at: "2026-10-14T09:00:00.000Z", created_by: null, invoice_sent_at: null, paid_at: null,
+  ends_at: "2027-09-01T00:00:00.000Z", created_at: "2026-10-14T09:00:00.000Z", created_by: null, invoice_sent_at: null, paid_at: null,
   marked_paid_by: null, approved_at: null, approved_by: null, live_at: null, ended_at: null, ended_reason: null, parked_at: null,
   disputed_at: null, dispute_id: null, has_payment_intent: false, invoice_number: null,
 };
@@ -109,7 +109,7 @@ const OLD_ANCHOR = deal({
 const noop = () => {};
 function props(over: Partial<DealPageBodyProps> = {}): DealPageBodyProps {
   return {
-    deal: QUAY, sponsorName: "Quay Fisheries", orgId: ORG, canEdit: true, busy: false, tz: "UTC", competitions: COMPS,
+    deal: QUAY, sponsorName: "Quay Fisheries", orgId: ORG, canEdit: true, busy: false, tz: "UTC", orgTz: "UTC", competitions: COMPS,
     createdBy: "Sam Patel", competitionFinished: false, payLink: null, error: null, notice: null, onAction: noop, ...over,
   };
 }
@@ -478,8 +478,28 @@ describe("the timeline (mockup screen 5): dealTimeline's steps, drawn", () => {
   describe("when it ends: its own date, the competition's, or none", () => {
     const WITH = (over: Partial<SponsorDeal>) => deal({ ...MARLOW, ...over });
     it("its own end date wins, and says nothing of the competition", () => {
-      const d = WITH({ ends_at: "2027-03-31T12:00:00.000Z", competition_id: "c-season" });
+      const d = WITH({ ends_at: "2027-04-01T00:00:00.000Z", competition_id: "c-season" });
       expect(stepWords(html({ deal: d, competitionFinished: true }), "ends")).toEqual(["Ends", "31 Mar 2027"]);
+    });
+    it("the day shown is the last day the CLUB typed, in the ORG's zone, whatever zone the viewer is in (the producer stores the start of the next day: 6 counted)", () => {
+      // The producer's value (createDeal: `(ends_on::date + 1)::timestamp at time zone <org tz>`): "Ends 31 Aug" at a Los Angeles org is
+      // 1 Sep 00:00 PDT = 07:00Z. Typed from that rule, with the org zone and the viewer's zone DIFFERENT, so neither reading can pass for the other.
+      const LA = "America/Los_Angeles";
+      const stored = new Date("2026-09-01T00:00:00-07:00").toISOString();
+      const own = WITH({ ends_at: stored, competition_id: null });
+      let checked = 0;
+      for (const viewer of ["UTC", "Europe/London", "Pacific/Auckland", LA]) {
+        expect(stepWords(html({ deal: own, tz: viewer, orgTz: LA }), "ends"), `viewer in ${viewer}`).toEqual(["Ends", "31 Aug 2026"]);
+        checked++;
+      }
+      // The org zone decides: the same instant at a UTC org is the 1st of September 00:00, so the club typed the 31st there too -
+      // while an org AHEAD of UTC stores the 31st at its own midnight, 12:00Z, and a viewer in UTC must still read the 31st.
+      expect(stepWords(html({ deal: WITH({ ends_at: "2026-09-01T00:00:00.000Z", competition_id: null }), tz: "Pacific/Auckland", orgTz: "UTC" }), "ends")).toEqual(["Ends", "31 Aug 2026"]);
+      checked++;
+      const auckland = new Date("2026-09-01T00:00:00+12:00").toISOString();
+      expect(stepWords(html({ deal: WITH({ ends_at: auckland, competition_id: null }), tz: "UTC", orgTz: "Pacific/Auckland" }), "ends")).toEqual(["Ends", "31 Aug 2026"]);
+      checked++;
+      expect(checked).toBe(6);
     });
     it("a competition deal with no end date ends when the competition does - with the date it is due, when it has one", () => {
       const d = WITH({ ends_at: null, competition_id: "c-season" });
@@ -678,7 +698,7 @@ const sponsor = (over: Partial<SponsorItem> = {}): SponsorItem => ({
 });
 function hubOf(over: Partial<SponsorsHubData> = {}): SponsorsHubData {
   return {
-    orgSlug: SLUG, deals: [], packages: [], tiersOrgWide: true, tiersCompetitionIds: [], hasMonetize: true, monetizeOrgWide: true, monetizeCompetitionIds: [], finishedCompetitionIds: [],
+    orgSlug: SLUG, orgTimezone: null, deals: [], packages: [], tiersOrgWide: true, tiersCompetitionIds: [], hasMonetize: true, monetizeOrgWide: true, monetizeCompetitionIds: [], finishedCompetitionIds: [],
     chargesEnabled: true, sponsorId: "a", dealId: null, dealCreatedByName: null, dealCompetitionFinished: false, reportLinks: [],
     reportDefaults: { from: "2026-01-01", to: "2026-11-09", competitionId: null }, ...over,
   };
@@ -729,6 +749,16 @@ describe("D4 hub.dealId opens the deal page on top of its sponsor (the seam, thr
       expect(m.has("deal-page")).toBe(false);
       expect(m.has("sponsor-sheet")).toBe(true);
     }
+  });
+
+  it("the org's zone reaches the page: a deal the club typed 'Ends 31 Aug' at a Los Angeles org shows the 31st, and an org with no zone reads as UTC (2 counted)", () => {
+    // The producer's own value: the start of the NEXT day at the org's zone (createDeal), 1 Sep 00:00 PDT.
+    const la = deal({ ...MARLOW, sponsor_id: "a", competition_id: null, ends_at: new Date("2026-09-01T00:00:00-07:00").toISOString() });
+    const inLa = mount([SUBJECT], hubOf({ orgTimezone: "America/Los_Angeles", deals: [la], dealId: "dm" }));
+    expect(flat(textOf(inLa.all("deal-page-step").find((x) => propsOf(x)["data-step"] === "ends") as never))).toContain("31 Aug 2026");
+    const utc = deal({ ...MARLOW, sponsor_id: "a", competition_id: null, ends_at: "2026-09-01T00:00:00.000Z" });
+    const noZone = mount([SUBJECT], hubOf({ orgTimezone: null, deals: [utc], dealId: "dm" }));
+    expect(flat(textOf(noZone.all("deal-page-step").find((x) => propsOf(x)["data-step"] === "ends") as never))).toContain("31 Aug 2026");
   });
 
   it("the server's two reads reach the page: who created the deal, and whether its competition has finished", () => {

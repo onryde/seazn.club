@@ -27,7 +27,7 @@ import { CHIP_BASE } from "@/components/ui/status-chip-style";
 import { fmtPublicDate } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
 import {
-  allowedActions, DEAL_ACTIONS, dealTimeline, type DealAction, type EndReason, type GoLiveRule, type PaymentMethod, type SponsorDeal,
+  allowedActions, DEAL_ACTIONS, dealTimeline, endsOnOf, type DealAction, type EndReason, type GoLiveRule, type PaymentMethod, type SponsorDeal,
   type TimelineStep,
 } from "@/lib/sponsor-deals";
 
@@ -83,8 +83,10 @@ export interface DealPageBodyProps {
   canEdit: boolean;
   /** A write is in flight: every control that would start another is disabled. */
   busy: boolean;
-  /** The zone dates are read in (the viewer's). */
+  /** The zone instants (created, paid, live, ended) are read in (the viewer's). */
   tz: string;
+  /** The ORG's timezone (V305; NULL reads as UTC): the zone the club's "Ends on" DAY was typed in, so the one date read in it. */
+  orgTz: string;
   /** `ends_on`: a competition's end date (YYYY-MM-DD) or null, shown beside "ends with the competition". */
   competitions: { id: string; name: string; ends_on?: string | null }[];
   /** The creator's display name, or null when it could not be resolved (a removed member, a deleted user). */
@@ -100,7 +102,7 @@ export interface DealPageBodyProps {
 }
 
 export function DealPageBody(props: DealPageBodyProps) {
-  const { deal, sponsorName, orgId, canEdit, busy, tz, competitions, createdBy, competitionFinished, payLink, error, notice, onAction } = props;
+  const { deal, sponsorName, orgId, canEdit, busy, tz, orgTz, competitions, createdBy, competitionFinished, payLink, error, notice, onAction } = props;
   const msg = useMsg();
   const locale = useLocaleOrDefault();
 
@@ -198,7 +200,9 @@ export function DealPageBody(props: DealPageBodyProps) {
               : msg("sponsors.deal.timeline.line.notYet"),
         };
       case "ends": {
-        if (at !== null) return { title: msg("sponsors.deal.timeline.ends"), line: at };
+        // The club typed a DAY, in the org's zone; the stored instant is the start of the day after it (`endsOnOf`), so it is read back
+        // as that day - not as an instant in the viewer's zone, which shows the next day to anyone west of the org's midnight.
+        if (s.at !== null) return { title: msg("sponsors.deal.timeline.ends"), line: calendarDay(endsOnOf(s.at, orgTz)) };
         if (deal.competition_id === null) return { title: msg("sponsors.deal.timeline.ends"), line: msg("sponsors.deal.timeline.line.noEnd") };
         const name = scopeName(deal.competition_id);
         const scheduled = s.detail?.competitionEndsOn;

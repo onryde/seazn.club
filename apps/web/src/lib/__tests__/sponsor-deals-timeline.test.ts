@@ -21,6 +21,7 @@ import {
   GO_LIVE_RULES,
   PAYMENT_METHODS,
   dealTimeline,
+  endsOnOf,
   goLiveRulesFor,
   type EndReason,
   type GoLiveRule,
@@ -449,5 +450,49 @@ describe("dealTimeline: the sequence, not just one call", () => {
     expect(dealTimeline(d, NO_END)).toEqual(first);
     expect(JSON.stringify(d)).toBe(before);
     expect(first.length).toBe(6);
+  });
+});
+
+// ---- the day the club typed ------------------------------------------------------------------------------------------------------
+// The producer (server/usecases/sponsor-deals.ts `createDeal`) stores `ends_on` as the START OF THE NEXT DAY in the ORG's timezone
+// (`(ends_on::date + 1)::timestamp at time zone tz`; NULL tz is UTC): "Ends 31 Aug" is written as 1 Sep 00:00 local. The deal page shows
+// the last day the deal runs, so it reads that instant back one millisecond earlier, in the org's zone - never the viewer's.
+describe("endsOnOf: the day the club typed, read back from the instant the producer stored", () => {
+  // [ends_on, org zone, that zone's UTC offset at the START OF THE NEXT DAY] - typed from the producer's rule and the zones' own rules
+  // (no DST on Kiritimati; London's clocks went back at 01:00 on 25 Oct 2026, so the next day starts on GMT; Auckland is NZST in
+  // August; Los Angeles is PDT until November), never read from the function.
+  const CASES: [string, string, string][] = [
+    ["2026-08-31", "UTC", "+00:00"],
+    ["2026-08-31", "America/Los_Angeles", "-07:00"],
+    ["2026-08-31", "Pacific/Auckland", "+12:00"],
+    ["2026-12-31", "Pacific/Kiritimati", "+14:00"],
+    ["2026-03-31", "Europe/London", "+01:00"],
+    ["2026-10-24", "Europe/London", "+01:00"],
+    ["2026-10-25", "Europe/London", "+00:00"],
+  ];
+  const nextDay = (ymd: string) => new Date(Date.parse(`${ymd}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+
+  it("every zone and day, including a year end and the day the clocks went back (7 counted): the stored instant reads back as the typed day", () => {
+    let checked = 0;
+    for (const [endsOn, tz, offset] of CASES) {
+      const stored = new Date(`${nextDay(endsOn)}T00:00:00${offset}`).toISOString();
+      expect(endsOnOf(stored, tz), `${endsOn} in ${tz} (stored ${stored})`).toBe(endsOn);
+      checked++;
+    }
+    expect(checked).toBe(CASES.length);
+    expect(checked).toBe(7);
+  });
+
+  it("the other reading is wrong: the stored instant read in a DIFFERENT zone, or with no millisecond taken, is not the typed day", () => {
+    const stored = new Date("2026-09-01T00:00:00-07:00").toISOString(); // typed 31 Aug at a Los Angeles org
+    expect(endsOnOf(stored, "America/Los_Angeles")).toBe("2026-08-31");
+    // A viewer in London or UTC sees the same instant on 1 Sep (07:00Z): that is the off-by-one the deal page must not show.
+    expect(endsOnOf(stored, "UTC")).toBe("2026-09-01");
+    expect(endsOnOf(stored, "Europe/London")).toBe("2026-09-01");
+  });
+
+  it("an unknown zone falls back to UTC rather than throwing (a bad stored zone must not take the deal page down)", () => {
+    expect(endsOnOf("2026-09-01T00:00:00.000Z", "Not/AZone")).toBe("2026-08-31");
+    expect(endsOnOf("2026-09-01T00:00:00.000Z", "")).toBe("2026-08-31");
   });
 });
