@@ -219,7 +219,7 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
   /** Engine 5.0.0 (X-TP-5): a knockout asked for a third-place match without two real semi-finals is refused by the engine
    *  (CONFIG_INVALID `third_place_needs_two_semis`) - at Generate for a field of 2 or 3. Counted apart from `refused`: it is
    *  the rule working, judged below against the rule's arithmetic (fewer than 4 entrants, fewer than 2 real semis). */
-  const thirdRefused: Array<{ label: string; entrants: number; realSemis: number }> = [];
+  const thirdRefused: Array<{ label: string; entrants: number; realSemis: number; code: unknown; reason: unknown }> = [];
   /** W4 T24: every (wide template, field, q, third) the seeded pass asked, so a field cannot drop out of the widened sweep unnoticed. */
   const wideAsked: Array<{ key: string; n: number; q: number; third: boolean }> = [];
 
@@ -244,7 +244,8 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
       } catch (e) {
         const third = /a third-place match needs two real semi-finals; (\d+) entrants give (\d+)/.exec((e as Error).message);
         if (third !== null && drafts[i]!.kind === "knockout" && drafts[i]!.config.thirdPlace === true) {
-          thirdRefused.push({ label, entrants: Number(third[1]), realSemis: Number(third[2]) });
+          const named = e as { code?: unknown; data?: { reason?: unknown } };
+          thirdRefused.push({ label, entrants: Number(third[1]), realSemis: Number(third[2]), code: named.code, reason: named.data?.reason });
           thirdOwed = true;
           refusedBracket++;
           continue;
@@ -405,6 +406,7 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
     expect(thirdRefused.length, "anti-vacuity: the sweep met the third-place refusal").toBeGreaterThan(0);
     for (const t of thirdRefused) {
       expect([t.entrants < 4, t.realSemis < 2], `${t.label}: refused for ${t.entrants} entrants / ${t.realSemis} real semis`).toEqual([true, true]);
+      expect([t.code, t.reason], `${t.label}: refused by code and reason, not only by wording`).toEqual(["CONFIG_INVALID", "third_place_needs_two_semis"]);
     }
     expect(seen.some((c) => c.label.includes("third=true") && c.kind === "knockout"), "a third-place knockout was drawn where the engine allows it").toBe(true);
 

@@ -878,6 +878,8 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
       bracket = this.pagePlayoff ? generatePagePlayoff(opts) : this.doubleElim ? generateDoubleElim(opts) : this.thirdPlace ? generateSingleElim({ entrants: bySeed, thirdPlace: true })
         : this.singleElim ? generateSingleElim({ entrants: bySeed }) : generateStepladder(opts);
     } catch (e) {
+      // Engine 5.0.0 (X-TP-5): a third place under 4 entrants lands here as a refusal (the product refuses it at Generate; this
+      // fake draws at Start). It never draws one.
       if (!EngineError.is(e)) throw e;
       throw new RefusedCall("POST", "/api/v1/divisions/d1/start", engineHttpStatus(e.code), e.code, e.message);
     }

@@ -347,6 +347,8 @@ describe.skipIf(!HAS_DB)("every in-scope format template is generated as the eng
       expect(message, `${label}: Generate refuses a third place at ${refusedAt.k} entrants`).toMatch(
         new RegExp(`a third-place match needs two real semi-finals; ${refusedAt.k} entrants give`),
       );
+      const named = refusal as { code?: unknown; data?: { reason?: unknown } };
+      expect([named.code, named.data?.reason], `${label}: refused by code and reason, not only by wording`).toEqual(["CONFIG_INVALID", "third_place_needs_two_semis"]);
       refusedThird.push({ label, entrants: refusedAt.k });
       return;
     }

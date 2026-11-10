@@ -1385,7 +1385,7 @@ describe.skipIf(!HAS_DB)("D-G1: a recorded abandon that decided nobody holds sta
     expect(c.ranks).toEqual(l.bySeed);
   });
 
-  it("D-G1 guard: the unbeaten default never ranks a FIELD entrant — a final settled with nobody winning while both finalists are in the field is refused CONFIG_INVALID, never snapshotted with its finalists last", async () => {
+  it("D-G1 guard: the unbeaten default never ranks a FIELD entrant — a final settled with nobody winning while both finalists are in the field is refused CONFIG_INVALID, never snapshotted with its finalists last; the same void with BOTH finalists departed is refused (no_title) until app B's vacant title", async () => {
     // single-sport: badminton, the probe's rig. The row is FORCED — the generator's event-less void given two seated
     // FIELD finalists, the shape the reviewer's abandoned final produced before D-G1. The guard's product path (a
     // stepladder seed departed before the draw, D-G3) is pinned by its own characterisation below; this case isolates

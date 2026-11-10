@@ -900,30 +900,22 @@ export interface CompleteResult {
   events: WireDivisionEvent[];
 }
 
-/** engine 5.0.0 (`BracketStage.entrants`): every entrant of the stage in the order it was drawn, INCLUDING one who has
- *  since withdrawn and now holds no seat (the ranks cover exactly this list, each once; a finalist who left is ranked 2nd,
- *  so she has to be on it).
+/** engine 5.0.0 (`BracketStage.entrants`): the entrants the stage DREW, so the ranks cover exactly them (each once; a
+ *  finalist who left is ranked 2nd, so she has to be on it).
  *
  *  A stage drawn from a previous stage's cut stored its draw order as `config.qualified` (departed qualifiers included -
- *  `generate-tx.ts`); that IS the roster. A root stage was drawn from the division's entrants: the seated ones, then those
- *  no longer in the field (seed order). Anyone seated but not on `qualified` (a lucky loser) follows. App B's T2' replaces
- *  this reconstruction with the roster stored at the draw. */
-async function bracketRoster(tx: Tx, inputs: StageInputs): Promise<string[]> {
+ *  `generate-tx.ts`); that IS the roster, in draw order, and anyone seated but not on it (a lucky loser) follows. Without it
+ *  the roster is the stage's seat-holders (`inputs.entrants`, in fixture order): a departed entrant who held a seat is
+ *  there, because the fixtures name her, and one who never held a seat in THIS stage (withdrew before the draw, or never
+ *  qualified from a group or league stage) is NOT - declaring her would rank her last in a stage she never played in.
+ *  The withdrawal planners (generators.ts, withdrawal.ts) declare the same seated set; app B's T2' replaces all three with
+ *  the roster stored at the draw, in `knockoutDrawOrder`. */
+function bracketRoster(inputs: StageInputs): string[] {
   const seated = inputs.entrants;
   const stored = (inputs.stage.config as { qualified?: unknown } | null)?.qualified;
-  const qualified = Array.isArray(stored) ? (stored as string[]) : null;
-  if (qualified !== null) {
-    const listed = new Set(qualified);
-    return [...qualified, ...seated.filter((id) => !listed.has(id))];
-  }
-  const rows = await tx<{ id: string; seed: number | null; status: string }[]>`
-    select id, seed, status from entrants where division_id = ${inputs.stage.division_id}`;
-  const bySeed = (a: { id: string; seed: number | null }, b: { id: string; seed: number | null }) =>
-    (a.seed ?? Infinity) - (b.seed ?? Infinity) || (a.id < b.id ? -1 : 1);
-  const seatedSet = new Set(seated);
-  const departed = rows.filter((r) => !seatedSet.has(r.id) && !inTheField(r)).sort(bySeed).map((r) => r.id);
-  const seatedOrdered = rows.filter((r) => seatedSet.has(r.id)).sort(bySeed).map((r) => r.id);
-  return [...seatedOrdered, ...seated.filter((id) => !seatedOrdered.includes(id)), ...departed];
+  if (!Array.isArray(stored)) return seated;
+  const listed = new Set(stored as string[]);
+  return [...(stored as string[]), ...seated.filter((id) => !listed.has(id))];
 }
 
 /** A bracket stage's engine shape, read for Complete and for a correction after it (`refreshCompletedBracketPlacement`).
@@ -940,7 +932,7 @@ async function readBracketStage(
   const bracketStage: BracketStage = {
     id: stageId,
     kind: inputs.kind as BracketStage["kind"],
-    entrants: await bracketRoster(tx, inputs),
+    entrants: bracketRoster(inputs),
     ...(inputs.seeds.size > 0 ? { seeds: inputs.seeds } : {}),
   };
   const seats = new Map(inputs.fixtures.map((f) => [f.id, [f.home_entrant_id, f.away_entrant_id] as const]));
