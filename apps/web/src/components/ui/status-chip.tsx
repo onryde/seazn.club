@@ -6,30 +6,11 @@ import { chipShowsCount } from "@/lib/public-site";
 import { msgFor } from "@/lib/messages-i18n";
 import type { Locale } from "@/lib/i18n-constants";
 
-export type ChipState =
-  | "draft"
-  | "registration"
-  | "in_progress"
-  | "scheduled"
-  | "live"
-  | "completed"
-  | "archived"
-  | "frozen";
-
-/** The chip's colour recipes. Exported so a chip that is not a competition's (the Sponsors tab's deal chip) wears the SAME
- *  vocabulary instead of inventing colours of its own. */
-export const CHIP_STYLE: Record<ChipState, string> = {
-  draft: "bg-slate-100 text-slate-600",
-  registration: "border border-purple-300 bg-white text-purple-700",
-  // UI5 item 6: under way, nothing on court this minute - the floodlit chip's lime, unlit and without its pulse.
-  in_progress: "border border-lime-600/40 bg-lime-50 text-lime-900",
-  scheduled: "border border-purple-200 bg-purple-50 text-purple-700",
-  // Floodlit scorebug (floodlit-console spec §5): lime-on-night 10.7:1.
-  live: "bg-night text-lime-400 ring-1 ring-inset ring-lime-400/40",
-  completed: "bg-slate-100 text-slate-500",
-  archived: "border border-slate-200 bg-transparent text-slate-400",
-  frozen: "bg-sky-100 text-sky-700",
-};
+// The recipes live in status-chip-style.ts (no server imports) so a client component can wear them; re-exported here for the
+// importers that have always read them from this file.
+import { CHIP_BASE, CHIP_STYLE, type ChipState } from "./status-chip-style";
+export { CHIP_BASE, CHIP_STYLE };
+export type { ChipState };
 
 const CHIP_KEY: Record<ChipState, MessageKey> = {
   draft: "chip.draft",
@@ -113,9 +94,6 @@ export function divisionChipState(
   // 'setup' — registration window promotes the chip (the organiser's real state)
   return opts.registrationOpen ? "registration" : "draft";
 }
-
-/** The chip's shape: pair it with a `CHIP_STYLE` recipe. */
-export const CHIP_BASE = "inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium";
 
 export function StatusChip({
   state,

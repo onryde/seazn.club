@@ -2,13 +2,15 @@
 
 // A sponsor deal's chip (sponsor deals PR 2, Task 14; mockup screen 1): what state the deal on a sponsor's row is in.
 //
-// It wears the status-chip vocabulary (components/ui/status-chip.tsx) - the house's one declaration of how lifecycle state
-// paints - and invents no colour. Which ChipState each deal kind borrows is a reading of the NAME first (a draft is a draft, a
-// scheduled deal is scheduled, an ended one is completed) and of the mockup's hue second (awaiting approval keeps the mockup's
-// purple ring; a live deal keeps its floodlit lime). The words come from lib/sponsor-deals.ts `dealChip()`, the engine's own
-// answer to "what does this deal's chip say", never re-derived here.
+// It wears the status-chip vocabulary (components/ui/status-chip-style.ts, re-exported by status-chip.tsx) - the house's one
+// declaration of how lifecycle state paints - and invents no colour. It reads the style module, never status-chip.tsx itself: that
+// file reads its words through lib/messages-i18n.ts (`server-only`), which a client component cannot import (`next build` fails).
+// Which ChipState each deal kind borrows is a reading of the NAME first (a draft is a draft, a scheduled deal is scheduled, an
+// ended one is completed) and of the mockup's hue second (awaiting approval keeps the mockup's purple ring; a live deal keeps its
+// floodlit lime). The words come from lib/sponsor-deals.ts `dealChip()`, the engine's own answer to "what does this deal's chip
+// say", never re-derived here.
 import { useMsg } from "@/components/i18n/dict-provider";
-import { CHIP_BASE, CHIP_STYLE, type ChipState } from "@/components/ui/status-chip";
+import { CHIP_BASE, CHIP_STYLE, type ChipState } from "@/components/ui/status-chip-style";
 import { dealChip, type DealChip as DealChipModel, type SponsorDeal } from "@/lib/sponsor-deals";
 import type { MessageKey } from "@/lib/messages";
 

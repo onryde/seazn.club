@@ -6,7 +6,7 @@
 // deal_status x payment_status and each answer must be one of them.
 //
 // "No new colours" is a property of the chip's classes: every colour class on a chip must come from the status-chip vocabulary
-// (`CHIP_STYLE`, components/ui/status-chip.tsx), the house's one declaration of how lifecycle state paints.
+// (`CHIP_STYLE`, components/ui/status-chip-style.ts), the house's one declaration of how lifecycle state paints.
 //
 // Killers (one at a time, restore from a cp backup):
 //   C1  kind -> key    the `ended` entry of DEAL_CHIP_MSG points at `draft`           -> "each kind reads its words"
@@ -17,7 +17,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DealChip, DEAL_CHIP_MSG } from "@/components/sponsors/deal-chip";
-import { CHIP_STYLE } from "@/components/ui/status-chip";
+import { CHIP_STYLE } from "@/components/ui/status-chip-style";
 import { dealChip, DEAL_STATUSES, PAYMENT_STATUSES, type SponsorDeal } from "@/lib/sponsor-deals";
 import { LOCALES } from "@/lib/i18n-constants";
 import uiEn from "@/dictionaries/en/ui.json";
