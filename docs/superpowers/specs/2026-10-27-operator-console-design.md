@@ -30,7 +30,7 @@ Mocks are layout only; the build uses the house theme. This screen was not mocke
   (`components/v2/fixture-stream-panel.tsx`), shown with its controls only while the fixture has a composed session in
   `warming | live | ending`. Not a new route. The phone composition already exposes a *Stream* control (AGENTS.md); the
   builder re-pins how it reaches the panel and puts Graphics first in whatever it opens.
-- **"OBS session" means a passthrough session** (`StreamMode = passthrough | composed`, `server/api-v1/schemas.ts:1652`)
+- **"OBS session" means a passthrough session** (`StreamMode = passthrough | composed`, `server/api-v1/schemas/`)
   *(coordinator's call 2026-10-27, not an owner ruling)*. A passthrough session's Graphics section is one plain line saying graphics are controlled in
   OBS, with no controls. The operator state is per fixture, so what is set from a composed session's Graphics section
   also reaches an OBS page showing the same fixture (§3.2, §3.3).
@@ -66,7 +66,7 @@ Four short lines, each a sentence, no jargon. Derived from data the panel alread
 - No new measure is invented: a "weak" phone state appears only if a measured signal for it already exists; otherwise
   the three words above.
 - **The YouTube line never claims receipt** *(coordinator's call 2026-10-27, not an owner ruling)*. A composed session's destination is not observed
-  (`output` is null for composed, `server/api-v1/schemas.ts:1765-1767`; the chain's neutral `sending` state,
+  (`output` is null for composed, `server/api-v1/schemas/`; the chain's neutral `sending` state,
   `lib/stream-chain.ts:19-20`, owner ruling R2006). The MVP line says "Sending to YouTube", worded neutrally like that
   `sending` state, and never "YouTube is receiving". Once YouTube Connect lands, the line reads the broadcast's stream
   status from Connect. No destination probe is added.

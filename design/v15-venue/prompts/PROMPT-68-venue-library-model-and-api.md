@@ -21,7 +21,7 @@ RLS, server usecases, and a v1 CRUD API. **Server only** — no console UI yet
 - `apps/web/src/app/api/v1/competitions/route.ts` — the route shape:
   `v1(async () => …)`, `requireAuth(req, "read"|"write")`, `parseBody(req,
   Schema)`, `reply(201, …)`, `listQuery(req)`. Mirror for venues.
-- `apps/web/src/server/api-v1/schemas.ts` — where zod request schemas live
+- `apps/web/src/server/api-v1/schemas/` — where zod request schemas live
   (e.g. `CreateCompetition`, and the schedule config at ~line 607). Add the
   venue schemas here.
 - `apps/web/src/server/api-v1/http.ts` and `.../auth.ts` — `v1`, `reply`,
@@ -75,7 +75,7 @@ rather than forcing V-number churn.
 - **Create** `apps/web/src/app/api/v1/venues/[id]/route.ts` (GET/PATCH/DELETE)
 - **Create** `apps/web/src/app/api/v1/venues/[id]/courts/route.ts` (POST add court)
 - **Create** `apps/web/src/app/api/v1/venue-courts/[id]/route.ts` (PATCH/DELETE court)
-- **Modify** `apps/web/src/server/api-v1/schemas.ts` — add venue zod schemas
+- **Modify** `apps/web/src/server/api-v1/schemas/` — add venue zod schemas
 - **Modify** `apps/web/src/lib/routes.ts` — add `orgVenues(org)`
 - **Modify** `openapi/openapi.yaml` (+ whatever the drift gate reads) — document
   the new paths so the openapi drift test stays green (see PROMPT-70/71 note;
@@ -256,7 +256,7 @@ describe.skipIf(!HAS_DB)("venues usecase", () => {
   Run: `DATABASE_URL=$DATABASE_URL npx vitest run apps/web/src/server/usecases/__tests__/venues.test.ts`
   Expected: FAIL — `Cannot find module '../venues'`.
 
-- [ ] **Step 5 — Add the zod schemas.** In `apps/web/src/server/api-v1/schemas.ts`:
+- [ ] **Step 5 — Add the zod schemas.** In `apps/web/src/server/api-v1/schemas/`:
 
 ```ts
 export const CourtInput = z.object({

@@ -110,7 +110,7 @@ export const isMatrixCase = (p: string): boolean => p.startsWith("matrix:");
  *
  *  SEAM ADAPTER. The rule table comes from the installed engine package (`@seazn/engine/testkit`), whose rows still name the
  *  pre-split app files in `enforcedAt` (`apps/web/src/server/usecases/stages.ts`, `schedule.ts`, `registrations.ts`; the
- *  `api-v1/schemas.ts` split will add one). That table is another repo's, so this half resolves the old name to the folder that
+ *  `api-v1/schemas/` split will add one). That table is another repo's, so this half resolves the old name to the folder that
  *  replaced it instead of failing every row. Retire this fallback, and the folder branch of `fileExists`/`readRepoFile`, when
  *  the engine's `enforcedAt` paths name the modules or the folders. */
 export function modulesAt(root: string, p: string): string[] | undefined {

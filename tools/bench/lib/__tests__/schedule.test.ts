@@ -107,7 +107,7 @@ function divA(over: Partial<ScheduleDivision> = {}): ScheduleDivision {
 // Wire-row builders — full `S.Fixture` / `S.VenueWithCourts` shapes
 // ---------------------------------------------------------------------------
 
-/** One `GET /api/v1/divisions/{id}/fixtures` row (schemas.ts:1000-1055 minus
+/** One `GET /api/v1/divisions/{id}/fixtures` row (api-v1/schemas/ minus
  *  the frozen `venue`/`court_label` the route strips). Every field the driver
  *  reads is defaulted here so a test names only what it is about. */
 function fx(over: Record<string, unknown> & { id: string }): Record<string, unknown> {
@@ -208,7 +208,7 @@ interface Script {
   /** Values the product persisted DIFFERENTLY from what was sent. */
   configOverrides?: Record<string, unknown>;
   /** What the PUT reports as the RESOLVED zone (`ScheduleSettings.tz`,
-   *  `schemas.ts:1450` — "stored division tz -> org timezone -> 'UTC'"). Unset
+   *  `api-v1/schemas/` — "stored division tz -> org timezone -> 'UTC'"). Unset
    *  means the fake echoes the tz it was sent, which is what a product build
    *  that accepted the pin does. `null` models a response carrying no readable
    *  tz at all. Set it to a DIFFERENT zone to model the case that matters: the
@@ -217,7 +217,7 @@ interface Script {
   settingsTz?: string | null;
 }
 
-/** `ScheduleConfig`'s own top-level keys (`schemas.ts:1283-1426`). The fake
+/** `ScheduleConfig`'s own top-level keys (`api-v1/schemas/`). The fake
  *  PUT strips anything not in here, because that schema is a plain `z.object`
  *  and a plain zod object STRIPS an unknown key rather than refusing it. A
  *  fake that echoed the request back would model a `.strict()` schema the
@@ -250,7 +250,7 @@ const OK_SOLVER = {
   moved: 1,
 };
 
-/** `AutoScheduleRequest`'s preprocess (`schemas.ts:1645-1651`), reproduced so
+/** `AutoScheduleRequest`'s preprocess (`api-v1/schemas/`), reproduced so
  *  the fake cannot be kinder than the product. `=== false` and not
  *  `!only_unlocked`: an ABSENT flag defaults to true and derives a reflow. */
 function derivedMode(body: unknown): "build" | "reflow" | "polish" {
@@ -290,7 +290,7 @@ function fakeTransport(script: Script = {}): { transport: SeedTransport; calls: 
       const settings = /^\/api\/v1\/divisions\/([^/]+)\/schedule-settings$/.exec(reqPath);
       if (method === "PUT" && settings) {
         // `putScheduleSettings` returns the PERSISTED `ScheduleSettings`
-        // (`schemas.ts:1446`), not an echo — and what it persists is what
+        // (`api-v1/schemas/`), not an echo — and what it persists is what
         // `ScheduleConfig` parsed, i.e. the declared keys it knows about and
         // nothing else. `script.stripConfigKeys` lets a test model a product
         // build that has additionally lost a key it used to have.
@@ -354,7 +354,7 @@ function fakeTransport(script: Script = {}): { transport: SeedTransport; calls: 
 
       if (method === "POST" && /^\/api\/v1\/stages\/[^/]+\/schedule\/apply$/.test(reqPath)) {
         // `ApplyScheduleRequest.assignments` is `.min(1).max(500)`
-        // (`schemas.ts:2146-2147`). A fake that accepted `[]` is not a test
+        // (`api-v1/schemas/`). A fake that accepted `[]` is not a test
         // double, it is a second implementation with kinder rules — the exact
         // class that has now shipped four times in this repo, and the reason
         // 41 green tests never saw the driver post a body the server refuses.
@@ -397,7 +397,7 @@ function fakeTransport(script: Script = {}): { transport: SeedTransport; calls: 
  *  since `ApplyScheduleRequest.assignments` is `.min(1)`, an empty default is
  *  also the one shape the real endpoint refuses. `ends_at` is always present
  *  because `ScheduleAssignment.ends_at` is a REQUIRED `z.string()` on the wire
- *  (`schemas.ts:1624`), and it is set to exactly `CONFIG.matchMinutes` so the
+ *  (`api-v1/schemas/`), and it is set to exactly `CONFIG.matchMinutes` so the
  *  §4.2 cross-check stays silent unless a test deliberately disagrees. */
 function autoAssignmentsFor(d: DivisionScript | undefined): Record<string, unknown>[] {
   const rows = d?.fixturesAfter ?? d?.fixturesBefore ?? [];
@@ -660,7 +660,7 @@ describe("runScheduleLayer — the engine assertion", () => {
   });
 
   it("reds when auto returns no solver telemetry at all", async () => {
-    // `AutoScheduleResult.solver` is NON-optional on the wire (schemas.ts:2101).
+    // `AutoScheduleResult.solver` is NON-optional on the wire (api-v1/schemas/).
     // A response without it cannot be asserted against, and silently recording
     // `actualEngine: undefined` would put `engine-undefined.json` on disk.
     const { transport } = fakeTransport({
@@ -764,7 +764,7 @@ describe("runScheduleLayer — the board", () => {
     const f = r.boards[0].fixtures[0];
 
     // 45, not 60: `CONFIG.gapMinutes` is 15, so a driver that added it lands
-    // on 09:60 and fails here. `Fixture` carries no `ends_at` (schemas.ts:
+    // on 09:60 and fails here. `Fixture` carries no `ends_at` (api-v1/schemas/:
     // 1000-1055), so this is the only derivation available.
     expect(f.end! - f.start!).toBe(45 * MIN);
     expect(f.end).toBe(T0 + 45 * MIN);
@@ -1392,7 +1392,7 @@ describe("runScheduleLayer — every division", () => {
 
     expect(calls.filter((c) => c.method === "PUT")).toEqual([]);
     // Still encoded, so the checker gets the product's own defaults as its
-    // oracle rather than nothing at all (schemas.ts:1287 — matchMinutes 30).
+    // oracle rather than nothing at all (api-v1/schemas/ — matchMinutes 30).
     expect(r.constraints[0].matchMinutes).toBe(30);
   });
 });
@@ -1467,7 +1467,7 @@ describe("runScheduleLayer — conflicts", () => {
 
     const r = await runScheduleLayer(layer({ transport }));
 
-    // `details` is optional on the wire (schemas.ts:1582). A dropped row would
+    // `details` is optional on the wire (api-v1/schemas/). A dropped row would
     // make the tally quietly under-report.
     expect(Object.values(r.outcomes[0].warnKindTally)).toEqual([1]);
     expect(Object.keys(r.outcomes[0].warnKindTally)[0]).toMatch(/details/);
@@ -1509,7 +1509,7 @@ describe("runScheduleLayer — officials", () => {
               id: "f1",
               scheduled_at: "2099-01-01T09:00:00.000Z",
               court_id: "court-1",
-              // `Fixture.officials` is `z.array(z.unknown())` (schemas.ts:1033),
+              // `Fixture.officials` is `z.array(z.unknown())` (api-v1/schemas/),
               // so nothing on the wire guarantees this shape.
               officials: [{ official_id: "off-1", role_key: "referee" }, "off-2", { role_key: "umpire" }],
             }),
@@ -1640,7 +1640,7 @@ describe("engine artifacts", () => {
 
 describe("runScheduleLayer — an empty proposal is a refusal, not an empty apply", () => {
   it("never POSTs an empty assignments array, because /apply refuses one", async () => {
-    // `ApplyScheduleRequest.assignments` is `.min(1)` (schemas.ts:2146) while
+    // `ApplyScheduleRequest.assignments` is `.min(1)` (api-v1/schemas/) while
     // `AutoScheduleResult.assignments` has no minimum — so the exact response a
     // capacity refusal produces is a body /apply rejects. The fake throws a 400
     // on `[]` the way the server does, so a driver that posts it fails here.
@@ -1718,7 +1718,7 @@ describe("runScheduleLayer — the auto request body", () => {
 
     const auto = calls.find((c) => c.path === "/api/v1/stages/stage-a/schedule/auto");
     // `only_unlocked: false` is the ONLY thing that derives `mode: "build"`
-    // (schemas.ts:1645-1651). `{}` derives "reflow" — a re-flow of a stage that
+    // (api-v1/schemas/). `{}` derives "reflow" — a re-flow of a stage that
     // has never been scheduled.
     expect(auto!.body).toEqual({ only_unlocked: false });
     // And the fake DERIVES the echoed mode from that body, so this assertion
@@ -1884,7 +1884,7 @@ describe("runScheduleLayer — the schedule-settings round trip", () => {
   //
   // The PUT body carries `tz` alongside `config`, and until this round nothing
   // read the answer back. `ScheduleSettings.tz` is the RESOLVED zone
-  // (`schemas.ts:1450`), produced by `resolveVenueTz(stored, orgTz)` — which
+  // (`api-v1/schemas/`), produced by `resolveVenueTz(stored, orgTz)` — which
   // returns the sent string only if it is a valid IANA name and otherwise falls
   // through to the org zone and then to UTC, all behind a 200.
   //
@@ -2345,7 +2345,7 @@ describe("runDivisionStartLayer — one division's failure never aborts another"
 describe("division-start code/status mirrors — the mirror is diffed against apps/web, not itself", () => {
   // R05 precedent (this file's own `SCHEDULE_CONFIG_KEYS` guard above):
   // assert against the schema's/module's OWN real values, imported directly
-  // — `schemas.ts`/`schedule-board.ts` are both NOT server-only, and no
+  // — `api-v1/schemas/`/`schedule-board.ts` are both NOT server-only, and no
   // PRODUCTION tools/bench file imports them (`schedule.ts`'s own header
   // comment on `STARTED_DIVISION_STATUS`), so this test is the only thing
   // that can catch the product renaming either value out from under the

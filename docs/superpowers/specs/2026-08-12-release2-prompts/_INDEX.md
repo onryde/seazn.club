@@ -1806,7 +1806,7 @@ rows `engine z3|z3+lns → optimized`") and the design's premise (`"z3"` is
   puts a solver engine value into one.
 - `ScheduleSolverInfo.parse` / `AiRepairReport.parse` appear **only** in
   `__tests__`, always over a freshly computed response. No production read path.
-- `ScheduleConfig` (`schemas.ts:843-894`) — the schema `_RULES.md` warns is the
+- `ScheduleConfig` (`api-v1/schemas/`) — the schema `_RULES.md` warns is the
   READ path — has no engine, solver or repair field at all.
 
 So the "rewrite-then-narrow order is mandatory" instruction, the load-bearing
@@ -1836,7 +1836,7 @@ that can no longer fail. Both now name `solver_unavailable`. This is the same
 defect shape C6 recorded against `schedule-capacity-guard.test.ts`'s
 `z3LoadCount`, in a file C6 had classified `ACCURATE_TODAY`.
 
-**The brief's `file:line` citations had all drifted.** `schemas.ts:1016` and
+**The brief's `file:line` citations had all drifted.** `api-v1/schemas/` and
 `:2190` are really **`:1229`** (`ScheduleSolverInfo.engine`) and **`:2592`**
 (`AiRepairReport.engine`). The brief's five-file set also missed three
 load-bearing sites: `apps/web/src/lib/i18n-keys.ts`, `scripts/smoke.ts`, and
@@ -1859,7 +1859,7 @@ actually delete them rather than inherit them — a skipped test that asserts an
 impossible value is exactly the "skip is load-bearing" shape.
 
 **Ledger:** `OWNED_BY_C7` is now empty. Seven of its ten files lost their last
-z3 mention; three (`schemas.ts`, `result-strip.tsx`, `result-strip.test.tsx`)
+z3 mention; three (`api-v1/schemas/`, `result-strip.tsx`, `result-strip.test.tsx`)
 kept accurate past-tense prose explaining why a member is absent and moved to
 `ACCURATE_TODAY`. Two files that were in `ACCURATE_TODAY`
 (`schedule-board-polish.test.tsx`, `ai-diff-repair-strip.test.tsx`) left the

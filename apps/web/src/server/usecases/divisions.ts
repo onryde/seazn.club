@@ -101,7 +101,7 @@ export interface DivisionRow {
   category: string | null;
   age_min: number | null;
   age_max: number | null;
-  /** RS007/V380: both-or-neither — enforced by `checkAgeCutoff` (schemas.ts)
+  /** RS007/V380: both-or-neither — enforced by `checkAgeCutoff` (api-v1/schemas/divisions.ts)
    *  on the request body and by `patchDivision`'s merge-check below on the
    *  merged row, NOT by `divisions_age_cutoff_check`, which a one-sided
    *  orphan satisfies (see that merge-check's own comment).
@@ -373,7 +373,7 @@ export async function createDivision(
       // RS007/V380: category/age_min/age_max/age_cutoff_month/age_cutoff_day/
       // eligibility_note are writable at create time now — the division-
       // creation wizard's Eligibility tab writes them directly (see
-      // schemas.ts's CreateDivision; the registration hub config panel still
+      // api-v1/schemas/divisions.ts's CreateDivision; the registration hub config panel still
       // edits the SAME columns via PATCH, which stays the only path for an
       // already-created division). `??`, not the schema's own `undefined`,
       // because postgres.js sends a bound JS `undefined` as literal SQL
@@ -950,7 +950,7 @@ export async function patchDivision(
         select show_seeds from divisions where id = ${id} for no key update`;
       seedsBefore = stored?.show_seeds;
     }
-    // RS004 review finding 1: checkAgeBand (schemas.ts) only compares
+    // RS004 review finding 1: checkAgeBand (api-v1/schemas/divisions.ts) only compares
     // age_min/age_max when BOTH are present in the SAME patch body — a
     // single-field PATCH (e.g. only age_min) used to reach here untouched
     // even when it would violate the STORED value of the side it left
@@ -1004,7 +1004,7 @@ export async function patchDivision(
     // Settings walkthrough F12 — the same merge-and-validate the age band
     // above gets, for the cutoff pair, and for the same reason.
     //
-    // `checkAgeCutoff` (api-v1/schemas.ts) is a `superRefine` on the request
+    // `checkAgeCutoff` (api-v1/schemas/divisions.ts) is a `superRefine` on the request
     // BODY, and its `(month != null) !== (day != null)` cannot tell a field
     // the request OMITTED from one it set to an explicit `null` — `!= null`
     // is true of both. So `PATCH { age_cutoff_day: null }` against a stored

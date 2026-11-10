@@ -294,7 +294,7 @@ describe("suite11 — the constraint scenario", () => {
     expect([...byWeekday.keys()].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6]);
     for (const [weekday, count] of byWeekday) expect(count, `weekday ${weekday}`).toBe(2);
     // NOT sessionWindows: that field is venue-wide with no court key
-    // (api-v1/schemas.ts:1633-1636) and cannot say "this court, twice a day".
+    // (api-v1/schemas/) and cannot say "this court, twice a day".
     expect((committed.divisions[0].scheduleConfig ?? {}).sessionWindows).toBeUndefined();
   });
 

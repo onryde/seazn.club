@@ -98,7 +98,7 @@ checkout simultaneously.
 | 05 | Create `gridStepMinutes` in a new `grid-step.ts`. | **It already existed** in `build-grid.ts`, taking a config object. P05 is an extract-and-retype to `(matchMinutes, gapMinutes)`, not a create — which forces call-site edits (`build-rest-lattice.test.ts`, `repair.ts`, `index.ts`, and a `./scheduling/grid-step` export subpath in `packages/engine/package.json` so the board takes a leaf import and the schedule page does not ship the solvers). `REPAIR_GRID_MINUTES` is now an alias of `GRID_FLOOR_MINUTES`, one owner, no way to disagree. |
 | 05 | Row height is a matter of changing `h-10` on the cell. | **False.** The place-button's `min-h-8` is the real row floor; changing the cell alone screenshots pixel-identical. Chosen: step ≥30 keeps `h-10`/`min-h-8` (41px, unchanged); step <30 uses `h-7`/`min-h-6` (33px, −19%), floored at 24px for WCAG 2.5.8. Plus `max-h-[70vh] overflow-y-auto` + sticky header. |
 | 05 | (trap, not a premise) The two pre-existing board suites would have caught a wrong step. | **They could not.** Both use a 30/0 config — the one shape where `gcd` and `matchMinutes+gapMinutes` coincide. That is why neither needed editing and why neither ever failed. Any new board test must use a config where the two DISAGREE (30/10, 45/15, 60/20) or it is vacuous. The step assertion must also compare against spacing **measured off the slots `buildGrid` actually emitted**, never against `grid.stepMinutes`, which is only buildGrid's claim about itself. |
-| 06 | The blackout shape is `{ court?: string; from: number; to: number }`. | **That is the ENGINE type** (`packages/engine/src/scheduling/calendar.ts`, epoch ms). The STORED/wire shape the UI must write is `schemas.ts` `ScheduleConfig.blackouts` = `{ court?: string; from: IsoDateTime; to: IsoDateTime }` (`.max(200)`, court `.max(100)`), and the server converts to ms. Writing numbers is a 400, not a unit difference. **Prompt 07 verifies the round-trip — assert ISO on the wire.** |
+| 06 | The blackout shape is `{ court?: string; from: number; to: number }`. | **That is the ENGINE type** (`packages/engine/src/scheduling/calendar.ts`, epoch ms). The STORED/wire shape the UI must write is `api-v1/schemas/scheduling.ts` `ScheduleConfig.blackouts` = `{ court?: string; from: IsoDateTime; to: IsoDateTime }` (`.max(200)`, court `.max(100)`), and the server converts to ms. Writing numbers is a 400, not a unit difference. **Prompt 07 verifies the round-trip — assert ISO on the wire.** |
 | 06 | The editor writes "via the panel's existing `onChange(config)` prop". | **`ConstraintsPanel` has no `onChange` prop.** Its props are `{divisionId, initialSettings, canEdit}` and it self-saves with a read-modify-write: GET `/api/v1/divisions/{id}/schedule-settings`, then PUT `{config: {...current.config, <patch>}}`. P06 generalised the existing `save()` into `savePatch(patch, applied)`; `constraints` and `blackouts` are now two callers of one function. No `tz` key is ever re-sent (V305). |
 | 06 | "Replace the read-only `{startWindows.length} start window(s) set` block." | **Different constraint family.** That line counts `constraints.startWindows` (per-entrant/pool `notBefore`/`notAfter`, AI-parser-authored); blackouts had NO display in this panel at all. Deleting it would drop the only surface for AI-authored start windows, so it was LEFT ALONE and the editor was added as a new full-width row at the end of the sheet. |
 | 06 | "Read how `constraints-panel.tsx` already resolves its other time-based fields to the org tz." | **It has none.** Before P06 the panel's controls were two checkboxes, three number inputs and one select — zero date/time handling, zero tz conversion. The path followed instead is the settings panel's: `toLocalInput(iso)` in / `new Date(localInput).toISOString()` out, i.e. the BROWSER's zone, matching the sibling `boardset.startAt` field. **Open gap:** that is not `settings.orgTz`, so an organiser in a different zone from the venue types venue-wrong instants — the same pre-existing behaviour as every other absolute-time field in the panel, not a P06 regression. |
@@ -431,7 +431,7 @@ answer so nobody re-derives it, and so nobody "fixes" it by deleting a field.
 | Constraints | `config.constraints.restMin` | "a rule about entrants" |
 
 Both live in the SAME `PUT /divisions/{id}/schedule-settings` payload
-(`schemas.ts:738` and `:753`).
+(`api-v1/schemas/` and `:753`).
 
 **The engine already reconciles them and the old fork is CLOSED.**
 `effectiveRestMinutes` (`calendar.ts:102-117`) returns the strictest of
@@ -614,7 +614,7 @@ across the two suites, every file restored byte-identically.
    `/api/v1/divisions/[id]/schedule-settings` is a documented platform endpoint;
    the console's own `isoFromZonedParts` only ever emits `Z`, which is what my
    comment wrongly reasoned from. **The sibling `checkDateOrder` at
-   `schemas.ts:44` IS safe on string order — it compares date-only
+   `api-v1/schemas/` IS safe on string order — it compares date-only
    `YYYY-MM-DD`, which carries no offset. Do not read it as precedent for
    instants.** Now compares `Date.parse`; three mixed-offset cases added, and
    reverting to string compare reds all three.

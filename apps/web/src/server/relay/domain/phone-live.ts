@@ -1,5 +1,5 @@
 // Owed 108 fix (b), web half — the phone-live EDGE. Pure: the use-case reads the tracker, passes the beat in, and stores what
-// this returns (capture-phone.ts `postBeat`, the only writer; stream-sessions.ts `heartbeat` serves `edge`).
+// this returns (capture-phone.ts `postBeat`, the only writer; usecases/stream-sessions/heartbeat.ts `heartbeat` serves `edge`).
 //
 // The relay (the Fly compositor) is outbound-only, so web can only tell it something in the reply to its ~5 s heartbeat. When
 // the phone's connection comes back after an outage the relay is waiting out its own back-off; a per-session counter in that

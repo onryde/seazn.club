@@ -80,7 +80,7 @@ async function configureRegistration(
 /** All four `OrganiserActionKind`s hit the SAME URL shape
  *  (`/api/v1/registrations/{id}/{action}`) except `assign_free_agent`,
  *  which posts to `/assign` with a body (`AssignSoloSignUp`,
- *  api-v1/schemas.ts) rather than to a verb named after the pack action.
+ *  api-v1/schemas/registration.ts) rather than to a verb named after the pack action.
  *  `promote` sends the SAME id as both the URL `{id}` and the body's
  *  `registration_id` — deliberately: the URL id only needs to resolve WHICH
  *  DIVISION to promote within (`promoteFromWaitlist`, registration-

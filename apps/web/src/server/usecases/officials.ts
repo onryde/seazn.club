@@ -52,7 +52,7 @@ const COLS = [
 ] as const;
 
 // G6 (bench B03 product-gaps, 2026-09-02): this used to be its own z.object,
-// field-for-field identical to schemas.ts's CreateOfficial/PatchOfficial but
+// field-for-field identical to api-v1/schemas/clubs.ts's CreateOfficial/PatchOfficial but
 // maintained separately — openapi.ts published one, this route validated
 // with the other, so they could silently drift. Import the same object
 // instead of a second copy. (The reverse direction — openapi.ts importing

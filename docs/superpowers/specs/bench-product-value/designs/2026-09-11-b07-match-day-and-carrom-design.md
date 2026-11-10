@@ -69,7 +69,7 @@ limit from the quarter-finals on. `maxBoards` lives only in the division cfg
 (`carrom.ts:54`, `z.number().int().positive().default(8)`; no 0/null/"unlimited"), and a
 stage overlay can only carry `shootout`/`extraTime`
 (`apps/web/src/server/engine-db/stage-cfg.ts:9`); `StageConfig` is a strict object with
-no `maxBoards` key (`apps/web/src/server/api-v1/schemas.ts:1009-1041`), so a stray key is
+no `maxBoards` key (`apps/web/src/server/api-v1/schemas/`), so a stray key is
 refused outright. The pack runs 8 boards in every round and records the adaptation; the
 gap is a product finding.
 
@@ -259,7 +259,7 @@ boards, best of 3, queen 3 capped at 22, `tieBoard: "extra"` — so no draws, ma
 16 real named players per division; seeds artificial (2025 finish, then round reached,
 then name). Each division: a `group` stage of 4 pools × 4, snake-dealt by seed
 (`stages.ts:729-739`), then `topNPerGroup` 2 with `rank_order` into an 8-player
-`knockout` with `thirdPlace: true` (`schemas.ts:1016`; `bracket.ts:219-227`, ext key
+`knockout` with `thirdPlace: true` (`api-v1/schemas/`; `bracket.ts:219-227`, ext key
 `se-3p`). 24 + 8 = 32 matches per division, **64 total**.
 
 ### 5.2 The board generator (`lib/carrom-sim.ts`)
@@ -287,7 +287,7 @@ produced one (a game decided at the 8-board limit, an extra board); otherwise NO
 Barceló Nasandhura, Malé (UTC+5); four boards named "Board 1"–"Board 4" (distinct from
 every entrant and official name — the sigil namespace is shared,
 `_PACK-PLAYBOOK.md`); 2–6 Dec 2025; ~45-minute slots; **the women's division is
-afternoon-only** via per-division `sessionWindows` (`schemas.ts:1594`).
+afternoon-only** via per-division `sessionWindows` (`api-v1/schemas/`).
 
 ### 5.5 Subjects, honestly named
 

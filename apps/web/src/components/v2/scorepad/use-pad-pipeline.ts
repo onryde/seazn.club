@@ -267,7 +267,7 @@
 // `LedgerSlotEvent` did not carry `voids_event_id` and the transport
 // boundary parsed-then-DROPPED it, though the server has always sent it
 // (`EventOut`, server/usecases/fixtures.ts; `ScoreEvent`,
-// server/api-v1/schemas.ts). `resolveVoids` rejects a `core.void` naming
+// server/api-v1/schemas/scoring.ts). `resolveVoids` rejects a `core.void` naming
 // nothing exactly as it rejects one naming an unknown id, so the pad froze
 // behind a rejection banner on whichever of the two paths won the race —
 // which is why the same walkthrough passed twice and failed once. This is

@@ -49,11 +49,11 @@ export function isStreamUrl(value: string): boolean {
  * must satisfy `isStreamUrl`.
  *
  * `z.preprocess`, NOT a trailing `.transform()` — this schema is embedded in
- * `PutFixtureStream` (api-v1/schemas.ts), which openapi.ts converts with
+ * `PutFixtureStream` (api-v1/schemas/fixtures.ts), which openapi.ts converts with
  * `z.toJSONSchema(…, { io: "output" })`. A trailing `.transform()` makes the
  * transform the OUTPUT node and the whole generator dies with "Transforms
  * cannot be represented in JSON Schema" (the exact hazard AutoScheduleRequest's
- * comment in schemas.ts documents and works around the same way). `preprocess`
+ * comment in api-v1/schemas/ documents and works around the same way). `preprocess`
  * puts the trim-to-null normalization on the INPUT side instead, so the
  * output side (`z.union([z.string(), z.null()]).refine(...)`) is plain and
  * converts cleanly.

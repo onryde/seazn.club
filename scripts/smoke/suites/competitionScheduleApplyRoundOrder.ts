@@ -130,7 +130,7 @@ export async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
     // "ai" only — the wire schema (ApplyCompetitionScheduleRequest) rejects
     // "manual" on this route; manual board edits stay on the per-stage
     // endpoint by construction (one division). Confirmed against
-    // schemas.ts, not assumed.
+    // api-v1/schemas/, not assumed.
     source: "ai",
   });
   // `error.conflicts` is the raw engine shape here — see the file header.

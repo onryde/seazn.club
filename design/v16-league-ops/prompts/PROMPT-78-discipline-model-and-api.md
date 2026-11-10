@@ -25,7 +25,7 @@ sport modules, the idempotent fold/detection usecase, and the v1 CRUD API.
 - `apps/web/src/server/usecases/scoring.ts` (~line 91) — the decided/void
   write seam where discovery refresh hooks; discipline detection hooks the
   same place.
-- `apps/web/src/server/api-v1/schemas.ts`, `.../http.ts`, `.../auth.ts` — 
+- `apps/web/src/server/api-v1/schemas/`, `.../http.ts`, `.../auth.ts` — 
   zod schema home, `v1`/`reply`/`parseBody`/`requireAuth` route idioms.
 - `apps/web/src/lib/entitlements.ts` — `requireFeature(orgId, key)`.
 - `apps/web/src/server/usecases/__tests__/schedule.test.ts` — DB-backed
@@ -82,7 +82,7 @@ is a read-side projection: **zero reducer/replay/golden changes** (README D2).
 - **Create** `apps/web/src/app/api/v1/divisions/[id]/discipline-rules/route.ts` (GET/PUT)
 - **Create** `apps/web/src/app/api/v1/divisions/[id]/suspensions/route.ts` (GET list, POST manual)
 - **Create** `apps/web/src/app/api/v1/suspensions/[id]/route.ts` (PATCH confirm/waive/adjust)
-- **Modify** `apps/web/src/server/api-v1/schemas.ts` — zod schemas
+- **Modify** `apps/web/src/server/api-v1/schemas/` — zod schemas
 - **Modify** `apps/web/src/server/api-v1/openapi.ts` — register the routes
   (**openapi regen/drift gate — bitten three times in v13; do not skip**)
 - **Modify** `apps/web/src/server/usecases/scoring.ts` — call

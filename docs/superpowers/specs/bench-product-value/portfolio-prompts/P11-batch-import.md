@@ -27,7 +27,7 @@ done** (check its index) + owner green-light. Worktree + fresh branch.
   `(division_id, import_id, fixture_id)` in DDL — the idempotency
   guarantee lives in the constraint, not app code; load
   `supabase-postgres-best-practices` first), admin page,
-  `schemas.ts`, `openapi.ts`, help page, 4 dictionaries
+  `api-v1/schemas/`, `openapi.ts`, help page, 4 dictionaries
 
 ## Do NOT touch
 

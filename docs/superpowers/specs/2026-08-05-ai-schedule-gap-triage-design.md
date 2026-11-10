@@ -166,7 +166,7 @@ that only asserts the pure function is not evidence. Assert the **prop reaching
 the card**, the way the #394 test asserts props reaching `AiCompetitionConsole`.
 
 **#387 second, because it is the detector.** After a run returns, compare
-`plan.credits` (`AiRunPriceFields`, `schemas.ts:1895`) to the quote the card
+`plan.credits` (`AiRunPriceFields`, `api-v1/schemas/`) to the quote the card
 showed. Surface a named receipt line in both directions — over-quote is a bad
 surprise, under-quote is a billing complaint, both must be visible — and emit a
 server-side event so the divergence produces a signal even when nobody reads the

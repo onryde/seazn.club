@@ -281,7 +281,7 @@ picks them up.
 | W10 | Integration behind flag: one registry, both entry points, offline e2e | W9 |
 | W11 | Cutover: default on, delete v1 pads, help + smoke + polish | W10 |
 
-\* W1→W2 is file-overlap sequencing (`schemas.ts`, `registrations.ts`), not a
+\* W1→W2 is file-overlap sequencing (`api-v1/schemas/`, `registrations.ts`), not a
 logical dependency. † W6 logically needs only W4 (attribution fields), but
 W5/W6 both edit every module file and the conformance kit — chained to avoid
 the same-file parallel trap.

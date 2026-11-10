@@ -21,7 +21,7 @@ split across rows for the same human.
 
 `mergePersons` (`apps/web/src/server/usecases/persons.ts:131-163`) is live behind
 `POST /api/v1/persons/:id/merge` (`app/api/v1/persons/[id]/merge/route.ts:9-15`,
-schema `api-v1/schemas.ts:297`, published in `openapi.ts:71`). No UI calls it.
+schema `api-v1/schemas/`, published in `openapi.ts:71`). No UI calls it.
 
 It repoints `entrant_members`, `lineups` and `player_profiles` — **deleting** rows
 that would collide rather than resolving them — then runs

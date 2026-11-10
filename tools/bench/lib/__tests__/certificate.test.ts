@@ -93,7 +93,7 @@ function doubleBookedHistory(): Board {
 }
 
 /** `ScheduleSolverInfo.status`' full vocabulary
- *  (`apps/web/src/server/api-v1/schemas.ts:1731-1770`), minus `infeasible`.
+ *  (`apps/web/src/server/api-v1/schemas/`), minus `infeasible`.
  *  Enumerated rather than sampled: one lucky status is not a parity sweep,
  *  and a `!==`-shaped inversion of the product-defect test passes on any
  *  single one of them. */

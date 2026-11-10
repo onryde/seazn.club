@@ -296,7 +296,7 @@ The Directory tab reads the same use-case server-side, as `VenuesTab` does.
 
 ### 5.4 YouTube and Twitch only (D6)
 
-- The `kind` enum accepted by **create** narrows to `youtube | twitch` (schemas.ts :1306).
+- The `kind` enum accepted by **create** narrows to `youtube | twitch` (api-v1/schemas/).
 - The server fills `url` from the per-platform preset in `lib/stream-destinations.ts`. For YouTube, the value proven
   on staging 2026-09-30 is `rtmp://a.rtmp.youtube.com/live2`; the implementer verifies the preset before trusting it.
 - `checkDestination` still runs as a guard.
@@ -305,7 +305,7 @@ The Directory tab reads the same use-case server-side, as `VenuesTab` does.
 
 ### 5.5 "In use" names the match
 
-- `targetHolderFor` (stream-sessions.ts :838-855) also returns `s.state`, the holder fixture's number, and the path
+- `targetHolderFor` (usecases/stream-sessions/holders.ts) also returns `s.state`, the holder fixture's number, and the path
   parts for its organiser page.
 - `targetInUse()` (:973-982) sends `holder: {fixtureId, href, matchLabel, courtName, label, state}`.
 - The index-race `holder: null` path keeps the generic copy.
@@ -315,7 +315,7 @@ The Directory tab reads the same use-case server-side, as `VenuesTab` does.
 
 - `outputState()` (ingest-cf.ts :269-288) distinguishes `connecting` from `unknown`. It already reads the output's
   `status.current.state`.
-- The current-session projection (schemas.ts :1323-1326) gains
+- The current-session projection (api-v1/schemas/) gains
   `output: {state: "ok"|"connecting"|"rejected"|"unknown", since: string} | null` for passthrough sessions. `since` is
   when the current non-ok state began, taken from the output-state change events the poll already records (:1250-1290).
 - The client shows the D3 warning when `state === "live" && output.state !== "ok" && now - since ≥ 30 s`. The 30 s is
@@ -327,7 +327,7 @@ The Directory tab reads the same use-case server-side, as `VenuesTab` does.
 `removeOutput`, `addOutput`, `inputStatus` and `outputState` take an optional `meta: {sessionId}`:
 
 - in the port (ports.ts :73), in `ingest-cf.ts` and in the fake driver;
-- every call site in `stream-sessions.ts` passes it, including `releaseOutput` :480.
+- every call site in `usecases/stream-sessions/` passes it, including `releaseOutput`.
 
 This closes the NULL `session_id` seen on staging for `removeOutput`.
 

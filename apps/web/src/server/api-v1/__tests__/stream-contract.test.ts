@@ -1,4 +1,4 @@
-// Streaming R1 wire contract (Task 9): the relay's schemas in schemas.ts, its
+// Streaming R1 wire contract (Task 9): the relay's schemas in api-v1/schemas/, its
 // five OpenAPI rows and its five key bans. Every expected value here comes from
 // a declaration that is NOT the schema under test:
 //  - the enum members from V410's CHECK lists (the table the rows live in) and
@@ -101,7 +101,7 @@ describe("relay wire enums equal their declarations", () => {
 
   // Capture QR v2 §6.13 (W4, T11): the v1 QR and the derived free-restart boolean are gone from the wire — the organiser
   // never sees credentials, and `restart` (W23) is the one restart field. The EXACT key set is pinned, so neither can
-  // come back (nor a new field arrive) without this list moving; and schemas.ts re-exports no capture QR schema at all.
+  // come back (nor a new field arrive) without this list moving; and api-v1/schemas/ re-exports no capture QR schema at all.
   it("W4 + A9: StreamSessionCurrent's exact key set — no `qr`, `restart` the one restart field — and no QR schema re-exported", () => {
     expect(Object.keys(S.StreamSessionCurrent.shape).sort()).toEqual([
       "balance", "countdown", "creditUsed", "desiredState", "endReason", "endedAt", "failReason", "fixtureDecided", "fixtureHeld", "fixtureId",
@@ -535,7 +535,7 @@ describe("the relay's routes are never key-reachable", () => {
 
   // N1/N2 (B1 review): every 422 these routes answer carries a machine code (lib/stream-destinations.ts), and the spec
   // names each one — in the route's summary AND on its 422's `code`. Which route throws which is the usecases' own
-  // (stream-targets.ts create/patch/remove, stream-sessions.ts createSession); DELETE's only 422 is YOUTUBE_USE_DISCONNECT.
+  // (stream-targets.ts create/patch/remove, usecases/stream-sessions/start.ts createSession); DELETE's only 422 is YOUTUBE_USE_DISCONNECT.
   it("N1/N2: each stream route's coded 422s are named in its summary and on its 422 `code`; DELETE documents exactly one, YOUTUBE_USE_DISCONNECT", () => {
     type Doc = {
       paths: Record<string, Record<string, { summary?: string; responses: Record<string, { content: { "application/json": { schema: { properties: { error: { properties: { code: { description?: string } } } } } } } }> }>>;

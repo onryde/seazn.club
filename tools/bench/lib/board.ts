@@ -36,7 +36,7 @@
 //
 // 1. TIMES ARE EPOCH MS, EXCEPT WALL CLOCKS, WHICH ARE MINUTES INTO A DAY.
 //    The product's `ScheduleConfig` speaks ISO-with-offset
-//    (`apps/web/src/server/api-v1/schemas.ts:1283`), the engine speaks epoch
+//    (`apps/web/src/server/api-v1/schemas/`), the engine speaks epoch
 //    ms, and a `HardConstraint`'s `not_before`/`not_after` speak `HH:mm` in
 //    the ORG zone — an instant and a wall clock are different units and a
 //    field that accepted "either" is the silently-compare-the-wrong-unit trap
@@ -243,7 +243,7 @@ export interface EncodedConstraints {
    *  unresolvable court ref throws instead. */
   blackouts: readonly { courtId?: string; from: number; to: number }[];
   sessionWindows: readonly { from: number; to: number }[];
-  /** Mapped from `constraints.hard[]` (`schemas.ts:1357`). */
+  /** Mapped from `constraints.hard[]` (`api-v1/schemas/`). */
   hard: readonly EncodedHardRule[];
   /** Fixtures locked BEFORE `auto` ran, snapshotted from the product's own
    *  state rather than from the bench's intention — design §3.2 step 3. */
@@ -476,8 +476,8 @@ export function judgeDivision(input: {
 
 /** `ScheduleConfig`'s own defaults, restated here because this function reads
  *  an OPAQUE record and therefore never runs that zod schema. Pinned to
- *  `apps/web/src/server/api-v1/schemas.ts:1287` (matchMinutes), `:1288`
- *  (gapMinutes) and `:1303` (perEntrantMinRest); a drift here would make the
+ *  `apps/web/src/server/api-v1/schemas/scheduling.ts` (matchMinutes,
+ *  gapMinutes and perEntrantMinRest); a drift here would make the
  *  checker judge a board against a duration the product never used. */
 const DEFAULT_MATCH_MINUTES = 30;
 const DEFAULT_GAP_MINUTES = 0;
@@ -492,7 +492,7 @@ const NOT_MODELLED = "not modelled by the bench checker";
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 /** The product's `IsoDateTime` is `z.iso.datetime({ offset: true })`
- *  (`apps/web/src/server/api-v1/schemas.ts:1280`) — the offset is REQUIRED, and
+ *  (`apps/web/src/server/api-v1/schemas/`) — the offset is REQUIRED, and
  *  this is that requirement restated as a suffix check for the same reason the
  *  defaults above are restated: this function reads an opaque record and never
  *  runs that zod schema.
@@ -569,8 +569,8 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 /** For a `.nullish()` product field, an absent key and an explicit `null` mean
- *  the same thing: `startAt`/`endAt` are `.nullish()` (`schemas.ts:1284`,
- *  `:1286`), so a stored config round-trips nulls and refusing one would red
+ *  the same thing: `startAt`/`endAt` are `.nullish()`
+ *  (`api-v1/schemas/scheduling.ts`), so a stored config round-trips nulls and refusing one would red
  *  every division that simply never set a window.
  *
  *  NOT for `.optional()` fields — see `isMissing`. The two are a matched pair
@@ -587,7 +587,7 @@ function isAbsent(value: unknown): boolean {
  *  `blackouts[].court` is the field this exists for, and the distinction is not
  *  academic. Reading its `null` as "no court" widens a ONE-COURT blackout into
  *  a global one that blocks every court for the window — the exact widening
- *  `schemas.ts`'s `blackouts` doc comment forbids ("an entry that cannot be
+ *  `api-v1/schemas/`'s `blackouts` doc comment forbids ("an entry that cannot be
  *  mapped is DROPPED entirely ... never widened into a venue-wide blackout by
  *  dropping just the `court` key"), and the opposite of a missed check: the
  *  checker would red fixtures on courts the organiser never blacked out.
@@ -599,7 +599,7 @@ function isMissing(value: unknown): boolean {
 }
 
 /** `isMissing`, not `isAbsent`. The only field this serves is `constraints`,
- *  which is `.optional()` (`schemas.ts:1330`) and therefore NOT nullish — a
+ *  which is `.optional()` (`api-v1/schemas/`) and therefore NOT nullish — a
  *  `null` is a present-but-invalid value.
  *
  *  Reading it as an absence was the worst-failing instance of this bug class:
@@ -624,8 +624,8 @@ function recordField(
 /** `isMissing`, not `isAbsent`, for the same reason as `recordField` — and it
  *  is uniform across all four fields this serves, because not one of them is
  *  `.nullish()`: `courts`, `blackouts` and `sessionWindows` are `.default([])`
- *  (`schemas.ts:1302`, `:1318`, `:1322`) and `constraints.hard` is
- *  `.optional()` (`:1357`).
+ *  (`api-v1/schemas/scheduling.ts`) and `constraints.hard` is
+ *  `.optional()`.
  *
  *  `constraints.hard: null` is the §1.4 false-clean one level down — the rule
  *  list emptied while `unmodelled[]` stayed empty, because a null never reaches
@@ -644,9 +644,9 @@ function arrayField(cfg: Record<string, unknown>, key: string, where: string): r
  *  for a pack that declared 45.
  *
  *  `isMissing`, deliberately not `isAbsent` (ruling R14). None of the three
- *  knobs this serves is `.nullish()` in the product — `matchMinutes`
- *  (`schemas.ts:1287`), `gapMinutes` (`:1288`) and `perEntrantMinRest`
- *  (`:1303`) are all `z.number().int()...default(n)` — so an explicit `null`
+ *  knobs this serves is `.nullish()` in the product — `matchMinutes`,
+ *  `gapMinutes` and `perEntrantMinRest`
+ *  (`api-v1/schemas/scheduling.ts`) are all `z.number().int()...default(n)` — so an explicit `null`
  *  is invalid product-side and laundering it into a valid default is the same
  *  defect as reading a null blackout `court` as "no court".
  *
@@ -771,7 +771,7 @@ function show(value: unknown): string {
  *
  *  A TABLE rather than nine `if`s: adding a knob to `ScheduleConfig` and
  *  forgetting it here is the failure this list exists to prevent, and a table
- *  is the shape a reader can diff against `schemas.ts:1283-1359` in one pass.
+ *  is the shape a reader can diff against `api-v1/schemas/` in one pass.
  *  Only `hard` is absent from it, because `encodeHardRule` reports that one
  *  rule by rule. */
 const UNMODELLED_TOP_LEVEL: readonly { key: string; why: string }[] = [
@@ -827,7 +827,7 @@ const UNMODELLED_CONSTRAINTS: readonly { key: string; why: string }[] = [
  *     the oracle, so the failure mode `isMissing` guards against — laundering a
  *     null into a usable number or an empty container — cannot arise here. The
  *     worst it can do is stay silent about a key.
- *   - `roundMinutes` IS `.nullish()` (`schemas.ts:1327`), so a null there
+ *   - `roundMinutes` IS `.nullish()` (`api-v1/schemas/`), so a null there
  *     genuinely means "not set", and reporting it as a declared-but-unmodelled
  *     knob would be a FALSE claim about what the pack asked for — the opposite
  *     error, and one this sweep exists to avoid making.
@@ -875,7 +875,7 @@ function reportUnmodelledKnobs(
  *
  *  The cause is structural, not a gap more code would close: the product's
  *  `Fixture` carries `home_entrant_id` / `away_entrant_id` and NO persons at
- *  all (`apps/web/src/server/api-v1/schemas.ts`, the `Fixture` object), so
+ *  all (`apps/web/src/server/api-v1/schemas/`, the `Fixture` object), so
  *  `BoardFixture.personIds` is always `[]` and `tallyKeys` yields no key for a
  *  person scope on any real board.
  *
@@ -956,7 +956,7 @@ function encodeHardRule(
       //   * `per_person` (and the per-person half of `both`) needs person ids,
       //     and the product's `Fixture` carries NONE — no `person_ids`, no
       //     lineup, only `home_entrant_id` / `away_entrant_id`
-      //     (`apps/web/src/server/api-v1/schemas.ts`, the `Fixture` object). So
+      //     (`apps/web/src/server/api-v1/schemas/`, the `Fixture` object). So
       //     `BoardFixture.personIds` is always `[]` and a person series can
       //     never have two members to measure between.
       //   * `feeder_to_dependent` (and the feeder half of `both`) needs the

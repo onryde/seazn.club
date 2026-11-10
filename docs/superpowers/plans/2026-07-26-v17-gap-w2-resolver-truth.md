@@ -800,11 +800,11 @@ Both cases here are **coverage additions, not regressions** — every assertion 
 - Create: `apps/web/src/server/usecases/__tests__/competition-lifecycle-event.test.ts`
 
 **Interfaces:**
-- Consumes: `CompetitionStatus` zod enum (`apps/web/src/server/api-v1/schemas.ts:20` — `z.enum(["draft", "published", "live", "completed", "archived"])`); `EVENTS.COMPETITION_STARTED` / `EVENTS.COMPETITION_COMPLETED` / `AnalyticsEvent` type (`apps/web/src/lib/analytics-events.ts:24,26,70`).
+- Consumes: `CompetitionStatus` zod enum (`apps/web/src/server/api-v1/schemas/` — `z.enum(["draft", "published", "live", "completed", "archived"])`); `EVENTS.COMPETITION_STARTED` / `EVENTS.COMPETITION_COMPLETED` / `AnalyticsEvent` type (`apps/web/src/lib/analytics-events.ts:24,26,70`).
 - Produces: `competitionLifecycleEvent(statusChangedTo: z.infer<typeof CompetitionStatus> | null): AnalyticsEvent | null` — a new named export from `competitions.ts`, mirroring the existing `shouldFireMadePublic` export (line 194) both in shape and in how it's unit-tested (see `apps/web/src/server/usecases/__tests__/competition-made-public.test.ts`, the exact precedent this task's test file follows).
 
 **Verified facts:**
-- `apps/web/src/server/api-v1/schemas.ts:20` — `export const CompetitionStatus = z.enum(["draft", "published", "live", "completed", "archived"]);`. `"active"` and `"complete"` are not, and can never be, members of this type.
+- `apps/web/src/server/api-v1/schemas/` — `export const CompetitionStatus = z.enum(["draft", "published", "live", "completed", "archived"]);`. `"active"` and `"complete"` are not, and can never be, members of this type.
 - `apps/web/src/server/usecases/competitions.ts:226` — `let statusChangedTo: string | null = null;` (untyped against the enum — this is *why* tsc never caught the bug).
 - `apps/web/src/server/usecases/competitions.ts:203-210` (`isRetirePatch`) — the CORRECT sibling comparison a few lines above the bug: `patch.status === "completed" || patch.status === "archived"`, using real enum members. The bug at lines 312-314 is the ONLY place in this file comparing against the wrong literals.
 - `apps/web/src/server/usecases/competitions.ts:310-319` (current, buggy):
@@ -833,7 +833,7 @@ Both cases here are **coverage additions, not regressions** — every assertion 
 
   // v17 #289: `statusChangedTo === "active" || statusChangedTo === "complete"`
   // compared against CompetitionStatus values that never exist — "live" and
-  // "completed" are the real enum members (schemas.ts's CompetitionStatus) —
+  // "completed" are the real enum members (api-v1/schemas/common.ts's CompetitionStatus) —
   // so COMPETITION_STARTED/COMPETITION_COMPLETED never fired. Pure decision
   // helper, mirrors shouldFireMadePublic — no DB needed.
   describe("competitionLifecycleEvent", () => {

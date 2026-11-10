@@ -235,7 +235,7 @@ export function youtubeRefusalOf(code: CreateFailureCode): YoutubeRefusalCode | 
 /** `target_in_use` without a match to name (the index race's `{ holder: null }`, or a holder whose fixture was deleted). */
 const TARGET_IN_USE_ELSEWHERE_KEY: MessageKey = "stream.error.target_in_use.unknown";
 
-/** The lower-case domain codes createSession puts on the wire VERBATIM (stream-sessions.ts `refuse`, `targetInUse`). */
+/** The lower-case domain codes createSession puts on the wire VERBATIM (usecases/stream-sessions/ `refuse`, `targetInUse`). */
 const VERBATIM_CODES: readonly CreateErrorCode[] = [
   "no_credits", "overlay_required", "active_session", "phone_not_paired", "phone_not_responding", "storage_exhausted", "ingest_unavailable",
   "composed_unavailable", "target_in_use",
@@ -290,7 +290,7 @@ export type CreateErrorHolder = {
   courtName: string | null; label: string; matchNo: number | null; href: string | null; state: "live" | "waiting";
 };
 
-/** Who holds the destination on a `target_in_use` (`extra.holder`, stream-sessions.ts `targetInUse`); `null` on the
+/** Who holds the destination on a `target_in_use` (`extra.holder`, usecases/stream-sessions/holders.ts `targetInUse`); `null` on the
  *  index-race variant `{ holder: null }`, on any other refusal, and on a holder without a label. A holder with no
  *  `state` (a pre-T3 server) reads "live": that server refused only for a destination already on air. */
 export function createErrorHolder(err: unknown): CreateErrorHolder | null {
@@ -335,7 +335,7 @@ export const INGEST_STATE_KEYS: Record<"connected" | "disconnected" | "unknown",
 };
 
 /** C6: the first chip is the INGEST STATE as the port reported it — passthrough only: the server reads the ingest for
- *  passthrough alone (stream-sessions.ts `currentSession`), so a composed session's `ingest` is always null and an
+ *  passthrough alone (usecases/stream-sessions/current.ts `currentSession`), so a composed session's `ingest` is always null and an
  *  "unknown" chip there would be a permanent false alarm. fps / Mbps / beat chips exist only once a heartbeat has
  *  arrived. The beat age is clamped at 0: `lastBeatAt` is the server's clock and `now` the browser's.
  *

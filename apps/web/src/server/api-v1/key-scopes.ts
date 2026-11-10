@@ -10,7 +10,7 @@
 // api-key management, Stripe connect, refunds, device-link minting, and the
 // session-bound /me surface.
 // Relative, with its extension: openapi.ts imports this file, and scripts/openapi-gen.ts runs under bare
-// `node --experimental-strip-types`, which resolves no `@/` alias (schemas.ts imports lib/ the same way).
+// `node --experimental-strip-types`, which resolves no `@/` alias (api-v1/schemas/ imports lib/ the same way).
 import { ORGANISER_ONLY_EVENT_TYPES, isOrganiserOnlyEvent } from "../../lib/organiser-only-events.ts";
 
 export type KeyScope = "read" | "score" | "manage";

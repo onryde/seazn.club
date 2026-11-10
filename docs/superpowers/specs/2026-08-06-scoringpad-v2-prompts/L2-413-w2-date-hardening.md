@@ -6,7 +6,7 @@ then this. Migration + server + forms session.
 Branch `feat/l2-w2-date-hardening` in a fresh worktree. One PR. Issue #413.
 Design: `../2026-08-03-scoringpad-v2-design.md` (Part I, WS4). Closes #407 WS4.
 
-**Needs L1 merged first** — file-overlap sequencing on `schemas.ts` /
+**Needs L1 merged first** — file-overlap sequencing on `api-v1/schemas/` /
 `registrations.ts`, not a logical dependency.
 
 ## RESCOPED — read this before anything else
@@ -43,7 +43,7 @@ forms deep-link the offenders. Null division dates inherit the competition windo
    divisions; `opens_at < closes_at` and `refund_lock_at <= closes_at` on
    registration_settings. Hierarchy checks need joins → usecase layer only.
    Load `supabase:supabase-postgres-best-practices` first.
-2. **Zod superRefines (`schemas.ts`)**: Create/PatchCompetition date order;
+2. **Zod superRefines (`api-v1/schemas/`)**: Create/PatchCompetition date order;
    Create/PatchDivision gain `starts_on`/`ends_on` + an order refine;
    PutRegistrationSettings window order + refund-lock-within-window; ScheduleConfig
    `startAt < endAt`, blackouts/sessionWindows `from < to`, startWindows

@@ -686,7 +686,7 @@ async function planForCompetition(
     // reviewing this response is the last automated-gate-free line of defence,
     // and the board cannot render what is not returned here.
     // `AiPlanConflict` carries the engine `Conflict` verbatim (see its own
-    // comment in schemas.ts) — `details` already rides along unchanged;
+    // comment in api-v1/schemas/) — `details` already rides along unchanged;
     // `withLegacyDetail` only restores the deprecated `detail` string the
     // engine stopped producing (C3, 2026-08-13 design amendment).
     warnings: result.warnings.map(withLegacyDetail),

@@ -72,7 +72,7 @@ pages + OG cards in PROMPT-83.
 - **Modify** division settings API/usecase — accept `auto_posts` (gated)
 - **Modify** `apps/web/src/server/usecases/scoring.ts` — draft hooks on the
   decided seam
-- **Modify** `schemas.ts` + `openapi.ts` (drift gate)
+- **Modify** `api-v1/schemas/` + `openapi.ts` (drift gate)
 
 ## Interfaces (produced — PROMPT-83 consumes these exact names)
 

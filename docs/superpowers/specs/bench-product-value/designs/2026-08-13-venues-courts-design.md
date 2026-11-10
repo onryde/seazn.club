@@ -320,7 +320,7 @@ Owner-ratified unless marked otherwise.
 
 - **A9 — the typed code is `NO_MATCHING_COURT`, not
   `capacity.no_matching_court`.** Typed codes in this repo are ALL_CAPS_SNAKE
-  (`schemas.ts:3134-3138`, precedent `CAPACITY_IMPOSSIBLE`); dotted-lowercase
+  (`api-v1/schemas/`, precedent `CAPACITY_IMPOSSIBLE`); dotted-lowercase
   is i18n-key-shaped. Exactly the same false premise as P8's `court.in_use`.
 
 - **A10 — the verifier gained `court_tag_mismatch` (26th conflict kind).**

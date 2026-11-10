@@ -71,10 +71,10 @@ being combined with `byeEntrants` (`:131`), and refuses a two-bye pairing
 There is **no staggered entry within a stage** — grep for
 `entryRound|entry_round|staggered` over `bracket.ts` and `stages.ts` returns
 nothing. Entrants join at round 0 or hold a bye; entering later is a
-cross-stage `ProgressionSchema` matter (`api-v1/schemas.ts:901-935`).
+cross-stage `ProgressionSchema` matter (`api-v1/schemas/`).
 
 But both keys ride `CreateStage.config: z.record(z.string(), z.unknown())`
-(`api-v1/schemas.ts:980`) inside an otherwise `.strict()` envelope (`:983`).
+(`api-v1/schemas/`) inside an otherwise `.strict()` envelope (`:983`).
 **A misspelled `slotOrder` is dropped in silence** and the product seeds its
 own draw. Decisions D4 and D8.
 
@@ -203,7 +203,7 @@ the live run is mandatory in-wave, never deferred to B06b.
 
 **Constraint scenario — the reason suite 11 exists.** One court, the Ally Pally
 stage. Two sessions a day is **not** `sessionWindows`: that field is venue-wide
-with no court key (`api-v1/schemas.ts:1542-1545`). It is two `PackCourtHours`
+with no court key (`api-v1/schemas/`). It is two `PackCourtHours`
 rows per weekday on the one court (`lib/pack-schema.ts:753`), which the product
 allows (`db/migration/deltas/V367__venues_and_courts.sql:114-120`, PK
 `(court_id, weekday, open_min)`; `usecases/venues.ts:192-197` states multiple
@@ -211,9 +211,8 @@ ranges per weekday are allowed and 422s only on overlap). The Christmas break is
 `PackCourtException` closed dates (`lib/pack-schema.ts:780`). Day caps ride
 `constraints.hard[]` `max_fixtures_per_day` at 3–4
 (`packages/engine/src/scheduling/constraints.ts:94-98`, admitted at
-`api-v1/schemas.ts:1577`). The final session's pins are per-fixture
-`schedule_locked` (`api-v1/schemas.ts:1136`, honoured by `AutoScheduleRequest`
-at `:1878-1899`) — a fixture field, not a config field. 16 playing days, one
+`api-v1/schemas/`). The final session's pins are per-fixture
+`schedule_locked` (`api-v1/schemas/`, honoured by `AutoScheduleRequest`) — a fixture field, not a config field. 16 playing days, one
 court, ~95 matches: the hardest packing case in the roster.
 
 **Certificate: full.** The real session-by-session timetable is published, so
@@ -248,13 +247,13 @@ real volume measurement to B08.
 
 `CreateStage.config` is one untyped record shared by every stage kind —
 league, group, swiss, knockout, double_elim, stepladder, page_playoff,
-americano, ladder (`api-v1/schemas.ts:61`). Typing `byes`/`slotOrder` therefore
+americano, ladder (`api-v1/schemas/`). Typing `byes`/`slotOrder` therefore
 **cannot** be a blanket strict schema, or every other kind's config keys begin
 400ing. It has to be a per-kind shape that types knockout and passes the rest
 through unchanged.
 
 Ships with a regression test proving both directions: a misspelled `slotOrder`
-now 400s, **and** a league config still round-trips. Touches `schemas.ts`,
+now 400s, **and** a league config still round-trips. Touches `api-v1/schemas/`,
 `usecases/stages.ts:800-810`, the CI OpenAPI drift step, and tests. No
 user-facing strings, so no locale work. Independent of B06a and B06b; can land
 at any point.

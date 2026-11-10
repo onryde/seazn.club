@@ -88,7 +88,7 @@ export function youtubeRefusal(code: YoutubeRefusalCode, connectionId: string): 
   return new HttpError(STATUS_OF[code], `YouTube refused Go live: ${code}`, code, { connectionId });
 }
 
-/** The existing one-session-per-fixture refusal (stream-sessions.ts `refuse`'s `active_session` shape): another Go live holds
+/** The existing one-session-per-fixture refusal (usecases/stream-sessions/refusals.ts `refuse`'s `active_session` shape): another Go live holds
  *  this fixture's broadcast, and no session exists yet to name. */
 const activeSession = (): HttpError =>
   new HttpError(409, "a session is already running for this fixture", "active_session", { sessionId: null });

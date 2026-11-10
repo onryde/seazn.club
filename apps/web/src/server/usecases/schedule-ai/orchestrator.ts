@@ -652,7 +652,7 @@ async function planForDivision(
     proposal: result.proposal,
     unschedulable: result.unschedulable,
     // `AiPlanConflict` carries the engine `Conflict` verbatim (see its own
-    // comment in schemas.ts) — `details` already rides along unchanged;
+    // comment in api-v1/schemas/) — `details` already rides along unchanged;
     // `withLegacyDetail` only restores the deprecated `detail` string the
     // engine stopped producing (C3, 2026-08-13 design amendment), so an
     // existing client reading `.detail` off `warnings`/`blocking` keeps
@@ -673,7 +673,7 @@ async function planForDivision(
     // The ARCHITECT's assumptions (stage 2). The resolver's are a different
     // array on a different response — see AiPlanResponse.assumptions.
     assumptions: result.assumptions,
-    // Public shape is pinned to AiPlanResponse.usage in api-v1/schemas.ts —
+    // Public shape is pinned to AiPlanResponse.usage in api-v1/schemas/ai-planning.ts —
     // exactly these three fields. cost_usd lives on AiPlanResult["usage"] for
     // the ledger (competition_events insert above) but must not leak into the
     // API response, so it is built explicitly here rather than by spreading

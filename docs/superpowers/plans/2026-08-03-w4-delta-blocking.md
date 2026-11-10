@@ -70,7 +70,7 @@ count) reads as new. (3) the feed-order loop gains `+ effectiveRestMinutes`.
 | `apps/web/src/server/usecases/competition-schedule-apply.ts` | baseline pass + delta gate + per-division apply window |
 | `apps/web/src/server/usecases/schedule-ai.ts` | `isBlocking` gains `person_overlap`/`window`; `rule` surfaced on plan conflicts; `CAP` on unschedulable |
 | `apps/web/src/server/usecases/competition-schedule-ai.ts` | `verifyConfigFor` apply-window arg; `CAP` on unschedulable |
-| `apps/web/src/server/api-v1/schemas.ts` | `rule` on `AiPlanConflict` + `ScheduleConflict`; `rule` on unschedulable rows |
+| `apps/web/src/server/api-v1/schemas/` | `rule` on `AiPlanConflict` + `ScheduleConflict`; `rule` on unschedulable rows |
 | `openapi/v1.json`, `openapi/v1.public.json` | regenerated |
 | `apps/web/content/help/scheduling/board.md` | what now gets refused vs badged |
 | `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json` | only if a new string appears |
@@ -499,7 +499,7 @@ function mapConflicts(
 ### Task 7: `rule` and `CAP` on the wire
 
 **Files:**
-- Modify: `apps/web/src/server/api-v1/schemas.ts:762-787` (`ScheduleConflict`),
+- Modify: `apps/web/src/server/api-v1/schemas/` (`ScheduleConflict`),
   `:1655-1660` (`AiPlanConflict`), the unschedulable rows at `:1687`/`:1856`
 - Modify: `apps/web/src/server/usecases/schedule-ai.ts`,
   `competition-schedule-ai.ts` — stamp `rule: "CAP"` on unschedulable rows

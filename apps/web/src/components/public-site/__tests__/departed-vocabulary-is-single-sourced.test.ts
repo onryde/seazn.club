@@ -40,7 +40,7 @@
 //     `withdrawn || disqualified`), and both schedule pages:
 //     `app/o/[orgSlug]/c/[compSlug]/schedule/page.tsx` and its division
 //     sibling `.../d/[divSlug]/schedule/page.tsx`;
-//   - a wire enum listing all four statuses — `server/api-v1/schemas.ts`'s
+//   - a wire enum listing all four statuses — `server/api-v1/schemas/common.ts`'s
 //     `EntrantStatus`, which is a CONTRACT and legitimately its own list.
 //
 // So the residual risk is real and is named rather than hidden: add a fifth

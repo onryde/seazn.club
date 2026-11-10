@@ -7,7 +7,7 @@
 // `patchOf` unwraps each field's default first, then makes it optional — the create schema keeps its defaults.
 //
 // Guarded by server/api-v1/__tests__/patch-omitted-fields.test.ts, which parses every PATCH body's fields from
-// `undefined` and reds on any that come back with a value. Pure zod, no imports beyond it: schemas.ts (which
+// `undefined` and reds on any that come back with a value. Pure zod, no imports beyond it: api-v1/schemas/ (which
 // scripts/openapi-gen.ts loads outside Next's bundler) imports this file by relative path.
 import { z } from "zod";
 

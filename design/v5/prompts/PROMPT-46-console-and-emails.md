@@ -3,7 +3,7 @@
 **Read first:** `v5/00-i18n-strategy.md` §1/§3/§5, `v5/01-translation-pipeline.md`;
 surfaces: `components/v2/**` (board, division-builder wizard, panels), console pages
 `app/o/[orgSlug]/**` (settings/billing/admin), `lib/email-templates/*` + `html/*` +
-`compose.ts` (9 builders + funnel), zod messages in `server/api-v1/schemas.ts`, hardcoded
+`compose.ts` (9 builders + funnel), zod messages in `server/api-v1/schemas/`, hardcoded
 `Intl` locales (~31 files: `"en-GB"` in billing/api-keys/card-stats, `"en-CA"`/`"en-US"`
 in device-links, `"en"` in division-builder + `lib/currency.ts:54` `formatMinor`).
 Preamble: PROMPT-00. **Depends:** PROMPT-44. May run parallel to PROMPT-45 (disjoint files).
@@ -23,7 +23,7 @@ Preamble: PROMPT-00. **Depends:** PROMPT-44. May run parallel to PROMPT-45 (disj
    (`server/usecases/registrations.ts`, `fixtures.ts`, `lib/billing.ts`, auth mails).
 3. **Errors** (v5/00 §5): client error mapper `errors.*` keyed by envelope `code`
    (+`feature_key` for 402 copy via `feature-copy.ts` — localize that table); promote
-   user-facing custom zod messages in `schemas.ts` to codes; server responses stay
+   user-facing custom zod messages in `api-v1/schemas/` to codes; server responses stay
    English+code (documented for API consumers).
 4. **Formatting** (v5/00 §5): `lib/format.ts` (`fmtDate/fmtTime/fmtRange/fmtNumber`
    taking locale + tz); sweep all hardcoded-locale `Intl` call sites onto it;

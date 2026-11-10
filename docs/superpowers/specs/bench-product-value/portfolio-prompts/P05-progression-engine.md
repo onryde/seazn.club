@@ -33,7 +33,7 @@ Server/engine only — UI is P6.
 - `apps/web/src/server/usecases/stages.ts` (generate/complete/standings/
   fillSlot), fixtures migration + readers scout list (public pages,
   stats, exports, scoring guard — scoring an unfilled fixture must 422),
-  `schemas.ts`, `openapi.ts`, new migration(s)
+  `api-v1/schemas/`, `openapi.ts`, new migration(s)
 
 ## Do NOT touch
 

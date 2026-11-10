@@ -11,7 +11,7 @@
 // Why this file does not import the product schema, in any form
 // -------------------------------------------------------------------------
 // `apps/web/src/server/templates/schema.ts` is `server-only` and it
-// VALUE-imports api-v1/schemas.ts, which reaches `@grpc/grpc-js`; and
+// VALUE-imports api-v1/schemas/, which reaches `@grpc/grpc-js`; and
 // tsconfig.scripts.json cannot resolve apps/web's `@/` path aliases, so even
 // a `import type` would fail typecheck. The subset relation is therefore
 // proven by reading that file as TEXT at test time and extracting its

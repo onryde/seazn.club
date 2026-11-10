@@ -45,7 +45,7 @@ F3 is where the programme's stated purpose is delivered.
 | Working reference shapes exist | `catalog/euro24.json:40` (`seeded_map`), `catalog/t20-super8.json:32` (`snake`) |
 | All 14 `label`/`help` are plain English literals | `:44-45`, rendered raw at `division-builder.tsx:672-673`, `division-settings.tsx:544` |
 | No dictionary keys exist for them | zero hits across `dictionaries/**` |
-| Picker covers **all 9** engine `StageKind`s | `schemas.ts:27` vs the 14 templates |
+| Picker covers **all 9** engine `StageKind`s | `api-v1/schemas/` vs the 14 templates |
 
 That last row matters and is covered in §4.
 
@@ -176,7 +176,7 @@ than merely asserted on.
 
 F4's premise was sport and format kinds. Verification found **no gap in either
 direction**: the picker's 14 templates use exactly the 9 engine `StageKind`s
-(`schemas.ts:27`), and every engine kind is reachable from the picker.
+(`api-v1/schemas/`), and every engine kind is reachable from the picker.
 
 The one open question was `mexicano`, which maps to engine kind `americano`
 (`division-builder.tsx:61`). The root cause is that `StageKind` has no

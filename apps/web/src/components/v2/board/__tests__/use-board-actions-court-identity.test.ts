@@ -1,6 +1,6 @@
 // P9 pass 4a item 2b. `moveCard` and `swapCourts` both PATCHed
 // `/api/v1/fixtures/{id}` with a `court_label` key — PatchFixture
-// (schemas.ts) is `.strict()` and dropped that key from its shape when the
+// (api-v1/schemas/fixtures.ts) is `.strict()` and dropped that key from its shape when the
 // cutover landed, so every drag and every court swap 400ed instead of
 // writing. `swapCourts` additionally READ `f.court_label` to decide which
 // side of the swap a fixture was on, which is frozen null post-cutover and

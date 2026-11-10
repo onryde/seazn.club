@@ -170,7 +170,7 @@ also means the "new server code ships structured logging" rule applies
 here in full, not as an incremental field add.
 
 One more site to verify, not assume: `PostKind` is declared **twice** —
-`usecases/org-posts.ts:32` and `api-v1/schemas.ts:2941`. Adding
+`usecases/org-posts.ts:32` and `api-v1/schemas/`. Adding
 `weekly_digest` must touch both or they silently drift, and `posts.kind`
 may additionally carry a DB CHECK constraint, which would be a third
 site needing a migration. This is the same API-enum-⊃-DB-CHECK mismatch

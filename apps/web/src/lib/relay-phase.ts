@@ -1,7 +1,7 @@
-// lib/relay-phase.ts — IMPORT-FREE on purpose (lib/__tests__/relay-phase.test.ts pins it): api-v1/schemas.ts imports
-// it by relative `.ts` path, and scripts/openapi-gen.ts / scripts/gen-relay-contracts.ts load schemas.ts under bare
+// lib/relay-phase.ts — IMPORT-FREE on purpose (lib/__tests__/relay-phase.test.ts pins it): api-v1/schemas/ imports
+// it by relative `.ts` path, and scripts/openapi-gen.ts / scripts/gen-relay-contracts.ts load api-v1/schemas/ under bare
 // `node --experimental-strip-types`, which cannot resolve `@/`. It is also the overlay page's CLIENT-SAFE reader of the
-// loopback phase endpoint (R2005): a client component must never import schemas.ts, which reaches the engine's
+// loopback phase endpoint (R2005): a client component must never import api-v1/schemas/, which reaches the engine's
 // scheduler (review M3). The relay-job.v1 contract (docs/contracts/relay-job.v1.json) publishes every value here:
 // the phase words in `$defs.heartbeat.properties.programmePhase` and `$defs.phaseReply`, the channel words in
 // `phaseChannel`, and the endpoint's three constants in `$defs.phaseEndpoint` (R2007 PR B; the compositor drift-tests
@@ -21,7 +21,7 @@ export const RELAY_PHASE_PATH = "/phase";
 /** Spec §4.3: a long-poll is held at most this long. */
 export const RELAY_PHASE_LONG_POLL_MAX_MS = 10_000;
 
-/** Spec §4.3: the loopback endpoint's reply, `{ phase, seq }` (relay-job.v1 `$defs.phaseReply`). schemas.ts's zod twin
+/** Spec §4.3: the loopback endpoint's reply, `{ phase, seq }` (relay-job.v1 `$defs.phaseReply`). api-v1/schemas/ folder's zod twin
  *  `RelayPhaseReply` infers exactly this type (relay-contract.test.ts pins it). */
 export type RelayPhaseReply = { phase: ProgrammePhaseWire; seq: number };
 

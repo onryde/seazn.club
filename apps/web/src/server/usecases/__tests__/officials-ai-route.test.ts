@@ -521,7 +521,7 @@ describe.skipIf(!HAS_DB)("officialsAiPlanForDivision — runner (v4/03 §2)", ()
   });
 
   it("diff baseline falls back to locked when there is no prior — locked fixture is unchanged, not changed", async () => {
-    // Review follow-up (T9 M-diff): schemas.ts documents diff.changed/unchanged
+    // Review follow-up (T9 M-diff): api-v1/schemas/ documents diff.changed/unchanged
     // as bare fixture ids vs a baseline of "the prior proposal when given, else
     // the locked assignments". With no prior, a from-scratch proposal that only
     // echoes the lock must report that fixture as unchanged.

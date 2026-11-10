@@ -10,7 +10,7 @@ import { z, type ZodType } from "zod";
 import * as S from "./schemas/index.ts";
 import { matchKeyRoute } from "./key-scopes.ts";
 // Spectator surface W2, Task 5 — imported directly rather than routed through
-// schemas.ts's `S.` namespace (unlike W1's MatchCentreDoc, which schemas.ts
+// api-v1/schemas/ folder's `S.` namespace (unlike W1's MatchCentreDoc, which api-v1/schemas/
 // re-exports as a field of PublicFixtureSummary): this is the document's own
 // top-level route response, not a field nested inside another schema. Same
 // relative-import, explicit-`.ts`-extension reasoning as every other import
@@ -27,7 +27,7 @@ import { PublicPlayerMatches } from "../public-site/player-matches-schema.ts";
 import {
   DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, STREAM_KEY_EMPTY, TARGET_UNREADABLE, YOUTUBE_USE_DISCONNECT,
 } from "../../lib/stream-destinations.ts";
-// The stream-link validator's own host list (zod only, client-safe, already reached through schemas.ts): a published example
+// The stream-link validator's own host list (zod only, client-safe, already reached through api-v1/schemas/): a published example
 // link is built from it, so it is a link `isStreamUrl` accepts by construction.
 import { STREAM_HOSTS } from "../../lib/stream-url.ts";
 
@@ -688,7 +688,7 @@ const STREAM_SESSION_CREATE_422 = pick422(DESTINATION_NOT_ALLOWED, TARGET_UNREAD
 
 // SCOPED to POST /fixtures/{id}/stream-sessions (Streaming R1, lane C A21): the
 // typed refusals of `createSession` carry machine-readable extras as real
-// HttpError `extra`s (usecases/stream-sessions.ts `refuse`), and the v1
+// HttpError `extra`s (usecases/stream-sessions/refusals.ts `refuse`), and the v1
 // envelope merges them into `error`. One envelope per status, built from the
 // same base, because a status can carry two refusals with different extras
 // (402: the plan paywall's feature_key/reason vs no_credits' featureKey).

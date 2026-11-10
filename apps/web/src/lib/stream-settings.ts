@@ -13,7 +13,7 @@ import { OVERLAY_TEMPLATES, templatesForSportFrom, type TemplateRegistry } from 
 import type { StreamMode } from "@/server/api-v1/schemas";
 
 /** V462's `fixture_stream_settings.overlay_delay_ms` check (0–30000). `PutStreamSettings` states the same bound as a
- *  literal (schemas.ts may not import `@/lib`); stream-settings.test.ts holds the two equal. */
+ *  literal (api-v1/schemas/ may not import `@/lib`); stream-settings.test.ts holds the two equal. */
 export const OVERLAY_DELAY_MAX_MS = 30_000;
 
 /** The mode a start streams with. `stored` is `fixture_stream_settings.stream_mode` (null = never chosen);

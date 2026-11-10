@@ -12,7 +12,7 @@ ALREADY exist — claim fills them, no persons migration needed),
 `apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/players/[personId]/page.tsx`
 (public card whose consent flags flip);
 `apps/web/src/app/(public)/r/[ref]/ticket.png/route.tsx` (QR rendering precedent);
-`apps/web/src/server/api-v1/schemas.ts` + `usecases/registrations.ts` (existing
+`apps/web/src/server/api-v1/schemas/` + `usecases/registrations.ts` (existing
 DOB/guardian-consent shapes — reuse vocabulary);
 `apps/web/src/lib/email-templates/compose.ts` (invite email on courtside template);
 `apps/web/src/lib/routes.ts` (register every new page — raw hrefs are lint-banned);

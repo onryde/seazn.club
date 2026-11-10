@@ -128,14 +128,14 @@ pages below rather than trusting a summary.
   ours is org-scoped.
 - Session lifecycle: `relay/domain/session.ts:154-161` Effect union; `provisioned` emits `add_output`; since R2004
   **every** terminal entry holding an output (both modes) prepends `release_output` (`session.ts:364-365`).
-  Every terminal entry writes `fixture_stream_sessions.ended_at` via persist (`stream-sessions.ts:188`;
+  Every terminal entry writes `fixture_stream_sessions.ended_at` via persist (`usecases/stream-sessions/`;
   `session.ts:229/244/296`). **Only the organiser's Stop goes through `stopSession`**; phone stop
   (`capture-phone.ts:611`), auto-stop (`:2367`), phone-lost/warming/never-live (`:2309`), target_rejected (`:2127`),
   output_failed (`:901`), credit_refused (`:419`), relay_disabled (`:871`), every expiry (`:856`), runner signals
   (`:809,:1017,:1020,:1067,:2727,:2747`), complete_now (`:958`) and expireTargetHolders (`~:2957`) call `apply()`
-  directly, and several never pass through `ending` (r2, 2026-10-27). `usecases/stream-sessions.ts:913` runEffects → `:922` readTargetSecret →
-  `:927` `ingest.addOutput` (`relay/ingest-cf.ts:372`). `startBroadcast` `:1553`, admission `:1741`. `stopSession` `:2551`.
-  `fillReplayUrl` `:2921-2930` → `setFixtureStreamUrl` (`usecases/fixtures.ts:512`).
+  directly, and several never pass through `ending` (r2, 2026-10-27). `usecases/stream-sessions/apply.ts` runEffects → `:922` readTargetSecret →
+  `:927` `ingest.addOutput` (`relay/ingest-cf.ts:372`). `startBroadcast`, admission `:1741`. `stopSession`.
+  `fillReplayUrl` → `setFixtureStreamUrl` (`usecases/fixtures.ts:512`).
 - Credits/restarts: `stream-credits.ts:129,167`; `CREDIT_REUSE_HOURS=24`, `FREE_RESTARTS_PER_WINDOW=3` (`relay/config.ts:279-288`). Unchanged.
 - Locking: `apply` takes the org advisory lock (`lockOrg` `:385`, `stream-credits.ts:104`) THEN the session row
   `for update` (`:386`/`:156`).
@@ -234,7 +234,7 @@ destination table, forks every reader.)*
 **One channel streams several matches at once** (the reason for the key pool, §5.3; four courts live at once was
 the example the owner heard and accepted). So for an API-backed row the **one-active-session-per-target rule does
 not apply**: the V421 unique index (`fixture_stream_sessions_one_active_target`) and the `target_in_use` refusal
-(`targetHolderFor`, `stream-sessions.ts:1250,1644,1821`) are narrowed to pasted-key rows. Exclusivity for API rows
+(`targetHolderFor`, `usecases/stream-sessions/`) are narrowed to pasted-key rows. Exclusivity for API rows
 moves to the **key**: at most one open broadcast per pooled key (§5.4), enforced by a unique index, plus at most one
 open broadcast per fixture. Disconnect/delete "in use" checks (§6.8) read open broadcasts, not the target holder.
 *(builder-check finding; my call on the mechanism)*
@@ -311,7 +311,7 @@ API-backed destination, **after** those pass and **before** the session insert, 
 4. `liveBroadcasts.insert`: title (§6.5), `scheduledStartTime` now, privacy = connection default, made-for-kids =
    connection setting, **`enableAutoStart=true`, `enableAutoStop=false`**, monitor stream off. Then `bind` to the key.
    **Steps 3–4 run OUTSIDE every transaction** — no row or advisory lock is held across a YouTube call, including
-   admission's target lock (`stream-sessions.ts ~:1720`). The resulting broadcast row is written `bound` in its own
+   admission's target lock (`usecases/stream-sessions/ ~:1720`). The resulting broadcast row is written `bound` in its own
    short transaction, then admission's existing transaction references it.
 5. The session proceeds as today. `add_output` reads the pooled key (sealed `{url, streamKey}`) instead of `rtmp_enc`.
 

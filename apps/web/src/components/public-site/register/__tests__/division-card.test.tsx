@@ -8,8 +8,8 @@
 //
 // Investigated per the dispatch before changing anything: the ORGANISER's
 // timezone is not plumbed to this client at ALL today —
-// `PublicRegistrationDivision`/`PublicRegistrationInfo` (schemas.ts:2312,
-// :2346) carry no tz field, and `publicRegistrationInfo`'s own SQL query
+// `PublicRegistrationDivision`/`PublicRegistrationInfo` (api-v1/schemas/registration.ts)
+// carry no tz field, and `publicRegistrationInfo`'s own SQL query
 // (usecases/registrations/) never selects `organizations.timezone` even
 // though that column exists and already governs scheduling elsewhere
 // (`settings.orgTz`, #397/#448). Inventing that plumbing is out of scope

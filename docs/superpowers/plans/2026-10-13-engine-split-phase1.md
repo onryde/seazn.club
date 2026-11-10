@@ -1241,7 +1241,7 @@ Worktree `engine-split-1f`.
 ### Task 1f-1: `engine_epoch` on `AppendEventRequest`
 
 **Files:**
-- Modify: `apps/web/src/server/api-v1/schemas.ts:1839-1844`, `apps/web/src/server/usecases/scoring.ts` (`assertEntitledToScore` :468-500 returns the sport; `scoreEvent` :143-197), and `openapi/v1.json` + `openapi/v1.public.json` (via `npm run openapi:gen`).
+- Modify: `apps/web/src/server/api-v1/schemas/`, `apps/web/src/server/usecases/scoring.ts` (`assertEntitledToScore` :468-500 returns the sport; `scoreEvent` :143-197), and `openapi/v1.json` + `openapi/v1.public.json` (via `npm run openapi:gen`).
 - Create: `apps/web/src/server/usecases/__tests__/scoring-engine-epoch.test.ts` and `apps/web/e2e/score-engine-epoch.spec.ts`.
 
 **Interfaces:**

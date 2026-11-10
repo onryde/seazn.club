@@ -24,7 +24,7 @@ Read first: `_RULES.md` → `_INDEX.md` → spec
 
 - `apps/web/src/server/news/draft-templates.ts` + its tests
 - `apps/web/src/server/usecases/org-posts.ts` (drafting call sites,
-  digest usecase), posts admin page component, `schemas.ts`/OpenAPI if
+  digest usecase), posts admin page component, `api-v1/schemas/`/OpenAPI if
   the digest button needs a route, 4 dictionaries
 
 ## Do NOT touch

@@ -39,7 +39,7 @@ executors re-pin each one by symbol (`grep -an <symbol>`) before editing.
 
 | # | Spec says | The tree says | Plan does |
 |---|---|---|---|
-| F1 (FALSE) | `targetHolderFor` call sites `stream-sessions.ts:1250,1644,1821`. | `:1250` is the definition, `:1644` is the **only** call, and `:1821-1826` is the 23505 mapper for the V421 index. | T3 narrows `holderRows` and the V421 index. The mapper stays as it is: once the index is narrowed, an API row can never raise it. |
+| F1 (FALSE) | `targetHolderFor` call sites `usecases/stream-sessions/`. | `:1250` is the definition, `:1644` is the **only** call, and `:1821-1826` is the 23505 mapper for the V421 index. | T3 narrows `holderRows` and the V421 index. The mapper stays as it is: once the index is narrowed, an API row can never raise it. |
 | F2 (FALSE) | The tick's break is at `:2424-2427`. | The budget check is at `:2419` and `break` at `:2421`. | T15 edits by symbol (`STREAM_TICK_BUDGET_MS`). |
 | F3 (FALSE) | "Email-outbox shares the fast trigger and is unaffected." | `email-outbox` is `due: { kind: "every" }` on `FAST_TRIGGER` (`schedule.ts:147-153`). Today it runs every 5 min on stg, under owner ruling 2026-10-20. Changing stg's `FAST_TRIGGER` to `* * * * *` makes it run **every minute on stg**. The `FAST_TRIGGER` doc comment (`schedule.ts:55-57`) says stg keeps `*/5` because "stg is `min_machines_running = 0`, and a minute trigger would keep it awake all day". | **Owner ruled Q1 = (b), 2026-10-27:** stg's `FAST_TRIGGER` stays `*/5`; `wrangler.json` and the email-outbox cadence are unchanged. Stream-tick runs on every fast firing (prod every minute, stg every 5 min), so on stg an end can land up to 5 min late: T22's stg window is [5, 10) min. |
 | F4 | Only `targetHolderFor` treats the target as the unit of exclusivity. | Four more places do. (a) `tearDownPriorMachines` (`:1292`, `or target_id = $t` at `:1300`). (b) `releasePriorOutputs` (`:1340`, `:1350`); both refuse `target_in_use` over **another fixture's** leftovers on the same target. (c) `holderRows` (`stream-target-holders.ts:43`), which also feeds the Directory `inUse`, Replace/Remove and `expireTargetHolders` (`:2952`). (d) `readKeyHints` (`secret-columns.ts:282`) opens every row's `rtmp_enc`. | T3 narrows (a), (b) and (c) to pasted rows. For an API row, another fixture's leftovers are on a different pooled key and cannot collide. T3 also filters (d) to `rtmp_enc is not null`. |
@@ -206,7 +206,7 @@ New, under `apps/web/src/`:
 | `app/api/v1/orgs/[id]/youtube-connections/[connectionId]/route.ts` | PATCH: settings and consent. DELETE: disconnect. |
 
 Modified: `server/relay/crypto.ts`, `server/relay/secret-columns.ts`, `server/relay/__tests__/enc-boundary.test.ts`,
-`server/usecases/stream-target-holders.ts`, `server/usecases/stream-targets.ts`, `server/usecases/stream-sessions.ts`,
+`server/usecases/stream-target-holders.ts`, `server/usecases/stream-targets.ts`, `server/usecases/stream-sessions/`,
 `server/api-v1/{schemas,openapi,key-scopes}.ts`, `app/api/cron/{stream-tick,relay-sweep}/route.ts`,
 `apps/cron-worker/src/schedule.ts` (`wrangler.json` is NOT modified, Q1 = b), `components/v2/stream-destinations-panel.tsx`, the fixture stream
 panel (located in T12), the public match page, `app/legal/privacy/page.tsx`, the four `ui.json`,
@@ -378,7 +378,7 @@ it("fingerprintYoutubeChannel is stable, 64 hex, and differs from fingerprintDes
 
 **Files:**
 - Modify: `apps/web/src/server/usecases/stream-target-holders.ts` (`holderRows`)
-- Modify: `apps/web/src/server/usecases/stream-sessions.ts` (`tearDownPriorMachines` `:1292`, `releasePriorOutputs` `:1340`)
+- Modify: `apps/web/src/server/usecases/stream-sessions/holders.ts` (`tearDownPriorMachines`, `releasePriorOutputs`)
 - Modify: `apps/web/src/server/relay/secret-columns.ts` (`readKeyHints` `:282`)
 - Modify: `apps/web/src/server/usecases/stream-targets.ts` (`patchStreamTarget`, `removeStreamTarget`, and the `listStreamTargets` hint read)
 - Test: `apps/web/src/server/usecases/__tests__/stream-target-holders.test.ts`, `stream-targets.test.ts`, `stream-sessions.test.ts` (add cases)
@@ -661,7 +661,7 @@ export async function saveConnectionFromGrant(a: { pendingId: string; channelId:
 export async function updateConnectionSettings(auth: AuthCtx, orgId: string, connectionId: string, b: { privacy?: YoutubePrivacy; madeForKids?: boolean; consent?: true }): Promise<YoutubeConnectionView>;
 export type YoutubeConnectionView = { connectionId: string; channelTitle: string; privacy: YoutubePrivacy; madeForKids: boolean;
   status: "connected" | "reconnect_needed"; liveState: "enabled" | "not_enabled" | "blocked" | "unknown"; termsOutdated: boolean; openBroadcasts: number };
-// schemas.ts: StreamTarget gains `youtube: YoutubeConnectionView.nullable()` (null for pasted rows); new YoutubeConnectionSettings, YoutubePendingChannels.
+// api-v1/schemas/streaming.ts: StreamTarget gains `youtube: YoutubeConnectionView.nullable()` (null for pasted rows); new YoutubeConnectionSettings, YoutubePendingChannels.
 ```
 - `POST /orgs/:id/youtube-connections` `{ pendingId, channelId }`. `GET /orgs/:id/youtube-connections/pending/:pendingId` returns `{ channels: {id,title}[] }`: only the pending row's own user, unexpired, and the org's. `PATCH /orgs/:id/youtube-connections/:connectionId` takes `{ privacy?, madeForKids?, consent? }`. Writes are EDITOR_ROLES (the `requireOrgAuth(req, id, "write")` the stream-targets routes use).
 
@@ -832,7 +832,7 @@ it("org B's fixture cannot be prepared on org A's API target → 404, zero port 
 > (503) for API-backed targets, abandon the prepared broadcast, and test that the copy is not the replace-key copy.
 
 **Files:**
-- Modify: `apps/web/src/server/usecases/stream-sessions.ts` (`startBroadcast` `:1553`, `refuseUnreadableTarget` `:1448`, `runEffects` `:913-923`, `sessionFactsForJob` `:2871-2880`; re-pin each by symbol)
+- Modify: `apps/web/src/server/usecases/stream-sessions/` (`startBroadcast`, `refuseUnreadableTarget`, `runEffects`, `sessionFactsForJob`; re-pin each by symbol)
 - Test: `apps/web/src/server/usecases/__tests__/stream-youtube-golive.test.ts` (new; reuse `relay/__tests__/_session-rig.ts`)
 
 **Interfaces:**
@@ -1036,7 +1036,7 @@ it("orgIds: [] is refused", …);
 > must expire stuck API sessions — test one.
 
 **Files:**
-- Modify: `apps/web/src/app/api/cron/stream-tick/route.ts`; `apps/web/src/server/usecases/stream-sessions.ts` (`tickOpenSessions` gains `budgetMs?: number`, default `STREAM_TICK_BUDGET_MS`)
+- Modify: `apps/web/src/app/api/cron/stream-tick/route.ts`; `apps/web/src/server/usecases/stream-sessions/tick.ts` (`tickOpenSessions` gains `budgetMs?: number`, default `STREAM_TICK_BUDGET_MS`)
 - Modify: `apps/cron-worker/src/schedule.ts` (stream-tick `due: { kind: "every" }`; `FAST_TRIGGER` UNCHANGED — stg stays `*/5` (owner Q1 = b, 2026-10-27); the doc comments at `:113-116`, `:140-142` updated to the new truth; failureCounts add `"data.youtube.failed"`). `wrangler.json` UNCHANGED.
 - Test: `apps/web/src/app/api/cron/stream-tick/route.test.ts`, `apps/cron-worker/test/{schedule,drift,run}.test.ts` (`run.test.ts:18` `FIVE_MINUTE_ROWS` lists stream-tick: it leaves that list and its throttle cases are re-pinned, R12)
 
@@ -1150,7 +1150,7 @@ Smoke `youtube: relay-sweep answers` (T21).
 
 **Files:**
 - Create: `apps/web/src/server/youtube/disconnect.ts`
-- Modify: `app/api/v1/orgs/[id]/youtube-connections/[connectionId]/route.ts` (DELETE), `schemas.ts`/`openapi.ts`/`key-scopes.ts`, the Directory row's Disconnect action, `ui.json` × 4; extend `apps/web/e2e/youtube-directory.shots.spec.ts` (T9) with the disconnect confirm and the `YOUTUBE_IN_USE` refusal at 1280/768/320 (R8)
+- Modify: `app/api/v1/orgs/[id]/youtube-connections/[connectionId]/route.ts` (DELETE), `api-v1/schemas/`/`openapi.ts`/`key-scopes.ts`, the Directory row's Disconnect action, `ui.json` × 4; extend `apps/web/e2e/youtube-directory.shots.spec.ts` (T9) with the disconnect confirm and the `YOUTUBE_IN_USE` refusal at 1280/768/320 (R8)
 - Test: `apps/web/src/server/youtube/__tests__/disconnect.test.ts`, the route test
 
 **Interfaces:**

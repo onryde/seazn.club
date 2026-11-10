@@ -123,7 +123,7 @@ post-PR-1 main**, because PR-1 changes the files this plan touches.
    and the `device-pad-*.spec.ts` family.
    - T9 drives "any surface" through the same mint-and-open path those specs use.
    - Read `console-device-live-sync.spec.ts` for the helper calls; do not invent new ones.
-3. **The organiser Stop route** is `POST …/stream-sessions/{sid}/stop` (`stopSession`, `stream-sessions.ts`). PR-1
+3. **The organiser Stop route** is `POST …/stream-sessions/{sid}/stop` (`stopSession`, `usecases/stream-sessions/`). PR-1
    passes `reason: "stopped"`. T4 adds the `auto_start_blocked_at` stamp **in the same transaction** as the stop.
 4. **Credit purchase in a use-case test** follows `server/usecases/__tests__/credit-packs.test.ts`. The Stripe sandbox
    is used only in the smoke and walkthrough (memory: Billing = SANDBOX). The use-case test grants credits through
@@ -148,9 +148,9 @@ post-PR-1 main**, because PR-1 changes the files this plan touches.
 |---|---|---|
 | `apps/web/src/server/usecases/stream-codes.ts` (`saveStreamSettings`) + `stream-settings` route | `{autoStream}` | T2 |
 | `apps/web/src/server/usecases/capture-phone.ts` | `autoAllowed` from the switch; step 6 auto start | T2, T4 |
-| `apps/web/src/server/usecases/stream-sessions.ts` | `stopSession` stamps `auto_start_blocked_at`; `tickSession` auto stop | T4, T5 |
+| `apps/web/src/server/usecases/stream-sessions/` | `stopSession` stamps `auto_start_blocked_at`; `tickSession` auto stop | T4, T5 |
 | `apps/web/src/server/relay/config.ts` | the two constants, joined to `tunable()` | T3 |
-| `apps/web/src/server/usecases/stream-phone.ts`, `schemas.ts` (`StreamPhone.auto`) | `auto`, `health`, `lastTakeover` | T6 |
+| `apps/web/src/server/usecases/stream-phone.ts`, `api-v1/schemas/streaming.ts` (`StreamPhone.auto`) | `auto`, `health`, `lastTakeover` | T6 |
 | `apps/web/src/server/usecases/__tests__/capture-model.test.ts` | five new commands and three invariants | T7 |
 | `apps/web/src/components/v2/fixture-stream-panel.tsx`, `stream-signal-chain.tsx`, `lib/stream-session-view.ts` | the switch, auto lines, health line, mode, notice | T8a, T8b |
 | `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json` + `lib/i18n-keys.ts` (generated) | `stream.auto.*`, `stream.health.*`, `stream.takeover.*` | T8a, T8b |
@@ -202,7 +202,7 @@ Owes: the house "≥2 UI options" gate.
 - Modify:
   - `server/usecases/stream-codes.ts` (`saveStreamSettings` accepts `{targetId?, autoStream?}`);
   - `app/api/v1/fixtures/[id]/stream-settings/route.ts`;
-  - `server/api-v1/schemas.ts` (`StreamSettingsBody`, `StreamSettings`);
+  - `server/api-v1/schemas/` (`StreamSettingsBody`, `StreamSettings`);
   - `server/usecases/capture-phone.ts` (the `autoAllowed` source).
 - Test:
   - `server/relay/__tests__/migration-shape.test.ts`;
@@ -342,7 +342,7 @@ Owes: unit.
 
 **Files:**
 
-- Modify: `server/usecases/capture-phone.ts` (`postBeat`, step 6) and `server/usecases/stream-sessions.ts`
+- Modify: `server/usecases/capture-phone.ts` (`postBeat`, step 6) and `server/usecases/stream-sessions/stop.ts`
   (`stopSession`)
 - Test: `server/usecases/__tests__/capture-auto-start.test.ts` (new, DB-backed)
 
@@ -399,7 +399,7 @@ Owes: use-case, money (one consume, at live) and regression (A12).
 
 **Files:**
 
-- Modify: `server/usecases/stream-sessions.ts` (`tickSession`, after W19)
+- Modify: `server/usecases/stream-sessions/tick.ts` (`tickSession`, after W19)
 - Test: `server/usecases/__tests__/capture-auto-stop.test.ts` (new, DB-backed)
 
 **Interfaces:**
@@ -443,7 +443,7 @@ Owes: use-case and regression (A12 + A15 together are in T9's walkthrough).
 **Files:**
 
 - Create: `server/relay/domain/phone-health.ts`
-- Modify: `server/usecases/stream-phone.ts`, `server/api-v1/schemas.ts` (`StreamPhone`)
+- Modify: `server/usecases/stream-phone.ts`, `server/api-v1/schemas/streaming.ts` (`StreamPhone`)
 - Test: `server/relay/domain/__tests__/phone-health.test.ts`, `server/usecases/__tests__/stream-phone.test.ts`
 
 **Interfaces:**

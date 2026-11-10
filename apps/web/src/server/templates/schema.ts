@@ -2,7 +2,7 @@
 //
 // `server-only`. An EARLIER draft of this file claimed "NOT server-only,
 // client-safe like format-gallery.tsx" — wrong, caught by e2e (not tsc or
-// vitest): `kind` below reuses api-v1/schemas.ts's StageKind, and that
+// vitest): `kind` below reuses api-v1/schemas/ folder's StageKind, and that
 // module VALUE-imports HardConstraint from @seazn/engine/scheduling, whose
 // barrel then also reached the gRPC placement client (@grpc/grpc-js — Node-only
 // dns/fs/http2/net; now in `@seazn/scheduler`). Bundling that into a "use
@@ -11,7 +11,7 @@
 // imports just that, and receives the actual parsed catalog as a prop from
 // its Server Component page instead.
 //
-// `kind` reuses the API-v1 StageKind enum (schemas.ts), never the engine's
+// `kind` reuses the API-v1 StageKind enum (api-v1/schemas/), never the engine's
 // core StageKind (packages/engine/src/core/types.ts) — the portfolio scout's
 // ruling 2: the engine union is missing americano/ladder/page_playoff, so a
 // template importing it would type-reject or silently mishandle exactly
@@ -23,7 +23,7 @@
 // `progression` (P7, D4's StageSeeding; unified onto ONE field by F2 —
 // QualificationSpecSchema and StageSeedingSchema no longer exist) is
 // declared below as an OPTIONAL field on TemplateStage, imported verbatim
-// from api-v1/schemas.ts's ProgressionSchema/TakeRuleSchema — never
+// from api-v1/schemas/stages.ts's ProgressionSchema/TakeRuleSchema — never
 // redeclared, copied, or forked. Every source is narrowed to
 // `stage: "previous"` only (TemplateStageProgression, just below the
 // imports): a catalog JSON has no live stage UUIDs for the `{stageId}`
@@ -47,9 +47,9 @@ import { PointsRule } from "@seazn/engine/competition";
  *  here. This is the `.refine`-style narrowing the P7 dispatch calls for:
  *  constrain the imported schema, don't fork it — `.omit`/`.extend` aren't
  *  options here because the exported `ProgressionSchema` binding is already
- *  the POST-`.refine()` ZodEffects (schemas.ts's own `seeded_map needs a
+ *  the POST-`.refine()` ZodEffects (api-v1/schemas/ folder's own `seeded_map needs a
  *  non-empty map` check), and ZodEffects doesn't carry `.omit`/`.extend` —
- *  only the ZodObject before that refine would have, and schemas.ts doesn't
+ *  only the ZodObject before that refine would have, and api-v1/schemas/ doesn't
  *  export it separately. */
 export const TemplateStageProgression = ProgressionSchema.refine(
   (p): p is ProgressionInput & { sources: (ProgressionInput["sources"][number] & { stage: "previous" })[] } =>
@@ -87,7 +87,7 @@ export const ScheduleDefaults = z.object({
 // with the key silently STRIPPED, producing `progression: undefined` with no
 // error — a catalog JSON could carry a stray key and never fail its
 // module-init parse (catalog.ts:42-44). Same failure class CreateStage was
-// already fixed for (F2 Task 5, api-v1/schemas.ts's CreateStage.strict()):
+// already fixed for (F2 Task 5, api-v1/schemas/stages.ts's CreateStage.strict()):
 // strict converts it from silent to loud, naming the offending key in the
 // zod unrecognized_keys issue.
 export const TemplateStage = z.object({

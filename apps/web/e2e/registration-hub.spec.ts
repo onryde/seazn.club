@@ -809,7 +809,7 @@ test.describe("RS005 registrants tab", () => {
             division_id: divisionId,
             entrant_kind: "individual",
             // No registering_self here — that flag makes contact.dob
-            // cart-wide-required (schemas.ts's superRefine) for no benefit
+            // cart-wide-required (api-v1/schemas/ folder's superRefine) for no benefit
             // to this test; an explicit per-player dob/gender is accepted
             // regardless of self-registration and is all this CSV column
             // check needs.
@@ -1347,7 +1347,7 @@ test.describe("RS005 registrants tab", () => {
             name: displayName,
             email: `delivered+${displayName.toLowerCase().replace(/\W+/g, "-")}@resend.dev`,
             // Cart-wide required the instant ANY entry sets registering_self
-            // (schemas.ts's superRefine) — harmless to include unconditionally.
+            // (api-v1/schemas/ folder's superRefine) — harmless to include unconditionally.
             dob: "1990-01-01",
           },
           privacy_consent: true,

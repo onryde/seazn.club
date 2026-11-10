@@ -31,7 +31,7 @@ const AUDIT = {
 };
 
 // P9 pass 3b: `court_id` — `JointApplyDivision`'s own field (`ApplyCompetitionScheduleRequest`'s
-// `.strict()` assignment item, schemas.ts, requires it and rejects `court_label` outright).
+// `.strict()` assignment item, api-v1/schemas/, requires it and rejects `court_label` outright).
 // `court` here stands in for a real `courts.id`; this file never round-trips it through zod, so
 // a plain string exercises the client's wiring exactly as well as a uuid-shaped one would.
 const slot = (id: string, hour: number, court: string) => ({

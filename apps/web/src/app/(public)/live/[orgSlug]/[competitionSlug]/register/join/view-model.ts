@@ -120,7 +120,7 @@ export interface JoinRequestBody {
   media_consent: boolean;
 }
 
-/** Mirrors PublicJoinRequest's wire shape field-for-field (schemas.ts).
+/** Mirrors PublicJoinRequest's wire shape field-for-field (api-v1/schemas/).
  *  `player_id` is OMITTED (not sent as an explicit null) for the
  *  NEW_PLAYER_CHOICE case — joinTeamEntry's own contract is "player_id
  *  absent -> insert", and omitting the key is the more honest wire shape

@@ -13,7 +13,7 @@ import { apiJson, setOrgConnectSql } from "../helpers";
 // A VALUE import, deliberately — the same choice `settings-schedule-bounds
 // .spec.ts:28` (W6 Task 2) documents and empirically probed: identity against
 // the server's own constant, never a hand-typed literal that could silently
-// drift from the real message. `schemas.ts` pulls `@seazn/engine/scheduling`
+// drift from the real message. `api-v1/schemas/` pulls `@seazn/engine/scheduling`
 // and `lib/registration-rules.ts`; both are pure TS/zod with no `server-only`
 // and no JSON import, so Playwright's ESM loader takes them (the failure that
 // import shape CAN produce — `Error: No tests found` from a transitive
@@ -158,7 +158,7 @@ function issuesOf(res: ApiResult): ValidationIssue[] {
  * `age_cutoff_day` whose message is EXACTLY the named constant.
  *
  * Pinning the path as well as the message matters: both cutoff rules report
- * on `age_cutoff_day` (`checkAgeCutoff`, schemas.ts), and a refusal that
+ * on `age_cutoff_day` (`checkAgeCutoff`, api-v1/schemas/divisions.ts), and a refusal that
  * arrived from somewhere else entirely — the 422 DB-CHECK backstop, a
  * different field's bound — would otherwise satisfy a message-only check.
  */
@@ -264,7 +264,7 @@ function cardSettingsBody(feeCents: number): Record<string, unknown> {
  * the test would witness the wrong refusal. They travel in the PUT BODY, not
  * in a preparatory `PATCH /divisions` — `putRegistrationSettings` reads
  * `input.entrant_kind ?? "individual"` off this very body, and `PatchDivision`
- * (`api-v1/schemas.ts:386`) has no `entrant_kind` member at all.
+ * (`api-v1/schemas/`) has no `entrant_kind` member at all.
  *
  * Such a PATCH would not merely be ignored, it would be REFUSED:
  * `PatchDivision` closes `.partial().refine((p) => Object.keys(p).length > 0,

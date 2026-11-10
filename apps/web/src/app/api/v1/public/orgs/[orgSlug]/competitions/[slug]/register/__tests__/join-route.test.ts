@@ -223,7 +223,7 @@ describe("POST .../register/join — routing", () => {
   });
 
   // Consent-asymmetry follow-up (2026-08-28): privacy_consent is now
-  // REQUIRED on PublicJoinRequest (schemas.ts), so a body omitting it fails
+  // REQUIRED on PublicJoinRequest (api-v1/schemas/registration.ts), so a body omitting it fails
   // schema validation before ever reaching the usecase — the schema-level
   // half of the fix; joinTeamEntry's own 422 gate (registration-submit.
   // test.ts / join-consent.test.ts) is the other half, for a body that

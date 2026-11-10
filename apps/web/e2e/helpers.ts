@@ -2217,7 +2217,7 @@ export interface RosterSlotSpec {
    *  It is seeded on the ENTRANT MEMBER, not on the lineup slot: `squad_number`
    *  is a column of `entrant_members`, and `readLineup` joins it back out
    *  (`server/engine-db/lineups.ts`). So this rides the entrants POST below,
-   *  which already declares the field (`api-v1/schemas.ts`), and NOT the
+   *  which already declares the field (`api-v1/schemas/`), and NOT the
    *  lineup PUT, which has no such field to give it.
    *
    *  Omit it and the member is created exactly as before, so every existing
@@ -2227,7 +2227,7 @@ export interface RosterSlotSpec {
   /** S13/#422 — omit for the (default) starting XI; "bench" seeds a real
    *  bench member so a `football.sub`/`core.lineup.substitution` flow has
    *  someone to bring ON. Matches the API's own `slot` enum
-   *  (`server/api-v1/schemas.ts`'s `z.enum(["starting","bench"])`) — every
+   *  (`server/api-v1/schemas/`'s `z.enum(["starting","bench"])`) — every
    *  existing caller omits this and keeps seeding an all-starting XI,
    *  byte-identical to before this field existed. */
   slot?: "starting" | "bench";

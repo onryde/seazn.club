@@ -148,7 +148,7 @@ export function competitionDateLine(
  *
  * The UNDERSCORE is the whole point, and re-review N1 is why. A bare
  * `String(index)` was described here as "unique by construction" and is not:
- * `Slug` (`api-v1/schemas.ts:56-60`) permits a bare `"0"` and it is
+ * `Slug` (`api-v1/schemas/`) permits a bare `"0"` and it is
  * client-settable at `CreateDivision.slug`, so `divisions = [premier, {slug:
  * "0"}]` with an unmatched entry at index 0 renders `mh-info-calendar-0` twice
  * — the same duplicate-locator defect this fallback replaced, one rung further

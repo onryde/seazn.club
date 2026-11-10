@@ -29,7 +29,7 @@
 
 **Files:**
 - Create: `db/migration/deltas/V292__ai_schedule_source.sql`
-- Modify: `apps/web/src/server/api-v1/schemas.ts` (ApplyScheduleRequest source enum)
+- Modify: `apps/web/src/server/api-v1/schemas/schedule-analysis.ts` (ApplyScheduleRequest source enum)
 
 **Interfaces:**
 - Produces: `fixtures.schedule_source` accepts `'ai'`; `ApplyScheduleRequest.source` zod enum includes `"ai"`.
@@ -50,9 +50,9 @@ alter table fixtures add constraint fixtures_schedule_source_check
   check (schedule_source in ('none', 'auto', 'manual', 'ai'));
 ```
 
-- [ ] **Step 3: Find the current enum in schemas.ts and extend it**
+- [ ] **Step 3: Find the current enum in api-v1/schemas/ and extend it**
 
-Run: `grep -n '"none", "auto", "manual"' apps/web/src/server/api-v1/schemas.ts`
+Run: `grep -n '"none", "auto", "manual"' apps/web/src/server/api-v1/schemas/`
 Change the `source` enum on `ApplyScheduleRequest` from `z.enum(["none", "auto", "manual"])`-style (match exact current members; it may be `["auto","manual"]`) to include `"ai"`.
 
 - [ ] **Step 4: Failing test — apply route accepts `source:"ai"`**
@@ -83,7 +83,7 @@ it("accepts source 'ai' and stamps schedule_source", async () => {
 **Files:**
 - Modify: `apps/web/src/server/usecases/schedule-plus.ts` (delete lines ~148–275: `AiConstraints` zod + type, `parseAiConstraints`, `AiConstraintsOut`, `aiConstraintsForDivision`)
 - Delete: `apps/web/src/app/api/v1/divisions/[id]/schedule/ai-constraints/route.ts`
-- Modify: `apps/web/src/server/api-v1/openapi.ts:215` (drop the ai-constraints RouteSpec row) + `schemas.ts` (drop `AiConstraintsRequest` and any response schema only it uses)
+- Modify: `apps/web/src/server/api-v1/openapi.ts:215` (drop the ai-constraints RouteSpec row) + `api-v1/schemas/` (drop `AiConstraintsRequest` and any response schema only it uses)
 - Modify: `apps/web/src/components/v2/constraints-panel.tsx:162-164` region (delete the parked prose box comment block + any dead handlers/imports it references)
 - Delete: old tests exercising ai-constraints (`apps/web/src/server/usecases/__tests__/schedule-plus.test.ts` ai cases + `schedule-plus-flag.test.ts` if it only covers the old feature — if it tests the kill-switch helper generically, keep the file and retarget it in Task 6)
 
@@ -305,14 +305,14 @@ Hand-author `clashingPlan`/`fixedPlan` against the Task 4 snapshot pack (small 4
 
 **Files:**
 - Create: `apps/web/src/app/api/v1/divisions/[id]/schedule/ai-plan/route.ts`
-- Modify: `apps/web/src/server/usecases/schedule-ai.ts` (add `aiPlanForDivision` orchestrator), `openapi.ts` ROUTES + `schemas.ts` (`AiPlanRequest`, `AiPlanResponse`), `apps/web/.env.example` (+`ANTHROPIC_API_KEY=`, `SCHEDULING_AI_MODEL=claude-opus-4-8`)
+- Modify: `apps/web/src/server/usecases/schedule-ai.ts` (add `aiPlanForDivision` orchestrator), `openapi.ts` ROUTES + `api-v1/schemas/ai-planning.ts` (`AiPlanRequest`, `AiPlanResponse`), `apps/web/.env.example` (+`ANTHROPIC_API_KEY=`, `SCHEDULING_AI_MODEL=claude-opus-4-8`)
 - Test: `apps/web/src/server/usecases/__tests__/schedule-ai-route.test.ts`
 
 **Interfaces:**
 - Consumes: Tasks 4–5; `requireResourceAuth(req, "division", id, "write")` (`server/api-v1/auth.ts:334`); `requireFeature(orgId, key)` (`lib/entitlements.ts:140`); `rateLimit(key, {max, windowSeconds})` (`lib/rate-limit.ts:36`); `isServerFeatureEnabled("ai-scheduling", distinctId, {orgId, fallback: true})` + `captureServer({event, distinctId, orgId, properties})` (`lib/posthog-server.ts`); `assignOfficials` + `AssignPolicy` from `@seazn/engine/officials` for the coverage preview.
 - Produces: `POST /api/v1/divisions/{id}/schedule/ai-plan` returning `AiPlanResult & { officials_coverage: {fillable: number; total: number; unfilled: {fixture_id: string; role_key: string}[]} | null }`.
 
-- [ ] **Step 1: Request schema** in `schemas.ts`:
+- [ ] **Step 1: Request schema** in `api-v1/schemas/`:
 
 ```ts
 export const AiPlanRequest = z.object({
@@ -515,7 +515,7 @@ it("locked row altered → ineligible block", ...);
 **Files:**
 - Modify: `apps/web/src/server/usecases/officials-ai.ts` (runner + orchestrator)
 - Create: `apps/web/src/app/api/v1/divisions/[id]/officials/ai-plan/route.ts`
-- Modify: `openapi.ts` ROUTES + `schemas.ts` (`AiOfficialsPlanRequest`, `AiOfficialsPlanResponse`)
+- Modify: `openapi.ts` ROUTES + `api-v1/schemas/ai-planning.ts` (`AiOfficialsPlanRequest`, `AiOfficialsPlanResponse`)
 - Test: `apps/web/src/server/usecases/__tests__/officials-ai-route.test.ts`
 
 **Interfaces:**
@@ -544,7 +544,7 @@ it("locked row altered → ineligible block", ...);
 ### Task 10: Ledger audit trail + last-run recall
 
 **Files:**
-- Modify: `apps/web/src/server/api-v1/schemas.ts` (`ApplyScheduleRequest` + `ApplyAssignmentsInput` gain optional `ai`), `apps/web/src/server/usecases/schedule.ts:541` region, `apps/web/src/server/usecases/officials.ts:433` region
+- Modify: `apps/web/src/server/api-v1/schemas/schedule-analysis.ts` (`ApplyScheduleRequest` + `ApplyAssignmentsInput` gain optional `ai`), `apps/web/src/server/usecases/schedule.ts:541` region, `apps/web/src/server/usecases/officials.ts:433` region
 - Create: `apps/web/src/app/api/v1/divisions/[id]/schedule/ai-last/route.ts` (+ ROUTES row, tag "scheduling", GET)
 - Test: extend the apply tests from Task 1 + `apps/web/src/server/usecases/__tests__/schedule-ai-ledger.test.ts`
 

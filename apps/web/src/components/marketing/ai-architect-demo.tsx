@@ -62,7 +62,7 @@ const REPLAY_MS = 350;
  * `AiRunPriceFields`, which declares its OWN `divisions` (the per-division PRICE
  * rows), and `z.infer` resolves to that one — so `AiCompetitionPlanResponse
  * ["divisions"]` has no `name` and no `movable`, the two fields the ledger is
- * made of. The recorded joint response carries them (schemas.ts documents the
+ * made of. The recorded joint response carries them (api-v1/schemas/ documents the
  * merge as deliberate); the inferred type simply cannot see them.
  */
 type DemoDivision = {

@@ -10,7 +10,7 @@
 //               the stages are what the division builder makes. Late entry acts on the ROOT knockout only (RB4-L1): under
 //               ko_plate the main bracket, under qualifying_main the qualifying one; the plate and the main draw are fed from
 //               it and never take a late entrant (RB4-L2).
-//   kinds     — every `entrants.kind` (V212; `EntrantKind` in schemas.ts). Each is played by a sport whose engine module
+//   kinds     — every `entrants.kind` (V212; `EntrantKind` in api-v1/schemas/common.ts). Each is played by a sport whose engine module
 //               DECLARES it (`entrantModel.kinds`), its natural sport first (`defaultKind`), among the sports this file can
 //               score a played win in and that is offered EVERY template the file builds (`templatesForSport`) — chess for
 //               individual (chess is individual-only), badminton for a doubles pair, football for a team. Derived below,
@@ -171,7 +171,7 @@ const sportOf = (kind: Kind): SportPick => SPORT_OF.get(kind)!;
 const CASES = ["bye", "withdrawn_slot", "refused", "rebuild_offered", "automatic_waiting", "automatic_tapped"] as const;
 type CaseKey = (typeof CASES)[number];
 
-/** The answer each case ends on (`KnockoutLateEntryResult["case"]`, schemas.ts), typed so a new answer is a compile error
+/** The answer each case ends on (`KnockoutLateEntryResult["case"]`, api-v1/schemas/), typed so a new answer is a compile error
  *  here until it has a case. An automatic arrival's flag is `waiting` (a marker, `entrants.knockout_waiting_stage_id` — the
  *  registration door discards the answer, so the cell reads the marker); the tap then ends on the cases the organiser's add
  *  runs. */

@@ -518,7 +518,7 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
   - `apps/web/src/server/usecases/registrations.ts`: `materialise` after the insert at `:1012`.
   - `apps/web/src/server/usecases/imports.ts`: `entrant.create` at `:686-693`.
   - `apps/web/src/server/usecases/stages.ts`: export `swissGen`, `reconcileSwissRoundShells` and `SwissExistingFixture`.
-  - `apps/web/src/server/api-v1/schemas.ts`: the entrants POST response schema.
+  - `apps/web/src/server/api-v1/schemas/`: the entrants POST response schema.
 - Test:
   - `apps/web/src/lib/__tests__/swiss-late-entry.test.ts`;
   - `apps/web/src/server/usecases/__tests__/swiss-late-entry.test.ts`;
@@ -731,7 +731,7 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
 **Files:**
 - Modify:
   - `apps/web/src/app/api/v1/stages/[id]/route.ts`: add `PATCH`;
-  - `apps/web/src/server/api-v1/schemas.ts`: `PatchSwissStage = z.object({ rounds: z.number().int().min(1), chess: z.boolean() }).partial().strict()`, with at least one key.
+  - `apps/web/src/server/api-v1/schemas/generation.ts`: `PatchSwissStage = z.object({ rounds: z.number().int().min(1), chess: z.boolean() }).partial().strict()`, with at least one key.
 - Create:
   - `apps/web/src/app/api/v1/stages/[id]/swiss/add-round/route.ts`;
   - in `apps/web/src/server/usecases/swiss-rounds-admin.ts`: `patchSwissStage` and `addSwissRound`.
@@ -819,7 +819,7 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
 
 **Rules (§12):** "Manual board swap in rounds ≥ 2 blocked with guidance" → **X-SW-30**.
 
-**Premise found:** the API half is already true. `PatchFixture` is `.strict()` (`schemas.ts:1553-1578`), so a request naming `home_entrant_id` gets 400. Only the guidance is missing.
+**Premise found:** the API half is already true. `PatchFixture` is `.strict()` (`api-v1/schemas/`), so a request naming `home_entrant_id` gets 400. Only the guidance is missing.
 
 **Files:**
 - Modify: `apps/web/src/lib/swiss-pairing-menu.ts` and `stage-rail.tsx`. For rounds ≥ 2, the read-only mode line adds "To change who plays whom: Unpair, then Pair next." (4 locales).
@@ -959,7 +959,7 @@ Tasks 15 and 16 have disjoint file sets and may run in parallel.
 
 **Files:**
 - Modify:
-  - `apps/web/src/server/api-v1/schemas.ts`: `StageConfig` at `:1176` and Task 12's `PatchSwissStage` both carry `requestedByes: z.never({ error: SWISS_REQUESTED_BYES_DEFERRED_MESSAGE }).optional()`. This follows the `TOP_LEVEL_DECIDER_REFUSALS` pattern at `:1170-1174`; `http.ts` turns it into a named 400;
+  - `apps/web/src/server/api-v1/schemas/`: `StageConfig` and Task 12's `PatchSwissStage` both carry `requestedByes: z.never({ error: SWISS_REQUESTED_BYES_DEFERRED_MESSAGE }).optional()`. This follows the `TOP_LEVEL_DECIDER_REFUSALS` pattern at `:1170-1174`; `http.ts` turns it into a named 400;
   - `apps/web/src/lib/swiss-refusals.ts`: add `SWISS_REQUESTED_BYES_DEFERRED`. Copy (4 locales): "Requested half-point or zero-point byes aren't offered yet. If a player must miss a round, record a walkover on their board."
 - Test: `apps/web/src/server/api-v1/__tests__/swiss-requested-byes.test.ts`.
 
@@ -1057,7 +1057,7 @@ Tasks 15 and 16 have disjoint file sets and may run in parallel.
 | 2 | T6–T8 | All in `swissGen`'s history and field code | One implementer pass |
 | 3 | T9–T10 | Late entry server then UI | Sequential |
 | 4 | T11–T14 | Round count, admin routes, rail controls | Sequential (`stage-rail.tsx`) |
-| 5 | T15 ‖ T16, then T17, T18 | T15/T16 have disjoint files; T17 and T18 touch `stages-panel.tsx` and `schemas.ts` after them | T15 and T16 in parallel |
+| 5 | T15 ‖ T16, then T17, T18 | T15/T16 have disjoint files; T17 and T18 touch `stages-panel.tsx` and `api-v1/schemas/` after them | T15 and T16 in parallel |
 | 6 | T19 | Reference checker (`packages/reference` only), a DIFFERENT implementer from the engine fixer | Its own batch; its files are disjoint from every other task, so it may run alongside any batch |
 | 7 | T20 | PR, CI, sign-off | — |
 

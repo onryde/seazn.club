@@ -826,7 +826,7 @@ it("params referenced in a template exist in every locale's template", () => { /
 **Files:**
 - Modify: `apps/web/src/server/usecases/public.ts:263-298` (`publicFixture`)
 - Modify: `apps/web/src/server/public-site/data.ts:689-747` (`getPublicFixture`)
-- Modify: the OpenAPI response schema the route is generated from (pin: grep `publicFixture\|public/fixtures` in `apps/web/src/server/api-v1/openapi*.ts` / `schemas.ts`); regenerate with `npm run openapi:gen`.
+- Modify: the OpenAPI response schema the route is generated from (pin: grep `publicFixture\|public/fixtures` in `apps/web/src/server/api-v1/openapi*.ts` / `api-v1/schemas/`); regenerate with `npm run openapi:gen`.
 - Test: `apps/web/src/server/usecases/__tests__/public-fixture-match-centre.test.ts`; `apps/web/src/app/api/v1/public/fixtures/[id]/__tests__/route.test.ts` (create if absent, following a sibling route test).
 
 **Interfaces:**

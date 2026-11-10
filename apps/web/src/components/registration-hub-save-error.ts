@@ -90,7 +90,7 @@ interface ZodIssueLike {
  *  capacity limit's number) is deliberately left out of the pattern. */
 const MESSAGE_FIELD_PATTERNS: readonly [RegExp, ConfigFieldKey][] = [
   [/age_max must be greater than or equal to age_min/i, "age_max"],
-  // RS007/V380 — AGE_CUTOFF_BOTH_OR_NEITHER (schemas.ts) arrives here as a
+  // RS007/V380 — AGE_CUTOFF_BOTH_OR_NEITHER (api-v1/schemas/divisions.ts) arrives here as a
   // bare message the same way the age-band check above does, but from a
   // different place since W8/F12: `patchDivision`'s cutoff merge-check
   // (usecases/divisions.ts), which compares the patch against the STORED row

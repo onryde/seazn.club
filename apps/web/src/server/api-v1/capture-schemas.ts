@@ -1,8 +1,8 @@
 // apps/web/src/server/api-v1/capture-schemas.ts — the zod twins of docs/contracts/capture-*.json (spec §4, §6.3,
 // §6.14). The JSON files are the cross-repo authority; capture-contract.test.ts pins parity both ways.
 //
-// Imports zod and nothing else: schemas.ts re-exports this file through a relative `.ts` specifier, and the
-// standalone OpenAPI generator (scripts/openapi-gen.ts, bare `node --experimental-strip-types`) loads schemas.ts.
+// Imports zod and nothing else: api-v1/schemas/ re-exports this file through a relative `.ts` specifier, and the
+// standalone OpenAPI generator (scripts/openapi-gen.ts, bare `node --experimental-strip-types`) loads api-v1/schemas/.
 // scripts/gen-capture-contracts.ts generates the JSON from these twins; it is kept for the next v-bump.
 import { z } from "zod";
 

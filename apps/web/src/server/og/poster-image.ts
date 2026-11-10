@@ -13,7 +13,7 @@ import { log } from "@/server/logger";
  * timeout, no size cap and no fallback.
  *
  * The badge is the live one. `entrants.badge_url` is organiser-typed free
- * text — `z.string().min(1).max(1000)` (`api-v1/schemas.ts:573`, `:618`), set
+ * text — `z.string().min(1).max(1000)` (`api-v1/schemas/`), set
  * through `PATCH /entrants/{id}` — and `resolveEntrantBadge` keeps it verbatim
  * when it already looks like a URL.
  *

@@ -25,7 +25,7 @@ Read first: `_RULES.md` → `_INDEX.md` → spec
 
 - new: `apps/web/src/server/templates/**`, migration `V<next>` (re-verify
   next free number at execution)
-- create-competition wizard components (scout locates), `schemas.ts`,
+- create-competition wizard components (scout locates), `api-v1/schemas/`,
   `openapi.ts`, key-scopes, 4 dictionaries
 
 ## Do NOT touch

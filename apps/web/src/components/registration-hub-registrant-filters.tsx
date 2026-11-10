@@ -151,7 +151,7 @@ export function RegistrationHubRegistrantFilters({
    *  bundled for the browser), but this component became a CLIENT one the
    *  moment it needed onChange handlers, and a client bundle pulling that
    *  import in failed `next build` outright — vitest and tsc both stayed
-   *  green, since neither one bundles for a browser. schemas.ts is a server
+   *  green, since neither one bundles for a browser. api-v1/schemas/ is a server
    *  module regardless (zod, the whole API surface). One source (the zod enum), read
    *  server-side once, never duplicated here. */
   statusOptions: readonly string[];

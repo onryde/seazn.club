@@ -844,7 +844,7 @@ describe("stg 2026-10-01 (SEAZN-CLUB-STG-A): the output word `disconnected` read
 
   it("D3 through the real adapter and the real view helper: the phone silent and the output reading `disconnected` → the PHONE box past the hold, no box under it; the phone sending again → the stream-key box", async () => {
     const W = OUTPUT_WARNING_AFTER_MS;
-    // The projection's own fold of a READ (stream-sessions.ts currentSession): ingest {state, protocol} — null for a
+    // The projection's own fold of a READ (usecases/stream-sessions/current.ts currentSession): ingest {state, protocol} — null for a
     // no-evidence word — and output {state, since, elapsedMs}, the state verbatim from outputState.
     const viewAt = async (elapsedMs: number): Promise<Parameters<typeof d3Warning>[0]> => {
       const status = await cf.inputStatus("in_stg", { sessionId: "sess-stg-d3" });

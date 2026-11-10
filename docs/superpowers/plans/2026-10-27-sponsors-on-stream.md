@@ -40,7 +40,7 @@ and its plan `docs/superpowers/plans/2026-10-27-operator-console.md`. YouTube Co
 
 ## Findings: spec pins re-verified on `5c4aeda9cd` (origin/main `a8f27bb7cf` + specs)
 
-True as cited: `resolveSponsors` `usecases/sponsors.ts:307`; `RelayHeartbeat` `api-v1/schemas.ts:2018`, `.strict()`
+True as cited: `resolveSponsors` `usecases/sponsors.ts:307`; `RelayHeartbeat` `api-v1/schemas/`, `.strict()`
 at :2062; 11 modules in `packages/engine/src/sports/index.ts:23-35`, none declaring breaks; carrom's `breaks` stat
 `sports/carrom/carrom.ts:1176`; the Player-home `hidden min-[350px]:flex` precedent `components/nav.tsx:234`; the
 overlay route's two cache headers `app/api/v1/public/fixtures/[id]/overlay/route.ts:16,20`; `seazn:ready` /
@@ -369,7 +369,7 @@ it("empty: settings null ⇒ null; no ticked card ⇒ null; enabled + ticked + n
 ### Task S5: Breaks in the fold, assignments, and `sponsorPlan` in the overlay answer
 
 **Files:**
-- Modify: `apps/web/src/server/overlay/recent.ts` (`replayDerived` :423 also emits the whole fixture's `BreakOpened[]`), `server/overlay/load.ts` (`CachedOverlay` gains `breaks`; bump the cache keys to `overlay-fold-v5` / `overlay-fold-relay-v5`; `loadOverlayLiveData` :259 adds `sponsorPlan`), `lib/overlay-recent-types.ts:78` (`RecentDerived.naturalBreaks?: string[]`), `server/api-v1/schemas.ts` (overlay answer schema)
+- Modify: `apps/web/src/server/overlay/recent.ts` (`replayDerived` :423 also emits the whole fixture's `BreakOpened[]`), `server/overlay/load.ts` (`CachedOverlay` gains `breaks`; bump the cache keys to `overlay-fold-v5` / `overlay-fold-relay-v5`; `loadOverlayLiveData` :259 adds `sponsorPlan`), `lib/overlay-recent-types.ts:78` (`RecentDerived.naturalBreaks?: string[]`), `server/api-v1/schemas/` (overlay answer schema)
 - Create: `server/sponsors/{card-source,stream-settings,assign,operator-log}.ts`
 - Test: `server/sponsors/__tests__/assign.test.ts`, `server/overlay/__tests__/load-sponsor-plan.test.ts`
 
@@ -501,7 +501,7 @@ S15.
 ### Task S8: Heartbeat contract and airing ingestion
 
 **Files:**
-- Modify: `server/api-v1/schemas.ts` (`RelayHeartbeat` :2018 gains `airings`, `airingsDropped`), `docs/contracts/relay-job.v1.json`, `docs/contracts/fixtures/relay-job.v1/` (+ `heartbeat-airings.json`, `heartbeat-invalid-airing-unknown-key.json`), `server/usecases/stream-sessions.ts` (`heartbeat` :2661 calls `recordAirings`; session end calls `closeOpenAirings`), `server/relay/sanitise.ts` (the airing list is not copied into sample `raw`)
+- Modify: `server/api-v1/schemas/streaming.ts` (`RelayHeartbeat` gains `airings`, `airingsDropped`), `docs/contracts/relay-job.v1.json`, `docs/contracts/fixtures/relay-job.v1/` (+ `heartbeat-airings.json`, `heartbeat-invalid-airing-unknown-key.json`), `server/usecases/stream-sessions/heartbeat.ts` (`heartbeat` calls `recordAirings`; session end calls `closeOpenAirings`), `server/relay/sanitise.ts` (the airing list is not copied into sample `raw`)
 - Create: `server/sponsors/airings.ts`
 - Test: `server/sponsors/__tests__/airings.test.ts`, `server/api-v1/__tests__/relay-contract.test.ts` (extend)
 

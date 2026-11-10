@@ -19,7 +19,7 @@ sport-specific branches; the goldens below span multiple sports on purpose.
   "knockout"` calls `generateSingleElim({ entrants: ids, seeds, ... })`, where
   `ids`/`seeds` come from `resolveQualification`. Also `snakeDistribute` +
   `POOL_KEYS` (pool `key` assignment) and `bracketToGen`.
-- `apps/web/src/server/api-v1/schemas.ts` — `CreateStage.qualification`
+- `apps/web/src/server/api-v1/schemas/stages.ts` — `CreateStage.qualification`
   (currently a free `z.record`), `CreateStage.config`. Tighten/extend the
   qualification schema here.
 - `packages/engine/src/competition/qualification.test.ts`,
@@ -117,7 +117,7 @@ interface SingleElimOptions {
 
 ### 4. Schema
 
-In `schemas.ts`, replace the free-form `qualification: z.record(...)` on
+In `api-v1/schemas/`, replace the free-form `qualification: z.record(...)` on
 `CreateStage` with a discriminated/union zod schema mirroring the four
 qualification shapes (recursive for `combine`), so bad specs 400 at the edge
 instead of throwing deep in the engine. Keep `config.slotOrder` validated

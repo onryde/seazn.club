@@ -141,7 +141,7 @@ export type RepairEngine = "none" | "optimized" | "llm";
 
 /**
  * The closed vocabulary `AiRepairReport.status`/`.fallback` already validate
- * on the wire (`schemas.ts`) — z3-decomposition-shaped names this module
+ * on the wire (`api-v1/schemas/`) — z3-decomposition-shaped names this module
  * keeps DELIBERATELY rather than inventing a `BuildStatus`-shaped set of its
  * own: C5's file set is additive-only on the wire (the `engine` enum alone),
  * so every value this module can now produce is mapped back onto these four,
@@ -163,7 +163,7 @@ export type SolverRepairStatus = "clean" | "repaired" | "partial" | "unrepaired"
 
 /** Why the caller is falling back to LLM repair. Every value is a fact about
  *  this call, never a guess. Same closed set the wire already validates
- *  (`schemas.ts`'s `AiRepairReport.fallback`) minus `queue_wait`: that value
+ *  (`api-v1/schemas/ai-planning.ts`'s `AiRepairReport.fallback`) minus `queue_wait`: that value
  *  existed only for the z3-era busy-gate this module no longer has (see the
  *  module doc comment) and is no longer producible — the wire keeps accepting
  *  it, narrowing it away is C7's job, not this one's. */

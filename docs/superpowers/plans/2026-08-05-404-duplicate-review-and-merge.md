@@ -68,7 +68,7 @@ different reasons, and the merge file is already the largest thing in this wave.
 
 | Fact | Evidence |
 |---|---|
-| The merge being replaced | `apps/web/src/server/usecases/persons.ts:131-163`; route `app/api/v1/persons/[id]/merge/route.ts:9-15`; schema `api-v1/schemas.ts:297`; `openapi.ts:71` |
+| The merge being replaced | `apps/web/src/server/usecases/persons.ts:131-163`; route `app/api/v1/persons/[id]/merge/route.ts:9-15`; schema `api-v1/schemas/`; `openapi.ts:71` |
 | `PersonRow` + `COLS` | `persons.ts:13`, `persons.ts:28` (`id, full_name, dob, gender, consent, external_ref, photo_path, user_id, created_at`) |
 | Tenancy | `withTenant(auth.orgId, async (tx) => …)`, imported from `@/lib/db` (`persons.ts:6`). RLS is `force`d on every table below. |
 | Identity index | `persons_org_user_lane_uq on persons(org_id,user_id,lane) where user_id is not null and lane='player'` — `V348:38-40` |
@@ -605,7 +605,7 @@ git commit -am "persons: ranked duplicate candidates with evidence (#404)"
 - Modify: `apps/web/src/app/api/v1/persons/[id]/merge/route.ts`
 - Create: `apps/web/src/app/api/v1/persons/duplicates/route.ts`
 - Create: `apps/web/src/app/api/v1/persons/merges/[id]/reverse/route.ts`
-- Modify: `apps/web/src/server/api-v1/schemas.ts:297` (`MergePersons`)
+- Modify: `apps/web/src/server/api-v1/schemas/persons.ts` (`MergePersons`)
 - Modify: `apps/web/src/server/api-v1/key-scopes.ts:217` (`NEVER_KEY_ROUTES`)
 - Test: `apps/web/src/app/api/v1/persons/__tests__/merge-route.test.ts`
 
@@ -668,7 +668,7 @@ Both found by Task 8's screenshots. Fixed here, not filed.
 **Files:**
 - Modify: `apps/web/src/server/usecases/person-merge.ts`
 - Create: `apps/web/src/app/api/v1/persons/merges/route.ts`
-- Modify: `apps/web/src/server/api-v1/{key-scopes.ts,openapi.ts,schemas.ts}`
+- Modify: `apps/web/src/server/api-v1/{key-scopes.ts,openapi.ts,schemas/}`
 - Modify: `apps/web/src/components/v2/duplicates-panel.tsx`
 - Test: `apps/web/src/server/usecases/__tests__/person-merge.test.ts` (extend),
   `apps/web/src/app/api/v1/persons/__tests__/merge-route.test.ts` (extend)

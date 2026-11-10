@@ -70,7 +70,7 @@ These were found while planning, by reading the tree at `c0416dea6`. None is dec
    So `LEVEL_RESULT_SEATED` fires only on the bug shape: a bracket stage kind, a status in `decided | forfeited | finalized`, and a level outcome. It is placed where the stage kind and the status are both known: `onDecided`, `toBracketFixture`, and the `stages.ts:4088` completed-bracket rebuild. Both helpers keep returning `{}` for a level outcome, which stays correct for leagues.
 7. **OWNER (resolved, ruling 82) — existing rows.** A bracket fixture already stored as `decided`/`finalized` with a level outcome (the 77 reds' shape, possibly in production) would make the read paths in finding 6 throw `LEVEL_RESULT_SEATED`.
    - **RESOLVED — ruling 82 (owner, 2026-10-08): backfill.** V431 also moves those rows to `needs_decision`, so the organiser sees the block and can settle them, and no live cup is left with an exception page. The cost is one `update` in the delta (Task 7 Steps 3, 4 and 7, unconditional). With the shape gone, the read-path guards in Task 8 throw on it like any other bug shape.
-8. **OpenAPI drift is expected, contrary to spec §5.4.8.** The public fixture status enum at `apps/web/src/server/api-v1/schemas.ts:1658` lists every status, so `needs_decision` changes `openapi/v1.json` and `openapi/v1.public.json` (`scripts/openapi-gen.ts:18-23`). Task 7 regenerates and commits both.
+8. **OpenAPI drift is expected, contrary to spec §5.4.8.** The public fixture status enum at `apps/web/src/server/api-v1/schemas/` lists every status, so `needs_decision` changes `openapi/v1.json` and `openapi/v1.public.json` (`scripts/openapi-gen.ts:18-23`). Task 7 regenerates and commits both.
 9. **"The V367 courts history" holds no status set.** `db/migration/deltas/V367__venues_and_courts.sql` contains no fixture-status literal. The SQL sets that do are:
    - V214 (the check constraint, `v2-engine/tables/V214__fixtures.sql:21-22`);
    - V354 / V355 (`division_has_results` and `fixtures_division_results_idx`);
@@ -207,7 +207,7 @@ These were found while planning, by reading the tree at `c0416dea6`. None is dec
 | `DECIDED_METHOD_KEY`; `decidedOutcomeTemplates`; `renderDecidedOutcome` | `W/lib/scoring-vocab.ts:1298-1303`, `:1375-1388`, `:1400-1430` |
 | `ENGINE_ERROR_KEY` | `W/lib/scoring-vocab.ts:583-610` |
 | `ENGINE_HTTP: Record<EngineErrorCode, number>`; 403 → `FORBIDDEN` | `W/server/api-v1/http.ts:19-75`, `:80` |
-| Public status enum | `W/server/api-v1/schemas.ts:1658` |
+| Public status enum | `W/server/api-v1/schemas/` |
 | `matchCentre.result.*` (public.json); `fixture.decidedBy.*`, `engineError.*` (ui.json) | `W/dictionaries/en/public.json:184-206`; `W/dictionaries/en/ui.json:3369-3377`, `:3872` |
 | `STATUS_LINE_KEYS`; `WIN_METHODS`/`RESULT_KINDS`; `resultMsg`; bracket winner | `W/server/public-site/competition-hub.ts:152-158`; `W/server/public-site/match-centre.ts:175-176`, `:722-760`; `W/components/public-site/bracket.tsx:121` |
 | Fixture status check constraint | `db/migration/v2-engine/tables/V214__fixtures.sql:21-22` |
@@ -3342,7 +3342,7 @@ Each of the three cases in the existing files gets one `<site>-kind-dropped` mut
 - Modify: `W/server/engine-db/append-event.ts:117-149` (`nextStatus` and `fixtureStatusFromFold` gain `stageKind`), `:386`
 - Modify: `W/server/engine-db/replay.ts:65` (passes `inputs.stageKind`), `W/server/usecases/admin-fixture-config.ts:100-104`, `:319` (selects `s.kind`, passes it)
 - Modify: `W/lib/fixture-engine-status.ts` (an explicit `needs_decision` → `"in_play"`)
-- Modify: `W/server/api-v1/schemas.ts:1658` (the public status enum), `openapi/v1.json`, `openapi/v1.public.json` (regenerated; finding 8)
+- Modify: `W/server/api-v1/schemas/` (the public status enum), `openapi/v1.json`, `openapi/v1.public.json` (regenerated; finding 8)
 - Modify: every status set the sweep classifies as one that must contain `needs_decision` (Step 6)
 - Create: `W/lib/fixture-status.ts`, `W/lib/__tests__/status-set-sweep.test.ts`, `W/lib/__tests__/status-set-ledger.ts`, `W/server/engine-db/__tests__/needs-decision-status.test.ts`, `W/server/__tests__/v431-needs-decision-migration.test.ts`
 - Modify: `W/server/public-site/competition-hub.ts:152-158` (`STATUS_LINE_KEYS` gains `needs_decision`), its schema test `competition-hub-schema.test.ts`, and `W/dictionaries/{en,fr,es,nl}/public.json` (`matchCentre.status.needs_decision`) — moved here from Task 13 (preflight C16)
@@ -3539,7 +3539,7 @@ export type FixtureStatusValue = (typeof FIXTURE_STATUSES)[number];
       throw new Error(`engineFixtureStatus: unknown fixtures.status "${dbStatus}"`);
 ```
 
-`W/server/api-v1/schemas.ts:1658`: the public status enum becomes `z.enum(FIXTURE_STATUSES)`. Then:
+`W/server/api-v1/schemas/`: the public status enum becomes `z.enum(FIXTURE_STATUSES)`. Then:
 
 ```bash
 cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && pnpm openapi:gen && git status --porcelain openapi; echo EXIT=$?

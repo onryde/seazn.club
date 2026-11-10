@@ -108,7 +108,7 @@ No owner question is open. OQ-1..OQ-4 are closed.
   - Client components already import `@seazn/engine/sports` (five scorepad skins), so this adds no new kind of dependency.
   - The W2a M4 "restate engine lists client-side" pattern is NOT used here.
 - **D3 — one storage place for deciders (greenfield, spec §11).** Every stage-scoped key, deciders included, lives in `stages.config.rules`. There are no live users, so no shim and no backfill:
-  - `StageConfig`'s top-level `shootout`/`extraTime` (`schemas.ts:1109-1110`) are REMOVED from API v1;
+  - `StageConfig`'s top-level `shootout`/`extraTime` (`api-v1/schemas/`) are REMOVED from API v1;
   - the top-level overlay in `stageScopedCfg` (`stage-cfg.ts:35`, `STAGE_DECIDER_KEYS`) is deleted;
   - every writer and test that sets them top-level is moved to `rules` (Task 12 greps for them);
   - `createStages`/`replaceStages` ACCEPT `config.rules` (retiring `assertNoRulesKey`'s `RULES_NOT_ACCEPTED_HERE`) and validate it through the same allowlist and schema parse as `putStageRules` (SC-P8);
@@ -185,7 +185,7 @@ No owner question is open. OQ-1..OQ-4 are closed.
 | `resnapshotFixtureConfig :155` (guards `:161-203`, writes `:212-338`, audit `:342`) | `W/server/usecases/admin-fixture-config.ts` |
 | `patchDivision :635` (config lock `:820-856`, write `:874`, tiebreakers `:899`) | `W/server/usecases/divisions.ts` |
 | `createStages :362` (`assertNoRulesKey :368`, custom-points gate `:404-415`, insert `:458`); `replaceStages :490` (lock `:513-518`, carry `:528-560`); template insert | `W/server/usecases/stages.ts`; `W/server/usecases/templates.ts:345` |
-| `StageConfig :1071` (`points :1104`, `shootout :1109`, `extraTime :1110`, `rules :1119`), `CreateStage :1131`, `PutStageRules :1201`, `StageRules :1206` | `W/server/api-v1/schemas.ts` |
+| `StageConfig :1071` (`points :1104`, `shootout :1109`, `extraTime :1110`, `rules :1119`), `CreateStage :1131`, `PutStageRules :1201`, `StageRules :1206` | `W/server/api-v1/schemas/` |
 | `/stages/{id}/rules` route | `W/server/api-v1/openapi.ts:156`; `W/app/api/v1/stages/[id]/rules/route.ts` |
 | `HttpError(status, message, code?, extra?)` | `W/lib/errors.ts:12-20` |
 | `ENGINE_HTTP`; `ENGINE_ERROR_KEY` | `W/server/api-v1/http.ts:22`; `W/lib/scoring-vocab.ts:596` |
@@ -216,7 +216,7 @@ No owner question is open. OQ-1..OQ-4 are closed.
 | e2e helpers `apiJson :312`, `addEntrantsViaApi :1978`, `createStageAndGenerate :1995`, `fixturePath :1959`, `expectNoHorizontalScroll :56`, `screenshotAtWidths :447`, `TAG :258` | `apps/web/e2e/helpers.ts` |
 | width projects all `testMatch: /mobile\.spec\.ts/` | `apps/web/playwright.config.ts:191-258` |
 | smoke `check :135`, suites called from `main :185` | `scripts/smoke.ts` |
-| the append route and its body schema | `W/app/api/v1/fixtures/[id]/events/route.ts:11-18`; `AppendEventRequest` `W/server/api-v1/schemas.ts:1828-1833` |
+| the append route and its body schema | `W/app/api/v1/fixtures/[id]/events/route.ts:11-18`; `AppendEventRequest` `W/server/api-v1/schemas/` |
 | every client POST to that route (review C2; the scan in Task 15 enumerates them): scoring pads `W/components/v2/scorepad/transport.ts:355` (wire body `pipeline.ts:152`, `:203`) and `W/components/v2/device-score-pad.tsx:318`; not pads: `W/components/v2/fixture-console.tsx:634` (the console chrome's `post()`: start, void, settle, forfeit, abandon, finalize), `W/components/v2/americano-panel.tsx:154`, `:160` | per file |
 | server writers that call `appendEvent` directly | `W/server/usecases/withdrawal.ts:121-160`; `W/server/usecases/scoring.ts:873` (`finalizeFixture`); `W/server/usecases/event-import.ts:354` (passes the historical `ev.at`) |
 | both pads load cfg through `loadFixturePadCfg` | console `f/[no]/page.tsx:79`; remote `W/app/score/[token]/page.tsx:265-270` |
@@ -445,7 +445,7 @@ Parallel lanes therefore never share that file. Task 23 confirms the map is empt
 | H | 12 stage creation defaults + SC-P8 + carry; 13 stage points server | `WT` | `W/server/usecases/{stages,templates,stage-defaults,stage-rules}.ts`, `W/server/api-v1/{schemas,openapi}.ts`, `openapi/*.json`, tests, `scripts/smoke.ts`, `MUT/t12.json`, `MUT/t13.json` | G, E3 merged |
 | H2 | 13b delete the top-level decider overlay (Opus) | `WT` | `W/server/engine-db/stage-cfg.ts`, `W/server/engine-db/__tests__/stage-cfg.test.ts`, `W/server/usecases/__tests__/stage-rules-every-sport.test.ts` (the moved D3 case), `MUT/t13b.json` | H merged (Task 12 moved every writer to `config.rules`) |
 | I | 14 the override writer + Q11 correction | `WT` | `W/server/usecases/fixture-rules.ts` (new), `W/server/engine-db/refreeze.ts` (new), `W/server/usecases/admin-fixture-config.ts`, `W/app/api/v1/fixtures/[id]/rules/route.ts` (new), `W/server/api-v1/{schemas,openapi}.ts`, `openapi/*.json`, tests, `scripts/smoke.ts`, `MUT/t14.json` | H2 merged (P-4 answered "A") |
-| I2 | 15 open pads follow a correction (`FIXTURE_RULES_CHANGED`) | `WT` | `W/server/engine-db/append-event.ts` (version check), `W/server/api-v1/schemas.ts` (`rules_version`), `W/server/usecases/{fixtures,scoring}.ts`, `W/app/api/v1/fixtures/[id]/rules/route.ts` (GET added), `W/components/v2/scorepad/{transport,pipeline,use-pad-pipeline,refusal-copy}.ts`, `W/components/v2/device-score-pad.tsx` (sends the version), the pad banner component, both pad pages, `W/components/v2/__tests__/events-post-sites.test.ts` (new source scan), `W/server/usecases/__tests__/rules-version-writers.test.ts` (new), 4 × `ui.json`, `openapi/*.json`, `e2e/remote-pad-rules-w2c.spec.ts` (new), tests, `scripts/smoke.ts`, `MUT/t15.json` | I merged |
+| I2 | 15 open pads follow a correction (`FIXTURE_RULES_CHANGED`) | `WT` | `W/server/engine-db/append-event.ts` (version check), `W/server/api-v1/schemas/` (`rules_version`), `W/server/usecases/{fixtures,scoring}.ts`, `W/app/api/v1/fixtures/[id]/rules/route.ts` (GET added), `W/components/v2/scorepad/{transport,pipeline,use-pad-pipeline,refusal-copy}.ts`, `W/components/v2/device-score-pad.tsx` (sends the version), the pad banner component, both pad pages, `W/components/v2/__tests__/events-post-sites.test.ts` (new source scan), `W/server/usecases/__tests__/rules-version-writers.test.ts` (new), 4 × `ui.json`, `openapi/*.json`, `e2e/remote-pad-rules-w2c.spec.ts` (new), tests, `scripts/smoke.ts`, `MUT/t15.json` | I merged |
 | J | 16 public labels | `WT` | `W/server/public-site/{describe-rules,stage-format-lines,data}.ts`, `W/lib/points-line.ts` (new), 4 × `public.json`, tests, `scripts/smoke.ts`, `MUT/t16.json` | I2 merged |
 | K | 17 S1 + S4 (stage); 18 S3 | `WT` | `W/components/v2/{stages-panel,match-rules}.tsx`, `W/components/v2/stage-rules/*.tsx` (new), 4 × `ui.json`, `e2e/stage-rules-w2c.spec.ts` (new), `e2e/mobile.spec.ts`, `MUT/t17.json`, `MUT/t18.json` | J merged |
 | L | 19 S2 + S4 (match) + run-sheet tag | `WT` | `W/components/v2/fixture-console.tsx`, `W/components/v2/match-rules-block.tsx` (new), the fixture page, `W/server/usecases/fixtures.ts` (loader), `desk/run-sheet-row.tsx`, 4 × `ui.json`, `e2e/match-rules-w2c.spec.ts` (new), `e2e/mobile.spec.ts`, `MUT/t19.json` | K merged |
@@ -457,7 +457,7 @@ Parallel lanes therefore never share that file. Task 23 confirms the map is empt
   - Before the rebase: **{A, B}**.
   - After Task 3: **{C, F}** start together. C runs Task 4 then Task 5 in `WT`, while F runs in a lane worktree. When F merges, **E3** starts in its lane (both edit `engine-db/competition.ts`). When Task 5 lands, **{E1, E2}** join: E1 in `WT`, E2 in a lane.
   - E1 and E2 are disjoint because the web presentation is one file per sport. E1 owns football, hockey, ice hockey, cricket, carrom and generic; E2 owns boardgame. Neither touches `index.ts`, `shared.ts` or `types.ts`: the `"sequence"` field kind and the abandon option table both land in Task 5 (review M12).
-  - **Everything from G on is sequential.** G–N share `schemas.ts`/`openapi`, `smoke.ts`, the four dictionaries and `mobile.spec.ts`, none of which is provably disjoint.
+  - **Everything from G on is sequential.** G–N share `api-v1/schemas/`/`openapi`, `smoke.ts`, the four dictionaries and `mobile.spec.ts`, none of which is provably disjoint.
 - **Lanes** branch from `feat/format-matrix-w2c` and merge back with a merge commit (never a squash). The lane's scoped gate re-runs on the merged tree:
   ```bash
   cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2c && git worktree add ../format-matrix-w2c-<lane> -b feat/format-matrix-w2c-<lane> feat/format-matrix-w2c; echo EXIT=$?
@@ -469,7 +469,7 @@ Parallel lanes therefore never share that file. Task 23 confirms the map is empt
   - Lane B is cut from `WT` BEFORE the rebase, so lane B merges into `WT` before Task 3 starts. The rebase then carries it.
 - **Batching** (RULES.md). Each of these pairs runs as one implementer loop (the agent split in **Execution** keeps Task 4 on Opus and Task 5 on Sonnet, so they are two loops back to back, not one):
   - Tasks 6+7: they share module files.
-  - Tasks 12+13: they share `stage-rules.ts` and `schemas.ts`.
+  - Tasks 12+13: they share `stage-rules.ts` and `api-v1/schemas/`.
   - Tasks 17+18: they share `stages-panel.tsx`.
   - Tasks 20+21: they share only the dictionaries and `mobile.spec.ts`, so they get two reviewer sections.
 
@@ -495,7 +495,7 @@ Parallel lanes therefore never share that file. Task 23 confirms the map is empt
 | `E/competition/points.ts` | walkover-only forfeit, awardScore replaces, `pointsRuleExpressible` | 9 |
 | `db/migration/deltas/V<next>__fixture_rules_override.sql`; `W/server/engine-db/fixture-cfg.ts` + 10 callers | `fixtures.rules_override`; `FixtureCfgSource` signature and order | 10 |
 | `W/server/usecases/stage-rules.ts` | every sport, engine allowlist, deciders into `rules`; stage points | 11, 13 |
-| `W/server/usecases/stage-defaults.ts` (new), `stages.ts`, `templates.ts`, `api-v1/schemas.ts` | defaults at both insert sites; carry merge; SC-P8 | 12 |
+| `W/server/usecases/stage-defaults.ts` (new), `stages.ts`, `templates.ts`, `api-v1/schemas/` | defaults at both insert sites; carry merge; SC-P8 | 12 |
 | `W/server/usecases/fixture-rules.ts`, `W/server/engine-db/refreeze.ts`, `W/app/api/v1/fixtures/[id]/rules/route.ts` (all new) | the one override writer, Q11, audit | 14 |
 | `W/server/engine-db/append-event.ts`, `AppendEventRequest`, `W/components/v2/scorepad/{transport,pipeline,use-pad-pipeline}.ts`, `W/components/v2/scorepad/v3/rules-changed-banner.tsx` (new) | the rules version on every append; pad reload + banner | 15 |
 | `W/lib/points-line.ts` (new), `W/server/public-site/{describe-rules,stage-format-lines,data}.ts` | labels for every sport, deciders, abandon, points | 16 |
@@ -708,7 +708,7 @@ Implements item 4 (Q3, Q4), D11, X-SR-4, as the owner answered P-2 "A": the `pat
 - NOT here: the smoke pin `scripts/smoke.ts:8378-8385` (same whole-config `FORMAT_LOCKED`). `smoke.ts` is a W2b file, so Task 10 (lane F, after the rebase) rewrites it; until then smoke is red on that one check, which is acceptable because smoke runs on PRs only and the PR opens in Task 23
 - Create: `apps/web/src/server/usecases/__tests__/division-locks.test.ts`
 - Create: `MUT/t2.json`
-- Do NOT touch: `stages.ts` (`replaceStages`' `FORMAT_LOCKED` stays, spec §4.3), `schemas.ts`/`openapi` (W2b edits them; the response's `refused` field reaches OpenAPI in Task 12), any UI.
+- Do NOT touch: `stages.ts` (`replaceStages`' `FORMAT_LOCKED` stays, spec §4.3), `api-v1/schemas/`/`openapi` (W2b edits them; the response's `refused` field reaches OpenAPI in Task 12), any UI.
 
 **Interfaces:**
 - Consumes: `lockedStageIdsAmong(tx, ids)` (moved, unchanged semantics: started = `config_snapshot` set OR any `score_events`).
@@ -2846,7 +2846,7 @@ Spec item 1 (write path 1) and item 5's validation for deciders; D1, D3; X-SR-1,
   - `w2cStageRulesSuite` gains the Task 4/7/8/11 checks;
   - the old-shape Armageddon sender at `:2406` ("bracket finish (chess)", `{rung: ARMAGEDDON, winner: chessAway}`) moves to Task 8's `{rung: "armageddon", black: chessAway, result: "draw"}`, and its check now asserts that Black advanced (re-review minor; review I10). Task 8 changed the engine, but this task owns `smoke.ts` in the sequential lanes.
 - Create: `MUT/t11.json`
-- Do NOT touch: `stages-panel.tsx` (Task 17), `schemas.ts` (Task 12), `engine-db/stage-cfg.ts` (the overlay deletion is resolver code: Opus Task 13b, re-review IMP-R3).
+- Do NOT touch: `stages-panel.tsx` (Task 17), `api-v1/schemas/` (Task 12), `engine-db/stage-cfg.ts` (the overlay deletion is resolver code: Opus Task 13b, re-review IMP-R3).
 
 **Interfaces:**
 - Consumes: Task 4's `sportTopKeys`, `stageTopKeysFor`; Task 2's `lockedStageIdsAmong`, `ruleErrorMessage`; `resolveModule`.
@@ -3045,7 +3045,7 @@ describe.skipIf(!HAS_DB)("rule 10 — stage rules × start × void", () => {
 
 > **Carried from Task 5 review (M2).** `rule-locks.ts:~104` reads a decider at the stage's TOP level (pre-D3 storage). When this task moves deciders into `stages.config.rules`, convert that branch, its test and its mutant to read the new storage (or delete them if `stage.rules` already covers it). Grep `-a` for every other top-level decider read.
 
-> **Carried from Task 2 review.** Name `openapi.ts:99` (the division PATCH summary still says "locked once fixtures exist"), declare the 409 body's `refused` array and the 200 body's `refused`, and list the new `ruleLock` codes in the division PATCH responses. Forward `EngineError.data` for `CONFIG_INVALID` in `api-v1/http.ts` so `issues`/`refused` reach HTTP clients (with a route test). Fix stale comments `pad-cfg-resolution.test.ts:99-102`, `schemas.ts:490-491`.
+> **Carried from Task 2 review.** Name `openapi.ts:99` (the division PATCH summary still says "locked once fixtures exist"), declare the 409 body's `refused` array and the 200 body's `refused`, and list the new `ruleLock` codes in the division PATCH responses. Forward `EngineError.data` for `CONFIG_INVALID` in `api-v1/http.ts` so `issues`/`refused` reach HTTP clients (with a route test). Fix stale comments `pad-cfg-resolution.test.ts:99-102`, `api-v1/schemas/`.
 
 Spec items 5, 6; §4.2; D3, D13; SC-P8; P7; Review Focus 4 and 5; the §8 seam "stageDefaults output is read back through `resolveFixtureCfg` and folded by the real engine".
 
@@ -3056,7 +3056,7 @@ Spec items 5, 6; §4.2; D3, D13; SC-P8; P7; Review Focus 4 and 5; the §8 seam "
   - `createStages` (`:362`): retire `assertNoRulesKey`/`RULES_NOT_ACCEPTED_HERE`; validate `config.rules`, then `withStageDefaults` before the insert (`:458`);
   - `replaceStages` carry (`:528-560`): `rules = {...stageDefaultsFor(newKind), ...carried}` for a slot whose `seq:kind` matched, and defaults only for a slot whose kind changed.
 - Modify: `apps/web/src/server/usecases/templates.ts:345`: the same helper.
-- Modify: `apps/web/src/server/api-v1/schemas.ts`:
+- Modify: `apps/web/src/server/api-v1/schemas/`:
   - `StageConfig` drops top-level `shootout`/`extraTime` (`:1109-1110`) and refuses them loudly, as `PatchFixture`'s `.strict()` precedent does at `:1314-1320`;
   - `rules` is accepted (`:1119`);
   - the division response gains `refused` (Task 2's field).
@@ -3200,7 +3200,7 @@ export function withStageDefaults(module: AnySportModule, kind: StageKind, varia
 - `createStages`: per stage, `validateStageRules(...)` on any provided rules, then `withStageDefaults`.
 - `replaceStages` carry: build the carried map as today, then `withStageDefaults(module, newKind, variant, {...config, rules: carried ?? {}})`.
 - `templates.ts:345`: wrap `effectiveStageConfig(templateStage)` the same way.
-- `schemas.ts`: remove the two keys and add the loud refusal (`.superRefine` adding an issue "moved to config.rules" when either key is present).
+- `api-v1/schemas/`: remove the two keys and add the loud refusal (`.superRefine` adding an issue "moved to config.rules" when either key is present).
 - `pnpm openapi:gen`.
 - Update every top-level-decider writer from Task 11's list.
 - Smoke: `w2c: a new knockout stage stores its sport's deciders` (`POST /stages` football knockout, then `GET` → `config.rules.shootout === true`).
@@ -3242,7 +3242,7 @@ Spec item 10; Q1; Review Focus 3.
 
 **Files:**
 - Modify: `apps/web/src/server/usecases/stage-rules.ts`: the body becomes `{rules?, points?}`. `points` is a `PointsRule | null` written to `config.points`.
-- Modify: `apps/web/src/server/api-v1/schemas.ts` (`PutStageRules :1201`, `StageRules :1206`), `openapi.ts:156` (summary codes), `openapi/*.json`.
+- Modify: `apps/web/src/server/api-v1/schemas/stages.ts` (`PutStageRules`, `StageRules`), `openapi.ts:156` (summary codes), `openapi/*.json`.
 - Modify: `apps/web/src/lib/rule-errors.ts` (`POINTS_RULE_INEXPRESSIBLE` message already present; verify).
 - Create: `apps/web/src/server/usecases/__tests__/stage-points.test.ts`
 - Modify: `scripts/smoke.ts` (one check)
@@ -3484,7 +3484,7 @@ Spec items 2, 3; §4.5 item 2 at `1b757c6cb`; D5, D6, D14; owner P-1 (the versio
 - Modify: `apps/web/src/server/usecases/admin-fixture-config.ts`: `resnapshotFixtureConfig` (`:155`) calls `refreezeFixture`. Behaviour is unchanged except that it now bumps `rules_version`, so an open pad learns of a staff re-freeze too. It passes the real `rules_override` through the resolver since Task 10.
 - Create: `apps/web/src/server/usecases/fixture-rules.ts`
 - Create: `apps/web/src/app/api/v1/fixtures/[id]/rules/route.ts` (`PUT`). Copy the auth call from `app/api/v1/fixtures/[id]/route.ts`'s PATCH.
-- Modify: `apps/web/src/server/api-v1/schemas.ts` (`PutFixtureRules = z.object({rules: z.record(z.string(), z.unknown()).nullable()})`), `openapi.ts` (route + summary listing the codes), `openapi/*.json`.
+- Modify: `apps/web/src/server/api-v1/schemas/stages.ts` (`PutFixtureRules = z.object({rules: z.record(z.string(), z.unknown()).nullable()})`), `openapi.ts` (route + summary listing the codes), `openapi/*.json`.
 - Modify: `apps/web/src/lib/rule-errors.ts` (`FIXTURE_FORMAT_LOCKED`, `FORMAT_DOES_NOT_FIT_PLAY` present; verify).
 - Modify: `apps/web/src/server/engine-db/__tests__/bracket-overlay-callers.test.ts`: the override seeding now calls `writeFixtureRulesOverride` (the §8 seam).
 - Create: `apps/web/src/server/usecases/__tests__/fixture-rules.test.ts`
@@ -3805,7 +3805,7 @@ Spec §2.1 #3 (pad half); §4.5 item 2 at `1b757c6cb`; §7 `FIXTURE_RULES_CHANGE
 
 **Files:**
 - Create: `apps/web/e2e/remote-pad-rules-w2c.spec.ts` (the probe in Step 1 becomes its first test and is KEPT)
-- Modify: `apps/web/src/server/api-v1/schemas.ts`: `AppendEventRequest` (`:1828`) gains `rules_version: z.number().int().nonnegative().optional()` (absent means unchecked; there is no null).
+- Modify: `apps/web/src/server/api-v1/schemas/scoring.ts`: `AppendEventRequest` (`:1828`) gains `rules_version: z.number().int().nonnegative().optional()` (absent means unchecked; there is no null).
 - Modify: `apps/web/src/server/usecases/scoring.ts:140` (`scoreEvent` threads it) and `apps/web/src/server/engine-db/append-event.ts`: the check after the advisory lock (`:189`) and BEFORE any insert. Every accepted response carries the row's `rules_version`.
 - Modify: `apps/web/src/server/usecases/fixtures.ts:98-131`: `loadFixturePadCfg` returns `rulesVersion: number`.
 - Modify: `apps/web/src/app/api/v1/fixtures/[id]/rules/route.ts`: add `GET` → `{cfg, rules_version, format_line}` (`format_line` from Task 16's describer once it lands; until then `effectiveRulesLine` as today).

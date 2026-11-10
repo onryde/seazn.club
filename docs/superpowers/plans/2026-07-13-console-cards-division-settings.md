@@ -22,7 +22,7 @@
 
 **Files:**
 - Create: `db/migration/deltas/V274__division_logo.sql`
-- Modify: `apps/web/src/lib/supabase-storage.ts` (add `divisionLogoPath`), `apps/web/src/server/usecases/divisions.ts` (COLS + `DivisionRow` + patch passthrough), `apps/web/src/server/api-v1/schemas.ts` (`PatchDivision` + `logo_storage_path`), `apps/web/src/server/usecases/public.ts`/logo resolution only if cards need public URLs (console-only for now — resolve via existing `resolveLogoUrl` helper where the page queries).
+- Modify: `apps/web/src/lib/supabase-storage.ts` (add `divisionLogoPath`), `apps/web/src/server/usecases/divisions.ts` (COLS + `DivisionRow` + patch passthrough), `apps/web/src/server/api-v1/schemas/divisions.ts` (`PatchDivision` + `logo_storage_path`), `apps/web/src/server/usecases/public.ts`/logo resolution only if cards need public URLs (console-only for now — resolve via existing `resolveLogoUrl` helper where the page queries).
 - Create: `apps/web/src/app/api/v1/divisions/[id]/logo-upload-url/route.ts` (POST, `requireResourceAuth(req,"division",id,"edit")`, same shape as org route; no plan gate — division logos ride the card design, not Pro branding).
 - Test: `apps/web/src/server/usecases/__tests__/division-settings.test.ts` (new, DB-backed; also used by Task 2).
 
@@ -43,7 +43,7 @@ alter table divisions
 **Files:**
 - Create: `apps/web/src/lib/format-lock.ts`
 - Test: `apps/web/src/lib/__tests__/format-lock.test.ts` (pure) + cases in `division-settings.test.ts` (DB)
-- Modify: `schemas.ts` (`PatchDivision` gains `variant_key: z.string().min(1)`, `config: z.record(z.string(), z.unknown())` — both optional like all patch fields), `divisions.ts` (`patchDivision` guard + variant validation copied from `createDivision`'s variant/config checks)
+- Modify: `api-v1/schemas/divisions.ts` (`PatchDivision` gains `variant_key: z.string().min(1)`, `config: z.record(z.string(), z.unknown())` — both optional like all patch fields), `divisions.ts` (`patchDivision` guard + variant validation copied from `createDivision`'s variant/config checks)
 
 **Interfaces produced:**
 ```ts

@@ -10,7 +10,7 @@ import { inSquadOrder, type EntrantMember, type LineupSlotWire, type MemberInput
 import { routeTo } from "../routing.ts";
 import { sportModule } from "../sport-cfg.ts";
 
-/** apps/web/src/server/api-v1/schemas.ts CreateEntrant `members .max(40)` (text-pinned by rosters.test.ts). */
+/** apps/web/src/server/api-v1/schemas/entrants.ts CreateEntrant `members .max(40)` (text-pinned by rosters.test.ts). */
 export const ROSTER_MAX = 40;
 
 /** Plan review 1 m-2, review 3 m-5: a variant whose players per side differs

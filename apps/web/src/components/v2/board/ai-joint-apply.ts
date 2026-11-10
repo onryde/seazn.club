@@ -27,7 +27,7 @@ import { aiCheckpointLabel } from "./ai-apply";
  *
  *  P9 pass 3b: `court_id` (a real `courts.id`), not the legacy `court_label`
  *  — `ApplyCompetitionScheduleRequest`'s assignment item is `.strict()` and
- *  requires `court_id` (schemas.ts), so a `court_label` key here 400s the
+ *  requires `court_id` (api-v1/schemas/), so a `court_label` key here 400s the
  *  whole joint apply rather than silently applying nothing. */
 export interface JointApplyDivision {
   divisionId: string;

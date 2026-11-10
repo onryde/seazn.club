@@ -4,7 +4,7 @@
 // "Owner ruling — SEEDING_* error copy is P6's, scoped"). The wire codes are
 // HttpError codes thrown by computeSeedProposal/confirmSeedProposal
 // (server/usecases/stages/), ALL_CAPS_SNAKE by repo convention
-// (schemas.ts:3024-3029) — never i18n keys themselves. This module is the
+// (api-v1/schemas/) — never i18n keys themselves. This module is the
 // ONE place a code becomes display text.
 import { describe, expect, it } from "vitest";
 import { seedingErrorMessage, SEEDING_ERROR_CODES, type SeedingErrorCode } from "@/lib/seeding-error";

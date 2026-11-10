@@ -3,7 +3,7 @@
 // These lived inline in `drivers/http.ts` and `drivers/browser.ts` as separate
 // copies. `payment_method` was added to the http copy and not the browser one,
 // and because `PutRegistrationSettings` defaults every key it does not receive
-// (api-v1/schemas.ts:2334), the browser driver silently reset every division it
+// (api-v1/schemas/), the browser driver silently reset every division it
 // configured back to "offline" — making hosted Checkout unmintable and
 // surfacing three steps later as a 422 reading "This entry fee is paid directly
 // to the organiser". One builder, one test.

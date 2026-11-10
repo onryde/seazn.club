@@ -397,7 +397,7 @@ Before relying on `toMatchObject({ status, code })`: open `apps/web/src/lib/erro
 ### Task 3: API body, schema, OpenAPI
 
 **Files:**
-- Modify: `apps/web/src/server/api-v1/schemas.ts` (near `GenerateResult`, L1584)
+- Modify: `apps/web/src/server/api-v1/schemas/` (near `GenerateResult`, L1584)
 - Modify: `apps/web/src/app/api/v1/stages/[id]/generate/route.ts`
 - Modify: `apps/web/src/server/api-v1/openapi.ts:130`
 - Regenerate: `openapi/v1.json`, `openapi/v1.public.json`
@@ -427,7 +427,7 @@ describe("GenerateStageInput", () => {
 
 - [ ] **Step 3: Implement**
 
-schemas.ts (the file may not import `@/` — keep the enum spelled out, as `StageConfig.pairing` at L1018 does):
+api-v1/schemas/ (the file may not import `@/` — keep the enum spelled out, as `StageConfig.pairing` at L1018 does):
 ```ts
 /** POST /stages/{id}/generate body. `pairing` = a ROUND-1-ONLY Swiss override
  *  (spec 2026-09-22); never stored. Absent body ≡ {}. */

@@ -521,7 +521,7 @@ describe("invariants", () => {
 // composed stale rule (STALE_HEARTBEAT_SECONDS_COMPOSED for a runner that has played, the STALE_HEARTBEAT_SECONDS boot
 // allowance for one that has not — owner ruling 2026-10-15, option A); the final beat's exit reason; exit 78.
 // Driven through `decide` with the REAL `evaluate`, never a hand-built expiry. The sim does what the usecase does after
-// commit (stream-sessions.ts): a `retry_runner` effect becomes create_started at attempt + 1 (`retryRunner`), a
+// commit (usecases/stream-sessions/): a `retry_runner` effect becomes create_started at attempt + 1 (`retryRunner`), a
 // `create_machine` effect becomes the provider's create_ok, and a beat writes heartbeat_at BEFORE its expiry tick and
 // its callbacks (`heartbeat`). destroy_ok is never automatic: a test feeds it where the DELETE is confirmed.
 // ONE SPORT is moot: the relay never reads the sport (relay-internal-routes.test.ts header).

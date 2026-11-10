@@ -56,9 +56,9 @@
 //   35 drift: rename an id in HUB_TAB_IDS ..... the tab drift case
 //   36 drift: rename a bucket in MatchBucketSchema ... the bucket drift case
 //   37 drift: rename an id in CompetitionHubTabId .... the tab drift case
-//   38 probe: drop a status from STATUSES below ..... the schemas.ts drift guard
+//   38 probe: drop a status from STATUSES below ..... the api-v1/schemas/ drift guard
 //      (38 is what proves that guard is not decoration — it really does read
-//      the enum out of `server/api-v1/schemas.ts` and compare.)
+//      the enum out of `server/api-v1/schemas/` and compare.)
 //
 // ONE mutant is EQUIVALENT — it cannot be killed by any test, here or anywhere,
 // and recording it is cheaper than having the next reader re-derive it:
@@ -113,16 +113,16 @@ import {
 } from "@/server/public-site/competition-hub-schema";
 
 // The v1 wire vocabulary for a fixture's status — `Fixture.status` in
-// `server/api-v1/schemas.ts`. W2a: that enum is now `z.enum(FIXTURE_STATUSES)`
+// `server/api-v1/schemas/`. W2a: that enum is now `z.enum(FIXTURE_STATUSES)`
 // (`lib/fixture-status.ts`, client-safe), so this list IS the wire vocabulary;
-// the guard below reads the source text to prove schemas.ts still uses it.
+// the guard below reads the source text to prove api-v1/schemas/ still uses it.
 const STATUSES = FIXTURE_STATUSES;
 
 describe("bucketFixture — every status the wire schema declares has a bucket", () => {
   it("the hand-written STATUSES list still matches the enum in server/api-v1/schemas.ts", () => {
     // Anchored on "forfeited", which occurs exactly once in that file (verified
     // 2026-09-08). Reading the source rather than importing keeps this pure
-    // lib test free of `schemas.ts`'s engine import graph.
+    // lib test free of `api-v1/schemas/`'s engine import graph.
     // api-v1/schemas/ is a folder of modules now (index.ts is only the barrel): the scan reads every module, so a
     // second, drifting copy cannot hide in any of them.
     const dir = new URL("../../server/api-v1/schemas/", import.meta.url);

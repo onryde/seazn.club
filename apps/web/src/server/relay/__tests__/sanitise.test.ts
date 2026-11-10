@@ -52,7 +52,7 @@ describe("sanitise — allowlist", () => {
     expect(sanitise(42)).toEqual({});
   });
   it("every payload key the usecase's forced destroys write survives (a key the list lacks never reaches the ledger — `staleAttempt` did not, Task 10 → lane-close sweep)", () => {
-    // The keys stream-sessions.ts hands forceDestroy at its three sites, typed here from those call sites.
+    // The keys usecases/stream-sessions/ hands forceDestroy at its three sites, typed here from those call sites.
     const written = { machineId: "m1", staleAttempt: 1, machineName: "relay-x-r1", reason: "sweep" };
     expect(sanitise(written)).toEqual(written);
     expect(Object.keys(written).filter((k) => !ALLOWED_KEYS.has(k))).toEqual([]);
@@ -121,7 +121,7 @@ describe("sanitise — allowlist", () => {
   });
 
   // R4 S8 (ruling R14): 64 proof-of-play items a beat must never put in a sample row. The usecase strips the list before
-  // either beat store (stream-sessions.ts `heartbeat`; its DB test reads both stores back), and the allowlist is the floor
+  // either beat store (usecases/stream-sessions/heartbeat.ts `heartbeat`; its DB test reads both stores back), and the allowlist is the floor
   // under that strip: neither the list nor any key only an item carries survives, while the overflow count beside it does.
   it("R4 S8 (R14): the airing list never survives into a sample's raw — the contract's airing beat loses that list and nothing else; airingsDropped is kept", () => {
     const beat = contractFixture("heartbeat-airings");

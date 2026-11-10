@@ -7,7 +7,7 @@
 // the form that closes that gap, and the copy that stops pointing at a dead end.
 //
 // Two shapes are in play and they are NOT the same:
-//   * stored/wire (`schemas.ts` ScheduleConfig.blackouts) — `{court?, from, to}`
+//   * stored/wire (`api-v1/schemas/scheduling.ts` ScheduleConfig.blackouts) — `{court?, from, to}`
 //     with `from`/`to` as ISO datetimes WITH offset;
 //   * engine (`packages/engine/src/scheduling/calendar.ts` Blackout) — the same
 //     keys with `from`/`to` as epoch ms.
@@ -148,7 +148,7 @@ describe("draftsToBlackouts — drafts into the stored wire shape", () => {
   it("writes ISO instants, not the engine's epoch ms", () => {
     const rows = draftsToBlackouts([validDraft()], ORG_TZ);
     expect(rows).toEqual([{ from: FROM_ISO, to: TO_ISO }]);
-    // Guards the shape itself: `schemas.ts` types these as z.iso.datetime, so a
+    // Guards the shape itself: `api-v1/schemas/` types these as z.iso.datetime, so a
     // number here is a 400 from the PUT, not a silently different unit.
     expect(typeof rows![0]!.from).toBe("string");
   });

@@ -60,14 +60,14 @@ C7's brief gates on "C4 + C5 **deployed**". Both halves have drifted and the dri
 
 Four owner rulings were taken on 2026-08-17 and are baked into the tasks below. Do not re-open them.
 
-1. **`z3_unavailable` is retired in C7, not left behind.** The brief's acceptance says openapi has "zero z3 occurrences (was 3)". The real count is **5**, in **both** `openapi/v1.public.json` and `openapi/v1.json`, and two of the five are the `status` member `z3_unavailable`. Nothing can produce it since C4/C9, and `solver_unavailable` (`schemas.ts:1284`) already renders through the identical copy. Retiring it is what makes the stated acceptance reachable.
+1. **`z3_unavailable` is retired in C7, not left behind.** The brief's acceptance says openapi has "zero z3 occurrences (was 3)". The real count is **5**, in **both** `openapi/v1.public.json` and `openapi/v1.json`, and two of the five are the `status` member `z3_unavailable`. Nothing can produce it since C4/C9, and `solver_unavailable` (`api-v1/schemas/`) already renders through the identical copy. Retiring it is what makes the stated acceptance reachable.
 2. **C8 deletes `z3-load.ts` outright, including its consumers.** `build.ts:116` imports `withZ3LockAndReset` and uses it at `:1210`; `build.ts:2404` already calls that wrapper vestigial. Eleven `build-*.test.ts` files import `resetZ3` as a hygiene guard. All are `ACCURATE_TODAY` ledger entries, i.e. outside C8's brief as written. C8's file set formally widens to cover them: after the deletion there is no z3 to reset, so those guards are inert by construction — the same vacuity C6 already recorded against `schedule-capacity-guard.test.ts`.
 3. **The migration takes V365, not V363** — *if* a migration turns out to be needed at all (Task C7-1). The in-flight RS001 registration worktree holds unmerged `V363__registration_groups_players.sql` and `V364__registrations_regroup.sql`, and that session is live. V365 leaves it headroom; a two-number gap is harmless to Flyway.
 4. **The status-check loop starts at execution kickoff**, not now. See "Status-check protocol" at the end of this plan.
 
 Two further findings carry no ruling and are handled inside the tasks:
 
-- **`schemas.ts:1016` and `:2190` are stale.** The real lines are **`:1229`** (`ScheduleSolverInfo.engine`) and **`:2592`** (`AiRepairReport.engine`).
+- **`api-v1/schemas/` and `:2190` are stale.** The real lines are **`:1229`** (`ScheduleSolverInfo.engine`) and **`:2592`** (`AiRepairReport.engine`).
 - **Neither brief mentions three load-bearing sites:** `scripts/smoke.ts:8936-8937` (a live `check()` allow-list naming both z3 engines), `apps/web/src/lib/i18n-keys.ts:890-891`, and `scripts/__tests__/z3-retirement-drift.test.ts` itself.
 
 ---
@@ -78,7 +78,7 @@ Two further findings carry no ruling and are handled inside the tasks:
 
 | File | Responsibility after this PR |
 |---|---|
-| `apps/web/src/server/api-v1/schemas.ts` | `:1229` engine enum → `["greedy","optimized"]`; `:2592` repair enum → `["none","optimized","llm"]`; `:1248-1285` status enum loses `"z3_unavailable"` |
+| `apps/web/src/server/api-v1/schemas/` | `:1229` engine enum → `["greedy","optimized"]`; `:2592` repair enum → `["none","optimized","llm"]`; `:1248-1285` status enum loses `"z3_unavailable"` |
 | `packages/engine/src/scheduling/build.ts` | `:574` engine union → `"greedy" \| "optimized"`; `BuildStatus` (~`:368`) loses `"z3_unavailable"` |
 | `apps/web/src/server/usecases/schedule-ai-solver.ts` | `:136` `RepairEngine` → `"none" \| "llm" \| "optimized"` |
 | `apps/web/src/components/v2/board/result-strip.tsx` | `ENGINE_KEY` (`:33-40`) loses `z3` and `"z3+lns"`; `statusKey` loses the `z3_unavailable` case (`:68`) |
@@ -162,7 +162,7 @@ cd "$WT" && git commit --allow-empty -m "chore(c7): branch base — record base 
 
 ## Task C7-1: Settle whether a migration is owed
 
-The brief's step 1 ("rewrite rows `engine z3|z3+lns → optimized`") and the design's premise ("`"z3"` is **stored** in board rows") could not be confirmed. Two independent searches on 2026-08-17 found **no** column, no CHECK constraint, no Postgres enum type and **zero `z3` hits anywhere under `db/`**. `ScheduleConfig` (`schemas.ts:843-894`) — the schema `_RULES.md` warns is the READ path — has no engine, solver or repair field at all. `ScheduleSolverInfo` (`:1223`) and `AiRepairReport` (`:2592`) are response schemas; the only imports outside tests are **type-only** client imports.
+The brief's step 1 ("rewrite rows `engine z3|z3+lns → optimized`") and the design's premise ("`"z3"` is **stored** in board rows") could not be confirmed. Two independent searches on 2026-08-17 found **no** column, no CHECK constraint, no Postgres enum type and **zero `z3` hits anywhere under `db/`**. `ScheduleConfig` (`api-v1/schemas/`) — the schema `_RULES.md` warns is the READ path — has no engine, solver or repair field at all. `ScheduleSolverInfo` (`:1223`) and `AiRepairReport` (`:2592`) are response schemas; the only imports outside tests are **type-only** client imports.
 
 If that holds, the rewrite-then-narrow ordering constraint the brief calls "load-bearing" **does not apply**, and no migration is written. This task proves it or disproves it. Do not skip it and do not assume either answer.
 
@@ -307,7 +307,7 @@ describe("the public contract has no z3 values left", () => {
 });
 ```
 
-Fill the `base` object out to whatever `ScheduleSolverInfo` actually requires — read `schemas.ts:1223-1399` and include every non-optional field, or every case fails for the wrong reason.
+Fill the `base` object out to whatever `ScheduleSolverInfo` actually requires — read `api-v1/schemas/` and include every non-optional field, or every case fails for the wrong reason.
 
 - [ ] **Step 2: Run it and confirm it fails for the RIGHT reason**
 
@@ -316,7 +316,7 @@ cd "$WT" && npm test --workspace apps/web -- --reporter=json \
   --outputFile=/tmp/c7-red.json src/server/api-v1/__tests__/z3-contract-retired.test.ts; echo "EXIT=$?"
 ```
 
-Expected in the JSON: the four rejection cases and the fixture case FAIL; the two "still accepts" cases PASS. If a "still accepts" case fails, `base` is under-populated — fix that before touching `schemas.ts`. A `numTotalTests` of 0 means the path filter matched nothing: `npm test -- <path>` treats positionals as filename filters and a typo reports green.
+Expected in the JSON: the four rejection cases and the fixture case FAIL; the two "still accepts" cases PASS. If a "still accepts" case fails, `base` is under-populated — fix that before touching `api-v1/schemas/`. A `numTotalTests` of 0 means the path filter matched nothing: `npm test -- <path>` treats positionals as filename filters and a typo reports green.
 
 - [ ] **Step 3: Commit the red**
 
@@ -330,7 +330,7 @@ git commit -m "test(c7): RED — the public contract still accepts z3 values"
 ## Task C7-3: Narrow the five unions
 
 **Files:**
-- Modify: `apps/web/src/server/api-v1/schemas.ts:1229`, `:1248-1285`, `:2592`
+- Modify: `apps/web/src/server/api-v1/schemas/`
 - Modify: `packages/engine/src/scheduling/build.ts:~368`, `:574`
 - Modify: `apps/web/src/server/usecases/schedule-ai-solver.ts:136`
 
@@ -356,12 +356,12 @@ Delete `| "z3_unavailable"` from `BuildStatus` (around `:368`) together with its
 - [ ] **Step 2: Narrow the web side**
 
 ```ts
-// apps/web/src/server/api-v1/schemas.ts:1229
+// apps/web/src/server/api-v1/schemas/
   engine: z.enum(["greedy", "optimized"]),
 ```
 
 ```ts
-// apps/web/src/server/api-v1/schemas.ts:2592
+// apps/web/src/server/api-v1/schemas/
   engine: z.enum(["none", "optimized", "llm"]),
 ```
 
@@ -722,7 +722,7 @@ Load `superpowers:requesting-code-review`, then run `/code-review`. Fix findings
 
 - [ ] **Step 8: Append the `_INDEX.md` entry**
 
-Flip C7's status row to `**PR #NNN open**` and append a status-log section recording, at minimum: the migration verdict from C7-1 and its evidence, the `z3_unavailable` ruling, the `schemas.ts:1016/2190` → `:1229/:2592` drift, the openapi "was 3" → 5 correction, and the three sites neither brief named. This file is the compaction anchor — write it as it happens, not at the end.
+Flip C7's status row to `**PR #NNN open**` and append a status-log section recording, at minimum: the migration verdict from C7-1 and its evidence, the `z3_unavailable` ruling, the `api-v1/schemas/` → `:1229/:2592` drift, the openapi "was 3" → 5 correction, and the three sites neither brief named. This file is the compaction anchor — write it as it happens, not at the end.
 
 - [ ] **Step 9: Open the PR**
 

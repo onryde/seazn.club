@@ -12,7 +12,7 @@
 //   declares no maximum for any of them.
 // - rounds from 1: the validator's minimum (Settings' 3 was the odd one out).
 //
-// DELIBERATELY a module with no imports, like capacity-bounds.ts: `server/api-v1/schemas.ts` reads it through a relative
+// DELIBERATELY a module with no imports, like capacity-bounds.ts: `server/api-v1/schemas/` reads it through a relative
 // `.ts` import, so it must load under plain node (the OpenAPI generator, tools/matrix), and the client forms read it too.
 
 export const FORMAT_BOUNDS = {

@@ -53,7 +53,7 @@ it now: **block, with an audited override-with-reason.**
    without an override; with `override.reason` writes a `competition_events` row
    of type `eligibility.overridden` (via `audit.ts`, moved from
    `registrations.ts:313`) and proceeds.
-2. **Zod (`server/api-v1/schemas.ts`)**: a typed `AgeRuleS`/`GenderRuleS`/
+2. **Zod (`server/api-v1/schemas/`)**: a typed `AgeRuleS`/`GenderRuleS`/
    `OtherRuleS` union replaces the untyped eligibility arrays on CreateDivision
    and PatchDivision (write-time only). Optional `EligibilityOverride {reason: 3..500}`
    on CreateEntrant / PatchEntrant / PutLineup / roster-sync / confirm / waive

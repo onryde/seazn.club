@@ -4528,7 +4528,7 @@ describe("registration funnel — rule 5: registration-api/ui needs dob/gender",
 // `registeringSelf: true` UNCONDITIONALLY for every entry of an
 // "individual" division (the captain IS the entrant) — and
 // `PublicRegisterGroupRequest`'s superRefine (apps/web/src/server/api-v1/
-// schemas.ts) 400s ANY self-registering entry lacking `contact.dob`,
+// schemas/registration.ts) 400s ANY self-registering entry lacking `contact.dob`,
 // independent of whether the division declares an age band. Before this
 // fix, an `open`, no-age-band, individual-kind division was a LEGAL pack
 // that crashed live — the original rule 5 only fired for an age band or a

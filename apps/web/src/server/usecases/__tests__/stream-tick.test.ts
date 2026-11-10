@@ -476,7 +476,7 @@ describe.skipIf(!HAS_DB)("W19 (§6.8.5): a live phone stream whose phone AND vid
   });
 
   it("FP17, B0's freshness bound: with the claim held elsewhere, a coalesced sample 1.5 × STREAM_POLL_MS old IS the fresh read (ended); one exactly COALESCED_SAMPLE_MAX_AGE_MS old is not (W19 skips the tick)", async () => {
-    const MAX_AGE = 2 * STREAM_POLL_MS;   // B0's COALESCED_SAMPLE_MAX_AGE_MS (stream-sessions.ts, I-1)
+    const MAX_AGE = 2 * STREAM_POLL_MS;   // B0's COALESCED_SAMPLE_MAX_AGE_MS (usecases/stream-sessions/ingest-poll.ts, I-1)
     let checked = 0;
     for (const [age, ends_] of [[1.5 * STREAM_POLL_MS, true], [MAX_AGE, false]] as const) {
       const r = await rig();

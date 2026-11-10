@@ -26,7 +26,7 @@ import { paths } from "./paths.ts";
  *  Create. */
 export const BUILDER_STEP_COUNT = 4;
 
-/** The product's Division and Stage rows (api-v1 schemas.ts Division, Stage). */
+/** The product's Division and Stage rows (api-v1 api-v1/schemas/ Division, Stage). */
 export interface DivisionOut { id: string; competition_id: string; name: string; slug: string; sport_key: string; variant_key: string; config: Record<string, unknown>; status: string }
 export interface StageOut { id: string; division_id: string; seq: number; kind: string; name: string; config: Record<string, unknown>; progression: unknown; status: string }
 

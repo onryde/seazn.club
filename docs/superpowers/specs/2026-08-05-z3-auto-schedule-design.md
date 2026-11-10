@@ -388,7 +388,7 @@ That shared file is the reason parallelism is forbidden here, not the task count
 | W2 | `build-encode.ts` + `build-encode-parity.test.ts` | parity suite green |
 | W3 | `build.ts` — tier walk, `rlimit`, anytime, verifier gate + `build.test.ts` + `build-determinism.test.ts` | engine unit green |
 | W4 | `build-lns.ts` + suite; `build-polish.test.ts` | engine unit green |
-| W5 | Web: `schemas.ts`, `schedule.ts` three-way dispatch, route, `openapi:gen`, updated usecase tests | web unit green, `git status --porcelain` empty |
+| W5 | Web: `api-v1/schemas/`, `schedule.ts` three-way dispatch, route, `openapi:gen`, updated usecase tests | web unit green, `git status --porcelain` empty |
 | W6 | UI: Polish button, result strip, 4 locales, `i18n:gen-keys` — `frontend-design` skill, desktop + 375 px screenshots | screenshots + porcelain empty |
 | W7 | `scripts/bench-build.ts` with hard rules, sets `SCHEDULING_BUILD_RLIMIT` | bench table in commit message |
 | W8 | E2E spec + smoke step + full gate rerun | e2e 3 projects green, smoke green |

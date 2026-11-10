@@ -6,7 +6,7 @@
  *
  *  - **date-only** (`YYYY-MM-DD`, from `<input type="date">`) carries no zone
  *    and no offset, so plain string order IS chronological. This is why
- *    `schemas.ts`'s `checkDateOrder` is allowed to use `<` on the wire.
+ *    `api-v1/schemas/`'s `checkDateOrder` is allowed to use `<` on the wire.
  *  - **instants** (`IsoDateTime` = `z.iso.datetime({ offset: true })`) accept
  *    ANY offset, so string order is chronological only within one offset.
  *    `2026-03-01T01:00:00-05:00` (06:00Z) sorts BEFORE

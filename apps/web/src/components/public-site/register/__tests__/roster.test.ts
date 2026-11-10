@@ -85,7 +85,7 @@ describe("serializeRoster — parseRoster's own inverse for its representable su
     //    like an ISO date misparses as a dob — both real parseRoster
     //    landmines, not paste-format edge cases a real name would ever hit.
     //  - squad_number restricted to 0-999: the WIRE schema itself caps it
-    //    there (schemas.ts squad_number.min(0).max(999)), so a "4-digit
+    //    there (api-v1/schemas/ squad_number.min(0).max(999)), so a "4-digit
     //    squad number" is never a legal value this app would ever hold in
     //    the first place, not just an untested one.
     //  - gender/email/is_captain stay at their EMPTY_ROSTER_PLAYER defaults

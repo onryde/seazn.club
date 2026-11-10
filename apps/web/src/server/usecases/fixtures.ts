@@ -489,7 +489,7 @@ export async function listDivisionFixturesForBoard(
  *  judged against. Declared as its own type because this endpoint's result IS
  *  the wire — the route returns it unmapped — so widening `FixtureRow` here
  *  would have widened GET too, where there is no move and nothing to report.
- *  Mirrored by `PatchedFixture` in `api-v1/schemas.ts`, which is what the
+ *  Mirrored by `PatchedFixture` in `api-v1/schemas/`, which is what the
  *  published spec is generated from. */
 export type PatchedFixtureOut = FixtureOut & { conflicts: ScheduleConflict[] };
 

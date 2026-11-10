@@ -20,7 +20,7 @@ Read first: `_RULES.md` → `_INDEX.md` → spec
 
 - new: `packages/engine/src/scheduling/health.ts` + tests
 - new route file under `apps/web/src/app/api/v1/stages/[id]/schedule/`
-- stage schedule page component (scout locates), `schemas.ts`,
+- stage schedule page component (scout locates), `api-v1/schemas/`,
   4 dictionaries
 
 ## Do NOT touch

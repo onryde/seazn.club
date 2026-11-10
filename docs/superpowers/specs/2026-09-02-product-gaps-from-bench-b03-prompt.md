@@ -96,12 +96,12 @@ followed. Every `insert into persons` in non-test `apps/web/src`:
 | `usecases/imports.ts:514` | column omitted → default |
 | `usecases/registrations.ts:810` | column omitted → default |
 
-`CreatePerson` (`apps/web/src/server/api-v1/schemas.ts:488-495`) has **no
+`CreatePerson` (`apps/web/src/server/api-v1/schemas/`) has **no
 `lane` field at all**, so the API cannot express it either.
 
 **Customer impact:** today, none directly — a coach IS expressible, just
-elsewhere: `EntrantMemberInput.roles` (`schemas.ts:365-421`) and
-`LineupSlotInput.role: z.enum(["player","coach","staff"])` (`schemas.ts:1058`).
+elsewhere: `EntrantMemberInput.roles` (`api-v1/schemas/`) and
+`LineupSlotInput.role: z.enum(["player","coach","staff"])` (`api-v1/schemas/`).
 The cost is to everyone downstream: a reader who takes the CHECK constraint as
 the contract builds against a value no customer can produce. B03 nearly seeded
 it by SQL, which would have meant the bench exercising a database rather than
@@ -199,7 +199,7 @@ exist to prevent. The
 only way to obtain fixtures with their `ext_key` over HTTP is
 `POST /api/v1/stages/{id}/generate`, whose response carries the full
 `FIXTURE_COLS` including `ext_key` (`usecases/stages.ts:1038-1046`;
-`Fixture.ext_key` at `schemas.ts:1034`).
+`Fixture.ext_key` at `api-v1/schemas/`).
 
 **Customer impact:** any API consumer — the documented, `api.access`-gated
 public API — can create fixtures but cannot list them without re-POSTing a
@@ -324,7 +324,7 @@ branch, so the reorder cannot come from that wave.
 
 ## G6 — the OpenAPI document publishes a different schema object than the route enforces
 
-**Evidence (READ, both objects):** `schemas.ts:3069` exports `CreateOfficial`,
+**Evidence (READ, both objects):** `api-v1/schemas/` exports `CreateOfficial`,
 imported by exactly one file — `api-v1/openapi.ts:295`, which publishes it as
 the documented request body. The route
 (`app/api/v1/officials/route.ts:3,15`) validates with a **different object**,
@@ -339,13 +339,13 @@ The B03 scout flagged the same duplication for `CreateVenue` and `CreateCourt`
 (the routes use `usecases/venues.ts:106-121`). **[re-verified 2026-09-03 — lead
 now closed.]** Both pairs are field-for-field identical:
 
-- `CreateVenue` (`schemas.ts:4519-4523`) vs `CreateVenueInput`
+- `CreateVenue` (`api-v1/schemas/`) vs `CreateVenueInput`
   (`venues.ts:106-110`) — character-identical.
-- `CreateCourt` (`schemas.ts:4527-4531`) vs `CreateCourtInput`
+- `CreateCourt` (`api-v1/schemas/`) vs `CreateCourtInput`
   (`venues.ts:116-120`) — identical once `RequiredCourtTags` is expanded;
-  `schemas.ts:39` defines it as literally
+  `api-v1/schemas/` defines it as literally
   `z.array(z.string().min(1).max(40)).max(50)`, which is what the usecase
-  spells out inline. Note `schemas.ts:37-38` says in its own comment that the
+  spells out inline. Note `api-v1/schemas/` says in its own comment that the
   inline spelling "can drift from the rest the next time the cap changes" —
   the duplication is known, and documented as a hazard, at the site itself.
 
@@ -357,7 +357,7 @@ integrator builds to the spec and gets a 400.
 **Recommendation:** have `openapi.ts` import the same object the route
 validates with, and delete the duplicate. If the doc copy exists to keep
 `usecases/` out of the OpenAPI layer, invert it instead — move the schema to
-`schemas.ts` and have the route import THAT — so there is one object either way.
+`api-v1/schemas/` and have the route import THAT — so there is one object either way.
 
 **Strongest argument against:** the split may be a deliberate layering rule
 (`api-v1/` must not import `usecases/` types). If so, the fix is a drift test
@@ -373,8 +373,8 @@ guess was right.]** Two corrections to how it was posed:
 2. **It cannot catch this class of drift**, exactly as suspected. The step runs
    `npm run openapi:gen` and then `git diff --exit-code openapi/v1.json`.
    `openapi-gen.ts:13` imports `buildOpenApiDocument` from
-   `api-v1/openapi.ts`, which reads `schemas.ts`. So the generated side and the
-   committed side both descend from `schemas.ts`, and the route's own
+   `api-v1/openapi.ts`, which reads `api-v1/schemas/`. So the generated side and the
+   committed side both descend from `api-v1/schemas/`, and the route's own
    `usecases/` object is on neither side of the comparison. `CreateOfficial`
    could drift arbitrarily far from `CreateOfficialInput` with this gate green.
 

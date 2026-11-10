@@ -7,7 +7,7 @@
 //               brief names; built through `buildTemplateStages` and the API's own `CreateStage` schema, so the stages
 //               are what the division builder makes. Late entry acts on the ROOT Swiss only; the playoff/knockout tail
 //               takes its field from the cut.
-//   kinds     — every `entrants.kind` (V212; `EntrantKind` in schemas.ts). Each is played by a sport whose engine module
+//   kinds     — every `entrants.kind` (V212; `EntrantKind` in api-v1/schemas/common.ts). Each is played by a sport whose engine module
 //               DECLARES it (`entrantModel.kinds`), its natural sport first (`defaultKind`), among the sports this file
 //               can score a played win in — chess for individual (chess is individual-only), badminton for a doubles
 //               pair, football for a team. Derived below, never typed as a table.

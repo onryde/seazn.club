@@ -145,7 +145,7 @@ describe("validateEntries", () => {
   });
 
   // INVERTED, RS007 — this test used to read "one entry, any shape, is enough
-  // to proceed (naming is encouraged in the UI, not gated here — schemas.ts
+  // to proceed (naming is encouraged in the UI, not gated here — api-v1/schemas/
   // leaves team_name/partner_name nullish)" and passed a NAMELESS TEAM entry.
   // It was asserting one side of a client/server disagreement as though it
   // were the contract: `registration-submit.ts`'s `entryDisplayName` 422s that

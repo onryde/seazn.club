@@ -1,6 +1,6 @@
 // The camera-policy VOCABULARY (design §5.1), and nothing else. One definition
 // shared by the server ladder (server/external-play/camera-policy.ts), the API
-// schemas (server/api-v1/schemas.ts, which `openapi:gen` loads under
+// schemas (server/api-v1/schemas/, which `openapi:gen` loads under
 // --experimental-strip-types — hence relative-import-safe, no enum) and the
 // division settings control (a client component, which must not import the
 // server-only module). The order IS the strictness ladder: index = rank.

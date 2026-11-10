@@ -4,8 +4,8 @@
 export type ExternalPlayProvider = "lichess";
 
 /** The two refusals T2's play gate can produce (preflight's `playGrantRefusal`).
- *  Declared HERE, in this import-free module, because api-v1/schemas.ts types
- *  its RoomAct answer with it and schemas.ts is part of the scripts program
+ *  Declared HERE, in this import-free module, because api-v1/schemas/ types
+ *  its RoomAct answer with it and api-v1/schemas/ is part of the scripts program
  *  (`tsconfig.scripts.json`, node strip-types): importing it from preflight.ts
  *  pulled that server-only, `@/`-aliased module into the scripts typecheck
  *  (T14 review I6). preflight.ts re-exports it. */

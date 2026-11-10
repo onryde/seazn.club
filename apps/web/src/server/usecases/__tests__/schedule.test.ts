@@ -146,11 +146,11 @@ afterAll(async () => {
 });
 
 // Pure schema contract (no DB): the apply request must accept source "ai"
-// (v4/03 §4). This guards the zod enum widening at schemas.ts ApplyScheduleRequest
+// (v4/03 §4). This guards the zod enum widening at api-v1/schemas/schedule-analysis.ts ApplyScheduleRequest
 // — it goes red if the "ai" member is reverted, independent of the DB constraint.
 describe("ApplyScheduleRequest schema (v4/03 §4)", () => {
   // P9 pass 3a: court_id (a real courts.id), not the legacy court_label — the
-  // assignment object is `.strict()` (schemas.ts), so a lingering court_label
+  // assignment object is `.strict()` (api-v1/schemas/), so a lingering court_label
   // key would 400 rather than silently pass through. Pure schema test, no DB:
   // any uuid-shaped string satisfies CourtId here, nothing resolves it against
   // a real court.
@@ -1267,7 +1267,7 @@ function windowAt(fromMs: number, toMs: number, tz: string) {
 // P9 pass 3a: `courts` dropped from the base config (real ids only, created
 // per-division by `seedBlackoutDivision` below — a module-level const cannot
 // call the DB). `blackouts[].court` became a CourtId in P9 pass 4c —
-// it stays a free-text label matched by NAME (schemas.ts: `court:
+// it stays a free-text label matched by NAME (api-v1/schemas/: `court:
 // z.string().max(100).optional()`, never migrated to CourtId), so
 // P9 (pass 4c): `blackouts[].court` is now a CourtId, so the draft below
 // carries a real court id rather than a display label.
@@ -1317,7 +1317,7 @@ describe.skipIf(!HAS_DB)("blackout windows round-trip into the placer (date/time
     // of the things `usesConstraints` trips on — hence the "pro" seed.
     expect(stored.config.blackouts).toEqual(rows);
 
-    // ISO strings, NOT the engine's epoch ms. `schemas.ts` types these as
+    // ISO strings, NOT the engine's epoch ms. `api-v1/schemas/` types these as
     // `z.iso.datetime({offset:true})`, so a client writing numbers gets a 400
     // rather than a subtly wrong time — the two shapes share all three keys.
     for (const w of stored.config.blackouts) {

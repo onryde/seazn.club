@@ -508,7 +508,7 @@ function windowContainment(
 // Rule 3 — rest minima
 //
 // ONE rest rule, not two. `perEntrantMinRest` is a division knob
-// (`schemas.ts:1303`) keyed on `entrantIds`, which the product's `Fixture`
+// (`api-v1/schemas/`) keyed on `entrantIds`, which the product's `Fixture`
 // genuinely carries (`home_entrant_id` / `away_entrant_id`) — so it is
 // measurable and it is checked here. The `min_rest_minutes` HARD rule is a
 // different constraint keyed on PERSONS or on feeder edges, neither of which
@@ -563,7 +563,7 @@ function restMinima(placed: readonly Placed[], constraints: EncodedConstraints):
   let exercised = false;
 
   // The top-level floor: per ENTRANT, unscoped — it is a division knob
-  // (`schemas.ts:1303`), not a `HardConstraint`.
+  // (`api-v1/schemas/`), not a `HardConstraint`.
   const byEntrant = groupBy(placed, (p) => p.fixture.entrantIds);
   for (const [entrantId, series] of byEntrant) {
     const r = restBreaches(

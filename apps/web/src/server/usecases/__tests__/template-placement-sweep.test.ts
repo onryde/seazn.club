@@ -38,7 +38,7 @@
 // (INVALID_REQUEST "neither entrant_indices nor person_indices") and BUILD falls back to greedy for that stage. The
 // verdicts read what was placed, never which placer placed it, so they hold under both.
 //
-// The rest between a player's matches is the settings' own default (`perEntrantMinRest` 0, ScheduleConfig in schemas.ts) for the
+// The rest between a player's matches is the settings' own default (`perEntrantMinRest` 0, ScheduleConfig in api-v1/schemas/scheduling.ts) for the
 // sweep below. A rest above 0 is its own describe, further down (engine 6.0.1: greedy honours rest before a fed bracket line).
 //
 // Real Postgres required; skipped without DATABASE_URL (the house convention of the sibling usecase suites).

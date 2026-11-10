@@ -34,7 +34,7 @@ export interface WhoFieldRequirements {
  * own dob/gender before "Next", for a value the server never asks for and
  * this client never reads. Both fields now require `imPlaying` as a
  * precondition, mirroring `PublicRegisterGroupRequest`'s superRefine
- * (schemas.ts) exactly:
+ * (api-v1/schemas/) exactly:
  *
  *  - dobRequired: UNCONDITIONALLY true once imPlaying — the schema
  *    requires `contact.dob` whenever ANY entry is `registering_self`,
@@ -82,7 +82,7 @@ export interface ContactValidation {
   };
 }
 
-/** Mirrors `PublicRegisterGroupContact` (schemas.ts:2359) field-shape rules
+/** Mirrors `PublicRegisterGroupContact` (api-v1/schemas/registration.ts) field-shape rules
  *  (name 1-120 chars, valid email) plus this session's requirement gating. */
 export function validateContact(
   contact: ContactState,
@@ -155,7 +155,7 @@ export interface EntriesValidation {
 }
 
 /** `PublicRegisterGroupRequest.entries` is `.min(1).max(10)`
- *  (schemas.ts:2421) — the max is already enforced at the point of adding
+ *  (api-v1/schemas/) — the max is already enforced at the point of adding
  *  (cart.ts's canAddEntry gates the "Add" control, so a cart can never grow
  *  past it), so the first thing gated here is non-empty. Per-entry naming is
  *  split, because the SERVER treats the two kinds differently and this file
@@ -335,7 +335,7 @@ export interface DetailsValidation {
  * once" — so this does NOT false-positive block on it).
  *
  * Also mirrors `PublicRegisterGroupRequest`'s superRefine
- * (schemas.ts): a self-linked TEAM/PAIR entry needs an EXPLICIT
+ * (api-v1/schemas/): a self-linked TEAM/PAIR entry needs an EXPLICIT
  * `self_player_index` resolved (`entry.self_player_index`) or the self-link
  * silently drops server-side with no submit-time error at all
  * (registration-submit.ts's own comment on why 0 is not a safe default
@@ -346,7 +346,7 @@ export interface DetailsValidation {
  * (design: "nothing extra"), so there is no control that could ever set
  * `self_player_index` for one — blocking would be a dead end the registrant
  * cannot resolve. A self-linked free agent's link therefore CAN still
- * silently drop at submit exactly as schemas.ts's comment describes; that
+ * silently drop at submit exactly as api-v1/schemas/ folder's comment describes; that
  * gap is left for whichever session wires the actual submit call (step 5)
  * to close, not papered over here with a check nobody could satisfy.
  *

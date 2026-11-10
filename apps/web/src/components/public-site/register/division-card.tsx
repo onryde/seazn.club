@@ -24,7 +24,7 @@ const BADGE = "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-me
 /** Viewer-LOCAL date, not the organiser's (RS006 fix wave finding #2,
  *  MEDIUM) — the ORGANISER's timezone is not plumbed to this client at all
  *  today: `PublicRegistrationDivision`/`PublicRegistrationInfo`
- *  (schemas.ts:2312, :2346) carry no tz field, and `publicRegistrationInfo`'s
+ *  (api-v1/schemas/registration.ts) carry no tz field, and `publicRegistrationInfo`'s
  *  own SQL query (usecases/registrations/settings.ts) never selects
  *  `organizations.timezone` even though that column exists and already
  *  governs scheduling elsewhere (`settings.orgTz`, #397/#448). Inventing

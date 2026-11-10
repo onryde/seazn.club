@@ -13,7 +13,7 @@ before starting, don't assume it.
 
 1. Migration (next free V-number — check the deltas dir): rewrite rows
    `engine z3|z3+lns → optimized`, repair `z3 → optimized`.
-2. THEN narrow `schemas.ts:1016` and `:2190`. **`ScheduleConfig` is the READ
+2. THEN narrow `api-v1/schemas/` and `:2190`. **`ScheduleConfig` is the READ
    path** — narrowing before the rewrite 500s every old row.
 3. Regenerate `openapi/v1.public.json` (drift gate is CI-only — run locally,
    porcelain clean).

@@ -562,7 +562,7 @@ optimised board and every other rule with it. And `INFEASIBLE` does not
 say which rule broke, whereas a minimum-violation board names it for
 free. Escape hatch if per-rule strictness is wanted later: a per-rule
 `enforcement: "hard" | "soft"`, matching the existing
-`crossPersonClash: "warn" | "hard"` (`schemas.ts:767`). Not designed now.
+`crossPersonClash: "warn" | "hard"` (`api-v1/schemas/`). Not designed now.
 
 Tasks 01-04 were re-audited on 2026-08-09 at the owner's request (four
 parallel Opus reviewers, mutation-first, one per task). Suite at that
@@ -608,7 +608,7 @@ Its implementer, its reviewer and my own wave-boundary gate all called it
 green.
 
 **`apps/web` tsc was red at that commit and stayed red across two tasks.**
-`apps/web/src/server/api-v1/schemas.ts:935` hand-mirrors that union as a zod
+`apps/web/src/server/api-v1/schemas/` hand-mirrors that union as a zod
 enum, and `schedule.ts` assigns `BuildResult` into it one-for-one: TS2322 at
 `schedule.ts:1102`. It surfaced only because Task 06b's implementer tripped
 over it doing unrelated work and reported it as pre-existing instead of
@@ -653,7 +653,7 @@ number, and never "fix" one of these by changing a timing constant.
 ## Rebased onto `origin/main` 2026-08-10 09:1xZ — clean, 0 behind
 
 73 commits replayed, ZERO conflicts, despite six overlapping files (the four
-`ui.json` dicts, `i18n-keys.ts`, `schemas.ts`, `packages/engine/package.json`).
+`ui.json` dicts, `i18n-keys.ts`, `api-v1/schemas/`, `packages/engine/package.json`).
 `git merge-tree --write-tree` predicted it correctly beforehand — use that to
 preview, it cost nothing and was right.
 

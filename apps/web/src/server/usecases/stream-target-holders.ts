@@ -1,6 +1,6 @@
 import "server-only";
 // server/usecases/stream-target-holders.ts — ONE answer to "which session holds this destination", read by the
-// Directory list (`inUse`), Go live's refusal (`target_in_use`, stream-sessions.ts `targetHolderFor`), and Replace key /
+// Directory list (`inUse`), Go live's refusal (`target_in_use`, usecases/stream-sessions/holders.ts `targetHolderFor`), and Replace key /
 // Remove (`TARGET_IN_USE`). Spec §5.3 + §5.5. Held = an ACTIVE session references a PASTED-key target (YouTube Connect:
 // an API-backed target is never held, spec §5.2); this org's only (the target join is the tenancy floor).
 import { sql, type Tx } from "@/lib/db";
@@ -21,7 +21,7 @@ export interface TargetHolder {
 }
 
 /** The holding fixture's organiser page; null once the fixture (or any slug on its path) is gone. One authority for the
- *  active holder here and Go live's terminal holder (stream-sessions.ts `terminalHolder`). */
+ *  active holder here and Go live's terminal holder (usecases/stream-sessions/holders.ts `terminalHolder`). */
 export function holderHref(r: Pick<HolderRow, "org_slug" | "comp_slug" | "div_slug" | "fixture_no">): string | null {
   return r.org_slug && r.comp_slug && r.div_slug && r.fixture_no !== null
     ? routes.fixture(r.org_slug, r.comp_slug, r.div_slug, r.fixture_no)

@@ -150,7 +150,7 @@ Facts the design stands on, each verified this session unless marked:
 | `org_entitlement_overrides` exists (V101, admin tools V266); **no add-on SKU concept exists in v18** | `db/migration/deltas/V101__billing.sql:66`, `V266__admin_plan_tools.sql:11` | E fb99bbd4c |
 | Inline paywall card `UpgradeGate` with plan / pass CTA hrefs; one-off Stripe Checkout precedents `POST /api/billing/pass-checkout` and `server/usecases/size-pack-checkout.ts:69` (`getStripe().checkout.sessions.create`) | `apps/web/src/components/upgrade-gate.tsx:252,307,438` | E fb99bbd4c |
 | Cron guard order: **503 when `CRON_SECRET` is unset, then 401 on a bad `x-cron-secret`**; one idempotent row-locked usecase. **The ROUTE lives here; the `schedule:` WORKFLOW does NOT** — `d53d87024` (PR #757, 2026-09-09) moved all 8 scheduled ops workflows to `onryde/seazn.club.workflow`, and `origin/main` now carries 11 workflows of which `help-shots.yml` is the only `schedule:` (verified 2026-09-11) | `apps/web/src/app/api/cron/registrations/route.ts:13-16` | E fb99bbd4c; workflow split verified 2026-09-11 |
-| Route conventions: `v1()` / `handler()` (`lib/http.ts:69`), `parseBody`, zod schemas at `server/api-v1/schemas.ts`, `requireResourceAuth(req, kind, id, scope)` at `server/api-v1/auth.ts:352`; OpenAPI `ROUTES` hand-maintained (`server/api-v1/openapi.ts:57`), generator `scripts/openapi-gen.ts`, CI drift step `ci.yml` | E ac85c70 |
+| Route conventions: `v1()` / `handler()` (`lib/http.ts:69`), `parseBody`, zod schemas at `server/api-v1/schemas/`, `requireResourceAuth(req, kind, id, scope)` at `server/api-v1/auth.ts:352`; OpenAPI `ROUTES` hand-maintained (`server/api-v1/openapi.ts:57`), generator `scripts/openapi-gen.ts`, CI drift step `ci.yml` | E ac85c70 |
 | Client `api()` already unwraps `data` — the documented double-unwrap live bug | `live-score-data.ts:1-4` | E ac85c70 |
 | `apps/web/playwright.config.ts:119` `const WALKTHROUGH = /[\\/]e2e[\\/]walkthrough[\\/]/;` (the file is at `apps/web/`, not `apps/web/e2e/`); `WALKTHROUGH_SPECS` exists on main since PR #723 and `e2e-ci-wiring.test.ts` requires every walkthrough spec named there | E fb99bbd4c |
 | `apps/web/e2e/helpers.ts:518 setBoolEntitlementOverrideSql(orgId, featureKey, value)` (upsert; thaw to false in `afterAll`), `:128 apiJson`, `:49 expectNoHorizontalScroll` | E fb99bbd4c |
@@ -809,7 +809,7 @@ the envelope if the project's tier has it (§12).
 | `POST /api/internal/relay/sessions/[sid]/heartbeat` | job token | `{ state, videoState, fps, bitrateKbps, egressBytes, measuredLatencyMs }` → `{ desiredState }` |
 | `POST /api/cron/relay-sweep` | `x-cron-secret` | 503 when `CRON_SECRET` unset, then 401 on mismatch (the registrations order [E]); one idempotent usecase; `pg_try_advisory_xact_lock(hashtext(sid))` per session [A] |
 
-Every route under `v1()`/`handler()`, zod at `server/api-v1/schemas.ts`,
+Every route under `v1()`/`handler()`, zod at `server/api-v1/schemas/`,
 OpenAPI `ROUTES` entries in the same change.
 
 **Admission order amended by owner ruling 2026-09-29 (F-A5):** `active_session` is checked right after `plan_lacks_relay` — before `no_credits`, `target_not_found` and `storage_exhausted` (`server/relay/domain/session.ts` `admit`).
@@ -1287,7 +1287,7 @@ never cite decoratively).
 | Pattern | Rule | Exemplar |
 |---|---|---|
 | Parse → authorize → delegate | every route is `v1()`/`handler()` wrapping `parseBody` → `requireResourceAuth` → one usecase; no logic in the route file | `lib/http.ts:69`; `server/api-v1/auth.ts:352`; `app/api/v1/fixtures/[id]/route.ts:17` |
-| Zod schemas in one place | request/response shapes live at `server/api-v1/schemas.ts`, never inline in a route or a component | `schemas.ts` (`PatchFixture :964`) |
+| Zod schemas in one place | request/response shapes live at `server/api-v1/schemas/`, never inline in a route or a component | `api-v1/schemas/fixtures.ts` (`PatchFixture`) |
 | Privacy folds live in VIEWS | what the public may see is decided by `public_*_v`, not by a filter in a usecase | `public_fixtures_v` (`V369:18` fb99bbd4c, FS13; setup nulls schedule/venue/court, `officials_hide_names`, visibility filter) |
 | Fire-and-forget side channels | realtime, revalidation and CDN purge are `void`, warn-only; a scoring write is never hostage to them | `publishFixtureUpdate` (`scoring.ts:139`), `fireDivisionRevalidate` (`revalidate.ts:14`) |
 | One authority per fact | a value is derived in one function and imported; a second source is a fallback, never a tiebreaker | `resolveFixtureCfg` (`fold.ts`), `fixtureStatusLabel` / `VOID_STATUSES` (`stages-panel.tsx`), the five `lib/public-site.ts` derivations |
@@ -1487,7 +1487,7 @@ design or owner RULING is an `_INDEX.md` finding, never silently resolved.
 | RP3 | `public_fixtures_v` copy source `V362:22` | **moved: `V369:18`** [E fb99bbd4c, FS13]; re-pin at Task 0 (`grep -al "public_fixtures_v" db/migration/deltas \| tail -1`) |
 | RP4 | catalogue rows in the v18 shape, five plans | verified [E V393] |
 | RP5 | desk contention | W2 merged; W3 live — W1-D rebases after any W3 merge |
-| RP6 | zod schemas at `server/api-v1/schemas.ts` | [E ac85c70]; re-pin at Task 0 |
+| RP6 | zod schemas at `server/api-v1/schemas/` | [E ac85c70]; re-pin at Task 0 |
 | RP7 | walkthrough matching = path regex `apps/web/playwright.config.ts:119` + `WALKTHROUGH_SPECS` naming | verified [E fb99bbd4c] |
 | RP8 | fonts: reuse `lib/fonts.ts:7-9`, add 800 | verified [E fb99bbd4c] |
 | RP9 | panel dictionary namespace (`console.json` vs `ui.json`) | pinned at W1-D by reading what `run-sheet-row.tsx` imports; recorded as a finding either way |

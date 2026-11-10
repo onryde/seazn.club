@@ -241,7 +241,7 @@ describe("POST /api/cron/relay-sweep", () => {
 });
 
 // PR #902 CI: `next build` collects this route's config by EVALUATING its module graph in a process with no
-// DATABASE_URL. stream-sessions.ts built a `sql` fragment at module scope — which opens the pooled client — and the
+// DATABASE_URL. usecases/stream-sessions/ built a `sql` fragment at module scope — which opens the pooled client — and the
 // build died "Failed to collect configuration for /api/cron/relay-sweep"; every unit shard without a database failed
 // to COLLECT the four suites that import it. The mocks above hide exactly that, so this loads the two REAL modules the
 // route imports, with no database configured and no client cached.

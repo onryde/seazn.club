@@ -276,7 +276,7 @@ async function fillDivision(divisionId: string, _orgId: string, taken: number): 
 }
 
 /** One public registration POST — a ONE-entry cart (`PublicRegisterGroupRequest`,
- *  api-v1/schemas.ts:~2430). Returns the HTTP status and the created entry's
+ *  api-v1/schemas/registration.ts). Returns the HTTP status and the created entry's
  *  registration status ('pending' = holds a spot, 'waitlisted' = over the
  *  cap), read off `entries[0]` of the cart-shaped response
  *  (`PublicRegisterGroupResponse`) — every call here posts exactly one

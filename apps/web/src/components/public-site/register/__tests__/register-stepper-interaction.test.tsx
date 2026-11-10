@@ -841,7 +841,7 @@ describe("finding #5 — restoring a pristine saved snapshot never shows stale e
     );
 
     // imPlaying:true is what makes dobRequired true unconditionally
-    // (whoFieldRequirements — schemas.ts's superRefine requires contact.dob
+    // (whoFieldRequirements — api-v1/schemas/ folder's superRefine requires contact.dob
     // whenever ANY entry is registering_self, independent of the eventual
     // division's own requires_dob). DIV_NEEDS_BOTH.requires_gender is what
     // additionally makes genderRequired true (review finding 3, 2026-08-27:

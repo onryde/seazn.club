@@ -11,7 +11,7 @@
 //      table here would only prove the module agrees with itself.
 //   2. The wire schemas (`ScheduleConflict` snake_case, `AiPlanConflict`
 //      camelCase) round-trip `details` through zod untouched. zod strips an
-//      undeclared field silently (schemas.ts's own comment on this), so this
+//      undeclared field silently (api-v1/schemas/ folder's own comment on this), so this
 //      is the test that would have caught it.
 //   3. `legacyVerifierConflict` — the AI repair round's copy of a conflict —
 //      never carries `details`, whatever the input. The end-to-end version of

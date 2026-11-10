@@ -1050,7 +1050,7 @@ route, and the commit message should say so plainly.
 public by default and degrade to private at the cap instead of 402ing. `createCompetition`
 returns the full row so the wizard can diff requested-vs-created and render
 `public-quota-degraded`. `instantiateTemplate` performs the identical degrade, but
-`FromTemplateResult` (`server/api-v1/schemas.ts:945-953`) **carries no `visibility`**, so
+`FromTemplateResult` (`server/api-v1/schemas/`) **carries no `visibility`**, so
 the client has nothing to diff, and `components/v2/template-gallery.tsx:297` redirects
 unconditionally. **The gallery is the DEFAULT path** — `/competitions/new` opens on it and
 "start blank" is a button inside it (`e2e/helpers.ts:1622`). A Free org at its cap creates

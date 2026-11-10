@@ -115,7 +115,7 @@ Rosters are mapped through `personKeyResolver.keyOf` (`schedule-ai.ts:623-631, 6
 
 - [ ] **Step 1: Write the failing test.** A move that creates a WARN-level conflict (not blocking, or it throws). Assert the returned conflicts are non-empty and non-blocking.
 - [ ] **Step 2: Run it — expect FAIL (returns undefined).**
-- [ ] **Step 3: Implement.** Change the return type and thread it through `patchFixture` to the route response. **This changes a wire payload** — update the response schema in `apps/web/src/server/api-v1/schemas.ts`, run `openapi:gen`, and commit the regenerated spec. Assert the payload shape in a test; the drift gate alone will not tell you the served JSON changed.
+- [ ] **Step 3: Implement.** Change the return type and thread it through `patchFixture` to the route response. **This changes a wire payload** — update the response schema in `apps/web/src/server/api-v1/schemas/`, run `openapi:gen`, and commit the regenerated spec. Assert the payload shape in a test; the drift gate alone will not tell you the served JSON changed.
 - [ ] **Step 4: UI.** If the drag surface can render the warning, do it via the `frontend-design` skill and verify at desktop AND 375px with no horizontal page scroll. Any new user-facing string goes in all 4 locale dictionaries, never hardcoded English. If the surface cannot show it without a redesign, say so and stop rather than guessing — a visual restyle needs sign-off.
 - [ ] **Step 5: Full web suite, drift gates, commit** `feat(schedule): a move returns the conflicts it computes (#461)`.
 

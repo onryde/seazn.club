@@ -13,7 +13,7 @@ import "server-only";
 //    DIFFERENT orgs: both miss the lookup and the second insert still raises 23505 on
 //    org_stream_credits_idempotency_key. staffRow answers that 23505 as the 409 it is.
 //  * consumeForSession runs INSIDE the transaction that makes the stream live
-//    (stream-sessions.ts): the lock, then the 24 h same-fixture reuse rule (skipped
+//    (usecases/stream-sessions/): the lock, then the 24 h same-fixture reuse rule (skipped
 //    when the session has no fixture), then balance < 1 → NoCreditsError.
 //  * recordPurchase is replay-safe by the stripe_event_id unique constraint:
 //    `on conflict do nothing` and the existing row is returned.
@@ -753,7 +753,7 @@ export async function neverLiveRefundStanding(
  *  and never had a camera, which the viewer never saw. The same ledger, reason, bucket and cap as the staff refund
  *  (`staffRow`'s linked branch, through `sessionCreditStanding` and `drawnBucketOf`), written by no staff member: no
  *  `created_by`, no key and no audit row (the audit chain is the staff's — this is the platform keeping its own promise).
- *  Runs INSIDE the transaction that fails the session (stream-sessions.ts `apply`), under the org's money lock.
+ *  Runs INSIDE the transaction that fails the session (usecases/stream-sessions/apply.ts `apply`), under the org's money lock.
  *  EXACTLY ONCE, by state and not by key: a session whose consume was never written (a free restart, or one refused for
  *  credits) has nothing to return, and one whose consumes are all refunded already (a staff refund first, or a second
  *  call) writes nothing — `refunded < consumed` is the only way a row is written. A free restart is also why the caller
@@ -839,7 +839,7 @@ export async function streamMonthlyRateByPlan(planKeys: readonly string[]): Prom
  *  bought (`grantPassStreamCredits`), and reading one here would grant it again every month. The resolver reads the
  *  org's SUBSCRIPTION, and no writer puts a pass key there — a pass is a competition_passes row, and a staff comp writes
  *  'pro' — so a pass key here is a corrupt subscription row. It grants nothing monthly and is REPORTED, rather than
- *  refused: this read sits on the go-live path (stream-sessions.ts `apply`), and going live must never hinge on the
+ *  refused: this read sits on the go-live path (usecases/stream-sessions/apply.ts `apply`), and going live must never hinge on the
  *  month's bookkeeping (M6). */
 export async function streamMonthlyRate(orgId: string): Promise<number> {
   const plan = await orgPlanKey(orgId);
@@ -876,7 +876,7 @@ async function monthlyGrantedThisPeriod(exec: Executor, orgId: string, period: s
  * path — no cron sweeps it). The readers that act on the balance call it before they read: the division page
  * (`relayCredits`) and createSession's balance check; the go-live consume runs the same body under its own lock
  * (`consumeForSession`'s `monthly`, review M6), so a session that goes live after the month turns draws the new month's
- * grant. Two display readers do NOT (lane-close m7): the session projection's `balance` (stream-sessions.ts
+ * grant. Two display readers do NOT (lane-close m7): the session projection's `balance` (usecases/stream-sessions/current.ts
  * `currentSession`) and the /admin credits panel (admin-stream-credits.ts) read the ledger as it stands, so across a
  * month turn they show last month's unexpired free credits until an acting reader rolls it. There is deliberately no
  * eager call on org creation and no cron: an org that never streams never needs a row.

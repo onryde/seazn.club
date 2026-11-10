@@ -11,7 +11,7 @@
 //
 // `templates` arrives as a PROP from the Server Component page, not a direct
 // `@/server/templates/catalog` import — that module resolves `StageKind`
-// through api-v1/schemas.ts, which (for the OpenAPI generator's sake) pulls
+// through api-v1/schemas/, which (for the OpenAPI generator's sake) pulls
 // in `@seazn/engine/scheduling`'s HardConstraint, whose barrel then also
 // reached the gRPC placement client (`@grpc/grpc-js`, Node-only: dns/fs/http2/
 // net; the client now lives in `@seazn/scheduler`). A plain Server Component
@@ -111,7 +111,7 @@ type TakeRule = NonNullable<TemplateStage["progression"]>["sources"][number]["ta
 
 /** One take rule -> its own translated phrase. Each rule kind is ONE
  *  dictionary key with parameters, never fragments concatenated at the call
- *  site — see ProgressionSchema/TakeRuleSchema (api-v1/schemas.ts) for the
+ *  site — see ProgressionSchema/TakeRuleSchema (api-v1/schemas/stages.ts) for the
  *  field shapes this switches on. F2 unified TakeRuleSchema onto 5 kinds
  *  (rankRange/topNPerGroup/bestNth/picks/roundLosers); only the 3 below are
  *  reachable from catalog data today (verified: no catalog entry emits

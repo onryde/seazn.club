@@ -46,7 +46,7 @@ const ROOMY_STORAGE_MINUTES = 100_000_000;
 /** The fake phone connects this long after its input is made; `video()` ticks past it. */
 const CONNECT_AFTER_MS = 1000;
 /** Each `video()` read must be a FRESH provider read: past the connect delay AND past the coalesced read's max age
- *  (stream-sessions.ts COALESCED_SAMPLE_MAX_AGE_MS = 2 × STREAM_POLL_MS, B0), or a read soon after another one is
+ *  (usecases/stream-sessions/ingest-poll.ts COALESCED_SAMPLE_MAX_AGE_MS = 2 × STREAM_POLL_MS, B0), or a read soon after another one is
  *  answered from the earlier sample and never sees the phone arrive (or drop). */
 const FRESH_READ_MS = Math.max(CONNECT_AFTER_MS, 2 * STREAM_POLL_MS) + 500;
 

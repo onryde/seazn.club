@@ -45,7 +45,7 @@ In `computeSeedProposal`, after `sourcesToTables`, if carry ≠ none and a sourc
 
 ### Schema
 
-Remove (or invert) the refine at `schemas.ts` that rejects `timing === "setup"` with non-none carry. Update the three tests that assert rejection so they assert **acceptance** of `setup`+`points`/`full`, and keep a test that still rejects nonsense (e.g. empty map for seeded_map).
+Remove (or invert) the refine at `api-v1/schemas/` that rejects `timing === "setup"` with non-none carry. Update the three tests that assert rejection so they assert **acceptance** of `setup`+`points`/`full`, and keep a test that still rejects nonsense (e.g. empty map for seeded_map).
 
 Entitlement gate at `createStages` stays timing-agnostic (already correct).
 

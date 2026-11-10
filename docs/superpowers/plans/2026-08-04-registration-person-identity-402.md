@@ -6,7 +6,7 @@
 
 **Architecture:** A `persons.lane` discriminator (`'player' | 'official'`) makes `(org_id, user_id, lane)` genuinely unique, so the partial unique index #396 planned — and reverted — can land. The public register route resolves the session itself and passes a `sessionUserId` inward; `submitRegistration` writes `registrations.user_id` only under an explicit affirmation plus a server-side guardian veto. `materialise` then upserts into the player lane, letting the unique index arbitrate the concurrent-registration race instead of a SELECT-then-INSERT.
 
-**Tech Stack:** Next.js (App Router, this repo's fork — read `node_modules/next/dist/docs/` before touching route or page code), TypeScript, zod (`api-v1/schemas.ts`), postgres.js (`sql` tagged templates), Flyway migrations under `db/migration/deltas/`, vitest, Playwright.
+**Tech Stack:** Next.js (App Router, this repo's fork — read `node_modules/next/dist/docs/` before touching route or page code), TypeScript, zod (`api-v1/schemas/`), postgres.js (`sql` tagged templates), Flyway migrations under `db/migration/deltas/`, vitest, Playwright.
 
 **Spec:** `docs/superpowers/specs/2026-08-04-registration-person-identity-402-design.md` (commit dfcb67d2). Read it before Task 1.
 
@@ -185,7 +185,7 @@ git commit -m "feat(db): V348 persons.lane makes (org_id,user_id) uniquely resol
 ### Task 2: capture the session `user_id`, with the guardian veto
 
 **Files:**
-- Modify: `apps/web/src/server/api-v1/schemas.ts:1069-1095` (`PublicRegisterRequest`)
+- Modify: `apps/web/src/server/api-v1/schemas/` (`PublicRegisterRequest`)
 - Modify: `apps/web/src/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route.ts`
 - Modify: `apps/web/src/server/usecases/registrations.ts:236-274` (`RegistrationRow`), `:784-790` (signature), `:884-901` (insert)
 - Test: `apps/web/src/server/usecases/__tests__/registration-user-link.test.ts` (create)
@@ -309,7 +309,7 @@ Expected: FAIL — `submitRegistration` takes no `sessionUserId`, so TypeScript 
 
 - [ ] **Step 3: Implement**
 
-In `schemas.ts`, inside `PublicRegisterRequest`:
+In `api-v1/schemas/`, inside `PublicRegisterRequest`:
 
 ```ts
   /** #402 — the registrant affirms this entry is for THEMSELVES. Only then may

@@ -62,7 +62,7 @@ export function withMaxFixturesPerDay(
 // supplements it rather than replacing it, and writes the SAME field.
 //
 // Two shapes, deliberately kept apart:
-//   * `BlackoutRow` is the stored/wire shape (`schemas.ts` ScheduleConfig
+//   * `BlackoutRow` is the stored/wire shape (`api-v1/schemas/scheduling.ts` ScheduleConfig
 //     .blackouts) — ISO datetimes with offset. The engine's own `Blackout`
 //     (calendar.ts) carries epoch ms; the server converts. The panel talks to
 //     the API, so it writes ISO.

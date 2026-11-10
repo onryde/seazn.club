@@ -53,9 +53,9 @@ export const defaultImportTransport: ImportTransport = { raw };
 
 // ---------------------------------------------------------------------------
 // The wire shapes this file sends/reads — hand-declared, matching the
-// product's `EventImportRequest` (schemas.ts) / `ImportReport` (event-
+// product's `EventImportRequest` (api-v1/schemas/scoring.ts) / `ImportReport` (event-
 // import.ts) field for field, for the SAME "cannot import apps/web" reason
-// `IMPORT_CAPS` above cites. `schemas.ts` itself is safely importable (it is
+// `IMPORT_CAPS` above cites. `api-v1/schemas/` itself is safely importable (it is
 // explicitly "NOT server-only: pure Zod" and other bench test files already
 // do), but no PRODUCTION file under `tools/bench/lib/` imports from
 // `apps/web` at all — `pack-schema.ts`'s own `PackEvent`/`PackStream` mirror

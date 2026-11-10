@@ -120,7 +120,7 @@ describe("guardCapacity", () => {
 
 // Review finding 3 (resource exhaustion): this is the schema `parseBody`
 // actually parses the live request with (route.ts) — see this schema's own
-// doc comment for why it stays independent from schemas.ts's CapacityPrecheck
+// doc comment for why it stays independent from api-v1/schemas/schedule-analysis.ts's CapacityPrecheck
 // rather than importing one from the other. `window: {from, to}` carried no
 // span bound — combined with `courts.max(50)` and calendarDays' own 4000-day
 // internal ceiling (capacity-input.ts), an authenticated POST could force

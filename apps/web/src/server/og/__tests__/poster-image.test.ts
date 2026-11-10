@@ -13,7 +13,7 @@ import {
 
 // The share image and the downloadable poster are PUBLIC routes, and satori
 // fetches every `<img src>` it is handed, server-side, from inside our own
-// network. `badge_url` is organiser-typed free text (api-v1/schemas.ts,
+// network. `badge_url` is organiser-typed free text (api-v1/schemas/,
 // `z.string().min(1).max(1000)`), so "draw this badge" was "make this request".
 // Everything here is about what that fetcher will and will not do.
 

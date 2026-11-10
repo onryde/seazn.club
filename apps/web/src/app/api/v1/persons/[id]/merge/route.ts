@@ -13,7 +13,7 @@ type Ctx = { params: Promise<{ id: string }> };
  * ZodError to 400 VALIDATION, which is the wrong story for the one field the
  * panel must key on, so that single issue is rethrown as 422 with a stable
  * code. (Duplicated verbatim in the reverse route: the shared home would be
- * api-v1/schemas.ts, which is deliberately pure Zod so the OpenAPI generator
+ * api-v1/schemas/, which is deliberately pure Zod so the OpenAPI generator
  * can run it outside the `@/` alias.)
  */
 function confirmationOr422(err: unknown): never {

@@ -52,7 +52,7 @@ import {
 // `summarizeCart`'s own doc comment for why forking this math is the
 // specific thing the RS006 dispatch calls out not to do).
 
-export const MAX_ROSTER_PLAYERS = 50; // PublicRegisterGroupEntry.players.max(50), schemas.ts:2396
+export const MAX_ROSTER_PLAYERS = 50; // PublicRegisterGroupEntry.players.max(50), api-v1/schemas/
 
 export type CartAction =
   | { type: "ADD_ENTRY"; id: string; division_id: string; entrant_kind: CartEntry["entrant_kind"] }
@@ -191,7 +191,7 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
       // asked" apart from "asked, and said no."
       // Self-linking is exclusive WITHIN ONE DIVISION, and only there.
       // Across divisions it must stay free — singles + doubles at the same
-      // tournament is the common racket-sport case, and schemas.ts's own
+      // tournament is the common racket-sport case, and api-v1/schemas/ folder's own
       // superRefine calls a cart-wide cap "the defect, not a guard".
       //
       // But twice in the SAME division is not a second entry, it is the same
@@ -382,7 +382,7 @@ export function autoLinkObviousSelf(cart: CartState, imPlaying: boolean): CartSt
  *  (validation.ts's whoFieldRequirements keys dobRequired off imPlaying
  *  independently of any division), so a stale self-link would submit
  *  `registering_self:true` with `contact.dob:null` — guaranteed rejected by
- *  schemas.ts's superRefine (PublicRegisterGroupRequest), with no
+ *  api-v1/schemas/ folder's superRefine (PublicRegisterGroupRequest), with no
  *  client-side warning before that 400/422. Returns the SAME reference when
  *  there is nothing to clear, matching every other function here. */
 export function clearSelfLinkWhenNotPlaying(cart: CartState, imPlaying: boolean): CartState {
@@ -397,7 +397,7 @@ export function clearSelfLinkWhenNotPlaying(cart: CartState, imPlaying: boolean)
 }
 
 /** Maps one cart line onto the step-2 subset of `PublicRegisterGroupEntry`
- *  (schemas.ts:2390) — drops the client-only `id`, reading the self-link
+ *  (api-v1/schemas/registration.ts) — drops the client-only `id`, reading the self-link
  *  fields off the entry itself (RS006: PER-ENTRY, not cart-level — see
  *  types.ts's `CartEntry` doc comment). `players`/`answers` are NOT added
  *  here (step 3's job); a caller building the full request object spreads
@@ -405,10 +405,10 @@ export function clearSelfLinkWhenNotPlaying(cart: CartState, imPlaying: boolean)
  *
  *  `self_player_index` stays `undefined` for an INDIVIDUAL entry — the
  *  schema itself implies index 0 for a one-player individual entry
- *  (schemas.ts superRefine), so sending it explicitly would just repeat what
+ *  (api-v1/schemas/ superRefine), so sending it explicitly would just repeat what
  *  the server already assumes. Every other self-linked kind (team/pair/
  *  free-agent) needs it explicit once step 3 resolves which roster row is
- *  the contact (schemas.ts superRefine rejects an unresolved claim rather
+ *  the contact (api-v1/schemas/ superRefine rejects an unresolved claim rather
  *  than silently defaulting it — see that schema's own comment on why 0
  *  is not a safe default there). */
 export function toGroupEntry(entry: CartEntry): {

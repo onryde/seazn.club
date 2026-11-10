@@ -30,7 +30,7 @@
 
 ### Task 1: Extract the rules table out of the client module
 
-Spec §T0. `match-rules.tsx:1` is `"use client"` and its only import is the dict provider (`:10`). A server module importing it receives client references, not values — and `schemas.ts` cannot hold the table either, because `scripts/openapi-gen.ts` runs that file under bare `node --experimental-strip-types`, which parses neither `@/` imports nor JSX. **A vitest test of the derivation passes either way** (node env, no RSC boundary), so getting this wrong ships green and inert; Task 3 is what proves it for real, from the server graph.
+Spec §T0. `match-rules.tsx:1` is `"use client"` and its only import is the dict provider (`:10`). A server module importing it receives client references, not values — and `api-v1/schemas/` cannot hold the table either, because `scripts/openapi-gen.ts` runs that file under bare `node --experimental-strip-types`, which parses neither `@/` imports nor JSX. **A vitest test of the derivation passes either way** (node env, no RSC boundary), so getting this wrong ships green and inert; Task 3 is what proves it for real, from the server graph.
 
 **Files:**
 - Create: `apps/web/src/lib/match-rules.ts`
@@ -389,7 +389,7 @@ Spec §T3, and the rulings D1 (lock), D2 (allowlist, validate the merge, store t
 **Files:**
 - Create: `apps/web/src/server/usecases/stage-rules.ts`
 - Create: `apps/web/src/app/api/v1/stages/[id]/rules/route.ts`
-- Modify: `apps/web/src/server/api-v1/schemas.ts` (add `rules` to `StageConfig` after `extraTime:1033`; add `PutStageRules`)
+- Modify: `apps/web/src/server/api-v1/schemas/` (add `rules` to `StageConfig` after `extraTime:1033`; add `PutStageRules`)
 - Modify: `apps/web/src/server/api-v1/openapi.ts` (register the route beside the court-tags entries at `:137-138`)
 - Modify: `apps/web/src/server/usecases/stages.ts` (`createStages` rejects a `rules` key)
 - Test: `apps/web/src/server/usecases/__tests__/stage-rules.test.ts` (create)
@@ -486,7 +486,7 @@ Expected: collection error — `stage-rules.ts` does not exist.
 
 - [ ] **Step 3: Add the schemas**
 
-In `apps/web/src/server/api-v1/schemas.ts`, inside the `StageConfig` `strictObject` after `extraTime` (`:1033`):
+In `apps/web/src/server/api-v1/schemas/`, inside the `StageConfig` `strictObject` after `extraTime` (`:1033`):
 
 ```ts
     /** Per-stage match-format override (design 2026-09-17). Deliberately

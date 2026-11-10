@@ -84,7 +84,7 @@ export function setDivisionVenues(auth: Auth, divisionId: string, venueIds: stri
   a `<CompetitionVenues>` island — the competition picker
 - **Modify** `apps/web/src/components/v2/division-settings.tsx` — the division
   picker (constrained subset)
-- **Modify** `apps/web/src/server/api-v1/schemas.ts` — `SetVenues = z.object({
+- **Modify** `apps/web/src/server/api-v1/schemas/` — `SetVenues = z.object({
   venueIds: z.array(z.string().uuid()).max(50) })`
 - **Modify** `apps/web/src/lib/i18n-keys.ts` + dictionaries — `venue.assign.*`
 - **Create** `apps/web/content/help/scheduling/multiple-venues.md` + register slug
@@ -150,7 +150,7 @@ it("rejects a division venue that isn't on its competition (422)", async () => {
 - [ ] **Step 5 — API routes.** `competitions/[id]/venues/route.ts` and
   `divisions/[id]/venues/route.ts`: `GET` → `list*Venues`; `PUT` →
   `parseBody(req, SetVenues)` → `set*Venues` → `reply(204)`. Auth `read`/`write`.
-  Add `SetVenues` to `schemas.ts`.
+  Add `SetVenues` to `api-v1/schemas/`.
 
 - [ ] **Step 6 — Competition picker island.** `<CompetitionVenues>`: multi-select
   of `listVenues(auth)` results; PUTs to `/api/v1/competitions/[id]/venues`.

@@ -298,7 +298,7 @@ now rulings; the specs below are corrected in place.
    **ship the cron**, following that shape, stg-only.
 
 Watch item for every wave-1/2 session: `PostKind` is declared **twice**
-(`org-posts.ts:32` and `schemas.ts:2941`) and may also carry a DB CHECK —
+(`org-posts.ts:32` and `api-v1/schemas/`) and may also carry a DB CHECK —
 the same API-enum-⊃-DB-CHECK mismatch already flagged for D1's
 `americano`/`page_playoff`. Verify all three sites, never two.
 
@@ -716,7 +716,7 @@ session should NOT re-derive:
   the api-v1 `StageKind` enum's 9 values match the CHECK). The
   format-templates design doc's fallback to `knockout(4)` for
   `league-playoff` is **stale — do not take it**.
-- **`StageSeeding` lives at `api-v1/schemas.ts:543-555`**
+- **`StageSeeding` lives at `api-v1/schemas/`**
   (`StageSeedingSchema` / `StageSeedingInput`). Import it. A template's
   `source` cannot be `{stageId: Uuid}` — catalog JSON has no UUIDs.
 - **`templates.ts:253-263` does not persist `seeding` at all.** Its
@@ -871,7 +871,7 @@ Tasks 1–6 rather than at re-pin above:
    nothing stops a future refactor of that spread from silently dropping it
    again with tsc staying green.
 3. **Exhaustive `Record<ConflictDetailKind, …>`-shaped tables live in
-   apps/web** — `schemas.ts`'s `CONFLICT_DETAIL_KIND_WITNESS`,
+   apps/web** — `api-v1/schemas/scheduling.ts`'s `CONFLICT_DETAIL_KIND_WITNESS`,
    `conflict-detail-legacy.ts`'s `LEGACY_PROSE`, and
    `conflict-detail-format.ts`'s formatter switch are the three confirmed by
    re-grep at Task 7 close (Tasks 1–6 counted four sites total). Widening the

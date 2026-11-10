@@ -72,7 +72,7 @@ is discarded.
 silent. T3 scoped the board fetch to the stage being scheduled — correct, and a
 no-op on single-stage divisions — but compares `stage_id`, which the bench's
 `WireFixture` types as optional while `S.Fixture`
-(`api-v1/schemas.ts:1091-1093`) declares it required. Had that field ever
+(`api-v1/schemas/`) declares it required. Had that field ever
 stopped arriving, every row would fail the comparison, the board would come
 back EMPTY, and an empty board has no unplaced fixtures and no conflicts: a
 clean judgement over nothing at all.

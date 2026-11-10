@@ -47,12 +47,12 @@
 // persisted. So the lane goes in the lane column and a roster member's
 // `roles` are now the pack's declared roles VERBATIM.
 //
-// `LineupSlotInput.role` (`schemas.ts`) remains the PER-FIXTURE lineup-slot
+// `LineupSlotInput.role` (`api-v1/schemas/`) remains the PER-FIXTURE lineup-slot
 // surface the same S3/#426 ruling governs, and still belongs to the
 // event-import driver that reads `PackStream.lineups` — out of scope here,
 // since streams are not one of this module's six resolve targets.
 //   - "official" -> NOT an entrant-roster person at all. `CreateOfficial`
-//     (`schemas.ts:3069-3077`) takes `person_id` as OPTIONAL, so an official
+//     (`api-v1/schemas/`) takes `person_id` as OPTIONAL, so an official
 //     needs no `persons` row from this plan either — excluded from `persons`
 //     entirely and surfaced only as a ref in `officialPersonRefs`.
 //     `pack.officials[]` itself IS resolved by this module as of B03 T6 (see
@@ -75,11 +75,11 @@
 // `PackDivision.moduleVersion` (the offline-fold engine pin), `.entry` (B03r
 // reservation) and `.scheduleConfig` (B04 reservation) are deliberately left
 // off `SeedPlanDivision` — none of those three is a `CreateDivision` field
-// (`schemas.ts:225-250`), and `scheduleConfig` is explicitly chartered to B04
+// (`api-v1/schemas/`), and `scheduleConfig` is explicitly chartered to B04
 // by the pack schema's own comment on that field.
 //
 // `.tiebreakers` was in that list and did not belong there: it IS a real
-// `CreateDivision` field (`schemas.ts:233`, `z.array(TiebreakerKeyS).nullish()`)
+// `CreateDivision` field (`api-v1/schemas/`, `z.array(TiebreakerKeyS).nullish()`)
 // and it is now threaded through. The claim was wrong in the most expensive
 // way available — `_tiny.json` declares `"tiebreakers": ["points", "diff"]`,
 // so the only pack in existence was silently losing its tie order, and the
@@ -90,11 +90,11 @@
 // (`pack-schema.ts:317-318`), so the array passes straight through.
 //
 // `PackStage.progression` is likewise a real `CreateStage` field
-// (`schemas.ts:819`) and was being dropped for the same reason. Note the
+// (`api-v1/schemas/`) and was being dropped for the same reason. Note the
 // asymmetry when sending these: `CreateStage` is `.strict()`
-// (`schemas.ts:821`) so an undeclared key is REJECTED, while `CreateDivision`
+// (`api-v1/schemas/`) so an undeclared key is REJECTED, while `CreateDivision`
 // is non-strict and silently DROPS one — the RS007/V380 comment at
-// `schemas.ts:233` records a division-creation wizard that lost its entire
+// `api-v1/schemas/` records a division-creation wizard that lost its entire
 // eligibility block exactly that way. Both are therefore omitted as absent
 // KEYS rather than sent as `undefined`.
 //
@@ -102,7 +102,7 @@
 // `namespace`, no emit-dependent syntax — this runs under `node
 // --experimental-strip-types`. Every relative import carries `.ts`. Nothing
 // here imports from `apps/web` — every product field name below is a hand
-// mirror, verified against the cited schemas.ts lines, never an import.
+// mirror, verified against the cited api-v1/schemas/ lines, never an import.
 import { expectedFixtureCount } from "./pack-io.ts";
 import type {
   Pack,
@@ -136,7 +136,7 @@ export interface SeedPlanStage {
   readonly kind: string;
   readonly name: string;
   readonly config: Record<string, PackJsonValue>;
-  /** `CreateStage.progression` (`schemas.ts:819`), carried opaque and verbatim
+  /** `CreateStage.progression` (`api-v1/schemas/`), carried opaque and verbatim
    *  for the same reason `config` is: the authority is the product's own
    *  `ProgressionSchema`, and a second copy of that vocabulary here is how two
    *  shapes of one fact drift apart. Absent when the pack declares none —
@@ -148,7 +148,7 @@ export interface SeedPlanStage {
 export interface SeedPlanDivision {
   readonly ref: string;
   readonly name: string;
-  /** Spelled as `CreateDivision` spells it (`schemas.ts:229-230`) — like every
+  /** Spelled as `CreateDivision` spells it (`api-v1/schemas/`) — like every
    *  other body field on this plan. The pack's own camelCase stops at this
    *  boundary; carrying it further is how a rename gets forgotten at the one
    *  call site that has to do it. */
@@ -158,14 +158,14 @@ export interface SeedPlanDivision {
    *  server merges it over the variant preset and validates it, exactly as
    *  `createDivision` does (pack-schema.ts's own comment on this field). */
   readonly config: Record<string, PackJsonValue>;
-  /** `CreateDivision.tiebreakers` (`schemas.ts:233`). Absent when the pack
+  /** `CreateDivision.tiebreakers` (`api-v1/schemas/`). Absent when the pack
    *  declares none — see the header note; this field was dropped entirely by
    *  the first cut of this module and `_tiny` was losing its tie order. */
   readonly tiebreakers?: readonly string[];
   readonly stages: readonly SeedPlanStage[];
 }
 
-/** `POST /persons` body fields (`CreatePerson`, `schemas.ts:488-495`).
+/** `POST /persons` body fields (`CreatePerson`, `api-v1/schemas/`).
  *
  *  `external_ref` is omitted — nothing in a pack maps onto it (header note 4
  *  on `PackSchema`: a pack ref is stored nowhere). `consent` is NOT omitted,
@@ -177,7 +177,7 @@ export interface SeedPlanPerson {
   readonly full_name: string;
   readonly dob?: string;
   /** `"x"` included because the PRODUCT accepts it — `CreatePerson.gender` is
-   *  `z.enum(["m","f","x"]).nullish()` (`api-v1/schemas.ts:502`), as are every
+   *  `z.enum(["m","f","x"]).nullish()` (`api-v1/schemas/`), as are every
    *  other person-shaped schema there. This interface was narrower than the
    *  API it writes to, so a bench pack could never seed a non-binary person
    *  even though the product has supported one since RS002 — and the product's
@@ -199,7 +199,7 @@ export interface SeedPlanPerson {
   /**
    * ALWAYS `{ public_name: true }` — seeded deliberately, never omitted.
    *
-   * `CreatePerson.consent` is `Consent` (`schemas.ts:480-485`), which carries
+   * `CreatePerson.consent` is `Consent` (`api-v1/schemas/`), which carries
    * `.default({})`, so leaving it off is legal and lands `{}`. That is the
    * trap: the two consent gates in this product have OPPOSITE polarity.
    * Public entrant/roster name display is opt-OUT (`anyOptedOut`, hiding only
@@ -232,7 +232,7 @@ export interface SeedPlanPerson {
 /** One `entrant_members` row-to-be. `personRef` is a placeholder, not a
  *  `person_id` — see the header comment on refs vs. ids. The other four
  *  fields are the exact `EntrantMemberInput` field names
- *  (`schemas.ts:365-370`), fully resolved and ready to spread into the real
+ *  (`api-v1/schemas/`), fully resolved and ready to spread into the real
  *  request once the driver has a real `person_id` for `personRef`. */
 export interface SeedPlanRosterMember {
   readonly personRef: string;

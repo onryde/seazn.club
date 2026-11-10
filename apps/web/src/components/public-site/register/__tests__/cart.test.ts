@@ -369,7 +369,7 @@ describe("cartReducer — SET_ENTRY_SELF (per-entry, independently settable — 
   // "Free-agent entries need nothing extra"), so nothing could ever resolve
   // self_player_index for one — self-linking it would submit
   // registering_self:true with an unresolvable index and 422 at submit with
-  // an error the registrant cannot act on (schemas.ts's own comment on this
+  // an error the registrant cannot act on (api-v1/schemas/ folder's own comment on this
   // exact class of request). Refusing it HERE, at the reducer, is the
   // innermost of three layers that make the UI structurally unable to
   // produce it (the others: entry-cart.tsx's checkbox never renders for a

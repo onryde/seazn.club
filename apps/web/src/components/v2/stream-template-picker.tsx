@@ -159,7 +159,7 @@ export function StreamTemplatePicker(p: {
   /** The last pick did not save — the picker shows the stored style again, and says so. */
   saveFailed: boolean;
   /** A line under the title (PR #989 review m1): the OBS tab's grid while a composed session is open says a pick applies
-   *  to the NEXT stream — a running session never moves (stream-sessions.ts copies the style at create). */
+   *  to the NEXT stream — a running session never moves (usecases/stream-sessions/ copies the style at create). */
   note?: string | null;
 }) {
   const msg = useMsg();

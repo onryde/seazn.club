@@ -11,7 +11,7 @@ code no longer means z3. Zero behavior change.
 ## The one rule that matters
 
 **Never touch a persisted or public enum VALUE.** `"z3"` / `"z3+lns"` in
-`schemas.ts:1016`, `:2190`, `openapi/v1.public.json`, stored board rows, and
+`api-v1/schemas/`, `openapi/v1.public.json`, stored board rows, and
 the demo fixture belong to C7. An identifier that is also a stored value is
 C7's, full stop. If renaming something would change a wire byte, a DB row, or
 an API response, put it back.

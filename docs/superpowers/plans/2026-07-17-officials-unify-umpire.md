@@ -14,7 +14,7 @@
 - **Only `response = 'accepted'` grants scoring.** `pending`/`declined` grant nothing.
 - **Officials get `canScore = true`, `canEdit = false`.** A non-member official reaches ONLY the fixture score view; every other page/kind still `notFound()`s them.
 - **i18n parity:** every new UI string ships in all four dicts — `src/dictionaries/{en,fr,es,nl}/ui.json`.
-- **Board conflict codes follow the `warn.*` (non-blocking) convention.** `ScheduleConflict.code` is a strict `z.enum` in `src/server/api-v1/schemas.ts` — extending it requires `npm run openapi:gen` (drift gate) from repo root.
+- **Board conflict codes follow the `warn.*` (non-blocking) convention.** `ScheduleConflict.code` is a strict `z.enum` in `src/server/api-v1/schemas/` — extending it requires `npm run openapi:gen` (drift gate) from repo root.
 - **No DB migration** — every column used already exists (`fixtures.officials`, `fixture_officials.response`, `official_availability`, `persons.user_id`).
 - **Tests run from `apps/web`**, DB suites need `DATABASE_URL` (ephemeral PG on :54329, see memory `project_local_test_db`) and are wrapped `describe.skipIf(!HAS_DB)`.
 - **Every change ships a test that fails without it** (repo rule). **Verify before push:** `npx tsc --noEmit` + unit run.
@@ -35,7 +35,7 @@
 | `apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx` | division page | remove `InviteScorer` import + usage |
 | `apps/web/src/components/v2/officials-panel.tsx` | officials schedule panel | add `status` to `FixtureLite`; sort fixtures |
 | `apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/schedule/page.tsx` | schedule page | thread `status` into `OfficialsPanel` fixtures prop |
-| `apps/web/src/server/api-v1/schemas.ts` | `ScheduleConflict` zod enum | add two `warn.official_*` codes |
+| `apps/web/src/server/api-v1/schemas/` | `ScheduleConflict` zod enum | add two `warn.official_*` codes |
 | `apps/web/src/server/usecases/schedule.ts` | `validateSchedule` | append official-declined / official-unavailable conflicts |
 | `apps/web/src/components/v2/board/types.ts` | board conflict label/help fallbacks | add English fallbacks for the two codes |
 | `apps/web/src/dictionaries/{en,fr,es,nl}/ui.json` | i18n | `board.conflict.*` + `board.conflictHelp.*` for the two codes; official-strip strings; prune `inviteScorer.*` |
@@ -607,7 +607,7 @@ git commit -m "feat(officials): scheduled matches first, in-play/decided last in
 ## Task 7: Board conflicts for declined / unavailable officials (D1)
 
 **Files:**
-- Modify: `apps/web/src/server/api-v1/schemas.ts` (`ScheduleConflict` enum ~line 661)
+- Modify: `apps/web/src/server/api-v1/schemas/scheduling.ts` (`ScheduleConflict` enum ~line 661)
 - Modify: `apps/web/src/server/usecases/schedule.ts` (`validateSchedule` ~top)
 - Modify: `apps/web/src/components/v2/board/types.ts` (`CONFLICT_LABEL`/`CONFLICT_HELP`)
 - Modify: `apps/web/src/dictionaries/{en,fr,es,nl}/ui.json` (`board.conflict.*` + `board.conflictHelp.*`)
@@ -650,7 +650,7 @@ Expected: FAIL — code not emitted (and TS enum rejects the string until Step 3
 
 - [ ] **Step 3: Extend the `ScheduleConflict` enum**
 
-In `schemas.ts`, add to the `z.enum([...])` list:
+In `api-v1/schemas/`, add to the `z.enum([...])` list:
 
 ```ts
     "warn.official_declined",

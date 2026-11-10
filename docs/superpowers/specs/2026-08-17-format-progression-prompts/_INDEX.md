@@ -22,7 +22,7 @@ worktrees, **F1 merges first**, F2 rebases onto merged F1 before opening its
 PR. F2 is additionally fenced off `scheduling/bracket.ts`, `exports/build.ts`
 and those two `stages.ts` functions; F1 is fenced off `qualification.ts`,
 `stage-seeding.ts`, `format-templates.ts`, the take-rule region of
-`schemas.ts`, and the catalogue fixtures.
+`api-v1/schemas/`, and the catalogue fixtures.
 
 | Session | Prompt file | Depends on | Status |
 |---|---|---|---|
@@ -217,7 +217,7 @@ prompts for F3, F5 and two standalone product fixes.
 
 12. **`timing: "setup"` + `carry` is rejected by the schema** — an OPEN product
     decision, not a defect (2026-08-18). `ProgressionSchema`'s second `.refine`
-    (`api-v1/schemas.ts`) rejects the combination, so once F3 flips every picker
+    (`api-v1/schemas/`) rejects the combination, so once F3 flips every picker
     format to `setup`, the marketed Pro entitlement `standings.carry_over`
     (`feature-copy.ts:51`, priced in all four marketing dictionaries) is
     unreachable on every picker format — via the API too, since no UI writes
@@ -374,10 +374,10 @@ union is the place they die rather than a separate cleanup.
 
 | Rule | Vocabulary | Type site | Zod site |
 |---|---|---|---|
-| `topN` | qualification | `packages/engine/src/competition/qualification.ts:25-28` | `apps/web/src/server/api-v1/schemas.ts:492` |
-| `rankRange` | seeding | `apps/web/src/server/usecases/stage-seeding.ts:43` | `schemas.ts:549-552` |
-| `bestOfRank` | qualification | `qualification.ts:29-39` | `schemas.ts:493-502` |
-| `bestNth` | seeding | `stage-seeding.ts:45` | `schemas.ts:554-556` |
+| `topN` | qualification | `packages/engine/src/competition/qualification.ts:25-28` | `apps/web/src/server/api-v1/schemas/` |
+| `rankRange` | seeding | `apps/web/src/server/usecases/stage-seeding.ts:43` | `api-v1/schemas/` |
+| `bestOfRank` | qualification | `qualification.ts:29-39` | `api-v1/schemas/` |
+| `bestNth` | seeding | `stage-seeding.ts:45` | `api-v1/schemas/` |
 
 Runtime consumers: `qualification.ts:95,109,114,190,274-282`;
 `stage-seeding.ts:113` (`case "rankRange"`), `:133` (`case "bestNth"`),

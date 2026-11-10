@@ -45,7 +45,7 @@ a shape the DB no longer has.
    - `apps/web/src/components/public-site/register-form.tsx`
    - old `POST` handler
      `apps/web/src/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route.ts`
-   - `PublicRegisterRequest` in `apps/web/src/server/api-v1/schemas.ts`
+   - `PublicRegisterRequest` in `apps/web/src/server/api-v1/schemas/`
      (~1803–1869) + its openapi output (`npm run openapi:gen` after)
    - `apps/web/src/components/v2/registrations-panel.tsx`,
      `registration-list.tsx`, `registration-settings.tsx`,
@@ -107,7 +107,7 @@ a shape the DB no longer has.
 ## Execution
 
 Sequential, one implementer loop (schema → demolition → types → sweep), no
-parallel agents — everything overlaps `registrations.ts`/`schemas.ts`.
+parallel agents — everything overlaps `registrations.ts`/`api-v1/schemas/`.
 
 **Scout (sonnet):** every reference to the deletion list above
 (`git grep -a`, include `e2e/`, `scripts/`, `content/help/`), plus current

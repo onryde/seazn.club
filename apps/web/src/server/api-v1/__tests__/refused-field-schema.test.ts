@@ -1,5 +1,5 @@
-// W2c Task 12 — `RefusedFieldS` (schemas.ts, the OpenAPI wire shape of PATCH /divisions/{id}'s `refused`) pinned to
-// `RefusedField` (lib/rule-errors.ts, what the usecase returns and `http.ts` forwards). schemas.ts may not import
+// W2c Task 12 — `RefusedFieldS` (api-v1/schemas/divisions.ts, the OpenAPI wire shape of PATCH /divisions/{id}'s `refused`) pinned to
+// `RefusedField` (lib/rule-errors.ts, what the usecase returns and `http.ts` forwards). api-v1/schemas/ may not import
 // rule-errors.ts (openapi-gen runs it under bare strip-types, no `@/`), so the two are written twice and tied here:
 // the type both ways (tsc), both codes (a `satisfies` table tsc holds exhaustive), every key, and the value level
 // through the one reader the wire has (`refusedFieldsOf`).

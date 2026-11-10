@@ -164,7 +164,7 @@ export async function stampTermsAcceptance(userId: string): Promise<void> {
 ### Task 3: Registration consent enforcement (TDD)
 
 **Files:**
-- Modify: `apps/web/src/server/api-v1/schemas.ts` (~line 920, `PublicRegisterRequest`)
+- Modify: `apps/web/src/server/api-v1/schemas/` (~line 920, `PublicRegisterRequest`)
 - Modify: `apps/web/src/server/usecases/registrations.ts` (guardian check ~line 760; insert ~line 807)
 - Test: `apps/web/src/server/usecases/__tests__/registrations.test.ts`
 
@@ -194,7 +194,7 @@ Expected: FAIL — submission succeeds (no check exists yet) or TS error on unkn
 
 - [ ] **Step 3: Implement.**
 
-3a. `schemas.ts` — inside `PublicRegisterRequest`, after `guardian_consent`:
+3a. `api-v1/schemas/` — inside `PublicRegisterRequest`, after `guardian_consent`:
 
 ```ts
 /** GDPR (spec 2026-07-14): explicit agreement to store/process the form's PII. */

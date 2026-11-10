@@ -20,23 +20,23 @@
 // ---------------------------------------------------------------------------
 
 /** `m`/`f`/`x` — the exact enum `PublicRegisterGroupContact.gender` and
- *  `PublicRegisterGroupPlayer.gender` both use (api-v1/schemas.ts). */
+ *  `PublicRegisterGroupPlayer.gender` both use (api-v1/schemas/). */
 export type PersonGender = "m" | "f" | "x";
 
 /** `divisions.category` (V364) / `PublicRegistrationDivision.category`'s
- *  non-null values — `DivisionCategory` in api-v1/schemas.ts. */
+ *  non-null values — `DivisionCategory` in api-v1/schemas/divisions.ts. */
 export type DivisionCategoryValue = "open" | "mens" | "womens" | "mixed";
 
 /** `registration_settings.entrant_kind` — `EntrantKind` in
- *  api-v1/schemas.ts, identical to `pack-schema.ts`'s `PackEntrantKind`. */
+ *  api-v1/schemas/common.ts, identical to `pack-schema.ts`'s `PackEntrantKind`. */
 export type EntrantKindValue = "individual" | "team" | "pair";
 
 /** `registration_settings.approval` — `RegistrationApproval` in
- *  api-v1/schemas.ts. */
+ *  api-v1/schemas/registration.ts. */
 export type ApprovalMode = "auto" | "manual";
 
 /** Mirrors the product's `RegistrationPaymentMethod`
- *  (api-v1/schemas.ts:2292) and `PackRegistrationBlock.paymentMethod`. */
+ *  (api-v1/schemas/registration.ts) and `PackRegistrationBlock.paymentMethod`. */
 export type RegistrationPaymentMethodValue = "offline" | "stripe";
 
 /** One player row — `PublicRegisterGroupPlayer` (submit) and the identical
@@ -128,7 +128,7 @@ export interface RegistrationDivisionTarget {
  *  fields `PublicRegisterGroupRequest` carries alongside it) — everything
  *  `Captain.enter()` needs for ONE entry. `selfPlayerIndex` left unset lets
  *  the server's own default apply (0 for a single-player individual entry —
- *  `PublicRegisterGroupRequest`'s superRefine, schemas.ts:2740-2748); set it
+ *  `PublicRegisterGroupRequest`'s superRefine, api-v1/schemas/); set it
  *  explicitly for anything else `registeringSelf` needs to identify. */
 export interface RegistrationEntry {
   contact: RegistrationContact;

@@ -178,7 +178,7 @@ describe("TemplateStage — .strict() (F2 full-branch review, Blocker 2): a lega
   // `seeding`/`qualification` shape parsed successfully with the key
   // silently STRIPPED, producing `progression: undefined` with no error.
   // Same failure class CreateStage was already fixed for (F2 Task 5,
-  // api-v1/schemas.ts) — `.strict()` converts it from silent to loud here
+  // api-v1/schemas/) — `.strict()` converts it from silent to loud here
   // too: the offending key now surfaces by name in the issue.
   it("rejects a stage carrying the legacy qualification key, naming it in the issue", () => {
     const r = TemplateStage.safeParse({

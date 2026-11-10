@@ -38,7 +38,7 @@ import { log } from "@/server/logger";
  *  lazily, under the money lock, by the readers that act on it — the division
  *  page's credits card (`relayCredits`), createSession's balance check and the
  *  go-live consume (stream-credits.ts `ensureMonthlyStreamGrant`). Two readers
- *  do NOT run it: the session projection's `balance` (stream-sessions.ts
+ *  do NOT run it: the session projection's `balance` (usecases/stream-sessions/current.ts
  *  `currentSession`) and the /admin credits panel (admin-stream-credits.ts),
  *  which read the ledger as it stands. Across a month turn, until one of the
  *  rolling readers runs, a Phone tab already open and staff both see last
