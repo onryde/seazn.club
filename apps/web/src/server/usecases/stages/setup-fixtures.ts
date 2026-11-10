@@ -66,7 +66,8 @@ export async function writeProgressionSetupFixtures(
   tx: Tx,
   stageId: string,
   /** `checkSeats`: judge a plate's laid-out lines by their seats as well as their keys (the proposal's own call, whose plate holds
-   *  every label). The un-fill's call (fed-seats.ts) leaves it off: it runs while seats and labels are mid-restore, at the SAME size. */
+   *  every label). The un-fill's call (fed-seats.ts) leaves it off: it runs while seats and labels are mid-restore, so a seat count
+   *  read then would be wrong, and it re-reads the source's CURRENT shape - a size change is the next proposal's to redraw. */
   opts: { checkSeats?: boolean } = {},
 ): Promise<GenerateWrite> {
   const [stage] = await tx<StageRow[]>`
@@ -154,7 +155,8 @@ export async function writeProgressionSetupFixtures(
   // W4 T8 (X-PL-7): a plate's lines are sized by its field, and the field can change size before the plate starts (a corrected
   // round-two result, a withdrawal). Lines laid out for another size are not this bracket: they go, and the right ones are
   // written below. Never over a started line (`stageHasStarted`: a plate that has begun stands as it is drawn). Keyed on the
-  // lines' own keys, so a re-run at the SAME size (an un-fill putting labels back) keeps every row and its time and court.
+  // lines' own keys (every call) and, on the proposal's call, their round-one seats (`opts.checkSeats`), so a re-run at the SAME
+  // size - the un-fill putting labels back, or a second proposal on an unchanged field - keeps every row and its time and court.
   if (isFirstLossPlate && existing.length > 0) {
     const wanted = new Set(gen.map((g) => g.extKey));
     let stale = existing.some((e) => e.ext_key === null || !wanted.has(e.ext_key)) || gen.some((g) => !existing.some((e) => e.ext_key === g.extKey));
