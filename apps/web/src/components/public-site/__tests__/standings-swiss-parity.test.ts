@@ -125,7 +125,7 @@ const input: TableViewInput = {
   entrantNames: NAMES,
   entrantLogos: {},
   entrantColours: {},
-  championId: null,
+  championIds: [],
   updatedAt: "2026-11-03T10:00:00Z",
   msg,
   rules: doc,

@@ -126,7 +126,7 @@ const view = buildTableView({
   entrantNames: Object.fromEntries(entrants.map((e) => [e, `Player ${e}`])),
   entrantLogos: {},
   entrantColours: {},
-  championId: null,
+  championIds: [],
   updatedAt: "2026-11-03T10:00:00Z",
   msg,
   rules: doc,

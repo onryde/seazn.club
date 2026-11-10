@@ -37,7 +37,14 @@ import { createStages, generateStageFixtures } from "@/server/usecases/stages";
 import { CompetitionHubDoc } from "../competition-hub-schema";
 import { loadCompetitionHub } from "../competition-hub";
 import { getPublicDivision } from "../data";
-import { divisionChampion } from "../champion";
+import { divisionTitle } from "../champion";
+
+/** The single champion's entrant id of `divisionTitle` — null for no title, a joint title or a vacant one. */
+const championIdOf = (...a: Parameters<typeof divisionTitle>): string | null => {
+  const t = divisionTitle(...a);
+  return t?.kind === "champion" ? t.champion : null;
+};
+
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { boardgame } from "@seazn/engine/sports/boardgame";
@@ -375,7 +382,7 @@ describe.skipIf(!HAS_DB)("loadCompetitionHub — against real Postgres", () => {
       // reachable from this document. The division page's crown is: the same
       // `divisionChampion` call the page makes, over the same real division read.
       const detail = (await getPublicDivision(scene.orgSlug, scene.koCompSlug, "cup"))!;
-      expect(divisionChampion(detail.stages, detail.fixtures, detail.standings)).toBe(south!.id);
+      expect(championIdOf(detail.stages, detail.fixtures, detail.standings)).toBe(south!.id);
     } finally {
       await sql`
         update fixtures

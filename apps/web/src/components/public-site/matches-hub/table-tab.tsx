@@ -127,7 +127,18 @@ export function TableTab({ doc, dict, initialDivision }: TableTabProps) {
         // they were never in) nor at the top of the one they are in: a side
         // that qualifies second from its group and wins the final is second in
         // the group table this crown sits above.
-        const champion = views.flatMap((v) => v.rows).find((r) => r.champion);
+        //
+        // W4: a JOINT title flags two rows, and `.find` kept only the first — the second winner's crown vanished.
+        // Every flagged row is kept, once per entrant (the same entrant appears in the group table AND the
+        // super-eight table). A vacant title flags nobody, so the strip is absent.
+        const champions = [
+          ...new Map(
+            views
+              .flatMap((v) => v.rows)
+              .filter((r) => r.champion)
+              .map((r) => [r.entrantId, r] as const),
+          ).values(),
+        ];
         return (
           <section key={first.divisionId} className="space-y-3">
             <div className="space-y-2">
@@ -149,7 +160,7 @@ export function TableTab({ doc, dict, initialDivision }: TableTabProps) {
               >
                 {first.divisionName}
               </h2>
-              {champion ? (
+              {champions.length > 0 ? (
                 // Gold is fixed podium vocabulary, deliberately outside the org
                 // theme — the same rule `standings-table-view.tsx:110-118`
                 // states for its medal chips, so a red-branded org still reads
@@ -164,10 +175,14 @@ export function TableTab({ doc, dict, initialDivision }: TableTabProps) {
                     🏆
                   </span>
                   <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-700">
-                    {t(dict, "table.champion")}
+                    {t(dict, champions.length > 1 ? "title.joint" : "table.champion")}
                   </span>
-                  <span className="min-w-0 truncate font-display text-sm font-semibold text-ink">
-                    {champion.name}
+                  <span
+                    className={`min-w-0 font-display text-sm font-semibold text-ink ${champions.length > 1 ? "break-words" : "truncate"}`}
+                  >
+                    {champions.length > 1
+                      ? t(dict, "title.jointNames", { a: champions[0]!.name, b: champions[1]!.name })
+                      : champions[0]!.name}
                   </span>
                 </p>
               ) : null}
