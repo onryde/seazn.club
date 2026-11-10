@@ -248,6 +248,10 @@ export async function createSponsor(
   });
 }
 
+/** The sponsor fields that make up its placement: what a live deal writes (deal-apply.ts step 3) and what a hand PATCH takes
+ *  over from it (ruling (g)). */
+const PLACEMENT_FIELDS = ["tier", "competition_id", "on_stream"] as const;
+
 export async function patchSponsor(
   auth: AuthCtx,
   id: string,
@@ -306,8 +310,14 @@ export async function patchSponsor(
     }
     // D9: a live deal owns tier, scope, stream and status; a deal waiting to go live holds status.
     assertSponsorPatchAllowed(locked.deals, cols);
+    // Ruling (g): a hand write of the placement (tier, scope, or the On-stream tick) makes it the club's, so the reset that
+    // undoes a deal's snapshot when its last deal ends (deal-apply.ts step 5) leaves it alone. Name, url, logo and status
+    // writes leave the provenance as it is.
+    const write: Record<string, unknown> = PLACEMENT_FIELDS.some((f) => cols.includes(f))
+      ? { ...patch, placement_from_deal_id: null }
+      : patch;
     const [row] = await tx<Omit<SponsorRow, keyof SponsorDealSummary>[]>`
-      update sponsors set ${tx(patch as never, ...(cols as never[]))}
+      update sponsors set ${tx(write as never, ...(Object.keys(write) as never[]))}
       where id = ${id} returning ${tx(COLS)}`;
     // R12: the first tick turns the org's rotation on. After the update (a refused tick leaves no row), in its transaction.
     if (patch.on_stream === true) await ensureOrgStreamSettings(tx, auth.orgId, auth.userId);

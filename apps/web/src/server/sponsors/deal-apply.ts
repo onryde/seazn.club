@@ -19,7 +19,7 @@ import { ensureOrgStreamSettings } from "./stream-settings";
 /** What `applyDealsToSponsor` did. `no_deals`: nothing written (no non-legacy deal, or every deal had already ended);
  *  `live` / `parked`: the live deal's snapshot is on the sponsor, active or held at pending by an open dispute;
  *  `hidden_open`: deals wait to go live, so the sponsor is hidden; `ended_all`: this call's caller ended the last live or
- *  open deal, and the sponsor was reset. */
+ *  open deal, and the sponsor went inactive — its placement reset only when a deal had written it (ruling (g)). */
 export type ApplyOutcome = "no_deals" | "live" | "parked" | "hidden_open" | "ended_all";
 
 /** A deal as the server reads it: the client-safe SponsorDeal plus the two money handles a server guard needs. */
@@ -42,6 +42,9 @@ export interface LockedSponsor {
   tier: SponsorTier;
   competition_id: string | null;
   on_stream: boolean;
+  /** Placement provenance (ruling (g), V493): the deal whose snapshot `tier`, `competition_id` and `on_stream` carry, set by
+   *  the live write; null when the club set them by hand (or a hand PATCH of any of them has since taken them over). */
+  placement_from_deal_id: string | null;
 }
 
 /** The sponsor_orders columns a deal is read from. The money column `status` is the API's `payment_status` (D1). */
@@ -127,7 +130,8 @@ export async function lockSponsorAndDeals(
   sponsorId: string,
 ): Promise<{ sponsor: LockedSponsor; deals: ServerDeal[] } | null> {
   const [sponsor] = await tx<LockedSponsor[]>`
-    select id, org_id, status, tier, competition_id, on_stream from sponsors where id = ${sponsorId} for update`;
+    select id, org_id, status, tier, competition_id, on_stream, placement_from_deal_id
+      from sponsors where id = ${sponsorId} for update`;
   if (!sponsor) return null;
   const rows = await tx<DealRow[]>`
     select ${tx(DEAL_ROW_COLS)} from sponsor_orders where sponsor_id = ${sponsorId}
@@ -262,7 +266,8 @@ export function assertSponsorPatchAllowed(deals: readonly ServerDeal[], fields: 
   }
 }
 
-type SponsorWrite = Pick<LockedSponsor, "status"> & Partial<Pick<LockedSponsor, "tier" | "competition_id" | "on_stream">>;
+type SponsorWrite = Pick<LockedSponsor, "status"> &
+  Partial<Pick<LockedSponsor, "tier" | "competition_id" | "on_stream" | "placement_from_deal_id">>;
 
 async function writeSponsor(tx: Tx, sponsorId: string, w: SponsorWrite): Promise<void> {
   const cols = Object.keys(w) as (keyof SponsorWrite)[];
@@ -277,13 +282,17 @@ async function writeSponsor(tx: Tx, sponsorId: string, w: SponsorWrite): Promise
  *  1. Legacy rows are ignored (D6). No other deal: `no_deals`, nothing written (manual control, §8a "1 Ok").
  *  2. No live deal: the earliest `scheduled` one (created_at, id) whose own `ends_at` has not passed goes live, `live_at = now`
  *     (§8a queue, Review Focus 5; F19: a past-end one is left for the sweep to end, whoever ended the live deal).
- *  3. A live deal: the sponsor takes its snapshot (tier, scope, stream) and `active`, or `pending` while a dispute parks it.
- *     An on-stream deal turns the org's rotation on the way the first tick does (R12).
- *  4. Else, a deal waiting to go live: `inactive`, and nothing else (hidden until live).
+ *  3. A live deal: the sponsor takes its snapshot (tier, scope, stream) and `active`, or `pending` while a dispute parks it,
+ *     and records that deal as its placement's provenance (ruling (g)). An on-stream deal turns the org's rotation on the way
+ *     the first tick does (R12).
+ *  4. Else, a deal waiting to go live: `inactive`, and nothing else (hidden until live). A placement a deal swapped out by
+ *     end_current wrote stays on the row, with its provenance, until the last open deal ends.
  *  5. Else every deal has ended. ONLY on the transition — `endedDealId` names the deal this call's caller just moved from
- *     live or open to ended — the sponsor is reset: inactive, partner, whole org, off the stream (`ended_all`). Any other
- *     apply that finds every deal ended writes nothing (`no_deals`), so a late event on an old deal (a dispute created or
- *     closed, a refund of an ended deal) never undoes the club's hand switch-back-on (F7, spec §10 Q3).
+ *     live or open to ended — the sponsor goes inactive (`ended_all`). Its tier, scope and stream are reset (partner, whole
+ *     org, off the stream) ONLY when a deal wrote them (`placement_from_deal_id` set), and the provenance is cleared: a
+ *     placement the club set by hand is the club's, so ending a deal that never went live never wipes it (ruling (g); spec
+ *     §5.1, §5.3). Any other apply that finds every deal ended writes nothing (`no_deals`), so a late event on an old deal (a
+ *     dispute created or closed, a refund of an ended deal) never undoes the club's hand switch-back-on (F7, spec §10 Q3).
  *
  * Fires no bust (F1); the caller expires the public pages after its commit.
  */
@@ -332,6 +341,7 @@ export async function applyDealsToSponsor(
       tier: live.tier,
       competition_id: live.competition_id,
       on_stream: live.includes_on_stream,
+      placement_from_deal_id: live.id,
     });
     if (live.includes_on_stream) await ensureOrgStreamSettings(tx, locked.sponsor.org_id, actorUserId);
     return { outcome: parked ? "parked" : "live", promotedDealId };
@@ -343,7 +353,15 @@ export async function applyDealsToSponsor(
   }
 
   if (endedDealId !== null) {
-    await writeSponsor(tx, sponsorId, { status: "inactive", tier: "partner", competition_id: null, on_stream: false });
+    // Ruling (g): D8's reset undoes what a DEAL wrote. A placement with no provenance is the club's own (set by hand, or taken
+    // over by a hand PATCH since): only the status changes.
+    await writeSponsor(
+      tx,
+      sponsorId,
+      locked.sponsor.placement_from_deal_id !== null
+        ? { status: "inactive", tier: "partner", competition_id: null, on_stream: false, placement_from_deal_id: null }
+        : { status: "inactive" },
+    );
     return { outcome: "ended_all", promotedDealId: null };
   }
   return { outcome: "no_deals", promotedDealId: null };

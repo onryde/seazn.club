@@ -166,6 +166,22 @@ alter table sponsor_orders
   add constraint sponsor_orders_approved_by_fkey
     foreign key (approved_by) references users(id) on delete set null;
 
+-- Placement provenance (controller ruling (g), batch G; plan D8, spec §5.1/§5.3): sponsors.placement_from_deal_id names the
+-- deal whose snapshot the sponsor's tier, competition_id and on_stream carry. D8's all-ended reset (partner, whole org, off
+-- the stream) exists to undo what a DEAL wrote, never what the club set by hand, so:
+--   * applyDealsToSponsor sets it whenever a live deal writes those three fields;
+--   * on the transition into all-ended the sponsor always goes inactive, and the three fields are reset ONLY when it is set;
+--     either way it is then cleared;
+--   * a hand PATCH of tier, competition_id or on_stream clears it: the club owns the placement again.
+-- A deal that was live and was then swapped out (end_current, the queue) leaves its id here until the last open deal ends, so
+-- the reset still undoes its snapshot. Null on every existing sponsor: no deal had written one before this migration.
+-- ON DELETE SET NULL: deleting the deal it names (deleteSponsor deletes a sponsor's deletable deals first) never blocks, and a
+-- null reads as hand-set, which keeps the placement: the safe side. The partial index serves that SET NULL's lookup.
+alter table sponsors
+  add column placement_from_deal_id uuid null
+    constraint sponsors_placement_from_deal_id_fkey references sponsor_orders(id) on delete set null;
+create index sponsors_placement_from_deal_idx on sponsors (placement_from_deal_id) where placement_from_deal_id is not null;
+
 -- The widened delete fence (header). `is distinct from`, not `<>`: an open or live deal's ended_reason is NULL, and a
 -- policy expression that is NULL refuses the row. A legacy row passes only as V300 admitted it: an abandoned checkout.
 drop policy sponsor_orders_prune on sponsor_orders;

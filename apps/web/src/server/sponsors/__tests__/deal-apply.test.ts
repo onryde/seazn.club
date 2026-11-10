@@ -5,7 +5,8 @@
 //
 // Expected values come from the plan's D-table and the spec, typed here: a live deal → the sponsor takes the deal's
 // snapshot and `active` (`pending` while parked); open deals only → `inactive`, nothing else touched; the transition into
-// all-ended → inactive / partner / whole org / off the stream; every other all-ended apply writes nothing (F7).
+// all-ended → inactive, and partner / whole org / off the stream ONLY when a deal wrote the placement (controller ruling (g):
+// `placement_from_deal_id`, set by the live write); every other all-ended apply writes nothing (F7).
 //
 // The sequence (TEST-STRATEGY rule 1): the empty case first; a second call; after a void (the deal ended, then a late event
 // on it); the queue (promotion). "Another sport" is not applicable — sponsors read no sport (plan §3); its substitute,
@@ -118,6 +119,10 @@ const rowBytes = async (id: string): Promise<string> =>
 
 const fields = async (id: string): Promise<SponsorFields> =>
   (await sql<SponsorFields[]>`select tier, competition_id, status, on_stream from sponsors where id = ${id}`)[0]!;
+
+/** Placement provenance (ruling (g)): the deal whose snapshot the sponsor carries, or null when the club placed it by hand. */
+const provenance = async (id: string): Promise<string | null> =>
+  (await sql<{ p: string | null }[]>`select placement_from_deal_id as p from sponsors where id = ${id}`)[0]!.p;
 
 const dealState = async (id: string) =>
   (await sql<{ deal_status: string; live_at: Date | null }[]>`select deal_status, live_at from sponsor_orders where id = ${id}`)[0]!;
@@ -252,22 +257,41 @@ describe.skipIf(!HAS_DB)("applyDealsToSponsor — the one owner of a deal's effe
   });
 
   // ---- all ended -----------------------------------------------------------------------------------------------------
-  it("all ended, ON the transition (this call ended the last live or open deal): inactive, partner, whole org, off the stream — ended_all", async () => {
+  it("all ended, ON the transition, after a deal WROTE the placement (it was live): inactive, partner, whole org, off the stream — ended_all, provenance cleared", async () => {
+    const w = await world();
+    const id = await sponsor(w, { tier: "partner", competition_id: null, status: "inactive", on_stream: false });
+    const dealId = await insertDeal(deal(w, id, { ...LIVE, tier: "gold", competition_id: w.compId, includes_on_stream: true }));
+    // The live write (End now, expiry, a refund, a lost dispute all come after one): the deal's snapshot and its provenance.
+    await expect(applyAsConsole(w, id)).resolves.toEqual({ outcome: "live", promotedDealId: null });
+    expect(await provenance(id), "the live write records the deal (ruling (g))").toBe(dealId);
+
+    await expect(applyAsConsole(w, id, { before: (tx) => endDeal(tx, dealId), endedDealId: dealId }))
+      .resolves.toEqual({ outcome: "ended_all", promotedDealId: null });
+    expect(await fields(id)).toEqual({ tier: "partner", competition_id: null, status: "inactive", on_stream: false });
+    expect(await provenance(id), "cleared with the reset").toBeNull();
+    expect(await listed(w.orgId, w.compId)).not.toContain(id);
+  });
+
+  it("RULING (g): all ended, ON the transition, of a deal that never went live on a HAND-placed sponsor: inactive only — its gold, C and stream are the club's and stay (ended_all)", async () => {
     const w = await world();
     let checked = 0;
-    // From live (End now, expiry, a refund, a lost dispute) and from open (a deal ended before it ever went live).
-    for (const [label, over] of [["live", LIVE], ["open", {}]] as const) {
+    // Every open status the transition can come from (D2's lifecycle minus live and ended).
+    for (const over of [{ deal_status: "draft" }, {}, { deal_status: "awaiting_approval", status: "paid", paid_at: T0, go_live: "on_approval" }, SCHEDULED] as Deal[]) {
+      const label = String(over.deal_status ?? "awaiting_payment");
       const id = await sponsor(w, { tier: "gold", competition_id: w.compId, status: "active", on_stream: true });
-      const dealId = await insertDeal(deal(w, id, { ...over, includes_on_stream: true }));
+      const dealId = await insertDeal(deal(w, id, { ...over, tier: "silver", competition_id: null, includes_on_stream: false, ends_at: T0 }));
+      // `ends_at` T0 is behind the apply's clock (T1): a scheduled deal is past its end, so it is never promoted (F19) and
+      // ending it is the transition from open.
       await expect(
         applyAsConsole(w, id, { before: (tx) => endDeal(tx, dealId), endedDealId: dealId }),
         label,
       ).resolves.toEqual({ outcome: "ended_all", promotedDealId: null });
-      expect(await fields(id), label).toEqual({ tier: "partner", competition_id: null, status: "inactive", on_stream: false });
+      expect(await fields(id), label).toEqual({ tier: "gold", competition_id: w.compId, status: "inactive", on_stream: true });
+      expect(await provenance(id), label).toBeNull();
       expect(await listed(w.orgId, w.compId), label).not.toContain(id);
       checked++;
     }
-    expect(checked, "transitions checked").toBe(2);
+    expect(checked, "open statuses checked").toBe(4);
   });
 
   it("F7 (spec §10 Q3): after every deal ended, the club switches the sponsor back on by hand, and a later apply on the old deal (a dispute closing, a refund of the ended deal) leaves the row byte-equal", async () => {

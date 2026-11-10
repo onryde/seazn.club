@@ -17,7 +17,9 @@
 //     declaration; the usecases are the code under test). A refused action is an HttpError: 409 not offered, 422
 //     `on_payment_needs_payment`; a DealRuleError reaching this test is a failure;
 //   - what a deal does to its sponsor: D8, typed as `modelApply` (empty case first; the all-ended reset ONLY on the transition,
-//     F7), and D9 (what a deal locks), typed as `patchRefusals`;
+//     F7, and ONLY of a placement a deal wrote — controller ruling (g), batch G: the model holds each sponsor's provenance,
+//     `placedBy`, set by a live deal and taken back by a hand PATCH of tier / competition_id / on_stream), and D9 (what a deal
+//     locks), typed as `patchRefusals`;
 //   - the plan gates: spec §10 Q1 (a tier other than partner, or a scope, needs `sponsors.tiers`), spec §8 (online selling needs
 //     `sponsors.monetize`), and the plan matrix (Pro both org-wide; community neither; an Event Pass both on ITS competition
 //     only), typed as `needsTiers` / `planGrants`;
@@ -33,21 +35,24 @@
 //      Stripe would retry forever). I1 stays as the statement of the rule; the index is its enforcement;
 //   I2 a sponsor with a live or open deal is `active` ⇔ it has a live, unparked deal. A sponsor whose deals have ALL ended (or
 //      that has none) is under manual control (spec §10 Q3): a step that keeps it there leaves its row byte-equal unless the step
-//      was an accepted patchSponsor on it; the step that moves it INTO all-ended writes the D8 reset (inactive, partner, whole
-//      org, off the stream);
+//      was an accepted patchSponsor on it; the step that moves it INTO all-ended makes it inactive (I9 judges its placement);
 //   I3 a sponsor with a live deal carries that deal's snapshot: tier, competition_id, on_stream;
 //   I4 the org's sponsor row count never changes, except by an accepted deleteSponsor (anti-goal 1: no payment inserts one);
 //   I5 no live deal is go_live='on_approval' with approved_at null;
 //   I6 no live deal is go_live='on_payment' with its money still unpaid;
 //   I7 a deal whose money is refunded has ended;
-//   I8 every deal's snapshot tier and includes_on_stream equal what the model recorded from its package at creation.
+//   I8 every deal's snapshot tier and includes_on_stream equal what the model recorded from its package at creation;
+//   I9 (ruling (g)) the step that moves a sponsor INTO all-ended: if a deal had written its placement (the model's provenance
+//      before the step), the D8 reset — partner, whole org, off the stream; if the club had placed it by hand, its tier, scope
+//      and stream are exactly what they were before the step. Both arms count their subjects (`I9dealSet`, `I9handSet`).
 // Model checks after every step:
 //   M1 the accept / refuse verdict, the refusal's HTTP status (and code where the plan names one), and a refused step leaves the
 //      sponsor tables (`sponsors`, `sponsor_orders`, `sponsor_packages`, `sponsor_stream_settings`) byte-equal (the billing
 //      ledger is outside: runEvent writes it, F36);
 //   M2 every deal's lifecycle, money, end reason, park, dispute flag, approval, intent, stored session, scope, method, rule,
 //      end date, amount and currency (the package's price; a second payment's row: the intent's own sum); M3 every sponsor's
-//      status, tier, scope and on_stream; M4 the org's stream-settings row;
+//      status, tier, scope, on_stream and placement provenance (`placement_from_deal_id` is the model's `placedBy`); M4 the
+//      org's stream-settings row;
 //   M5 Stripe: every session's status is the model's; no deal holds two open sessions; no ended or deleted deal holds an open
 //      one (two payable sessions never coexist, D14); the refunds a step sends are exactly the ones it owes — one, for the
 //      deal's own intent, on an accepted console refund of a charge; none for money marked paid by hand, a webhook, or any
@@ -63,9 +68,11 @@
 // packages and sponsors are made on Pro first: the state a downgrade leaves), and C is either never finished (no divisions)
 // or finished (its derived phase).
 //
-// Two macros aim chains a uniform generator almost never strings together (2000 uniform runs never did): `f7` (a paid deal, its
-// sponsor's last open one, ends → the hand switch-back-on → a late refund or dispute on it) and `f19` (time passes until the
-// deal queued behind a live one is past its own end → the live one ends; or the live one ends at once and the queue promotes).
+// Three macros aim chains a uniform generator almost never strings together (2000 uniform runs never did): `f7` (a paid deal, its
+// sponsor's last open one, ends → the hand switch-back-on → a late refund or dispute on it), `f19` (time passes until the
+// deal queued behind a live one is past its own end → the live one ends; or the live one ends at once and the queue promotes)
+// and `g` (ruling (g): the club places a sponsor by hand — Gold, or on the stream — while no deal of it is live, then every deal
+// of it that waits ends by End now, none ever live: the placement must survive).
 // Each macro step is an ordinary checked step, resolved against the model when it runs.
 //
 // Anti-vacuity: the property reports its runs and the steps it checked (≥ 100, else a failure). The named scenarios drive the
@@ -285,6 +292,8 @@ const specAfterSend = (s: DealStatus): DealStatus => (s === "draft" ? "awaiting_
 // =================================================================================================================================
 
 type PatchKind = "on" | "off" | "gold" | "partner" | "streamOn" | "streamOff";
+/** Ruling (g), typed: the sponsor fields a hand PATCH takes over from a deal's snapshot. */
+const PLACEMENT_KEYS = ["tier", "competition_id", "on_stream"] as const;
 const PATCHES: Readonly<Record<PatchKind, PatchSponsorInput>> = {
   on: { status: "active" },
   off: { status: "inactive" },
@@ -319,16 +328,22 @@ type Prim =
  *    hand-set row.
  *  - `f19`: a live deal with a deal queued behind it; `past`: time passes until the queued deal's own end has gone, with no
  *    sweep; then the live deal ends by hand. F19: a past-end queued deal is never promoted; otherwise the queue promotes it.
+ *  - `g` (ruling (g)): a sponsor with no live deal is placed by hand (`f`: Gold, or on the stream; off Pro, where a Gold patch
+ *    is a 402, on the stream), given a deal that waits if it has none, and then every deal of it that waits ends by End now.
+ *    The sponsor's tier and stream must be the hand ones after the last end, never D8's reset.
  */
-type Macro = { k: "f7"; d: number; late: "refunded" | "dispute" } | { k: "f19"; d: number; past: boolean };
+type Macro =
+  | { k: "f7"; d: number; late: "refunded" | "dispute" }
+  | { k: "f19"; d: number; past: boolean }
+  | { k: "g"; d: number; f: "gold" | "streamOn" };
 type Cmd = Prim | Macro;
 type Kind = Prim["k"];
 const KINDS: readonly Kind[] = [
   "create", "send", "markPaid", "approve", "endNow", "refund", "patch", "checkout", "paid", "refunded", "dispute", "sweep",
   "age", "delete", "downgrade",
 ];
-const MACROS: readonly Macro["k"][] = ["f7", "f19"];
-const isMacro = (c: Cmd): c is Macro => c.k === "f7" || c.k === "f19";
+const MACROS: readonly Macro["k"][] = ["f7", "f19", "g"];
+const isMacro = (c: Cmd): c is Macro => c.k === "f7" || c.k === "f19" || c.k === "g";
 
 const ix = fc.nat({ max: 23 });
 const createArb: fc.Arbitrary<Cmd> = fc.record({
@@ -370,6 +385,7 @@ const cmdArb: fc.Arbitrary<Cmd> = fc.oneof(
   { weight: 1, arbitrary: fc.record({ k: fc.constant("downgrade" as const) }) },
   { weight: 4, arbitrary: fc.record({ k: fc.constant("f7" as const), d: ix, late: fc.constantFrom<"refunded" | "dispute">("refunded", "dispute") }) },
   { weight: 4, arbitrary: fc.record({ k: fc.constant("f19" as const), d: ix, past: fc.boolean() }) },
+  { weight: 4, arbitrary: fc.record({ k: fc.constant("g" as const), d: ix, f: fc.constantFrom<"gold" | "streamOn">("gold", "streamOn") }) },
 );
 
 /** 1–14 commands (the brief): 1–4 deals made first, so the actions after them have deals to act on (a command with no target
@@ -407,6 +423,9 @@ interface MSponsor {
   id: string;
   alive: boolean;
   row: SponsorFields;
+  /** Ruling (g): the deal whose snapshot `row`'s tier, scope and stream carry — set when a live deal writes them, taken back
+   *  (null) by a hand PATCH of tier / competition_id / on_stream and by the transition into all-ended. Null: placed by hand. */
+  placedBy: MDeal | null;
 }
 interface MDeal {
   /** "" until the step that made it has read the id the code gave it. */
@@ -481,6 +500,8 @@ const cover = {
   endCurrentSwap: 0,
   promotion: 0,
   transitionReset: 0,
+  /** Ruling (g): the transition into all-ended of a sponsor the club had placed by hand: inactive only. */
+  transitionKept: 0,
   switchBackOn: 0,
   manualHeldOnLateEvent: 0,
   parkedLive: 0,
@@ -505,17 +526,20 @@ const cover = {
   f7Chain: 0,
   f19PastEnd: 0,
   f19Promotion: 0,
+  /** The `g` macro run to its end: a hand placement through the end of every deal that waited. */
+  gChain: 0,
 };
 type Cover = keyof typeof cover;
 
 /** How many subjects each invariant judged (anti-vacuity per invariant: an invariant that never met its subject proved nothing). */
-const subjects = { I1: 0, I2: 0, I2manual: 0, I3: 0, I5: 0, I6: 0, I7: 0, I8: 0 };
+const subjects = { I1: 0, I2: 0, I2manual: 0, I3: 0, I5: 0, I6: 0, I7: 0, I8: 0, I9dealSet: 0, I9handSet: 0 };
 
 /**
  * D8, typed (the order matters): no deal → nothing; no live deal → the earliest scheduled deal whose own end has not passed goes
- * live (§8a queue; F19); a live deal → the sponsor takes its snapshot, `active` or `pending` while parked; else an open deal →
- * `inactive` and nothing else; else every deal has ended → the reset, written ONLY when `ended` names the deal this step moved
- * into ended (F7). Answers the deal it promoted.
+ * live (§8a queue; F19); a live deal → the sponsor takes its snapshot, `active` or `pending` while parked, and that deal is its
+ * placement's provenance (ruling (g)); else an open deal → `inactive` and nothing else; else every deal has ended → ONLY when
+ * `ended` names the deal this step moved into ended (F7): `inactive`, plus D8's reset of tier, scope and stream ONLY when a deal
+ * wrote them (ruling (g): a hand placement is the club's), and the provenance is cleared. Answers the deal it promoted.
  */
 function modelApply(m: Model, sp: number, now: number, ended: MDeal | null, viaSweep = false): MDeal | null {
   const deals = dealsOf(m, sp);
@@ -534,8 +558,10 @@ function modelApply(m: Model, sp: number, now: number, ended: MDeal | null, viaS
       if (!viaSweep && m.finished && next.competition_id !== null && next.endsAt === null) cover.deferredFinishedPromotion++;
     }
   }
-  const row = m.sponsors[sp]!.row;
+  const sponsor = m.sponsors[sp]!;
+  const row = sponsor.row;
   if (live !== null) {
+    sponsor.placedBy = live;
     row.status = live.parked ? "pending" : "active";
     if (live.parked) cover.parkedLive++;
     row.tier = live.snapshot.tier;
@@ -549,8 +575,14 @@ function modelApply(m: Model, sp: number, now: number, ended: MDeal | null, viaS
     return null;
   }
   if (ended !== null) {
-    Object.assign(row, { status: "inactive", tier: "partner", competition_id: null, on_stream: false } satisfies SponsorFields);
-    cover.transitionReset++;
+    if (sponsor.placedBy !== null) {
+      Object.assign(row, { status: "inactive", tier: "partner", competition_id: null, on_stream: false } satisfies SponsorFields);
+      cover.transitionReset++;
+    } else {
+      row.status = "inactive";
+      cover.transitionKept++;
+    }
+    sponsor.placedBy = null;
   }
   return null;
 }
@@ -680,7 +712,12 @@ async function buildWorld(spec: WorldSpec): Promise<{ w: World; m: Model }> {
     finished: spec.finished,
     orgId,
     compId,
-    sponsors: sponsorIds.map((id) => ({ id, alive: true, row: { status: "active", tier: "partner", competition_id: null, on_stream: false } })),
+    sponsors: sponsorIds.map((id) => ({
+      id,
+      alive: true,
+      row: { status: "active", tier: "partner", competition_id: null, on_stream: false },
+      placedBy: null,
+    })),
     deals: [],
     sessions: new Map(),
     seq: 0,
@@ -717,6 +754,7 @@ interface DealDb {
 }
 interface SponsorDb extends SponsorFields {
   id: string;
+  placement_from_deal_id: string | null;
   bytes: string;
 }
 interface Snap {
@@ -734,7 +772,8 @@ async function snapshot(orgId: string): Promise<Snap> {
            payment_intent_id, checkout_session_id, ends_at, amount_cents, currency
       from sponsor_orders where org_id = ${orgId} order by created_at, id`;
   const sponsors = await sql<SponsorDb[]>`
-    select id, status, tier, competition_id, on_stream, to_jsonb(s)::text as bytes from sponsors s where s.org_id = ${orgId}`;
+    select id, status, tier, competition_id, on_stream, placement_from_deal_id, to_jsonb(s)::text as bytes
+      from sponsors s where s.org_id = ${orgId}`;
   const [t] = await sql<{ tables: string; stream: boolean }[]>`
     select concat_ws(' | ',
              (select coalesce(jsonb_agg(to_jsonb(x) order by x.id), '[]'::jsonb) from sponsors x where x.org_id = ${orgId})::text,
@@ -837,6 +876,8 @@ interface Step {
   sweep?: { want: SweepResult; got: SweepResult };
   /** The Stripe refunds this step owes: one for the deal's intent on an accepted console refund of a charge, else none. */
   refundsWant: string[];
+  /** Ruling (g): which sponsors (by id) carried a placement a deal wrote, in the MODEL, before this step ran. */
+  placedBefore?: Map<string, boolean>;
 }
 
 function dealTarget(m: Model, d: number, pool: MDeal[] = m.deals): MDeal | null {
@@ -1052,6 +1093,8 @@ async function exec(w: World, m: Model, c: Prim, label: string): Promise<Step> {
       const res = await attempt(() => patchSponsor(w.auth, sp.id, patch));
       if (verdict(label, res, refusals)) return { ...step, refused: true };
       Object.assign(sp.row, patch);
+      // Ruling (g): a hand write of the placement (tier, scope, or the On-stream tick) takes it back from the deal that wrote it.
+      if (PLACEMENT_KEYS.some((key) => key in patch)) sp.placedBy = null;
       if (patch.on_stream === true) m.streamRow = true;
       if (c.f === "on" && allEnded) cover.switchBackOn++;
       step.patched = sp.id;
@@ -1383,6 +1426,10 @@ function check(label: string, m: Model, before: Snap, after: Snap, step: Step | 
     for (const key of ["status", "tier", "competition_id", "on_stream"] as const) {
       if (row[key] !== sp.row[key]) f(`M3: sponsor ${sp.id} ${key} is ${JSON.stringify(row[key])}; the model says ${JSON.stringify(sp.row[key])}`);
     }
+    const placedBy = sp.placedBy?.id ?? null;
+    if (row.placement_from_deal_id !== placedBy) {
+      f(`M3: sponsor ${sp.id} placement_from_deal_id is ${JSON.stringify(row.placement_from_deal_id)}; the model says ${JSON.stringify(placedBy)}`);
+    }
   }
   if (after.streamRow !== m.streamRow) f(`M4: the org's stream-settings row ${after.streamRow ? "exists" : "is missing"}; the model says ${m.streamRow}`);
 
@@ -1427,9 +1474,18 @@ function check(label: string, m: Model, before: Snap, after: Snap, step: Step | 
         if (step.patched !== sid && prev.bytes !== row.bytes) f(`I2: sponsor ${sid} is under manual control and a step that is not a patch rewrote it: ${prev.bytes} → ${row.bytes}`);
         else if (step.touched.has(sid) && after.deals.some((d) => d.sponsor_id === sid)) cover.manualHeldOnLateEvent++;
       } else if (!manualBefore && manualAfter) {
-        const reset = { status: "inactive", tier: "partner", competition_id: null, on_stream: false };
+        // I9 (ruling (g)): D8's reset undoes a placement a DEAL wrote; a hand placement keeps its tier, scope and stream.
+        const placed = step.placedBefore?.get(sid);
+        if (placed === undefined) throw new Error(`harness: no provenance recorded before the step for sponsor ${sid}`);
+        const want = placed
+          ? { status: "inactive", tier: "partner", competition_id: null, on_stream: false }
+          : { status: "inactive", tier: prev.tier, competition_id: prev.competition_id, on_stream: prev.on_stream };
+        if (placed) subjects.I9dealSet++;
+        else subjects.I9handSet++;
         const shape = { status: row.status, tier: row.tier, competition_id: row.competition_id, on_stream: row.on_stream };
-        if (JSON.stringify(shape) !== JSON.stringify(reset)) f(`I2/D8: sponsor ${sid}'s last deal ended and its row is ${JSON.stringify(shape)}, not the reset`);
+        if (JSON.stringify(shape) !== JSON.stringify(want)) {
+          f(`I9: sponsor ${sid}'s last deal ended (${placed ? "a deal's placement" : "a hand placement"}) and its row is ${JSON.stringify(shape)}, not ${JSON.stringify(want)}`);
+        }
       }
     }
   }
@@ -1498,6 +1554,22 @@ function planMacro(m: Model, c: Macro): MacroStep[] | null {
       ...tail,
     ];
   }
+  if (c.k === "g") {
+    // A sponsor with no live deal (any deals waiting are ended below); off Pro a Gold patch is a 402, so it goes on the stream.
+    const sp = [c.d % 2, 1 - (c.d % 2)].find((i) => m.sponsors[i]!.alive && !dealsOf(m, i).some((x) => x.status === "live"));
+    if (sp === undefined) return null;
+    const waiting = dealsOf(m, sp).filter((x) => isOpenStatus(x.status)).length;
+    const plan: MacroStep[] = [() => ({ k: "patch", s: sp, f: m.plan === "pro" ? c.f : "streamOn" })];
+    // None waiting: one that waits for its money (offline, When paid, partner, whole org: every plan sells it).
+    if (waiting === 0) plan.push(() => ({ k: "create", s: sp, p: 0, scoped: false, m: "offline", r: "on_payment", ends: null, endCurrent: false }));
+    for (let i = 0; i < Math.max(1, waiting); i++) {
+      plan.push(() => {
+        const next = dealsOf(m, sp).find((x) => isOpenStatus(x.status));
+        return next === undefined ? null : { k: "endNow", d: m.deals.indexOf(next) };
+      });
+    }
+    return plan;
+  }
   // f19: a live deal with a deal queued behind it (one with an end date, for `past`).
   const pool = m.deals.filter((d) => {
     if (d.status !== "live" || !m.sponsors[d.sponsor]!.alive || !offered(d).includes("end_now")) return false;
@@ -1551,9 +1623,11 @@ async function runSequence(spec: WorldSpec, cmds: readonly Cmd[]): Promise<numbe
     W.alerts.length = 0;
     W.refunds.length = 0;
     m.alerts = [];
+    const placedBefore = new Map(m.sponsors.map((s) => [s.id, s.placedBy !== null]));
     let step: Step;
     try {
       step = await exec(w, m, c, label);
+      step.placedBefore = placedBefore;
       await drain();
       const after = await snapshot(w.orgId);
       if (step.ran) check(label, m, before, after, step);
@@ -1607,6 +1681,7 @@ async function runSequence(spec: WorldSpec, cmds: readonly Cmd[]): Promise<numbe
     }
     ms.completed++;
     if (c.k === "f7") cover.f7Chain++;
+    else if (c.k === "g") cover.gChain++;
     else if (c.past) cover.f19PastEnd++;
     else cover.f19Promotion++;
   }
@@ -1639,7 +1714,7 @@ describe.skipIf(!HAS_DB)("sponsor deals, model-based: named scenarios (DB)", () 
         { k: "checkout", d: 0 },
         { k: "markPaid", d: 0 }, // money in flight: 409 deal_paid_online
         { k: "send", d: 0 }, // 409 deal_paid_online
-        { k: "endNow", d: 0 }, // the completed session is carried over; the sponsor's last deal ended: the reset
+        { k: "endNow", d: 0 }, // the completed session is carried over; the last deal ended, never live: inactive only (ruling (g))
         { k: "patch", s: 0, f: "on" }, // the hand switch-back-on (spec §10 Q3)
         { k: "paid", d: 0, again: false }, // the late payment: recorded, the deal stays ended, deal_ended alert
         { k: "dispute", d: 0, phase: "created" },
@@ -1647,7 +1722,27 @@ describe.skipIf(!HAS_DB)("sponsor deals, model-based: named scenarios (DB)", () 
         { k: "refund", d: 0 }, // refundable after a won dispute
         { k: "refunded", d: 0 }, // the dashboard's event for the same refund: a no-op
       ],
-      ["sessionCarriedOver", "paidOnlineRefusal", "transitionReset", "switchBackOn", "latePayment", "manualHeldOnLateEvent"],
+      ["sessionCarriedOver", "paidOnlineRefusal", "transitionKept", "switchBackOn", "latePayment", "manualHeldOnLateEvent"],
+    );
+  }, 120_000);
+
+  it("ruling (g): a hand placement outlives deals that never went live; a deal's placement swapped out by end_current is reset when the deal waiting behind it ends; a hand tick after the swap takes the placement over", async () => {
+    await scenario(
+      { plan: "pro", finished: false },
+      [
+        { k: "patch", s: 0, f: "gold" }, // placed by hand: Gold
+        { k: "patch", s: 0, f: "streamOn" }, // and on the stream (the On-stream tick)
+        C(), // 0: offline When-paid: waits, so the sponsor is hidden — nothing else changes
+        { k: "endNow", d: 0 }, // never live, a hand placement: inactive only, Gold and the stream stay
+        C({ s: 1, p: 1, m: "complimentary", r: "immediate" }), // 1: live, Gold on the stream: the DEAL's placement
+        C({ s: 1, endCurrent: true }), // 2: 1 ends, 2 waits: 1's snapshot stays on the row, still 1's
+        { k: "endNow", d: 2 }, // the last deal ends and the placement was 1's: D8's reset
+        C({ s: 1, p: 1, m: "complimentary", r: "immediate" }), // 3: live again, the deal's placement
+        C({ s: 1, endCurrent: true }), // 4: 3 ends, 4 waits
+        { k: "patch", s: 1, f: "streamOff" }, // the club ticks it off the stream: the placement is the club's now
+        { k: "endNow", d: 4 }, // never live, a hand placement: Gold stays, off the stream
+      ],
+      ["transitionKept", "transitionReset", "endCurrentSwap"],
     );
   }, 120_000);
 
@@ -1920,6 +2015,9 @@ describe.skipIf(!HAS_DB)("sponsor deals, model-based: anti-vacuity over every se
       expect(subjects[s], `invariant ${s} judged at least one subject`).toBeGreaterThan(0);
     }
     for (const k of MACROS) expect(macroStats[k].completed, `macro ${k} ran to its end`).toBeGreaterThan(0);
+    // Ruling (g): both arms of the transition met — a deal's placement reset, and a hand placement kept.
+    expect(cover.transitionReset, "a transition reset a deal's placement").toBeGreaterThan(0);
+    expect(cover.transitionKept, "a transition kept a hand placement").toBeGreaterThan(0);
     expect(cover.f19PastEnd, "f19 past its end").toBeGreaterThan(0);
     expect(cover.f19Promotion, "f19 with the queue promoting").toBeGreaterThan(0);
   });
