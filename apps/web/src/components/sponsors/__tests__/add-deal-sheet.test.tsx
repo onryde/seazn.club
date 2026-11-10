@@ -16,7 +16,8 @@
 //   K2  complimentary    on_payment kept for a complimentary deal (`rule` not derived)   -> "complimentary moves go-live"
 //   K3  scope options    the `needsTiers` disable dropped from the competition options   -> (c) community
 //   K4  package cards    `needsTiers` dropped from the card's `locked`                   -> (c) community
-//   K5  in-flight        the `inFlight` ref guard dropped                                -> "a second tap while it is in flight"
+//   K5  in-flight        the `inFlight` ref guard dropped                                -> "the handler's own guard"
+//   K5b busy button     `!busy` dropped from `canSubmit`                                -> "the button's own guard"
 //   K6  end_current      `end_current` always false                                      -> "End the current deal now"
 //   K7  email opening    `last_billing_email` ignored                                    -> (d)
 //   K8  dup confirm      the confirm skipped                                             -> "a second open deal on the same package"
@@ -899,22 +900,44 @@ describe("ending the current deal promotes an earlier deal that is waiting, whic
 });
 
 describe("one tap, one deal", () => {
-  it("a second tap while it is in flight sends nothing, and the button is disabled and back again afterwards", async () => {
+  // Two guards stand between a double tap and a second deal, and each is pinned ON ITS OWN (batch J review m10): the first test
+  // reaches only the handler's `inFlight` ref (a STALE closure still believes nothing is in flight, so the button's `canSubmit` cannot
+  // help it); the second reaches only the button (`disabled={!canSubmit}`, with `!busy` in it) and a handler read from the FRESH render,
+  // whose closure knows it is busy. Drop either guard and exactly its own test goes red.
+  it("the handler's own guard: a second call from a STALE closure sends nothing, and a deliberate tap after it finished is a second deal", async () => {
     let release!: () => void;
     const onCreate = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
     const { island } = mount({ onCreate });
+    // Both calls come from the render BEFORE the first tap: `busy` is still false in this closure, so `canSubmit` is true in it and
+    // only the ref can tell the second call that the first is still in flight.
     const stale = propsOf(one(island, "add-deal-submit")).onClick as () => Promise<void>;
     const first = stale();
     const second = stale();
-    expect(onCreate).toHaveBeenCalledTimes(1);
-    expect(isDisabled(island, "add-deal-submit"), "disabled while in flight").toBe(true);
+    expect(onCreate, "one request, not two").toHaveBeenCalledTimes(1);
     release();
     await Promise.all([first, second]);
-    expect(isDisabled(island, "add-deal-submit"), "enabled again").toBe(false);
+    expect(onCreate, "the second call never became a request").toHaveBeenCalledTimes(1);
     const again = submit(island);
     release();
     await again;
     expect(onCreate, "a deliberate second tap after it finished is a second deal").toHaveBeenCalledTimes(2);
+  });
+
+  it("the button's own guard: it is disabled while the request is in flight, a handler read from the FRESH render sends nothing, and it is enabled again afterwards", async () => {
+    let release!: () => void;
+    const onCreate = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    const { island } = mount({ onCreate });
+    expect(isDisabled(island, "add-deal-submit"), "enabled before the first tap").toBe(false);
+    const first = submit(island);
+    expect(onCreate).toHaveBeenCalledTimes(1);
+    expect(isDisabled(island, "add-deal-submit"), "disabled while in flight").toBe(true);
+    // The fresh render's handler closes over `busy === true`: `canSubmit` is false in it, so it sends nothing.
+    const fresh = propsOf(one(island, "add-deal-submit")).onClick as () => Promise<void>;
+    await fresh();
+    expect(onCreate, "a tap on the fresh button is not a second request").toHaveBeenCalledTimes(1);
+    release();
+    await first;
+    expect(isDisabled(island, "add-deal-submit"), "enabled again").toBe(false);
   });
 
   it("Escape and the close button do nothing while it is in flight", async () => {
