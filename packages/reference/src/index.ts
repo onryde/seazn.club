@@ -67,6 +67,32 @@ export {
   bruteForcePerfectMatching,
 } from "./families/swiss-matching.ts";
 
+// W4 app B (Task 14) adds the knockout progression family (rulebook-W4-knockout.md): draw, late entry, plate field, lucky loser,
+// final ranks and ladder seats. Exported here, not held in FAMILIES: its domain is a bracket's progression and places, not a
+// stage kind x sport pair's finish (T15-R5 keeps one oracle per pair, and bracket-finish owns knockout).
+export { PROGRESSION_OUT_OF_SCOPE, PROGRESSION_RULED_OUT, ProgressionOutOfScope, ProgressionRuledOut, bracketProgression } from "./families/bracket-progression.ts";
+export type {
+  BracketProgressionFamily,
+  DrawAnswer,
+  EntrantKey,
+  FirstMatch,
+  LadderAnswer,
+  LadderDecision,
+  LadderInput,
+  LadderMatch,
+  LateEntryCase,
+  LateLine,
+  LuckyAnswer,
+  LuckyCandidate,
+  Place,
+  PlateFieldAnswer,
+  PlayoffResult,
+  ProgressionOutOfScopeReason,
+  ProgressionRuledOutReason,
+  RankInput,
+  RankTitle,
+} from "./families/bracket-progression.ts";
+
 export type StageKindName = StageKind;
 
 /** What every family declares: where it answers from, and which stage kind × sport pairs it answers. */
