@@ -36,6 +36,9 @@ const SCRIPT = "scripts/check-vitest-collection.ts";
 // gate proves is the arithmetic between listing and execution, and that only
 // holds if this set really is everything `c*` matches.
 const C_GLOBBED = [
+  // W4 app B (champion by title tag / joint winners): both begin with "c", so the `c*` glob removes them.
+  "src/server/public-site/__tests__/champion-division-db.test.ts",
+  "src/server/public-site/__tests__/champion-title-engine-parity.test.ts",
   "src/server/public-site/__tests__/champion.test.ts",
   "src/server/public-site/__tests__/competition-hub-db.test.ts",
   "src/server/public-site/__tests__/competition-hub-field-filter.test.ts",
@@ -196,6 +199,8 @@ const REST = [
   // Cricket's deciding super over under the match-centre scores (#1151). Begins with "m", so it belongs here
   // rather than in C_GLOBBED; this gate reddened on it in the PR's own CI.
   "src/server/public-site/__tests__/match-centre-super-over.test.ts",
+  // W4 app B (X-CH-6): the match centre's joint-winners line. Begins with "m", so it belongs here rather than in C_GLOBBED.
+  "src/server/public-site/__tests__/match-centre-joint-winners.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 
