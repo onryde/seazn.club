@@ -124,6 +124,16 @@ on:
         required: false
         type: boolean
         default: false
+      # Sponsor deals PR 2 (Batch J): OFF unless asked for. On, the same `walkthrough rest 2/2` leg also runs
+      # e2e/walkthrough/sponsor-deals-captures.spec.ts with SPONSOR_DEALS_CAPTURE_DIR set (without it every test there skips)
+      # and uploads the PNGs as the `sponsor-deals-captures` artifact - the owner's sign-off pictures of the deals screens at
+      # 320/768/1280 (and the deal page and the Add deal sheet in es/fr/nl at 1280), never committed. Off (and on every `push`),
+      # both steps are skipped by their `if:`.
+      sponsor_deals_captures:
+        description: "Also capture the sponsor deals screens (walkthrough rest 2/2 leg) and upload them as an artifact"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: e2e-${{ inputs.pr || github.ref }}
@@ -1366,6 +1376,43 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sponsor-captures-report
+          path: apps/web/playwright-report
+          retention-days: 7
+
+      # Sponsor deals PR 2 (Batch J), the same shape as the sponsor captures above: opt-in (`sponsor_deals_captures`), the same
+      # leg, its own artifact name. The step is longer than the sponsor one (its seed makes six sponsors, five deals and three
+      # packages before the first shot, and the spec asks for 33 pictures), hence the room. The spec's own last test refuses a
+      # missing, non-PNG or byte-identical capture (AGENTS.md class 10); the count below refuses an empty directory.
+      - name: Sponsor deals captures (opt-in)
+        id: sponsor_deals_captures
+        if: ${{ !cancelled() && inputs.sponsor_deals_captures && matrix.slug == 'walkthrough-rest-2' }}
+        timeout-minutes: 10
+        run: |
+          mkdir -p "$SPONSOR_DEALS_CAPTURE_DIR"
+          npx playwright test --project=walkthrough e2e/walkthrough/sponsor-deals-captures.spec.ts
+          shots=$(find "$SPONSOR_DEALS_CAPTURE_DIR" -name '*.png' | wc -l | tr -d ' ')
+          echo "sponsor deals captures: $shots"
+          if [ "$shots" -eq 0 ]; then echo "::error::the sponsor deals capture step wrote no screenshots"; exit 1; fi
+        working-directory: apps/web
+        env:
+          PLAYWRIGHT_BASE: http://localhost:3000
+          SPONSOR_DEALS_CAPTURE_DIR: ${{ github.workspace }}/sponsor-deals-captures
+
+      - name: Upload sponsor deals captures (opt-in)
+        if: ${{ !cancelled() && inputs.sponsor_deals_captures && matrix.slug == 'walkthrough-rest-2' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sponsor-deals-captures
+          path: sponsor-deals-captures
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
+      - name: Upload sponsor deals capture report (on failure)
+        if: ${{ !cancelled() && steps.sponsor_deals_captures.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sponsor-deals-captures-report
           path: apps/web/playwright-report
           retention-days: 7
 

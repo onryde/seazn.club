@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Locator, type Page, type Response } from "@playwright/test";
 import { apiJson, expectNoHorizontalScroll, setBoolEntitlementOverrideSql, setOrgConnectSql, withDb } from "./helpers";
 import {
-  dealUrl, openSponsorRowTools, releaseSettingsOrg, seedCompetition, seedMemberIdentity, seedSettingsOrg, sponsorsUrl, sponsorUrl, type SeededOrg,
+  dealUrl, openSponsorRowTools, releaseSettingsOrg, seedCompetition, seedMemberIdentity, seedSettingsOrg, sponsorsUrl, sponsorUrl, tapUntil, type SeededOrg,
 } from "./settings-support";
 
 const UI: Record<string, string> = JSON.parse(
@@ -325,16 +325,6 @@ test("a viewer sees the sponsors and their chips - and no action, no ⋯, no edi
 // What no vitest suite can see: ONE body in two wrappers (a page below 768, a right-hand panel over the list from 768), the swap when
 // the window crosses 768, a real tap on the name, the back link's size and where it goes, and the real PATCHes behind the page's
 // controls. A floor the page must hold at every width: no sideways scroll.
-
-/** Taps `tap` until `done` shows. The first tap on a page can land before React has attached (class 20: it is lost, not queued), so
- *  the tap is retried until its effect is on screen - safe to repeat only where the tap itself is idempotent (open, never toggle). */
-async function tapUntil(tap: Locator, done: Locator, why: string): Promise<void> {
-  await expect(async () => {
-    if (await done.isVisible()) return;
-    await tap.click({ timeout: 2_000 });
-    await expect(done, why).toBeVisible({ timeout: 3_000 });
-  }).toPass({ timeout: 20_000 });
-}
 
 test("sponsor page: phones get their own page with back; desktop a side sheet over the list", async ({ page, request }) => {
   // Two seeds, a page load per width and a live resize.

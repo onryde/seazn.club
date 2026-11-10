@@ -84,6 +84,17 @@ export async function openSponsorRowTools(page: Page, name: string): Promise<Loc
   return row;
 }
 
+/** Taps `tap` until `done` shows. The first tap on a page can land before React has attached (class 20: it is lost, not queued), so
+ *  the tap is retried until its effect is on screen - safe to repeat only where the tap itself is idempotent (open, never toggle).
+ *  Shared by the sponsor-deals specs (the e2e spec and the walkthrough captures: a walkthrough spec must not import a spec file). */
+export async function tapUntil(tap: Locator, done: Locator, why: string): Promise<void> {
+  await expect(async () => {
+    if (await done.isVisible()) return;
+    await tap.click({ timeout: 2_000 });
+    await expect(done, why).toBeVisible({ timeout: 3_000 });
+  }).toPass({ timeout: 20_000 });
+}
+
 async function activeOrgCookie(request: APIRequestContext): Promise<string | null> {
   const state = await request.storageState();
   return state.cookies.find((c) => c.name === "seazn_org")?.value ?? null;
