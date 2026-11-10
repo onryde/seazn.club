@@ -608,6 +608,18 @@ describe("?sponsor= and ?deal= on the Sponsors tab: this org's, else the list (T
     expect(refused).toBe(5);
   });
 
+  it("a LEGACY deal (a pre-deals order: no sponsor) is selectable by no URL - with no sponsor, a foreign one or an own one", async () => {
+    h.listDeals.mockResolvedValue([
+      { id: "d1", sponsor_id: "s1" },
+      { id: "dL", sponsor_id: null },
+    ]);
+    expect(sel(await render("sponsors", undefined, undefined, { deal: "dL" })).deal, "no sponsor").toBe("-");
+    expect(sel(await render("sponsors", undefined, undefined, { sponsor: "not-mine", deal: "dL" })).deal, "foreign sponsor").toBe("-");
+    expect(sel(await render("sponsors", undefined, undefined, { sponsor: "s1", deal: "dL" })).deal, "own sponsor").toBe("-");
+    // The positive pair: the same page does select an own deal.
+    expect(sel(await render("sponsors", undefined, undefined, { sponsor: "s1", deal: "d1" })).deal).toBe("d1");
+  });
+
   it("a ?deal= without a valid sponsor selects nothing (a deal lives on its sponsor's page)", async () => {
     expect(sel(await render("sponsors", undefined, undefined, { deal: "d1" }))).toEqual({ sponsor: "-", deal: "-", links: "" });
     expect(sel(await render("sponsors", undefined, undefined, { sponsor: "not-mine", deal: "d1" }))).toEqual({
