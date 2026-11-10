@@ -1,0 +1,137 @@
+{
+  "scenario": "W4B_Q5B",
+  "cases": [
+    {
+      "caseId": "ko_plate|football|11-a-side|W4B_Q5B",
+      "state": "works",
+      "reason": "10 checks, 98 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5b-loser-declines-the-plate",
+          "verdict": "pass",
+          "checked": 14
+        }
+      ]
+    },
+    {
+      "caseId": "ko_plate|cricket|t20|W4B_Q5B",
+      "state": "works",
+      "reason": "10 checks, 98 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5b-loser-declines-the-plate",
+          "verdict": "pass",
+          "checked": 14
+        }
+      ]
+    },
+    {
+      "caseId": "ko_plate|boardgame|blitz|W4B_Q5B",
+      "state": "works",
+      "reason": "9 checks, 84 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5b-loser-declines-the-plate",
+          "verdict": "pass",
+          "checked": 14
+        }
+      ]
+    },
+    {
+      "caseId": "ko_plate|carrom|club-29|W4B_Q5B",
+      "state": "works",
+      "reason": "9 checks, 84 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5b-loser-declines-the-plate",
+          "verdict": "pass",
+          "checked": 14
+        }
+      ]
+    },
+    {
+      "caseId": "ko_plate|generic|score|W4B_Q5B",
+      "state": "works",
+      "reason": "9 checks, 84 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5b-loser-declines-the-plate",
+          "verdict": "pass",
+          "checked": 14
+        }
+      ]
+    },
+    {
+      "caseId": "ko_plate|volleyball|beach|W4B_Q5B",
+      "state": "works",
+      "reason": "10 checks, 98 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5b-loser-declines-the-plate",
+          "verdict": "pass",
+          "checked": 14
+        }
+      ]
+    },
+    {
+      "caseId": "ko_plate|badminton|bwf-3x15|W4B_Q5B",
+      "state": "works",
+      "reason": "9 checks, 84 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5b-loser-declines-the-plate",
+          "verdict": "pass",
+          "checked": 14
+        }
+      ]
+    },
+    {
+      "caseId": "ko_plate|tabletennis|bo5|W4B_Q5B",
+      "state": "works",
+      "reason": "9 checks, 84 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5b-loser-declines-the-plate",
+          "verdict": "pass",
+          "checked": 14
+        }
+      ]
+    },
+    {
+      "caseId": "ko_plate|tennis|tour|W4B_Q5B",
+      "state": "works",
+      "reason": "9 checks, 84 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5b-loser-declines-the-plate",
+          "verdict": "pass",
+          "checked": 14
+        }
+      ]
+    },
+    {
+      "caseId": "ko_plate|icehockey|iihf|W4B_Q5B",
+      "state": "works",
+      "reason": "10 checks, 98 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5b-loser-declines-the-plate",
+          "verdict": "pass",
+          "checked": 14
+        }
+      ]
+    },
+    {
+      "caseId": "ko_plate|hockey|fih-outdoor|W4B_Q5B",
+      "state": "works",
+      "reason": "10 checks, 98 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q5b-loser-declines-the-plate",
+          "verdict": "pass",
+          "checked": 14
+        }
+      ]
+    }
+  ]
+}

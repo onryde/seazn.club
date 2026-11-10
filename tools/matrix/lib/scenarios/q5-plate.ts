@@ -15,7 +15,7 @@ import { confirmAdvance, firstLossersOf, type AdvanceObs } from "./advance.ts";
 import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, stageCompleted, type Item } from "./assertions.ts";
 import { Recorder, finishStage, recordGenerate, setUpDivision, snapshot, type DivisionSetup, type StagePlay } from "./common.ts";
 import { lineOf, type Line } from "./w4a-late-entry.ts";
-import { Q5A_FIELD, Q5B_FIELD, playOut } from "./w4b-support.ts";
+import { Q5A_FIELD, Q5B_FIELD, playOut, watchProductWrites } from "./w4b-support.ts";
 import type { Scenario, ScenarioContext, ScenarioOutput } from "./types.ts";
 
 export type Q5Key = "W4B_Q5A" | "W4B_Q5B";
@@ -193,8 +193,8 @@ async function markDrained(ctx: ScenarioContext, rec: Recorder, setup: DivisionS
   rec.exit = "drained";
 }
 
-const withdrawEntrant = async (ctx: ScenarioContext, rec: Recorder, id: string, why: string): Promise<void> => {
-  const w = await ctx.driver.withdraw(id);
+const withdrawEntrant = async (ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, id: string, why: string): Promise<void> => {
+  const w = await watchProductWrites(ctx, rec, setup, "the plate entrant's withdrawal", () => ctx.driver.withdraw(id));
   rec.facts.add("withdrawn");
   rec.withdrawn.add(id);
   rec.notes.push(`withdrawal of ${why}: policy ${w.policy}, ${w.walkovers} walkover(s)`);
@@ -227,7 +227,7 @@ const q5a: Scenario = {
       return finish(ctx, rec, setup, drawn, own, mc, null);
     }
     const before = drawn.lines;
-    await withdrawEntrant(ctx, rec, withdrawn, `plate entrant ${withdrawn} (seed ${setup.seedOf(withdrawn)})`);
+    await withdrawEntrant(ctx, rec, setup, withdrawn, `plate entrant ${withdrawn} (seed ${setup.seedOf(withdrawn)})`);
     const after = await stageLines(ctx, setup, plate.id);
     // The rest of the division is played out: the main bracket, then the plate.
     await playOut(ctx, rec, setup, main);
@@ -264,7 +264,7 @@ const q5b: Scenario = {
       await markDrained(ctx, rec, setup);
       return finish(ctx, rec, setup, { proposed: null, advance: null, lines: [] }, own, mc, null);
     }
-    await withdrawEntrant(ctx, rec, declined, `main-draw loser ${declined} (seed ${setup.seedOf(declined)}) declining the plate`);
+    await withdrawEntrant(ctx, rec, setup, declined, `main-draw loser ${declined} (seed ${setup.seedOf(declined)}) declining the plate`);
     // Round 2 decides the bye holder's first match: now every first loss is known and the plate is proposed.
     await playOut(ctx, rec, setup, main);
     const mc = await finishStage(ctx, rec, main.id);

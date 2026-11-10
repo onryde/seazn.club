@@ -180,6 +180,9 @@ export class Recorder {
   /** Entrants a recorded withdrawal took out: their fixtures may be finished
    *  by the product's cascade, not the harness (R4 sets it). */
   readonly withdrawn = new Set<string>();
+  /** W4 T15: fixtures a scenario watched the PRODUCT finish by an organiser act it performed itself (a withdrawal's cascade for an entrant the single
+   *  `withdrawal` observation cannot name, a declared joint-winners final): fixture id -> the act. life-results-as-posted reads it as an explanation. */
+  readonly productActs = new Map<string, string>();
   /** W1c Task 7: fixtures whose stream is the ledger's stored rows (the pad
    *  path), not the events the harness meant to send. PADPROOF requires every
    *  fixture it decides to be one. */
