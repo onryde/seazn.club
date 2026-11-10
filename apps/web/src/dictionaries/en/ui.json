@@ -3736,6 +3736,7 @@
   "officials.alreadyOfficial": "already an official",
   "officials.addTeamRef": "Add as team-referee",
   "officials.pending": "Pending: {reason}",
+  "officials.pendingSharedRank": "Pending: rank {rank} is shared by {holders} entrants - pick one by hand",
   "officials.colFixture": "Fixture",
   "officials.colKickoff": "Kick-off",
   "officials.colOfficials": "Officials",
