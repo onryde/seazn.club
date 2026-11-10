@@ -17,7 +17,7 @@ import { PENDING_STATUSES, crownOf, winnerOf, type CompleteObs, type ObservedPla
 import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, stageCompleted, type Item } from "./assertions.ts";
 import { Recorder, finishStage, setUpDivision, snapshot, type StagePlay } from "./common.ts";
 import { lineLoser, lineOf, type Line } from "./w4a-late-entry.ts";
-import { Q4A_FIELD, finalOf, playOut } from "./w4b-support.ts";
+import { Q4A_FIELD, finalOf, playOut, watchProductWrites } from "./w4b-support.ts";
 import type { Scenario, ScenarioContext, ScenarioOutput } from "./types.ts";
 
 /** A line with the two facts Q4a reads beyond the W4A `Line`: whether the product flags it the final, and the declaration's instant. */
@@ -178,7 +178,7 @@ async function q4aRun(ctx: ScenarioContext): Promise<ScenarioOutput> {
   const before = await linesOf();
   const final = finalOf(before);
   if (final === null) throw new Error(`scenario: stage ${stage.id} has no final among its ${before.length} lines`);
-  const declared = await attempt(rec, "the declaration", () => d.declareJointWinners(final.id));
+  const declared = await watchProductWrites(ctx, rec, setup, "the joint-winners declaration", () => attempt(rec, "the declaration", () => d.declareJointWinners(final.id)));
   const afterDeclare = await linesOf();
   const stageAfterDeclare = await statusOf();
   let rankRows: JointObs["rankRows"] = null;
