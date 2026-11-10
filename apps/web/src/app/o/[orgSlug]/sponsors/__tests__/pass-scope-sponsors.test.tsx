@@ -46,13 +46,17 @@ vi.mock("@/components/org-sponsors", () => ({
     hasTiers: boolean;
     competitions: { ends_on: string | null }[];
     hub: {
-      hasMonetize: boolean; chargesEnabled: boolean; deals: { id: string }[]; packages: { id: string }[];
+      hasMonetize: boolean; monetizeOrgWide: boolean; monetizeCompetitionIds: readonly string[]; finishedCompetitionIds: readonly string[];
+      chargesEnabled: boolean; deals: { id: string }[]; packages: { id: string }[];
       sponsorId: string | null; dealId: string | null;
     };
   }) => (
     <div
       data-testid={`sponsor-tiers-${hasTiers}`}
       data-hub-monetize={String(hub.hasMonetize)}
+      data-hub-monetize-wide={String(hub.monetizeOrgWide)}
+      data-hub-monetize-ids={hub.monetizeCompetitionIds.join("|")}
+      data-hub-finished={hub.finishedCompetitionIds.join("|")}
       data-hub-charges={String(hub.chargesEnabled)}
       data-hub-deals={hub.deals.map((d) => d.id).join("|")}
       data-hub-packages={hub.packages.map((k) => k.id).join("|")}
@@ -69,7 +73,8 @@ vi.mock("@/components/sponsor-packages", () => ({
 }));
 
 import { sql } from "@/lib/db";
-import { hasFeature, invalidateOrgEntitlements } from "@/lib/entitlements";
+import { featureScopes, hasFeature, invalidateOrgEntitlements } from "@/lib/entitlements";
+import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import SponsorsHubPage from "../page";
 import type { SponsorsTab } from "@/lib/sponsors-hub";
 
@@ -228,6 +233,83 @@ describe.skipIf(!HAS_DB)("the Sponsors tab reads the org's deals, packages, plan
     // The control arm: the Packages tab agrees about the same two orgs.
     expect(await renderSponsorsTab(withPass, "packages")).toContain("sponsor-monetize-true");
     expect(await renderSponsorsTab(noPass, "packages")).toContain("sponsor-monetize-false");
+  });
+
+  it("hands over WHERE online selling is on, through the real entitlements: an Event Pass lifts its own competition and never the whole organisation (batch H fix round 1: m2)", async () => {
+    const withPass = await seedOrg({ withPass: true });
+    const noPass = await seedOrg({ withPass: false });
+    const passHtml = await renderSponsorsTab(withPass, "sponsors");
+    expect([field(passHtml, "monetize"), field(passHtml, "monetize-wide"), field(passHtml, "monetize-ids")], "an Event Pass on one competition").toEqual([
+      "true", "false", withPass.passedId,
+    ]);
+    // The enforcement side the sheet mirrors: the passed competition is allowed, its unpassed sibling is not.
+    expect(await hasFeature(withPass.orgId, "sponsors.monetize", withPass.passedId)).toBe(true);
+    expect(await hasFeature(withPass.orgId, "sponsors.monetize", withPass.plainId)).toBe(false);
+    expect(field(passHtml, "monetize-ids"), "the unpassed competition is not offered").not.toContain(withPass.plainId);
+    // The control arm: no pass, no plan - nowhere.
+    const noneHtml = await renderSponsorsTab(noPass, "sponsors");
+    expect([field(noneHtml, "monetize"), field(noneHtml, "monetize-wide"), field(noneHtml, "monetize-ids")]).toEqual(["false", "false", ""]);
+  });
+
+  it("a plan that sells online everywhere is org-wide with no per-competition list - and a pass beside it changes nothing (batch H fix round 1: m2)", async () => {
+    const rig = await seedOrg({ withPass: true });
+    await setOrgPlan(rig.orgId, "pro");
+    await invalidateOrgEntitlements(rig.orgId);
+    // Premise from the entitlement engine itself, not a plan name typed here: the plan lifts the feature with no competition in scope.
+    expect(await hasFeature(rig.orgId, "sponsors.monetize"), "premise: the plan has it org-wide").toBe(true);
+    const html = await renderSponsorsTab(rig, "sponsors");
+    expect([field(html, "monetize"), field(html, "monetize-wide"), field(html, "monetize-ids")]).toEqual(["true", "true", ""]);
+    expect(await featureScopes(rig.orgId, "sponsors.monetize")).toEqual({ orgWide: true, competitionIds: [] });
+  });
+
+  it("featureScopes lists EVERY passed competition and only those (two passes, one unpassed sibling)", async () => {
+    const rig = await seedOrg({ withPass: true });
+    await sql`insert into competition_passes (competition_id, org_id) values (${rig.plainId}, ${rig.orgId}) on conflict (competition_id) do nothing`;
+    await invalidateOrgEntitlements(rig.orgId);
+    const third = (await sql<{ id: string }[]>`
+      insert into competitions (org_id, name, slug, visibility) values (${rig.orgId}, 'Third Cup', ${"third-" + uniq()}, 'unlisted') returning id`)[0]!.id;
+    const got = await featureScopes(rig.orgId, "sponsors.monetize");
+    expect(got.orgWide).toBe(false);
+    expect([...got.competitionIds].sort()).toEqual([rig.passedId, rig.plainId].sort());
+    expect(got.competitionIds, "a competition with no pass is not listed").not.toContain(third);
+    // Another org's passes never leak in.
+    const other = await seedOrg({ withPass: true });
+    expect((await featureScopes(other.orgId, "sponsors.monetize")).competitionIds).toEqual([other.passedId]);
+  });
+
+  it("featureScopes lists only passes that still APPLY: a competition that is completed, archived or ended past the grace stops offering Online (batch H fix round 1: m2)", async () => {
+    // The enforcement side re-resolves the pass with its lock (`hasFeature` -> `passLockReason`), so an affordance that offered Online
+    // on a competition whose pass no longer applies would be refused by the server (402) after the organiser had filled the sheet in.
+    const rig = await seedOrg({ withPass: true });
+    const dead: { label: string; set: () => Promise<void> }[] = [
+      { label: "completed", set: async () => { await sql`update competitions set status = 'completed' where id = ${rig.plainId}`; } },
+      { label: "archived", set: async () => { await sql`update competitions set status = 'archived' where id = ${rig.plainId}`; } },
+      { label: "ended long ago", set: async () => { await sql`update competitions set status = 'published', ends_on = (now() at time zone 'utc')::date - 60 where id = ${rig.plainId}`; } },
+    ];
+    await sql`insert into competition_passes (competition_id, org_id) values (${rig.plainId}, ${rig.orgId}) on conflict (competition_id) do nothing`;
+    await invalidateOrgEntitlements(rig.orgId);
+    // The pair first: while the second pass applies, both are listed.
+    expect([...(await featureScopes(rig.orgId, "sponsors.monetize")).competitionIds].sort(), "premise: both passes apply").toEqual([rig.passedId, rig.plainId].sort());
+    let checked = 0;
+    for (const arm of dead) {
+      await arm.set();
+      await invalidateOrgEntitlements(rig.orgId);
+      expect(await hasFeature(rig.orgId, "sponsors.monetize", rig.plainId), `${arm.label}: the server no longer lifts it`).toBe(false);
+      expect((await featureScopes(rig.orgId, "sponsors.monetize")).competitionIds, `${arm.label}: so the sheet does not offer it`).toEqual([rig.passedId]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  // The positive case (a competition that HAS finished) needs the division rig of sponsor-deals-sweep.test.ts, which drives
+  // `finishedPackageCompetitions` itself; here the real loader is proven wired into the real page: it runs for a competition-scoped
+  // package without throwing and answers "not finished" for a competition that is still going.
+  it("the real finishedPackageCompetitions loader is wired into the Sponsors tab: a package on a competition still going is not listed, and the field is present (batch H fix round 1: m1)", async () => {
+    const rig = await seedOrg({ withPass: false });
+    await sql`insert into sponsor_packages (org_id, competition_id, name, price_cents, currency)
+              values (${rig.orgId}, ${rig.passedId}, 'Cup package', 500, 'gbp')`;
+    // The competition has no fixtures and an end date in the future: not finished, so the list is EMPTY (and present, not missing).
+    expect(field(await renderSponsorsTab(rig, "sponsors"), "finished")).toBe("");
   });
 
   it("reads whether Stripe takes charges from the org row: off by default, and on only with a connected account AND charges enabled (review M4)", async () => {

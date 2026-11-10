@@ -3,7 +3,9 @@
 // The page is an async server component, so it is awaited and prerendered (the settings suites' pattern). The two
 // client islands it hosts (OrgSponsors, SponsorPackages) are stubbed to markers that carry the props the page gave them
 // - "did the org get the feature?" and "was it read-only?" become exact string checks. lib/entitlements is mocked at the
-// ONE call the page makes (`hasFeatureOnAnyPass`) so the granted and the denied gate are both driven.
+// two calls the page makes (`hasFeatureOnAnyPass`, and since the Add deal sheet's fix round `featureScopes` - WHERE a feature is on,
+// which the Sponsors tab asks for sponsors.monetize) so the granted and the denied gate are both driven. By default `featureScopes`
+// answers org-wide exactly when `hasFeatureOnAnyPass` does, so every gate case below drives both; the scope cases override it.
 //
 // What these cases pin, per the task brief and R19:
 //   - no tab => Overview; an unknown tab => Overview
@@ -35,6 +37,7 @@ const h = vi.hoisted(() => ({
   listDeals: vi.fn(),
   finishedPackageCompetitions: vi.fn(),
   hasFeatureOnAnyPass: vi.fn(),
+  featureScopes: vi.fn(),
   sql: vi.fn(),
   loadOnStreamScope: vi.fn(),
   sponsorOverview: vi.fn(),
@@ -49,7 +52,7 @@ vi.mock("@/server/usecases/sponsor-deals", () => ({
   finishedPackageCompetitions: h.finishedPackageCompetitions,
   listDeals: h.listDeals,
 }));
-vi.mock("@/lib/entitlements", () => ({ hasFeatureOnAnyPass: h.hasFeatureOnAnyPass }));
+vi.mock("@/lib/entitlements", () => ({ hasFeatureOnAnyPass: h.hasFeatureOnAnyPass, featureScopes: h.featureScopes }));
 vi.mock("@/lib/db", () => ({ sql: h.sql }));
 vi.mock("@/server/sponsors/on-stream", () => ({ loadOnStreamScope: h.loadOnStreamScope }));
 vi.mock("@/server/sponsors/report", () => ({
@@ -87,6 +90,9 @@ function Marker(p: {
       deals: { id: string }[];
       packages: { id: string }[];
       hasMonetize: boolean;
+      monetizeOrgWide: boolean;
+      monetizeCompetitionIds: readonly string[];
+      finishedCompetitionIds: readonly string[];
       chargesEnabled: boolean;
       sponsorId: string | null;
       dealId: string | null;
@@ -108,6 +114,9 @@ function Marker(p: {
       data-hub-deals={p.hub.deals.map((d) => d.id).join("|")}
       data-hub-packages={p.hub.packages.map((k) => k.id).join("|")}
       data-hub-monetize={String(p.hub.hasMonetize)}
+      data-hub-monetize-wide={String(p.hub.monetizeOrgWide)}
+      data-hub-monetize-ids={p.hub.monetizeCompetitionIds.join("|")}
+      data-hub-finished={p.hub.finishedCompetitionIds.join("|")}
       data-hub-charges={String(p.hub.chargesEnabled)}
       data-hub-sponsor={p.hub.sponsorId ?? "-"}
       data-hub-deal={p.hub.dealId ?? "-"}
@@ -276,6 +285,7 @@ beforeEach(() => {
   h.finishedPackageCompetitions.mockResolvedValue(["c2"]);
   h.loadOnStreamScope.mockResolvedValue({ settings: { enabled: true, frequency: "busy" }, ownRow: true, sports: [{ sportKey: "cricket", kinds: [], sample: null, sampleCompetitionId: null }] });
   h.hasFeatureOnAnyPass.mockResolvedValue(true);
+  h.featureScopes.mockImplementation(async (org: string, key: string) => ({ orgWide: await h.hasFeatureOnAnyPass(org, key), competitionIds: [] }));
   // The page makes two reads through `sql`: the org's competitions, and whether its Stripe account takes charges. One mock cannot
   // answer both the same way, so it answers by the query's own text.
   h.sql.mockImplementation(async (strings: TemplateStringsArray) =>
@@ -499,10 +509,59 @@ describe("the Packages tab hands over which packages' competitions have finished
     expect(h.finishedPackageCompetitions).not.toHaveBeenCalled();
   });
 
-  it("another tab never asks (the page loads only what its tab shows)", async () => {
-    await render("sponsors");
+  it("a tab that shows neither packages nor deals never asks (the page loads only what its tab shows)", async () => {
     await render("on_stream");
+    await render("overview");
     expect(h.finishedPackageCompetitions).not.toHaveBeenCalled();
+    expect(h.featureScopes).not.toHaveBeenCalled();
+  });
+});
+
+describe("the Sponsors tab hands the Add deal sheet WHERE online selling is on, and which packages' competitions have finished (batch H fix round 1: m1, m2)", () => {
+  // The server gates sponsors.monetize PER SCOPE (an Event Pass lifts its own competition, not the organisation), so a boolean "has
+  // it anywhere" cannot say which packages may be invoiced online. The page hands over the answer `featureScopes` gave, as it is.
+  const monetize = (html: string) => ({
+    anywhere: attr(html, "org-sponsors", "data-hub-monetize"),
+    wide: attr(html, "org-sponsors", "data-hub-monetize-wide"),
+    ids: attr(html, "org-sponsors", "data-hub-monetize-ids"),
+  });
+
+  it("asks featureScopes for sponsors.monetize for THIS org, and for nothing else's scope (tiers stay org-wide)", async () => {
+    await render("sponsors");
+    expect(h.featureScopes).toHaveBeenCalledTimes(1);
+    expect(h.featureScopes).toHaveBeenCalledWith(ORG.id, "sponsors.monetize");
+    expect(h.hasFeatureOnAnyPass.mock.calls.map((c) => c[1]).filter((k) => k === "sponsors.tiers")).toEqual(["sponsors.tiers"]);
+  });
+
+  it("the answer arrives as it is, in every shape the entitlement can take (4 checked): org-wide, a pass on one competition, passes on two, none", async () => {
+    const CASES: [string, { orgWide: boolean; competitionIds: string[] }, { anywhere: string; wide: string; ids: string }][] = [
+      ["a paid plan", { orgWide: true, competitionIds: [] }, { anywhere: "true", wide: "true", ids: "" }],
+      ["an Event Pass on one competition", { orgWide: false, competitionIds: ["c1"] }, { anywhere: "true", wide: "false", ids: "c1" }],
+      ["Event Passes on two", { orgWide: false, competitionIds: ["c1", "c3"] }, { anywhere: "true", wide: "false", ids: "c1|c3" }],
+      ["no plan and no pass", { orgWide: false, competitionIds: [] }, { anywhere: "false", wide: "false", ids: "" }],
+    ];
+    let checked = 0;
+    for (const [label, answer, want] of CASES) {
+      h.featureScopes.mockResolvedValue(answer);
+      expect(monetize(await render("sponsors")), label).toEqual(want);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("asks finishedPackageCompetitions for THIS org and hands its answer over as it is; nothing finished is an EMPTY list", async () => {
+    expect(attr(await render("sponsors"), "org-sponsors", "data-hub-finished")).toBe("c2");
+    expect(h.finishedPackageCompetitions).toHaveBeenCalledWith(ORG.id);
+    h.finishedPackageCompetitions.mockResolvedValue([]);
+    expect(attr(await render("sponsors"), "org-sponsors", "data-hub-finished")).toBe("");
+    h.finishedPackageCompetitions.mockResolvedValue(["c1", "c3"]);
+    expect(attr(await render("sponsors"), "org-sponsors", "data-hub-finished")).toBe("c1|c3");
+  });
+
+  it("the Packages tab is unchanged: it still asks hasFeatureOnAnyPass for monetize (the featureScopes read is the Sponsors tab's)", async () => {
+    await render("packages");
+    expect(h.hasFeatureOnAnyPass).toHaveBeenCalledWith(ORG.id, "sponsors.monetize");
+    expect(h.featureScopes).not.toHaveBeenCalled();
   });
 });
 
@@ -728,6 +787,21 @@ describe("?sponsor=<own> draws the sponsor's own page (Task 15 - F23, moved here
     expect(html, "the report link counts the sponsor's own links").toContain("Active links: 1");
     const wrap = /<div\b[^>]*data-testid="sponsors-list-view"[^>]*>/.exec(html)![0];
     expect(/class="[^"]*\bmax-md:hidden\b/.test(wrap), "the list yields to the page below md").toBe(true);
+  });
+
+  it("the SERVER render is the phone body hidden from md up, never the side panel: the viewport is unknown on the server (useMdUp's null)", async () => {
+    // `prerender` reads `useMdUp`'s SERVER snapshot - `null`, "not known yet" - so what it serves is what a visitor gets before
+    // hydration: a desktop must not flash the phone body, and no dialog may be in the markup (a side panel the server guessed at).
+    // Nothing else sees this: every unit mounts the sheet with `useMdUp` mocked to a boolean. Anchored on the wrapper's own tag and on
+    // `\sclass="md:hidden"`: a bare `md:hidden` also matches inside `max-md:hidden`, and an omitted class prop would not satisfy `="`.
+    const html = await render("sponsors", undefined, undefined, { sponsor: "s1" });
+    const wrappers = [...html.matchAll(/<div\b[^>]*data-testid="sponsor-sheet-page"[^>]*>/g)].map((m) => m[0]);
+    expect(wrappers, "exactly one page wrapper").toHaveLength(1);
+    expect(wrappers[0]).toMatch(/\sclass="md:hidden"/);
+    expect(html, "no side-panel dialog in the server markup").not.toContain('role="dialog"');
+    expect(html, "the body is inside the wrapper, so the hidden class hides something real").toContain('data-testid="sponsor-sheet-back"');
+    // The sponsor page is not the list: without a selection there is no wrapper at all.
+    expect(await render("sponsors")).not.toContain('data-testid="sponsor-sheet-page"');
   });
 
   it("the second sponsor's id renders the SECOND sponsor's page (not the first row)", async () => {

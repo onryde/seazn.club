@@ -99,6 +99,18 @@ export const isLiveDeal = (d: Pick<SponsorDeal, "deal_status">): boolean => d.de
  *  definition: the server's `has_open_deal` and the console's "this sponsor already has one of these" both read it. */
 export const isOpenDeal = (d: Pick<SponsorDeal, "deal_status">): boolean => d.deal_status !== "live" && d.deal_status !== "ended";
 
+/** The end date has been reached (`<=`: `ends_at = now` is over). No end date is never past. The one definition: the sweep, the
+ *  queue's promotion (server/sponsors/deal-apply.ts) and the Add deal sheet's summary all ask it. */
+export const isPastEnd = (endsAt: Date | string | null, now: Date): boolean =>
+  endsAt !== null && new Date(endsAt).getTime() <= now.getTime();
+
+/** The deal a sponsor's queue promotes when none is live (spec §8a, deal-apply step 2): the first `scheduled` one, in the order
+ *  given (the server's is `created_at, id`), whose own end has not passed. A scheduled deal already past its end is never promoted
+ *  (F19): it would go live for the hour until the sweep ends it. Null when nothing waits. */
+export function nextScheduledDeal<T extends Pick<SponsorDeal, "deal_status" | "ends_at">>(deals: readonly T[], now: Date): T | null {
+  return deals.find((d) => d.deal_status === "scheduled" && !isPastEnd(d.ends_at, now)) ?? null;
+}
+
 /** The rule list the Add deal sheet offers: "When paid" is not offered for a complimentary deal (spec §5.2). */
 export function goLiveRulesFor(m: PaymentMethod): readonly GoLiveRule[] {
   return m === "complimentary" ? GO_LIVE_RULES.filter((r) => r !== "on_payment") : GO_LIVE_RULES;
@@ -171,7 +183,9 @@ const NOT_REFUNDABLE_AFTER: ReadonlySet<EndReason> = new Set<EndReason>(["refund
 /** The actions a deal offers, in DEAL_ACTIONS order. TOTAL (F15): every deal_status × payment_status × method answers.
  *  Task 6 refuses with 409, before any write, every action this does not offer (F12). `*_invoice` is online-only here;
  *  Task 23 adds resend_invoice for offline deals with an email (F13). */
-export function allowedActions(d: SponsorDeal): DealAction[] {
+export function allowedActions(
+  d: Pick<SponsorDeal, "deal_status" | "payment_method" | "payment_status" | "disputed_at" | "ended_reason">,
+): DealAction[] {
   const s = d.deal_status;
   const online = d.payment_method === "online";
   const paidFor = d.payment_method !== "complimentary";
@@ -272,6 +286,23 @@ export function primaryLabel(m: PaymentMethod, r: GoLiveRule, otherLive: boolean
   return r === "immediate" && !otherLive ? "save_and_go_live" : "save_deal";
 }
 
+/** After an ONLINE create whose invoice could not be sent (Stripe's 502), which invoice action the saved deal offers (spec §5.2:
+ *  a deal that waits for its rule is a draft, an immediate one is live - or scheduled behind a live deal - with its payment
+ *  pending). Read from `allowedActions` of the deal the server made, never typed beside it. `queued`: the sponsor has a live deal
+ *  that stays live. */
+export function invoiceActionOnCreate(rule: GoLiveRule, queued: boolean): "send_invoice" | "resend_invoice" {
+  const offered = allowedActions({
+    deal_status: initialStatus("online", rule, queued),
+    payment_method: "online",
+    payment_status: initialPaymentStatus("online"),
+    disputed_at: null,
+    ended_reason: null,
+  });
+  if (offered.includes("send_invoice")) return "send_invoice";
+  if (offered.includes("resend_invoice")) return "resend_invoice";
+  throw new DealRuleError("illegal_transition", `a new online ${rule} deal offers neither Send invoice nor Resend invoice`);
+}
+
 /** The Add deal sheet's summary, as the dictionary keys and the values that fill them (the i18n house rule bans a dynamic `msg()` key,
  *  and this module is client-safe with no dictionary of its own): the sheet renders each part and joins them with a space. */
 export type SummaryParts = { key: MessageKey; params: Record<string, string> }[];
@@ -283,7 +314,8 @@ export type SummaryParts = { key: MessageKey; params: Record<string, string> }[]
  *   - the sponsor coming off the pages in the meantime (spec §8a): a sponsor on the pages today (`currentlyShown`) whose new deal does
  *     not go live now is hidden until it does. A LIVE deal keeps its sponsor on the pages whatever is queued behind it
  *     (server/sponsors/deal-apply.ts, step 3), so `otherLive` says nothing is hidden. `otherLive` is the EFFECTIVE flag: false once
- *     the organiser ends the current deal now.
+ *     the organiser ends the current deal now - and then a deal already WAITING behind it is promoted (step 2) and keeps the
+ *     sponsor on the pages (`promotesWaiting`), so nothing is hidden either.
  *  `scopeName` null is the whole organisation. `amount` is the price as the sheet shows it. A complimentary deal cannot go live on
  *  payment - the server's refusal (422 `on_payment_needs_payment`), here the same DealRuleError the lifecycle table throws. */
 export function dealSummary(i: {
@@ -295,6 +327,8 @@ export function dealSummary(i: {
   amount: string;
   email: string | null;
   otherLive: boolean;
+  /** Ending the current deal now would promote a deal already waiting behind it (deal-apply step 2): the sponsor stays on the pages. */
+  promotesWaiting?: boolean;
   currentlyShown: boolean;
 }): SummaryParts {
   if (i.method === "complimentary" && i.rule === "on_payment") {
@@ -336,7 +370,7 @@ export function dealSummary(i: {
     parts.push({ key, params: {} });
   }
   if (i.otherLive) parts.push({ key: "sponsors.dealSheet.summary.queued", params: { name: i.sponsorName } });
-  if (i.currentlyShown && !i.otherLive && i.rule !== "immediate") {
+  if (i.currentlyShown && !i.otherLive && !i.promotesWaiting && i.rule !== "immediate") {
     parts.push({ key: "sponsors.dealSheet.summary.hidden", params: { name: i.sponsorName } });
   }
   return parts;

@@ -6,6 +6,7 @@
 import { ApiV1Error } from "@/lib/client-v1";
 import type { MessageKey } from "@/lib/messages";
 import type { SponsorRefusalCode } from "@/lib/sponsor-refusals";
+import { invoiceActionOnCreate, type GoLiveRule, type PaymentMethod } from "@/lib/sponsor-deals";
 
 /** The envelope's own status codes the hub's routes refuse with (`statusCode` in server/api-v1/http.ts). */
 type EnvelopeCode = "VALIDATION" | "UNAUTHENTICATED" | "PAYMENT_REQUIRED" | "FORBIDDEN" | "NOT_FOUND" | "RATE_LIMITED";
@@ -53,12 +54,24 @@ export const SAVE_ERROR_MSG: Readonly<Record<EnvelopeCode | SponsorRefusalCode, 
 };
 
 /** A write whose refusal means something else than the shared words say, for one or two codes. */
-export type SponsorWrite = "create_deal" | "create_deal_ending" | "resend_invoice";
+export type SponsorWrite = "create_deal" | "create_deal_resend" | "create_deal_ending" | "resend_invoice";
 
-/** Which create a refusal came from: the Add deal sheet asks to end the sponsor's live deal (`end_current`) in the same call or not,
- *  and a 502 means something different in each (below). */
-export function createDealWrite(endCurrent: boolean): SponsorWrite {
-  return endCurrent ? "create_deal_ending" : "create_deal";
+/** Which create a refusal came from. The Add deal sheet's create has THREE shapes, and a Stripe 502 means something different in each:
+ *  - an ONLINE create that does not end the current deal: the deal is saved first and the invoice sent after (createDeal, F11), so a
+ *    502 leaves a saved deal - a draft (`create_deal`, Send invoice sends it) or, for a deal that goes live straight away, a live or
+ *    queued one (`create_deal_resend`, Resend invoice). Which one is `allowedActions`' answer for the deal the server made
+ *    (`invoiceActionOnCreate`), not a guess here;
+ *  - an online create that ENDS the current deal (`end_current`): a second Stripe call, closing the live deal's pay link, runs before
+ *    anything is written, so the 502 is "nothing saved" or "saved, invoice not sent" and the answer does not say which
+ *    (`create_deal_ending`);
+ *  - a create that sends no invoice: with `end_current` its only Stripe call is that one, before any write, so a 502 is always
+ *    "nothing was saved" - exactly what the shared `stripe_unavailable` words say, so it has none of its own (undefined); without
+ *    `end_current` it has no Stripe call at all.
+ *  `queued`: the sponsor has a live deal that stays live. */
+export function createDealWrite(i: { method: PaymentMethod; endCurrent: boolean; rule: GoLiveRule; queued: boolean }): SponsorWrite | undefined {
+  if (i.method !== "online") return undefined;
+  if (i.endCurrent) return "create_deal_ending";
+  return invoiceActionOnCreate(i.rule, i.queued) === "send_invoice" ? "create_deal" : "create_deal_resend";
 }
 
 /** Per-write words, consulted before the shared map (batch F review I1, m7). */
@@ -66,6 +79,8 @@ export const SAVE_ERROR_BY_WRITE: Readonly<Record<SponsorWrite, Partial<Record<S
   // A create that does NOT end the current deal: its only Stripe call is the invoice, sent AFTER the deal is saved (createDeal,
   // F11), so a 502 there leaves a saved draft, which Send invoice sends.
   create_deal: { stripe_unavailable: "sponsors.error.invoiceSavedNoLink" },
+  // The same create when the deal goes live (or queues) straight away: its next step is Resend invoice, not Send invoice.
+  create_deal_resend: { stripe_unavailable: "sponsors.error.invoiceSavedResend" },
   // A create that ends the current deal (`end_current`, Task 16) has a SECOND Stripe call, before anything is written: closing the
   // live deal's pay link. A 502 is therefore either "nothing was saved" or "the deal is saved, its invoice is not sent", and the
   // answer does not say which - so the words send the organiser to look at the sponsor's deals rather than promise either.

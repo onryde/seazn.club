@@ -22,6 +22,13 @@
 //   K8  dup confirm      the confirm skipped                                             -> "a second open deal on the same package"
 //   K9  submit guard     the placement guard dropped from `canSubmit`                    -> "a competition picked on community"
 //   K10 ends_on          sent for a competition scope                                    -> "Ends on is for the whole organisation"
+// Fix round 1 (batch H review):
+//   F1  finished package   `packageFinished` always false                                  -> "a package whose competition has finished"
+//   F2  finished guard     `packageOpen(pkg)` dropped from `canSubmit`                     -> "the handler can be called"
+//   F3  per-scope Online   `monetizeFor` ignores the scope (org-wide boolean again)        -> "Event Pass"
+//   F4  waiting deal       `promotesWaiting` always false                                  -> "an earlier deal waiting"
+//   F5  waiting deal       the sponsor filter dropped                                      -> "another sponsor's waiting deal"
+//   F6  nothing saved      the page-level words used for an offline create                 -> "ends the current deal and sends no invoice"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
@@ -36,6 +43,7 @@ import { ApiV1Error } from "@/lib/client-v1";
 import { routes } from "@/lib/routes";
 import { sponsorsHref } from "@/lib/sponsors-hub";
 import { goLiveRulesFor, type GoLiveRule, type PaymentMethod, type SponsorDeal } from "@/lib/sponsor-deals";
+import { CreateSponsorDeal } from "@/server/api-v1/schemas/sponsors";
 import type { SponsorPackageRow } from "@/server/usecases/sponsors";
 import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
@@ -79,8 +87,11 @@ const OPEN_DEAL: SponsorDeal = {
 
 const created: CreateDealBody[] = [];
 function props(over: Partial<AddDealSheetProps> = {}): AddDealSheetProps {
+  // A paid plan sells online invoices everywhere: `monetizeOrgWide` follows `hasMonetize` unless a test says otherwise (an Event Pass).
+  const hasMonetize = over.hasMonetize ?? true;
   return {
-    sponsor: sponsor(), deals: [], packages: PACKAGES, competitions: COMPETITIONS, hasTiers: true, hasMonetize: true, chargesEnabled: true,
+    sponsor: sponsor(), deals: [], packages: PACKAGES, competitions: COMPETITIONS, hasTiers: true, hasMonetize, monetizeOrgWide: hasMonetize,
+    monetizeCompetitionIds: [], chargesEnabled: true, finishedCompetitionIds: [],
     orgSlug: SLUG, onCreate: vi.fn(async (body: CreateDealBody) => { created.push(body); }), onClose: vi.fn(), ...over,
   };
 }
@@ -469,12 +480,20 @@ describe("what is sent is what is shown (the seam)", () => {
     };
   }
 
-  it("every payment method x every go-live card it offers x whole organisation / a competition (counted)", async () => {
+  // The ids are REAL uuids here: the server's body schema (strict, `package_id: Uuid`) refuses anything else, so the sweep can only
+  // prove the bodies it sends are bodies the server takes if it sends what a real org's ids look like.
+  const U_PACKAGE = "0b6e0d6a-5c1e-4a3b-8f0e-1d2c3b4a5f60";
+  const U_COMP = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+  const U_PACKAGES = [pkg({ id: U_PACKAGE, name: "Gold Season", price_cents: 60_000, tier: "gold" })];
+  const U_COMPETITIONS = [{ id: U_COMP, name: "Winter League 2026/27", ends_on: null }];
+
+  it("every payment method x every go-live card it offers x whole organisation / a competition (counted); every body parses through the server's strict schema", async () => {
     let checked = 0;
+    let parsed = 0;
     for (const method of ["online", "offline", "complimentary"] as const) {
       for (const rule of goLiveRulesFor(method)) {
-        for (const scope of ["", "c2"]) {
-          const { island, p } = mount({ sponsor: sponsor({ locked_by_deal: true, status: "active" }) });
+        for (const scope of ["", U_COMP]) {
+          const { island, p } = mount({ sponsor: sponsor({ locked_by_deal: true, status: "active" }), packages: U_PACKAGES, competitions: U_COMPETITIONS });
           pick(island, `add-deal-payment-${method}`);
           pick(island, `add-deal-golive-${rule}`);
           chooseScope(island, scope);
@@ -483,12 +502,25 @@ describe("what is sent is what is shown (the seam)", () => {
           const shown = bodyFromScreen(island);
           await submit(island);
           expect(p.onCreate, `${method}/${rule}/${scope || "whole"}`).toHaveBeenCalledTimes(1);
-          expect((p.onCreate as ReturnType<typeof vi.fn>).mock.calls[0]![0], `${method}/${rule}/${scope || "whole"}`).toEqual(shown);
+          const sent = (p.onCreate as ReturnType<typeof vi.fn>).mock.calls[0]![0] as CreateDealBody;
+          expect(sent, `${method}/${rule}/${scope || "whole"}`).toEqual(shown);
+          // The server's own contract (server/api-v1/schemas/sponsors.ts): strict, uuids, an ISO day, a real email.
+          expect(() => CreateSponsorDeal.parse(sent), `${method}/${rule}/${scope || "whole"}: the body the server takes`).not.toThrow();
+          parsed++;
           checked++;
         }
       }
     }
     expect(checked, "8 valid pairs x 2 scopes").toBe(16);
+    expect(parsed, "every one of them went through the schema").toBe(16);
+  });
+
+  it("the schema check is live: an unknown key, a non-uuid package and a bad day are each refused (so a pass above means something)", () => {
+    const ok: CreateDealBody = { package_id: U_PACKAGE, competition_id: null, payment_method: "offline", go_live: "on_payment", end_current: false };
+    expect(() => CreateSponsorDeal.parse(ok), "premise: the base body parses").not.toThrow();
+    expect(() => CreateSponsorDeal.parse({ ...ok, currency: "gbp" }), "strict: an unknown key").toThrow();
+    expect(() => CreateSponsorDeal.parse({ ...ok, package_id: "p-gold" }), "a package id that is not a uuid").toThrow();
+    expect(() => CreateSponsorDeal.parse({ ...ok, ends_on: "30/06/2027" }), "an ends_on that is not an ISO day").toThrow();
   });
 
   it("a complimentary deal sends no billing email even when the sponsor has one on file", async () => {
@@ -524,6 +556,189 @@ describe("what is sent is what is shown (the seam)", () => {
     expect(isDisabled(island, "add-deal-submit"), "the button waits").toBe(true);
     await submit(island);
     expect(p.onCreate).not.toHaveBeenCalled();
+  });
+});
+
+// --- fix round 1 ------------------------------------------------------------------------------------------------------------------
+
+describe("Online is offered only for a scope the plan sells it on: an Event Pass lifts its own competition and never the whole organisation (m2)", () => {
+  // The server's gate is per scope (server/sponsors/deal-gates.ts `assertOnlineAllowed`: `requireFeature(org, "sponsors.monetize",
+  // competitionId)`; a null scope resolves org-wide, which on a pass org is the community answer). A pass org: `hasMonetize` (reachable
+  // on SOME scope) is true, org-wide is false, and only c1 is lifted.
+  const PASS = { hasMonetize: true, monetizeOrgWide: false, monetizeCompetitionIds: ["c1"], chargesEnabled: true } as const;
+  const WHOLE_SENTENCE = "Online invoices for the whole organisation need a paid plan. An Event Pass covers its own competition only.";
+  const COMP_SENTENCE = "This competition has no Event Pass, and online invoices need a paid plan or a pass for it.";
+
+  it("the whole organisation (where it opens): Online is locked with the scope's sentence and an upgrade way out, and the sheet opens on Offline", async () => {
+    const { island, p } = mount(PASS);
+    expect(scopeOf(island)).toBe("");
+    expect(methodOf(island), "no Online on the whole organisation: it would be a 402").toEqual(["offline"]);
+    expect(isDisabled(island, "add-deal-payment-online")).toBe(true);
+    expect(textIn(island, "add-deal-payment-lock-scope")).toBe(WHOLE_SENTENCE);
+    expect(propsOf(one(island, "add-deal-payment-link-online")).href, "a way out: the plan, not Connect").toBe(routes.billing(SLUG));
+    expect(textIn(island, "add-deal-payment-lock-online")).not.toContain("Paid plans only");
+    // What is shown is what is sent.
+    await submit(island);
+    expect(p.onCreate).toHaveBeenLastCalledWith(expect.objectContaining({ payment_method: "offline", competition_id: null }));
+  });
+
+  it("the pass's competition: Online opens, with no lock hint, and a deal for it is sent online", async () => {
+    const { island, p } = mount(PASS);
+    chooseScope(island, "c1");
+    expect(isDisabled(island, "add-deal-payment-online")).toBe(false);
+    expect(has(island, "add-deal-payment-lock-online"), "no hint where Online is open").toBe(false);
+    pick(island, "add-deal-payment-online");
+    expect(methodOf(island)).toEqual(["online"]);
+    await submit(island);
+    expect(p.onCreate).toHaveBeenLastCalledWith(expect.objectContaining({ payment_method: "online", competition_id: "c1" }));
+  });
+
+  it("a competition with no pass: Online is locked with ITS sentence (not the whole-organisation one)", () => {
+    const { island } = mount(PASS);
+    chooseScope(island, "c2");
+    expect(isDisabled(island, "add-deal-payment-online")).toBe(true);
+    expect(textIn(island, "add-deal-payment-lock-scope")).toBe(COMP_SENTENCE);
+    expect(textIn(island, "add-deal-payment-lock-scope")).not.toBe(WHOLE_SENTENCE);
+  });
+
+  it("a package for the pass's competition opens ON Online; a package for any other competition does not", () => {
+    const passPkg = mount({ ...PASS, packages: [CUP] });
+    expect(scopeOf(passPkg.island)).toBe("c1");
+    expect(methodOf(passPkg.island), "its scope is lifted: the plan's best choice").toEqual(["online"]);
+    const otherPkg = mount({ ...PASS, packages: [pkg({ id: "p-c2", name: "Winter Partner", competition_id: "c2" })] });
+    expect(scopeOf(otherPkg.island)).toBe("c2");
+    expect(methodOf(otherPkg.island)).toEqual(["offline"]);
+  });
+
+  it("a choice that no longer holds falls to Offline, and is SENT as Offline: Online picked on the pass's competition, then the scope moved to the whole organisation", async () => {
+    const { island, p } = mount(PASS);
+    chooseScope(island, "c1");
+    pick(island, "add-deal-payment-online");
+    chooseScope(island, "");
+    expect(methodOf(island)).toEqual(["offline"]);
+    await submit(island);
+    expect(p.onCreate).toHaveBeenLastCalledWith(expect.objectContaining({ payment_method: "offline", competition_id: null }));
+  });
+
+  it("the pairs: a paid plan opens Online on the whole organisation AND on every competition; a covered scope without Stripe charges says Connect, not the scope sentence (counted)", () => {
+    let checked = 0;
+    for (const scope of ["", "c1", "c2"]) {
+      const paid = mount({ hasMonetize: true, monetizeOrgWide: true, monetizeCompetitionIds: [], chargesEnabled: true });
+      chooseScope(paid.island, scope);
+      expect(isDisabled(paid.island, "add-deal-payment-online"), `paid plan, scope ${scope || "whole"}`).toBe(false);
+      checked++;
+    }
+    const noCharges = mount({ ...PASS, chargesEnabled: false });
+    chooseScope(noCharges.island, "c1");
+    expect(has(noCharges.island, "add-deal-payment-lock-scope"), "scope covered: not the scope sentence").toBe(false);
+    expect(propsOf(one(noCharges.island, "add-deal-payment-link-online")).href).toBe(routes.connect(SLUG));
+    checked++;
+    const none = mount({ hasMonetize: false, monetizeOrgWide: false, monetizeCompetitionIds: [], chargesEnabled: true });
+    expect(textIn(none.island, "add-deal-payment-lock-online"), "no plan at all: the plan sentence").toBe("Paid plans only. Upgrade to send invoices");
+    expect(has(none.island, "add-deal-payment-lock-scope")).toBe(false);
+    checked++;
+    expect(checked).toBe(5);
+  });
+});
+
+describe("a package whose competition has finished is not sold (m1)", () => {
+  const FINISHED = "This package's competition has finished, so it can't be sold any more.";
+
+  it("it is shown locked with the reason and no upgrade link, the other cards stay open, and the sheet opens on the first package that is still sold (counted)", () => {
+    const { island } = mount({ finishedCompetitionIds: ["c1"] });
+    let cards = 0;
+    for (const id of ["p-gold", "p-silver", "p-partner", "p-cup"]) {
+      expect(isDisabled(island, `add-deal-package-${id}`), id).toBe(id === "p-cup");
+      cards++;
+    }
+    expect(cards).toBe(4);
+    expect(textIn(island, "add-deal-package-finished-p-cup")).toBe(FINISHED);
+    expect(has(island, "add-deal-package-upgrade-p-cup"), "an upgrade does not bring a finished competition back").toBe(false);
+    expect(has(island, "add-deal-package-lock-p-cup"), "it is not the plan's lock").toBe(false);
+    expect(packageOf(island)).toEqual(["p-gold"]);
+    // The opening skips it: a sheet whose first package is the finished one opens on the next.
+    const first = mount({ packages: [CUP, PARTNER], finishedCompetitionIds: ["c1"] });
+    expect(packageOf(first.island)).toEqual(["p-partner"]);
+  });
+
+  it("it is never sent: the radio is disabled, and even the handler called anyway (a stale tap) sends nothing", async () => {
+    const { island, p } = mount({ packages: [CUP], finishedCompetitionIds: ["c1"] });
+    expect(packageOf(island), "nothing is chosen").toEqual([]);
+    pick(island, "add-deal-package-p-cup");
+    expect(isDisabled(island, "add-deal-submit")).toBe(true);
+    await submit(island);
+    expect(p.onCreate).not.toHaveBeenCalled();
+  });
+
+  it("the pairs: the same package is sold while its competition is running; another competition's end locks nothing here; a whole-organisation package is never locked by the list (counted)", async () => {
+    let checked = 0;
+    for (const finished of [[], ["c2"]]) {
+      const { island, p } = mount({ packages: [CUP], finishedCompetitionIds: finished });
+      expect(isDisabled(island, "add-deal-package-p-cup"), `finished=${JSON.stringify(finished)}`).toBe(false);
+      expect(packageOf(island)).toEqual(["p-cup"]);
+      await submit(island);
+      expect(p.onCreate).toHaveBeenCalledTimes(1);
+      checked++;
+    }
+    const whole = mount({ packages: [PARTNER], finishedCompetitionIds: ["c1", "c2"] });
+    expect(isDisabled(whole.island, "add-deal-package-p-partner")).toBe(false);
+    checked++;
+    expect(checked).toBe(3);
+  });
+
+  it("the lock does not depend on the plan: a paid plan locks it too, and a community sheet shows the finished reason before the plan's", () => {
+    const paid = mount({ hasTiers: true, finishedCompetitionIds: ["c1"] });
+    expect(isDisabled(paid.island, "add-deal-package-p-cup")).toBe(true);
+    const community = mount({ hasTiers: false, hasMonetize: false, chargesEnabled: false, finishedCompetitionIds: ["c1"] });
+    expect(has(community.island, "add-deal-package-finished-p-cup")).toBe(true);
+    expect(has(community.island, "add-deal-package-lock-p-cup"), "one reason at a time").toBe(false);
+  });
+});
+
+describe("ending the current deal promotes an earlier deal that is waiting, which keeps the sponsor on the pages (m3)", () => {
+  const LIVE_SPONSOR = sponsor({ locked_by_deal: true, status: "active" });
+  const waiting = (over: Partial<SponsorDeal> = {}): SponsorDeal =>
+    ({ ...OPEN_DEAL, id: "d-wait", deal_status: "scheduled", payment_method: "offline", ends_at: null, ...over });
+  const HIDDEN = "Ridge Gold Physiotherapy is hidden from your pages until then.";
+  /** A waiting deal that stays waiting for the sponsor's next deal, with the new deal NOT going live now (offline, after approval). */
+  function mountEnding(deals: SponsorDeal[], endCurrent: boolean) {
+    const m = mount({ sponsor: LIVE_SPONSOR, deals });
+    pick(m.island, "add-deal-payment-offline");
+    pick(m.island, "add-deal-golive-on_approval");
+    tick(m.island, "add-deal-end-current", endCurrent);
+    return m;
+  }
+
+  it("ticked, with a deal waiting behind the live one: nothing is hidden (the waiting deal goes live in its place)", () => {
+    const { island } = mountEnding([waiting()], true);
+    expect(summaryOf(island)).not.toContain("hidden");
+    expect(summaryOf(island), "and it is no longer 'queued behind the live deal' either").not.toContain("already live");
+  });
+
+  it("the pairs (counted): nothing waiting -> hidden; the waiting deal is past its own end (the sweep ends it, it is never promoted) -> hidden; another sponsor's waiting deal -> hidden; a waiting deal with a future end -> not hidden", () => {
+    const cases: { label: string; deals: SponsorDeal[]; hidden: boolean }[] = [
+      { label: "nothing waiting", deals: [], hidden: true },
+      { label: "waiting but past its end", deals: [waiting({ ends_at: "2020-01-01T00:00:00.000Z" })], hidden: true },
+      { label: "another sponsor's waiting deal", deals: [waiting({ sponsor_id: "someone-else" })], hidden: true },
+      { label: "a live deal is not a waiting one", deals: [{ ...OPEN_DEAL, id: "d-live", deal_status: "live", payment_method: "offline" }], hidden: true },
+      { label: "waiting, ends in the future", deals: [waiting({ ends_at: "2099-01-01T00:00:00.000Z" })], hidden: false },
+      { label: "waiting, no end", deals: [waiting()], hidden: false },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const { island } = mountEnding(c.deals, true);
+      expect(summaryOf(island).includes(HIDDEN), c.label).toBe(c.hidden);
+      checked++;
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("unticked, the deal queues behind the live one and the sheet says that - never hidden, whether or not another deal waits", () => {
+    for (const deals of [[], [waiting()]]) {
+      const { island } = mountEnding(deals, false);
+      expect(summaryOf(island)).toContain("is already live under another deal");
+      expect(summaryOf(island)).not.toContain("hidden");
+    }
   });
 });
 
@@ -589,24 +804,56 @@ describe("a refusal stays on the sheet, in the dictionary's words", () => {
     expect(has(island, "add-deal-error"), "a new attempt clears the old refusal").toBe(false);
   });
 
-  it("a stripe_unavailable the sheet is handed reads the words of ITS create: the saved-draft sentence, or - when the current deal was being ended - the 'look at the deals' one", async () => {
-    // The page resolves for this refusal (it closes the sheet and speaks itself), so a sheet only meets it from another caller - but
-    // the words must still be right: a refusal while the current deal is being ended cannot promise that nothing was changed OR that
-    // a draft exists.
+  it("a stripe_unavailable the sheet is handed reads the words of ITS create: Send invoice for a saved draft, Resend invoice for a deal that is live, 'look at the deals' when the current deal was being ended (counted)", async () => {
+    // The page resolves for an ONLINE create's refusal (it closes the sheet and speaks itself), so a sheet only meets it from another
+    // caller - but the words must still be right: each names the action the saved deal actually offers (`allowedActions`), and a
+    // refusal while the current deal is being ended cannot promise that nothing was changed OR that a draft exists.
     let checked = 0;
-    for (const [ending, key] of [[false, "sponsors.error.invoiceSavedNoLink"], [true, "sponsors.error.invoiceNotSentCheck"]] as const) {
+    const CASES: { rule: GoLiveRule; ending: boolean; key: MessageKey }[] = [
+      { rule: "on_payment", ending: false, key: "sponsors.error.invoiceSavedNoLink" },
+      { rule: "on_approval", ending: false, key: "sponsors.error.invoiceSavedNoLink" },
+      { rule: "immediate", ending: false, key: "sponsors.error.invoiceSavedResend" },
+      { rule: "on_payment", ending: true, key: "sponsors.error.invoiceNotSentCheck" },
+      { rule: "immediate", ending: true, key: "sponsors.error.invoiceNotSentCheck" },
+    ];
+    for (const c of CASES) {
       const onCreate = vi.fn().mockRejectedValue(new ApiV1Error("x", 502, "stripe_unavailable"));
       const { island } = mount({ onCreate, sponsor: sponsor({ locked_by_deal: true, status: "active" }) });
-      if (ending) tick(island, "add-deal-end-current", true);
+      pick(island, `add-deal-golive-${c.rule}`);
+      if (c.ending) tick(island, "add-deal-end-current", true);
       await submit(island);
-      expect(textIn(island, "add-deal-error"), `ending=${ending}`).toBe(msg(key));
+      expect(textIn(island, "add-deal-error"), `${c.rule} ending=${c.ending}`).toBe(msg(c.key));
       checked++;
     }
-    expect(checked).toBe(2);
-    const { createDealWrite, sponsorSaveErrorKey } = await import("@/components/sponsors/save-error");
-    const err = new ApiV1Error("x", 502, "stripe_unavailable");
-    expect(sponsorSaveErrorKey(err, createDealWrite(false))).toBe("sponsors.error.invoiceSavedNoLink");
-    expect(sponsorSaveErrorKey(err, createDealWrite(true))).toBe("sponsors.error.invoiceNotSentCheck");
+    expect(checked).toBe(CASES.length);
+    // And the words name the button the person will find: Resend where the deal is live, Send where it is a draft.
+    expect(msg("sponsors.error.invoiceSavedNoLink")).toContain(msg("sponsors.deal.action.sendInvoice"));
+    expect(msg("sponsors.error.invoiceSavedResend")).toContain(msg("sponsors.deal.action.resendInvoice"));
+    expect(msg("sponsors.error.invoiceSavedResend"), "the live deal's words do not send the club to a button it will not find").not.toContain(msg("sponsors.deal.action.sendInvoice"));
+  });
+
+  it("a create that ends the current deal and sends no invoice, refused by Stripe, SAVED NOTHING: the sheet says so in the shared words and keeps every choice (F6)", async () => {
+    // Offline / complimentary + end_current: the only Stripe call is closing the live deal's pay link, before anything is written.
+    // (The page rethrows this refusal for the sheet; it does not close it.)
+    const onCreate = vi.fn()
+      .mockRejectedValueOnce(new ApiV1Error("x", 502, "stripe_unavailable"))
+      .mockResolvedValueOnce(undefined);
+    const { island, p } = mount({ onCreate, sponsor: sponsor({ locked_by_deal: true, status: "active" }) });
+    pick(island, "add-deal-payment-offline");
+    pick(island, "add-deal-golive-on_approval");
+    tick(island, "add-deal-end-current", true);
+    await submit(island);
+    expect(textIn(island, "add-deal-error")).toBe(msg("sponsors.error.stripeUnavailable"));
+    expect(msg("sponsors.error.stripeUnavailable"), "the shared words are the 'nothing was changed' ones").toContain("nothing was changed");
+    expect(p.onClose, "the sheet is still open").not.toHaveBeenCalled();
+    expect(methodOf(island)).toEqual(["offline"]);
+    expect(ruleOf(island)).toEqual(["on_approval"]);
+    expect(propsOf(one(island, "add-deal-end-current")).checked, "the choices are kept").toBe(true);
+    expect(isDisabled(island, "add-deal-submit"), "and it can be sent again").toBe(false);
+    await submit(island);
+    expect(onCreate).toHaveBeenCalledTimes(2);
+    expect(p.onClose, "the retry succeeded: now it closes").toHaveBeenCalledTimes(1);
+    expect(onCreate.mock.calls[1]![0], "the same body again").toEqual(onCreate.mock.calls[0]![0]);
   });
 
   it("anything that is not a v1 refusal (a dropped connection) reads the house fallback, never the browser's English", async () => {

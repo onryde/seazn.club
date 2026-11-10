@@ -30,6 +30,9 @@ import {
   goLiveRulesFor,
   initialPaymentStatus,
   initialStatus,
+  invoiceActionOnCreate,
+  isPastEnd,
+  nextScheduledDeal,
   pickRowDeal,
   primaryLabel,
   rowNextAction,
@@ -215,6 +218,80 @@ describe("the Add deal sheet's rules (spec §5.2, D22)", () => {
       checked++;
     }
     expect(checked, "cases checked").toBe(18);
+  });
+});
+
+// Fix round 1 (batch H review): the queue's head and the end test the Add deal sheet asks the same way the server does, and the
+// invoice action a saved online deal offers.
+describe("isPastEnd and nextScheduledDeal — the queue's head (spec §8a, deal-apply step 2, F19)", () => {
+  const NOW = new Date("2026-11-10T12:00:00.000Z");
+  const sched = (id: string, ends_at: string | null, deal_status: DealStatus = "scheduled") => ({ id, deal_status, ends_at });
+
+  it("isPastEnd: no end is never past; the end itself IS over (<=); a millisecond either side (6 checked)", () => {
+    const cases: [string | Date | null, boolean][] = [
+      [null, false],
+      [NOW.toISOString(), true],
+      [new Date(NOW.getTime() - 1).toISOString(), true],
+      [new Date(NOW.getTime() + 1).toISOString(), false],
+      [new Date(NOW.getTime()), true],
+      ["2099-01-01T00:00:00.000Z", false],
+    ];
+    let checked = 0;
+    for (const [endsAt, past] of cases) {
+      expect(isPastEnd(endsAt, NOW), String(endsAt)).toBe(past);
+      checked++;
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("the empty case first: no deals, nothing scheduled, and nothing but scheduled counts (every other status, 5 checked)", () => {
+    expect(nextScheduledDeal([], NOW)).toBeNull();
+    let checked = 0;
+    for (const status of DEAL_STATUSES.filter((st) => st !== "scheduled")) {
+      expect(nextScheduledDeal([sched("x", null, status)], NOW), status).toBeNull();
+      checked++;
+    }
+    expect(checked, "six statuses less scheduled").toBe(5);
+  });
+
+  it("it is the FIRST scheduled deal in the order given whose own end has not passed: a past-end one is skipped, never promoted", () => {
+    const a = sched("a", "2020-01-01T00:00:00.000Z");
+    const b = sched("b", null);
+    const c = sched("c", "2099-01-01T00:00:00.000Z");
+    expect(nextScheduledDeal([a, b, c], NOW)?.id, "a is past its end: b is the head").toBe("b");
+    expect(nextScheduledDeal([c, b], NOW)?.id, "the order given decides").toBe("c");
+    expect(nextScheduledDeal([a], NOW), "every scheduled deal past its end: nothing to promote").toBeNull();
+    expect(nextScheduledDeal([sched("l", null, "live"), c], NOW)?.id, "a live deal in the list is not the queue").toBe("c");
+  });
+});
+
+describe("invoiceActionOnCreate — which invoice action an ONLINE deal offers right after it is made (spec §5.2, F15)", () => {
+  // Typed from the spec: a deal that waits for its rule is a DRAFT (Send invoice sends it); an immediate deal is live - or scheduled
+  // behind a live deal - with its payment pending, and an invoice that is out is RESENT.
+  const EXPECTED: [GoLiveRule, boolean, "send_invoice" | "resend_invoice"][] = [
+    ["on_payment", false, "send_invoice"],
+    ["on_payment", true, "send_invoice"],
+    ["on_approval", false, "send_invoice"],
+    ["on_approval", true, "send_invoice"],
+    ["immediate", false, "resend_invoice"],
+    ["immediate", true, "resend_invoice"],
+  ];
+
+  it("every rule x queued (6 checked), and the answer is one of the deal's own allowed actions", () => {
+    let checked = 0;
+    for (const [rule, queued, action] of EXPECTED) {
+      expect(invoiceActionOnCreate(rule, queued), `${rule}/queued=${queued}`).toBe(action);
+      // The same deal, built by the lifecycle table, offers it - and never the other one.
+      const offered = allowedActions({
+        deal_status: initialStatus("online", rule, queued), payment_method: "online", payment_status: initialPaymentStatus("online"),
+        disputed_at: null, ended_reason: null,
+      });
+      expect(offered, `${rule}/queued=${queued}`).toContain(action);
+      expect(offered).not.toContain(action === "send_invoice" ? "resend_invoice" : "send_invoice");
+      checked++;
+    }
+    expect(checked).toBe(6);
+    expect(EXPECTED.length, "the typed table covers every rule x queued").toBe(GO_LIVE_RULES.length * 2);
   });
 });
 

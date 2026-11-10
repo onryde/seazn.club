@@ -230,6 +230,53 @@ describe("Details: a LIVE deal owns the tier, scope and stream; an OPEN deal cha
     expect(findAll(markup, "sponsor-sheet-tier-now")).toHaveLength(0);
   });
 
+  // m6 (batch H review): the line used to be raised by a differing TIER only. A deal that differs from the sponsor's placement in
+  // SCOPE alone (the same tier, another competition) changes what the sponsor shows on just as much, and said nothing.
+  describe("what changes when the deal goes live: tier, scope, both or neither (the placement differential)", () => {
+    const AT = (tier: string, competition_id: string | null) =>
+      deal({ id: `do-${tier}-${competition_id ?? "all"}`, deal_status: "awaiting_payment", payment_status: "pending", tier: tier as SponsorDeal["tier"], competition_id });
+    const SP = (tier: string, competition_id: string | null) =>
+      sponsor({ tier: tier as SponsorItem["tier"], competition_id, has_open_deal: true, status: "inactive" });
+    const line = (markup: string, id: string) => (findAll(markup, id).length === 0 ? null : textOfMarkup(findOne(markup, id).outer));
+
+    // Expected sentences are typed from the brief's own pattern ("... now X. Y when the deal goes live."), never read back from the page.
+    const CASES: { label: string; sp: SponsorItem; d: SponsorDeal; tier: string | null; scope: string | null }[] = [
+      { label: "scope only (whole org -> one competition)", sp: SP("gold", null), d: AT("gold", "c-season"), tier: null, scope: "Scope now All competitions. Season 2026/27 when the deal goes live." },
+      { label: "scope only (one competition -> whole org)", sp: SP("gold", "c-season"), d: AT("gold", null), tier: null, scope: "Scope now Season 2026/27. All competitions when the deal goes live." },
+      { label: "scope only (one competition -> another)", sp: SP("gold", "c-season"), d: AT("gold", "c-winter"), tier: null, scope: "Scope now Season 2026/27. Winter League 2026/27 when the deal goes live." },
+      { label: "tier only", sp: SP("partner", null), d: AT("gold", null), tier: "Tier now Partner. Gold when the deal goes live.", scope: null },
+      { label: "both", sp: SP("partner", null), d: AT("gold", "c-season"), tier: "Tier now Partner. Gold when the deal goes live.", scope: "Scope now All competitions. Season 2026/27 when the deal goes live." },
+      { label: "neither", sp: SP("gold", "c-season"), d: AT("gold", "c-season"), tier: null, scope: null },
+    ];
+
+    it("each case raises exactly the lines that differ (6 checked, 4 differential)", () => {
+      let checked = 0;
+      let differing = 0;
+      for (const c of CASES) {
+        // The row's own deal is the one the line reads (`sponsor.deal`): the list route puts the open deal there.
+        const markup = bodyHtml({ sponsor: { ...c.sp, deal: c.d }, deals: [c.d] });
+        expect(line(markup, "sponsor-sheet-tier-now"), `${c.label}: tier line`).toBe(c.tier);
+        expect(line(markup, "sponsor-sheet-scope-now"), `${c.label}: scope line`).toBe(c.scope);
+        if (c.tier !== null || c.scope !== null) differing++;
+        checked++;
+      }
+      expect(checked).toBe(CASES.length);
+      expect(differing, "five of the six change something: the sixth is the negative pair").toBe(5);
+    });
+
+    it("the scope line obeys the same guards as the tier line: a live deal owns the scope, an ended deal changes nothing", () => {
+      const open = AT("gold", "c-season");
+      const live = deal({ id: "dl2", deal_status: "live", payment_status: "paid", tier: "gold", competition_id: "c-season" });
+      const lockedButRowOpen = sponsor({ tier: "gold", competition_id: null, locked_by_deal: true, has_open_deal: true, deal: open });
+      expect(findAll(bodyHtml({ sponsor: lockedButRowOpen, deals: [live, open] }), "sponsor-sheet-scope-now"), "locked: a live deal owns the scope").toHaveLength(0);
+      const ended = deal({ id: "de2", deal_status: "ended", payment_status: "paid", tier: "gold", competition_id: "c-season", ended_at: "2026-08-31T12:00:00.000Z", ended_reason: "expired" });
+      const flagButRowEnded = sponsor({ tier: "gold", competition_id: null, has_open_deal: true, deal: ended });
+      expect(findAll(bodyHtml({ sponsor: flagButRowEnded, deals: [ended] }), "sponsor-sheet-scope-now"), "an ended deal changes nothing").toHaveLength(0);
+      // the pair: the same open deal on an unlocked sponsor DOES raise it
+      expect(findAll(bodyHtml({ sponsor: sponsor({ tier: "gold", competition_id: null, has_open_deal: true, deal: open }), deals: [open] }), "sponsor-sheet-scope-now")).toHaveLength(1);
+    });
+  });
+
   it("without tiers (the free plan) the tier and competition rows are not drawn at all; name, link and stream are", () => {
     const markup = bodyHtml({ hasTiers: false });
     expect(findAll(markup, "sponsor-sheet-detail-tier")).toHaveLength(0);
@@ -528,7 +575,8 @@ const refuseWith = (status: number, code: string) => ({ status, body: { ok: fals
 
 function hubOf(over: Partial<SponsorsHubData> = {}): SponsorsHubData {
   return {
-    orgSlug: SLUG, deals: [], packages: [], hasMonetize: true, chargesEnabled: true, sponsorId: "a", dealId: null, reportLinks: [LINK],
+    orgSlug: SLUG, deals: [], packages: [], hasMonetize: true, monetizeOrgWide: true, monetizeCompetitionIds: [], finishedCompetitionIds: [],
+    chargesEnabled: true, sponsorId: "a", dealId: null, reportLinks: [LINK],
     reportDefaults: DEFAULTS, ...over,
   };
 }

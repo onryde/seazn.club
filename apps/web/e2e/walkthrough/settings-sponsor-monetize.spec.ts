@@ -85,7 +85,11 @@ import {
  *     same idiom `settings-org-tabs.spec.ts:70-84` established on this very
  *     page; the invoice form's own controls carry test ids (`invoice-sponsor`,
  *     `invoice-email`, `invoice-send`), since sponsor deals T12 turned its typed
- *     "Sponsor name" into a picker of the org's sponsors.
+ *     "Sponsor name" into a picker of the org's sponsors. Leg 2 no longer uses that
+ *     form: it drives the Add deal sheet from the sponsor's own page (sponsor deals
+ *     PR 2, Task 16: `add-deal-*` test ids), which Task 18 leaves standing when it
+ *     deletes the form. Leg 5's send step still uses the form, and legs 3-5 still read
+ *     the Packages panel's orders: Task 18 repoints those.
  *
  *  3. **The `sponsors.monetize` override is a no-op on a Pro org.** The live
  *     catalog grants it at pro/enterprise/event_pass/event_pass_l and refuses
@@ -240,6 +244,20 @@ function fieldIn(scope: Locator, label: string): Locator {
 }
 function selectIn(scope: Locator, label: string): Locator {
   return scope.locator("label").filter({ hasText: label }).locator("select");
+}
+
+/** A sponsor's row on the Sponsors tab. */
+const rowOf = (page: Page, sponsorId: string): Locator =>
+  page.locator(`[data-testid="sponsor-row"][data-sponsor-id="${sponsorId}"]`);
+
+/** Taps `tap` until `done` shows. The first tap on a page can land before React has attached (class 20: it is lost, not queued),
+ *  so the tap is retried until its effect is on screen - safe to repeat only where the tap itself is idempotent (open, never toggle). */
+async function tapUntil(tap: Locator, done: Locator, why: string): Promise<void> {
+  await expect(async () => {
+    if (await done.isVisible()) return;
+    await tap.click({ timeout: 2_000 });
+    await expect(done, why).toBeVisible({ timeout: 3_000 });
+  }).toPass({ timeout: 20_000 });
 }
 
 // The run's own identifiers. `TAG` scopes them to this run so a stray row is
@@ -525,43 +543,22 @@ test("sell: the Sponsors hub's Packages and orders tab creates a priced package,
 // Leg 2 — INVOICE
 // ---------------------------------------------------------------------------
 
-test("invoice: Send invoice picks a sponsor and mints a REAL Stripe Checkout Session on the connected account", async ({
+test("invoice: Add deal on the sponsor's page, Online, Send invoice mints a REAL Stripe Checkout Session on the connected account, read back at Stripe", async ({
   page,
   request,
 }: {
   page: Page;
   request: APIRequestContext;
 }) => {
-  // Three nav-sized waits: the page, the reload once the sponsor exists, and the outbox poll (READ_MS) below.
-  test.setTimeout(budget(3, 1));
+  // Four nav-sized waits (the sponsor's page, the Packages tab, the sponsor's page again, the outbox poll) and two Stripe round
+  // trips (the send, through our server, and the runner's read of the session).
+  test.setTimeout(budget(4, 2));
   expect(packageId, "leg 1 must have sold a package").not.toBe("");
-  await page.goto(sponsorsUrl(org.slug, "packages"));
 
-  const panel = page.getByTestId("sponsor-packages");
-  await expect(panel).toBeVisible({ timeout: READ_MS });
-  await expect(
-    panel.getByText(ui("sponsors.orders.empty")),
-    "no orders exist yet",
-  ).toBeVisible();
-
-  // The invoice form is FOLDED until the package's own Send invoice is pressed
-  // — `invoiceFor === pkg.id` gates it, so the controls do not exist before then.
-  const picker = panel.getByTestId("invoice-sponsor");
-  await expect(picker, "the invoice form must be folded until asked for").toHaveCount(0);
-
-  await panel.getByTestId(`invoice-open-${packageId}`).click();
-
-  // THE EMPTY CASE, in a real browser (sponsor deals T12): a fresh org has no sponsor, and an invoice goes to a sponsor — so the
-  // form says where to start and offers neither a picker nor a Send button.
-  const noSponsors = panel.getByTestId("invoice-no-sponsors");
-  await expect(noSponsors, "an org with no sponsor is told to add one first").toBeVisible();
-  await expect(noSponsors).toHaveText(ui("sponsors.order.noSponsors"));
-  await expect(noSponsors, "and the words are a link to the Sponsors tab").toHaveAttribute(
-    "href",
-    new RegExp(`/o/${org.slug}/sponsors\\?tab=sponsors$`),
-  );
-  await expect(panel.getByTestId("invoice-send"), "no sponsor, no Send").toHaveCount(0);
-  await expect(picker).toHaveCount(0);
+  // Nothing is a deal yet (the old leg read this off the console's "no orders" paragraph; the console is going, the API is the authority).
+  const before = await apiJson<OrderRow[]>(request, `/api/v1/orgs/${org.orgId}/sponsor-deals`);
+  expect(before.status, "GET /sponsor-deals").toBe(200);
+  expect(before.data, "no deal exists yet").toEqual([]);
 
   // Add the sponsor (over the API: the Sponsors tab's own add form is other specs' subject). A tier that is NOT the package's, so
   // leg 3 can tell a placement that took the deal's tier from one that kept its own.
@@ -574,26 +571,32 @@ test("invoice: Send invoice picks a sponsor and mints a REAL Stripe Checkout Ses
   sponsorId = added.data!.id;
   sponsorTierBefore = added.data!.tier;
   expect(sponsorTierBefore, "premise: the sponsor starts on a tier other than the package's").not.toBe(packageTier);
+  expect(added.data!.status, "premise: a sponsor added by hand is on the public pages").toBe("active");
 
-  // The picker's sponsors arrive with the page, so the page is read again.
-  await page.reload();
-  await expect(panel).toBeVisible({ timeout: READ_MS });
-  await panel.getByTestId(`invoice-open-${packageId}`).click();
-  await expect(picker, "with a sponsor the form offers the picker").toBeVisible();
-  await expect(panel.getByTestId("invoice-no-sponsors")).toHaveCount(0);
-  await expect(picker, "the picker opens at the first sponsor by display_order — the only one here").toHaveValue(
-    sponsorId,
-  );
-  await picker.selectOption(sponsorId);
-  // The form tells the club what an unpaid invoice does to the sponsor: off the public pages until it is paid.
-  await expect(panel.getByTestId("invoice-hidden-note"), "a sponsor with no live deal is told the invoice hides it").toHaveText(
-    ui("sponsors.order.hiddenUntilPaid"),
-  );
+  // The sponsor's own page, and Add deal on it (PR 2, Task 16: the sheet replaces the console's invoice picker).
+  await page.goto(sponsorUrl(org.slug, sponsorId));
+  const sheet = page.getByTestId("add-deal-sheet");
+  await tapUntil(page.getByTestId("sponsor-sheet-add-deal"), sheet, "Add deal opens the sheet over the sponsor's page");
 
-  const send = panel.getByTestId("invoice-send");
-  await expect(send, "an unaddressed invoice must not be sendable").toBeDisabled();
-  await panel.getByTestId("invoice-email").fill(SPONSOR_EMAIL);
+  // What the sheet OPENS AT, from the page's REAL flags: a Pro org (sponsors.monetize) whose Connect account takes charges opens on
+  // Online, paid-first, on the one package on sale - and Online is not locked.
+  await expect(page.getByTestId(`add-deal-package-${packageId}`), "the one package on sale is the one picked").toBeChecked();
+  await expect(page.getByTestId("add-deal-payment-online"), "Pro + a charge-ready account opens on Online").toBeChecked();
+  await expect(page.getByTestId("add-deal-payment-link-online"), "and Online is not locked").toHaveCount(0);
+  await expect(page.getByTestId("add-deal-golive-on_payment"), "and opens on 'When paid'").toBeChecked();
+  // An online deal needs the sponsor's billing email: an unaddressed invoice must not be sendable.
+  const send = page.getByTestId("add-deal-submit");
+  await expect(send, "the button names what it does").toHaveText(ui("sponsors.deal.action.sendInvoice"));
+  await expect(send, "no billing email yet: it waits").toBeDisabled();
+  await page.getByTestId("add-deal-email").fill(SPONSOR_EMAIL);
   await expect(send).toBeEnabled();
+  // The sheet tells the club what an unpaid invoice does to a sponsor on the pages today (the old form's "hidden until paid" note).
+  const summary = page.getByTestId("add-deal-summary");
+  await expect(summary, "the invoice goes to the typed address").toContainText(SPONSOR_EMAIL);
+  await expect(summary).toContainText(ui("sponsors.dealSheet.summary.live.whenPaid"));
+  await expect(summary, "an invoice that is unpaid hides a sponsor who is showing").toContainText(
+    ui("sponsors.dealSheet.summary.hidden", { name: SPONSOR_NAME }),
+  );
 
   const [sent] = await Promise.all([
     page.waitForResponse(
@@ -604,38 +607,71 @@ test("invoice: Send invoice picks a sponsor and mints a REAL Stripe Checkout Ses
     ),
     send.click(),
   ]);
-  // A 409 here is the Connect gate refusing an unconnected org
-  // (`createDeal`'s own `connect_required`), i.e. the claim in `beforeAll`
-  // did not take. Say which it was.
+  // A 409 here is the Connect gate refusing an unconnected org (`createDeal`'s own `connect_required`), i.e. the claim in
+  // `beforeAll` did not take. Say which it was.
   expect(
     sent.status(),
     `POST /sponsors/{id}/deals answered ${sent.status()}: ${await sent.text()}`,
   ).toBe(201);
+  expect(JSON.parse(sent.request().postData() ?? "null"), "what the sheet showed is what it sent").toMatchObject({
+    package_id: packageId,
+    competition_id: null,
+    payment_method: "online",
+    go_live: "on_payment",
+    sponsor_email: SPONSOR_EMAIL,
+    end_current: false,
+  });
 
-  // The link Stripe returned is the proof the rail is real: a fabricated
-  // `acct_e2e_*` destination is rejected outright, so a hosted-checkout URL
-  // cannot exist unless the connected account does. It rides in the create's
-  // answer, beside the deal (F11) — the deal itself carries no url.
+  // The link Stripe returned is the proof the rail is real: a fabricated `acct_e2e_*` destination is rejected outright, so a
+  // hosted-checkout URL cannot exist unless the connected account does. It rides in the create's answer, beside the deal (F11).
   const body = (await sent.json()) as { data?: { checkout_url?: string | null; deal?: { id?: string } } };
-  expect(
-    body.data?.checkout_url ?? "",
-    "Stripe must have returned a hosted checkout URL for the destination charge",
-  ).toMatch(/^https:\/\/checkout\.stripe\.com\//);
-
-  // And the console SHOWS it — the banner and the copyable link, not just a
-  // 201 nobody surfaced.
-  await expect(panel.getByText(ui("sponsors.order.sent"))).toBeVisible();
-  await expect(panel.getByRole("button", { name: ui("sponsors.order.copyLink") })).toBeVisible();
-  const shown = (await panel.getByTestId("invoice-link").textContent()) ?? "";
-  expect(shown.trim(), "the banner must show the link Stripe actually returned").toBe(
-    body.data!.checkout_url,
+  const checkoutUrl = body.data?.checkout_url ?? "";
+  expect(checkoutUrl, "Stripe must have returned a hosted checkout URL for the destination charge").toMatch(
+    /^https:\/\/checkout\.stripe\.com\//,
   );
+
+  // And the session is READ BACK at Stripe, by the runner's own key, never taken on the create's word: open, one payment, for the
+  // package's price in its currency, addressed to the typed email, and carrying the metadata the webhook finds the deal by.
+  const sessionId = /\/(cs_test_[A-Za-z0-9]+)/.exec(checkoutUrl)?.[1];
+  expect(sessionId, "the checkout URL names a test-mode session id").toBeDefined();
+  const session = await runnerStripe().checkout.sessions.retrieve(sessionId!);
+  expect(session.status, "the session is open: payable").toBe("open");
+  expect(session.mode, "one payment").toBe("payment");
+  expect(session.amount_total, "priced from the package, not from the form").toBe(PRICE_CENTS);
+  expect(session.currency).toBe(packageCurrency);
+  expect(session.customer_email, "addressed to the email the sheet sent").toBe(SPONSOR_EMAIL);
+  expect(session.metadata, "the metadata leg 3's webhook reads").toMatchObject({
+    kind: "sponsor",
+    order_id: body.data!.deal!.id,
+    org_id: org.orgId,
+  });
+
+  // The page says what happened, on the sponsor's page: the sheet is closed, the notice names the sponsor, and the deal reads
+  // "Awaiting payment" with Resend invoice as its next step (an invoice that has gone out is resent, never sent again).
+  await expect(sheet, "the deal is made: the sheet closes").toHaveCount(0);
+  await expect(page.getByTestId("sponsor-notice")).toHaveText(ui("sponsors.deal.notice.invoiceSent", { name: SPONSOR_NAME }));
+  const deal = page.locator(`[data-testid="sponsor-sheet-deal"][data-deal-id="${body.data!.deal!.id}"]`);
+  await expect(deal.getByTestId("deal-chip"), "the sponsor's page: the new deal awaits its payment").toHaveText(
+    ui("sponsors.deal.chip.awaitingPayment"),
+  );
+  await expect(
+    deal.locator('[data-testid="sponsor-sheet-deal-action"][data-action="resend_invoice"]'),
+    "an invoice that has gone out offers Resend invoice",
+  ).toHaveText(ui("sponsors.deal.action.resendInvoice"));
+  await expect(
+    deal.locator('[data-testid="sponsor-sheet-deal-action"][data-action="send_invoice"]'),
+    "and no longer Send invoice (that is a draft's)",
+  ).toHaveCount(0);
+  // The list behind the panel says the same on the sponsor's row (re-read after the write).
+  const row = rowOf(page, sponsorId);
+  await expect(row.getByTestId("deal-chip"), "the row: its chip").toHaveText(ui("sponsors.deal.chip.awaitingPayment"));
+  await expect(row.getByTestId("sponsor-row-action"), "the row: its one next step").toHaveText(ui("sponsors.deal.action.resendInvoice"));
 
   const orders = await apiJson<OrderRow[]>(request, `/api/v1/orgs/${org.orgId}/sponsor-deals`);
   expect(orders.status, "GET /sponsor-deals").toBe(200);
   const order = orders.data?.find((o) => o.sponsor_email === SPONSOR_EMAIL);
   expect(order, `no order for ${SPONSOR_EMAIL} came back from the API`).toBeDefined();
-  expect(order!.id, "the deal the console read back is the one the create answered").toBe(body.data!.deal!.id);
+  expect(order!.id, "the deal the API read back is the one the create answered").toBe(body.data!.deal!.id);
   expect(order!.package_id, "the order must hang off the package that was invoiced").toBe(packageId);
   expect(order!.sponsor_id, "the deal is the PICKED sponsor's, not a new one").toBe(sponsorId);
   expect(order!.sponsor_name, "the deal names the sponsor it was picked for").toBe(SPONSOR_NAME);
@@ -648,8 +684,8 @@ test("invoice: Send invoice picks a sponsor and mints a REAL Stripe Checkout Ses
   orderId = order!.id;
 
   // The deal's effect on the sponsor it was picked for: a deal waiting for its payment HIDES the sponsor (applyDealsToSponsor
-  // step 4 — `inactive`, tier untouched), so leg 3's "goes live, on the package's tier" is a change from something, not a
-  // restatement of a default (the sponsor was created `active`).
+  // step 4 - `inactive`, tier untouched), so leg 3's "goes live, on the package's tier" is a change from something, not a
+  // restatement of a default (the sponsor was created `active`). That is the rule `on_payment`: the sheet said so above.
   const waiting = await apiJson<SponsorRow[]>(request, `/api/v1/orgs/${org.orgId}/sponsors`);
   expect(waiting.status, "GET /sponsors").toBe(200);
   const hidden = waiting.data?.filter((s) => s.name === SPONSOR_NAME) ?? [];
@@ -657,11 +693,9 @@ test("invoice: Send invoice picks a sponsor and mints a REAL Stripe Checkout Ses
   expect(hidden[0]!.status, "an unpaid deal hides its sponsor until it is live").toBe("inactive");
   expect(hidden[0]!.tier, "and has not yet moved the sponsor's tier").toBe(sponsorTierBefore);
 
-  // The invoice email went through the outbox: ONE row for the order, and the
-  // request made its first attempt once the response was out, so it is no
-  // longer waiting and keeps no body. CI's server has no Resend key, so there
-  // it ends `dead` (`no_api_key`); a server with one has sent it. Polled,
-  // because that attempt runs after the response.
+  // The invoice email went through the outbox: ONE row for the order, and the request made its first attempt once the response
+  // was out, so it is no longer waiting and keeps no body. CI's server has no Resend key, so there it ends `dead`
+  // (`no_api_key`); a server with one has sent it. Polled, because that attempt runs after the response.
   await expect
     .poll(
       async () =>
@@ -676,25 +710,32 @@ test("invoice: Send invoice picks a sponsor and mints a REAL Stripe Checkout Ses
     )
     .toEqual([{ waiting: false, hasBody: false }]);
 
-  // The negative half of leg 3's positive: a pending order offers no refund.
-  // Asserted here so the pair is a real differential rather than a lone
-  // "the button exists" reachability check.
+  // The negative half of leg 3's positive: a pending order offers no refund. Asserted here, on the transitional Packages panel
+  // where legs 3 and 4 read their orders until Task 18 replaces it, so the pair is a real differential rather than a lone "the
+  // button exists" reachability check.
+  await page.goto(sponsorsUrl(org.slug, "packages"));
+  const panel = page.getByTestId("sponsor-packages");
+  await expect(panel).toBeVisible({ timeout: READ_MS });
   await expect(panel.getByText(ui("sponsors.order.status.pending"))).toBeVisible();
   await expect(
     panel.getByRole("button", { name: ui("sponsors.order.refund"), exact: true }),
     "a pending order must NOT offer a refund",
   ).toHaveCount(0);
 
-  // The duplicate-invoice confirm, in a real browser: the picked sponsor now has an OPEN deal on this package, so a second
-  // invoice for it asks first — and declining mints nothing (no second Checkout Session, no second deal).
-  await panel.getByTestId(`invoice-open-${packageId}`).click();
-  await panel.getByTestId("invoice-email").fill(SPONSOR_EMAIL);
-  await panel.getByTestId("invoice-send").click();
+  // The duplicate-invoice confirm, in a real browser: the sponsor now has an OPEN deal on this package, so a second invoice
+  // for it asks first - and declining mints nothing (no second Checkout Session, no second deal). The billing email opens at the
+  // address the sponsor was last invoiced at (D22), read from the REAL deal the create just made.
+  await page.goto(sponsorUrl(org.slug, sponsorId));
+  await tapUntil(page.getByTestId("sponsor-sheet-add-deal"), sheet, "Add deal opens the sheet again");
+  await expect(page.getByTestId("add-deal-email"), "the email opens at the sponsor's last billing email").toHaveValue(SPONSOR_EMAIL);
+  await send.click();
   const dialog = page.getByRole("alertdialog");
   await expect(dialog, "a sponsor with an open deal on this package is asked before a second invoice").toBeVisible();
   await expect(dialog.getByText(ui("sponsors.order.dupConfirm.title"))).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
+  await page.getByTestId("add-deal-cancel").click();
+  await expect(sheet).toHaveCount(0);
   const after = await apiJson<OrderRow[]>(request, `/api/v1/orgs/${org.orgId}/sponsor-deals`);
   expect(
     after.data?.filter((o) => o.sponsor_id === sponsorId).length,

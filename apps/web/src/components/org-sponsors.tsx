@@ -68,7 +68,8 @@ export interface SponsorItem {
 /** What the hub page reads for the Sponsors tab beyond the list (sponsor deals PR 2, Task 13). Its readers: the sponsor list
  *  (Task 14, READS `orgSlug` only - a row carries its own deal, so `deals` would be a second authority for it), the sponsor's own
  *  page (Task 15: `sponsorId` picks it, `deals` fill its Deals, `reportLinks` and `reportDefaults` are its Report link), the Add deal
- *  sheet (Task 16: `packages` are its cards, `hasMonetize` and `chargesEnabled` decide whether Online is open, `deals` feed its
+ *  sheet (Task 16: `packages` are its cards, `hasMonetize`, `monetizeOrgWide`, `monetizeCompetitionIds` and `chargesEnabled` decide
+ *  whether Online is open FOR THE SCOPE picked, `finishedCompetitionIds` lock the packages that are no longer sold, `deals` feed its
  *  "already has one of these" confirm) and the deal page (Task 17: `dealId`, still unread until it lands). */
 export interface SponsorsHubData {
   orgSlug: string;
@@ -76,10 +77,17 @@ export interface SponsorsHubData {
   deals: SponsorDeal[];
   /** Every package of the org, active first. */
   packages: SponsorPackageRow[];
-  /** `sponsors.monetize` on any competition's pass: online invoices are sold on this plan. */
+  /** `sponsors.monetize` on any competition's pass: online invoices are sold on this plan (somewhere). */
   hasMonetize: boolean;
+  /** ...and on the whole organisation (a paid plan). The server gates online selling PER SCOPE (deal-gates.ts): an Event Pass lifts
+   *  its own competition and never the whole organisation, so the sheet cannot ask the any-pass flag alone. */
+  monetizeOrgWide: boolean;
+  /** The competitions an Event Pass lifts online selling on (empty when `monetizeOrgWide`: org-wide covers every competition). */
+  monetizeCompetitionIds: string[];
   /** The org's Stripe account takes charges. */
   chargesEnabled: boolean;
+  /** The competitions of the org's active packages that have finished: a package for one is not sold (409 competition_finished). */
+  finishedCompetitionIds: string[];
   /** `?sponsor=` after the page checked it is one of this org's sponsors; null shows the list. */
   sponsorId: string | null;
   /** `?deal=` after the page checked it is one of the selected sponsor's deals; null shows the sponsor's page. */
@@ -584,9 +592,11 @@ export function OrgSponsors({
   }
 
   /** The Add deal sheet's write: POST the deal, then re-read what it changed (the list and the deals, whatever the answer - a refusal
-   *  can mean a deal moved meanwhile). A refusal is the SHEET's to show, with its choices kept. A Stripe refusal is the exception: it
-   *  means a deal may have been saved without its invoice, so the sheet closes (a second tap would make a second deal) and the page
-   *  says it, over the re-read list. Resolving closes the sheet. */
+   *  can mean a deal moved meanwhile). A refusal is the SHEET's to show, with its choices kept. The exception is a Stripe refusal of an
+   *  ONLINE create: it can mean a deal was saved without its invoice, so the sheet closes (a second tap would make a second deal) and
+   *  the page says it, over the re-read list. A Stripe refusal of a create that sends no invoice (it ends the current deal, and
+   *  Stripe failed closing that deal's pay link before anything was written) saved NOTHING: it stays the sheet's, choices kept.
+   *  Resolving closes the sheet. */
   async function createDeal(s: SponsorItem, body: CreateDealBody): Promise<void> {
     setError(null);
     setNotice(null);
@@ -594,8 +604,12 @@ export function OrgSponsors({
       await v1(`/sponsors/${s.id}/deals`, { method: "POST", body: JSON.stringify(body) });
       setNotice(msg(body.payment_method === "online" ? "sponsors.deal.notice.invoiceSent" : "sponsors.dealSheet.notice.saved", { name: s.name }));
     } catch (err) {
-      if (!(err instanceof ApiV1Error) || err.code !== "stripe_unavailable") throw err;
-      setError(msg(sponsorSaveErrorKey(err, createDealWrite(body.end_current))));
+      if (!(err instanceof ApiV1Error) || err.code !== "stripe_unavailable" || body.payment_method !== "online") throw err;
+      setError(msg(sponsorSaveErrorKey(
+            err,
+            // `queued`: the sponsor's live deal stays live, so an immediate deal waits behind it (and then offers Resend, not Send).
+            createDealWrite({ method: body.payment_method, endCurrent: body.end_current, rule: body.go_live, queued: s.locked_by_deal && !body.end_current }),
+          )));
     } finally {
       await Promise.all([refresh(), refreshDeals()].map((read) => read.catch(() => {})));
     }
@@ -788,7 +802,10 @@ export function OrgSponsors({
           competitions={competitions}
           hasTiers={hasTiers}
           hasMonetize={hub.hasMonetize}
+          monetizeOrgWide={hub.monetizeOrgWide}
+          monetizeCompetitionIds={hub.monetizeCompetitionIds}
           chargesEnabled={hub.chargesEnabled}
+          finishedCompetitionIds={hub.finishedCompetitionIds}
           orgSlug={hub.orgSlug}
           onCreate={(body) => createDeal(addDealSponsor, body)}
           onClose={() => setAddDealFor(null)}

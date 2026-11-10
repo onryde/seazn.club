@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 import { Banknote, Handshake, LayoutGrid, Radio } from "lucide-react";
 import { requireOrgPage } from "@/server/page-auth";
 import { sql } from "@/lib/db";
-import { hasFeatureOnAnyPass } from "@/lib/entitlements";
+import { featureScopes, hasFeatureOnAnyPass } from "@/lib/entitlements";
 import { listSponsorPackages, listSponsorRows } from "@/server/usecases/sponsors";
 import { finishedPackageCompetitions, listDeals } from "@/server/usecases/sponsor-deals";
 import { loadOnStreamScope } from "@/server/sponsors/on-stream";
@@ -91,15 +91,21 @@ export default async function SponsorsHubPage({
   if (tab === "sponsors") {
     // The sponsor and deal screens read more than the list (sponsor deals PR 2, Task 13): the org's deals and packages, both plan
     // flags (affordances, org-wide like the rest of this page), whether Stripe takes charges, and each competition's end date.
-    const [sponsorRows, deals, packages, hasTiers, hasMonetize, chargesEnabled, competitions] = await Promise.all([
+    // Two more for the Add deal sheet (Task 16 fix round 1): WHERE online selling is on (the server gates it per scope, so an Event
+    // Pass lifts its own competition and not the whole organisation: `monetize`), and which competitions' packages are finished
+    // (a package for one is not sold: the create refuses it, 409 competition_finished).
+    const [sponsorRows, deals, packages, hasTiers, monetize, chargesEnabled, competitions, finishedCompetitionIds] = await Promise.all([
       listSponsorRows(active.id),
       listDeals(page.auth),
       listSponsorPackages(page.auth),
       hasFeatureOnAnyPass(active.id, "sponsors.tiers"),
-      hasFeatureOnAnyPass(active.id, "sponsors.monetize"),
+      featureScopes(active.id, "sponsors.monetize"),
       orgChargesEnabled(active.id),
       orgCompetitions(active.id),
+      finishedPackageCompetitions(active.id),
     ]);
+    // Reachable ANYWHERE (an affordance, as before): the plan sells online invoices on some scope.
+    const hasMonetize = monetize.orgWide || monetize.competitionIds.length > 0;
     // `?sponsor=` / `?deal=` are selections only if they are THIS org's: the sponsor from the rows just read, the deal from the
     // selected sponsor's own deals. Anything else is the list again - never a 404, never a crash.
     const sponsorId = resolveSponsorParam(rawSponsor, sponsorRows);
@@ -124,7 +130,10 @@ export default async function SponsorsHubPage({
           hasTiers={hasTiers}
           billingHref={routes.billing(orgSlug)}
           canEdit={canEdit}
-          hub={{ orgSlug, deals, packages, hasMonetize, chargesEnabled, sponsorId, dealId, reportLinks, reportDefaults }}
+          hub={{
+            orgSlug, deals, packages, hasMonetize, monetizeOrgWide: monetize.orgWide, monetizeCompetitionIds: monetize.competitionIds,
+            chargesEnabled, finishedCompetitionIds, sponsorId, dealId, reportLinks, reportDefaults,
+          }}
         />
       </HubPanel>
     );

@@ -179,6 +179,9 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
   const shownScope = liveDeal ? liveDeal.competition_id : sponsor.competition_id;
   const coming = !locked && sponsor.has_open_deal && sponsor.deal !== null && isOpenDeal(sponsor.deal) ? sponsor.deal : null;
   const tierNow = coming !== null && coming.tier !== sponsor.tier ? coming : null;
+  // The same for the scope: a deal that differs from the sponsor's own placement ONLY in scope (the same tier, another competition) still
+  // changes what the sponsor shows on when it goes live, and the page says so, whichever of the two moved.
+  const scopeNow = coming !== null && coming.competition_id !== sponsor.competition_id ? coming : null;
   const lockNoteId = `sponsor-sheet-lock-${sponsor.id}`;
   const nameId = `sponsor-sheet-name-${sponsor.id}`;
 
@@ -338,6 +341,11 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
                   <dt className="text-slate-500">{msg("sponsors.scopeLabel")}</dt>
                   <dd data-testid="sponsor-sheet-detail-scope" className="min-w-0 break-words text-slate-800">
                     {scopeName(shownScope)}
+                    {scopeNow !== null ? (
+                      <span data-testid="sponsor-sheet-scope-now" className="mt-0.5 block text-xs text-slate-500">
+                        {msg("sponsors.sheet.scopeNow", { now: scopeName(sponsor.competition_id), next: scopeName(scopeNow.competition_id) })}
+                      </span>
+                    ) : null}
                   </dd>
                 </>
               ) : null}

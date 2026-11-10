@@ -645,6 +645,10 @@ test("add deal: complimentary, straight away -> Save and go live -> on the publi
   // A sponsor switched off by hand has no deal, so its row offers Add deal; the sheet is the same from the sponsor's page.
   await openAddDealFromRow(page, s.sponsorId);
 
+  // The positive pair of the absence below: a community org opens on Offline, and an offline deal asks for the sponsor's address, so
+  // "no address" after the switch is the switch's doing and not a field that was never drawn.
+  await expect(page.getByTestId("add-deal-payment-offline"), "premise: a community org opens on Offline").toBeChecked();
+  await expect(page.getByTestId("add-deal-email"), "premise: an offline deal asks for the sponsor's address").toBeVisible();
   await page.getByTestId("add-deal-payment-complimentary-card").click();
   await expect(page.getByTestId("add-deal-golive-immediate"), "complimentary moves go-live off 'when paid'").toBeChecked();
   await expect(page.getByTestId("add-deal-golive-on_payment"), "and 'When paid' is gone").toHaveCount(0);

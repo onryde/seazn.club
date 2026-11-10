@@ -9,11 +9,14 @@
 // components with their own hooks), so the element tree a test walks is the whole sheet.
 //
 // What it decides, and what it does not:
-//  - It opens on the plan's best choice (D22): Online when the plan sells invoices AND Stripe takes charges, else Offline; "When paid";
+//  - It opens on the plan's best choice (D22): Online when the plan sells invoices FOR THAT SCOPE AND Stripe takes charges, else Offline;
+//    "When paid";
 //    the scope at the package's competition (locked) else the whole organisation; the email at the sponsor's last billing email.
 //  - The server has the last word (every refusal comes back in the dictionary's words, `sponsorSaveErrorKey`); the sheet only refuses
 //    what it can see: a package or a competition the plan does not place (the same predicate the server enforces,
-//    `placementNeedsTiers`, spec §10 Q1 and F29), an online deal with no billing email, a complimentary deal that waits for payment.
+//    `placementNeedsTiers`, spec §10 Q1 and F29), a package whose competition has finished (409 competition_finished), Online on a
+//    scope the plan does not sell it on (an Event Pass lifts its own competition and never the whole organisation: 402), an online
+//    deal with no billing email, a complimentary deal that waits for payment.
 //  - Every derived value (method, go-live rule, scope, "another deal is live") is computed in render from what is on the sheet, never
 //    stored beside it, so what is shown and what is sent cannot disagree.
 //  - A second tap while the request is in flight sends nothing (a ref, not state: a double tap can beat a re-render).
@@ -32,7 +35,7 @@ import { fmtPublicDate } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
 import { routes } from "@/lib/routes";
 import { placementNeedsTiers } from "@/lib/sponsor-deal-policy";
-import { dealSummary, goLiveRulesFor, primaryLabel, type GoLiveRule, type PaymentMethod, type SponsorDeal } from "@/lib/sponsor-deals";
+import { dealSummary, goLiveRulesFor, nextScheduledDeal, primaryLabel, type GoLiveRule, type PaymentMethod, type SponsorDeal } from "@/lib/sponsor-deals";
 import { sponsorsHref } from "@/lib/sponsors-hub";
 import type { SponsorPackageRow } from "@/server/usecases/sponsors";
 
@@ -57,10 +60,16 @@ export interface AddDealSheetProps {
   competitions: readonly { id: string; name: string; ends_on?: string | null }[];
   /** The plan places tiers and competition deals (`sponsors.tiers`). */
   hasTiers: boolean;
-  /** The plan sells online invoices (`sponsors.monetize`). */
+  /** The plan sells online invoices (`sponsors.monetize`) on SOME scope: what separates "needs a plan" from "not for this scope". */
   hasMonetize: boolean;
+  /** `sponsors.monetize` is on for the whole organisation (a paid plan), and so for every competition. */
+  monetizeOrgWide: boolean;
+  /** The competitions an Event Pass lifts `sponsors.monetize` on (the server gates online selling per scope, deal-gates.ts). */
+  monetizeCompetitionIds: readonly string[];
   /** The org's Stripe account takes charges. */
   chargesEnabled: boolean;
+  /** The competitions whose packages are no longer sold (finished): such a package is shown locked, with the reason, and never sent. */
+  finishedCompetitionIds: readonly string[];
   orgSlug: string;
   /** Make the deal. RESOLVING means it is done (the sheet closes itself); a REJECTION with an ApiV1Error is shown on the sheet, in the
    *  dictionary's words, and the sheet stays open with every choice kept. */
@@ -80,7 +89,7 @@ const CARD =
   "peer-focus-visible:ring-2 peer-focus-visible:ring-purple-400 peer-disabled:opacity-60 peer-disabled:hover:border-slate-200";
 const DOT =
   "pointer-events-none absolute right-3 top-3.5 h-4 w-4 rounded-full border border-slate-300 bg-white " +
-  "peer-checked:border-purple-600 peer-checked:bg-purple-600 peer-checked:shadow-[inset_0_0_0_3px_#fff]";
+  "peer-checked:border-purple-600 peer-checked:bg-purple-600 peer-checked:ring-3 peer-checked:ring-inset peer-checked:ring-white";
 const PAY_TITLE: Record<PaymentMethod, MessageKey> = {
   online: "sponsors.dealSheet.pay.online.title",
   offline: "sponsors.dealSheet.pay.offline.title",
@@ -94,7 +103,8 @@ const PAY_LINE: Record<PaymentMethod, MessageKey> = {
 const LOCK_LINK = "inline-flex items-center font-medium text-purple-700 underline max-md:min-h-11";
 
 export function AddDealSheet({
-  sponsor, deals, packages, competitions, hasTiers, hasMonetize, chargesEnabled, orgSlug, onCreate, onClose,
+  sponsor, deals, packages, competitions, hasTiers, hasMonetize, monetizeOrgWide, monetizeCompetitionIds, chargesEnabled, finishedCompetitionIds,
+  orgSlug, onCreate, onClose,
 }: AddDealSheetProps) {
   const msg = useMsg();
   const locale = useLocaleOrDefault();
@@ -104,11 +114,17 @@ export function AddDealSheet({
   const onSale = packages.filter((p) => p.active);
   /** The plan does not place this package (spec §10 Q1: on the community plan every deal is Partner on the whole organisation). */
   const packageLocked = (p: SponsorPackageRow) => !hasTiers && placementNeedsTiers(p.tier, p.competition_id);
-  const onlineOpen = hasMonetize && chargesEnabled;
+  /** The package's competition has finished: it is not sold (the server refuses it, 409 `competition_finished`). */
+  const packageFinished = (p: SponsorPackageRow) => p.competition_id !== null && finishedCompetitionIds.includes(p.competition_id);
+  const packageOpen = (p: SponsorPackageRow) => !packageLocked(p) && !packageFinished(p);
+  /** The plan sells online invoices FOR THIS SCOPE ("" is the whole organisation): org-wide covers every scope, an Event Pass only
+   *  its own competition (the server's per-scope gate, deal-gates.ts `assertOnlineAllowed`). */
+  const monetizeFor = (scopeId: string) => monetizeOrgWide || (scopeId !== "" && monetizeCompetitionIds.includes(scopeId));
 
-  const [packageId, setPackageId] = useState<string | null>(() => onSale.find((p) => !packageLocked(p))?.id ?? null);
+  const firstOpen = onSale.find(packageOpen) ?? null;
+  const [packageId, setPackageId] = useState<string | null>(() => firstOpen?.id ?? null);
   const [pickedScope, setPickedScope] = useState("");
-  const [pickedMethod, setPickedMethod] = useState<PaymentMethod>(onlineOpen ? "online" : "offline");
+  const [pickedMethod, setPickedMethod] = useState<PaymentMethod>(chargesEnabled && monetizeFor(firstOpen?.competition_id ?? "") ? "online" : "offline");
   const [pickedRule, setPickedRule] = useState<GoLiveRule>("on_payment");
   const [email, setEmail] = useState(sponsor.last_billing_email ?? "");
   const [endsOn, setEndsOn] = useState("");
@@ -122,7 +138,8 @@ export function AddDealSheet({
   /** A package for one competition fixes the scope (the server refuses any other: 422 scope_outside_package). */
   const scopeFixed = pkg !== null && pkg.competition_id !== null;
   const scope = pkg?.competition_id ?? pickedScope;
-  /** Online is only for a plan that sells it AND an account that can take the money; a stale choice falls to Offline. */
+  /** Online is only for a scope the plan sells it on AND an account that can take the money; a stale choice falls to Offline. */
+  const onlineOpen = chargesEnabled && monetizeFor(scope);
   const method: PaymentMethod = pickedMethod === "online" && !onlineOpen ? "offline" : pickedMethod;
   /** "When paid" is not offered for a complimentary deal: a choice that no longer exists reads as Straight away. */
   const rule: GoLiveRule = goLiveRulesFor(method).includes(pickedRule) ? pickedRule : "immediate";
@@ -130,12 +147,15 @@ export function AddDealSheet({
   const endsCurrent = sponsorLive && endCurrent;
   /** Another deal of this sponsor is live AND stays live: the new one queues behind it (§8a). */
   const otherLive = sponsorLive && !endCurrent;
+  /** Ending the current deal now promotes the deal already waiting behind it (deal-apply step 2), which keeps the sponsor on the pages:
+   *  the same head-of-queue question the server asks, over this sponsor's deals. */
+  const promotesWaiting = endsCurrent && nextScheduledDeal(deals.filter((d) => d.sponsor_id === sponsor.id), new Date()) !== null;
   const emailTrim = email.trim();
   const emailValid = EMAIL_RE.test(emailTrim);
   const emailOk = method === "complimentary" || (method === "online" ? emailValid : emailTrim === "" || emailValid);
   /** The placement the plan allows - the same predicate the server enforces, so a community user never meets the 402. */
   const placementOk = pkg !== null && (hasTiers || !placementNeedsTiers(pkg.tier, scope === "" ? null : scope));
-  const canSubmit = pkg !== null && placementOk && emailOk && !busy;
+  const canSubmit = pkg !== null && packageOpen(pkg) && placementOk && emailOk && !busy;
 
   const scopeCompetition = scope === "" ? null : (competitions.find((c) => c.id === scope) ?? null);
   const scopeName = scope === "" ? null : (scopeCompetition?.name ?? msg("sponsors.dealSheet.scopeUnknown"));
@@ -187,7 +207,13 @@ export function AddDealSheet({
       await onCreate(body);
       onClose();
     } catch (err) {
-      setError(msg(err instanceof ApiV1Error ? sponsorSaveErrorKey(err, createDealWrite(endsCurrent)) : "settings.saveFailed"));
+      setError(
+        msg(
+          err instanceof ApiV1Error
+            ? sponsorSaveErrorKey(err, createDealWrite({ method, endCurrent: endsCurrent, rule, queued: otherLive }))
+            : "settings.saveFailed",
+        ),
+      );
     } finally {
       inFlight.current = false;
       setBusy(false);
@@ -233,6 +259,7 @@ export function AddDealSheet({
 
   const packageCards = onSale.map((p) => {
     const locked = packageLocked(p);
+    const finished = packageFinished(p);
     const competition = p.competition_id === null ? null : (competitions.find((c) => c.id === p.competition_id) ?? null);
     return choice({
       testid: `add-deal-package-${p.id}`,
@@ -240,7 +267,7 @@ export function AddDealSheet({
       group: "add-deal-package",
       value: p.id,
       checked: p.id === packageId,
-      disabled: locked,
+      disabled: locked || finished,
       onPick: () => setPackageId(p.id),
       title: (
         <span className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3">
@@ -259,7 +286,12 @@ export function AddDealSheet({
           ) : null}
         </span>
       ),
-      hint: locked ? (
+      hint: finished ? (
+        // Checked first: an upgrade does not bring a finished competition back, so it offers no way out but another package.
+        <p data-testid={`add-deal-package-finished-${p.id}`} className="mt-1 text-xs text-slate-600">
+          {msg("sponsors.dealSheet.packageFinished")}
+        </p>
+      ) : locked ? (
         <p data-testid={`add-deal-package-lock-${p.id}`} className="mt-1 flex flex-wrap items-center gap-x-1.5 text-xs text-slate-600">
           <span>{msg("sponsors.dealSheet.packageLocked")}</span>
           {upgradeLink(`add-deal-package-upgrade-${p.id}`, msg("sponsors.dealSheet.upgrade"), routes.billing(orgSlug))}
@@ -281,10 +313,23 @@ export function AddDealSheet({
       line: msg(PAY_LINE[m]),
       hint: lockedOnline ? (
         <p data-testid="add-deal-payment-lock-online" className="mt-1 flex flex-wrap items-center gap-x-1.5 text-xs text-slate-600">
-          {hasMonetize ? null : <span>{msg("sponsors.dealSheet.pay.lockedPlan")}</span>}
-          {hasMonetize
-            ? upgradeLink("add-deal-payment-link-online", msg("sponsors.dealSheet.pay.connectLink"), routes.connect(orgSlug))
-            : upgradeLink("add-deal-payment-link-online", msg("sponsors.dealSheet.pay.lockedPlanLink"), routes.billing(orgSlug))}
+          {/* Why, most fundamental first: no plan for online at all; a plan that sells it elsewhere (an Event Pass covers its own
+              competition, never the whole organisation); then, with the scope covered, the account that cannot take charges. */}
+          {!hasMonetize ? (
+            <>
+              <span>{msg("sponsors.dealSheet.pay.lockedPlan")}</span>
+              {upgradeLink("add-deal-payment-link-online", msg("sponsors.dealSheet.pay.lockedPlanLink"), routes.billing(orgSlug))}
+            </>
+          ) : !monetizeFor(scope) ? (
+            <>
+              <span data-testid="add-deal-payment-lock-scope">
+                {msg(scope === "" ? "sponsors.dealSheet.pay.lockedScopeWhole" : "sponsors.dealSheet.pay.lockedScopeCompetition")}
+              </span>
+              {upgradeLink("add-deal-payment-link-online", msg("sponsors.dealSheet.upgrade"), routes.billing(orgSlug))}
+            </>
+          ) : (
+            upgradeLink("add-deal-payment-link-online", msg("sponsors.dealSheet.pay.connectLink"), routes.connect(orgSlug))
+          )}
         </p>
       ) : undefined,
     });
@@ -333,6 +378,7 @@ export function AddDealSheet({
           amount: priceLabel(locale, pkg.price_cents, pkg.currency),
           email: method === "online" && emailTrim !== "" ? emailTrim : null,
           otherLive,
+          promotesWaiting,
           currentlyShown: sponsor.status === "active",
         });
 

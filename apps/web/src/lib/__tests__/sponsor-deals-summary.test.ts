@@ -16,6 +16,7 @@
 //   S3  queue           the `otherLive` branch dropped                     -> the 16-combination sweep
 //   S4  whole org       `scopeName !== null` ignored                       -> "the whole organisation"
 //   S5  guard           the complimentary + on_payment refusal dropped     -> "refuses the combination the server refuses"
+//   S6  promotion       `!i.promotesWaiting` dropped from the hidden clause -> "ending the current deal now promotes"
 import { describe, expect, it } from "vitest";
 import {
   DealRuleError,
@@ -166,6 +167,32 @@ describe("the hidden-until clause (spec §8a, deal-apply.ts step 4)", () => {
       expect(say(dealSummary({ ...base, rule, otherLive: true, currentlyShown: true })), `${rule} behind a live deal`).not.toContain("hidden");
     }
     expect(say(dealSummary({ ...base, rule: "on_payment", otherLive: false, currentlyShown: true })), "the same deal, current one ended").toContain("hidden");
+  });
+});
+
+describe("ending the current deal now promotes a deal already waiting behind it, so the sponsor stays on the pages (deal-apply.ts step 2)", () => {
+  const HIDDEN = "Northbank Print is hidden from your pages until then.";
+  const base = { ...WHOLE, method: "offline", rule: "on_payment", otherLive: false, currentlyShown: true } as const;
+
+  it("with promotesWaiting, no rule says hidden; without it the same deal does (the differential, 2 rules x 2 methods counted)", () => {
+    let checked = 0;
+    for (const method of ["online", "offline"] as const) {
+      for (const rule of ["on_payment", "on_approval"] as const) {
+        const input = { ...base, method, rule };
+        expect(say(dealSummary({ ...input, promotesWaiting: true })), `${method}/${rule} promoted`).not.toContain("hidden");
+        expect(say(dealSummary({ ...input, promotesWaiting: false })), `${method}/${rule} not promoted`).toContain(HIDDEN);
+        expect(say(dealSummary(input)), `${method}/${rule} flag absent reads as not promoted`).toContain(HIDDEN);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("it changes nothing else in the sentence: the head and the go-live clause are the same with or without it", () => {
+    const withIt = say(dealSummary({ ...base, promotesWaiting: true }));
+    const without = say(dealSummary({ ...base, promotesWaiting: false }));
+    expect(without.startsWith(withIt), "the hidden clause is the only difference").toBe(true);
+    expect(without.slice(withIt.length).trim()).toBe(HIDDEN);
   });
 });
 

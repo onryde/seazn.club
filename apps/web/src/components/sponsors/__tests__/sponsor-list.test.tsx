@@ -660,7 +660,8 @@ describe("Move: two rows drawn side by side in a group may sit APART in the stor
 // --- the island: the writes the actions make ---------------------------------------------------------------------------------------
 
 const HUB: SponsorsHubData = {
-  orgSlug: SLUG, deals: [], packages: [], hasMonetize: true, chargesEnabled: true, sponsorId: null, dealId: null, reportLinks: [], reportDefaults: null,
+  orgSlug: SLUG, deals: [], packages: [], hasMonetize: true, monetizeOrgWide: true, monetizeCompetitionIds: [], finishedCompetitionIds: [],
+  chargesEnabled: true, sponsorId: null, dealId: null, reportLinks: [], reportDefaults: null,
 };
 
 const fetchMock = vi.fn();
@@ -975,7 +976,12 @@ describe("Add deal on a row opens the Add deal sheet for that sponsor; the sheet
     id: "p-gold", competition_id: null, name: "Gold Season", description: null, price_cents: 60_000, currency: "gbp", tier: "gold",
     active: true, created_at: "2026-10-01T09:00:00.000Z", includes_on_stream: true, used_by: 0,
   };
-  const HUB_WITH_PACKAGES: SponsorsHubData = { ...HUB, packages: [PACKAGE], hasMonetize: true, chargesEnabled: false };
+  // The three scope fields carry values no default could produce (an Event Pass org: not org-wide, one competition covered, another
+  // finished), so a pass-through that dropped one - or read a constant - is caught by the value arriving.
+  const HUB_WITH_PACKAGES: SponsorsHubData = {
+    ...HUB, packages: [PACKAGE], hasMonetize: true, monetizeOrgWide: false, monetizeCompetitionIds: ["c-pass"], finishedCompetitionIds: ["c-done"],
+    chargesEnabled: false,
+  };
   const sheetsIn = (m: ReturnType<typeof mount>) => m.island.tree().filter((e) => e.type === AddDealSheet);
   const BODY: CreateDealBody = { package_id: "p-gold", competition_id: null, payment_method: "offline", go_live: "on_payment", end_current: false };
 
@@ -989,6 +995,9 @@ describe("Add deal on a row opens the Add deal sheet for that sponsor; the sheet
     expect((p.sponsor as SponsorItem).id).toBe("s7");
     expect(p.packages, "hub.packages").toBe(HUB_WITH_PACKAGES.packages);
     expect(p.hasMonetize, "hub.hasMonetize").toBe(true);
+    expect(p.monetizeOrgWide, "hub.monetizeOrgWide - false here: a pass org").toBe(false);
+    expect(p.monetizeCompetitionIds, "hub.monetizeCompetitionIds").toBe(HUB_WITH_PACKAGES.monetizeCompetitionIds);
+    expect(p.finishedCompetitionIds, "hub.finishedCompetitionIds").toBe(HUB_WITH_PACKAGES.finishedCompetitionIds);
     expect(p.chargesEnabled, "hub.chargesEnabled - false here, so Online is locked on the sheet").toBe(false);
     // The pairs: each flag is passed through as it is, not pinned (counted).
     let flags = 0;
@@ -1002,6 +1011,11 @@ describe("Add deal on a row opens the Add deal sheet for that sponsor; the sheet
       }
     }
     expect(flags).toBe(4);
+    // The scope fields move with the hub too (an org-wide plan, nothing finished): the other value arrives, not the first one's.
+    const wide = mount(ROWS, { hub: { ...HUB_WITH_PACKAGES, monetizeOrgWide: true, monetizeCompetitionIds: [], finishedCompetitionIds: [] } });
+    wide.click("Add deal: Northbank Print");
+    const w = propsOf(sheetsIn(wide)[0]!);
+    expect([w.monetizeOrgWide, w.monetizeCompetitionIds, w.finishedCompetitionIds]).toEqual([true, [], []]);
     const noTiers = mount(ROWS, { hub: HUB_WITH_PACKAGES, hasTiers: false });
     noTiers.click("Add deal: Northbank Print");
     expect(propsOf(sheetsIn(noTiers)[0]!).hasTiers, "hasTiers").toBe(false);
@@ -1049,19 +1063,55 @@ describe("Add deal on a row opens the Add deal sheet for that sponsor; the sheet
     expect(calls.filter((c) => c.method === "GET"), "a refusal can mean a deal moved: re-read both").toHaveLength(2);
   });
 
-  it("a Stripe refusal RESOLVES (the deal may be saved, so the sheet must close) and the page says it: the draft sentence, or the 'look at the deals' one when the current deal was being ended", async () => {
+  it("an ONLINE Stripe refusal RESOLVES (the deal may be saved, so the sheet must close) and the page says it: Send for a draft, Resend for a deal that is live, 'look at the deals' when the current deal was being ended", async () => {
     answer = (url, method) =>
-      method === "POST" ? { status: 502, body: { ok: false, error: { code: "stripe_unavailable", message: "server english" } } } : { status: 200, body: { data: [] } };
+      method === "POST" ? { status: 502, body: { ok: false, error: { code: "stripe_unavailable", message: "server english" } } } : { status: 200, body: { data: ROWS } };
+    // Expected words from the lifecycle table (a draft is sent, a live/scheduled deal is resent) and
+    // the create's own Stripe calls.
+    const CASES: Array<[string, Partial<CreateDealBody>, MessageKey]> = [
+      ["on_payment, no end", { go_live: "on_payment" }, "sponsors.error.invoiceSavedNoLink"],
+      ["on_approval, no end", { go_live: "on_approval" }, "sponsors.error.invoiceSavedNoLink"],
+      ["immediate, no end", { go_live: "immediate" }, "sponsors.error.invoiceSavedResend"],
+      ["immediate, ends the current deal", { go_live: "immediate", end_current: true }, "sponsors.error.invoiceNotSentCheck"],
+      ["on_payment, ends the current deal", { go_live: "on_payment", end_current: true }, "sponsors.error.invoiceNotSentCheck"],
+    ];
     let checked = 0;
-    for (const [endCurrent, key] of [[false, "sponsors.error.invoiceSavedNoLink"], [true, "sponsors.error.invoiceNotSentCheck"]] as const) {
+    for (const [label, over, key] of CASES) {
       calls.length = 0;
       const m = mount(ROWS, { hub: HUB_WITH_PACKAGES });
       m.click("Add deal: Northbank Print");
-      await (propsOf(sheetsIn(m)[0]!).onCreate as (b: CreateDealBody) => Promise<void>)({ ...BODY, payment_method: "online", sponsor_email: "a@b.example", end_current: endCurrent });
-      expect(m.text(), String(endCurrent)).toContain(msg(key));
+      // RESOLVING is the signal the sheet closes on (the sheet itself closes after a resolved create: add-deal-sheet.test.tsx); a
+      // rejection would keep it open over a deal that may already be saved.
+      const err = await (propsOf(sheetsIn(m)[0]!).onCreate as (b: CreateDealBody) => Promise<void>)({ ...BODY, payment_method: "online", sponsor_email: "a@b.example", ...over }).then(() => null, (e: unknown) => e);
+      expect(err, `${label}: resolves`).toBeNull();
+      expect(m.text(), label).toContain(msg(key));
+      expect(m.text(), label).not.toContain("server english");
+      expect(m.text(), `${label}: no success notice`).not.toContain("Invoice sent for");
+      expect(calls.filter((c) => c.method === "GET"), `${label}: the saved draft shows on the re-read`).toHaveLength(2);
+      checked++;
+    }
+    expect(checked).toBe(CASES.length);
+    // The two sentences differ, or the Send/Resend split above proves nothing.
+    expect(msg("sponsors.error.invoiceSavedResend")).not.toBe(msg("sponsors.error.invoiceSavedNoLink"));
+  });
+
+  it("a Stripe refusal of a create that sends NO invoice (offline or complimentary, ending the current deal) rejects: saved nothing, so the sheet stays open with its choices and the page says nothing", async () => {
+    answer = (url, method) =>
+      method === "POST" ? { status: 502, body: { ok: false, error: { code: "stripe_unavailable", message: "server english" } } } : { status: 200, body: { data: ROWS } };
+    let checked = 0;
+    for (const method of ["offline", "complimentary"] as const) {
+      calls.length = 0;
+      const m = mount(ROWS, { hub: HUB_WITH_PACKAGES });
+      m.click("Add deal: Northbank Print");
+      const onCreate = propsOf(sheetsIn(m)[0]!).onCreate as (b: CreateDealBody) => Promise<void>;
+      const err = await onCreate({ ...BODY, payment_method: method, go_live: "immediate", end_current: true }).then(() => null, (e: unknown) => e);
+      expect(err, method).toBeInstanceOf(ApiV1Error);
+      expect((err as ApiV1Error).code, method).toBe("stripe_unavailable");
+      expect(sheetsIn(m), `${method}: still open`).toHaveLength(1);
+      for (const key of ["sponsors.error.stripeUnavailable", "sponsors.error.invoiceSavedNoLink", "sponsors.error.invoiceSavedResend", "sponsors.error.invoiceNotSentCheck"] as const) {
+        expect(m.text(), `${method}: ${key} is the sheet's to show, not the page's`).not.toContain(msg(key));
+      }
       expect(m.text()).not.toContain("server english");
-      expect(m.text(), "no success notice").not.toContain("Invoice sent for");
-      expect(calls.filter((c) => c.method === "GET"), "the saved draft shows on the re-read").toHaveLength(2);
       checked++;
     }
     expect(checked).toBe(2);
