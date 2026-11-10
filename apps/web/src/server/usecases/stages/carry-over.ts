@@ -347,6 +347,7 @@ export async function seedNextStage(auth: AuthCtx, completedStageId: string): Pr
       shapes,
       departedLoseBestNth(sourceTables, resolvedSources, await departedEntrantIds(tx, current.division_id)),
       next.kind,
+      resolvedSources.map((r) => r.kind),
     );
     // W2d T12 (spec §5.9): a cross-group draw best-Nth made is stored with its source, under the division lock held above.
     await persistCrossGroupDraws(tx, resolvedSources, newLotsDraws);
