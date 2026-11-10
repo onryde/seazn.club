@@ -438,6 +438,37 @@ export async function withdrawEntrantCascade(
           const f = byId.get(u.fixtureId);
           if (f) plan.push({ update: { ...u, walkoverBy: entrantId }, fixture: f, bracket: { kind: stage.kind, held: held.has(f.id) } });
         }
+        // W4 fix round 1 (RB4-C3 / RB4-T6, PO ruling 2026-11-10): the planner walks over only UNSETTLED lines, so the SECOND
+        // finalist (or third-place side) to leave finds the line already walked over to her by the first. A walkover awarded
+        // for a withdrawal whose winner then departs is the vacant title (or the vacant 3rd) - a departure double walkover.
+        // The `withdrew` forfeit is voided and the line re-enters the plan; the branch below writes the no-event double
+        // walkover. Only a line whose whole ledger is that one forfeit: a played line stays as played (ruling 271), and
+        // anything else on the ledger is the organiser's.
+        if (stage.kind === "knockout") {
+          for (const f of mine) {
+            const o = f.outcome as { kind?: string; winner?: string; reason?: string } | null;
+            const scoped = f.is_final === true || f.third_place === true;
+            // PO ruling 2026-11-10 (I2): once the organiser has Completed the stage the walkover champion STANDS; a later
+            // departure takes the ordinary post-complete handling, never the vacant title.
+            if (stage.status === "complete" || !scoped || f.status !== "forfeited" || o?.kind !== "award" || o.winner !== entrantId) continue;
+            const other = f.home_entrant_id === entrantId ? f.away_entrant_id : f.home_entrant_id;
+            if (!other) continue;
+            const events = await listEvents(auth, f.id, 0);
+            const voided = new Set(events.filter((e) => e.voids_event_id !== null).map((e) => e.voids_event_id as string));
+            const effective = events.filter((e) => e.type !== "core.void" && !voided.has(e.id));
+            const only = effective.length > 0 && effective.every((e) => e.type === "core.forfeit" && (e.payload as { reason?: string } | null)?.reason === REASON);
+            if (!only) continue;
+            for (const e of effective) {
+              const state = await getFixtureState(auth, f.id);
+              await scoreEvent(auth, f.id, { expected_seq: state.last_seq, type: "core.void", payload: { event_id: e.id } }, CASCADE);
+            }
+            plan.push({
+              update: { fixtureId: f.id, status: "walkover", walkoverTo: other, walkoverBy: entrantId } as FixtureUpdate & { walkoverBy?: string },
+              fixture: { ...f, status: "scheduled", outcome: null },
+              bracket: { kind: stage.kind, held: false },
+            });
+          }
+        }
       } else {
         // americano: remaining games void (expunged, D5); earned standings stand.
         for (const f of mine) {
