@@ -107,6 +107,24 @@ export const PatchSwissStage = z
   .refine((p) => Object.keys(p).length > 0, "empty patch");
 export type PatchSwissStage = z.infer<typeof PatchSwissStage>;
 
+/** PATCH /stages/{id} (W4 B4 T9; X-TP-1/2/6/7) - a knockout stage's third-place setting: Shared (the two semi-final losers
+ *  share 3rd) or Play-off match. Exactly this one key; an unknown key is refused (strict). Editable until the stage starts. */
+export const PatchKnockoutStage = z.object({ thirdPlace: z.enum(["shared", "playoff"]) }).strict();
+export type PatchKnockoutStage = z.infer<typeof PatchKnockoutStage>;
+
+/** The one body of `PATCH /stages/{id}`: a Swiss stage's `{ rounds?, chess? }` or a knockout stage's `{ thirdPlace }`. The
+ *  usecase of whichever arm matches refuses a stage of the other kind by name (STAGE_NOT_SWISS / STAGE_NOT_KNOCKOUT). */
+export const PatchStage = z.union([PatchSwissStage, PatchKnockoutStage]);
+export type PatchStage = z.infer<typeof PatchStage>;
+
+export const PatchKnockoutStageResult = z.object({
+  stage_id: z.string(),
+  thirdPlace: z.enum(["shared", "playoff"]),
+  /** True when the stage held lines and they were drawn again (nothing changed: false). */
+  regenerated: z.boolean(),
+});
+export type PatchKnockoutStageResult = z.infer<typeof PatchKnockoutStageResult>;
+
 export const PatchSwissStageResult = z.object({
   rounds: z.number().int(),
   chess: z.boolean(),

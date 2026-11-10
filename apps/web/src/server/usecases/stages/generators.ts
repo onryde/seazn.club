@@ -10,6 +10,7 @@ import { generateRoundRobin, generateSingleElim, generateDoubleElim, generatePag
 import { withdrawBracketEntrant, type BracketFixture } from "@seazn/engine/competition";
 import { byeAward } from "@/lib/fixture-bye";
 import type { Tx, GenFixture, ActiveEntrant } from "./types";
+import { knockoutRefusal } from "../knockout-refusal";
 // The draw primitives moved to the engine-db layer (competition.ts reads them; usecases import engine-db, never the reverse).
 import { knockoutDraws, knockoutDrawOrder } from "@/server/engine-db/knockout-draw";
 export { knockoutDraws, knockoutDrawOrder };
@@ -431,18 +432,28 @@ export function generate(
       });
     }
     case "knockout": {
-      const bracket = generateSingleElim({
-        entrants: ids,
-        seeds,
-        thirdPlace: cfg.thirdPlace === true,
-        // Jul3/08 §4 (7 Jan): organiser-chosen bye recipients
-        ...(Array.isArray(cfg.byes) ? { byeEntrants: cfg.byes as string[] } : {}),
-        // PROMPT-59 §2: explicit published slot map (seed numbers index into
-        // the resolved qualification order); engine validates the shape.
-        ...(Array.isArray(cfg.slotOrder)
-          ? { slotOrder: (cfg.slotOrder as unknown[]).map((s) => (s === null ? null : Number(s))) }
-          : {}),
-      });
+      let bracket: GeneratedBracket;
+      try {
+        bracket = generateSingleElim({
+          entrants: ids,
+          seeds,
+          thirdPlace: cfg.thirdPlace === true,
+          // Jul3/08 §4 (7 Jan): organiser-chosen bye recipients
+          ...(Array.isArray(cfg.byes) ? { byeEntrants: cfg.byes as string[] } : {}),
+          // PROMPT-59 §2: explicit published slot map (seed numbers index into
+          // the resolved qualification order); engine validates the shape.
+          ...(Array.isArray(cfg.slotOrder)
+            ? { slotOrder: (cfg.slotOrder as unknown[]).map((s) => (s === null ? null : Number(s))) }
+            : {}),
+        });
+      } catch (err) {
+        // B4 T9 (X-TP-1, D3): the engine's own refusal of a third-place match under two real semi-finals is NAMED, never a bare
+        // CONFIG_INVALID: a play-off stage that shrank to three (a withdrawal before Start) is told the way out (Shared).
+        if (EngineError.is(err) && err.code === "CONFIG_INVALID" && (err.data as { reason?: unknown } | undefined)?.reason === "third_place_needs_two_semis") {
+          throw knockoutRefusal("KO_THIRD_PLACE_TOO_FEW", { entrants: (err.data as { entrants?: unknown }).entrants ?? ids.length });
+        }
+        throw err;
+      }
       return bracketToGen(bracket, bracket.rounds);
     }
     case "page_playoff": {

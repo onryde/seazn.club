@@ -269,6 +269,11 @@ function isDecidingFinalOfKnockout(step: { fixture: FixtureRowLite; bracket?: { 
   return step.bracket?.kind === "knockout" && step.fixture.is_final === true && step.fixture.third_place !== true;
 }
 
+/** X-TP-7's scope: the third-place match of a KNOCKOUT (`third_place`), which feeds no next match. */
+function isThirdPlaceOfKnockout(step: { fixture: FixtureRowLite; bracket?: { kind: string } }): boolean {
+  return step.bracket?.kind === "knockout" && step.fixture.third_place === true;
+}
+
 /** X-WD-3 / X-WD-4's no-event writes (`writeDepartedSeat`), committed on their own and published like a score: the
  *  fixture and every seat the cascade then changed. A cache that could not be dropped is logged, never thrown — the
  *  write has committed (scoring's R10 M3 shape). */
@@ -492,7 +497,15 @@ export async function withdrawEntrantCascade(
               await departSeat(auth, u.fixtureId, entrantId, "double_walkover");
               settled.push(u.fixtureId);
               out.walkovers++;
-            } else if (isDecidingFinalOfKnockout(step)) {
+            } else if (isThirdPlaceOfKnockout(step) && !line.live) {
+              // B4 T9 (X-TP-7, superseding X-DW-3's hold for THIS match): both sides of a third-place play-off are out, so 3rd is
+              // VACANT and both rank 4th - written as a departure double walkover (no event, as a bye is written), which
+              // seats nobody and lets the stage complete. With ONE side out the line stays a walkover (the branch above never
+              // reaches here: `walkoverTo` is the other, present, side).
+              await departSeat(auth, u.fixtureId, entrantId, "double_walkover");
+              settled.push(u.fixtureId);
+              out.walkovers++;
+            } else if (isDecidingFinalOfKnockout(step) || isThirdPlaceOfKnockout(step)) {
               // Review m-3: a Start with nothing played is a live ledger the no-event write refuses; the final stays open and is
               // NAMED, so the organiser is told it is theirs to settle or void.
               out.left_to_organiser.push(u.fixtureId);
