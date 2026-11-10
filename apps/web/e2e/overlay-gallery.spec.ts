@@ -1042,6 +1042,45 @@ test.describe("the staff overlay gallery (R2007)", () => {
     expect(sockets, "a preview opened a socket").toEqual([]);
   });
 
+  // S2-5 ruling 110: football's overlay clock reads match time with added time, and its widest reading is `120+15:00`
+  // (15 minutes past the end of extra time). `?clock=ET_H2.1800` holds football's live sample there; every clock cell
+  // that draws it — the bug's and the bar's — shows it whole, at every frame, inside every box that clips it.
+  test("check 9: football's widest clock reading, 120+15:00, fits every clock cell at every frame", async ({ page }) => {
+    test.setTimeout(240_000);
+    await signInStaff(page);
+    for (const frame of ["full", "844", "390"]) {
+      await openGallery(page, `?sport=football&clock=ET_H2.1800&frame=${frame}`);
+      const probe = await page.evaluate(() => {
+        const cells = [...document.querySelectorAll<HTMLElement>("[data-gallery-cell] .ovl-bug-clock, [data-gallery-cell] .ovl-clock-cell")];
+        const misfit: string[] = [];
+        const texts = new Set<string>();
+        for (const el of cells) {
+          const key = el.closest<HTMLElement>("[data-gallery-cell]")?.dataset.galleryCell ?? "?";
+          const text = (el.textContent ?? "").trim();
+          texts.add(text);
+          if (el.scrollWidth > el.clientWidth + 1) misfit.push(`${key}: "${text}" overflows its own box`);
+          const r = el.getBoundingClientRect();
+          // Every ancestor that clips, up to the overlay root, must hold the whole cell.
+          for (let a = el.parentElement; a !== null; a = a.parentElement) {
+            const style = getComputedStyle(a);
+            if (style.overflowX !== "visible" || style.overflowY !== "visible") {
+              const box = a.getBoundingClientRect();
+              if (r.left < box.left - 1 || r.right > box.right + 1 || r.top < box.top - 1 || r.bottom > box.bottom + 1) {
+                misfit.push(`${key}: "${text}" sits outside ${a.className || a.tagName}`);
+              }
+            }
+            if (a.dataset.testid === "ovl-root") break;
+          }
+        }
+        return { count: cells.length, texts: [...texts], misfit };
+      });
+      console.log(`[9] frame ${frame}: clock cells ${probe.count}, readings ${JSON.stringify(probe.texts)}, misfit ${probe.misfit.length}`);
+      expect(probe.count, `anti-vacuity: frame ${frame} draws football's clock`).toBeGreaterThan(0);
+      expect(probe.texts, "every clock cell reads the stressed match time").toEqual(["120+15:00"]);
+      expect(probe.misfit, `frame ${frame}`).toEqual([]);
+    }
+  });
+
   test("check 7: ?frame=844 and ?frame=390 render each preview at that width", async ({ page }) => {
     test.setTimeout(240_000);
     await signInStaff(page);

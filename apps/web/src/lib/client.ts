@@ -29,9 +29,14 @@ export class ApiError extends Error {
 /** Minimal JSON fetch helper for client components. */
 export async function api<T = unknown>(
   url: string,
-  options?: RequestInit & { json?: unknown },
+  options?: RequestInit & {
+    json?: unknown;
+    /** Sees the response as soon as its headers arrive, before the body is read: a measurement (the overlay's server
+     *  offset, S2-5 ruling 110), never part of the call's outcome. */
+    onResponse?: (res: Response) => void;
+  },
 ): Promise<T> {
-  const { json, ...rest } = options ?? {};
+  const { json, onResponse, ...rest } = options ?? {};
   const res = await fetch(url, {
     ...rest,
     headers: {
@@ -47,6 +52,7 @@ export async function api<T = unknown>(
     },
     body: json !== undefined ? JSON.stringify(json) : rest.body,
   });
+  onResponse?.(res);
   const payload = await res.json().catch(() => ({}));
   if (!res.ok || payload?.ok === false) {
     // A 402 upgrade error carries a human `reason` (feature-copy) alongside the

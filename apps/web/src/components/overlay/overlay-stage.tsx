@@ -26,6 +26,7 @@ import {
   type OverlaySideInput,
 } from "@/lib/overlay-model";
 import { useOverlayClock } from "./use-overlay-clock";
+import { overlayServerOffsetMs } from "@/components/public-site/overlay-server-offset";
 import { t } from "@/lib/i18n-runtime";
 import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
 // Owner answer 18 (Q7): the stage knows the REGISTRY, not two components. It
@@ -203,7 +204,10 @@ export function OverlayStage(props: OverlayStageProps) {
   useCompositorSignals({ enabled: compositor, contentReady: !awaitingDelay, lastSuccessAt: received.at });
   // The ONE timer in the overlay (Step 8a; _THEMES.md §6; owner 2026-09-06:
   // the clock TICKS). Formatted here, handed to the pure model as a string.
-  const clockLabel = useOverlayClock(data.clock, data.status, presentationNowOffsetMs);
+  // S2-5 ruling 110: a football clock reads the server's time, measured off the overlay's own polls
+  // (`fetchOverlayFixture` samples each answer's `Date` header), whatever this machine's clock says. A preview polls
+  // nothing itself: it reads through what this page's overlay polls have measured, or this machine's clock before any.
+  const clockLabel = useOverlayClock(data.clock, data.status, presentationNowOffsetMs, overlayServerOffsetMs);
 
   // ONE dictionary channel (Task 5e fix round). The projection and the theme
   // read the SAME resolver over the SAME `props.dict` — a theme that resolved

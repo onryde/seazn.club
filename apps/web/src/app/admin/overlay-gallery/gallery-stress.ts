@@ -11,8 +11,13 @@
 //   ?code=<text>                      both sides' explicit short name (`OverlaySideInput.short`, the producer's code;
 //                                     the model reads it and cuts it to `BADGE_MAX_CHARS`, as it does any producer's —
 //                                     the widest four drive the Result ladder's last rung, gallery check 4c)
+//   ?clock=<period>.<seconds>         FOOTBALL's live sample holds this match-time reading, paused (S2-5 ruling 110):
+//                                     `ET_H2.1800` is `120+15:00`, the widest the bug's clock cell must hold. Read
+//                                     under 2 × 45 with 2 × 15 of extra time (`STRESS_MATCH_TIME`)
 import type { OverlaySideInput } from "@/lib/overlay-model";
 import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
+import type { OverlayLiveData } from "@/components/public-site/live-score-data";
+import { clockPeriodsOf, type MatchTimeCfg } from "@/components/v2/scorepad/v3/skins/football-match-time";
 
 /** The `{score}` a forced sentence shows — every cell, whatever its outcome carries. */
 export const STRESS_SCORE = "4–3";
@@ -77,3 +82,40 @@ export function stressTemplates(base: DecidedOutcomeTemplates, sentence: string)
     ...(base.tiebreakScored === undefined ? {} : { tiebreakScored: every(base.tiebreakScored) }),
   };
 }
+
+/** The football cfg a stressed clock is read under: the engine's default halves, with extra time on so every period a
+ *  football match can reach is a reading. */
+export const STRESS_MATCH_TIME: MatchTimeCfg = { halves: 2, halfMinutes: 45, extraTime: { enabled: true, halfMinutes: 15 } };
+/** An hour into one period: well past any added time a referee plays, and still a bounded string. */
+const CLOCK_SECONDS_MAX = 3_600;
+
+export interface StressClock {
+  period: string;
+  seconds: number;
+}
+
+/** `?clock=<period>.<seconds>`: a period `STRESS_MATCH_TIME` reaches and whole seconds within the bound, or nothing. */
+export function parseStressClock(raw: string | undefined): StressClock | null {
+  const m = /^([A-Z0-9_]+)\.(\d{1,4})$/.exec(raw?.trim() ?? "");
+  if (m === null) return null;
+  const [, period, digits] = m;
+  const seconds = Number(digits);
+  return clockPeriodsOf(STRESS_MATCH_TIME).includes(period!) && seconds <= CLOCK_SECONDS_MAX ? { period: period!, seconds } : null;
+}
+
+/** The snapshots with football's LIVE sample holding `clock`, paused (so the reading is the same at every frame and on
+ *  every reload). Every other sport and state is the same object it was. */
+export function stressFootballClock<T extends Record<string, Record<string, OverlayLiveData>>>(
+  snapshots: T,
+  clock: StressClock | null,
+  now: number,
+): T {
+  const football = snapshots.football;
+  if (clock === null || football?.live === undefined) return snapshots;
+  const live: OverlayLiveData = {
+    ...football.live,
+    clock: { phase: clock.period, anchorSeconds: clock.seconds, anchorAtWallMs: now, running: false, matchTime: STRESS_MATCH_TIME },
+  };
+  return { ...snapshots, football: { ...football, live } };
+}
+

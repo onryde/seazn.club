@@ -11,6 +11,9 @@ import type { ProgrammePhaseWire } from "@/lib/relay-phase";
 import type { SponsorPlan } from "@/lib/sponsor-plan";
 import type { OverlayCarromToss } from "@/lib/overlay-toss";
 import type { OverlayClosedOver, OverlayCricketLive, OverlayCricketToss, OverlayHighlights } from "@/lib/overlay-cricket";
+import type { MatchTimeCfg } from "@/components/v2/scorepad/v3/skins/football-match-time";
+import { offsetSampleOf, type ServerOffset } from "@/components/v2/scorepad/server-offset";
+import { overlayServerOffset } from "./overlay-server-offset";
 
 export interface LiveFixtureData {
   status: string;
@@ -78,6 +81,11 @@ export interface OverlayLiveData extends LiveFixtureData {
     nominalSeconds?: number;
     /** Absent/true = tick; false = hold at anchorSeconds (pad Pause). */
     running?: boolean;
+    /** S2-5 ruling 110 — FOOTBALL ONLY: the cfg match time reads (`matchClock`), and the mark that this clock is the
+     *  shared one: anchored on the newest standing `football.clock` event (never a goal), its `anchorAtWallMs` the
+     *  server's `recorded_at`, read through the overlay's measured server offset and shown in match time (`45:00` at
+     *  the second half's start, `90+2:30` in added time). Absent for every other sport, whose clock reads as before. */
+    matchTime?: MatchTimeCfg;
   };
   cricket?: {
     innings: { runs: number; wickets: number; legalBalls: number; ballsLimit: number | null }[];
@@ -143,9 +151,30 @@ export async function fetchOverlayFixture(
   relay?: { sid: string; st: string },
   opts: { preview?: boolean } = {},
 ): Promise<OverlayLiveData> {
+  const sentAtMs = Date.now();
   return api<OverlayLiveData>(overlayPollPath(fixtureId, relay, opts), {
     cache: "no-store",
+    onResponse: (res) => sampleServerOffset(overlayServerOffset, res, sentAtMs, Date.now()),
   });
+}
+
+/**
+ * S2-5 ruling 110 — the overlay's server offset, sampled from its own polls by the pad's rule (`server-offset.ts`: the
+ * `Date` header's second plus half a second, against the request's midpoint; a round trip over 5 s is dropped). A
+ * measurement riding the call, never part of its outcome: nothing here throws.
+ *
+ * One rule the pad does not need: an answer a shared cache served (`Age` above 0) is not sampled. This poll is
+ * `public, s-maxage=2` (the overlay route), so an edge may hand back a stored answer whose `Date` is when it was stored,
+ * seconds behind the server's now. The pad's `/events` calls are never shared-cached.
+ */
+export function sampleServerOffset(offset: ServerOffset, res: Response, sentAtMs: number, receivedAtMs: number): void {
+  try {
+    if (Number(res.headers.get("age") ?? "0") > 0) return;
+    const sample = offsetSampleOf(res.headers.get("date"), sentAtMs, receivedAtMs);
+    if (sample !== undefined) offset.add(sample);
+  } catch {
+    // A response whose headers cannot be read is still the poll's answer.
+  }
 }
 
 /** The overlay poll's path. Exported for the telemetry scrub's test (`st` is a credential on every poll). */

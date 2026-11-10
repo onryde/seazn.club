@@ -11,7 +11,16 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { interpolate } from "@/lib/i18n-runtime";
 import { decidedOutcomeTemplates, renderDecidedOutcome } from "@/lib/scoring-vocab";
-import { parseGalleryStress, STRESS_SCORE, stressSides, stressTemplates } from "../gallery-stress";
+import {
+  parseGalleryStress,
+  parseStressClock,
+  STRESS_SCORE,
+  stressFootballClock,
+  stressSides,
+  stressTemplates,
+} from "../gallery-stress";
+import { clockLabelAt } from "@/components/overlay/use-overlay-clock";
+import type { OverlayLiveData } from "@/components/public-site/live-score-data";
 
 const DICT = join(dirname(fileURLToPath(import.meta.url)), "../../../../dictionaries");
 const en = JSON.parse(readFileSync(join(DICT, "en", "ui.json"), "utf8")) as Record<string, string>;
@@ -116,3 +125,41 @@ describe("stressTemplates — every winner-bearing template becomes the forced s
     expect(forced.tie).toBe(base.tie);
   });
 });
+
+// S2-5 ruling 110: the bug's clock cell must hold football's widest reading, `120+15:00` — 15 minutes into the second
+// half of extra time's added time. `?clock=ET_H2.1800` puts that reading on football's live sample.
+describe("?clock= — football's live sample at a stressed match-time reading (S2-5 ruling 110)", () => {
+  it("parses a period the stress cfg reaches and bounded whole seconds; anything else is no stress", () => {
+    expect(parseStressClock("ET_H2.1800")).toEqual({ period: "ET_H2", seconds: 1800 });
+    expect(parseStressClock(" H1.0 ")).toEqual({ period: "H1", seconds: 0 });
+    expect(parseStressClock("H2.3600")).toEqual({ period: "H2", seconds: 3600 });
+    expect(parseStressClock("H2.3601"), "over an hour").toBeNull();
+    expect(parseStressClock("Q3.60"), "no quarters under 2 × 45").toBeNull();
+    expect(parseStressClock("PSO.60"), "the shootout has no clock").toBeNull();
+    expect(parseStressClock("ET_H2.-1")).toBeNull();
+    expect(parseStressClock("ET_H2.18.5")).toBeNull();
+    expect(parseStressClock("ET_H2")).toBeNull();
+    expect(parseStressClock(undefined)).toBeNull();
+  });
+
+  const snap = (status: string) => ({ status }) as unknown as OverlayLiveData;
+  const SNAPSHOTS = {
+    football: { warming: snap("scheduled"), live: snap("in_play"), ended: snap("decided") },
+    hockey: { warming: snap("scheduled"), live: snap("in_play"), ended: snap("decided") },
+  };
+
+  it("ET_H2.1800 holds football's live sample at 120+15:00, paused; nothing else moves", () => {
+    const out = stressFootballClock(SNAPSHOTS, parseStressClock("ET_H2.1800"), 5_000);
+    const clock = out.football.live.clock!;
+    expect(clock).toMatchObject({ phase: "ET_H2", anchorSeconds: 1800, running: false });
+    expect(clockLabelAt(clock, 5_000 + 60_000, 0, null), "paused: the same a minute on").toBe("120+15:00");
+    expect(out.football.warming).toBe(SNAPSHOTS.football.warming);
+    expect(out.football.ended).toBe(SNAPSHOTS.football.ended);
+    expect(out.hockey).toBe(SNAPSHOTS.hockey);
+  });
+
+  it("no ?clock= is the snapshots as they were", () => {
+    expect(stressFootballClock(SNAPSHOTS, null, 5_000)).toBe(SNAPSHOTS);
+  });
+});
+

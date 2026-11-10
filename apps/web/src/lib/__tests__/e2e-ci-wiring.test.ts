@@ -224,6 +224,9 @@ const WALKTHROUGH_SPECS: string[] = [
   "scorepad-v3-tennis-mtb.spec.ts",
   "scorepad-v3-volleyball-match.spec.ts",
   "scorepad-v3-cricket-icc-picks.spec.ts",
+  // S2-5 ruling 107: the football console follows a clock a device link
+  // started, read through the server's offset.
+  "scorepad-v3-football-shared-clock.spec.ts",
 
   // The organiser desks.
   "competition-desk-organiser.spec.ts",

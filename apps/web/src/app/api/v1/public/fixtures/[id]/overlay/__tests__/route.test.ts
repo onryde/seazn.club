@@ -189,23 +189,17 @@ describe.skipIf(!HAS_DB)("GET /public/fixtures/{id}/overlay", () => {
     expect(body.data?.venueTz).not.toBe("Asia/Kolkata");
   });
 
-  it("a fixture with REAL events runs the cached fold and materialises the clock the engine derived", async () => {
+  it("a fixture with REAL events runs the cached fold; a football goal alone puts no clock on air (S2-5 ruling 110)", async () => {
     // Review 2026-09-09 (I1): every earlier case had `last_seq === null`, so
     // `loadOverlayLiveData` short-circuited past `cachedFold` entirely and the
     // endpoint's whole reason to exist had never executed anywhere.
-    const elapsed = 761;
-    const { fixtureId } = await footballFixtureWithStampedGoal(elapsed);
+    // S2-5 ruling 110: football's overlay clock is the SHARED one, anchored on a `football.clock` event (the next
+    // case); a stamped goal no longer anchors it. This case pinned the goal anchor before the ruling.
+    const { fixtureId } = await footballFixtureWithStampedGoal(761);
     const { status, body } = await read(await GET(req(fixtureId, "/overlay"), ctx(fixtureId)));
     expect(status).toBe(200);
     expect(body.data?.lastSeq, "the ledger advanced, so the fold had input").toBe(2);
-    const clock = body.data?.clock as
-      | { phase: string; anchorSeconds: number; anchorAtWallMs: number }
-      | undefined;
-    expect(clock, "the fold ran and the projection found the stamp").toBeDefined();
-    expect(clock!.phase).toBe("H1");
-    // The value the scorer actually recorded, not merely "a number".
-    expect(clock!.anchorSeconds).toBe(elapsed);
-    expect(clock!.anchorAtWallMs).toBeGreaterThan(0);
+    expect(body.data?.clock, "no clock event, no football clock").toBeUndefined();
     expect(body.data?.venueTz).toBe("Europe/Amsterdam");
     // The row's own fields still ride alongside the folded ones.
     expect(body.data?.status).toBeDefined();
@@ -221,6 +215,30 @@ describe.skipIf(!HAS_DB)("GET /public/fixtures/{id}/overlay", () => {
     expect(recent.some((e) => e.type.startsWith("core."))).toBe(false);
     // A goal that named no scorer names no person — never an empty one.
     expect(recent[0]!.payload).not.toHaveProperty("person");
+  });
+
+  it("S2-5 ruling 110 — a real football ledger's clock event materialises the shared clock, with its match time", async () => {
+    const elapsed = 761;
+    const s = await seedFixture({ sportKey: "football", orgTz: "Europe/Amsterdam" });
+    await appendEvent(s.orgId, s.fixtureId, 0, { type: "core.start", payload: {} });
+    await appendEvent(s.orgId, s.fixtureId, 1, {
+      type: "football.clock",
+      payload: { at: { period: "H1", elapsed }, running: true },
+    });
+    const { status, body } = await read(await GET(req(s.fixtureId, "/overlay"), ctx(s.fixtureId)));
+    expect(status).toBe(200);
+    expect(body.data?.lastSeq).toBe(2);
+    const clock = body.data?.clock as
+      | { phase: string; anchorSeconds: number; anchorAtWallMs: number; running: boolean; matchTime?: { halfMinutes: number } }
+      | undefined;
+    expect(clock, "the fold ran and the projection found the clock event").toBeDefined();
+    expect(clock!.phase).toBe("H1");
+    // The value the console recorded, not merely "a number".
+    expect(clock!.anchorSeconds).toBe(elapsed);
+    expect(clock!.running).toBe(true);
+    expect(clock!.anchorAtWallMs).toBeGreaterThan(0);
+    // The engine's default football cfg: two halves of 45 minutes.
+    expect(clock!.matchTime).toMatchObject({ halves: 2, halfMinutes: 45 });
   });
 
   it("W2 Step 7 — a real badminton ledger arrives with the ENGINE'S set point on it", async () => {
