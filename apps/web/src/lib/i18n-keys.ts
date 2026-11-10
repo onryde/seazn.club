@@ -9156,6 +9156,7 @@ export type DictionaryKey =
   | "table.tieBreak.seed"
   | "table.tieBreak.set_diff"
   | "table.tieBreak.set_ratio"
+  | "table.tieBreak.shared_place"
   | "table.tieBreak.wins"
   | "table.tieNote.drawnAt"
   | "table.tieNote.h2hIncomplete"
