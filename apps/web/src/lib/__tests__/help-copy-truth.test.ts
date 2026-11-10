@@ -1567,8 +1567,40 @@ describe("an added falsehood fails whatever it says", () => {
     );
     expect(fault).toContain("THIS TEST IS A GATE, NOT A BUG");
     expect(fault).toContain("_approved-copy.ts");
-    expect(fault).toContain("registrations.ts");
     expect(fault, "the on-disk text must be printed, not just its digest").toContain("Something new.");
+  });
+
+  // The gate tells the reader to read their wording against the code that writes
+  // the fee lock. `registrations.ts` became a folder (src/server/MODULARIZATION.md)
+  // and this used to pin the substring "registrations.ts", which kept passing
+  // against the dead name. Pin the module that HOLDS the stamp, and make the
+  // path a checked citation, so a move that strands it fails here.
+  it("the fee-lock path the gate names is a real module, in both gate messages", () => {
+    const FEE_LOCK_MODULE = "server/usecases/registrations/checkout-completion.ts";
+    const [digestFault] = inventoryFaults(
+      "event-pass.md",
+      `${eventPass}\n\nSomething new.\n`,
+      APPROVED_EVENT_PASS_INVENTORY,
+    );
+    const anchor = "Only a competition with no paid card entry yet follows your plan's live rate.";
+    expect(eventPass, "the anchor moved — re-point this test").toContain(anchor);
+    const [paragraphFault] = goldenParagraphFaults(
+      "event-pass.md",
+      eventPass.replace(anchor, "Every competition follows your plan's live rate."),
+      APPROVED_EVENT_PASS,
+    );
+    expect(paragraphFault, "the paragraph gate did not fire").toContain("CHANGED");
+
+    const namedBy = (fault: string) =>
+      citationsIn("gate message", fault).filter((c) => c.path.startsWith("server/usecases/"));
+    // ANTI-VACUITY: each message names the module at least once, and nothing
+    // else under server/usecases/ sneaks past the resolver unchecked.
+    for (const fault of [digestFault!, paragraphFault!]) {
+      const named = namedBy(fault);
+      expect(named.length, "the gate message cites no server module").toBeGreaterThan(0);
+      expect([...new Set(named.map((c) => c.path))]).toEqual([FEE_LOCK_MODULE]);
+      expect(citationFaults(named)).toEqual([]);
+    }
   });
 
   /**
