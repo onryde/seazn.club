@@ -160,7 +160,10 @@ export async function w4KnockoutBSuite(): Promise<void> {
     const w = await v1(owner, `/api/v1/entrants/${d.ents[2]?.id}/withdraw`, "POST");
     await d.playRound(1);
     const waiting = await d.stageStatus(d.plateId);
-    await d.playRound(2, (f) => (f.home_entrant_id === d.ents[1]?.id || f.away_entrant_id === d.ents[1]?.id ? d.ents[1].id : f.home_entrant_id));
+    await d.playRound(2, (f) => {
+      if (f.home_entrant_id === null) throw new Error(`w4b X-PL-2: round-2 fixture ${f.id} has no home seat after round 1`);
+      return f.home_entrant_id === d.ents[1]?.id || f.away_entrant_id === d.ents[1]?.id ? d.ents[1].id : f.home_entrant_id;
+    });
     const plateStatus = await d.stageStatus(d.plateId);
     const noLines = (await d.lines(d.plateId)).length === 0;
     await v1(owner, `/api/v1/stages/${d.mainId}/complete`, "POST");
