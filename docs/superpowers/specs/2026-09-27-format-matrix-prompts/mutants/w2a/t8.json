@@ -409,7 +409,7 @@
   },
   {
     "id": "seat-stages",
-    "file": "apps/web/src/server/usecases/stages.ts",
+    "file": "apps/web/src/server/usecases/stages/carry-over.ts",
     "find": "    assertNoLevelSeat({ fixtureId: f.id, stageKind: f.stage_kind, status: f.status, outcome: f.outcome });\n",
     "replace": "",
     "killers": [

@@ -76,7 +76,7 @@
  },
  {
   "id": "both-dead-void-resolver",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/bracket-seats.ts",
   "find": "        if (seatDeparted(byeHome, feedHome) && seatDeparted(byeAway, feedAway)) {",
   "replace": "        if (false) {",
   "killers": [
@@ -91,7 +91,7 @@
  },
  {
   "id": "departure-dw-any-dw",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/bracket-seats.ts",
   "find": "  return bye || (e !== undefined && e.via === \"winner\" && e.row.departed_walkover);",
   "replace": "  return bye || (e !== undefined && advancesNobody(e.row.outcome as MatchOutcome | null));",
   "killers": [
@@ -113,7 +113,7 @@
  },
  {
   "id": "departure-dw-dropped",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/bracket-seats.ts",
   "find": "  return bye || (e !== undefined && e.via === \"winner\" && e.row.departed_walkover);",
   "replace": "  return bye;",
   "killers": [
@@ -143,7 +143,7 @@
  },
  {
   "id": "final-dw-written-resolver",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/bracket-seats.ts",
   "find": "          if (!feedsNextMatch(f)) continue;",
   "replace": "          if (false) continue;",
   "killers": [
@@ -173,7 +173,7 @@
  },
  {
   "id": "loser-edge-seat-not-dead",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/bracket-seats.ts",
   "find": "  if (f.loser_withdrawn) return true;",
   "replace": "  if (false) return true;",
   "killers": [
@@ -232,7 +232,7 @@
  },
  {
   "id": "stepladder-config-invalid",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/generators.ts",
   "find": "        if (side !== undefined && fed) {\n          departedSeat.set(u.fixtureId, side);",
   "replace": "        if (false) {\n          departedSeat.set(u.fixtureId, side);",
   "killers": [
@@ -366,7 +366,7 @@
  },
  {
   "id": "bye-stamp-not-dead",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/bracket-seats.ts",
   "find": "      const deadHome = openHome && (byeHome || seatFeederIsDead(feedHome));\n      const deadAway = openAway && (byeAway || seatFeederIsDead(feedAway));",
   "replace": "      const deadHome = openHome && seatFeederIsDead(feedHome);\n      const deadAway = openAway && seatFeederIsDead(feedAway);",
   "killers": [
@@ -388,7 +388,7 @@
  },
  {
   "id": "departed-seat-throw-silent",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/bracket-seats.ts",
   "find": "  if (!row) {\n    throw new Error(`writeDepartedSeat:",
   "replace": "  if (!row) {\n    return [];\n    throw new Error(`writeDepartedSeat:",
   "killers": [

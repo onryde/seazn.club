@@ -252,7 +252,7 @@
  },
  {
   "id": "t2-repin-loser-dead-legacy",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/bracket-seats.ts",
   "find": "  return killsLoserEdge(f.outcome);\n",
   "replace": "  return f.outcome?.kind === \"award\";\n",
   "killers": [

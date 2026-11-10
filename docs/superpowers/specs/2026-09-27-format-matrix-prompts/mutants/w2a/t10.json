@@ -1,7 +1,7 @@
 [
   {
     "id": "abandon-ignored",
-    "file": "apps/web/src/server/usecases/stages.ts",
+    "file": "apps/web/src/server/usecases/stages/bracket-seats.ts",
     "find": "&& !f.has_active_abandon",
     "replace": "",
     "killers": [
@@ -44,7 +44,7 @@
   },
   {
     "id": "abandon-always",
-    "file": "apps/web/src/server/usecases/stages.ts",
+    "file": "apps/web/src/server/usecases/stages/bracket-seats.ts",
     "find": "&& !f.has_active_abandon",
     "replace": "&& false",
     "killers": [
@@ -88,7 +88,7 @@
   },
   {
     "id": "cancelled",
-    "file": "apps/web/src/server/usecases/stages.ts",
+    "file": "apps/web/src/server/usecases/stages/bracket-seats.ts",
     "find": "if (f.status === \"cancelled\") return true;",
     "replace": "",
     "killers": [
@@ -103,7 +103,7 @@
   },
   {
     "id": "outcome-ignored",
-    "file": "apps/web/src/server/usecases/stages.ts",
+    "file": "apps/web/src/server/usecases/stages/bracket-seats.ts",
     "find": "f.status === \"abandoned\" && f.outcome === null && !f.has_active_abandon",
     "replace": "f.status === \"abandoned\" && !f.has_active_abandon",
     "killers": [

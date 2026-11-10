@@ -565,7 +565,7 @@
  },
  {
   "id": "t14-swiss-own-format",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/swiss-reconcile.ts",
   "find": "    if (own) {",
   "replace": "    if (false && own) {",
   "killers": [
@@ -580,7 +580,7 @@
  },
  {
   "id": "t14-swiss-skip",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/swiss-reconcile.ts",
   "find": "      if (onBlocked === \"skip\") return { shells: round, delta: NO_SWISS_RESHAPE };\n      throw ownFormatLoss(own);",
   "replace": "      throw ownFormatLoss(own);",
   "killers": [
@@ -707,7 +707,7 @@
  },
  {
   "id": "t14-loss-rebuild",
-  "file": "apps/web/src/server/usecases/stages.ts",
+  "file": "apps/web/src/server/usecases/stages/generate-tx.ts",
   "find": "await refuseOwnFormatLoss(tx, tx`stage_id = ${stageId}`);",
   "replace": "",
   "killers": [
