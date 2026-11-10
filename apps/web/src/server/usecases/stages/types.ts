@@ -46,7 +46,7 @@ export const FIXTURE_COLS = [
   "home_entrant_id", "away_entrant_id", "home_slot_label", "away_slot_label",
   "scheduled_at", "venue", "court_label", "court_id", "venue_id",
   "officials", "status", "outcome", "schedule_source", "schedule_locked", "created_at",
-  "ext_key", "lane", "is_final", "third_place", "conditional",
+  "ext_key", "lane", "is_final", "third_place", "conditional", "joint_winners_at",
 ] as const;
 
 /** F1 follow-up (2026-08-17, payload-budget regression — board-v3.spec.ts
@@ -163,6 +163,9 @@ export interface FixtureRow {
   is_final?: boolean;
   third_place?: boolean;
   conditional?: boolean;
+  /** W4 B5b (V499): when the final was ruled joint winners (an ISO instant), else null. Optional for the reason the four
+   *  above are: hand-built rows predate it. Selected by `getFixture`, `patchFixture` and `listDivisionFixtures`. */
+  joint_winners_at?: string | null;
   /** The bracket FEED edges (V214__fixtures.sql): the fixture this one's winner/loser
    *  advances INTO, and which seat there (1 = home, 2 = away). Written by
    *  `wireCrossFeeds` and by both generators' feed pass; read by

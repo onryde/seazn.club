@@ -9847,6 +9847,16 @@
                           },
                           "conditional": {
                             "type": "boolean"
+                          },
+                          "joint_winners_at": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -25952,6 +25962,16 @@
                               },
                               "conditional": {
                                 "type": "boolean"
+                              },
+                              "joint_winners_at": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -28432,6 +28452,16 @@
                               },
                               "conditional": {
                                 "type": "boolean"
+                              },
+                              "joint_winners_at": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -33900,6 +33930,16 @@
                               },
                               "conditional": {
                                 "type": "boolean"
+                              },
+                              "joint_winners_at": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -44979,6 +45019,16 @@
                         },
                         "conditional": {
                           "type": "boolean"
+                        },
+                        "joint_winners_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -45552,6 +45602,16 @@
                         },
                         "conditional": {
                           "type": "boolean"
+                        },
+                        "joint_winners_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         },
                         "conflicts": {
                           "type": "array",
