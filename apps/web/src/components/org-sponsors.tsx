@@ -5,14 +5,16 @@
 // everything — logo included, uploaded on submit — for both add and edit.
 // Tiers above partner and per-competition scoping are Pro (`sponsors.tiers`);
 // without it the manager is the free un-tiered strip with an upsell note.
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import Link from "@/components/ui/console-link";
 import {
-  ArrowDown, ArrowUp, ImagePlus, MousePointerClick, Pencil, Trash2,
+  ArrowDown, ArrowUp, Eye, ImagePlus, MousePointerClick, Pencil, Trash2,
 } from "lucide-react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { TIER_BADGE, TIER_MSG } from "@/components/sponsors/tier-labels";
+import { sponsorSaveErrorKey } from "@/components/sponsors/save-error";
+import { ApiV1Error } from "@/lib/client-v1";
 import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
 
 const MAX_LOGO_BYTES = 2 * 1024 * 1024;
@@ -35,6 +37,12 @@ export interface SponsorItem {
   click_count: number;
   /** The paid package order that activated this placement, if any. */
   paid_order_id?: string | null;
+  /** The deal the row shows (sponsor deals D8), or null when the sponsor has none. */
+  deal: { id: string; payment_status: string } | null;
+  /** A live deal owns this sponsor's tier, competition, stream and status (D9): the form offers none of them. */
+  locked_by_deal: boolean;
+  /** A deal waits to go live (draft, awaiting payment or approval, scheduled): it holds the sponsor's status (D9). */
+  has_open_deal: boolean;
 }
 
 interface Draft {
@@ -50,6 +58,23 @@ interface Draft {
 const EMPTY_DRAFT: Draft = {
   name: "", url: "", tier: "partner", competition_id: "", file: null, preview: null,
 };
+
+/** Can the club switch this sponsor back on by hand (spec §10.3: "After all of a sponsor's deals have ended: the club may
+ *  switch the sponsor back on by hand, as for a sponsor with no deal")? Exactly where the server takes `PATCH { status:
+ *  "active" }` (server/usecases/sponsors.ts `patchSponsor`): the sponsor is off (`inactive`; a dispute-parked one is `pending`
+ *  and refused), and no live deal (409 sponsor_locked_by_deal) or deal waiting to go live (409 sponsor_has_open_deal) holds
+ *  its status. */
+export function canShowAgain(s: SponsorItem): boolean {
+  return s.status === "inactive" && !s.locked_by_deal && !s.has_open_deal;
+}
+
+/** Is a delete certain to be refused? Money history (paid or refunded) on any of a sponsor's deals is a 409
+ *  `sponsor_has_deal_history` (server/usecases/sponsors.ts `dealHoldsHistory`). What the row can see of it is its paid order
+ *  and the deal it shows; a pre-deals order or a history on an older deal is only known to the server, whose refusal is shown
+ *  the same way. So this only decides whether to ASK first - it refuses nothing. */
+function deleteIsRefusedForHistory(s: SponsorItem): boolean {
+  return Boolean(s.paid_order_id) || s.deal?.payment_status === "paid" || s.deal?.payment_status === "refunded";
+}
 
 /** People type bare domains — give the link a scheme before validation. */
 function normalizeUrl(raw: string): string {
@@ -74,7 +99,7 @@ function isValidSponsorUrl(raw: string): boolean {
 /** The one sponsor form — add and edit share it; logo travels with it.
  *  Hoisted out of OrgSponsors: a nested component definition would remount
  *  (and drop focus) on every parent render. */
-function SponsorForm({
+export function SponsorForm({
   value,
   onChange,
   onSubmit,
@@ -82,6 +107,7 @@ function SponsorForm({
   submitLabel,
   busy,
   hasTiers,
+  lockedByDeal,
   competitions,
   onPickLogo,
 }: {
@@ -92,6 +118,9 @@ function SponsorForm({
   submitLabel: string;
   busy: boolean;
   hasTiers: boolean;
+  /** A live deal sets the tier and the competition (D9): both selects are disabled and the form says why. Name, link and logo
+   *  stay editable. Always false on the add form. */
+  lockedByDeal: boolean;
   competitions: { id: string; name: string }[];
   onPickLogo: (file: File, set: (fn: (prev: Draft) => Draft) => void) => void;
 }) {
@@ -99,6 +128,8 @@ function SponsorForm({
   // House uploader pattern (org-logo, prose-editor): a real button clicks a
   // ref'd hidden input — label-wrapped file inputs misfire in some browsers.
   const fileRef = useRef<HTMLInputElement>(null);
+  // The deal-lock note's id: the disabled selects point at it so the reason is announced with them, not only shown.
+  const lockNoteId = useId();
   const urlInvalid = value.url.trim() !== "" && !isValidSponsorUrl(value.url);
   return (
       <div className="flex flex-wrap items-start gap-4">
@@ -162,7 +193,8 @@ function SponsorForm({
                 <span className="label">{msg("sponsors.tierLabel")}</span>
                 <select
                   value={value.tier}
-                  disabled={busy}
+                  disabled={busy || lockedByDeal}
+                  aria-describedby={lockedByDeal ? lockNoteId : undefined}
                   onChange={(e) =>
                     onChange((prev) => ({ ...prev, tier: e.target.value as SponsorTier }))
                   }
@@ -181,7 +213,8 @@ function SponsorForm({
                 <span className="label">{msg("sponsors.scopeLabel")}</span>
                 <select
                   value={value.competition_id}
-                  disabled={busy}
+                  disabled={busy || lockedByDeal}
+                  aria-describedby={lockedByDeal ? lockNoteId : undefined}
                   onChange={(e) =>
                     onChange((prev) => ({ ...prev, competition_id: e.target.value }))
                   }
@@ -195,6 +228,11 @@ function SponsorForm({
                   ))}
                 </select>
               </label>
+            ) : null}
+            {hasTiers && lockedByDeal ? (
+              <p id={lockNoteId} className="text-xs text-slate-500 sm:col-span-2" data-testid="sponsor-locked-note">
+                {msg("sponsors.deal.lockedNote")}
+              </p>
             ) : null}
           </div>
           <div className="mt-3 flex items-center gap-2">
@@ -249,11 +287,13 @@ export function OrgSponsors({
     const data = (await res.json().catch(() => ({}))) as {
       data?: unknown;
       // v1 errors are plain strings OR structured { code, message, issues }.
-      error?: string | { message?: string };
+      error?: string | { code?: string; message?: string };
     };
     if (!res.ok) {
-      const message = typeof data.error === "string" ? data.error : data.error?.message;
-      throw new Error(message ?? msg("settings.saveFailed"));
+      // Carry the envelope's CODE, not just its sentence: the sentence is server English, the code is what `run` maps to the
+      // dictionary (`sponsorSaveErrorKey`).
+      const e = typeof data.error === "string" ? { message: data.error } : (data.error ?? {});
+      throw new ApiV1Error(e.message ?? msg("settings.saveFailed"), res.status, e.code ?? "UNKNOWN");
     }
     // /api/v1 envelope: { ok, data } — callers want the payload.
     return data.data ?? data;
@@ -266,7 +306,15 @@ export function OrgSponsors({
     try {
       await fn();
     } catch (err) {
-      setError(err instanceof Error ? err.message : msg("settings.saveFailed"));
+      // A server refusal reads the dictionary's words for its code; an error this component raised itself (a logo that is too
+      // big, a failed upload) already carries its own translated sentence.
+      setError(
+        err instanceof ApiV1Error
+          ? msg(sponsorSaveErrorKey(err))
+          : err instanceof Error
+            ? err.message
+            : msg("settings.saveFailed"),
+      );
     } finally {
       setBusy(false);
     }
@@ -287,9 +335,9 @@ export function OrgSponsors({
     const json = (await res.json().catch(() => ({}))) as {
       // handler() envelope: { ok, data } — same unwrap as api().
       data?: { upload_url?: string; public_url?: string };
-      error?: string;
     };
-    if (!res.ok) throw new Error(json.error ?? msg("settings.org.sponsors.uploadNotAllowed"));
+    // The envelope's `error` is the server's English sentence (or a structured object): never shown, whatever the status.
+    if (!res.ok) throw new Error(msg("settings.org.sponsors.uploadNotAllowed"));
     const grant = json.data;
     if (!grant?.upload_url || !grant.public_url) {
       throw new Error(msg("settings.org.sponsors.uploadNotAllowed"));
@@ -367,13 +415,16 @@ export function OrgSponsors({
 
   function remove(s: SponsorItem) {
     void (async () => {
-      // A bought placement deserves a pause: deleting hides what the
-      // sponsor paid for, and the money does NOT come back by itself.
-      if (s.paid_order_id) {
+      // The server's rule (sponsors.ts `deleteSponsor`, sponsor deals F3): a sponsor's deals go WITH it, unless one holds payment
+      // history (paid or refunded, or a pre-deals order) or an open payment link nobody could close - then the delete is a 409 and
+      // the sponsor stays. So a sponsor with deals asks first, in words that match; one already known to hold payment history
+      // is not asked to confirm a delete that cannot happen (its 409 reads `sponsors.error.hasDealHistory`). The server stays
+      // the rule's one owner: this only skips a question, it refuses nothing.
+      if (s.deal && !deleteIsRefusedForHistory(s)) {
         const ok = await confirm({
-          title: msg("sponsors.deletePaid.title"),
-          body: msg("sponsors.deletePaid.body", { name: s.name }),
-          confirmLabel: msg("sponsors.deletePaid.label"),
+          title: msg("sponsors.deleteDeal.title"),
+          body: msg("sponsors.deleteDeal.body", { name: s.name }),
+          confirmLabel: msg("sponsors.deleteDeal.label"),
           tone: "danger",
         });
         if (!ok) return;
@@ -383,6 +434,18 @@ export function OrgSponsors({
         setSponsors((prev) => prev.filter((row) => row.id !== s.id));
       });
     })();
+  }
+
+  /** Show on site again (spec §10.3): the sponsor's own status PATCH, and nothing else in it. The list is re-read whatever the
+   *  answer - a refusal means a deal arrived since the page loaded, and the re-read row then offers the control no more. */
+  function showAgain(s: SponsorItem) {
+    void run(async () => {
+      try {
+        await api(`/${s.id}`, { method: "PATCH", body: JSON.stringify({ status: "active" }) });
+      } finally {
+        await refresh().catch(() => {});
+      }
+    });
   }
 
   /** Swap within the rendered group, persist the global order. */
@@ -430,6 +493,7 @@ export function OrgSponsors({
             submitLabel={msg("settings.org.sponsors.add")}
             busy={busy}
             hasTiers={hasTiers}
+            lockedByDeal={false}
             competitions={competitions}
             onPickLogo={pickLogo}
           />
@@ -472,6 +536,7 @@ export function OrgSponsors({
                     submitLabel={msg("sponsors.save")}
                     busy={busy}
                     hasTiers={hasTiers}
+                    lockedByDeal={s.locked_by_deal}
                     competitions={competitions}
                     onPickLogo={pickLogo}
                   />
@@ -526,6 +591,20 @@ export function OrgSponsors({
                       <MousePointerClick className="h-3.5 w-3.5" strokeWidth={1.75} />
                       {s.click_count}
                     </span>
+                    {canEdit && canShowAgain(s) ? (
+                      // Off the public pages with nothing holding it there: its last deal ended (or it never had one).
+                      <button
+                        type="button"
+                        data-testid={`sponsor-show-${s.id}`}
+                        aria-label={msg("sponsors.showAgainLabel", { name: s.name })}
+                        disabled={busy}
+                        onClick={() => showAgain(s)}
+                        className="btn flex shrink-0 items-center gap-1.5 text-xs"
+                      >
+                        <Eye className="h-3.5 w-3.5" />
+                        {msg("sponsors.showAgain")}
+                      </button>
+                    ) : null}
                     {canEdit ? (
                       <div className="flex shrink-0 items-center gap-0.5">
                         <button

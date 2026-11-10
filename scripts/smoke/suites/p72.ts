@@ -69,6 +69,22 @@ export async function p72Suite(): Promise<void> {
     delSpon.status === 409 && delMsg(delSpon).includes("sponsorship payment records"),
   );
 
+  // Guard 4 — a sponsor DEAL scoped to the comp (sponsor deals D18): a complimentary deal moved no money, so no money guard sees
+  // it, yet the RESTRICT keys would turn the delete into a 500. Made through the real API, deleted through the real route.
+  const dealComp = await makeComp("P72 Deal Cup");
+  const dealPkg = v1data<{ id: string }>(
+    await v1(owner, `/api/v1/orgs/${orgId}/sponsor-packages`, "POST", { name: `P72 Deal Package ${tag}`, price_cents: 1_000, currency: "gbp", tier: "partner" }),
+  );
+  const dealSponsor = v1data<{ id: string }>(await v1(owner, `/api/v1/orgs/${orgId}/sponsors`, "POST", { name: `P72 Deal Sponsor ${tag}` }));
+  const madeDeal = await v1(owner, `/api/v1/orgs/${orgId}/sponsors/${dealSponsor.id}/deals`, "POST", {
+    package_id: dealPkg.id, competition_id: dealComp.id, payment_method: "complimentary", go_live: "immediate",
+  });
+  const delDeal = await v1(owner, `/api/v1/competitions/${dealComp.id}`, "DELETE");
+  check(
+    "p72: delete blocked by a sponsor deal (409)",
+    madeDeal.status === 201 && delDeal.status === 409 && delMsg(delDeal).includes("sponsor deals") && delMsg(delDeal).includes("archive it instead"),
+  );
+
   // === KEY AUTH: DELETE /competitions/:id is never key-accessible → 403 for
   // ANY scope (the route is absent from the allowlist, so it default-denies).
   // A read key is enough to prove the door, and — unlike a write-capable key,
@@ -273,10 +289,17 @@ async function seedPaidSponsorOrder(orgId: string, competitionId: string): Promi
     const [pkg] = await sql<{ id: string }[]>`
       insert into sponsor_packages (org_id, competition_id, name, price_cents, currency, tier)
       values (${orgId}, ${competitionId}, 'Gold', 25000, 'gbp', 'gold') returning id`;
+    // Deal-shaped (sponsor deals F4/F5): a deal always has its sponsor (sponsor_orders_sponsor_or_legacy), here a live,
+    // online, on-payment deal with paid money, snapshotting its package, every deal column explicit.
+    const [sp] = await sql<{ id: string }[]>`
+      insert into sponsors (org_id, competition_id, name, tier, status)
+      values (${orgId}, ${competitionId}, 'Smoke Sponsor', 'gold', 'active') returning id`;
     await sql`
       insert into sponsor_orders
-        (org_id, package_id, sponsor_name, sponsor_email, amount_cents, currency, status, paid_at)
-      values (${orgId}, ${pkg.id}, 'Smoke Sponsor', 'sponsor@x.test', 25000, 'gbp', 'paid', now())`;
+        (org_id, package_id, sponsor_name, sponsor_email, amount_cents, currency, status, paid_at, sponsor_id,
+         deal_status, payment_method, go_live, live_at, tier, includes_on_stream, package_name, competition_id)
+      values (${orgId}, ${pkg.id}, 'Smoke Sponsor', 'sponsor@x.test', 25000, 'gbp', 'paid', now(), ${sp.id},
+              'live', 'online', 'on_payment', now(), 'gold', false, 'Gold', ${competitionId})`;
   } finally {
     await sql.end();
   }

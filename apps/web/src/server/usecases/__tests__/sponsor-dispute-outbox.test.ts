@@ -49,6 +49,7 @@ import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness
 import { CONNECT_SCOPED_EVENT_TYPES, HANDLED_EVENT_TYPES, runEvent } from "../billing-events";
 import { handleRegistrationCheckoutCompleted } from "../registrations";
 import { handleSponsorChargeRefunded, handleSponsorDispute, listSponsorRows, patchSponsor } from "../sponsors";
+import { applyDealsToSponsor } from "@/server/sponsors/deal-apply";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { stubOutboxEnv } from "./_invite-mail";
 import { cleanUpSponsorOrgs, seedSponsorOrder } from "./_money-fixtures";
@@ -336,15 +337,22 @@ describe.skipIf(!HAS_DB)("a card inquiry leaves the sponsor live; the money take
     expect(enqueueCalls(ALERT, id), "asked once: a withdrawal queues no mail").toHaveLength(1);
   });
 
-  it("empty: with no dispute, a placement the organiser holds as pending is not parked and goes live", async () => {
+  it("empty: a sponsor with no deal and no dispute that the organiser holds as pending is not parked and goes live", async () => {
+    // Sponsor deals F6: a status PATCH is the organiser's only on a sponsor no deal governs (D9, manual control). The paid order's
+    // sponsor is deal-governed, so the empty case is a sponsor added by hand beside it, in the same org.
     const o = await paidOrder({ ownerLocale: "fr", defaultLocale: "en" });
+    const [{ id: noDeal }] = await sql<{ id: string }[]>`
+      insert into sponsors (org_id, name, tier, status) values (${o.orgId}, 'Corner Shop', 'partner', 'active') returning id`;
+    const row = { orgId: o.orgId, sponsorId: noDeal };
 
-    await expect(patchSponsor(ownerAuth(o), o.sponsorId!, { status: "pending" })).resolves.toMatchObject({ status: "pending" });
-    expect((await consoleRow(o)).dispute_parked, "held by the organiser, not parked by a dispute").toBe(false);
-    await expect(patchSponsor(ownerAuth(o), o.sponsorId!, { status: "active" })).resolves.toMatchObject({ status: "active" });
+    await expect(patchSponsor(ownerAuth(o), noDeal, { status: "pending" })).resolves.toMatchObject({ status: "pending" });
+    expect((await consoleRow(row)).dispute_parked, "held by the organiser, not parked by a dispute").toBe(false);
+    await expect(patchSponsor(ownerAuth(o), noDeal, { status: "active" })).resolves.toMatchObject({ status: "active" });
   });
 
-  it("during an inquiry the console does not call the live placement parked, and the organiser can switch it off and on", async () => {
+  it("during an inquiry the console does not call the live placement parked, and a status PATCH on its live-deal sponsor is 409 sponsor_locked_by_deal", async () => {
+    // Sponsor deals F6 (D9, spec §8a "what a live deal locks"): the live deal owns the sponsor's visibility, so the organiser's
+    // switch is refused, during an inquiry as at any other time; the inquiry itself leaves the placement live.
     const o = await paidOrder({ ownerLocale: "fr", defaultLocale: "en" });
     const id = newDisputeId();
 
@@ -352,8 +360,13 @@ describe.skipIf(!HAS_DB)("a card inquiry leaves the sponsor live; the money take
     expect((await orderState(o.orderId)).disputed_at, "premise: the inquiry flagged the order").not.toBeNull();
 
     expect((await consoleRow(o)).dispute_parked, "not parked: the placement is live").toBe(false);
-    await expect(patchSponsor(ownerAuth(o), o.sponsorId!, { status: "inactive" })).resolves.toMatchObject({ status: "inactive" });
-    await expect(patchSponsor(ownerAuth(o), o.sponsorId!, { status: "active" })).resolves.toMatchObject({ status: "active" });
+    for (const status of ["inactive", "active"] as const) {
+      await expect(patchSponsor(ownerAuth(o), o.sponsorId!, { status }), `PATCH ${status}`).rejects.toMatchObject({
+        status: 409,
+        code: "sponsor_locked_by_deal",
+      });
+    }
+    expect((await orderState(o.orderId)).sponsor_status, "the placement stays live").toBe("active");
   });
 
   it("once the money is taken the console calls the placement parked, and no status change by hand brings it back", async () => {
@@ -365,9 +378,9 @@ describe.skipIf(!HAS_DB)("a card inquiry leaves the sponsor live; the money take
     expect((await orderState(o.orderId)).sponsor_status, "premise: the withdrawal parked the placement").toBe("pending");
 
     expect((await consoleRow(o)).dispute_parked, "parked by the dispute").toBe(true);
-    await expect(patchSponsor(ownerAuth(o), o.sponsorId!, { status: "active" }), "not straight back on").rejects.toMatchObject({ status: 409 });
+    await expect(patchSponsor(ownerAuth(o), o.sponsorId!, { status: "active" }), "not straight back on").rejects.toMatchObject({ status: 409, code: "sponsor_dispute_parked" });
     // Nor the long way round: switched off by hand, the placement would no longer read as parked, and `active` would then pass.
-    await expect(patchSponsor(ownerAuth(o), o.sponsorId!, { status: "inactive" }), "nor off, then on").rejects.toMatchObject({ status: 409 });
+    await expect(patchSponsor(ownerAuth(o), o.sponsorId!, { status: "inactive" }), "nor off, then on").rejects.toMatchObject({ status: 409, code: "sponsor_dispute_parked" });
     expect((await orderState(o.orderId)).sponsor_status, "the placement stays parked").toBe("pending");
   });
 
@@ -498,29 +511,20 @@ describe.skipIf(!HAS_DB)("a sponsorship dispute that closes won tells the org ow
     expect(await rowsOf(LOST, [id]), "and no loss was recorded").toHaveLength(0);
   });
 
-  it("an inquiry closed after the organiser switched the placement off leaves it off", async () => {
-    // The inquiry leaves the placement live, so the organiser may switch it off on reading the alert. The close clears the dispute; it
-    // brings back only a placement the dispute parked, never one the organiser chose to hide.
-    const o = await paidOrder({ ownerLocale: "fr", defaultLocale: "en" });
-    const id = newDisputeId();
-
-    await handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_needs_response" }), "created");
-    await patchSponsor(ownerAuth(o), o.sponsorId!, { status: "inactive" });
-    await expect(handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_closed" }), "closed")).resolves.toBe(true);
-
-    const after = await orderState(o.orderId);
-    expect(after.disputed_at, "the dispute is over: the flag is cleared").toBeNull();
-    expect(after.sponsor_status, "and the placement stays off").toBe("inactive");
-  });
+  // Sponsor deals F6: "an inquiry closed after the organiser switched the placement off leaves it off" is gone. It is unreachable: a
+  // live deal owns its sponsor's status (D9), so the organiser cannot switch a paid placement off (the case above, 409).
 
   it("an inquiry that parked its placement before inquiries stopped parking comes back on its close", async () => {
     // Inquiries opened before this change parked the placement at `created`; their `warning_closed` can arrive up to 120 days later.
-    // That earlier park is staged as the old `created` left it: the order flagged, the placement 'pending'.
+    // That earlier park is staged the way a park is held now (sponsor deals F6): the live deal's `parked_at`, applied to its sponsor
+    // by the one owner (`applyDealsToSponsor`), which holds the placement at 'pending'.
     const o = await paidOrder({ ownerLocale: "fr", defaultLocale: "en" });
     const id = newDisputeId();
 
     await handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_needs_response" }), "created");
-    await sql`update sponsors set status = 'pending' where id = ${o.sponsorId}`;
+    await sql`update sponsor_orders set parked_at = now() where id = ${o.orderId}`;
+    await sql.begin((tx) => applyDealsToSponsor(tx, o.sponsorId, null));
+    expect((await orderState(o.orderId)).sponsor_status, "premise: the parked deal holds the placement down").toBe("pending");
     expect((await consoleRow(o)).dispute_parked, "premise: the placement reads as parked by the dispute").toBe(true);
 
     await expect(handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_closed" }), "closed")).resolves.toBe(true);
@@ -551,8 +555,9 @@ describe.skipIf(!HAS_DB)("a sponsorship dispute that closes won tells the org ow
   });
 
   it("a refunded placement the organiser set to pending stays down when the inquiry closes", async () => {
-    // 'pending' alone is the park marker, and the organiser may write it by hand after the refund. The close brings a placement back
-    // only while its order is still paid, so a refunded sponsor never goes live on its own.
+    // The refund ended the sponsor's only deal, so the sponsor is back under manual control (sponsor deals D9, F6) and the organiser
+    // may write 'pending' by hand. The close brings a placement back only while its order is still paid, so a refunded sponsor never
+    // goes live on its own.
     const o = await paidOrder({ ownerLocale: "fr", defaultLocale: "en" });
     const id = newDisputeId();
 

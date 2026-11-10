@@ -7,12 +7,13 @@
 import { describe, expect, it } from "vitest";
 import { ApiV1Error } from "@/lib/client-v1";
 import { HttpError } from "@/lib/errors";
+import { SPONSOR_REFUSAL_CODES, sponsorRefusal, type SponsorRefusalCode } from "@/lib/sponsor-refusals";
 import { v1 } from "@/server/api-v1/http";
 import uiEn from "@/dictionaries/en/ui.json";
 import uiEs from "@/dictionaries/es/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
 import uiNl from "@/dictionaries/nl/ui.json";
-import { SAVE_ERROR_FALLBACK_MSG, SAVE_ERROR_MSG, sponsorSaveErrorKey } from "../save-error";
+import { SAVE_ERROR_BY_WRITE, SAVE_ERROR_FALLBACK_MSG, SAVE_ERROR_MSG, sponsorSaveErrorKey, type SponsorWrite } from "../save-error";
 
 const LOCALES = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as Record<string, Record<string, string>>;
 
@@ -40,7 +41,92 @@ describe("sponsorSaveErrorKey - the envelope's code, to the dictionary", () => {
       checked++;
     }
     expect(checked).toBe(cases.length);
-    expect(Object.keys(SAVE_ERROR_MSG).length, "every mapped code is one the cases reach").toBe(cases.length);
+  });
+
+  it("EVERY code the sponsor, package and deal routes refuse with - enumerated from the server's own list - reaches the client verbatim and reads its own words (count reported)", async () => {
+    // Batch F review m2: the codes are no longer typed here. They come from SPONSOR_REFUSAL_CODES, the one list the server's
+    // coded refusals are built from (`sponsorRefusal`, whose `code` is typed against it), so a code added to the server joins
+    // this sweep and goes red here until it has words. The expected words per code are this test's own reading of what each
+    // refusal means (typed against the same list, so a new code also needs an entry below).
+    const EXPECTED: Record<SponsorRefusalCode, string> = {
+      sponsor_locked_by_deal: "sponsors.error.lockedByDeal",
+      sponsor_has_open_deal: "sponsors.error.hasOpenDeal",
+      sponsor_dispute_parked: "sponsors.error.disputeParked",
+      sponsor_has_deal_history: "sponsors.error.hasDealHistory",
+      sponsor_has_open_checkout: "sponsors.error.hasOpenCheckout",
+      package_retired: "sponsors.error.packageRetired",
+      scope_outside_package: "sponsors.error.scopeOutsidePackage",
+      competition_finished: "sponsors.error.competitionFinished",
+      connect_required: "sponsors.error.connectRequired",
+      sponsor_email_required: "sponsors.error.emailRequired",
+      ends_on_in_past: "sponsors.error.endsOnInPast",
+      deal_already_paid: "sponsors.error.dealAlreadyPaid",
+      deal_ended: "sponsors.error.dealEnded",
+      deal_not_payable: "sponsors.error.dealNotPayable",
+      deal_not_awaiting_approval: "sponsors.error.notAwaitingApproval",
+      deal_not_refundable: "sponsors.error.notRefundable",
+      deal_disputed: "sponsors.error.dealDisputed",
+      deal_not_invoiceable: "sponsors.error.notInvoiceable",
+      deal_changed: "sponsors.error.dealChanged",
+      // Mark as paid's refusal (F37). Resend's own sentence is a per-write override, below.
+      deal_paid_online: "sponsors.error.dealPaidOnline",
+      on_payment_needs_payment: "sponsors.error.needsPayment",
+      // A transition the deal no longer allows: it moved under the action, the same words as deal_changed.
+      illegal_transition: "sponsors.error.dealChanged",
+      stripe_unavailable: "sponsors.error.stripeUnavailable",
+    };
+    expect(SPONSOR_REFUSAL_CODES.length, "anti-vacuity: the server lists its codes").toBeGreaterThan(0);
+    let checked = 0;
+    for (const code of SPONSOR_REFUSAL_CODES) {
+      const res = await v1(async () => {
+        throw sponsorRefusal(409, "the server's own sentence", code);
+      });
+      const sent = ((await res.json()) as { error: { code: string } }).error.code;
+      expect(sent, `${code} reaches the client verbatim`).toBe(code);
+      expect(Object.hasOwn(SAVE_ERROR_MSG, code), `${code} has words in the console's map`).toBe(true);
+      expect(Object.hasOwn(EXPECTED, code), `${code} has an expected key in this test`).toBe(true);
+      const key = sponsorSaveErrorKey(new ApiV1Error("the server's own sentence", 409, sent));
+      expect(key, `${code} is not the house fallback`).not.toBe(SAVE_ERROR_FALLBACK_MSG);
+      expect(key, code).toBe(EXPECTED[code]);
+      checked++;
+    }
+    expect(checked).toBe(SPONSOR_REFUSAL_CODES.length);
+    expect(checked, "every expected entry is a listed code").toBe(Object.keys(EXPECTED).length);
+    // The plan gate's code is the status's own (402 PAYMENT_REQUIRED), not a deal code.
+    expect(sponsorSaveErrorKey(new ApiV1Error("x", 402, await codeFor(402)))).toBe("sponsors.error.planRequired");
+    // The reverse: nothing in the map is dead - every mapped code is an envelope status code or one the server lists.
+    const ENVELOPE = ["VALIDATION", "UNAUTHENTICATED", "PAYMENT_REQUIRED", "FORBIDDEN", "NOT_FOUND", "RATE_LIMITED"];
+    const listed = new Set<string>([...ENVELOPE, ...SPONSOR_REFUSAL_CODES]);
+    const dead = Object.keys(SAVE_ERROR_MSG).filter((c) => !listed.has(c));
+    expect(dead, "a mapped code nobody sends").toEqual([]);
+    expect(Object.keys(SAVE_ERROR_MSG).length).toBe(ENVELOPE.length + SPONSOR_REFUSAL_CODES.length);
+  });
+
+  it("one code, two meanings: the console's Send invoice and Resend read their own words for stripe_unavailable and deal_paid_online; every other write reads the shared words (counted)", () => {
+    // Expected values from the server's paths (server/usecases/sponsor-deals.ts):
+    //  - createDeal sends an online deal's invoice AFTER the deal is saved (F11), and the console's form never asks to end the
+    //    current deal (no `end_current`), so a create's 502 there leaves a saved draft - never "nothing was changed";
+    //  - sendDealInvoice may close the old link (retire) before Stripe fails to mint a new one, so it says "not sent";
+    //  - deal_paid_online on a Resend is the stored session already paid (ensureDealCheckout); on Mark as paid it is F37.
+    const CASES: Array<[SponsorWrite | undefined, string, string]> = [
+      ["create_deal", "stripe_unavailable", "sponsors.error.invoiceSavedNoLink"],
+      ["resend_invoice", "stripe_unavailable", "sponsors.error.resendStripeUnavailable"],
+      ["resend_invoice", "deal_paid_online", "sponsors.error.resendPaidOnline"],
+      [undefined, "stripe_unavailable", "sponsors.error.stripeUnavailable"],
+      [undefined, "deal_paid_online", "sponsors.error.dealPaidOnline"],
+      // An override never leaks to another code of the same write.
+      ["create_deal", "deal_changed", "sponsors.error.dealChanged"],
+      ["create_deal", "package_retired", "sponsors.error.packageRetired"],
+      ["resend_invoice", "deal_not_invoiceable", "sponsors.error.notInvoiceable"],
+      ["resend_invoice", "NOT_FOUND", "sponsors.error.notFound"],
+      ["create_deal", "INTERNAL", SAVE_ERROR_FALLBACK_MSG],
+    ];
+    let checked = 0;
+    for (const [write, code, key] of CASES) {
+      expect(sponsorSaveErrorKey(new ApiV1Error("x", 409, code), write), `${write ?? "any"} ${code}`).toBe(key);
+      checked++;
+    }
+    expect(checked).toBe(CASES.length);
   });
 
   it("anything else - another code, an unknown one, a network failure, not an error at all - is the house fallback (count reported)", async () => {
@@ -63,14 +149,28 @@ describe("sponsorSaveErrorKey - the envelope's code, to the dictionary", () => {
   });
 
   it("every key it can answer exists in all four locales, and none is the server's English (count reported)", () => {
+    const keys = [...Object.values(SAVE_ERROR_MSG), ...Object.values(SAVE_ERROR_BY_WRITE).flatMap((m) => Object.values(m)), SAVE_ERROR_FALLBACK_MSG];
     let checked = 0;
-    for (const key of [...Object.values(SAVE_ERROR_MSG), SAVE_ERROR_FALLBACK_MSG]) {
+    for (const key of keys) {
       for (const [locale, dict] of Object.entries(LOCALES)) {
         expect(typeof dict[key], `${locale} ${key}`).toBe("string");
         expect(dict[key]!.length, `${locale} ${key}`).toBeGreaterThan(0);
         checked++;
       }
     }
-    expect(checked).toBe((Object.keys(SAVE_ERROR_MSG).length + 1) * 4);
+    expect(checked).toBe(keys.length * 4);
+  });
+
+  it("the saved-draft sentence never says nothing was changed, in any locale (the false sentence the review found)", () => {
+    // en/ui.json `sponsors.error.stripeUnavailable` says "nothing was changed"; after a create commits its deal that is false.
+    const NOTHING_CHANGED: Record<string, RegExp> = { en: /nothing was changed/i, es: /no se cambió nada/i, fr: /rien n'a (donc )?été modifié/i, nl: /niets gewijzigd/i };
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      expect(dict["sponsors.error.stripeUnavailable"], `${locale}: premise, the shared sentence says it`).toMatch(NOTHING_CHANGED[locale]!);
+      expect(dict["sponsors.error.invoiceSavedNoLink"], locale).not.toMatch(NOTHING_CHANGED[locale]!);
+      expect(dict["sponsors.error.resendStripeUnavailable"], locale).not.toMatch(NOTHING_CHANGED[locale]!);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 });

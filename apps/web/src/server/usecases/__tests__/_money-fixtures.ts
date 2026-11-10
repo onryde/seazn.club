@@ -58,9 +58,12 @@ export async function seedSponsorOrg(opts: { defaultLocale?: Locale; prefix?: st
  * competition to audit on), and a sponsor contact at `<prefix>-sponsor-…@test.local`. Generalised from sponsor-dispute.test.ts's
  * `seedPaidSponsorOrder`.
  *
- *  - `paid`: the order carries its payment intent and `paid_at`, and the active placement it bought (`sponsorId`).
- *  - `pending`: a checkout that has not been paid yet: no placement, no `paid_at`, and no intent on the order (the success webhook
- *    writes it). `intent` is still returned: it is the id the caller's payment event carries.
+ * Every order is a DEAL (sponsor deals, F5), with every deal column explicit (they carry no default): an online deal that goes live on
+ * payment, snapshotting its package (tier, name, competition), off the stream. A deal always has its sponsor: the schema refuses one
+ * without (`sponsor_orders_sponsor_or_legacy`), and a live `on_payment` deal with no money is a state no product path writes.
+ *  - `paid`: a LIVE deal with its payment intent, `paid_at` and `live_at`, and its active sponsor (`sponsorId`).
+ *  - `pending`: a deal AWAITING PAYMENT, with its sponsor (inactive: hidden until live), and no `paid_at` and no intent on the order (the
+ *    success webhook writes it). `intent` is still returned: it is the id the caller's payment event carries.
  *
  * The org and package names carry no `&`, `<` or `>`.
  */
@@ -73,7 +76,7 @@ export async function seedSponsorOrder(opts: {
 }): Promise<{
   orderId: string;
   orgId: string;
-  sponsorId: string | null;
+  sponsorId: string;
   intent: string;
   sponsorEmail: string;
   ownerId: string;
@@ -102,19 +105,19 @@ export async function seedSponsorOrder(opts: {
     insert into sponsor_packages (org_id, competition_id, name, price_cents, currency, tier)
     values (${orgId}, ${compId}, ${packageName}, 25000, 'gbp', 'gold') returning id`;
   const paid = opts.status === "paid";
-  const sponsorId = paid
-    ? (
-        await sql<{ id: string }[]>`
-          insert into sponsors (org_id, competition_id, name, tier, status)
-          values (${orgId}, ${compId}, 'Acme Corp', 'gold', 'active') returning id`
-      )[0]!.id
-    : null;
+  const [{ id: sponsorId }] = await sql<{ id: string }[]>`
+    insert into sponsors (org_id, competition_id, name, tier, status)
+    values (${orgId}, ${compId}, 'Acme Corp', 'gold', ${paid ? "active" : "inactive"}) returning id`;
   const [{ id: orderId }] = await sql<{ id: string }[]>`
     insert into sponsor_orders (org_id, package_id, sponsor_name, sponsor_email,
                                 amount_cents, currency, status, sponsor_id,
-                                payment_intent_id, paid_at)
+                                payment_intent_id, paid_at,
+                                deal_status, payment_method, go_live, live_at,
+                                tier, includes_on_stream, package_name, competition_id)
     values (${orgId}, ${packageId}, 'Acme Corp', ${sponsorEmail},
-            25000, 'gbp', ${opts.status}, ${sponsorId}, ${paid ? intent : null}, ${paid ? new Date() : null})
+            25000, 'gbp', ${opts.status}, ${sponsorId}, ${paid ? intent : null}, ${paid ? new Date() : null},
+            ${paid ? "live" : "awaiting_payment"}, 'online', 'on_payment', ${paid ? new Date() : null},
+            'gold', false, ${packageName}, ${compId})
     returning id`;
   return { orderId, orgId, sponsorId, intent, sponsorEmail, ownerId, ownerEmail, orgName, packageName };
 }

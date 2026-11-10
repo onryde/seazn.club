@@ -48,9 +48,16 @@ async function seedPendingSponsorOrder(): Promise<{ orderId: string; orgId: stri
   const [{ id: packageId }] = await sql<{ id: string }[]>`
     insert into sponsor_packages (org_id, name, price_cents, currency)
     values (${orgId}, 'Perimeter', 1000, 'gbp') returning id`;
+  // A deal always has its sponsor (sponsor_orders_sponsor_or_legacy): an online deal awaiting payment, its sponsor hidden
+  // until live, snapshotting its org-wide package (sponsor deals F4/F5).
+  const [{ id: sponsorId }] = await sql<{ id: string }[]>`
+    insert into sponsors (org_id, competition_id, name, tier, status)
+    values (${orgId}, ${null}, 'Race Sponsor', 'partner', 'inactive') returning id`;
   const [{ id: orderId }] = await sql<{ id: string }[]>`
-    insert into sponsor_orders (org_id, package_id, sponsor_name, sponsor_email, amount_cents, currency, status)
-    values (${orgId}, ${packageId}, 'Race Sponsor', ${"sponsor-" + suffix + "@test.local"}, 1000, 'gbp', 'pending')
+    insert into sponsor_orders (org_id, package_id, sponsor_name, sponsor_email, amount_cents, currency, status, sponsor_id,
+                                deal_status, payment_method, go_live, tier, includes_on_stream, package_name, competition_id)
+    values (${orgId}, ${packageId}, 'Race Sponsor', ${"sponsor-" + suffix + "@test.local"}, 1000, 'gbp', 'pending', ${sponsorId},
+            'awaiting_payment', 'online', 'on_payment', 'partner', false, 'Perimeter', ${null})
     returning id`;
   return { orderId, orgId };
 }

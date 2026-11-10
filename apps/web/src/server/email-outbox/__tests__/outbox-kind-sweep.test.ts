@@ -21,10 +21,11 @@
 //   - registration_dispute_lost: the real `handleRegistrationDispute` (`closed`, lost) on a paid card cart whose owner's account has no
 //     language, in an `es` org. The dispute names no charge, so the balance recovery is skipped and Stripe is not called; the notice is
 //     queued to the owner's account and the worker makes the first attempt.
-//   - sponsor_invoice: the real `startSponsorCheckout` of a package in an `fr` org (the Checkout session is the Stripe mock's): the invoice
-//     is queued to the sponsor contact after the session is minted, and the request that did it makes the first attempt.
+//   - sponsor_invoice: the real `createDeal` of an ONLINE deal on a package in an `fr` org (sponsor deals Task 7; the Checkout session is
+//     the Stripe mock's): the invoice is queued to the sponsor's billing email once the session is minted, and the request that did it
+//     makes the first attempt.
 //   - sponsor_receipt: the real `handleSponsorPaymentSucceeded` on a pending order in an `nl` org: the receipt is queued to the sponsor
-//     contact in the transaction that activates the placement, and the worker makes the first attempt.
+//     contact in the transaction that pays the deal (and applies it to its sponsor), and the worker makes the first attempt.
 //   - sponsor_refund: the real `refundSponsorOrder` of a paid order in an `es` org (Stripe's refund is mocked): the notice is queued in
 //     the transaction that records the refund, at its own savepoint, and the request that did it makes the first attempt.
 //   - sponsor_dispute_alert: the real `handleSponsorDispute` (`created`) on a paid sponsor order whose org owner's account is `fr`: the
@@ -240,7 +241,8 @@ import {
   sweepRegistrations,
   withdrawRegistrationPublic,
 } from "@/server/usecases/registrations";
-import { handleSponsorDispute, handleSponsorPaymentSucceeded, refundSponsorOrder, startSponsorCheckout } from "@/server/usecases/sponsors";
+import { handleSponsorDispute, handleSponsorPaymentSucceeded, refundSponsorOrder } from "@/server/usecases/sponsors";
+import { createDeal } from "@/server/usecases/sponsor-deals";
 import {
   alertConnectBankRemoved,
   alertCreditPackGrantFailed,
@@ -454,7 +456,11 @@ beforeEach(() => {
   vi.stubEnv("CRON_SECRET", CRON);
   deliverMock.mockReset();
   deliverMock.mockImplementation(async () => ({ ok: true, providerId: `re_${RUN}_${randomUUID()}` }));
-  stripeMock.checkoutCreate.mockReset().mockImplementation(async () => ({ id: `cs_${RUN}_${randomUUID().slice(0, 8)}`, url: "https://checkout.stripe.test/session" }));
+  stripeMock.checkoutCreate.mockReset().mockImplementation(async () => ({
+    id: `cs_${RUN}_${randomUUID().slice(0, 8)}`,
+    url: "https://checkout.stripe.test/session",
+    expires_at: Math.floor(Date.now() / 1000) + 86_400,
+  }));
   stripeMock.refundCreate.mockReset().mockImplementation(async () => ({ id: `re_${RUN}_${randomUUID().slice(0, 8)}` }));
   stripeMock.setupIntentCreate.mockReset().mockImplementation(async () => {
     const id = `seti_${RUN}_${randomUUID().slice(0, 8)}`;
@@ -926,8 +932,9 @@ async function registrationDisputeLostScenario(): Promise<KindScenario> {
   };
 }
 
-/** The real checkout of a package in an `fr` org: the invoice is queued to the sponsor contact once the Checkout session (the Stripe
- *  mock's) is minted, and the request that did it makes the first attempt. The org's owner is mailed at a RUN address, so it is found. */
+/** The real online deal on a package in an `fr` org (sponsor deals Task 7): the invoice is queued to the sponsor's billing email once the
+ *  Checkout session (the Stripe mock's) is minted, and the request that did it makes the first attempt. The org's owner is mailed at a
+ *  RUN address, so it is found. */
 async function sponsorInvoiceScenario(): Promise<KindScenario> {
   const s = await seedSponsorOrg({ defaultLocale: "fr", prefix: RUN });
   made.orgIds.push(s.orgId);
@@ -940,14 +947,22 @@ async function sponsorInvoiceScenario(): Promise<KindScenario> {
     recipient,
     firstAttempt: "request",
     run: async () => {
-      const out = await startSponsorCheckout(s.auth, { package_id: s.packageId, sponsor_name: "Sweep Sponsor", sponsor_email: recipient }, "https://sweep.test");
-      expect(out.order.status, "premise: the real checkout opened a pending order").toBe("pending");
+      const [sp] = await sql<{ id: string }[]>`
+        insert into sponsors (org_id, name, tier, status) values (${s.orgId}, 'Sweep Sponsor', 'partner', 'active') returning id`;
+      const out = await createDeal(
+        s.auth,
+        sp!.id,
+        { package_id: s.packageId, competition_id: null, payment_method: "online", go_live: "on_payment", sponsor_email: recipient, ends_on: null },
+        "https://sweep.test",
+      );
+      expect(out.deal.payment_status, "premise: the real online deal is unpaid").toBe("pending");
+      expect(out.checkout_url, "premise: its invoice carries the minted link").toBe("https://checkout.stripe.test/session");
     },
   };
 }
 
 /** The real payment webhook on a pending order in an `nl` org: the receipt is queued to the sponsor contact in the transaction that
- *  activates the placement, and the first attempt is the worker's. The fixture's addresses start with RUN, so they are found. */
+ *  pays the deal (and applies it to its sponsor), and the first attempt is the worker's. The fixture's addresses start with RUN, so they are found. */
 async function sponsorReceiptScenario(): Promise<KindScenario> {
   const o = await seedSponsorOrder({ status: "pending", defaultLocale: "nl", prefix: RUN });
   made.orgIds.push(o.orgId);

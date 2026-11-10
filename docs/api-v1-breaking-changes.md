@@ -7,6 +7,43 @@ This file starts at the first breaking change the v1 contract has taken. It
 is not a full changelog: additive fields do not appear here, because a reader
 that ignores an unknown field is unaffected by one.
 
+## 2026-11-10 — sponsor orders become sponsor deals; `/sponsor-orders` is removed
+
+A sponsorship used to be an order: `POST /orgs/{id}/sponsor-orders` took a
+package, a sponsor name and an email, started a Stripe Checkout and mailed the
+link, and a paid order made a NEW sponsor. It is now a deal on a sponsor the
+organiser already has, paid online, offline or not at all, going live on
+payment, at once or on approval (sponsor deals, D16).
+
+| Removed | Replaced by |
+|---|---|
+| `GET /orgs/{id}/sponsor-orders` | `GET /orgs/{id}/sponsor-deals` (`?sponsor_id=` for one sponsor's), `GET /orgs/{id}/sponsor-deals/{dealId}` |
+| `POST /orgs/{id}/sponsor-orders` (`package_id`, `sponsor_name`, `sponsor_email`) | `POST /orgs/{id}/sponsors/{sponsorId}/deals` → 201 `{ deal, checkout_url }`; an online deal sends its invoice at once. `POST /orgs/{id}/sponsor-deals/{dealId}/send-invoice` resends it |
+| `POST /orgs/{id}/sponsor-orders/{orderId}/refund` | `POST /orgs/{id}/sponsor-deals/{dealId}/refund` |
+| `GET /orgs/{id}/sponsor-orders/{orderId}/evidence` | `GET /orgs/{id}/sponsor-deals/{dealId}/evidence` |
+| — | `POST /orgs/{id}/sponsor-deals/{dealId}/mark-paid`, `/approve`, `/end` |
+
+**Fields.** `sponsor_email` is the deal's billing email, where the invoice
+goes. An order's one `status` is split in two: `payment_status` (`none`,
+`pending`, `paid`, `failed`, `refunded`) for the money and `deal_status`
+(`draft`, `awaiting_payment`, `awaiting_approval`, `scheduled`, `live`,
+`ended`) for its life. The Checkout url rides beside the deal on the create and
+send-invoice replies, never on the deal.
+
+**What a consumer sees.** 404 on every removed path. Like the paths they
+replace, every sponsor-deals path is console-only: an API key gets 403.
+
+**Existing orders.** They are the deals' rows (the same table): an order made
+before the change reads as an ENDED deal with `ended_reason: "legacy"`, its
+payment and dispute history kept.
+
+**Why in place.** No client outside the web app uses the API yet (owner,
+2026-10-27).
+
+**Background.** Sponsor deals, plan 2026-11-07, Tasks 6 and 7. The pinning tests
+are `apps/web/src/app/api/v1/orgs/[id]/sponsor-deals/__tests__/routes.test.ts`
+and `apps/web/src/server/usecases/__tests__/sponsor-deals-online.test.ts`.
+
 ## 2026-11-10 — a cricket wicket can be voided only while it is the latest ball
 
 `POST /api/v1/fixtures/{id}/events` with `type: "core.void"` used to accept any active entry as its target. For a cricket

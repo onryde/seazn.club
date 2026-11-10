@@ -210,15 +210,19 @@ describe.skipIf(!HAS_DB)("V492 sponsors on stream — the constraints are real",
         join information_schema.constraint_column_usage ccu
           on ccu.constraint_schema = cc.constraint_schema and ccu.constraint_name = cc.constraint_name
        where cc.constraint_schema = current_schema()
-         and ccu.table_name in ('sponsors', 'sponsor_packages') and ccu.column_name = 'tier'
+         and ccu.table_name in ('sponsors', 'sponsor_packages', 'sponsor_orders') and ccu.column_name = 'tier'
          -- PG18 lists NOT NULL as a check too; only the value checks are the tier authority's.
          and cc.check_clause not like '%IS NOT NULL'`;
-    // V283 declares one on each table: sponsors.tier and sponsor_packages.tier.
-    expect(checks.map((c) => c.table_name).sort(), "tier checks found").toEqual(["sponsor_packages", "sponsors"]);
+    // V283 declares one on sponsors.tier and one on sponsor_packages.tier; the sponsor-deals delta adds the deal's snapshot
+    // tier, sponsor_orders.tier (F31).
+    expect(checks.map((c) => c.table_name).sort(), "tier checks found").toEqual(["sponsor_orders", "sponsor_packages", "sponsors"]);
+    let checked = 0;
     for (const c of checks) {
       const values = [...c.check_clause.matchAll(/'([^']+)'/g)].map((m) => m[1]!);
       expect(values.sort(), c.table_name).toEqual([...SPONSOR_TIERS].sort());
+      checked++;
     }
+    expect(checked, "tables checked").toBe(3);
   });
 
   it("an existing sponsor reads on_stream = false (greenfield, no backfill): the column is boolean NOT NULL default false, and the real producer leaves it off", async () => {

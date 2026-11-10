@@ -163,7 +163,7 @@ export async function processStripeEvent(event: Stripe.Event): Promise<void> {
       await handleStreamPackChargeRefunded(event.data.object as Stripe.Charge);
       break;
     case "payment_intent.succeeded":
-      // Sponsor order paid (v10) — activates the sponsor row, replay-safe.
+      // Sponsor deal paid — moves the deal, which applies to its own sponsor (never inserts one), replay-safe.
       await handleSponsorPaymentSucceeded(event.data.object as Stripe.PaymentIntent);
       break;
     case "payment_intent.payment_failed":

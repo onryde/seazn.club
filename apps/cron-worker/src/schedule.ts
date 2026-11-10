@@ -73,6 +73,19 @@ export const JOBS: readonly Job[] = [
     failureCounts: ["data.failed", "data.alerted"],
   },
   { id: "funnel-remind", path: "/api/funnel/remind", trigger: TRIGGER_CRON, due: { kind: "every" }, retry: true, manual: true },
+  // Sponsor deals (plan 2026-11-07-sponsor-deals D20, Task 9): an expired deal comes down within the hour, on the existing hourly
+  // trigger (no new trigger: the Free plan's 5-trigger cap). Idempotent (each deal is re-checked under its sponsor's lock), so a
+  // 5xx is re-sent. `data.failed` counts the deals it could not move (a Stripe session it could not close, an unreadable
+  // competition).
+  {
+    id: "sponsor-deals",
+    path: "/api/cron/sponsor-deals",
+    trigger: TRIGGER_CRON,
+    due: { kind: "every" },
+    retry: true,
+    manual: true,
+    failureCounts: ["data.failed"],
+  },
   { id: "ai-previews", path: "/api/cron/ai-previews", trigger: TRIGGER_CRON, due: { kind: "daily", hourUtc: 3 }, retry: true, manual: true },
   // R1 (owner 2026-10-01): daily 04:17. Never retried: a re-send after a 5xx can
   // overlap a pass still alive server-side, and the sweep's overlap safety

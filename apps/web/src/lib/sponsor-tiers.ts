@@ -1,8 +1,9 @@
 // Sponsor tiers — the ONE authority for the tier list (R4 sponsors on stream, F10). Client-safe on purpose: this module
 // imports nothing, so the pure planner (lib/sponsor-plan.ts), the overlay card and client components can read it.
 // `server/usecases/sponsors.ts` re-exports the list and type rather than declaring its own (it imports the email
-// outbox, so nothing client-side may import it). The DB's two tier CHECKs (V283: sponsors.tier, sponsor_packages.tier)
-// must name the same four — server/sponsors/__tests__/migration.test.ts reads them back and compares.
+// outbox, so nothing client-side may import it). The DB's three tier CHECKs (V283: sponsors.tier, sponsor_packages.tier;
+// the sponsor-deals delta: sponsor_orders.tier, a deal's snapshot) must name the same four —
+// server/sponsors/__tests__/migration.test.ts reads them back and compares.
 
 /** Rank order, highest first (spec 2026-10-27 §1). */
 export const SPONSOR_TIERS = ["title", "gold", "silver", "partner"] as const;

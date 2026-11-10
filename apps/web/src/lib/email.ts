@@ -565,8 +565,9 @@ export async function disputeLostEmail(args: DisputeLostArgs, locale: Locale): P
   return disputeLostTemplate(args, dict);
 }
 
-/** Pay-now invoice to the sponsor contact at checkout start (v10), in the org's language. It is queued on the email outbox by
- *  `startSponsorCheckout` (sponsors.ts, kind `sponsor_invoice`) once the Checkout session is minted; nothing sends it directly. */
+/** Pay-now invoice to an online deal's billing email, in the org's language. It is queued on the email outbox by
+ *  `queueSponsorInvoice` (sponsors.ts, kind `sponsor_invoice`; one per send, from `sendDealInvoice`) once the Checkout session
+ *  is minted or reused; nothing sends it directly. */
 export async function sponsorInvoiceEmail(args: SponsorInvoiceArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
   return sponsorInvoiceTemplate(args, dict);

@@ -11,6 +11,7 @@ import type Stripe from "stripe";
 import { z } from "zod";
 import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { sponsorRefusal } from "@/lib/sponsor-refusals";
 import { requireFeature } from "@/lib/entitlements";
 import { isRedirectableUrl, SPONSOR_URL_HTTP_ONLY } from "@/lib/sponsor-clicks";
 import { patchOf } from "@/lib/zod-patch";
@@ -25,7 +26,6 @@ import {
 } from "@/lib/email";
 import { deferred } from "@/lib/deferred";
 import {
-  assertOutboxCanQueue,
   dispatchNow,
   enqueueEmailOnce,
   expiryWithin,
@@ -40,13 +40,32 @@ import { recoverDisputedTransfer as recoverDisputedTransferCore } from "./disput
 import { orgOwnerRecipient } from "./org-owner";
 import { routes } from "@/lib/routes";
 import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
+import { placementNeedsTiers } from "@/lib/sponsor-deal-policy";
+import { assertPlacementAllowed } from "@/server/sponsors/deal-gates";
 import { ensureOrgStreamSettings } from "@/server/sponsors/stream-settings";
+import { DealRuleError, statusAfterPaid, type DealStatus, type PaymentStatus, type SponsorDeal } from "@/lib/sponsor-deals";
+import { captureError } from "@/lib/sentry";
+import {
+  applyDealsToSponsor,
+  assertSponsorPatchAllowed,
+  isLegacyDeal,
+  lockDealAndSponsor,
+  lockSponsorAndDeals,
+  readDeals,
+  readOrgDeals,
+  sponsorDealSummary,
+  type LockedDeal,
+  type ServerDeal,
+  type SponsorDealSummary,
+} from "@/server/sponsors/deal-apply";
 
 // The tier list lives in the client-safe lib (R4 F10: this module imports the email outbox, so the planner and the
 // overlay cannot import it). Re-exported, never re-declared — one authority.
 export { SPONSOR_TIERS, type SponsorTier };
 
-export interface SponsorRow {
+/** A sponsor row. Its deal summary (sponsor deals D8/D9: `deal`, `locked_by_deal`, `has_open_deal`, `last_billing_email`)
+ *  rides on every read and write answer, computed by `sponsorDealSummary` from the sponsor's deals. */
+export interface SponsorRow extends SponsorDealSummary {
   id: string;
   competition_id: string | null;
   name: string;
@@ -119,13 +138,17 @@ export type ReorderSponsorsInput = z.infer<typeof ReorderSponsorsInput>;
  *  holders entirely. It now offers it (page.tsx asks `hasFeatureOnAnyPass`, an
  *  affordance question), so a pass holder CAN save an unscoped tiered sponsor
  *  and be refused. That surfaces as an error toast, not a silent no-op, so the
- *  failure is legible — pick the competition and it saves. */
+ *  failure is legible — pick the competition and it saves.
+ *
+ *  WHICH placements need the key is `placementNeedsTiers`'s answer (sponsor deals D17, F14; spec §10 Q1), the one
+ *  predicate sponsors, packages and deals share — never re-decided here. A patch that names neither field judges what
+ *  it introduces: an absent tier reads as partner and an absent scope as the whole org. */
 async function assertTierAllowed(
   orgId: string,
   tier: SponsorTier | undefined,
   competitionId: string | null | undefined,
 ): Promise<void> {
-  if ((tier && tier !== "partner") || competitionId != null) {
+  if (placementNeedsTiers(tier ?? "partner", competitionId ?? null)) {
     await requireFeature(orgId, "sponsors.tiers", competitionId ?? undefined);
   }
 }
@@ -146,8 +169,9 @@ async function sponsorCompetitionId(orgId: string, id: string): Promise<string |
  *  request (Next applies a request's revalidations when its handler finishes) and never rejects, the write having
  *  committed. Never `bustPublicSponsors` here: its `deferred` is Next's `after()`, which runs once the response has gone
  *  and fires its tags only when every tail task is done - smoke job 128625643038 read a free org's public page 3 ms after
- *  the 201 and was served the cached page without the new partner sponsor. */
-async function expirePublicSponsors(orgId: string, op: string): Promise<void> {
+ *  the 201 and was served the cached page without the new partner sponsor. Exported for the deal usecases (sponsor deals F1):
+ *  every console deal action awaits it after its commit. */
+export async function expirePublicSponsors(orgId: string, op: string): Promise<void> {
   await expireCompetitionShell(orgId, { op });
 }
 
@@ -166,21 +190,31 @@ function bustPublicSponsors(orgId: string): void {
  *  paid_order_id links a placement back to the package order that bought
  *  it, so the manager can mark it and guard its deletion. */
 export async function listSponsorRows(orgId: string): Promise<SponsorRow[]> {
-  return withTenant(orgId, (tx) => tx<SponsorRow[]>`
+  return withTenant(orgId, async (tx) => {
+    const rows = await tx<Omit<SponsorRow, keyof SponsorDealSummary>[]>`
     select ${tx(COLS)},
            (select o.id from sponsor_orders o
             where o.sponsor_id = sponsors.id and o.status = 'paid'
             limit 1) as paid_order_id,
-           (sponsors.status = 'pending'
-            and exists(select 1 from sponsor_orders o
-                       where o.sponsor_id = sponsors.id and o.status = 'paid'
-                         and o.disputed_at is not null)) as dispute_parked,
+           -- Parked: a dispute holds the sponsor's LIVE deal (its parked_at), which applyDealsToSponsor holds at pending.
+           exists(select 1 from sponsor_orders o
+                  where o.sponsor_id = sponsors.id and o.deal_status = 'live'
+                    and o.parked_at is not null) as dispute_parked,
            exists(select 1 from sponsor_orders o
                   where o.sponsor_id = sponsors.id and o.status = 'refunded'
                     and o.dispute_id is not null) as dispute_lost
     from sponsors
     order by array_position(${[...SPONSOR_TIERS]}::text[], tier),
-             display_order, created_at, id`);
+             display_order, created_at, id`;
+    // The deal summary is computed in TS from the deals themselves (pickRowDeal), never a SQL copy of the selection.
+    const bySponsor = new Map<string, ServerDeal[]>();
+    for (const d of await readOrgDeals(tx, orgId)) {
+      const list = bySponsor.get(d.sponsor_id!) ?? [];
+      list.push(d);
+      bySponsor.set(d.sponsor_id!, list);
+    }
+    return rows.map((r) => ({ ...r, ...sponsorDealSummary(bySponsor.get(r.id) ?? []) }));
+  });
 }
 
 export async function listSponsors(auth: AuthCtx): Promise<SponsorRow[]> {
@@ -207,12 +241,16 @@ export async function createSponsor(
                  and tier = ${input.tier}),
               ${input.status})
       returning ${tx(COLS)}`;
-    return row!;
+    return { ...row!, ...sponsorDealSummary([]) };
   }).then(async (row) => {
     await expirePublicSponsors(auth.orgId, "sponsor.create");
     return row;
   });
 }
+
+/** The sponsor fields that make up its placement: what a live deal writes (deal-apply.ts step 3) and what a hand PATCH takes
+ *  over from it (ruling (g)). */
+const PLACEMENT_FIELDS = ["tier", "competition_id", "on_stream"] as const;
 
 export async function patchSponsor(
   auth: AuthCtx,
@@ -243,8 +281,15 @@ export async function patchSponsor(
       : patch.tier && patch.tier !== "partner"
         ? await sponsorCompetitionId(auth.orgId, id)
         : undefined;
+  // The plan gate runs FIRST, before the transaction: on a plan without `sponsors.tiers` a tier or scope PATCH answers 402
+  // before any deal lock is consulted (sponsor deals F16).
   await assertTierAllowed(auth.orgId, patch.tier, scope);
   return withTenant(auth.orgId, async (tx) => {
+    // ONE unconditional sponsor lock, for every patch (sponsor deals F16), in the one order every deal writer takes (F2):
+    // the sponsor, then its deals. Every deal writer holds this lock while it moves a deal, so the deals read under it are
+    // current — a deal another transaction made live while this PATCH waited is seen, and locks the patch below.
+    const locked = await lockSponsorAndDeals(tx, id);
+    if (!locked) throw new HttpError(404, "sponsor not found");
     // A placement parked by an open dispute (its paid order is flagged and
     // the handler took it down to 'pending') stays down until the dispute
     // closes — reactivating it by hand would put a charged-back sponsor
@@ -252,39 +297,108 @@ export async function patchSponsor(
     // just `active`: switched to `inactive` it would no longer read as
     // parked, and `active` would then pass. An inquiry flags the order but
     // leaves the placement live, so the organiser manages it as normal.
-    // The row lock orders this against the webhook's park.
+    // Checked before the deal lock, so a parked placement keeps saying why.
     if (patch.status !== undefined && patch.status !== "pending") {
-      const [cur] = await tx<{ status: string; open_dispute: boolean }[]>`
-        select s.status,
-               exists(select 1 from sponsor_orders o
-                      where o.sponsor_id = s.id and o.status = 'paid'
-                        and o.disputed_at is not null) as open_dispute
-        from sponsors s where s.id = ${id} for update of s`;
-      if (cur?.status === "pending" && cur.open_dispute) {
-        throw new HttpError(
+      const openDispute = locked.deals.some((o) => o.payment_status === "paid" && o.disputed_at !== null);
+      if (locked.sponsor.status === "pending" && openDispute) {
+        throw sponsorRefusal(
           409,
           "this placement is parked by an open payment dispute — it comes back automatically if the dispute is won",
+          "sponsor_dispute_parked",
         );
       }
     }
-    const [row] = await tx<SponsorRow[]>`
-      update sponsors set ${tx(patch as never, ...(cols as never[]))}
+    // D9: a live deal owns tier, scope, stream and status; a deal waiting to go live holds status.
+    assertSponsorPatchAllowed(locked.deals, cols);
+    // Ruling (g): a hand write of the placement (tier, scope, or the On-stream tick) makes it the club's, so the reset that
+    // undoes a deal's snapshot when its last deal ends (deal-apply.ts step 5) leaves it alone. Name, url, logo and status
+    // writes leave the provenance as it is.
+    const write: Record<string, unknown> = PLACEMENT_FIELDS.some((f) => cols.includes(f))
+      ? { ...patch, placement_from_deal_id: null }
+      : patch;
+    const [row] = await tx<Omit<SponsorRow, keyof SponsorDealSummary>[]>`
+      update sponsors set ${tx(write as never, ...(Object.keys(write) as never[]))}
       where id = ${id} returning ${tx(COLS)}`;
-    if (!row) throw new HttpError(404, "sponsor not found");
     // R12: the first tick turns the org's rotation on. After the update (a refused tick leaves no row), in its transaction.
     if (patch.on_stream === true) await ensureOrgStreamSettings(tx, auth.orgId, auth.userId);
-    return row;
+    return { ...row!, ...sponsorDealSummary(locked.deals) };
   }).then(async (row) => {
     await expirePublicSponsors(auth.orgId, "sponsor.patch");
     return row;
   });
 }
 
+/** Money a deal holds as history: once paid (and so once refundable or refunded), its record is the audit trail. */
+const MONEY_HISTORY: ReadonlySet<PaymentStatus> = new Set<PaymentStatus>(["paid", "refunded"]);
+
+/** A deal that holds its sponsor (product ruling 2026-11-09, sponsor deals Task 5): it carries money history — money paid or
+ *  refunded — or it is a pre-deals legacy order (F16: the RESTRICT key covers it). Every other deal (a draft, an unpaid or
+ *  failed one, a complimentary one, live or ended) goes with its sponsor. A stored Checkout session no longer holds it
+ *  (Task 7, F3): `deleteSponsor` retires the session first, and refuses only when it cannot. The tenant's prune policy (V300's
+ *  fence, widened by the sponsor-deals delta) admits exactly the others once their session is cleared, so each refusal here is
+ *  a 409, never a 23503. */
+function dealHoldsHistory(d: ServerDeal): boolean {
+  // TODO(Task 20, F10): `|| d.invoice_number !== null` once deals are numbered (a numbered invoice is a document); the
+  // prune policy gains `and invoice_number is null` in the same task.
+  return MONEY_HISTORY.has(d.payment_status) || isLegacyDeal(d);
+}
+
+const holdsHistory = () =>
+  sponsorRefusal(
+    409,
+    "this sponsor has deal history (money paid or refunded, or a pre-deals order) — end its deals instead",
+    "sponsor_has_deal_history",
+  );
+const holdsOpenCheckout = () =>
+  sponsorRefusal(
+    409,
+    "this sponsor has a deal whose payment link could not be closed, or was just paid — try again in a moment, or end the deal instead",
+    "sponsor_has_open_checkout",
+  );
+
+/**
+ * Delete a sponsor with its deals. Refused (409 `sponsor_has_deal_history`) while a deal holds money history — read FIRST, so a
+ * delete that will be refused never closes a payment link. Then the session rule (F3), outside any transaction: every stored
+ * Checkout session is retired; a completed one (money in flight) or an open one that cannot be expired refuses the delete (409
+ * `sponsor_has_open_checkout`), because a later payment on a deleted deal would take money and record nothing. Each retired
+ * session is forgotten at once, committed (`forgetDeadSession`), so the deals hold no session. Then ONE transaction in the one
+ * lock order (F2) re-checks both — a session still stored was minted since, so it is payable and refuses — and deletes.
+ */
 export async function deleteSponsor(auth: AuthCtx, id: string): Promise<void> {
+  const before = await withTenant(auth.orgId, (tx) => readDeals(tx, { sponsorId: id }));
+  if (before.some(dealHoldsHistory)) throw holdsHistory();
+  // Every refusal before the first expire (review I1): Stripe is asked about EVERY stored session first, so a completed one
+  // (money in flight) or one nobody can read refuses the delete with no link closed. Then each open one is expired and
+  // forgotten in its own statement: a later failure leaves no dead link stored on a deal that stays.
+  const held = before.flatMap((d): WithSession[] =>
+    d.checkout_session_id === null ? [] : [{ id: d.id, checkout_session_id: d.checkout_session_id }]);
+  const asStripeRefusal = async <T>(fn: () => Promise<T>): Promise<T> => {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 502) throw holdsOpenCheckout();
+      throw err;
+    }
+  };
+  const statuses: SessionStatus[] = [];
+  for (const d of held) {
+    const status = await asStripeRefusal(() => storedSessionStatus(d));
+    if (status === "complete") throw holdsOpenCheckout();
+    statuses.push(status);
+  }
+  for (const [i, d] of held.entries()) {
+    await asStripeRefusal(() => (statuses[i] === "open" ? expireOpenSession(auth.orgId, d) : forgetDeadSession(auth.orgId, d)));
+  }
   return withTenant(auth.orgId, async (tx) => {
-    const [row] = await tx<{ id: string }[]>`
-      delete from sponsors where id = ${id} returning id`;
-    if (!row) throw new HttpError(404, "sponsor not found");
+    // The one lock order (F2): the sponsor, then its deals — legacy rows included, since the RESTRICT key covers them.
+    const locked = await lockSponsorAndDeals(tx, id);
+    if (!locked) throw new HttpError(404, "sponsor not found");
+    if (locked.deals.some(dealHoldsHistory)) throw holdsHistory();
+    // Every retired session was forgotten above, so a session still stored was minted since the read: it is still payable.
+    // With none stored, the prune policy admits the rows.
+    if (locked.deals.some((d) => d.checkout_session_id !== null)) throw holdsOpenCheckout();
+    if (locked.deals.length > 0) await tx`delete from sponsor_orders where sponsor_id = ${id}`;
+    await tx`delete from sponsors where id = ${id}`;
   }).then(() => expirePublicSponsors(auth.orgId, "sponsor.delete"));
 }
 
@@ -373,11 +487,12 @@ export async function resolveSponsors(
 }
 
 // ---------------------------------------------------------------------------
-// Monetization (Pro `sponsors.monetize`) — packages + Connect checkout
+// Packages (every plan; a placement, so the placement gate) + Connect checkout (Pro `sponsors.monetize`)
 // ---------------------------------------------------------------------------
 
 export interface SponsorPackageRow {
   id: string;
+  /** Null: any competition (the deal picks), V495. */
   competition_id: string | null;
   name: string;
   description: string | null;
@@ -386,12 +501,23 @@ export interface SponsorPackageRow {
   tier: SponsorTier;
   active: boolean;
   created_at: string;
+  /** A deal on this package puts its sponsor on the stream too (V495; snapshotted onto the deal, D4). */
+  includes_on_stream: boolean;
+  /** How many DISTINCT sponsors hold an open (non-ended, non-legacy) deal on this package. */
+  used_by: number;
 }
 
 const PKG_COLS = [
   "id", "competition_id", "name", "description", "price_cents",
-  "currency", "tier", "active", "created_at",
+  "currency", "tier", "active", "created_at", "includes_on_stream",
 ] as const;
+
+/** `used_by`, read beside a package row (select or returning). Non-ended is non-legacy too: V495 rewrote every pre-deals
+ *  order as an ENDED deal, and `sponsor_orders_ended_shape` keeps a non-ended deal reason-free. */
+function packageUsedBy(tx: Tx) {
+  return tx`(select count(distinct o.sponsor_id)::int from sponsor_orders o
+              where o.package_id = sponsor_packages.id and o.deal_status <> 'ended') as used_by`;
+}
 
 export const CreateSponsorPackageInput = z.object({
   name: z.string().min(1).max(120),
@@ -400,21 +526,18 @@ export const CreateSponsorPackageInput = z.object({
   currency: z.string().length(3).toLowerCase().default("gbp"),
   tier: z.enum(SPONSOR_TIERS).default("partner"),
   competition_id: z.string().uuid().nullish(),
+  includes_on_stream: z.boolean().default(false),
 });
 export type CreateSponsorPackageInput = z.infer<typeof CreateSponsorPackageInput>;
 
-export const StartSponsorCheckoutInput = z.object({
-  package_id: z.string().uuid(),
-  sponsor_name: z.string().min(1).max(80),
-  sponsor_email: z.string().email().max(320),
-});
-export type StartSponsorCheckoutInput = z.infer<typeof StartSponsorCheckoutInput>;
-
+/** A package is a placement, so every plan may create one (spec §8) and it passes the ONE placement gate (D17, F14):
+ *  a tier other than partner, or a competition, needs `sponsors.tiers`. Selling it online is `sponsors.monetize`'s,
+ *  asked when an online deal is made, never here. */
 export async function createSponsorPackage(
   auth: AuthCtx,
   input: CreateSponsorPackageInput,
 ): Promise<SponsorPackageRow> {
-  await requireFeature(auth.orgId, "sponsors.monetize", input.competition_id ?? undefined);
+  await assertPlacementAllowed(auth.orgId, input.tier, input.competition_id ?? null);
   return withTenant(auth.orgId, async (tx) => {
     if (input.competition_id) {
       const [comp] = await tx`select 1 from competitions where id = ${input.competition_id}`;
@@ -422,18 +545,18 @@ export async function createSponsorPackage(
     }
     const [row] = await tx<SponsorPackageRow[]>`
       insert into sponsor_packages (org_id, competition_id, name, description,
-                                    price_cents, currency, tier)
+                                    price_cents, currency, tier, includes_on_stream)
       values (${auth.orgId}, ${input.competition_id ?? null}, ${input.name},
               ${input.description ?? null}, ${input.price_cents},
-              ${input.currency}, ${input.tier})
-      returning ${tx(PKG_COLS)}`;
+              ${input.currency}, ${input.tier}, ${input.includes_on_stream})
+      returning ${tx(PKG_COLS)}, ${packageUsedBy(tx)}`;
     return row!;
   });
 }
 
 export async function listSponsorPackages(auth: AuthCtx): Promise<SponsorPackageRow[]> {
   return withTenant(auth.orgId, (tx) => tx<SponsorPackageRow[]>`
-    select ${tx(PKG_COLS)} from sponsor_packages
+    select ${tx(PKG_COLS)}, ${packageUsedBy(tx)} from sponsor_packages
     order by active desc, created_at desc, id`);
 }
 
@@ -445,7 +568,7 @@ export async function deactivateSponsorPackage(
   return withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<SponsorPackageRow[]>`
       update sponsor_packages set active = false
-      where id = ${id} returning ${tx(PKG_COLS)}`;
+      where id = ${id} returning ${tx(PKG_COLS)}, ${packageUsedBy(tx)}`;
     if (!row) throw new HttpError(404, "package not found");
     return row;
   });
@@ -473,218 +596,398 @@ const ORDER_COLS = [
   "disputed_at", "dispute_id",
 ] as const;
 
-export async function listSponsorOrders(auth: AuthCtx): Promise<SponsorOrderRow[]> {
-  return withTenant(auth.orgId, (tx) => tx<SponsorOrderRow[]>`
-    select ${tx(ORDER_COLS)} from sponsor_orders
-    order by created_at desc, id`);
+// ---------------------------------------------------------------------------
+// An online deal's Checkout session (sponsor deals Task 7, D14, F3, F32, F37)
+// ---------------------------------------------------------------------------
+
+/** The deal fields a Checkout session and its invoice are built from (the deal's snapshot, D4). */
+type SponsorDealView = Pick<
+  SponsorDeal,
+  "id" | "package_id" | "package_name" | "sponsor_name" | "sponsor_email" | "amount_cents" | "currency" | "competition_id"
+>;
+
+/** The org fields a deal's Checkout session needs. */
+export interface DealCheckoutOrg {
+  id: string;
+  slug: string;
+  stripe_account_id: string;
+}
+
+/** A Checkout session as a deal stores it: id, pay link, and its expiry in Unix seconds (Stripe's own unit). */
+export interface DealSession {
+  id: string;
+  url: string;
+  expires_at: number;
+}
+
+/** A stored session is reused while more than this is left of it (F32): a link mailed with minutes to live is no link. */
+const SESSION_REUSE_MARGIN_MS = 10 * 60_000;
+
+/** Stripe could not do what the deal needs; the deal is left exactly as it was. */
+function stripeUnavailable(what: string, err: unknown, deal: { id: string }): HttpError {
+  log.error({ err, dealId: deal.id }, `sponsors: Stripe could not ${what}`);
+  return sponsorRefusal(502, `Stripe could not ${what}, so nothing was changed; try again`, "stripe_unavailable");
 }
 
 /**
- * Start a package checkout: order row FIRST (pending), then the Stripe
- * Checkout Session as a destination charge on the org's connected account —
- * amount to the org, platform keeps the entry-fee application fee, exactly
- * like registrations. Stripe is called OUTSIDE any sql transaction; the
- * idempotency key `sponsor-order-<id>` pins retries to one session. The
- * sponsor contact gets a pay-now invoice email.
- *
- * The invoice goes through the email outbox (kind `sponsor_invoice`, ref
- * `sponsor_order/<order id>`, once-key the order id), in the org's language,
- * and this request makes its first attempt after it returns. The box is asked
- * whether it can queue email BEFORE the order exists (P-W2-1): the session
- * minted below is real, so a key fault must refuse the checkout before it
- * starts. Once the session exists the order stands: an invoice that still
- * cannot be queued is logged and the checkout answers as usual, since the
- * organiser is shown the same payment link to share.
+ * Mint a deal's Checkout session: a destination charge on the org's connected account (the amount to the org, the platform's
+ * entry-fee application fee kept), exactly like a registration's. Outside any transaction (house rule). `attempt` is the send
+ * number, so the Stripe idempotency key `sponsor-deal-<id>-<attempt>` pins a retried send to ONE session and a later send to a
+ * new one. Success and cancel return to the org's public hub, `routes.publicHub(slug)` (`/live/<slug>`, F25). Any Stripe
+ * failure is a 502 (`stripe_unavailable`).
  */
-export async function startSponsorCheckout(
-  auth: AuthCtx,
-  input: StartSponsorCheckoutInput,
+export async function mintDealCheckout(
+  deal: SponsorDealView,
+  org: DealCheckoutOrg,
   origin: string,
-): Promise<{ order: SponsorOrderRow; checkout_url: string }> {
-  const pkg = await withTenant(auth.orgId, async (tx) => {
-    const [row] = await tx<SponsorPackageRow[]>`
-      select ${tx(PKG_COLS)} from sponsor_packages where id = ${input.package_id}`;
-    if (!row) throw new HttpError(404, "package not found");
-    if (!row.active) throw new HttpError(422, "This package is no longer on sale");
-    return row;
-  });
-  await requireFeature(auth.orgId, "sponsors.monetize", pkg.competition_id ?? undefined);
-
-  // Connect gate (v9 ordering): the org must be onboarded — same refusal as
-  // entry fees — before any order exists. The ToS chargeback clause was
-  // accepted when the connected account was created (createConnectOnboardingLink).
-  const [org] = await sql<
-    {
-      slug: string;
-      name: string;
-      default_locale: string;
-      stripe_account_id: string | null;
-      stripe_charges_enabled: boolean;
-    }[]
-  >`
-    select slug, name, default_locale, stripe_account_id, stripe_charges_enabled
-    from organizations where id = ${auth.orgId}`;
-  if (!org?.stripe_account_id || !org.stripe_charges_enabled) {
-    throw new HttpError(409, "Connect Stripe (Get paid) before selling sponsorship packages");
-  }
-  // P-W2-1: refuse now, before the order and the Checkout session, if this box
-  // cannot queue the invoice.
-  assertOutboxCanQueue();
-
-  const order = await withTenant(auth.orgId, async (tx) => {
-    const [row] = await tx<SponsorOrderRow[]>`
-      insert into sponsor_orders (org_id, package_id, sponsor_name, sponsor_email,
-                                  amount_cents, currency)
-      values (${auth.orgId}, ${pkg.id}, ${input.sponsor_name}, ${input.sponsor_email},
-              ${pkg.price_cents}, ${pkg.currency})
-      returning ${tx(ORDER_COLS)}`;
-    return row!;
-  });
-
+  attempt: number,
+): Promise<DealSession> {
   const returnBase = `${origin}${routes.publicHub(org.slug)}`;
-  const session = await getStripe().checkout.sessions.create(
-    {
-      mode: "payment",
-      customer_email: input.sponsor_email,
-      metadata: { kind: "sponsor", order_id: order.id, org_id: auth.orgId },
-      line_items: [
-        {
-          quantity: 1,
-          price_data: {
-            currency: pkg.currency,
-            unit_amount: pkg.price_cents,
-            product_data: { name: `${pkg.name} — sponsorship (${input.sponsor_name})` },
-          },
-        },
-      ],
-      payment_intent_data: {
-        application_fee_amount: applicationFeeCents(
-          pkg.price_cents,
-          await feePercentFor(auth.orgId, pkg.competition_id ?? undefined),
-        ),
-        transfer_data: { destination: org.stripe_account_id },
-        metadata: {
-          kind: "sponsor",
-          order_id: order.id,
-          package_id: pkg.id,
-          org_id: auth.orgId,
-        },
-      },
-      success_url: `${returnBase}?sponsorship=success`,
-      cancel_url: `${returnBase}?sponsorship=cancelled`,
-    },
-    { idempotencyKey: `sponsor-order-${order.id}` },
-  );
-  if (!session.url) throw new HttpError(502, "Stripe did not return a checkout URL");
-
-  // The render is inside the same try as the enqueue: the session is minted,
-  // so nothing about the invoice may turn this checkout into an error.
-  let invoiceId: string | null = null;
+  const fee = applicationFeeCents(deal.amount_cents, await feePercentFor(org.id, deal.competition_id ?? undefined));
+  let session: Stripe.Checkout.Session;
   try {
-    const locale = await recipientLocale(sql, { pick: null, userId: null, orgDefault: org.default_locale });
-    const content = await sponsorInvoiceEmail(
+    session = await getStripe().checkout.sessions.create(
       {
-        orgName: org.name,
-        packageName: pkg.name,
-        sponsorName: input.sponsor_name,
-        amountCents: pkg.price_cents,
-        currency: pkg.currency,
-        checkoutUrl: session.url,
+        mode: "payment",
+        customer_email: deal.sponsor_email ?? undefined,
+        metadata: { kind: "sponsor", order_id: deal.id, org_id: org.id },
+        line_items: [
+          {
+            quantity: 1,
+            price_data: {
+              currency: deal.currency,
+              unit_amount: deal.amount_cents,
+              product_data: { name: `${deal.package_name} — sponsorship (${deal.sponsor_name})` },
+            },
+          },
+        ],
+        payment_intent_data: {
+          application_fee_amount: fee,
+          transfer_data: { destination: org.stripe_account_id },
+          metadata: { kind: "sponsor", order_id: deal.id, package_id: deal.package_id, org_id: org.id },
+        },
+        success_url: `${returnBase}?sponsorship=success`,
+        cancel_url: `${returnBase}?sponsorship=cancelled`,
       },
-      locale,
+      { idempotencyKey: `sponsor-deal-${deal.id}-${attempt}` },
     );
-    invoiceId = await enqueueEmailOnce(sql, {
-      kind: "sponsor_invoice",
-      refType: "sponsor_order",
-      refId: order.id,
-      dedupeKey: onceKey("sponsor_invoice", "sponsor_order", order.id),
-      orgId: auth.orgId,
-      to: input.sponsor_email,
-      transactional: false,
-      expiresAt: expiryWithin(null),
-      ...content,
-    });
   } catch (err) {
-    log.error({ err, orderId: order.id }, "sponsors: invoice email could not be queued");
+    throw stripeUnavailable("create the payment link", err, deal);
   }
-  const queued = invoiceId;
-  if (queued) deferred(() => dispatchNow([queued]));
+  if (!session.url) throw stripeUnavailable("return a payment link", new Error("no checkout url"), deal);
+  return { id: session.id, url: session.url, expires_at: session.expires_at };
+}
 
-  return { order, checkout_url: session.url };
+/** What Stripe says of a session; the session rule decides on `retrieve` alone. */
+type SessionStatus = "open" | "complete" | "expired";
+
+/** A deal holding a stored session. */
+type WithSession = { id: string; checkout_session_id: string };
+
+/** Ask Stripe what a stored session is (`retrieve`). A read error, or any status but open / complete / expired, is a 502
+ *  (`stripe_unavailable`): nothing is decided on a session nobody could read. */
+async function storedSessionStatus(deal: WithSession): Promise<SessionStatus> {
+  let status: Stripe.Checkout.Session["status"];
+  try {
+    status = (await getStripe().checkout.sessions.retrieve(deal.checkout_session_id)).status;
+  } catch (err) {
+    throw stripeUnavailable("read this deal's payment link", err, deal);
+  }
+  if (status === "open" || status === "complete" || status === "expired") return status;
+  throw stripeUnavailable(`read this deal's payment link (status ${String(status)})`, null, deal);
+}
+
+/**
+ * Forget a dead session at once, in its OWN committed statement (review I1): a later refusal in the caller's transaction must
+ * not roll the dead id, url and expiry back onto the deal, where the next Send invoice would offer it. Compare-and-clear: only
+ * while it is still the stored session (a session stored since is left alone, and the caller's lock re-check sees it).
+ */
+async function forgetDeadSession(orgId: string, deal: WithSession): Promise<void> {
+  await withTenant(orgId, (tx) => tx`
+    update sponsor_orders set checkout_session_id = null, checkout_url = null, checkout_expires_at = null
+     where id = ${deal.id} and checkout_session_id = ${deal.checkout_session_id}`);
+}
+
+/** Expire an open session at Stripe, then forget it. Keyed per SESSION (never per deal: a later session of the same deal
+ *  would replay the first one's answer and stay open). An `expire` error is a 502 and is never parsed; nothing is forgotten. */
+async function expireOpenSession(orgId: string, deal: WithSession): Promise<void> {
+  try {
+    await getStripe().checkout.sessions.expire(
+      deal.checkout_session_id,
+      {},
+      { idempotencyKey: `sponsor-session-expire-${deal.checkout_session_id}` },
+    );
+  } catch (err) {
+    throw stripeUnavailable("close this deal's open payment link", err, deal);
+  }
+  await forgetDeadSession(orgId, deal);
+}
+
+/**
+ * The session rule (D14, F3, F37): two payable sessions for one deal must never coexist, so every path that replaces, abandons
+ * or deletes a stored session retires it first. Outside any transaction. Decided ONLY on the status `retrieve` reports (an
+ * `expire` error is never parsed): `open` is expired, then `retired`; `expired` is `retired` with no call; `complete` is money
+ * in flight, answered as `complete` for the caller to refuse or carry on. No stored session is `none`. A session that cannot be
+ * read, or that is open and cannot be expired, is a 502 (`stripe_unavailable`) and nothing else happens: carrying on would leave
+ * two payable sessions. A retired session is forgotten at once, committed (review I1), so callers refuse BEFORE retiring and
+ * compare the stored session against null after. (registrations.ts expires a stale session best-effort; here a failed expire
+ * stops.)
+ */
+export async function retireDealSession(
+  orgId: string,
+  deal: { id: string; checkout_session_id: string | null },
+): Promise<"none" | "retired" | "complete"> {
+  if (deal.checkout_session_id === null) return "none";
+  const held: WithSession = { id: deal.id, checkout_session_id: deal.checkout_session_id };
+  const status = await storedSessionStatus(held);
+  if (status === "complete") return "complete";
+  if (status === "open") await expireOpenSession(orgId, held);
+  else await forgetDeadSession(orgId, held);
+  return "retired";
+}
+
+/** A completed session: the sponsor has paid at Stripe and the webhook is on its way (F37). */
+export function paidOnline(): HttpError {
+  return sponsorRefusal(
+    409,
+    "The sponsor has already paid this deal online; the payment is being recorded. Refresh in a moment.",
+    "deal_paid_online",
+  );
+}
+
+/**
+ * The ONE reuse-or-retire-and-mint rule (F32; Task 22's `payInvoice` calls it too): the stored session while more than 10
+ * minutes are left of it AND Stripe still calls it open (review I1: the stored expiry alone is no proof — an expired one is
+ * forgotten and replaced), else the stored one retired by the session rule and a new one minted with attempt
+ * `invoice_send_count + 1`. A completed stored session is 409 `deal_paid_online`: no re-mint. Outside any transaction.
+ * `minted: false` means the stored session is reused; after a mint the deal holds no session until the caller stores it.
+ */
+export async function ensureDealCheckout(
+  deal: ServerDeal,
+  org: DealCheckoutOrg,
+  origin: string,
+): Promise<DealSession & { minted: boolean }> {
+  const expiresMs = deal.checkout_expires_at === null ? null : Date.parse(deal.checkout_expires_at);
+  const sessionId = deal.checkout_session_id;
+  if (sessionId && deal.checkout_url && expiresMs !== null && expiresMs > Date.now() + SESSION_REUSE_MARGIN_MS) {
+    const held: WithSession = { id: deal.id, checkout_session_id: sessionId };
+    const status = await storedSessionStatus(held);
+    if (status === "open") return { id: sessionId, url: deal.checkout_url, expires_at: Math.floor(expiresMs / 1000), minted: false };
+    if (status === "complete") throw paidOnline();
+    await forgetDeadSession(org.id, held);
+  } else if ((await retireDealSession(org.id, deal)) === "complete") throw paidOnline();
+  return { ...(await mintDealCheckout(deal, org, origin, deal.invoice_send_count + 1)), minted: true };
+}
+
+/**
+ * Queue a deal's invoice on the email outbox, on `tx` (the transaction that records the send): kind `sponsor_invoice`, ref
+ * `sponsor_order/<deal id>`, once-key `<deal id>:<sendNo>` — so a resend is a new invoice and a retried send (the same count)
+ * is not. To the deal's billing email, a literal address, in the org's language. Returns the outbox id, or `null` when this
+ * send already has its invoice. No catch: a refused enqueue rolls the send back (its session is pinned by its Stripe key, so a
+ * retry gets the same one). The caller asked `assertOutboxCanQueue` before it minted (P-W2-1).
+ */
+export async function queueSponsorInvoice(
+  tx: Tx,
+  a: { deal: SponsorDealView & { org_id: string }; checkoutUrl: string; sendNo: number },
+): Promise<string | null> {
+  const { deal, checkoutUrl, sendNo } = a;
+  if (!deal.sponsor_email) throw new Error(`sponsors: online deal ${deal.id} has no billing email (online_has_email)`);
+  const [org] = await tx<{ name: string; default_locale: string }[]>`
+    select name, default_locale from organizations where id = ${deal.org_id}`;
+  const locale = await recipientLocale(tx, { pick: null, userId: null, orgDefault: org?.default_locale ?? null });
+  const content = await sponsorInvoiceEmail(
+    {
+      orgName: org?.name ?? "the organiser",
+      packageName: deal.package_name,
+      sponsorName: deal.sponsor_name,
+      amountCents: deal.amount_cents,
+      currency: deal.currency,
+      checkoutUrl,
+    },
+    locale,
+  );
+  return enqueueEmailOnce(tx, {
+    kind: "sponsor_invoice",
+    refType: "sponsor_order",
+    refId: deal.id,
+    dedupeKey: onceKey("sponsor_invoice", "sponsor_order", deal.id, String(sendNo)),
+    orgId: deal.org_id,
+    to: deal.sponsor_email,
+    transactional: false,
+    expiresAt: expiryWithin(null),
+    ...content,
+  });
 }
 
 // ---------------------------------------------------------------------------
 // Webhook activation (billing-events dispatch; replay-safe)
 // ---------------------------------------------------------------------------
 
+/** Why a sponsor payment needs the owner's eye: money taken that did not move a deal the way a payment should. */
+type DealPaymentAlert =
+  /** The deal had ended (End now over a completed session, Review Focus 1): recorded, refundable, the sponsor untouched. */
+  | "deal_ended"
+  /** The deal's rule cannot take a payment (a draft, or awaiting approval; F12): recorded, refundable, the deal as it was. */
+  | "deal_not_payable"
+  /** A second, different payment on a deal already paid (F3): its own ended, refundable row. */
+  | "duplicate_payment"
+  /** The deal the payment names is not there (T8 review m1): money taken with nothing to record it on. */
+  | "deal_missing";
+
 /**
- * payment_intent.succeeded with metadata.kind === 'sponsor': mark the order
- * paid and create the activated sponsor row at the package tier. Idempotent
- * under /admin/billing-events replay: only a `pending` or `failed` order
- * activates, so a paid or refunded one short-circuits (sponsor_id is written
- * only with `paid`, so it needs no guard of its own); Stripe's own
- * idempotency keys expire ~24h so this DB guard is the real one.
+ * The owner alert for a payment the club may owe back (Review Focus 1, F3, F12): a Sentry event carrying the reason, the deal
+ * and the intent, raised after the commit and only on the transition (a redelivery of the same intent is a no-op before it).
+ * TODO(Task 23): the owner's account-addressed `sponsor_deal_paid` outbox alert (with a duplicate flag) replaces this stand-in;
+ * that kind needs Task 23's `email_outbox_kind_valid` delta.
+ */
+function alertDealPayment(
+  reason: DealPaymentAlert,
+  a: { orgId: string | null; dealId: string; intentId: string; recordedOn: string | null },
+): void {
+  captureError(new Error(`sponsors: ${reason} (deal ${a.dealId})`), {
+    orgId: a.orgId ?? undefined,
+    route: "billing.sponsor_payment",
+    extra: { reason, dealId: a.dealId, intentId: a.intentId, recordedOn: a.recordedOn },
+  });
+}
+
+/** What a payment did, decided under the lock and acted on after the commit. */
+type PaymentOutcome = {
+  /** Null only when the deal is not there and the intent names no org. */
+  orgId: string | null;
+  /** The deal applied to its sponsor: the public pages are busted. */
+  applied: boolean;
+  alert: { reason: DealPaymentAlert; dealId: string; recordedOn: string | null; err?: unknown } | null;
+};
+
+/**
+ * payment_intent.succeeded with metadata.kind === 'sponsor' (spec §5.2, §5.3; D7): the payment moves its DEAL, and the deal
+ * reaches its sponsor only through `applyDealsToSponsor`. Nothing here inserts a sponsor (anti-goal 1, F17).
  *
- * The sponsor's receipt is queued on the email outbox in the SAME transaction
- * (`queueSponsorReceipt`), so it exists exactly when the activation does, and
- * only on the transition (the guard above stops a replay before it). The
- * worker makes the first attempt: a webhook has no response to defer behind.
+ * In the one lock order (F2): the deal's sponsor, then its deals (`lockDealAndSponsor`), then re-checked:
+ *  - unpaid (`pending`, or `failed`: Stripe lets a failed intent succeed on a retry, and a re-sent invoice pays on a new
+ *    intent): money paid, the intent that took it recorded (overwriting a declined one, so its refund and disputes find the
+ *    deal), and the receipt queued in the same transaction. Then the go-live rule (`statusAfterPaid`) moves the deal — live,
+ *    scheduled behind a live deal, or awaiting approval — and the sponsor's deals are applied. An ENDED deal (legacy included)
+ *    keeps its status and its sponsor is not touched: `log.warn` plus the owner alert. A deal its rule cannot move (a draft,
+ *    awaiting approval) keeps its status: the `DealRuleError` is caught here, never escapes (F12: a throw would 500 the
+ *    webhook and Stripe would retry forever), and is logged with the deal id plus the owner alert. Both stay refundable.
+ *  - already paid on the SAME intent (on this deal or the row a second payment made): a redelivery, a no-op. Stripe's own
+ *    idempotency keys expire ~24h, so this DB guard is the real one.
+ *  - paid (or refunded) on another intent: a second payment (F3). Its own row — the deal's snapshot, `online`, money `paid`
+ *    on its own intent, amount and currency, ended `duplicate_payment` — so the club sees the money and can refund it; the
+ *    deal and its sponsor stay as they were; owner alert. No receipt (Task 23 owns the copy).
+ *
+ * The worker makes the receipt's first attempt: a webhook has no response to defer behind. Nobody reads a webhook's result back
+ * at once, so the public pages are busted as tail work (`deferred`, F1).
  */
 export async function handleSponsorPaymentSucceeded(
   intent: Stripe.PaymentIntent,
 ): Promise<void> {
   if (intent.metadata?.kind !== "sponsor") return;
-  const orderId = intent.metadata.order_id;
-  if (!orderId) return;
+  const dealId = intent.metadata.order_id;
+  if (!dealId) return;
 
-  const activated = await sql.begin(async (tx) => {
-    const [order] = await tx<(SponsorOrderRow & { org_id: string })[]>`
-      select ${sql(ORDER_COLS as unknown as string[])}, org_id
-      from sponsor_orders where id = ${orderId} for update`;
-    if (!order) return null;
-    // Only an order that has not been paid activates: `pending`, or `failed` (Stripe lets a failed intent succeed on a retry).
-    // `paid` is a replay. `refunded` must never come back on boards and public pages: the old guard (paid, or a sponsor_id) let a
-    // refunded order whose placement the organiser had deleted (`sponsor_id` set null) re-activate and be marked paid again.
-    if (order.status !== "pending" && order.status !== "failed") return null;
+  const out = await sql.begin(async (tx): Promise<PaymentOutcome | null> => {
+    const locked = await lockDealAndSponsor(tx, dealId);
+    // Money taken with no deal to record it on (deleted in a race after its session completed): never quiet (T8 review m1).
+    if (!locked) {
+      return { orgId: intent.metadata.org_id ?? null, applied: false, alert: { reason: "deal_missing", dealId, recordedOn: null } };
+    }
+    const { deal, orgId } = locked;
+    if (deal.payment_status !== "pending" && deal.payment_status !== "failed") {
+      if (locked.deals.some((d) => d.payment_intent_id === intent.id)) return null; // a redelivery
+      return { orgId, applied: false, alert: { reason: "duplicate_payment", dealId: deal.id, recordedOn: await recordDuplicatePayment(tx, locked, intent) } };
+    }
 
-    const [pkg] = await tx<{ name: string; tier: SponsorTier; competition_id: string | null }[]>`
-      select name, tier, competition_id from sponsor_packages where id = ${order.package_id}`;
-    if (!pkg) return null;
-
-    const [sponsor] = await tx<{ id: string }[]>`
-      insert into sponsors (org_id, competition_id, name, tier, status, display_order)
-      values (${order.org_id}, ${pkg.competition_id}, ${order.sponsor_name}, ${pkg.tier},
-              'active',
-              (select coalesce(max(display_order), -1) + 1 from sponsors
-               where org_id = ${order.org_id}
-                 and competition_id is not distinct from ${pkg.competition_id}
-                 and tier = ${pkg.tier}))
-      returning id`;
-    await queueSponsorReceipt(tx, { order, packageName: pkg.name, intentId: intent.id });
+    const now = new Date();
+    let next: DealStatus | null = null; // null: the deal does not move
+    let refused: DealRuleError | null = null;
+    if (deal.deal_status !== "ended") {
+      const otherLive = locked.deals.some((d) => d.id !== deal.id && d.deal_status === "live");
+      try {
+        next = statusAfterPaid(deal, otherLive);
+      } catch (err) {
+        if (!(err instanceof DealRuleError)) throw err;
+        refused = err;
+      }
+    }
+    const goesLive = next === "live" && deal.deal_status !== "live";
     await tx`
       update sponsor_orders
-      set status = 'paid', paid_at = now(),
-          payment_intent_id = coalesce(payment_intent_id, ${intent.id}),
-          sponsor_id = ${sponsor!.id}
-      where id = ${orderId}`;
-    return { order };
+         set status = 'paid', paid_at = ${now}, payment_intent_id = ${intent.id},
+             deal_status = ${next ?? deal.deal_status}${goesLive ? tx`, live_at = ${now}` : tx``}
+       where id = ${deal.id}`;
+    if (deal.sponsor_email !== null) {
+      await queueSponsorReceipt(tx, {
+        order: {
+          id: deal.id,
+          org_id: orgId,
+          sponsor_name: deal.sponsor_name,
+          sponsor_email: deal.sponsor_email,
+          amount_cents: deal.amount_cents,
+          currency: deal.currency,
+        },
+        packageName: deal.package_name,
+        intentId: intent.id,
+      });
+    }
+    if (next === null) {
+      const reason = refused ? "deal_not_payable" : "deal_ended";
+      return { orgId, applied: false, alert: { reason, dealId: deal.id, recordedOn: deal.id, err: refused ?? undefined } };
+    }
+    if (locked.sponsorId !== null) await applyDealsToSponsor(tx, locked.sponsorId, null, { now });
+    return { orgId, applied: true, alert: null };
   });
-  if (!activated) return;
+  if (!out) return;
 
-  const [org] = await sql<{ slug: string }[]>`
-    select slug from organizations where id = ${activated.order.org_id}`;
-  if (org) deferred(() => fireOrgRevalidate(org.slug));
+  if (out.alert) {
+    const { reason, dealId: alerted, recordedOn, err } = out.alert;
+    const at = { dealId: alerted, intentId: intent.id, recordedOn };
+    if (reason === "deal_ended") log.warn({ dealId: alerted }, "sponsors: payment on an ended deal");
+    else if (reason === "deal_not_payable") log.error({ err, ...at }, "sponsors: payment on a deal its rule cannot move");
+    else if (reason === "deal_missing") log.error(at, "sponsors: payment on a deal that is not there");
+    else log.error(at, "sponsors: a second payment on a paid deal");
+    alertDealPayment(reason, { orgId: out.orgId, ...at });
+  }
+  if (out.applied && out.orgId !== null) {
+    const [org] = await sql<{ slug: string }[]>`
+      select slug from organizations where id = ${out.orgId}`;
+    if (org) deferred(() => fireOrgRevalidate(org.slug));
+  }
+}
+
+/**
+ * F3: a second, different payment on a deal already paid. Recorded as its own row under the same lock, so the money stays
+ * visible and refundable: the deal's snapshot (sponsor, package, scope, tier, stream), `online`, money `paid` on its own intent,
+ * amount and currency, ended `duplicate_payment` at once (applyDealsToSponsor reads it as an ordinary ended deal). A sponsor-less
+ * legacy row, or a deal with no billing email, cannot carry such a row (`sponsor_or_legacy`, `online_has_email`): then nothing
+ * is written and the alert alone carries it (null). Answers the new row's id.
+ */
+async function recordDuplicatePayment(tx: Tx, locked: LockedDeal, intent: Stripe.PaymentIntent): Promise<string | null> {
+  const { deal } = locked;
+  if (locked.sponsorId === null || deal.sponsor_email === null) return null;
+  const [row] = await tx<{ id: string }[]>`
+    insert into sponsor_orders (org_id, sponsor_id, package_id, package_name, tier, includes_on_stream, competition_id,
+                                sponsor_name, sponsor_email, payment_method, go_live, amount_cents, currency, status,
+                                payment_intent_id, paid_at, deal_status, ended_at, ended_reason)
+    values (${locked.orgId}, ${locked.sponsorId}, ${deal.package_id}, ${deal.package_name}, ${deal.tier},
+            ${deal.includes_on_stream}, ${deal.competition_id}, ${deal.sponsor_name}, ${deal.sponsor_email}, 'online',
+            ${deal.go_live}, ${intent.amount_received ?? intent.amount}, ${intent.currency}, 'paid', ${intent.id}, now(),
+            'ended', now(), 'duplicate_payment')
+    returning id`;
+  return row!.id;
 }
 
 /**
  * Queue the sponsor's payment receipt on the email outbox, on `tx`: the
- * transaction that activates the placement (R1), so the receipt and the paid
- * order commit together or not at all. Kind `sponsor_receipt`, ref
+ * transaction that pays the deal (R1), so the receipt and the paid
+ * deal commit together or not at all. Kind `sponsor_receipt`, ref
  * `sponsor_order/<order id>`, once-key the payment intent: one receipt per
  * payment, whatever redelivers it. Literal address (the sponsor contact), in
  * the org's language (D4: the order has no pick and no account). The org is
  * read through `tx` (#996). There is no catch (D1): a refused enqueue rolls the
- * activation back and fails the webhook, which Stripe delivers again. Returns
+ * payment back and fails the webhook, which Stripe delivers again. Returns
  * the outbox id, or `null` when this payment already has its receipt.
  * Exported for the once-key test.
  */
@@ -732,7 +1035,11 @@ export async function queueSponsorReceipt(
 }
 
 /** payment_intent.payment_failed for a sponsor order: pending → failed
- *  (a paid order is never clobbered by a stray late failure event). */
+ *  (a paid order is never clobbered by a stray late failure event). The
+ *  deal's status is unchanged: the sponsor can retry in the same session, and
+ *  nothing reaches the sponsor. One autocommit statement on the deal row alone,
+ *  which waits on no other lock while it holds it, so it cannot deadlock
+ *  against the sponsor-first order (F2). */
 export async function handleSponsorPaymentFailed(
   intent: Stripe.PaymentIntent,
 ): Promise<void> {
@@ -763,26 +1070,33 @@ export async function refundSponsorOrder(
     if (!row) throw new HttpError(404, "order not found");
     return row;
   });
+  // A refund that lost the race to another (or to Stripe's own charge.refunded) is the deal's refusal, coded (review m2).
   if (order.status !== "paid" || !order.payment_intent_id) {
-    throw new HttpError(422, "Only a paid order can be refunded");
+    throw sponsorRefusal(409, "Only a paid deal can be refunded, and only once", "deal_not_refundable");
   }
   // Stripe refuses refunds on charged-back charges; surface the state in our
   // own words before ever calling out (raw Stripe text leaked to the console).
   if (order.disputed_at) {
-    throw new HttpError(
+    throw sponsorRefusal(
       409,
       "This payment has been charged back — a disputed payment can't be refunded. Respond to the dispute instead.",
+      "deal_disputed",
     );
   }
-  // Stripe OUTSIDE any sql transaction (house rule).
-  await getStripe().refunds.create(
-    {
-      payment_intent: order.payment_intent_id,
-      reverse_transfer: true,
-      refund_application_fee: true,
-    },
-    { idempotencyKey: `sponsor-refund-${orderId}` },
-  );
+  // Stripe OUTSIDE any sql transaction (house rule). A Stripe failure is the documented 502 `stripe_unavailable`, never a
+  // 500 carrying Stripe's own text (review m2); nothing was recorded, and the key makes the retry safe.
+  try {
+    await getStripe().refunds.create(
+      {
+        payment_intent: order.payment_intent_id,
+        reverse_transfer: true,
+        refund_application_fee: true,
+      },
+      { idempotencyKey: `sponsor-refund-${orderId}` },
+    );
+  } catch (err) {
+    throw stripeUnavailable("refund this payment", err, { id: orderId });
+  }
   const notice = await handleSponsorChargeRefunded({
     payment_intent: order.payment_intent_id,
     refunded: true,
@@ -799,17 +1113,17 @@ export async function refundSponsorOrder(
 }
 
 /**
- * charge.refunded for a sponsor order (Stripe-dashboard refunds included):
- * flip the paid order to `refunded` and take the bought placement off the
- * public pages (status → inactive; the row survives as the audit trail).
- * Idempotent — only a `paid` order flips, and non-sponsor charges don't
- * match any order row.
+ * charge.refunded for a sponsor deal (the console's refund and Stripe-dashboard refunds alike): the paid deal's money flips to
+ * `refunded` and the deal ENDS as refunded in the same transaction, then its sponsor's deals are applied (spec §5.2; D8): a
+ * scheduled deal behind it goes live, else the sponsor is reset when this refund ended its last live or open deal. A deal that
+ * had already ended passes no `endedDealId` (F7: not a transition), so a hand switch-back-on survives it. A legacy row (D6,
+ * F18) flips its money only: its deal columns stay and nothing is applied. No sponsor is ever written here except through
+ * `applyDealsToSponsor`. In the one lock order (F2): the deal is found unlocked, then its sponsor and deals are locked and the
+ * deal re-checked (still paid, on this intent). Idempotent: only a `paid` deal flips, and a non-sponsor charge matches none.
  *
- * The flip queues the sponsor's refund notice in the same transaction
- * (`queueSponsorRefundReceipt`), so only the transition writes one. Returns
- * its outbox id (null: no flip, or no notice) for the console refund, which
- * makes the first attempt; a webhook (a refund made in the Stripe dashboard)
- * leaves it to the worker.
+ * The flip queues the sponsor's refund notice in the same transaction (`queueSponsorRefundReceipt`), so only the transition
+ * writes one. Returns its outbox id (null: no flip, or no notice) for the console refund, which makes the first attempt; a
+ * webhook (a refund made in the Stripe dashboard) leaves it to the worker.
  */
 export async function handleSponsorChargeRefunded(charge: Stripe.Charge): Promise<string | null> {
   const intent =
@@ -818,29 +1132,37 @@ export async function handleSponsorChargeRefunded(charge: Stripe.Charge): Promis
       : charge.payment_intent?.id;
   if (!intent || !charge.refunded) return null;
   const refunded = await sql.begin(async (tx) => {
-    const [order] = await tx<
-      {
-        id: string;
-        org_id: string;
-        sponsor_id: string | null;
-        sponsor_name: string;
-        sponsor_email: string;
-        amount_cents: number;
-        currency: string;
-        package_id: string;
-      }[]
-    >`
-      update sponsor_orders
-      set status = 'refunded'
-      where payment_intent_id = ${intent} and status = 'paid'
-      returning id, org_id, sponsor_id, sponsor_name, sponsor_email,
-                amount_cents, currency, package_id`;
-    if (!order) return null;
-    const notice = await queueSponsorRefundReceipt(tx, order);
-    if (order.sponsor_id) {
-      await tx`update sponsors set status = 'inactive' where id = ${order.sponsor_id}`;
+    // Unlocked: only the deal, to lock its sponsor first (F2).
+    const [ref] = await tx<{ id: string }[]>`
+      select id from sponsor_orders where payment_intent_id = ${intent} and status = 'paid'`;
+    if (!ref) return null;
+    const locked = await lockDealAndSponsor(tx, ref.id);
+    if (!locked || locked.deal.payment_status !== "paid" || locked.deal.payment_intent_id !== intent) return null;
+    const { deal, orgId } = locked;
+    if (locked.sponsorId === null || isLegacyDeal(deal)) {
+      await tx`update sponsor_orders set status = 'refunded' where id = ${deal.id}`;
+    } else {
+      const now = new Date();
+      const wasOpen = deal.deal_status !== "ended";
+      await tx`
+        update sponsor_orders
+           set status = 'refunded', deal_status = 'ended', ended_at = coalesce(ended_at, ${now}), ended_reason = 'refunded'
+         where id = ${deal.id}`;
+      await applyDealsToSponsor(tx, locked.sponsorId, null, { now, endedDealId: wasOpen ? deal.id : null });
     }
-    return { orgId: order.org_id, notice };
+    const notice =
+      deal.sponsor_email === null
+        ? null
+        : await queueSponsorRefundReceipt(tx, {
+            id: deal.id,
+            org_id: orgId,
+            sponsor_name: deal.sponsor_name,
+            sponsor_email: deal.sponsor_email,
+            amount_cents: deal.amount_cents,
+            currency: deal.currency,
+            package_id: deal.package_id,
+          });
+    return { orgId, notice };
   });
   if (!refunded) return null;
   const [org] = await sql<{ slug: string }[]>`
@@ -973,17 +1295,37 @@ async function recoverSponsorDispute(
   });
 }
 
+/** A dispute parks the deal (D8: a parked live deal holds its sponsor at pending; a parked scheduled deal goes live parked),
+ *  then applies. `coalesce` keeps the first park time under replay. A legacy row (D6, F18) is never parked: its deal columns
+ *  are not this path's to write. */
+async function parkDeal(tx: Tx, locked: LockedDeal): Promise<void> {
+  if (locked.sponsorId === null || isLegacyDeal(locked.deal)) return;
+  await tx`update sponsor_orders set parked_at = coalesce(parked_at, now()) where id = ${locked.deal.id}`;
+  await applyDealsToSponsor(tx, locked.sponsorId, null);
+}
+
+/** A dispute that closes without taking the money (won, or an inquiry dropped) unparks the deal, then applies. */
+async function unparkDeal(tx: Tx, locked: LockedDeal): Promise<void> {
+  if (locked.sponsorId === null || isLegacyDeal(locked.deal)) return;
+  await tx`update sponsor_orders set parked_at = null where id = ${locked.deal.id}`;
+  await applyDealsToSponsor(tx, locked.sponsorId, null);
+}
+
 /**
  * charge.dispute.created / .funds_withdrawn / .closed for a sponsor package
  * charge (P0-2 — destination charges make the PLATFORM liable, exactly like
  * entry fees). `created` flags the order and alerts the owner, and parks the
- * placement (pending) for a formal dispute, which takes the money at once.
- * An inquiry (`warning_*`) takes no money, so its placement stays live until
+ * DEAL (`parked_at`) for a formal dispute, which takes the money at once.
+ * An inquiry (`warning_*`) takes no money, so its deal stays live until
  * `funds_withdrawn` reports the money taken and parks it (owner, 2026-10-26).
  * `closed` clears the flag and, on a win (or a closed inquiry,
- * `warning_closed`) while the order is still paid, re-activates a placement
- * the dispute parked; on a loss it writes the order off, deactivates the
- * placement and reverses the club's transfer. Dispatched after
+ * `warning_closed`) while the order is still paid, unparks the deal; on a
+ * loss it writes the order off, ENDS the deal (`dispute_lost`) and reverses
+ * the club's transfer. Every move reaches the sponsor only through
+ * `applyDealsToSponsor` (D8: a parked live deal holds its sponsor at
+ * pending; an ended last deal resets it, only on that transition, F7), in
+ * the one lock order (F2: the deal's sponsor, then its deals). A legacy row
+ * (D6, F18) flips its money and dispute columns only. Dispatched after
  * handleRegistrationDispute for `created` and `closed`, and alone for
  * `funds_withdrawn` — a non-sponsor intent matches no order row and no-ops.
  *
@@ -1018,8 +1360,9 @@ export async function handleSponsorDispute(
     })[]
   >`
     select ${sql(ORDER_COLS as unknown as string[])}, org_id, disputed_at, dispute_id,
-           (select competition_id from sponsor_packages p where p.id = sponsor_orders.package_id)
-             as competition_id,
+           -- The deal's own scope (its snapshot, D4), never the package's: a deal scoped to C on an any-competition package
+           -- audits on C (F35).
+           competition_id,
            (select name from sponsor_packages p where p.id = sponsor_orders.package_id)
              as package_name,
            (select name from organizations g where g.id = sponsor_orders.org_id) as org_name,
@@ -1054,12 +1397,12 @@ export async function handleSponsorDispute(
     // on show. If the network escalates it, `funds_withdrawn` parks it then.
     const inquiry = dispute.status.startsWith("warning_");
     await sql.begin(async (tx) => {
-      const [prior] = await tx<{ dispute_id: string | null }[]>`
-        select dispute_id from sponsor_orders where id = ${order.id} for update`;
+      const locked = await lockDealAndSponsor(tx, order.id);
+      if (!locked) return;
       await tx`update sponsor_orders
                set disputed_at = coalesce(disputed_at, now()), dispute_id = ${dispute.id}
                where id = ${order.id}`;
-      const firstFlag = prior?.dispute_id !== dispute.id;
+      const firstFlag = locked.deal.dispute_id !== dispute.id;
       if (firstFlag && recipient) {
         const kind = "sponsor_dispute_alert";
         await enqueueEmailOnce(tx, {
@@ -1075,9 +1418,7 @@ export async function handleSponsorDispute(
           dedupeKey: onceKey(kind, "dispute", dispute.id, "created"),
         });
       }
-      if (firstFlag && !inquiry && order.sponsor_id) {
-        await tx`update sponsors set status = 'pending' where id = ${order.sponsor_id}`;
-      }
+      if (firstFlag && !inquiry) await parkDeal(tx, locked);
     });
     bustPublicSponsors(order.org_id);
     return true;
@@ -1094,13 +1435,11 @@ export async function handleSponsorDispute(
     // dispute's `created` has parked it already, so the write converges, and
     // a withdrawal that beats its `created` leaves the park to that event.
     await sql.begin(async (tx) => {
-      const [prior] = await tx<
-        { status: SponsorOrderRow["status"]; disputed_at: Date | null; dispute_id: string | null }[]
-      >`select status, disputed_at, dispute_id from sponsor_orders where id = ${order.id} for update`;
-      const open = prior?.status === "paid" && prior.disputed_at !== null && prior.dispute_id === dispute.id;
-      if (open && order.sponsor_id) {
-        await tx`update sponsors set status = 'pending' where id = ${order.sponsor_id}`;
-      }
+      const locked = await lockDealAndSponsor(tx, order.id);
+      if (!locked) return;
+      const prior = locked.deal;
+      const open = prior.payment_status === "paid" && prior.disputed_at !== null && prior.dispute_id === dispute.id;
+      if (open) await parkDeal(tx, locked);
     });
     bustPublicSponsors(order.org_id);
     return true;
@@ -1121,11 +1460,12 @@ export async function handleSponsorDispute(
     // two ways Stripe offers to resolve an inquiry, and a refunded sponsor
     // never goes back on boards and public pages.
     await sql.begin(async (tx) => {
-      const [prior] = await tx<{ disputed_at: Date | null; status: SponsorOrderRow["status"] }[]>`
-        select disputed_at, status from sponsor_orders where id = ${order.id} for update`;
+      const locked = await lockDealAndSponsor(tx, order.id);
+      if (!locked) return;
+      const prior = locked.deal;
       await tx`update sponsor_orders set disputed_at = null where id = ${order.id}`;
-      const firstClear = prior?.disputed_at !== null;
-      const stillPaid = prior?.status === "paid";
+      const firstClear = prior.disputed_at !== null;
+      const stillPaid = prior.payment_status === "paid";
       if (firstClear && stillPaid && recipient) {
         const kind = "sponsor_dispute_won";
         await enqueueEmailOnce(tx, {
@@ -1141,14 +1481,9 @@ export async function handleSponsorDispute(
           dedupeKey: onceKey(kind, "dispute", dispute.id, "won"),
         });
       }
-      // Only a placement the dispute parked comes back ('pending' is the
-      // park marker, and the 409 holds it while parked): an inquiry leaves
-      // the placement live, and one the organiser switched off during it
-      // stays off.
-      if (stillPaid && order.sponsor_id) {
-        await tx`update sponsors set status = 'active'
-                 where id = ${order.sponsor_id} and status = 'pending'`;
-      }
+      // The deal is unparked and applied: a live deal puts its sponsor back (an inquiry never parked it, and a live deal's
+      // status is the deal's, never a hand switch, D9). A refunded deal has ended, and an ended deal never comes back.
+      if (stillPaid) await unparkDeal(tx, locked);
     });
     bustPublicSponsors(order.org_id);
     return true;
@@ -1156,11 +1491,27 @@ export async function handleSponsorDispute(
 
   if (dispute.status === "lost") {
     // The write-off must land whatever Stripe does next — same contract as the
-    // registration dispute-lost path. Both flips are idempotent under replay.
-    await sql`update sponsor_orders set status = 'refunded' where id = ${order.id}`;
-    if (order.sponsor_id) {
-      await sql`update sponsors set status = 'inactive' where id = ${order.sponsor_id}`;
-    }
+    // registration dispute-lost path: committed BEFORE the recovery's Stripe
+    // calls. The money is written off and the deal ENDS (`dispute_lost`), then
+    // the sponsor's deals are applied: `endedDealId` only when this loss ended a
+    // live or open deal (F7), so a replay, or a loss on an already-ended deal,
+    // leaves a hand switch-back-on alone. Idempotent under replay.
+    await sql.begin(async (tx) => {
+      const locked = await lockDealAndSponsor(tx, order.id);
+      if (!locked) return;
+      const { deal } = locked;
+      if (locked.sponsorId === null || isLegacyDeal(deal)) {
+        await tx`update sponsor_orders set status = 'refunded' where id = ${deal.id}`;
+        return;
+      }
+      const now = new Date();
+      const wasOpen = deal.deal_status !== "ended";
+      await tx`
+        update sponsor_orders
+           set status = 'refunded', deal_status = 'ended', ended_at = coalesce(ended_at, ${now}), ended_reason = 'dispute_lost'
+         where id = ${deal.id}`;
+      await applyDealsToSponsor(tx, locked.sponsorId, null, { now, endedDealId: wasOpen ? deal.id : null });
+    });
     const recovery = await recoverSponsorDispute(dispute, order);
     // `already` = a replayed close (metadata guard hit) — the write-off + email
     // already happened on the first run.
@@ -1221,9 +1572,15 @@ export async function buildSponsorDisputeEvidence(
   origin: string,
 ): Promise<{ ref: string; html: string }> {
   const order = await withTenant(auth.orgId, async (tx) => {
+    // Any deal, not only one paid online: an offline or complimentary deal has no billing email and pays `none` (V495).
     const [row] = await tx<
-      (SponsorOrderRow & { dispute_id: string | null })[]
-    >`select ${tx(ORDER_COLS)}, dispute_id from sponsor_orders where id = ${orderId}`;
+      (Omit<SponsorOrderRow, "sponsor_email" | "status"> & {
+        sponsor_email: string | null;
+        status: string;
+        dispute_id: string | null;
+        package_name: string | null;
+      })[]
+    >`select ${tx(ORDER_COLS)}, dispute_id, package_name from sponsor_orders where id = ${orderId}`;
     if (!row) throw new HttpError(404, "order not found");
     return row;
   });
@@ -1250,13 +1607,15 @@ export async function buildSponsorDisputeEvidence(
 
   // The receipt, reconstructed with the exact sender inputs, in the language
   // it was sent in: the org's (queueSponsorReceipt resolves it the same way).
+  // Its package name is the deal's snapshot, as the payment webhook sends it (D4, T8 review m3): a package renamed since must
+  // not make the evidence disagree with the mail the sponsor received.
   const publicUrl = org ? `${origin}${routes.publicHub(org.slug)}` : null;
   const locale = await recipientLocale(sql, { pick: null, userId: null, orgDefault: org?.default_locale ?? null });
   const emailText = (
     await sponsorReceiptEmail(
       {
         orgName: org?.name ?? "the organiser",
-        packageName: pkg?.name ?? "sponsorship",
+        packageName: order.package_name ?? "sponsorship",
         sponsorName: order.sponsor_name,
         amountCents: order.amount_cents,
         currency: order.currency,
@@ -1287,7 +1646,7 @@ export async function buildSponsorDisputeEvidence(
   <table style="font-size:14px;border-collapse:collapse">
     ${evRow("Order", orderId)}
     ${evRow("Sponsor", order.sponsor_name)}
-    ${evRow("Customer email", order.sponsor_email)}
+    ${evRow("Customer email", order.sponsor_email ?? "—")}
     ${evRow("Package", `${pkg?.name ?? "—"} (${pkg?.tier ?? "—"})`)}
     ${evRow("Scope", comp ? comp.name : "whole organisation")}
     ${evRow("Amount", `${(order.amount_cents / 100).toFixed(2)} ${order.currency.toUpperCase()}`)}
@@ -1299,7 +1658,7 @@ export async function buildSponsorDisputeEvidence(
   </table>
 
   <h2 style="font-size:15px;margin:24px 0 6px">Receipt email (customer communication)</h2>
-  <p style="margin:0 0 6px;color:#6b7280;font-size:12px">Reconstruction of the transactional receipt sent to ${escHtml(order.sponsor_email)} on payment.</p>
+  <p style="margin:0 0 6px;color:#6b7280;font-size:12px">${order.sponsor_email ? `Reconstruction of the transactional receipt sent to ${escHtml(order.sponsor_email)} on payment.` : "This deal has no billing email: no receipt was mailed. Reconstruction of the receipt it would have carried."}</p>
   <pre style="background:#f6f5f8;border-radius:8px;padding:14px;font-size:12px;white-space:pre-wrap">${escHtml(emailText)}</pre>
 
   <h2 style="font-size:15px;margin:24px 0 6px">Placement delivered (service provided)</h2>
