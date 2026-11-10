@@ -74,7 +74,9 @@ export async function patchKnockoutStage(
     return stage;
   });
   let sealed: SealedSetupCounts | undefined;
-  const readsSealed = pre.kind === "knockout" && pre.progression === null && pre.lines > 0;
+  // Shared never reads them: it deletes the -3p line in place and refuses over no setup (M-3).
+  const readsSealed = thirdPlaceFlagOf(body.thirdPlace) && pre.kind === "knockout" && pre.progression === null && pre.lines > 0;
+  let removedScope: { divisionId: string; competitionId: string } | null = null;
 
   const write = await withTenant(
     auth.orgId,
@@ -120,6 +122,10 @@ export async function patchKnockoutStage(
           await tx`update fixtures set loser_to_fixture = null, loser_to_slot = null where loser_to_fixture in ${tx(ids)}`;
           await tx`delete from fixtures where id in ${tx(ids)}`;
         }
+        if (ids.length > 0) {
+          const [div] = await tx<{ competition_id: string }[]>`select competition_id from divisions where id = ${stage.division_id}`;
+          removedScope = { divisionId: stage.division_id, competitionId: div!.competition_id };
+        }
         return { result: { ...base, regenerated: ids.length > 0 }, generated: null, removedIds: ids, changed: true };
       }
       if (root || qualified) {
@@ -147,6 +153,10 @@ export async function patchKnockoutStage(
     }
   } else if (write.changed) {
     await fireStageRevalidate(auth.orgId, stageId);
+    // m1: a Shared switch deletes lines in place (no generate write), so the hub / division / fixture caches and the realtime
+    // push still owe their invalidation for the removed -3p line.
+    const scope = removedScope as { divisionId: string; competitionId: string } | null;
+    if (scope !== null && write.removedIds.length > 0) afterScheduleWrite(scope.divisionId, scope.competitionId, "schedule", write.removedIds);
   }
   return write.result;
 }
