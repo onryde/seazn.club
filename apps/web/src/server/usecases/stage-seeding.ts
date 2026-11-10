@@ -42,6 +42,7 @@ import { bracketStageIsDecided, loadCrossGroupRules } from "@/server/engine-db/c
 import { persistLotsDraws } from "@/server/engine-db/table-rules";
 import { knockoutRefusal } from "./knockout-refusal";
 import { LUCKY_LOSER_SOURCE_KINDS, luckyLoserPool, qualifiersOfCut, rankCutOf } from "./lucky-loser";
+import { plateFieldOf } from "./plate-field";
 import { poolCount, POOL_KEYS, BRACKET_KINDS, REAL_TABLE_KINDS, loadBracketFixtures, americanoPlacementTables, departedEntrantIds } from "./stages";
 
 type Tx = postgres.TransactionSql;
@@ -256,7 +257,15 @@ export async function resolveProgressionSource(
 export async function sourceShapeOf(
   tx: Tx,
   source: { id: string; kind: string } | { kind: string; config: Record<string, unknown> },
+  /** W4 T8 (X-PL-5): the take rules read against this source. A `firstLosses` take sizes itself from the source's first-loss field,
+   *  so the shape carries `firstLossCount` once that field is complete (the engine's `SourceShape.firstLossCount`); absent while it
+   *  is open and for every caller that does not ask (save time, before round two: the take expands to no slot). */
+  takes: readonly TakeRule[] = [],
 ): Promise<SourceShape> {
+  if (source.kind === "knockout" && "id" in source && takes.some((t) => t.kind === "firstLosses")) {
+    const field = await plateFieldOf(tx, source.id);
+    return { poolKeys: [], ...(field.complete ? { firstLossCount: field.losers.length } : {}) };
+  }
   if (source.kind !== "group") return { poolKeys: [] };
   if ("id" in source) {
     const pools = await tx<{ key: string }[]>`select key from pools where stage_id = ${source.id} order by key`;
@@ -415,6 +424,23 @@ export async function sourcesToTables(
   const resolved: { id: string; kind: string; status: string }[] = [];
   for (const s of sources) {
     const source = await resolveProgressionSource(tx, target, s.stage);
+    // W4 T8 (X-PL-5, C4+): a source read ONLY for its first losses is proposable when its first-loss FIELD is complete (round
+    // two played, nobody pending), not when the stage is: the plate is drawn after round two, never waiting for the final. It reads
+    // the bracket's lines, never a standings snapshot (the stage has not completed, so it has none).
+    if (source.kind === "knockout" && s.take.length > 0 && s.take.every((t) => t.kind === "firstLosses")) {
+      const field = await plateFieldOf(tx, source.id);
+      if (!field.complete) {
+        throw new HttpError(409, "the source stage's first matches are not all played yet", "SEEDING_SOURCE_INCOMPLETE", {
+          sourceStageId: source.id,
+        });
+      }
+      resolved.push(source);
+      shapes.push({ poolKeys: [], firstLossCount: field.losers.length });
+      // The hash is over the field itself (who, in what order of first loss), so a corrected result that moves it stales a draft.
+      const rows = field.losers.map((l, i) => ({ entrantId: l.entrantId, rank: i + 1 })) as unknown as StandingsRow[];
+      tables.push({ pools: [{ pool: "first_loss", rows }] as never, bracket: await loadBracketFixtures(tx, source.id) });
+      continue;
+    }
     // W4 T14 (X-QM-4): a completed knockout with a decision taken back still reads `complete` (nothing reopens a stage), and
     // its stored ranks are the ones the correction is about to change: nothing is seeded from them until it is decided again.
     if (source.status !== "complete" || (source.kind === "knockout" && !(await bracketStageIsDecided(tx, source.id)))) {
@@ -423,7 +449,7 @@ export async function sourcesToTables(
       });
     }
     resolved.push(source);
-    shapes.push(await sourceShapeOf(tx, source));
+    shapes.push(await sourceShapeOf(tx, source, s.take));
     // americano is NOT readable from `standings_snapshots` — its snapshot
     // folds over ephemeral per-round PAIR entrants, so reading it here seats
     // ids the next stage's roster does not contain. Shares the on_complete

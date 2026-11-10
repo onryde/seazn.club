@@ -56,7 +56,9 @@ export type KnockoutRefusalCode =
   // from, so the stage writers refuse it (`lib/stage-standalone.ts` names the kind -> code). One code per kind (pre-flight
   // D13): each locale names the format in its own words, never a raw kind token.
   | "STEPLADDER_NEEDS_TABLE_SOURCE"
-  | "PAGE_PLAYOFF_NEEDS_TABLE_SOURCE";
+  | "PAGE_PLAYOFF_NEEDS_TABLE_SOURCE"
+  // T8 (X-PL-2): a plate proposal asked of a field under two first-match losers; the plate completes by name instead.
+  | "PLATE_FIELD_TOO_SMALL";
 
 export interface KnockoutRefusalRow {
   status: 400 | 409 | 422;
@@ -132,6 +134,11 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
     status: 422,
     en: "Knockout + Plate needs at least 4 entrants.",
     key: "knockout.refusal.KO_PLATE_TOO_FEW",
+  },
+  PLATE_FIELD_TOO_SMALL: {
+    status: 422,
+    en: "The plate needs at least two first-match losers.",
+    key: "knockout.refusal.PLATE_FIELD_TOO_SMALL",
   },
   QUALIFYING_MAIN_TOO_FEW: {
     status: 422,
