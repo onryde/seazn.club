@@ -14,7 +14,7 @@ import {
 import type { SettingsTab } from "../src/app/o/[orgSlug]/settings/_components/settings-nav";
 // The hub's URL builder is dependency-free (it imports only the console route builders), so unlike settings-nav it IS
 // importable as a value from this process.
-import { sponsorsHref, type SponsorsTab } from "../src/lib/sponsors-hub";
+import { sponsorHref, sponsorsHref, type SponsorsTab } from "../src/lib/sponsors-hub";
 
 /**
  * Support for the W2 settings walkthrough specs.
@@ -47,6 +47,14 @@ export function settingsUrl(slug: string, tab: string): string {
  */
 export function sponsorsUrl(slug: string, tab: SponsorsTab): string {
   return sponsorsHref(slug, tab);
+}
+
+/**
+ * `/o/{slug}/sponsors?tab=sponsors&sponsor={id}` - one sponsor's own page (sponsor deals PR 2, Task 15): a page of its own below
+ * md and a side panel over the list from md. "Show on site again" lives here now, no longer on the list's row.
+ */
+export function sponsorUrl(slug: string, sponsorId: string): string {
+  return sponsorHref(slug, sponsorId);
 }
 
 /**

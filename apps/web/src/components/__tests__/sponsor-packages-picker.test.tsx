@@ -839,13 +839,14 @@ describe("End now is offered on every deal that has not ended, asks first, and s
     expect(checked).toBe(DEAL_STATUSES.length);
   });
 
-  it("the confirm body follows the deal: a live deal; an open one behind the sponsor's live deal; an open one with none (all three, each a different sentence)", async () => {
+  it("the confirm body follows the deal: a live deal; an open one behind the sponsor's live deal; an open one with none (each body asserted; the three bodies are different sentences)", async () => {
     // Spec §8a / deal-apply step 4: a live deal keeps the sponsor shown; without one, an open deal hides it.
     const LIVE_OTHER = deal({ id: "d-live", package_id: "p2", deal_status: "live", payment_status: "paid" });
     // The middle case is PAID and not live, so its body also owes New-2's paid-kept sentence (batch G).
     const amount = new Intl.NumberFormat(undefined, { style: "currency", currency: "GBP" }).format(250);
     const CASES: [string, Record<string, unknown>[], string, MessageKey, MessageKey | null][] = [
-      ["the live deal itself", [LIVE_OTHER], "d-live", "sponsors.order.endConfirm.bodyLive", null],
+      ["the live deal itself (paid: the PR 2 ruling - a LIVE paid deal keeps its money too)", [LIVE_OTHER], "d-live", "sponsors.order.endConfirm.bodyLive", "sponsors.order.endConfirm.paidKept"],
+      ["the live deal itself, unpaid", [deal({ id: "d-live", package_id: "p2", deal_status: "live", payment_status: "pending" })], "d-live", "sponsors.order.endConfirm.bodyLive", null],
       ["an open deal behind a live one", [LIVE_OTHER, deal({ id: "d-open", deal_status: "scheduled", payment_status: "paid" })], "d-open", "sponsors.order.endConfirm.bodyKept", "sponsors.order.endConfirm.paidKept"],
       ["an open deal, nothing live", [deal({ id: "d-open", deal_status: "awaiting_payment" })], "d-open", "sponsors.order.endConfirm.bodyHidden", null],
     ];
@@ -868,8 +869,8 @@ describe("End now is offered on every deal that has not ended, asks first, and s
       seen.add(opts.body);
       checked++;
     }
-    expect(checked).toBe(3);
-    expect(seen.size, "three different sentences").toBe(3);
+    expect(checked).toBe(4);
+    expect(seen.size, "four different bodies (live paid / live unpaid / kept / hidden)").toBe(4);
   });
 
   it("declining sends nothing; confirming POSTs /sponsor-deals/{id}/end with no body and re-reads", async () => {
@@ -1038,20 +1039,22 @@ describe("the refund confirm says what the public pages do, by the deal's state 
   });
 });
 
-describe("End now on a deal that is paid but not live says the money stays and a refund is separate (batch G New-2)", () => {
+describe("End now on a paid deal - live or not - says the money stays and a refund is separate (batch G New-2; PR 2 ruling: live too)", () => {
   // Ending a deal never moves money (server/usecases/sponsor-deals.ts endDealNow); Refund stays offered on a paid deal ended
   // by End now (lib/sponsor-deals.ts allowedActions). A disputed payment is not the club's to refund, so it is not told to.
+  // The first arm of this was "paid but NOT live"; the PR 2 ruling (batch H brief) extends it to a LIVE paid deal.
   const amount = new Intl.NumberFormat(undefined, { style: "currency", currency: "GBP" }).format(250);
   const LIVE_OTHER = deal({ id: "d-live", package_id: "p2", deal_status: "live", payment_status: "paid" });
   const CASES: [string, Record<string, unknown>[], boolean][] = [
     ["scheduled, paid, behind a live deal", [LIVE_OTHER, deal({ id: "d-e", deal_status: "scheduled", payment_status: "paid" })], true],
     ["awaiting approval, paid", [deal({ id: "d-e", deal_status: "awaiting_approval", payment_status: "paid" })], true],
-    ["live, paid (out of scope: the brief's 'paid but not live')", [deal({ id: "d-e", deal_status: "live", payment_status: "paid" })], false],
+    ["live, paid (the PR 2 ruling: a LIVE paid deal keeps its money too)", [deal({ id: "d-e", deal_status: "live", payment_status: "paid" })], true],
+    ["live, paid, disputed", [deal({ id: "d-e", deal_status: "live", payment_status: "paid", disputed_at: "2026-11-02T10:00:00.000Z" })], false],
     ["awaiting payment, unpaid", [deal({ id: "d-e", deal_status: "awaiting_payment", payment_status: "pending" })], false],
     ["scheduled, paid, disputed", [LIVE_OTHER, deal({ id: "d-e", deal_status: "scheduled", payment_status: "paid", disputed_at: "2026-11-02T10:00:00.000Z" })], false],
   ];
 
-  it("paid and not live -> the paid-kept sentence names the amount; live, unpaid or disputed -> none (all five)", async () => {
+  it("paid (live or not) -> the paid-kept sentence names the amount; unpaid or disputed -> none (all six)", async () => {
     const paidKept = msg("sponsors.order.endConfirm.paidKept", { amount, name: LONG_NAME });
     let checked = 0;
     for (const [label, rows, says] of CASES) {
@@ -1066,8 +1069,8 @@ describe("End now on a deal that is paid but not live says the money stays and a
       else expect(body, label).not.toContain(paidKept);
       checked++;
     }
-    expect(checked).toBe(5);
-    expect(CASES.filter((c) => c[2]).length, "both arms exercised").toBe(2);
+    expect(checked).toBe(6);
+    expect(CASES.filter((c) => c[2]).length, "both arms exercised").toBe(3);
   });
 
   it("the sentence exists in all four locales, names the amount and the Refund button by its own label (counted)", () => {

@@ -33,6 +33,12 @@ export function nextTrapFocus<T>(focusable: readonly T[], active: T | null, shif
   return active === last ? first : null;
 }
 
+/** The classes `placement="side"` ADDS to the overlay and to the dialog - every one is `md:`, so below 768 a side modal is the
+ *  bottom sheet it always was. From md the dialog is a full-height right-hand panel (the sponsor page, sponsor deals T15): the
+ *  overlay packs it against the right edge, and the dialog loses its rounding on the three sides that touch the screen. */
+export const SIDE_OVERLAY_CLASSES = "md:items-stretch md:justify-end md:p-0";
+export const SIDE_DIALOG_CLASSES = "md:h-full md:max-h-none md:max-w-lg md:rounded-none md:rounded-l-2xl md:border-y-0 md:border-r-0 md:pb-6";
+
 /** Lightweight centered modal with an overlay. */
 export function Modal({
   title,
@@ -41,6 +47,7 @@ export function Modal({
   footer,
   size = "md",
   bleed = false,
+  placement = "center",
 }: {
   title: string;
   children?: React.ReactNode;
@@ -51,6 +58,9 @@ export function Modal({
    *  (Stripe's EmbeddedCheckout: at 320 the default `p-6` left it 270 px and clipped its form). The header keeps a
    *  16-px inset and the close grows to a 44-px target. Every class it changes is `max-md:`, so ≥768 is untouched. */
   bleed?: boolean;
+  /** `center` (the default) is the centered modal over `sm`, a bottom sheet under it. `side` is the same bottom sheet under `md`
+   *  and, from `md`, a full-height panel on the right edge: a page that opens over its list (the sponsor page). */
+  placement?: "center" | "side";
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   // Read the LATEST onClose via a ref so the mount effect below can stay
@@ -120,16 +130,17 @@ export function Modal({
   const bleedDialog = bleed ? " max-md:px-0" : "";
   const bleedInset = bleed ? " max-md:px-4" : "";
   const bleedClose = bleed ? " max-md:h-11 max-md:w-11" : "";
+  const side = placement === "side";
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className={`modal-overlay${side ? ` ${SIDE_OVERLAY_CLASSES}` : ""}`} onClick={onClose}>
       {/* Bottom sheet under `sm`, centered modal above (v3/02 pattern 3). */}
       <div
         ref={dialogRef}
         // 85dvh, not 85vh: `vh` is the LARGE viewport and ignores retractable
         // mobile browser chrome, so the panel was measured against a box taller
         // than the visible one and the footer sat under the chrome at 320×568.
-        className={`flex max-h-[85dvh] w-full ${maxW} flex-col rounded-t-2xl border border-purple-100 bg-white p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-2xl sm:pb-6${bleedDialog}`}
+        className={`flex max-h-[85dvh] w-full ${maxW} flex-col rounded-t-2xl border border-purple-100 bg-white p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-2xl sm:pb-6${bleedDialog}${side ? ` ${SIDE_DIALOG_CLASSES}` : ""}`}
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}

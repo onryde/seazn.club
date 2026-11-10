@@ -13,7 +13,7 @@ import "server-only";
 import type { Tx } from "@/lib/db";
 import { omit } from "@/lib/omit";
 import { sponsorRefusal } from "@/lib/sponsor-refusals";
-import { pickRowDeal, type SponsorDeal } from "@/lib/sponsor-deals";
+import { isLiveDeal as isLive, isOpenDeal as isOpen, pickRowDeal, type SponsorDeal } from "@/lib/sponsor-deals";
 import type { SponsorTier } from "@/lib/sponsor-tiers";
 import { ensureOrgStreamSettings } from "./stream-settings";
 
@@ -112,9 +112,8 @@ function toServerDeal(r: DealRow): ServerDeal {
 
 /** A pre-deals order (D6): ignored by every deal rule, never a row's deal, never live. */
 export const isLegacyDeal = (d: Pick<SponsorDeal, "ended_reason">): boolean => d.ended_reason === "legacy";
-const isLive = (d: Pick<SponsorDeal, "deal_status">): boolean => d.deal_status === "live";
-/** Waiting to go live: neither live nor ended (draft, awaiting payment or approval, scheduled). */
-const isOpen = (d: Pick<SponsorDeal, "deal_status">): boolean => d.deal_status !== "live" && d.deal_status !== "ended";
+// `isLive` / `isOpen` are lib/sponsor-deals.ts's `isLiveDeal` / `isOpenDeal`: the console asks the same two questions, so there is
+// one definition of each (sponsor deals PR 2, T14 carry m4).
 /** The end date has been reached (`<=`: `ends_at = now` is over). No end date is never past. */
 export const isPastEnd = (endsAt: Date | string | null, now: Date): boolean =>
   endsAt !== null && new Date(endsAt).getTime() <= now.getTime();

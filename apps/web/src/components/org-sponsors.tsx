@@ -17,11 +17,14 @@ import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { TIER_MSG } from "@/components/sponsors/tier-labels";
 import { SponsorList, dealPrice, groupTierOf, sameOrderBand, type DealWrite } from "@/components/sponsors/sponsor-list";
+import { SponsorSheet, SponsorSheetBody, type SheetDealAction } from "@/components/sponsors/sponsor-sheet";
+import { endConfirmBodyKey, endKeepsPayment } from "@/components/sponsors/deal-copy";
 import { sponsorSaveErrorKey } from "@/components/sponsors/save-error";
 import type { SponsorWrite } from "@/components/sponsors/save-error";
 import { ApiV1Error } from "@/lib/client-v1";
 import type { SponsorDeal } from "@/lib/sponsor-deals";
-import type { ReportLinkSummary } from "@/lib/sponsor-report";
+import type { ReportLinkDefaults, ReportLinkSummary } from "@/lib/sponsor-report";
+import { sponsorsHref } from "@/lib/sponsors-hub";
 import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
 import type { SponsorPackageRow } from "@/server/usecases/sponsors";
 
@@ -29,7 +32,8 @@ const MAX_LOGO_BYTES = 2 * 1024 * 1024;
 
 /** The tier list's one authority is lib/sponsor-tiers.ts; re-exported for the console's own importers. */
 export { SPONSOR_TIERS, type SponsorTier };
-/** Where "Show on site again" is offered lives with the list that draws the button; re-exported for its importers. */
+/** Where "Show on site again" is offered (`canShowAgain`) is declared beside the list; the sponsor's page draws the button (Task 15).
+ *  Re-exported for its importers. */
 export { canShowAgain } from "@/components/sponsors/sponsor-list";
 
 /** Client-safe mirror of the usecase SponsorRow. */
@@ -45,6 +49,8 @@ export interface SponsorItem {
   dispute_parked?: boolean;
   dispute_lost?: boolean;
   click_count: number;
+  /** The sponsor is in the stream's rotation (the On stream tab's tick; the sponsor page's toggle). A live deal sets it (D9). */
+  on_stream: boolean;
   /** The paid package order that activated this placement, if any. */
   paid_order_id?: string | null;
   /** The deal the row shows (sponsor deals D8: `pickRowDeal` over the sponsor's deals), or null when the sponsor has none - the
@@ -56,9 +62,10 @@ export interface SponsorItem {
   has_open_deal: boolean;
 }
 
-/** What the hub page reads for the Sponsors tab beyond the list (sponsor deals PR 2, Task 13). Its consumers: the sponsor list
+/** What the hub page reads for the Sponsors tab beyond the list (sponsor deals PR 2, Task 13). Its readers: the sponsor list
  *  (Task 14, READS `orgSlug` only - a row carries its own deal, so `deals` would be a second authority for it), the sponsor's own
- *  page (Task 15), the Add deal sheet (Task 16) and the deal page (Task 17). The rest is inert until those land. */
+ *  page (Task 15: `sponsorId` picks it, `deals` fill its Deals, `reportLinks` and `reportDefaults` are its Report link), the Add deal
+ *  sheet (Task 16) and the deal page (Task 17: `dealId`, still unread until it lands). */
 export interface SponsorsHubData {
   orgSlug: string;
   /** Every deal of the org, newest first (legacy pre-deals rows included: they are ended deals). */
@@ -75,6 +82,8 @@ export interface SponsorsHubData {
   dealId: string | null;
   /** The selected sponsor's live report links (an editor's page only; empty otherwise). */
   reportLinks: ReportLinkSummary[];
+  /** The Report link's opening dates (this year), read for an editor's page only; null for a viewer, whose page has no such section. */
+  reportDefaults: ReportLinkDefaults | null;
 }
 
 interface Draft {
@@ -89,6 +98,16 @@ interface Draft {
 }
 const EMPTY_DRAFT: Draft = {
   name: "", url: "", tier: "partner", competition_id: "", file: null, preview: null,
+};
+
+/** The route each deal write POSTs. Send and Resend invoice are one route: the server sends a draft's first invoice and re-sends an
+ *  open one's the same way (ensureDealCheckout). */
+const DEAL_ROUTE: Record<SheetDealAction, string> = {
+  send_invoice: "send-invoice",
+  resend_invoice: "send-invoice",
+  mark_paid: "mark-paid",
+  approve: "approve",
+  end_now: "end",
 };
 
 /** Is a delete certain to be refused? Money history (paid or refunded) on any of a sponsor's deals is a 409
@@ -134,6 +153,7 @@ export function SponsorForm({
   lockedByDeal,
   competitions,
   onPickLogo,
+  compact = false,
 }: {
   value: Draft;
   onChange: (fn: (prev: Draft) => Draft) => void;
@@ -151,6 +171,9 @@ export function SponsorForm({
   lockedByDeal: boolean;
   competitions: { id: string; name: string }[];
   onPickLogo: (file: File, set: (fn: (prev: Draft) => Draft) => void) => void;
+  /** One column of fields under the logo, whatever the viewport: for the sponsor page's side panel, where `sm:` (a VIEWPORT query)
+   *  would put two fields side by side in a 360px panel. The list's inline editor and the add box leave it off. */
+  compact?: boolean;
 }) {
   const msg = useMsg();
   // House uploader pattern (org-logo, prose-editor): a real button clicks a
@@ -189,9 +212,9 @@ export function SponsorForm({
             e.target.value = "";
           }}
         />
-        <div className="min-w-0 flex-1">
-          {/* 2-col rows: name+link, then tier+competition; single stack on mobile. */}
-          <div className="grid gap-3 sm:grid-cols-2">
+        <div className={compact ? "w-full min-w-0" : "min-w-0 flex-1"}>
+          {/* 2-col rows: name+link, then tier+competition; single stack on mobile (and always, when compact). */}
+          <div className={`grid gap-3 ${compact ? "" : "sm:grid-cols-2"}`}>
             <label className="block">
               <span className="label">{msg("settings.org.sponsors.name")}</span>
               <input
@@ -258,7 +281,7 @@ export function SponsorForm({
               </label>
             ) : null}
             {showPlacement && hasTiers && lockedByDeal ? (
-              <p id={lockNoteId} className="text-xs text-slate-500 sm:col-span-2" data-testid="sponsor-locked-note">
+              <p id={lockNoteId} className={`text-xs text-slate-500 ${compact ? "" : "sm:col-span-2"}`} data-testid="sponsor-locked-note">
                 {msg("sponsors.deal.lockedNote")}
               </p>
             ) : null}
@@ -306,6 +329,16 @@ export function OrgSponsors({
   const locale = useLocaleOrDefault();
   const tz = useViewerTz();
   const [sponsors, setSponsors] = useState<SponsorItem[]>(initialSponsors);
+  // The org's deals, for the sponsor page and the confirms that name what a deal's end does to the others. The server's list is the
+  // truth: a new arrival from the page (a navigation, a `router.refresh()`) replaces what a write here last read - compared by
+  // identity, in render, never an effect.
+  const [deals, setDeals] = useState<SponsorDeal[]>(hub.deals);
+  const [seenHubDeals, setSeenHubDeals] = useState(hub.deals);
+  if (seenHubDeals !== hub.deals) {
+    setSeenHubDeals(hub.deals);
+    setDeals(hub.deals);
+  }
+  const [addDealFor, setAddDealFor] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [edit, setEdit] = useState<Draft>(EMPTY_DRAFT);
@@ -366,6 +399,12 @@ export function OrgSponsors({
   async function refresh() {
     const rows = (await api("", { method: "GET" })) as SponsorItem[];
     setSponsors(rows);
+  }
+
+  /** Re-read the org's deals (`GET /sponsor-deals`, newest first). Only while a sponsor's page is open: the list reads each row's
+   *  own deal and never `deals`, so a list-only session has nothing to keep fresh. */
+  async function refreshDeals() {
+    setDeals((await v1("/sponsor-deals", { method: "GET" })) as SponsorDeal[]);
   }
 
   /** Upload a picked logo to storage; returns its public URL. */
@@ -494,37 +533,71 @@ export function OrgSponsors({
     });
   }
 
-  /** A row's one write (Tasks 6 and 7's routes): the deal the row shows is the one acted on. The list is re-read whatever the
-   *  answer - the chip, the action and the group all follow the deal, and a refusal means it moved under the tap. Resend invoice
-   *  changes nothing on the row, so it says it was sent. Mark as paid asks first (house precedent: the registrant hub's mark paid):
-   *  it is the club's attestation that money arrived outside the app, and it moves the deal on by its go-live rule - often live -
-   *  with no undo on the row. Approve stays one tap (End now reverses a live deal); Resend invoice is harmless. */
-  function dealAction(s: SponsorItem, action: DealWrite) {
-    const deal = s.deal;
-    if (deal === null) return; // `rowNextAction(null)` is Add deal, a link: no write is offered for a sponsor with no deal.
-    const route = { resend_invoice: "send-invoice", mark_paid: "mark-paid", approve: "approve" }[action];
+  /** A deal's write (Tasks 6 and 7's routes). The list is re-read whatever the answer - the chip, the action and the group all
+   *  follow the deal, and a refusal means it moved under the tap - and, while a sponsor's page is open, so are the deals. Sending
+   *  or resending an invoice changes nothing a row shows, so it says it was sent. Two writes ask first, each with words about its
+   *  own consequence: Mark as paid (house precedent: the registrant hub's mark paid) is the club's attestation that money arrived
+   *  outside the app, and it moves the deal on by its go-live rule - often live - with no undo; End now ends the deal and, on a
+   *  deal the sponsor has paid, says the money stays and Refund is the separate step (it never moves money). Approve stays one tap
+   *  (End now reverses a live deal); sending an invoice is harmless. `name` is the sponsor's current name. */
+  function runDealAction(deal: SponsorDeal, name: string, action: SheetDealAction) {
     void (async () => {
       if (action === "mark_paid") {
         const ok = await confirm({
-          title: msg("sponsors.deal.markPaid.title", { amount: dealPrice(deal, locale), name: s.name }),
+          title: msg("sponsors.deal.markPaid.title", { amount: dealPrice(deal, locale), name }),
           body: msg("sponsors.deal.markPaid.body"),
           confirmLabel: msg("sponsors.deal.action.markPaid"),
           tone: "default",
         });
         if (!ok) return;
       }
+      if (action === "end_now") {
+        const ok = await confirm({
+          title: msg("sponsors.order.endConfirm.title"),
+          body: [
+            msg(endConfirmBodyKey(deals, deal), { name }),
+            ...(endKeepsPayment(deal) ? [msg("sponsors.order.endConfirm.paidKept", { amount: dealPrice(deal, locale), name })] : []),
+          ].join(" "),
+          confirmLabel: msg("sponsors.order.endConfirm.label"),
+          tone: "danger",
+        });
+        if (!ok) return;
+      }
       await run(
         async () => {
           try {
-            await v1(`/sponsor-deals/${deal.id}/${route}`, { method: "POST" });
-            if (action === "resend_invoice") setNotice(msg("sponsors.deal.notice.invoiceResent", { name: s.name }));
+            await v1(`/sponsor-deals/${deal.id}/${DEAL_ROUTE[action]}`, { method: "POST" });
+            if (action === "resend_invoice") setNotice(msg("sponsors.deal.notice.invoiceResent", { name }));
+            if (action === "send_invoice") setNotice(msg("sponsors.deal.notice.invoiceSent", { name }));
           } finally {
             await refresh().catch(() => {});
+            if (hub.sponsorId !== null) await refreshDeals().catch(() => {});
           }
         },
-        action === "resend_invoice" ? "resend_invoice" : undefined,
+        action === "resend_invoice" || action === "send_invoice" ? "resend_invoice" : undefined,
       );
     })();
+  }
+
+  /** A row's one write: the deal the row shows is the one acted on. `rowNextAction(null)` is Add deal, a link: no write is offered
+   *  for a sponsor with no deal. */
+  function dealAction(s: SponsorItem, action: DealWrite) {
+    if (s.deal === null) return;
+    runDealAction(s.deal, s.name, action);
+  }
+
+  /** The sponsor page's On stream toggle (the On stream tab's tick, same PATCH). A live deal owns the flag (D9), so a locked sponsor
+   *  is never sent: the control is disabled for it, and this is the same rule for a call that gets past it. The list is re-read
+   *  whatever the answer - a refusal means a deal went live since the page loaded. */
+  function toggleStream(s: SponsorItem, next: boolean) {
+    if (s.locked_by_deal) return;
+    void run(async () => {
+      try {
+        await api(`/${s.id}`, { method: "PATCH", body: JSON.stringify({ on_stream: next }) });
+      } finally {
+        await refresh().catch(() => {});
+      }
+    });
   }
 
   /** Swap within the rendered group (the deal's tier, as the list draws it), persist the global order. */
@@ -549,75 +622,137 @@ export function OrgSponsors({
     });
   }
 
+  // The sponsor whose page is open (`?sponsor=`, checked by the page to be one of this org's). Read from the live list, so a write
+  // that changes the sponsor (a stream toggle, an edit, Show on site again) shows on its page. A sponsor the list no longer holds
+  // (deleted since the page loaded) is no selection: the list shows.
+  const selected = hub.sponsorId === null ? undefined : sponsors.find((s) => s.id === hub.sponsorId);
+  const sheetOpen = selected !== undefined;
+  // The sponsor's editor is the page's while its page is open; the list behind a side panel must not draw a second one.
+  const listEditingId = selected !== undefined && editingId === selected.id ? null : editingId;
+
   return (
     <div className="space-y-5">
-      <p className="text-sm text-slate-500">{msg("sponsors.line")}</p>
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      {/* Always mounted: a live region that appears WITH its text is not reliably announced, so only the text changes. Empty, it is
-          screen-reader-only (out of the layout, still in the accessibility tree). */}
-      <p role="status" data-testid="sponsor-notice" className="text-sm text-emerald-700 empty:sr-only">
-        {notice}
-      </p>
-
-      {canEdit ? (
-        <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
-          <p className="text-sm font-semibold text-slate-800">{msg("sponsors.form.title")}</p>
-          <p className="mb-3 mt-0.5 text-xs text-slate-500">{msg("sponsors.form.hint")}</p>
-          <SponsorForm
-            value={draft}
-            onChange={(fn) => setDraft(fn)}
-            onSubmit={create}
-            submitLabel={msg("settings.org.sponsors.add")}
-            busy={busy}
+      {/* The sponsor's page, when one is selected: the page body below md (the list is hidden then), a side panel from md. */}
+      {selected ? (
+        <SponsorSheet
+          title={msg("sponsors.sheet.title")}
+          backText={msg("sponsors.sheet.back")}
+          backLabel={msg("sponsors.sheet.backLabel")}
+          closeHref={sponsorsHref(hub.orgSlug, "sponsors")}
+          suspended={addDealFor !== null}
+        >
+          <SponsorSheetBody
+            sponsor={selected}
+            deals={deals}
+            orgId={orgId}
+            orgSlug={hub.orgSlug}
             hasTiers={hasTiers}
-            showPlacement={false}
-            lockedByDeal={false}
+            canEdit={canEdit}
+            busy={busy}
+            tz={tz}
             competitions={competitions}
-            onPickLogo={pickLogo}
+            editing={editingId === selected.id}
+            renderEditor={() => (
+              <SponsorForm
+                value={edit}
+                onChange={(fn) => setEdit(fn)}
+                onSubmit={() => saveEdit(selected)}
+                onCancel={() => setEditingId(null)}
+                submitLabel={msg("sponsors.save")}
+                busy={busy}
+                hasTiers={hasTiers}
+                // A live deal owns the tier and the competition (D9, F28): the page shows them as the deal's and offers no control.
+                showPlacement={!selected.locked_by_deal}
+                lockedByDeal={false}
+                competitions={competitions}
+                onPickLogo={pickLogo}
+                compact
+              />
+            )}
+            onEdit={() => startEdit(selected)}
+            onToggleStream={(next) => toggleStream(selected, next)}
+            onShowAgain={() => showAgain(selected)}
+            onAddDeal={() => setAddDealFor(selected.id)}
+            onDealAction={(deal, action) => runDealAction(deal, selected.name, action)}
+            error={error}
+            notice={notice}
+            reportLinks={hub.reportLinks}
+            reportDefaults={hub.reportDefaults}
           />
-          {!hasTiers ? (
-            <p className="mt-3 text-xs text-slate-500">
-              {msg("sponsors.tiersUpsell")}{" "}
-              <Link href={billingHref} className="text-purple-600 underline">
-                {msg("settings.upgrade.link")}
-              </Link>
-            </p>
-          ) : null}
-        </div>
+        </SponsorSheet>
       ) : null}
 
-      <SponsorList
-        sponsors={sponsors}
-        hasTiers={hasTiers}
-        canEdit={canEdit}
-        busy={busy}
-        orgSlug={hub.orgSlug}
-        tz={tz}
-        competitions={competitions}
-        editingId={editingId}
-        renderEditor={(s) => (
-          <SponsorForm
-            value={edit}
-            onChange={(fn) => setEdit(fn)}
-            onSubmit={() => saveEdit(s)}
-            onCancel={() => setEditingId(null)}
-            submitLabel={msg("sponsors.save")}
-            busy={busy}
-            hasTiers={hasTiers}
-            showPlacement
-            lockedByDeal={s.locked_by_deal}
-            competitions={competitions}
-            onPickLogo={pickLogo}
-          />
+      <div data-testid="sponsors-list-view" className={`space-y-5 ${sheetOpen ? "max-md:hidden" : ""}`}>
+        <p className="text-sm text-slate-500">{msg("sponsors.line")}</p>
+        {/* With a sponsor's page open the page shows its own error and notice (a side panel's backdrop would cover these). */}
+        {!sheetOpen && error && <p className="text-sm text-red-600">{error}</p>}
+        {/* Always mounted: a live region that appears WITH its text is not reliably announced, so only the text changes. Empty, it is
+            screen-reader-only (out of the layout, still in the accessibility tree). */}
+        {!sheetOpen && (
+          <p role="status" data-testid="sponsor-notice" className="text-sm text-emerald-700 empty:sr-only">
+            {notice}
+          </p>
         )}
-        moreOpenId={moreOpenId}
-        onToggleMore={(id) => setMoreOpenId((open) => (open === id ? null : id))}
-        onEdit={startEdit}
-        onMove={move}
-        onRemove={remove}
-        onShowAgain={showAgain}
-        onAction={dealAction}
-      />
+
+        {canEdit ? (
+          <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+            <p className="text-sm font-semibold text-slate-800">{msg("sponsors.form.title")}</p>
+            <p className="mb-3 mt-0.5 text-xs text-slate-500">{msg("sponsors.form.hint")}</p>
+            <SponsorForm
+              value={draft}
+              onChange={(fn) => setDraft(fn)}
+              onSubmit={create}
+              submitLabel={msg("settings.org.sponsors.add")}
+              busy={busy}
+              hasTiers={hasTiers}
+              showPlacement={false}
+              lockedByDeal={false}
+              competitions={competitions}
+              onPickLogo={pickLogo}
+            />
+            {!hasTiers ? (
+              <p className="mt-3 text-xs text-slate-500">
+                {msg("sponsors.tiersUpsell")}{" "}
+                <Link href={billingHref} className="text-purple-600 underline">
+                  {msg("settings.upgrade.link")}
+                </Link>
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
+        <SponsorList
+          sponsors={sponsors}
+          hasTiers={hasTiers}
+          canEdit={canEdit}
+          busy={busy}
+          orgSlug={hub.orgSlug}
+          tz={tz}
+          competitions={competitions}
+          editingId={listEditingId}
+          renderEditor={(s) => (
+            <SponsorForm
+              value={edit}
+              onChange={(fn) => setEdit(fn)}
+              onSubmit={() => saveEdit(s)}
+              onCancel={() => setEditingId(null)}
+              submitLabel={msg("sponsors.save")}
+              busy={busy}
+              hasTiers={hasTiers}
+              showPlacement
+              lockedByDeal={s.locked_by_deal}
+              competitions={competitions}
+              onPickLogo={pickLogo}
+            />
+          )}
+          moreOpenId={moreOpenId}
+          onToggleMore={(id) => setMoreOpenId((open) => (open === id ? null : id))}
+          onEdit={startEdit}
+          onMove={move}
+          onRemove={remove}
+          onAction={dealAction}
+        />
+      </div>
     </div>
   );
 }

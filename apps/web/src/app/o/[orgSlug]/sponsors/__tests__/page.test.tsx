@@ -16,10 +16,16 @@
 //   - Sponsors (sponsor deals PR 2, Task 13): the tab also reads the org's deals, packages, both plan flags, whether Stripe takes
 //     charges, and the competitions' end dates; `?sponsor=` / `?deal=` select a sponsor's own page and a deal on it - kept only if
 //     they are THIS org's (a deal: the selected sponsor's) - and the sponsor's report links are read only then, only for an editor
+//   - Sponsors (Task 15): `?sponsor=<own>` renders the REAL sponsor page (`data-testid="sponsor-sheet"`, F23 - moved here from Task 13,
+//     where nothing yet drew it), for that sponsor, with the Report link's opening dates read for an editor only
 //   - Overview (S13): every member gets the numbers for the period the URL names (kept only if it is a period or one of THIS
 //     org's competitions), all read at ONE `now`; only an editor's page loads the report links and the share form's defaults
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prerender } from "react-dom/static";
+
+/** Task 15: flip to render the page's island for real (the sponsor page is what a person sees behind `?sponsor=`); every other case
+ *  reads the marker, which carries exactly what the page handed it. */
+const real = vi.hoisted(() => ({ on: false }));
 
 const h = vi.hoisted(() => ({
   requireOrgPage: vi.fn(),
@@ -58,9 +64,18 @@ vi.mock("@/components/ui/scroll-active-tab-into-view", () => ({
   ScrollActiveTabIntoView: ({ children }: { children: React.ReactNode }) => <div data-active-tab-scroller>{children}</div>,
 }));
 
-// The islands, as markers carrying exactly what the page handed them.
-vi.mock("@/components/org-sponsors", () => ({
-  OrgSponsors: (p: {
+// What the REAL island reaches for when it renders the sponsor page: the confirm dialog and the router (neither is mounted by a
+// prerender of the page alone).
+vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => async () => true }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {}, refresh: () => {} }) }));
+
+// The islands, as markers carrying exactly what the page handed them - except OrgSponsors while `real.on` (see above).
+vi.mock("@/components/org-sponsors", async (importActual) => {
+  const actual = await importActual<typeof import("@/components/org-sponsors")>();
+  const Island = (p: Parameters<typeof actual.OrgSponsors>[0]) => <actual.OrgSponsors {...p} />;
+  return { ...actual, OrgSponsors: (p: Parameters<typeof actual.OrgSponsors>[0]) => (real.on ? Island(p) : Marker(p)) };
+});
+function Marker(p: {
     orgId: string;
     initialSponsors: unknown[];
     competitions: { id: string; ends_on?: string | null }[];
@@ -76,8 +91,10 @@ vi.mock("@/components/org-sponsors", () => ({
       sponsorId: string | null;
       dealId: string | null;
       reportLinks: { id: string }[];
+      reportDefaults: { from: string; to: string } | null;
     };
-  }) => (
+  }) {
+  return (
     <div
       data-testid="org-sponsors"
       data-org={p.orgId}
@@ -95,9 +112,10 @@ vi.mock("@/components/org-sponsors", () => ({
       data-hub-sponsor={p.hub.sponsorId ?? "-"}
       data-hub-deal={p.hub.dealId ?? "-"}
       data-hub-links={p.hub.reportLinks.map((l) => l.id).join("|")}
+      data-hub-defaults={p.hub.reportDefaults === null ? "-" : `${p.hub.reportDefaults.from}..${p.hub.reportDefaults.to}`}
     />
-  ),
-}));
+  );
+}
 vi.mock("@/components/sponsors/on-stream-tab", () => ({
   OnStreamTab: (p: {
     orgId: string;
@@ -668,6 +686,101 @@ describe("?sponsor= and ?deal= on the Sponsors tab: this org's, else the list (T
   function auth0() {
     return { orgId: ORG.id, via: "session", userId: "u1", role: "owner", keyId: null };
   }
+});
+
+describe("?sponsor=<own> draws the sponsor's own page (Task 15 - F23, moved here from Task 13), and the Report link's opening dates ride with it", () => {
+  const SPONSOR = {
+    id: "s1", name: "Harbour Print", competition_id: null, url: "https://harbour-print.example/", logo_path: null, tier: "gold", display_order: 0,
+    status: "active", click_count: 4, on_stream: false, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false,
+  };
+  const DEAL = {
+    id: "d1", sponsor_id: "s1", package_id: "p1", deal_status: "awaiting_payment", payment_status: "pending", payment_method: "offline",
+    go_live: "on_payment", package_name: "Gold Season", tier: "gold", includes_on_stream: false, competition_id: null, amount_cents: 60_000,
+    currency: "gbp", sponsor_name: "Harbour Print", sponsor_email: null, ends_at: null, created_at: "2026-10-01T09:00:00.000Z", created_by: null,
+    invoice_sent_at: null, paid_at: null, marked_paid_by: null, approved_at: null, approved_by: null, live_at: null, ended_at: null,
+    ended_reason: null, parked_at: null, disputed_at: null, dispute_id: null, has_payment_intent: false, invoice_number: null,
+  };
+  /** The sheet's opening tag (anchored on `="`, so an omitted prop cannot satisfy it). */
+  const sheetsIn = (html: string) => [...html.matchAll(/<section\b[^>]*data-testid="sponsor-sheet"[^>]*>/g)].map((m) => m[0]);
+
+  beforeEach(() => {
+    real.on = true;
+    h.listSponsorRows.mockResolvedValue([SPONSOR, { ...SPONSOR, id: "s2", name: "Ridge Kitchens" }]);
+    h.listDeals.mockResolvedValue([DEAL]);
+    h.listReportLinks.mockResolvedValue([{ id: "l1", sponsorId: "s1", competitionId: null, competitionName: null, from: "2026-01-01", to: "2026-02-01", createdAt: "2026-02-02T00:00:00.000Z" }]);
+  });
+  afterEach(() => {
+    real.on = false;
+  });
+
+  it("the OWN id renders the page for THAT sponsor, with its deal and its report link; the list is still in the page (hidden below md by a class)", async () => {
+    const html = await render("sponsors", undefined, undefined, { sponsor: "s1" });
+    const sheets = sheetsIn(html);
+    expect(sheets, "exactly one sponsor page").toHaveLength(1);
+    expect(sheets[0]).toContain('data-sponsor-id="s1"');
+    expect(html).toContain("Harbour Print");
+    expect(html).toContain('data-testid="sponsor-sheet-deals"');
+    expect(html).toContain('data-deal-id="d1"');
+    // The pair for the viewer case below: an editor's page carries every control a viewer's does not.
+    for (const id of ["sponsor-sheet-report", "sponsor-sheet-edit", "sponsor-sheet-add-deal", "sponsor-sheet-deal-action"]) {
+      expect(html, id).toContain(`data-testid="${id}"`);
+    }
+    expect(html, "the report link counts the sponsor's own links").toContain("Active links: 1");
+    const wrap = /<div\b[^>]*data-testid="sponsors-list-view"[^>]*>/.exec(html)![0];
+    expect(/class="[^"]*\bmax-md:hidden\b/.test(wrap), "the list yields to the page below md").toBe(true);
+  });
+
+  it("the second sponsor's id renders the SECOND sponsor's page (not the first row)", async () => {
+    const html = await render("sponsors", undefined, undefined, { sponsor: "s2" });
+    expect(sheetsIn(html)[0]).toContain('data-sponsor-id="s2"');
+  });
+
+  it("no ?sponsor=, a foreign one and a repeated one: no sponsor page, and the list is not hidden (7 checked)", async () => {
+    let checked = 0;
+    for (const raw of [undefined, "other-orgs-sponsor", "", "__proto__", "constructor", ["s1", "s2"], "S1"]) {
+      const html = await render("sponsors", undefined, undefined, raw === undefined ? {} : { sponsor: raw });
+      expect(sheetsIn(html), JSON.stringify(raw)).toHaveLength(0);
+      expect(html, JSON.stringify(raw)).not.toContain('data-testid="sponsor-sheet"');
+      const wrap = /<div\b[^>]*data-testid="sponsors-list-view"[^>]*>/.exec(html)![0];
+      expect(/\bmax-md:hidden\b/.test(wrap), `${JSON.stringify(raw)}: the list is not hidden`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(7);
+  });
+
+  it("an editor's page reads the opening dates for THIS YEAR (the Overview's landing window), once, at the same `now` it hands the island", async () => {
+    await render("sponsors", undefined, undefined, { sponsor: "s1" });
+    expect(h.reportLinkDefaults).toHaveBeenCalledTimes(1);
+    const [auth, orgId, period, now] = h.reportLinkDefaults.mock.calls[0]!;
+    expect(auth).toMatchObject({ orgId: ORG.id, userId: "u1" });
+    expect(orgId).toBe(ORG.id);
+    expect(period, "no ?period= is this year").toEqual({ kind: "this_year" });
+    expect(now).toBeInstanceOf(Date);
+  });
+
+  it("a page with no sponsor selected reads no opening dates (the list needs none)", async () => {
+    await render("sponsors");
+    expect(h.reportLinkDefaults).not.toHaveBeenCalled();
+  });
+
+  it("a viewer's sponsor page is read-only: it renders, with NO report link, NO Edit, NO Add deal, and the dates are never read", async () => {
+    asMember("viewer", false);
+    const html = await render("sponsors", undefined, undefined, { sponsor: "s1" });
+    expect(sheetsIn(html)).toHaveLength(1);
+    expect(h.reportLinkDefaults).not.toHaveBeenCalled();
+    expect(h.listReportLinks).not.toHaveBeenCalled();
+    for (const id of ["sponsor-sheet-report", "sponsor-sheet-edit", "sponsor-sheet-add-deal", "sponsor-sheet-deal-action"]) {
+      expect(html, id).not.toContain(`data-testid="${id}"`);
+    }
+  });
+
+  it("the marker case still reports the dates the page passed (null without a sponsor, this year's with one)", async () => {
+    real.on = false;
+    expect(attr(await render("sponsors"), "org-sponsors", "data-hub-defaults")).toBe("-");
+    expect(attr(await render("sponsors", undefined, undefined, { sponsor: "s1" }), "org-sponsors", "data-hub-defaults")).toBe("2026-01-01..2026-12-31");
+    asMember("viewer", false);
+    expect(attr(await render("sponsors", undefined, undefined, { sponsor: "s1" }), "org-sponsors", "data-hub-defaults")).toBe("-");
+  });
 });
 
 describe("a non-editor gets the same read-only view Settings gave - canEdit false, no Packages (R19; Settings never refused)", () => {

@@ -91,6 +91,13 @@ export function isUnpaid(p: PaymentStatus): boolean {
   return p === "pending" || p === "failed";
 }
 
+/** Is this deal LIVE? The ONE definition: the server's sponsor lock (`locked_by_deal`) and the console both read it. */
+export const isLiveDeal = (d: Pick<SponsorDeal, "deal_status">): boolean => d.deal_status === "live";
+
+/** Is this deal OPEN - waiting to go live (draft, awaiting payment or approval, scheduled)? Neither live nor ended. The ONE
+ *  definition: the server's `has_open_deal` and the console's "this sponsor already has one of these" both read it. */
+export const isOpenDeal = (d: Pick<SponsorDeal, "deal_status">): boolean => d.deal_status !== "live" && d.deal_status !== "ended";
+
 /** The rule list the Add deal sheet offers: "When paid" is not offered for a complimentary deal (spec §5.2). */
 export function goLiveRulesFor(m: PaymentMethod): readonly GoLiveRule[] {
   return m === "complimentary" ? GO_LIVE_RULES.filter((r) => r !== "on_payment") : GO_LIVE_RULES;

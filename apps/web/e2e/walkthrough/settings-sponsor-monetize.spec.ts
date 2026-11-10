@@ -9,6 +9,7 @@ import {
   seedSettingsOrg,
   releaseSettingsOrg,
   sponsorsUrl,
+  sponsorUrl,
   type SeededOrg,
 } from "../settings-support";
 import {
@@ -1053,9 +1054,10 @@ test("end now: an invoice the sponsor never pays is resent, then ended from its 
   const held = await apiJson(request, `/api/v1/orgs/${org.orgId}/sponsors/${secondId}`, "PATCH", { status: "active" });
   expect(held.status, "an open deal holds the sponsor's status").toBe(409);
   expect(held.error?.code).toBe("sponsor_has_open_deal");
-  // ...so the Sponsors tab does not offer to show it again yet (the negative half of the tap below).
-  await page.goto(sponsorsUrl(org.slug, "sponsors"));
-  await expect(page.getByRole("button", { name: ui("sponsors.edit", { name: SECOND_NAME }) })).toBeVisible({ timeout: READ_MS });
+  // ...so the sponsor's page does not offer to show it again yet (the negative half of the tap below). Show on site again lives on
+  // the sponsor's own page now (PR 2, Task 15), not on the list's row; the page's Edit proves it has loaded.
+  await page.goto(sponsorUrl(org.slug, secondId));
+  await expect(page.getByTestId("sponsor-sheet-edit")).toBeVisible({ timeout: READ_MS });
   await expect(page.getByTestId(`sponsor-show-${secondId}`), "a deal waiting to go live holds the sponsor: no Show on site again").toHaveCount(0);
   await page.goto(sponsorsUrl(org.slug, "packages"));
   await expect(panel).toBeVisible({ timeout: READ_MS });
@@ -1129,9 +1131,9 @@ test("end now: an invoice the sponsor never pays is resent, then ended from its 
   expect(await onPublicPage(), "and is not on the public page").toBe(false);
 
   // Spec §10.3 (owner, 2026-11-07): "After all of a sponsor's deals have ended: the club may switch the sponsor back on by
-  // hand, as for a sponsor with no deal." The Sponsors tab offers it on the hidden sponsor's row - TAPPED here, and the
+  // hand, as for a sponsor with no deal." The sponsor's own page offers it (it moved off the list's row in PR 2, Task 15) - TAPPED here, and the
   // terminal state is read back where a visitor meets it: the public page.
-  await page.goto(sponsorsUrl(org.slug, "sponsors"));
+  await page.goto(sponsorUrl(org.slug, secondId));
   const showAgain = page.getByTestId(`sponsor-show-${secondId}`);
   await expect(showAgain, "every deal ended: the hidden sponsor can be shown again").toBeVisible({ timeout: READ_MS });
   await expect(showAgain).toHaveText(ui("sponsors.showAgain"));

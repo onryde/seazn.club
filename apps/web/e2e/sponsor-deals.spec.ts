@@ -310,3 +310,180 @@ test("a viewer sees the sponsors and their chips - and no action, no ⋯, no edi
     await member.release();
   }
 });
+
+// --- PR 2, Task 15: a sponsor's own page -------------------------------------------------------------------------------------------
+//
+// What no vitest suite can see: ONE body in two wrappers (a page below 768, a right-hand panel over the list from 768), the swap when
+// the window crosses 768, a real tap on the name, the back link's size and where it goes, and the real PATCHes behind the page's
+// controls. A floor the page must hold at every width: no sideways scroll.
+
+/** Taps `tap` until `done` shows. The first tap on a page can land before React has attached (class 20: it is lost, not queued), so
+ *  the tap is retried until its effect is on screen - safe to repeat only where the tap itself is idempotent (open, never toggle). */
+async function tapUntil(tap: Locator, done: Locator, why: string): Promise<void> {
+  await expect(async () => {
+    if (await done.isVisible()) return;
+    await tap.click({ timeout: 2_000 });
+    await expect(done, why).toBeVisible({ timeout: 3_000 });
+  }).toPass({ timeout: 20_000 });
+}
+
+test("sponsor page: phones get their own page with back; desktop a side sheet over the list", async ({ page, request }) => {
+  // Two seeds, a page load per width and a live resize.
+  test.setTimeout(150_000);
+  const org = await seedSettingsOrg(request, { plan: "pro", label: "sheet-wrappers" });
+  seeded.push(org);
+  const NAME = "Harbourside Building Supplies and Timber Co";
+  expect(NAME.length, "premise: the realistic 43-character name").toBe(43);
+  const pkg = await newPackage(request, org.orgId, "gold");
+  const sponsorId = await newSponsor(request, org.orgId, NAME);
+  const other = await newSponsor(request, org.orgId, "Quay Fisheries");
+  const dealId = await newDeal(request, org.orgId, sponsorId, { package_id: pkg });
+  expect(await dealStatus(request, org.orgId, dealId), "premise: an offline deal waiting for its money").toBe("awaiting_payment");
+  const listUrl = sponsorsUrl(org.slug, "sponsors");
+  const sheet = page.getByTestId("sponsor-sheet");
+  const dialog = page.getByRole("dialog");
+  const listView = page.getByTestId("sponsors-list-view");
+
+  // --- Desktop (1280): the name opens a side panel OVER the list; Escape closes it back to the list URL.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(listUrl);
+  await expect(page.getByTestId("sponsor-row")).toHaveCount(2);
+  const nameLink = rowOf(page, sponsorId).getByTestId("sponsor-row-name-link");
+  await nameLink.click();
+  await expect(page).toHaveURL(new RegExp(`sponsor=${sponsorId}`));
+  await expect(dialog, "from 768 the sponsor's page is a panel").toBeVisible();
+  await expect(sheet, "one body, inside the panel").toHaveCount(1);
+  await expect(dialog.getByTestId("sponsor-sheet")).toHaveCount(1);
+  await expect(listView, "the list is still there behind the panel").toBeVisible();
+  await expect(page.getByTestId("sponsor-sheet-back"), "the panel has its own close, not a back link").toHaveCount(0);
+  const panel = (await dialog.boundingBox())!;
+  expect(panel.x + panel.width, "the panel sits against the right edge").toBeGreaterThanOrEqual(1280 - 1);
+  expect(panel.height, "and runs the full height").toBeGreaterThanOrEqual(900 - 1);
+  expect(panel.width, "a side panel, not the whole screen").toBeLessThanOrEqual(520);
+  await expect(page.getByTestId("sponsor-sheet-name")).toHaveText(NAME);
+  await expect(page.getByTestId("sponsor-sheet-deals").getByTestId("sponsor-sheet-deal")).toHaveCount(1);
+  await expectNoHorizontalScroll(page);
+  await page.keyboard.press("Escape");
+  await expect(dialog, "Escape closes the panel").toHaveCount(0);
+  await expect(page, "and goes back to the list URL").toHaveURL(new RegExp(`${listUrl.replace(/[?]/g, "\\?")}$`));
+
+  // --- Phone (390): the same URL is a PAGE with a back link; the list yields to it.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${listUrl}&sponsor=${sponsorId}`);
+  const pageBody = page.getByTestId("sponsor-sheet-page");
+  await expect(pageBody, "below 768 the sponsor's page is the page").toBeVisible();
+  await expect(dialog, "and not a dialog").toHaveCount(0);
+  await expect(sheet).toHaveCount(1);
+  await expect(listView, "the list is hidden, not removed").toBeHidden();
+  const back = page.getByTestId("sponsor-sheet-back");
+  await expect(back).toBeVisible();
+  const backBox = (await back.boundingBox())!;
+  expect(backBox.height, "the back link is a 44px target").toBeGreaterThanOrEqual(44);
+  expect(await back.getAttribute("href"), "and goes to the list").toBe(listUrl);
+  for (const id of ["sponsor-sheet-details", "sponsor-sheet-deals", "sponsor-sheet-report"]) {
+    await expect(page.getByTestId(id), `${id} is on the page`).toBeVisible();
+  }
+  await expectNoHorizontalScroll(page);
+  // 44px tap targets on the page's controls.
+  for (const id of ["sponsor-sheet-edit", "sponsor-sheet-add-deal", "sponsor-sheet-share"]) {
+    const box = (await page.getByTestId(id).boundingBox())!;
+    expect(box.height, `${id}: a 44px target`).toBeGreaterThanOrEqual(44);
+  }
+  for (const btn of await page.getByTestId("sponsor-sheet-deal-action").all()) {
+    expect((await btn.boundingBox())!.height, "a deal's action: a 44px target").toBeGreaterThanOrEqual(44);
+  }
+
+  // --- Crossing 768 with the page open: the panel replaces the page, and there is STILL one body.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(dialog, "widened past 768: the panel").toBeVisible();
+  await expect(pageBody, "and the phone wrapper is gone").toHaveCount(0);
+  await expect(sheet, "one body, never two").toHaveCount(1);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(dialog).toHaveCount(0);
+  await expect(pageBody).toBeVisible();
+  await expect(sheet).toHaveCount(1);
+
+  // --- Back returns to the list (and its other sponsor), with the sponsor's page gone.
+  await back.click();
+  await expect(page).toHaveURL(new RegExp(`${listUrl.replace(/[?]/g, "\\?")}$`));
+  await expect(sheet, "back: no sponsor page").toHaveCount(0);
+  await expect(listView).toBeVisible();
+  await expect(rowOf(page, other)).toBeVisible();
+
+  // --- The name's tap area on a phone is a 44px target that the row does not pay for: hit-test it, do not just measure paint.
+  const link = rowOf(page, sponsorId).getByTestId("sponsor-row-name-link");
+  const hit = await link.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const top = document.elementFromPoint(r.left + r.width / 2, r.top + 2);
+    const bottom = document.elementFromPoint(r.left + r.width / 2, r.bottom - 2);
+    return { height: r.height, top: top === el || el.contains(top), bottom: bottom === el || el.contains(bottom) };
+  });
+  expect(hit.height, "the name link's box is 44px tall on a phone").toBeGreaterThanOrEqual(44);
+  expect(hit.top && hit.bottom, "and both ends of it hit the link").toBe(true);
+  await expectNoHorizontalScroll(page);
+});
+
+test("sponsor page: a live deal's tier and stream are read-only; name and link save", async ({ page, request }) => {
+  // Seeding plus two page loads and three writes.
+  test.setTimeout(150_000);
+  const org = await seedSettingsOrg(request, { plan: "pro", label: "sheet-details" });
+  seeded.push(org);
+  const gold = await newPackage(request, org.orgId, "gold");
+  const liveId = await newSponsor(request, org.orgId, "Ridge Gold Physiotherapy");
+  const freeId = await newSponsor(request, org.orgId, "Plain Sponsor");
+  const liveDeal = await newDeal(request, org.orgId, liveId, { package_id: gold, payment_method: "complimentary", go_live: "immediate" });
+  expect(await dealStatus(request, org.orgId, liveDeal), "premise: live").toBe("live");
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  // --- The live-deal sponsor: the deal's tier is read-only, with the reason; the stream box is disabled; the editor has no tier or competition.
+  await page.goto(`${sponsorsUrl(org.slug, "sponsors")}&sponsor=${liveId}`);
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId("sponsor-sheet-detail-tier"), "the deal's tier").toContainText(ui("sponsors.tier.gold"));
+  await expect(dialog.getByTestId("sponsor-sheet-locked-note")).toHaveText(ui("sponsors.deal.lockedNote"));
+  await expect(dialog.getByTestId("sponsor-sheet-tier-now"), "a live deal changes nothing later: no 'Tier now' line").toHaveCount(0);
+  await expect(dialog.getByTestId("sponsor-sheet-stream"), "a live deal owns the stream").toBeDisabled();
+  const edit = dialog.getByTestId("sponsor-sheet-edit");
+  const editor = dialog.getByTestId("sponsor-sheet-editor");
+  await tapUntil(edit, editor, "Edit opens the editor");
+  await expect(editor.locator("select"), "no tier or competition control while the deal is live").toHaveCount(0);
+
+  // Name and link save: exactly the two fields, nothing about the tier.
+  const NEW_NAME = "Ridge Gold Physio & Sports";
+  await editor.getByRole("textbox").nth(0).fill(NEW_NAME);
+  await editor.getByRole("textbox").nth(1).fill("ridge-gold.example.com");
+  const [saved] = await Promise.all([
+    page.waitForResponse((r) => r.url().endsWith(`/api/v1/orgs/${org.orgId}/sponsors/${liveId}`) && r.request().method() === "PATCH"),
+    editor.getByRole("button", { name: ui("sponsors.save"), exact: true }).click(),
+  ]);
+  expect(saved.status(), `PATCH answered ${saved.status()}: ${await saved.text()}`).toBe(200);
+  expect(JSON.parse(saved.request().postData() ?? "null"), "only what changed").toEqual({ name: NEW_NAME, url: "https://ridge-gold.example.com" });
+  await expect(editor, "saved: the editor closes").toHaveCount(0);
+  await expect(dialog.getByTestId("sponsor-sheet-name")).toHaveText(NEW_NAME);
+  const readBack = await apiJson<{ id: string; name: string; url: string | null; tier: string }[]>(request, `/api/v1/orgs/${org.orgId}/sponsors`);
+  const row = readBack.data!.find((s) => s.id === liveId)!;
+  expect({ name: row.name, url: row.url, tier: row.tier }, "the server agrees, and the deal's tier is untouched").toEqual({
+    name: NEW_NAME, url: "https://ridge-gold.example.com", tier: "gold",
+  });
+
+  // --- The pair: a sponsor with NO deal keeps its tier and competition controls, and its stream box works.
+  await page.goto(`${sponsorsUrl(org.slug, "sponsors")}&sponsor=${freeId}`);
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId("sponsor-sheet-locked-note"), "no deal, no lock").toHaveCount(0);
+  const stream = dialog.getByTestId("sponsor-sheet-stream");
+  await expect(stream).toBeEnabled();
+  await tapUntil(dialog.getByTestId("sponsor-sheet-edit"), dialog.getByTestId("sponsor-sheet-editor"), "Edit opens the editor");
+  await expect(dialog.getByTestId("sponsor-sheet-editor").locator("select"), "tier and competition are the club's to set").toHaveCount(2);
+  await dialog.getByTestId("sponsor-sheet-editor").getByRole("button", { name: ui("confirm.cancel"), exact: true }).click();
+  await expect(dialog.getByTestId("sponsor-sheet-editor")).toHaveCount(0);
+  const [toggled] = await Promise.all([
+    page.waitForResponse((r) => r.url().endsWith(`/api/v1/orgs/${org.orgId}/sponsors/${freeId}`) && r.request().method() === "PATCH"),
+    stream.click(),
+  ]);
+  expect(toggled.status(), `PATCH answered ${toggled.status()}: ${await toggled.text()}`).toBe(200);
+  expect(JSON.parse(toggled.request().postData() ?? "null"), "exactly the stream flag").toEqual({ on_stream: true });
+  const after = await apiJson<{ id: string; on_stream: boolean }[]>(request, `/api/v1/orgs/${org.orgId}/sponsors`);
+  expect(after.data!.find((s) => s.id === freeId)!.on_stream, "the server agrees").toBe(true);
+  await expect(stream, "and the box reads back checked").toBeChecked();
+  await expectNoHorizontalScroll(page);
+});

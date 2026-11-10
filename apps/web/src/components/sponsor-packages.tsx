@@ -22,8 +22,19 @@ import { useConfirm } from "@/components/ui/confirm-provider";
 import { sponsorSaveErrorKey, type SponsorWrite } from "@/components/sponsors/save-error";
 import { ApiV1Error } from "@/lib/client-v1";
 import type { MessageKey } from "@/lib/messages";
+import {
+  dupConfirmBodyKey,
+  endConfirmBodyKey,
+  endKeepsPayment,
+  hasLiveDeal,
+  hasOpenDealOn,
+} from "@/components/sponsors/deal-copy";
 import { allowedActions, isUnpaid, type PaymentStatus, type SponsorDeal } from "@/lib/sponsor-deals";
 import { SPONSOR_TIERS, type SponsorTier } from "@/components/org-sponsors";
+
+// The deal screens' shared words and questions moved to components/sponsors/deal-copy.ts (sponsor deals PR 2, Task 15); this tab's
+// transitional picker (deleted in Task 18) keeps exporting them under the names its tests import.
+export { dupConfirmBodyKey, endConfirmBodyKey, endKeepsPayment, hasLiveDeal, hasOpenDealOn };
 
 interface PackageItem {
   id: string;
@@ -86,53 +97,6 @@ export function sponsorsByDisplayOrder(sponsors: readonly SponsorPick[]): Sponso
     .map((sponsor, position) => ({ sponsor, position }))
     .sort((a, b) => a.sponsor.display_order - b.sponsor.display_order || a.position - b.position)
     .map(({ sponsor }) => sponsor);
-}
-
-/** Does this sponsor already have an OPEN deal on this package - one that has not gone live yet (draft, awaiting payment or
- *  approval, scheduled)? A live deal is running and an ended one is over; neither is a second invoice for the same thing. The
- *  same rule as `has_open_deal` (server/sponsors/deal-apply.ts `isOpen`). Keys on the SPONSOR, not the typed email. */
-export function hasOpenDealOn(deals: readonly SponsorDeal[], sponsorId: string, packageId: string): boolean {
-  return deals.some(
-    (d) =>
-      d.sponsor_id === sponsorId && d.package_id === packageId && d.deal_status !== "live" && d.deal_status !== "ended",
-  );
-}
-
-/** Is this sponsor under a LIVE deal right now? A live deal keeps the sponsor on the public pages whatever is queued behind it;
- *  without one, a deal waiting for its payment hides the sponsor until it is live (server/sponsors/deal-apply.ts, step 4). */
-export function hasLiveDeal(deals: readonly SponsorDeal[], sponsorId: string): boolean {
-  return deals.some((d) => d.sponsor_id === sponsorId && d.deal_status === "live");
-}
-
-/** The duplicate-invoice confirm's words (review m8): "could pay twice" only while one of the sponsor's open deals on this
- *  package still has money to take (pending or failed); open deals with nothing left to pay make a second deal, not a second
- *  payment. */
-export function dupConfirmBodyKey(deals: readonly SponsorDeal[], sponsorId: string, packageId: string): MessageKey {
-  const unpaid = deals.some(
-    (d) =>
-      d.sponsor_id === sponsorId &&
-      d.package_id === packageId &&
-      d.deal_status !== "live" &&
-      d.deal_status !== "ended" &&
-      isUnpaid(d.payment_status),
-  );
-  return unpaid ? "sponsors.order.dupConfirm.body" : "sponsors.order.dupConfirm.bodySettled";
-}
-
-/** End now's confirm words (review I2): what the public pages do once this deal ends. A live deal hands over to the queue (or
- *  the sponsor comes off); a deal that never went live leaves the sponsor as it is - shown under its live deal, else hidden
- *  (server/sponsors/deal-apply.ts, step 4). */
-export function endConfirmBodyKey(deals: readonly SponsorDeal[], deal: SponsorDeal): MessageKey {
-  if (deal.deal_status === "live") return "sponsors.order.endConfirm.bodyLive";
-  if (deal.sponsor_id !== null && hasLiveDeal(deals, deal.sponsor_id)) return "sponsors.order.endConfirm.bodyKept";
-  return "sponsors.order.endConfirm.bodyHidden";
-}
-
-/** End now never moves money (batch G New-2): a deal the sponsor has paid, that is not live, keeps its payment when it ends,
- *  and the confirm says so - and that Refund, still offered on it afterwards (lib/sponsor-deals.ts allowedActions), is the
- *  separate step. A disputed payment is the dispute's, not the club's to refund. */
-export function endKeepsPayment(deal: SponsorDeal): boolean {
-  return deal.payment_status === "paid" && deal.deal_status !== "live" && !deal.disputed_at;
 }
 
 /** The refund confirm's money words (review m1, batch G New-3): back to the card through Stripe only when a card payment at

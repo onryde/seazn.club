@@ -149,15 +149,14 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
     refused?.status === 403 && read?.status === 200 && v1data<Deal>(read).payment_status === "pending",
   );
 
-  // --- PR 2 Task 13: the hub's ?sponsor= is trusted for nothing. A REAL sponsor id of another org (the Pro org's, made above) on this
-  // org's hub answers 200 with the Sponsors tab's list - this org's sponsor in it, the foreign one's name nowhere. That is ALL this
-  // row proves: nothing reads `hub.sponsorId` until the sponsor page (Task 15) renders it, so a page that ACCEPTED the foreign id
-  // would pass too (review M1). The row is named for its floor; the foreign-id refusal itself is pinned by sponsors-hub.test.ts
-  // (`resolveSponsorParam`) and page.test.tsx / pass-scope-sponsors.test.tsx (the id handed to the island), and Task 15 owns the
-  // sponsor-sheet assertion (`data-testid="sponsor-sheet"` present for the OWN id, absent for the foreign one).
+  // --- PR 2 Task 13, completed by Task 15: the hub's ?sponsor= is trusted for nothing. A REAL sponsor id of another org (the Pro org's,
+  // made above) on this org's hub answers 200 with the Sponsors tab's list - this org's sponsor in it, the foreign one's name nowhere,
+  // and NO sponsor page. Until Task 15 nothing read `hub.sponsorId`, so a page that ACCEPTED the foreign id would have passed too
+  // (review M1); the OWN-id row below is the positive pair that makes this absence mean something - the same page DOES draw
+  // `data-testid="sponsor-sheet"` for an id that is the org's own.
   const foreignHub = await html(free, `/o/${org.slug}/sponsors?tab=sponsors&sponsor=${viewerSponsor}`);
   check(
-    "sd hub ?sponsor=<foreign> answers the list and leaks no foreign name (floor until the sponsor page)",
+    "sd hub ?sponsor=<foreign> answers the list and leaks no foreign name",
     foreignHub.status === 200 &&
       foreignHub.body.includes('data-testid="sponsors-tab-sponsors"') &&
       foreignHub.body.includes(paidName) &&
@@ -187,6 +186,27 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
       row.includes('data-action="mark_paid"') &&
       addForm.length > 0 &&
       !addForm.includes("<select"),
+  );
+
+  // --- PR 2 Task 15: a sponsor's own page. The Pro org's hub with its OWN sponsor's id renders the page body (the server sends it
+  // whatever the viewport - below md it is the page, from md the browser swaps it for a side panel), for THAT sponsor, with its Deals
+  // section carrying the offline deal made above (the chip is the awaiting-payment one) and its Mark as paid; the list is still
+  // there behind it (hidden below md only by a class).
+  const ownHub = proSlug ? await html(admin, `/o/${proSlug}/sponsors?tab=sponsors&sponsor=${viewerSponsor}`) : null;
+  const sheetAt = ownHub ? ownHub.body.indexOf('data-testid="sponsor-sheet"') : -1;
+  const sheet = ownHub && sheetAt >= 0 ? ownHub.body.slice(sheetAt) : "";
+  check(
+    "sd hub ?sponsor=<id> renders the sponsor page (200, sponsor-sheet)",
+    ownHub?.status === 200 &&
+      viewerDealId !== "" &&
+      sheetAt >= 0 &&
+      sheet.includes(`data-sponsor-id="${viewerSponsor}"`) &&
+      sheet.includes(`Deal Viewer ${tag}`) &&
+      sheet.includes('data-testid="sponsor-sheet-deals"') &&
+      sheet.includes(`data-deal-id="${viewerDealId}"`) &&
+      sheet.includes("Awaiting payment") &&
+      sheet.includes('data-action="mark_paid"') &&
+      ownHub.body.includes('data-testid="sponsors-list-view"'),
   );
 
   // --- T9, the hourly sweep's route (D20): the cron secret guards it, and the right one answers the sweep's counts. CI sets

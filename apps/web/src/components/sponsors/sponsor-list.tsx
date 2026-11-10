@@ -9,11 +9,13 @@
 // `expandWithHooks` and keeps one owner for the writes. The sub-components here are plain functions called inline, never elements,
 // for the same reason: an unexpanded child is a control a test cannot reach.
 //
+// The name is a link to the sponsor's own page (`sponsorHref`, Task 15), and Show on site again lives there now (spec §10.3).
+//
 // One DOM. Below md (768) the clicks and the edit / move / delete controls fold into a tray that is `max-md:hidden` until the ⋯
 // (SponsorRowMore) opens it; from md up they sit inline. The controls exist once.
 import type { ReactNode } from "react";
 import Link from "@/components/ui/console-link";
-import { ArrowDown, ArrowUp, Eye, MousePointerClick, Pencil, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, MousePointerClick, Pencil, Trash2 } from "lucide-react";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { DealChip } from "@/components/sponsors/deal-chip";
 import { SponsorRowMore } from "@/components/sponsors/sponsor-row-more";
@@ -71,7 +73,6 @@ export interface SponsorListProps {
   onEdit: (s: SponsorItem) => void;
   onMove: (id: string, delta: -1 | 1) => void;
   onRemove: (s: SponsorItem) => void;
-  onShowAgain: (s: SponsorItem) => void;
   onAction: (s: SponsorItem, action: DealWrite) => void;
 }
 
@@ -144,7 +145,7 @@ const ICON_BUTTON =
 export function SponsorList(props: SponsorListProps) {
   const {
     sponsors, hasTiers, canEdit, busy, orgSlug, tz, competitions, editingId, renderEditor, moreOpenId, onToggleMore, onEdit, onMove,
-    onRemove, onShowAgain, onAction,
+    onRemove, onAction,
   } = props;
   const msg = useMsg();
   const locale = useLocaleOrDefault();
@@ -233,28 +234,23 @@ export function SponsorList(props: SponsorListProps) {
             <div data-testid="sponsor-row-main" className="min-w-0">
               {/* A badge (Disputed - parked, Paid ...) wraps under the name instead of squeezing it to "O..." in a 160px column. */}
               <p data-testid="sponsor-row-name" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-sm font-medium text-slate-800">
-                <span data-testid="sponsor-row-name-text" className="min-w-0 max-w-full truncate">
-                  {s.name}
-                </span>
+                {/* The name opens the sponsor's own page (Task 15). On a phone the link's tap area grows to 44px with padding that a
+                    negative margin takes back, so the row does not get taller; `relative z-[1]` keeps that padding on top of the
+                    sub-line it overlaps, or the lower half of the tap area would hit the sub-line instead of the link. */}
+                <Link
+                  href={sponsorHref(orgSlug, s.id)}
+                  data-testid="sponsor-row-name-link"
+                  className="relative z-[1] block min-w-0 max-w-full hover:text-purple-700 hover:underline max-md:-my-3 max-md:py-3"
+                >
+                  <span data-testid="sponsor-row-name-text" className="block min-w-0 max-w-full truncate">
+                    {s.name}
+                  </span>
+                </Link>
                 {badge(s)}
               </p>
               <p data-testid="sponsor-row-sub" className="truncate text-xs text-slate-500">
                 {subline(s, { msg, locale, tz, competitions })}
               </p>
-              {canEdit && canShowAgain(s) ? (
-                // Off the public pages with nothing holding it there: its last deal ended (or it never had one). Spec §10.3.
-                <button
-                  type="button"
-                  data-testid={`sponsor-show-${s.id}`}
-                  aria-label={msg("sponsors.showAgainLabel", { name: s.name })}
-                  disabled={busy}
-                  onClick={() => onShowAgain(s)}
-                  className="btn btn-ghost mt-1.5 w-fit px-3 py-1.5 text-xs max-md:min-h-11"
-                >
-                  <Eye className="h-3.5 w-3.5" />
-                  {msg("sponsors.showAgain")}
-                </button>
-              ) : null}
             </div>
             {canEdit ? <SponsorRowMore name={s.name} open={open} controlsId={trayId} onToggle={() => onToggleMore(s.id)} /> : null}
             <div

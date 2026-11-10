@@ -57,6 +57,7 @@ const row = (over: Partial<SponsorItem> & { id: string }): SponsorItem => ({
   display_order: 0,
   status: "active",
   click_count: 0,
+  on_stream: false,
   paid_order_id: null,
   deal: null,
   locked_by_deal: false,
@@ -182,9 +183,10 @@ const HUB: SponsorsHubData = {
   sponsorId: null,
   dealId: null,
   reportLinks: [],
+  reportDefaults: null,
 };
 
-function mount(rows: SponsorItem[], opts: { canEdit?: boolean } = {}) {
+function mount(rows: SponsorItem[], opts: { canEdit?: boolean; sponsorId?: string } = {}) {
   const props: Parameters<typeof OrgSponsors>[0] = {
     orgId: ORG,
     initialSponsors: rows,
@@ -192,7 +194,7 @@ function mount(rows: SponsorItem[], opts: { canEdit?: boolean } = {}) {
     hasTiers: true,
     billingHref: "/billing",
     canEdit: opts.canEdit ?? true,
-    hub: HUB,
+    hub: opts.sponsorId === undefined ? HUB : { ...HUB, sponsorId: opts.sponsorId },
   };
   const island = renderIsland(OrgSponsors, props, expandSponsorTree);
   const byLabel = (key: MessageKey, name: string): ReactElement => {
@@ -218,7 +220,18 @@ function mount(rows: SponsorItem[], opts: { canEdit?: boolean } = {}) {
       if (!el) throw new Error(`no element with data-testid="${testId}"`);
       return el;
     },
-    text: () => flat(island.text()),
+    // The words on screen, read from the EXPANDED tree: the sponsor's page (its error line among them) is a child component, and
+    // `island.text()` reads only what the island itself returned. Each element's own string children, so nothing is counted twice.
+    text: () =>
+      flat(
+        island
+          .tree()
+          .flatMap((e) => {
+            const kids = propsOf(e).children;
+            return (Array.isArray(kids) ? kids : [kids]).filter((k) => typeof k === "string" || typeof k === "number").map(String);
+          })
+          .join(" "),
+      ),
   };
 }
 
@@ -399,7 +412,7 @@ describe("the copy that replaces the paid-placement promise", () => {
   });
 });
 
-describe("Show on site again: a hidden sponsor whose deals have all ended is switched back on by hand (spec §10.3, batch F fix round 2)", () => {
+describe("Show on site again (now on the sponsor's page, Task 15): a hidden sponsor whose deals have all ended is switched back on by hand (spec §10.3, batch F fix round 2)", () => {
   // Spec §10.3 (owner, 2026-11-07): "After all of a sponsor's deals have ended: the club may switch the sponsor back on by hand,
   // as for a sponsor with no deal." The server's rule for `PATCH { status }` (server/usecases/sponsors.ts `patchSponsor`): a
   // live deal refuses it (409 sponsor_locked_by_deal), a deal waiting to go live refuses it (409 sponsor_has_open_deal), and a
@@ -417,7 +430,7 @@ describe("Show on site again: a hidden sponsor whose deals have all ended is swi
   it("offered exactly where the server accepts it - inactive with no open or live deal, for an editor (all seven checked)", () => {
     let checked = 0;
     for (const [label, over, canEdit, offered] of CASES) {
-      const m = mount([row({ id: "a", name: LONG_NAME, ...over })], { canEdit });
+      const m = mount([row({ id: "a", name: LONG_NAME, ...over })], { canEdit, sponsorId: "a" });
       expect(m.has("sponsor-show-a"), label).toBe(offered);
       checked++;
     }
@@ -426,7 +439,7 @@ describe("Show on site again: a hidden sponsor whose deals have all ended is swi
   });
 
   it("its words: 'Show on site again', named for the sponsor to a screen reader (label in name)", () => {
-    const m = mount([row({ id: "a", name: LONG_NAME, status: "inactive" })]);
+    const m = mount([row({ id: "a", name: LONG_NAME, status: "inactive" })], { sponsorId: "a" });
     const button = m.find("sponsor-show-a");
     expect(flat(textOf(button)), "the visible words").toBe(msg("sponsors.showAgain"));
     expect(propsOf(button)["aria-label"]).toBe(msg("sponsors.showAgainLabel", { name: LONG_NAME }));
@@ -438,7 +451,7 @@ describe("Show on site again: a hidden sponsor whose deals have all ended is swi
       method === "PATCH"
         ? { status: 200, body: { ok: true, data: row({ id: "a", name: LONG_NAME, status: "active" }) } }
         : { status: 200, body: { ok: true, data: [row({ id: "a", name: LONG_NAME, status: "active" })] } };
-    const m = mount([row({ id: "a", name: LONG_NAME, status: "inactive", deal: dealOf("d1", "pending", { deal_status: "ended" }) })]);
+    const m = mount([row({ id: "a", name: LONG_NAME, status: "inactive", deal: dealOf("d1", "pending", { deal_status: "ended" }) })], { sponsorId: "a" });
     (propsOf(m.find("sponsor-show-a")).onClick as () => void)();
     await flush();
     const patches = calls.filter((c) => c.method === "PATCH");
@@ -455,7 +468,7 @@ describe("Show on site again: a hidden sponsor whose deals have all ended is swi
       method === "PATCH"
         ? { status: 409, body: { ok: false, error: { code: "sponsor_has_open_deal", message: SERVER } } }
         : { status: 200, body: { ok: true, data: [row({ id: "a", name: LONG_NAME, status: "inactive", has_open_deal: true, deal: dealOf("d9", "pending", { deal_status: "awaiting_payment" }) })] } };
-    const m = mount([row({ id: "a", name: LONG_NAME, status: "inactive" })]);
+    const m = mount([row({ id: "a", name: LONG_NAME, status: "inactive" })], { sponsorId: "a" });
     (propsOf(m.find("sponsor-show-a")).onClick as () => void)();
     await flush();
     expect(m.text()).toContain(msg("sponsors.error.hasOpenDeal"));

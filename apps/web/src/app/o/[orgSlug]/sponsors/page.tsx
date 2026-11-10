@@ -105,10 +105,16 @@ export default async function SponsorsHubPage({
     const sponsorId = resolveSponsorParam(rawSponsor, sponsorRows);
     const dealId = sponsorId === null ? null : resolveDealParam(rawDeal, deals.filter((d) => d.sponsor_id === sponsorId));
     // The sponsor page's Report link section: the selected sponsor's live links. The read is an editor's (it refuses a viewer).
+    // Its opening dates are this year's (`resolveSponsorPeriod` with no `?period=` - the Overview's landing window). Read with the
+    // links, for an editor's page only: a viewer's sponsor page has no such section.
     const reportLinks =
       sponsorId !== null && canEdit
         ? (await listReportLinks(page.auth, active.id)).filter((l) => l.sponsorId === sponsorId)
         : [];
+    const reportDefaults =
+      sponsorId !== null && canEdit
+        ? await reportLinkDefaults(page.auth, active.id, resolveSponsorPeriod(undefined, competitions), new Date())
+        : null;
     body = (
       <HubPanel tab="sponsors" icon={Handshake} dict={dict}>
         <OrgSponsors
@@ -118,7 +124,7 @@ export default async function SponsorsHubPage({
           hasTiers={hasTiers}
           billingHref={routes.billing(orgSlug)}
           canEdit={canEdit}
-          hub={{ orgSlug, deals, packages, hasMonetize, chargesEnabled, sponsorId, dealId, reportLinks }}
+          hub={{ orgSlug, deals, packages, hasMonetize, chargesEnabled, sponsorId, dealId, reportLinks, reportDefaults }}
         />
       </HubPanel>
     );

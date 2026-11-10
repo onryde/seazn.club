@@ -22,10 +22,12 @@
 //     purpose. (RS004 review finding 3, elsewhere in this wave, is exactly
 //     about a test overclaiming what it proves; this file tries hard not to
 //     repeat that mistake.)
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { nextTrapFocus, FOCUSABLE_SELECTOR } from "@/components/modal";
+import type { ReactElement } from "react";
+import { renderIsland } from "@/components/__tests__/_hook-harness";
+import { Modal, nextTrapFocus, FOCUSABLE_SELECTOR } from "@/components/modal";
 
 const source = readFileSync(fileURLToPath(new URL("../modal.tsx", import.meta.url)), "utf8");
 
@@ -143,5 +145,86 @@ describe("Modal — focus-trap wiring (source-level pins; see file header)", () 
   it("still marks the dialog role and aria-modal — unchanged by this fix", () => {
     expect(source).toContain('role="dialog"');
     expect(source).toContain('aria-modal="true"');
+  });
+});
+
+// --- placement="side" (sponsor deals PR 2, Task 15) ----------------------------------------------------------------------------
+// The sponsor page opens over its list as a full-height panel on the right from md, and is the bottom sheet every Modal is below md.
+// Class-string tests (no DOM here): what is pinned is the markup a browser is handed. The anchors are whole tokens - `/\bmd:hidden\b/`
+// style matches would also hit `max-md:hidden` - so every comparison is on split class tokens.
+describe("Modal placement=\"side\" - a right-hand panel from md, unchanged below it", () => {
+  beforeEach(() => {
+    vi.stubGlobal("document", { activeElement: null, addEventListener: () => {}, removeEventListener: () => {} });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const tokens = (el: ReactElement | undefined): string[] =>
+    String((el?.props as { className?: string } | undefined)?.className ?? "").split(/\s+/).filter(Boolean);
+
+  function parts(placement: "center" | "side" | undefined) {
+    const island = renderIsland(Modal, { title: "Sponsor", onClose: () => {}, children: "x", placement });
+    const tree = island.tree();
+    const overlay = tree.find((el) => tokens(el).includes("modal-overlay"));
+    const dialog = tree.find((el) => (el.props as { role?: string }).role === "dialog");
+    island.unmount();
+    return { overlay, dialog };
+  }
+
+  it("without it (every other Modal in the app) the classes are exactly what they were - the default placement is center", () => {
+    for (const placement of [undefined, "center" as const]) {
+      const { overlay, dialog } = parts(placement);
+      expect(tokens(overlay).join(" ")).toBe("modal-overlay");
+      expect(tokens(dialog).join(" ")).toBe(
+        "flex max-h-[85dvh] w-full sm:max-w-md flex-col rounded-t-2xl border border-purple-100 bg-white p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-2xl sm:pb-6",
+      );
+    }
+  });
+
+  it("side ADDS classes and removes none: everything the center modal wears, the side one still wears", () => {
+    const center = parts("center");
+    const side = parts("side");
+    let checked = 0;
+    for (const key of ["overlay", "dialog"] as const) {
+      const wearsNow = new Set(tokens(side[key]));
+      for (const t of tokens(center[key])) {
+        expect(wearsNow.has(t), `${key} keeps ${t}`).toBe(true);
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(10);
+  });
+
+  it("every class side adds is an md: variant, so below 768 the sheet is the bottom sheet it always was (max-md: and base classes unchanged)", () => {
+    const center = parts("center");
+    const side = parts("side");
+    let added = 0;
+    for (const key of ["overlay", "dialog"] as const) {
+      const before = new Set(tokens(center[key]));
+      const extra = tokens(side[key]).filter((t) => !before.has(t));
+      expect(extra.length, `${key}: side changes something`).toBeGreaterThan(0);
+      for (const t of extra) {
+        expect(t, `${key}: ${t} only applies from md`).toMatch(/^md:/);
+        expect(t, `${key}: ${t} is not a max-md: class`).not.toMatch(/^max-md:/);
+        added++;
+      }
+      // the below-md classes the center modal has, side has too (none gained, none lost)
+      expect(tokens(side[key]).filter((t) => t.startsWith("max-md:")), key).toEqual(tokens(center[key]).filter((t) => t.startsWith("max-md:")));
+    }
+    expect(added, "anti-vacuity: side added something to both the overlay and the dialog").toBeGreaterThanOrEqual(2);
+  });
+
+  it("from md the dialog is a full-height panel against the right edge: stretched overlay packed right, no height cap, rounded on the left only", () => {
+    const { overlay, dialog } = parts("side");
+    expect(tokens(overlay)).toEqual(expect.arrayContaining(["md:items-stretch", "md:justify-end", "md:p-0"]));
+    expect(tokens(dialog)).toEqual(
+      expect.arrayContaining(["md:h-full", "md:max-h-none", "md:rounded-none", "md:rounded-l-2xl", "md:border-y-0", "md:border-r-0"]),
+    );
+  });
+
+  it("side composes with bleed (both keep their own classes)", () => {
+    const island = renderIsland(Modal, { title: "x", onClose: () => {}, children: "x", placement: "side" as const, bleed: true });
+    const dialog = island.tree().find((el) => (el.props as { role?: string }).role === "dialog");
+    island.unmount();
+    expect(tokens(dialog)).toEqual(expect.arrayContaining(["max-md:px-0", "md:h-full"]));
   });
 });

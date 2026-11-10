@@ -34,7 +34,7 @@ const confirmMock = vi.hoisted(() => vi.fn<(opts?: unknown) => Promise<boolean>>
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMock }));
 
 import { OrgSponsors, SponsorForm, type SponsorItem, type SponsorsHubData } from "@/components/org-sponsors";
-import { SponsorList, type SponsorListProps } from "@/components/sponsors/sponsor-list";
+import { canShowAgain, SponsorList, type SponsorListProps } from "@/components/sponsors/sponsor-list";
 import { SponsorRowMore } from "@/components/sponsors/sponsor-row-more";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { expandSponsorTree } from "./_sponsor-tree";
@@ -75,7 +75,7 @@ const deal = (over: Partial<SponsorDeal>): SponsorDeal => ({ ...DEAL, ...over })
 
 const sponsor = (over: Partial<SponsorItem> & { id: string; name: string }): SponsorItem => ({
   competition_id: null, url: null, logo_path: null, tier: "partner", display_order: 0, status: "active", click_count: 0,
-  paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false, ...over,
+  on_stream: false, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false, ...over,
 });
 
 /** The mockup's eight rows (screen 1), in the mockup's group order. `chip` / `sub` / `action` are the words in the picture. */
@@ -151,7 +151,7 @@ const noop = () => {};
 function listProps(sponsors: SponsorItem[], over: Partial<SponsorListProps> = {}): SponsorListProps {
   return {
     sponsors, hasTiers: true, canEdit: true, busy: false, orgSlug: SLUG, tz: "UTC", competitions: COMPS, editingId: null,
-    renderEditor: () => null, moreOpenId: null, onToggleMore: noop, onEdit: noop, onMove: noop, onRemove: noop, onShowAgain: noop,
+    renderEditor: () => null, moreOpenId: null, onToggleMore: noop, onEdit: noop, onMove: noop, onRemove: noop,
     onAction: noop, ...over,
   };
 }
@@ -470,27 +470,49 @@ describe("a viewer reads the list and changes nothing (R19: 'a viewer gets the r
   });
 });
 
-describe("Show on site again is still reachable from the list (spec §10.3, carried from PR 1)", () => {
-  it("offered on the one row that is off with nothing holding it, once, with its PR 1 label and test id; a tap asks the owner", () => {
-    const off = ROWS.filter((r) => r.status === "inactive" && !r.locked_by_deal && !r.has_open_deal);
+describe("Show on site again is NOT on the list any more: it moved to the sponsor's page (Task 15, spec §10.3)", () => {
+  // One home, never two copies that can disagree. The pair that proves it was not simply deleted is in sponsor-sheet.test.tsx: the
+  // page offers it for the SAME rows, by the same predicate (`canShowAgain`).
+  it("the rows that qualify (Northbank, Tidewell) carry no Show control on the list; their name links to the page that does", () => {
+    const off = ROWS.filter((r) => canShowAgain(r));
     expect(off.map((r) => r.id), "premise: Northbank and Tidewell are the hidden rows nothing holds").toEqual(["s7", "s8"]);
     const markup = listHtml(ROWS);
-    expect(findAll(markup, "sponsor-show-s7")).toHaveLength(1);
-    expect(findAll(markup, "sponsor-show-s8")).toHaveLength(1);
-    expect(findAll(markup, "sponsor-show-s2"), "an open deal holds the sponsor").toHaveLength(0);
-    expect(findAll(markup, "sponsor-show-s1"), "active and live").toHaveLength(0);
-    const button = findOne(markup, "sponsor-show-s7");
-    expect(attrOf(button.open, "aria-label")).toBe("Show on site again: Northbank Print");
-    expect(textOfMarkup(button.outer)).toBe("Show on site again");
-    const shown: string[] = [];
-    const tree = expandSponsorTree(<SponsorList {...listProps(ROWS, { onShowAgain: (s) => shown.push(s.id) })} />);
-    const el = tree.find((e) => propsOf(e)["data-testid"] === "sponsor-show-s7")!;
-    (propsOf(el).onClick as () => void)();
-    expect(shown).toEqual(["s7"]);
+    let checked = 0;
+    for (const r of off) {
+      expect(findAll(markup, `sponsor-show-${r.id}`), `${r.id}: no Show on site again on the list`).toHaveLength(0);
+      expect(attrOf(findOne(rowOf(markup, r.id), "sponsor-row-name-link").open, "href"), `${r.id}: the name opens the page`).toBe(
+        `/o/${SLUG}/sponsors?tab=sponsors&sponsor=${r.id}`,
+      );
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
+describe("the row's name opens the sponsor's own page (Task 15)", () => {
+  it("every row's name is ONE link to its sponsor's page, the text still truncates, and a phone's tap area is 44px (8 rows checked)", () => {
+    const markup = listHtml(ROWS);
+    let checked = 0;
+    for (const r of ROWS) {
+      const row = rowOf(markup, r.id);
+      const links = findAll(row, "sponsor-row-name-link");
+      expect(links, `${r.id}: exactly one name link`).toHaveLength(1);
+      expect(attrOf(links[0]!.open, "href"), r.id).toBe(`/o/${SLUG}/sponsors?tab=sponsors&sponsor=${r.id}`);
+      expect(textOfMarkup(links[0]!.outer), `${r.id}: the link's words are the name, nothing else`).toBe(r.name);
+      const link = classTokens(links[0]!.open);
+      expect(link, `${r.id}: the link can shrink`).toEqual(expect.arrayContaining(["min-w-0", "max-w-full"]));
+      // A 20px line of text is not a 44px target: the padding grows the tap area below md and the negative margin takes the space back.
+      expect(link, `${r.id}: phone tap area`).toEqual(expect.arrayContaining(["max-md:py-3", "max-md:-my-3"]));
+      // The padding overlaps the sub-line below it; a later sibling paints (and hit-tests) on top unless the link is lifted.
+      expect(link, `${r.id}: lifted above the sub-line its padding overlaps`).toEqual(expect.arrayContaining(["relative", "z-[1]"]));
+      expect(classTokens(findOne(links[0]!.outer, "sponsor-row-name-text").open), `${r.id}: the text truncates`).toContain("truncate");
+      checked++;
+    }
+    expect(checked).toBe(8);
   });
 
-  it("not offered to a viewer", () => {
-    expect(findAll(listHtml(ROWS, { canEdit: false }), "sponsor-show-s7")).toHaveLength(0);
+  it("a viewer's name is a link too (the page is read-only for them)", () => {
+    expect(findAll(listHtml(ROWS, { canEdit: false }), "sponsor-row-name-link")).toHaveLength(8);
   });
 });
 
@@ -631,7 +653,7 @@ describe("Move: two rows drawn side by side in a group may sit APART in the stor
 // --- the island: the writes the actions make ---------------------------------------------------------------------------------------
 
 const HUB: SponsorsHubData = {
-  orgSlug: SLUG, deals: [], packages: [], hasMonetize: true, chargesEnabled: true, sponsorId: null, dealId: null, reportLinks: [],
+  orgSlug: SLUG, deals: [], packages: [], hasMonetize: true, chargesEnabled: true, sponsorId: null, dealId: null, reportLinks: [], reportDefaults: null,
 };
 
 const fetchMock = vi.fn();
