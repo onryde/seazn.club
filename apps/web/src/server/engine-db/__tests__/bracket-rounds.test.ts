@@ -7,6 +7,7 @@ import { generate } from "@/server/usecases/stages/generators";
 import { parseExtKey } from "../competition";
 import { attachFeedRefs, engineRoundOf, laneDepthOf, type BracketLane } from "../bracket-rounds";
 import { bracketRosterOf, drawSeedsOf } from "../bracket-roster";
+import { knockoutDrawOrder, rootBracketOrder } from "../knockout-draw";
 
 const ids = (n: number) => Array.from({ length: n }, (_, i) => `e${i + 1}`);
 const active = (n: number) => ids(n).map((id, i) => ({ id, seed: i + 1, swiss_first_round: null }));
@@ -105,5 +106,30 @@ describe("attachFeedRefs inverts the forward edges into homeFrom / awayFrom (C6/
     const rows = new Map([["a", { id: "a" }]]);
     expect(attachFeedRefs(rows, [])).toBe(0);
     expect(attachFeedRefs(rows, [{ id: "x", winner_to_fixture: "gone", winner_to_slot: 1, loser_to_fixture: "a", loser_to_slot: null }])).toBe(0);
+  });
+});
+
+describe("rootBracketOrder: only a knockout is rebuilt in DRAW order; every other bracket kind keeps the order Generate placed it in (review M2)", () => {
+  const unseeded = ids(8).map((id) => ({ id, seed: null, swiss_first_round: null }));
+  const stageIds = Array.from({ length: 12 }, (_, i) => `00000000-0000-4000-8000-0000000000${String(i).padStart(2, "0")}`);
+  it("double_elim, stepladder and page_playoff: the active order, whatever the stage id", () => {
+    let checked = 0;
+    for (const kind of ["double_elim", "stepladder", "page_playoff"]) {
+      for (const stageId of stageIds) {
+        expect(rootBracketOrder(kind, stageId, unseeded, {})).toEqual(ids(8));
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(36);
+  });
+  it("knockout: the engine-side draw (knockoutDrawOrder), a permutation that is not the registration order for some stage", () => {
+    let shuffled = 0;
+    for (const stageId of stageIds) {
+      const got = rootBracketOrder("knockout", stageId, unseeded, {});
+      expect(got).toEqual(knockoutDrawOrder(stageId, unseeded, {}).map((e) => e.id));
+      expect([...got].sort()).toEqual(ids(8));
+      if (JSON.stringify(got) !== JSON.stringify(ids(8))) shuffled++;
+    }
+    expect(shuffled, "the draw really shuffles an unseeded field (else this test cannot tell knockout from the rest)").toBeGreaterThan(0);
   });
 });
