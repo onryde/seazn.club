@@ -3705,6 +3705,7 @@ export type DictionaryKey =
   | "knockout.refusal.KO_PLATE_TOO_FEW"
   | "knockout.refusal.KO_REDRAW_WOULD_CLEAR_SETUP"
   | "knockout.refusal.KO_START_NEEDS_UPDATE_DRAW"
+  | "knockout.refusal.KO_START_NEEDS_UPDATE_DRAW_FROZEN"
   | "knockout.refusal.PAGE_PLAYOFF_NEEDS_TABLE_SOURCE"
   | "knockout.refusal.PAGE_PLAYOFF_TOO_FEW"
   | "knockout.refusal.QUALIFYING_MAIN_TOO_FEW"

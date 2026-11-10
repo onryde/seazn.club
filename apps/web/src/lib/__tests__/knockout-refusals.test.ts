@@ -29,6 +29,7 @@ const PLAN_CODES = [
   "KO_REDRAW_WOULD_CLEAR_SETUP",
   // B2 fix round 2 (item 2): Start reconciles in place only; a redraw is Update draw's, refused at Start by name.
   "KO_START_NEEDS_UPDATE_DRAW",
+  "KO_START_NEEDS_UPDATE_DRAW_FROZEN",
   // T9 (X-LE-2): a fed knockout never takes a late player; the refusal names the stage that fills it.
   "KO_LATE_ENTRY_FED_STAGE",
   // T10 (X-LE-6): round 1 has no slot left; Rebuild is offered (details.can_rebuild) only when nothing has started.

@@ -2570,6 +2570,7 @@
   "knockout.refusal.KO_GENERATE_AFTER_START": "El juego ya empezó, así que Generar no cambiará el cuadro. Usa Añadir al cuadro.",
   "knockout.refusal.KO_REDRAW_WOULD_CLEAR_SETUP": "Habría que sortear el cuadro de nuevo, y eso borra la configuración que ya tienen sus partidos (árbitros, alineaciones, dispositivos de anotación, emisiones, disponibilidad de jugadores o llamadas a pista). Usa Reconstruir enfrentamientos: antes te muestra lo que borra.",
   "knockout.refusal.KO_START_NEEDS_UPDATE_DRAW": "Hay que actualizar el cuadro: pulsa primero Actualizar cuadro.",
+  "knockout.refusal.KO_START_NEEDS_UPDATE_DRAW_FROZEN": "Hay que actualizar el cuadro y el calendario está congelado: descongélalo en la página Calendario, pulsa Actualizar cuadro y luego Iniciar.",
   "knockout.refusal.KO_LATE_ENTRY_FED_STAGE": "Este cuadro se llena desde {stage}. Añade al jugador allí.",
   "knockout.refusal.KO_LATE_ENTRY_NO_SLOT": "Ronda 1 completa; no queda ningún hueco.",
   "knockout.refusal.KO_LATE_ENTRY_NOT_UNDOABLE": "Añadir un jugador tardío no se puede deshacer. Retira al jugador en su lugar.",

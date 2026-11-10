@@ -11,11 +11,12 @@ import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import postgres from "postgres";
 import { afterAll, describe, expect, it } from "vitest";
-import { connectionOptions } from "@/lib/db";
+import { connectionOptions, sql as appSql } from "@/lib/db";
 import { bracketPlaceLabels } from "@/lib/bracket-places";
 import { playBadminton, rowsOf } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 import { seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { completeStage } from "@/server/usecases/stages";
+import { bracketProgression, type RankInput } from "../../../../../packages/reference/src/index.ts";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const DELTAS = resolve(__dirname, "../../../../../db/migration/deltas");
@@ -274,4 +275,40 @@ describe.runIf(HAS_DB)("W4 delta V496: finished knockouts re-rank to a shared 3r
     const line = v.r.notices.find((n) => /no standings snapshot: skipped/.test(n));
     expect(Number(line?.match(/: (\d+) complete/)?.[1]), "this stage is counted in the skipped line").toBeGreaterThanOrEqual(1);
   }, 240_000);
+});
+
+// B6a fix round 1 (review m4; brief Step 2c): the V496 OUTPUT against the bracket-progression ORACLE (@seazn/reference, written from
+// the rulebook, never from the engine or this delta). A finished knockout with no third-place fixture is downgraded to the 3.x shape,
+// the delta runs, and the stored ranks must equal the oracle's places for the same result (RB4-T2 shared 3rd, RB4-R2 strict below).
+// Reuses this file's `finished` / `downgradeTo3x` / `run` / `rolledBack`; the oracle is imported by relative path (apps/web does not
+// depend on @seazn/reference).
+describe.runIf(HAS_DB)("W4 delta V496 vs the rulebook oracle (RB4-T2, R2)", () => {
+  it("a 4-draw and an 8-draw finished with no third-place fixture: after V496 the stored ranks equal the oracle's (counted)", async () => {
+    let checked = 0;
+    for (const n of [4, 8]) {
+      const f = await finished(n);
+      const rows = await rowsOf(f.stageId);
+      const seeds = new Map((await appSql<{ id: string; seed: number | null }[]>`select id, seed from entrants where id in ${appSql(f.places.map((p) => p.entrantId))}`).map((e) => [e.id, e.seed] as const));
+      const played = rows.filter((r) => r.outcome?.winner && r.ext_key !== null && !r.ext_key.endsWith("-3p"));
+      const loserOf = (r: (typeof played)[number]) => (r.outcome!.winner === r.home_entrant_id ? r.away_entrant_id! : r.home_entrant_id!);
+      const last = Math.max(...played.map((r) => r.round_no));
+      const final = played.find((r) => r.round_no === last)!; // one fixture in the last round: no third-place fixture here
+      const input: RankInput = {
+        thirdPlace: "shared",
+        title: { kind: "champion", champion: final.outcome!.winner!, runnerUp: loserOf(final) },
+        semiLosers: played.filter((r) => r.round_no === last - 1).map(loserOf),
+        others: played.filter((r) => r.round_no < last - 1).map((r) => ({ entrant: loserOf(r), eliminatedRound: r.round_no, seed: seeds.get(loserOf(r)) ?? null })),
+      };
+      const want = Object.fromEntries(bracketProgression.ranks(input).map((p) => [p.entrant, p.rank]));
+      const v = await rolledBack(async (tx, notices) => {
+        await downgradeTo3x(tx, f);
+        await run(tx, notices);
+        return snapOf(tx, f.stageId);
+      });
+      expect(ranksOf(v), `n=${n}`).toEqual(want);
+      expect(Object.keys(want).length, `n=${n} covers every entrant`).toBe(n);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  }, 480_000);
 });
