@@ -42,6 +42,7 @@ import { isOrganiserOnlyEvent } from "@/lib/organiser-only-events";
 import { DEPARTED_STATUSES } from "./entrants";
 import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { fillSlot, markDependentSeedProposalsStale, resolveBracketSeats, stampDepartedSeat } from "./stages";
+import { maybeProposePlate } from "./plate-field";
 import { detectSuspensions } from "./discipline";
 import { draftPostsForDecidedFixture } from "./org-posts";
 import {
@@ -1177,6 +1178,16 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
       advanced.push(...(await markDependentSeedProposalsStale(auth, context.stage_id, { includeConfirmed: true })));
     } catch (err) {
       log.error({ err, stageId: context.stage_id }, "scoring: a corrected knockout's proposals did not update (score write unaffected)");
+    }
+  }
+  // W4 T8 (X-PL-5, X-PL-7): a decided or corrected main-draw result may complete the plate's field (every first match played, round
+  // two for the bye holders) or move it: the plate is proposed after round two, never waiting for the final. After the commit, like
+  // the stale call above, and best-effort the same way: the score is already written.
+  if (context?.kind === "knockout") {
+    try {
+      await maybeProposePlate(auth, context.stage_id);
+    } catch (err) {
+      log.error({ err, stageId: context.stage_id }, "scoring: the plate's proposal did not update (score write unaffected)");
     }
   }
   // Auto-advance (Jul3/08 §5, 16 Sep): when the flag is on and the stage just

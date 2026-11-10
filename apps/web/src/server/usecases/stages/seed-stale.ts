@@ -210,4 +210,18 @@ export async function markFieldChangeSeedProposalsStale(orgId: string, divisionI
       // best-effort, see docstring
     }
   }
+  // W4 T8 (X-PL-4): a withdrawal forfeits the entrant's pending first match, which can complete (or move) a plate's field with no
+  // score written. The plate's trigger runs for every knockout of the division that a `firstLosses` stage draws from.
+  const mains = await withTenant(orgId, (tx) => tx<{ id: string }[]>`
+    select distinct m.id from stages m join stages p on p.division_id = m.division_id and p.seq > m.seq
+     where m.division_id = ${divisionId} and m.kind = 'knockout' and p.progression is not null
+       and p.progression ->> 'timing' = 'setup' and p.progression::text like '%firstLosses%'`);
+  for (const m of mains) {
+    try {
+      const { maybeProposePlate } = await import("../plate-field");
+      await maybeProposePlate(systemCtx, m.id);
+    } catch {
+      // best-effort, see docstring
+    }
+  }
 }

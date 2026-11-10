@@ -222,6 +222,9 @@ function fieldOf(drafts: readonly StageDraft[], at: number, n: number): number {
   return stage.progression.sources.reduce((sum, s) => sum + expandTake(s.take as TakeRule[], shape).flat().length, 0);
 }
 
+/** W4 T8: a stage that takes `firstLosses` (the plate) is drawn at a field nobody knows day one; it is drawn after round two. */
+const takesFirstLosses = (d: StageDraft): boolean => d.progression?.sources.some((src) => src.take.some((t) => t.kind === "firstLosses")) === true;
+
 /** Snake-distributed pool sizes for `n` over `count` pools (each pool takes one per wave): the arithmetic of the draw. */
 const poolSizes = (n: number, count: number): number[] =>
   Array.from({ length: count }, (_, i) => Math.floor(n / count) + (i < n % count ? 1 : 0));
@@ -310,6 +313,8 @@ describe.skipIf(!HAS_DB)("every in-scope format template is generated as the eng
   let enumerated = 0;
   /** Combos Generate refuses by X-TP-5 (a third place under four entrants), with the field the knockout stage was drawn at. */
   const refusedThird: Array<{ label: string; entrants: number }> = [];
+  /** W4 T8: the first-loss plates the sweep met with no day-one lines (one per ko_plate combo that reached its stage loop). */
+  let platesWithoutLines = 0;
 
   async function runCombo(template: string, sport: SportPick, n: number, third: boolean): Promise<void> {
     const drafts = draftsFor(template, n, third);
@@ -331,7 +336,7 @@ describe.skipIf(!HAS_DB)("every in-scope format template is generated as the eng
     }
     // X-TP-5 (engine 5.0.0): a third-place match needs two real semi-finals. The field each knockout stage is drawn at is the
     // engine's own arithmetic (`fieldOf`); below four entrants Generate must refuse it, and a combo that does not is a defect.
-    const thirdFields = drafts.flatMap((d, at) => (d.kind === "knockout" && d.config.thirdPlace === true ? [{ at, k: fieldOf(drafts, at, n) }] : []));
+    const thirdFields = drafts.flatMap((d, at) => (d.kind === "knockout" && d.config.thirdPlace === true && !takesFirstLosses(d) ? [{ at, k: fieldOf(drafts, at, n) }] : []));
     const refusedAt = thirdFields.find((t) => t.k < 4);
     if (refusedAt !== undefined) {
       let refusal: unknown = null;
@@ -373,6 +378,13 @@ describe.skipIf(!HAS_DB)("every in-scope format template is generated as the eng
       const draft = drafts[at]!;
       const mine = rows.filter((r) => r.stage_id === stage.id);
       const k = fieldOf(drafts, at, n);
+      // W4 T8 (X-PL-5, owner ruling G2): a stage that takes `firstLosses` has NO day-one lines - its field is unknown until round
+      // two - so Generate and Start write none and refuse nothing. What it draws then is the plate sweeps' (plate-first-loss*).
+      if (takesFirstLosses(draft)) {
+        if (mine.length !== 0) problems.push(`${label} / ${draft.name}: ${mine.length} lines day one; a first-loss plate has none until round two`);
+        platesWithoutLines++;
+        continue;
+      }
       if (BRACKET_KINDS.has(draft.kind)) {
         const fates = bracketFates(engineBracket(draft.kind, k, draft.config));
         const drawn = mine.map((r) => r.ext_key ?? `(no ext_key) ${r.id}`).sort();
@@ -435,6 +447,10 @@ describe.skipIf(!HAS_DB)("every in-scope format template is generated as the eng
     expect(enumerated, "the combos enumerated are every (template, sport, field, third place) the declarations name").toBe(expectedCombos);
     expect(checked.length, "combos checked").toBeGreaterThan(0);
 
+    // W4 T8: every ko_plate combo that was generated met its plate with no lines, and none did anywhere else (counted: zero is a failure).
+    expect(platesWithoutLines, "first-loss plates met with no day-one lines = the ko_plate combos checked").toBe(checked.filter((c) => c.template === "ko_plate").length);
+    expect(platesWithoutLines, "anti-vacuity: the sweep met a plate").toBeGreaterThan(0);
+
     // Every in-scope template placed something - no format is skipped by having nothing to place.
     for (const t of IN_SCOPE) {
       const placed = checked.filter((c) => c.template === t).reduce((s, c) => s + c.placed, 0);
@@ -474,7 +490,7 @@ describe.skipIf(!HAS_DB)("every in-scope format template is generated as the eng
       IN_SCOPE.flatMap((t) =>
         FIELDS.flatMap((n) => {
           const drafts = draftsFor(t, n, true);
-          return drafts.some((d, at) => d.kind === "knockout" && fieldOf(drafts, at, n) < 4) && stageGraphSizeGate(drafts, n) === null
+          return drafts.some((d, at) => d.kind === "knockout" && !takesFirstLosses(d) && fieldOf(drafts, at, n) < 4) && stageGraphSizeGate(drafts, n) === null
             ? [`${t} ${s.key} n=${n} q=${topNFor(t, n)} third=true`]
             : [];
         }),

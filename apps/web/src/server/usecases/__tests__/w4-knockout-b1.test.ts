@@ -370,6 +370,19 @@ describe("M4: a roundLosers take whose source is a double elimination is refused
     const e = refusal([{ kind: "roundLosers", round: 1, count: 2 }], ["knockout"]);
     expect(e instanceof HttpError && (e as HttpError & { code?: string }).code === "SEEDING_ROUNDLOSERS_DE_SOURCE").toBe(false);
   });
+  it("Task 8: refuses firstLosses from a double_elim source with SEEDING_FIRSTLOSSES_DE_SOURCE (422), naming the source", () => {
+    const e = refusal([{ kind: "firstLosses" }], ["double_elim"]);
+    expect(e).toBeInstanceOf(HttpError);
+    expect(e).toMatchObject({ status: 422, code: "SEEDING_FIRSTLOSSES_DE_SOURCE", extra: { sourceIndex: 0 } });
+  });
+  it("Task 8: firstLosses from a single-elimination source is NOT refused by that guard (the plate's own shape)", () => {
+    const e = refusal([{ kind: "firstLosses" }], ["knockout"]);
+    expect(e instanceof HttpError && (e as HttpError & { code?: string }).code === "SEEDING_FIRSTLOSSES_DE_SOURCE").toBe(false);
+  });
+  it("Task 8: a double_elim source with roundLosers keeps its own code, not the first-losses one", () => {
+    const e = refusal([{ kind: "roundLosers", round: 1, count: 2 }], ["double_elim"]);
+    expect(e).toMatchObject({ code: "SEEDING_ROUNDLOSERS_DE_SOURCE" });
+  });
   it("a double_elim source with a different take (rankRange) is not refused: only round losers collide across lanes", () => {
     const e = refusal([{ kind: "rankRange", from: 1, to: 2 }], ["double_elim"]);
     expect(e instanceof HttpError && (e as HttpError & { code?: string }).code === "SEEDING_ROUNDLOSERS_DE_SOURCE").toBe(false);

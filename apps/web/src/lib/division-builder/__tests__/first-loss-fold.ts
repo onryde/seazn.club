@@ -4,13 +4,18 @@
 import { generateSingleElim } from "@seazn/engine/scheduling";
 
 export function foldFirstLosses(n: number): number {
-  if (n < 2) return 0;
+  return foldFirstLoserSeeds(n).length;
+}
+
+/** The SEEDS (1-based) whose first real match was a loss when the better seed wins every line: the rulebook's plate field, by seed. */
+export function foldFirstLoserSeeds(n: number): number[] {
+  if (n < 2) return [];
   const ids = Array.from({ length: n }, (_, i) => `e${i + 1}`);
   const seed = new Map(ids.map((id, i) => [id, i + 1] as const));
   const { fixtures } = generateSingleElim({ entrants: ids, seeds: seed });
   const winnerOf = new Map<string, string>();
   const played = new Set<string>();
-  let firstLosses = 0;
+  const losers: number[] = [];
   type Line = { home?: string; homeFrom?: { fixtureId: string }; away?: string; awayFrom?: { fixtureId: string } };
   const seat = (f: Line, side: "home" | "away"): string | undefined => {
     const direct = side === "home" ? f.home : f.away;
@@ -29,9 +34,9 @@ export function foldFirstLosses(n: number): number {
     if (home === undefined || away === undefined) throw new Error(`fold: ${f.id} of ${n} has an unresolved seat`);
     const [better, worse] = seed.get(home)! < seed.get(away)! ? [home, away] : [away, home];
     winnerOf.set(f.id, better);
-    if (!played.has(worse)) firstLosses++;
+    if (!played.has(worse)) losers.push(seed.get(worse)!);
     played.add(better);
     played.add(worse);
   }
-  return firstLosses;
+  return losers.sort((a, b) => a - b);
 }
