@@ -57,6 +57,21 @@ export function refuseRoundLosersFromDoubleElim(spec: ProgressionSpec, sourceKin
   });
 }
 
+/** Task 8: the same for a `firstLosses` take (the plate). A double-elimination loser drops into the losers' side, so "the first
+ *  real loss" has no single round to wait for; the take is refused by name against a double-elimination source. */
+export function refuseFirstLossesFromDoubleElim(spec: ProgressionSpec, sourceKinds: readonly string[]): void {
+  spec.sources.forEach((s, i) => {
+    if (sourceKinds[i] === "double_elim" && s.take.some((t) => t.kind === "firstLosses")) {
+      throw new HttpError(
+        422,
+        "a double-elimination source cannot feed a stage by first losses: a loser drops into the losers' side and may lose again",
+        "SEEDING_FIRSTLOSSES_DE_SOURCE",
+        { sourceIndex: i },
+      );
+    }
+  });
+}
+
 export function resolveStoredProgression(
   spec: ProgressionSpec,
   shapes: readonly SourceShape[],
@@ -65,6 +80,7 @@ export function resolveStoredProgression(
   sourceKinds: readonly string[],
 ): ReturnType<typeof resolveProgression> {
   refuseRoundLosersFromDoubleElim(spec, sourceKinds);
+  refuseFirstLossesFromDoubleElim(spec, sourceKinds);
   let out: ReturnType<typeof resolveProgression>;
   try {
     out = resolveProgression(specToEngine(spec), shapes, tables, targetKind);

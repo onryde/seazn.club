@@ -110,6 +110,29 @@ describe("takeRuleText — one take rule -> one translated phrase", () => {
   it("rankRange", () => {
     expect(takeRuleText(enMsg, { kind: "rankRange", from: 1, to: 4 })).toBe("Ranked 1–4");
   });
+  // X-PL-6 (the take-reader sweep): every engine take kind has a TRANSLATED phrase, never the raw kind and never a throw.
+  it("every take kind the wire declares reads a translated phrase in all 4 locales — firstLosses 'Every first-match loser'", () => {
+    const rules: Parameters<typeof takeRuleText>[1][] = [
+      { kind: "rankRange", from: 1, to: 4 },
+      { kind: "topNPerGroup", n: 2 },
+      { kind: "bestNth", nth: 3, count: 4 },
+      { kind: "picks", picks: [{ pool: "A", rank: 1 }, { pool: "B", rank: 1 }] },
+      { kind: "roundLosers", round: 1, count: 4 },
+      { kind: "firstLosses" },
+    ];
+    let checked = 0;
+    for (const [locale, dict] of ALL_DICTS) {
+      const msg: Msg = (key, vars) => tRuntime(dict, key, vars);
+      for (const rule of rules) {
+        const out = takeRuleText(msg, rule);
+        expect(out, `${locale} ${rule.kind}`).not.toBe(rule.kind);
+        expect(out, `${locale} ${rule.kind}`).not.toMatch(/\{[a-zA-Z]+\}|templates\.detail/);
+        checked++;
+      }
+    }
+    expect(checked).toBe(rules.length * ALL_DICTS.length);
+    expect(takeRuleText(enMsg, { kind: "firstLosses" })).toBe("Every first-match loser");
+  });
 });
 
 describe("templateProgressionLines", () => {

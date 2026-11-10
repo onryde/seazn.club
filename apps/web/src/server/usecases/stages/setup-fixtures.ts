@@ -10,6 +10,7 @@ import { pinStageTableRules } from "@/server/engine-db/table-rules";
 import { BYE_SLOT_LABEL } from "@/lib/bye-line";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { courtNamesById } from "../schedule";
+import { stageHasStarted } from "../fixture-started-sql";
 import { descriptorLabel, expandSources, placeDescriptors, resolveProgressionSource, sourceShapeOf, type SlotDescriptor, type SlotLabel } from "../stage-seeding";
 import {
   STAGE_COLS,
@@ -74,8 +75,14 @@ export async function writeProgressionSetupFixtures(tx: Tx, stageId: string): Pr
   const shapes: SourceShape[] = [];
   for (const s of progression.sources) {
     const source = await resolveProgressionSource(tx, stage, s.stage);
-    shapes.push(await sourceShapeOf(tx, source));
+    // W4 T8 (X-PL-5): a `firstLosses` take's size is the source's first-loss field, known only once round two is played.
+    shapes.push(await sourceShapeOf(tx, source, s.take));
   }
+  // The plate has NO day-one fixtures (owner ruling G2 exempts it from "Start creates placeholders for every stage"): while its
+  // field is open the take expands to no slot, and the stage stays as it is (pending, no lines) - the organiser reads "Plate draws
+  // after round 2", never a refusal. It is drawn at its field's size by `maybeProposePlate` (plate-field.ts), which asks again.
+  const firstLossShape = progression.sources.some((s, i) => s.take.some((t) => t.kind === "firstLosses") && shapes[i]!.firstLossCount === undefined);
+  if (firstLossShape) return emptyGenerate(tx, stage);
   const pots = expandSources(progression.sources, (i) => shapes[i]!);
   // F3 round-3 review, Task 1 — `stage.kind` is THIS stage's own kind (the
   // progression's target), threaded through so placeDescriptors can refuse
@@ -125,14 +132,31 @@ export async function writeProgressionSetupFixtures(tx: Tx, stageId: string): Pr
     }
   }
 
-  const existing = await tx<{ id: string; ext_key: string | null }[]>`
+  let existing: { id: string; ext_key: string | null }[] = await tx<{ id: string; ext_key: string | null }[]>`
     select id, ext_key from fixtures where stage_id = ${stageId}`;
 
   // A `timing: "setup"` progression generates off SYNTHETIC entrants —
   // score-dependent formats (swiss/americano/ladder) have no seed-order
   // shape to draw before results exist, same restriction the plain path
   // has; `generate()` covers every bracket/table kind that DOES have one.
-  const gen: SeededGenFixture[] = generate(stage.kind, stage.config, entrants, poolIds);
+  // RB4-E5 / RB4-T4: a third-place match needs two real semi-finals. A plate's field is unknown up front, so a plate that asks for one
+  // and draws under four is drawn WITHOUT it (never refused: RB4-P6); `computeSeedProposal` records the drop in the proposal.
+  const isFirstLossPlate = progression.sources.some((s) => s.take.some((t) => t.kind === "firstLosses"));
+  const config = isFirstLossPlate && stage.config.thirdPlace === true && placed.length < 4 ? { ...stage.config, thirdPlace: false } : stage.config;
+  const gen: SeededGenFixture[] = generate(stage.kind, config, entrants, poolIds);
+
+  // W4 T8 (X-PL-7): a plate's lines are sized by its field, and the field can change size before the plate starts (a corrected
+  // round-two result, a withdrawal). Lines laid out for another size are not this bracket: they go, and the right ones are
+  // written below. Never over a started line (`stageHasStarted`: a plate that has begun stands as it is drawn). Keyed on the
+  // lines' own keys, so a re-run at the SAME size (an un-fill putting labels back) keeps every row and its time and court.
+  if (isFirstLossPlate && existing.length > 0) {
+    const wanted = new Set(gen.map((g) => g.extKey));
+    const stale = existing.some((e) => e.ext_key === null || !wanted.has(e.ext_key)) || gen.some((g) => !existing.some((e) => e.ext_key === g.extKey));
+    if (stale && !(await stageHasStarted(tx, stageId))) {
+      await tx`delete from fixtures where stage_id = ${stageId}`;
+      existing = [];
+    }
+  }
 
   // F2a (P7 follow-up, 2026-08-14): the plain path's `group_too_few_entrants`
   // guard (:990-999) only fires when `gen.length === 0` — but a
@@ -412,6 +436,18 @@ export async function writeProgressionSetupFixtures(tx: Tx, stageId: string): Pr
     select competition_id from divisions where id = ${stage.division_id}`;
   return {
     outcome: { created, existing: gen.length - created, fixtures },
+    divisionId: stage.division_id,
+    competitionId: division!.competition_id,
+    kind: stage.kind,
+  };
+}
+
+/** A Generate that wrote nothing: the stage has no lines yet and says so. Its `outcome` is the shape every Generate returns, with
+ *  no `created` and no fixtures, so a caller that publishes on `created > 0` publishes nothing. */
+async function emptyGenerate(tx: Tx, stage: StageRow): Promise<GenerateWrite> {
+  const [division] = await tx<{ competition_id: string }[]>`select competition_id from divisions where id = ${stage.division_id}`;
+  return {
+    outcome: { created: 0, existing: 0, fixtures: [] },
     divisionId: stage.division_id,
     competitionId: division!.competition_id,
     kind: stage.kind,

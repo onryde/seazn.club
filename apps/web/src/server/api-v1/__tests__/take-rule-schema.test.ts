@@ -96,10 +96,10 @@ describe("TakeRuleSchema accepts, unchanged, every take rule a shipped template 
     // Grid coverage, from the template tests (format-templates.test.ts):
     // league_ko / qualifying_main / group_playoffs emit rankRange, groups_ko
     // emits topNPerGroup plus a bestNth remainder when the pools do not
-    // divide the qualifiers, ko_plate emits roundLosers. No template emits
+    // divide the qualifiers, ko_plate emits firstLosses (X-PL-6). No template emits
     // `picks` (template-gallery.tsx's header records the same). A grid that
     // misses a kind would leave that kind's value bounds unchecked here.
     const kinds = new Set(SOURCES[0]!.rules().map((r) => (r as { kind: string }).kind));
-    expect([...kinds].sort()).toEqual(["bestNth", "rankRange", "roundLosers", "topNPerGroup"]);
+    expect([...kinds].sort()).toEqual(["bestNth", "firstLosses", "rankRange", "topNPerGroup"]);
   });
 });

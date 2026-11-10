@@ -85,7 +85,11 @@ const BY_LOCALE: Record<Locale, Dict> = { en, es, fr, nl };
  *
  *  SEEDING_ROUNDLOSERS_DE_SOURCE (W4 app PR B, review M4): a `roundLosers` take whose source is a double-elimination stage.
  *  The engine numbers rounds from 0 PER LANE (winners', losers', grand final) and its round-loser read does not tell the lanes
- *  apart, so the take would silently mix lanes' losers. Refused by name at propose/resolve time rather than guessed. */
+ *  apart, so the take would silently mix lanes' losers. Refused by name at propose/resolve time rather than guessed.
+ *
+ *  SEEDING_FIRSTLOSSES_DE_SOURCE (W4 app PR B, Task 8): the same refusal for a `firstLosses` take. "First real loss" is defined over a
+ *  single-elimination bracket's rounds; a double-elimination loser drops into a second lane and may lose again, so there is no one
+ *  "first loss" round to wait on. Refused by name rather than guessed. */
 export const SEEDING_ERROR_CODES = [
   "SEEDING_MAP_SLOT_INVALID",
   "SEEDING_MAP_SOURCE_INVALID",
@@ -105,6 +109,7 @@ export const SEEDING_ERROR_CODES = [
   "SEEDING_CARRY_SOURCE_INVALID",
   "SEEDING_NOTHING_TO_FILL",
   "SEEDING_ROUNDLOSERS_DE_SOURCE",
+  "SEEDING_FIRSTLOSSES_DE_SOURCE",
 ] as const;
 export type SeedingErrorCode = (typeof SEEDING_ERROR_CODES)[number];
 

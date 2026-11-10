@@ -49,6 +49,8 @@ const PLAN_CODES = [
   // T16 (SP-UI, X-SP-6, ruling 269): a stepladder or page playoff with no table to seed from — one code per kind (D13).
   "STEPLADDER_NEEDS_TABLE_SOURCE",
   "PAGE_PLAYOFF_NEEDS_TABLE_SOURCE",
+  // T8 (X-PL-2): a plate proposal on a field under two first-match losers.
+  "PLATE_FIELD_TOO_SMALL",
   // B5a T11 (X-CH-3): a reinstated finalist would re-open a vacant title whose stage already seeded another.
   "VACANT_TITLE_ALREADY_SEEDED",
   // B5a T12 (X-CH-4, X-CH-6): "Declare joint winners" and its Undo.
@@ -172,6 +174,7 @@ describe("KNOCKOUT_REFUSALS (W4 app-A)", () => {
   });
 
   it("T15's three: 422 (the field or the cut has to change, re-sending changes nothing), with the plan's sentences", () => {
+    expect(KNOCKOUT_REFUSALS.PLATE_FIELD_TOO_SMALL).toEqual({ status: 422, en: "The plate needs at least two first-match losers.", key: "knockout.refusal.PLATE_FIELD_TOO_SMALL" });
     expect(KNOCKOUT_REFUSALS.KO_PLATE_TOO_FEW).toEqual({ status: 422, en: "Knockout + Plate needs at least 4 entrants.", key: "knockout.refusal.KO_PLATE_TOO_FEW" });
     expect(KNOCKOUT_REFUSALS.QUALIFYING_MAIN_TOO_FEW).toEqual({ status: 422, en: "Qualifying + Main draw needs at least {min} entrants.", key: "knockout.refusal.QUALIFYING_MAIN_TOO_FEW" });
     expect(KNOCKOUT_REFUSALS.KO_CUT_NOT_WHOLE_ROUND).toEqual({ status: 422, en: "From a knockout, qualify a whole round: 1, 2, 4, 8 …", key: "knockout.refusal.KO_CUT_NOT_WHOLE_ROUND" });

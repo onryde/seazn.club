@@ -1,6 +1,7 @@
 import "server-only";
 // Marking seed proposals stale when a source stage or the field changes.
 
+import { log } from "@/server/logger";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { ProgressionSpec } from "@seazn/engine/competition";
@@ -208,6 +209,21 @@ export async function markFieldChangeSeedProposalsStale(orgId: string, divisionI
       await computeSeedProposal(systemCtx, stageId);
     } catch {
       // best-effort, see docstring
+    }
+  }
+  // W4 T8 (X-PL-4): a withdrawal forfeits the entrant's pending first match, which can complete (or move) a plate's field with no
+  // score written. The plate's trigger runs for every knockout of the division that a `firstLosses` stage draws from.
+  const mains = await withTenant(orgId, (tx) => tx<{ id: string }[]>`
+    select distinct m.id from stages m join stages p on p.division_id = m.division_id and p.seq > m.seq
+     where m.division_id = ${divisionId} and m.kind = 'knockout' and p.progression is not null
+       and p.progression ->> 'timing' = 'setup' and p.progression::text like '%firstLosses%'`);
+  for (const m of mains) {
+    try {
+      const { maybeProposePlate } = await import("../plate-field");
+      await maybeProposePlate(systemCtx, m.id);
+    } catch (err) {
+      // best-effort, see docstring - but said aloud: a plate that was not proposed after a withdrawal must be findable.
+      log.warn({ event: "plate_trigger_failed_after_withdrawal", stageId: m.id, err: String(err) }, "plate_trigger_failed_after_withdrawal");
     }
   }
 }

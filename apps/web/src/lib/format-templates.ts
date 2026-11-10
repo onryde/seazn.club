@@ -281,14 +281,16 @@ export const STAGE_TEMPLATES: {
   },
   {
     key: "ko_plate",
-    build: ({ qualified: q }) => [
+    // X-PL-6: the plate takes EVERY first-match loss — no count, `qualified` is ignored (PL-1: a hidden Top 4 dropped
+    // first losses above 12 entrants).
+    build: () => [
       { kind: "knockout", name: "Main draw", config: {}, progression: null },
       {
         kind: "knockout",
         name: "Plate",
         config: {},
         progression: {
-          sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 1, count: q }] }],
+          sources: [{ stage: "previous", take: [{ kind: "firstLosses" }] }],
           placement: "rank_order",
           timing: "setup",
         },
@@ -415,7 +417,8 @@ export function detectTemplate(
     // take-rule kind — roundLosers (KO+Plate) vs rankRange (Qualifying+Main
     // draw). F2: was losersOfRound/topN key-presence on `.qualification`.
     const take = stages[1]?.progression?.sources[0]?.take ?? [];
-    if (take.some((t) => t.kind === "roundLosers")) return "ko_plate";
+    // `roundLosers` is the legacy shape a stored (seated/played) plate keeps; `firstLosses` is what the template writes.
+    if (take.some((t) => t.kind === "firstLosses" || t.kind === "roundLosers")) return "ko_plate";
     if (take.some((t) => t.kind === "rankRange")) return "qualifying_main";
     return null;
   }

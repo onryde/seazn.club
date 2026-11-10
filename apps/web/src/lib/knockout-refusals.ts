@@ -58,6 +58,8 @@ export type KnockoutRefusalCode =
   // D13): each locale names the format in its own words, never a raw kind token.
   | "STEPLADDER_NEEDS_TABLE_SOURCE"
   | "PAGE_PLAYOFF_NEEDS_TABLE_SOURCE"
+  // T8 (X-PL-2): a plate proposal asked of a field under two first-match losers; the plate completes by name instead.
+  | "PLATE_FIELD_TOO_SMALL"
   // B5a T11 (X-CH-3; T12): reversing a vacant title (a Reinstate) or undoing joint winners on a stage whose completion already
   // filled another stage's draw - its ranks are not this stage's to change any more.
   | "VACANT_TITLE_ALREADY_SEEDED"
@@ -155,6 +157,11 @@ export const KNOCKOUT_REFUSALS: Record<KnockoutRefusalCode, KnockoutRefusalRow> 
     status: 422,
     en: "Knockout + Plate needs at least 4 entrants.",
     key: "knockout.refusal.KO_PLATE_TOO_FEW",
+  },
+  PLATE_FIELD_TOO_SMALL: {
+    status: 422,
+    en: "The plate needs at least two first-match losers.",
+    key: "knockout.refusal.PLATE_FIELD_TOO_SMALL",
   },
   QUALIFYING_MAIN_TOO_FEW: {
     status: 422,

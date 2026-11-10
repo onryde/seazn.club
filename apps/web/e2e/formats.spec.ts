@@ -68,13 +68,15 @@ test("division builder exposes the Jul3/08 format presets", async ({ page, reque
 // F3 flipped every picker template's progression to `timing: "setup"` (day-
 // one fixtures — the plate's TBD bracket exists before Main is even
 // generated). Owner ruling 12 (2026-08-18, F3 index): seeding stays
-// PROPOSE-AND-CONFIRM under `setup` timing, never auto-confirm — completing
-// Main computes a draft seed proposal and returns it (`seed_proposal` on the
-// completion response); `POST /generate` alone never seeds the plate, and
-// nothing fills its TBD slots until an explicit propose + confirm. This spec
-// used to assert the OLD `on_complete` wire shape (plain `qualified` on the
-// completion response, auto-filled), which no picker template has emitted
-// since that flip.
+// PROPOSE-AND-CONFIRM under `setup` timing, never auto-confirm. W4 app PR B
+// (Task 8, X-PL-5): the plate takes EVERY first loss (`firstLosses`), a field
+// known only once every first match is decided, so it has NO day-one lines
+// (`POST /generate` writes none) and its draft proposal appears the moment the
+// field is known - after round 1 for eight entrants (no byes) - while the main
+// draw's semi-finals and final are still to play. Completing Main therefore
+// returns no `seed_proposal`; nothing fills the plate's slots until an explicit
+// confirm. (Before Task 8 this spec asserted a day-one plate of 3 lines and a
+// draft proposal from Main's completion.)
 test("ko_plate template: completing the main draw computes a seed proposal; confirming it seeds the plate", async ({ page, request }) => {
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
@@ -117,12 +119,12 @@ test("ko_plate template: completing the main draw computes a seed proposal; conf
   expect(main.kind).toBe("knockout");
   expect(plate.kind).toBe("knockout");
   // ko_plate preset (format-templates.ts): plate's progression sources the
-  // main draw's round-1 losers. `timing: "setup"` since F3 flipped every
+  // main draw's first losers (RB4-P1; X-PL-6). `timing: "setup"` since F3 flipped every
   // picker template to day-one fixtures. `q` (round-1 loser count) defaults
   // to 4 (division-builder.tsx's `qualified` knob), never touched by this
   // test.
   expect(plate.progression).toMatchObject({
-    sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 1, count: 4 }] }],
+    sources: [{ stage: "previous", take: [{ kind: "firstLosses" }] }],
     placement: "rank_order",
     timing: "setup",
   });
@@ -146,18 +148,15 @@ test("ko_plate template: completing the main draw computes a seed proposal; conf
     away_entrant_id: string | null;
   };
 
-  // Day-one: the plate's TBD bracket exists before Main has even generated,
-  // let alone been played — `timing: "setup"`'s whole point. Placeholder
-  // slots only, no real entrants yet.
+  // Day-one (owner ruling G2, X-PL-5): the plate has NO lines before its field
+  // is known - its size depends on byes and forfeits across the whole draw.
   const plateDayOne = await apiJson<{ created: number; fixtures: Fx[] }>(
     request,
     `/api/v1/stages/${plate.id}/generate`,
     "POST",
   );
-  expect(plateDayOne.data!.created).toBe(3); // 4-entrant single elim
-  expect(
-    plateDayOne.data!.fixtures.every((f) => f.home_entrant_id === null && f.away_entrant_id === null),
-  ).toBe(true);
+  expect(plateDayOne.data!.created).toBe(0);
+  expect(plateDayOne.data!.fixtures).toEqual([]);
 
   const gen = await apiJson<{ fixtures: Fx[] }>(
     request,
@@ -182,6 +181,17 @@ test("ko_plate template: completing the main draw computes a seed proposal; conf
       payload: { p1Score: a, p2Score: b },
     });
   };
+  // Round 1 of eight decides every first match (no byes), so the plate's field is known HERE, with the main draw's semi-finals and
+  // final still to play (X-PL-5): the division page shows the plate's draft proposal now, and a main with undecided lines.
+  const round1Rows = (await apiJson<{ fixtures: Fx[] }>(request, `/api/v1/stages/${main.id}/generate`, "POST")).data!.fixtures.filter((f) => f.round_no === round1No);
+  for (const f of round1Rows) {
+    const homeWins = (seedOf.get(f.home_entrant_id!) ?? 99) < (seedOf.get(f.away_entrant_id!) ?? 99);
+    await decide(f.id, homeWins ? 2 : 0, homeWins ? 0 : 2);
+  }
+  await page.goto(await divisionPath(page.request, divisionId, "?tab=fixtures"));
+  await expect(page.locator('[data-progression-state="draft"]').filter({ hasText: "Plate" })).toBeVisible({ timeout: 20_000 });
+  const afterRound1 = (await apiJson<{ fixtures: Fx[] }>(request, `/api/v1/stages/${main.id}/generate`, "POST")).data!.fixtures;
+  expect(afterRound1.filter((f) => f.round_no > round1No && !["decided", "finalized"].includes(f.status)).length, "the proposal came while the later rounds are unplayed").toBeGreaterThan(0);
   for (let guard = 0; guard < 10; guard++) {
     const rows = (
       await apiJson<{ fixtures: Fx[] }>(request, `/api/v1/stages/${main.id}/generate`, "POST")
@@ -196,20 +206,19 @@ test("ko_plate template: completing the main draw computes a seed proposal; conf
     }
   }
 
-  // "complete": setup timing never auto-fills — completeStage computes a
-  // DRAFT seed proposal instead and returns it (owner ruling 12). The plate
-  // stays exactly as TBD as it was on day one until an organiser confirms.
+  // "complete": the proposal was made after round 1 (above), so completing Main returns none; the plate is not filled until an
+  // organiser confirms (owner ruling 12).
   const done = await apiJson<{ completed: boolean; seed_proposal?: { id: string; status: string } }>(
     request,
     `/api/v1/stages/${main.id}/complete`,
     "POST",
   );
   expect(done.data!.completed).toBe(true);
-  expect(done.data!.seed_proposal?.status).toBe("draft");
+  expect(done.data!.seed_proposal).toBeUndefined();
 
   // "propose": explicit recompute — the real endpoint the progression panel
-  // calls (completeStage's own auto-compute above is best-effort and gets
-  // marked stale by this call).
+  // calls (the proposal made after round 1 is marked stale by this call and
+  // re-proposed for the same field).
   const proposal = await apiJson<{
     id: string;
     computed: { qualifiers: { entrantId: string; destinationSlot: string }[]; ties: unknown[] };

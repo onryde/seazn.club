@@ -36,6 +36,7 @@ import { seedingErrorMessage } from "@/lib/seeding-error";
 import { plural } from "@/lib/i18n-runtime";
 import type { Locale } from "@/lib/i18n-constants";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
+import type { PlateCardState } from "@/lib/plate-card-state";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -215,6 +216,10 @@ export interface ProgressionPanelProps {
    *  lib/seeding-source-ready.ts: the server's own gate). Required, not defaulted: Confirm's warning promises a recompute
    *  only on a yes, and a caller that forgets it should fail to compile rather than quietly go back to promising. */
   confirmedDrawReopens: boolean;
+  /** W4 T8: where a plate's field stands (`lib/plate-card-state.ts`); null for every other stage. A plate has no lines day one, so
+   *  its card says "draws after round 2 - n of m first matches decided" while the field is open, and "not enough first-match
+   *  losers" when it completed by name; once the field is known the card is the ordinary proposal one. */
+  plate?: PlateCardState | null;
   locale: Locale;
   canEdit: boolean;
 }
@@ -229,6 +234,7 @@ export function ProgressionPanel({
   stageNames,
   departedEntrantIds,
   confirmedDrawReopens,
+  plate = null,
   locale,
   canEdit,
 }: ProgressionPanelProps) {
@@ -328,8 +334,35 @@ export function ProgressionPanel({
 
   if (!canEdit) return null;
 
+  if (!proposal && plate?.state === "waiting") {
+    return (
+      <section className="card mb-6 p-4" data-progression-state="plate-waiting">
+        <h3 className="text-sm font-semibold text-slate-800">{stageName}</h3>
+        <p className="mt-2 text-sm text-slate-500">{msg("plate.drawsAfterRound2", { done: plate.done, total: plate.total })}</p>
+      </section>
+    );
+  }
+  if (!proposal && plate?.state === "refused") {
+    return (
+      <section className="card mb-6 border-red-200 p-4" data-progression-state="plate-refused">
+        <h3 className="text-sm font-semibold text-slate-800">{stageName}</h3>
+        <p className="mt-2 text-sm text-red-700" role="alert">
+          {seedingErrorMessage(locale, "SEEDING_FIRSTLOSSES_DE_SOURCE", msg("plate.tooSmall"))}
+        </p>
+      </section>
+    );
+  }
+  if (!proposal && plate?.state === "too_small") {
+    return (
+      <section className="card mb-6 p-4" data-progression-state="plate-too-small">
+        <h3 className="text-sm font-semibold text-slate-800">{stageName}</h3>
+        <p className="mt-2 text-sm text-slate-500">{msg("plate.tooSmall")}</p>
+      </section>
+    );
+  }
+
   if (!proposal) {
-    if (!sourceReady) return null;
+    if (!sourceReady && plate?.state !== "ready") return null;
     return (
       <section className="card mb-6 p-4" data-progression-state="empty">
         <h3 className="text-sm font-semibold text-slate-800">{stageName}</h3>

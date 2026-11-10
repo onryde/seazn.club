@@ -112,13 +112,10 @@ type TakeRule = NonNullable<TemplateStage["progression"]>["sources"][number]["ta
 /** One take rule -> its own translated phrase. Each rule kind is ONE
  *  dictionary key with parameters, never fragments concatenated at the call
  *  site — see ProgressionSchema/TakeRuleSchema (api-v1/schemas/stages.ts) for the
- *  field shapes this switches on. F2 unified TakeRuleSchema onto 5 kinds
- *  (rankRange/topNPerGroup/bestNth/picks/roundLosers); only the 3 below are
- *  reachable from catalog data today (verified: no catalog entry emits
- *  picks/roundLosers — those are picker-only, format-templates.ts, which
- *  never renders through this component) so `rule` no longer narrows to
- *  `never` in the default branch, but the fallback (raw kind string) is
- *  unchanged and still correct if that ever stops being true. */
+ *  field shapes this switches on. EXHAUSTIVE over the engine's TakeRule (D2, the take-reader sweep): a kind added there
+ *  fails tsc at the `never` below until it has a phrase. Only 3 kinds are reachable from catalog data today (no catalog
+ *  entry emits picks/roundLosers/firstLosses; those are picker-only, format-templates.ts) but the rest render a translated
+ *  phrase, never the raw kind and never a throw. */
 export function takeRuleText(msg: Msg, rule: TakeRule): string {
   switch (rule.kind) {
     case "topNPerGroup":
@@ -127,8 +124,14 @@ export function takeRuleText(msg: Msg, rule: TakeRule): string {
       return msg("templates.detail.take.bestNth", { count: rule.count, nth: rule.nth });
     case "rankRange":
       return msg("templates.detail.take.rankRange", { from: rule.from, to: rule.to });
+    case "roundLosers":
+      return msg("templates.detail.take.roundLosers", { count: rule.count, round: rule.round });
+    case "picks":
+      return msg("templates.detail.take.picks", { count: rule.picks.length });
+    case "firstLosses":
+      return msg("templates.detail.take.firstLosses");
     default:
-      return rule.kind;
+      return rule satisfies never;
   }
 }
 

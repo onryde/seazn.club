@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { previewDivisionFixtures } from "../stages";
 import { buildTemplateStages } from "@/lib/format-templates";
+import { foldFirstLosses } from "@/lib/division-builder/__tests__/first-loss-fold";
 
 describe("previewDivisionFixtures — qualifier sizing (bestNth / multi-rule / roundLosers)", () => {
   it("sizes a bestNth spec by its own count, not the old 4-entrant default", () => {
@@ -89,6 +90,21 @@ describe("previewDivisionFixtures — qualifier sizing (bestNth / multi-rule / r
     const plate = phases[1]!;
     expect(plate.sections[0]!.title).toBe("Quarter-finals"); // 8 entrants
     expect(plate.sections[0]!.matches).toHaveLength(4);
+  });
+
+  it("X-PL-6 sizes a firstLosses plate by the main draw's first-loss FIELD (the engine's own bracket, folded), n = 4..64 counted — never the old 4-entrant default", () => {
+    let checked = 0;
+    let beyondFour = 0;
+    for (let n = 4; n <= 64; n++) {
+      const phases = previewDivisionFixtures(buildTemplateStages("ko_plate", { qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 }) as never, n);
+      const field = foldFirstLosses(n);
+      const real = phases[1]!.sections.flatMap((sec) => sec.matches).filter((m) => m.home !== "Bye" && m.away !== "Bye").length;
+      expect(real, `n=${n}: a plate of ${field} plays ${field - 1} matches`).toBe(field - 1);
+      checked++;
+      if (field > 4) beyondFour++;
+    }
+    expect(checked).toBe(61);
+    expect(beyondFour, "the sweep reaches the PL-1 cases (a field above 4)").toBeGreaterThan(40);
   });
 
   it("still sizes a plain rankRange (topN's replacement) spec correctly (regression)", () => {

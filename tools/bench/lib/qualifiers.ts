@@ -63,7 +63,7 @@ export interface QualifierTable {
 }
 
 /** The one take rule this module implements. Deliberately narrow: a pack
- *  declaring `rankRange`/`bestNth`/`picks`/`roundLosers` is NOT silently run
+ *  declaring `rankRange`/`bestNth`/`picks`/`roundLosers`/`firstLosses` is NOT silently run
  *  through the topNPerGroup rule — the caller names what it actually saw
  *  instead of guessing (`run-suite.ts`'s `parseTopNPerGroup`). */
 export interface TopNPerGroup {

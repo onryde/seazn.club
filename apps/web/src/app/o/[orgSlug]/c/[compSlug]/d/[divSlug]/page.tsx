@@ -71,6 +71,7 @@ import { lineupCatalogFor } from "@/server/usecases/lineup-catalog";
 import { effectiveEntrantModel, type TableStageKind, type TiebreakerKey } from "@seazn/engine/sport";
 import type { ProgressionSpec } from "@seazn/engine/competition";
 import { confirmedDrawReopens as confirmedDrawReopensFor, seedingSourceReady } from "@/lib/seeding-source-ready";
+import { plateCardStatesFor } from "@/server/usecases/plate-field";
 import { sql, withTenant } from "@/lib/db";
 import { DivisionDangerZone } from "@/components/v2/division-danger-zone";
 import { EmbedSnippet } from "@/components/v2/embed-snippet";
@@ -343,6 +344,11 @@ export default async function DivisionPage({
     editable && seedingStages.length > 0
       ? await Promise.all(seedingStages.map((s) => getSeedProposal(auth, s.id)))
       : [];
+  // W4 T8 (X-PL-5, X-PL-2): a plate (a stage taking `firstLosses`) has no lines until round two decides its field, so its card is
+  // told where the field stands - waiting `done` of `total`, ready, or too small - from the main draw's own first-loss field.
+  const plateCardStates = editable
+    ? await plateCardStatesFor(auth, stages as never, seedingStages as never, seedProposals.map((p) => p != null))
+    : seedingStages.map(() => null);
   // "draft" = computed, waiting for the organiser to confirm it. "stale" = a
   // source's standings moved underneath it and it needs recomputing. Both are
   // waiting on a human; "confirmed" is done and never nags.
@@ -1009,6 +1015,7 @@ export default async function DivisionPage({
                 stageNames={stageNames}
                 departedEntrantIds={departedEntrantIds}
                 confirmedDrawReopens={confirmedDrawReopens[i] ?? false}
+                plate={plateCardStates[i] ?? null}
                 locale={locale}
                 canEdit={editable}
               />

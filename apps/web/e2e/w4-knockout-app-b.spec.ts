@@ -86,3 +86,121 @@ test.describe("X-FR-4 the stage_completed wire: finalRanks as ids, places with r
     expect(checked).toBe(2);
   });
 });
+
+// ─── B3b (Task 8): the plate after round two (X-PL-5) and for every field (X-PL-8) ──────────────────────────────────────────────
+// A Knockout + Plate division of `n`, built stage by stage through the v1 routes (what the template writes: a main knockout and a
+// plate taking `firstLosses`, drawn at setup), played by the scorer's own result events with the BETTER SEED winning every line.
+// Expected fields are the rulebook's (RB4-P1: an entrant's FIRST real match loss; a bye is no match), worked by hand per n below.
+interface PlateFx extends Fx {
+  status: string;
+}
+
+async function plateDivision(request: APIRequestContext, label: string, n: number) {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W4 B plate ${label} ${TAG}`, visibility: "private" });
+  expect(comp.status, JSON.stringify(comp.error)).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: `Plate ${label}`,
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  expect(div.status, JSON.stringify(div.error)).toBeLessThan(300);
+  const names = Array.from({ length: n }, (_, i) => `E${i + 1} ${TAG}`);
+  const added = await addEntrantsViaApi(request, div.data!.id, names);
+  expect(added.ids).toHaveLength(n);
+  const main = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind: "knockout", name: "Main draw", config: {} });
+  expect(main.status, JSON.stringify(main.error)).toBe(201);
+  const plate = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", {
+    seq: 2,
+    kind: "knockout",
+    name: "Plate",
+    config: {},
+    progression: { sources: [{ stage: "previous", take: [{ kind: "firstLosses" }] }], placement: "rank_order", timing: "setup" },
+  });
+  expect(plate.status, JSON.stringify(plate.error)).toBe(201);
+  expect((await apiJson(request, `/api/v1/stages/${main.data!.id}/generate`, "POST")).status).toBe(200);
+  const day1 = await apiJson<{ created: number }>(request, `/api/v1/stages/${plate.data!.id}/generate`, "POST");
+  expect([day1.status, day1.data?.created], "the plate has no day-one lines (owner ruling G2)").toEqual([200, 0]);
+  expect((await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST")).status).toBeLessThan(300);
+  const seedOf = new Map(added.ids.map((id, i) => [id, i + 1] as const));
+  const nameOf = new Map(added.ids.map((id, i) => [id, `E${i + 1}`] as const));
+  return { divisionId: div.data!.id, mainId: main.data!.id, plateId: plate.data!.id, seedOf, nameOf };
+}
+
+const plateLines = async (request: APIRequestContext, divisionId: string, stageId: string): Promise<PlateFx[]> => {
+  const res = await apiJson<PlateFx[]>(request, `/api/v1/divisions/${divisionId}/fixtures`);
+  expect(res.status, JSON.stringify(res.error)).toBe(200);
+  return res.data!.filter((f) => f.stage_id === stageId);
+};
+
+/** Decide every playable, undecided line of `round` of `stageId`: the lower seed wins. */
+async function playRoundBetterSeed(request: APIRequestContext, rig: { divisionId: string; seedOf: Map<string, number> }, stageId: string, round: number): Promise<number> {
+  let played = 0;
+  for (const f of (await plateLines(request, rig.divisionId, stageId)).filter((l) => l.round_no === round && l.home_entrant_id && l.away_entrant_id && !["decided", "finalized", "forfeited"].includes(l.status))) {
+    const homeBetter = (rig.seedOf.get(f.home_entrant_id!) ?? 99) < (rig.seedOf.get(f.away_entrant_id!) ?? 99);
+    const state = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${f.id}/state`);
+    const scored = await apiJson(request, `/api/v1/fixtures/${f.id}/events`, "POST", {
+      expected_seq: state.data!.last_seq,
+      type: "generic.result",
+      payload: { p1Score: homeBetter ? 2 : 0, p2Score: homeBetter ? 0 : 2 },
+    });
+    expect(scored.status, JSON.stringify(scored.error)).toBe(201);
+    played++;
+  }
+  return played;
+}
+
+const compute = (request: APIRequestContext, plateId: string) =>
+  apiJson<{ id: string; computed: { qualifiers: { entrantId: string }[] } }>(request, `/api/v1/stages/${plateId}/seed-proposal`, "POST");
+
+test.describe("X-PL-5 the plate draws after round 2", () => {
+  test("n=5: no proposal after round 1 (the field is open), a proposal for the first losers E3 and E5 after round 2 while the main final is still to play", async ({ request }) => {
+    test.setTimeout(180_000);
+    const rig = await plateDivision(request, "n5", 5);
+    // Five draw a bracket of eight: seeds 1-3 hold byes, so round 1 is ONE match (E4 v E5) and the bye holders open in round 2.
+    expect(await playRoundBetterSeed(request, rig, rig.mainId, 1), "premise: round 1 is one real match").toBe(1);
+    const early = await compute(request, rig.plateId);
+    expect([early.status, early.error?.code], "after round 1 the bye holders have not played: the field is open, nothing to propose").toEqual([409, "SEEDING_SOURCE_INCOMPLETE"]);
+    expect(await plateLines(request, rig.divisionId, rig.plateId), "and the plate has no lines").toEqual([]);
+    expect(await playRoundBetterSeed(request, rig, rig.mainId, 2), "premise: round 2 is two matches").toBe(2);
+    const final = (await plateLines(request, rig.divisionId, rig.mainId)).find((l) => l.round_no === 3)!;
+    expect(["decided", "finalized"], "the main final is still to play").not.toContain(final.status);
+    const lines = await plateLines(request, rig.divisionId, rig.plateId);
+    expect(lines.length, "the plate is drawn at its field of two: one line").toBe(1);
+    const proposal = await compute(request, rig.plateId);
+    expect(proposal.status, JSON.stringify(proposal.error)).toBeLessThan(300);
+    expect(proposal.data!.computed.qualifiers.map((q) => rig.nameOf.get(q.entrantId)).sort(), "the first losers: E3 (round 2) and E5 (round 1); E4's round-2 loss is not its first").toEqual(["E3", "E5"]);
+  });
+});
+
+test.describe("X-PL-8 the plate completes at n=6, 7, 9", () => {
+  // Rulebook, by hand (better seed wins): n=6 byes 1,2 - R1 4v5 and 3v6 lose 5 and 6. n=7 bye 1 - R1 2v7, 3v6, 4v5 lose 7, 6, 5. n=9 byes 1-7 -
+  // R1 8v9 loses 9; round 2 1v8 (8 played already), 4v5, 3v6, 2v7 lose 5, 6, 7.
+  for (const { n, field } of [
+    { n: 6, field: ["E5", "E6"] },
+    { n: 7, field: ["E5", "E6", "E7"] },
+    { n: 9, field: ["E5", "E6", "E7", "E9"] },
+  ]) {
+    test(`n=${n}: the plate takes ${field.join(", ")}, is played out, and both stages and the division complete with no 409`, async ({ request }) => {
+      test.setTimeout(300_000);
+      const rig = await plateDivision(request, `n${n}`, n);
+      for (const r of [1, 2]) await playRoundBetterSeed(request, rig, rig.mainId, r);
+      const proposal = await compute(request, rig.plateId);
+      expect(proposal.status, JSON.stringify(proposal.error)).toBeLessThan(300);
+      expect(proposal.data!.computed.qualifiers.map((q) => rig.nameOf.get(q.entrantId)).sort(), `n=${n}: the first losers`).toEqual(field);
+      const confirmed = await apiJson<{ filled: number }>(request, `/api/v1/stages/${rig.plateId}/seed-proposal/confirm`, "POST", { proposalId: proposal.data!.id });
+      expect(confirmed.status, JSON.stringify(confirmed.error)).toBeLessThan(300);
+      expect(confirmed.data!.filled, "every first loser seated").toBe(field.length);
+      for (const stageId of [rig.mainId, rig.plateId]) {
+        const rounds = Math.max(...(await plateLines(request, rig.divisionId, stageId)).map((l) => l.round_no));
+        for (let r = 1; r <= rounds; r++) await playRoundBetterSeed(request, rig, stageId, r);
+      }
+      for (const stageId of [rig.mainId, rig.plateId]) {
+        const done = await apiJson<{ completed: boolean }>(request, `/api/v1/stages/${stageId}/complete`, "POST");
+        expect([done.status, done.data?.completed], JSON.stringify(done.error)).toEqual([200, true]);
+      }
+      const division = await apiJson<{ status: string }>(request, `/api/v1/divisions/${rig.divisionId}`);
+      expect(division.data?.status, "the division completes").toBe("completed");
+    });
+  }
+});
