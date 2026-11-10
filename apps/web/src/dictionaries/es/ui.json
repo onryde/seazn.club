@@ -520,6 +520,8 @@
   "sponsors.deal.subline.paid": "Pagado el {date}",
   "sponsors.deal.subline.ended": "Terminado el {date}",
   "sponsors.deal.notice.invoiceResent": "Factura enviada de nuevo para {name}.",
+  "sponsors.deal.markPaid.title": "¿Registrar {amount} de {name} como recibido?",
+  "sponsors.deal.markPaid.body": "El acuerdo se marca como pagado y sigue su regla de publicación: activo, programado o pendiente de aprobación.",
   "sponsors.list.more": "Más opciones de {name}",
   "sponsors.pkg.retireConfirm.title": "¿Retirar este paquete?",
   "sponsors.pkg.retireConfirm.body": "Retirarlo impide nuevas facturas para {name}. Los espacios pagados y los pedidos anteriores no se ven afectados.",

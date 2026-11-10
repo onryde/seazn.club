@@ -43,6 +43,14 @@ export function groupTierOf(s: SponsorItem): SponsorTier {
   return s.deal?.tier ?? s.tier;
 }
 
+/** Can two NEIGHBOURS in a drawn group swap places? The server reads the list ordered by the sponsor's STORED tier, then
+ *  display_order (server/usecases/sponsors.ts list), so two rows have an order between them only when that stored tier is the
+ *  same. A native-gold sponsor and a partner with a gold deal share the Gold group but not an order: a swap between them would be
+ *  drawn, persisted, and snap back on the next read. The arrows and `move()` both ask this. */
+export function sameOrderBand(a: SponsorItem, b: SponsorItem): boolean {
+  return a.tier === b.tier;
+}
+
 export interface SponsorListProps {
   /** In the order they were read (the server's tier-then-order list); the list groups them without reordering within a group. */
   sponsors: SponsorItem[];
@@ -86,8 +94,9 @@ function hostOf(url: string): string {
   }
 }
 
-/** £1,500 / £120.50: whole amounts drop the pence, the way the mockup writes them. */
-function price(d: SponsorDeal, locale: string): string {
+/** £1,500 / £120.50: whole amounts drop the pence, the way the mockup writes them. Exported for the Mark as paid confirm, which
+ *  names the same amount the row shows. */
+export function dealPrice(d: SponsorDeal, locale: string): string {
   const whole = d.amount_cents % 100 === 0;
   try {
     return fmtNumber(locale, d.amount_cents / 100, {
@@ -111,7 +120,7 @@ function subline(s: SponsorItem, ctx: { msg: Msg; locale: string; tz: string; co
   }
   const day = (iso: string | null) => fmtPublicDate(locale, tz, iso, { day: "numeric", month: "short" });
   const scope = d.competition_id ? (competitions.find((c) => c.id === d.competition_id)?.name ?? "…") : msg("sponsors.scopeAll");
-  const paidFor = d.payment_method === "complimentary" ? msg("sponsors.deal.subline.complimentary") : price(d, locale);
+  const paidFor = d.payment_method === "complimentary" ? msg("sponsors.deal.subline.complimentary") : dealPrice(d, locale);
   let tail: string;
   if (d.deal_status === "ended") {
     tail = d.ended_at ? msg("sponsors.deal.subline.ended", { date: day(d.ended_at) }) : msg("sponsors.deal.chip.ended");
@@ -277,7 +286,7 @@ export function SponsorList(props: SponsorListProps) {
                   <button
                     type="button"
                     aria-label={msg("settings.org.sponsors.moveUp", { name: s.name })}
-                    disabled={busy || index === 0}
+                    disabled={busy || index === 0 || !sameOrderBand(group[index - 1]!, s)}
                     onClick={() => onMove(s.id, -1)}
                     className={ICON_BUTTON}
                   >
@@ -286,7 +295,7 @@ export function SponsorList(props: SponsorListProps) {
                   <button
                     type="button"
                     aria-label={msg("settings.org.sponsors.moveDown", { name: s.name })}
-                    disabled={busy || index === group.length - 1}
+                    disabled={busy || index === group.length - 1 || !sameOrderBand(group[index + 1]!, s)}
                     onClick={() => onMove(s.id, 1)}
                     className={ICON_BUTTON}
                   >

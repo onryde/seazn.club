@@ -520,6 +520,8 @@
   "sponsors.deal.subline.paid": "Betaald op {date}",
   "sponsors.deal.subline.ended": "Beëindigd op {date}",
   "sponsors.deal.notice.invoiceResent": "Factuur opnieuw verstuurd voor {name}.",
+  "sponsors.deal.markPaid.title": "{amount} van {name} als ontvangen registreren?",
+  "sponsors.deal.markPaid.body": "De deal wordt als betaald gemarkeerd en volgt zijn live-regel: live, gepland of wacht op goedkeuring.",
   "sponsors.list.more": "Meer voor {name}",
   "sponsors.pkg.retireConfirm.title": "Dit pakket intrekken?",
   "sponsors.pkg.retireConfirm.body": "Intrekken voorkomt nieuwe facturen voor {name}. Betaalde plekken en eerdere bestellingen blijven ongewijzigd.",

@@ -39,6 +39,10 @@ const KIND_STATE: Record<Kind, ChipState> = {
   none: "archived",
 };
 
+/** "No deal" borrows the archived chip's quiet outline one step darker: archived's `text-slate-400` is ~2.6:1 on white and AA wants
+ *  4.5:1 (slate-500 is 4.8:1). A swap on the shared recipe, so the status chip's own `archived` is untouched. */
+const NONE_STYLE = CHIP_STYLE.archived.replace("text-slate-400", "text-slate-500");
+
 /** A deal's chip; a sponsor with no deal (`null`) reads "No deal". */
 export function DealChip({ deal }: { deal: SponsorDeal | null }) {
   const msg = useMsg();
@@ -53,7 +57,7 @@ export function DealChip({ deal }: { deal: SponsorDeal | null }) {
       : DEAL_CHIP_MSG[kind];
   const state: ChipState = held ? "frozen" : KIND_STATE[kind];
   return (
-    <span data-testid="deal-chip" data-chip-kind={kind} className={`${CHIP_BASE} max-w-full ${CHIP_STYLE[state]}`}>
+    <span data-testid="deal-chip" data-chip-kind={kind} className={`${CHIP_BASE} max-w-full ${kind === "none" ? NONE_STYLE : CHIP_STYLE[state]}`}>
       {state === "live" && <span aria-hidden className="chip-pulse-dot h-1.5 w-1.5 shrink-0 rounded-full bg-lime-400" />}
       {msg(label)}
     </span>

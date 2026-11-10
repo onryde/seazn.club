@@ -7700,6 +7700,8 @@ export type DictionaryKey =
   | "sponsors.deal.chip.paid"
   | "sponsors.deal.chip.scheduled"
   | "sponsors.deal.lockedNote"
+  | "sponsors.deal.markPaid.body"
+  | "sponsors.deal.markPaid.title"
   | "sponsors.deal.notice.invoiceResent"
   | "sponsors.deal.subline.bankTransfer"
   | "sponsors.deal.subline.complimentary"

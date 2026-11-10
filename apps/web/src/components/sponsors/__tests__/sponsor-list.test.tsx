@@ -20,6 +20,12 @@
 //   L8  truncation     drop `min-w-0` from the name's wrapper                                          -> "a 43-character name"
 //   L9  wiring         Resend invoice POSTs `/approve`                                                 -> "Resend invoice POSTs"
 //   L10 write words    resend refusal read through the shared map                                     -> "a refused Resend"
+//   L11 stored tier    `move()` drops its `sameOrderBand` guard                                       -> "a call that gets past the disabled arrow"
+//   L12 arrows         the up/down `disabled` drops `sameOrderBand`                                   -> "the arrows between a native gold"
+//   L13 confirm        Mark as paid skips the confirm                                                  -> "Mark as paid asks first"
+//   L14 cancel         Mark as paid ignores a "no" and POSTs anyway                                   -> "cancelled: no POST"
+//   L15 edit           `startEdit` stops clearing `moreOpenId`                                         -> "Edit does not leave the row's tray open"
+//   L16 live region    the notice renders only while it has text                                      -> "always mounted"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
@@ -29,6 +35,7 @@ vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMo
 
 import { OrgSponsors, SponsorForm, type SponsorItem, type SponsorsHubData } from "@/components/org-sponsors";
 import { SponsorList, type SponsorListProps } from "@/components/sponsors/sponsor-list";
+import { SponsorRowMore } from "@/components/sponsors/sponsor-row-more";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { expandSponsorTree } from "./_sponsor-tree";
 import { attrOf, classTokens, findAll, findOne, textOfMarkup } from "./_markup";
@@ -124,18 +131,21 @@ const MOCKUP: MockupRow[] = [
     group: "partner", chip: "Draft", sub: "Partner · £120 · Not sent yet", action: ["open_deal", "Open deal"],
   },
   {
-    s: sponsor({ id: "s7", name: "Northbank Print", tier: "partner", click_count: 0, status: "inactive", url: "https://northbank-print.co.uk/", deal: null }),
+    s: sponsor({ id: "s7", name: "Northbank Print", tier: "partner", click_count: 2, status: "inactive", url: "https://northbank-print.co.uk/", deal: null }),
     group: "partner", chip: "No deal", sub: "No deal · northbank-print.co.uk", action: ["add_deal", "Add deal"],
   },
   {
     s: sponsor({
-      id: "s8", name: "Tidewell Garage", tier: "partner", click_count: 2, status: "inactive",
+      id: "s8", name: "Tidewell Garage", tier: "partner", click_count: 18, status: "inactive",
       deal: deal({ id: "d8", sponsor_id: "s8", deal_status: "ended", payment_status: "paid", package_name: "Partner", tier: "partner", amount_cents: 12_000, ended_at: "2026-08-31T12:00:00.000Z", ended_reason: "expired" }),
     }),
     group: "partner", chip: "Ended", sub: "Partner · £120 · Ended 31 Aug", action: ["add_deal", "Add deal"],
   },
 ];
 const ROWS = MOCKUP.map((m) => m.s);
+/** The mockup's link-click counts per row (the `title="N link clicks"` on each row of screen 1), typed here - the fixture sets the same
+ *  numbers on the sponsors, so the row can be seen to read them back. */
+const MOCKUP_CLICKS: Record<string, number> = { s1: 41, s2: 12, s3: 7, s4: 3, s5: 9, s6: 0, s7: 2, s8: 18 };
 
 const noop = () => {};
 function listProps(sponsors: SponsorItem[], over: Partial<SponsorListProps> = {}): SponsorListProps {
@@ -174,6 +184,7 @@ describe("the eight mockup rows: each chip, sub-line and ONE next action (mockup
       const row = rowOf(markup, m.s.id);
       expect(textOfMarkup(findOne(row, "deal-chip").outer), `${m.s.name}: chip`).toBe(m.chip);
       expect(textOfMarkup(findOne(row, "sponsor-row-sub").outer), `${m.s.name}: sub-line`).toBe(m.sub);
+      expect(textOfMarkup(findOne(row, "sponsor-row-clicks").outer), `${m.s.name}: clicks`).toBe(String(MOCKUP_CLICKS[m.s.id]));
       const actions = findAll(row, "sponsor-row-action");
       if (m.action === null) {
         expect(actions, `${m.s.name}: no button`).toHaveLength(0);
@@ -509,6 +520,59 @@ describe("Move: the first and last row of a GROUP cannot move further", () => {
   });
 });
 
+describe("Move: neighbours in one group swap only when they share a STORED tier (the server orders by it - review I1)", () => {
+  // Server order is stored tier, then display_order: a native gold sponsor sorts before a PARTNER sponsor whose pending deal is gold,
+  // though both are drawn in Gold. G1 and G2 are native gold; P is the partner with the gold deal.
+  const G1 = sponsor({ id: "g1", name: "Native Gold One", tier: "gold", display_order: 0 });
+  const G2 = sponsor({ id: "g2", name: "Native Gold Two", tier: "gold", display_order: 1 });
+  const P = sponsor({
+    id: "p1", name: "Partner With Gold Deal", tier: "partner", display_order: 0, status: "inactive", has_open_deal: true,
+    deal: deal({ id: "dp1", sponsor_id: "p1", deal_status: "awaiting_payment", payment_status: "pending", tier: "gold", package_name: "Gold Season" }),
+  });
+  const MIXED = [G1, G2, P];
+  const disabled = (markup: string, id: string, key: "moveUp" | "moveDown", name: string): boolean => {
+    const label = msg(`settings.org.sponsors.${key}`, { name });
+    const tag = [...rowOf(markup, id).matchAll(/<button\b[^>]*>/g)].map((m) => m[0]).find((b) => attrOf(b, "aria-label") === label);
+    if (!tag) throw new Error(`no ${key} for ${name}`);
+    return attrOf(tag, "disabled") !== undefined;
+  };
+
+  it("premise: all three are drawn in ONE group (Gold), in the server's order", () => {
+    const groups = findAll(listHtml(MIXED), "sponsor-group");
+    expect(groups.map((g) => attrOf(g.open, "data-tier"))).toEqual(["gold"]);
+    expect(findAll(groups[0]!.outer, "sponsor-row").map((r) => attrOf(r.open, "data-sponsor-id"))).toEqual(["g1", "g2", "p1"]);
+  });
+
+  it("the arrows between a native gold and the partner with a gold deal are disabled; the arrows between two native golds are not (4 checked)", () => {
+    const markup = listHtml(MIXED);
+    expect(disabled(markup, "g1", "moveDown", G1.name), "G1 down: its neighbour G2 shares the stored tier").toBe(false);
+    expect(disabled(markup, "g2", "moveUp", G2.name), "G2 up: its neighbour G1 shares the stored tier").toBe(false);
+    expect(disabled(markup, "g2", "moveDown", G2.name), "G2 down: its neighbour P is stored partner").toBe(true);
+    expect(disabled(markup, "p1", "moveUp", P.name), "P up: its neighbour G2 is stored gold").toBe(true);
+  });
+
+  it("a call that gets past the disabled arrow still sends no reorder; the legal swap beside it does send one", async () => {
+    const m = mount(MIXED);
+    m.click(msg("settings.org.sponsors.moveDown", { name: G2.name }));
+    m.click(msg("settings.org.sponsors.moveUp", { name: P.name }));
+    await flush();
+    expect(calls.filter((c) => c.url.endsWith("/sponsors/reorder")), "no reorder was sent across stored tiers").toHaveLength(0);
+    // The pair: the same call between two native golds is a real reorder.
+    m.click(msg("settings.org.sponsors.moveDown", { name: G1.name }));
+    await flush();
+    const reorder = calls.filter((c) => c.url.endsWith("/sponsors/reorder"));
+    expect(reorder).toHaveLength(1);
+    expect(reorder[0]!.body).toEqual({ ids: ["g2", "g1", "p1"] });
+  });
+
+  it("without tiers (one flat list) the same rule holds: a stored-tier boundary is not crossed", async () => {
+    const m = mount(MIXED, { hasTiers: false });
+    m.click(msg("settings.org.sponsors.moveDown", { name: G2.name }));
+    await flush();
+    expect(calls.filter((c) => c.url.endsWith("/sponsors/reorder"))).toHaveLength(0);
+  });
+});
+
 // --- the island: the writes the actions make ---------------------------------------------------------------------------------------
 
 const HUB: SponsorsHubData = {
@@ -583,6 +647,54 @@ describe("the three row actions call the deal routes (Tasks 6 and 7), then re-re
     expect(checked).toBe(2);
   });
 
+  it("Mark as paid asks first, naming the amount and the sponsor; cancelled, nothing is sent (the negative)", async () => {
+    confirmMock.mockResolvedValueOnce(false);
+    const m = mount(ROWS);
+    m.click("Mark as paid: Marlow & Daughters Bakery");
+    await flush();
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    const asked = confirmMock.mock.calls[0]![0] as { title: string; body: string; confirmLabel: string; tone?: string };
+    // The words are the controller's: "Record £X from {sponsor} as received?" - Marlow's deal is £300.
+    expect(asked.title).toBe("Record £300 from Marlow & Daughters Bakery as received?");
+    expect(asked.body).toContain("go-live rule");
+    expect(asked.confirmLabel, "the button says what it does").toBe("Mark as paid");
+    expect(asked.tone).toBe("default");
+    expect(POSTS(), "cancelled: no POST").toEqual([]);
+    expect(calls, "cancelled: nothing was sent or re-read").toEqual([]);
+    expect(m.text(), "and no error or notice appears").not.toContain("Invoice sent again");
+  });
+
+  it("Mark as paid, confirmed, sends exactly one POST (the pair), and Approve and Resend invoice ask nothing", async () => {
+    answer = (url, method) => (method === "GET" ? { status: 200, body: { data: ROWS } } : { status: 200, body: { data: {} } });
+    const m = mount(ROWS);
+    m.click("Mark as paid: Marlow & Daughters Bakery");
+    await flush();
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(POSTS()).toEqual([`/api/v1/orgs/${ORG}/sponsor-deals/d4/mark-paid`]);
+    confirmMock.mockClear();
+    calls.length = 0;
+    m.click("Approve: Quay Fisheries");
+    m.click("Resend invoice: Ridge Gold Physiotherapy");
+    await flush();
+    expect(confirmMock, "Approve is one tap (End now reverses it); Resend is harmless").not.toHaveBeenCalled();
+    expect(POSTS()).toEqual([
+      `/api/v1/orgs/${ORG}/sponsor-deals/d3/approve`,
+      `/api/v1/orgs/${ORG}/sponsor-deals/d2/send-invoice`,
+    ]);
+  });
+
+  it("the sentence shows the amount the row shows - pence kept, in the sponsor's own currency", async () => {
+    const priced = sponsor({
+      id: "s20", name: "Euro Cafe", status: "inactive", has_open_deal: true,
+      deal: deal({ id: "d20", sponsor_id: "s20", deal_status: "awaiting_payment", payment_status: "pending", payment_method: "offline", amount_cents: 12_050, currency: "eur" }),
+    });
+    confirmMock.mockResolvedValueOnce(false);
+    const m = mount([priced]);
+    m.click("Mark as paid: Euro Cafe");
+    await flush();
+    expect((confirmMock.mock.calls[0]![0] as { title: string }).title).toBe("Record €120.50 from Euro Cafe as received?");
+  });
+
   it("a refused Resend reads the resend words for its code, never the server's English - and the list is still re-read (L10)", async () => {
     const SERVER = "the sponsor's own payment is already on its way";
     answer = (url, method) =>
@@ -614,6 +726,56 @@ describe("the three row actions call the deal routes (Tasks 6 and 7), then re-re
     const m = mount(ROWS, { canEdit: false });
     expect(() => m.byLabel("Approve: Quay Fisheries")).toThrow(/no control labelled/);
     expect(() => m.byLabel("Resend invoice: Ridge Gold Physiotherapy")).toThrow(/no control labelled/);
+  });
+});
+
+describe("the status line is one live region that is always mounted, so only its text changes (review m4)", () => {
+  const statusEls = (m: ReturnType<typeof mount>) => m.island.tree().filter((e) => propsOf(e).role === "status");
+
+  it("it is there, empty, before any write; after Resend invoice it is the SAME one region carrying the words", async () => {
+    const m = mount(ROWS);
+    const before = statusEls(m);
+    expect(before, "exactly one status region before anything happens").toHaveLength(1);
+    expect(propsOf(before[0]!)["data-testid"]).toBe("sponsor-notice");
+    expect(propsOf(before[0]!).children, "empty: no text yet").toBeFalsy();
+    m.click("Resend invoice: Ridge Gold Physiotherapy");
+    await flush();
+    const after = statusEls(m);
+    expect(after, "still exactly one region").toHaveLength(1);
+    expect(propsOf(after[0]!).children).toBe("Invoice sent again for Ridge Gold Physiotherapy.");
+  });
+
+  it("the next write clears the words (the region stays)", async () => {
+    answer = (url, method) => (method === "GET" ? { status: 200, body: { data: ROWS } } : { status: 200, body: { data: {} } });
+    const m = mount(ROWS);
+    m.click("Resend invoice: Ridge Gold Physiotherapy");
+    await flush();
+    expect(propsOf(statusEls(m)[0]!).children).toBeTruthy();
+    m.click("Approve: Quay Fisheries");
+    await flush();
+    expect(statusEls(m)).toHaveLength(1);
+    expect(propsOf(statusEls(m)[0]!).children, "a different write: the old sentence is gone").toBeFalsy();
+  });
+});
+
+describe("Edit does not leave the row's ⋯ tray open behind it (review m3)", () => {
+  it("open ⋯, Edit, Cancel: the editor is gone and the tray is closed again", () => {
+    const m = mount(ROWS);
+    const list = () => propsOf(m.island.tree().find((e) => e.type === SponsorList)!);
+    const trayOf = (id: string) => m.island.tree().find((e) => propsOf(e).id === `sponsor-tools-${id}`);
+    const more = m.island.tree().find((e) => e.type === SponsorRowMore && propsOf(e).name === "Ridge Gold Physiotherapy")!;
+    (propsOf(more).onToggle as () => void)();
+    expect(list().moreOpenId, "premise: the ⋯ is open").toBe("s2");
+    expect(classTokens(`<div class="${propsOf(trayOf("s2")!).className as string}">`), "premise: the tray shows").not.toContain("max-md:hidden");
+
+    m.click(msg("sponsors.edit", { name: "Ridge Gold Physiotherapy" }));
+    expect(list().editingId, "premise: the row is being edited").toBe("s2");
+    expect(list().moreOpenId, "the open state does not ride along into the editor").toBeNull();
+
+    const form = m.island.tree().find((e) => e.type === SponsorForm && propsOf(e).onCancel !== undefined)!;
+    (propsOf(form).onCancel as () => void)();
+    expect(list().editingId).toBeNull();
+    expect(classTokens(`<div class="${propsOf(trayOf("s2")!).className as string}">`), "after Cancel the tray is folded again").toContain("max-md:hidden");
   });
 });
 
@@ -690,12 +852,14 @@ describe("the new copy exists in all four locales, with its placeholders intact"
     ["sponsors.deal.subline.paid", ["date"]],
     ["sponsors.deal.subline.ended", ["date"]],
     ["sponsors.deal.notice.invoiceResent", ["name"]],
+    ["sponsors.deal.markPaid.title", ["amount", "name"]],
+    ["sponsors.deal.markPaid.body", []],
     ["sponsors.list.more", ["name"]],
     ["sponsors.form.hint", []],
   ];
   const DICTS: Record<string, Record<string, string>> = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl };
 
-  it("every key is a non-empty string in en / es / fr / nl and names the same {placeholders} in each (15 keys x 4 locales)", () => {
+  it("every key is a non-empty string in en / es / fr / nl and names the same {placeholders} in each (17 keys x 4 locales)", () => {
     expect(LOCALES.length, "premise: four locales").toBe(4);
     let checked = 0;
     for (const [key, vars] of KEYS) {
@@ -707,7 +871,7 @@ describe("the new copy exists in all four locales, with its placeholders intact"
         checked++;
       }
     }
-    expect(checked).toBe(60);
+    expect(checked).toBe(68);
   });
 
   it("'deal' is the word in English: no 'order' sneaks into the new strings", () => {

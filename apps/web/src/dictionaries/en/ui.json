@@ -520,6 +520,8 @@
   "sponsors.deal.subline.paid": "Paid {date}",
   "sponsors.deal.subline.ended": "Ended {date}",
   "sponsors.deal.notice.invoiceResent": "Invoice sent again for {name}.",
+  "sponsors.deal.markPaid.title": "Record {amount} from {name} as received?",
+  "sponsors.deal.markPaid.body": "The deal is marked paid and follows its go-live rule: live, scheduled or awaiting approval.",
   "sponsors.list.more": "More for {name}",
   "sponsors.pkg.retireConfirm.title": "Retire this package?",
   "sponsors.pkg.retireConfirm.body": "Retiring stops new invoices for {name}. Paid placements and past orders are not affected.",

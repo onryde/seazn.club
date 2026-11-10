@@ -90,6 +90,22 @@ async function postedTo(page: Page, suffix: string): Promise<Response> {
   return page.waitForResponse((r) => r.url().endsWith(suffix) && r.request().method() === "POST", { timeout: 20_000 });
 }
 
+/** The partner package every deal here is bought at (`newPackage`): £250.00, whole pounds on the row and in the confirm. */
+const PRICE = "£250";
+
+/** Taps a row's Mark as paid until the confirm is up, and returns the dialog. The FIRST tap on a page can land before React has
+ *  attached (class 20: the click is then lost, not queued), so it is retried until the dialog shows - safe to repeat, because nothing
+ *  is sent until the dialog's own button is pressed. */
+async function openMarkPaidConfirm(page: Page, sponsorId: string, name: string): Promise<Locator> {
+  const dialog = page.getByRole("alertdialog", { name: ui("sponsors.deal.markPaid.title", { amount: PRICE, name }) });
+  await expect(async () => {
+    await rowOf(page, sponsorId).getByTestId("sponsor-row-action").click();
+    await expect(dialog, `${name}: Mark as paid asks first, naming the sponsor and the amount`).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
+  await expect(dialog).toContainText(ui("sponsors.deal.markPaid.body"));
+  return dialog;
+}
+
 test("list: each row shows one next action and the chip its deal state names", async ({ page, request }) => {
   // Seeding (five sponsors, four deals) plus two page loads and four taps.
   test.setTimeout(180_000);
@@ -134,19 +150,28 @@ test("list: each row shows one next action and the chip its deal state names", a
   // Add deal goes to the sponsor's own page: a link, not a write.
   await expect(rowOf(page, none).getByTestId("sponsor-row-action"), "Add deal is a link to the sponsor's page").toHaveAttribute("href", new RegExp(`sponsor=${none}`));
 
-  // Mark as paid, tapped: the row follows the deal the route answered with.
+  // Mark as paid asks first. Cancelled, nothing is sent and the row does not move (the negative) ...
+  const cancelDialog = await openMarkPaidConfirm(page, unpaid, "Quay Fisheries");
+  await page.keyboard.press("Escape");
+  await expect(cancelDialog, "cancelled: the dialog is gone").toHaveCount(0);
+  await expectRow(page, unpaid, ui("sponsors.deal.chip.awaitingPayment"), ui("sponsors.deal.action.markPaid"), "cancelled: the row did not move");
+  expect(await dealStatus(request, org.orgId, unpaidDeal), "cancelled: nothing was sent").toBe("awaiting_payment");
+  // ... and confirmed (its pair), the row follows the deal the route answered with.
+  const confirmDialog = await openMarkPaidConfirm(page, unpaid, "Quay Fisheries");
   const [paid] = await Promise.all([
     postedTo(page, `/sponsor-deals/${unpaidDeal}/mark-paid`),
-    rowOf(page, unpaid).getByTestId("sponsor-row-action").click(),
+    confirmDialog.getByRole("button", { name: ui("sponsors.deal.action.markPaid"), exact: true }).click(),
   ]);
   expect(paid.status(), `mark-paid answered ${paid.status()}: ${await paid.text()}`).toBe(200);
   await expectRow(page, unpaid, ui("sponsors.deal.chip.live"), null, "paid, it goes live and needs nothing");
   expect(await dealStatus(request, org.orgId, unpaidDeal), "the deal itself is live").toBe("live");
 
-  // The approval deal: the same tap lands it on Approve, and Approve takes it live. One action at each step, never two.
+  // The approval deal: the same tap lands it on Approve, and Approve takes it live - in ONE tap (End now reverses it), no dialog.
+  // One action at each step, never two. The page is hydrated by now (the dialog above opened), so Approve is not retried.
+  const stepsDialog = await openMarkPaidConfirm(page, steps, "Harbour Tyres");
   const [paidSteps] = await Promise.all([
     postedTo(page, `/sponsor-deals/${stepsDeal}/mark-paid`),
-    rowOf(page, steps).getByTestId("sponsor-row-action").click(),
+    stepsDialog.getByRole("button", { name: ui("sponsors.deal.action.markPaid"), exact: true }).click(),
   ]);
   expect(paidSteps.status(), `mark-paid answered ${paidSteps.status()}: ${await paidSteps.text()}`).toBe(200);
   await expectRow(page, steps, ui("sponsors.deal.chip.awaitingApproval"), ui("sponsors.deal.action.approve"), "paid, it waits for the club's approval");
@@ -155,6 +180,7 @@ test("list: each row shows one next action and the chip its deal state names", a
     rowOf(page, steps).getByTestId("sponsor-row-action").click(),
   ]);
   expect(approved.status(), `approve answered ${approved.status()}: ${await approved.text()}`).toBe(200);
+  await expect(page.getByRole("alertdialog"), "Approve asked nothing: one tap").toHaveCount(0);
   await expectRow(page, steps, ui("sponsors.deal.chip.live"), null, "approved, it is live");
   expect(await dealStatus(request, org.orgId, stepsDeal), "the deal itself is live").toBe("live");
 

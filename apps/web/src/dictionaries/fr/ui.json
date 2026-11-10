@@ -520,6 +520,8 @@
   "sponsors.deal.subline.paid": "Payé le {date}",
   "sponsors.deal.subline.ended": "Terminé le {date}",
   "sponsors.deal.notice.invoiceResent": "Facture renvoyée pour {name}.",
+  "sponsors.deal.markPaid.title": "Enregistrer {amount} de {name} comme reçu ?",
+  "sponsors.deal.markPaid.body": "L'accord est marqué comme payé et suit sa règle de mise en ligne : actif, planifié ou en attente d'approbation.",
   "sponsors.list.more": "Plus d'options pour {name}",
   "sponsors.pkg.retireConfirm.title": "Retirer cette offre ?",
   "sponsors.pkg.retireConfirm.body": "Retirer l'offre empêche de nouvelles factures pour {name}. Les emplacements payés et les commandes passées ne sont pas affectés.",

@@ -13,10 +13,10 @@ import { useId, useRef, useState } from "react";
 import Link from "@/components/ui/console-link";
 import { ImagePlus } from "lucide-react";
 import { useViewerTz } from "@/components/client-time";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { TIER_MSG } from "@/components/sponsors/tier-labels";
-import { SponsorList, groupTierOf, type DealWrite } from "@/components/sponsors/sponsor-list";
+import { SponsorList, dealPrice, groupTierOf, sameOrderBand, type DealWrite } from "@/components/sponsors/sponsor-list";
 import { sponsorSaveErrorKey } from "@/components/sponsors/save-error";
 import type { SponsorWrite } from "@/components/sponsors/save-error";
 import { ApiV1Error } from "@/lib/client-v1";
@@ -303,6 +303,7 @@ export function OrgSponsors({
 }) {
   const msg = useMsg();
   const confirm = useConfirm();
+  const locale = useLocaleOrDefault();
   const tz = useViewerTz();
   const [sponsors, setSponsors] = useState<SponsorItem[]>(initialSponsors);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
@@ -424,6 +425,8 @@ export function OrgSponsors({
   }
 
   function startEdit(s: SponsorItem) {
+    // The ⋯ tray belongs to the row's controls; the editor replaces them, and a tray left open would still be open on Cancel.
+    setMoreOpenId(null);
     setEditingId(s.id);
     setEdit({
       name: s.name,
@@ -493,22 +496,35 @@ export function OrgSponsors({
 
   /** A row's one write (Tasks 6 and 7's routes): the deal the row shows is the one acted on. The list is re-read whatever the
    *  answer - the chip, the action and the group all follow the deal, and a refusal means it moved under the tap. Resend invoice
-   *  changes nothing on the row, so it says it was sent. */
+   *  changes nothing on the row, so it says it was sent. Mark as paid asks first (house precedent: the registrant hub's mark paid):
+   *  it is the club's attestation that money arrived outside the app, and it moves the deal on by its go-live rule - often live -
+   *  with no undo on the row. Approve stays one tap (End now reverses a live deal); Resend invoice is harmless. */
   function dealAction(s: SponsorItem, action: DealWrite) {
     const deal = s.deal;
     if (deal === null) return; // `rowNextAction(null)` is Add deal, a link: no write is offered for a sponsor with no deal.
     const route = { resend_invoice: "send-invoice", mark_paid: "mark-paid", approve: "approve" }[action];
-    void run(
-      async () => {
-        try {
-          await v1(`/sponsor-deals/${deal.id}/${route}`, { method: "POST" });
-          if (action === "resend_invoice") setNotice(msg("sponsors.deal.notice.invoiceResent", { name: s.name }));
-        } finally {
-          await refresh().catch(() => {});
-        }
-      },
-      action === "resend_invoice" ? "resend_invoice" : undefined,
-    );
+    void (async () => {
+      if (action === "mark_paid") {
+        const ok = await confirm({
+          title: msg("sponsors.deal.markPaid.title", { amount: dealPrice(deal, locale), name: s.name }),
+          body: msg("sponsors.deal.markPaid.body"),
+          confirmLabel: msg("sponsors.deal.action.markPaid"),
+          tone: "default",
+        });
+        if (!ok) return;
+      }
+      await run(
+        async () => {
+          try {
+            await v1(`/sponsor-deals/${deal.id}/${route}`, { method: "POST" });
+            if (action === "resend_invoice") setNotice(msg("sponsors.deal.notice.invoiceResent", { name: s.name }));
+          } finally {
+            await refresh().catch(() => {});
+          }
+        },
+        action === "resend_invoice" ? "resend_invoice" : undefined,
+      );
+    })();
   }
 
   /** Swap within the rendered group (the deal's tier, as the list draws it), persist the global order. */
@@ -519,6 +535,10 @@ export function OrgSponsors({
     const gi = group.findIndex((s) => s.id === id);
     const target = gi + delta;
     if (gi < 0 || target < 0 || target >= group.length) return;
+    // The server orders by the STORED tier then display_order: a neighbour of another stored tier (a partner with a gold deal,
+    // beside a native gold) has no order to swap with, and the swap would snap back on the next read. The arrows are disabled
+    // there too; this is the same rule for a call that gets past them.
+    if (!sameOrderBand(group[target]!, row)) return;
     const next = [...sponsors];
     const a = next.indexOf(group[gi]!);
     const b = next.indexOf(group[target]!);
@@ -533,11 +553,11 @@ export function OrgSponsors({
     <div className="space-y-5">
       <p className="text-sm text-slate-500">{msg("sponsors.line")}</p>
       {error && <p className="text-sm text-red-600">{error}</p>}
-      {notice && (
-        <p role="status" data-testid="sponsor-notice" className="text-sm text-emerald-700">
-          {notice}
-        </p>
-      )}
+      {/* Always mounted: a live region that appears WITH its text is not reliably announced, so only the text changes. Empty, it is
+          screen-reader-only (out of the layout, still in the accessibility tree). */}
+      <p role="status" data-testid="sponsor-notice" className="text-sm text-emerald-700 empty:sr-only">
+        {notice}
+      </p>
 
       {canEdit ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">

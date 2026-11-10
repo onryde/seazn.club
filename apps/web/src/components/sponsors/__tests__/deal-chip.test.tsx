@@ -13,6 +13,7 @@
 //   C2  variant        drop the `awaitingPayment` arm of the label                      -> "a live deal still unpaid"
 //   C3  variant        drop the `onHold` arm of the label                               -> "a live deal parked by a dispute"
 //   C4  vocabulary     a one-off `bg-amber-100` on the awaiting_payment chip            -> "no new colours"
+//   C5  contrast       "No deal" keeps archived's `text-slate-400`                        -> "'No deal' reads at AA"
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DealChip, DEAL_CHIP_MSG } from "@/components/sponsors/deal-chip";
@@ -66,6 +67,24 @@ describe("each chip kind reads its words, in all four locales", () => {
       }
     }
     expect(checked, "8 kinds x 4 locales").toBe(32);
+  });
+
+  it("the two live variants have words in all four locales, and each is more than plain 'Live' (2 keys x 4 locales)", () => {
+    const VARIANTS = ["sponsors.deal.chip.liveAwaitingPayment", "sponsors.deal.chip.liveOnHold"] as const;
+    let checked = 0;
+    for (const key of VARIANTS) {
+      for (const locale of LOCALES) {
+        const words = DICTS[locale]![key];
+        expect(typeof words === "string" && words.trim().length > 0, `${key} in ${locale}`).toBe(true);
+        const plain = DICTS[locale]!["sponsors.deal.chip.live"]!;
+        expect(words!.startsWith(plain), `${key} in ${locale} starts from the locale's own Live`).toBe(true);
+        expect(words!.length, `${key} in ${locale} says more than Live`).toBeGreaterThan(plain.length);
+        // Translated: the other three locales do not ship the English sentence.
+        if (locale !== "en") expect(words, `${key} in ${locale} is not the English`).not.toBe(DICTS.en![key]);
+        checked++;
+      }
+    }
+    expect(checked, "2 variants x 4 locales").toBe(8);
   });
 
   it("the English words are the mockup's (8 checked)", () => {
@@ -128,7 +147,10 @@ describe("the chip wears the status-chip vocabulary and invents no colour", () =
   const SHAPE = ["inline-flex", "shrink-0", "items-center", "gap-1.5", "rounded-full", "px-2.5", "py-0.5", "text-xs", "font-medium", "max-w-full"];
 
   it("every kind carries the status chip's shape and exactly one of its declared colour recipes (8 checked)", () => {
-    const recipes = Object.values(CHIP_STYLE).map((r) => r.split(/\s+/).sort().join(" "));
+    // The status chip's recipes, plus the one deliberate contrast step for "No deal" (asserted on its own below): archived with its
+    // slate-400 text taken to slate-500.
+    const AA_ARCHIVED = CHIP_STYLE.archived.split(/\s+/).map((t) => (t === "text-slate-400" ? "text-slate-500" : t));
+    const recipes = [...Object.values(CHIP_STYLE).map((r) => r.split(/\s+/)), AA_ARCHIVED].map((r) => [...r].sort().join(" "));
     let checked = 0;
     const samples: [string, SponsorDeal | null][] = [
       ["none", null],
@@ -151,6 +173,19 @@ describe("the chip wears the status-chip vocabulary and invents no colour", () =
       checked++;
     }
     expect(checked).toBe(8);
+  });
+
+  it("'No deal' reads at AA: slate-500 text, where the status chip's archived recipe is slate-400 (~2.6:1 on white; review m1)", () => {
+    const tokens = classOf(html(null)).split(/\s+/);
+    expect(tokens, "slate-500 is 4.8:1 on white").toContain("text-slate-500");
+    expect(tokens, "not archived's 2.6:1 slate-400").not.toContain("text-slate-400");
+    // The rest of the recipe is archived's quiet outline, unchanged ...
+    for (const t of CHIP_STYLE.archived.split(/\s+/).filter((x) => x !== "text-slate-400")) expect(tokens, t).toContain(t);
+    // ... and the status chip's own archived is left as it was (other screens wear it).
+    expect(CHIP_STYLE.archived).toContain("text-slate-400");
+    // Its pair: a deal's chip that is not "No deal" is not touched by the swap.
+    expect(classOf(html(deal({ deal_status: "ended" }))).split(/\s+/)).toContain("text-slate-500");
+    expect(classOf(html(deal({ deal_status: "draft" }))).split(/\s+/)).toContain("text-slate-600");
   });
 
   it("a live deal keeps the status chip's pulse dot; a parked one does not (it is not live on the pages)", () => {
