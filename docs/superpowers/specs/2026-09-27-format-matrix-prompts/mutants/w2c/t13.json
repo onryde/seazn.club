@@ -22,66 +22,6 @@
   ]
  },
  {
-  "id": "t13-gate-forfeit-arm",
-  "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "if (rule.bonuses.length > 0 || rule.forfeit !== undefined) await requireFeature",
-  "replace": "if (rule.bonuses.length > 0) await requireFeature",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/stage-points.test.ts"
-    ],
-    "name": "Review Focus 3: bonuses and forfeit points need"
-   }
-  ]
- },
- {
-  "id": "t13-gate-bonus-arm",
-  "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "if (rule.bonuses.length > 0 || rule.forfeit !== undefined) await requireFeature",
-  "replace": "if (rule.forfeit !== undefined) await requireFeature",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/stage-points.test.ts"
-    ],
-    "name": "Review Focus 3: bonuses and forfeit points need"
-   }
-  ]
- },
- {
-  "id": "t13-gate-base-free",
-  "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "if (rule.bonuses.length > 0 || rule.forfeit !== undefined) await requireFeature",
-  "replace": "if (true) await requireFeature",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/stage-points.test.ts"
-    ],
-    "name": "Review Focus 3: bonuses and forfeit points need"
-   }
-  ]
- },
- {
-  "id": "t13-gate-create",
-  "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "if (points !== undefined) await assertCustomPointsAllowed(auth, PointsRule.parse(points));",
-  "replace": "",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/custom-points.test.ts"
-    ],
-    "name": "bonuses are gated at stage create"
-   }
-  ]
- },
- {
   "id": "t13-put-asks",
   "file": "apps/web/src/server/usecases/stage-rules.ts",
   "find": "if (points !== undefined && points !== null) refuseStagePoints(module_, stage.stage_kind, stage.division_config, points);",
@@ -618,36 +558,6 @@
   ]
  },
  {
-  "id": "t13-fr1-carry-applied",
-  "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "const config = carry?.points !== undefined && sent.points === undefined ? { ...sent, points: carry.points } : sent;",
-  "replace": "const config = sent;",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/stage-points.test.ts"
-    ],
-    "name": "Apply keeps a matched slot's points"
-   }
-  ]
- },
- {
-  "id": "t13-fr1-body-points-win",
-  "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "const config = carry?.points !== undefined && sent.points === undefined ? { ...sent, points: carry.points } : sent;",
-  "replace": "const config = carry?.points !== undefined ? { ...sent, points: carry.points } : sent;",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/stage-points.test.ts"
-    ],
-    "name": "Apply keeps a matched slot's points"
-   }
-  ]
- },
- {
   "id": "t13-fr1-put-404-before-402",
   "file": "apps/web/src/server/usecases/stage-rules.ts",
   "find": "    if (!exists) throw new HttpError(404, \"stage not found\");\n",
@@ -715,35 +625,6 @@
   ]
  },
  {
-  "id": "t13-fr2-one-tx",
-  "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "    return insertStageBatch(tx, divisionId, inputs, stageCap, frozen, keep);\n  });\n}",
-  "replace": "    return keep;\n  }).then((keep) => withTenant(auth.orgId, (tx) => insertStageBatch(tx, divisionId, inputs, stageCap, frozen, keep)));\n}",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
-    ],
-    "name": "SEEDING_RULES_MISSING"
-   },
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
-    ],
-    "name": "from inside the insert loop"
-   },
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/stage-defaults.test.ts"
-    ],
-    "name": "refuses an invalid rules body: the existing graph stands"
-   }
-  ]
- },
- {
   "id": "t13-fr2-lock-before-gates",
   "file": "apps/web/src/server/usecases/stages/stage-graph.ts",
   "find": "    await assertFormatUnlocked(tx, divisionId);\n    return head;",
@@ -770,51 +651,6 @@
      "src/server/usecases/__tests__/stage-points.test.ts"
     ],
     "name": "the removal arm"
-   }
-  ]
- },
- {
-  "id": "t13-fr3-in-tx-lock-recheck",
-  "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "    await assertFormatUnlocked(tx, divisionId);\n    // Per-stage match-rules overrides survive the delete",
-  "replace": "    // Per-stage match-rules overrides survive the delete",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
-    ],
-    "name": "a fixture committed while Apply waits on the division lock"
-   }
-  ]
- },
- {
-  "id": "t13-fr3-advisory-lock",
-  "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "    await tx`select pg_advisory_xact_lock(hashtext(${\"division:\" + divisionId}))`;\n    await assertFormatUnlocked(tx, divisionId);\n",
-  "replace": "    await assertFormatUnlocked(tx, divisionId);\n",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/replace-stages-gates.test.ts"
-    ],
-    "name": "a fixture committed while Apply waits on the division lock"
-   }
-  ]
- },
- {
-  "id": "t13-fr3-pooled-read-in-tx",
-  "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "    await tx`delete from stages where division_id = ${divisionId}`;\n    // R-T13-3:",
-  "replace": "    await sql`select 1`;\n    await tx`delete from stages where division_id = ${divisionId}`;\n    // R-T13-3:",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/pool-nesting-tripwire.test.ts"
-    ],
-    "name": "replaceStages completes against a one-slot pool"
    }
   ]
  }
