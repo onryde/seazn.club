@@ -201,7 +201,7 @@ function seatIsStamped(t: Node, slot: 1 | 2): boolean {
 }
 
 /** Of `ids`, the entrants who have left the field (`DEPARTED_STATUSES`). */
-async function departedOf(tx: Tx, ids: readonly (string | undefined)[]): Promise<Set<string>> {
+export async function departedOf(tx: Tx, ids: readonly (string | undefined)[]): Promise<Set<string>> {
   const want = ids.filter((id): id is string => id !== undefined);
   if (want.length === 0) return new Set();
   // Imported lazily, as player-stats imports its refresh module: `usecases/entrants` sits ABOVE this file
@@ -465,7 +465,9 @@ async function planRelease(
       continue;
     }
     if (!mine.has(occupant)) continue;
-    const reset = isCascadeWalkover(t);
+    // W4 B5a (review I-2): a final that went VACANT (both finalists out, `departSeat`'s no-event double walkover) was never
+    // played, so it does not count as started: taking a finalist's feeder back re-opens it, the other finalist keeps the seat.
+    const reset = isCascadeWalkover(t) || isDepartureDoubleWalkover(t);
     if (!reset && hasStarted(t)) {
       const ref = await boardRef(tx, t);
       throw new HttpError(409, nextMatchStartedMessage(nextMatchLabel(ref, msg)), NEXT_MATCH_STARTED_CODE, { next_match: ref });

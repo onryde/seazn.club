@@ -57,6 +57,11 @@ const PLAN_CODES = [
   "JOINT_WINNERS_NOT_A_FINAL",
   "JOINT_WINNERS_FINAL_DECIDED",
   "JOINT_WINNERS_NOT_DECLARED",
+  // B5a fix round 1 (I-3): the append door's refusal on a final ruled joint.
+  "FINAL_JOINT_WINNERS_DECLARED",
+  // B5a fix round 1 (m-3, m-4): declare over two departed finalists; Undo with a finalist departed since.
+  "JOINT_WINNERS_FINALISTS_OUT",
+  "JOINT_WINNERS_UNDO_FINALIST_OUT",
 ] as const;
 
 const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;
