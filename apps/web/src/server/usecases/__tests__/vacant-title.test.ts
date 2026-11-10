@@ -264,6 +264,38 @@ describe.skipIf(!HAS_DB)("W4 B5a T11: both finalists out leaves the title vacant
     await post(s.auth, feeder.id, "badminton.game.summary", { home: 10, away: 21 });
     expect((await fixtureRow(feeder.id)).status, "premise: the replayed semi decided (away wins 2-1)").toBe("decided");
     const replayed = await fixtureRow(final.id);
-    expect(feeder.winner_to_slot === 1 ? replayed.home_entrant_id : replayed.away_entrant_id, "the replayed semi seats its new winner").not.toBeNull();
+    const replayWinner = (await fixtureRow(feeder.id)).outcome as { winner: string };
+    expect(replayWinner.winner, "premise: the replay's winner is the semi's away side").toBe(feeder.away_entrant_id);
+    expect(feeder.winner_to_slot === 1 ? replayed.home_entrant_id : replayed.away_entrant_id, "the replayed semi seats ITS WINNER").toBe(replayWinner.winner);
+  });
+
+  it("n-2 the I-2 reset is final-only: a non-final departure double walkover keeps NEXT_MATCH_STARTED; a played non-final too", async () => {
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 8 });
+    const quarters = (await rowsOf(s.stageId)).filter((r) => r.home_entrant_id && r.away_entrant_id);
+    expect(quarters.length, "rig: four seated quarters").toBe(4);
+    for (const q of quarters) await playBadminton(s.auth, q.id, true);
+    const semiId = (await fixtureRow(quarters[0]!.id)).winner_to_fixture!;
+    const feeders = quarters.filter((q) => q.winner_to_fixture === semiId);
+    expect(feeders, "rig: two quarters feed the semi").toHaveLength(2);
+    const semi = await fixtureRow(semiId);
+    const [a, b] = [semi.home_entrant_id!, semi.away_entrant_id!];
+    // The OTHER semi is played: a played non-final with events.
+    const otherSemi = (await rowsOf(s.stageId)).find((r) => r.id !== semiId && r.home_entrant_id && r.away_entrant_id && r.winner_to_fixture === semi.winner_to_fixture)!;
+    const otherFeeder = quarters.find((q) => q.winner_to_fixture === otherSemi.id)!;
+    await playBadminton(s.auth, otherSemi.id, true);
+    // Both seated semi-finalists out: a departure double walkover on a line that FEEDS the final.
+    await bothOut(s, a, b);
+    expect((await fixtureRow(semiId)).outcome, "premise: the semi is a departure double walkover").toEqual({ kind: "double_walkover" });
+    const lastGame = async (id: string) =>
+      (await sql<{ id: string }[]>`
+        select e.id from score_events e where e.fixture_id = ${id} and e.type = 'badminton.game.summary'
+          and not exists (select 1 from score_events v where v.voids_event_id = e.id) order by e.seq desc limit 1`)[0]!.id;
+    const before = await sql`select id, status, outcome, home_entrant_id, away_entrant_id from fixtures where stage_id = ${s.stageId} order by id`;
+    // Taking back a quarter that seated the double-walkover semi: still refused (it feeds on), nothing written.
+    await expect(post(s.auth, feeders[0]!.id, "core.void", { event_id: await lastGame(feeders[0]!.id) })).rejects.toMatchObject({ code: "NEXT_MATCH_STARTED" });
+    // Taking back a quarter that seated a PLAYED semi: refused, nothing written.
+    await expect(post(s.auth, otherFeeder.id, "core.void", { event_id: await lastGame(otherFeeder.id) })).rejects.toMatchObject({ code: "NEXT_MATCH_STARTED" });
+    const after = await sql`select id, status, outcome, home_entrant_id, away_entrant_id from fixtures where stage_id = ${s.stageId} order by id`;
+    expect(after, "both refusals rolled back").toEqual(before);
   });
 });
