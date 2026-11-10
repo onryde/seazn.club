@@ -1097,20 +1097,28 @@ export async function bracketStageIsDecided(tx: Tx, stageId: string): Promise<bo
  */
 export async function refreshCompletedBracketPlacement(orgId: string, stageId: string): Promise<boolean> {
   return withTenant(orgId, async (tx) => {
-    const inputs = await loadStageInputs(tx, stageId);
-    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + inputs.stage.division_id}))`;
-    if (inputs.stage.status !== "complete" || inputs.kind !== "knockout") return false;
-    const { bracketStage, bracketFixtures } = await readBracketStage(tx, inputs, stageId);
-    if (!isBracketStageComplete(bracketStage, bracketFixtures)) return false;
-    if (unbeatenWithNoTitle(inputs, bracketFixtures).length > 0) return false;
-    const rows = placementTable(completeBracketStage(bracketStage, bracketFixtures).finalRanks).rows;
-    const [stored] = await tx<{ rows: readonly StandingsRow[] }[]>`
-      select rows from standings_snapshots where stage_id = ${stageId} and pool_id is null`;
-    const ranksOf = (list: readonly StandingsRow[]) => JSON.stringify(list.map((r) => [r.entrantId, r.rank]));
-    if (stored !== undefined && ranksOf(stored.rows) === ranksOf(rows)) return false;
-    await writeSnapshot(tx, stageId, null, rows, inputs.division.seq);
-    return true;
+    const [stage] = await tx<{ division_id: string }[]>`select division_id from stages where id = ${stageId}`;
+    if (!stage) throw new EngineError("STAGE_NOT_READY", `stage ${stageId} not found`, { stageId });
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+    return refreshCompletedBracketPlacementTx(tx, stageId);
   });
+}
+
+/** `refreshCompletedBracketPlacement` inside a caller's transaction, which already holds the division's advisory lock
+ *  (B5a T11: a Reinstate that reverses a vacant title rewrites the snapshot in the SAME transaction as the reversal). */
+export async function refreshCompletedBracketPlacementTx(tx: Tx, stageId: string): Promise<boolean> {
+  const inputs = await loadStageInputs(tx, stageId);
+  if (inputs.stage.status !== "complete" || inputs.kind !== "knockout") return false;
+  const { bracketStage, bracketFixtures } = await readBracketStage(tx, inputs, stageId);
+  if (!isBracketStageComplete(bracketStage, bracketFixtures)) return false;
+  if (unbeatenWithNoTitle(inputs, bracketFixtures).length > 0) return false;
+  const rows = placementTable(completeBracketStage(bracketStage, bracketFixtures).finalRanks).rows;
+  const [stored] = await tx<{ rows: readonly StandingsRow[] }[]>`
+    select rows from standings_snapshots where stage_id = ${stageId} and pool_id is null`;
+  const ranksOf = (list: readonly StandingsRow[]) => JSON.stringify(list.map((r) => [r.entrantId, r.rank]));
+  if (stored !== undefined && ranksOf(stored.rows) === ranksOf(rows)) return false;
+  await writeSnapshot(tx, stageId, null, rows, inputs.division.seq);
+  return true;
 }
 
 /**

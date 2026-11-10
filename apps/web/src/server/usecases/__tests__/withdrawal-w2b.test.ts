@@ -435,25 +435,25 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     expect(await activeTypes(final.id)).toEqual(["core.start", "badminton.game.summary"]);
   });
 
-  it("X-WD-4: both finalists withdraw — the final stays open (W4 handover)", async () => {
-    // single-sport: badminton. Two entrants: the draw is the final alone. A final has no next match, so it cannot be a
-    // double walkover (D19, X-DW-3); with both finalists gone the vacant title is W4's (spec §2.2), and nothing is
-    // written here.
+  it("X-WD-4 amended by X-CH-3 (W4 B5a T11): both finalists withdraw — the title is vacant automatically, never sent to settle", async () => {
+    // single-sport: badminton (the sport sweep lives in vacant-title.test.ts). Two entrants: the draw is the final alone. A
+    // final has no next match, so a RECORDED double walkover is still refused (D19, X-DW-3), but the DEPARTURE of both
+    // finalists writes the vacant title itself (X-CH-3, rulings 267 and 274): a no-event double walkover, both seats kept.
     const s = await seedBracket({ ...badminton, stageKind: "knockout", entrants: 2 });
     const final = await fixtureRow(s.fixtureIds[0]!);
     expect([final.winner_to_fixture, final.loser_to_fixture], "rig: the line feeds nothing").toEqual([null, null]);
     await withdrawBeforeStart(s.auth, s.divisionId, final.home_entrant_id!);
     const out = await withdrawEntrantCascade(s.auth, final.away_entrant_id!);
-    expect(out).toMatchObject({ walkovers: 0, voided: 0, left_to_organiser: [] });
+    expect(out).toMatchObject({ walkovers: 1, voided: 0, left_to_organiser: [] });
     const after = await fixtureRow(final.id);
     expect([after.status, after.outcome, after.home_entrant_id, after.away_entrant_id]).toEqual([
-      "scheduled",
-      null,
+      "forfeited",
+      { kind: "double_walkover" },
       final.home_entrant_id,
       final.away_entrant_id,
     ]);
     expect(await activeTypes(final.id)).toEqual([]);
-    expect((await completeStage(s.auth, s.stageId)).completed, "the stage is not finished").toBe(false);
+    expect((await completeStage(s.auth, s.stageId)).completed, "no settle is asked: the stage completes").toBe(true);
   });
 
   it("X-WD-4 (dead seats): a seat its withdrawn entrant left beside a DEPARTURE double walkover (both of that feeder's sides withdrew) makes the line a double walkover, and its fed opponent walks over", async () => {
@@ -517,7 +517,7 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
   it("X-WD-4: every finalist-to-be withdraws — both semis are double walkovers and the final stays open, never a double walkover (D19, X-DW-3)", async () => {
     // single-sport: badminton. Four entrants; each semi loses one side before Start and the other after it, so both
     // are departure double walkovers and both of the final's seats die through departure. A final has no next match:
-    // it is never written a double walkover (the vacant title is W4's).
+    // it is never written a double walkover: X-CH-3's vacant title needs two SEATED finalists (the engine refuses a vacant final with an empty side).
     const s = await seedBracket({ ...badminton, stageKind: "knockout", entrants: 4 });
     const semis = (await rowsOf(s.stageId)).filter((r) => r.home_entrant_id && r.away_entrant_id);
     expect(semis, "rig: two seated semis").toHaveLength(2);
@@ -1773,7 +1773,7 @@ describe.skipIf(!HAS_DB)("rule 10: withdrawals in any order", () => {
             const seated = [r.home_entrant_id, r.away_entrant_id].filter((x): x is string => x !== null && gone.has(x));
             if (seated.length === 0 || PLAYED10.has(r.status) || reopened.has(r.id)) return [];
             const isFinal = r.winner_to_fixture === null && r.loser_to_fixture === null;
-            if (isFinal && seated.length === 2) return []; // X-WD-4: both finalists departed — W4's vacant title
+            if (isFinal && seated.length === 2) return []; // X-WD-4 / X-CH-3: both finalists departed — a bare-flip final the cascade did not reach stays open
             return [`${r.ext_key ?? r.id} ${r.status} seats ${seated.length} withdrawn`];
           });
           expect(offenders, `${where}: a withdrawn entrant seated on an undecided fixture`).toEqual([]);
