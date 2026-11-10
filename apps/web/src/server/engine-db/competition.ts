@@ -884,9 +884,38 @@ export async function tableStageCompletable(tx: Tx, stageId: string): Promise<bo
   return isTableStageComplete(toTableStage(inputs, new Map()), inputs.tableFixtures);
 }
 
+/** The `stage_completed` event as it crosses the wire and is stored: `finalRanks` stays entrant ids in rank order (the
+ *  shape every API client, the bench, the matrix and the smoke suites read). The engine's own event carries `FinalPlace[]`
+ *  since 5.0.0; `toWireEvent` flattens it (a tie keeps its rank order; app B's T3 adds `places` beside it). */
+export type WireDivisionEvent =
+  | Exclude<DivisionEvent, { type: "stage_completed" }>
+  | { type: "stage_completed"; stageId: string; finalRanks: string[] };
+
+export function toWireEvent(ev: DivisionEvent): WireDivisionEvent {
+  return ev.type === "stage_completed" ? { ...ev, finalRanks: ev.finalRanks.map((p) => p.entrantId) } : ev;
+}
+
 export interface CompleteResult {
   completed: boolean;
-  events: DivisionEvent[];
+  events: WireDivisionEvent[];
+}
+
+/** engine 5.0.0 (`BracketStage.entrants`): the entrants the stage DREW, so the ranks cover exactly them (each once; a
+ *  finalist who left is ranked 2nd, so she has to be on it).
+ *
+ *  A stage drawn from a previous stage's cut stored its draw order as `config.qualified` (departed qualifiers included -
+ *  `generate-tx.ts`); that IS the roster, in draw order, and anyone seated but not on it (a lucky loser) follows. Without it
+ *  the roster is the stage's seat-holders (`inputs.entrants`, in fixture order): a departed entrant who held a seat is
+ *  there, because the fixtures name her, and one who never held a seat in THIS stage (withdrew before the draw, or never
+ *  qualified from a group or league stage) is NOT - declaring her would rank her last in a stage she never played in.
+ *  The withdrawal planners (generators.ts, withdrawal.ts) declare the same seated set; app B's T2' replaces all three with
+ *  the roster stored at the draw, in `knockoutDrawOrder`. */
+function bracketRoster(inputs: StageInputs): string[] {
+  const seated = inputs.entrants;
+  const stored = (inputs.stage.config as { qualified?: unknown } | null)?.qualified;
+  if (!Array.isArray(stored)) return seated;
+  const listed = new Set(stored as string[]);
+  return [...(stored as string[]), ...seated.filter((id) => !listed.has(id))];
 }
 
 /** A bracket stage's engine shape, read for Complete and for a correction after it (`refreshCompletedBracketPlacement`).
@@ -903,6 +932,7 @@ async function readBracketStage(
   const bracketStage: BracketStage = {
     id: stageId,
     kind: inputs.kind as BracketStage["kind"],
+    entrants: bracketRoster(inputs),
     ...(inputs.seeds.size > 0 ? { seeds: inputs.seeds } : {}),
   };
   const seats = new Map(inputs.fixtures.map((f) => [f.id, [f.home_entrant_id, f.away_entrant_id] as const]));
@@ -914,6 +944,33 @@ async function readBracketStage(
   `;
   const feederIds = new Set(feeders.map((r) => r.id));
   for (const bf of bracketFixtures) if (feederIds.has(bf.id)) bf.isFinal = false;
+  // engine 5.0.0 (`resolveDeadSeats`): which fixture's winner or loser fills each seat. Without it a seat emptied by a
+  // withdrawal cannot be attributed, so the walkover over it names no loser and the departed entrant ranks nowhere.
+  const feedEdges = await tx<
+    { id: string; winner_to_fixture: string | null; winner_to_slot: number | null; loser_to_fixture: string | null; loser_to_slot: number | null }[]
+  >`select id, winner_to_fixture, winner_to_slot, loser_to_fixture, loser_to_slot from fixtures where stage_id = ${stageId}`;
+  const byFixture = new Map(bracketFixtures.map((bf) => [bf.id, bf]));
+  for (const e of feedEdges) {
+    for (const [to, slot, side] of [
+      [e.winner_to_fixture, e.winner_to_slot, "winner"],
+      [e.loser_to_fixture, e.loser_to_slot, "loser"],
+    ] as const) {
+      const target = to === null ? undefined : byFixture.get(to);
+      if (target === undefined || (slot !== 1 && slot !== 2)) continue;
+      target[slot === 1 ? "homeFrom" : "awayFrom"] = { fixtureId: e.id, side };
+    }
+  }
+  // R-1: a THIRD-PLACE line that holds nobody and whose every feeder is already settled can never be
+  // filled or played - and the app owes no result for it (`undecidedBracketFixtures`: a bye line). Engine 5.0.0 holds
+  // completion for every unsettled fixture (X-CH-7), so it is read as the void it is, or the stage would wait on it
+  // forever. A voided third place shares 3rd (never a seed split).
+  const rowOf = new Map(inputs.fixtures.map((f) => [f.id, f]));
+  for (const bf of bracketFixtures) {
+    const row = rowOf.get(bf.id)!;
+    if (bf.thirdPlace !== true || bf.status !== "scheduled" || row.outcome !== null || row.home_entrant_id !== null || row.away_entrant_id !== null) continue;
+    const feeders = [bf.homeFrom, bf.awayFrom].filter((r): r is NonNullable<typeof r> => r !== undefined);
+    if (feeders.length > 0 && feeders.every((r) => SETTLED_FIXTURE_STATUSES.has(byFixture.get(r.fixtureId)!.status))) bf.status = "void";
+  }
   return { bracketStage, bracketFixtures };
 }
 
@@ -1004,7 +1061,7 @@ export async function completeStageIfReady(
     if (inputs.stage.status === "complete") return { completed: true, events: [] };
 
     const isTable = TABLE_KINDS.has(inputs.kind);
-    let events: DivisionEvent[] = [];
+    let events: WireDivisionEvent[] = [];
 
     if (isTable) {
       // Completion reads no draw: it asks only whether every fixture is settled.
@@ -1034,7 +1091,7 @@ export async function completeStageIfReady(
       }
       // X-TB-4: rank_lock carries the STORED order and drawn_at (PS-5b) — the second, stored pass's events.
       const completed = await rankWithStoredLots(tx, inputs);
-      events = completed.events;
+      events = completed.events.map(toWireEvent);
       for (const pool of completed.tables.pools) {
         await writeSnapshot(tx, stageId, pool.pool || null, pool.rows, inputs.division.seq);
       }
@@ -1066,12 +1123,21 @@ export async function completeStageIfReady(
           { stageId },
         );
       }
-      events = [{ type: "stage_completed", stageId, finalRanks }];
+      events = [{ type: "stage_completed", stageId, finalRanks: [...finalRanks] }];
       await writeSnapshot(tx, stageId, null, placementTable(finalRanks).rows, inputs.division.seq);
     } else if (isBracketKind(inputs.kind)) {
       const { bracketStage, bracketFixtures } = await readBracketStage(tx, inputs, stageId);
 
+      const finals = bracketFixtures.filter((bf) => bf.isFinal === true);
       if (!isBracketStageComplete(bracketStage, bracketFixtures)) {
+        // Engine 5.0.0 made completion stricter: EVERY fixture settled, not just the final (X-CH-7). The caller's named
+        // refusal for the lines still owed (`beforeBracketComplete`: W4 T6 AN-2) used to run at the point the engine said
+        // "complete" - the finals settled - and that point now answers false while a third-place line is open, so the
+        // organiser would read a bare {completed:false} for a stage that is only waiting on that line. Run it at the same
+        // point as before: every final settled. A final not yet settled keeps the soft answer (C4).
+        if (finals.length > 0 && finals.every((bf) => SETTLED_FIXTURE_STATUSES.has(bf.status))) {
+          await opts.beforeBracketComplete?.(tx);
+        }
         return { completed: false, events: [] };
       }
       await opts.beforeBracketComplete?.(tx);
@@ -1122,7 +1188,7 @@ export async function completeStageIfReady(
       // losers, third-place, DE-reset and page-playoff with no algorithm
       // change, per the pass-1 regression tests) + the stage_completed event.
       const completed = completeBracketStage(bracketStage, bracketFixtures);
-      events = completed.events;
+      events = completed.events.map(toWireEvent);
       await writeSnapshot(
         tx,
         stageId,

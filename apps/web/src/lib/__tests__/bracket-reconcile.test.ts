@@ -80,6 +80,7 @@ describe("planReconcile (KNOCKOUT_IDENTITY over the engine's brackets)", () => {
   const unchanged = roster(["x"], [["x", seat("l0", "home")]]);
   it("within a power of two the role keys agree (6 → 7, 7 → 6, 5 → 8), across one they do not (8 → 9, 9 → 8, 4 → 5), with or without a third place", () => {
     let checked = 0;
+    let refused = 0;
     for (const thirdPlace of [false, true]) {
       for (const [from, to, same] of [
         [6, 7, true],
@@ -90,6 +91,12 @@ describe("planReconcile (KNOCKOUT_IDENTITY over the engine's brackets)", () => {
         [4, 5, false],
         [3, 2, false],
       ] as const) {
+        // Engine 5.0.0 (X-TP-5): a third place needs two real semi-finals, so [3, 2] has none to draw with it - the engine
+        // refuses (asserted below), and that pair is checked without a third place only.
+        if (thirdPlace && (from < 4 || to < 4)) {
+          refused++;
+          continue;
+        }
         // The premise, from the engine: the same size ⇔ the same number of lines.
         expect(lines(from, thirdPlace).length === lines(to, thirdPlace).length, `premise ${from} → ${to}`).toBe(same);
         const plan = planReconcile(lines(from, thirdPlace), lines(to, thirdPlace), ids, unchanged);
@@ -97,7 +104,11 @@ describe("planReconcile (KNOCKOUT_IDENTITY over the engine's brackets)", () => {
         checked++;
       }
     }
-    expect(checked).toBe(14);
+    expect(checked).toBe(13);
+    expect(refused, "anti-vacuity: the pair a third place cannot be drawn for was reached").toBe(1);
+    for (const n of [2, 3]) {
+      expect(() => engineBracketRows(n, true), `${n} entrants with a third place`).toThrow(/two real semi-finals/);
+    }
   });
   it("knockoutLines keys each side against its own final, and an empty side is empty", () => {
     expect(knockoutLines([])).toEqual([]);

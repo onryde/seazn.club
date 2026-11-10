@@ -421,16 +421,19 @@ describe("F1, M1 and R4 on a bracket row play THROUGH a decider too (M-6)", () =
         };
       });
       expect(rows.length, `${sport}: the whole page playoff is on the books`).toBe(generatePagePlayoff({ entrants: ["e1", "e2", "e3", "e4"] }).fixtures.length);
-      const expected = bracketRanks({ id: "s1", kind: "page_playoff", seeds }, rows);
+      // Engine 5.0.0: `bracketRanks` returns FinalPlace[]; the wire's finalRanks stays ids in rank order, so compare those.
+      const expected = bracketRanks({ id: "s1", kind: "page_playoff", entrants: [...seeds.keys()], seeds }, rows).map((p) => p.entrantId);
       expect(ranks, `${sport}: finalRanks`).toEqual(expected);
-      // The case must discriminate: the walkover's loser is out at round 1 with elim's loser, and has the BETTER seed, so only a
-      // rank that honours "out at q1" - not the leftover pass - puts it ahead.
+      // The case must discriminate. MOVED by engine 5.0.0 (X-SP-5): an entrant put out by a walkover ranks BELOW one put out by
+      // play in the same round. The walkover's loser is out at q1 with elim's loser and has the BETTER seed, so a rank that fell
+      // back to seed alone would put it ahead; the rule puts it behind. (Until 4.x the rule was the seed one and this read the
+      // other way round.)
       const walkedOver = rows.find((r) => r.walkedOver === "loser");
       expect(walkedOver, `${sport}: one walkover`).toBeDefined();
       const elimLoser = rows.find((r) => r.status === "decided" && r.round === walkedOver!.round && r.id !== walkedOver!.id)?.loser;
       expect(elimLoser, `${sport}: pp-elim's loser is out at the same round`).toBeDefined();
       expect(seeds.get(walkedOver!.loser!)!, `${sport}: the walkover's loser out-seeds pp-elim's`).toBeLessThan(seeds.get(elimLoser!)!);
-      expect(ranks!.indexOf(walkedOver!.loser!), `${sport}: ahead of pp-elim's loser`).toBeLessThan(ranks!.indexOf(elimLoser!));
+      expect(ranks!.indexOf(walkedOver!.loser!), `${sport}: behind pp-elim's loser (X-SP-5)`).toBeGreaterThan(ranks!.indexOf(elimLoser!));
       judged++;
     }
     expect(judged).toBe(SPORT_KEYS.length);

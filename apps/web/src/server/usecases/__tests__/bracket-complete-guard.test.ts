@@ -161,6 +161,65 @@ describe.runIf(HAS_DB)("W4 T6 AN-2: a bracket completes only with every match de
     expect((await completeStage(held.auth, held.stageId)).completed).toBe(true);
   }, 240_000);
 
+  it("the wire (engine 5.0.0 FinalPlace[]): stage_completed.finalRanks stays entrant ids in rank order - in the response AND in the stored event - and a decided third place splits 3rd from 4th", async () => {
+    // Smoke w4KnockoutA, the bench and the matrix read these as strings; the engine's own event carries { entrantId, rank }.
+    for (const { sport, variant } of SPORTS) {
+      const r = await semisDecided(sport, variant);
+      await decide(r.auth, sport, r.final, true);
+      await decide(r.auth, sport, r.third, true);
+      const done = await completeStage(r.auth, r.stageId);
+      expect(done.completed).toBe(true);
+      const ev = done.events.find((e) => e.type === "stage_completed");
+      expect(ev?.type, `${sport}: the event is returned`).toBe("stage_completed");
+      const ranks = ev?.type === "stage_completed" ? ev.finalRanks : [];
+      const [stored] = await sql<{ payload: { finalRanks: unknown } }[]>`
+        select payload from division_events where division_id = ${r.divisionId} and type = 'stage_completed'`;
+      expect(stored!.payload.finalRanks, `${sport}: the stored event carries the same ids`).toEqual(ranks);
+      expect(ranks.length, `${sport}: four ranked`).toBe(4);
+      expect(ranks.every((id) => typeof id === "string"), `${sport}: plain ids, not places`).toBe(true);
+      const after = await linesOf(r.stageId);
+      const final = after.find((l) => l.id === r.final.id)!;
+      const third = after.find((l) => l.id === r.third.id)!;
+      expect(ranks[0], `${sport}: the final's winner is first`).toBe(final.home_entrant_id);
+      expect(ranks[1], `${sport}: the final's loser is second`).toBe(final.away_entrant_id);
+      expect(ranks[2], `${sport}: the third-place winner is third`).toBe(third.home_entrant_id);
+      expect(ranks[3], `${sport}: the third-place loser is fourth`).toBe(third.away_entrant_id);
+    }
+  }, 240_000);
+
+  it("the roster is who the stage DREW (engine 5.0.0 BracketStage.entrants): a departed division entrant who never held a seat in it is not ranked - not in finalRanks, not in the snapshot", async () => {
+    // I1 (review). `config.qualified` is written only by the on_complete path, so a root knockout (someone withdrew BEFORE the
+    // draw) and every setup-timed fed bracket (a group/league withdrawal who never qualified, drawn into the finals' stage by
+    // the confirmed proposal) complete with NO stored roster. Both are the same predicate: the entrant is a division member in
+    // a departed status with no seat in this stage. The engine ranks every DECLARED entrant, one in no fixture last, so
+    // declaring her would rank her in a stage she never played in.
+    let swept = 0;
+    for (const { sport, variant } of SPORTS) {
+      for (const status of ["withdrawn", "disqualified"] as const) {
+        const r = await semisDecided(sport, variant);
+        const [stageRow] = await sql<{ config: { qualified?: unknown } }[]>`select config from stages where id = ${r.stageId}`;
+        expect(stageRow!.config.qualified, `${sport}: premise, no stored roster (the shape every setup-timed stage has)`).toBeUndefined();
+        const [ghost] = await sql<{ id: string }[]>`
+          insert into entrants (division_id, org_id, kind, display_name, seed, status)
+          select division_id, org_id, kind, 'Ghost', 99, ${status} from entrants where division_id = ${r.divisionId} limit 1
+          returning id`;
+        await decide(r.auth, sport, r.final, true);
+        await decide(r.auth, sport, r.third, true);
+        const done = await completeStage(r.auth, r.stageId);
+        expect(done.completed, `${sport}/${status}: completes`).toBe(true);
+        const ev = done.events.find((e) => e.type === "stage_completed");
+        const ranks = ev?.type === "stage_completed" ? ev.finalRanks : [];
+        expect(ranks.length, `${sport}/${status}: the four who played, not five`).toBe(4);
+        expect(ranks, `${sport}/${status}: the ghost is not ranked`).not.toContain(ghost!.id);
+        const [snap] = await sql<{ rows: { entrantId: string }[] }[]>`select rows from standings_snapshots where stage_id = ${r.stageId}`;
+        expect(snap!.rows.length, `${sport}/${status}: the snapshot holds four`).toBe(4);
+        expect(snap!.rows.map((x) => x.entrantId), `${sport}/${status}: nor in the snapshot`).not.toContain(ghost!.id);
+        swept++;
+      }
+    }
+    expect(swept, "anti-vacuity: every sport and status").toBe(SPORTS.length * 2);
+  }, 360_000);
+
   it("C4: a final NOT yet settled keeps the soft answer — {completed: false}, no refusal, nothing written", async () => {
     // single-sport: badminton — the engine's own completion predicate answers here; no sport field is read.
     const r = await semisDecided("badminton", "bwf");

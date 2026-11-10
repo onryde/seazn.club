@@ -40,7 +40,8 @@ import { autoSolverWallMs } from "./solver-tuning";
  * RECONCILIATION BELOW IS NOT REDUNDANT PLUMBING, and that was measured, not
  * assumed. `buildSchedule`'s SUCCESS/`improved` exit anchors a `current`-only
  * frozen id correctly (its own `pinnedAssignments`), but every FALLBACK exit
- * — `already_optimal`, a proved tie, `verifier_rejected`, `not_searched` —
+ * — `already_optimal`, a proved tie that does not disturb `current` less
+ * (engine 6.0.2), `verifier_rejected`, `not_searched` —
  * reports `seed.assignments`, the PLAIN unpinned greedy seed, which has no
  * idea a `current`-only id (no `.locked`) is supposed to stay put. Confirmed
  * empirically against unmodified `build.ts`: a two-fixture repro, both

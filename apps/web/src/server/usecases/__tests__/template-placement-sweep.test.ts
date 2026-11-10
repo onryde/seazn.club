@@ -22,10 +22,10 @@
 // cannot fill (ko_plate, qualifying_main) and a page playoff fed by fewer entrants than its size (group_playoffs,
 // swiss_playoff - T26c fix round 1, I1: its "Rank 4" seat could never be filled, yet it got a court and a time).
 //
-// Owed (by name): a knockout drawn at 3 WITH a third-place match - the root knockout at n=3, and a fed knockout taking a
-// Top 3 (league_ko, groups_ko, swiss_knockout at n=3) - puts its third-place line on the timetable although one of its
-// seats is the bye semi's loser, which never exists (G1, knockout half). Third place is W4 app PR B's; the sweep holds the
-// exact list so PR B's fix turns it red here. G1's double-elimination half is W6's (W6-double-elim.md, "Carried from W4").
+// A knockout drawn at 2 or 3 WITH a third-place match is no longer a placement question: engine 5.0.0 (X-TP-5) refuses it at
+// Generate (CONFIG_INVALID `third_place_needs_two_semis`), so the third-place line that used to be placed although its seat was
+// the bye semi's loser (G1, knockout half) does not exist. The sweep holds those combos as REFUSED, each asserted to be refused
+// by that rule and judged against its arithmetic (fewer than four entrants). G1's double-elimination half is W6's.
 //
 // Two sports, one per entrant kind the registry DECLARES as a default (a team sport and an individual one - different
 // scoring, different entrant model), each the registry's first that is offered every in-scope template. The placement
@@ -38,11 +38,8 @@
 // (INVALID_REQUEST "neither entrant_indices nor person_indices") and BUILD falls back to greedy for that stage. The
 // verdicts read what was placed, never which placer placed it, so they hold under both.
 //
-// The rest between a player's matches is the settings' own default (`perEntrantMinRest` 0, ScheduleConfig in api-v1/schemas/scheduling.ts).
-// A rest above 0 is OUT OF SCOPE here, pending engine 6.0.1 (the finding routed in task-26c-report.md: with a rest of 30,
-// BUILD leaves every line fed by an undecided line unplaced - blocking `warn.order` H6 "starts inside feeder's rest" -
-// 4 of a bracket of 8's 7 lines placed, which also hides G1, since the owed third-place lines are fed lines). Add those
-// cases when that release lands, not before.
+// The rest between a player's matches is the settings' own default (`perEntrantMinRest` 0, ScheduleConfig in api-v1/schemas/scheduling.ts) for the
+// sweep below. A rest above 0 is its own describe, further down (engine 6.0.1: greedy honours rest before a fed bracket line).
 //
 // Real Postgres required; skipped without DATABASE_URL (the house convention of the sibling usecase suites).
 import { afterAll, describe, expect, it } from "vitest";
@@ -100,12 +97,6 @@ const IN_SCOPE = STAGE_TEMPLATES.filter((t) => t.retired !== true && !(t.key in 
 
 /** The fields: a bye semi (3), byes in round 1 (5), no byes (8). */
 const FIELDS = [3, 5, 8] as const;
-
-/** G1, knockout half - owed to W4 app PR B (third place is PR B's). A knockout drawn at 3 with a third-place match: the
- *  third-place line's home seat is the loser of the bye semi, which never exists, yet the line holds a time and a court.
- *  Root: `knockout` at n=3. Fed (a Top 3 out of 3, see `topNFor`): every template whose finals knockout reads the Top N. */
-const OWED_PR_B_TEMPLATES = ["knockout", "league_ko", "groups_ko", "swiss_knockout"] as const;
-const OWED_PR_B_WHY = "owed: W4 app PR B (third place) - G1 knockout half: a third-place line fed by a bye semi's loser is placed like a match";
 
 /** The Top N the builder sends: its opening knob (4, `openingKnobs`) where the box is shown and the field fills it, else
  *  the whole field - an organiser with 3 entrants takes a Top 3, so the finals' bracket has a bye exactly as a root
@@ -260,7 +251,7 @@ interface Checked {
 }
 
 /** A division of `n` seeded entrants of the sport's default kind, two courts and saved settings (the stages are the caller's). */
-async function rig(sport: SportPick, n: number) {
+async function rig(sport: SportPick, n: number, perEntrantMinRest = 0) {
   const { auth } = await seedOrg("pro");
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
@@ -291,7 +282,7 @@ async function rig(sport: SportPick, n: number) {
       matchMinutes: 30,
       gapMinutes: 0,
       courts,
-      perEntrantMinRest: 0,
+      perEntrantMinRest,
       blackouts: [],
       sessionWindows: [],
     },
@@ -317,6 +308,8 @@ describe.skipIf(!HAS_DB)("every in-scope format template is generated as the eng
   /** Combos the builder's size gate refuses, with the code the server's own Generate refused with. */
   const gated: Array<{ label: string; gate: string; server: string | null }> = [];
   let enumerated = 0;
+  /** Combos Generate refuses by X-TP-5 (a third place under four entrants), with the field the knockout stage was drawn at. */
+  const refusedThird: Array<{ label: string; entrants: number }> = [];
 
   async function runCombo(template: string, sport: SportPick, n: number, third: boolean): Promise<void> {
     const drafts = draftsFor(template, n, third);
@@ -334,6 +327,29 @@ describe.skipIf(!HAS_DB)("every in-scope format template is generated as the eng
         server = (e as { code?: string }).code ?? `(no code) ${(e as Error).message}`;
       }
       gated.push({ label, gate: gate.code, server });
+      return;
+    }
+    // X-TP-5 (engine 5.0.0): a third-place match needs two real semi-finals. The field each knockout stage is drawn at is the
+    // engine's own arithmetic (`fieldOf`); below four entrants Generate must refuse it, and a combo that does not is a defect.
+    const thirdFields = drafts.flatMap((d, at) => (d.kind === "knockout" && d.config.thirdPlace === true ? [{ at, k: fieldOf(drafts, at, n) }] : []));
+    const refusedAt = thirdFields.find((t) => t.k < 4);
+    if (refusedAt !== undefined) {
+      let refusal: unknown = null;
+      for (const s of stages) {
+        try {
+          await generateStageFixtures(auth, s.id);
+        } catch (e) {
+          refusal = e;
+          break;
+        }
+      }
+      const message = refusal instanceof Error ? refusal.message : String(refusal);
+      expect(message, `${label}: Generate refuses a third place at ${refusedAt.k} entrants`).toMatch(
+        new RegExp(`a third-place match needs two real semi-finals; ${refusedAt.k} entrants give`),
+      );
+      const named = refusal as { code?: unknown; data?: { reason?: unknown } };
+      expect([named.code, named.data?.reason], `${label}: refused by code and reason, not only by wording`).toEqual(["CONFIG_INVALID", "third_place_needs_two_semis"]);
+      refusedThird.push({ label, entrants: refusedAt.k });
       return;
     }
     for (const s of stages) await generateStageFixtures(auth, s.id);
@@ -414,7 +430,7 @@ describe.skipIf(!HAS_DB)("every in-scope format template is generated as the eng
     if (problems.length > 0) console.info(`placement sweep problems (${problems.length}):\n  ${problems.join("\n  ")}`);
 
     // Anti-vacuity: every combo asked ends as a checked placement or a counted refusal, and there were some of each.
-    expect(checked.length + gated.length, "every enumerated combo was checked or refused by the size gate").toBe(enumerated);
+    expect(checked.length + gated.length + refusedThird.length, "every enumerated combo was checked, refused by the size gate or refused by X-TP-5").toBe(enumerated);
     const expectedCombos = IN_SCOPE.reduce((sum, t) => sum + SPORTS.length * FIELDS.length * (drawsKnockout(t) ? 2 : 1), 0);
     expect(enumerated, "the combos enumerated are every (template, sport, field, third place) the declarations name").toBe(expectedCombos);
     expect(checked.length, "combos checked").toBeGreaterThan(0);
@@ -426,9 +442,8 @@ describe.skipIf(!HAS_DB)("every in-scope format template is generated as the eng
     }
     // Byes were kept off (root byes, Swiss bye shells, fed byes).
     expect(checked.reduce((s, c) => s + c.off, 0), "lines kept off the timetable").toBeGreaterThan(0);
-    // Fated lines kept OFF, per template: none today. The only fated lines the sweep draws are the owed third-place lines
-    // (G1, below), and those are placed, so they are problems, not `fated`. PR B's fix keeps them off: that moves them here
-    // and turns this pin red for exactly the owed templates, beside the owed list - both are updated together, by design.
+    // Fated lines kept OFF, per template: none. The only fated lines the sweep used to draw were the third-place lines under
+    // two semis (G1), which the engine now refuses to draw at all (X-TP-5, asserted below).
     const fatedBy = (t: string) => checked.filter((c) => c.template === t).reduce((s, c) => s + c.fated, 0);
     expect(Object.fromEntries(IN_SCOPE.map((t) => [t, fatedBy(t)])), "fated lines kept off the timetable, per template").toEqual(
       Object.fromEntries(IN_SCOPE.map((t) => [t, 0])),
@@ -452,20 +467,69 @@ describe.skipIf(!HAS_DB)("every in-scope format template is generated as the eng
       new Set(["KO_PLATE_TOO_FEW", "QUALIFYING_MAIN_TOO_FEW", "PAGE_PLAYOFF_TOO_FEW"]),
     );
 
-    // G1 knockout half, owed to PR B BY NAME: exactly the third-place line of each named template at n=3 with third place,
-    // in every sport - one more, one fewer or one moved is red here.
-    const owed = SPORTS.flatMap((s) =>
-      OWED_PR_B_TEMPLATES.map((t) => {
-        const stage = draftsFor(t, 3, true).find((d) => d.kind === "knockout")!.name;
-        return `${t} ${s.key} n=3 q=${topNFor(t, 3)} third=true / ${stage}: se-3p (fated_bye) is never played but holds time=true court=true`;
-      }),
+    // X-TP-5 (engine 5.0.0): the third-place combos under four entrants are REFUSED, not placed. Derived from the rule, not from
+    // the refusals met: every third-place combo of a template that draws a knockout, in every sport, at a field whose knockout
+    // stage is under four, must be among them - none more, none fewer.
+    const expectedRefused = SPORTS.flatMap((s) =>
+      IN_SCOPE.flatMap((t) =>
+        FIELDS.flatMap((n) => {
+          const drafts = draftsFor(t, n, true);
+          return drafts.some((d, at) => d.kind === "knockout" && fieldOf(drafts, at, n) < 4) && stageGraphSizeGate(drafts, n) === null
+            ? [`${t} ${s.key} n=${n} q=${topNFor(t, n)} third=true`]
+            : [];
+        }),
+      ),
     ).sort();
-    // One assertion over both halves, so a red shows the whole list: the owed lines, and every fault outside them.
-    expect(
-      { owed: problems.filter((p) => owed.includes(p)).sort(), outside: problems.filter((p) => !owed.includes(p)) },
-      `${OWED_PR_B_WHY}; anything outside that list is a placement or generation fault`,
-    ).toEqual({ owed, outside: [] });
+    expect(expectedRefused.length, "anti-vacuity: the rule names refused combos").toBeGreaterThan(0);
+    expect(refusedThird.map((r) => r.label).sort(), "the combos Generate refuses by X-TP-5").toEqual(expectedRefused);
+    for (const r of refusedThird) expect(r.entrants, `${r.label}: refused under four entrants`).toBeLessThan(4);
+    // Nothing else went wrong.
+    expect(problems, "anything outside the refused combos is a placement or generation fault").toEqual([]);
   });
+});
+
+// Engine 6.0.1 (greedy honours rest before a fed bracket line): the cases the header above deferred. With a rest above 0
+// and no placement service (greedy), BUILD used to start a fed line at its feeder's final whistle, so the verifier flagged it
+// (`order_inside_feeder_rest`) and the seed dropped it: a knockout of 4 placed 2 of its 3 lines, a bracket of 8 placed 4 of 7.
+// The expected count is the ENGINE's own bracket (`bracketFates`: lines it plays), never a typed 3 or 7.
+describe.skipIf(!HAS_DB)("a knockout at a rest above 0 (engine 6.0.1): every line the engine plays is placed, fed lines included", () => {
+  const REST = 30;
+  for (const n of [4, 8]) {
+    it(`n=${n} at rest ${REST}: every line placed with a time and a court, a fed line no earlier than its feeder's end plus the rest`, async () => {
+      let swept = 0;
+      for (const sport of SPORTS) {
+        const { auth, divisionId } = await rig(sport, n, REST);
+        const drafts = draftsFor("knockout", n, false);
+        const stages = await createStages(auth, divisionId, drafts.map((d, i) => ({ ...d, seq: i + 1 })) as CreateStages);
+        expect(stages.length, "one knockout stage").toBe(1);
+        await generateStageFixtures(auth, stages[0]!.id);
+        await place(auth, stages[0]!.id);
+        const rows = await sql<(Row & { winner_to_fixture: string | null })[]>`
+          select id, stage_id, round_no, ext_key, status, outcome, home_entrant_id, away_entrant_id, home_slot_label,
+                 away_slot_label, scheduled_at, court_id, winner_to_fixture
+            from fixtures where division_id = ${divisionId}`;
+        const fates = bracketFates(engineBracket("knockout", n, {}));
+        const played = [...fates.values()].filter((f) => f === "match").length;
+        expect(played, `${sport.key}: the engine plays n-1 lines in a bracket of ${n}`).toBe(n - 1);
+        const placed = rows.filter((r) => r.scheduled_at !== null && r.court_id !== null);
+        expect(placed.length, `${sport.key} n=${n}: lines placed (of ${played} the engine plays)`).toBe(played);
+        // The feeder floor, read off the saved rows: a fed line starts at or after its feeder's end + rest (match 30 + gap 0).
+        const byId = new Map(rows.map((r) => [r.id, r]));
+        let fed = 0;
+        for (const f of rows) {
+          if (f.winner_to_fixture === null) continue;
+          const next = byId.get(f.winner_to_fixture)!;
+          fed++;
+          expect(next.scheduled_at!.getTime(), `${sport.key} n=${n}: ${next.ext_key} starts after ${f.ext_key} ends + rest`).toBeGreaterThanOrEqual(
+            f.scheduled_at!.getTime() + (30 + REST) * 60_000,
+          );
+        }
+        expect(fed, "anti-vacuity: feed edges checked").toBeGreaterThan(0);
+        swept++;
+      }
+      expect(swept, "every picked sport swept").toBe(SPORTS.length);
+    }, 300_000);
+  }
 });
 
 // The oracle, without a database: the engine's brackets at the fields the rule names, against the rule's own arithmetic.
@@ -482,11 +546,11 @@ describe("the sweep's line-fate oracle (no database)", () => {
     expect(asked, "anti-vacuity").toBe(32);
   });
 
-  it("a third-place match fed by a bye semi's loser is fated to be a bye (3 with third place); a field whose semis are both played has none", () => {
-    expect(fatesAt(3, true).get("se-3p")).toBe("fated_bye"); // the bye semi has no loser
+  it("a third-place match needs two real semi-finals (X-TP-5): 2 and 3 entrants are refused by the engine, 4 and 5 draw it as a match", () => {
+    for (const k of [2, 3]) expect(() => fatesAt(k, true), `${k} entrants`).toThrow(/a third-place match needs two real semi-finals/);
     expect(fatesAt(4, true).get("se-3p")).toBe("match");
     expect(fatesAt(5, true).get("se-3p")).toBe("match"); // both semis are played (byes are round 1's)
-    expect(count(fatesAt(3, true), "fated_bye")).toBe(1);
+    expect(count(fatesAt(4, true), "fated_bye") + count(fatesAt(5, true), "fated_bye"), "no fated third-place line is drawn any more").toBe(0);
     expect(count(fatesAt(8, true), "fated_bye") + count(fatesAt(8, true), "bye") + count(fatesAt(8, true), "dead")).toBe(0);
   });
 

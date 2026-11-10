@@ -231,9 +231,17 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
   #bracketRows(stage: MultiStage, seeded: readonly { id: string; seed: number }[]): void {
     const ids = seeded.map((s) => s.id);
     const seeds = new Map(seeded.map((s) => [s.id, s.seed]));
-    const b: GeneratedBracket = stage.kind === "knockout" ? generateSingleElim({ entrants: ids, seeds, thirdPlace: stage.config.thirdPlace === true })
-      : stage.kind === "stepladder" ? generateStepladder({ entrants: ids, seeds })
-      : generatePagePlayoff({ entrants: ids, seeds });
+    // Engine 5.0.0 (X-TP-5): a third place under two real semi-finals (a field under 4) is refused at Generate, like the
+    // product (an EngineError becomes its status; anything else is a harness fault and surfaces as itself).
+    let b: GeneratedBracket;
+    try {
+      b = stage.kind === "knockout" ? generateSingleElim({ entrants: ids, seeds, thirdPlace: stage.config.thirdPlace === true })
+        : stage.kind === "stepladder" ? generateStepladder({ entrants: ids, seeds })
+        : generatePagePlayoff({ entrants: ids, seeds });
+    } catch (e) {
+      if (!EngineError.is(e)) throw e;
+      throw new RefusedCall("POST", `/api/v1/stages/${stage.id}/generate`, engineHttpStatus(e.code), e.code, e.message);
+    }
     const rowOf = new Map<string, string>();
     for (const g of b.fixtures) {
       const f = this.seat(g.round + 1, null, null, { stage_id: stage.id, ext_key: g.id, is_final: g.isFinal === true, ...(g.thirdPlace === true ? { third_place: true } : {}) });

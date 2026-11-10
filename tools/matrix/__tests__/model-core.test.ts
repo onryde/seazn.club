@@ -1066,7 +1066,8 @@ describe("RR-1: a knockout take-back whose next match has started is refused BY 
     const roundNo = bracketRoundNoText();
     const ids = (n: number) => Array.from({ length: n }, (_, i) => `x${i + 1}`);
     const BRACKETS: Record<string, (n: number) => GeneratedBracket[]> = {
-      knockout: (n) => [generateSingleElim({ entrants: ids(n) }), generateSingleElim({ entrants: ids(n), thirdPlace: true })],
+      // X-TP-5 (engine 5.0.0): a third place needs two real semi-finals, so it is drawn from 4 entrants only.
+      knockout: (n) => [generateSingleElim({ entrants: ids(n) }), ...(n >= 4 ? [generateSingleElim({ entrants: ids(n), thirdPlace: true })] : [])],
       double_elim: (n) => [generateDoubleElim({ entrants: ids(n) }), generateDoubleElim({ entrants: ids(n), bracketReset: true })],
       page_playoff: (n) => (n === 4 ? [generatePagePlayoff({ entrants: ids(n) })] : []),
       stepladder: (n) => [generateStepladder({ entrants: ids(n) })],
