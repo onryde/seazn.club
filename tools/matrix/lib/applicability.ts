@@ -176,7 +176,8 @@ const bracket = hasKind(...BRACKET_STAGE_KINDS);
 /** Some stage takes its entrants from a points-table stage — the one each
  *  source NAMES (StageSourceFact.from), resolved by stageFactsOf. */
 const tableFed: Predicate = (f) => f.stages.some((s) => s.sources.some((src) => src.take.length > 0 && TABLE_KINDS.includes(f.stages[src.from]?.kind ?? "")));
-const plate: Predicate = (f) => f.stages.some((s) => s.takes.includes("roundLosers"));
+/** A plate: a stage fed by a bracket's losers — `firstLosses` (X-PL-6, what the template writes) or the legacy `roundLosers`. */
+const plate: Predicate = (f) => f.stages.some((s) => s.takes.includes("roundLosers") || s.takes.includes("firstLosses"));
 const thirdPlace: Predicate = (f) => f.stages.some((s) => s.kind === "knockout" && s.config.thirdPlace === true);
 const losersContinue = or(hasKind(...TABLE_KINDS, "ladder", "double_elim", "page_playoff"), plate);
 const ALL_KINDS: readonly string[] = StageKind.options;

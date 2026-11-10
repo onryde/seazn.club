@@ -208,6 +208,31 @@ describe("currentQualifiedFromStages — topNPerGroup / bestNth (groups_ko, A3 f
   });
 });
 
+describe("X-PL-6 — the plate sends no Top N, and a stored firstLosses plate reads back no count", () => {
+  const base = { swissRounds: 5, poolCount: 2, legs: 1, standingsCarry: "none" as const };
+
+  it("formatStagesFor('ko_plate') sends take [firstLosses] whatever the Top N knob says (today: roundLosers count 4) — and qualifying_main keeps its 4", () => {
+    let checked = 0;
+    for (const qualified of [0, 3, 4, 6, 99]) {
+      const plate = formatStagesFor("ko_plate", { ...base, qualified })[1]!.progression as { sources: { take: unknown[] }[] };
+      expect(plate.sources[0]!.take, `qualified ${qualified}`).toEqual([{ kind: "firstLosses" }]);
+      const qm = formatStagesFor("qualifying_main", { ...base, qualified })[1]!.progression as { sources: { take: unknown[] }[] };
+      expect(qm.sources[0]!.take, `qualifying_main ${qualified}`).toEqual([{ kind: "rankRange", from: 1, to: 4 }]);
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+
+  it("a stored firstLosses plate has no count to read back: the knob falls to its 4 (nothing on screen reads it)", () => {
+    expect(
+      currentQualifiedFromStages([
+        { kind: "knockout", progression: null },
+        { kind: "knockout", progression: { sources: [{ stage: "previous", take: [{ kind: "firstLosses" }] }], placement: "rank_order", timing: "setup" } },
+      ]),
+    ).toBe(4);
+  });
+});
+
 describe("F6 — standings carry on settings applyStructure path", () => {
   const knobs = { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 };
 

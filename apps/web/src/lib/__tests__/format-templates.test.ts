@@ -45,7 +45,32 @@ import frUi from "@/dictionaries/fr/ui.json";
 import nlUi from "@/dictionaries/nl/ui.json";
 
 describe("ko_plate template", () => {
-  it("builds a main knockout + a plate seeded by roundLosers, count = the qualified knob", () => {
+  // X-PL-6: the plate takes EVERY first-match loss — no count, no hidden Top N (PL-1: `roundLosers` count 4 dropped first
+  // losses above 12 entrants). // differential: today roundLosers count 4
+  it("X-PL-6 ko_plate's plate takes every eligible first loss: no count, no hidden Top N", () => {
+    let checked = 0;
+    for (const qualified of [0, 2, 4, 8, 16]) {
+      const stages = buildTemplateStages("ko_plate", { qualified, swissRounds: 5, poolCount: 2, legs: 1 });
+      expect(stages[1]!.progression, `qualified ${qualified}`).toEqual({
+        sources: [{ stage: "previous", take: [{ kind: "firstLosses" }] }],
+        placement: "rank_order",
+        timing: "setup",
+      });
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+
+  it("a stored plate keeps its legacy roundLosers shape: detectTemplate still names it ko_plate (and a bare knockout pair is still no template)", () => {
+    const legacy = buildTemplateStages("ko_plate", { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 });
+    legacy[1]!.progression = { sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 1, count: 4 }] }], placement: "rank_order", timing: "setup" };
+    expect(detectTemplate(legacy)).toBe("ko_plate");
+    const neither = buildTemplateStages("ko_plate", { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 });
+    neither[1]!.progression = { sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 1 }] }], placement: "rank_order", timing: "setup" };
+    expect(detectTemplate(neither)).toBeNull();
+  });
+
+  it("builds a main knockout + a plate seeded by firstLosses", () => {
     const stages = buildTemplateStages("ko_plate", {
       qualified: 4,
       swissRounds: 5,
@@ -57,7 +82,7 @@ describe("ko_plate template", () => {
     expect(stages[1]).toMatchObject({
       kind: "knockout",
       progression: {
-        sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 1, count: 4 }] }],
+        sources: [{ stage: "previous", take: [{ kind: "firstLosses" }] }],
         placement: "rank_order",
         timing: "setup",
       },
@@ -171,10 +196,10 @@ describe("format-templates emit progression, not qualification", () => {
     });
   });
 
-  it("ko_plate still emits roundLosers, now setup — take shape unchanged, only timing flipped (F3)", () => {
+  it("ko_plate emits firstLosses, setup timing (F3's flip kept; X-PL-6 replaced the roundLosers take)", () => {
     const stages = buildTemplateStages("ko_plate", { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 });
     expect(stages[1]!.progression).toEqual({
-      sources: [{ stage: "previous", take: [{ kind: "roundLosers", round: 1, count: 4 }] }],
+      sources: [{ stage: "previous", take: [{ kind: "firstLosses" }] }],
       placement: "rank_order",
       timing: "setup",
     });

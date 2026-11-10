@@ -31,8 +31,8 @@ export interface FormatKnobValues {
 /** Which knobs a format shows. The picker renders exactly these, and `formatBoundIssue` / `formatStagesFor` read the same
  *  answer, so a knob is judged — and sent — exactly when it is on screen. */
 export interface FormatKnobsShown {
-  /** The Top N box: templates whose second stage is sized by `qualified`. ko_plate and qualifying_main read `qualified` too,
-   *  at their own default of 4 (sent that, never the box); group_playoffs is a fixed four. */
+  /** The Top N box: templates whose second stage is sized by `qualified`. qualifying_main reads `qualified` too,
+   *  at its own default of 4 (sent that, never the box); ko_plate sends none at all (X-PL-6: its plate takes every first loss); group_playoffs is a fixed four. */
   secondStage: boolean;
   pools: boolean;
   rounds: boolean;
@@ -153,7 +153,7 @@ export interface SavedStage {
  *
  *  F2 (unified progression field): reads the FIRST stage's `.progression`, matching whichever TakeRule kind
  *  format-templates.ts's real specs emit — rankRange -> to-from+1 (league_ko/group_stepladder/group_playoffs/
- *  qualifying_main), roundLosers -> count (ko_plate), picks -> picks.length (a hand-built custom graph only).
+ *  qualifying_main), roundLosers -> count (a stored pre-X-PL-6 plate), firstLosses -> no count, so it falls to 4 (ko_plate: nothing to knob), picks -> picks.length (a hand-built custom graph only).
  *
  *  A3 (round-4 review): groups_ko emits topNPerGroup (+ a bestNth remainder), never picks. topNPerGroup -> n × the group
  *  stage's pool count (config.pools.count on the group stage the progression sources: the nearest earlier one — F3

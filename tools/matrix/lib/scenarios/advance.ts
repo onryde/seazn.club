@@ -4,7 +4,7 @@
 // order, recorded (tie semantics are W4/W5's rulebook, not ours).
 import type { StagePostBody } from "../catalogue.ts";
 import { RefusedCall, type FixtureRow, type SeedProposalRef, type StageRef } from "../driver/types.ts";
-import { winnerOf, type ObservedRun, type ObservedStage } from "../observed.ts";
+import { toObservedOutcome, winnerOf, type ObservedRun, type ObservedStage } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
 import { assertion, type Item } from "./assertions.ts";
 import type { Recorder, StagePlay } from "./common.ts";
@@ -17,7 +17,7 @@ export const SEEDING_TIE_CODE = "SEEDING_TIE_UNRESOLVED";
 
 export class UnknownTakeKind extends Error {
   constructor(kind: string) {
-    super(`advance: take kind '${kind}' is not in the harness's vocabulary (rankRange, topNPerGroup, bestNth, roundLosers — format-templates.ts)`);
+    super(`advance: take kind '${kind}' is not in the harness's vocabulary (rankRange, topNPerGroup, bestNth, roundLosers, firstLosses — format-templates.ts)`);
     this.name = "UnknownTakeKind";
   }
 }
@@ -56,22 +56,56 @@ export function sourcePoolCount(source: StagePostBody, fieldSize: number, namedP
   return declared;
 }
 
+/** X-PL-6 (RB4-P1/P2): the entrants of a bracket whose FIRST match was a played loss — the plate's field, read off the rows alone
+ *  (never the product's resolver). A first match won, or lost by an award (a forfeit, RB4-P2), is no first loss; a bye is no
+ *  match (one side empty); a third-place match is nobody's first. Rows in play order (round, then line). */
+export function firstLossersOf(lines: readonly { roundNo: number | null; home: string | null; away: string | null; outcome: unknown; thirdPlace?: boolean | undefined }[]): string[] {
+  const played = new Set<string>();
+  const losers: string[] = [];
+  const ordered = lines.filter((f) => f.thirdPlace !== true).sort((a, b) => (a.roundNo ?? 0) - (b.roundNo ?? 0));
+  for (const f of ordered) {
+    if (f.home === null || f.away === null) continue;
+    const o = toObservedOutcome(f.outcome);
+    for (const e of [f.home, f.away]) {
+      if (played.has(e)) continue;
+      played.add(e);
+      if (o?.kind === "win" && o.winner !== e) losers.push(e);
+    }
+  }
+  return losers;
+}
+
+/** The plate field a `firstLosses` body offers, read off the source stage's rows; undefined when the body takes no `firstLosses` (the
+ *  rows are not read at all for any other take). */
+export function plateFieldOf(body: StagePostBody, sourceRows: Parameters<typeof firstLossersOf>[0]): number | undefined {
+  return takesOf(body).some((t) => t.kind === "firstLosses") ? firstLossersOf(sourceRows).length : undefined;
+}
+
+/** The seats `firstLosses` offers are the source's played field, so a caller that does not know it names the gap. */
+export class PlateFieldUnknown extends Error {
+  constructor() {
+    super("advance: a firstLosses take offers the source bracket's first losses, which need its played fixtures (firstLossersOf) — none were given");
+    this.name = "PlateFieldUnknown";
+  }
+}
+
 /** How many entrants the body's progression declares it takes. `sourcePools`
  *  is the SOURCE stage's pool count (sourcePoolCount: its posted body's,
  *  checked against its fixtures). bestNth adds its count once, never per pool
  *  (engine expandTake). */
-export function declaredTake(body: StagePostBody, sourcePools: number): number {
-  return takesOf(body).reduce((n, t) => n + takeSeats(t, sourcePools), 0);
+export function declaredTake(body: StagePostBody, sourcePools: number, plateField?: number): number {
+  return takesOf(body).reduce((n, t) => n + takeSeats(t, sourcePools, plateField), 0);
 }
 
 /** The seats ONE take offers, as the product's own vocabulary counts them (see declaredTake). `declaredTake` is their sum; the
  *  FP-2 allowance reads them one by one (leftEmptyBound), so a take's empty seats are excused only by that take's own rows. */
-export function takeSeats(t: TakeRule, sourcePools: number): number {
+export function takeSeats(t: TakeRule, sourcePools: number, plateField?: number): number {
   switch (t.kind) {
     case "rankRange": return Number(t.to) - Number(t.from) + 1;
     case "topNPerGroup": return Number(t.n) * sourcePools;
     case "bestNth": return Number(t.count);
     case "roundLosers": return Number(t.count);
+    case "firstLosses": if (plateField === undefined) throw new PlateFieldUnknown(); return plateField;
     default: throw new UnknownTakeKind(String(t.kind));
   }
 }
@@ -106,6 +140,7 @@ export function withdrawnQualifiers(takes: readonly TakeRule[], source: Pick<Obs
           inside.add(w === f.home ? f.away : f.home);
         }
         break;
+      case "firstLosses": for (const e of firstLossersOf(source.fixtures)) inside.add(e); break;
       default: throw new UnknownTakeKind(String(t.kind));
     }
   }
@@ -130,10 +165,11 @@ export interface AdvanceObs {
 }
 
 /** `body`: the TARGET stage's posted body; `sourcePools`: the source stage's
- *  pool count (sourcePoolCount; declaredTake). */
-export async function confirmAdvance(ctx: ScenarioContext, rec: Recorder, target: StageRef, proposal: SeedProposalRef, body: StagePostBody, sourcePools: number): Promise<AdvanceObs> {
+ *  pool count (sourcePoolCount; declaredTake); `plateField`: the source's first losses (firstLossersOf), read only by a
+ *  `firstLosses` take. */
+export async function confirmAdvance(ctx: ScenarioContext, rec: Recorder, target: StageRef, proposal: SeedProposalRef, body: StagePostBody, sourcePools: number, plateField?: number): Promise<AdvanceObs> {
   const takes = takesOf(body);
-  const seats = takes.map((t) => takeSeats(t, sourcePools));
+  const seats = takes.map((t) => takeSeats(t, sourcePools, plateField));
   const declared = seats.reduce((n, k) => n + k, 0);
   // confirm answers the WHOLE target stage; the seats are read off it.
   const seatedOf = (fx: readonly FixtureRow[]) =>

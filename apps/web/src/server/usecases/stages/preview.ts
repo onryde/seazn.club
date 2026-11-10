@@ -3,6 +3,7 @@ import "server-only";
 // seeded entrants, no DB.
 
 import { progressionSize, type SourceShape, type TakeRule } from "@seazn/engine/competition";
+import { estimatePlateField } from "@/lib/division-builder/format-estimate";
 import { msg } from "@/lib/messages";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
@@ -102,7 +103,11 @@ function previewSourceShape(prev: PreviewStageInput | undefined): SourceShape {
 // to a preview: this sizes SLOTS from static take-rule counts, never real
 // entrant ids, and multiple sources describe entrants from DIFFERENT earlier
 // stages by construction — there is nothing to dedupe.
-function qualifierCount(progression: unknown, prevStage?: PreviewStageInput): number {
+//
+// X-PL-6: a `firstLosses` take has no count of its own (the engine sizes it from the played field), so the preview sizes it
+// from the previous stage's entrants under "better seed wins" — `estimatePlateField`, the same display count the builder
+// shows — and adds it to whatever else the source takes.
+function qualifierCount(progression: unknown, prevStage?: PreviewStageInput, prevEntrants = 0): number {
   if (!progression || typeof progression !== "object") return 0;
   const spec = progression as { sources?: { take?: unknown }[] };
   const sources = spec.sources;
@@ -111,16 +116,17 @@ function qualifierCount(progression: unknown, prevStage?: PreviewStageInput): nu
     const take = source?.take;
     if (!Array.isArray(take)) return total;
     const rules = take as TakeRule[];
+    const plate = rules.some((r) => (r as { kind?: unknown } | null)?.kind === "firstLosses") ? estimatePlateField(prevEntrants) : 0;
     if (rules.some((r) => (r as { kind?: unknown } | null)?.kind === "topNPerGroup")) {
       try {
-        return total + expandTake(rules, previewSourceShape(prevStage)).reduce((sum, pot) => sum + pot.length, 0);
+        return total + plate + expandTake(rules, previewSourceShape(prevStage)).reduce((sum, pot) => sum + pot.length, 0);
       } catch {
         // A malformed sibling rule despite the topNPerGroup check above —
         // fall through to progressionSize's own graceful degradation; this
         // read path must never throw.
       }
     }
-    return total + progressionSize(rules);
+    return total + plate + progressionSize(rules);
   }, 0);
 }
 
@@ -134,16 +140,18 @@ export function previewDivisionFixtures(
   const n = Math.min(Math.max(2, Math.trunc(count) || 2), 64);
   const poolIds = new Map(POOL_KEYS.split("").map((k) => [k, k]));
 
+  const counts: number[] = []; // each stage's entrant count, for a later `firstLosses` stage's field
   return stages.map((stage, stageIdx) => {
     const firstStage = stageIdx === 0;
     // `|| 4` is now genuinely unknowable only: an absent/malformed
     // progression, or a take whose rules all resolve to 0 real qualifiers.
-    // A real topNPerGroup/rankRange/bestNth/picks/roundLosers take is sized
+    // A real topNPerGroup/rankRange/bestNth/picks/roundLosers/firstLosses take is sized
     // exactly by qualifierCount (shape-aware for topNPerGroup via the
     // previous array entry, progressionSize otherwise — see its comment).
     const entrantCount = firstStage
       ? n
-      : Math.max(2, qualifierCount(stage.progression, stages[stageIdx - 1]) || 4);
+      : Math.max(2, qualifierCount(stage.progression, stages[stageIdx - 1], counts[stageIdx - 1]) || 4);
+    counts.push(entrantCount);
     const label = (i: number) => (firstStage ? alphaLabel(i) : `Seed ${i + 1}`);
 
     // Formats whose pairings depend on live results — no static draw exists.
