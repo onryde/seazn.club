@@ -3451,8 +3451,16 @@ async function generateStageFixturesWrite(
   let readsSealedSetup = false;
   {
     const pre = await withTenant(auth.orgId, async (tx) => {
-      const [stage] = await tx<StageRow[]>`
-        select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
+      // T26c (I1, round-trip budget): whether the division holds a FED page playoff - the one size gate a non-knockout root
+      // answers to - and the division's status, read in this same statement, so a root whose division has no page playoff
+      // pays no extra round trip for the gate below (generate-roundtrips.test.ts pins the budget).
+      const [stage] = await tx<(StageRow & { fed_page_playoff: boolean; division_status: string | null })[]>`
+        select ${tx(STAGE_COLS)},
+               exists (select 1 from stages p
+                        where p.division_id = stages.division_id and p.kind = 'page_playoff' and p.progression is not null)
+                 as fed_page_playoff,
+               (select d.status from divisions d where d.id = stages.division_id) as division_status
+          from stages where id = ${stageId}`;
       if (!stage) throw new HttpError(404, "stage not found");
       // A pairing mode means nothing off a Swiss stage. Refused HERE, in the
       // pre-flight, because both paths below that leave this block early
@@ -3495,12 +3503,13 @@ async function generateStageFixturesWrite(
       if (rootKnockout) {
         const [division] = await tx<{ status: string }[]>`select status from divisions where id = ${stage.division_id}`;
         if (!drawn || division?.status !== "active") await refuseFormatTooSmall(tx, stage.division_id);
-      } else if (stage.progression === null) {
-        // T26c fix round 1 (I1): any other ROOT before Start. A league or a Swiss that feeds a page playoff is that format's
-        // source, as a root knockout is a plate's, so a group_playoffs or swiss_playoff of three is refused by name here too,
-        // never drawn and laid out with a fourth seat no stage can fill. After Start the field is the bracket's to settle.
-        const [division] = await tx<{ status: string }[]>`select status from divisions where id = ${stage.division_id}`;
-        if (division?.status !== "active") await refuseFormatTooSmall(tx, stage.division_id);
+      } else if (stage.progression === null && stage.fed_page_playoff && stage.division_status !== "active") {
+        // T26c fix round 1 (I1): any other ROOT before Start, in a division with a fed page playoff. A league or a Swiss that
+        // feeds a page playoff is that format's source, as a root knockout is a plate's, so a group_playoffs or swiss_playoff of
+        // three is refused by name here too, never drawn and laid out with a fourth seat no stage can fill. After Start the field
+        // is the bracket's to settle. Only a fed page playoff gates a non-knockout root (a guard in
+        // lib/__tests__/format-size-gates.test.ts sweeps the templates for any other), so no other root pays for the gate.
+        await refuseFormatTooSmall(tx, stage.division_id);
       }
       if (!stage.progression) return null;
       const progression = stage.progression as unknown as ProgressionSpec & { timing: "setup" | "on_complete" };

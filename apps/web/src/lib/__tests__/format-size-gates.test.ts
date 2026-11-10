@@ -8,9 +8,9 @@ import { effectiveEntrantModel } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { formatPickerView, formatStagesFor } from "@/lib/division-builder/format-choice";
 import { estimateMinutes, estimateTemplate } from "@/lib/division-builder/format-estimate";
-import { collapsedPicks, isPairRotationTemplate, keepSizeGatedInView, SUGGESTED_COUNT, type PlanInput } from "@/lib/division-builder/model";
+import { collapsedPicks, isPairRotationTemplate, keepSizeGatedInView, openingKnobs, SUGGESTED_COUNT, type PlanInput } from "@/lib/division-builder/model";
 import { PAGE_PLAYOFF_SIZE, PLATE_MIN, QUALIFYING_MAIN_MIN, isWholeRoundCut, stageGraphSizeGate, stageGraphSizeRefusal } from "@/lib/format-size-gates";
-import { buildTemplateStages, templatesForSport, type TemplateKnobs } from "@/lib/format-templates";
+import { buildTemplateStages, STAGE_TEMPLATES, templatesForSport, type TemplateKnobs } from "@/lib/format-templates";
 
 const KNOBS: TemplateKnobs = { qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 };
 const ALL_OFFER = templatesForSport("badminton", ["individual"]).map((t) => t.key);
@@ -297,6 +297,27 @@ describe("I1 group_playoffs and swiss_playoff below the page playoff's size (bui
       checked++;
     }
     expect(checked).toBe(2);
+  });
+
+  // The server's Generate pre-flight (stages.ts generateStageFixturesWrite) runs the size gate on a NON-knockout root only
+  // when its division holds a fed page playoff, so a root of any other division pays no round trip for it
+  // (generate-roundtrips.test.ts). That rests on an assumption, held here as a guard: every graph the gate refuses whose
+  // roots hold no knockout contains a fed page playoff. A new gate on a league or Swiss root breaks it here first.
+  it("guard: a graph refused with no knockout root always holds a fed page playoff (the server's pre-filter)", () => {
+    let graphs = 0;
+    let nonKnockoutRefused = 0;
+    for (const t of STAGE_TEMPLATES) {
+      for (let n = 0; n <= 16; n++) {
+        const stages = buildTemplateStages(t.key, openingKnobs(n));
+        graphs++;
+        if (stageGraphSizeGate(stages, n) === null) continue;
+        if (stages.some((s) => s.progression === null && s.kind === "knockout")) continue;
+        nonKnockoutRefused++;
+        expect(stages.some((s) => s.kind === "page_playoff" && s.progression !== null), `${t.key} n=${n}`).toBe(true);
+      }
+    }
+    expect(graphs, "anti-vacuity: every template at 0..16").toBe(STAGE_TEMPLATES.length * 17);
+    expect(nonKnockoutRefused, "anti-vacuity: the page templates below four are refused graphs with no knockout root").toBeGreaterThan(0);
   });
 });
 
