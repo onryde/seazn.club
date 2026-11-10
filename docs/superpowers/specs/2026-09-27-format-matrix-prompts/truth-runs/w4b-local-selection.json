@@ -1,0 +1,18 @@
+{
+  "note": "W4 (app A + app B) local truth-run selection, following the W2a/W2b precedent (PO ruling, I1): the W4A and W4B scripts are opt-in and have never executed in any CI path, so they are judged by a LOCAL run. ALL cells of every key are selected (no per-row sampling): W4A_R2 22, W4A_R10 22, W4A_R6 11, W4B_Q3 22, W4B_Q3_OUT 11, W4B_Q4A 22, W4B_Q5A 11, W4B_Q5B 11 = 132 L3 cases, every sport of the registry (planned by `--set w1-driving --scenario <key>`, w4a-cells.ts / w4b-cells.ts). `cases` is empty: no committed-plan cell is re-judged. One matrix:l3 run per key, see the README beside it for the command line.",
+  "cases": [],
+  "browserShards": {
+    "L1": [],
+    "L2": []
+  },
+  "newScenarios": [
+    "W4A_R2",
+    "W4A_R10",
+    "W4A_R6",
+    "W4B_Q3",
+    "W4B_Q3_OUT",
+    "W4B_Q4A",
+    "W4B_Q5A",
+    "W4B_Q5B"
+  ]
+}
