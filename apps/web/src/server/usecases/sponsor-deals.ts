@@ -577,16 +577,18 @@ export async function sweepSponsorDeals(now: Date = new Date(), opts: { orgIds?:
 
 /** THE authority on "this competition has finished" for sponsor deals (§8a): its derived phase, read as an org's viewer (the
  *  context this repo synthesizes elsewhere). The sweep ends a deal on it, `createDeal` refuses a package on it, and the
- *  Packages tab hides Send invoice by it. Throws when the desk cannot be read. */
+ *  Packages tab marks such a package "finished" while the Add deal sheet shows it locked (both via
+ *  `finishedPackageCompetitions`). Throws when the desk cannot be read. */
 async function isCompetitionFinished(orgId: string, competitionId: string, now: Date): Promise<boolean> {
   const desk = await getCompetitionDesk({ orgId, via: "session", userId: null, role: "viewer", keyId: null }, competitionId, now);
   return competitionPhase(desk).kind === "finished";
 }
 
 /**
- * The competitions of the org's ACTIVE packages that have finished (`isCompetitionFinished`), each once: the Packages tab offers
- * no Send invoice on those packages (batch F review m4; `createDeal` refuses them anyway). A competition whose phase cannot be
- * read is left out here (a display hint, logged), and the create's own guard still refuses it. Whole-org packages ask nothing.
+ * The competitions of the org's ACTIVE packages that have finished (`isCompetitionFinished`), each once: the Packages tab marks
+ * those packages "finished" and the Add deal sheet shows them locked (batch F review m4; `createDeal` refuses them anyway with
+ * 409 `competition_finished`). The Packages tab has no Send invoice any more - a deal is added from the sheet. A competition whose
+ * phase cannot be read is left out here (a display hint, logged), and the create's own guard still refuses it. Whole-org packages ask nothing.
  */
 export async function finishedPackageCompetitions(orgId: string, now: Date = new Date()): Promise<string[]> {
   const rows = await withTenant(orgId, (tx) => tx<{ competition_id: string }[]>`
