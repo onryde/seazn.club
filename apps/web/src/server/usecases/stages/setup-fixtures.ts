@@ -62,7 +62,13 @@ export async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: s
 
 /** The body of a `timing: "setup"` Generate, in the caller's transaction. Idempotent over the rows it finds (keyed by
  *  `ext_key`), so an un-fill runs it to put a line's labels back (fed-seats.ts `unfillProposalSeats`, W4 T14). */
-export async function writeProgressionSetupFixtures(tx: Tx, stageId: string): Promise<GenerateWrite> {
+export async function writeProgressionSetupFixtures(
+  tx: Tx,
+  stageId: string,
+  /** `checkSeats`: judge a plate's laid-out lines by their seats as well as their keys (the proposal's own call, whose plate holds
+   *  every label). The un-fill's call (fed-seats.ts) leaves it off: it runs while seats and labels are mid-restore, at the SAME size. */
+  opts: { checkSeats?: boolean } = {},
+): Promise<GenerateWrite> {
   const [stage] = await tx<StageRow[]>`
     select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
   if (!stage) throw new HttpError(404, "stage not found");
@@ -151,7 +157,19 @@ export async function writeProgressionSetupFixtures(tx: Tx, stageId: string): Pr
   // lines' own keys, so a re-run at the SAME size (an un-fill putting labels back) keeps every row and its time and court.
   if (isFirstLossPlate && existing.length > 0) {
     const wanted = new Set(gen.map((g) => g.extKey));
-    const stale = existing.some((e) => e.ext_key === null || !wanted.has(e.ext_key)) || gen.some((g) => !existing.some((e) => e.ext_key === g.extKey));
+    let stale = existing.some((e) => e.ext_key === null || !wanted.has(e.ext_key)) || gen.some((g) => !existing.some((e) => e.ext_key === g.extKey));
+    // The keys alone cannot see every change of size: a bracket of 3 and a bracket of 4 lay out the SAME three lines and differ
+    // only in where the bye is (RB4-L4), so a field that moved 3 -> 4 (a match abandoned when the plate was drawn, ruled later)
+    // kept lines with no seat for its fourth qualifier: 422 SEEDING_RULES_MISSING on every re-proposal, advice that could not
+    // work. The seats the lines were laid out for - every round-one side that is not a bye - must be the field's size too.
+    if (!stale && opts.checkSeats === true) {
+      const sides = await tx<{ h: { key?: string } | null; a: { key?: string } | null; he: string | null; ae: string | null }[]>`
+        select home_slot_label as h, away_slot_label as a, home_entrant_id as he, away_entrant_id as ae
+          from fixtures where stage_id = ${stageId} and round_no = 1`;
+      const isSeat = (label: { key?: string } | null, entrant: string | null) => entrant !== null || (label !== null && label.key !== BYE_SLOT_LABEL.key);
+      const seats = sides.reduce((n, r) => n + (isSeat(r.h, r.he) ? 1 : 0) + (isSeat(r.a, r.ae) ? 1 : 0), 0);
+      stale = seats !== entrants.length;
+    }
     if (stale && !(await stageHasStarted(tx, stageId))) {
       await tx`delete from fixtures where stage_id = ${stageId}`;
       existing = [];

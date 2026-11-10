@@ -17,6 +17,8 @@ import { startDivision } from "../schedule";
 import { createStages } from "../stages";
 import { seedOrg } from "./_seed";
 
+const cricketModule = builtinModules.find((m) => m.key === "cricket")!;
+
 type Kind = (typeof EntrantKind.options)[number];
 
 export const KNOBS = { qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 };
@@ -68,6 +70,7 @@ function sportPick(key: string): { sport: { key: string; variant: string }; kind
 }
 export const FOOTBALL_PICK = sportPick("football");
 export const BADMINTON_PICK = sportPick("badminton");
+export const CRICKET_PICK = sportPick("cricket");
 export const FOOTBALL = FOOTBALL_PICK.sport;
 export const FOOTBALL_KIND: Kind = FOOTBALL_PICK.kind;
 
@@ -131,7 +134,16 @@ export async function win(rig: Pick<PlateRig, "auth" | "sport">, f: Pick<LineRow
     for (let g = 0; g < 2; g++) await post(rig.auth, f.id, "badminton.game.summary", home ? { home: 21, away: 10 } : { home: 10, away: 21 });
     return;
   }
-  if (rig.sport.key !== "football") throw new Error(`the plate rig scores football and badminton, not ${rig.sport.key}`);
+  if (rig.sport.key === "cricket") {
+    // T20: the home side bats first. A full quota each; the side with more runs wins (see below).
+    const balls = (cricketModule.configSchema.parse(cricketModule.variants[rig.sport.variant]) as { ballsPerInnings: number }).ballsPerInnings;
+    const home = winner === f.home_entrant_id;
+    // Home wins: 150 then a chase of 100 falls short. Away wins: 100 then a chase that ends at the winning run (101) inside its quota.
+    await post(rig.auth, f.id, "cricket.innings.summary", { runs: home ? 150 : 100, wickets: 5, legalBalls: balls });
+    await post(rig.auth, f.id, "cricket.innings.summary", home ? { runs: 100, wickets: 6, legalBalls: balls } : { runs: 101, wickets: 3, legalBalls: balls - 6 });
+    return;
+  }
+  if (rig.sport.key !== "football") throw new Error(`the plate rig scores football, badminton and cricket, not ${rig.sport.key}`);
   await post(rig.auth, f.id, "football.goal", { by: winner });
   await post(rig.auth, f.id, "football.period", { phase: "HT" });
   await post(rig.auth, f.id, "football.period", { phase: "FT" });
