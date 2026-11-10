@@ -1,7 +1,7 @@
 // R4 sponsors-on-stream S11 - the Sponsors hub page (/o/[orgSlug]/sponsors?tab=...), rendered.
 //
 // The page is an async server component, so it is awaited and prerendered (the settings suites' pattern). The two
-// client islands it hosts (OrgSponsors, SponsorPackages) are stubbed to markers that carry the props the page gave them
+// client islands it hosts (OrgSponsors, PackageList) are stubbed to markers that carry the props the page gave them
 // - "did the org get the feature?" and "was it read-only?" become exact string checks. lib/entitlements is mocked at the
 // two calls the page makes (`hasFeatureOnAnyPass`, and since the Add deal sheet's fix round `featureScopes` - WHERE a feature is on,
 // which the Sponsors tab asks for sponsors.monetize) so the granted and the denied gate are both driven. By default `featureScopes`
@@ -10,7 +10,7 @@
 // What these cases pin, per the task brief and R19:
 //   - no tab => Overview; an unknown tab => Overview
 //   - every tab renders its own panel and ONLY its own (a sweep over `SPONSORS_TABS`, counted)
-//   - Sponsors keeps `sponsors.tiers`, Packages keeps `sponsors.monetize` - granted AND denied
+//   - Sponsors keeps `sponsors.tiers`; Packages (Task 18, D17) is on EVERY plan and only reads both flags as affordances - granted AND denied
 //   - a non-editor gets the read-only view Settings gave (canEdit false, no Packages) - NOT a refusal (R19)
 //   - the data each tab needs is loaded for that tab only, and never twice across a sequence
 //   - On stream (S12): an editor gets the tab with the org's sponsors, tiers gate and the scope the URL names - kept only if it
@@ -190,24 +190,29 @@ vi.mock("@/components/sponsors/overview-tab", () => ({
     />
   ),
 }));
-vi.mock("@/components/sponsor-packages", () => ({
-  SponsorPackages: (p: {
+// The Packages tab's island (Task 18): a marker carrying what the page handed it - the packages as the server listed them, the two plan
+// flags (affordances), the competitions for the scope picker, which have finished, and whether the viewer may write.
+vi.mock("@/components/sponsors/package-list", () => ({
+  PackageList: (p: {
     orgId: string;
-    competitions: unknown[];
-    sponsors: { id: string; name: string; display_order: number }[];
+    initialPackages: { id: string }[];
+    competitions: { id: string; name: string }[];
+    hasTiers: boolean;
     hasMonetize: boolean;
     billingHref: string;
-    sponsorsHref: string;
-    finishedCompetitionIds?: readonly string[];
+    finishedCompetitionIds: readonly string[];
+    canEdit: boolean;
   }) => (
     <div
-      data-testid="sponsor-packages-island"
+      data-testid="package-list-island"
       data-org={p.orgId}
-      data-finished={p.finishedCompetitionIds === undefined ? "<absent>" : p.finishedCompetitionIds.join("|")}
+      data-packages={p.initialPackages.map((k) => k.id).join("|")}
+      data-competitions={p.competitions.map((c) => `${c.id}:${c.name}`).join("|")}
+      data-has-tiers={String(p.hasTiers)}
       data-has-monetize={String(p.hasMonetize)}
-      data-competitions={p.competitions.length}
-      data-pick={p.sponsors.map((s) => `${s.id}:${s.name}:${s.display_order}`).join("|")}
-      data-sponsors-href={p.sponsorsHref}
+      data-billing={p.billingHref}
+      data-finished={p.finishedCompetitionIds.join("|")}
+      data-can-edit={String(p.canEdit)}
     />
   ),
 }));
@@ -413,7 +418,8 @@ describe("a panel's heading IS its tab's label - one declaration, so the two can
     h.resolveLocale.mockResolvedValue("en");
     const html = await render("packages");
     expect(html).not.toContain("Sell sponsorship");
-    expect(html).toMatch(/<h2 id="sponsors-tab-packages-heading"[^>]*>Packages and orders<\/h2>/);
+    expect(html).toMatch(/<h2 id="sponsors-tab-packages-heading"[^>]*>Packages<\/h2>/);
+    expect(html, "orders are deals now and live on the Sponsors tab").not.toMatch(/Packages and orders/);
   });
 });
 
@@ -445,81 +451,91 @@ describe("the Sponsors tab keeps Settings' gates: sponsors.tiers, granted AND de
   });
 });
 
-describe("the Packages tab keeps Settings' gate: sponsors.monetize, granted AND denied", () => {
-  it("granted => SponsorPackages gets hasMonetize true; asked org-wide for sponsors.monetize", async () => {
-    h.hasFeatureOnAnyPass.mockResolvedValue(true);
+describe("the Packages tab is the price list, on every plan (sponsor deals PR 2, Task 18; D17)", () => {
+  const auth = { orgId: ORG.id, via: "session", userId: "u1", role: "owner", keyId: null };
+
+  it("hands the island the org's packages as the server listed them, its competitions for the scope picker, and the billing URL", async () => {
     const html = await render("packages");
-    expect(attr(html, "sponsor-packages-island", "data-has-monetize")).toBe("true");
-    expect(h.hasFeatureOnAnyPass).toHaveBeenCalledWith(ORG.id, "sponsors.monetize");
+    expect(h.listSponsorPackages).toHaveBeenCalledTimes(1);
+    expect(h.listSponsorPackages).toHaveBeenCalledWith(auth);
+    expect(attr(html, "package-list-island", "data-org")).toBe(ORG.id);
+    expect(attr(html, "package-list-island", "data-packages")).toBe("p1|p2");
+    expect(attr(html, "package-list-island", "data-competitions")).toBe("c1:Spring Cup|c2:Autumn Cup|c3:Cup 3");
+    expect(attr(html, "package-list-island", "data-billing")).toBe("/o/riverside/settings/billing");
+    expect(attr(html, "package-list-island", "data-can-edit")).toBe("true");
   });
 
-  it("denied => hasMonetize false (the upsell arm)", async () => {
-    h.hasFeatureOnAnyPass.mockImplementation(async (_org: string, key: string) => key !== "sponsors.monetize");
+  it("the empty case: an org with no packages still gets the list, with an EMPTY package list (not a missing one) - and Create", async () => {
+    h.listSponsorPackages.mockResolvedValue([]);
     const html = await render("packages");
-    expect(attr(html, "sponsor-packages-island", "data-has-monetize")).toBe("false");
+    expect(html).toContain('data-testid="package-list-island"');
+    expect(attr(html, "package-list-island", "data-packages")).toBe("");
+    expect(attr(html, "package-list-island", "data-can-edit")).toBe("true");
   });
 
-  it("the two gates are independent: tiers denied does not deny monetize, and the Packages tab does not ask for tiers", async () => {
-    h.hasFeatureOnAnyPass.mockImplementation(async (_org: string, key: string) => key === "sponsors.monetize");
-    expect(attr(await render("packages"), "sponsor-packages-island", "data-has-monetize")).toBe("true");
-    expect(h.hasFeatureOnAnyPass.mock.calls.map((c) => c[1])).toEqual(["sponsors.monetize"]);
-    h.hasFeatureOnAnyPass.mockClear();
-    // The Sponsors tab asks BOTH (Task 13: the Add deal sheet locks Send invoice by monetize), each answered on its own.
-    const sponsors = await render("sponsors");
-    expect(attr(sponsors, "org-sponsors", "data-has-tiers")).toBe("false");
-    expect(attr(sponsors, "org-sponsors", "data-hub-monetize")).toBe("true");
-    expect(h.hasFeatureOnAnyPass.mock.calls.map((c) => c[1])).toEqual(["sponsors.tiers", "sponsors.monetize"]);
-    h.hasFeatureOnAnyPass.mockImplementation(async (_org: string, key: string) => key === "sponsors.tiers");
-    const flipped = await render("sponsors");
-    expect(attr(flipped, "org-sponsors", "data-has-tiers")).toBe("true");
-    expect(attr(flipped, "org-sponsors", "data-hub-monetize")).toBe("false");
-  });
-});
-
-describe("the Packages tab hands the invoice form its sponsor picker (sponsor deals T12)", () => {
-  it("passes every sponsor row as { id, name, display_order } - the picker's whole input - and the Sponsors tab's URL for the empty case", async () => {
+  it("a community org - NEITHER flag granted - still gets the list and its packages: the page is not gated, only the tier and scope inside it", async () => {
+    h.hasFeatureOnAnyPass.mockResolvedValue(false);
     const html = await render("packages");
-    expect(attr(html, "sponsor-packages-island", "data-pick")).toBe("s1:Harbour:3|s2:Ridge:0");
-    expect(attr(html, "sponsor-packages-island", "data-sponsors-href")).toBe(sponsorsHref(ORG.slug, "sponsors"));
+    expect(html).toContain('data-testid="package-list-island"');
+    expect(attr(html, "package-list-island", "data-packages")).toBe("p1|p2");
+    expect(attr(html, "package-list-island", "data-has-tiers")).toBe("false");
+    expect(attr(html, "package-list-island", "data-has-monetize")).toBe("false");
   });
 
-  it("a plan WITHOUT sponsors.monetize sees the upsell and reads no sponsors; the granted pair does read them", async () => {
-    h.hasFeatureOnAnyPass.mockImplementation(async (_org: string, key: string) => key !== "sponsors.monetize");
-    const denied = await render("packages");
-    expect(attr(denied, "sponsor-packages-island", "data-has-monetize")).toBe("false");
-    expect(attr(denied, "sponsor-packages-island", "data-pick")).toBe("");
-    expect(h.listSponsorRows, "denied: nothing read").not.toHaveBeenCalled();
-    h.hasFeatureOnAnyPass.mockResolvedValue(true);
+  it("both plan flags are affordances, each answered on its own: the four combinations (counted), asked org-wide for each key", async () => {
+    let checked = 0;
+    for (const tiers of [true, false]) {
+      for (const monetize of [true, false]) {
+        h.hasFeatureOnAnyPass.mockClear();
+        h.hasFeatureOnAnyPass.mockImplementation(async (_org: string, key: string) => (key === "sponsors.tiers" ? tiers : key === "sponsors.monetize" ? monetize : false));
+        const html = await render("packages");
+        const label = `tiers=${tiers} monetize=${monetize}`;
+        expect(attr(html, "package-list-island", "data-has-tiers"), label).toBe(String(tiers));
+        expect(attr(html, "package-list-island", "data-has-monetize"), label).toBe(String(monetize));
+        expect(h.hasFeatureOnAnyPass.mock.calls.map((c) => c[1]).sort(), label).toEqual(["sponsors.monetize", "sponsors.tiers"]);
+        expect(h.hasFeatureOnAnyPass).toHaveBeenCalledWith(ORG.id, "sponsors.tiers");
+        expect(h.hasFeatureOnAnyPass).toHaveBeenCalledWith(ORG.id, "sponsors.monetize");
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("the competitions the scope picker offers are THIS org's only: the org id is bound into the read, and only that read", async () => {
     await render("packages");
-    expect(h.listSponsorRows, "granted: the picker's sponsors are read").toHaveBeenCalledTimes(1);
+    const reads = h.sql.mock.calls.map((c) => ({ text: (c[0] as TemplateStringsArray).join("?"), values: c.slice(1) }));
+    const comps = reads.filter((r) => r.text.includes("from competitions"));
+    expect(comps, "exactly one competitions read").toHaveLength(1);
+    expect(comps[0]!.values).toEqual([ORG.id]);
+    expect(reads.filter((r) => r.text.includes("stripe_charges_enabled")), "the Add deal sheet's Stripe read is the Sponsors tab's").toEqual([]);
   });
 
-  it("an org with no sponsors hands an EMPTY picker (the form then says Add a sponsor first), not a missing one", async () => {
-    h.listSponsorRows.mockResolvedValue([]);
-    const html = await render("packages");
-    expect(html).toContain('data-testid="sponsor-packages-island"');
-    expect(attr(html, "sponsor-packages-island", "data-pick")).toBe("");
+  it("reads no sponsors: the invoice form and its picker are gone (a deal is added from a sponsor)", async () => {
+    await render("packages");
+    expect(h.listSponsorRows).not.toHaveBeenCalled();
+    expect(h.listDeals, "and no orders list: deals live on the Sponsors tab").not.toHaveBeenCalled();
+    expect(h.featureScopes, "the per-scope read is the Sponsors tab's").not.toHaveBeenCalled();
   });
 });
 
 describe("the Packages tab hands over which packages' competitions have finished (batch F review m4)", () => {
-  // The client hides Send invoice on those packages; createDeal refuses them anyway (409 competition_finished). The ids are the
-  // usecase's answer, handed over as they are.
-  it("granted: asks finishedPackageCompetitions for THIS org and hands its answer over as it is", async () => {
+  // The card marks those packages as not sold; createDeal refuses them anyway (409 competition_finished). The ids are the usecase's
+  // answer, handed over as they are - on every plan, since the tab is.
+  it("asks finishedPackageCompetitions for THIS org and hands its answer over as it is", async () => {
     const html = await render("packages");
     expect(h.finishedPackageCompetitions).toHaveBeenCalledWith(ORG.id);
-    expect(attr(html, "sponsor-packages-island", "data-finished")).toBe("c2");
+    expect(attr(html, "package-list-island", "data-finished")).toBe("c2");
   });
 
   it("nothing finished: an EMPTY list, not a missing one", async () => {
     h.finishedPackageCompetitions.mockResolvedValue([]);
-    expect(attr(await render("packages"), "sponsor-packages-island", "data-finished")).toBe("");
+    expect(attr(await render("packages"), "package-list-island", "data-finished")).toBe("");
   });
 
-  it("a plan WITHOUT sponsors.monetize asks nothing (it sees the upsell, no packages)", async () => {
-    h.hasFeatureOnAnyPass.mockImplementation(async (_org: string, key: string) => key !== "sponsors.monetize");
-    expect(attr(await render("packages"), "sponsor-packages-island", "data-finished")).toBe("");
-    expect(h.finishedPackageCompetitions).not.toHaveBeenCalled();
+  it("a community org reads it too (the pair of the old 'a plan without the feature asks nothing')", async () => {
+    h.hasFeatureOnAnyPass.mockResolvedValue(false);
+    expect(attr(await render("packages"), "package-list-island", "data-finished")).toBe("c2");
+    expect(h.finishedPackageCompetitions).toHaveBeenCalledTimes(1);
   });
 
   it("a tab that shows neither packages nor deals never asks (the page loads only what its tab shows)", async () => {
@@ -571,11 +587,6 @@ describe("the Sponsors tab hands the Add deal sheet WHERE online selling is on, 
     expect(attr(await render("sponsors"), "org-sponsors", "data-hub-finished")).toBe("c1|c3");
   });
 
-  it("the Packages tab is unchanged: it still asks hasFeatureOnAnyPass for monetize (the featureScopes read is the Sponsors tab's)", async () => {
-    await render("packages");
-    expect(h.hasFeatureOnAnyPass).toHaveBeenCalledWith(ORG.id, "sponsors.monetize");
-    expect(h.featureScopes).not.toHaveBeenCalled();
-  });
 });
 
 describe("the Sponsors tab loads what the sponsor and deal screens read (sponsor deals PR 2, Task 13)", () => {
@@ -642,16 +653,21 @@ describe("the Sponsors tab loads what the sponsor and deal screens read (sponsor
     expect(comps, "the read selects ends_on as text, so a date column cannot reach the client as a Date").toMatch(/ends_on::text/);
   });
 
-  it("another tab reads none of it (the page loads only what its tab shows)", async () => {
+  it("another tab reads none of it (the page loads only what its tab shows); Packages reads its packages and no deals", async () => {
     let checked = 0;
-    for (const tab of ["overview", "packages", "on_stream"]) {
+    for (const tab of ["overview", "on_stream"]) {
       await render(tab, undefined, undefined, { sponsor: "s1", deal: "d1" });
       checked++;
     }
-    expect(checked).toBe(3);
+    expect(checked).toBe(2);
     expect(h.listDeals).not.toHaveBeenCalled();
     expect(h.listSponsorPackages).not.toHaveBeenCalled();
     expect(h.sql.mock.calls.map((c) => (c[0] as TemplateStringsArray).join("?")).filter((t) => t.includes("stripe_charges_enabled"))).toEqual([]);
+    // The one tab besides Sponsors that lists packages reads them - and still no deals, whatever the URL says.
+    h.listSponsorPackages.mockClear();
+    await render("packages", undefined, undefined, { sponsor: "s1", deal: "d1" });
+    expect(h.listSponsorPackages).toHaveBeenCalledTimes(1);
+    expect(h.listDeals).not.toHaveBeenCalled();
   });
 });
 
@@ -994,10 +1010,12 @@ describe("a non-editor gets the same read-only view Settings gave - canEdit fals
     expect(attr(html, "org-sponsors", "data-sponsors")).toBe("2");
   });
 
-  it("?tab=packages gives a non-editor Overview: SponsorPackages is never mounted and its gate is never even asked", async () => {
+  it("?tab=packages gives a non-editor Overview: the price list is never mounted, its packages are never read and its gates are never even asked", async () => {
     const html = await render("packages");
     expect(panels(html)).toEqual(["overview"]);
-    expect(html).not.toContain('data-testid="sponsor-packages-island"');
+    expect(html).not.toContain('data-testid="package-list-island"');
+    expect(h.listSponsorPackages).not.toHaveBeenCalled();
+    expect(h.finishedPackageCompetitions).not.toHaveBeenCalled();
     expect(h.hasFeatureOnAnyPass).not.toHaveBeenCalled();
     expect(h.listSponsorRows).not.toHaveBeenCalled();
   });
@@ -1043,16 +1061,23 @@ describe("the page loads only what the tab it shows needs, and nothing is carrie
     expect(h.reportLinkDefaults).not.toHaveBeenCalled();
   });
 
-  it("Sponsors then Packages in sequence: each render asks for its own gate once, so a second call carries nothing over", async () => {
+  it("Sponsors then Packages in sequence: each render asks for its own reads once, so a second call carries nothing over", async () => {
     await render("sponsors");
+    // (the featureScopes stub delegates to hasFeatureOnAnyPass, so monetize shows up in both - the second assertion is the one that
+    // says WHO asked)
     expect(h.hasFeatureOnAnyPass.mock.calls.map((c) => c[1])).toEqual(["sponsors.tiers", "sponsors.monetize"]);
+    expect(h.featureScopes.mock.calls.map((c) => c[1])).toEqual(["sponsors.monetize"]);
     expect(h.listSponsorRows).toHaveBeenCalledTimes(1);
+    expect(h.listSponsorPackages).toHaveBeenCalledTimes(1);
     h.hasFeatureOnAnyPass.mockClear();
+    h.featureScopes.mockClear();
     h.listSponsorRows.mockClear();
+    h.listSponsorPackages.mockClear();
     await render("packages");
-    expect(h.hasFeatureOnAnyPass.mock.calls.map((c) => c[1])).toEqual(["sponsors.monetize"]);
-    expect(h.listSponsorRows, "the Packages tab reads the org's sponsors once, for its picker").toHaveBeenCalledTimes(1);
-    expect(h.listSponsorRows).toHaveBeenCalledWith(ORG.id);
+    expect(h.hasFeatureOnAnyPass.mock.calls.map((c) => c[1])).toEqual(["sponsors.tiers", "sponsors.monetize"]);
+    expect(h.featureScopes, "the Packages tab asks the org-level question, not the per-scope one").not.toHaveBeenCalled();
+    expect(h.listSponsorRows, "and reads no sponsors").not.toHaveBeenCalled();
+    expect(h.listSponsorPackages, "its packages once").toHaveBeenCalledTimes(1);
   });
 
   it("authorises from the URL (requireOrgPage with the hub's rename tail), before anything is read", async () => {

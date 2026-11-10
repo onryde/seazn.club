@@ -919,3 +919,54 @@ test("deal page: Refund (offline) records it, no card copy", async ({ page, requ
   expect([read.data!.deal_status, read.data!.payment_status]).toEqual(["ended", "refunded"]);
   await expectPublic(request, s, false, "refunded: off the public page");
 });
+
+// Sponsor deals PR 2, Task 18 - Packages is a price list. "Used by" is read from the deals themselves, so it is the producer-to-
+// consumer seam: deals made through the real route, counted by the real list read, shown on the real card.
+test("packages: a package's used-by count follows its deals, and Retire takes it off the list of packages to sell", async ({ page, request }) => {
+  // Seeding (two sponsors, two deals), four page loads and the retire.
+  test.setTimeout(240_000);
+  const org = await seedSettingsOrg(request, { plan: "community", label: "pkg-used-by" });
+  seeded.push(org);
+  const pkg = await newPackage(request, org.orgId, "partner");
+  const card = page.locator(`[data-testid="package-card"][data-package-id="${pkg}"]`);
+  const usedBy = card.getByTestId("package-used-by");
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  // The empty case first: a package nobody holds a deal on says so, and says nothing about "0 sponsors".
+  await page.goto(sponsorsUrl(org.slug, "packages"));
+  await expect(page.getByTestId("sponsor-package-list"), "Packages is on every plan: a community org has the list").toBeVisible();
+  await expect(usedBy, "no deal yet").toHaveText(ui("sponsors.pkg.notUsed"));
+
+  const ridge = await newSponsor(request, org.orgId, "Ridge Gold Physiotherapy");
+  const quay = await newSponsor(request, org.orgId, "Quay Fisheries");
+  const ridgeDeal = await newDeal(request, org.orgId, ridge, { package_id: pkg, payment_method: "complimentary", go_live: "immediate" });
+  await page.reload();
+  await expect(usedBy, "one sponsor holds a deal on it (the singular)").toHaveText(ui("sponsors.pkg.usedBy.one", { count: "1" }));
+
+  await newDeal(request, org.orgId, quay, { package_id: pkg, payment_method: "complimentary", go_live: "immediate" });
+  await page.reload();
+  await expect(usedBy, "two sponsors (the plural)").toHaveText(ui("sponsors.pkg.usedBy.other", { count: "2" }));
+
+  // An ended deal stops counting: the sponsor no longer holds the package.
+  const ended = await apiJson<Deal>(request, `/api/v1/orgs/${org.orgId}/sponsor-deals/${ridgeDeal}/end`, "POST");
+  expect(ended.status, JSON.stringify(ended.error)).toBe(200);
+  await page.reload();
+  await expect(usedBy, "an ended deal no longer counts").toHaveText(ui("sponsors.pkg.usedBy.one", { count: "1" }));
+
+  // Retire asks first, then takes the package off sale; the deal already on it carries on.
+  const dialog = page.getByRole("alertdialog", { name: ui("sponsors.pkg.retireConfirm.title") });
+  await expect(async () => {
+    if (await dialog.isVisible()) return;
+    await card.getByTestId("package-retire").click({ timeout: 2_000 });
+    await expect(dialog, "Retire asks first").toBeVisible({ timeout: 3_000 });
+  }).toPass({ timeout: 20_000 });
+  const [retired] = await Promise.all([
+    page.waitForResponse((r) => r.url().endsWith(`/sponsor-packages/${pkg}`) && r.request().method() === "DELETE", { timeout: 20_000 }),
+    dialog.getByRole("button", { name: ui("sponsors.pkg.retireConfirm.label"), exact: true }).click(),
+  ]);
+  expect(retired.status(), `retire answered ${retired.status()}: ${await retired.text()}`).toBe(200);
+  await expect(card.getByTestId("package-retired"), "the card reads Retired").toBeVisible();
+  await expect(card.getByTestId("package-retire"), "and offers no second Retire").toHaveCount(0);
+  await expect(usedBy, "the deal already on it carries on: still counted").toHaveText(ui("sponsors.pkg.usedBy.one", { count: "1" }));
+  await expectNoHorizontalScroll(page);
+});

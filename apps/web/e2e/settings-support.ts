@@ -41,7 +41,7 @@ export function settingsUrl(slug: string, tab: string): string {
 
 /**
  * `/o/{slug}/sponsors?tab=…` — the Sponsors hub (R4 sponsors-on-stream S11). Settings no longer has a Sponsors tab: its
- * two bodies moved here, `OrgSponsors` to `?tab=sponsors` and `SponsorPackages` (the sell console and the orders) to
+ * two bodies moved here, `OrgSponsors` to `?tab=sponsors` and `SponsorPackages` (the sell console and the orders; since sponsor deals Task 18 the `PackageList` price list - orders are deals, on the Sponsors tab) to
  * `?tab=packages`. `settingsUrl(slug, "sponsors")` still WORKS - it redirects - but a spec that means the hub goes there
  * directly, so it does not depend on the redirect to reach the page it is about.
  */

@@ -8,7 +8,7 @@
 // Who sees what (R19, from the existing Settings -> Sponsors guard, reused):
 //   - Settings never REFUSED a non-editor. It rendered a read-only view: `OrgSponsors canEdit={false}` and no
 //     packages. The hub keeps exactly that - Overview and Sponsors are readable by every member, and the tabs that
-//     only make sense to someone who can change things (On stream, Packages and orders) are not offered to a
+//     only make sense to someone who can change things (On stream, Packages) are not offered to a
 //     non-editor and fall back to Overview if asked for by URL. The WRITE paths stay guarded by their own routes.
 import { routes } from "@/lib/routes";
 

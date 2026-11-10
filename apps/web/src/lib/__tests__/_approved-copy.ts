@@ -397,7 +397,7 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
  *    `/api/v1/orgs/**` takes the SESSION branch of `requireOrgAuth` and IS
  *    freeze-checked. Five screens write through it: `components/api-keys.tsx`
  *    (Settings → API), `components/news/composer.tsx`,
- *    `components/org-sponsors.tsx`, `components/sponsor-packages.tsx` and
+ *    `components/org-sponsors.tsx`, `components/sponsors/package-list.tsx` and
  *    `components/org-payment-instructions.tsx`. An admin over `members.max`
  *    would have read this article, been told the app was exempt, and then hit a
  *    402 in Settings → API and the news composer.

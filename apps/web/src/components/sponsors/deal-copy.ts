@@ -1,8 +1,8 @@
 // The words and the small questions the deal screens share (sponsor deals PR 2, Tasks 15-17): what ending or refunding a deal does to
 // the money and to the public pages, whether a pay link the console showed can still be paid, and the "this sponsor already has one
-// of these" check behind the Add deal sheet's duplicate confirm. They lived in the Packages tab's transitional picker
-// (components/sponsor-packages.tsx, which Task 18 deletes and which now re-exports them): the sponsor page, the deal page and the
-// Add deal sheet need the SAME answers, so there is one home. Pure: no hooks.
+// of these" check behind the Add deal sheet's duplicate confirm. They lived in the Packages tab's transitional picker (deleted in
+// Task 18, when Packages became a price list): the sponsor page, the deal page and the Add deal sheet need the SAME answers, so
+// there is one home. Pure: no hooks.
 import { fmtNumber } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
 import { isLiveDeal, isOpenDeal, isUnpaid, type SponsorDeal } from "@/lib/sponsor-deals";

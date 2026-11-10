@@ -465,7 +465,7 @@ test("Sponsors hub, Sponsors tab: add three, reorder, edit tier and scope, delet
   const B2 = `Bravo Bakery & Co ${TAG}`;
 
   // The Sponsors hub (R4 sponsors-on-stream S11): the tab left Settings. This is the hub's Sponsors tab, which mounts
-  // OrgSponsors alone - SponsorPackages is its own "Packages and orders" tab now.
+  // OrgSponsors alone - the price list (PackageList) is its own "Packages" tab now.
   await page.goto(sponsorsUrl(org.slug, "sponsors"));
 
   // DOM order on this tab is: OrgSponsors' add form, then its rows (each of

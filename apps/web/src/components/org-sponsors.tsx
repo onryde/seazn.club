@@ -140,6 +140,15 @@ function deleteIsRefusedForHistory(s: SponsorItem): boolean {
   return Boolean(s.paid_order_id) || s.deal?.payment_status === "paid" || s.deal?.payment_status === "refunded";
 }
 
+/** The dictionary key for a refused logo upload grant, from the route's STATUS (batch H review m6): the picker offers PNG, JPG and WebP,
+ *  and the route's own answers are 400 (validation: a type outside its list), 415 (unsupported type) and 401 / 403 (not allowed to
+ *  upload at all). 413 is the size cap (the route does not send it itself; a proxy or the bucket does), read as the 2 MB limit. */
+export function logoUploadRefusalKey(status: number): "settings.org.sponsors.uploadTypeNotAllowed" | "settings.org.sponsors.tooBig" | "settings.org.sponsors.uploadNotAllowed" {
+  if (status === 400 || status === 415 || status === 422) return "settings.org.sponsors.uploadTypeNotAllowed";
+  if (status === 413) return "settings.org.sponsors.tooBig";
+  return "settings.org.sponsors.uploadNotAllowed";
+}
+
 /** People type bare domains — give the link a scheme before validation. */
 function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
@@ -443,8 +452,10 @@ export function OrgSponsors({
       // handler() envelope: { ok, data } — same unwrap as api().
       data?: { upload_url?: string; public_url?: string };
     };
-    // The envelope's `error` is the server's English sentence (or a structured object): never shown, whatever the status.
-    if (!res.ok) throw new Error(msg("settings.org.sponsors.uploadNotAllowed"));
+    // The envelope's `error` is the server's English sentence (or a structured object): never shown, whatever the status. The STATUS
+    // says which words are true (batch H review m6): a type the route will not take (400 validation, 415 or 422) is a different fix
+    // from "not allowed to upload at all" (401, 403), and a file over the cap (413) is the size limit - never the generic refusal.
+    if (!res.ok) throw new Error(msg(logoUploadRefusalKey(res.status)));
     const grant = json.data;
     if (!grant?.upload_url || !grant.public_url) {
       throw new Error(msg("settings.org.sponsors.uploadNotAllowed"));
@@ -454,7 +465,7 @@ export function OrgSponsors({
       headers: { "Content-Type": file.type },
       body: file,
     });
-    if (!put.ok) throw new Error(msg("settings.org.logo.uploadFailed"));
+    if (!put.ok) throw new Error(msg(put.status === 413 ? "settings.org.sponsors.tooBig" : "settings.org.logo.uploadFailed"));
     return grant.public_url;
   }
 

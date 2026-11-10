@@ -394,10 +394,11 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
   );
   const hubPackages = await html(admin, `/o/${proOrgSlug}/sponsors?tab=packages`);
   check(
-    "sp hub Packages tab renders the sell console for an editor",
+    "sp hub Packages tab renders the price list for an editor (sponsor deals Task 18: no console, no orders)",
     hubPackages.status === 200 &&
       hubPackages.body.includes('data-testid="sponsors-tab-packages"') &&
-      hubPackages.body.includes('data-testid="sponsor-packages"'),
+      hubPackages.body.includes('data-testid="sponsor-package-list"') &&
+      !hubPackages.body.includes('data-testid="sponsor-packages"'),
   );
   // Sponsor deals PR 2, Task 17: `&deal=<id>` on a sponsor's page is that deal's own page - from the REAL list the deal landed in
   // above (Acme's online deal), read back through the real hub page. A stranger's id is the sponsor's page again, never a 404.
@@ -489,10 +490,14 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
     freeGoldPkg.status === 402 &&
       (freeGoldPkg.json.error as { feature_key?: string } | undefined)?.feature_key === "sponsors.tiers",
   );
-  // The hub is not itself gated: a free-plan owner reaches it, and its Packages tab (the upsell) renders rather than 402/404.
+  // The hub is not itself gated, and neither is its Packages tab (D17): a free-plan owner gets the price list - with the partner
+  // package created above on it - rather than an upsell, 402 or 404. The gates are the tier and the online selling inside it.
   const freeHub = await html(free, `/o/${freeOrg.slug}/sponsors?tab=packages`);
   check(
-    "sp hub Packages tab answers 200 on a free org (the gate is the feature, not the page)",
-    freeHub.status === 200 && freeHub.body.includes('data-testid="sponsors-tab-packages"'),
+    "sp hub Packages tab renders the price list on a free org, with its package (the gate is the feature, not the page)",
+    freeHub.status === 200 &&
+      freeHub.body.includes('data-testid="sponsors-tab-packages"') &&
+      freeHub.body.includes('data-testid="sponsor-package-list"') &&
+      freeHub.body.includes("Partner Package"),
   );
 }

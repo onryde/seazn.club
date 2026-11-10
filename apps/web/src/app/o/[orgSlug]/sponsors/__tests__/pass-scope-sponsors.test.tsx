@@ -1,8 +1,8 @@
 // Phase 2 pass-scoping sweep — the Sponsors hub's two Event Pass keys.
 //
 // (Moved from settings/__tests__ with the Sponsors tab itself, R4 sponsors-on-stream S11: `sponsors.tiers` is now read
-// by the hub's Sponsors tab and `sponsors.monetize` by its Packages and orders tab - one tab each where Settings had
-// both on one. Same org-wide question, same pass overlay, same expectations.)
+// by the hub's Sponsors tab and `sponsors.monetize` by its Packages tab (an affordance in the price list since Task 18; the
+// deals themselves moved to the Sponsors tab) - one tab each where Settings had both on one. Same org-wide question, same pass overlay, same expectations.)
 //
 // `sponsors.tiers` and `sponsors.monetize` are lifted by the Event Pass
 // (community=false, event_pass=true), but the page resolved both
@@ -69,9 +69,18 @@ vi.mock("@/components/org-sponsors", () => ({
     />
   ),
 }));
-vi.mock("@/components/sponsor-packages", () => ({
-  SponsorPackages: ({ hasMonetize }: { hasMonetize: boolean }) => (
-    <div data-testid={`sponsor-monetize-${hasMonetize}`} />
+// Task 18: the Packages tab is a price list on every plan; its island gets both plan flags as affordances, the org's packages and
+// competitions (the scope picker) - the marker carries what the REAL loaders handed it.
+vi.mock("@/components/sponsors/package-list", () => ({
+  PackageList: ({ hasMonetize, hasTiers, initialPackages, competitions }: {
+    hasMonetize: boolean; hasTiers: boolean; initialPackages: { id: string }[]; competitions: { id: string }[];
+  }) => (
+    <div
+      data-testid={`sponsor-monetize-${hasMonetize}`}
+      data-pkg-tiers={String(hasTiers)}
+      data-pkg-packages={initialPackages.map((k) => k.id).join("|")}
+      data-pkg-competitions={competitions.map((c) => c.id).sort().join("|")}
+    />
   ),
 }));
 
@@ -201,7 +210,7 @@ describe.skipIf(!HAS_DB)("the Sponsors hub sees an Event Pass held on any compet
     expect(await hasFeature(withPass.orgId, "sponsors.tiers", withPass.plainId)).toBe(false);
   });
 
-  it("turns the package composer on for a pass holder, and keeps it off without one", async () => {
+  it("turns the package list's online-selling note on for a pass holder, and keeps it off without one", async () => {
     const withPass = await seedOrg({ withPass: true });
     expect(await renderSponsorsTab(withPass, "packages")).toContain("sponsor-monetize-true");
 
@@ -226,6 +235,28 @@ describe.skipIf(!HAS_DB)("the Sponsors tab reads the org's deals, packages, plan
     expect(field(html, "packages")).toBe(mine.packageId);
     expect(field(html, "deals")).not.toContain(other.dealId);
     expect(field(html, "packages")).not.toContain(other.packageId);
+  });
+
+  // Task 18 (D17): the Packages tab is on EVERY plan. A community org with no pass still gets the list, its own packages and its own
+  // competitions - only the tier / scope / online affordances inside it follow the plan, and each follows its own flag.
+  it("the Packages tab renders for an org with NO pass: THIS org's packages and competitions only, both flags false (empty case of the gate)", async () => {
+    const mine = await seedOrg({ withPass: false });
+    const other = await seedOrg({ withPass: false });
+    const html = await renderSponsorsTab(mine, "packages");
+    const pkg = (name: string) => new RegExp(`data-pkg-${name}="([^"]*)"`).exec(html)?.[1];
+    expect(html).toContain("sponsor-monetize-false");
+    expect(pkg("tiers")).toBe("false");
+    expect(pkg("packages")).toBe(mine.packageId);
+    expect(pkg("packages")).not.toContain(other.packageId);
+    expect(pkg("competitions")).toBe([mine.passedId, mine.plainId].sort().join("|"));
+    expect(pkg("competitions")).not.toContain(other.passedId);
+  });
+
+  it("the Packages tab's two plan flags follow the pass independently and for real: a pass turns BOTH affordances on", async () => {
+    const withPass = await seedOrg({ withPass: true });
+    const html = await renderSponsorsTab(withPass, "packages");
+    expect(html).toContain("sponsor-monetize-true");
+    expect(new RegExp('data-pkg-tiers="([^"]*)"').exec(html)?.[1]).toBe("true");
   });
 
   it("asks sponsors.monetize with the pass overlay, granted AND denied - the same answer the Packages tab gives", async () => {

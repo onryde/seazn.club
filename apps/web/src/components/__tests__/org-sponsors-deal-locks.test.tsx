@@ -160,9 +160,10 @@ beforeEach(() => {
   confirmMock.mockImplementation(async () => true);
   answer = () => ({ status: 200, body: { data: [] } });
   fetchMock.mockReset();
-  fetchMock.mockImplementation(async (url: string, init?: { method?: string; body?: string }) => {
+  fetchMock.mockImplementation(async (url: string, init?: { method?: string; body?: unknown }) => {
     const method = init?.method ?? "GET";
-    calls.push({ url, method, body: init?.body ? (JSON.parse(init.body) as Record<string, unknown>) : null });
+    // A string body is JSON; the storage PUT's body is the File itself (never parsed).
+    calls.push({ url, method, body: typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null });
     const a = answer(url, method);
     return { ok: a.status < 400, status: a.status, json: async () => a.body };
   });
@@ -186,6 +187,8 @@ const HUB: SponsorsHubData = {
   chargesEnabled: true,
   sponsorId: null,
   dealId: null,
+  dealCreatedByName: null,
+  dealCompetitionFinished: false,
   reportLinks: [],
   reportDefaults: null,
 };
@@ -284,31 +287,77 @@ describe("Edit hands the form the ROW's lock (the join between the list and the 
   });
 });
 
-describe("a refused logo upload reads the dictionary's words, never the server's (fix round 1, m6)", () => {
-  it("the upload route's refusal - a sentence, or a structured validation error - shows 'Upload not allowed' and saves nothing (both checked)", async () => {
-    const CASES: [string, unknown][] = [
-      ["Unsupported image type", { ok: false, error: "Unsupported image type" }],
-      ["Invalid input: content_type", { ok: false, error: { code: "VALIDATION", message: "Invalid input: content_type" } }],
-    ];
+describe("a refused logo upload reads the dictionary's words, never the server's (fix round 1, m6; and which words, Task 18)", () => {
+  // The STATUS says which words are true: a type the route will not take is a different fix from "not allowed to upload", and a file
+  // over the cap is the size limit. Expected words come from the dictionary keys, never from the component's own table.
+  const UPLOAD_ERRORS: { label: string; status: number; body: unknown; serverText: string; key: MessageKey }[] = [
+    { label: "415 a sentence", status: 415, body: { ok: false, error: "Unsupported image type" }, serverText: "Unsupported image type", key: "settings.org.sponsors.uploadTypeNotAllowed" },
+    { label: "400 a structured validation error", status: 400, body: { ok: false, error: { code: "VALIDATION", message: "Invalid input: content_type" } }, serverText: "Invalid input: content_type", key: "settings.org.sponsors.uploadTypeNotAllowed" },
+    { label: "422 validation", status: 422, body: { ok: false, error: { code: "VALIDATION", message: "Invalid enum value" } }, serverText: "Invalid enum value", key: "settings.org.sponsors.uploadTypeNotAllowed" },
+    { label: "413 over the size cap", status: 413, body: { ok: false, error: "Payload Too Large" }, serverText: "Payload Too Large", key: "settings.org.sponsors.tooBig" },
+    { label: "403 not allowed to upload", status: 403, body: { ok: false, error: "Forbidden" }, serverText: "Forbidden", key: "settings.org.sponsors.uploadNotAllowed" },
+    { label: "401 signed out", status: 401, body: { ok: false, error: { code: "UNAUTHENTICATED", message: "Sign in" } }, serverText: "Sign in", key: "settings.org.sponsors.uploadNotAllowed" },
+  ];
+  const ALL_UPLOAD_KEYS: MessageKey[] = ["settings.org.sponsors.uploadTypeNotAllowed", "settings.org.sponsors.tooBig", "settings.org.sponsors.uploadNotAllowed", "settings.org.logo.uploadFailed"];
+
+  async function submitWithLogo(): Promise<ReturnType<typeof mount>> {
+    const m = mount([row({ id: "a", name: "Quay Chandlers" })]);
+    m.edit("Quay Chandlers");
+    const file = new File(["x"], "logo.png", { type: "image/png" });
+    (propsOf(m.form()).onChange as (fn: (p: typeof DRAFT) => unknown) => void)((p) => ({ ...p, file }));
+    (propsOf(m.form()).onSubmit as () => void)();
+    await flush();
+    return m;
+  }
+
+  it("the upload route's refusal shows the words its STATUS earns - a sentence or a structured error is never shown - and saves nothing (counted)", async () => {
     let checked = 0;
-    for (const [serverText, body] of CASES) {
+    for (const c of UPLOAD_ERRORS) {
       calls.length = 0;
       answer = (url, method) =>
-        url.includes("/content-upload") && method === "POST" ? { status: 415, body } : { status: 200, body: { data: [] } };
-      const m = mount([row({ id: "a", name: "Quay Chandlers" })]);
-      m.edit("Quay Chandlers");
-      const file = new File(["x"], "logo.png", { type: "image/png" });
-      (propsOf(m.form()).onChange as (fn: (p: typeof DRAFT) => unknown) => void)((p) => ({ ...p, file }));
-      (propsOf(m.form()).onSubmit as () => void)();
-      await flush();
-      expect(calls.some((c) => c.url.includes("/content-upload")), `${serverText}: the upload was attempted`).toBe(true);
-      expect(m.text(), serverText).toContain(msg("settings.org.sponsors.uploadNotAllowed"));
-      expect(m.text(), serverText).not.toContain(serverText);
-      expect(m.text(), serverText).not.toContain("[object Object]");
-      expect(calls.filter((c) => c.method === "PATCH"), `${serverText}: nothing was saved`).toEqual([]);
+        url.includes("/content-upload") && method === "POST" ? { status: c.status, body: c.body } : { status: 200, body: { data: [] } };
+      const m = await submitWithLogo();
+      expect(calls.some((x) => x.url.includes("/content-upload")), `${c.label}: the upload was attempted`).toBe(true);
+      expect(m.text(), c.label).toContain(msg(c.key));
+      // The pair: none of the OTHER refusals' words is on the screen (a mapping that always said one thing would pass the line above).
+      // The dictionary strings overlap by prefix ("Upload not allowed" / "That image type isn't allowed"), so compare whole messages.
+      for (const other of ALL_UPLOAD_KEYS.filter((k) => k !== c.key)) {
+        if (msg(c.key).includes(msg(other))) continue;
+        expect(m.text(), `${c.label}: not ${other}`).not.toContain(msg(other));
+      }
+      expect(m.text(), c.label).not.toContain(c.serverText);
+      expect(m.text(), c.label).not.toContain("[object Object]");
+      expect(calls.filter((x) => x.method === "PATCH"), `${c.label}: nothing was saved`).toEqual([]);
       checked++;
     }
-    expect(checked).toBe(CASES.length);
+    expect(checked, "every refusal was driven").toBe(UPLOAD_ERRORS.length);
+    expect(new Set(UPLOAD_ERRORS.map((c) => c.key)).size, "premise: the table reaches three different messages").toBe(3);
+  });
+
+  it("the storage PUT is refused: over the cap reads the size limit, anything else reads 'Upload failed' (and the PATCH is never sent)", async () => {
+    let checked = 0;
+    for (const [status, key] of [[413, "settings.org.sponsors.tooBig"], [500, "settings.org.logo.uploadFailed"], [403, "settings.org.logo.uploadFailed"]] as const) {
+      calls.length = 0;
+      answer = (url, method) => {
+        if (url.includes("/content-upload") && method === "POST") return { status: 200, body: { data: { upload_url: "https://storage.example/put", public_url: "https://cdn.example/logo.png" } } };
+        if (url === "https://storage.example/put") return { status, body: {} };
+        return { status: 200, body: { data: [] } };
+      };
+      const m = await submitWithLogo();
+      expect(calls.some((x) => x.url === "https://storage.example/put" && x.method === "PUT"), `${status}: the PUT was attempted`).toBe(true);
+      expect(m.text(), `PUT ${status}`).toContain(msg(key));
+      expect(calls.filter((x) => x.method === "PATCH"), `PUT ${status}: nothing was saved`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("the empty case of the grant: a 200 with no upload url is the generic refusal, not a type or size message", async () => {
+    answer = (url, method) =>
+      url.includes("/content-upload") && method === "POST" ? { status: 200, body: { data: {} } } : { status: 200, body: { data: [] } };
+    const m = await submitWithLogo();
+    expect(m.text()).toContain(msg("settings.org.sponsors.uploadNotAllowed"));
+    expect(m.text()).not.toContain(msg("settings.org.sponsors.uploadTypeNotAllowed"));
   });
 });
 

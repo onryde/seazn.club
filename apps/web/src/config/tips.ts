@@ -121,7 +121,7 @@ export const TIPS = {
     // longer adds it. What the pass still adds is the cross-division CAREER
     // rollup (`stats.player.career`), for the divisions inside the competition
     // it covers, so that is what this sentence names.
-    body: "For this competition only: the pass gives it 128 entrants per division and up to 10 divisions. It adds branded exports, public player cards, career stats, auto officials assignment, discipline tracking, embeds, sponsor packages, the realtime scoreboard, a one-time AI credit top-up and a 4% platform fee instead of 5%. It is not Pro — your brand colour on public pages, API access and your organisation's own limits all stay Pro. A passed competition stops counting against your active-competition limit; the pass doesn't carry to next season's edition.",
+    body: "For this competition only: the pass gives it 128 entrants per division and up to 10 divisions. It adds branded exports, public player cards, career stats, auto officials assignment, discipline tracking, embeds, sponsor tiers and online sponsor invoices, the realtime scoreboard, a one-time AI credit top-up and a 4% platform fee instead of 5%. It is not Pro — your brand colour on public pages, API access and your organisation's own limits all stay Pro. A passed competition stops counting against your active-competition limit; the pass doesn't carry to next season's edition.",
     helpSlug: "billing/event-pass",
   },
   "registration.platform-fee": {

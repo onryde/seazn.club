@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 // `SPONSORS_TABS` (lib/sponsors-hub.ts). It replaces Settings -> Sponsors, whose two bodies moved here UNCHANGED:
 //
 //   Sponsors            <OrgSponsors>      (was Settings -> Sponsors, the list and the form)
-//   Packages and orders <SponsorPackages>  (was the block under it, editors only)
+//   Packages            <PackageList>      (the price list; Task 18 replaced the "Packages and orders" console - orders are deals now)
 //   On stream          <OnStreamTab>       (S12: the rotation's switch and dial, the tick list, a preview per sport; editors only)
 //   Overview            <OverviewTab>      (S13: per-sponsor times shown, on screen, viewers, link clicks for a period; Share
 //                                           report links for editors)
@@ -25,7 +25,7 @@ import { listReportLinks, reportLinkDefaults, sponsorOverview } from "@/server/s
 import { OrgSponsors } from "@/components/org-sponsors";
 import { OnStreamTab } from "@/components/sponsors/on-stream-tab";
 import { OverviewTab } from "@/components/sponsors/overview-tab";
-import { SponsorPackages } from "@/components/sponsor-packages";
+import { PackageList } from "@/components/sponsors/package-list";
 import { routes } from "@/lib/routes";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
@@ -34,7 +34,6 @@ import {
   resolveOnStreamScope,
   resolveSponsorParam,
   resolveSponsorsTab,
-  sponsorsHref,
   sponsorsTabsFor,
 } from "@/lib/sponsors-hub";
 import { resolveSponsorPeriod } from "@/lib/sponsor-report";
@@ -150,25 +149,29 @@ export default async function SponsorsHubPage({
       </HubPanel>
     );
   } else if (tab === "packages") {
-    // The invoice form picks one of the org's sponsors (sponsor deals T12): only the picker's three fields cross to the client.
-    // A plan without the feature sees the upsell and no form, so it reads no sponsors (the page loads only what its tab shows).
-    // A package whose competition has finished offers no Send invoice (batch F review m4; the create refuses it anyway).
-    const hasMonetize = await hasFeatureOnAnyPass(active.id, "sponsors.monetize");
-    const [competitions, sponsorRows, finishedCompetitionIds] = await Promise.all([
+    // The price list (Task 18; sponsor deals D17): a package is a placement, so the tab is offered on EVERY plan and reads the org's
+    // packages whatever it holds. The two plan flags are affordances only (org-wide, like the rest of this page): `sponsors.tiers`
+    // opens the tier and one-competition controls in the create sheet, `sponsors.monetize` only picks the closing note. The server
+    // gates the write itself (`createSponsorPackage`). A package whose competition has finished is marked as not sold (the Add deal
+    // sheet refuses it too: 409 competition_finished).
+    const [packages, competitions, hasTiers, hasMonetize, finishedCompetitionIds] = await Promise.all([
+      listSponsorPackages(page.auth),
       orgCompetitions(active.id),
-      hasMonetize ? listSponsorRows(active.id) : Promise.resolve([]),
-      hasMonetize ? finishedPackageCompetitions(active.id) : Promise.resolve([]),
+      hasFeatureOnAnyPass(active.id, "sponsors.tiers"),
+      hasFeatureOnAnyPass(active.id, "sponsors.monetize"),
+      finishedPackageCompetitions(active.id),
     ]);
     body = (
       <HubPanel tab="packages" icon={Banknote} dict={dict}>
-        <SponsorPackages
+        <PackageList
           orgId={active.id}
-          competitions={competitions}
-          sponsors={sponsorRows.map((s) => ({ id: s.id, name: s.name, display_order: s.display_order }))}
+          initialPackages={packages}
+          competitions={competitions.map((c) => ({ id: c.id, name: c.name }))}
+          hasTiers={hasTiers}
           hasMonetize={hasMonetize}
           billingHref={routes.billing(orgSlug)}
-          sponsorsHref={sponsorsHref(orgSlug, "sponsors")}
           finishedCompetitionIds={finishedCompetitionIds}
+          canEdit={canEdit}
         />
       </HubPanel>
     );

@@ -1,6 +1,6 @@
 // The Sponsors hub's refusal copy (final review D3): ONE map from the v1 envelope's machine code to a dictionary key, for the
 // On stream tab's tick and dial, Share report's create and revoke and - since sponsor deals T12 - the Sponsors tab's manager and
-// the Packages tab's invoice, resend, end and refund. The server's sentence is English and names internals ("competition not
+// the Packages tab's invoice, resend, end and refund (and, since Task 18, its package create and retire). The server's sentence is English and names internals ("competition not
 // found"), so it is never shown; a code this map does not know reads the house fallback. Pure: no hooks, no "use client", like
 // break-labels.ts beside it.
 import { ApiV1Error } from "@/lib/client-v1";
@@ -54,7 +54,7 @@ export const SAVE_ERROR_MSG: Readonly<Record<EnvelopeCode | SponsorRefusalCode, 
 };
 
 /** A write whose refusal means something else than the shared words say, for one or two codes. */
-export type SponsorWrite = "create_deal" | "create_deal_resend" | "create_deal_ending" | "resend_invoice";
+export type SponsorWrite = "create_deal" | "create_deal_resend" | "create_deal_ending" | "resend_invoice" | "create_package" | "retire_package";
 
 /** Which create a refusal came from. The Add deal sheet's create has THREE shapes, and a Stripe 502 means something different in each:
  *  - an ONLINE create that does not end the current deal: the deal is saved first and the invoice sent after (createDeal, F11), so a
@@ -75,7 +75,7 @@ export function createDealWrite(i: { method: PaymentMethod; endCurrent: boolean;
 }
 
 /** Per-write words, consulted before the shared map (batch F review I1, m7). */
-export const SAVE_ERROR_BY_WRITE: Readonly<Record<SponsorWrite, Partial<Record<SponsorRefusalCode, MessageKey>>>> = {
+export const SAVE_ERROR_BY_WRITE: Readonly<Record<SponsorWrite, Partial<Record<EnvelopeCode | SponsorRefusalCode, MessageKey>>>> = {
   // A create that does NOT end the current deal: its only Stripe call is the invoice, sent AFTER the deal is saved (createDeal,
   // F11), so a 502 there leaves a saved draft, which Send invoice sends.
   create_deal: { stripe_unavailable: "sponsors.error.invoiceSavedNoLink" },
@@ -91,6 +91,11 @@ export const SAVE_ERROR_BY_WRITE: Readonly<Record<SponsorWrite, Partial<Record<S
     stripe_unavailable: "sponsors.error.resendStripeUnavailable",
     deal_paid_online: "sponsors.error.resendPaidOnline",
   },
+  // The Packages tab's writes (Task 18, m7): a 422 there is the package's own fields - the generic "Reload the page" line (the shared
+  // VALIDATION words) sends a person away from a form they could simply correct. A create tells them what a package needs; a retire
+  // has only an id to get wrong, so it says the package could not be retired.
+  create_package: { VALIDATION: "sponsors.error.packageInvalid" },
+  retire_package: { VALIDATION: "sponsors.error.packageRetireInvalid" },
 };
 
 /** Anything else: another code, a network failure, a body that was not the envelope. */
@@ -101,6 +106,6 @@ export const SAVE_ERROR_FALLBACK_MSG: MessageKey = "settings.saveFailed";
 export function sponsorSaveErrorKey(err: unknown, write?: SponsorWrite): MessageKey {
   if (!(err instanceof ApiV1Error)) return SAVE_ERROR_FALLBACK_MSG;
   const own = write === undefined ? undefined : SAVE_ERROR_BY_WRITE[write];
-  if (own && Object.hasOwn(own, err.code)) return own[err.code as SponsorRefusalCode]!;
+  if (own && Object.hasOwn(own, err.code)) return own[err.code as EnvelopeCode | SponsorRefusalCode]!;
   return Object.hasOwn(SAVE_ERROR_MSG, err.code) ? SAVE_ERROR_MSG[err.code as keyof typeof SAVE_ERROR_MSG] : SAVE_ERROR_FALLBACK_MSG;
 }
