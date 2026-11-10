@@ -13,6 +13,7 @@ import { deferred } from "@/lib/deferred";
 import { DIVISION_GATE_REASON, divisionScoringClosed } from "@/lib/division-phase";
 import { EngineError, lastLiveEvent, scorerMayForfeit } from "@seazn/engine/core";
 import { foldEpochOf } from "@seazn/engine/sport";
+import { CRICKET_BALL_TYPES, isCricketBall } from "@/lib/cricket-wicket-void";
 import { epochFloorOverrideOrOff, judgeEngineEpoch } from "./engine-epoch-override";
 import { appendEvent, replayOutcomeFor, resolveModule, rulesVersionNow } from "@/server/engine-db";
 import type { CascadeWriter } from "@/server/engine-db/append-event";
@@ -479,10 +480,16 @@ async function assertUndoTarget(
   if (typeof eventId !== "string" || !UUID_RE.test(eventId)) {
     throw new HttpError(409, "Nothing to undo", "UNDO_NOOP");
   }
-  const [target] = await withTenant(auth.orgId, (tx) => tx<{ type: string; voided: boolean }[]>`
+  const [target] = await withTenant(auth.orgId, (tx) => tx<{ type: string; voided: boolean; wicket: boolean; laterBall: boolean }[]>`
     select e.type,
            exists (select 1 from score_events v
-                   where v.fixture_id = e.fixture_id and v.voids_event_id = e.id) as voided
+                   where v.fixture_id = e.fixture_id and v.voids_event_id = e.id) as voided,
+           (e.payload ? 'wicket' and e.payload -> 'wicket' <> 'null'::jsonb) as wicket,
+           exists (select 1 from score_events l
+                   where l.fixture_id = e.fixture_id and l.seq > e.seq
+                     and l.type = any(${[...CRICKET_BALL_TYPES]})
+                     and not exists (select 1 from score_events lv
+                                     where lv.fixture_id = l.fixture_id and lv.voids_event_id = l.id)) as "laterBall"
     from score_events e
     where e.id = ${eventId} and e.fixture_id = ${fixtureId}`);
   if (!target) {
@@ -500,6 +507,19 @@ async function assertUndoTarget(
       409,
       "An undo cannot be undone — re-record the entry instead",
       "UNDO_NOT_UNDOABLE",
+    );
+  }
+  // A cricket wicket can be voided only while it is the latest active ball of the match (owner, 2026-11-10,
+  // docs/specs/2026-11-10-cricket-wicket-void-latest-only.md). Voiding an older one replays the ledger without it: the over
+  // boundaries shift and the bowler rules are not re-checked, so the card quietly stops being what was played. Sport-scoped
+  // by the event type's namespace; "later" means a later ACTIVE ball (any innings, super overs included), so a wicket
+  // followed only by non-ball entries (a bowler change, a powerplay) is still the latest. The console's "Void back to here"
+  // voids the newer entries newest first, so the then-latest wicket passes this check.
+  if (isCricketBall(target.type) && target.wicket && target.laterBall) {
+    throw new HttpError(
+      409,
+      "A wicket can be undone only while it is the latest ball — undo the balls after it first",
+      "UNDO_WICKET_NOT_LATEST",
     );
   }
 }
