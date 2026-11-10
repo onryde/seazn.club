@@ -7898,7 +7898,7 @@
   "sponsors.order.resend": "Factuur opnieuw versturen",
   "sponsors.order.endNow": "Nu beëindigen",
   "sponsors.order.endConfirm.title": "Deze deal nu beëindigen?",
-  "sponsors.order.endConfirm.bodyLive": "De lopende deal van {name} eindigt nu en een eventuele betaallink werkt niet meer. Een deal die erachter in de wachtrij staat, gaat live; is er geen, dan verdwijnt {name} van je openbare pagina's.",
+  "sponsors.order.endConfirm.bodyLive": "De lopende deal van {name} eindigt nu en een eventuele betaallink werkt niet meer. Een deal die erachter in de wachtrij staat, gaat live als de einddatum nog niet voorbij is; anders verdwijnt {name} van je openbare pagina's.",
   "sponsors.order.endConfirm.bodyKept": "Deze deal met {name} eindigt nu en gaat niet live; een eventuele betaallink werkt niet meer. De lopende deal van {name} houdt de sponsor op je openbare pagina's.",
   "sponsors.order.endConfirm.bodyHidden": "Deze deal met {name} eindigt nu en gaat niet live; een eventuele betaallink werkt niet meer. {name} wordt niet getoond op je openbare pagina's.",
   "sponsors.order.endConfirm.label": "Deal beëindigen",
@@ -7906,5 +7906,7 @@
   "sponsors.order.status.endedUnpaid": "Beëindigd, onbetaald",
   "sponsors.order.refundConfirm.bodyRecorded": "Hiermee wordt {amount} als terugbetaald aan {name} vastgelegd. De deal is handmatig als betaald gemarkeerd, dus er gaat geen geld via Stripe: betaal {name} zelf terug. Dit kan niet ongedaan worden gemaakt.",
   "sponsors.order.dupConfirm.bodySettled": "{name} heeft al een deal voor dit pakket die wacht om te starten, zonder openstaand bedrag. Een nieuwe factuur maakt een tweede deal. Toch versturen?",
-  "sponsors.pkg.competitionFinished": "Competitie afgelopen"
+  "sponsors.pkg.competitionFinished": "Competitie afgelopen",
+  "sponsors.showAgain": "Weer tonen op de site",
+  "sponsors.showAgainLabel": "Weer tonen op de site: {name}"
 }

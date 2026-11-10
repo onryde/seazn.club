@@ -958,15 +958,16 @@ test("refund: the console reverses the charge, and the placement comes off the p
 // Leg 5 — END NOW (batch F fix round 1, review I2): the console exits a deal it created
 // ---------------------------------------------------------------------------
 
-test("end now: an invoice the sponsor never pays is resent, then ended from its order - its link dies at Stripe, the sponsor stays off the public page, and is switched back on by hand", async ({
+test("end now: an invoice the sponsor never pays is resent, then ended from its order - its link dies at Stripe, the sponsor stays off the public page until the club taps Show on site again", async ({
   page,
   request,
 }: {
   page: Page;
   request: APIRequestContext;
 }) => {
-  // Navs: the console, the public page read five times, the outbox poll. Stripe: the send, the resend, the end, the runner's read.
-  test.setTimeout(budget(7, 4));
+  // Navs: the console (three visits), the Sponsors tab (twice), the public page read five times, the outbox poll. Stripe: the
+  // send, the resend, the end, the runner's read.
+  test.setTimeout(budget(11, 4));
   expect(packageId, "leg 1 must have sold a package").not.toBe("");
 
   // A public competition, so the sponsor's public view can be read back: an org-wide sponsor's board shows on its page.
@@ -1015,6 +1016,12 @@ test("end now: an invoice the sponsor never pays is resent, then ended from its 
   const held = await apiJson(request, `/api/v1/orgs/${org.orgId}/sponsors/${secondId}`, "PATCH", { status: "active" });
   expect(held.status, "an open deal holds the sponsor's status").toBe(409);
   expect(held.error?.code).toBe("sponsor_has_open_deal");
+  // ...so the Sponsors tab does not offer to show it again yet (the negative half of the tap below).
+  await page.goto(sponsorsUrl(org.slug, "sponsors"));
+  await expect(page.getByRole("button", { name: ui("sponsors.edit", { name: SECOND_NAME }) })).toBeVisible({ timeout: READ_MS });
+  await expect(page.getByTestId(`sponsor-show-${secondId}`), "a deal waiting to go live holds the sponsor: no Show on site again").toHaveCount(0);
+  await page.goto(sponsorsUrl(org.slug, "packages"));
+  await expect(panel).toBeVisible({ timeout: READ_MS });
 
   // RESEND, tapped: the open link is reused (F32 - one payable link, never two) and a second invoice email is queued.
   const resend = panel.getByTestId(`order-resend-${dealId}`);
@@ -1076,10 +1083,24 @@ test("end now: an invoice the sponsor never pays is resent, then ended from its 
   expect(off.data?.find((s) => s.id === secondId)?.status, "the sponsor's last deal ended: it stays off").toBe("inactive");
   expect(await onPublicPage(), "and is not on the public page").toBe(false);
 
-  // Spec §10.3: once every deal has ended the club may switch the sponsor back on by hand. This console has no status
-  // control (PR 1), so the sponsor API does it - and the refusal above is now an accept.
-  const back = await apiJson<SponsorRow>(request, `/api/v1/orgs/${org.orgId}/sponsors/${secondId}`, "PATCH", { status: "active" });
-  expect(back.status, `PATCH answered ${back.status}: ${JSON.stringify(back.error)}`).toBe(200);
-  expect(back.data!.status).toBe("active");
-  await expect.poll(onPublicPage, { timeout: READ_MS, message: "switched back on, it shows again" }).toBe(true);
+  // Spec §10.3 (owner, 2026-11-07): "After all of a sponsor's deals have ended: the club may switch the sponsor back on by
+  // hand, as for a sponsor with no deal." The Sponsors tab offers it on the hidden sponsor's row - TAPPED here, and the
+  // terminal state is read back where a visitor meets it: the public page.
+  await page.goto(sponsorsUrl(org.slug, "sponsors"));
+  const showAgain = page.getByTestId(`sponsor-show-${secondId}`);
+  await expect(showAgain, "every deal ended: the hidden sponsor can be shown again").toBeVisible({ timeout: READ_MS });
+  await expect(showAgain).toHaveText(ui("sponsors.showAgain"));
+  const [shown] = await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().endsWith(`/api/v1/orgs/${org.orgId}/sponsors/${secondId}`) && r.request().method() === "PATCH",
+      { timeout: READ_MS },
+    ),
+    showAgain.click(),
+  ]);
+  expect(shown.status(), `PATCH answered ${shown.status()}: ${await shown.text()}`).toBe(200);
+  expect(JSON.parse(shown.request().postData() ?? "null"), "the status PATCH and nothing else").toEqual({ status: "active" });
+  await expect(showAgain, "switched on: nothing left to show again").toHaveCount(0);
+  const on = await apiJson<SponsorRow[]>(request, `/api/v1/orgs/${org.orgId}/sponsors`);
+  expect(on.data?.find((s) => s.id === secondId)?.status, "the sponsor reads back on").toBe("active");
+  await expect.poll(onPublicPage, { timeout: READ_MS, message: "switched back on, it shows on the public page again" }).toBe(true);
 });

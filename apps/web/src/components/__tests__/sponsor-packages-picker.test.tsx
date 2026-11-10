@@ -927,3 +927,21 @@ describe("a package whose competition has finished offers no Send invoice (revie
     expect(checked).toBe(2);
   });
 });
+
+describe("End now's live-deal sentence is true by F19: a queued deal goes live only if its end date has not passed (batch F fix round 2)", () => {
+  // server/sponsors/deal-apply.ts: ending the live deal promotes the next scheduled deal unless it is already past its own end
+  // (F19, it stays queued and hidden until the sweep ends it). The sentence must carry that condition in every locale.
+  const LOCALES = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as Record<string, Record<string, string>>;
+  const END_DATE: Record<string, RegExp> = { en: /end date/i, es: /fecha de fin/i, fr: /date de fin/i, nl: /einddatum/i };
+
+  it("names the queued deal's end date in all four locales, and still names the sponsor (counted)", () => {
+    let checked = 0;
+    for (const [loc, dict] of Object.entries(LOCALES)) {
+      const text = dict["sponsors.order.endConfirm.bodyLive"];
+      expect(text, loc).toMatch(END_DATE[loc]!);
+      expect(text, loc).toContain("{name}");
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+});

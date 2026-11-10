@@ -7898,7 +7898,7 @@
   "sponsors.order.resend": "Resend invoice",
   "sponsors.order.endNow": "End now",
   "sponsors.order.endConfirm.title": "End this deal now?",
-  "sponsors.order.endConfirm.bodyLive": "{name}'s live deal ends now, and any payment link it sent stops working. A deal queued behind it goes live; if there is none, {name} comes off your public pages.",
+  "sponsors.order.endConfirm.bodyLive": "{name}'s live deal ends now, and any payment link it sent stops working. A deal queued behind it goes live if its end date hasn't passed; otherwise {name} comes off your public pages.",
   "sponsors.order.endConfirm.bodyKept": "This deal for {name} ends now and won't go live; any payment link it sent stops working. {name}'s live deal keeps it on your public pages.",
   "sponsors.order.endConfirm.bodyHidden": "This deal for {name} ends now and won't go live; any payment link it sent stops working. {name} stays off your public pages.",
   "sponsors.order.endConfirm.label": "End deal",
@@ -7906,5 +7906,7 @@
   "sponsors.order.status.endedUnpaid": "Ended, unpaid",
   "sponsors.order.refundConfirm.bodyRecorded": "This records {amount} as refunded to {name}. The deal was marked as paid by hand, so no money moves through Stripe: pay {name} back yourself. This can't be undone.",
   "sponsors.order.dupConfirm.bodySettled": "{name} already has a deal for this package that's waiting to start, with nothing left to pay. Another invoice makes a second deal. Send it anyway?",
-  "sponsors.pkg.competitionFinished": "Competition finished"
+  "sponsors.pkg.competitionFinished": "Competition finished",
+  "sponsors.showAgain": "Show on site again",
+  "sponsors.showAgainLabel": "Show on site again: {name}"
 }

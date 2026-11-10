@@ -7898,7 +7898,7 @@
   "sponsors.order.resend": "Reenviar factura",
   "sponsors.order.endNow": "Terminar ahora",
   "sponsors.order.endConfirm.title": "¿Terminar este acuerdo ahora?",
-  "sponsors.order.endConfirm.bodyLive": "El acuerdo activo de {name} termina ahora y cualquier enlace de pago que envió deja de funcionar. Si hay un acuerdo en cola detrás, se activa; si no, {name} sale de tus páginas públicas.",
+  "sponsors.order.endConfirm.bodyLive": "El acuerdo activo de {name} termina ahora y cualquier enlace de pago que envió deja de funcionar. Si hay un acuerdo en cola detrás y su fecha de fin no ha pasado, se activa; si no, {name} sale de tus páginas públicas.",
   "sponsors.order.endConfirm.bodyKept": "Este acuerdo con {name} termina ahora y no se activará; cualquier enlace de pago que envió deja de funcionar. El acuerdo activo de {name} lo mantiene en tus páginas públicas.",
   "sponsors.order.endConfirm.bodyHidden": "Este acuerdo con {name} termina ahora y no se activará; cualquier enlace de pago que envió deja de funcionar. {name} sigue fuera de tus páginas públicas.",
   "sponsors.order.endConfirm.label": "Terminar acuerdo",
@@ -7906,5 +7906,7 @@
   "sponsors.order.status.endedUnpaid": "Terminado, sin pagar",
   "sponsors.order.refundConfirm.bodyRecorded": "Esto registra {amount} como reembolsado a {name}. El acuerdo se marcó como pagado a mano, así que no se mueve dinero por Stripe: devuélvele el dinero a {name} tú mismo. Esta acción no se puede deshacer.",
   "sponsors.order.dupConfirm.bodySettled": "{name} ya tiene un acuerdo para este paquete que espera para empezar, sin nada pendiente de pago. Otra factura crea un segundo acuerdo. ¿Enviarla de todos modos?",
-  "sponsors.pkg.competitionFinished": "Competición terminada"
+  "sponsors.pkg.competitionFinished": "Competición terminada",
+  "sponsors.showAgain": "Volver a mostrar en el sitio",
+  "sponsors.showAgainLabel": "Volver a mostrar en el sitio: {name}"
 }

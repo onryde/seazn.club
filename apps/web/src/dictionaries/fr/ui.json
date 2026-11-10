@@ -7898,7 +7898,7 @@
   "sponsors.order.resend": "Renvoyer la facture",
   "sponsors.order.endNow": "Terminer maintenant",
   "sponsors.order.endConfirm.title": "Terminer cet accord maintenant ?",
-  "sponsors.order.endConfirm.bodyLive": "L'accord en cours de {name} se termine maintenant et tout lien de paiement envoyé cesse de fonctionner. Un accord en attente derrière lui devient actif ; sinon, {name} est retiré de vos pages publiques.",
+  "sponsors.order.endConfirm.bodyLive": "L'accord en cours de {name} se termine maintenant et tout lien de paiement envoyé cesse de fonctionner. Un accord en attente derrière lui devient actif si sa date de fin n'est pas passée ; sinon, {name} est retiré de vos pages publiques.",
   "sponsors.order.endConfirm.bodyKept": "Cet accord avec {name} se termine maintenant et ne deviendra pas actif ; tout lien de paiement envoyé cesse de fonctionner. L'accord en cours de {name} le garde sur vos pages publiques.",
   "sponsors.order.endConfirm.bodyHidden": "Cet accord avec {name} se termine maintenant et ne deviendra pas actif ; tout lien de paiement envoyé cesse de fonctionner. {name} reste absent de vos pages publiques.",
   "sponsors.order.endConfirm.label": "Terminer l'accord",
@@ -7906,5 +7906,7 @@
   "sponsors.order.status.endedUnpaid": "Terminée, impayée",
   "sponsors.order.refundConfirm.bodyRecorded": "Cela enregistre {amount} comme remboursé à {name}. L'accord a été marqué comme payé manuellement : aucun argent ne passe par Stripe, remboursez {name} vous-même. Cette action est irréversible.",
   "sponsors.order.dupConfirm.bodySettled": "{name} a déjà un accord pour cette offre qui attend de commencer, sans rien à payer. Une autre facture crée un second accord. L'envoyer quand même ?",
-  "sponsors.pkg.competitionFinished": "Compétition terminée"
+  "sponsors.pkg.competitionFinished": "Compétition terminée",
+  "sponsors.showAgain": "Réafficher sur le site",
+  "sponsors.showAgainLabel": "Réafficher sur le site : {name}"
 }

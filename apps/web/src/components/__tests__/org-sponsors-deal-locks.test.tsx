@@ -18,6 +18,7 @@
 //   K2  wiring       `lockedByDeal={s.locked_by_deal}` -> `lockedByDeal={false}`           -> "edit passes the row's lock to the form"
 //   K3  delete ask   drop the `s.deal` arm of the confirm guard                            -> "a sponsor with a deal asks first"
 //   K4  mapped       `msg(sponsorSaveErrorKey(err))` -> `err.message`                      -> "a refusal reads the dictionary's words"
+//   K5  show again   offer "Show on site again" on every row                                -> "offered exactly where the server accepts it"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
@@ -52,6 +53,7 @@ const row = (over: Record<string, unknown> & { id: string }) => ({
   paid_order_id: null,
   deal: null,
   locked_by_deal: false,
+  has_open_deal: false,
   ...over,
 });
 const DEAL = { id: "d1", payment_status: "none" };
@@ -152,14 +154,14 @@ const flush = async () => {
   for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0));
 };
 
-function mount(rows: ReturnType<typeof row>[]) {
+function mount(rows: ReturnType<typeof row>[], opts: { canEdit?: boolean } = {}) {
   const island = renderIsland(OrgSponsors, {
     orgId: ORG,
     initialSponsors: rows,
     competitions: COMPETITIONS,
     hasTiers: true,
     billingHref: "/billing",
-    canEdit: true,
+    canEdit: opts.canEdit ?? true,
   } as Parameters<typeof OrgSponsors>[0]);
   const byLabel = (key: MessageKey, name: string): ReactElement => {
     const label = msg(key, { name });
@@ -178,6 +180,12 @@ function mount(rows: ReturnType<typeof row>[]) {
     remove: (name: string) => (propsOf(byLabel("settings.org.sponsors.remove", name)).onClick as () => void)(),
     form,
     hasRow: (name: string) => island.text().includes(name),
+    has: (testId: string) => island.tree().some((e) => propsOf(e)["data-testid"] === testId),
+    find: (testId: string): ReactElement => {
+      const el = island.tree().find((e) => propsOf(e)["data-testid"] === testId);
+      if (!el) throw new Error(`no element with data-testid="${testId}"`);
+      return el;
+    },
     text: () => flat(island.text()),
   };
 }
@@ -356,5 +364,71 @@ describe("the copy that replaces the paid-placement promise", () => {
     expect(msg("sponsors.deleteDeal.body", { name: "X" })).toMatch(/deal/i);
     expect(msg("sponsors.error.hasDealHistory")).toMatch(/can.t be deleted/i);
     expect(msg("sponsors.error.hasOpenCheckout")).toMatch(/payment link/i);
+  });
+});
+
+describe("Show on site again: a hidden sponsor whose deals have all ended is switched back on by hand (spec §10.3, batch F fix round 2)", () => {
+  // Spec §10.3 (owner, 2026-11-07): "After all of a sponsor's deals have ended: the club may switch the sponsor back on by hand,
+  // as for a sponsor with no deal." The server's rule for `PATCH { status }` (server/usecases/sponsors.ts `patchSponsor`): a
+  // live deal refuses it (409 sponsor_locked_by_deal), a deal waiting to go live refuses it (409 sponsor_has_open_deal), and a
+  // dispute-parked (`pending`) placement refuses it. Typed here from that rule, never read from the component.
+  const CASES: [string, Record<string, unknown>, boolean, boolean][] = [
+    ["inactive, its deals all ended", { status: "inactive", deal: { id: "d1", payment_status: "pending" } }, true, true],
+    ["inactive, no deal at all", { status: "inactive" }, true, true],
+    ["active", { status: "active" }, true, false],
+    ["inactive, a deal waiting to go live", { status: "inactive", deal: { id: "d2", payment_status: "pending" }, has_open_deal: true }, true, false],
+    ["inactive, under a live deal", { status: "inactive", deal: { id: "d3", payment_status: "paid" }, locked_by_deal: true }, true, false],
+    ["parked by a dispute", { status: "pending", dispute_parked: true, deal: { id: "d4", payment_status: "paid" } }, true, false],
+    ["inactive, no deal, but the viewer cannot edit", { status: "inactive" }, false, false],
+  ];
+
+  it("offered exactly where the server accepts it - inactive with no open or live deal, for an editor (all seven checked)", () => {
+    let checked = 0;
+    for (const [label, over, canEdit, offered] of CASES) {
+      const m = mount([row({ id: "a", name: LONG_NAME, ...over })], { canEdit });
+      expect(m.has("sponsor-show-a"), label).toBe(offered);
+      checked++;
+    }
+    expect(checked).toBe(CASES.length);
+    expect(CASES.filter((c) => c[3]).length, "both arms exercised").toBe(2);
+  });
+
+  it("its words: 'Show on site again', named for the sponsor to a screen reader (label in name)", () => {
+    const m = mount([row({ id: "a", name: LONG_NAME, status: "inactive" })]);
+    const button = m.find("sponsor-show-a");
+    expect(flat(String(m.island.text())), "the visible words").toContain(msg("sponsors.showAgain"));
+    expect(propsOf(button)["aria-label"]).toBe(msg("sponsors.showAgainLabel", { name: LONG_NAME }));
+    expect(String(propsOf(button)["aria-label"]).startsWith(msg("sponsors.showAgain")), "the accessible name starts with the visible words").toBe(true);
+  });
+
+  it("a tap PATCHes the sponsor with EXACTLY { status: 'active' } - no confirm - and re-reads the list; the switched-on row offers it no more", async () => {
+    answer = (_url, method) =>
+      method === "PATCH"
+        ? { status: 200, body: { ok: true, data: row({ id: "a", name: LONG_NAME, status: "active" }) } }
+        : { status: 200, body: { ok: true, data: [row({ id: "a", name: LONG_NAME, status: "active" })] } };
+    const m = mount([row({ id: "a", name: LONG_NAME, status: "inactive", deal: { id: "d1", payment_status: "pending" } })]);
+    (propsOf(m.find("sponsor-show-a")).onClick as () => void)();
+    await flush();
+    const patches = calls.filter((c) => c.method === "PATCH");
+    expect(patches.map((c) => c.url)).toEqual([`/api/v1/orgs/${ORG}/sponsors/a`]);
+    expect(patches[0]!.body).toEqual({ status: "active" });
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(calls.filter((c) => c.method === "GET").map((c) => c.url), "the list is re-read").toEqual([`/api/v1/orgs/${ORG}/sponsors`]);
+    expect(m.has("sponsor-show-a"), "now active: nothing to show again").toBe(false);
+  });
+
+  it("a deal that arrived since the page loaded: the server's 409 sponsor_has_open_deal reads the dictionary's words, and the re-read hides the control", async () => {
+    const SERVER = "this sponsor has a deal waiting to go live: it shows once that deal is live";
+    answer = (_url, method) =>
+      method === "PATCH"
+        ? { status: 409, body: { ok: false, error: { code: "sponsor_has_open_deal", message: SERVER } } }
+        : { status: 200, body: { ok: true, data: [row({ id: "a", name: LONG_NAME, status: "inactive", has_open_deal: true, deal: { id: "d9", payment_status: "pending" } })] } };
+    const m = mount([row({ id: "a", name: LONG_NAME, status: "inactive" })]);
+    (propsOf(m.find("sponsor-show-a")).onClick as () => void)();
+    await flush();
+    expect(m.text()).toContain(msg("sponsors.error.hasOpenDeal"));
+    expect(m.text()).not.toContain(SERVER);
+    expect(calls.filter((c) => c.method === "GET"), "re-read after the refusal").toHaveLength(1);
+    expect(m.has("sponsor-show-a"), "the re-read row has an open deal: no control").toBe(false);
   });
 });

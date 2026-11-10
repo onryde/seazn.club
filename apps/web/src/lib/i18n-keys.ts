@@ -7877,6 +7877,8 @@ export type DictionaryKey =
   | "sponsors.share.revokeYes"
   | "sponsors.share.title"
   | "sponsors.share.to"
+  | "sponsors.showAgain"
+  | "sponsors.showAgainLabel"
   | "sponsors.tier.gold"
   | "sponsors.tier.partner"
   | "sponsors.tier.silver"

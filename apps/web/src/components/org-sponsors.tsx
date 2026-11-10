@@ -8,7 +8,7 @@
 import { useId, useRef, useState } from "react";
 import Link from "@/components/ui/console-link";
 import {
-  ArrowDown, ArrowUp, ImagePlus, MousePointerClick, Pencil, Trash2,
+  ArrowDown, ArrowUp, Eye, ImagePlus, MousePointerClick, Pencil, Trash2,
 } from "lucide-react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
@@ -41,6 +41,8 @@ export interface SponsorItem {
   deal: { id: string; payment_status: string } | null;
   /** A live deal owns this sponsor's tier, competition, stream and status (D9): the form offers none of them. */
   locked_by_deal: boolean;
+  /** A deal waits to go live (draft, awaiting payment or approval, scheduled): it holds the sponsor's status (D9). */
+  has_open_deal: boolean;
 }
 
 interface Draft {
@@ -56,6 +58,15 @@ interface Draft {
 const EMPTY_DRAFT: Draft = {
   name: "", url: "", tier: "partner", competition_id: "", file: null, preview: null,
 };
+
+/** Can the club switch this sponsor back on by hand (spec §10.3: "After all of a sponsor's deals have ended: the club may
+ *  switch the sponsor back on by hand, as for a sponsor with no deal")? Exactly where the server takes `PATCH { status:
+ *  "active" }` (server/usecases/sponsors.ts `patchSponsor`): the sponsor is off (`inactive`; a dispute-parked one is `pending`
+ *  and refused), and no live deal (409 sponsor_locked_by_deal) or deal waiting to go live (409 sponsor_has_open_deal) holds
+ *  its status. */
+export function canShowAgain(s: SponsorItem): boolean {
+  return s.status === "inactive" && !s.locked_by_deal && !s.has_open_deal;
+}
 
 /** Is a delete certain to be refused? Money history (paid or refunded) on any of a sponsor's deals is a 409
  *  `sponsor_has_deal_history` (server/usecases/sponsors.ts `dealHoldsHistory`). What the row can see of it is its paid order
@@ -425,6 +436,18 @@ export function OrgSponsors({
     })();
   }
 
+  /** Show on site again (spec §10.3): the sponsor's own status PATCH, and nothing else in it. The list is re-read whatever the
+   *  answer - a refusal means a deal arrived since the page loaded, and the re-read row then offers the control no more. */
+  function showAgain(s: SponsorItem) {
+    void run(async () => {
+      try {
+        await api(`/${s.id}`, { method: "PATCH", body: JSON.stringify({ status: "active" }) });
+      } finally {
+        await refresh().catch(() => {});
+      }
+    });
+  }
+
   /** Swap within the rendered group, persist the global order. */
   function move(id: string, delta: -1 | 1) {
     const row = sponsors.find((s) => s.id === id);
@@ -568,6 +591,20 @@ export function OrgSponsors({
                       <MousePointerClick className="h-3.5 w-3.5" strokeWidth={1.75} />
                       {s.click_count}
                     </span>
+                    {canEdit && canShowAgain(s) ? (
+                      // Off the public pages with nothing holding it there: its last deal ended (or it never had one).
+                      <button
+                        type="button"
+                        data-testid={`sponsor-show-${s.id}`}
+                        aria-label={msg("sponsors.showAgainLabel", { name: s.name })}
+                        disabled={busy}
+                        onClick={() => showAgain(s)}
+                        className="btn flex shrink-0 items-center gap-1.5 text-xs"
+                      >
+                        <Eye className="h-3.5 w-3.5" />
+                        {msg("sponsors.showAgain")}
+                      </button>
+                    ) : null}
                     {canEdit ? (
                       <div className="flex shrink-0 items-center gap-0.5">
                         <button
