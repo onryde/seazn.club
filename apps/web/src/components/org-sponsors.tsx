@@ -70,7 +70,7 @@ export interface SponsorItem {
   name: string;
   url: string | null;
   logo_path: string | null;
-  /** The optional 4:5 poster a Title sponsor shows in the public competition hero (V503); null shows the logo card. */
+  /** The optional 4:5 poster a Title sponsor shows in the public competition hero (V501); null shows the logo card. */
   poster_path: string | null;
   tier: SponsorTier;
   display_order: number;

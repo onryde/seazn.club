@@ -131,7 +131,7 @@ export const CreateSponsor = z.object({
   // http(s) only (R4 S10 fix round 1, m1): zod's `.url()` alone accepts `javascript:` and `data:`.
   url: z.string().url().max(500).refine(isRedirectableUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
   logo_path: z.string().max(500).nullish(),
-  // The same http(s)-only rule as `url` and the same 500-character cap as the DB's `sponsors_poster_path_check` (V503): next/image
+  // The same http(s)-only rule as `url` and the same 500-character cap as the DB's `sponsors_poster_path_check` (V501): next/image
   // throws on a relative src, so a poster is never a bare storage path.
   poster_path: z.string().url().max(500).refine(isPosterUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
   tier: SponsorTier.default("partner"),

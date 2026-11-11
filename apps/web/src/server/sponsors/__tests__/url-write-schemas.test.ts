@@ -6,7 +6,7 @@
 // `javascript:` and `data:`.
 //
 // Title sponsor poster (Task 2): `poster_path` is the second URL a sponsor stores and the first one a browser's <img> loads, so it
-// is held to the same http(s) rule and to the same 500-character cap as the DB's `sponsors_poster_path_check` (V503). Sponsor
+// is held to the same http(s) rule and to the same 500-character cap as the DB's `sponsors_poster_path_check` (V501). Sponsor
 // placement is sport-agnostic: no sport sweep here.
 //
 // Expected values come from the rule (http and https only), never from `redirectTarget`, the predicate under test.

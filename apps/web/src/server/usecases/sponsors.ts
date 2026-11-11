@@ -71,7 +71,7 @@ export interface SponsorRow extends SponsorDealSummary {
   name: string;
   url: string | null;
   logo_path: string | null;
-  /** The optional 4:5 poster a Title sponsor shows in the public competition hero (V503). Holds the public CDN URL, as
+  /** The optional 4:5 poster a Title sponsor shows in the public competition hero (V501). Holds the public CDN URL, as
    *  `logo_path` does; null means the hero draws the logo card instead. */
   poster_path: string | null;
   tier: SponsorTier;
@@ -109,7 +109,7 @@ export const CreateSponsorInput = z.object({
   // redirect target (`/s/[key]`) and a board's href.
   url: z.string().url().max(500).refine(isRedirectableUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
   logo_path: z.string().max(500).nullish(),
-  // Title sponsor poster (V503): an absolute http(s) URL of at most 500 characters, the DB's `sponsors_poster_path_check` is the
+  // Title sponsor poster (V501): an absolute http(s) URL of at most 500 characters, the DB's `sponsors_poster_path_check` is the
   // second guard. next/image throws on a src that is neither absolute nor `/`-rooted, so unlike `logo_path` this is never a bare
   // storage path; and a `javascript:` or `data:` value is refused here for the same reason `url` is.
   poster_path: z.string().url().max(500).refine(isPosterUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
@@ -445,7 +445,7 @@ export interface ResolvedSponsor {
   name: string;
   url: string | null;
   logo: string | null;
-  /** The sponsor's 4:5 poster (V503), or null. Only the competition hero's Title placement draws it; every other surface
+  /** The sponsor's 4:5 poster (V501), or null. Only the competition hero's Title placement draws it; every other surface
    *  carries the field and ignores it. */
   poster: string | null;
   tier: SponsorTier;

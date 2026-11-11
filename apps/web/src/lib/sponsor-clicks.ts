@@ -92,7 +92,7 @@ export const SPONSOR_URL_HTTP_ONLY = "url must be an http:// or https:// address
 /** For a write schema's `.refine`: a url a visitor may be sent to. */
 export const isRedirectableUrl = (url: string): boolean => redirectTarget(url) !== null;
 
-/** For the poster's write schemas: `isRedirectableUrl` AND written with the `://` the DB's `sponsors_poster_path_check` (V503)
+/** For the poster's write schemas: `isRedirectableUrl` AND written with the `://` the DB's `sponsors_poster_path_check` (V501)
  *  requires, case-insensitively. WHATWG `new URL()` repairs a missing or wrong slash, so `https:/a.example/p.png`,
  *  `https:a.example/p.png` and `https:\\a.example\p.png` all pass `redirectTarget` (and zod's `.url()`) and would then be refused by
  *  the CHECK alone, as a 500 instead of the 400 the spec promises (§6.3, D13). The stored value is the poster's own text, never the

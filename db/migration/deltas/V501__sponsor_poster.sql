@@ -1,4 +1,4 @@
--- V503 — Title sponsor poster: an optional 4:5 poster per sponsor (renumbered at merge: rename the file AND this line).
+-- V501 — Title sponsor poster: an optional 4:5 poster per sponsor.
 --
 -- Spec: docs/superpowers/specs/2026-11-11-title-sponsor-hero-poster-design.md §6.1 (plan Task 1). A Title sponsor shows
 -- its poster in the public competition hero (a panel from 768 up, a band below); a sponsor with no poster shows its logo
