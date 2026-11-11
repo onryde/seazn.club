@@ -25,6 +25,7 @@ const SECOND_POOLS = 2;
 const TAKE = 2;
 
 async function seedOrg(): Promise<AuthCtx> {
+  // single-sport: the pool draw and its first-draw guard read entrant ids and seeds, never a sport rule; generic is the rig.
   const suffix = randomUUID().slice(0, 8);
   const [{ id: orgId }] = await sql<{ id: string }[]>`
     insert into organizations (name, slug) values (${"Gg " + suffix}, ${"gg-" + suffix}) returning id`;
@@ -38,6 +39,7 @@ async function seedOrg(): Promise<AuthCtx> {
 }
 
 async function rig(n: number, sport?: { key: string; variant: string; config: Record<string, unknown> }, kind: "individual" | "team" = "individual") {
+  // single-sport: the pool draw and its first-draw guard read entrant ids and seeds, never a sport rule; generic is the rig.
   const auth = await seedOrg();
   const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "G " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
   const division = await createDivision(auth, comp.id, {
@@ -193,6 +195,7 @@ describe.skipIf(!HAS_DB)("group -> group -> knockout: a pool of one is refused b
   });
 
   it("control: a knockout-only division of 7 is not a group stage - drawn, nobody refused", async () => {
+    // single-sport: the pool draw and its first-draw guard read entrant ids and seeds, never a sport rule; generic is the rig.
     const auth = await seedOrg();
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "K " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
     const division = await createDivision(auth, comp.id, { name: "Open", slug: "open", sport_key: "generic", variant_key: "score", config: CFG } as never);
@@ -203,6 +206,7 @@ describe.skipIf(!HAS_DB)("group -> group -> knockout: a pool of one is refused b
   });
 
   it("control: a ladder names no fixture at generate (challenges come later) yet is never refused - the guard is the group stage's alone", async () => {
+    // single-sport: the pool draw and its first-draw guard read entrant ids and seeds, never a sport rule; generic is the rig.
     const auth = await seedOrg();
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "L " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
     const division = await createDivision(auth, comp.id, { name: "Open", slug: "open", sport_key: "generic", variant_key: "score", config: CFG } as never);
@@ -212,6 +216,7 @@ describe.skipIf(!HAS_DB)("group -> group -> knockout: a pool of one is refused b
   });
 
   it("another sport: a football division refuses the same 7-into-4 field by the same name", async () => {
+    // single-sport: football is the second sport of this file; the refusal is sport-agnostic (the sweep above runs on generic).
     const [v] = await sql<{ sport_key: string; key: string; config: Record<string, unknown> }[]>`
       select sport_key, key, config from sport_variants where sport_key = 'football' and is_system order by key limit 1`;
     expect(v, "premise: football has a system variant (sync:sports ran)").toBeDefined();
