@@ -96,10 +96,10 @@ const ORG = {
   timezone: "Europe/London",
 };
 
-async function render(): Promise<string> {
+async function render(tab?: string): Promise<string> {
   const element = await SettingsPage({
     params: Promise.resolve({ orgSlug: "riverside" }),
-    searchParams: Promise.resolve({}),
+    searchParams: Promise.resolve(tab ? { tab } : {}),
   });
   const { prelude } = await prerender(element);
   const reader = (prelude as ReadableStream<Uint8Array>).getReader();
@@ -220,6 +220,33 @@ describe("settings → organisation: the C8 card", () => {
     expect(wrappers.length, "anti-vacuity: the page draws a centred wrapper").toBeGreaterThan(0);
     expect(wrappers.some((c) => c.includes("max-w-6xl"))).toBe(true);
     for (const c of wrappers) expect(c, c.join(" ")).not.toContain("max-w-5xl");
+  });
+
+  // Owner 2026-11-11, option 1: the Organisation tab drops the left rail (its two cards take the full width) and shows
+  // the SAME nav as the phone strip, above the content, at every width. `data-nav-shape` is the component's own
+  // declaration of which shape it drew; the class assertions anchor on `="`/whitespace, because `md:hidden` also
+  // matches inside `max-md:hidden`.
+  it("the Organisation tab has the compact nav above the content and no rail", async () => {
+    grant({ branding: true, "dashboard.theme": true });
+    const shapeOf = (html: string) => [...html.matchAll(/data-nav-shape="(\w+)"/g)].map((m) => m[1]);
+    const classOf = (html: string, needle: string) => {
+      const at = html.indexOf(needle);
+      expect(at, needle).toBeGreaterThan(-1);
+      return html.slice(html.lastIndexOf('class="', at) + 7, html.indexOf('"', html.lastIndexOf('class="', at) + 7)).split(/\s+/);
+    };
+
+    const org = await render();
+    expect(shapeOf(org), "exactly one nav, the strip").toEqual(["strip"]);
+    expect(org).toContain('data-testid="org-profile-card"');
+    expect(org, "no rail furniture (plan header, back link)").not.toContain("settings-nav-stream-credits");
+    // The flex row that put the rail beside the content is gone on this tab.
+    const wrapper = classOf(org, 'data-nav-shape="strip"');
+    expect(wrapper.join(" ")).toBe("w-full");
+    const row = org.slice(0, org.indexOf('data-nav-shape="strip"'));
+    const rowClass = row.slice(row.lastIndexOf('class="flex flex-col gap-4'), row.lastIndexOf('class="flex flex-col gap-4') + 60);
+    expect(rowClass).toMatch(/^class="flex flex-col gap-4"/);
+    // Every other tab stays one tap away, from the strip: the Preferences link is in it, once.
+    expect((org.match(/href="[^"]*settings\?tab=preferences"/g) ?? []).length).toBe(1);
   });
 
   it("View page points at the org's public page, opening a new tab", async () => {

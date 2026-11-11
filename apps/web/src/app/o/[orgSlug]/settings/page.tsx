@@ -294,9 +294,11 @@ export default async function SettingsPage({
   return (
     <>
       <div className="mx-auto max-w-6xl px-4 py-4 md:py-8">
-        <div className="flex flex-col gap-4 md:flex-row md:gap-8">
+        {/* The Organisation tab drops the rail (owner 2026-11-11, option 1): its two cards take the full content width, and
+            the compact strip above them keeps the other tabs one tap away. Every other tab keeps the rail. */}
+        <div className={tab === "organization" ? "flex flex-col gap-4" : "flex flex-col gap-4 md:flex-row md:gap-8"}>
 
-          <SettingsNav orgSlug={orgSlug} active={tab} dict={dict} context={navCtx} />
+          <SettingsNav orgSlug={orgSlug} active={tab} dict={dict} context={navCtx} compact={tab === "organization"} />
 
 
           {/* ── Panel ── */}
