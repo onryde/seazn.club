@@ -392,7 +392,7 @@ export default async function SettingsPage({
                 />
                 {canEdit && (
                   <div className="mt-2">
-                    <TourReplayButton variant="link" />
+                    <TourReplayButton />
                   </div>
                 )}
               </div>

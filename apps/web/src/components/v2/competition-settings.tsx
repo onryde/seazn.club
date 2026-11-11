@@ -290,6 +290,11 @@ export function CompetitionSettings({
     // and saving would send null, which the schema now refuses. Say so here
     // rather than surface a bare 400, and keep the same order check the wizard
     // and the API do.
+    // The name's `required` input is unmounted on the Branding tab, so native validation cannot be relied on here.
+    if (!form.name.trim()) {
+      setError(msg("comp.wizard.missing.name"));
+      return;
+    }
     if (!form.ends_on) {
       setError(msg("comp.wizard.endsOn.required"));
       return;
@@ -643,7 +648,7 @@ export function CompetitionSettings({
                   {!discoveryBranding && <span className="text-purple-700">{msg("compset.pro")}</span>}
                 </span>
                 <input
-                  type="url"
+                  type="text"
                   inputMode="url"
                   disabled={readOnly || !discoveryBranding}
                   value={form.hero_image_path}
