@@ -18,7 +18,7 @@ import { generateStream } from "../lib/streams/index.ts";
 import { KNOWN_UNSUPPORTED } from "../lib/streams/known-unsupported.ts";
 import { GeneratorUnsupported, OutcomeUnreachable, type StreamRequest } from "../lib/streams/types.ts";
 import {
-  FieldUnbounded, RESCUE_BUDGET, VariantGenerationStuck, VariantRescueBudgetExceeded, buildSportVariants, buildVariant,
+  FieldUnbounded, PAIR_HALF, RESCUE_BUDGET, VariantGenerationStuck, VariantRescueBudgetExceeded, buildSportVariants, buildVariant,
   factorsFor, levelsOf, offlineBuilderDefault, offlineVariantOrder, scorable, titleCase,
 } from "../lib/variants.ts";
 
@@ -60,6 +60,27 @@ function productValid(sport: string, preset: string, values: Record<string, stri
     if (e instanceof CfgInvalid) return false;
     throw e;
   }
+}
+/** Every half of every mutual `pairedWith` pair SPORT_RULES declares: one field at a filled level, its partner blank. Read off the
+ *  declarations and the factor levels, never off the generator's listing. */
+function declaredPairHalves(): { sport: string; filled: string; blank: string; raw: string; a: string; b: string }[] {
+  const out: { sport: string; filled: string; blank: string; raw: string; a: string; b: string }[] = [];
+  for (const sport of SPORT_KEYS) {
+    const fs = factorsFor(sport);
+    const ix = (name: string) => fs.findIndex((f) => f.name === name);
+    for (const f of factorFields(sport)) {
+      const partner = f.pairedWith;
+      if (partner === undefined || factorFields(sport).find((g) => g.key === partner)?.pairedWith !== f.key) continue;
+      const [first, second] = ix(f.key) < ix(partner) ? [f.key, partner] : [partner, f.key];
+      for (const l of fs[ix(f.key)]!.levels) {
+        if (l.raw === "") continue;
+        const a = first === f.key ? `${f.key}=${l.cls}` : `${first}=blank`;
+        const b = first === f.key ? `${second}=blank` : `${f.key}=${l.cls}`;
+        out.push({ sport, filled: f.key, blank: partner, raw: l.raw, a, b });
+      }
+    }
+  }
+  return out;
 }
 
 describe("builder default variant, derived offline", () => {
@@ -278,6 +299,7 @@ describe("the pair-wise cover", () => {
     // would list them wrongly; the brute force here has no depth.
     let judged = 0;
     let tried = 0;
+    let pairHalves = 0;
     for (const v of ALL) {
       const fs = factorsFor(v.sport);
       const at = (label: string) => {
@@ -289,6 +311,9 @@ describe("the pair-wise cover", () => {
         const [i, a] = at(u.a);
         const [j, b] = at(u.b);
         expect(i >= 0 && a >= 0 && j >= 0 && b >= 0, `${v.sport}: ${u.a} × ${u.b} names a real level`).toBe(true);
+        // A half of a both-or-neither pair (ruling 161) is proved by construction in the test below: football's product is ~85M,
+        // so its cross product is no brute force. Counted, so a listing that merely claims the marker cannot hide here.
+        if (u.reason.includes(PAIR_HALF)) { pairHalves++; continue; }
         const free: number[] = [];
         for (let k = 1; k < fs.length; k++) if (k !== i && k !== j) free.push(k);
         const lv = new Array<number>(fs.length).fill(0);
@@ -309,9 +334,58 @@ describe("the pair-wise cover", () => {
     }
     expect(judged).toBeGreaterThan(0);
     expect(tried).toBeGreaterThan(judged);
+    expect(pairHalves, "the pair halves skipped here are exactly the ones the by-construction test proves").toBe(declaredPairHalves().length);
     // A brute force over the whole cross product: every factor an editor field adds multiplies it (W2c Task 7's abandon
     // select tripled it, 1.1 s -> 3.5 s under load). No per-test budget here: CI runs this suite with `--testTimeout=30000`
     // (.github/workflows/ci.yml, the tools/matrix step), and a literal beside it would be a second copy to drift.
+  });
+  it("a half of a both-or-neither pair (RuleField.pairedWith, controller ruling 161) is listed uncoverable by construction, without a rescue search, and the premises of 'no completion' hold", () => {
+    // Expected listings, from SPORT_RULES' own declarations: for each mutual pair, every filled level of one field against the
+    // other's blank, both ways round. Football's extraTimeSubs/extraTimeWindows (0, 3 and an interior 2 each) give 3 + 3 = 6.
+    const expected = declaredPairHalves();
+    expect(expected.length, "some sport declares a pair (anti-vacuity)").toBeGreaterThan(0);
+    const listed = ALL.flatMap((v) => v.uncoverable.filter((u) => u.reason.includes(PAIR_HALF)).map((u) => `${v.sport}: ${u.a} × ${u.b}`));
+    expect(listed.sort(cp)).toEqual(expected.map((e) => `${e.sport}: ${e.a} × ${e.b}`).sort(cp));
+    expect(listed).toContain("football: extraTimeSubs=min × extraTimeWindows=blank");
+    expect(listed).toContain("football: extraTimeSubs=blank × extraTimeWindows=max");
+    // The premises, checked against the product (productValid, not buildVariant):
+    let proved = 0;
+    for (const e of expected) {
+      const fields = factorFields(e.sport);
+      // (1) only the pair's own two fields write its engine key: nothing else can complete the half;
+      const key = fields.find((f) => f.key === e.filled)!.edits;
+      expect(fields.filter((f) => f.edits.some((k) => key.includes(k))).map((f) => f.key).sort(cp), `${e.sport} ${e.filled}`).toEqual([e.filled, e.blank].sort(cp));
+      // (2) the engine refuses the half under every preset, alone and with every single further level of every other field.
+      const others = factorsFor(e.sport).slice(2).filter((f) => f.name !== e.filled && f.name !== e.blank);
+      for (const preset of variantKeys(e.sport)) {
+        expect(productValid(e.sport, preset, { [e.filled]: e.raw }), `${e.sport}/${preset} ${e.filled}=${e.raw} alone`).toBe(false);
+        for (const f of others) for (const l of f.levels) {
+          if (l.raw === "") continue;
+          expect(productValid(e.sport, preset, { [e.filled]: e.raw, [f.name]: l.raw }), `${e.sport}/${preset} ${e.filled}=${e.raw} + ${f.name}=${l.raw}`).toBe(false);
+          proved++;
+        }
+      }
+      // (3) and the whole pair is a value the engine takes: the half is refused for being a half, not for its number.
+      expect(productValid(e.sport, offlineBuilderDefault(e.sport), { [e.filled]: e.raw, [e.blank]: e.raw }), `${e.sport} ${e.filled}=${e.raw} with its partner`).toBe(true);
+    }
+    expect(proved).toBeGreaterThan(0);
+  });
+  it("a pair half costs no rescue search: football generates within a small multiple of its pass-1 validations", () => {
+    // single-sport: football is the one sport declaring a pair, and its ~85M product is what an exhaustive rescue would walk.
+    const L = factorsFor("football").map((f) => f.levels.length);
+    let P = 0;
+    for (let i = 0; i < L.length; i++) for (let j = i + 1; j < L.length; j++) P += L[i]! * L[j]!;
+    let calls = 0;
+    const counted: typeof buildVariant = (s, p, v) => { calls++; return buildVariant(s, p, v); };
+    const v = buildSportVariants("football", { validate: counted });
+    expect(JSON.stringify(v)).toBe(JSON.stringify(ALL.find((x) => x.sport === "football")));
+    expect(calls).toBeGreaterThan(P);
+    expect(calls, `football spent ${calls} validations (P = ${P}, RESCUE_BUDGET = ${RESCUE_BUDGET})`).toBeLessThan(RESCUE_BUDGET / 5);
+    // The greedy fill takes the pair JOINTLY: one box at a time, the first reads its partner blank and can only be blank, so every
+    // filled level of the pair needs a rescued case of its own (measured: 200 football cases, against 93 jointly and 93 before
+    // the pair existed). The ceiling is that measurement's, not the generator's output.
+    expect(v.cases.length, "football's cases: the pair filled jointly").toBeLessThanOrEqual(120);
+    expect(v.cases.some((c) => c.classes.extraTimeSubs !== "blank" && c.classes.extraTimeWindows !== "blank")).toBe(true);
   });
   it("a pair refused at its defaults AND under every single further level, but valid under two, is COVERED, not listed (badminton bwf × cap 15)", () => {
     // single-sport: the pinned depth-2 witness. bwf's set targets (21) exceed cap 15, and no one field lowers
@@ -370,7 +444,9 @@ describe("the pair-wise cover", () => {
   //   - when all P pairs pass, the first uncovered pair is (row level 0,
   //     preset level 0), so the first completion tries every level of every
   //     field factor once (T1 = Σ over fields |Lk|) and then re-checks the
-  //     complete case (call P + T1 + 1).
+  //     complete case (call P + T1 + 1). A both-or-neither pair (ruling 161,
+  //     `pairedWith`) is filled jointly, so it costs |La|·|Lb| in T1, not
+  //     |La| + |Lb| (football's extra-time pair: 16, not 8).
   // A wrong budget lands on the OTHER site, whose message differs, so the test
   // fails loudly rather than passing vacuously.
   const budgeted = (budget: number) => {
@@ -382,7 +458,14 @@ describe("the pair-wise cover", () => {
     const L = factorsFor(sport).map((f) => f.levels.length);
     let P = 0;
     for (let i = 0; i < L.length; i++) for (let j = i + 1; j < L.length; j++) P += L[i]! * L[j]!;
-    return { fields: factorsFor(sport).slice(2), P, T1: L.slice(2).reduce((a, b) => a + b, 0) };
+    const fields = factorsFor(sport).slice(2);
+    let T1 = 0;
+    for (const f of fields) {
+      const partner = fields.find((g) => g.name === f.pairedWith && g.pairedWith === f.name);
+      if (partner === undefined) T1 += f.levels.length;
+      else if (fields.indexOf(f) < fields.indexOf(partner)) T1 += f.levels.length * partner.levels.length;
+    }
+    return { fields, P, T1 };
   };
   it("a fill with no valid level is a named refusal naming the sport and the factor (registry sweep)", () => {
     let judged = 0;
