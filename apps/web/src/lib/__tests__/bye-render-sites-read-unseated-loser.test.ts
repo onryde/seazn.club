@@ -159,6 +159,7 @@ const EXEMPT: readonly Exemption[] = [
   // W4 T14 moved the setup body into `writeProgressionSetupFixtures` (the un-fill re-runs it in its caller's
   // transaction); `generateProgressionSetupFixtures` is now only its withTenant wrapper.
   { file: "src/server/usecases/stages/setup-fixtures.ts", fn: "writeProgressionSetupFixtures", sites: 4, reason: "writes the bye label on a progression seat, guarded on a seat not already stamped" },
+  { file: "src/server/usecases/stages/setup-fixtures.ts", fn: "isSeat", sites: 1, reason: "counts the plate bracket's round-one seats (a real entrant, or a slot label that is not the bye label) to see whether the laid-out lines still fit the field before the stage starts; it renders no name, and a dead seat has no place in a pre-start layout" },
   // W4 T8 (FX-G2; W4 design §6.5): the root-knockout reconcile's guard — the label keys a root bracket's own lines carry,
   // checked before a reconciled Generate writes, so no progression label is stranded. A module constant, read by a write.
   { file: "src/server/usecases/stages/generate-tx.ts", fn: "<module>", sites: 1, reason: "ROOT_BRACKET_LABEL_KEYS: the keys a root knockout's own lines carry, a reconciled Generate's refusal before it writes; renders nothing" },
