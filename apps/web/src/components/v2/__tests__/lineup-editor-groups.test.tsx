@@ -86,12 +86,14 @@ const editor = (props: Partial<React.ComponentProps<typeof LineupEditor>> & { si
   );
 
 /** The markup of one group section (its heading and rows, nothing else). */
-function groupHtml(html: string, key: "starting" | "bench"): string {
+function groupHtml(html: string, key: "starting" | "bench" | "staff"): string {
   const start = html.indexOf(`data-testid="lineup-group-${key}"`);
   expect(start, `no ${key} group rendered`).toBeGreaterThan(-1);
-  const other = key === "starting" ? "bench" : "starting";
-  const otherAt = html.indexOf(`data-testid="lineup-group-${other}"`);
-  const end = otherAt > start ? otherAt : html.length;
+  const ends = (["starting", "bench", "staff"] as const)
+    .filter((k) => k !== key)
+    .map((k) => html.indexOf(`data-testid="lineup-group-${k}"`))
+    .filter((at) => at > start);
+  const end = ends.length > 0 ? Math.min(...ends) : html.length;
   return html.slice(start, end);
 }
 
@@ -116,11 +118,69 @@ describe("grouping by slot", () => {
     expect(html).toContain("2/2 starting");
   });
 
-  it("the row number is the row's place in the saved order (its order_no), not its place in the group", () => {
-    const starting = groupHtml(editor({ side: sideOf(mixed) }), "starting");
+  it("the row number is the row's place WITHIN ITS GROUP (1, 2, 3…), never its order_no; the payload keeps order_no", () => {
+    const html = editor({ side: sideOf(mixed) });
+    const starting = groupHtml(html, "starting");
+    const bench = groupHtml(html, "bench");
+    // starting = Alpha (order_no 1), Charlie (order_no 3): shown 1. and 2.
     expect(starting).toContain(">1.</span>");
-    expect(starting).toContain(">3.</span>");
-    expect(starting).not.toContain(">2.</span>");
+    expect(starting).toContain(">2.</span>");
+    expect(starting).not.toContain(">3.</span>");
+    // bench = Bravo (order_no 2), Delta (order_no 4): shown 1. and 2., not 2. and 4.
+    expect(bench).toContain(">1.</span>");
+    expect(bench).toContain(">2.</span>");
+    expect(bench).not.toContain(">4.</span>");
+    // the wire is unchanged: order_no is still the draft index + 1
+    expect(draft(mixed).map((s, i) => toPutSlot(s, i, false).order_no)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("coaches and staff sit in their own third group: not in Bench, no position select, role still in the menu", () => {
+    const side = sideOf([
+      slot(1, "starting"),
+      slot(2, "bench"),
+      slot(3, "bench", { role: "coach" }),
+      slot(4, "starting", { role: "staff" }),
+    ]);
+    const html = editor({ side, positionGroups: [{ key: "GK", name: "Goalkeeper" }] });
+    const staff = groupHtml(html, "staff");
+    const bench = groupHtml(html, "bench");
+    expect(staff).toContain(">Charlie</span>");
+    expect(staff).toContain(">Delta</span>");
+    expect(staff.split('data-testid="lineup-row"').length - 1).toBe(2);
+    expect(staff).toContain("Coaches &amp; staff");
+    expect(staff).not.toContain('data-testid="lineup-position-select"');
+    expect(staff).toContain('data-testid="lineup-row-menu-button"');
+    expect(staff).toContain(">1.</span>");
+    expect(staff).toContain(">2.</span>");
+    // Bench counts players only
+    expect(bench).toContain("Bench · 1");
+    expect(bench).not.toContain(">Charlie</span>");
+    expect(groupHtml(html, "starting")).not.toContain(">Delta</span>");
+    expect(groupHtml(html, "starting")).toContain('data-testid="lineup-position-select"');
+    // role stays changeable in the staff row's menu; no Starting/Bench item there
+    const items = lineupMenuItems({ slots: draft([slot(3, "bench", { role: "coach" })]), personId: id(3), roles: [], pairShaped: false, primary: "position" });
+    expect(items.map((i) => i.id)).toEqual(["role", "up", "down", "remove"]);
+  });
+
+  it("phone overflow chain: the card, its header and a 43-char name row all carry min-w-0 + truncate (browser proof: mobile.spec.ts hit-test)", () => {
+    const long = "Bartholomew Maximilian Featherstonehaugh-Smythe";
+    const html = editor({ side: sideOf([slot(1, "starting", { full_name: long })]) });
+    expect(long.length).toBeGreaterThanOrEqual(43);
+    expect(html).toMatch(/<section class="card min-w-0 p-4" data-testid="lineup-editor"/);
+    expect(html).toMatch(/<header class="[^"]*\bmin-w-0\b/);
+    expect(html).toMatch(/<li data-testid="lineup-row"[^>]*class="flex min-w-0 /);
+    expect(html).toMatch(/class="min-w-\[2.5rem\] truncate[^"]*">Bartholomew/);
+  });
+
+  it("no one holds a role: no Coaches & staff group renders (empty case)", () => {
+    expect(editor({ side: sideOf(mixed) })).not.toContain('data-testid="lineup-group-staff"');
+  });
+
+  it("move up/down inside Coaches & staff swaps only staff rows", () => {
+    const d = draft([slot(1, "starting", { role: "coach" }), slot(2, "starting"), slot(3, "bench", { role: "staff" })]);
+    expect(order(applyLineupAction(d, id(3), { type: "move", dir: "up" }))).toEqual(["Charlie", "Bravo", "Alpha"]);
+    expect(groupSlots(d).staff.map((r) => r.index)).toEqual([0, 2]);
+    expect(groupSlots(d).starting.length + groupSlots(d).bench.length + groupSlots(d).staff.length).toBe(3);
   });
 
   it("groupSlots keeps the full-draft index each row will be saved under", () => {
@@ -354,9 +414,9 @@ describe("the save payload is identical for the same edits", () => {
     ]);
     d = applyLineupAction(d, id(2), { type: "position", value: "DF" });
     d = applyLineupAction(d, id(2), { type: "roleFlag", key: "captain", on: true });
-    d = applyLineupAction(d, id(3), { type: "role", role: "coach" });
     d = applyLineupAction(d, id(3), { type: "slot", slot: "bench" });
     d = applyLineupAction(d, id(4), { type: "move", dir: "up" });
+    d = applyLineupAction(d, id(3), { type: "role", role: "coach" });
     d = applyLineupAction(d, id(1), { type: "remove" });
     expect(put(d, false)).toEqual([
       { person_id: id(2), slot: "starting", position_key: "DF", order_no: 1, roles: ["captain"], role: "player", pair_order: null },

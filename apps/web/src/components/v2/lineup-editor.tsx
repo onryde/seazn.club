@@ -492,7 +492,7 @@ function LineupRow({
           </span>
         )}
       </span>
-      {primary === "position" && (
+      {primary === "position" && s.role === "player" && (
         <select
           disabled={!canEdit}
           value={s.position_key ?? ""}
@@ -684,11 +684,11 @@ export function LineupEditor({
   }
 
   return (
-    <section className="card p-4" data-testid="lineup-editor">
-      <header className="mb-2 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-slate-700">{msg("lineup.title", { name: side.name })}</h3>
+    <section className="card min-w-0 p-4" data-testid="lineup-editor">
+      <header className="mb-2 flex min-w-0 items-center justify-between gap-2">
+        <h3 className="min-w-0 truncate text-sm font-semibold text-slate-700">{msg("lineup.title", { name: side.name })}</h3>
         <span
-          className={`text-xs ${startingCount === expectedStarting ? "text-emerald-600" : "text-slate-400"}`}
+          className={`shrink-0 text-xs ${startingCount === expectedStarting ? "text-emerald-600" : "text-slate-400"}`}
         >
           {msg("lineup.starting", { n: startingCount, total: expectedStarting })}
         </span>
@@ -718,23 +718,29 @@ export function LineupEditor({
             [
               ["starting", groups.starting],
               ["bench", groups.bench],
+              ["staff", groups.staff],
             ] as const
-          ).map(([key, rows]) => (
+          )
+            // Coaches & staff only exist when someone holds the role.
+            .filter(([key, rows]) => key !== "staff" || rows.length > 0)
+            .map(([key, rows]) => (
             <section key={key} data-testid={`lineup-group-${key}`} className="min-w-0">
               <h4 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                 {key === "starting"
                   ? msg("lineup.group.starting")
-                  : msg("lineup.group.benchCount", { n: rows.length })}
+                  : key === "bench"
+                    ? msg("lineup.group.benchCount", { n: rows.length })
+                    : msg("lineup.group.staff")}
               </h4>
               {rows.length === 0 ? (
                 <p className="text-xs text-slate-400">{msg("lineup.group.none")}</p>
               ) : (
                 <ul className="space-y-1.5">
-                  {rows.map(({ s, index }) => (
+                  {rows.map(({ s }, place) => (
                     <LineupRow
                       key={s.person_id}
                       s={s}
-                      number={index + 1}
+                      number={place + 1}
                       availability={availability[s.person_id]}
                       primary={primary}
                       positionGroups={positionGroups}
