@@ -57,6 +57,16 @@ const CASES: Case[] = [
     height: "px",
   },
   {
+    // The Title sponsor's poster (spec 2026-11-11-title-sponsor-hero-poster §7.5). The contract reads the FIRST `<Image` in the
+    // file, so the poster must stay the first one there (the logo card's image comes after it). Width and height are the poster
+    // constants' own names, so the 4:5 pair the optimiser is asked for cannot drift apart or away from `lib/sponsor-poster.ts`.
+    name: "title-sponsor-showcase.tsx sponsor poster",
+    file: join(SRC_ROOT, "components/public-site/title-sponsor-showcase.tsx"),
+    srcExpr: "slide.poster",
+    width: "POSTER_WIDTH",
+    height: "POSTER_HEIGHT",
+  },
+  {
     name: "[orgSlug]/layout.tsx org logo",
     file: join(SRC_ROOT, "app/(public)/live/[orgSlug]/layout.tsx"),
     srcExpr: "org.logo",
