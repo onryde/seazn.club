@@ -299,6 +299,10 @@ const WALKTHROUGH_SPECS: string[] = [
   // composed session's overlay page (the compositor stood in for at its HTTP boundary), the short link followed, the report
   // shared, read in French and revoked; a viewer refused. Holds the stream-slot pool (its own PoolHolder).
   "sponsors-journey.spec.ts",
+  // Title sponsor poster: an organiser picks and saves a poster (the crop warning, the stored url), a visitor sees it in the hero panel
+  // and, at 320, the band, taps it and is counted, a second Title sponsor rotates in on the page's driven clock, Remove falls back to the
+  // logo card, and a downgrade takes the placement away. Storage is stood in for at the browser's boundary (helpers/poster-art.ts).
+  "title-sponsor-poster.spec.ts",
 
   // Settings W5 — competition settings (`/o/{org}/c/{comp}/settings`), the
   // surface the suite never navigated to before this wave: general/branding

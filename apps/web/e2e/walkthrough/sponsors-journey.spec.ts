@@ -32,10 +32,11 @@
 // paint (a browser tooltip is not in the DOM; its text is asserted).
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { expect, test, type BrowserContext, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { expectNoHorizontalScroll, withDb } from "../helpers";
 import { seedMemberIdentity, sponsorsUrl } from "../settings-support";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
+import { SPONSOR_PAGE_TITLE, realSponsorHop } from "../helpers/sponsor-hop";
 import { FAKE_CONNECT_MS, POOL_SLOT_WAIT_MS, POLL_WAIT_MS, cycleMs, holdsStreamSlot, releaseStreamSlot, takeWholePool } from "../helpers/stream-slot-pool";
 import {
   EMPTY_JAR,
@@ -467,43 +468,6 @@ test("J9 a second sport's fixture: the compositor page airs the sponsors on the 
   await expectOverview(o.page, A.id, "times", String(shownA), "A's Times shown, both sports together");
   await expect(overviewRow(o.page, B.id).getByTestId("sponsor-overview-times"), "B's too").toHaveText(String(shownB));
 });
-
-const SPONSOR_PAGE_TITLE = "Harbourside";
-type SponsorHop = { url: string; status: number; location: string | undefined };
-
-/** Route ONE `/s/` hop on `ctx`: send it to the REAL server unchanged, record what the server answered, and hand back
- *  the sponsor's page in its place.
- *
- *  Why route the hop and not the sponsor's host: Playwright calls a route handler "only for the first url if the response
- *  is a redirect" (playwright-core types.d.ts, `page.route`). A route on the sponsor's own origin therefore never fires
- *  behind the 302, and the browser goes to DNS, which `.example` never answers. CI run 42449692776 failed exactly this
- *  way: `net::ERR_NAME_NOT_RESOLVED` with a context route on `A.url`'s origin in place. `public-fixture.spec.ts`'s header
- *  records the same finding (CI run 41256296230), probed locally with the page in the same tab and in a popup.
- *
- *  `route.fetch` does not follow redirects here, so the server sees this browser's own request and records the click
- *  from it. Its 302 and Location are asserted exactly, and that redirect target is the seam. The route is context-level,
- *  so it also catches the first request of a new tab. */
-async function realSponsorHop(ctx: BrowserContext, pathname: string): Promise<{ hop: Promise<SponsorHop> }> {
-  let settle!: (hop: SponsorHop) => void;
-  let fail!: (err: unknown) => void;
-  const hop = new Promise<SponsorHop>((res, rej) => {
-    settle = res;
-    fail = rej;
-  });
-  await ctx.route(
-    (url) => url.pathname === pathname,
-    async (route) => {
-      try {
-        const real = await route.fetch({ maxRedirects: 0 });
-        settle({ url: route.request().url(), status: real.status(), location: real.headers()["location"] });
-        await route.fulfill({ status: 200, contentType: "text/html", body: `<!doctype html><title>${SPONSOR_PAGE_TITLE}</title>` });
-      } catch (err) {
-        fail(err);
-      }
-    },
-  );
-  return { hop };
-}
 
 test("J5 the short link the stream showed, followed logged out, redirects and counts one click; the board's link counts one more", async ({ browser }) => {
   test.setTimeout(6 * NAV_MS + 10 * ACT_MS);
