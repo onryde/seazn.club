@@ -90,3 +90,15 @@ describe("PhoneDisclosure desktopCollapsible (fixture console: fold the lineup o
     expect(html).toMatch(/<div class="grid flex-1 hidden" id="[^"]+"><p data-role="body">the editor<\/p><\/div>/);
   });
 });
+
+describe("PhoneDisclosure phoneStartOpen", () => {
+  it("renders CLOSED on first paint, like every other fold (the server and the hydration render never open it; the seed opens it after hydration)", () => {
+    const h = renderToStaticMarkup(
+      <PhoneDisclosure summary="What each tier gets" showLabel="Show" hideLabel="Hide" phoneStartOpen>
+        <p data-role="body">the legend</p>
+      </PhoneDisclosure>,
+    );
+    expect(h).toMatch(/data-role="phone-disclosure-toggle"[^>]*aria-expanded="false"/);
+    expect(h).toMatch(/<div class="grid flex-1 max-md:hidden" id="[^"]+"><p data-role="body">the legend<\/p><\/div>/);
+  });
+});

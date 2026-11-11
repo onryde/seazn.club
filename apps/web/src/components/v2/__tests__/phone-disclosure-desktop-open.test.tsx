@@ -74,3 +74,46 @@ describe("PhoneDisclosure after hydration", () => {
     expect(isOpen(island.tree())).toBe(true);
   });
 });
+
+// The phone-only variant has no `startOpen` of its own (that prop belongs to `desktopCollapsible`), so a caller whose fold should
+// open on a phone says so with `phoneStartOpen` (Sponsors hub, Packages tab: an EMPTY price list opens its tier legend). Default off,
+// so every existing phone-only fold (stage points' More, tie-break rules, the match rules block) stays closed until tapped.
+describe("PhoneDisclosure phoneStartOpen (the phone-only variant, opened after hydration)", () => {
+  it("opens on its own after hydration at every width - 1280, 768, 767 and 320 (4 checked); the default, with the prop absent, stays closed at all four", () => {
+    const widths = [1280, 768, 767, 320];
+    const on = widths.map((w) => isOpen(at(w, { phoneStartOpen: true }).island.tree()));
+    expect(on).toEqual([true, true, true, true]);
+    const off = widths.map((w) => isOpen(at(w, {}).island.tree()));
+    expect(off, "no prop: the phone default is closed (spec 3.10)").toEqual([false, false, false, false]);
+    expect(isOpen(at(320, { phoneStartOpen: false }).island.tree())).toBe(false);
+  });
+
+  it("is still a phone control: the toggle keeps its md:hidden and the body keeps its max-md:hidden class when closed", () => {
+    const tree = at(320, { phoneStartOpen: true, startOpen: false }).island.tree();
+    expect(String(propsOf(toggle(tree)).className)).toMatch(/\smd:hidden$/);
+  });
+
+  it("a tap is the reader's: it folds an open one and a re-render with the same props does not re-open it; flipping the prop off never folds it", () => {
+    const { island, base } = at(320, { phoneStartOpen: true });
+    expect(isOpen(island.tree())).toBe(true);
+    (propsOf(toggle(island.tree())).onClick as () => void)();
+    expect(isOpen(island.tree()), "the tap folded it").toBe(false);
+    island.rerender({ ...base });
+    expect(isOpen(island.tree()), "the same props do not re-open what the reader folded").toBe(false);
+    (propsOf(toggle(island.tree())).onClick as () => void)();
+    expect(isOpen(island.tree())).toBe(true);
+    island.rerender({ ...base, phoneStartOpen: false });
+    expect(isOpen(island.tree()), "the first package lands: the legend the reader has open stays open").toBe(true);
+  });
+
+  it("the prop turning true later opens it (a re-seed, not a mount-only default): false then true at 320", () => {
+    const { island, base } = at(320, { phoneStartOpen: false });
+    expect(isOpen(island.tree())).toBe(false);
+    island.rerender({ ...base, phoneStartOpen: true });
+    expect(isOpen(island.tree()), "told to start open after the fact").toBe(true);
+  });
+
+  it("does not touch the desktopCollapsible variant: startOpen false still folds it, whatever phoneStartOpen says", () => {
+    expect(isOpen(at(1280, { desktopCollapsible: true, startOpen: false, phoneStartOpen: true }).island.tree())).toBe(false);
+  });
+});
