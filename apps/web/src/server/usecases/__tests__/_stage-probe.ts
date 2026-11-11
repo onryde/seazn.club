@@ -16,6 +16,10 @@ const probes = (f: { kind: string; options?: { value: string }[]; min?: number; 
   : f.kind === "sequence" ? [""]
   : [String(f.min ?? 1), ...(f.max === undefined ? [] : [String(f.max)])];
 
+/** The other form values a probe builds with: a both-or-neither field (`pairedWith`, football's extra-time pair, ruling 161)
+ *  builds nothing alone, so its partner box holds the same probe. */
+const partnerOf = (f: { pairedWith?: string }, p: string): Record<string, string> => (f.pairedWith === undefined ? {} : { [f.pairedWith]: p });
+
 /** The sport's own answer to a config: its schema accepts it, and its write door refuses nothing in it. */
 const accepted = (m: AnySportModule, cfg: Record<string, unknown>): boolean =>
   m.configSchema.safeParse(cfg).success && writeConfigIssues(m, cfg).length === 0;
@@ -28,7 +32,7 @@ export function builtFor(m: AnySportModule, variant: string, top: string): Recor
   for (const f of SPORT_RULES[m.key] ?? []) {
     if (!f.edits.some((k) => k.split(".")[0] === top)) continue;
     for (const p of probes(f)) {
-      const frag = f.build(p, {});
+      const frag = f.build(p, partnerOf(f, p));
       if (Object.keys(frag).length > 0 && accepted(m, { ...base, ...frag })) return frag;
     }
   }
@@ -54,7 +58,7 @@ export function editorFragments(m: AnySportModule, variant: string, top: string)
   for (const f of SPORT_RULES[m.key] ?? []) {
     if (!f.edits.some((k) => k.split(".")[0] === top)) continue;
     for (const p of probes(f)) {
-      const frag = f.build(p, {});
+      const frag = f.build(p, partnerOf(f, p));
       if (Object.keys(frag).length > 0 && accepted(m, { ...base, ...frag })) out.push(frag);
     }
   }
