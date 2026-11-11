@@ -240,12 +240,19 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
   );
 
   // --- PR 3 Task 22: the numbered invoice. Its page answers one opaque 404 for a token that opens nothing.
+  // As with the report's revoked link (suites/sponsors.ts says why, next 16.3.6's errorRecovery path): a notFound() thrown by
+  // the page answers Next's error shell, whose body carries the not-found notice only as escaped Flight JSON, never as a
+  // `data-testid="..."` attribute - the browser draws it client-side, which e2e/walkthrough/sponsor-invoices.spec.ts reads
+  // after it draws. So the PROOF is the 404 status; `notice` only says the answer came from this route's not-found, and
+  // `leaked` is the invoice's own markup, which a 404 must never carry.
   const unknownInvoice = await html(newSession(), `/r/sponsor/invoice/${randomBytes(32).toString("base64url")}`);
-  check(
-    "sd invoice page 404 for an unknown token",
-    unknownInvoice.status === 404 && unknownInvoice.body.includes('data-testid="sponsor-invoice-not-found"') &&
-      !unknownInvoice.body.includes('data-testid="sponsor-invoice"'),
-  );
+  const invoiceNotice = unknownInvoice.body.includes("sponsor-invoice-not-found");
+  const invoiceLeaked = unknownInvoice.body.includes('data-testid="sponsor-invoice"');
+  const unknownInvoiceIs404 = unknownInvoice.status === 404 && invoiceNotice && !invoiceLeaked;
+  if (!unknownInvoiceIs404) {
+    console.log(`      unknown invoice token: status ${unknownInvoice.status}, notice ${invoiceNotice}, invoice leaked ${invoiceLeaked}, ${unknownInvoice.body.length} bytes`);
+  }
+  check("sd invoice page 404 for an unknown token", unknownInvoiceIs404);
 
   // The console's copy, for a numbered offline deal on its OWN sponsor (F33) of the Pro org: "read" auth, so the viewer gets it.
   const invoiceSponsor = v1data<{ id: string }>(
