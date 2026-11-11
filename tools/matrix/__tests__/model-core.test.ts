@@ -2040,7 +2040,7 @@ describe("Task 14: modelCommands and SWISS_BIAS (ruling 49)", () => {
  *  MODEL_FAMILY_ROUTE, the code under test. */
 const D6: Readonly<Record<string, string>> = {
   league_ko: "W5", groups_ko: "W5", group_stepladder: "W5", group_playoffs: "W5", group_group_ko: "W5",
-  ko_plate: "W4", qualifying_main: "W4",
+  ko_plate: "W10", qualifying_main: "W10",
   swiss_playoff: "W3", swiss_knockout: "W3",
   ladder: "W7", americano: "W7", mexicano: "W7",
 };

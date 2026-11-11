@@ -27,7 +27,6 @@ import { crownOf, isTerminal, toObservedOutcome, type CompleteObs, type Observed
 import type { CreditCase } from "@seazn/reference";
 import type { CheckResult } from "../results.ts";
 import { sportModule } from "../sport-cfg.ts";
-import { routeTo, type Route } from "../routing.ts";
 import { generateStream, levelReachable, partialPlay } from "../streams/index.ts";
 import { GeneratorUnsupported, OutcomeUnreachable, type ForfeitReason, type RequestedOutcome, type Side, type StreamEvent } from "../streams/types.ts";
 import { AWARD_POLICY, DLS_ON, abandonOverride, inMatchReasons, w2bApplies, w2bCells } from "../w2b-cells.ts";
@@ -492,11 +491,10 @@ export function knockoutCrown(fixtures: readonly ObservedFixture[]): { ok: true;
   return { ok: true, winner: CROWN_SETTLED.has(only.status) ? winner : null };
 }
 
-/** The vacant title's owner (spec §2.2's handover, W2b-R10: W4, with joint winners). A route, so the Q-A guard reads the
- *  wave it names (routing.ts). */
-export const VACANT_TITLE_ROUTE: Route = routeTo("W4", "a vacant title: a finalist withdrawn beside a voided feeder leaves the final void and crowns nobody (X-WD-3); the forfeit-credit wave pins the product's answer and changes nothing");
-/** The vacant half's title, naming the deferral. */
-export const FINAL_VACANT_TITLE = `X-WD-3/${VACANT_TITLE_ROUTE.wave}: finalist withdraws beside a voided feeder — final void, title vacant (${VACANT_TITLE_ROUTE.wave} owns vacant titles)`;
+/** The vacant half's title. The vacant title was handed to W4 (spec §2.2, W2b-R10) and W4 shipped it (T15: a vacant title is a
+ *  declared result the product reads, not a missing crown), so nothing is owed any more: no route, only the label. W2b still pins
+ *  the product's answer (the final void, nobody crowned) and changes nothing. */
+export const FINAL_VACANT_TITLE = "X-WD-3: finalist withdraws beside a voided feeder — final void, title vacant";
 
 /** The vacant half (wdCascFinalHalf). a2 withdrew from the final while its other seat was TBD, so her seat there is
  *  dead and departed; SF2's void then killed the other seat, which did not depart. Two dead seats, one departed, is a

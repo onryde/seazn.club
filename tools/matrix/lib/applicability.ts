@@ -292,9 +292,9 @@ const LADDER = "ladder|generic";
 const NO_TEAM = "no team entrants in this sport's model";
 const NO_PAIR = "no pair entrants in this sport's model";
 const NO_TABLE = "no points-table stage in this row (brackets place by elimination; a ladder orders by position)";
-/** T8-g (W4 app PR A, Task 24): who owes boardgame's M6 drive - the wave's PR B, as a prod-build e2e, since `next dev` cannot serve the
+/** T8-g (W4 app PR A, Task 24): who owes boardgame's M6 drive - a prod-build e2e that W4 did not build, so W10 (the sweep lane) owns it, since `next dev` cannot serve the
  *  public standings API that run ends in. Named through this route (T1-R2), in the same bytes drop-list.json commits. */
-const M6_BOARDGAME_OWED = routeTo("W4", "boardgame's M6 case is driven end to end by a prod-build e2e that reads the public standings (next dev cannot serve them)");
+const M6_BOARDGAME_OWED = routeTo("W10", "boardgame's M6 case is driven end to end by a prod-build e2e that reads the public standings (next dev cannot serve them)");
 
 export const RULES: Readonly<Record<string, Rule>> = Object.freeze({
   [LIFECYCLE_ID]: ALWAYS,

@@ -985,7 +985,7 @@ describe("Task 14: a team cell runs end to end with a lineup per side (ruling 49
 
 describe("Task 14: a row the model does not drive is refused by family through runCell, before any run (D6)", () => {
   // The brief's table, typed from D6 (ruling 52) — never read from MODEL_FAMILY_ROUTE.
-  it.each([["league_ko", "W5"], ["swiss_playoff", "W3"], ["ko_plate", "W4"], ["group_group_ko", "W5"], ["ladder", "W7"], ["americano", "W7"], ["mexicano", "W7"]] as const)("%s is ModelUnsupported naming %s", async (row, wave) => {
+  it.each([["league_ko", "W5"], ["swiss_playoff", "W3"], ["ko_plate", "W10"], ["group_group_ko", "W5"], ["ladder", "W7"], ["americano", "W7"], ["mexicano", "W7"]] as const)("%s is ModelUnsupported naming %s", async (row, wave) => {
     const { driver, report } = runModelCell({ row, sport: "generic", variant: "standard", runs: 5, seed: 1, entrants: 8 });
     await expect(report).rejects.toMatchObject({ name: "ModelUnsupported", wave });
     expect(driver.calls).toEqual([]);
