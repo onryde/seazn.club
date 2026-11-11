@@ -273,6 +273,9 @@ export function scrubTokenQuery(query: string): string {
 export function scrubScoreUrl(value: string): string {
   if (!MAYBE_TOKEN.test(value)) return value;
   return value
+    // First: a room JWT is random base64url and can contain a `dl_` run, which BARE_TOKEN would half-eat and so break the JWT shape (C43).
+    .replace(ROOM_TOKEN_QUERY, "$1[token]")
+    .replace(ENCODED_ROOM_TOKEN, "$1[token]")
     .replace(SCORE_PATH, "/score/[token]")
     .replace(ENCODED_SCORE_PATH, "$1[token]")
     .replace(BARE_TOKEN, "dl_[token]")
@@ -284,8 +287,6 @@ export function scrubScoreUrl(value: string): string {
     .replace(ENCODED_JOIN_CODE, "$1[code]")
     .replace(CAPTURE_PATH, "$1[code]")
     .replace(ENCODED_CAPTURE_PATH, "$1[code]")
-    .replace(ROOM_TOKEN_QUERY, "$1[token]")
-    .replace(ENCODED_ROOM_TOKEN, "$1[token]")
     .replace(SECRET_PATH, "$1[token]")
     .replace(ENCODED_SECRET_PATH, "$1[token]")
     .replace(ONE_TIME_ROUTE_QUERY, (_m, head: string, query: string) => head + scrubTokenQuery(query))
