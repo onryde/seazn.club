@@ -22,7 +22,8 @@ import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { ProseEditor, textboxName } from "@/components/prose-editor";
-import { OrgAbout } from "@/components/org-about";
+import { OrgProfileCard } from "@/components/org-profile-card";
+import { expandSettingsCard } from "@/components/v2/__tests__/_settings-card-expand";
 import { OrgPaymentInstructions } from "@/components/org-payment-instructions";
 import { Composer } from "@/components/news/composer";
 import { CompetitionSettings } from "@/components/v2/competition-settings";
@@ -123,8 +124,24 @@ const editorOf = (island: Mounted) => {
 describe("the four editors that never drew a hint now do", () => {
   const cases: [string, () => Mounted, string, string][] = [
     [
+      // Settings C8 (owner 2026-11-11): the About editor lives in the Organisation card now. The card passes its
+      // columns as props, so the tree is expanded through the frame — without it the editor is invisible and
+      // `editorOf`'s length-1 check would red on a zero, never pass on one.
       "org About",
-      () => renderIsland(OrgAbout, { orgId: "o1", initialValue: null, branding: {} }),
+      () =>
+        renderIsland(
+          OrgProfileCard,
+          {
+            orgId: "o1",
+            orgSlug: "riverside",
+            initialName: "Riverside",
+            initialBranding: {},
+            initialAbout: null,
+            canEdit: true,
+            brandGate: { locked: false },
+          },
+          expandSettingsCard,
+        ),
       HINT_KEYS.about,
       LABEL_KEYS.about,
     ],
@@ -162,7 +179,7 @@ describe("the four editors that never drew a hint now do", () => {
           canEdit: true,
           discoveryBranding: false,
           viewerPlan: "community",
-        }),
+        }, expandSettingsCard),
       HINT_KEYS.settings,
       LABEL_KEYS.settings,
     ],
@@ -205,7 +222,9 @@ describe("the four editors that never drew a hint now do", () => {
         status: "draft", discoverable: false, discovery: {}, branding: {},
       },
       orgId: "o1", canEdit: true, discoveryBranding: false, viewerPlan: "community",
-    });
+    }, expandSettingsCard);
+    // Expanded through the C8 frame, so "no editor" is measured where the editor would be: the read-only box is there.
+    expect(island.tree().filter((el) => el.type === "textarea")).toHaveLength(1);
     expect(island.tree().filter((el) => el.type === ProseEditor)).toHaveLength(0);
   });
 });

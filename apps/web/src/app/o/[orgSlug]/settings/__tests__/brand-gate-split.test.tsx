@@ -60,14 +60,28 @@ vi.mock("@/lib/resolve-locale", () => ({ resolveLocale }));
 vi.mock("@/components/org-logo", () => ({
   OrgLogo: () => <div data-testid="org-logo-uploader" />,
 }));
-vi.mock("@/components/org-brand-color", () => ({
-  OrgBrandColor: () => <div data-testid="org-brand-color-picker" />,
+// Settings C8 (owner 2026-11-11): the brand colour lives in the Organisation card (`OrgProfileCard`), which is
+// rendered FOR REAL here — the page decides the gate, the card draws the picker (`data-testid="org-brand-color-picker"`)
+// or the page's refusal, and stubbing the card would prove only the stub. It calls `useRouter`, which throws outside a
+// mounted app router, so the router is stubbed (and `redirect`, which the page itself imports); the TipTap editor is
+// stubbed because it needs a DOM.
+vi.mock("next/navigation", () => ({
+  redirect: vi.fn(),
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+  usePathname: () => "/o/riverside/settings",
 }));
-vi.mock("@/components/org-switcher", () => ({ OrgSwitcher: () => <div /> }));
-vi.mock("@/components/org-rename", () => ({ OrgRename: () => <div /> }));
-vi.mock("@/components/org-about", () => ({ OrgAbout: () => <div /> }));
+vi.mock("@/components/prose-editor", () => ({ ProseEditor: () => <div data-testid="about-editor" /> }));
 vi.mock("@/components/org-timezone", () => ({ OrgTimezone: () => <div /> }));
-vi.mock("@/components/tour-replay", () => ({ TourReplayButton: () => <div /> }));
+vi.mock("@/components/org-public-language", () => ({ OrgPublicLanguage: () => <div /> }));
+vi.mock("@/components/org-registration-currency", () => ({ OrgRegistrationCurrency: () => <div /> }));
+vi.mock("@/components/tour-replay", () => ({
+  TourReplayButton: ({ variant }: { variant?: string }) => <div data-testid="tour-replay" data-variant={variant ?? "row"} />,
+}));
+// The switcher left this page (switching is the account menu's and the breadcrumb's). A marker, so a re-mount reds.
+vi.mock("@/components/org-switcher", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/org-switcher")>()),
+  OrgSwitcher: () => <div data-testid="org-switcher-marker" />,
+}));
 
 import SettingsPage from "../page";
 
@@ -125,6 +139,8 @@ describe("settings → organisation: logo and brand colour are gated separately 
     grant({ branding: true, "dashboard.theme": false });
     const html = await render();
 
+    // Premise: the real Organisation card rendered (not an empty page that would pass every "absent" below).
+    expect(html).toContain('data-testid="org-profile-card"');
     expect(html).toContain("org-logo-uploader");
     expect(html).not.toContain("org-brand-color-picker");
     // settings.upgrade.brandColor (dictionaries/en/ui.json:480) was dead code
@@ -171,5 +187,49 @@ describe("settings → organisation: logo and brand colour are gated separately 
     expect(html).not.toContain("org-logo-uploader");
     expect(html).toContain("Your own logo is switched off for this organisation.");
     expect(html).toContain("org-brand-color-picker");
+  });
+});
+
+// Settings C8 (owner 2026-11-11, mock set11c01 O1): the Organisation tab is one card. Rendered with the REAL card, so
+// what is asserted is what the page and the card produce together.
+describe("settings → organisation: the C8 card", () => {
+  it("one card, no org switcher, the defaults inside it, and the tour as a quiet link under it", async () => {
+    grant({ branding: true, "dashboard.theme": true });
+    const html = await render();
+    expect(html).toContain('data-testid="org-profile-card"');
+    expect(html).not.toContain("org-switcher-marker");
+    expect(html).not.toContain('data-testid="org-identity-name"');
+    // The defaults moved here from Preferences, into the card.
+    const card = html.slice(html.indexOf('data-testid="org-profile-card"'));
+    expect(card).toContain('data-testid="org-defaults"');
+    expect(html).toContain('data-testid="tour-replay" data-variant="link"');
+    // The role badge stays beside the heading.
+    expect(html).toContain(">Owner<");
+  });
+
+  it("View page points at the org's public page, opening a new tab", async () => {
+    grant({ branding: true, "dashboard.theme": false });
+    const html = await render();
+    const at = html.indexOf('data-testid="org-view-page"');
+    expect(at, "the link is drawn").toBeGreaterThan(-1);
+    const tag = html.slice(html.lastIndexOf("<a", at), html.indexOf(">", at));
+    expect(tag).toContain('href="/live/riverside"');
+    expect(tag).toContain('target="_blank"');
+  });
+
+  it("a viewer: the card, read-only — no defaults, no tour, no Save", async () => {
+    grant({ branding: true, "dashboard.theme": true });
+    requireOrgPage.mockResolvedValue({
+      user: { id: "u2", email: "viewer@example.com", display_name: "V", timezone: null, locale: null },
+      org: { ...ORG, role: "viewer" },
+      canEdit: false,
+      auth: { orgId: ORG.id, via: "session", userId: "u2", role: "viewer", keyId: null },
+    });
+    const html = await render();
+    expect(html).toContain('data-testid="org-profile-card"');
+    expect(html).not.toContain('data-testid="org-defaults"');
+    expect(html).not.toContain('data-testid="tour-replay"');
+    expect(html).not.toContain('data-testid="settings-save-bar"');
+    expect(html).toContain("Riverside Community Club");
   });
 });
