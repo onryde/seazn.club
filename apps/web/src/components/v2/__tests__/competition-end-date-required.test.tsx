@@ -13,7 +13,8 @@
 // are driven through the shared hook harness (see _hook-harness.tsx).
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement, ReactNode } from "react";
-import { propsOf, renderIsland, walk } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
+import { expandSettingsCard } from "./_settings-card-expand";
 import { DateTimeField, type DateTimeFieldProps } from "../shared/datetime-field";
 import { CompetitionWizard } from "../competition-wizard";
 import { CompetitionSettings } from "../competition-settings";
@@ -262,7 +263,15 @@ describe("CompetitionSettings — the end date is changeable, not removable (#37
       canEdit: true,
       discoveryBranding: false,
       viewerPlan: "community",
-    });
+    }, expandSettingsCard);
+  // The refusal is said inside the card (its notices row), which `text()` does not reach: read the expanded tree.
+  const cardText = (island: ReturnType<typeof mount>) => textOf(island.tree());
+
+  it("premise: the expanded settings tree really holds the two date inputs and the form", () => {
+    const tree = mount().tree();
+    expect(dateInputs(tree)).toHaveLength(2);
+    expect(tree.filter((el) => el.type === "form")).toHaveLength(1);
+  });
 
   it("still PATCHes a CHANGED end date", async () => {
     const island = mount();
@@ -279,7 +288,7 @@ describe("CompetitionSettings — the end date is changeable, not removable (#37
     await submitForm(island.tree());
 
     expect(vi.mocked(apiV1)).not.toHaveBeenCalled();
-    expect(island.text()).toContain(REQUIRED);
+    expect(cardText(island)).toContain(REQUIRED);
   });
 
   it("refuses to PATCH an end date moved before the start date", async () => {
@@ -288,6 +297,6 @@ describe("CompetitionSettings — the end date is changeable, not removable (#37
     await submitForm(island.tree());
 
     expect(vi.mocked(apiV1)).not.toHaveBeenCalled();
-    expect(island.text()).toContain(BACKWARDS);
+    expect(cardText(island)).toContain(BACKWARDS);
   });
 });

@@ -138,7 +138,7 @@ async function openFixture(page: Page, r: OverlayRig): Promise<void> {
   expect(fx.data?.fixture_no ?? 0, "the rig's fixture has a run-sheet number").toBeGreaterThan(0);
   await page.goto(`/o/${r.orgSlug}/c/${r.compSlug}/d/${r.divSlug}/f/${fx.data!.fixture_no}`);
   await expect(
-    page.locator('[data-role="console-scoring"], [data-role="console-stream"]').first(),
+    page.locator('[data-role="console-scoring"], [data-role="console-panel-bar"]').first(),
     "the fixture console rendered",
   ).toBeAttached({ timeout: 30_000 });
 }
@@ -932,6 +932,9 @@ test.describe("R2006: the OBS tab's score style grid", () => {
             const cell = opt.querySelector<HTMLElement>("span[aria-hidden]")!;
             const canvas = opt.querySelector<HTMLElement>('[data-testid="ovl-preview-canvas"]')!;
             const c = canvas.getBoundingClientRect();
+            // Below md the Stream panel opens BELOW the pad (chrome down, 2026-09-02), so an option can sit past the first
+            // 900px: a tap needs it scrolled into view first, as a thumb does it (elementFromPoint is null off-screen).
+            opt.scrollIntoView({ block: "center" });
             const box = opt.getBoundingClientRect();
             const hit = document.elementFromPoint(box.left + box.width / 2, box.top + Math.min(box.height / 2, 40));
             return {
@@ -1006,7 +1009,7 @@ test.describe("R2006: the OBS tab's score style grid", () => {
       await expect(checked()).toHaveAttribute("data-template", other);
       await expect.poll(async () => (await linkUrl()).searchParams.get("template")).toBe(other);
       await page.reload();
-      await expect(page.locator('[data-role="console-scoring"], [data-role="console-stream"]').first()).toBeAttached({ timeout: 30_000 });
+      await expect(page.locator('[data-role="console-scoring"], [data-role="console-panel-bar"]').first()).toBeAttached({ timeout: 30_000 });
       await streamControl(page).click();
       await page.locator('[data-testid="stream-tab-obs"]').click();
       await expect(checked(), "the stored pick, after a reload").toHaveAttribute("data-template", other);

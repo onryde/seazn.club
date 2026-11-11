@@ -132,13 +132,16 @@ test("visibility picker: Link only surfaces a copyable URL; public page stays no
   const orgSlug = (await activeOrg(page)).slug;
 
   await page.goto(await competitionPath(page.request, comp.data!.id, "/settings"));
-  // Radio cards speak plain language (v3/03 §7).
+  // The segmented control speaks plain language (v3/03 §7): the selected option's consequence sits under it.
   await expect(page.getByText(uiEn["visibility.private.consequence"]!, { exact: true })).toBeVisible();
-  await page.getByRole("radio", { name: /link only/i }).check();
+  // Settings C8 (owner 2026-11-11): each segment's radio is sr-only inside its <label>, so the tap goes to the label.
+  const linkOnly = page.getByRole("radio", { name: /link only/i });
+  await page.locator("label").filter({ has: linkOnly }).click();
+  await expect(linkOnly).toBeChecked();
   // The consequence is immediate: share URL + copy affordance appear.
   await expect(page.getByText(`/live/${orgSlug}/${comp.data!.slug}`).first()).toBeVisible();
   await expect(page.getByRole("button", { name: /copy link/i })).toBeVisible();
-  await page.getByRole("button", { name: /save settings/i }).click();
+  await page.getByRole("button", { name: /save changes/i }).click();
   await expect(page.getByText("Saved.").first()).toBeVisible();
 
   // Keys/noindex behaviour unchanged: unlisted pages serve a robots noindex.

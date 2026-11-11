@@ -284,7 +284,7 @@ export function SettingsShell({
 }) {
   if (!showNav) return <main className="mx-auto max-w-3xl px-4 py-8">{children}</main>;
   return (
-    <div className="mx-auto max-w-5xl px-4 py-4 md:py-8">
+    <div className="mx-auto max-w-6xl px-4 py-4 md:py-8">
       <div className="flex flex-col gap-4 md:flex-row md:gap-8">
         <SettingsNav orgSlug={orgSlug} active={active} dict={dict} context={context} />
         <main className="min-w-0 flex-1">{children}</main>

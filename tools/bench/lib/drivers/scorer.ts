@@ -189,13 +189,14 @@ export const FORFEIT_CONFIRM_TESTID = "forfeit-confirm";
  *  (tools/matrix/lib/browser/pages/fixture-console.ts) taps these. */
 export const PROMPT_REASON_TESTID = "score-prompt-reason";
 export const PROMPT_SUBMIT_TESTID = "score-prompt-submit";
-/** PR #1133 — the console keeps Forfeit and Abandon in a "Match actions" panel (fixture-console.tsx
- *  `data-role="match-actions"`) that starts CLOSED at ≥768 behind this toggle, whose `aria-expanded` says which. On a
- *  phone the panel is open and the toggle is `max-md:hidden`. Finalize is NOT in it: since 2026-11-05 Finalize is the
- *  banner at the top of the console (`data-role="finalize-banner"`), on screen without opening anything. */
+/** Header panel bar (owner 2026-11-11): Match actions is the last button of the console's panel bar (Stream · Remote
+ *  scoring · Lineup · Match rules · Match actions, one panel open at a time). Its panel (`data-role="match-actions"`,
+ *  Forfeit and Abandon) is CLOSED as loaded at EVERY width, phones included (the bar and its panel sit below the pad
+ *  there), and the button's `aria-expanded` says which. Finalize is NOT in it: since 2026-11-05 it is the banner at the
+ *  top of the console (`data-role="finalize-banner"`), on screen without opening anything. */
 export const MATCH_ACTIONS_TOGGLE_TESTID = "match-actions-toggle";
-/** The toggle while it is ON SCREEN and NOT open. `:visible` is Playwright's own pseudo-class, so a phone's hidden
- *  toggle counts 0, and so does the toggle of a panel already open. */
+/** The button while it is ON SCREEN and NOT open. `:visible` is Playwright's own pseudo-class, so it counts 0 when the
+ *  console offers no match action at all, and 0 for the button of a panel already open. */
 export const MATCH_ACTIONS_CLOSED_SELECTOR = `[data-testid="${MATCH_ACTIONS_TOGGLE_TESTID}"]:not([aria-expanded="true"]):visible`;
 /** The toggle once its panel is open — what a tap that landed on the closed one turns it into. */
 export const MATCH_ACTIONS_OPEN_SELECTOR = `[data-testid="${MATCH_ACTIONS_TOGGLE_TESTID}"][aria-expanded="true"]`;

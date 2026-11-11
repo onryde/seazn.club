@@ -264,39 +264,26 @@ describe.skipIf(!HAS_DB)("getCreditsTab", () => {
     expect(history[0]!.action).not.toBe("adminAdjust");
   });
 
-  // The Invite & earn card is hidden (owner, 2026-11-11), so the view reads no
-  // referral data — and above all no longer MINTS the org's referral code on a
-  // GET (`getOrCreateReferralCode` wrote `organizations.referral_code` on first
-  // read). The /refer route and the referral grants are untouched; a referrer's
-  // earned credits still count in the wallet's balance like any earn grant.
-  it("reads no referral data and mints no referral code, on a first or second read (R1)", async () => {
+  // The referral programme is removed (owner, 2026-11-11), but its ledger rows
+  // are history and stay: an `earn_grant` row the old referrer grant wrote
+  // (key `earn:referral:<referred org>`) still reads in the history and the
+  // balance, and the view carries no referral fields, on a first or second read.
+  it("a historical referral earn grant still reads; the view carries no referral fields (R1)", async () => {
     const { auth } = await seedOrg("community");
     const walletId = await walletIdFor(auth.orgId);
-    // Known starting state, not assumed: no code. If seeding ever mints one,
-    // this is what makes the "still null" below mean something.
-    await sql`update organizations set referral_code = null where id = ${auth.orgId}`;
-
-    // An org this one referred, and the referrer's +20 — the inputs the old
-    // view summarised. They still land in the wallet; the view just does not
-    // single them out.
-    const { auth: referredOrg } = await seedOrg("community");
-    await sql`update organizations set referred_by_org_id = ${auth.orgId} where id = ${referredOrg.orgId}`;
-    await recordEarnGrant(walletId, referredOrg.orgId, "referral", randomUUID(), 20);
+    const before = (await getCreditsTab(auth.orgId)).history.length;
+    // Written exactly as the retired referrer grant wrote it (reason "referral").
+    await recordEarnGrant(walletId, auth.orgId, "referral" as never, randomUUID(), 20);
 
     let reads = 0;
     for (const view of [await getCreditsTab(auth.orgId), await getCreditsTab(auth.orgId)]) {
       for (const k of ["referralCode", "referredCount", "referralEarned"]) {
-        expect(Object.keys(view), `the view no longer carries ${k}`).not.toContain(k);
+        expect(Object.keys(view), `the view carries no ${k}`).not.toContain(k);
       }
-      // positive pair: the wallet itself is read — the +20 is in the balance
+      expect(view.history.length, "the historical row is listed").toBe(before + 1);
       expect(view.history.some((r) => r.delta === 20), "the referral earn grant is in the history").toBe(true);
       reads++;
     }
     expect(reads).toBe(2);
-
-    const [row] = await sql<{ referral_code: string | null }[]>`
-      select referral_code from organizations where id = ${auth.orgId}`;
-    expect(row, "the org exists").toBeDefined();
-    expect(row!.referral_code, "a GET of the Credits tab minted a referral code").toBeNull();
   });
 });

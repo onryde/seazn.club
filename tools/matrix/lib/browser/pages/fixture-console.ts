@@ -11,10 +11,10 @@
 //    (`decided`, :714) and needs `scoring` (:685 — status not finalized) — so a
 //    finalized console drops it. Since 2026-11-05 (PR #1133) it is the
 //    `finalize-banner` at the TOP of the console, on screen as loaded.
-//  - PR #1133: Forfeit and Abandon sit in the "Match actions" panel
-//    (`data-role="match-actions"`), which starts CLOSED at md and up behind
-//    `match-actions-toggle` (its `aria-expanded` says which); on a phone it is
-//    open and the toggle hidden. So forfeitUi and abandonUi load the console
+//  - Header panel bar (2026-11-11): Forfeit and Abandon sit in the "Match actions"
+//    panel (`data-role="match-actions"`), which starts CLOSED at EVERY width
+//    behind the bar's `match-actions-toggle` button (its `aria-expanded` says
+//    which; on a phone the bar sits below the pad). So forfeitUi and abandonUi load the console
 //    waiting for the toggle OR their control to hydrate (whichever is the first
 //    act at that width), then open the panel with the bench's own
 //    openMatchActions (scorer.ts, ruling 38), which taps only a toggle that is
@@ -167,7 +167,7 @@ export async function forfeitUi(c: PageCtx, fixture: ForfeitFixture, by: string,
   const nav = navBudget(c);
   const { stepMs } = forfeitBudgets(c, steps.length);
   // The Forfeit opener is the first act, scheduled or under way — after opening the Match actions panel it sits in
-  // (PR #1133: closed at md and up behind its toggle, open on a phone).
+  // (panel bar 2026-11-11: closed at every width behind its bar button).
   await reload(c, { control: matchActionsOr(page, page.getByTestId(FORFEIT_TESTID)), what: "the console's Forfeit" });
   await openMatchActions(page, stepMs);
   const posted: PostedEvent[] = [];

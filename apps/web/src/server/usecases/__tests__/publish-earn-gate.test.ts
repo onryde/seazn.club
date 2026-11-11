@@ -1,7 +1,6 @@
-// v17 gap #296 — the onboarding (+10) and referral-welcome (+10) earn grants
-// used to fire at signup/onboarding-complete; a scripted signup could farm
-// 20 free credits per email address doing nothing else. This wave moves
-// both behind a cheap real-usage signal: the org PUBLISHES a competition
+// v17 gap #296 — the onboarding (+10) earn grant used to fire at
+// signup/onboarding-complete; a scripted signup could farm free credits per
+// email address doing nothing else. This wave moves it behind a cheap real-usage signal: the org PUBLISHES a competition
 // with at least one (non-archived) division. shouldFireGrowthEarnGrants is
 // the pure decision (mirrors shouldFireMadePublic); the rest proves the
 // wiring against real Postgres. recordEarnGrant/tryEarnGrant themselves
@@ -14,25 +13,25 @@ import { randomUUID } from "node:crypto";
 // route as a 500 on a publish that already happened — and because the gate
 // only fires on the TRANSITION into "published", the status is already
 // "published" on any retry, so the grant is lost for good. To prove the
-// try/catch really wraps the raw `referred_by_org_id` select (not just
-// `tryEarnGrant`, which never throws by construction), this mock makes that
-// one query fail on demand. Flag-gated and default-off, so the rest of the
-// file is untouched; a Proxy with only an `apply` trap keeps postgres.js's
-// own properties (`sql.json`, `sql.begin`, …) working for every other call.
-const dbFault = vi.hoisted(() => ({ failReferralSelect: false }));
+// grant cannot escape, this mock makes the grant's own transaction
+// (`sql.begin` in recordEarnGrant) fail on demand. Flag-gated and default-off,
+// so the rest of the file is untouched; the `get` trap forwards every other
+// property (`sql.json`, …) and every tagged-template call untouched.
+const dbFault = vi.hoisted(() => ({ failGrantTx: false, hits: 0 }));
 vi.mock("@/lib/db", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/db")>();
   const sqlProxy = new Proxy(actual.sql, {
-    apply(target, thisArg, args: unknown[]) {
-      const strings = args[0] as TemplateStringsArray | undefined;
-      if (
-        dbFault.failReferralSelect &&
-        Array.isArray(strings) &&
-        strings.join("").includes("referred_by_org_id")
-      ) {
-        return Promise.reject(new Error("transient DB error"));
+    get(target, prop, receiver) {
+      // `sql.begin` is the grant's own transaction (recordEarnGrant). The
+      // publish's tenant transaction runs through `withTenant`, which closes
+      // over the REAL client inside lib/db, so it never reaches this proxy.
+      if (prop === "begin" && dbFault.failGrantTx) {
+        return () => {
+          dbFault.hits++;
+          return Promise.reject(new Error("transient DB error"));
+        };
       }
-      return Reflect.apply(target as never, thisArg, args);
+      return Reflect.get(target, prop, receiver);
     },
   });
   return { ...actual, sql: sqlProxy };
@@ -113,13 +112,6 @@ describe.skipIf(!HAS_DB)("publish-with-division earn gate — wiring (v17 gap #2
     expect(n).toBe(0);
   });
 
-  it("a referred org gets NO welcome grant at signup (moved off createOrgForUser)", async () => {
-    const referrer = await createOrgForUser(await seedUser(), `Referrer ${uniq()}`);
-    const org = await createOrgForUser(await seedUser(), `Referred ${uniq()}`, { referredByOrgId: referrer.id });
-    const walletId = await walletIdFor(org.id);
-    expect(await packBalance(walletId)).toBe(0);
-  });
-
   it("publishing a competition with a division grants ONBOARDING_EARN once, idempotent across re-publishes", async () => {
     await seedSportFixtures();
     const userId = await seedUser();
@@ -167,45 +159,13 @@ describe.skipIf(!HAS_DB)("publish-with-division earn gate — wiring (v17 gap #2
     expect(await packBalance(walletId)).toBe(0);
   });
 
-  it("a referred org ALSO gets the welcome grant, but only once it publishes with a division", async () => {
-    await seedSportFixtures();
-    const referrerUserId = await seedUser();
-    const referrer = await createOrgForUser(referrerUserId, `Referrer2 ${uniq()}`);
-    const userId = await seedUser();
-    const org = await createOrgForUser(userId, `Referred2 ${uniq()}`, { referredByOrgId: referrer.id });
-    const auth = await authFor(org.id, userId);
-    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Cup", visibility: "private", branding: {} });
-    await createDivision(auth, comp.id, {
-      name: "Open",
-      slug: `open-${uniq()}`,
-      sport_key: "generic",
-      variant_key: "score",
-      config: GENERIC_CONFIG,
-    });
-
-    await patchCompetition(auth, comp.id, { status: "published" });
-    const walletId = await walletIdFor(org.id);
-    // ONBOARDING_EARN (10) + REFERRAL_WELCOME_EARN (10) = 20. Asserted on the
-    // PACK bucket (where earn grants land, SPEC-2 §5.4 D2) — whole-wallet
-    // balance() would also include the community bootstrap monthly grant that
-    // createOrgForUser gives every new org (grant bucket), which is not under
-    // test here.
-    expect(await packBalance(walletId)).toBe(20);
-  });
-
   it("a DB failure in the post-commit grant block never fails the publish", async () => {
     // The publish is ALREADY COMMITTED by the time this block runs. Letting a
     // transient error escape would hand the caller a 500 for a write that
-    // succeeded — and lose the referral grant permanently, since the gate only
-    // fires on the transition INTO published and the row is already published
-    // on any retry. Best-effort: log and swallow.
+    // succeeded. Best-effort: log and swallow.
     await seedSportFixtures();
-    const referrerUserId = await seedUser();
-    const referrer = await createOrgForUser(referrerUserId, `RefFail ${uniq()}`);
     const userId = await seedUser();
-    const org = await createOrgForUser(userId, `ReferredFail ${uniq()}`, {
-      referredByOrgId: referrer.id,
-    });
+    const org = await createOrgForUser(userId, `GrantFail ${uniq()}`);
     const auth = await authFor(org.id, userId);
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Cup", visibility: "private", branding: {} });
     await createDivision(auth, comp.id, {
@@ -219,13 +179,14 @@ describe.skipIf(!HAS_DB)("publish-with-division earn gate — wiring (v17 gap #2
     const rejections: unknown[] = [];
     const onRejection = (err: unknown) => rejections.push(err);
     process.on("unhandledRejection", onRejection);
-    dbFault.failReferralSelect = true;
+    dbFault.hits = 0;
+    dbFault.failGrantTx = true;
     try {
       // Resolves with the updated row — not a rejection.
       const row = await patchCompetition(auth, comp.id, { status: "published" });
       expect(row.status).toBe("published");
     } finally {
-      dbFault.failReferralSelect = false;
+      dbFault.failGrantTx = false;
       process.off("unhandledRejection", onRejection);
     }
 
@@ -233,10 +194,10 @@ describe.skipIf(!HAS_DB)("publish-with-division earn gate — wiring (v17 gap #2
     const [persisted] = await sql<{ status: string }[]>`
       select status from competitions where id = ${comp.id}`;
     expect(persisted!.status).toBe("published");
-    // …the grant that ran BEFORE the failing select still stuck (proving the
-    // block was entered and the failure came from the select, not the gate)…
+    // …the grant block was entered and its transaction really failed…
+    expect(dbFault.hits, "the injected fault never fired — the grant block was not reached").toBeGreaterThan(0);
     const walletId = await walletIdFor(org.id);
-    expect(await packBalance(walletId)).toBe(10); // onboarding only; referral lost
+    expect(await packBalance(walletId)).toBe(0);
     // …and nothing was left dangling.
     expect(rejections).toEqual([]);
   });

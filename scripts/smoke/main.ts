@@ -19,7 +19,6 @@ import { publicQuotaDegradeSuite } from "./suites/publicQuotaDegrade.ts";
 import { passGrantsSuite } from "./suites/passGrants.ts";
 import { passRungLSuite } from "./suites/passRungL.ts";
 import { clubsSuite } from "./suites/clubs.ts";
-import { referralSuite } from "./suites/referral.ts";
 import { extraOrgAddonSuite } from "./suites/extraOrgAddon.ts";
 import { addonChurnWebhookSuite } from "./suites/addonChurnWebhook.ts";
 import { outboxTrialWarningSuite } from "./suites/outboxTrialWarning.ts";
@@ -1148,10 +1147,6 @@ export async function main() {
   // quick-created person) on Pro, and the tunable clubs.max=2 community cap.
   // Own fresh orgs so it's independent of the destructive downgrades above.
   await suite("clubs", () => clubsSuite());
-
-  // --- #267 (SPEC-5 §2): referral attribution + the referred org's welcome
-  // grant, over the real `ref`-cookie flow. Own fresh orgs; keyless-safe.
-  await suite("referral", () => referralSuite());
 
   // --- v17 gap #293: the extra-organisation recurring add-on. A Pro
   // payer at the 5-org cap gets a 402 CARRYING a purchase offer, buying the

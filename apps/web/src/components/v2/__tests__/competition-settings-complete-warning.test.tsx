@@ -12,6 +12,7 @@ import type { ReactElement } from "react";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { CompetitionSettings } from "../competition-settings";
 import { OpenStagesWarning } from "../open-stages-warning";
+import { expandSettingsCard } from "./_settings-card-expand";
 import { apiV1 } from "@/lib/client-v1";
 import { plural, t } from "@/lib/i18n-runtime";
 import uiEn from "@/dictionaries/en/ui.json";
@@ -60,7 +61,7 @@ const mount = (
     viewerPlan: "pro",
     suggestedStatus: o.suggestedStatus ?? null,
     openStages: o.openStages ?? STAGES,
-  });
+  }, expandSettingsCard);
 
 const STATUSES = ["draft", "published", "live", "completed", "archived"];
 const statusSelect = (tree: ReactElement[]) =>

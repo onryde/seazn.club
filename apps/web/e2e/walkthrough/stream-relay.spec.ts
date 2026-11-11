@@ -61,6 +61,7 @@ import {
   fakeRecoveringKey,
 } from "../../src/server/relay/fakes";
 import { FREE_RESTARTS_PER_WINDOW } from "../../src/server/relay/config";
+import { holdRemoteScoringOpen } from "../helpers/console-panels";
 import {
   FAKE_CONNECT_MS,
   POLL_WAIT_MS,
@@ -348,7 +349,7 @@ async function goLiveApi(page: Page, fixtureId: string, targetId: string, fixtur
  *  (R3b), exactly as the division page's did before the move. */
 async function openFixture(page: Page, rig: RelayRig, f: RelayFixture, query = ""): Promise<void> {
   await page.goto(`${rig.divPath}/f/${f.no}${query}`);
-  await expect(page.locator('[data-role="console-scoring"], [data-role="console-stream"]').first(), `fixture ${f.no}'s console rendered`).toBeAttached({ timeout: 30_000 });
+  await expect(page.locator('[data-role="console-scoring"], [data-role="console-panel-bar"]').first(), `fixture ${f.no}'s console rendered`).toBeAttached({ timeout: 30_000 });
 }
 
 /** The division fixtures tab on the filter it MOUNTS on — no filter tapped (B3 fix round 1, I-2): where the run sheet's
@@ -1388,8 +1389,9 @@ for (const sw of A7_SWITCHES) {
 // A7(d) — Review Focus 4: a FINALIZED match has no Scoring section, so Stream lives in the fallback card
 // ===========================================================================
 // The Scoring section (and the Stream button beside its heading) renders only while the match can still be scored. A
-// stream outlives the whistle — the organiser finalizes, and the camera is still on air — so the console carries Stream
-// in its own card then (`console-stream`), and Stop must still be one tap away there, at 1280 and on the phone.
+// stream outlives the whistle — the organiser finalizes, and the camera is still on air — so Stream stays a
+// button of the console's panel bar then (header panel bar, 2026-11-11: it opens its own panel, `data-panel="stream"`), and Stop must
+// still be one tap away there, at 1280 and on the phone.
 test("A7(d): a LIVE stream on a match that is then FINALIZED → no Scoring section; the fallback Stream card opens the panel on its Phone tab showing LIVE, fits at 1280 and 320 → Stop (at 320) → ended", async ({
   page,
 }) => {
@@ -1411,23 +1413,23 @@ test("A7(d): a LIVE stream on a match that is then FINALIZED → no Scoring sect
   expect(fin.status, `setup finalize from ${state.data!.status}: ${JSON.stringify(fin.error)}`).toBe(200);
 
   const scope = await openPhoneTab(page, rig, f);
-  const card = page.locator('[data-role="console-stream"]');
+  const card = page.locator('[data-role="console-panel"][data-panel="stream"]');
   await expect(page.locator('[data-role="console-scoring"]'), "premise: a finalized match has no Scoring section").toHaveCount(0);
-  await expect(card, "the fallback card holds Stream").toHaveCount(1);
-  await expect(card.locator('[data-role="fixture-stream-body"]'), "the panel opened INSIDE the fallback card").toHaveCount(1);
+  await expect(card, "the Stream panel is open").toHaveCount(1);
+  await expect(card.locator('[data-role="fixture-stream-body"]'), "the Stream body is INSIDE the panel").toHaveCount(1);
   const body = scope.locator("[data-phone-body]");
   await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"), { timeout: POLL_WAIT_MS });
   await expectNoHorizontalScroll(page);
   await shot(card, "A7d-fallback.png");
-  // B3 fix round 1, Minor 6: the organiser at the court opens it on a PHONE, through the strip icon — a fresh load at
-  // 320 with the panel closed: the card hides while closed, and the strip icon opens it, Stop inside.
+  // B3 fix round 1, Minor 6: the organiser at the court opens it on a PHONE, through the bar's Stream button — a fresh load
+  // at 320 with the panel closed: no panel until the button opens it, Stop inside.
   await page.setViewportSize({ width: 320, height: 900 });
   await page.reload();
-  await expect(card, "closed on a phone, the empty fallback card hides").toBeHidden({ timeout: NAV_MS });
-  const phoneIcon = page.locator('[data-role="fixture-stream-phone"]');
-  await expect(phoneIcon, "the strip's Stream icon").toBeVisible();
-  await phoneIcon.click();
-  await expect(card, "the strip icon opens the fallback card on the phone").toBeVisible();
+  await expect(card, "closed on a phone, no Stream panel").toHaveCount(0, { timeout: NAV_MS });
+  const phoneButton = page.locator('[data-role="fixture-stream"]');
+  await expect(phoneButton, "the bar's Stream button, a full-width row on a phone").toBeVisible();
+  await phoneButton.click();
+  await expect(card, "the Stream button opens the panel on the phone").toBeVisible();
   const phoneTab = card.getByTestId("stream-tab-phone");
   if (await phoneTab.count()) await phoneTab.click();
   await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"), { timeout: POLL_WAIT_MS });
@@ -1616,6 +1618,7 @@ test("A9: the Phone tab offers the SAME controls — membership, order and repea
   const NAVS = 1; // openPhoneTab
   test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 60_000 + NAVS * NAV_MS);
   await page.setViewportSize({ width: 1280, height: 900 });
+  await holdRemoteScoringOpen(page);
   const rig = await seedRelayRig(page);
   await addTargetApi(page, rig.orgId, { label: "A9 destination" });
   const f = rig.fixtures[0]!;

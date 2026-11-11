@@ -91,14 +91,18 @@ function toggleBlocks(html: string): string[] {
 }
 
 describe("phone-disclosure toggle labels match what the card actually is", () => {
-  it("a sport with a lineup editor labels its phone toggle with 'lineup'", () => {
-    const blocks = toggleBlocks(consoleHtml(editorModule.key));
-    expect(blocks.length).toBe(2); // one per side
-    for (const block of blocks) expect(block.toLowerCase()).toContain("lineup");
+  // Since 2026-11-11 the lineup cards live in the Lineup panel (opened from the header bar), so a sport with a lineup editor
+  // has NO per-side disclosure: its entry point is the "Lineup" bar button.
+  it("a sport with a lineup editor offers a 'Lineup' bar button and no per-side lineup disclosure", () => {
+    const html = consoleHtml(editorModule.key);
+    expect(toggleBlocks(html)).toHaveLength(0);
+    expect(html).toMatch(/<button[^>]*data-testid="lineup-toggle"[^>]*>Lineup<\/button>/);
   });
 
-  it("a sport with NO lineup editor never says 'lineup' anywhere in its toggle — it reads as availability", () => {
-    const blocks = toggleBlocks(consoleHtml(rosterModule.key));
+  it("a sport with NO lineup editor offers no Lineup button, and its toggle reads as availability — never 'lineup'", () => {
+    const html = consoleHtml(rosterModule.key);
+    expect(html).not.toContain('data-testid="lineup-toggle"');
+    const blocks = toggleBlocks(html);
     expect(blocks.length).toBe(2); // one per side
     for (const block of blocks) {
       expect(block.toLowerCase()).not.toContain("lineup");

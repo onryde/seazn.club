@@ -1943,7 +1943,7 @@
         ]
       },
       "patch": {
-        "summary": "Update a competition. 402 when the patch brings the competition back into the `competitions.max_active` count from outside it — a status into draft/published/live from archived or completed, or an end date (alone or with a status) that ends an Event Pass's exemption — while the organisation is at its limit, as a create would be; also 402 when the competition is billing-frozen (anything but archiving or completing it) and at `dashboard.public.max` when it becomes publicly readable. 409 slug in use",
+        "summary": "Update a competition. 402 when the patch brings the competition back into the `competitions.max_active` count from outside it — a status into draft/published/live from archived or completed, or an end date (alone or with a status) that ends an Event Pass's exemption — while the organisation is at its limit, as a create would be; also 402 when the competition is billing-frozen (anything but archiving or completing it) and at `dashboard.public.max` when it becomes publicly readable. `discovery` merges key by key into what is stored: a key left out keeps its value, and null clears it. 409 slug in use",
         "tags": [
           "competitions"
         ],

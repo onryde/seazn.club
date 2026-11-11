@@ -63,6 +63,7 @@ import { decodeEveryCard } from "../../src/server/__tests__/_sheet-raster";
 import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
 import { composeMatchRef } from "../../src/lib/match-ref";
 import { boardRoundCodes } from "../../src/components/v2/board/round-codes";
+import { holdRemoteScoringOpen } from "../helpers/console-panels";
 
 const EN = JSON.parse(
   readFileSync(fileURLToPath(new URL("../../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
@@ -904,6 +905,7 @@ test("regression: the console's hand-over after printing re-shows the SAME QR as
   const consolePath = await fixturePath(page.request, target.id);
   const openPanel = async () => {
     await page.setViewportSize({ width: 1280, height: 900 });
+    await holdRemoteScoringOpen(page);
     await page.goto(consolePath);
     const anchor = page.locator('[data-testid="score-pad"]');
     await expect(anchor).toBeVisible({ timeout: STEP_MS });

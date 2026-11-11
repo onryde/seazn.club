@@ -28,6 +28,7 @@ import { test, expect, type Page, type APIRequestContext } from "@playwright/tes
 import { apiJson, fixturePath, seedRosteredFixture, TAG, type RosteredFixture } from "../helpers";
 import { waitForHydration } from "../directory-kit";
 import { openMatchActions } from "../helpers/match-actions";
+import { holdRemoteScoringOpen, openConsolePanel } from "../helpers/console-panels";
 
 const SHOTS = process.env.R7_SHOT_DIR ?? "/tmp/r7-shots";
 
@@ -54,6 +55,7 @@ async function ledger(
 
 async function openConsole(page: Page, fx: RosteredFixture): Promise<string> {
   const path = await fixturePath(page.request, fx.fixtureId);
+  await holdRemoteScoringOpen(page);
   await page.goto(path);
   await expect(pad(page)).toBeVisible({ timeout: 20_000 });
   // `goto` returns at `load`, before React hydrates, and the pad is
@@ -335,6 +337,8 @@ test("R7 lineup: a one-player sport shows no editor, and football names what its
     away: [{ fullName: `R7W L Gk ${TAG}`, positionKey: "GK" }],
   });
   await openConsole(page, fb);
+  // The lineup cards live in the Lineup panel (header panel bar, 2026-11-11), closed until its button opens it.
+  await openConsolePanel(page, "lineup");
   await expect(
     page.getByText(/still needs/i).first(),
     "the side without a keeper is told so, before anyone tries to score",
@@ -371,6 +375,7 @@ test("R7 lineup: a one-player sport shows no editor, and football names what its
     away: [{ fullName: `R7W C Black ${TAG}` }],
   });
   const chessPath = await fixturePath(page.request, chess.fixtureId);
+  await holdRemoteScoringOpen(page);
   await page.goto(chessPath);
   await expect(page.locator("body")).toBeVisible({ timeout: 20_000 });
 

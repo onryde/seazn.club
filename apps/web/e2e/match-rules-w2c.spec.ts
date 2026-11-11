@@ -17,6 +17,7 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from "@
 import { builtinModules } from "@seazn/engine/sports";
 import { TAG, addEntrantsViaApi, apiJson, divisionPath, fixturePath } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
+import { openConsolePanel } from "./helpers/console-panels";
 import { matchFieldsFor } from "../src/lib/rule-scope";
 
 const L = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8")) as Record<string, string>;
@@ -114,6 +115,8 @@ async function post(request: APIRequestContext, fixtureId: string, seq: number, 
 async function openConsole(page: Page, path: string): Promise<Locator> {
   await page.goto(path, { waitUntil: "load" });
   await dismissCookieBanner(page);
+  // Since 2026-11-11 the block lives in the Match rules panel, closed until its bar button opens it.
+  await openConsolePanel(page, "rules");
   const block = page.getByTestId("match-rules-block");
   await expect(block, "the match rules block is on the fixture page").toBeVisible({ timeout: STEP_MS });
   return block;
@@ -165,6 +168,7 @@ test("X-SR-2 change one match's format before it starts: it reads best of 1, sur
 
   // A reload still shows it, on the value.
   await page.reload({ waitUntil: "load" });
+  await openConsolePanel(page, "rules"); // the panel starts closed after every load
   await expect(page.getByTestId("match-rules-overridden")).toBeVisible({ timeout: STEP_MS });
   await expect(selectOf(page.getByTestId("match-rules-block"), "bestOf")).toHaveValue("1");
 
@@ -190,6 +194,7 @@ test("X-SR-2 'Use stage rules' clears the override and the tag - override, reloa
   await save(page, block);
   await expect(block.getByTestId("match-rules-overridden")).toBeVisible({ timeout: STEP_MS });
   await page.reload({ waitUntil: "load" });
+  await openConsolePanel(page, "rules"); // the panel starts closed after every load
   block = page.getByTestId("match-rules-block");
   await expect(block.getByTestId("match-rules-overridden")).toBeVisible({ timeout: STEP_MS });
 
@@ -204,6 +209,7 @@ test("X-SR-2 'Use stage rules' clears the override and the tag - override, reloa
 
   // 4. reload: still clear, and the run sheet carries no tag
   await page.reload({ waitUntil: "load" });
+  await openConsolePanel(page, "rules"); // the panel starts closed after every load
   await expect(page.getByTestId("match-rules-block")).toBeVisible({ timeout: STEP_MS });
   await expect(page.getByTestId("match-rules-overridden")).toHaveCount(0);
   await page.goto(s.fixtures, { waitUntil: "load" });

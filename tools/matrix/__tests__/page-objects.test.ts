@@ -1401,9 +1401,10 @@ describe("abandonUi: the console's Abandon (W2a Task 14 Step 8)", () => {
   const btn = `role:button:${NAME.abandon.text}`;
   const toggleId = `testid:${MATCH_ACTIONS_TOGGLE_TESTID}`;
 
-  /** PR #1133: the Abandon sits in the Match actions panel. `toggle` is the console's width and state: "closed" (md and
-   *  up, as loaded — L1's 1280), "open" (md and up, already opened) or "absent" (a phone: the panel open, its toggle
-   *  hidden). getByRole skips a hidden button, so while the panel is closed the Abandon is not found at all. A console
+  /** Panel bar (2026-11-11): the Abandon sits in the Match actions panel. `toggle` is the bar button's state: "closed" (as
+   *  loaded, at any width — L1's 1280), "open" (already opened) or "absent" (a console offering no match action: no
+   *  button, so none to tap; kept to pin that the driver then taps nothing). Below md the bar sits under the pad, so a
+   *  phone is the "closed" case too. getByRole skips a hidden button, so while the panel is closed the Abandon is not found at all. A console
    *  that offers no match action at all (`offered: false` with `toggle: "absent"`) renders neither. */
   function consolePage(o: { offered?: boolean; stuck?: boolean; answer?: { status: number; body: unknown }; eventsOf?: string; toggle?: "closed" | "open" | "absent" } = {}) {
     const log: string[] = [];

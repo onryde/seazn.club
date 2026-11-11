@@ -38,7 +38,7 @@ export const EVENTS = {
   BILLING_INTERVAL_CHANGED: "billing_interval_changed",
   SUBSCRIPTION_CANCEL_SCHEDULED: "subscription_cancel_scheduled",
   SUBSCRIPTION_RESUMED: "subscription_resumed",
-  // PLG growth loops (2026-07-17 plan) — distribution + referral.
+  // PLG growth loops (2026-07-17 plan) — distribution.
   ATTRIBUTION_CLICKED: "attribution_clicked",
   SHARE_FIRED: "share_fired",
   PLAYER_STARTED_OWN_ORG: "player_started_own_org",

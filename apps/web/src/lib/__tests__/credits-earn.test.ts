@@ -4,8 +4,8 @@
 // never-expire `pack` bucket, idempotent per (reason, ref) and floored by a
 // LIFETIME_EARN_CAP so the loop can never mint unbounded free credits. tryEarnGrant
 // is the best-effort hook wrapper (never throws — a grant failure must not fail
-// onboarding or the checkout webhook). The referral source is DEFERRED (no
-// attribution primitive exists yet), so only onboarding + first_paid are here.
+// onboarding or the checkout webhook). Only onboarding + first_paid exist (the
+// referral programme is removed, 2026-11-11).
 //
 // Real Postgres required; skipped without DATABASE_URL. Run against the fresh v17
 // schema: DATABASE_URL=$(cat /tmp/v17_base_url) DB_SCHEMA=seazn_club_v17.

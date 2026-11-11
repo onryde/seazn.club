@@ -126,15 +126,16 @@ export const TESTID = testids({
 export const PAD_PINS: readonly Readonly<{ name: string } & Pin>[] = Object.freeze([
   { name: "START_MATCH_TESTID", needle: "score-start-match", file: `${V2}/fixture-console.tsx` },
   { name: "FINALIZE_TESTID", needle: "score-finalize", file: `${V2}/fixture-console.tsx` },
-  // PR #1133: the toggle of the Match actions panel Forfeit and Abandon sit in (bench openMatchActions taps it).
+  // Panel bar (2026-11-11): the bar button of the Match actions panel Forfeit and Abandon sit in (bench openMatchActions taps it).
   { name: "MATCH_ACTIONS_TOGGLE_TESTID", needle: "match-actions-toggle", file: `${V2}/fixture-console.tsx` },
   { name: "SEND_NOW_TESTID", needle: "pad-send-now", file: `${V2}/scorepad/v3/detail-dock.tsx` },
   { name: "tile", needle: "data-tile-id", file: `${V2}/scorepad/v3/tile-grid.tsx` },
   { name: "number", needle: "pad-sheet-number", file: `${V2}/scorepad/v3/guided-sheet.tsx` },
   { name: "confirm", needle: "pad-sheet-confirm", file: `${V2}/scorepad/v3/guided-sheet.tsx` },
   { name: "choice", needle: "data-choice-option-id", file: `${V2}/scorepad/v3/guided-sheet.tsx` },
-  // A data-role, not a testid: the phone twin of the device hand-over.
-  { name: "DEVICE_HANDOVER_PHONE", needle: 'data-role="device-handover-phone"', file: `${V2}/fixture-console.tsx` },
+  // A data-role, not a testid: the Remote scoring button of the panel bar (ONE button at every width since 2026-11-11;
+  // the `device-handover-phone` twin is gone).
+  { name: "DEVICE_HANDOVER", needle: '"data-role": "device-handover"', file: `${V2}/fixture-console.tsx` },
 ].map((p) => Object.freeze(p)));
 
 /** W1-driving Task 13: the gallery composes each card's testid from its

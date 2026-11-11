@@ -58,6 +58,7 @@ import { FLOOR_MS, ROUTE_CHECK_MS } from "./spectator-w2-kit";
 import { withDb } from "./rs007-money-kit";
 import { STORAGE_KEY as GAME_2048_STORAGE_KEY, type GameState as Game2048State } from "../src/games/2048/state";
 import { openMatchActions } from "./helpers/match-actions";
+import { consolePanel, openConsolePanel } from "./helpers/console-panels";
 
 // v3/02 §4 viewport gate — runs ONLY in the mobile-se / mobile-14 projects
 // (375×667, 390×844). Every audited route must render with zero page-level
@@ -119,17 +120,18 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
   );
   console.log(`[phone-composition ${vp.width}x${vp.height}] ${controls.length} visible controls:\n  ${controls.join("\n  ")}`);
 
-  const deskHandover = page.locator('[data-role="device-handover"]');
-  const phoneHandover = page.locator('[data-role="device-handover-phone"]');
-  const handoverOffered = (await deskHandover.count()) > 0;
-  // Spec 2026-09-30 §2: Stream is the second twinned control — a desktop button and a phone strip icon, one mount.
-  const deskStream = page.locator('[data-role="fixture-stream"]');
-  const phoneStream = page.locator('[data-role="fixture-stream-phone"]');
-  const streamOffered = (await deskStream.count()) > 0;
-  // Twins are EQUAL in presence (one mount drives both) — never one without the other.
-  expect(await phoneStream.count(), "the stream twins are present together or not at all").toBe(await deskStream.count());
+  // Header panel bar (owner 2026-11-11): Remote scoring and Stream are ONE button each at every width — the old phone icon
+  // twins are gone (one DOM; a 2-column grid of equal buttons below md, Stream on its own full row).
+  const handoverButton = page.locator('[data-role="device-handover"]');
+  const handoverOffered = (await handoverButton.count()) > 0;
+  const streamButton = page.locator('[data-role="fixture-stream"]');
+  const streamOffered = (await streamButton.count()) > 0;
+  expect(
+    await page.locator('[data-role="device-handover-phone"], [data-role="fixture-stream-phone"]').count(),
+    "no phone twin of the bar's buttons exists any more",
+  ).toBe(0);
   // Anti-vacuity: both callers are an organiser's fixture page on the shared Pro org (AUTH_STATE), where streaming is
-  // entitled since V426 — so the twin checks below must have something to check.
+  // entitled since V426 — so the checks below must have something to check.
   expect(streamOffered, "an organiser's fixture page on an entitled org offers Stream").toBe(true);
   const detailsToggle = page.locator('[data-role="match-details-toggle"]');
   const scoringHeading = page.locator('[data-role="console-scoring"] h2');
@@ -138,14 +140,19 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
   const rowCount = await rows.count();
 
   if (phone) {
-    if (handoverOffered) {
-      await expect(phoneHandover).toBeVisible();
-      await expect(deskHandover).toBeHidden();
-    }
-    if (streamOffered) {
-      await expect(phoneStream).toBeVisible();
-      await expect(deskStream).toBeHidden();
-    }
+    if (handoverOffered) await expect(handoverButton).toBeVisible();
+    if (streamOffered) await expect(streamButton).toBeVisible();
+    // The bar below md: Stream owns a full row, every other button is the same width (a 2-column grid of equals).
+    const bar = page.locator('[data-role="console-panel-bar"]');
+    const barBox = await bar.boundingBox();
+    expect(barBox, "the panel bar renders").not.toBeNull();
+    const streamBox = await streamButton.boundingBox();
+    expect(streamBox!.width, "Stream is a full-width row on a phone").toBeGreaterThanOrEqual(barBox!.width - 1);
+    const others = await bar.locator("button:not([data-role='fixture-stream'])").evaluateAll((els) =>
+      els.map((e) => Math.round(e.getBoundingClientRect().width)),
+    );
+    expect(others.length, "anti-vacuity: the bar offers buttons besides Stream").toBeGreaterThan(1);
+    expect(new Set(others).size, `the bar's other buttons are equal widths, got ${others.join(",")}`).toBe(1);
     await expect(detailsToggle).toBeVisible();
     await expect(scoringHeading).toBeHidden();
     await expect(page.locator('[data-role="v3-headline"]')).toBeHidden();
@@ -168,6 +175,11 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
       box!.y + box!.height,
       `primary tap target bottom edge (${Math.round(box!.y + box!.height)}px) must sit inside the ${vp.height}px first screen`,
     ).toBeLessThanOrEqual(vp.height);
+    // Chrome down (design 2026-09-02): the panel bar sits BELOW the pad on a phone, so it never pushes the pad off the first screen.
+    if ((await bar.count()) > 0) {
+      const barTop = (await bar.boundingBox())!.y;
+      expect(barTop, `the panel bar (top ${Math.round(barTop)}px) sits below the pad's primary tap (bottom ${Math.round(box!.y + box!.height)}px)`).toBeGreaterThanOrEqual(box!.y + box!.height);
+    }
     // Nothing overlays it at its centre — a 44px box under a sheet is still a miss.
     expect(
       await target.evaluate((el) => {
@@ -222,10 +234,25 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
       );
       await activityToggle.click();
     }
-    // Lineup disclosures: rows visible, editors folded.
+    // Phone-only disclosures left on the console (the availability roster of a one-player sport): every toggle is visible.
+    // The lineup cards are no longer disclosures — they live in the Lineup panel of the bar (2026-11-11), checked below.
     const disclosures = page.locator('[data-role="phone-disclosure-toggle"]');
     const disclosureCount = await disclosures.count();
     for (let i = 0; i < disclosureCount; i++) await expect(disclosures.nth(i)).toBeVisible();
+    // The Lineup panel (offered for every team/pair sport): closed on arrival; opened, it shows ONE team behind the Home/Away
+    // switch while the switch is visible (it is `md:hidden` — gate on it, never on a width literal), both cards otherwise.
+    if (await openConsolePanel(page, "lineup", { optional: true })) {
+      const cards = [page.getByTestId("lineup-team-home"), page.getByTestId("lineup-team-away")];
+      let shown = 0;
+      for (const card of cards) if (await card.isVisible()) shown++;
+      const phoneSwitch = await page.getByTestId("lineup-team-switch").first().isVisible();
+      expect(shown, phoneSwitch ? "exactly one lineup card shows with the Home/Away switch" : "both lineup cards show without the switch").toBe(
+        phoneSwitch ? 1 : 2,
+      );
+      await expectNoHorizontalScroll(page);
+      await consolePanel(page, "lineup").getByTestId("console-panel-close").click();
+      await expect(consolePanel(page, "lineup"), "the close X closes the Lineup panel").toBeHidden();
+    }
     // Review fix (Important 3, final review) — nothing here ever OPENED a
     // disclosure: every prior assertion ran with the body CLOSED, so
     // `phone-disclosure.tsx`'s open branch (`aria-expanded="true"`,
@@ -246,14 +273,8 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
       await expect(first).toHaveAttribute("aria-expanded", "false");
     }
   } else {
-    if (handoverOffered) {
-      await expect(deskHandover).toBeVisible();
-      await expect(phoneHandover).toBeHidden();
-    }
-    if (streamOffered) {
-      await expect(deskStream).toBeVisible();
-      await expect(phoneStream).toBeHidden();
-    }
+    if (handoverOffered) await expect(handoverButton).toBeVisible();
+    if (streamOffered) await expect(streamButton).toBeVisible();
     await expect(detailsToggle).toBeHidden();
     await expect(scoringHeading).toBeVisible();
     await expect(activityToggle).toBeHidden();
@@ -828,99 +849,57 @@ test("division tab rail overflows reachably, never clipped", async ({ page, requ
 });
 
 /**
- * Settings W2 task 4 — the org identity row at `/settings?tab=organization`.
- *
- * The row exists to say WHICH organisation you are in, and at phone widths it
- * did not. The name block was `flex-1`, i.e. `flex: 1 1 0%`, so it was the
- * only child of that row that could yield: the 44px avatar is `shrink-0`, and
- * the role badge and the org switcher both size to their content. At 320 the
- * card's inner width is ~240px, those three take nearly all of it, and the
- * one thing the row is for was left a sliver. `min-w-0` was already present,
- * so the usual `truncate` diagnosis is NOT the cause here.
+ * Settings C8 (owner 2026-11-11, mock set11c01 O1) — the Organisation card at
+ * `/settings?tab=organization`. It replaced the W2 identity row (avatar, name,
+ * role badge, OrgSwitcher), whose phone defect was a name squeezed to a sliver
+ * by the chrome beside it; this keeps that defect's gate on the new home of
+ * the name.
  *
  * Nothing in `apps/web` vitest can see any of this — that suite is
  * `environment: "node"`, so it has no layout at all — and the page-level
- * no-horizontal-scroll audit above passes either way, because a squeezed
- * `truncate` box produces no page overflow. This is the gate.
+ * no-horizontal-scroll audit passes either way, because a squeezed input
+ * produces no page overflow. This is the gate.
  *
  * Two assertions, because either alone is satisfiable the wrong way:
  *
- *  - the name's RENDERED box is wide enough to read. A reachability check
- *    ("the name is visible") passes at 38px, which is the defect.
- *  - the row's COMPOSITION, in both directions: below `md` the chrome sits on
- *    its own line, at `md` and up it stays on the name's line. That second
- *    branch is the "≥768 must not change" guard, and the pair together is
- *    what stops the fix being "make the badge smaller" — a phone view showing
- *    the same controls at smaller sizes is a groomed shrink.
+ *  - the name field's RENDERED box is wide enough to read. A reachability
+ *    check ("the field is visible") passes at 38px, which was the old defect.
+ *  - the card's COMPOSITION: every width project here is below `lg` (1024),
+ *    where the card is one column — the long text (About) sits BELOW the
+ *    decisions (name, brand colour, defaults), never beside them. A two-column
+ *    card at 320 is exactly the squeeze this guards against.
  */
-test("settings identity row: the org name keeps a readable share, and the chrome wraps below md", async ({
+test("settings organisation card: the org name keeps a readable share, and the card is one column below lg", async ({
   page,
 }) => {
   const width = projectViewport()?.width ?? 0;
-  const isPhone = width < 768;
 
   await page.goto("/settings?tab=organization", { waitUntil: "load" });
-  const name = page.getByTestId("org-identity-name");
+  const card = page.getByTestId("org-profile-card");
+  const name = card.getByTestId("org-name-input");
   await expect(name).toBeVisible();
-  // A row that renders an empty name would satisfy every box assertion below.
-  await expect(name).not.toHaveText("");
+  // A field that renders an empty name would satisfy every box assertion below.
+  await expect(name).not.toHaveValue("");
 
-  // The 140px floor is NOT a soft margin, and it is not tightest at the
-  // narrowest width. Measured after the fix: 320→182, 360→222, 375→168,
-  // 390→183, 430→223. 375 sits LOWER than 320 because the badge's 57px still
-  // fits on the first line there and takes 57+12 out of the name's share,
-  // while at 320 it wraps away and gives that space back. So the width with
-  // the least headroom over this floor is 375, not 320 — a change that looks
-  // safe when eyeballed at 320 can breach it at 375 first. Check 375 whenever
-  // anything joins or leaves this row.
-  //
-  // Both halves are SOFT so neither can hide behind the other. A hard first
-  // expectation aborts the test, which is how one half of a two-part gate ends
-  // up never having been watched to fail — failure class 3, an assertion only
-  // ever seen to pass is decoration. Measured 2026-09-05 on the pre-fix bundle:
-  // the width half reported red at all five phone projects (6/46/61/76/116 px)
-  // and the composition half never ran at all, because this expectation stopped
-  // the test first. Soft, they both report on every red, at every width.
+  // Soft, both halves, so neither can hide behind the other (failure class 3).
   const box = await name.boundingBox();
-  expect(box, "identity name has no box").not.toBeNull();
+  expect(box, "org name field has no box").not.toBeNull();
   expect
-    .soft(
-      Math.round(box!.width),
-      `org name box at viewport ${width}px, text ${JSON.stringify(await name.textContent())}`,
-    )
-    .toBeGreaterThan(140);
+    .soft(Math.round(box!.width), `org name field at viewport ${width}px, value ${JSON.stringify(await name.inputValue())}`)
+    .toBeGreaterThan(200);
 
-  // Composition, measured as "do the first and last children of the identity
-  // row share a line" — NOT as a comparison of box sizes. With `items-center`
-  // two children on one flex line always overlap vertically; two children on
-  // different lines never do.
-  const geom = await page.evaluate(() => {
-    const el = document.querySelector<HTMLElement>('[data-testid="org-identity-name"]');
-    const row = el?.parentElement?.parentElement ?? null;
-    if (!row) return null;
-    const kids = Array.from(row.children) as HTMLElement[];
-    const rects = kids.map((k) => k.getBoundingClientRect());
-    const first = rects[0];
-    const last = rects[rects.length - 1];
-    if (!first || !last) return null;
-    return {
-      children: kids.length,
-      sameLine: first.top < last.bottom - 1 && last.top < first.bottom - 1,
-      tops: rects.map((r) => Math.round(r.top)),
-      bottoms: rects.map((r) => Math.round(r.bottom)),
-    };
+  const geom = await card.evaluate((form) => {
+    const left = form.querySelector<HTMLElement>(':scope > [data-split="left"]');
+    const right = form.querySelector<HTMLElement>(':scope > [data-split="right"]');
+    if (!left || !right) return null;
+    const l = left.getBoundingClientRect();
+    const r = right.getBoundingClientRect();
+    return { leftBottom: Math.round(l.bottom), rightTop: Math.round(r.top), leftWidth: Math.round(l.width), rightWidth: Math.round(r.width) };
   });
-  expect(geom, "identity row not found from the name testid").not.toBeNull();
-  // Pin the shape this measurement assumes: avatar, name block, badge,
-  // switcher. If the row gains or loses a child, `first`/`last` stop meaning
-  // what this test thinks they mean, and it should red rather than drift.
-  expect(geom!.children, "identity row child count").toBe(4);
-  const seen = `tops ${geom!.tops.join(",")} bottoms ${geom!.bottoms.join(",")}`;
-  if (isPhone) {
-    expect.soft(geom!.sameLine, `${width}px: chrome must wrap BELOW the name — ${seen}`).toBe(false);
-  } else {
-    expect.soft(geom!.sameLine, `${width}px: the row must stay on ONE line — ${seen}`).toBe(true);
-  }
+  expect(geom, "the card's two split columns were not found").not.toBeNull();
+  const seen = `left bottom ${geom!.leftBottom}, right top ${geom!.rightTop}, widths ${geom!.leftWidth}/${geom!.rightWidth}`;
+  expect.soft(geom!.rightTop, `${width}px: About must sit BELOW the decisions — ${seen}`).toBeGreaterThanOrEqual(geom!.leftBottom - 1);
+  expect.soft(geom!.rightWidth, `${width}px: one column — both halves share the card's width — ${seen}`).toBe(geom!.leftWidth);
 });
 
 /**
@@ -2001,17 +1980,21 @@ test("page smokes: settings save + invoice/plan card render", async ({ page }) =
   await page.goto("/settings?tab=organization");
   const nameInput = page.getByLabel(/organi[sz]ation name/i);
   await expect(nameInput).toBeVisible();
-  // Two "Save" buttons live on this tab (rename + payment details) — scope
-  // to the rename form's own label container.
-  const renameForm = page.locator("label", { has: nameInput });
+  // Settings C8 (owner 2026-11-11): the name is a field of the Organisation
+  // card, saved by its one "Save changes"; the org defaults beside it keep Save
+  // buttons of their own, so scope to the card.
+  const card = page.getByTestId("org-profile-card");
+  const saveBarNote = card.getByTestId("settings-save-bar-message");
   const orgName = await nameInput.inputValue();
   await nameInput.fill(`${orgName} ✓`);
-  await renameForm.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(renameForm.getByText("Saved.")).toBeVisible();
-  // Restore — other specs assert on the org name.
+  await card.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(saveBarNote).toHaveText("Saved.");
+  // Restore — other specs assert on the org name. Editing again replaces the
+  // note with the unsaved list, so the second "Saved." is the second save's.
   await nameInput.fill(orgName);
-  await renameForm.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(renameForm.getByText("Saved.")).toBeVisible();
+  await expect(saveBarNote).not.toHaveText("Saved.");
+  await card.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(saveBarNote).toHaveText("Saved.");
 
   // Billing: the plan card is the invoice-adjacent surface every org has.
   await page.goto("/settings/billing");
@@ -2238,65 +2221,133 @@ test("lineup editor role/pair-order selects hold at phone width", async ({ page,
     sportKey: "tennis",
     variantKey: "tour",
     entrantKind: "pair",
-    home: [{ fullName: "Home One" }, { fullName: "Home Two" }],
-    away: [{ fullName: "Away One" }, { fullName: "Away Two" }],
+    // 43+ characters: the realistic long name that put the lineup card at 406px
+    // in a 288px column (nowrap name -> min-content). Both sides.
+    home: [{ fullName: "Bartholomew Maximilian Featherstonehaugh-Smythe" }, { fullName: "Home Two" }],
+    away: [{ fullName: "Bartholomew Maximilian Featherstonehaugh-Jones" }, { fullName: "Away Two" }],
   });
 
   await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
 
-  const roleSelects = page.getByTestId("lineup-role-select");
-  // Below `md` each lineup card sits inside a `PhoneDisclosure`
-  // (`fixture-console.tsx`, one per side) whose body is `max-md:hidden` until
-  // the row is tapped — spec 2026-09-02-scorepad-v3-phone-composition §3.10.
-  // So at five of this file's seven width projects the selects are present in
-  // the DOM but UNPAINTED: `boundingBox()` returns null and `toBeVisible()`
-  // never resolves. The fold is the approved design, so the fix is to open the
-  // disclosure, NOT to weaken what this test asserts — the 44px floor still
-  // has to hold in the state a scorer actually reaches these controls in, and
-  // `expectNoHorizontalScroll` at the foot now runs with the body open, which
-  // is the state that shipped a 106px overflow at 320px during this wave.
+  // Lineup editor groups (2026-11-11): the per-row Role select moved into the ⋯
+  // menu, so the touch floor now has to hold for the ⋯ trigger, for every item
+  // of the OPEN menu (a bottom sheet below `md`, a dropdown above it), and for
+  // the one inline control a row keeps (tennis pairs: the pair-order select).
   //
-  // Wait ATTACHED first (the editor is client-rendered) — visibility is
-  // exactly what the fold denies, so it cannot be the wait condition here.
-  await expect(roleSelects.first(), "no role select rendered").toBeAttached({ timeout: 30_000 });
-  // BOTH sides, not the first: each side mounts its own disclosure, so opening
-  // one leaves the other's selects boxless and the loop below fails on them.
-  // Gated on the toggle being VISIBLE rather than on a width literal.
-  //
-  // The lineup's own PhoneDisclosure is `desktopCollapsible` (PR #782, fold
-  // the lineup once the match starts, every width) — its toggle is visible at
-  // every width here, not just phone-narrow. At `tablet-768`/`tablet-834`
-  // (real `md`-and-up viewports) the body also starts OPEN pre-match, since
-  // this fixture never sends `core.start`, so the toggle may already read
-  // `aria-expanded="true"` before any click — only click when it does not.
-  const lineupDisclosures = page.locator('[data-role="phone-disclosure"]:has([data-testid="lineup-role-select"])');
-  expect(await lineupDisclosures.count(), "lineup editor is not inside a PhoneDisclosure").toBeGreaterThan(0);
-  for (const wrapper of await lineupDisclosures.all()) {
-    const toggle = wrapper.locator('[data-role="phone-disclosure-toggle"]');
-    if (!(await toggle.isVisible())) continue;
-    if ((await toggle.getAttribute("aria-expanded")) !== "true") {
-      await toggle.click();
+  // Below `md` only ONE team card shows, behind a Home/Away switch
+  // (`md:hidden`), and the editor lives in the header bar's Lineup panel — so
+  // the panel is opened once, then each side is driven in turn: switch to it
+  // (only when the switch is visible), then measure.
+  await openConsolePanel(page, "lineup");
+  const menuButtons = page.getByTestId("lineup-row-menu-button");
+  // Wait ATTACHED first (the editor is client-rendered) — visibility is exactly
+  // what the fold denies, so it cannot be the wait condition here.
+  await expect(menuButtons.first(), "no ⋯ menu button rendered").toBeAttached({ timeout: 30_000 });
+  let measured = 0;
+  for (const side of ["home", "away"] as const) {
+    const teamSwitch = page.getByTestId(`lineup-team-switch-${side}`);
+    if (await teamSwitch.isVisible()) {
+      await teamSwitch.click();
+      await expect(teamSwitch).toHaveAttribute("aria-pressed", "true");
     }
-    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const card = page.getByTestId(`lineup-team-${side}`);
+    await expect(card, `${side} lineup card is not showing`).toBeVisible();
+
+    const buttons = card.getByTestId("lineup-row-menu-button");
+    await expect(buttons.first(), `${side}: ⋯ button still folded after its disclosure was opened`).toBeVisible({
+      timeout: 30_000,
+    });
+    // Hit-test, not scrollWidth: an overflow that is CLIPPED leaves scrollWidth
+    // equal to clientWidth while the button is off-screen. Every ⋯ centre must
+    // be inside the viewport and be what a finger would actually land on.
+    const viewportWidth = page.viewportSize()!.width;
+    const cardBox = await card.boundingBox();
+    expect(cardBox!.width, `${side} lineup card is ${cardBox!.width}px in a ${viewportWidth}px viewport`).toBeLessThanOrEqual(
+      viewportWidth,
+    );
+    for (const button of await buttons.all()) {
+      const hit = await button.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const x = r.left + r.width / 2;
+        el.scrollIntoView({ block: "center" });
+        const r2 = el.getBoundingClientRect();
+        const top = document.elementFromPoint(r2.left + r2.width / 2, r2.top + r2.height / 2);
+        return { inView: x >= 0 && x <= window.innerWidth, hit: top !== null && (top === el || el.contains(top)) };
+      });
+      expect(hit.inView, "⋯ button centre is off-screen horizontally").toBe(true);
+      expect(hit.hit, "⋯ button is not what elementFromPoint returns at its centre").toBe(true);
+      const box = await button.boundingBox();
+      expect(box, "⋯ button has no box").not.toBeNull();
+      expect(box!.height, `⋯ button touch target is ${box!.height}px tall`).toBeGreaterThanOrEqual(44);
+      expect(box!.width, `⋯ button touch target is ${box!.width}px wide`).toBeGreaterThanOrEqual(44);
+      measured++;
+    }
+
+    // Option A two-line row (owner 2026-11-11): below md the select drops to its own line under the name, so a long name
+    // keeps most of the row and the select shows its full option text; from md the row is ONE line. Measured on the row
+    // whose name is the 43-char one, never on a short stand-in.
+    const longRow = card.getByTestId("lineup-row").filter({ hasText: "Featherstonehaugh" }).first();
+    await expect(longRow, `${side}: the 43-char row is rendered`).toBeVisible();
+    const geo = await longRow.evaluate((row) => {
+      const q = (sel: string) => row.querySelector<HTMLElement>(sel);
+      const name = Array.from(row.querySelectorAll<HTMLElement>("span.truncate")).find((e) => e.textContent?.includes("Featherstonehaugh"))!;
+      const select = q('[data-testid="lineup-position-select"], [data-testid="lineup-pairorder-select"]');
+      const rr = row.getBoundingClientRect();
+      const nr = name.getBoundingClientRect();
+      return {
+        rowW: rr.width,
+        nameW: nr.width,
+        nameTop: nr.top,
+        nameMid: nr.top + nr.height / 2,
+        selTop: select ? select.getBoundingClientRect().top : null,
+        selMid: select ? select.getBoundingClientRect().top + select.getBoundingClientRect().height / 2 : null,
+        selOverflow: select ? select.scrollWidth - select.clientWidth : null,
+      };
+    });
+    expect(geo.selTop, `${side}: the row offers its select (anti-vacuity)`).not.toBeNull();
+    expect(geo.selOverflow!, `${side}: the select's own text is clipped`).toBeLessThanOrEqual(0);
+    if (viewportWidth < 768) {
+      expect(geo.nameW / geo.rowW, `${side}: the name is ${geo.nameW}px of a ${geo.rowW}px row`).toBeGreaterThanOrEqual(0.6);
+      expect(geo.selTop!, `${side}: below md the select sits on its own line under the name`).toBeGreaterThan(geo.nameTop + 8);
+    } else {
+      // Rows are items-center, so the one-line proof is the vertical CENTRES within 4px (tops differ by the select's 44px height).
+      expect(Math.abs(geo.selMid! - geo.nameMid), `${side}: from md the row is one line (name/select centres within 4px)`).toBeLessThanOrEqual(4);
+    }
+    await expectNoHorizontalScroll(page);
+
+    // Open the first row's menu: every control in it is a 44px target, the Role
+    // segmented control is in it, and it fits the page (the state that matters).
+    await buttons.first().click();
+    const menu = card.getByTestId("lineup-row-menu");
+    await expect(menu).toBeVisible();
+    await expect(menu.getByTestId("lineup-menu-role-coach"), "Role control missing from the ⋯ menu").toBeVisible();
+    const items = menu.locator('[role="menuitem"]:visible, [role="menuitemradio"]:visible');
+    expect(await items.count(), "⋯ menu has no visible items").toBeGreaterThan(3);
+    for (const item of await items.all()) {
+      const box = await item.boundingBox();
+      expect(box, "menu item has no box").not.toBeNull();
+      expect(box!.height, `menu item touch target is ${box!.height}px`).toBeGreaterThanOrEqual(44);
+    }
+    await expectNoHorizontalScroll(page);
+    await page.keyboard.press("Escape");
+    await expect(menu, "Escape did not dismiss the ⋯ menu").toBeHidden();
   }
-  await expect(roleSelects.first(), "role select still folded after its disclosure was opened").toBeVisible({
-    timeout: 30_000,
-  });
-  for (const select of await roleSelects.all()) {
-    const box = await select.boundingBox();
-    expect(box, "role select has no box").not.toBeNull();
-    expect(box!.height, `role select touch target is ${box!.height}px`).toBeGreaterThanOrEqual(44);
-  }
+  expect(measured, "no ⋯ button was measured").toBeGreaterThan(0);
 
   const pairOrderSelects = page.getByTestId("lineup-pairorder-select");
-  await expect(pairOrderSelects.first(), "no pair-order select rendered — entrant.kind did not reach isPairShaped").toBeVisible({
+  await expect(pairOrderSelects.first(), "no pair-order select rendered — entrant.kind did not reach isPairShaped").toBeAttached({
     timeout: 30_000,
   });
+  // The side showing now (away) is the one with a box on a phone; measure what is visible.
+  let pairMeasured = 0;
   for (const select of await pairOrderSelects.all()) {
+    if (!(await select.isVisible())) continue;
     const box = await select.boundingBox();
     expect(box, "pair-order select has no box").not.toBeNull();
     expect(box!.height, `pair-order select touch target is ${box!.height}px`).toBeGreaterThanOrEqual(44);
+    pairMeasured++;
   }
+  expect(pairMeasured, "no visible pair-order select was measured").toBeGreaterThan(0);
 
   await expectNoHorizontalScroll(page);
 });
@@ -5652,11 +5703,16 @@ for (const [sportKey, short] of WIDTH_MATRIX_CLOCK_SPORTS) {
 // position keys (`packages/engine/src/sports/*`), the names carry `projectTag()` (two width projects share one CI process).
 // ---------------------------------------------------------------------------
 
-/** Open every phone-disclosure instance whose toggle is visible at this width; returns how many instances exist. */
+/**
+ * Open everything the console folds: the header bar's Lineup panel (the heavy block the old Lineup disclosure held; the
+ * bar is one control per panel at every width, so it is opened by its own button) and every phone-disclosure instance
+ * whose toggle is visible at this width. Returns how many things were opened (panel + disclosures), so a caller can
+ * still prove it was not vacuous.
+ */
 async function openEveryPhoneFold(page: Page): Promise<number> {
+  expect(await openConsolePanel(page, "lineup"), "the console offers the Lineup panel (a football/volleyball/hockey fixture)").toBe(true);
+  let opened = 1;
   const toggles = page.locator('[data-role="phone-disclosure-toggle"]');
-  // Attached, not visible: a fold's toggle may be `md:hidden` here, and a hidden control cannot be clicked.
-  await expect(toggles.first(), "the console renders its folds (the lineup disclosure at least)").toBeAttached({ timeout: 20_000 });
   const n = await toggles.count();
   for (let i = 0; i < n; i++) {
     const toggle = toggles.nth(i);
@@ -5664,8 +5720,9 @@ async function openEveryPhoneFold(page: Page): Promise<number> {
     if ((await toggle.getAttribute("aria-expanded")) === "true") continue;
     await toggle.click();
     await expect(toggle, `fold ${i + 1} of ${n} opens`).toHaveAttribute("aria-expanded", "true");
+    opened++;
   }
-  return n;
+  return opened;
 }
 
 const VB_COURT = ["S", "OH", "MB", "OPP", "OH", "MB"] as const;
@@ -5710,8 +5767,8 @@ for (const sport of RETIREMENT_SPORTS) {
     await assertTapFloor(padTile(page, "retire-away"), `${sport.sportKey}: away Injured tile, folds as left`);
 
     // 2. Every fold opened (EVERY instance): still on the board, still over the floor, page still not scrolling sideways.
-    const folds = await openEveryPhoneFold(page);
-    expect(folds, "at least one fold instance existed to open (a console with none would make this step vacuous)").toBeGreaterThan(0);
+    // Non-vacuous by construction: openEveryPhoneFold hard-expects the Lineup panel to open (a count >0 would be a tautology).
+    await openEveryPhoneFold(page);
     await assertTapFloor(padTile(page, "retire-home"), `${sport.sportKey}: home Injured tile, every fold open`);
     await expectNoHorizontalScroll(page);
 
@@ -5760,8 +5817,8 @@ test("volleyball v3 pad: the field-six question and both answers hold the 44px f
   await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
   await dismissCookieBanner(page);
   await assertV3PadHoldsAtThisWidth(page, "volleyball pad at rest", 4);
-  const folds = await openEveryPhoneFold(page);
-  expect(folds, "at least one fold instance existed to open (a console with none would make this step vacuous)").toBeGreaterThan(0);
+  // Non-vacuous by construction: openEveryPhoneFold hard-expects the Lineup panel to open (a count >0 would be a tautology).
+  await openEveryPhoneFold(page);
 
   await assertTapFloor(padTile(page, "sanction-home"), "volleyball: home sanction tile, every fold open");
   await padTile(page, "sanction-home").click();
@@ -7289,13 +7346,10 @@ test("W2c match rules block at every width: the fold opens, the controls hold th
   /** Class 22: attached first, then open the fold only when its toggle is the visible kind. */
   const openFold = async (): Promise<void> => {
     await expect(block, "the block is attached at every width").toBeAttached({ timeout: 20_000 });
-    const toggle = page.locator('[data-role="phone-disclosure"]:has([data-testid="match-rules-block"]) > [data-role="phone-disclosure-toggle"]');
-    expect(await toggle.isVisible(), `the fold is a phone control (${projectWidth})`).toBe(projectWidth < 768);
-    if (await toggle.isVisible()) {
-      await assertTapFloor(toggle, "Match rules toggle");
-      await expect(block, "folded on a phone until the toggle is tapped").toBeHidden();
-      if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
-    }
+    const toggle = page.getByTestId("match-rules-toggle");
+    await assertTapFloor(toggle, "Match rules toggle");
+    await expect(block, "closed until the header button is tapped").toBeHidden();
+    await openConsolePanel(page, "rules");
     await expect(block).toBeVisible({ timeout: 20_000 });
   };
   const fits = async (label: string): Promise<void> => {

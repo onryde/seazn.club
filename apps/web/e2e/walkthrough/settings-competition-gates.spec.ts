@@ -38,7 +38,8 @@ import { routes } from "../../src/lib/routes";
  *   - `competitions.max_active` freezes an EXISTING competition (case #4);
  *   - `discovery.branding` disables two fields the client then stops sending;
  *   - `discovery.listed` has NO form gate at all — the server is the only one;
- *   - `dashboard.theme` removes a whole tab rather than disabling it;
+ *   - `dashboard.theme` swaps the palette for a plan line (the Branding tab
+ *     itself is always there since settings C8, owner 2026-11-11);
  *   - a viewer's role removes the Save button rather than the fields;
  *
  * plus case #18, the date-order refusal, which is neither an entitlement nor a
@@ -47,7 +48,7 @@ import { routes } from "../../src/lib/routes";
  * EVERY refusal here is asserted on the API as well as (or instead of) the UI,
  * and that is not belt-and-braces. `competition-settings.tsx` pre-clears the
  * gated fields before the request leaves the browser (`...(discoveryBranding ?
- * { tagline, hero_image_path } : {})`, :165), exactly the shape Task 1's case
+ * { discovery: { tagline } } : {})`), exactly the shape Task 1's case
  * #10 found on `discoverable`: delete the server's guard and the whole UI path
  * stays green. The scripted PATCH is the only witness the server guard has, and
  * the pinned request BODY below is the evidence that it is not redundant.
@@ -76,7 +77,6 @@ const L = {
   name: ui("compset.name"),
   ends: ui("compset.ends"),
   tagline: ui("compset.tagline"),
-  hero: ui("compset.heroUrl"),
   pro: ui("compset.pro"),
   save: ui("compset.save"),
   saved: ui("compset.saved"),
@@ -84,6 +84,8 @@ const L = {
   showcase: ui("showcase.label"),
   tabGeneral: ui("compset.tab.general"),
   tabBranding: ui("compset.tab.branding"),
+  /** The palette's first chip (BrandColorPicker's `defaultLabel` on this page): present iff the palette is. */
+  sameAsOrg: ui("compset.sameAsOrg"),
   /**
    * The sentence BOTH date refusals must carry — the 400's `issues[0].message`
    * (one body carrying an inverted pair) and the 422's `error.message` (one
@@ -180,7 +182,8 @@ function field(page: Page, label: string) {
   return page.locator("label").filter({ hasText: startsWith(label) }).locator("input");
 }
 
-const showcaseBox = (page: Page) => page.getByRole("checkbox", { name: L.showcase });
+/** The Showcase opt-in (`showcase-optin.tsx`): a checkbox with `role="switch"` since settings C8. */
+const showcaseBox = (page: Page) => page.getByRole("switch", { name: L.showcase });
 const saveButton = (page: Page) => page.getByRole("button", { name: L.save, exact: true });
 
 /**
@@ -381,8 +384,8 @@ test("case #4: over quota freezes the OLDER competition — the form says read-o
     await expect(page.getByText(L.readOnly)).toBeVisible({ timeout: READ_MS });
     await expect(field(page, L.name)).toBeDisabled();
     await expect(field(page, L.ends)).toBeDisabled();
-    // The discriminating one. This checkbox is `disabled={readOnly ||
-    // form.visibility !== "public"}` (competition-settings.tsx:355) and the
+    // The discriminating one. This switch is disabled unless the form is public
+    // AND not read-only (`ShowcaseOptIn`'s `live`), and the
     // competition IS public, so `readOnly` is the only thing that can be
     // disabling it — i.e. the freeze reached past the two plain text fields.
     await expect(showcaseBox(page)).toBeDisabled();
@@ -455,7 +458,7 @@ test("case #4: over quota freezes the OLDER competition — the form says read-o
   }
 });
 
-test("discovery.branding: the tagline and hero go disabled, the client then stops sending them, and a scripted PATCH that does send one is 402ed", async ({
+test("discovery.branding: the tagline goes disabled, the client then stops sending them, and a scripted PATCH that does send one is 402ed", async ({
   page,
   request,
 }) => {
@@ -465,13 +468,12 @@ test("discovery.branding: the tagline and hero go disabled, the client then stop
     await setFlag(request, org.orgId, "discovery.branding", false);
 
     await page.goto(routes.competitionSettings(org.slug, comp.slug));
-    // The two branding fields only mount once the showcase opt-in is on and
-    // the competition is public (competition-settings.tsx:375) — so the opt-in
-    // is a precondition of this test, not part of what it asserts.
-    await expect(showcaseBox(page)).toBeEnabled({ timeout: READ_MS });
-    await showcaseBox(page).check();
-    await expect(field(page, L.tagline)).toBeDisabled();
-    await expect(field(page, L.hero)).toBeDisabled();
+    // Settings C8 (owner 2026-11-11): the tagline lives on the Branding
+    // tab, always mounted — no showcase precondition any more.
+    await page.getByRole("tab", { name: L.tabBranding, exact: true }).click();
+    await expect(field(page, L.tagline)).toBeDisabled({ timeout: READ_MS });
+    // The hero image field is gone from the form (owner 2026-11-11): the stored value is never edited or sent here.
+    await expect(page.getByTestId("compset-branding").locator('input[type="url"]')).toHaveCount(0);
     // The organiser is told WHY, in the label rather than only by the greyed
     // control. Scoped to the tagline's own <label> because "(Pro)" appears
     // more than once on this page.
@@ -480,19 +482,20 @@ test("discovery.branding: the tagline and hero go disabled, the client then stop
     ).toContainText(L.pro);
 
     // WHY THE SCRIPTED PATCH BELOW IS NOT REDUNDANT, pinned rather than
-    // asserted about. `save()` builds its `discovery` object as
-    // `...(discoveryBranding ? { tagline, hero_image_path } : {})` (:165), so
-    // with the key off the browser never mentions either field — delete
+    // asserted about. `save()` sends `discovery` only as
+    // `...(discoveryBranding ? { discovery: { tagline } } : {})`,
+    // so with the key off the browser never mentions either field — delete
     // `requireFeature("discovery.branding")` from `patchCompetition` and every
     // UI assertion above still passes. This is Task 1's case #10 shape on a
     // second field pair, and it is the reason this file asserts on the API.
     const saved = await pressSave(page, comp.id);
     expect(saved.status).toBe(200);
-    const sentDiscovery = (saved.body.discovery ?? {}) as Record<string, unknown>;
+    // City and country left the form too (settings C8; the server merges `discovery` key by key, so their stored
+    // values survive), which leaves nothing for an unentitled org to send: no `discovery` key at all.
     expect(
-      Object.keys(sentDiscovery).sort(),
+      Object.hasOwn(saved.body, "discovery"),
       "the client omits the gated keys entirely, so the UI can never exercise the server's gate",
-    ).toEqual(["city", "country"]);
+    ).toBe(false);
 
     const refused = await patchComp(request, comp.id, {
       discovery: { tagline: `should 402 ${TAG}` },
@@ -578,11 +581,11 @@ test("discovery.listed: the form gates nothing at all — the showcase checkbox 
   }
 });
 
-test("dashboard.theme: the Branding tab is absent rather than disabled, and it comes back when the key does", async ({
+test("dashboard.theme: the Branding tab says the colour needs a plan instead of offering the palette, and the palette comes back with the key", async ({
   page,
   request,
 }) => {
-  // Two navs: the goto, and the reload that proves the tab comes back.
+  // Two navs: the goto, and the reload that proves the palette comes back.
   test.setTimeout(budget(2, 0));
   const comp = await seedCompetition(request, org.orgId, { visibility: "private" });
   try {
@@ -596,24 +599,33 @@ test("dashboard.theme: the Branding tab is absent rather than disabled, and it c
     // named for.
     await expect(
       page.getByRole("tab", { name: L.tabGeneral, exact: true }),
-      "the settings page must have rendered before its missing tab means anything",
+      "the settings page must have rendered before its missing palette means anything",
+    ).toBeVisible({ timeout: READ_MS });
+    // Settings C8 (owner 2026-11-11): the tab is always there — what a plan does not include is said beside the
+    // control, not by a tab that is missing.
+    await page.getByRole("tab", { name: L.tabBranding, exact: true }).click();
+    await expect(
+      page.locator('[data-feature="dashboard.theme"]'),
+      "without dashboard.theme the Branding tab says the colour needs a plan",
     ).toBeVisible({ timeout: READ_MS });
     await expect(
-      page.getByRole("tab", { name: L.tabBranding, exact: true }),
-      "without dashboard.theme the tab is not rendered at all — `tabs` omits it (competition-settings.tsx:201), it is not a disabled control",
+      page.getByRole("button", { name: L.sameAsOrg, exact: true }),
+      "…and offers no palette (BrandColorPicker is not rendered, not merely disabled)",
     ).toHaveCount(0);
 
     // And back — which is what makes the `toHaveCount(0)` above mean anything.
-    // A locator that can never match (a renamed dictionary key, a tab that
-    // stopped being a `role="tab"`) satisfies a count of zero forever; this
-    // half is the proof that the same locator DOES match when the entitlement
-    // is held, so the zero was the entitlement's doing.
+    // A locator that can never match (a renamed dictionary key, a chip that
+    // stopped being a button) satisfies a count of zero forever; this half is
+    // the proof that the same locator DOES match when the entitlement is held,
+    // so the zero was the entitlement's doing.
     await setFlag(request, org.orgId, "dashboard.theme", true);
     await page.reload();
+    await page.getByRole("tab", { name: L.tabBranding, exact: true }).click();
     await expect(
-      page.getByRole("tab", { name: L.tabBranding, exact: true }),
-      "the tab is the entitlement's only expression on this surface, so it must return with it",
+      page.getByRole("button", { name: L.sameAsOrg, exact: true }),
+      "the palette is the entitlement's expression on this tab, so it must return with it",
     ).toBeVisible({ timeout: READ_MS });
+    await expect(page.locator('[data-feature="dashboard.theme"]')).toHaveCount(0);
   } finally {
     await releaseCompetition(request, comp.id);
   }
