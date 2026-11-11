@@ -21,7 +21,7 @@ import { sql } from "@/lib/db";
 import { utcMonthStart } from "@/lib/credits";
 import { relayOffer } from "@/server/stream-panel-context";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { creditBreakdown } from "@/server/usecases/stream-credits";
+import { creditBreakdown, projectMonthlyRollDelta, streamMonthlyRate } from "@/server/usecases/stream-credits";
 import { relayCredits } from "@/server/usecases/stream-sessions";
 import { daysUntilMonthReset } from "@/server/usecases/credits-tab";
 import {
@@ -49,6 +49,22 @@ export interface StreamCreditsTabView {
   history: StreamHistoryPage;
 }
 
+/** The tab's offer state from `relayOffer`'s facts — ONE authority, so the rail's projection asks the same question
+ *  that decides whether the tab grants. */
+export function streamCreditsOffer(f: { entitled: boolean; relayEntitled: boolean; relayDisabled: boolean }): StreamCreditsOffer {
+  return f.relayDisabled ? "unavailable" : f.entitled && f.relayEntitled ? "on" : "notIncluded";
+}
+
+/** The Streaming credits total the tab WILL show — the ledger as it stands plus what the tab's own grant would add
+ *  (or minus last month's expiring leftover) — computed WITHOUT writing. For the Settings rail, so its number equals the
+ *  tab's on the first visit of a month. Offer not "on" ⇒ the tab never grants ⇒ no projection. Throws like its reads;
+ *  the caller is best-effort. */
+export async function projectedStreamCreditsTotal(orgId: string, now: Date = new Date()): Promise<number> {
+  const { total } = await creditBreakdown(sql, orgId);
+  if (streamCreditsOffer(await relayOffer(orgId)) !== "on") return total;
+  return total + (await projectMonthlyRollDelta(sql, orgId, await streamMonthlyRate(orgId), now));
+}
+
 export async function getStreamCreditsTab(
   auth: AuthCtx,
   orgId: string,
@@ -60,11 +76,7 @@ export async function getStreamCreditsTab(
   const periodStart = utcMonthStart(now);
 
   const offerFacts = await relayOffer(orgId);
-  const offer: StreamCreditsOffer = offerFacts.relayDisabled
-    ? "unavailable"
-    : offerFacts.entitled && offerFacts.relayEntitled
-      ? "on"
-      : "notIncluded";
+  const offer = streamCreditsOffer(offerFacts);
 
   // The split, and — only with Stream on — the plan's allowance (this read grants the month's credits first).
   const credits =

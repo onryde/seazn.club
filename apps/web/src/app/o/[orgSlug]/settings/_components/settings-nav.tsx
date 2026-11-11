@@ -7,10 +7,9 @@ import {
 import { routes } from "@/lib/routes";
 import { t, type Dict } from "@/lib/i18n";
 import { ScrollActiveTabIntoView } from "@/components/ui/scroll-active-tab-into-view";
-import { sql } from "@/lib/db";
 import { orgPlanKey } from "@/lib/entitlements";
 import { planLabel } from "@/lib/plan-label";
-import { creditBreakdown } from "@/server/usecases/stream-credits";
+import { projectedStreamCreditsTotal } from "@/server/usecases/stream-credits-tab";
 
 /** Panels the tabbed Settings index renders inline (`?tab=`). */
 export type SettingsTab =
@@ -159,16 +158,13 @@ export interface NavContext {
  * Streaming, not AI (owner, 2026-11-11: streaming credits are promoted over AI
  * credits); the AI balance is one tap away on the Credits tab.
  *
- * The balance is `creditBreakdown`'s total — the same authority, over the same
- * ledger, that the Streaming side's headline (`getStreamCreditsTab` → `total`)
- * reads. It is a DISPLAY read, like the session projection's balance and the
- * /admin panel (stream-credits.ts, lane-close m7): it never grants this month's
- * free credits. A grant here would be a ledger write on every Settings render,
- * and for an org whose plan does not stream, a grant that must never happen.
- * The Credits page reads it after its Streaming side's own read (which grants),
- * so the two numbers agree there; elsewhere, across a month turn and before an
- * acting reader (the division page, a go-live, the Streaming tab) has rolled
- * the month, it shows the ledger as it stands.
+ * The balance is `projectedStreamCreditsTotal`: the ledger as it stands plus
+ * what the Streaming tab's own read WOULD grant this month (and minus last
+ * month's leftover free credits it would expire), so the rail always equals the
+ * tab, including on the first Settings visit of a month (owner, 2026-11-11). It
+ * is a READ-ONLY projection of the grant's own arithmetic (`planMonthlyRoll`,
+ * shared with the writer): it never writes the ledger, and for a plan that does
+ * not stream it projects nothing.
  *
  * Deliberately not fetched inside `SettingsNav`: an async component nested in
  * the tree would make the rail unrenderable by the synchronous static
@@ -181,8 +177,8 @@ export interface NavContext {
  */
 export async function navContext(orgId: string): Promise<NavContext | null> {
   try {
-    const [plan, stream] = await Promise.all([orgPlanKey(orgId), creditBreakdown(sql, orgId)]);
-    return { plan: planLabel(plan), streamCredits: stream.total };
+    const [plan, stream] = await Promise.all([orgPlanKey(orgId), projectedStreamCreditsTotal(orgId)]);
+    return { plan: planLabel(plan), streamCredits: stream };
   } catch {
     return null;
   }

@@ -21,7 +21,7 @@ import path from "node:path";
 
 const {
   requireOrgPage, requireBillingPage, resolveLocale, preferredCurrency, getCreditsTab,
-  orgPlanKey, walletIdFor, balance, ledger,
+  orgPlanKey, walletIdFor, balance, ledger, projectedStreamCreditsTotal,
 } = vi.hoisted(() => ({
   requireOrgPage: vi.fn(),
   requireBillingPage: vi.fn(),
@@ -33,6 +33,8 @@ const {
   balance: vi.fn(),
   // The org's match-credit ledger, summed by bucket, as `org_stream_credits` would answer it.
   ledger: { monthly: 0, pack: 0, fail: false },
+  // The rail's read-only projection (usecases/__tests__/stream-credits-rail-projection.test.ts drives it over a real DB).
+  projectedStreamCreditsTotal: vi.fn(),
 }));
 
 // A statement on `org_stream_credits` (the real `creditBreakdown` runs over this mock) answers the ledger above; any other
@@ -59,13 +61,11 @@ vi.mock("@/components/billing-credits", () => ({
 }));
 // The Credits page has two sides; Streaming is the default (the bare URL) and AI is `?kind=ai`. These tests are about the
 // sidebar, so both sides' data modules are stubbed; credits/__tests__/page.test.tsx is the one that drives the sides.
-vi.mock("@/server/usecases/stream-credits-tab", () => ({ getStreamCreditsTab: vi.fn() }));
+vi.mock("@/server/usecases/stream-credits-tab", () => ({ getStreamCreditsTab: vi.fn(), projectedStreamCreditsTotal }));
 vi.mock("@/server/usecases/stream-credits-checkout", () => ({ reconcileStreamCreditsReturn: vi.fn() }));
 vi.mock("@/components/billing-stream-credits", () => ({ BillingStreamCredits: () => <div data-testid="stream-credits-panel" /> }));
 
 import { getDictionary } from "@/lib/i18n";
-import { sql } from "@/lib/db";
-import { creditBreakdown } from "@/server/usecases/stream-credits";
 import { creditsKindOf } from "@/components/credits-kind-switch";
 import { SettingsShell, SETTINGS_TABS, navContext } from "../_components/settings-nav";
 import ConnectSettingsPage from "../connect/page";
@@ -113,6 +113,7 @@ beforeEach(() => {
   ledger.monthly = 3;
   ledger.pack = 9;
   ledger.fail = false;
+  projectedStreamCreditsTotal.mockResolvedValue(12);
 });
 
 describe("the Settings sidebar", () => {
@@ -262,28 +263,21 @@ describe("route-owning Settings pages mount the sidebar", () => {
 });
 
 describe("navContext", () => {
-  it("returns the plan label and the org's streaming balance — the Streaming side's own number, never the AI wallet's", async () => {
-    // Expected from the Streaming side's authority over the same ledger, not a literal: `creditBreakdown`'s total is the
-    // balance Settings -> Credits -> Streaming shows (stream-credits-tab.ts `total`).
-    const expected = (await creditBreakdown(sql, "org-1")).total;
-    expect(expected, "differential: the AI wallet's 37 is not the streaming balance").not.toBe(37);
-    expect(await navContext("org-1")).toEqual({ plan: "Pro", streamCredits: expected });
-    // a second call over a ledger that moved answers the new number (no memo)
-    ledger.pack = 20;
-    expect(await navContext("org-1")).toEqual({ plan: "Pro", streamCredits: (await creditBreakdown(sql, "org-1")).total });
+  it("returns the plan label and the Streaming tab's projected balance — never the AI wallet's", async () => {
+    expect(37, "differential: the AI wallet's 37 is not the streaming balance").not.toBe(12);
+    expect(await navContext("org-1")).toEqual({ plan: "Pro", streamCredits: 12 });
+    expect(projectedStreamCreditsTotal).toHaveBeenCalledWith("org-1");
+    // a second call over a number that moved answers the new number (no memo)
+    projectedStreamCreditsTotal.mockResolvedValue(20);
+    expect(await navContext("org-1")).toEqual({ plan: "Pro", streamCredits: 20 });
     // the empty ledger is 0, not null: an org that never streamed still gets the rail header
-    ledger.monthly = 0;
-    ledger.pack = 0;
+    projectedStreamCreditsTotal.mockResolvedValue(0);
     expect(await navContext("org-1")).toEqual({ plan: "Pro", streamCredits: 0 });
   });
 
-  it("is a display read: it never writes the ledger and never reads the AI wallet", async () => {
-    vi.mocked(sql).mockClear();
+  it("never reads the AI wallet", async () => {
     await navContext("org-1");
-    const statements = vi.mocked(sql).mock.calls.map((c) => (Array.isArray(c[0]) ? (c[0] as string[]).join("?") : ""));
-    const onLedger = statements.filter((t) => t.includes("org_stream_credits"));
-    expect(onLedger.length, "anti-vacuity: the ledger was read").toBeGreaterThan(0);
-    for (const t of onLedger) expect(t.trim().toLowerCase().startsWith("select"), t).toBe(true);
+    expect(projectedStreamCreditsTotal).toHaveBeenCalled();
     expect(balance).not.toHaveBeenCalled();
     expect(walletIdFor).not.toHaveBeenCalled();
   });
@@ -291,9 +285,9 @@ describe("navContext", () => {
   it("returns null rather than taking the page down when a read fails", async () => {
     // The rail is navigation. A credits outage must not 500 every Settings
     // page in the product.
-    ledger.fail = true;
+    projectedStreamCreditsTotal.mockRejectedValue(new Error("ledger unavailable"));
     expect(await navContext("org-1")).toBeNull();
-    ledger.fail = false;
+    projectedStreamCreditsTotal.mockResolvedValue(12);
     orgPlanKey.mockRejectedValue(new Error("entitlements unavailable"));
     expect(await navContext("org-1")).toBeNull();
   });

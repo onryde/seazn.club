@@ -939,13 +939,18 @@ function assertMonthlyRate(rate: number): void {
  * (its consume's bucket), and the NEXT rollover sweeps it with the rest — monthly credits (top-ups included) never
  * outlive the month they are spent in by more than one rollover.
  */
-async function rollMonthlyLocked(tx: Tx, orgId: string, rate: number, now: Date): Promise<number> {
-  assertMonthlyRate(rate);
-  const period = streamMonthlyPeriod(now);
-  const so = await monthlyGrantedThisPeriod(tx, orgId, period);
-  if (so.hasBase && so.granted >= rate) return 0;
+/** What the rollover would write for one org, as PURE arithmetic over what it has read (ONE authority: the writer
+ *  `rollMonthlyLocked` and the read-only rail projection `projectMonthlyRoll` both ask this, so they cannot drift).
+ *  `none` — base present and nothing owed. `topUp` — mid-month upgrade (I3). `base` — a new period: expire `expire` (the
+ *  monthly leftover, 0 = no row) then grant `grant` (the rate; 0 = no row). Throws `ledger_negative` for a negative
+ *  bucket, as the writer always has. */
+export type MonthlyRollPlan =
+  | { kind: "none" }
+  | { kind: "topUp"; topUp: number }
+  | { kind: "base"; expire: number; grant: number };
 
-  const split = await creditBreakdown(tx, orgId);
+export function planMonthlyRoll(so: { hasBase: boolean; granted: number }, split: StreamCreditBreakdown, rate: number): MonthlyRollPlan {
+  if (so.hasBase && so.granted >= rate) return { kind: "none" };
   // "Cannot happen" as a guard: no writer takes either bucket below zero (consume draws monthly only while > 0; every
   // revoke is floored on the pack). A negative monthly bucket granted on top of would silently hand the org rate − n;
   // a negative pack would make the expire below write a negative snapshot and fail V410's CHECK on every
@@ -953,31 +958,54 @@ async function rollMonthlyLocked(tx: Tx, orgId: string, rate: number, now: Date)
   if (split.monthly < 0 || split.pack < 0) {
     throw new HttpError(500, `This organisation's match-credit buckets are monthly ${split.monthly}, pack ${split.pack}; refusing to roll over a negative ledger`, "ledger_negative");
   }
-  if (so.hasBase) {
-    const topUp = rate - so.granted;
-    const { balanceAfter } = credit(split.total, topUp);
+  if (so.hasBase) return { kind: "topUp", topUp: rate - so.granted };
+  return { kind: "base", expire: split.monthly, grant: rate };
+}
+
+/** READ-ONLY: the signed change to an org's TOTAL the rollover would make now (a new period: grant − expired leftover;
+ *  a top-up: +topUp; nothing owed: 0). Writes nothing and takes no lock — a display figure for the Settings rail. */
+export async function projectMonthlyRollDelta(exec: Executor, orgId: string, rate: number, now: Date = new Date()): Promise<number> {
+  assertMonthlyRate(rate);
+  const so = await monthlyGrantedThisPeriod(exec, orgId, streamMonthlyPeriod(now));
+  const plan = planMonthlyRoll(so, await creditBreakdown(exec, orgId), rate);
+  if (plan.kind === "none") return 0;
+  if (plan.kind === "topUp") return plan.topUp;
+  return plan.grant - plan.expire;
+}
+
+async function rollMonthlyLocked(tx: Tx, orgId: string, rate: number, now: Date): Promise<number> {
+  assertMonthlyRate(rate);
+  const period = streamMonthlyPeriod(now);
+  const so = await monthlyGrantedThisPeriod(tx, orgId, period);
+  if (so.hasBase && so.granted >= rate) return 0;
+
+  const split = await creditBreakdown(tx, orgId);
+  const plan = planMonthlyRoll(so, split, rate);
+  if (plan.kind === "none") return 0;
+  if (plan.kind === "topUp") {
+    const { balanceAfter } = credit(split.total, plan.topUp);
     await tx`
       insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, note, idempotency_key)
-      values (${orgId}, ${topUp}, 'grant', 'monthly', ${balanceAfter},
+      values (${orgId}, ${plan.topUp}, 'grant', 'monthly', ${balanceAfter},
               ${`Free match credits for ${period}: topped up to the plan's ${rate}`}, ${streamMonthlyDeltaKey(orgId, period, rate)})`;
-    return topUp;
+    return plan.topUp;
   }
   let balance = split.total;
-  if (split.monthly > 0) {
-    const { balanceAfter } = debit(balance, split.monthly);
+  if (plan.expire > 0) {
+    const { balanceAfter } = debit(balance, plan.expire);
     await tx`
       insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, note)
-      values (${orgId}, ${-split.monthly}, 'expire', 'monthly', ${balanceAfter},
+      values (${orgId}, ${-plan.expire}, 'expire', 'monthly', ${balanceAfter},
               ${`Unused free match credits expired before the ${period} grant`})`;
     balance = balanceAfter;
   }
-  if (rate === 0) return 0;
-  const { balanceAfter } = credit(balance, rate);
+  if (plan.grant === 0) return 0;
+  const { balanceAfter } = credit(balance, plan.grant);
   await tx`
     insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, note, idempotency_key)
-    values (${orgId}, ${rate}, 'grant', 'monthly', ${balanceAfter},
+    values (${orgId}, ${plan.grant}, 'grant', 'monthly', ${balanceAfter},
             ${`Free match credits for ${period}`}, ${streamMonthlyGrantKey(orgId, period)})`;
-  return rate;
+  return plan.grant;
 }
 
 // ---------------------------------------------------------------------------

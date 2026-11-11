@@ -24,7 +24,7 @@ import path from "node:path";
 
 const {
   requireBillingPage, resolveLocale, preferredCurrency, getCreditsTab, getStreamCreditsTab, reconcile,
-  orgPlanKey, walletIdFor, balance, ledger,
+  orgPlanKey, walletIdFor, balance, ledger, projectedStreamCreditsTotal,
 } = vi.hoisted(() => ({
   requireBillingPage: vi.fn(),
   resolveLocale: vi.fn(),
@@ -36,7 +36,11 @@ const {
   walletIdFor: vi.fn(),
   balance: vi.fn(),
   // The org's match-credit ledger as the rail's reader sees it: `org_stream_credits` summed by bucket.
-  ledger: { monthly: 0, pack: 0, fail: false },
+  // `pending`: free credits the Streaming tab's own read would grant (not yet on the ledger).
+  ledger: { monthly: 0, pack: 0, fail: false, pending: 0 },
+  // The rail's read-only projection — proven over a real DB in usecases/__tests__/stream-credits-rail-projection.test.ts;
+  // stubbed here as ledger + pending, failing when the ledger does.
+  projectedStreamCreditsTotal: vi.fn(),
 }));
 
 // The real `creditBreakdown` (server/usecases/stream-credits.ts, the Streaming side's own authority for the balance) runs
@@ -53,7 +57,7 @@ vi.mock("@/server/page-auth", () => ({ requireBillingPage, requireOrgPage: vi.fn
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale }));
 vi.mock("@/lib/currency-server", () => ({ preferredCurrency }));
 vi.mock("@/server/usecases/credits-tab", () => ({ getCreditsTab }));
-vi.mock("@/server/usecases/stream-credits-tab", () => ({ getStreamCreditsTab }));
+vi.mock("@/server/usecases/stream-credits-tab", () => ({ getStreamCreditsTab, projectedStreamCreditsTotal }));
 vi.mock("@/server/usecases/stream-credits-checkout", () => ({ reconcileStreamCreditsReturn: reconcile }));
 vi.mock("@/lib/entitlements", () => ({ orgPlanKey }));
 vi.mock("@/lib/credits", () => ({ walletIdFor, balance }));
@@ -121,6 +125,11 @@ beforeEach(() => {
   orgPlanKey.mockResolvedValue("pro");
   walletIdFor.mockResolvedValue("w1");
   balance.mockResolvedValue(37);
+  ledger.pending = 0;
+  projectedStreamCreditsTotal.mockImplementation(async () => {
+    if (ledger.fail) throw new Error("ledger unavailable");
+    return ledger.monthly + ledger.pack + ledger.pending;
+  });
   ledger.monthly = 3;
   ledger.pack = 9;
   ledger.fail = false;
@@ -180,20 +189,21 @@ describe("Settings → Credits: which side", () => {
 });
 
 describe("Settings → Credits: the rail's streaming balance", () => {
-  it("the rail's streaming balance is the number the Streaming side shows — read after that side's own read, which grants the month first (P9)", async () => {
+  it("the rail's streaming balance is the number the Streaming side shows — on a month's first visit, whichever read runs first (P9)", async () => {
     // A month's first visit: the ledger holds 9 bought credits and none of this month's free ones until the Streaming
-    // side's read grants them (`relayCredits` → `ensureMonthlyStreamGrant`). Stubbed here as a read that writes the grant
-    // into the ledger and then answers the balance through the SAME authority the rail reads.
+    // side's read grants them. The rail projects that grant WITHOUT writing it, so it equals the tab either way.
     ledger.monthly = 0;
     ledger.pack = 9;
-    const before = (await creditBreakdown(sql, "org-1")).total;
+    ledger.pending = 5;
+    const before = ledger.monthly + ledger.pack;
     getStreamCreditsTab.mockImplementation(async () => {
       ledger.monthly = 5;
-      return { marker: "view-1", total: (await creditBreakdown(sql, "org-1")).total };
+      ledger.pending = 0;
+      return { marker: "view-1", total: ledger.monthly + ledger.pack };
     });
     const out = await render({});
     const shown = Number(/data-testid="stream-credits-panel"[^>]*data-total="(\d+)"/.exec(out)?.[1] ?? Number.NaN);
-    expect(shown, "the Streaming side shows the granted balance").toBe((await creditBreakdown(sql, "org-1")).total);
+    expect(shown, "the Streaming side shows the granted balance").toBe(14);
     expect(shown, "differential: the grant moved the balance, or this test cannot tell the order").not.toBe(before);
     const rail = railLink(out);
     expect(rail, "the rail's balance link").not.toBeNull();
