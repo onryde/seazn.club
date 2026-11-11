@@ -516,7 +516,7 @@ function anchorOf(event: LedgerClockEvent, own: boolean, before: ClockAnchor | n
 }
 
 /** A payload's `at`, when it is one the engine would have accepted. */
-function gameTimeOf(at: unknown): GameTimeStamp | null {
+export function gameTimeOf(at: unknown): GameTimeStamp | null {
   if (typeof at !== "object" || at === null) return null;
   const { period, elapsed } = at as { period?: unknown; elapsed?: unknown };
   if (typeof period !== "string" || period.trim() === "") return null;

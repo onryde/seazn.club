@@ -1666,10 +1666,17 @@ export interface PadHostView {
    * `known`), which would let it run its own arithmetic and drift from the
    * stamp `send` actually applies.
    *
-   * DISPLAY ONLY. This never becomes an `at` on a payload and never corrects
-   * the fold: the ENGINE's laziness is correct and is not to be "fixed" from
-   * here. A ticking display and a lazily-swept state legitimately disagree
-   * between events.
+   * It never corrects the fold: the ENGINE's laziness is correct and is not
+   * to be "fixed" from here. A ticking display and a lazily-swept state
+   * legitimately disagree between events.
+   *
+   * ONE PAYLOAD READS IT, and only one: football's substitution, whose `at`
+   * the skin owns (ruling 154, superseding R3-2; `subStampOf` in
+   * skins/football-subs.ts). A sub joins the stoppage of the sub before it
+   * when this reading is at most 120 s past it, and otherwise is stamped with
+   * this reading floored at the fold's `asOf` — the same value `send` would
+   * stamp, read at most one render (whole seconds) earlier. Every other
+   * payload is stamped by `send` alone.
    */
   readonly clockAt?: GameTimeStamp;
   /**

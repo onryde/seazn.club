@@ -395,8 +395,9 @@ test("football v3: the substitution WINDOW cap (subWindows) is a SECOND, indepen
   test.setTimeout(120_000);
   // The cap that has NEVER FIRED IN PRODUCTION. v2 football sent no `at` on
   // any event, so every substitution ever recorded through that pad was
-  // unstamped and consumed no window; R3-2 is what turns the cap on, by
-  // stamping the swap from the fold's own `asOf`. This is its first coverage.
+  // unstamped and consumed no window; R3-2 turned the cap on by stamping the
+  // swap, and ruling 154 (2026-11-11) stamps it from the live pad clock, which
+  // opens seeded at the fold's `asOf` (1200 below). This is its first coverage.
   const fx = await seedRosteredFixture(page.request, {
     label: `V3 FB SubWindows ${TAG}`,
     sportKey: "football",
@@ -555,9 +556,10 @@ test("football v3: a substitution under BOTH caps succeeds — no refusal, event
   });
   await mergeDivisionConfig(page.request, fx.divisionId, { maxSubs: 3, subWindows: 3 });
   await postEvent(page.request, fx.fixtureId, "core.start", {});
-  // Stamps `asOf` so the UI sub below actually carries an `at` (`stampOf`,
-  // football.tsx:319, omits `at` while `asOf` is unset) — otherwise this
-  // would pass without the window cap ever engaging at all.
+  // Stamps `asOf`, which seeds the pad clock, so the UI sub below carries an
+  // `at` (ruling 154, `subStampOf`: a clock that was never told the time
+  // stamps nothing) — otherwise this would pass without the window cap ever
+  // engaging at all.
   await postEvent(page.request, fx.fixtureId, "football.card", {
     by: fx.homeEntrantId,
     color: "yellow",

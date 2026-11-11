@@ -1246,7 +1246,7 @@ describe("buildSwap", () => {
         away: footballSquad({ onPitch: ["a1"], bench: ["a4"] }),
       },
     });
-    const home = buildSwap(view({ state: live }), t)[0]!;
+    const home = buildSwap(view({ state: live, clockAt: { period: "H2", elapsed: 1000 } }), t)[0]!;
     expect(home.policyOk).toBe(false);
     expect(home.policyMessage).toContain("pad.football.context.sub.blocked.subWindows");
     expect(home.policyMessage).toContain('"windows":3');
@@ -1267,7 +1267,7 @@ describe("buildSwap", () => {
         away: footballSquad({ onPitch: ["a1"], bench: ["a4"] }),
       },
     });
-    expect(buildSwap(view({ state: live }), t)[0]!.policyOk).toBe(true);
+    expect(buildSwap(view({ state: live, clockAt: { period: "H2", elapsed: 300 } }), t)[0]!.policyOk).toBe(true);
   });
 
   it("does NOT refuse on the window cap when nothing can be stamped — an unstamped substitution consumes no window", () => {
@@ -1286,17 +1286,14 @@ describe("buildSwap", () => {
     expect(buildSwap(view({ state: live }), t)[0]!.policyOk).toBe(true);
   });
 
-  // R3-2 + the `at`-stamp note: stamp from the fold's own `asOf`, with v2's
-  // staleness guard. A WRONG stamp mis-attributes a stoppage; no stamp merely
-  // consumes no window.
-  it("stamps `at` from the fold's asOf when it names the CURRENT phase", () => {
-    const stamped = view({ state: state({ asOf: { period: "H1", elapsed: 754 } }) });
-    expect(buildSwap(stamped, t)[0]!.buildEvent("h1", "h4").payload).toEqual({
-      by: "home-1",
-      off: "h1",
-      on: "h4",
-      at: { period: "H1", elapsed: 754 },
-    });
+  // Ruling 154 (superseding R3-2's stamp from the fold's `asOf`): with no sub to join, a sub takes the LIVE reading, floored at
+  // the fold's asOf when that names the current phase. A WRONG stamp mis-attributes a stoppage; no stamp merely consumes no
+  // window.
+  it("stamps `at` from the live clock, floored at the fold's asOf when it names the CURRENT phase", () => {
+    const at = (clock: number, asOf: { period: string; elapsed: number }) =>
+      buildSwap(view({ state: state({ asOf }), clockAt: { period: "H1", elapsed: clock } }), t)[0]!.buildEvent("h1", "h4").payload;
+    expect(at(800, { period: "H1", elapsed: 754 })).toEqual({ by: "home-1", off: "h1", on: "h4", at: { period: "H1", elapsed: 800 } });
+    expect(at(700, { period: "H1", elapsed: 754 })).toEqual({ by: "home-1", off: "h1", on: "h4", at: { period: "H1", elapsed: 754 } });
   });
 
   // CORRECTED, R6 fix pass 2 gap 6. These two asserted the `at` key was ABSENT,
@@ -1897,12 +1894,15 @@ describe("against a real engine fold", () => {
     expect(home.blocked?.h7).toBe("pad.football.context.sub.blocked.reentry.short");
   });
 
-  it("stamps the next substitution from the stamp the fold itself is now as-of", () => {
-    const home = buildSwap(foldedView(afterSub), t)[0]!;
-    expect(home.buildEvent("h1", "h12").payload).toMatchObject({
-      by: "H",
-      at: { period: "H1", elapsed: 1200 },
-    });
+  // Ruling 154 (superseding R3-2, which stamped from the fold's asOf): the newest stamped event is the H1 sub at 1200, so a
+  // sub read up to 120 s later joins its stoppage and takes 1200; one read later takes the live reading.
+  it("stamps the next substitution at the last sub's stoppage within 120 s of it, and at the live reading after", () => {
+    const at = (elapsed: number) =>
+      buildSwap({ ...foldedView(afterSub), clockAt: { period: "H1", elapsed } }, t)[0]!.buildEvent("h1", "h12").payload;
+    expect(at(1320)).toMatchObject({ by: "H", at: { period: "H1", elapsed: 1200 } });
+    expect(at(1321)).toMatchObject({ by: "H", at: { period: "H1", elapsed: 1321 } });
+    // With no live reading the fold's asOf is NOT a stamp any more: the sub goes out unstamped.
+    expect((buildSwap(foldedView(afterSub), t)[0]!.buildEvent("h1", "h12").payload as { at?: unknown }).at).toBeUndefined();
   });
 
   // Both branches of fix 4 against a REAL fold: the stream that carries a
