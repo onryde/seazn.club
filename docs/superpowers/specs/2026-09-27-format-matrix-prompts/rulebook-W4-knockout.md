@@ -157,7 +157,7 @@ consume it then. The rows keep Q6's shape for that follow-up. The random draw (R
 | RB4-T3 | **Play-off match:** the two semi-final losers play for 3rd and 4th. The stage is **not complete** until that match is decided or settled. | product rule (ruling 266) | OWNER 266 |
 | RB4-T4 | A third-place match is never generated where fewer than two semi-finals are real (one is a bye). A request for one there is refused with a named reason. | product rule (ruling 266) | OWNER 266 |
 | RB4-T5 | The setting is editable until the stage starts, then read-only. | product rule (RB3-5 "play freezes it") | OWNER 274 (designer's call) |
-| RB4-T6 | Third-place play-off with one side out: walkover. Both sides out: 3rd is vacant and both rank 4th. | product rule (ruling 267 by analogy) | OWNER 274 (designer's call) |
+| RB4-T6 | Third-place play-off with one side out: walkover. Both sides out: 3rd is vacant and both rank 4th. A semi-final loser is **out** when they withdrew or lost the semi-final by an organiser-recorded walkover (owner ruling A, 2026-11-11). | product rule (ruling 267 by analogy); amended by owner ruling A 2026-11-11 (recorded walkover semi loser is out) | OWNER 274 (designer's call); OWNER A 2026-11-11 |
 
 ---
 
