@@ -8,10 +8,12 @@
 // write; the list is stateless. "Add a sponsor" and the EDIT form both ask for a
 // name, a logo and a link only - the tier and where a sponsor shows come from its
 // deal (owner, 2026-11-11: "why showing tier in sponsor edit?"), and the sponsor's
-// page shows them read-only. The API still takes both on a PATCH. Tiers above
+// page shows them read-only. The API still takes both on a PATCH. The sponsor
+// page's editor (never the Add form) also has the optional Poster the public hero
+// shows for a Title sponsor, where the plan can place one (`PosterField`). Tiers above
 // partner and per-competition scoping are Pro (`sponsors.tiers`); without it the
 // manager is the free un-tiered strip with an upsell note.
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/components/ui/console-link";
 import { ImagePlus } from "lucide-react";
@@ -20,7 +22,7 @@ import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { SponsorList, dealPrice, groupTierOf, sameOrderBand, type DealWrite } from "@/components/sponsors/sponsor-list";
 import { AddDealSheet, type CreateDealBody } from "@/components/sponsors/add-deal-sheet";
-import { SponsorSheet, SponsorSheetBody } from "@/components/sponsors/sponsor-sheet";
+import { SMALL_BTN, SponsorSheet, SponsorSheetBody } from "@/components/sponsors/sponsor-sheet";
 import { DealPageBody } from "@/components/sponsors/deal-page";
 import { PayLinkBanner } from "@/components/sponsors/pay-link-banner";
 import {
@@ -32,6 +34,7 @@ import { ApiV1Error } from "@/lib/client-v1";
 import { intlLocaleFor } from "@/lib/public-date-locale";
 import type { DealAction, SponsorDeal } from "@/lib/sponsor-deals";
 import type { ReportLinkDefaults, ReportLinkSummary } from "@/lib/sponsor-report";
+import { POSTER_HEIGHT, POSTER_WIDTH, posterCrop, type PosterCrop } from "@/lib/sponsor-poster";
 import { sponsorHref, sponsorsHref } from "@/lib/sponsors-hub";
 import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
 import type { SponsorPackageRow } from "@/server/usecases/sponsors";
@@ -45,6 +48,14 @@ const LOGO_ACCEPT = LOGO_TYPES.join(",");
 const LOGO_FORMAT_NAME: Record<(typeof LOGO_TYPES)[number], string> = { "image/png": "PNG", "image/jpeg": "JPG", "image/webp": "WebP" };
 /** The cap in the unit the hint says. The same constant `pickLogo` enforces, so the number in the hint is the number that refuses. */
 const LOGO_MAX_MB = MAX_LOGO_BYTES / (1024 * 1024);
+/** The accepted formats written the way the page's language writes a list ("PNG, JPG or WebP" / "PNG, JPG ou WebP"): `intlLocaleFor` keeps
+ *  English on en-GB, whose list has no serial comma (the owner's sentence), where bare "en" would add one. The logo hint and the poster hint
+ *  read it from here, so neither can name a format the picker does not offer. */
+function acceptedFormats(locale: string): string {
+  return new Intl.ListFormat(intlLocaleFor(locale), { style: "long", type: "disjunction" }).format(
+    LOGO_ACCEPT.split(",").map((type) => LOGO_FORMAT_NAME[type as (typeof LOGO_TYPES)[number]]),
+  );
+}
 
 /** The tier list's one authority is lib/sponsor-tiers.ts; re-exported for the console's own importers. */
 export { SPONSOR_TIERS, type SponsorTier };
@@ -146,6 +157,58 @@ function draftOf(s: SponsorItem | undefined): Draft {
   return s === undefined ? EMPTY_DRAFT : { name: s.name, url: s.url ?? "", file: null, preview: s.logo_path };
 }
 
+/** What the poster field holds while the sponsor page's editor is open (Title-sponsor hero poster, spec §8). Its own state, not a key on
+ *  `Draft`: the logo draft stays a name, a link and a logo. `file` is a picked, not yet uploaded, picture and `preview` what the tile shows
+ *  (its object URL, else the stored poster). `removed` says the stored poster is to go; it never holds together with a `file` (picking
+ *  clears it, Remove clears the file). `crop` is what the 4:5 tile will cut off the PICKED picture, or null when there is no pick or the
+ *  browser could not measure it. */
+export interface PosterDraft {
+  file: File | null;
+  preview: string | null;
+  removed: boolean;
+  crop: PosterCrop | null;
+}
+
+/** What the poster field opens with: the sponsor's stored poster previewed, nothing picked, nothing removed (empty for no sponsor). */
+export function posterDraftOf(s: Pick<SponsorItem, "poster_path"> | undefined): PosterDraft {
+  return { file: null, preview: s?.poster_path ?? null, removed: false, crop: null };
+}
+
+/** The PATCH body of a save from the sponsor page's editor: only what changed, never the tier or the scope (a deal sets those). `uploaded`
+ *  holds the public URL of each picture the save has just uploaded. A poster is removed only when there is one stored to remove (`removed`
+ *  with nothing stored sends nothing), and a stored poster that was not touched is not re-sent. Pure: the island does the uploads. */
+export function sponsorEditPatch(
+  s: Pick<SponsorItem, "name" | "url" | "poster_path">,
+  edit: { name: string; url: string },
+  poster: PosterDraft,
+  uploaded: { logo?: string; poster?: string },
+): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  if (edit.name.trim() && edit.name.trim() !== s.name) patch.name = edit.name.trim();
+  const url = normalizeUrl(edit.url) || null;
+  if (url !== s.url) patch.url = url;
+  if (uploaded.logo) patch.logo_path = uploaded.logo;
+  // A removed draft has no file (so nothing was uploaded for it): the two arms cannot both apply.
+  if (uploaded.poster) patch.poster_path = uploaded.poster;
+  else if (poster.removed && s.poster_path !== null) patch.poster_path = null;
+  return patch;
+}
+
+/** Measure a picked picture against the 4:5 tile (`posterCrop`, spec §11). A browser that cannot decode it (no `createImageBitmap`, or it
+ *  rejects) has no answer, and the file is still taken: no warning is better than a refused file. The bitmap is closed either way. */
+async function measurePoster(file: File): Promise<PosterCrop | null> {
+  try {
+    const bitmap = await createImageBitmap(file);
+    try {
+      return posterCrop(bitmap.width, bitmap.height);
+    } finally {
+      bitmap.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
 /** The route each deal write POSTs. Send and Resend invoice are one route: the server sends a draft's first invoice and re-sends an
  *  open one's the same way (ensureDealCheckout). */
 const DEAL_ROUTE: Record<DealAction, string> = {
@@ -206,6 +269,7 @@ export function SponsorForm({
   submitLabel,
   busy,
   onPickLogo,
+  poster,
   compact = false,
 }: {
   value: Draft;
@@ -215,6 +279,9 @@ export function SponsorForm({
   submitLabel: string;
   busy: boolean;
   onPickLogo: (file: File, set: (fn: (prev: Draft) => Draft) => void) => void;
+  /** The optional Poster field (Title-sponsor hero poster): given only to the sponsor page's editor, and only when the plan can place a Title
+   *  sponsor. The Add form never has it (a poster belongs to a sponsor that exists), so it is a prop and not a mode of the form. */
+  poster?: { value: PosterDraft; onPick: (file: File) => void | Promise<void>; onRemove: () => void };
   /** One column of fields under the logo, whatever the viewport: for the sponsor page's side panel, where `sm:` (a VIEWPORT query)
    *  would put two fields side by side in a 360px panel. The add box leaves it off. */
   compact?: boolean;
@@ -225,11 +292,7 @@ export function SponsorForm({
   // ref'd hidden input — label-wrapped file inputs misfire in some browsers.
   const fileRef = useRef<HTMLInputElement>(null);
   const hintId = useId();
-  // The formats are written the way the page's language writes a list ("PNG, JPG or WebP" / "PNG, JPG ou WebP"): `intlLocaleFor` keeps
-  // English on en-GB, whose list has no serial comma (the owner's sentence), where bare "en" would add one.
-  const formats = new Intl.ListFormat(intlLocaleFor(locale), { style: "long", type: "disjunction" }).format(
-    LOGO_ACCEPT.split(",").map((type) => LOGO_FORMAT_NAME[type as (typeof LOGO_TYPES)[number]]),
-  );
+  const formats = acceptedFormats(locale);
   const urlInvalid = value.url.trim() !== "" && !isValidSponsorUrl(value.url);
   return (
       <div className="flex flex-wrap items-start gap-4">
@@ -292,6 +355,7 @@ export function SponsorForm({
               ) : null}
             </label>
           </div>
+          {poster ? <PosterField value={poster.value} onPick={poster.onPick} onRemove={poster.onRemove} /> : null}
           <div className="mt-3 flex items-center gap-2">
             <button
               type="button"
@@ -310,6 +374,85 @@ export function SponsorForm({
         </div>
       </div>
     );
+}
+
+/** The optional Poster field of the sponsor page's editor (spec §8): a dashed 4:5 tile that IS the crop (the public panel draws the same
+ *  `object-cover` box), the hint beside it, Remove, and a warning when the picture would lose more than a quarter. Like the logo tile it is
+ *  an icon with an accessible name, and one hint says what it takes - the formats are the input's `accept`, the size the cap `pickPoster`
+ *  refuses at, the recommended size the poster's own constants - so the hint cannot say something the picker does not do. Stateless but for
+ *  the ids and the ref: the draft and every write are OrgSponsors'. Hoisted out of SponsorForm for the same reason SponsorForm is out of
+ *  OrgSponsors. */
+export function PosterField({
+  value,
+  onPick,
+  onRemove,
+}: {
+  value: PosterDraft;
+  onPick: (file: File) => void | Promise<void>;
+  onRemove: () => void;
+}) {
+  const msg = useMsg();
+  const locale = useLocaleOrDefault();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const labelId = useId();
+  const hintId = useId();
+  const crop = value.crop;
+  const sizes = { width: POSTER_WIDTH, height: POSTER_HEIGHT };
+  return (
+    <div data-testid="sponsor-poster-field" role="group" aria-labelledby={labelId} className="mt-3 min-w-0">
+      <span id={labelId} className="label">
+        {msg("sponsors.poster.label")}
+      </span>
+      <div className="flex min-w-0 flex-wrap items-start gap-x-4 gap-y-3">
+        <button
+          type="button"
+          data-testid="sponsor-poster-tile"
+          onClick={() => fileRef.current?.click()}
+          className="group grid aspect-[4/5] w-24 shrink-0 cursor-pointer place-items-center overflow-hidden rounded-xl border border-dashed border-slate-300 bg-white text-slate-400 hover:border-purple-400 hover:text-purple-600"
+          aria-label={msg("sponsors.sheet.poster")}
+          aria-describedby={hintId}
+        >
+          {value.preview ? (
+            // The picked file's object URL or the stored CDN URL, cropped exactly as the public poster panel crops it.
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={value.preview} alt="" className="h-full w-full object-cover" />
+          ) : (
+            <ImagePlus className="h-6 w-6" strokeWidth={1.75} aria-hidden="true" />
+          )}
+        </button>
+        <input
+          ref={fileRef}
+          data-testid="sponsor-poster-input"
+          type="file"
+          accept={LOGO_ACCEPT}
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void onPick(f);
+            e.target.value = "";
+          }}
+        />
+        <div className="grid min-w-0 flex-1 basis-40 justify-items-start gap-2">
+          <p id={hintId} data-testid="sponsor-poster-hint" className="min-w-0 text-xs text-slate-500">
+            {msg("sponsors.poster.hint", { formats: acceptedFormats(locale), mb: LOGO_MAX_MB, ...sizes })}
+          </p>
+          {/* Always mounted, so a screen reader hears the warning arrive; empty it takes no room. */}
+          <div role="status" className="min-w-0 empty:hidden">
+            {crop !== null && crop.warn && crop.side !== null ? (
+              <p data-testid="sponsor-poster-crop" className="min-w-0 text-xs text-amber-800">
+                {msg(crop.side === "width" ? "sponsors.poster.cropWidth" : "sponsors.poster.cropHeight", { percent: crop.percent, ...sizes })}
+              </p>
+            ) : null}
+          </div>
+          {value.preview ? (
+            <button type="button" data-testid="sponsor-poster-remove" onClick={onRemove} className={SMALL_BTN}>
+              {msg("sponsors.poster.remove")}
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function OrgSponsors({
@@ -353,6 +496,13 @@ export function OrgSponsors({
   const editParamId = hub.editSponsor ? hub.sponsorId : null;
   const [editingId, setEditingId] = useState<string | null>(editParamId);
   const [edit, setEdit] = useState<Draft>(draftOf(initialSponsors.find((s) => s.id === editParamId)));
+  // The poster has its own draft (the logo's stays a name, a link and a logo). `posterSeq` numbers the picks: a measuring that finishes
+  // after a newer pick, after Remove, or after the editor moved to another sponsor is stale and is dropped (`pickPoster`).
+  const [poster, setPoster] = useState<PosterDraft>(posterDraftOf(initialSponsors.find((s) => s.id === editParamId)));
+  const posterSeq = useRef(0);
+  useEffect(() => {
+    posterSeq.current += 1;
+  }, [editParamId]);
   const [seenEditParamId, setSeenEditParamId] = useState(editParamId);
   /** The row whose ⋯ is open below md (one at a time). */
   const [moreOpenId, setMoreOpenId] = useState<string | null>(null);
@@ -360,6 +510,7 @@ export function OrgSponsors({
     setSeenEditParamId(editParamId);
     setEditingId(editParamId);
     setEdit(draftOf(sponsors.find((s) => s.id === editParamId)));
+    setPoster(posterDraftOf(sponsors.find((s) => s.id === editParamId)));
     // The row's tray belongs to the list; the pencil took the reader off it, and a tray left open would still be open on the way back.
     setMoreOpenId(null);
   }
@@ -467,6 +618,27 @@ export function OrgSponsors({
     set((prev) => ({ ...prev, file, preview }));
   }
 
+  /** Pick a poster for the open editor: over the cap it is refused at once (the same cap as the logo, in the poster's words and with the
+   *  draft left as it was); otherwise it is measured against the 4:5 tile and taken, with the crop it would take (null when the browser
+   *  cannot measure it). The preview exists only once the pick is taken, so a dropped pick leaves no object URL behind. */
+  async function pickPoster(file: File) {
+    if (file.size > MAX_LOGO_BYTES) {
+      setError(msg("sponsors.poster.tooBig", { mb: LOGO_MAX_MB }));
+      return;
+    }
+    setError(null);
+    const seq = ++posterSeq.current;
+    const crop = await measurePoster(file);
+    if (seq !== posterSeq.current) return;
+    setPoster({ file, preview: URL.createObjectURL(file), removed: false, crop });
+  }
+
+  /** Remove the poster: forget a pick, and mark a stored poster to go (the save sends the null). */
+  function removePoster() {
+    posterSeq.current += 1;
+    setPoster({ file: null, preview: null, removed: true, crop: null });
+  }
+
   function create() {
     void run(async () => {
       const logo_path = draft.file ? await uploadLogo(draft.file) : null;
@@ -498,17 +670,19 @@ export function OrgSponsors({
   function startEdit(s: SponsorItem) {
     setEditingId(s.id);
     setEdit(draftOf(s));
+    setPoster(posterDraftOf(s));
+    posterSeq.current += 1;
   }
 
   function saveEdit(s: SponsorItem) {
     void run(async () => {
-      // Send only what changed. The editor is a name, a link and a logo: the sponsor's tier and scope are its deals' to set (the API
-      // still takes them, for callers that are not this screen), so a save from here never carries either.
-      const patch: Record<string, unknown> = {};
-      if (edit.name.trim() && edit.name.trim() !== s.name) patch.name = edit.name.trim();
-      const url = normalizeUrl(edit.url) || null;
-      if (url !== s.url) patch.url = url;
-      if (edit.file) patch.logo_path = await uploadLogo(edit.file);
+      // Send only what changed (`sponsorEditPatch`). The editor is a name, a link, a logo and (where the plan can place a Title sponsor) a
+      // poster: the sponsor's tier and scope are its deals' to set (the API still takes them, for callers that are not this screen), so a
+      // save from here never carries either.
+      const uploaded: { logo?: string; poster?: string } = {};
+      if (edit.file) uploaded.logo = await uploadLogo(edit.file);
+      if (poster.file) uploaded.poster = await uploadLogo(poster.file);
+      const patch = sponsorEditPatch(s, edit, poster, uploaded);
       if (Object.keys(patch).length > 0) {
         await api(`/${s.id}`, { method: "PATCH", body: JSON.stringify(patch) });
         await refresh();
@@ -773,6 +947,7 @@ export function OrgSponsors({
                 submitLabel={msg("sponsors.save")}
                 busy={busy}
                 onPickLogo={pickLogo}
+                poster={hasTiers ? { value: poster, onPick: pickPoster, onRemove: removePoster } : undefined}
                 compact
               />
             )}

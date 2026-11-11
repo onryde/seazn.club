@@ -25,7 +25,7 @@
 //   K3  delete ask   drop the `s.deal` arm of the confirm guard                            -> "a sponsor with a deal asks first"
 //   K4  mapped       `msg(sponsorSaveErrorKey(err))` -> `err.message`                      -> "a refusal reads the dictionary's words"
 //   K5  show again   offer "Show on site again" on every row                                -> "offered exactly where the server accepts it"
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
 
@@ -34,12 +34,16 @@ vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMo
 // The island reads a router (to clear the pencil's ?edit=1 once its editor is done); nothing in this file navigates.
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {}, refresh: () => {}, replace: () => {} }) }));
 
-import { OrgSponsors, SPONSOR_TIERS, SponsorForm, type SponsorItem, type SponsorsHubData } from "@/components/org-sponsors";
+import {
+  OrgSponsors, PosterField, SPONSOR_TIERS, SponsorForm, posterDraftOf, sponsorEditPatch, type PosterDraft, type SponsorItem, type SponsorsHubData,
+} from "@/components/org-sponsors";
 import { TIER_MSG } from "@/components/sponsors/tier-labels";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { expandSponsorTree } from "@/components/sponsors/__tests__/_sponsor-tree";
+import { findAll } from "@/components/sponsors/__tests__/_markup";
 import type { PaymentStatus, SponsorDeal } from "@/lib/sponsor-deals";
+import { POSTER_HEIGHT, POSTER_WIDTH } from "@/lib/sponsor-poster";
 import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
@@ -363,7 +367,14 @@ describe("Edit opens a form that is a name, a link and a logo, whatever the plan
         m.edit("Quay Chandlers");
         const html = renderToStaticMarkup(m.form());
         expect(html, `${label}, tiers=${hasTiers}: a select`).not.toContain("<select");
-        for (const w of PLACEMENT_WORDS()) expect(flat(html), `${label}, tiers=${hasTiers}: says "${w}"`).not.toContain(w);
+        // The Poster field (a plan with tiers only) says where a poster shows - "while this sponsor is a Title sponsor" - so it names the Title
+        // tier. That is a sentence about the poster, not a control that places the sponsor, so the field is taken out of the word sweep and
+        // the sweep reads everything else; the field itself is counted (it is there on a plan with tiers and only there).
+        const field = findAll(html, "sponsor-poster-field");
+        expect(field, `${label}, tiers=${hasTiers}: the poster field is on a plan with tiers only`).toHaveLength(hasTiers ? 1 : 0);
+        const rest = field.length > 0 ? html.replace(field[0]!.outer, "") : html;
+        expect(rest.length, `${label}, tiers=${hasTiers}: the sweep still reads the rest of the editor`).toBeGreaterThan(500);
+        for (const w of PLACEMENT_WORDS()) expect(flat(rest), `${label}, tiers=${hasTiers}: says "${w}"`).not.toContain(w);
         checked++;
       }
     }
@@ -668,5 +679,544 @@ describe("Show on site again (now on the sponsor's page, Task 15): a hidden spon
     expect(m.text()).not.toContain(SERVER);
     expect(calls.filter((c) => c.method === "GET"), "re-read after the refusal").toHaveLength(1);
     expect(m.has("sponsor-show-a"), "the re-read row has an open deal: no control").toBe(false);
+  });
+});
+
+// --- the poster field (Title-sponsor hero poster, batch C Task 6; spec docs/superpowers/specs/2026-11-11-title-sponsor-hero-poster-design.md §8) ---
+// An OPTIONAL fourth field on the sponsor page's editor (never the Add form): a 4:5 tile that is the live crop, the hint beside it, Remove,
+// and a crop warning when the picture would lose more than a quarter. Its state is its OWN (`PosterDraft`), not a key on the logo's draft:
+// the draft test above still pins that one to a name, a link and a logo. The cap and the formats are the LOGO picker's constants (the poster
+// is exactly as strong as the logo, no stronger: spec §4 premise 4), so the hint is tied to behaviour the same way the logo's is - parse
+// "up to N MB" out of the rendered hint, then drive the real picker at N and at N + 1 bytes.
+//
+// Expected copy is the owner-approved sentences (spec §10) typed here, filled with the declared constants (`POSTER_WIDTH`, `POSTER_HEIGHT`);
+// the crop figures are the spec §11 worked table, never `posterCrop`'s output read back into the page.
+//
+// Killers (one at a time, restore from a cp backup):
+//   P1  patch    `sponsorEditPatch` sends `poster_path: null` on `removed` even when nothing is stored     -> "removed + none stored"
+//   P2  gate     pass `poster` to the editor whatever `hasTiers` says                                         -> "DENIED and GRANTED"
+//   P3  size     drop the `file.size > MAX_LOGO_BYTES` check in `pickPoster`                                  -> "one more is refused"
+//   P4  stale    drop the pick-sequence check after the measuring `await`                                     -> "a slow pick that lands after"
+//   P4b stale    drop the effect that numbers the pick again when the editor moves to another sponsor         -> "a slow pick that lands after"
+//   P5  crop     draw the crop warning whatever `crop.warn` says                                              -> "crop: warn true shows"
+//   P6  reset    `startEdit` keeps the poster draft of the last editor                                        -> "an abandoned pick is not carried"
+const POSTER_NONE: PosterDraft = { file: null, preview: null, removed: false, crop: null };
+const POSTER_STORED = "https://cdn.example/posters/old.png";
+const POSTER_NEW = "https://cdn.example/posters/new.png";
+const posterProp = (value: PosterDraft = POSTER_NONE, over: Record<string, unknown> = {}) => ({ value, onPick: () => {}, onRemove: () => {}, ...over });
+const posterTiles = (html: string) => [...html.matchAll(/<button\b[^>]*data-testid="sponsor-poster-tile"[^>]*>([\s\S]*?)<\/button>/g)];
+const posterHints = (html: string) => [...html.matchAll(/<p\b[^>]*data-testid="sponsor-poster-hint"[^>]*>([\s\S]*?)<\/p>/g)];
+const posterCrops = (html: string) => [...html.matchAll(/<p\b[^>]*data-testid="sponsor-poster-crop"[^>]*>([\s\S]*?)<\/p>/g)];
+const posterRemoves = (html: string) => [...html.matchAll(/<button\b[^>]*data-testid="sponsor-poster-remove"[^>]*>([\s\S]*?)<\/button>/g)];
+const POSTER_HINT_EN = `Shows beside the competition name while this sponsor is a Title sponsor. PNG, JPG or WebP, up to 2 MB. Best at ${POSTER_WIDTH} × ${POSTER_HEIGHT} (4:5, Instagram portrait).`;
+const CONTENT_UPLOAD_OK = { status: 200, body: { data: { upload_url: "https://storage.example/put", public_url: POSTER_NEW } } };
+const closeMock = vi.fn();
+type Bitmap = { width: number; height: number; close: () => void };
+/** `createImageBitmap` of a picture `w` x `h`: what the browser answers for a measured file. */
+const bitmapOf = (w: number, h: number) => async (): Promise<Bitmap> => ({ width: w, height: h, close: closeMock });
+const pngFile = (size = 1, name = "poster.png") => new File([new Uint8Array(size)], name, { type: "image/png" });
+type PosterWire = { value: PosterDraft; onPick: (f: File) => void | Promise<void>; onRemove: () => void };
+const posterOf = (m: ReturnType<typeof mount>) => propsOf(m.form()).poster as PosterWire | undefined;
+
+afterEach(() => {
+  vi.stubGlobal("createImageBitmap", undefined);
+  closeMock.mockReset();
+});
+
+describe("the poster field: its presence (the Add form never has it; a plan without tiers has none)", () => {
+  it("the Add form never has a poster field; the sponsor page's editor has exactly one tile, described by one hint (empty case first)", () => {
+    // The empty case first: no `poster` prop (the Add form, and the editor of a plan without tiers) draws nothing of it.
+    const bare = formMarkup();
+    for (const id of ["sponsor-poster-tile", "sponsor-poster-hint", "sponsor-poster-remove", "sponsor-poster-crop", "sponsor-poster-input"]) {
+      expect(bare, `no poster prop: no ${id}`).not.toContain(`data-testid="${id}"`);
+    }
+    expect(flat(stripTags(bare)), "and no label for it").not.toContain(msg("sponsors.poster.label"));
+    // The real Add form on a page whose plan has tiers: still no poster prop - a poster belongs to a sponsor that exists.
+    const addPage = mount([], { hasTiers: true });
+    const add = addPage.island.tree().find((e) => e.type === SponsorForm);
+    expect(add, "premise: the add form is on the page").toBeDefined();
+    expect(propsOf(add!).poster, "the Add form has no poster").toBeUndefined();
+    expect(posterTiles(renderToStaticMarkup(add!)), "and draws no tile").toHaveLength(0);
+
+    // The editor: exactly one tile, exactly one hint, the tile described by the hint.
+    let checked = 0;
+    for (const html of [formMarkup({ poster: posterProp() }), formMarkup({ poster: posterProp(), compact: true })]) {
+      const tiles = posterTiles(html);
+      const hints = posterHints(html);
+      expect(tiles, "exactly one tile").toHaveLength(1);
+      expect(hints, "exactly one hint").toHaveLength(1);
+      const tag = /<button\b[^>]*data-testid="sponsor-poster-tile"[^>]*>/.exec(html)![0];
+      expect(attr(tag, "aria-label"), "the tile keeps its accessible name").toBe(msg("sponsors.sheet.poster"));
+      expect(msg("sponsors.sheet.poster"), "premise: that name is the word Poster").toBe("Poster");
+      expect(stripTags(tiles[0]![1]!), "no visible word inside the dashed box").toBe("");
+      const hintId = attr(/<p\b[^>]*data-testid="sponsor-poster-hint"[^>]*>/.exec(html)![0], "id");
+      expect(hintId, "the hint has an id").toBeTruthy();
+      expect(attr(tag, "aria-describedby"), "the tile is described by its hint").toBe(hintId);
+      // The logo tile is still the logo's: its own hint, its own id.
+      const logoTag = /<button\b[^>]*\baria-label="Logo"[^>]*>/.exec(html)![0];
+      expect(attr(logoTag, "aria-describedby"), "the logo tile keeps ITS hint").not.toBe(hintId);
+      expect(flat(stripTags(html)), "the visible label").toContain(msg("sponsors.poster.label"));
+      checked++;
+    }
+    expect(checked, "form and compact form").toBe(2);
+    // Two editors on one page must not share a hint id.
+    const two = renderToStaticMarkup(
+      <>
+        <SponsorForm value={DRAFT} onChange={() => {}} onSubmit={() => {}} submitLabel="Save" busy={false} onPickLogo={() => {}} poster={posterProp()} />
+        <SponsorForm value={DRAFT} onChange={() => {}} onSubmit={() => {}} submitLabel="Save" busy={false} onPickLogo={() => {}} poster={posterProp()} />
+      </>,
+    );
+    const ids = posterHints(two).map((h) => attr(/<p\b[^>]*data-testid="sponsor-poster-hint"[^>]*>/.exec(h[0])![0], "id"));
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size, "each poster hint has its own id").toBe(2);
+  });
+
+  it("DENIED and GRANTED: the editor is handed a poster only when the plan can place a Title sponsor (hasTiers), whatever is stored", () => {
+    let checked = 0;
+    for (const [hasTiers, stored] of [[true, POSTER_STORED], [true, null], [false, POSTER_STORED], [false, null]] as const) {
+      const m = mount([row({ id: "a", name: "Quay Chandlers", poster_path: stored })], { hasTiers });
+      m.edit("Quay Chandlers");
+      const poster = posterOf(m);
+      const html = renderToStaticMarkup(m.form());
+      if (hasTiers) {
+        expect(poster, `tiers, stored=${stored}: GRANTED`).toBeDefined();
+        expect(poster!.value, `tiers, stored=${stored}: it opens at what is stored`).toEqual({ file: null, preview: stored, removed: false, crop: null });
+        expect(posterTiles(html), `tiers, stored=${stored}: one tile`).toHaveLength(1);
+      } else {
+        expect(poster, `no tiers, stored=${stored}: DENIED`).toBeUndefined();
+        expect(posterTiles(html), `no tiers, stored=${stored}: no tile`).toHaveLength(0);
+        expect(html, `no tiers, stored=${stored}: a stored poster is not drawn in the editor`).not.toContain(POSTER_STORED);
+      }
+      checked++;
+    }
+    expect(checked, "both plans x stored and not stored").toBe(4);
+  });
+});
+
+describe("the poster hint: it says what the picker takes, in the owner's words, tied to behaviour", () => {
+  it("the hint names every format the poster's file input accepts, the cap and the recommended size - and the input accepts what the logo's does", () => {
+    const html = formMarkup({ poster: posterProp() });
+    const inputs = [...html.matchAll(/<input\b[^>]*type="file"[^>]*>/g)].map((m) => m[0]);
+    expect(inputs, "the logo's input and the poster's").toHaveLength(2);
+    const posterInput = inputs.find((tag) => /data-testid="sponsor-poster-input"/.test(tag))!;
+    const logoInput = inputs.find((tag) => !/data-testid="sponsor-poster-input"/.test(tag))!;
+    const accepted = (attr(posterInput, "accept") ?? "").split(",");
+    expect(accepted, "the poster picker takes PNG, JPG and WebP").toEqual(["image/png", "image/jpeg", "image/webp"]);
+    expect(attr(logoInput, "accept"), "exactly what the logo picker takes: one list").toBe(attr(posterInput, "accept"));
+    const names = accepted.map((type) => LOGO_TYPE_NAME[type]);
+    expect(names.every((n) => typeof n === "string"), "premise: every accepted type has a name here").toBe(true);
+    const list = new Intl.ListFormat("en-GB", { style: "long", type: "disjunction" }).format(names as string[]);
+    const hint = stripTags(posterHints(html)[0]![1]!);
+    expect(hint, "the owner-approved sentence, word for word").toBe(POSTER_HINT_EN);
+    expect(hint, "the list is the input's own").toContain(`${list}, up to`);
+    expect(hint, "it names the recommended size from the declared constants").toContain(`${POSTER_WIDTH} × ${POSTER_HEIGHT} (4:5`);
+    expect(hint, "and where it shows").toContain("Shows beside the competition name");
+  });
+});
+
+describe("the poster tile: the live 4:5 crop, Remove, and the crop warning", () => {
+  it("a stored poster previews object-cover in the 4:5 tile with Remove; none: the icon and no Remove; a picked one previews the same way", () => {
+    const stored = formMarkup({ poster: posterProp({ ...POSTER_NONE, preview: POSTER_STORED }) });
+    const tile = posterTiles(stored)[0]!;
+    const img = /<img\b[^>]*>/.exec(tile[1]!)![0];
+    expect(attr(img, "src"), "the stored poster").toBe(POSTER_STORED);
+    expect((attr(img, "class") ?? "").split(/\s+/), "it fills the tile, cropped as the public panel crops it").toContain("object-cover");
+    expect((attr(img, "class") ?? "").split(/\s+/), "and is not letterboxed like the logo").not.toContain("object-contain");
+    const tag = /<button\b[^>]*data-testid="sponsor-poster-tile"[^>]*>/.exec(stored)![0];
+    expect((attr(tag, "class") ?? "").split(/\s+/), "the tile is 4:5").toContain("aspect-[4/5]");
+    expect(posterRemoves(stored), "a stored poster offers Remove").toHaveLength(1);
+    expect(stripTags(posterRemoves(stored)[0]![1]!)).toBe(msg("sponsors.poster.remove"));
+
+    const none = formMarkup({ poster: posterProp() });
+    expect(posterTiles(none)[0]![1], "none: the icon").toContain("<svg");
+    expect(posterTiles(none)[0]![1], "none: no picture").not.toContain("<img");
+    expect(posterRemoves(none), "none: nothing to remove").toHaveLength(0);
+
+    const picked = formMarkup({ poster: posterProp({ ...POSTER_NONE, file: pngFile(), preview: "blob:picked" }) });
+    expect(attr(/<img\b[^>]*>/.exec(posterTiles(picked)[0]![1]!)![0], "src"), "a picked file previews").toBe("blob:picked");
+    expect(posterRemoves(picked), "a picked poster offers Remove").toHaveLength(1);
+  });
+
+  it("Remove calls onRemove, and the tile's file input hands the picked file to onPick and clears itself so the same file can be picked again", () => {
+    const onPick = vi.fn();
+    const onRemove = vi.fn();
+    const island = renderIsland(PosterField, { value: { ...POSTER_NONE, preview: POSTER_STORED }, onPick, onRemove });
+    const remove = island.tree().find((e) => propsOf(e)["data-testid"] === "sponsor-poster-remove")!;
+    (propsOf(remove).onClick as () => void)();
+    expect(onRemove).toHaveBeenCalledTimes(1);
+    const input = island.tree().find((e) => propsOf(e)["data-testid"] === "sponsor-poster-input")!;
+    expect(propsOf(input).type).toBe("file");
+    const file = pngFile();
+    const target = { files: [file], value: "C:\\fakepath\\poster.png" };
+    (propsOf(input).onChange as (e: unknown) => void)({ target });
+    expect(onPick).toHaveBeenCalledTimes(1);
+    expect(onPick).toHaveBeenCalledWith(file);
+    expect(target.value, "cleared").toBe("");
+    // The empty case: a cancelled dialog hands over no file, and picks nothing.
+    (propsOf(input).onChange as (e: unknown) => void)({ target: { files: [], value: "" } });
+    expect(onPick, "no file, no pick").toHaveBeenCalledTimes(1);
+  });
+
+  it("crop: warn true shows the width or the height sentence with its percent and the recommended size; warn false shows nothing (5 checked)", () => {
+    // Figures are the spec §11 worked table: 1920 x 1080 cuts 55% of the width (warn), 1080 x 1920 cuts 30% of the height (warn),
+    // 1080 x 1080 cuts 20% (no warning), 1080 x 1350 cuts nothing, and an unmeasured picture has no crop at all.
+    const CASES: [string, PosterDraft["crop"], string | null][] = [
+      ["wider, 55% (warn)", { side: "width", percent: 55, warn: true }, `This picture is wider than 4:5, so 55% of its width will be cut off. ${POSTER_WIDTH} × ${POSTER_HEIGHT} fits exactly.`],
+      ["taller, 30% (warn)", { side: "height", percent: 30, warn: true }, `This picture is taller than 4:5, so 30% of its height will be cut off. ${POSTER_WIDTH} × ${POSTER_HEIGHT} fits exactly.`],
+      ["square, 20% (no warn)", { side: "width", percent: 20, warn: false }, null],
+      ["exactly 4:5", { side: null, percent: 0, warn: false }, null],
+      ["not measured", null, null],
+    ];
+    let checked = 0;
+    let warned = 0;
+    for (const [label, crop, sentence] of CASES) {
+      const html = formMarkup({ poster: posterProp({ ...POSTER_NONE, file: pngFile(), preview: "blob:picked", crop }) });
+      const found = posterCrops(html);
+      if (sentence === null) {
+        expect(found, `${label}: no warning`).toHaveLength(0);
+      } else {
+        expect(found, `${label}: one warning`).toHaveLength(1);
+        expect(flat(stripTags(found[0]![1]!)), label).toBe(sentence);
+        warned++;
+      }
+      checked++;
+    }
+    expect(checked).toBe(5);
+    expect(warned, "both sentences were exercised").toBe(2);
+  });
+});
+
+describe("the poster field is in the page's language (en / es / fr / nl)", () => {
+  // The owner-approved sentences, spec §10, typed here; the format list is written the way each language writes a list.
+  const WANT = {
+    en: {
+      dict: uiEn, label: "Poster (optional)", remove: "Remove poster", tooBig: "Posters can be up to 2 MB.",
+      hint: POSTER_HINT_EN,
+      cropWidth: `This picture is wider than 4:5, so 55% of its width will be cut off. ${POSTER_WIDTH} × ${POSTER_HEIGHT} fits exactly.`,
+      cropHeight: `This picture is taller than 4:5, so 30% of its height will be cut off. ${POSTER_WIDTH} × ${POSTER_HEIGHT} fits exactly.`,
+    },
+    es: {
+      dict: uiEs, label: "Cartel (opcional)", remove: "Quitar cartel", tooBig: "Los carteles pueden pesar hasta 2 MB.",
+      hint: `Se muestra junto al nombre de la competición mientras este patrocinador sea Principal. PNG, JPG o WebP, hasta 2 MB. Ideal a ${POSTER_WIDTH} × ${POSTER_HEIGHT} (4:5, retrato de Instagram).`,
+      cropWidth: `Esta imagen es más ancha que 4:5, así que se recortará el 55% de su ancho. ${POSTER_WIDTH} × ${POSTER_HEIGHT} encaja exactamente.`,
+      cropHeight: `Esta imagen es más alta que 4:5, así que se recortará el 30% de su alto. ${POSTER_WIDTH} × ${POSTER_HEIGHT} encaja exactamente.`,
+    },
+    fr: {
+      dict: uiFr, label: "Affiche (facultatif)", remove: "Retirer l'affiche", tooBig: "Les affiches peuvent atteindre 2 Mo.",
+      hint: `S'affiche à côté du nom de la compétition tant que ce sponsor est Titre. PNG, JPG ou WebP, jusqu'à 2 Mo. Idéal en ${POSTER_WIDTH} × ${POSTER_HEIGHT} (4:5, portrait Instagram).`,
+      cropWidth: `Cette image est plus large que 4:5 : 55 % de sa largeur sera coupé. ${POSTER_WIDTH} × ${POSTER_HEIGHT} s'ajuste exactement.`,
+      cropHeight: `Cette image est plus haute que 4:5 : 30 % de sa hauteur sera coupé. ${POSTER_WIDTH} × ${POSTER_HEIGHT} s'ajuste exactement.`,
+    },
+    nl: {
+      dict: uiNl, label: "Poster (optioneel)", remove: "Poster verwijderen", tooBig: "Posters mogen maximaal 2 MB zijn.",
+      hint: `Staat naast de naam van de competitie zolang deze sponsor Titel is. PNG, JPG of WebP, tot 2 MB. Het best op ${POSTER_WIDTH} × ${POSTER_HEIGHT} (4:5, Instagram staand).`,
+      cropWidth: `Deze afbeelding is breder dan 4:5, dus 55% van de breedte valt weg. ${POSTER_WIDTH} × ${POSTER_HEIGHT} past precies.`,
+      cropHeight: `Deze afbeelding is hoger dan 4:5, dus 30% van de hoogte valt weg. ${POSTER_WIDTH} × ${POSTER_HEIGHT} past precies.`,
+    },
+  } as const;
+
+  it("the label, the hint, Remove, the size refusal and both crop sentences read right in each locale (4 x 6 checked)", () => {
+    let checked = 0;
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const w = WANT[locale];
+      const dict = w.dict as unknown as Dict;
+      const render = (crop: PosterDraft["crop"]) =>
+        flat(stripTags(renderToStaticMarkup(
+          <DictProvider dict={dict} locale={locale}>
+            <SponsorForm value={DRAFT} onChange={() => {}} onSubmit={() => {}} submitLabel="Save" busy={false} onPickLogo={() => {}}
+              poster={posterProp({ ...POSTER_NONE, file: pngFile(), preview: "blob:picked", crop })} />
+          </DictProvider>,
+        )));
+      const text = render({ side: "width", percent: 55, warn: true });
+      expect(text, `${locale}: label`).toContain(w.label);
+      expect(text, `${locale}: hint`).toContain(w.hint);
+      expect(text, `${locale}: Remove`).toContain(w.remove);
+      expect(text, `${locale}: wider`).toContain(w.cropWidth);
+      expect(render({ side: "height", percent: 30, warn: true }), `${locale}: taller`).toContain(w.cropHeight);
+      expect(t(dict, "sponsors.poster.tooBig", { mb: 2 }), `${locale}: tooBig`).toBe(w.tooBig);
+      checked += 6;
+    }
+    expect(checked).toBe(24);
+  });
+});
+
+describe("the poster picker: the size it refuses at is the cap the hint names (the island's own pickPoster)", () => {
+  it("that many bytes are taken and measured, one more is refused with the poster size words and leaves the draft untouched", async () => {
+    vi.stubGlobal("createImageBitmap", bitmapOf(1080, 1350));
+    const hintMb = Number(/up to (\d+) MB/.exec(flat(stripTags(formMarkup({ poster: posterProp() }))))?.[1]);
+    expect(Number.isInteger(hintMb) && hintMb > 0, "premise: the hint carries a whole number of MB").toBe(true);
+    const cap = hintMb * 1024 * 1024;
+    const m = mount([row({ id: "a", name: "Quay Chandlers" })]);
+    m.edit("Quay Chandlers");
+    const atCap = pngFile(cap);
+    await posterOf(m)!.onPick(atCap);
+    await flush();
+    const taken = posterOf(m)!.value;
+    expect(taken.file, "a file of exactly the cap is taken").toBe(atCap);
+    expect(taken.preview, "and previewed").toMatch(/^blob:/);
+    expect(taken.removed).toBe(false);
+    expect(closeMock, "the measuring bitmap is closed").toHaveBeenCalledTimes(1);
+    expect(m.text(), "no size complaint at the cap").not.toContain(msg("sponsors.poster.tooBig", { mb: hintMb }));
+    await posterOf(m)!.onPick(pngFile(cap + 1));
+    await flush();
+    expect(posterOf(m)!.value, "one byte over the cap leaves the draft exactly as it was").toBe(taken);
+    expect(m.text(), "one more byte is refused, in the poster's words").toContain(msg("sponsors.poster.tooBig", { mb: hintMb }));
+    expect(closeMock, "a refused file is never measured").toHaveBeenCalledTimes(1);
+    // The pair: the logo's own sentence is not what a poster says.
+    expect(m.text()).not.toContain(msg("settings.org.sponsors.tooBig"));
+  });
+
+  it("a picture is measured into a crop (1920 x 1080 cuts 55% of the width: warn); a measuring failure still takes the file, with no crop", async () => {
+    const m = mount([row({ id: "a", name: "Quay Chandlers" })]);
+    m.edit("Quay Chandlers");
+    vi.stubGlobal("createImageBitmap", bitmapOf(1920, 1080));
+    await posterOf(m)!.onPick(pngFile());
+    await flush();
+    expect(posterOf(m)!.value.crop, "spec §11: 1920 x 1080 -> width, 55, warn").toEqual({ side: "width", percent: 55, warn: true });
+    // Through the real consumer: the editor now draws the warning.
+    expect(flat(stripTags(renderToStaticMarkup(m.form())))).toContain("so 55% of its width will be cut off");
+    // 1080 x 1350: exactly 4:5, nothing to warn about.
+    vi.stubGlobal("createImageBitmap", bitmapOf(POSTER_WIDTH, POSTER_HEIGHT));
+    await posterOf(m)!.onPick(pngFile());
+    await flush();
+    expect(posterOf(m)!.value.crop).toEqual({ side: null, percent: 0, warn: false });
+    expect(posterCrops(renderToStaticMarkup(m.form())), "a picture that fits shows no warning").toHaveLength(0);
+    // The browser cannot read it (createImageBitmap missing, or it rejects): the file is still taken.
+    let checked = 0;
+    for (const failing of [undefined, async () => { throw new Error("cannot decode"); }]) {
+      vi.stubGlobal("createImageBitmap", failing);
+      const f = pngFile();
+      await posterOf(m)!.onPick(f);
+      await flush();
+      expect(posterOf(m)!.value.file, "the file is taken").toBe(f);
+      expect(posterOf(m)!.value.crop, "with no crop").toBeNull();
+      expect(posterCrops(renderToStaticMarkup(m.form())), "and no warning").toHaveLength(0);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a slow pick that lands after a newer one, or after Remove, is dropped (the sequence, not the feature)", async () => {
+    const m = mount([row({ id: "a", name: "Quay Chandlers", poster_path: POSTER_STORED }), row({ id: "b", name: "Ridge Cycles", poster_path: null })]);
+    m.edit("Quay Chandlers");
+    // A is slow to measure; B is quick and is picked after it.
+    let releaseA!: (b: Bitmap) => void;
+    vi.stubGlobal("createImageBitmap", (f: File) => (f.name === "a.png" ? new Promise<Bitmap>((resolve) => { releaseA = resolve; }) : bitmapOf(1080, 1350)()));
+    const a = pngFile(1, "a.png");
+    const b = pngFile(1, "b.png");
+    const pendingA = posterOf(m)!.onPick(a);
+    await posterOf(m)!.onPick(b);
+    await flush();
+    expect(posterOf(m)!.value.file, "B landed").toBe(b);
+    releaseA({ width: 1920, height: 1080, close: () => {} });
+    await pendingA;
+    await flush();
+    expect(posterOf(m)!.value.file, "A landed late and was dropped: B is still the pick").toBe(b);
+    expect(posterOf(m)!.value.crop, "and B's crop was not overwritten by A's").toEqual({ side: null, percent: 0, warn: false });
+    // Remove while a pick is still measuring: the removal stands.
+    let releaseC!: (b: Bitmap) => void;
+    vi.stubGlobal("createImageBitmap", () => new Promise<Bitmap>((resolve) => { releaseC = resolve; }));
+    const pendingC = posterOf(m)!.onPick(pngFile(1, "c.png"));
+    posterOf(m)!.onRemove();
+    releaseC({ width: 1080, height: 1350, close: () => {} });
+    await pendingC;
+    await flush();
+    expect(posterOf(m)!.value, "the pick that was still measuring does not resurrect after Remove").toEqual({ file: null, preview: null, removed: true, crop: null });
+    // The editor moves to another sponsor (a pencil, Back) while a pick is still measuring: it does not land in that sponsor's draft.
+    let releaseD!: (b: Bitmap) => void;
+    vi.stubGlobal("createImageBitmap", () => new Promise<Bitmap>((resolve) => { releaseD = resolve; }));
+    const pendingD = posterOf(m)!.onPick(pngFile(1, "d.png"));
+    m.edit("Ridge Cycles");
+    releaseD({ width: 1080, height: 1350, close: () => {} });
+    await pendingD;
+    await flush();
+    expect(posterOf(m)!.value, "the next sponsor's draft is its own stored poster, not the pick that was still measuring").toEqual(POSTER_NONE);
+  });
+});
+
+describe("sponsorEditPatch: what a save sends (pure)", () => {
+  const STORED_ROW = { name: "Quay Chandlers", url: "https://quay.example", poster_path: POSTER_STORED };
+  const BARE_ROW = { name: "Quay Chandlers", url: "https://quay.example", poster_path: null };
+  const SAME = { name: "Quay Chandlers", url: "https://quay.example" };
+  const REMOVED: PosterDraft = { file: null, preview: null, removed: true, crop: null };
+
+  it("unchanged, set, replace, removed, removed with nothing stored, name + poster, logo: each sends exactly its keys (8 checked)", () => {
+    const ROWS: [string, Record<string, unknown>, Record<string, unknown>][] = [
+      ["unchanged, none stored", sponsorEditPatch(BARE_ROW, SAME, posterDraftOf(BARE_ROW), {}), {}],
+      ["unchanged, one stored: it is not re-sent", sponsorEditPatch(STORED_ROW, SAME, posterDraftOf(STORED_ROW), {}), {}],
+      ["uploaded.poster, none stored", sponsorEditPatch(BARE_ROW, SAME, { ...POSTER_NONE, file: pngFile() }, { poster: POSTER_NEW }), { poster_path: POSTER_NEW }],
+      ["uploaded.poster replaces a stored one", sponsorEditPatch(STORED_ROW, SAME, { ...POSTER_NONE, file: pngFile() }, { poster: POSTER_NEW }), { poster_path: POSTER_NEW }],
+      ["removed + stored: null", sponsorEditPatch(STORED_ROW, SAME, REMOVED, {}), { poster_path: null }],
+      ["removed + none stored: nothing to remove, nothing sent", sponsorEditPatch(BARE_ROW, SAME, REMOVED, {}), {}],
+      ["name + poster: both keys, and the url untouched", sponsorEditPatch(BARE_ROW, { name: " New name ", url: "https://quay.example" }, { ...POSTER_NONE, file: pngFile() }, { poster: POSTER_NEW }), { name: "New name", poster_path: POSTER_NEW }],
+      ["uploaded.logo: logo_path alone", sponsorEditPatch(STORED_ROW, SAME, posterDraftOf(STORED_ROW), { logo: "https://cdn.example/logo.png" }), { logo_path: "https://cdn.example/logo.png" }],
+    ];
+    let checked = 0;
+    for (const [label, got, want] of ROWS) {
+      expect(got, label).toEqual(want);
+      checked++;
+    }
+    expect(checked).toBe(8);
+    expect(ROWS.filter(([, , want]) => Object.keys(want).length === 0).length, "premise: the empty case is exercised (three rows send nothing)").toBe(3);
+    // The url keeps its own rule: a bare domain is given a scheme, a cleared box is null.
+    expect(sponsorEditPatch(BARE_ROW, { name: "Quay Chandlers", url: "new.example.com" }, posterDraftOf(BARE_ROW), {})).toEqual({ url: "https://new.example.com" });
+    expect(sponsorEditPatch(BARE_ROW, { name: "Quay Chandlers", url: "" }, posterDraftOf(BARE_ROW), {})).toEqual({ url: null });
+  });
+
+  it("posterDraftOf: an empty form for no sponsor, the stored poster previewed for one that has it, nothing picked, nothing removed", () => {
+    expect(posterDraftOf(undefined)).toEqual(POSTER_NONE);
+    expect(posterDraftOf(row({ id: "a", poster_path: POSTER_STORED }))).toEqual({ file: null, preview: POSTER_STORED, removed: false, crop: null });
+    expect(posterDraftOf(row({ id: "a", poster_path: null }))).toEqual(POSTER_NONE);
+  });
+});
+
+describe("the poster field through the island: a save, a removal, a refusal, and what is not carried over", () => {
+  const OKAY = (rowOver: Partial<SponsorItem> = {}) => (url: string, method: string) => {
+    if (url.includes("/content-upload") && method === "POST") return CONTENT_UPLOAD_OK;
+    if (url === "https://storage.example/put") return { status: 200, body: {} };
+    if (method === "GET") return { status: 200, body: { data: [row({ id: "a", name: "Quay Chandlers", ...rowOver })] } };
+    return { status: 200, body: { data: {} } };
+  };
+  const save = async (m: ReturnType<typeof mount>) => {
+    (propsOf(m.form()).onSubmit as () => void)();
+    await flush();
+  };
+
+  it("Save sends the poster PATCH alone (upload grant, storage PUT, then PATCH { poster_path }), re-reads the list, and the page shows the new poster", async () => {
+    vi.stubGlobal("createImageBitmap", bitmapOf(1080, 1350));
+    answer = OKAY({ poster_path: POSTER_NEW });
+    const m = mount([row({ id: "a", name: "Quay Chandlers" })]);
+    m.edit("Quay Chandlers");
+    await posterOf(m)!.onPick(pngFile(10));
+    await flush();
+    await save(m);
+    const grant = calls.find((c) => c.url.includes("/content-upload"))!;
+    expect(grant.method).toBe("POST");
+    expect(grant.body, "the grant is asked for the file's own type").toEqual({ content_type: "image/png" });
+    expect(calls.some((c) => c.url === "https://storage.example/put" && c.method === "PUT"), "the bytes are PUT to storage").toBe(true);
+    const patches = calls.filter((c) => c.method === "PATCH");
+    expect(patches.map((c) => c.url)).toEqual([`/api/v1/orgs/${ORG}/sponsors/a`]);
+    expect(patches[0]!.body, "the poster alone: no name, no link, no logo").toEqual({ poster_path: POSTER_NEW });
+    expect(calls.filter((c) => c.method === "GET").map((c) => c.url), "the list is re-read").toEqual([`/api/v1/orgs/${ORG}/sponsors`]);
+    expect(m.has("sponsor-sheet-editor"), "saved: the editor closes").toBe(false);
+    expect(propsOf(m.find("sponsor-sheet-poster-thumb")).src, "the read-only Details row shows what was saved").toBe(POSTER_NEW);
+  });
+
+  it("replacing a stored poster uploads the new one; removing it sends null; removing nothing sends nothing and uploads nothing (the sequence)", async () => {
+    vi.stubGlobal("createImageBitmap", bitmapOf(1080, 1350));
+    // replace
+    answer = OKAY({ poster_path: POSTER_NEW });
+    const replaced = mount([row({ id: "a", name: "Quay Chandlers", poster_path: POSTER_STORED })]);
+    replaced.edit("Quay Chandlers");
+    await posterOf(replaced)!.onPick(pngFile());
+    await flush();
+    await save(replaced);
+    expect(calls.filter((c) => c.method === "PATCH").map((c) => c.body)).toEqual([{ poster_path: POSTER_NEW }]);
+    // remove a stored poster
+    calls.length = 0;
+    answer = OKAY({ poster_path: null });
+    const removed = mount([row({ id: "a", name: "Quay Chandlers", poster_path: POSTER_STORED })]);
+    removed.edit("Quay Chandlers");
+    posterOf(removed)!.onRemove();
+    expect(posterOf(removed)!.value, "Remove empties the tile").toEqual({ file: null, preview: null, removed: true, crop: null });
+    await save(removed);
+    expect(calls.filter((c) => c.url.includes("/content-upload")), "a removal uploads nothing").toHaveLength(0);
+    expect(calls.filter((c) => c.method === "PATCH").map((c) => c.body), "removing a stored poster sends null").toEqual([{ poster_path: null }]);
+    // pick, then Remove, with nothing stored: the pick was never saved, so there is nothing to send and nothing to upload
+    calls.length = 0;
+    answer = OKAY();
+    const none = mount([row({ id: "a", name: "Quay Chandlers", poster_path: null })]);
+    none.edit("Quay Chandlers");
+    await posterOf(none)!.onPick(pngFile());
+    await flush();
+    posterOf(none)!.onRemove();
+    await save(none);
+    expect(calls.filter((c) => c.url.includes("/content-upload")), "a poster removed before Save is never uploaded").toHaveLength(0);
+    expect(calls.filter((c) => c.method === "PATCH"), "and nothing is PATCHed").toHaveLength(0);
+    // a name change on a sponsor with a stored poster does not re-send the poster
+    calls.length = 0;
+    answer = OKAY();
+    const named = mount([row({ id: "a", name: "Old name", poster_path: POSTER_STORED })]);
+    named.edit("Old name");
+    (propsOf(named.form()).onChange as (fn: (p: typeof DRAFT) => typeof DRAFT) => void)((p) => ({ ...p, name: "New name" }));
+    await save(named);
+    expect(calls.filter((c) => c.method === "PATCH").map((c) => c.body), "the name alone").toEqual([{ name: "New name" }]);
+  });
+
+  it("a new logo and a new poster in one save upload both and PATCH both keys (the two uploads do not share a file)", async () => {
+    vi.stubGlobal("createImageBitmap", bitmapOf(1080, 1350));
+    let grants = 0;
+    answer = (url, method) => {
+      if (url.includes("/content-upload") && method === "POST") {
+        grants++;
+        return { status: 200, body: { data: { upload_url: `https://storage.example/put-${grants}`, public_url: `https://cdn.example/${grants === 1 ? "logo" : "poster"}.png` } } };
+      }
+      if (url.startsWith("https://storage.example/put-")) return { status: 200, body: {} };
+      return { status: 200, body: { data: [] } };
+    };
+    const m = mount([row({ id: "a", name: "Quay Chandlers" })]);
+    m.edit("Quay Chandlers");
+    const logo = pngFile(1, "logo.png");
+    (propsOf(m.form()).onChange as (fn: (p: typeof DRAFT) => unknown) => void)((p) => ({ ...p, file: logo }));
+    await posterOf(m)!.onPick(pngFile(1, "poster.png"));
+    await flush();
+    await save(m);
+    expect(grants, "two grants: one per file").toBe(2);
+    expect(calls.filter((c) => c.method === "PATCH").map((c) => c.body)).toEqual([{ logo_path: "https://cdn.example/logo.png", poster_path: "https://cdn.example/poster.png" }]);
+  });
+
+  it("a refused poster upload shows the dictionary's words for its status and saves nothing (415, 403, and a storage PUT that fails)", async () => {
+    vi.stubGlobal("createImageBitmap", bitmapOf(1080, 1350));
+    let checked = 0;
+    for (const [label, grant, key] of [
+      ["415", { status: 415, body: { ok: false, error: "Unsupported image type" } }, "settings.org.sponsors.uploadTypeNotAllowed"],
+      ["403", { status: 403, body: { ok: false, error: "Forbidden" } }, "settings.org.sponsors.uploadNotAllowed"],
+    ] as const) {
+      calls.length = 0;
+      answer = (url, method) => (url.includes("/content-upload") && method === "POST" ? grant : { status: 200, body: { data: [] } });
+      const m = mount([row({ id: "a", name: "Quay Chandlers" })]);
+      m.edit("Quay Chandlers");
+      await posterOf(m)!.onPick(pngFile());
+      await flush();
+      await save(m);
+      expect(m.text(), label).toContain(msg(key));
+      expect(calls.filter((c) => c.method === "PATCH"), `${label}: nothing saved`).toHaveLength(0);
+      expect(m.has("sponsor-sheet-editor"), `${label}: the editor stays open`).toBe(true);
+      expect(posterOf(m)!.value.file, `${label}: the pick is still there to retry`).not.toBeNull();
+      checked++;
+    }
+    calls.length = 0;
+    answer = (url, method) => (url.includes("/content-upload") && method === "POST" ? CONTENT_UPLOAD_OK : url === "https://storage.example/put" ? { status: 500, body: {} } : { status: 200, body: { data: [] } });
+    const m = mount([row({ id: "a", name: "Quay Chandlers" })]);
+    m.edit("Quay Chandlers");
+    await posterOf(m)!.onPick(pngFile());
+    await flush();
+    await save(m);
+    expect(m.text(), "storage PUT 500").toContain(msg("settings.org.logo.uploadFailed"));
+    expect(calls.filter((c) => c.method === "PATCH"), "storage PUT 500: nothing saved").toHaveLength(0);
+    checked++;
+    expect(checked).toBe(3);
+  });
+
+  it("an abandoned pick is not carried into the next editor: Cancel then Edit again, and a second sponsor's pencil, both open at what is STORED", async () => {
+    vi.stubGlobal("createImageBitmap", bitmapOf(1080, 1350));
+    answer = OKAY();
+    const m = mount([
+      row({ id: "a", name: "Quay Chandlers", poster_path: POSTER_STORED }),
+      row({ id: "b", name: "Ridge Cycles", poster_path: null }),
+    ]);
+    m.edit("Quay Chandlers");
+    await posterOf(m)!.onPick(pngFile());
+    await flush();
+    expect(posterOf(m)!.value.file, "premise: a pick is in the draft").not.toBeNull();
+    // Cancel closes the editor; the page's own Edit button opens it again.
+    (propsOf(m.form()).onCancel as () => void)();
+    (propsOf(m.find("sponsor-sheet-edit")).onClick as () => void)();
+    expect(posterOf(m)!.value, "Edit again: back to what is stored").toEqual({ file: null, preview: POSTER_STORED, removed: false, crop: null });
+    // The pencil on ANOTHER sponsor: its own stored poster (none), not the first one's pick.
+    await posterOf(m)!.onPick(pngFile());
+    await flush();
+    m.edit("Ridge Cycles");
+    expect(posterOf(m)!.value, "the next sponsor's editor starts at its own stored poster").toEqual(POSTER_NONE);
   });
 });
