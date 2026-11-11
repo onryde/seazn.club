@@ -650,6 +650,7 @@ describe("the copy that replaces the paid-placement promise", () => {
   it("states the real rule: deals go with the sponsor, history blocks the delete (and says so)", () => {
     expect(msg("sponsors.deleteDeal.body", { name: "X" })).toMatch(/deal/i);
     expect(msg("sponsors.error.hasDealHistory")).toMatch(/can.t be deleted/i);
+    expect(msg("sponsors.error.hasOpenCheckout")).toMatch(/payment link/i);
   });
 
   it("the history refusal is true for a NUMBERED unpaid deal in every locale: it names invoices, and claims no payment history (4 checked)", () => {
@@ -670,7 +671,6 @@ describe("the copy that replaces the paid-placement promise", () => {
       checked++;
     }
     expect(checked).toBe(4);
-    expect(msg("sponsors.error.hasOpenCheckout")).toMatch(/payment link/i);
   });
 });
 

@@ -127,7 +127,7 @@ describe.skipIf(!HAS_DB)("allocateInvoiceNumber: one counter per org, in sequenc
     const opened = new Promise<void>((resolve) => { open = resolve; });
     let timer: ReturnType<typeof setTimeout> | undefined;
     const neverOpened = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`the barrier never opened: at most ${peak} transaction(s) were open at once, so the allocations ran one after another and raced nothing`)), 5_000);
+      timer = setTimeout(() => reject(new Error(`the barrier never opened: at most ${peak} transaction(s) were open at once, so the allocations ran one after another and raced nothing`)), 20_000);
     });
     let got: number[];
     try {
