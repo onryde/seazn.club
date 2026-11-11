@@ -276,7 +276,8 @@ export function nextMatchStartedText(): NextMatchText {
   if (started === null) throw new Error("product-text: fed-seats.ts hasStarted is not the three-term rule (plus W4 T2's live call) the model mirrors — re-read it");
   const cascade = /\nfunction isCascadeWalkover\(t: Node\): boolean \{\s*return t\.status === "([a-z_]+)" && \(t\.outcome as \{ kind\?: string \} \| null\)\?\.kind === "([a-z_]+)" && t\.live_events === 0;\s*\}/.exec(fed);
   if (cascade === null) throw new Error("product-text: fed-seats.ts isCascadeWalkover is not the three-term exemption the model mirrors — re-read it");
-  const resetExempt = /\n\s*const reset = isCascadeWalkover\(t\);\s*if \(!reset && hasStarted\(t\)\) \{/.test(fed);
+  // W4 B5a n-2 widened `reset` by ONE term (a departure double walkover that feeds nothing: a vacant final, which the model never builds); pinned whole so a third term reds here and is read.
+  const resetExempt = /\n\s*const reset = isCascadeWalkover\(t\) \|\| \(isDepartureDoubleWalkover\(t\) && t\.winner_to_fixture === null && t\.loser_to_fixture === null\);\s*if \(!reset && hasStarted\(t\)\) \{/.test(fed);
   const everyAppend = /\n {2}const \w+ = await releaseFedSeats\(tx, fixtureId, fixture\.outcome, outcome\);/.test(read("apps/web/src/server/engine-db/append-event.ts"));
   const template = /\nexport function nextMatchStartedMessage\(label: string\): string \{\s*return `([^`]*)`;\s*\}/.exec(lib)?.[1];
   if (template === undefined) throw new Error(`product-text: ${from[1]}.ts nextMatchStartedMessage not found`);

@@ -28,8 +28,8 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const RAW = JSON.parse(readFileSync(join(REPO, "tools/matrix/catalogue/l2-pairs.json"), "utf8")) as { runs: L2Run[] };
 /** The slice's cells, from its declared rows × sports (never a typed list). */
 const SLICE_CELLS: ReadonlySet<string> = new Set(SLICE_ROWS.flatMap((r) => SLICE_SPORTS.map((s) => cellId(r, s))));
-/** The slice's committed L2 runs, in file order — 68 today (65 swiss|badminton,
- *  2 swiss|generic, 1 knockout|badminton). Only this filter's own length is
+/** The slice's committed L2 runs, in file order — 70 today (65 swiss|badminton,
+ *  2 swiss|generic, 1 knockout|generic, 2 knockout|badminton). Only this filter's own length is
  *  asserted, so a regenerated catalogue moves the test, not the plan. */
 const SLICE_RUNS = RAW.runs.filter((r) => SLICE_CELLS.has(cellId(r.row, r.sport)));
 const ATOM = new Map(ATOMIC.map((a) => [a.id, a]));
@@ -105,7 +105,7 @@ describe("planL2 — the committed rotation, filtered, never re-planned", () => 
     expect(SLICE_RUNS.some((r) => r.width !== L2_WIDTHS[(r.n - 1) % L2_WIDTHS.length])).toBe(true);
   });
 
-  it("slice L2 = 68 runs: 3 executed, and the rest carry 🚫 or ░ with a reason", () => {
+  it("slice L2 = 70 runs: 3 executed, and the rest carry 🚫 or ░ with a reason", () => {
     const cases = planL2(committed, SLICE_CELLS);
     expect(cases).toHaveLength(SLICE_RUNS.length);
     // The expected split, from the catalogue's own declarations.
