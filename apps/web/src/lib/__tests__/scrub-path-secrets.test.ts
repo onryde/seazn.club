@@ -176,7 +176,6 @@ function pathBuilders(): Map<string, string> {
 
 /** The builder paths that are knowingly public, each with the reason (the file-system verdicts above, seen from the template). */
 const PUBLIC_BUILDERS: Record<string, string> = {
-  "/refer": "a referral link is shared in public on purpose",
   "/r": "a registration reference is a lookup, not auth",
   "/api/v1/public/registrations/by-ref": "the same reference, in the public API",
   "/s": "a sponsor's short link is printed on the stream for every viewer on purpose; it only counts a click and redirects",
@@ -186,13 +185,15 @@ describe("every /<path>/${token} template is scrubbed, or is knowingly public", 
   const builders = pathBuilders();
 
   it("the scan found the builders (anti-vacuity)", () => {
+    // No `/refer/${code}` builder any more either: the Invite & earn card that built it is gone from Settings -> Credits
+    // (2026-11-11). The /refer ROUTE still exists and is still public (VERDICTS above); only the template is gone.
     // No `/api/orgs/[id]/invites/${token}/revoke` builder any more: since 2026-11-07 the Team panel revokes by the
     // invite's ID (an email-bound invite's token never reaches it). The route still takes a link's token, so its PATH
     // stays a credential route (VERDICTS, swept above); there is just no template building it from a token.
     expect([...builders.keys()].sort()).toEqual(
-      expect.arrayContaining(["/join", "/checkin", "/api/checkin", "/claim", "/api/claims", "/api/invites", "/score", "/api/v1/capture/codes", "/refer", "/r", "/api/v1/public/registrations/by-ref", "/r/sponsor"]),
+      expect.arrayContaining(["/join", "/checkin", "/api/checkin", "/claim", "/api/claims", "/api/invites", "/score", "/api/v1/capture/codes", "/r", "/api/v1/public/registrations/by-ref", "/r/sponsor"]),
     );
-    expect(builders.size).toBeGreaterThanOrEqual(11);
+    expect(builders.size).toBeGreaterThanOrEqual(10);
   });
 
   it("each builder's URL loses its token, or is on the public list with its reason; no public entry is stale", () => {
@@ -211,7 +212,7 @@ describe("every /<path>/${token} template is scrubbed, or is knowingly public", 
       }
     }
     for (const prefix of Object.keys(PUBLIC_BUILDERS)) expect(builders.has(prefix), `${prefix} is no longer built anywhere: delete it`).toBe(true);
-    expect(scrubbed).toBeGreaterThanOrEqual(16); // (11 builders - 3 public) x 2 kinds
+    expect(scrubbed).toBeGreaterThanOrEqual(14); // (10 builders - 3 public) x 2 kinds
     expect(kept).toBe(Object.keys(PUBLIC_BUILDERS).length * KINDS.length);
   });
 });
