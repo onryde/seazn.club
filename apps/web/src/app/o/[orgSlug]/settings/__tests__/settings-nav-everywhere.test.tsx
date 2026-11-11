@@ -67,7 +67,7 @@ vi.mock("@/components/billing-stream-credits", () => ({ BillingStreamCredits: ()
 
 import { getDictionary } from "@/lib/i18n";
 import { creditsKindOf } from "@/components/credits-kind-switch";
-import { SettingsShell, SETTINGS_TABS, navContext } from "../_components/settings-nav";
+import { SettingsShell, SettingsNav, SETTINGS_TABS, navContext } from "../_components/settings-nav";
 import ConnectSettingsPage from "../connect/page";
 import CreditsSettingsPage from "../credits/page";
 
@@ -192,6 +192,39 @@ describe("the Settings sidebar", () => {
       checked++;
     }
     expect(checked, "anti-vacuity: all four locales were rendered").toBe(4);
+  });
+
+  it("organisation tab: the plan line (plan, the rail's credits value, Buy credits, back link) sits above the strip; Preferences has none", async () => {
+    // One fixture feeds BOTH shapes; the rail's number and the line's number must be the same string.
+    const ctx = { plan: "Pro", streamCredits: 7 };
+    let checked = 0;
+    for (const loc of ["en", "nl", "fr", "es"] as const) {
+      const dict = await getDictionary(loc, "ui");
+      const file = dictFile(loc);
+      const org = await html(<SettingsNav orgSlug="riverside" active="organization" dict={dict} context={ctx} compact />);
+      const rail = await html(<SettingsNav orgSlug="riverside" active="preferences" dict={dict} context={ctx} />);
+      const prefsCompact = await html(<SettingsNav orgSlug="riverside" active="preferences" dict={dict} context={ctx} compact={false} />);
+      const want = esc(fill(file["settings.nav.streamCreditsLeft"]!, { count: 7 }));
+      const chip = /data-testid="settings-plan-line-credits"[^>]*>([^<]*)</.exec(org);
+      expect(chip, `${loc}: credits chip`).not.toBeNull();
+      expect(chip![1], loc).toBe(want);
+      expect(railLink(rail)!.text, `${loc}: rail value equals the line's`).toBe(chip![1]);
+      expect(org, loc).toMatch(/data-testid="settings-plan-line-plan"[^>]*>Pro</);
+      expect(org, loc).toContain(`href="/o/riverside/settings/credits"`);
+      expect(org, loc).toContain(esc(file["stream.auto.buyCredits"]!));
+      expect(org, loc).toMatch(/href="\/o\/riverside"[^>]*data-testid="settings-plan-line-back"|data-testid="settings-plan-line-back"[^>]*href="\/o\/riverside"/);
+      // above the strip
+      expect(org.indexOf('data-testid="settings-plan-line"'), loc).toBeGreaterThan(-1);
+      expect(org.indexOf('data-testid="settings-plan-line"'), loc).toBeLessThan(org.indexOf("<nav"));
+      // not on the rail shape
+      expect(rail, loc).not.toContain('data-testid="settings-plan-line"');
+      expect(prefsCompact, loc).not.toContain('data-testid="settings-plan-line"');
+      checked++;
+    }
+    expect(checked, "anti-vacuity: all four locales").toBe(4);
+    // no context => no line (and no crash)
+    const dict = await getDictionary("en", "ui");
+    expect(await html(<SettingsNav orgSlug="riverside" active="organization" dict={dict} compact />)).not.toContain('data-testid="settings-plan-line"');
   });
 
   it("renders the rail without context rather than failing", async () => {
