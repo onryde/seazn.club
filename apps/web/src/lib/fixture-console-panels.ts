@@ -43,11 +43,18 @@ export interface IdleTimer {
   stop(): void;
 }
 
+/** Wrappers, never the bare functions: a browser's setTimeout throws "Illegal invocation" when called as a method of a
+ *  plain object (`this` !== window). Node does not care, which is how this shipped green once. */
+const DEFAULT_TIMERS = {
+  setTimeout: ((f: () => void, ms?: number) => globalThis.setTimeout(f, ms)) as typeof setTimeout,
+  clearTimeout: ((id?: ReturnType<typeof setTimeout>) => globalThis.clearTimeout(id)) as typeof clearTimeout,
+};
+
 /** A restartable one-shot. `timers` is injectable so a test can drive it with fake timers. */
 export function createIdleTimer(
   ms: number,
   onIdle: () => void,
-  timers: { setTimeout: typeof setTimeout; clearTimeout: typeof clearTimeout } = { setTimeout, clearTimeout },
+  timers: { setTimeout: typeof setTimeout; clearTimeout: typeof clearTimeout } = DEFAULT_TIMERS,
 ): IdleTimer {
   let handle: ReturnType<typeof setTimeout> | null = null;
   const stop = () => {
@@ -88,5 +95,8 @@ export function idleActivityHandlers(restart: () => void) {
     onFocusCapture: restart,
     onCopyCapture: restart,
     onClickCapture: restart,
+    onScrollCapture: restart,
+    onWheelCapture: restart,
+    onTouchStartCapture: restart,
   };
 }

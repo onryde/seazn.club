@@ -92,15 +92,25 @@ describe("Remote scoring idle auto-close", () => {
     expect(onIdle).toHaveBeenCalledTimes(1); // one-shot
   });
 
-  it("pointer, keyboard, focus and copy inside the panel each restart the timer (the wrapper's real handlers)", () => {
+  it("pointer, keyboard, focus, copy, scroll, wheel and touch inside the panel each restart the timer (the wrapper's real handlers)", () => {
     const restart = vi.fn();
     const h = idleActivityHandlers(restart);
     const names = Object.keys(h).sort();
     expect(names).toEqual(
-      ["onClickCapture", "onCopyCapture", "onFocusCapture", "onKeyDownCapture", "onPointerDownCapture", "onPointerMoveCapture"],
+      [
+        "onClickCapture",
+        "onCopyCapture",
+        "onFocusCapture",
+        "onKeyDownCapture",
+        "onPointerDownCapture",
+        "onPointerMoveCapture",
+        "onScrollCapture",
+        "onTouchStartCapture",
+        "onWheelCapture",
+      ],
     );
     for (const n of names) (h as Record<string, () => void>)[n]!();
-    expect(restart).toHaveBeenCalledTimes(6);
+    expect(restart).toHaveBeenCalledTimes(9);
   });
 
   it("stop() cancels it", () => {
@@ -146,5 +156,26 @@ describe("Remote scoring idle delay is tunable for e2e", () => {
     const bad: unknown[] = [0, -1, NaN, Infinity, "", "abc", null, {}];
     for (const v of bad) expect(remoteScoringIdleMs(v, v), `bad override ${String(v)}`).toBe(REMOTE_SCORING_IDLE_MS);
     expect(bad.length).toBeGreaterThan(0);
+  });
+});
+
+describe("createIdleTimer with its DEFAULT timers (browser `this` rule)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("calls setTimeout/clearTimeout detached from the timers object: a browser throws Illegal invocation otherwise", () => {
+    const calls: string[] = [];
+    const strict = (name: string) =>
+      function (this: unknown, ..._a: unknown[]) {
+        if (this !== globalThis) throw new TypeError("Illegal invocation");
+        calls.push(name);
+        return 1;
+      };
+    vi.stubGlobal("setTimeout", strict("set"));
+    vi.stubGlobal("clearTimeout", strict("clear"));
+    const t = createIdleTimer(1000, () => {});
+    expect(() => t.restart()).not.toThrow();
+    expect(() => t.restart()).not.toThrow(); // second arm also clears the first
+    expect(() => t.stop()).not.toThrow();
+    expect(calls).toEqual(["set", "clear", "set", "clear"]);
   });
 });

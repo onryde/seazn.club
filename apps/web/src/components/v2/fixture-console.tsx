@@ -474,6 +474,7 @@ interface Props {
   streamReturn?: boolean;
   /** Which header panel is open on the first render (default: none, or Stream for `streamReturn`). Static-markup tests use
    *  it to render a panel's body, since they cannot click its button. */
+  /** TEST SEAM: opens a panel on first render so static-markup tests (no DOM, no clicks) can see a panel body. Production never passes it. */
   initialPanel?: OpenPanel;
   /** W2c Task 19 (S2) - the match rules block's facts (`loadFixtureMatchRules`, minus its function-valued `fields`), decided
    *  by the page: organisers only. Absent => no block. */
