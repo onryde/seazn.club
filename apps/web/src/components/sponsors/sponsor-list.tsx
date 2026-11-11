@@ -19,8 +19,8 @@
 // is `max-md:hidden` until the ⋯ (SponsorRowMore) opens it; from md up they sit inline. The controls exist once.
 import type { ReactNode } from "react";
 import Link from "@/components/ui/console-link";
-import { ArrowDown, ArrowUp, ChevronRight, MousePointerClick, Pencil, Trash2 } from "lucide-react";
-import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
+import { ArrowDown, ArrowUp, ChevronRight, Pencil, Trash2 } from "lucide-react";
+import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { DealChip } from "@/components/sponsors/deal-chip";
 import { priceLabel } from "@/components/sponsors/deal-copy";
 import { SponsorRowMore } from "@/components/sponsors/sponsor-row-more";
@@ -171,6 +171,7 @@ export function SponsorList(props: SponsorListProps) {
     sponsors, hasTiers, canEdit, busy, orgSlug, tz, competitions, moreOpenId, onToggleMore, onMove, onRemove, onAction, onAddDeal,
   } = props;
   const msg = useMsg();
+  const plural = useMsgPlural();
   const locale = useLocaleOrDefault();
 
   if (sponsors.length === 0) {
@@ -260,7 +261,14 @@ export function SponsorList(props: SponsorListProps) {
     const trayId = `sponsor-tools-${s.id}`;
     // The tray folds only where there is a ⋯ to open it: a viewer has no controls to fold, so the clicks stay put for them.
     const folded = canEdit && !open;
-    const clicks = msg("sponsors.clicks", { count: s.click_count });
+    // "1 click" / "41 clicks": the number says what it counts, in the words of the locale's plural rule (owner, 2026-11-11: a bare
+    // pointer icon and a number was not read as a count of anything).
+    const clicks = plural("sponsors.row.clicks", s.click_count);
+    // The arrows swap a sponsor with its neighbour in the same group. A group of one has nobody to swap with, so there is nothing to
+    // show - not a pair of dead buttons (owner, 2026-11-11). A group of two or more keeps both, the one at an edge disabled.
+    const canReorder = group.length > 1;
+    const moveUp = msg("settings.org.sponsors.moveUp", { name: s.name });
+    const moveDown = msg("settings.org.sponsors.moveDown", { name: s.name });
     return (
       <li key={s.id} data-testid="sponsor-row" data-sponsor-id={s.id} className="px-3 py-2.5">
         <div
@@ -318,35 +326,41 @@ export function SponsorList(props: SponsorListProps) {
             data-testid="sponsor-row-tools"
             className={`col-span-2 col-start-2 flex min-w-0 flex-wrap items-center gap-1 max-[376px]:col-start-1 md:col-span-1 md:col-start-auto md:shrink-0 md:flex-nowrap md:justify-end ${folded ? "max-md:hidden" : ""}`}
           >
+            {/* The visible words ARE the accessible name ("41 clicks"), so a screen reader keeps the count; the title says what a click is.
+                No icon: the words carry it, and 768-1279 has no spare width for both beside the deal cell. */}
             <span
               data-testid="sponsor-row-clicks"
-              className="flex shrink-0 items-center gap-1 pr-2 text-xs tabular-nums text-slate-500"
-              title={clicks}
-              aria-label={clicks}
+              className="shrink-0 whitespace-nowrap pr-2 text-xs tabular-nums text-slate-500"
+              title={msg("sponsors.row.clicksHint")}
             >
-              <MousePointerClick className="h-3.5 w-3.5" strokeWidth={1.75} />
-              {s.click_count}
+              {clicks}
             </span>
             {canEdit ? (
               <>
-                <button
-                  type="button"
-                  aria-label={msg("settings.org.sponsors.moveUp", { name: s.name })}
-                  disabled={busy || index === 0 || !sameOrderBand(group[index - 1]!, s)}
-                  onClick={() => onMove(s.id, -1)}
-                  className={ICON_BUTTON}
-                >
-                  <ArrowUp className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  aria-label={msg("settings.org.sponsors.moveDown", { name: s.name })}
-                  disabled={busy || index === group.length - 1 || !sameOrderBand(group[index + 1]!, s)}
-                  onClick={() => onMove(s.id, 1)}
-                  className={ICON_BUTTON}
-                >
-                  <ArrowDown className="h-3.5 w-3.5" />
-                </button>
+                {canReorder ? (
+                  <>
+                    <button
+                      type="button"
+                      title={moveUp}
+                      aria-label={moveUp}
+                      disabled={busy || index === 0 || !sameOrderBand(group[index - 1]!, s)}
+                      onClick={() => onMove(s.id, -1)}
+                      className={ICON_BUTTON}
+                    >
+                      <ArrowUp className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      title={moveDown}
+                      aria-label={moveDown}
+                      disabled={busy || index === group.length - 1 || !sameOrderBand(group[index + 1]!, s)}
+                      onClick={() => onMove(s.id, 1)}
+                      className={ICON_BUTTON}
+                    >
+                      <ArrowDown className="h-3.5 w-3.5" />
+                    </button>
+                  </>
+                ) : null}
                 <button
                   type="button"
                   aria-label={msg("settings.org.sponsors.remove", { name: s.name })}
