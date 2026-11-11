@@ -37,7 +37,7 @@ export function inSquadOrder(members: readonly EntrantMember[]): EntrantMember[]
 }
 export interface CompetitionRef { id: string; slug: string; orgId: string }
 export interface DivisionRef { id: string; slug: string; sportKey: string; variantKey: string; config: Record<string, unknown> }
-export interface StageRef { id: string; seq: number; kind: string; config: Record<string, unknown>; status: string }
+export interface StageRef { id: string; seq: number; kind: string; config: Record<string, unknown>; status: string; /** The stage's stored progression as the API serves it (absent on a fake that predates it). */ progression?: unknown }
 /** POST /api/v1/competitions/from-template's answer (api-v1/schemas/stages.ts
  *  FromTemplateResult, W1-driving Task 13): ids and the APPLIED visibility —
  *  no org id, no sport, no stage kind, so the caller reads those back. */
