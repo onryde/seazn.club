@@ -7,6 +7,36 @@ This file starts at the first breaking change the v1 contract has taken. It
 is not a full changelog: additive fields do not appear here, because a reader
 that ignores an unknown field is unaffected by one.
 
+## 2026-11-10 — a sponsor's name is stored trimmed, and a blank name is a 400
+
+`POST /api/v1/orgs/{id}/sponsors` and `PATCH /api/v1/orgs/{id}/sponsors/{sponsorId}` took `name` as "1 to 80 characters",
+measured on the string as sent. A name of only spaces passed (`"   "` is three characters) and was stored as it came: a
+sponsor with no readable name on its card, its list row and its invoice. The organiser console trims the field in the
+browser; the API did not. The server now trims the name's edge whitespace (everything `String.prototype.trim` strips:
+spaces, tabs, newlines, a non-breaking space) BEFORE it measures it against the same 1 to 80, and stores the trimmed name.
+Both paths are reachable with a write-scoped API key as well as from the console.
+
+| Case | Before | Now |
+|---|---|---|
+| `POST` or `PATCH`, `name: ""` | 400 | 400 (unchanged) |
+| `POST`, `name` of only whitespace (`"   "`, a tab, a newline, a non-breaking space) | 201, a sponsor named with spaces | 400 `VALIDATION`, `error.issues` naming `["name"]`, nothing written |
+| `PATCH`, `name` of only whitespace | 200, the sponsor's name overwritten with the spaces | 400 `VALIDATION`, the name unchanged |
+| `POST` or `PATCH`, `name: "  Harbour Physio "` | stored and returned with the spaces | stored and returned as `"Harbour Physio"` |
+| `name` of 80 characters padded with spaces | 400 (over 80 as sent) | accepted: the limit counts the trimmed name |
+| `name` of 81 characters | 400 | 400 (unchanged) |
+| `name: "Harbour  Physio"` (two inner spaces) | kept | kept: only the edges are trimmed |
+
+**What a consumer sees.** A blank name is a 400 `VALIDATION` before any authorisation or database work, with `error.issues`
+naming `name`. A name with whitespace round it is no longer an error and no longer comes back as sent: read the sponsor's
+`name` from the 201 or 200 reply, not from what the request carried. Send a name with at least one visible character.
+
+**What does not change.** The OpenAPI document: a trim is not part of a JSON schema, so `openapi:gen` shows no difference.
+The 1 to 80 bound, the other sponsor fields, and every other sponsors path.
+
+**Background.** Sponsor deals batch J review, m3. The pinning tests are
+`apps/web/src/app/api/v1/orgs/[id]/sponsors/__tests__/name-trim.test.ts` (the four write schemas, and the real create and
+patch routes over the real tables).
+
 ## 2026-11-10 — sponsor orders become sponsor deals; `/sponsor-orders` is removed
 
 A sponsorship used to be an order: `POST /orgs/{id}/sponsor-orders` took a

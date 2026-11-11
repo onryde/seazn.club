@@ -41,7 +41,7 @@ import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
 import { OrgTeam } from "@/components/org-team";
 import { ApiKeysPanel } from "@/components/api-keys";
-import { SponsorPackages } from "@/components/sponsor-packages";
+import { PackageList } from "@/components/sponsors/package-list";
 
 /** Macrotask turns: each await in a chain lands on its own turn. */
 async function flush() {
@@ -136,13 +136,9 @@ describe("a superseded first read never lands on the panel that replaced it", ()
     expect(island.text()).not.toContain("ZqAlphaKey");
   });
 
-  it("SponsorPackages: without the feature only the deals are read (empty case); org A's late packages do not replace org B's", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((url: string) =>
-        later(url).then((data) => ({ ok: true, json: async () => ({ data }) })),
-      ),
-    );
+  it("PackageList (Task 18): the packages arrive with the server render and mounting reads NOTHING, so there is no first read to supersede", async () => {
+    // The old Packages console read its packages and deals on mount (and kept this suite's SponsorPackages case). The price list takes
+    // them from the page's own read: its only requests follow a write by the person using it, on the org they are standing in.
     const pkg = (name: string) => ({
       id: `p-${name}`,
       competition_id: null,
@@ -150,35 +146,35 @@ describe("a superseded first read never lands on the panel that replaced it", ()
       description: null,
       price_cents: 1000,
       currency: "gbp",
-      tier: "gold",
+      tier: "gold" as const,
+      includes_on_stream: false,
       active: true,
+      created_at: "2026-01-01T00:00:00.000Z",
+      used_by: 0,
     });
     const props = {
       orgId: "org-a",
+      initialPackages: [pkg("ZqAlphaPack")],
       competitions: [],
-      sponsors: [],
-      hasMonetize: false,
+      tiersOrgWide: true,
+      tiersCompetitionIds: [],
+      hasMonetize: true,
       billingHref: "/billing",
-      sponsorsHref: "/o/x/sponsors?tab=sponsors",
+      finishedCompetitionIds: [],
+      canEdit: true,
     };
-    const island = renderIsland(SponsorPackages, props);
+    const island = renderIsland(PackageList, props);
     await flush();
-    // Final review m1: a plan without the feature still reads its DEALS (their End now and Refund stay), never the packages.
-    expect(net.pending.map((d) => d.url), "a plan without the feature reads only its deals").toEqual(["/api/v1/orgs/org-a/sponsor-deals"]);
-    answer("/api/v1/orgs/org-a/sponsor-deals", []);
+    expect(net.pending.map((d) => d.url), "mounting reads nothing").toEqual([]);
+    // (the cards are child components, so the tree holds them as elements carrying their package)
+    const cards = (tree: ReactElement[]) => tree.filter((el) => propsOf(el)["pkg"] !== undefined).map((el) => (propsOf(el)["pkg"] as { name: string }).name);
+    expect(cards(island.tree()), "the server's package is on the screen").toEqual(["ZqAlphaPack"]);
+    expect(hasTestId(island.tree(), "package-empty")).toBe(false);
+    // The empty case of the same mount: no packages, still no request.
+    const empty = renderIsland(PackageList, { ...props, initialPackages: [] });
     await flush();
-
-    island.rerender({ ...props, hasMonetize: true });
-    island.rerender({ ...props, hasMonetize: true, orgId: "org-b" });
-    answer("/api/v1/orgs/org-b/sponsor-packages", [pkg("ZqBravoPack")]);
-    answer("/api/v1/orgs/org-b/sponsor-deals", []);
-    await flush();
-    expect(island.text()).toContain("ZqBravoPack");
-
-    answer("/api/v1/orgs/org-a/sponsor-packages", [pkg("ZqAlphaPack")]);
-    answer("/api/v1/orgs/org-a/sponsor-deals", []);
-    await flush();
-    expect(island.text()).toContain("ZqBravoPack");
-    expect(island.text()).not.toContain("ZqAlphaPack");
+    expect(net.pending.map((d) => d.url), "an empty list reads nothing either").toEqual([]);
+    expect(cards(empty.tree())).toEqual([]);
+    expect(hasTestId(empty.tree(), "package-empty")).toBe(true);
   });
 });

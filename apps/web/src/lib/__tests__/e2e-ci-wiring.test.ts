@@ -290,6 +290,11 @@ const WALKTHROUGH_SPECS: string[] = [
   // report panel and the public report at 320/768/1280. SKIPS unless SPONSOR_CAPTURE_DIR is set, which only e2e.yml's
   // opt-in `sponsor_captures` dispatch does (its step and upload sit beside the overlay gallery's).
   "sponsors-capture.spec.ts",
+  // Sponsor deals PR 2 (Batch J): the owner's visual sign-off capture of the deals screens - the list, a sponsor's page, the Add deal
+  // sheet, the deal page live / ended / disputed / dispute lost, Packages and its create sheet at 320/768/1280, and the deal page and
+  // the Add deal sheet in es/fr/nl at 1280. SKIPS unless SPONSOR_DEALS_CAPTURE_DIR is set, which only e2e.yml's opt-in
+  // `sponsor_deals_captures` dispatch does (its step and upload sit beside the sponsor captures').
+  "sponsor-deals-captures.spec.ts",
   // R4 sponsors on stream: the sponsor journey end to end — added through the form, ticked onto the stream, aired by a real
   // composed session's overlay page (the compositor stood in for at its HTTP boundary), the short link followed, the report
   // shared, read in French and revoked; a viewer refused. Holds the stream-slot pool (its own PoolHolder).

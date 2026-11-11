@@ -32,7 +32,7 @@ vi.mock("@/components/org-timezone", () => ({ OrgTimezone: () => <div /> }));
 vi.mock("@/components/tour-replay", () => ({ TourReplayButton: () => <div /> }));
 // The moved bodies. If the page still mounted either, this would show it.
 vi.mock("@/components/org-sponsors", () => ({ OrgSponsors: () => <div data-testid="org-sponsors" /> }));
-vi.mock("@/components/sponsor-packages", () => ({ SponsorPackages: () => <div data-testid="sponsor-packages-island" /> }));
+vi.mock("@/components/sponsors/package-list", () => ({ PackageList: () => <div data-testid="package-list-island" /> }));
 
 import SettingsPage from "../page";
 import { SETTINGS_TABS } from "../_components/settings-nav";
@@ -137,7 +137,7 @@ describe("settings?tab=sponsors redirects to sponsors?tab=sponsors", () => {
     const html = await renderSettings({ tab: "bogus" });
     expect(html).toContain("org-logo-uploader");
     expect(html).not.toContain('data-testid="org-sponsors"');
-    expect(html).not.toContain('data-testid="sponsor-packages-island"');
+    expect(html).not.toContain('data-testid="package-list-island"');
   });
 
   it("the Settings sidebar has no Sponsors entry", async () => {

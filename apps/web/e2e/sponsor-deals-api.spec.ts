@@ -21,13 +21,14 @@
 //
 // Task 12 — the one page-level test: today's console on a sponsor whose live deal owns its tier, scope and stream. The On stream
 // tick is disabled and says why; the Sponsors tab's tier and competition selects are disabled with the same note; and the
-// Packages tab's invoice form picks that sponsor by name — each at 320, 768 and 1280 with a 43-character name, no sideways scroll.
+// Packages tab's price list counts that sponsor under its package, and the deal's own page offers End now — each at 320, 768 and 1280
+// with a 43-character name, no sideways scroll.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { apiJson, expectNoHorizontalScroll, withDb } from "./helpers";
 import { postSignedEvent, stripeEvent, stripeUid } from "./_stripe-events";
-import { releaseSettingsOrg, seedCompetition, seedSettingsOrg, sponsorsUrl, type SeededOrg } from "./settings-support";
+import { dealUrl, openSponsorRowTools, releaseSettingsOrg, seedCompetition, seedSettingsOrg, sponsorsUrl, type SeededOrg } from "./settings-support";
 
 /** Copy read from the dictionary the page renders from, never retyped (this folder's idiom: sponsors-hub.spec.ts). */
 const UI: Record<string, string> = JSON.parse(
@@ -299,6 +300,8 @@ test("a sponsor under a live deal: On stream tick, tier and competition are lock
 
     // Sponsors tab: the edit form's tier and competition are locked, with the same note.
     await page.goto(sponsorsUrl(org.slug, "sponsors"));
+    // Below md the row's Edit sits behind its ⋯ (sponsor deals Task 14); the helper opens the fold only where the ⋯ is on screen.
+    await openSponsorRowTools(page, LONG);
     await page.getByRole("button", { name: ui("sponsors.edit", { name: LONG }) }).click();
     const note = page.getByTestId("sponsor-locked-note");
     await expect(note, `${width}: the locked edit form says why`).toHaveText(ui("sponsors.deal.lockedNote"));
@@ -308,26 +311,22 @@ test("a sponsor under a live deal: On stream tick, tier and competition are lock
     await expect(fields.getByLabel(ui("settings.org.sponsors.name")), `${width}: the name stays editable`).toBeEnabled();
     await expectNoHorizontalScroll(page);
 
-    // Packages tab: the invoice form lists both sponsors by name, the long one included, and fits.
+    // Packages tab (the price list since Task 18): the package is a card, and counts this sponsor - the one with the long name - as
+    // holding a deal on it. The invoice form this leg used to open is the Add deal sheet now, whose hidden-until-paid and
+    // "starts after the current one" lines are pinned in sponsor-deals.spec.ts ("Add deal ..." legs), where a deal is added.
     await page.goto(sponsorsUrl(org.slug, "packages"));
-    await page.getByTestId(`invoice-open-${pkg.data!.id}`).click();
-    const picker = page.getByTestId("invoice-sponsor");
-    await expect(picker, `${width}: the invoice form picks a sponsor`).toBeVisible();
-    await expect(picker.locator("option"), `${width}: one option per sponsor`).toHaveCount(2);
-    await expect(picker.locator(`option[value="${lockedId}"]`), `${width}: the 43-character name is listed whole`).toHaveText(LONG);
-    // The form says an unpaid invoice hides the sponsor, unless a live deal already keeps it on the public pages.
-    await picker.selectOption(freeId);
-    await expect(page.getByTestId("invoice-hidden-note"), `${width}: a sponsor with no live deal is told the invoice hides it`).toHaveText(ui("sponsors.order.hiddenUntilPaid"));
-    await expect(page.getByTestId("invoice-queued-note"), `${width}: and nothing queues`).toHaveCount(0);
-    await picker.selectOption(lockedId);
-    await expect(page.getByTestId("invoice-hidden-note"), `${width}: a sponsor under a live deal is not`).toHaveCount(0);
-    // Batch F fix 1: behind a live deal the new one queues (spec §8a), and the form says so.
-    await expect(page.getByTestId("invoice-queued-note"), `${width}: it is told the new deal starts after the current one`).toHaveText(ui("sponsors.order.queuedAfterCurrent"));
-    // The live deal's order row offers End now (review I2), with its long sponsor name; a complimentary deal has no invoice to resend.
     const dealId = deal.data!.deal.id;
-    await expect(page.getByTestId(`order-end-${dealId}`), `${width}: the live deal can be ended from its order`).toBeVisible();
-    await expect(page.getByTestId(`order-end-${dealId}`)).toHaveText(ui("sponsors.order.endNow"));
-    await expect(page.getByTestId(`order-resend-${dealId}`), `${width}: nothing to resend on a complimentary deal`).toHaveCount(0);
+    const card = page.locator(`[data-testid="package-card"][data-package-id="${pkg.data!.id}"]`);
+    await expect(card, `${width}: the package is on the price list`).toBeVisible();
+    await expect(card.getByTestId("package-used-by"), `${width}: one sponsor holds a deal on it`).toHaveText(ui("sponsors.pkg.usedBy.one", { count: "1" }));
+    await expectNoHorizontalScroll(page);
+
+    // The live deal's own page offers End now, with its 43-character sponsor name; a complimentary deal has no invoice to resend.
+    await page.goto(dealUrl(org.slug, lockedId, dealId));
+    const endNow = page.locator('[data-testid="deal-page-action"][data-action="end_now"]');
+    await expect(endNow, `${width}: the live deal can be ended from its page`).toBeVisible();
+    await expect(endNow).toHaveText(ui("sponsors.deal.action.endNow"));
+    await expect(page.locator('[data-testid="deal-page-action"][data-action="resend_invoice"]'), `${width}: nothing to resend on a complimentary deal`).toHaveCount(0);
     await expectNoHorizontalScroll(page);
     checked++;
   }

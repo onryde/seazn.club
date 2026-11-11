@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 // `SPONSORS_TABS` (lib/sponsors-hub.ts). It replaces Settings -> Sponsors, whose two bodies moved here UNCHANGED:
 //
 //   Sponsors            <OrgSponsors>      (was Settings -> Sponsors, the list and the form)
-//   Packages and orders <SponsorPackages>  (was the block under it, editors only)
+//   Packages            <PackageList>      (the price list; Task 18 replaced the "Packages and orders" console - orders are deals now)
 //   On stream          <OnStreamTab>       (S12: the rotation's switch and dial, the tick list, a preview per sport; editors only)
 //   Overview            <OverviewTab>      (S13: per-sponsor times shown, on screen, viewers, link clicks for a period; Share
 //                                           report links for editors)
@@ -17,29 +17,47 @@ export const dynamic = "force-dynamic";
 import { Banknote, Handshake, LayoutGrid, Radio } from "lucide-react";
 import { requireOrgPage } from "@/server/page-auth";
 import { sql } from "@/lib/db";
-import { hasFeatureOnAnyPass } from "@/lib/entitlements";
-import { listSponsorRows } from "@/server/usecases/sponsors";
-import { finishedPackageCompetitions } from "@/server/usecases/sponsor-deals";
+import { featureScopes, hasFeatureOnAnyPass } from "@/lib/entitlements";
+import { listSponsorPackages, listSponsorRows } from "@/server/usecases/sponsors";
+import { dealCreatorName, finishedPackageCompetitions, isDealCompetitionFinished, listDeals } from "@/server/usecases/sponsor-deals";
 import { loadOnStreamScope } from "@/server/sponsors/on-stream";
 import { listReportLinks, reportLinkDefaults, sponsorOverview } from "@/server/sponsors/report";
 import { OrgSponsors } from "@/components/org-sponsors";
 import { OnStreamTab } from "@/components/sponsors/on-stream-tab";
 import { OverviewTab } from "@/components/sponsors/overview-tab";
-import { SponsorPackages } from "@/components/sponsor-packages";
+import { PackageList } from "@/components/sponsors/package-list";
 import { routes } from "@/lib/routes";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
-import { resolveOnStreamScope, resolveSponsorsTab, sponsorsHref, sponsorsTabsFor } from "@/lib/sponsors-hub";
+import {
+  resolveDealParam,
+  resolveOnStreamScope,
+  resolveSponsorParam,
+  resolveSponsorsTab,
+  sponsorsTabsFor,
+} from "@/lib/sponsors-hub";
 import { resolveSponsorPeriod } from "@/lib/sponsor-report";
 import { HubPanel, SponsorsHubTabs } from "./_components/hub-chrome";
 
 /** The org's competitions, newest first: the composer's and the package form's scope PICKER (not a scope - there is no
- *  one competition to thread on an org-level page). Same query, same cap, as Settings -> Sponsors had. */
-async function orgCompetitions(orgId: string): Promise<{ id: string; name: string }[]> {
-  return sql<{ id: string; name: string }[]>`
-    select id, name from competitions
+ *  one competition to thread on an org-level page). Same query, same cap, as Settings -> Sponsors had. `ends_on` (text, so a
+ *  date column never reaches the client as a Date) is the deal timeline's "ends with the competition" hint, nothing more: a
+ *  deal ends on the competition's derived phase, not on this date. */
+async function orgCompetitions(orgId: string): Promise<{ id: string; name: string; ends_on: string | null }[]> {
+  return sql<{ id: string; name: string; ends_on: string | null }[]>`
+    select id, name, ends_on::text as ends_on from competitions
     where org_id = ${orgId}
     order by created_at desc limit 100`;
+}
+
+/** Can the org take card charges? The Add deal sheet offers Send invoice only if it can. The server's `checkoutOrg`
+ *  (usecases/sponsor-deals.ts) refuses a deal's Checkout with 409 `connect_required` unless the org has a connected Stripe
+ *  account AND that account takes charges, so this asks for both: the flag alone would offer Send invoice to an org whose
+ *  Checkout the server refuses (review M4). An org the read cannot find is not charge-ready. */
+async function orgChargesEnabled(orgId: string): Promise<boolean> {
+  const [org] = await sql<{ stripe_account_id: string | null; stripe_charges_enabled: boolean }[]>`
+    select stripe_account_id, stripe_charges_enabled from organizations where id = ${orgId}`;
+  return Boolean(org?.stripe_account_id) && org?.stripe_charges_enabled === true;
 }
 
 export default async function SponsorsHubPage({
@@ -47,7 +65,13 @@ export default async function SponsorsHubPage({
   searchParams,
 }: {
   params: Promise<{ orgSlug: string }>;
-  searchParams: Promise<{ tab?: string; scope?: string | string[]; period?: string | string[] }>;
+  searchParams: Promise<{
+    tab?: string;
+    scope?: string | string[];
+    period?: string | string[];
+    sponsor?: string | string[];
+    deal?: string | string[];
+  }>;
 }) {
   const { orgSlug } = await params;
   const page = await requireOrgPage(orgSlug, { tail: "/sponsors" });
@@ -55,7 +79,7 @@ export default async function SponsorsHubPage({
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "ui");
 
-  const { tab: rawTab, scope: rawScope, period: rawPeriod } = await searchParams;
+  const { tab: rawTab, scope: rawScope, period: rawPeriod, sponsor: rawSponsor, deal: rawDeal } = await searchParams;
   const tab = resolveSponsorsTab(rawTab, canEdit);
 
   // ORG-LEVEL, so `hasFeatureOnAnyPass` and not `hasFeature` - the Settings tab's own reasoning, unchanged: the
@@ -64,11 +88,61 @@ export default async function SponsorsHubPage({
   // competition actually being written). These two flags are AFFORDANCES only.
   let body: React.ReactNode;
   if (tab === "sponsors") {
-    const [sponsorRows, hasTiers, competitions] = await Promise.all([
+    // The sponsor and deal screens read more than the list (sponsor deals PR 2, Task 13): the org's deals and packages, both plan
+    // flags (affordances, org-wide like the rest of this page), whether Stripe takes charges, and each competition's end date.
+    // Two more for the Add deal sheet (Task 16 fix round 1): WHERE tiers are placed and online selling is on (the server gates both per
+    // scope, so an Event Pass lifts its own competition and not the whole organisation: `tiers`, `monetize`), and which competitions' packages are finished
+    // (a package for one is not sold: the create refuses it, 409 competition_finished).
+    //
+    // Two waves, never one `Promise.all` of eight: the pool is `max: 5` (lib/db.ts `connectionOptions`), `listSponsorRows`,
+    // `listDeals` and `listSponsorPackages` each pin a connection for a whole transaction, and a sixth read just queues behind them -
+    // eight at once made every load of this tab hold the whole pool and queue the other three (batch J perf carry). The first wave is
+    // the five TOP-LEVEL reads of the org's own rows and desks - the SLOWEST of them, `finishedPackageCompetitions` (one desk read per
+    // competition that has a package), starts here so it overlaps the rest instead of waiting for them (batch J review m7); the second
+    // is the three cheap ones, the two plan questions and the Stripe flag, which only the Add deal sheet's affordances need. The count
+    // is of reads this page starts: a read that fans out inside its usecase is one here.
+    const [sponsorRows, deals, packages, competitions, finishedCompetitionIds] = await Promise.all([
       listSponsorRows(active.id),
-      hasFeatureOnAnyPass(active.id, "sponsors.tiers"),
+      listDeals(page.auth),
+      listSponsorPackages(page.auth),
       orgCompetitions(active.id),
+      finishedPackageCompetitions(active.id),
     ]);
+    const [tiers, monetize, chargesEnabled] = await Promise.all([
+      featureScopes(active.id, "sponsors.tiers"),
+      featureScopes(active.id, "sponsors.monetize"),
+      orgChargesEnabled(active.id),
+    ]);
+    // Reachable ANYWHERE (an affordance, as before): the plan places tiers / sells online invoices on some scope.
+    const hasTiers = tiers.orgWide || tiers.competitionIds.length > 0;
+    const hasMonetize = monetize.orgWide || monetize.competitionIds.length > 0;
+    // `?sponsor=` / `?deal=` are selections only if they are THIS org's: the sponsor from the rows just read, the deal from the
+    // selected sponsor's own deals. Anything else is the list again - never a 404, never a crash.
+    const sponsorId = resolveSponsorParam(rawSponsor, sponsorRows);
+    const dealId = sponsorId === null ? null : resolveDealParam(rawDeal, deals.filter((d) => d.sponsor_id === sponsorId));
+    // The deal page's two server reads (Task 17), only while a deal is selected: who created it, and - for an open deal that ends with
+    // its competition (no end date of its own) - whether the desk says that competition has finished. The timeline words both.
+    const selectedDeal = dealId === null ? null : (deals.find((d) => d.id === dealId) ?? null);
+    const [dealCreatedByName, dealCompetitionFinished] =
+      selectedDeal === null
+        ? [null, false]
+        : await Promise.all([
+            dealCreatorName(active.id, selectedDeal.created_by),
+            selectedDeal.deal_status !== "ended" && selectedDeal.ends_at === null
+              ? isDealCompetitionFinished(active.id, selectedDeal.competition_id)
+              : Promise.resolve(false),
+          ]);
+    // The sponsor page's Report link section: the selected sponsor's live links. The read is an editor's (it refuses a viewer).
+    // Its opening dates are this year's (`resolveSponsorPeriod` with no `?period=` - the Overview's landing window). Read with the
+    // links, for an editor's page only: a viewer's sponsor page has no such section.
+    const reportLinks =
+      sponsorId !== null && canEdit
+        ? (await listReportLinks(page.auth, active.id)).filter((l) => l.sponsorId === sponsorId)
+        : [];
+    const reportDefaults =
+      sponsorId !== null && canEdit
+        ? await reportLinkDefaults(page.auth, active.id, resolveSponsorPeriod(undefined, competitions), new Date())
+        : null;
     body = (
       <HubPanel tab="sponsors" icon={Handshake} dict={dict}>
         <OrgSponsors
@@ -78,29 +152,40 @@ export default async function SponsorsHubPage({
           hasTiers={hasTiers}
           billingHref={routes.billing(orgSlug)}
           canEdit={canEdit}
+          hub={{
+            orgSlug, orgTimezone: active.timezone, deals, packages, tiersOrgWide: tiers.orgWide, tiersCompetitionIds: tiers.competitionIds,
+            hasMonetize, monetizeOrgWide: monetize.orgWide, monetizeCompetitionIds: monetize.competitionIds,
+            chargesEnabled, finishedCompetitionIds, sponsorId, dealId, dealCreatedByName, dealCompetitionFinished, reportLinks, reportDefaults,
+          }}
         />
       </HubPanel>
     );
   } else if (tab === "packages") {
-    // The invoice form picks one of the org's sponsors (sponsor deals T12): only the picker's three fields cross to the client.
-    // A plan without the feature sees the upsell and no form, so it reads no sponsors (the page loads only what its tab shows).
-    // A package whose competition has finished offers no Send invoice (batch F review m4; the create refuses it anyway).
-    const hasMonetize = await hasFeatureOnAnyPass(active.id, "sponsors.monetize");
-    const [competitions, sponsorRows, finishedCompetitionIds] = await Promise.all([
+    // The price list (Task 18; sponsor deals D17): a package is a placement, so the tab is offered on EVERY plan and reads the org's
+    // packages whatever it holds. The two plan flags are affordances only: `sponsors.tiers` opens the tier and one-competition controls
+    // in the create sheet PER SCOPE (the server's gate: an Event Pass lifts its own competition and never the whole organisation, so
+    // the sheet reads WHERE, `featureScopes`), `sponsors.monetize` only picks the closing note (any scope). The server gates the write
+    // itself (`createSponsorPackage`). A package whose competition has finished is marked as not sold (the Add deal
+    // sheet refuses it too: 409 competition_finished).
+    const [packages, competitions, tiers, hasMonetize, finishedCompetitionIds] = await Promise.all([
+      listSponsorPackages(page.auth),
       orgCompetitions(active.id),
-      hasMonetize ? listSponsorRows(active.id) : Promise.resolve([]),
-      hasMonetize ? finishedPackageCompetitions(active.id) : Promise.resolve([]),
+      featureScopes(active.id, "sponsors.tiers"),
+      hasFeatureOnAnyPass(active.id, "sponsors.monetize"),
+      finishedPackageCompetitions(active.id),
     ]);
     body = (
       <HubPanel tab="packages" icon={Banknote} dict={dict}>
-        <SponsorPackages
+        <PackageList
           orgId={active.id}
-          competitions={competitions}
-          sponsors={sponsorRows.map((s) => ({ id: s.id, name: s.name, display_order: s.display_order }))}
+          initialPackages={packages}
+          competitions={competitions.map((c) => ({ id: c.id, name: c.name }))}
+          tiersOrgWide={tiers.orgWide}
+          tiersCompetitionIds={tiers.competitionIds}
           hasMonetize={hasMonetize}
           billingHref={routes.billing(orgSlug)}
-          sponsorsHref={sponsorsHref(orgSlug, "sponsors")}
           finishedCompetitionIds={finishedCompetitionIds}
+          canEdit={canEdit}
         />
       </HubPanel>
     );

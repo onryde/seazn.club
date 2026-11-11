@@ -1,4 +1,4 @@
-import type { APIRequestContext, Browser, BrowserContext } from "@playwright/test";
+import type { APIRequestContext, Browser, BrowserContext, Locator, Page } from "@playwright/test";
 import { expect } from "@playwright/test";
 import {
   TAG,
@@ -14,7 +14,7 @@ import {
 import type { SettingsTab } from "../src/app/o/[orgSlug]/settings/_components/settings-nav";
 // The hub's URL builder is dependency-free (it imports only the console route builders), so unlike settings-nav it IS
 // importable as a value from this process.
-import { sponsorsHref, type SponsorsTab } from "../src/lib/sponsors-hub";
+import { dealHref, sponsorHref, sponsorsHref, type SponsorsTab } from "../src/lib/sponsors-hub";
 
 /**
  * Support for the W2 settings walkthrough specs.
@@ -41,12 +41,58 @@ export function settingsUrl(slug: string, tab: string): string {
 
 /**
  * `/o/{slug}/sponsors?tab=…` — the Sponsors hub (R4 sponsors-on-stream S11). Settings no longer has a Sponsors tab: its
- * two bodies moved here, `OrgSponsors` to `?tab=sponsors` and `SponsorPackages` (the sell console and the orders) to
+ * two bodies moved here, `OrgSponsors` to `?tab=sponsors` and `SponsorPackages` (the sell console and the orders; since sponsor deals Task 18 the `PackageList` price list - orders are deals, on the Sponsors tab) to
  * `?tab=packages`. `settingsUrl(slug, "sponsors")` still WORKS - it redirects - but a spec that means the hub goes there
  * directly, so it does not depend on the redirect to reach the page it is about.
  */
 export function sponsorsUrl(slug: string, tab: SponsorsTab): string {
   return sponsorsHref(slug, tab);
+}
+
+/**
+ * `/o/{slug}/sponsors?tab=sponsors&sponsor={id}` - one sponsor's own page (sponsor deals PR 2, Task 15): a page of its own below
+ * md and a side panel over the list from md. "Show on site again" lives here now, no longer on the list's row.
+ */
+export function sponsorUrl(slug: string, sponsorId: string): string {
+  return sponsorHref(slug, sponsorId);
+}
+
+/** `/o/{slug}/sponsors?tab=sponsors&sponsor={id}&deal={id}` - one deal's own page, on top of its sponsor (sponsor deals PR 2, Task 17). */
+export function dealUrl(slug: string, sponsorId: string, dealId: string): string {
+  return dealHref(slug, sponsorId, dealId);
+}
+
+/**
+ * A sponsor's row on the Sponsors tab, with its edit / move / delete controls reachable. Below `md` those controls (and the
+ * clicks count) are folded behind the row's own ⋯ (`sponsor-row-more`, sponsor deals Task 14); from 768 up the ⋯ is gone and they
+ * are inline. So this opens the fold ONLY where the toggle is on screen - gated on the toggle being visible, never on a width
+ * literal (a width test would be wrong at 768/834 and would click a hidden control). Retried until the island has hydrated: a
+ * click on the server-rendered ⋯ before React attaches does nothing, and `aria-expanded` is what says it took.
+ * Returns the row; `name` must pick out exactly one.
+ */
+export async function openSponsorRowTools(page: Page, name: string): Promise<Locator> {
+  const row = page.getByTestId("sponsor-row").filter({ hasText: name });
+  await expect(row, `the Sponsors tab lists exactly one row naming ${name}`).toHaveCount(1);
+  const more = row.getByTestId("sponsor-row-more");
+  if (await more.isVisible()) {
+    await expect(async () => {
+      if ((await more.getAttribute("aria-expanded")) !== "true") await more.click();
+      await expect(more).toHaveAttribute("aria-expanded", "true", { timeout: 1_000 });
+    }).toPass({ timeout: 15_000 });
+  }
+  await expect(row.getByTestId("sponsor-row-tools"), `${name}: the row's tools are reachable`).toBeVisible();
+  return row;
+}
+
+/** Taps `tap` until `done` shows. The first tap on a page can land before React has attached (class 20: it is lost, not queued), so
+ *  the tap is retried until its effect is on screen - safe to repeat only where the tap itself is idempotent (open, never toggle).
+ *  Shared by the sponsor-deals specs (the e2e spec and the walkthrough captures: a walkthrough spec must not import a spec file). */
+export async function tapUntil(tap: Locator, done: Locator, why: string): Promise<void> {
+  await expect(async () => {
+    if (await done.isVisible()) return;
+    await tap.click({ timeout: 2_000 });
+    await expect(done, why).toBeVisible({ timeout: 3_000 });
+  }).toPass({ timeout: 20_000 });
 }
 
 async function activeOrgCookie(request: APIRequestContext): Promise<string | null> {

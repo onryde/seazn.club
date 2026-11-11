@@ -8,10 +8,14 @@ import { describe, expect, it } from "vitest";
 import {
   SPONSORS_EDITOR_ONLY_TABS,
   SPONSORS_TABS,
+  dealHref,
   legacySettingsSponsorsTarget,
   onStreamHref,
+  resolveDealParam,
   resolveOnStreamScope,
+  resolveSponsorParam,
   resolveSponsorsTab,
+  sponsorHref,
   sponsorsHref,
   sponsorsTabsFor,
 } from "@/lib/sponsors-hub";
@@ -161,5 +165,85 @@ describe("resolveOnStreamScope (a raw ?scope= is a scope only if it is one of TH
 
   it("an org with no competitions has only the organisation scope", () => {
     expect(resolveOnStreamScope("c1", [])).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Sponsor deals PR 2, Task 13: the hub's `?sponsor=` and `?deal=` (a sponsor's own page; a deal on it).
+//
+// Both params are trusted for nothing: an id is a selection only if it is one of the ids the PAGE loaded for THIS org (and, for
+// a deal, for the selected sponsor). Anything else behaves as if absent - the list - never a 404 and never a crash. The
+// expected URLs below are typed from the plan's interface (`/o/<slug>/sponsors?tab=sponsors&sponsor=<id>[&deal=<id>]`), not
+// built with the helper under test.
+// ---------------------------------------------------------------------------------------------------------------------
+const SPONSOR_A = "aaaaaaaa-1111-4aaa-8bbb-cccccccccccc";
+const SPONSOR_B = "bbbbbbbb-2222-4bbb-8ccc-dddddddddddd";
+const FOREIGN = "eeeeeeee-9999-4eee-8fff-ffffffffffff";
+
+describe.each([
+  ["resolveSponsorParam", resolveSponsorParam],
+  ["resolveDealParam", resolveDealParam],
+] as const)("%s (a raw param is a selection only if it is one of THIS org's loaded ids)", (name, resolve) => {
+  const own = [{ id: SPONSOR_A }, { id: SPONSOR_B }];
+
+  it("an own id resolves to itself - and the SECOND id too, not just the first", () => {
+    expect(resolve(SPONSOR_A, own)).toBe(SPONSOR_A);
+    expect(resolve(SPONSOR_B, own)).toBe(SPONSOR_B);
+  });
+
+  it("the empty list resolves nothing (the empty case: an org with no sponsors or no deals)", () => {
+    expect(resolve(SPONSOR_A, [])).toBeNull();
+    expect(resolve(undefined, [])).toBeNull();
+  });
+
+  it("an id that is not in the list - another org's, made up, differently cased, or an inherited key - is absent (counted)", () => {
+    let checked = 0;
+    for (const raw of [FOREIGN, "not-a-uuid", SPONSOR_A.toUpperCase(), ` ${SPONSOR_A}`, `${SPONSOR_A} `, "__proto__", "constructor", "toString", "0"]) {
+      expect(resolve(raw, own), `${name}(${JSON.stringify(raw)})`).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(9);
+  });
+
+  it("absent and empty are absent; a repeated param (an array - even of own ids, even of one) is absent, never the first element (counted)", () => {
+    let checked = 0;
+    for (const raw of [undefined, "", [], [SPONSOR_A], [SPONSOR_A, SPONSOR_B], [FOREIGN, SPONSOR_A]] as (string | string[] | undefined)[]) {
+      expect(resolve(raw, own), `${name}(${JSON.stringify(raw)})`).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("answers the list's own id, a second call answers the same, and the list is not touched", () => {
+    const list = [{ id: SPONSOR_A }, { id: SPONSOR_B }];
+    const before = JSON.stringify(list);
+    expect(resolve(SPONSOR_B, list)).toBe(SPONSOR_B);
+    expect(resolve(SPONSOR_B, list)).toBe(SPONSOR_B);
+    expect(JSON.stringify(list)).toBe(before);
+  });
+});
+
+describe("sponsorHref / dealHref (the sponsor's page and a deal on it are ?sponsor= / ?deal= on the Sponsors tab)", () => {
+  it("a sponsor is ?tab=sponsors&sponsor=<id>; a deal adds &deal=<id> after it", () => {
+    expect(sponsorHref("acme", SPONSOR_A)).toBe(`/o/acme/sponsors?tab=sponsors&sponsor=${SPONSOR_A}`);
+    expect(dealHref("acme", SPONSOR_A, SPONSOR_B)).toBe(`/o/acme/sponsors?tab=sponsors&sponsor=${SPONSOR_A}&deal=${SPONSOR_B}`);
+  });
+
+  it("a deal URL starts with its sponsor's URL (one place for the shape), and both start with the Sponsors tab's", () => {
+    expect(dealHref("acme", "s", "d").startsWith(sponsorHref("acme", "s"))).toBe(true);
+    expect(sponsorHref("acme", "s").startsWith(sponsorsHref("acme", "sponsors"))).toBe(true);
+  });
+
+  it("encodes the ids (a value with & or = cannot smuggle a second param)", () => {
+    expect(sponsorHref("acme", "a&tab=team=1")).toBe("/o/acme/sponsors?tab=sponsors&sponsor=a%26tab%3Dteam%3D1");
+    expect(dealHref("acme", "s", "a&b")).toBe("/o/acme/sponsors?tab=sponsors&sponsor=s&deal=a%26b");
+  });
+
+  it("round trip: the id in a built URL is the id the resolver accepts", () => {
+    const url = new URL(dealHref("acme", SPONSOR_A, SPONSOR_B), "https://x.test");
+    expect(url.searchParams.get("tab")).toBe("sponsors");
+    expect(resolveSponsorsTab(url.searchParams.get("tab") ?? undefined, true)).toBe("sponsors");
+    expect(resolveSponsorParam(url.searchParams.get("sponsor") ?? undefined, [{ id: SPONSOR_A }])).toBe(SPONSOR_A);
+    expect(resolveDealParam(url.searchParams.get("deal") ?? undefined, [{ id: SPONSOR_B }])).toBe(SPONSOR_B);
   });
 });

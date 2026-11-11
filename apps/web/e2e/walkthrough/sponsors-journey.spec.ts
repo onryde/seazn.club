@@ -12,7 +12,7 @@
 // page printed.
 //
 //   J10  the top bar: Sponsors (labelled) reaches the hub; Settings and Sign out are icons with names and tooltips; 1280, 320
-//   J1   a sponsor added through the form (name, link, tier) — on the public match page's board
+//   J1   a sponsor added through the form (name, link; no tier - its deal sets that) — on the public match page's board
 //   J2   On stream: tick one, tick a second, untick it, tick it again — the plan the console preview reads follows each tap
 //   J3   the plan the compositor's page reads (the relay door): the ticked sponsors only, each with its short code — and the
 //        page draws the card with `seazn.club/s/<code>`
@@ -104,7 +104,8 @@ test.describe.configure({ mode: "serial" });
 
 // --- the journey's people and things ------------------------------------------------------------------------------------
 /** The sponsor the organiser adds through the form: a realistic 43-character name (AGENTS.md: what found the last overflow). */
-const A = { name: "Harbourside Building Supplies and Timber Co", url: "https://harbourside-timber.example/journey", tier: "gold", id: "" };
+// The ADD form asks a name, a logo and a link only (sponsor deals Task 14): the tier comes from a deal, so a sponsor added by hand starts a partner.
+const A = { name: "Harbourside Building Supplies and Timber Co", url: "https://harbourside-timber.example/journey", tier: "partner", id: "" };
 /** Added by setup: ticked in J2 like A. */
 const B = { name: "Ridge Cycles", url: "https://ridge-cycles.example/", tier: "silver", id: "" };
 /** Added by setup and never ticked: the plan must never name it. */
@@ -237,7 +238,7 @@ test("J10 the top bar: Sponsors is a labelled link to the hub; Settings and Sign
   await page.setViewportSize({ width: 1280, height: 900 });
 });
 
-test("J1 a sponsor added through the form — name, link, tier — is stored as typed and shows on the public match page's board", async ({ browser }) => {
+test("J1 a sponsor added through the form — name, link, no tier — is stored as typed (a partner) and shows on the public match page's board", async ({ browser }) => {
   test.setTimeout(4 * NAV_MS + 12 * ACT_MS);
   const o = owner();
   const { page } = o;
@@ -252,12 +253,10 @@ test("J1 a sponsor added through the form — name, link, tier — is stored as 
     await expect(add).toBeEnabled({ timeout: 1_000 });
   }).toPass({ timeout: NAV_MS });
   await tab.getByLabel(say(EN_UI, "settings.org.sponsors.link"), { exact: true }).fill(A.url);
-  // The tier <select> sits INSIDE its <label> (org-sponsors.tsx), so `getByLabel` - which matches the label's whole text
-  // content - read "TierTitleGoldSilverPartner" and never matched "Tier" exactly (CI e2e 42444160080). By role it is found by
-  // its accessible name, which skips the control itself: exactly "Tier", what a screen reader announces.
-  const tier = tab.getByRole("combobox", { name: say(EN_UI, "sponsors.tierLabel"), exact: true });
-  await tier.selectOption(A.tier);
-  await expect(tier, "the tier picked").toHaveValue(A.tier);
+  // The add form has no tier to pick: a sponsor's tier and where it shows come from its first deal (spec §6.1). Looked for by role,
+  // the way a person finds a control - a `getByLabel` would read the select's whole label text and never match "Tier" exactly.
+  await expect(tab.getByRole("combobox", { name: say(EN_UI, "sponsors.tierLabel"), exact: true }), "the add form asks no tier").toHaveCount(0);
+  await expect(tab.getByText(say(EN_UI, "sponsors.form.hint")), "and says the deal sets it").toBeVisible();
   await expect(name).toHaveValue(A.name);
   await add.click();
   await expect(tab.getByRole("button", { name: say(EN_UI, "settings.org.sponsors.remove", { name: A.name }), exact: true }), "the new row").toBeVisible();

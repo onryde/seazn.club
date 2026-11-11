@@ -11,6 +11,11 @@
 // the element's own prop called); the form's markup is read with `renderToStaticMarkup`, which is where `disabled` shows. What
 // neither can see (CSS, widths, tap area) is the e2e's (`e2e/sponsor-deals-api.spec.ts`, run by CI).
 //
+// Since sponsor deals Task 14 the rows are drawn by `SponsorList` (components/sponsors/sponsor-list.tsx), a stateless child of
+// OrgSponsors: the island is mounted with `expandSponsorTree` (components/sponsors/__tests__/_sponsor-tree.tsx), which steps
+// into it, so every click below is still the element's own handler on the tree a person's browser would be handed. Rows
+// carry a FULL deal (`dealOf`), as the server's list sends it - the chip and the row's action read it.
+//
 // Every sweep reports how many it checked (TEST-STRATEGY: zero is a failure).
 //
 // Killers (one at a time, restore from a cp backup):
@@ -26,8 +31,10 @@ import type { ReactElement } from "react";
 const confirmMock = vi.hoisted(() => vi.fn<(opts?: unknown) => Promise<boolean>>(async () => true));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMock }));
 
-import { OrgSponsors, SponsorForm } from "@/components/org-sponsors";
-import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { OrgSponsors, SponsorForm, type SponsorItem, type SponsorsHubData } from "@/components/org-sponsors";
+import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
+import { expandSponsorTree } from "@/components/sponsors/__tests__/_sponsor-tree";
+import type { PaymentStatus, SponsorDeal } from "@/lib/sponsor-deals";
 import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
@@ -41,7 +48,7 @@ const ORG = "org-1";
 const LONG_NAME = "Harbourside Building Supplies and Timber Co";
 const COMPETITIONS = [{ id: "c1", name: "Spring Cup" }];
 
-const row = (over: Record<string, unknown> & { id: string }) => ({
+const row = (over: Partial<SponsorItem> & { id: string }): SponsorItem => ({
   competition_id: null,
   name: `Sponsor ${over.id}`,
   url: null,
@@ -50,13 +57,24 @@ const row = (over: Record<string, unknown> & { id: string }) => ({
   display_order: 0,
   status: "active",
   click_count: 0,
+  on_stream: false,
   paid_order_id: null,
   deal: null,
   locked_by_deal: false,
   has_open_deal: false,
+  last_billing_email: null,
   ...over,
 });
-const DEAL = { id: "d1", payment_status: "none" };
+/** A deal as the server's list sends it (the whole `SponsorDeal`), for a row to show. Live and paid unless a test says otherwise. */
+const dealOf = (id: string, payment_status: PaymentStatus, over: Partial<SponsorDeal> = {}): SponsorDeal => ({
+  id, sponsor_id: "a", package_id: "p1", deal_status: "live", payment_status, payment_method: "online", go_live: "on_payment",
+  package_name: "Gold Season", tier: "gold", includes_on_stream: false, competition_id: null, amount_cents: 60_000, currency: "gbp",
+  sponsor_name: "Sponsor", sponsor_email: null, ends_at: null, created_at: "2026-10-01T09:00:00.000Z", created_by: null,
+  invoice_sent_at: null, paid_at: null, marked_paid_by: null, approved_at: null, approved_by: null, live_at: null, ended_at: null,
+  ended_reason: null, parked_at: null, disputed_at: null, dispute_id: null, has_payment_intent: false, invoice_number: null,
+  ...over,
+});
+const DEAL = dealOf("d1", "none");
 
 const DRAFT = { name: "Name", url: "", tier: "gold" as const, competition_id: "", file: null, preview: null };
 
@@ -69,6 +87,7 @@ function formMarkup(over: Record<string, unknown> = {}): string {
       submitLabel="Save"
       busy={false}
       hasTiers
+      showPlacement
       lockedByDeal={false}
       competitions={COMPETITIONS}
       onPickLogo={() => {}}
@@ -141,9 +160,10 @@ beforeEach(() => {
   confirmMock.mockImplementation(async () => true);
   answer = () => ({ status: 200, body: { data: [] } });
   fetchMock.mockReset();
-  fetchMock.mockImplementation(async (url: string, init?: { method?: string; body?: string }) => {
+  fetchMock.mockImplementation(async (url: string, init?: { method?: string; body?: unknown }) => {
     const method = init?.method ?? "GET";
-    calls.push({ url, method, body: init?.body ? (JSON.parse(init.body) as Record<string, unknown>) : null });
+    // A string body is JSON; the storage PUT's body is the File itself (never parsed).
+    calls.push({ url, method, body: typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null });
     const a = answer(url, method);
     return { ok: a.status < 400, status: a.status, json: async () => a.body };
   });
@@ -154,15 +174,39 @@ const flush = async () => {
   for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0));
 };
 
-function mount(rows: ReturnType<typeof row>[], opts: { canEdit?: boolean } = {}) {
-  const island = renderIsland(OrgSponsors, {
+/** What the hub page hands the island (Task 13). Typed, so a prop the island starts reading cannot be missing here without tsc
+ *  saying so (review M6: a cast hid `hub` from the type-check). */
+const HUB: SponsorsHubData = {
+  orgSlug: "harbour-vale",
+  orgTimezone: null,
+  deals: [],
+  packages: [],
+  tiersOrgWide: true,
+  tiersCompetitionIds: [],
+  hasMonetize: true,
+  monetizeOrgWide: true,
+  monetizeCompetitionIds: [],
+  finishedCompetitionIds: [],
+  chargesEnabled: true,
+  sponsorId: null,
+  dealId: null,
+  dealCreatedByName: null,
+  dealCompetitionFinished: false,
+  reportLinks: [],
+  reportDefaults: null,
+};
+
+function mount(rows: SponsorItem[], opts: { canEdit?: boolean; sponsorId?: string } = {}) {
+  const props: Parameters<typeof OrgSponsors>[0] = {
     orgId: ORG,
     initialSponsors: rows,
     competitions: COMPETITIONS,
     hasTiers: true,
     billingHref: "/billing",
     canEdit: opts.canEdit ?? true,
-  } as Parameters<typeof OrgSponsors>[0]);
+    hub: opts.sponsorId === undefined ? HUB : { ...HUB, sponsorId: opts.sponsorId },
+  };
+  const island = renderIsland(OrgSponsors, props, expandSponsorTree);
   const byLabel = (key: MessageKey, name: string): ReactElement => {
     const label = msg(key, { name });
     const el = island.tree().find((e) => propsOf(e)["aria-label"] === label);
@@ -179,14 +223,25 @@ function mount(rows: ReturnType<typeof row>[], opts: { canEdit?: boolean } = {})
     edit: (name: string) => (propsOf(byLabel("sponsors.edit", name)).onClick as () => void)(),
     remove: (name: string) => (propsOf(byLabel("settings.org.sponsors.remove", name)).onClick as () => void)(),
     form,
-    hasRow: (name: string) => island.text().includes(name),
+    hasRow: (name: string) => island.tree().some((e) => e.type === "li" && textOf(e).includes(name)),
     has: (testId: string) => island.tree().some((e) => propsOf(e)["data-testid"] === testId),
     find: (testId: string): ReactElement => {
       const el = island.tree().find((e) => propsOf(e)["data-testid"] === testId);
       if (!el) throw new Error(`no element with data-testid="${testId}"`);
       return el;
     },
-    text: () => flat(island.text()),
+    // The words on screen, read from the EXPANDED tree: the sponsor's page (its error line among them) is a child component, and
+    // `island.text()` reads only what the island itself returned. Each element's own string children, so nothing is counted twice.
+    text: () =>
+      flat(
+        island
+          .tree()
+          .flatMap((e) => {
+            const kids = propsOf(e).children;
+            return (Array.isArray(kids) ? kids : [kids]).filter((k) => typeof k === "string" || typeof k === "number").map(String);
+          })
+          .join(" "),
+      ),
   };
 }
 
@@ -235,31 +290,77 @@ describe("Edit hands the form the ROW's lock (the join between the list and the 
   });
 });
 
-describe("a refused logo upload reads the dictionary's words, never the server's (fix round 1, m6)", () => {
-  it("the upload route's refusal - a sentence, or a structured validation error - shows 'Upload not allowed' and saves nothing (both checked)", async () => {
-    const CASES: [string, unknown][] = [
-      ["Unsupported image type", { ok: false, error: "Unsupported image type" }],
-      ["Invalid input: content_type", { ok: false, error: { code: "VALIDATION", message: "Invalid input: content_type" } }],
-    ];
+describe("a refused logo upload reads the dictionary's words, never the server's (fix round 1, m6; and which words, Task 18)", () => {
+  // The STATUS says which words are true: a type the route will not take is a different fix from "not allowed to upload", and a file
+  // over the cap is the size limit. Expected words come from the dictionary keys, never from the component's own table.
+  const UPLOAD_ERRORS: { label: string; status: number; body: unknown; serverText: string; key: MessageKey }[] = [
+    { label: "415 a sentence", status: 415, body: { ok: false, error: "Unsupported image type" }, serverText: "Unsupported image type", key: "settings.org.sponsors.uploadTypeNotAllowed" },
+    { label: "400 a structured validation error", status: 400, body: { ok: false, error: { code: "VALIDATION", message: "Invalid input: content_type" } }, serverText: "Invalid input: content_type", key: "settings.org.sponsors.uploadTypeNotAllowed" },
+    { label: "422 validation", status: 422, body: { ok: false, error: { code: "VALIDATION", message: "Invalid enum value" } }, serverText: "Invalid enum value", key: "settings.org.sponsors.uploadTypeNotAllowed" },
+    { label: "413 over the size cap", status: 413, body: { ok: false, error: "Payload Too Large" }, serverText: "Payload Too Large", key: "settings.org.sponsors.tooBig" },
+    { label: "403 not allowed to upload", status: 403, body: { ok: false, error: "Forbidden" }, serverText: "Forbidden", key: "settings.org.sponsors.uploadNotAllowed" },
+    { label: "401 signed out", status: 401, body: { ok: false, error: { code: "UNAUTHENTICATED", message: "Sign in" } }, serverText: "Sign in", key: "settings.org.sponsors.uploadNotAllowed" },
+  ];
+  const ALL_UPLOAD_KEYS: MessageKey[] = ["settings.org.sponsors.uploadTypeNotAllowed", "settings.org.sponsors.tooBig", "settings.org.sponsors.uploadNotAllowed", "settings.org.logo.uploadFailed"];
+
+  async function submitWithLogo(): Promise<ReturnType<typeof mount>> {
+    const m = mount([row({ id: "a", name: "Quay Chandlers" })]);
+    m.edit("Quay Chandlers");
+    const file = new File(["x"], "logo.png", { type: "image/png" });
+    (propsOf(m.form()).onChange as (fn: (p: typeof DRAFT) => unknown) => void)((p) => ({ ...p, file }));
+    (propsOf(m.form()).onSubmit as () => void)();
+    await flush();
+    return m;
+  }
+
+  it("the upload route's refusal shows the words its STATUS earns - a sentence or a structured error is never shown - and saves nothing (counted)", async () => {
     let checked = 0;
-    for (const [serverText, body] of CASES) {
+    for (const c of UPLOAD_ERRORS) {
       calls.length = 0;
       answer = (url, method) =>
-        url.includes("/content-upload") && method === "POST" ? { status: 415, body } : { status: 200, body: { data: [] } };
-      const m = mount([row({ id: "a", name: "Quay Chandlers" })]);
-      m.edit("Quay Chandlers");
-      const file = new File(["x"], "logo.png", { type: "image/png" });
-      (propsOf(m.form()).onChange as (fn: (p: typeof DRAFT) => unknown) => void)((p) => ({ ...p, file }));
-      (propsOf(m.form()).onSubmit as () => void)();
-      await flush();
-      expect(calls.some((c) => c.url.includes("/content-upload")), `${serverText}: the upload was attempted`).toBe(true);
-      expect(m.text(), serverText).toContain(msg("settings.org.sponsors.uploadNotAllowed"));
-      expect(m.text(), serverText).not.toContain(serverText);
-      expect(m.text(), serverText).not.toContain("[object Object]");
-      expect(calls.filter((c) => c.method === "PATCH"), `${serverText}: nothing was saved`).toEqual([]);
+        url.includes("/content-upload") && method === "POST" ? { status: c.status, body: c.body } : { status: 200, body: { data: [] } };
+      const m = await submitWithLogo();
+      expect(calls.some((x) => x.url.includes("/content-upload")), `${c.label}: the upload was attempted`).toBe(true);
+      expect(m.text(), c.label).toContain(msg(c.key));
+      // The pair: none of the OTHER refusals' words is on the screen (a mapping that always said one thing would pass the line above).
+      // The dictionary strings overlap by prefix ("Upload not allowed" / "That image type isn't allowed"), so compare whole messages.
+      for (const other of ALL_UPLOAD_KEYS.filter((k) => k !== c.key)) {
+        if (msg(c.key).includes(msg(other))) continue;
+        expect(m.text(), `${c.label}: not ${other}`).not.toContain(msg(other));
+      }
+      expect(m.text(), c.label).not.toContain(c.serverText);
+      expect(m.text(), c.label).not.toContain("[object Object]");
+      expect(calls.filter((x) => x.method === "PATCH"), `${c.label}: nothing was saved`).toEqual([]);
       checked++;
     }
-    expect(checked).toBe(CASES.length);
+    expect(checked, "every refusal was driven").toBe(UPLOAD_ERRORS.length);
+    expect(new Set(UPLOAD_ERRORS.map((c) => c.key)).size, "premise: the table reaches three different messages").toBe(3);
+  });
+
+  it("the storage PUT is refused: over the cap reads the size limit, anything else reads 'Upload failed' (and the PATCH is never sent)", async () => {
+    let checked = 0;
+    for (const [status, key] of [[413, "settings.org.sponsors.tooBig"], [500, "settings.org.logo.uploadFailed"], [403, "settings.org.logo.uploadFailed"]] as const) {
+      calls.length = 0;
+      answer = (url, method) => {
+        if (url.includes("/content-upload") && method === "POST") return { status: 200, body: { data: { upload_url: "https://storage.example/put", public_url: "https://cdn.example/logo.png" } } };
+        if (url === "https://storage.example/put") return { status, body: {} };
+        return { status: 200, body: { data: [] } };
+      };
+      const m = await submitWithLogo();
+      expect(calls.some((x) => x.url === "https://storage.example/put" && x.method === "PUT"), `${status}: the PUT was attempted`).toBe(true);
+      expect(m.text(), `PUT ${status}`).toContain(msg(key));
+      expect(calls.filter((x) => x.method === "PATCH"), `PUT ${status}: nothing was saved`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("the empty case of the grant: a 200 with no upload url is the generic refusal, not a type or size message", async () => {
+    answer = (url, method) =>
+      url.includes("/content-upload") && method === "POST" ? { status: 200, body: { data: {} } } : { status: 200, body: { data: [] } };
+    const m = await submitWithLogo();
+    expect(m.text()).toContain(msg("settings.org.sponsors.uploadNotAllowed"));
+    expect(m.text()).not.toContain(msg("settings.org.sponsors.uploadTypeNotAllowed"));
   });
 });
 
@@ -315,13 +416,13 @@ describe("Delete: the confirm says what the server will really do, and a refusal
   it("a sponsor whose shown deal was paid, or refunded, is not asked to confirm a delete that cannot happen either (both checked)", async () => {
     const SERVER = "this sponsor has deal history";
     let checked = 0;
-    for (const payment_status of ["paid", "refunded"]) {
+    for (const payment_status of ["paid", "refunded"] as const) {
       confirmMock.mockClear();
       answer = (_url, method) =>
         method === "DELETE"
           ? { status: 409, body: { ok: false, error: { code: "sponsor_has_deal_history", message: SERVER } } }
           : { status: 200, body: { data: [] } };
-      const m = mount([row({ id: "a", name: "Quay Chandlers", deal: { id: "d1", payment_status } })]);
+      const m = mount([row({ id: "a", name: "Quay Chandlers", deal: dealOf("d1", payment_status) })]);
       m.remove("Quay Chandlers");
       await flush();
       expect(confirmMock, payment_status).not.toHaveBeenCalled();
@@ -333,7 +434,7 @@ describe("Delete: the confirm says what the server will really do, and a refusal
     // The pair: a deal that took no money (complimentary, or unpaid) still asks.
     confirmMock.mockClear();
     answer = () => ({ status: 200, body: { data: null } });
-    mount([row({ id: "b", name: "Ridge Cycles", deal: { id: "d2", payment_status: "pending" } })]).remove("Ridge Cycles");
+    mount([row({ id: "b", name: "Ridge Cycles", deal: dealOf("d2", "pending") })]).remove("Ridge Cycles");
     await flush();
     expect(confirmMock).toHaveBeenCalledTimes(1);
   });
@@ -367,25 +468,25 @@ describe("the copy that replaces the paid-placement promise", () => {
   });
 });
 
-describe("Show on site again: a hidden sponsor whose deals have all ended is switched back on by hand (spec §10.3, batch F fix round 2)", () => {
+describe("Show on site again (now on the sponsor's page, Task 15): a hidden sponsor whose deals have all ended is switched back on by hand (spec §10.3, batch F fix round 2)", () => {
   // Spec §10.3 (owner, 2026-11-07): "After all of a sponsor's deals have ended: the club may switch the sponsor back on by hand,
   // as for a sponsor with no deal." The server's rule for `PATCH { status }` (server/usecases/sponsors.ts `patchSponsor`): a
   // live deal refuses it (409 sponsor_locked_by_deal), a deal waiting to go live refuses it (409 sponsor_has_open_deal), and a
   // dispute-parked (`pending`) placement refuses it. Typed here from that rule, never read from the component.
-  const CASES: [string, Record<string, unknown>, boolean, boolean][] = [
-    ["inactive, its deals all ended", { status: "inactive", deal: { id: "d1", payment_status: "pending" } }, true, true],
+  const CASES: [string, Partial<SponsorItem>, boolean, boolean][] = [
+    ["inactive, its deals all ended", { status: "inactive", deal: dealOf("d1", "pending", { deal_status: "ended" }) }, true, true],
     ["inactive, no deal at all", { status: "inactive" }, true, true],
     ["active", { status: "active" }, true, false],
-    ["inactive, a deal waiting to go live", { status: "inactive", deal: { id: "d2", payment_status: "pending" }, has_open_deal: true }, true, false],
-    ["inactive, under a live deal", { status: "inactive", deal: { id: "d3", payment_status: "paid" }, locked_by_deal: true }, true, false],
-    ["parked by a dispute", { status: "pending", dispute_parked: true, deal: { id: "d4", payment_status: "paid" } }, true, false],
+    ["inactive, a deal waiting to go live", { status: "inactive", deal: dealOf("d2", "pending", { deal_status: "awaiting_payment" }), has_open_deal: true }, true, false],
+    ["inactive, under a live deal", { status: "inactive", deal: dealOf("d3", "paid"), locked_by_deal: true }, true, false],
+    ["parked by a dispute", { status: "pending", dispute_parked: true, deal: dealOf("d4", "paid") }, true, false],
     ["inactive, no deal, but the viewer cannot edit", { status: "inactive" }, false, false],
   ];
 
   it("offered exactly where the server accepts it - inactive with no open or live deal, for an editor (all seven checked)", () => {
     let checked = 0;
     for (const [label, over, canEdit, offered] of CASES) {
-      const m = mount([row({ id: "a", name: LONG_NAME, ...over })], { canEdit });
+      const m = mount([row({ id: "a", name: LONG_NAME, ...over })], { canEdit, sponsorId: "a" });
       expect(m.has("sponsor-show-a"), label).toBe(offered);
       checked++;
     }
@@ -394,9 +495,9 @@ describe("Show on site again: a hidden sponsor whose deals have all ended is swi
   });
 
   it("its words: 'Show on site again', named for the sponsor to a screen reader (label in name)", () => {
-    const m = mount([row({ id: "a", name: LONG_NAME, status: "inactive" })]);
+    const m = mount([row({ id: "a", name: LONG_NAME, status: "inactive" })], { sponsorId: "a" });
     const button = m.find("sponsor-show-a");
-    expect(flat(String(m.island.text())), "the visible words").toContain(msg("sponsors.showAgain"));
+    expect(flat(textOf(button)), "the visible words").toBe(msg("sponsors.showAgain"));
     expect(propsOf(button)["aria-label"]).toBe(msg("sponsors.showAgainLabel", { name: LONG_NAME }));
     expect(String(propsOf(button)["aria-label"]).startsWith(msg("sponsors.showAgain")), "the accessible name starts with the visible words").toBe(true);
   });
@@ -406,7 +507,7 @@ describe("Show on site again: a hidden sponsor whose deals have all ended is swi
       method === "PATCH"
         ? { status: 200, body: { ok: true, data: row({ id: "a", name: LONG_NAME, status: "active" }) } }
         : { status: 200, body: { ok: true, data: [row({ id: "a", name: LONG_NAME, status: "active" })] } };
-    const m = mount([row({ id: "a", name: LONG_NAME, status: "inactive", deal: { id: "d1", payment_status: "pending" } })]);
+    const m = mount([row({ id: "a", name: LONG_NAME, status: "inactive", deal: dealOf("d1", "pending", { deal_status: "ended" }) })], { sponsorId: "a" });
     (propsOf(m.find("sponsor-show-a")).onClick as () => void)();
     await flush();
     const patches = calls.filter((c) => c.method === "PATCH");
@@ -422,8 +523,8 @@ describe("Show on site again: a hidden sponsor whose deals have all ended is swi
     answer = (_url, method) =>
       method === "PATCH"
         ? { status: 409, body: { ok: false, error: { code: "sponsor_has_open_deal", message: SERVER } } }
-        : { status: 200, body: { ok: true, data: [row({ id: "a", name: LONG_NAME, status: "inactive", has_open_deal: true, deal: { id: "d9", payment_status: "pending" } })] } };
-    const m = mount([row({ id: "a", name: LONG_NAME, status: "inactive" })]);
+        : { status: 200, body: { ok: true, data: [row({ id: "a", name: LONG_NAME, status: "inactive", has_open_deal: true, deal: dealOf("d9", "pending", { deal_status: "awaiting_payment" }) })] } };
+    const m = mount([row({ id: "a", name: LONG_NAME, status: "inactive" })], { sponsorId: "a" });
     (propsOf(m.find("sponsor-show-a")).onClick as () => void)();
     await flush();
     expect(m.text()).toContain(msg("sponsors.error.hasOpenDeal"));

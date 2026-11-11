@@ -848,12 +848,12 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "marketing",
     key: "pricing.pass.f6",
-    why: "sponsorship. sponsors.tiers and sponsors.monetize on 'event_pass' — the paid half is what makes this a pass claim rather than a Community one, so both halves are load-bearing.",
+    why: "sponsorship. sponsors.tiers and sponsors.monetize on 'event_pass' — the paid half is what makes this a pass claim rather than a Community one, so both halves are load-bearing. RE-WORDED (sponsor deals PR 2, batch J): it said 'paid sponsorship packages', but packages are on EVERY plan now (sponsor deals D17: Community creates and sells them as offline and complimentary deals; server/usecases/sponsors.ts createSponsorPackage calls server/sponsors/deal-gates.ts assertPlacementAllowed, which gates only a tier above partner and a one-competition scope). What `sponsors.monetize` actually lifts is ONLINE INVOICES (deal-gates.ts assertOnlineAllowed, plus a Stripe Connect account), and `sponsors.tiers` is the tiers - so the claim now names those two, one for one.",
     text: {
-      en: "Sponsor tiers & paid sponsorship packages",
-      es: "Niveles de patrocinadores y paquetes de patrocinio de pago",
-      fr: "Niveaux de sponsors et offres de sponsoring payantes",
-      nl: "Sponsorniveaus & betaalde sponsorpakketten",
+      en: "Sponsor tiers & online sponsor invoices",
+      es: "Niveles de patrocinadores y facturas en línea para patrocinadores",
+      fr: "Niveaux de sponsors et factures en ligne pour les sponsors",
+      nl: "Sponsorniveaus & online facturen voor sponsors",
     },
   },
   {

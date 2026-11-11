@@ -496,6 +496,28 @@ export async function hasFeatureOnAnyPass(orgId: string, featureKey: string): Pr
 }
 
 /**
+ * WHERE a boolean feature is on for the org: org-wide (which subsumes every competition), or only on the competitions it holds
+ * an Event Pass for. `hasFeatureOnAnyPass` collapses that to one yes/no; this keeps the scope, for the AFFORDANCE that must tell a
+ * scope the org has from one it has not - the Add deal sheet's Online, which the server gates per scope (server/sponsors/
+ * deal-gates.ts `assertOnlineAllowed`: an Event Pass lifts its own competition and never the whole organisation). Same rules as
+ * `hasFeatureOnAnyPass` (override layer and plan fallback through `hasFeature`; the org-wide answer first), and the same warning:
+ * affordances only, never enforcement - the write path re-resolves the competition actually being written.
+ */
+export async function featureScopes(
+  orgId: string,
+  featureKey: string,
+): Promise<{ orgWide: boolean; competitionIds: string[] }> {
+  if (await hasFeature(orgId, featureKey)) return { orgWide: true, competitionIds: [] };
+  const passes = await sql<{ competition_id: string }[]>`
+    select competition_id from competition_passes where org_id = ${orgId}`;
+  const competitionIds: string[] = [];
+  for (const { competition_id } of passes) {
+    if (await hasFeature(orgId, featureKey, competition_id)) competitionIds.push(competition_id);
+  }
+  return { orgWide: false, competitionIds };
+}
+
+/**
  * The ADDITIVE add-on axis (SPEC-2 §3, §11.3, V323): capacity purchased (or
  * admin-granted) on TOP of the plan's base cap. Sums `delta_each · qty` over
  * the org's non-canceled add-on rows whose target matches, so

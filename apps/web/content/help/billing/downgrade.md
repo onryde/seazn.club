@@ -21,7 +21,7 @@ Anything over a Community limit becomes **read-only**: your most recently active
 - **Archive**, complete or delete competitions until you're inside the limits — frozen ones thaw automatically, one for each place you free, the most recently active first.
 - Or upgrade again; everything unfreezes instantly.
 
-Pro-only features (your brand colour, branded exports, sponsor tiers and packages, API keys…) simply switch off rather than freezing anything — public pages fall back to the standard look with your logo still on it, exports come out as plain tables, keys stop authenticating.
+Pro-only features (your brand colour, branded exports, sponsor tiers above Partner, online sponsor invoices, API keys…) simply switch off rather than freezing anything — public pages fall back to the standard look with your logo still on it, exports come out as plain tables, keys stop authenticating.
 
 ## Entry fees keep running — the fee rate changes
 
@@ -29,7 +29,7 @@ One thing that does **not** switch off: **card entry fees keep working on Commun
 
 What changes is the platform fee, for a competition that never took a paid card entry: on Community that's **5%**, where Pro is 2% and Enterprise 1%. See [the fee ladder](/help/billing/plans#the-platform-fee-on-entry-fees).
 
-A competition that has already taken a paid card entry keeps that platform fee **locked** at the rate it was first charged, for every entry after it, whatever your plan does next — including a downgrade to Community. A competition that takes its **first paid entry** while covered by an [Event Pass](/help/billing/event-pass) **locks in** the pass's **4%** rate the same way, and keeps it after the downgrade along with everything else the pass grants — bigger limits, branded exports, sponsor tiers and packages — while the rest of the org sits on Community.
+A competition that has already taken a paid card entry keeps that platform fee **locked** at the rate it was first charged, for every entry after it, whatever your plan does next — including a downgrade to Community. A competition that takes its **first paid entry** while covered by an [Event Pass](/help/billing/event-pass) **locks in** the pass's **4%** rate the same way, and keeps it after the downgrade along with everything else the pass grants — bigger limits, branded exports, sponsor tiers and online sponsor invoices — while the rest of the org sits on Community.
 
 ## Moving to a cheaper plan gives you credit, not a bill
 

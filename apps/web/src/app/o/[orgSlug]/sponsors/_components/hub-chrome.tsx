@@ -58,7 +58,7 @@ export function SponsorsHubTabs({
  *  page test and the e2e specs read to learn WHICH tab opened.
  *
  *  The heading is NOT a prop: it is `tabLabel(dict, tab)`, the very string the tab bar shows, so a panel can never be
- *  headed with words its own tab does not carry ("Sell sponsorship" over a tab called "Packages and orders"). */
+ *  headed with words its own tab does not carry ("Sell sponsorship" over a tab called "Packages"). */
 export function HubPanel({
   tab,
   icon: Icon,

@@ -331,7 +331,7 @@ const APPROVED_CARD_BULLETS: ApprovedBullets[] = [
       "Advanced formats — americano, ladders",
       "4% platform fee on entry fees, not 5%",
       "Branded exports & public player cards",
-      "Sponsor tiers & paid sponsorship packages",
+      "Sponsor tiers & online sponsor invoices",
       "Realtime scoreboard & slideshow",
     ],
   },
@@ -655,7 +655,7 @@ const CARD_SURFACES: CardSurface[] = [
       { feature: "exports.branded", plans: PASS_RUNGS, says: /\bbranded exports\b/i },
       { feature: "dashboard.player_profiles", plans: PASS_RUNGS, says: /\bpublic player cards\b/i },
       { feature: "sponsors.tiers", plans: PASS_RUNGS, says: /\bsponsor tiers\b/i },
-      { feature: "sponsors.monetize", plans: PASS_RUNGS, says: /\bpaid sponsorship packages\b/i },
+      { feature: "sponsors.monetize", plans: PASS_RUNGS, says: /\bonline sponsor invoices\b/i },
       { feature: "realtime", plans: PASS_RUNGS, says: /\brealtime scoreboard\b/i },
     ],
     unclaimed: {

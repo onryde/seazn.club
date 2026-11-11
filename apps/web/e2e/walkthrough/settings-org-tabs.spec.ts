@@ -465,7 +465,7 @@ test("Sponsors hub, Sponsors tab: add three, reorder, edit tier and scope, delet
   const B2 = `Bravo Bakery & Co ${TAG}`;
 
   // The Sponsors hub (R4 sponsors-on-stream S11): the tab left Settings. This is the hub's Sponsors tab, which mounts
-  // OrgSponsors alone - SponsorPackages is its own "Packages and orders" tab now.
+  // OrgSponsors alone - the price list (PackageList) is its own "Packages" tab now.
   await page.goto(sponsorsUrl(org.slug, "sponsors"));
 
   // DOM order on this tab is: OrgSponsors' add form, then its rows (each of
@@ -475,7 +475,11 @@ test("Sponsors hub, Sponsors tab: add three, reorder, edit tier and scope, delet
   const addName = field(page, L.sponsorName).first();
   const addLink = field(page, L.sponsorLink).first();
   // The tier select is the one offering "gold"; the scope select is the one
-  // offering this org's competition.
+  // offering this org's competition. The ADD form has neither (sponsor deals
+  // Task 14: a new sponsor is a name, a logo and a link, and its deal sets the
+  // tier and where it shows), so they are looked for to be found ABSENT; they
+  // come back in the row's EDIT form below, where a sponsor with no deal is
+  // placed by hand.
   const addTier = page
     .locator("select")
     .filter({ has: page.locator('option[value="gold"]') })
@@ -487,8 +491,8 @@ test("Sponsors hub, Sponsors tab: add three, reorder, edit tier and scope, delet
   const addButton = page.getByRole("button", { name: L.addSponsor, exact: true });
 
   await expect(addName, "Pro org must get the sponsor manager").toBeVisible({ timeout: READ_MS });
-  await expect(addTier, "sponsors.tiers is Pro — the tier select must render").toBeVisible();
-  await expect(addScope, "sponsors.tiers is Pro — the scope select must render").toBeVisible();
+  await expect(addTier, "the add form asks no tier: a deal sets it").toHaveCount(0);
+  await expect(addScope, "the add form asks no scope: a deal sets it").toHaveCount(0);
 
   async function addSponsor(name: string, link: string, double = false): Promise<void> {
     await addName.fill(name);
@@ -524,7 +528,7 @@ test("Sponsors hub, Sponsors tab: add three, reorder, edit tier and scope, delet
   expect(seeded[0]!.url, "the link field is normalised to https:// and stored").toBe(
     "https://alpha-tools.example.com",
   );
-  expect(seeded.map((s) => s.tier), "the tier select's default").toEqual([
+  expect(seeded.map((s) => s.tier), "a sponsor added by hand starts a partner").toEqual([
     "partner",
     "partner",
     "partner",

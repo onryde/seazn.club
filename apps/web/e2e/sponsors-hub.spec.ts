@@ -84,11 +84,12 @@ test("tabs: the hub opens on Overview and each tab opens its own panel, in the d
   }
   expect(opened, "every declared tab was opened").toBe(SPONSORS_TABS.length);
 
-  // The moved bodies, in place: the add form on Sponsors, the sell console on Packages and orders.
+  // The moved bodies, in place: the add form on Sponsors, the price list on Packages (orders are deals now: they are on each sponsor, on the Sponsors tab).
   await page.goto(sponsorsUrl(org.slug, "packages"));
-  await expect(page.getByTestId("sponsor-packages"), "the sell console moved to Packages and orders").toBeVisible();
+  await expect(page.getByTestId("sponsor-package-list"), "Packages is the price list").toBeVisible();
+  await expect(page.getByTestId("sponsors-tab-packages"), "headed with the tab's own name").toContainText(UI["sponsors.hub.tab.packages"] ?? "");
   await page.goto(sponsorsUrl(org.slug, "sponsors"));
-  await expect(page.getByTestId("sponsor-packages"), "Sponsors no longer carries the sell console").toHaveCount(0);
+  await expect(page.getByTestId("sponsor-package-list"), "Sponsors does not carry the price list").toHaveCount(0);
   await expect(page.getByRole("button", { name: UI["settings.org.sponsors.add"] ?? "", exact: true }), "the add form moved to the Sponsors tab").toBeVisible();
 });
 
@@ -141,7 +142,7 @@ test("a viewer gets the read-only view Settings gave: Sponsors without the add f
     // The editor-only tabs are not refused with an error page: they fall back to Overview.
     await page.goto(sponsorsUrl(seeded.slug, "packages"));
     await expect(page.getByTestId("sponsors-tab-overview")).toBeVisible();
-    await expect(page.getByTestId("sponsor-packages"), "a viewer is never shown the sell console").toHaveCount(0);
+    await expect(page.getByTestId("sponsor-package-list"), "a viewer is never shown the price list").toHaveCount(0);
     await page.goto(sponsorsUrl(seeded.slug, "on_stream"));
     await expect(page.getByTestId("sponsors-tab-overview")).toBeVisible();
   } finally {

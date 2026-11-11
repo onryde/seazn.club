@@ -577,16 +577,18 @@ export async function sweepSponsorDeals(now: Date = new Date(), opts: { orgIds?:
 
 /** THE authority on "this competition has finished" for sponsor deals (§8a): its derived phase, read as an org's viewer (the
  *  context this repo synthesizes elsewhere). The sweep ends a deal on it, `createDeal` refuses a package on it, and the
- *  Packages tab hides Send invoice by it. Throws when the desk cannot be read. */
+ *  Packages tab marks such a package "finished" while the Add deal sheet shows it locked (both via
+ *  `finishedPackageCompetitions`). Throws when the desk cannot be read. */
 async function isCompetitionFinished(orgId: string, competitionId: string, now: Date): Promise<boolean> {
   const desk = await getCompetitionDesk({ orgId, via: "session", userId: null, role: "viewer", keyId: null }, competitionId, now);
   return competitionPhase(desk).kind === "finished";
 }
 
 /**
- * The competitions of the org's ACTIVE packages that have finished (`isCompetitionFinished`), each once: the Packages tab offers
- * no Send invoice on those packages (batch F review m4; `createDeal` refuses them anyway). A competition whose phase cannot be
- * read is left out here (a display hint, logged), and the create's own guard still refuses it. Whole-org packages ask nothing.
+ * The competitions of the org's ACTIVE packages that have finished (`isCompetitionFinished`), each once: the Packages tab marks
+ * those packages "finished" and the Add deal sheet shows them locked (batch F review m4; `createDeal` refuses them anyway with
+ * 409 `competition_finished`). The Packages tab has no Send invoice any more - a deal is added from the sheet. A competition whose
+ * phase cannot be read is left out here (a display hint, logged), and the create's own guard still refuses it. Whole-org packages ask nothing.
  */
 export async function finishedPackageCompetitions(orgId: string, now: Date = new Date()): Promise<string[]> {
   const rows = await withTenant(orgId, (tx) => tx<{ competition_id: string }[]>`
@@ -597,6 +599,34 @@ export async function finishedPackageCompetitions(orgId: string, now: Date = new
   // set is bounded by the org's own active packages. The answer keeps the read's id order, whatever order the desks finish in.
   const phases = await Promise.all(rows.map(({ competition_id }) => competitionPhaseOf(orgId, competition_id, now)));
   return rows.filter((_, i) => phases[i] === "finished").map((r) => r.competition_id);
+}
+
+/**
+ * Has this deal's competition finished - the deal page's timeline says so on a deal that ends with its competition (Task 17)?
+ * `isCompetitionFinished`'s answer (the derived phase, never the competition's stored end date), for ONE competition. A whole-
+ * organisation deal (`null`) has none and reads no desk. This is a DISPLAY hint, so a desk that cannot be read answers false
+ * (logged): the page never claims an end it could not check, and the sweep's own guard is what ends the deal.
+ */
+export async function isDealCompetitionFinished(orgId: string, competitionId: string | null, now: Date = new Date()): Promise<boolean> {
+  if (competitionId === null) return false;
+  return (await competitionPhaseOf(orgId, competitionId, now)) === "finished";
+}
+
+/**
+ * The name the deal page puts beside "Created": the creator's display name, or null when it cannot honestly be named. A deal's
+ * `created_by` is a user id; it is resolved only while that user is STILL a member of this org (a removed member's name is not
+ * for the org's other members to read, and a deleted user has none), and a blank name is no name. The page then draws "Created"
+ * with a date and no author rather than guess.
+ */
+export async function dealCreatorName(orgId: string, userId: string | null): Promise<string | null> {
+  if (userId === null) return null;
+  const [row] = await sql<{ display_name: string | null }[]>`
+    select u.display_name
+      from users u
+      join org_members m on m.user_id = u.id and m.org_id = ${orgId}
+     where u.id = ${userId} and u.deleted_at is null`;
+  const name = row?.display_name?.trim() ?? "";
+  return name === "" ? null : name;
 }
 
 /** A competition's derived phase for the sweep (`isCompetitionFinished`). A read that throws is `unreadable` — never

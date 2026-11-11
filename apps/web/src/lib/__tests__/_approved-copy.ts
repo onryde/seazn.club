@@ -194,7 +194,7 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "1f4d0c836719b26f",
   "193ac3fc3eb05678",
   "1b57ba96756ac962",
-  "fcd1bcb9b15230dd",
+  "e7e5ba41db5859f5",
   "9cdc77f8e4467e2c",
   "f8a66461cb7b0535",
   "adede976a539f9fa",
@@ -270,7 +270,7 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
   "e5ac72886c19cefc",
   "8ee85036b1264382",
   "c315a996027a99ea",
-  "9a4d219f071cc7fb",
+  "6591a70f2809af23",
   "f7c7084faf0e9fab",
   "d5a0df90dfe35a6c",
   "01b10f014d674ec5",
@@ -397,7 +397,7 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
  *    `/api/v1/orgs/**` takes the SESSION branch of `requireOrgAuth` and IS
  *    freeze-checked. Five screens write through it: `components/api-keys.tsx`
  *    (Settings → API), `components/news/composer.tsx`,
- *    `components/org-sponsors.tsx`, `components/sponsor-packages.tsx` and
+ *    `components/org-sponsors.tsx`, `components/sponsors/package-list.tsx` and
  *    `components/org-payment-instructions.tsx`. An admin over `members.max`
  *    would have read this article, been told the app was exempt, and then hit a
  *    402 in Settings → API and the news composer.

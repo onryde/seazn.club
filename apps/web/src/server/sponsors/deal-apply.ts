@@ -13,7 +13,7 @@ import "server-only";
 import type { Tx } from "@/lib/db";
 import { omit } from "@/lib/omit";
 import { sponsorRefusal } from "@/lib/sponsor-refusals";
-import { pickRowDeal, type SponsorDeal } from "@/lib/sponsor-deals";
+import { isLiveDeal as isLive, isOpenDeal as isOpen, isPastEnd, nextScheduledDeal, pickRowDeal, type SponsorDeal } from "@/lib/sponsor-deals";
 import type { SponsorTier } from "@/lib/sponsor-tiers";
 import { ensureOrgStreamSettings } from "./stream-settings";
 
@@ -112,12 +112,11 @@ function toServerDeal(r: DealRow): ServerDeal {
 
 /** A pre-deals order (D6): ignored by every deal rule, never a row's deal, never live. */
 export const isLegacyDeal = (d: Pick<SponsorDeal, "ended_reason">): boolean => d.ended_reason === "legacy";
-const isLive = (d: Pick<SponsorDeal, "deal_status">): boolean => d.deal_status === "live";
-/** Waiting to go live: neither live nor ended (draft, awaiting payment or approval, scheduled). */
-const isOpen = (d: Pick<SponsorDeal, "deal_status">): boolean => d.deal_status !== "live" && d.deal_status !== "ended";
-/** The end date has been reached (`<=`: `ends_at = now` is over). No end date is never past. */
-export const isPastEnd = (endsAt: Date | string | null, now: Date): boolean =>
-  endsAt !== null && new Date(endsAt).getTime() <= now.getTime();
+// `isLive` / `isOpen` are lib/sponsor-deals.ts's `isLiveDeal` / `isOpenDeal`: the console asks the same two questions, so there is
+// one definition of each (sponsor deals PR 2, T14 carry m4).
+// `isPastEnd` and the queue's head (`nextScheduledDeal`) are lib/sponsor-deals.ts's: the Add deal sheet asks the same two questions.
+// Re-exported because the usecases import it from here.
+export { isPastEnd };
 
 /**
  * F2's lock, the one order every deal writer takes: the sponsor `for update`, then ALL its deals `for update` in
@@ -321,7 +320,7 @@ export async function applyDealsToSponsor(
     // `deals` is in (created_at, id) order, so the first scheduled deal is the head of the queue. A scheduled deal whose own
     // end has already passed is never promoted (F19): it would go live for the hour until the sweep ends it. It stays
     // scheduled (the sponsor stays hidden behind it, below) for that sweep to end `expired`.
-    const next = deals.find((d) => d.deal_status === "scheduled" && !isPastEnd(d.ends_at, now));
+    const next = nextScheduledDeal(deals, now);
     if (next) {
       await tx`update sponsor_orders set deal_status = 'live', live_at = ${now} where id = ${next.id}`;
       live = { ...next, deal_status: "live", live_at: now.toISOString() };

@@ -31,7 +31,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
-import { allowedActions, type DealStatus, type GoLiveRule, type PaymentMethod, type PaymentStatus } from "@/lib/sponsor-deals";
+import { allowedActions, endsOnOf, type DealStatus, type GoLiveRule, type PaymentMethod, type PaymentStatus } from "@/lib/sponsor-deals";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { stubOutboxEnv } from "./_invite-mail";
 import { resolveSponsors } from "../sponsors";
@@ -618,6 +618,8 @@ describe.skipIf(!HAS_DB)("ends_on is a day in the org's timezone (DB)", () => {
     const p = await pkg(o);
     const { deal } = await createDeal(o.auth, id, input(p, { ends_on: today }), ORIGIN);
     expect(deal.ends_at).toBe(new Date(`${addDays(today, 1)}T00:00:00Z`).toISOString());
+    // The seam with the deal page: it reads the typed day back with `endsOnOf` over exactly what the producer wrote.
+    expect(endsOnOf(deal.ends_at!, "UTC"), "the day the club typed, read back").toBe(today);
     expect(await refusal(() => createDeal(o.auth, id, input(p, { ends_on: addDays(today, -1) }), ORIGIN))).toMatchObject({ status: 422, code: "ends_on_in_past" });
   });
 
@@ -629,7 +631,30 @@ describe.skipIf(!HAS_DB)("ends_on is a day in the org's timezone (DB)", () => {
     const today = localDate(new Date(), tz);
     const { deal } = await createDeal(o.auth, id, input(p, { ends_on: today }), ORIGIN);
     expect(deal.ends_at, "the start of the NEXT local day").toBe(new Date(`${addDays(today, 1)}T00:00:00+14:00`).toISOString());
+    expect(endsOnOf(deal.ends_at!, tz), "the day the club typed, read back in the org's zone").toBe(today);
     expect(await refusal(() => createDeal(o.auth, id, input(p, { ends_on: addDays(today, -1) }), ORIGIN))).toMatchObject({ status: 422, code: "ends_on_in_past" });
+  });
+});
+
+describe.skipIf(!HAS_DB)("the stored end reads back as the typed day for every org zone (DB, the deal page's seam)", () => {
+  const localDate = (at: Date, tz: string): string =>
+    new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(at);
+  const addDays = (iso: string, n: number): string => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+
+  it("typed today and a week on, at orgs behind and ahead of UTC (6 counted): the producer's stored instant, read with `endsOnOf` in the org's zone, is the typed day", async () => {
+    let checked = 0;
+    for (const tz of ["America/Los_Angeles", "Pacific/Auckland", "Europe/London"]) {
+      const o = await org("community", { timezone: tz });
+      const id = await sponsor(o);
+      const p = await pkg(o);
+      for (const offset of [0, 7]) {
+        const typed = addDays(localDate(new Date(), tz), offset);
+        const { deal } = await createDeal(o.auth, id, input(p, { ends_on: typed }), ORIGIN);
+        expect(endsOnOf(deal.ends_at!, tz), `${tz}: typed ${typed}`).toBe(typed);
+        checked++;
+      }
+    }
+    expect(checked).toBe(6);
   });
 });
 

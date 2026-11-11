@@ -8,7 +8,7 @@
 // Who sees what (R19, from the existing Settings -> Sponsors guard, reused):
 //   - Settings never REFUSED a non-editor. It rendered a read-only view: `OrgSponsors canEdit={false}` and no
 //     packages. The hub keeps exactly that - Overview and Sponsors are readable by every member, and the tabs that
-//     only make sense to someone who can change things (On stream, Packages and orders) are not offered to a
+//     only make sense to someone who can change things (On stream, Packages) are not offered to a
 //     non-editor and fall back to Overview if asked for by URL. The WRITE paths stay guarded by their own routes.
 import { routes } from "@/lib/routes";
 
@@ -51,6 +51,35 @@ export function resolveOnStreamScope(
   competitions: readonly { id: string }[],
 ): string | null {
   return typeof raw === "string" ? (competitions.find((c) => c.id === raw)?.id ?? null) : null;
+}
+
+/** A raw `?sponsor=` / `?deal=` is a selection only if it is one of the ids the PAGE loaded for this org (a deal: for the selected
+ *  sponsor). An absent, empty, repeated (array) or unknown value - another org's id, a made-up one, an inherited key - is no
+ *  selection (null), so the page falls back to the list: never a 404 and never a crash. `find` on the loaded list, never a keyed
+ *  lookup, so `__proto__` and `constructor` are not ids. */
+function resolveIdParam(raw: string | string[] | undefined, loaded: readonly { id: string }[]): string | null {
+  return typeof raw === "string" ? (loaded.find((row) => row.id === raw)?.id ?? null) : null;
+}
+
+/** The sponsor a raw `?sponsor=` names (its own page), or null: only THIS org's sponsors can be selected. */
+export function resolveSponsorParam(raw: string | string[] | undefined, sponsors: readonly { id: string }[]): string | null {
+  return resolveIdParam(raw, sponsors);
+}
+
+/** The deal a raw `?deal=` names (a deal on the selected sponsor's page), or null: hand it the SELECTED sponsor's deals, so a
+ *  deal of another sponsor is no selection either. */
+export function resolveDealParam(raw: string | string[] | undefined, deals: readonly { id: string }[]): string | null {
+  return resolveIdParam(raw, deals);
+}
+
+/** `/o/<slug>/sponsors?tab=sponsors&sponsor=<id>`: a sponsor's own page (a phone page, a side sheet on desktop). */
+export function sponsorHref(orgSlug: string, sponsorId: string): string {
+  return `${sponsorsHref(orgSlug, "sponsors")}&sponsor=${encodeURIComponent(sponsorId)}`;
+}
+
+/** `/o/<slug>/sponsors?tab=sponsors&sponsor=<id>&deal=<id>`: one deal, on its sponsor's page. */
+export function dealHref(orgSlug: string, sponsorId: string, dealId: string): string {
+  return `${sponsorHref(orgSlug, sponsorId)}&deal=${encodeURIComponent(dealId)}`;
 }
 
 /**

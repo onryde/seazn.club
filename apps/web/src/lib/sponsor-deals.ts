@@ -6,6 +6,7 @@
 //
 // Each value set mirrors a named CHECK on sponsor_orders (the sponsor-deals delta);
 // server/sponsors/__tests__/deal-values-db.test.ts reads them back and compares (F31).
+import type { MessageKey } from "@/lib/messages";
 import type { SponsorTier } from "./sponsor-tiers.ts";
 
 /** D2: the lifecycle. `scheduled` = every condition of the rule is met, but the sponsor already has a live deal (§8a). */
@@ -91,6 +92,39 @@ export function isUnpaid(p: PaymentStatus): boolean {
   return p === "pending" || p === "failed";
 }
 
+/** Is this deal LIVE? The ONE definition: the server's sponsor lock (`locked_by_deal`) and the console both read it. */
+export const isLiveDeal = (d: Pick<SponsorDeal, "deal_status">): boolean => d.deal_status === "live";
+
+/** Is this deal OPEN - waiting to go live (draft, awaiting payment or approval, scheduled)? Neither live nor ended. The ONE
+ *  definition: the server's `has_open_deal` and the console's "this sponsor already has one of these" both read it. */
+export const isOpenDeal = (d: Pick<SponsorDeal, "deal_status">): boolean => d.deal_status !== "live" && d.deal_status !== "ended";
+
+/** The end date has been reached (`<=`: `ends_at = now` is over). No end date is never past. The one definition: the sweep, the
+ *  queue's promotion (server/sponsors/deal-apply.ts) and the Add deal sheet's summary all ask it. */
+export const isPastEnd = (endsAt: Date | string | null, now: Date): boolean =>
+  endsAt !== null && new Date(endsAt).getTime() <= now.getTime();
+
+/** The day the club typed as "Ends on", read back from the `ends_at` the producer stored (YYYY-MM-DD). `createDeal` writes the START OF
+ *  THE NEXT DAY in the ORG's timezone (`(ends_on::date + 1)::timestamp at time zone <org tz>`, NULL = UTC), so the last day the deal
+ *  runs is that instant minus one millisecond, read in the same zone: never the viewer's, which moves it a day either way. An
+ *  unknown zone (a bad stored value) reads as UTC rather than throwing. */
+export function endsOnOf(endsAt: string, orgTz: string): string {
+  const last = new Date(Date.parse(endsAt) - 1);
+  const read = (timeZone: string) => new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(last);
+  try {
+    return read(orgTz);
+  } catch {
+    return read("UTC");
+  }
+}
+
+/** The deal a sponsor's queue promotes when none is live (spec §8a, deal-apply step 2): the first `scheduled` one, in the order
+ *  given (the server's is `created_at, id`), whose own end has not passed. A scheduled deal already past its end is never promoted
+ *  (F19): it would go live for the hour until the sweep ends it. Null when nothing waits. */
+export function nextScheduledDeal<T extends Pick<SponsorDeal, "deal_status" | "ends_at">>(deals: readonly T[], now: Date): T | null {
+  return deals.find((d) => d.deal_status === "scheduled" && !isPastEnd(d.ends_at, now)) ?? null;
+}
+
 /** The rule list the Add deal sheet offers: "When paid" is not offered for a complimentary deal (spec §5.2). */
 export function goLiveRulesFor(m: PaymentMethod): readonly GoLiveRule[] {
   return m === "complimentary" ? GO_LIVE_RULES.filter((r) => r !== "on_payment") : GO_LIVE_RULES;
@@ -163,7 +197,9 @@ const NOT_REFUNDABLE_AFTER: ReadonlySet<EndReason> = new Set<EndReason>(["refund
 /** The actions a deal offers, in DEAL_ACTIONS order. TOTAL (F15): every deal_status × payment_status × method answers.
  *  Task 6 refuses with 409, before any write, every action this does not offer (F12). `*_invoice` is online-only here;
  *  Task 23 adds resend_invoice for offline deals with an email (F13). */
-export function allowedActions(d: SponsorDeal): DealAction[] {
+export function allowedActions(
+  d: Pick<SponsorDeal, "deal_status" | "payment_method" | "payment_status" | "disputed_at" | "ended_reason">,
+): DealAction[] {
   const s = d.deal_status;
   const online = d.payment_method === "online";
   const paidFor = d.payment_method !== "complimentary";
@@ -262,4 +298,194 @@ export function dealChip(d: SponsorDeal): DealChip {
 export function primaryLabel(m: PaymentMethod, r: GoLiveRule, otherLive: boolean): "send_invoice" | "save_deal" | "save_and_go_live" {
   if (m === "online") return "send_invoice";
   return r === "immediate" && !otherLive ? "save_and_go_live" : "save_deal";
+}
+
+/** After an ONLINE create whose invoice could not be sent (Stripe's 502), which invoice action the saved deal offers (spec §5.2:
+ *  a deal that waits for its rule is a draft, an immediate one is live - or scheduled behind a live deal - with its payment
+ *  pending). Read from `allowedActions` of the deal the server made, never typed beside it. `queued`: the sponsor has a live deal
+ *  that stays live. */
+export function invoiceActionOnCreate(rule: GoLiveRule, queued: boolean): "send_invoice" | "resend_invoice" {
+  const offered = allowedActions({
+    deal_status: initialStatus("online", rule, queued),
+    payment_method: "online",
+    payment_status: initialPaymentStatus("online"),
+    disputed_at: null,
+    ended_reason: null,
+  });
+  if (offered.includes("send_invoice")) return "send_invoice";
+  if (offered.includes("resend_invoice")) return "resend_invoice";
+  throw new DealRuleError("illegal_transition", `a new online ${rule} deal offers neither Send invoice nor Resend invoice`);
+}
+
+/** The Add deal sheet's summary, as the dictionary keys and the values that fill them (the i18n house rule bans a dynamic `msg()` key,
+ *  and this module is client-safe with no dictionary of its own): the sheet renders each part and joins them with a space. */
+export type SummaryParts = { key: MessageKey; params: Record<string, string> }[];
+
+/** What the Add deal sheet says will happen (mockup screen 3), from the choices on the sheet and nothing else:
+ *   - the head: who gets which package for which scope, and what it costs how (an online deal then says where its invoice goes);
+ *   - when they go live (spec §5.2). A deal queued behind a live one (`otherLive`, §8a) drops "straight away" - that would be false -
+ *     and says it waits for the live deal to end; the other rules keep the condition they wait on and add the wait;
+ *   - the sponsor coming off the pages in the meantime (spec §8a): a sponsor on the pages today (`currentlyShown`) whose new deal does
+ *     not go live now is hidden until it does. A LIVE deal keeps its sponsor on the pages whatever is queued behind it
+ *     (server/sponsors/deal-apply.ts, step 3), so `otherLive` says nothing is hidden. `otherLive` is the EFFECTIVE flag: false once
+ *     the organiser ends the current deal now - and then a deal already WAITING behind it is promoted (step 2) and keeps the
+ *     sponsor on the pages (`promotesWaiting`), so nothing is hidden either.
+ *  `scopeName` null is the whole organisation. `amount` is the price as the sheet shows it. A complimentary deal cannot go live on
+ *  payment - the server's refusal (422 `on_payment_needs_payment`), here the same DealRuleError the lifecycle table throws. */
+export function dealSummary(i: {
+  sponsorName: string;
+  packageName: string;
+  scopeName: string | null;
+  method: PaymentMethod;
+  rule: GoLiveRule;
+  amount: string;
+  email: string | null;
+  otherLive: boolean;
+  /** Ending the current deal now would promote a deal already waiting behind it (deal-apply step 2): the sponsor stays on the pages. */
+  promotesWaiting?: boolean;
+  currentlyShown: boolean;
+}): SummaryParts {
+  if (i.method === "complimentary" && i.rule === "on_payment") {
+    throw new DealRuleError("on_payment_needs_payment", "a complimentary deal has no payment to go live on");
+  }
+  const whole = i.scopeName === null;
+  const who: Record<string, string> = { name: i.sponsorName, package: i.packageName };
+  if (i.scopeName !== null) who.scope = i.scopeName;
+  const parts: SummaryParts = [];
+  if (i.method === "online") {
+    parts.push({ key: whole ? "sponsors.dealSheet.summary.head.onlineAll" : "sponsors.dealSheet.summary.head.online", params: who });
+    parts.push(
+      i.email
+        ? { key: "sponsors.dealSheet.summary.invoiceTo", params: { amount: i.amount, email: i.email } }
+        : { key: "sponsors.dealSheet.summary.invoice", params: { amount: i.amount } },
+    );
+  } else if (i.method === "offline") {
+    parts.push({ key: whole ? "sponsors.dealSheet.summary.head.offlineAll" : "sponsors.dealSheet.summary.head.offline", params: { ...who, amount: i.amount } });
+  } else {
+    parts.push({ key: whole ? "sponsors.dealSheet.summary.head.complimentaryAll" : "sponsors.dealSheet.summary.head.complimentary", params: who });
+  }
+
+  if (!(i.rule === "immediate" && i.otherLive)) {
+    const live: Record<GoLiveRule, Partial<Record<PaymentMethod, MessageKey>>> = {
+      on_payment: { online: "sponsors.dealSheet.summary.live.whenPaid", offline: "sponsors.dealSheet.summary.live.whenMarked" },
+      immediate: {
+        online: "sponsors.dealSheet.summary.live.now",
+        offline: "sponsors.dealSheet.summary.live.now",
+        complimentary: "sponsors.dealSheet.summary.live.onSave",
+      },
+      on_approval: {
+        online: "sponsors.dealSheet.summary.live.approvalPaid",
+        offline: "sponsors.dealSheet.summary.live.approvalMarked",
+        complimentary: "sponsors.dealSheet.summary.live.approvalOnly",
+      },
+    };
+    const key = live[i.rule][i.method];
+    if (key === undefined) throw new Error(`dealSummary: no go-live sentence for ${i.method}/${i.rule}`);
+    parts.push({ key, params: {} });
+  }
+  if (i.otherLive) parts.push({ key: "sponsors.dealSheet.summary.queued", params: { name: i.sponsorName } });
+  if (i.currentlyShown && !i.otherLive && !i.promotesWaiting && i.rule !== "immediate") {
+    parts.push({ key: "sponsors.dealSheet.summary.hidden", params: { name: i.sponsorName } });
+  }
+  return parts;
+}
+
+/** One step of a deal's timeline (spec §6.5, mockup screen 5). `at` is the ISO time the step happened, or null.
+ *  `done`: it happened. `next`: the ONE step an open deal is waiting on. `not_yet`: still to come. `skipped`: this deal has no such
+ *  step (a complimentary deal has no invoice or payment) - the screen does not draw it. `missed`: the deal HAS the step, it never
+ *  happened, and the deal has ended, so it never will (an unpaid deal ended now: "Not paid") - the screen DOES draw it, so the club
+ *  can see why nothing came of the deal.
+ *  `detail` keys by step: `created.by`; `invoice_sent.to`; `paid.method|amountCents|currency`; `ends.competitionEndsOn|
+ *  competitionFinished`; `ended.reason`. */
+export type TimelineStep = {
+  key: "created" | "invoice_sent" | "paid" | "approved" | "live" | "ends" | "ended";
+  at: string | null;
+  state: "done" | "next" | "not_yet" | "skipped" | "missed";
+  detail?: Record<string, string>;
+};
+
+/**
+ * The deal page's timeline, top to bottom as mockup screen 5 draws it: created, invoice_sent, paid, approved, live, then `ends`
+ * for an open deal or `ended` for an ended one. Every deal answers all six rows (a step that does not apply is `skipped`; the
+ * screen hides those), so two deals' timelines line up.
+ *
+ * Applies: `invoice_sent` to an online deal (an offline one only once a send is recorded - the mockup's offline deal shows no
+ * invoice step), never to a complimentary one; `paid` to every deal but a complimentary one; `approved` to the `on_approval` rule
+ * only. An open deal waits on its first applicable step that has not happened (`next`); later ones are `not_yet`, but a step that
+ * HAS happened is `done` wherever it sits (an immediate deal is live while its payment is still awaited). `ends` is a future
+ * date, never the thing a deal waits on.
+ *
+ * An ENDED deal waits on nothing: each step it has that never happened is `missed` (drawn, e.g. "Not paid"); a step it never had
+ * stays `skipped` (hidden). A LEGACY one (a pre-deals order) knows only its money: the steps the migration never recorded are
+ * `skipped` too, not `missed`.
+ *
+ * `ctx.competitionEndsOn` is a DISPLAY hint (the competition's end date, YYYY-MM-DD, or null): an open deal scoped to a
+ * competition with no end date of its own ends when that competition finishes (spec §8a), so its `ends` step carries the date the
+ * competition is scheduled to end. It never decides anything here - a deal ends on the competition's derived phase (the sweep),
+ * not on a date this function reads - so a hint in the past leaves the deal open.
+ * `ctx.competitionFinished` is the DESK's answer (the competition's derived phase, server/usecases/sponsor-deals.ts
+ * `isDealCompetitionFinished`), never the date: for an open deal that ends with its competition, the `ends` step says the
+ * competition has finished - the deal is still open only until the sweep's next hourly check.
+ * `ctx.createdBy` is the creator's display name, or null when it could not be resolved (a removed member, a deleted user): the
+ * created step then names no one rather than guess.
+ */
+export function dealTimeline(
+  d: SponsorDeal,
+  ctx: { competitionEndsOn: string | null; competitionFinished: boolean; createdBy: string | null },
+): TimelineStep[] {
+  const ended = d.deal_status === "ended";
+  const complimentary = d.payment_method === "complimentary";
+  const invoiceSent = d.invoice_sent_at !== null;
+  const paid = d.payment_status === "paid" || d.payment_status === "refunded";
+  // A pre-deals order (V495, ended_reason `legacy`): the migration backfilled the MONEY and left invoice_sent_at / approved_at / live_at
+  // NULL, so "never sent" and "never went live" would be guesses. Only the payment stays a known fact (paid, or never arrived).
+  const legacy = d.ended_reason === "legacy";
+
+  const raw: { key: TimelineStep["key"]; at: string | null; applies: boolean; done: boolean; detail?: Record<string, string> }[] = [
+    { key: "created", at: d.created_at, applies: true, done: true, ...(ctx.createdBy ? { detail: { by: ctx.createdBy } } : {}) },
+    {
+      key: "invoice_sent",
+      at: d.invoice_sent_at,
+      applies: !complimentary && (d.payment_method === "online" || invoiceSent),
+      done: invoiceSent,
+      ...(invoiceSent && d.sponsor_email ? { detail: { to: d.sponsor_email } } : {}),
+    },
+    {
+      key: "paid",
+      at: d.paid_at,
+      applies: !complimentary,
+      done: paid,
+      ...(paid ? { detail: { method: d.payment_method, amountCents: String(d.amount_cents), currency: d.currency } } : {}),
+    },
+    { key: "approved", at: d.approved_at, applies: d.go_live === "on_approval", done: d.approved_at !== null },
+    { key: "live", at: d.live_at, applies: true, done: d.live_at !== null || d.deal_status === "live" },
+  ];
+
+  let waiting = false;
+  const steps: TimelineStep[] = raw.map((r) => {
+    const base = { key: r.key, at: r.at, ...(r.detail ? { detail: r.detail } : {}) };
+    if (!r.applies) return { ...base, state: "skipped" };
+    if (r.done) return { ...base, state: "done" };
+    if (legacy && r.key !== "paid") return { ...base, state: "skipped" };
+    // An ended deal waits on nothing: what it had and never got, it never will - shown as missed, not hidden.
+    if (ended) return { ...base, state: "missed" };
+    if (!waiting) {
+      waiting = true;
+      return { ...base, state: "next" };
+    }
+    return { ...base, state: "not_yet" };
+  });
+
+  if (ended) {
+    steps.push({ key: "ended", at: d.ended_at, state: "done", ...(d.ended_reason ? { detail: { reason: d.ended_reason } } : {}) });
+    return steps;
+  }
+  // Only a deal that ends WITH its competition (a competition scope and no end date of its own: the sweep's `competition_finished`
+  // arm) carries either note; a deal with its own `ends_at` ends on that, and a whole-organisation deal has no competition.
+  const withCompetition = d.ends_at === null && d.competition_id !== null;
+  const detail: Record<string, string> = {};
+  if (withCompetition && ctx.competitionEndsOn !== null) detail.competitionEndsOn = ctx.competitionEndsOn;
+  if (withCompetition && ctx.competitionFinished) detail.competitionFinished = "yes";
+  steps.push({ key: "ends", at: d.ends_at, state: "not_yet", ...(Object.keys(detail).length > 0 ? { detail } : {}) });
+  return steps;
 }
