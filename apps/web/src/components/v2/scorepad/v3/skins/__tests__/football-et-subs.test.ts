@@ -52,12 +52,10 @@ describe("engine 7.0.0: the caps the pad reads rise in extra time only, and only
       want: { H1: BASE, H2: BASE, SHOOTOUT: BASE },
     },
     {
-      label: "rolling subs: no player cap at all, the window cap still rises",
+      // The declared player cap is still answered (the fold applies none under rolling subs; the slot skips it there).
+      label: "rolling subs: both declared caps still rise in extra time",
       cfg: cfgOf({ rollingSubs: true, extraTime: EXTRA_TIME, extraTimeSubs: ET_EXTRA }),
-      want: {
-        H2: { maxSubs: undefined, subWindows: LAW3_WINDOWS },
-        ET_H1: { maxSubs: undefined, subWindows: LAW3_WINDOWS + ET_EXTRA.windows },
-      },
+      want: { H2: BASE, ET_H1: RAISED },
     },
   ];
 
@@ -207,6 +205,31 @@ describe("engine 7.0.0: the sub slot agrees with the fold in extra time, both wa
       }
     }
     expect(cases.length).toBe(3);
+  });
+});
+
+describe("engine 7.0.0: under rolling subs the declared player cap is answered but never applied", () => {
+  it("a side past a declared maxSubs of 2 may still substitute, as the fold allows", () => {
+    const cfg = cfgOf({ rollingSubs: true, maxSubs: 2, subWindows: undefined });
+    expect(subCapsOf(cfg, "H1").maxSubs, "premise: the engine still answers the declared cap").toBe(2);
+    const played = play(cfg, THREE_IN_THREE, "H1");
+    // The fold keeps no spent-player list under rolling subs, so the count the cap would read is 0 here.
+    expect(played.state.squads.home.offUsed.length, "premise: the fold records no spent players under rolling subs").toBe(0);
+    const { slot, fold } = verdict(played, { period: "H1", elapsed: 2700 });
+    expect(fold, "premise: the fold applies no player cap under rolling subs").toBe(true);
+    expect(slot.policyOk).toBe(true);
+  });
+
+  it("the slot's own rolling guard: even a squad that lists three spent players is not held to the declared two", () => {
+    // The fold above lists none, so this is the guard alone: a state with three spent players under rolling subs.
+    const cfg = cfgOf({ rollingSubs: true, maxSubs: 2, subWindows: undefined });
+    const played = play(cfg, THREE_IN_THREE, "H1");
+    const home = played.state.squads.home;
+    const spent = { ...played, state: { ...played.state, squads: { ...played.state.squads, home: { ...home, offUsed: ["H-x1", "H-x2", "H-x3"] } } } } as Played;
+    expect(verdict(spent, { period: "H1", elapsed: 2700 }).slot.policyOk).toBe(true);
+    // And without rolling the same count is refused at the cap: the guard, not the count, is what lets it through.
+    const capped = play(cfgOf({ maxSubs: 2, subWindows: undefined }), THREE_IN_THREE.slice(0, 2), "H1");
+    expect(verdict(capped, { period: "H1", elapsed: 2700 }).slot.policyOk).toBe(false);
   });
 });
 

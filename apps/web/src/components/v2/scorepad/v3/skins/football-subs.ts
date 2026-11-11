@@ -3,10 +3,9 @@
 //
 // THE CAPS COME FROM THE ENGINE (engine 7.0.0, F-R3). Law 3 lets a competition that plays extra time allow one more
 // substitution and one more substitution opportunity in it (`extraTimeSubs`), so a cap is a question about the cfg AND
-// the phase. The engine answers it in one place, `effectiveSubCaps(cfg, phase)`, which its package does not export; it
-// reaches the web through the two readers that do go through it: `footballPadRules.subWindowsCap(cfg, phase)` for the
-// windows and football's own `lineupPolicy(cfg, state)` (the kernel's `maxSubs`) for the players. Neither cap is read off
-// the cfg here, so extra time raises it on the pad exactly as it does in the fold.
+// the phase. The engine answers it in one place, `footballPadRules.effectiveSubCaps(cfg, phase)`, the reader its fold's window
+// check and `lineupPolicy` use too. Neither cap is read off the cfg here, so extra time raises it on the pad exactly as it
+// does in the fold.
 //
 // A SUBSTITUTION'S STAMP is the controller's ruling 154 (the phone's, adopted for the web on the owner's approval of
 // 2026-11-11; it supersedes the web's R3-2, which stamped a sub with the fold's `asOf`). Mirrors the phone's
@@ -14,7 +13,6 @@
 // seazn.club.capture's `feat/s2-5-football`.
 import type { EventEnvelope } from "@seazn/engine/core";
 import { footballPadRules } from "@seazn/engine/pad";
-import { football, type FootballCfg, type FootballState } from "@seazn/engine/sports/football";
 import { gameTimeOf, type GameTimeStamp } from "../clock";
 
 /** The two caps in force in a phase: PLAYERS (`maxSubs`) and STOPPAGES (`subWindows`). `undefined` is no cap. */
@@ -29,16 +27,12 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 /**
  * The caps in force in `phase` (Law 3; F-R3): the cfg's `maxSubs` and `subWindows`, each raised by `extraTimeSubs` once the
- * match has reached extra time (ET_H1, ET_H2, or the kicks after extra time). `maxSubs` is `undefined` under rolling subs,
- * as the kernel applies none there.
- *
- * `lineupPolicy` is typed for a parsed cfg and a whole State, and reads only the cap leaves of the one and the `phase` of
- * the other; the pad holds an `unknown` cfg and knows the phase, so both are handed over as what they are read for.
+ * match has reached extra time (ET_H1, ET_H2, or the kicks after extra time), each only where declared. `maxSubs` is the cap
+ * as declared even under rolling subs; the caller skips it there, as the kernel applies none.
  */
 export function subCapsOf(cfg: unknown, phase: string): SubCaps {
-  const state = { phase } as unknown as FootballState;
-  const policy = football.lineupPolicy?.(asRecord(cfg) as unknown as FootballCfg, state);
-  return { maxSubs: policy?.maxSubs, subWindows: footballPadRules.subWindowsCap(cfg, phase) };
+  const { maxSubs, subWindows } = footballPadRules.effectiveSubCaps(cfg, phase);
+  return { maxSubs, subWindows };
 }
 
 /**
