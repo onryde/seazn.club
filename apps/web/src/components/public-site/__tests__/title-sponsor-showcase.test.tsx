@@ -360,6 +360,23 @@ describe("TitleSponsorShowcase: markup", () => {
     expect(checked, "contrast cases checked").toBe(4);
   });
 
+  it("the panel's capsule is centred by its own width, never pinned at left:50% (which wrapped four dots into a 3 + 1 blob in the browser)", () => {
+    const capsule = attrsOf(html({ slides: [A, B, C, D] }), "title-showcase-dots")[0]!;
+    for (const token of ["inset-x-0", "mx-auto", "w-fit", "bottom-2", "rounded-full"]) expect(capsule, token).toMatch(new RegExp(`(?:^|[\\s"])${token}(?=[\\s"])`));
+    expect(capsule).not.toMatch(/left-1\/2/);
+    expect(capsule).not.toMatch(/-translate-x-1\/2/);
+  });
+
+  it("the panel's card keeps its content clear of the dots' capsule, and only when there is a capsule", () => {
+    const withDots = attrsOf(html({ slides: [B, C] }), "title-slide-fallback")[0]!;
+    expect(withDots).toMatch(/\bpb-14\b/);
+    const alone = attrsOf(html({ slides: [B] }), "title-slide-fallback")[0]!;
+    expect(alone).not.toMatch(/\bpb-14\b/);
+    expect(alone).toMatch(/\bpb-4\b/);
+    // The band's thumbnail has no capsule and no room for padding.
+    expect(attrsOf(html({ slides: [B, C], variant: "band" }), "title-slide-fallback")[0]).not.toMatch(/\bpb-14\b/);
+  });
+
   it("band dots sit on the court colour with no capsule, and clear 3:1 there too (count 2)", () => {
     const h = html({ variant: "band" });
     expect(attrsOf(h, "title-showcase-dots")[0]).not.toMatch(/\bbg-black\//);

@@ -86,8 +86,14 @@ const LINK_ATTRS = { target: "_blank", rel: "nofollow noopener sponsored" } as c
 
 /** What fills a slide: its poster, or the card when it has none or it failed. A plain function, not a component, so the one
  *  island above owns every hook and the tree stays flat. */
-function slideFace(slide: TitleSlide, variant: ShowcaseVariant, failed: boolean, onFailed: (id: string) => void): ReactNode {
-  if (!slide.poster || failed) return fallbackCard(slide, variant);
+function slideFace(
+  slide: TitleSlide,
+  variant: ShowcaseVariant,
+  failed: boolean,
+  dotsBelow: boolean,
+  onFailed: (id: string) => void,
+): ReactNode {
+  if (!slide.poster || failed) return fallbackCard(slide, variant, dotsBelow);
   return (
     <Image
       data-testid="title-slide-poster"
@@ -103,14 +109,16 @@ function slideFace(slide: TitleSlide, variant: ShowcaseVariant, failed: boolean,
 }
 
 /** The card a slide without a (working) poster shows: white, the logo centred at 60% of its width (the name beneath it in the
- *  panel only: the 56px thumbnail has no room, and the sentence beside it says the name), or a monogram when there is no logo. */
-function fallbackCard(slide: TitleSlide, variant: ShowcaseVariant): ReactNode {
+ *  panel only: the 56px thumbnail has no room, and the sentence beside it says the name), or a monogram when there is no logo.
+ *  With dots (`dotsBelow`) the panel's capsule sits over the card's bottom 52px, so the content is centred in what is left of it:
+ *  a name drawn under the logo would otherwise run under the capsule. */
+function fallbackCard(slide: TitleSlide, variant: ShowcaseVariant, dotsBelow: boolean): ReactNode {
   const panel = variant === "panel";
   const glyph = [...slide.name.trim()][0]?.toUpperCase() ?? "?";
   return (
     <div
       data-testid="title-slide-fallback"
-      className={`flex h-full w-full min-w-0 flex-col items-center justify-center bg-white text-center ${panel ? "gap-3 p-4" : "p-1"}`}
+      className={`flex h-full w-full min-w-0 flex-col items-center justify-center bg-white text-center ${panel ? `gap-3 px-4 pt-4 ${dotsBelow ? "pb-14" : "pb-4"}` : "p-1"}`}
     >
       {slide.logo ? (
         <Image
@@ -182,13 +190,15 @@ export function TitleSponsorShowcase({
   const fade = (i: number) =>
     `transition-opacity duration-700 motion-reduce:transition-none ${i === at ? "opacity-100" : "opacity-0"}`;
 
+  // The panel's capsule is centred with `inset-x-0 mx-auto w-fit`, NOT `left-1/2 -translate-x-1/2`: a box pinned at `left: 50%`
+  // may only be as wide as the half that remains, so four 44px dots (176px) wrapped into a 3 + 1 blob on a 300px poster.
   const dots =
     count >= 2 ? (
       <div
         data-testid="title-showcase-dots"
         className={
           panel
-            ? "absolute bottom-2 left-1/2 flex max-w-[calc(100%-1rem)] -translate-x-1/2 flex-wrap justify-center rounded-full bg-black/70"
+            ? "absolute inset-x-0 bottom-2 mx-auto flex w-fit max-w-[calc(100%-1rem)] flex-wrap justify-center rounded-full bg-black/70"
             : "-mb-2 flex flex-wrap justify-center"
         }
       >
@@ -250,10 +260,10 @@ export function TitleSponsorShowcase({
                       aria-label={slide.name}
                       className="block h-full w-full focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-white"
                     >
-                      {slideFace(slide, variant, broken.has(slide.id), markBroken)}
+                      {slideFace(slide, variant, broken.has(slide.id), count >= 2, markBroken)}
                     </a>
                   ) : (
-                    slideFace(slide, variant, broken.has(slide.id), markBroken)
+                    slideFace(slide, variant, broken.has(slide.id), count >= 2, markBroken)
                   )}
                 </div>
               ))}
@@ -280,7 +290,7 @@ export function TitleSponsorShowcase({
               const row = (
                 <>
                   <div className="relative aspect-[4/5] w-14 overflow-hidden rounded-md bg-white ring-1 ring-white/20">
-                    {slideFace(slide, variant, broken.has(slide.id), markBroken)}
+                    {slideFace(slide, variant, broken.has(slide.id), count >= 2, markBroken)}
                   </div>
                   <span
                     data-testid="title-band-sentence"
