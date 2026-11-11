@@ -1,8 +1,6 @@
-import Link from "next/link";
 import { t, plural, type Dict, type Locale, type TKey } from "@/lib/i18n";
 import type { CreditsTabView } from "@/server/usecases/credits-tab";
 import { BuyCredits } from "@/components/buy-credits";
-import { CopyLink } from "@/components/copy-link";
 import type { Currency, CreditPackOption } from "@/lib/currency";
 
 interface Props {
@@ -23,22 +21,25 @@ function fmtDay(iso: string, locale: Locale): string {
 /**
  * Org Billing → Credits tab (SPEC-6 §A3): the AI-credit wallet home. Pooled
  * balance, this-month grant meter, never-expire packs, an auto-topup off-state
- * placeholder (D1 is fast-follow — rendered, not wired), the run history with
- * a CSV export, and an "Invite & earn" referral card (SPEC-5 §2, #267).
+ * placeholder (D1 is fast-follow — rendered, not wired), and the run history
+ * with a CSV export.
+ *
+ * The "Invite & earn" referral card (SPEC-5 §2, #267) that sat below the wallet
+ * is hidden (owner, 2026-11-11). Only the card: the /refer/<code> route, the
+ * attribution cookie and the referral grants are untouched, and so is the view
+ * model, which still carries `referralCode` / `referredCount` / `referralEarned`.
  *
  * Reuses the billing page's card/eyebrow/meter idiom (the same `.card` +
  * purple-600 eyebrow + slate body as Usage) so it reads as one more section on
  * a single-scroll billing page, not a bolted-on surface. The history table
  * lives in a `.scroll-x` container so the page never scrolls horizontally at
- * 375px; the summary rows stack. Renders two sibling `.card` sections (a
- * Fragment), matching the page's own sibling-section layout.
+ * 375px; the summary rows stack.
  */
 export function BillingCredits({ view, dict, locale, exportHref, packs, currency }: Props) {
   const grantPct = view.grantCap > 0 ? Math.min((view.grantUsed / view.grantCap) * 100, 100) : 0;
   const grantLeft = Math.max(0, view.grantCap - view.grantUsed);
 
   return (
-    <>
     <section data-credits className="card mb-6 p-5">
       <h2 className="mb-4 text-xs font-semibold uppercase tracking-wide text-purple-600">
         {t(dict, "billing.credits.title")}
@@ -171,41 +172,5 @@ export function BillingCredits({ view, dict, locale, exportHref, packs, currency
         )}
       </div>
     </section>
-
-    {/* Invite & earn (SPEC-5 §2, #267; gating updated by v17 gap #296) — the
-        org's shareable referral link. A referred org's first paid
-        competition earns THIS org 20 credits; the referred org earns its own
-        10 once it publishes a competition with a division (not at signup —
-        see server/usecases/competitions.ts's shouldFireGrowthEarnGrants).
-        Same card/eyebrow idiom as the section above, kept separate since
-        it's its own feature (referral growth loop, not the wallet itself).
-        CopyLink is the only client child — it never imports `@/lib/i18n`,
-        just `path`. */}
-    <section data-referral className="card mb-6 p-5">
-      <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-purple-600">
-        {t(dict, "billing.credits.referral.title")}
-      </h2>
-      <p className="text-sm text-slate-600">{t(dict, "billing.credits.referral.desc")}</p>
-      <div className="mt-3">
-        <CopyLink
-          path={`/refer/${view.referralCode}`}
-          label={t(dict, "billing.credits.referral.linkLabel")}
-        />
-      </div>
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs text-slate-500">
-          {plural(dict, "billing.credits.referral.stats", view.referredCount, locale, {
-            earned: view.referralEarned,
-          })}
-        </p>
-        <Link
-          href="/help/billing/credits"
-          className="text-xs font-medium text-purple-600 hover:underline"
-        >
-          {t(dict, "billing.credits.referral.howItWorks")} →
-        </Link>
-      </div>
-    </section>
-    </>
   );
 }
