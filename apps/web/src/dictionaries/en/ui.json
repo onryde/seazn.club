@@ -447,6 +447,8 @@
   "embed.line": "Paste this snippet into your club site — it stays in sync by itself.",
   "embed.copy": "Copy snippet",
   "sponsors.title": "Sponsors",
+  "sponsors.eyebrow": "Partners & packages",
+  "sponsors.desc": "Who backs your club, what they bought and where their logo shows.",
   "sponsors.line": "Sponsor logos appear on your public pages, the registration page and the TV slideshow.",
   "sponsors.tier.titleTier": "Title",
   "sponsors.tier.gold": "Gold",

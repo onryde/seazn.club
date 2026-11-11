@@ -447,6 +447,8 @@
   "embed.line": "Collez cet extrait dans le site de votre club — il se synchronise automatiquement.",
   "embed.copy": "Copier l'extrait",
   "sponsors.title": "Sponsors",
+  "sponsors.eyebrow": "Partenaires et offres",
+  "sponsors.desc": "Qui soutient votre club, ce qu'il a acheté et où son logo apparaît.",
   "sponsors.line": "Les logos des sponsors apparaissent sur vos pages publiques, la page d'inscription et le diaporama TV.",
   "sponsors.tier.titleTier": "Titre",
   "sponsors.tier.gold": "Or",

@@ -266,7 +266,13 @@ export default async function SponsorsHubPage({
   return (
     <main className="mx-auto max-w-4xl px-4 py-4 md:py-8">
       <BackLink href="/dashboard" label={t(dict, "common.dashboard")} />
-      <h1 className="page-title mb-4 min-w-0 md:mb-6">{t(dict, "sponsors.title")}</h1>
+      {/* The header is the Streaming page's (owner, 2026-11-11: "we don't have lime board under sponsor"): the lime-bar eyebrow, the title,
+          a one-line description. The h1's old gap to the tab bar (`mb-4 md:mb-6`) now closes the whole header, so the bar's spacing is unchanged. */}
+      <div className="mb-4 min-w-0 md:mb-6">
+        <p className="app-eyebrow mb-1">{t(dict, "sponsors.eyebrow")}</p>
+        <h1 className="page-title">{t(dict, "sponsors.title")}</h1>
+        <p className="mt-1 max-w-xl text-sm text-slate-500">{t(dict, "sponsors.desc")}</p>
+      </div>
       <SponsorsHubTabs orgSlug={orgSlug} tabs={sponsorsTabsFor(canEdit)} active={tab} dict={dict} />
       {body}
     </main>

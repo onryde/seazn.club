@@ -493,6 +493,92 @@ describe("the Sponsors hub - the back link to the dashboard (the Streaming page'
   });
 });
 
+// The page header matches Streaming's (owner, 2026-11-11: "we don't have lime board under sponsor", Streaming screenshot confirmed
+// "right"): the lime-bar eyebrow (`app-eyebrow`) above the title and a one-line description under it, then the tabs. Streaming's markup is
+// `<p class="app-eyebrow mb-1">` / `<h1 class="page-title">` / `<p class="mt-1 max-w-xl text-sm text-slate-500">`. Expected words come from the
+// dictionary files, never typed here; the HTML is entity-decoded first (`&` is `&amp;`, an apostrophe is `&#x27;`).
+describe("the Sponsors hub - the page header matches Streaming's: eyebrow, title, description, then the tabs", () => {
+  const decode = (s: string): string =>
+    s.replace(/<[^>]+>/g, "").replaceAll("&amp;", "&").replaceAll("&#x27;", "'").replaceAll("&quot;", '"').replaceAll("&lt;", "<").replaceAll("&gt;", ">").trim();
+  /** Every `<p>` whose class list holds `cls` (anchored on `class="`, so an omitted class cannot satisfy it), with its decoded text and position. */
+  const paragraphs = (html: string, cls: string): { tag: string; text: string; at: number }[] =>
+    [...html.matchAll(/<p\b([^>]*\bclass="([^"]*)"[^>]*)>([\s\S]*?)<\/p>/g)]
+      .filter((m) => m[2]!.split(/\s+/).includes(cls))
+      .map((m) => ({ tag: m[0].slice(0, m[0].indexOf(">") + 1), text: decode(m[3]!), at: m.index ?? -1 }));
+  const eyebrows = (html: string) => paragraphs(html, "app-eyebrow");
+  const descriptions = (html: string) => paragraphs(html, "max-w-xl");
+
+  it("every locale: the eyebrow and the description are that locale's sponsors.eyebrow and sponsors.desc, each exactly once (counted)", async () => {
+    const eyebrowWords = new Set<string>();
+    const descWords = new Set<string>();
+    let checked = 0;
+    for (const locale of LOCALES) {
+      h.resolveLocale.mockResolvedValue(locale);
+      const wantEyebrow = UI_BY_LOCALE[locale]!["sponsors.eyebrow"];
+      const wantDesc = UI_BY_LOCALE[locale]!["sponsors.desc"];
+      expect(typeof wantEyebrow, `${locale}: the dictionary has sponsors.eyebrow`).toBe("string");
+      expect(typeof wantDesc, `${locale}: the dictionary has sponsors.desc`).toBe("string");
+      const html = await render();
+      expect(eyebrows(html).map((p) => p.text), `${locale}: one eyebrow`).toEqual([wantEyebrow]);
+      expect(descriptions(html).map((p) => p.text), `${locale}: one description`).toEqual([wantDesc]);
+      eyebrowWords.add(wantEyebrow!);
+      descWords.add(wantDesc!);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+    expect(eyebrowWords.size, "hardcoded English would collapse the eyebrows to one").toBe(LOCALES.length);
+    expect(descWords.size, "hardcoded English would collapse the descriptions to one").toBe(LOCALES.length);
+  });
+
+  it("the eyebrow is the lime-bar one (`app-eyebrow`) at Streaming's `mb-1`; the description is Streaming's quiet line", async () => {
+    const html = await render();
+    const [eyebrow] = eyebrows(html);
+    const [desc] = descriptions(html);
+    expect(eyebrow, "the eyebrow is there").toBeDefined();
+    expect(desc, "the description is there").toBeDefined();
+    expect(eyebrow!.tag).toMatch(/class="app-eyebrow mb-1"/);
+    expect(desc!.tag).toMatch(/class="[^"]*\bmt-1\b[^"]*\bmax-w-xl\b[^"]*\btext-sm\b[^"]*\btext-slate-500\b/);
+  });
+
+  it("every tab, editor and viewer: back link -> eyebrow -> h1 -> description -> tab bar -> panel, in that order (counted)", async () => {
+    let checked = 0;
+    for (const canEdit of [true, false]) {
+      asMember(canEdit ? "owner" : "viewer", canEdit);
+      for (const tab of SPONSORS_TABS) {
+        const html = await render(tab);
+        const back = /<a\b[^>]*\bhref="\/dashboard"/.exec(html)?.index ?? -1;
+        const eyebrow = eyebrows(html)[0]?.at ?? -1;
+        const h1 = html.indexOf("<h1");
+        const desc = descriptions(html)[0]?.at ?? -1;
+        const nav = html.indexOf('aria-label="Sponsors sections"');
+        // The panel that opened: a viewer asking for an editor-only tab is shown Overview, so read WHICH panel rendered (exactly one).
+        const shown = panels(html);
+        expect(shown, `${canEdit ? "editor" : "viewer"} ?tab=${tab}: one panel`).toHaveLength(1);
+        const panel = html.indexOf(`data-testid="sponsors-tab-${shown[0]}"`);
+        const order = [back, eyebrow, h1, desc, nav, panel];
+        const who = `${canEdit ? "editor" : "viewer"} ?tab=${tab}`;
+        expect(order.every((n) => n >= 0), `${who}: all six parts are in the markup (${order.join(",")})`).toBe(true);
+        expect(order.every((n, i, a) => i === 0 || n > a[i - 1]!), `${who}: order is back, eyebrow, h1, description, tabs, panel (${order.join(",")})`).toBe(true);
+        checked++;
+      }
+    }
+    expect(checked).toBe(SPONSORS_TABS.length * 2);
+  });
+
+  it("the gap above the tab bar is unchanged: it sits BELOW the description on the header's wrapper, not on the h1 any more", async () => {
+    const html = await render();
+    const h1Tag = /<h1\b[^>]*>/.exec(html)?.[0] ?? "";
+    expect(h1Tag, "the title is still the page title").toMatch(/class="[^"]*\bpage-title\b/);
+    expect(h1Tag, "the title no longer carries the gap").not.toMatch(/\bmb-4\b|\bmd:mb-6\b/);
+    // The wrapper is the element holding the eyebrow, the title and the description.
+    const wrapper = /<div class="([^"]*)">\s*<p class="app-eyebrow/.exec(html)?.[1];
+    expect(wrapper, "eyebrow, title and description share one wrapper").toBeDefined();
+    expect(wrapper!.split(/\s+/), "the old h1 gap, intact").toEqual(expect.arrayContaining(["mb-4", "md:mb-6"]));
+    // And nothing sits between the wrapper and the tab bar's scroller: the gap is the only thing separating them.
+    expect(html, "the wrapper closes straight into the tab bar").toMatch(/<\/p><\/div><div data-active-tab-scroller/);
+  });
+});
+
 describe("the tab bar scrolls its active tab into view (the Settings and Directory precedent; at 320 the 4th tab is off-screen)", () => {
   it("the nav sits inside the active-tab scroller and the current tab is inside it too, for every tab (counted)", async () => {
     let checked = 0;
