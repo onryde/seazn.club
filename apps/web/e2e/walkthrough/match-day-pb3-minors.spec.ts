@@ -87,6 +87,10 @@ interface HintBox {
 }
 
 const EDITOR = (page: Page): Locator => page.locator('[contenteditable="true"][aria-placeholder]');
+/** The payment instructions' own Save. Settings → Connect also carries the Sponsor invoices card's Save (sponsor deals PR 3), so
+ *  a bare role+name match is ambiguous there: the button is the one with BOTH this card's testid and the "Save" name. */
+const payInstructionsSave = (page: Page): Locator =>
+  page.getByRole("button", { name: uiEn["pay.save"]!, exact: true }).and(page.getByTestId("payment-instructions-save"));
 
 async function prove(page: Page, box: HintBox, width: number): Promise<void> {
   const hint = uiEn[box.key]!;
@@ -193,12 +197,12 @@ for (const width of [1280, 768, 320] as const) {
         labelKey: "pay.cashTitle",
         editor: EDITOR,
         saveTyped: async (p) => {
-          await p.getByRole("button", { name: uiEn["pay.save"]!, exact: true }).click();
+          await payInstructionsSave(p).click();
           await expect.poll(orgValue("payment_instructions"), { timeout: NAV_MS }).not.toBeNull();
           return orgValue("payment_instructions")();
         },
         saveEmpty: async (p) => {
-          await p.getByRole("button", { name: uiEn["pay.save"]!, exact: true }).click();
+          await payInstructionsSave(p).click();
           await expect.poll(async () => (await orgValue("payment_instructions")()) ?? "", { timeout: NAV_MS }).toBe("");
           return orgValue("payment_instructions")();
         },

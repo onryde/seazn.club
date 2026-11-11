@@ -479,6 +479,7 @@ export function OrgPaymentInstructions({
             onClick={saveInstructions}
             disabled={busy || !dirty}
             className="btn btn-primary px-4"
+            data-testid="payment-instructions-save"
           >
             {busy ? msg("pay.saving") : msg("pay.save")}
           </button>
