@@ -171,14 +171,18 @@ async function invoiceRowsOfOrg(orgId: string): Promise<number> {
   return (await sql<{ n: number }[]>`select count(*)::int as n from email_outbox where org_id = ${orgId} and kind = 'sponsor_invoice'`)[0]!.n;
 }
 /** `n` inert copies of the real invoice row `id` (status `replaced`, no body; each its own ref and once-key, so neither the replace
- *  rule nor the once-index touches them): rows the cap counts that nothing will ever send. */
+ *  rule nor the once-index touches them): rows the cap counts that nothing will ever send. The real row's first send is still
+ *  running in the background (`deferred` is inline fire-and-forget outside a request), so the dispatcher may have leased it or
+ *  marked it sent by the time it is copied: every column the dispatcher stamps is set to its queued-row value here, or a copy
+ *  inherits a `lease_until` (the lease-only-while-sending CHECK refuses it) or a `provider_id` (its unique index refuses it). */
 async function seedInvoiceRows(id: string, n: number): Promise<string> {
   const tag = `seed-${uniq()}`;
   await sql`
     insert into email_outbox
     select (jsonb_populate_record(null::email_outbox, to_jsonb(o) || jsonb_build_object(
              'id', gen_random_uuid(), 'ref_id', o.ref_id || ':' || ${tag} || '-' || g, 'dedupe_key', ${tag} || '-' || g,
-             'status', 'replaced', 'body_sealed', null, 'created_at', now(), 'status_at', now()))).*
+             'status', 'replaced', 'body_sealed', null, 'created_at', now(), 'status_at', now(),
+             'lease_until', null, 'provider_id', null, 'sent_at', null, 'last_error', null, 'attempts', 0, 'next_attempt_at', now()))).*
       from email_outbox o, generate_series(1, ${n}::int) g
      where o.id = ${id}`;
   return tag;
@@ -459,8 +463,16 @@ describe.skipIf(!HAS_DB)("T23 review fixes: the answer's link, the in-lock re-ch
     await sendDealInvoice(other.o.auth, od.id, ORIGIN);
     expect(await rowsOf("sponsor_invoice", od.id)).toHaveLength(1);
 
-    // A rolling window: once the seeded rows are older than 24 hours, the org is back under the cap and sends.
-    await sql`update email_outbox set created_at = now() - make_interval(hours => 25) where org_id = ${o.orgId} and dedupe_key like ${`${tag}-%`}`;
+    // A rolling window, witnessed from both sides. Rows 23 hours old (inside 24, long past an hour) still count: the send is refused.
+    const age = async (hours: number) => {
+      const moved = await sql`update email_outbox set created_at = now() - make_interval(hours => ${hours}::int) where org_id = ${o.orgId} and dedupe_key like ${`${tag}-%`}`;
+      expect(moved.count, `premise: all ${INVOICE_EMAILS_PER_DAY - 3} seeded rows aged to ${hours}h`).toBe(INVOICE_EMAILS_PER_DAY - 3);
+    };
+    await age(23);
+    expect(await refusal(() => sendDealInvoice(o.auth, online.deal.id, ORIGIN)), "rows 23h old still count").toEqual(LIMIT);
+    expect((await dealRow(online.deal.id)).invoice_send_count, "the 23h refusal counted nothing").toBe(onBefore.invoice_send_count);
+    // Once the seeded rows are older than 24 hours, the org is back under the cap and sends.
+    await age(25);
     await sendDealInvoice(o.auth, online.deal.id, ORIGIN);
     expect((await dealRow(online.deal.id)).invoice_send_count, "the online resend went").toBe(onBefore.invoice_send_count + 1);
   });

@@ -361,8 +361,10 @@ export async function createDeal(
 export const INVOICE_EMAILS_PER_DAY = 50;
 
 /** Refuse a send that would be past the cap (429 `invoice_send_limit`), counting every `sponsor_invoice` row the org queued in the
- *  last 24 hours. A soft cap: two sends racing at 49 can both pass (nothing serialises sends across sponsors), which is accepted -
- *  it bounds abuse, it is not a quota anyone pays for. */
+ *  last 24 hours. A soft cap: the count runs before the send's own transaction and nothing serialises sends across sponsors, so
+ *  concurrent sends can overshoot it by the number in flight (not by one); accepted at this scale (an owner or admin session
+ *  is required) - it bounds abuse, it is not a quota anyone pays for. If it ever must be exact: take
+ *  `pg_advisory_xact_lock(hashtext(org_id))` and recount inside the send's transaction. */
 async function assertInvoiceSendsLeft(orgId: string): Promise<void> {
   if ((await emailsQueuedWithin(orgId, "sponsor_invoice", 24)) >= INVOICE_EMAILS_PER_DAY) {
     throw sponsorRefusal(429, "You've sent a lot of invoices today. Try again tomorrow, or contact support.", "invoice_send_limit");

@@ -6,11 +6,21 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 // and dated; this page IS the versioning promise (v3/08 §3).
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
+    date: "2026-11-11",
+    title: "Breaking: a sponsor deal's create and send-invoice answer invoice_url, not checkout_url; 50 invoice emails a day",
+    lines: [
+      "POST /orgs/{id}/sponsors/{sponsorId}/deals and POST /orgs/{id}/sponsor-deals/{dealId}/send-invoice answered { deal, checkout_url }, the deal's raw Stripe Checkout url. They now answer { deal, invoice_url }: the link to the deal's numbered invoice page, the exact link the invoice email carries. A sponsor is never sent a raw Checkout link; the invoice page's Pay by card is the only way to a Checkout session. A reader of checkout_url finds the field absent.",
+      "invoice_url is a link for an online create (201) and for either send (200), an offline deal's included; it is null for an offline or complimentary create, because nothing is emailed. Every send mints a new token, so each answer's link differs from the last and an earlier one opens nothing.",
+      "New: an organisation can send at most 50 invoice emails in any 24 hours (an online create and both sends count). The 51st answers 429 invoice_send_limit, with nothing written or sent.",
+      "Both paths are console-only (an API key gets 403), and this lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
     date: "2026-11-10",
     title: "Breaking: sponsor orders become sponsor deals; /sponsor-orders is removed",
     lines: [
       "Removed: GET and POST /orgs/{id}/sponsor-orders, POST /orgs/{id}/sponsor-orders/{orderId}/refund and GET /orgs/{id}/sponsor-orders/{orderId}/evidence. Each now answers 404.",
-      "A sponsorship is a deal on a sponsor: POST /orgs/{id}/sponsors/{sponsorId}/deals creates one (a package, a scope, payment online, offline or complimentary, and when it goes live), and answers { deal, checkout_url }. An online deal sends its invoice at once; the url is null for an offline or complimentary deal.",
+      "A sponsorship is a deal on a sponsor: POST /orgs/{id}/sponsors/{sponsorId}/deals creates one (a package, a scope, payment online, offline or complimentary, and when it goes live), and answers { deal, invoice_url }. An online deal sends its invoice at once; the url is null for an offline or complimentary deal.",
       "The rest of the surface: GET /orgs/{id}/sponsor-deals (?sponsor_id= for one sponsor), GET /orgs/{id}/sponsor-deals/{dealId}, and POST /orgs/{id}/sponsor-deals/{dealId}/send-invoice, /mark-paid, /approve, /end and /refund, plus GET /orgs/{id}/sponsor-deals/{dealId}/evidence for the dispute evidence pack.",
       "sponsor_email is now the deal's billing email, where the invoice goes; a deal reports its money as payment_status (none, pending, paid, failed, refunded) and its life as deal_status, where an order had one status.",
       "Every sponsor-deals path, like the sponsor-orders paths before it, is console-only: an API key gets 403. This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
