@@ -289,6 +289,7 @@ describe("the forfeit dialog, opened (D-6)", () => {
       canOrganise: true,
       stageKind: null,
       viewerPlan: "community",
+      initialPanel: "actions",
       scorePadV2: {
         moduleVersion: football.version,
         resolvedConfig: CFG,

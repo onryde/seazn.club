@@ -77,6 +77,7 @@ describe("a refused forfeit lists its reasons in the reader's language (audit 1.
       canOrganise: true,
       stageKind: null,
       viewerPlan: "community" as const,
+      initialPanel: "actions" as const,
       scorePadV2: {
         moduleVersion: generic.version,
         resolvedConfig: CFG,

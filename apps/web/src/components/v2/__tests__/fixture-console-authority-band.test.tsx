@@ -107,6 +107,9 @@ type ConsoleOver = {
     /** Spec 2026-09-30 §2 — the page's stream mount and its `?stream=open`. */
     stream?: FixtureStreamMount;
     streamReturn?: boolean;
+    /** Which header panel is open on render. Default: Match actions (most of this file reads its band) — unless the
+     *  test asks for the stream return, which opens Stream itself. `null` = every panel closed. */
+    panel?: "stream" | "handover" | "lineup" | "rules" | "actions" | null;
     /** T9b: the page's shared stream session, seeded through `StreamSessionProvider`'s test seam (the server never
      *  passes it). The console's own provider for the same fixture adds nothing beneath it, so this IS what it reads. */
     streamView?: StreamSessionView | null;
@@ -147,6 +150,7 @@ function consoleTree(over: ConsoleOver = {}) {
       deviceHandover={over.deviceHandover ?? true}
       stream={over.stream}
       streamReturn={over.streamReturn}
+      initialPanel={over.panel === null ? undefined : (over.panel ?? (over.streamReturn ? undefined : "actions"))}
       recorderNames={{ "user-1": "Dana Okafor" }}
       scorePadV2={{
         moduleVersion: over.other?.moduleVersion ?? football.version,
@@ -232,8 +236,10 @@ function finalizeBannerHtml(html: string): string {
 
 describe("the authority band (D-12)", () => {
   it("gathers the match-ending controls into one named, explained container", () => {
-    const band = bandHtml(consoleHtml());
-    expect(band, "the caption names what this group is").toContain("Match actions");
+    const html = consoleHtml();
+    const band = bandHtml(html);
+    // Since 2026-11-11 the caption is the open panel's own title (the panel chrome), not a heading inside the band.
+    expect(html, "the panel names what this group is").toContain('<h2 class="min-w-0 truncate text-sm font-semibold text-slate-700">Match actions</h2>');
     expect(band, "and a sentence says what it costs").toContain("end the match record");
     expect(band).toContain("Forfeit");
     expect(band).toContain("Abandon");
@@ -271,33 +277,34 @@ describe("the authority band (D-12)", () => {
     );
   });
 
-  it("Forfeit and Abandon open from a Match actions button beside Remote scoring; a phone keeps the card open (owner, 2026-11-05)", () => {
-    const html = consoleHtml();
-    const toggle = html.indexOf('data-testid="match-actions-toggle"');
+  it("Forfeit and Abandon open from the Match actions button in the panel bar, after Remote scoring; closed until it is pressed (owner, 2026-11-11)", () => {
+    const closed = consoleHtml({ panel: null });
+    const toggle = closed.indexOf('data-testid="match-actions-toggle"');
     expect(toggle, "the button that opens the panel").toBeGreaterThan(-1);
-    const row = html.slice(html.lastIndexOf("<div", html.indexOf('data-role="device-handover"')), toggle + 400);
-    expect(row, "in the same button row as Remote scoring").toContain("Remote scoring");
-    expect(html.slice(toggle, toggle + 300), "desktop-only: the phone has no second tree").toMatch(/\smax-md:hidden"/);
-    const band = html.slice(html.indexOf('data-role="match-actions"') - 80, html.indexOf('data-role="match-actions"') + 200);
-    expect(band, "the server render is the phone's: the panel is there, open, with no desktop-hiding class").not.toContain(
-      "hidden",
-    );
+    expect(closed.indexOf('data-role="device-handover"'), "after Remote scoring in the bar").toBeLessThan(toggle);
+    expect(closed.slice(toggle - 200, toggle + 120)).toContain('aria-expanded="false"');
+    expect(closed, "closed: the band is not rendered at any width").not.toContain('data-role="match-actions"');
+    const open = consoleHtml();
+    expect(open.slice(open.indexOf('data-testid="match-actions-toggle"') - 200, open.indexOf('data-testid="match-actions-toggle"') + 120)).toContain('aria-expanded="true"');
+    const band = open.slice(open.indexOf('data-role="match-actions"') - 80, open.indexOf('data-role="match-actions"') + 200);
     expect(band).toContain('id="match-actions-panel"');
+    expect(open, "no width-hiding class on the panel").toContain('data-panel="actions" aria-label="Match actions" class="card min-w-0 p-5 max-md:p-3"');
     expect(consoleHtml({ canOrganise: false }), "no organiser actions, no button").not.toContain(
       'data-testid="match-actions-toggle"',
     );
   });
 
-  it("sits BELOW the pad and BELOW the ledger", () => {
+  it("the panel bar sits above the Scoring card, and an opened Match actions panel directly under it", () => {
     const html = consoleHtml();
+    const bar = html.indexOf('data-role="console-panel-bar"');
+    const band = html.indexOf('data-role="match-actions"');
     const pad = html.indexOf('data-testid="score-pad"');
     const ledger = html.indexOf('data-role="v3-activity"');
-    const band = html.indexOf('data-role="match-actions"');
-    expect(pad).toBeGreaterThan(-1);
-    expect(ledger, "the ledger follows the pad").toBeGreaterThan(pad);
-    expect(band, "nothing that ends a match sits at thumb height by a rally tap").toBeGreaterThan(
-      ledger,
-    );
+    expect(bar).toBeGreaterThan(-1);
+    expect(band, "the opened panel follows the bar").toBeGreaterThan(bar);
+    expect(html.indexOf('data-role="console-scoring"'), "...and the Scoring card follows it").toBeGreaterThan(band);
+    expect(pad).toBeGreaterThan(band);
+    expect(ledger).toBeGreaterThan(pad);
   });
 
   it("wraps the pad in no overflow-hidden ancestor", () => {
@@ -488,43 +495,44 @@ describe("W2a: held bracket fixtures and organiser-only actions (finding 11, fin
     expect(checked).toBe(2);
   });
 
-  it("m5 (fix round 2): the official's held note sits straight under the Scoring card — above the ledger and the lineups", () => {
+  it("m5 (fix round 2): the official's held note sits straight under the Scoring card — above the ledger", () => {
     const html = consoleHtml({ ...HELD, canOrganise: false });
     const scoring = html.indexOf('data-role="console-scoring"');
     const note = html.indexOf('data-testid="held-note"');
     const ledger = html.indexOf('data-role="v3-activity"');
-    const lineups = html.indexOf('data-testid="lineup-editor"');
     expect(scoring).toBeGreaterThan(-1);
     expect(note, "the note follows the Scoring card").toBeGreaterThan(scoring);
     expect(ledger, "the rig renders the ledger").toBeGreaterThan(-1);
-    expect(lineups, "the rig renders the lineups").toBeGreaterThan(-1);
     expect(note, "above the ledger").toBeLessThan(ledger);
-    expect(note, "above the lineups").toBeLessThan(lineups);
   });
-  it("loop R M7(a): an official on a held fixture gets NO empty Scoring card at any width — and the card stays wherever it holds something", () => {
-    // At 1280 and 768 the card rendered its "Scoring" heading over nothing (no pad once held, no hand-over, no stream):
-    // the phone gate (`consoleScoringEmptyOnPhone`) hid it below md only. The class token is read exactly — "hidden",
-    // never the phone-only "max-md:hidden".
+  it("loop R M7(a): the Scoring card is hidden at every width when it holds nothing — and shown wherever it holds something", () => {
+    // Since 2026-11-11 no panel renders inside the card, so what fills it is the pad or Start match. A held fixture has
+    // neither (no pad once held), whoever is looking and whatever buttons the panel bar offers. The class token is read
+    // exactly — "hidden", never the phone-only "max-md:hidden".
     const tokens = (html: string) => /<section class="([^"]*)" data-role="console-scoring"/.exec(html)?.[1]?.split(/\s+/) ?? null;
-    // Empty case first: nothing in the card at ANY width.
-    const empty = tokens(consoleHtml({ ...HELD, canOrganise: false, deviceHandover: false }));
-    expect(empty, "the section still renders, hidden, so the held note keeps its place after it").not.toBeNull();
-    expect(empty).toContain("hidden");
-    // Each thing that does fill the card keeps it shown — one row per content source.
-    const rows: [string, string][] = [
-      ["organiser (hand-over button)", consoleHtml(HELD)],
-      ["official with the hand-over", consoleHtml({ ...HELD, canOrganise: false })],
-      ["official with a stream", consoleHtml({ ...HELD, canOrganise: false, deviceHandover: false, stream: PANEL_MOUNT })],
-      ["official on a live match (the pad)", consoleHtml({ canOrganise: false, deviceHandover: false })],
+    const empties: [string, string][] = [
+      ["an official on a held fixture", consoleHtml({ ...HELD, canOrganise: false, deviceHandover: false })],
+      ["the organiser on a held fixture (the bar still offers its buttons)", consoleHtml(HELD)],
+      ["an official with a stream mount", consoleHtml({ ...HELD, canOrganise: false, deviceHandover: false, stream: PANEL_MOUNT })],
     ];
     let checked = 0;
-    for (const [name, html] of rows) {
+    for (const [name, html] of empties) {
+      const t = tokens(html);
+      expect(t, `${name}: the section still renders, hidden, so the held note keeps its place after it`).not.toBeNull();
+      expect(t, name).toContain("hidden");
+      checked++;
+    }
+    const filled: [string, string][] = [
+      ["a live match (the pad)", consoleHtml({ canOrganise: false, deviceHandover: false })],
+      ["before kickoff (Start match)", consoleHtml({ status: "scheduled" })],
+    ];
+    for (const [name, html] of filled) {
       const t = tokens(html);
       expect(t, name).not.toBeNull();
       expect(t!.includes("hidden"), name).toBe(false);
       checked++;
     }
-    expect(checked).toBe(rows.length);
+    expect(checked).toBe(empties.length + filled.length);
   });
 });
 
@@ -578,32 +586,31 @@ describe("phone composition — the match strip (spec §3.1)", () => {
   // "max-md:hidden". Every assertion below that has to tell the two classes
   // apart now requires a real class-boundary (a space, not a hyphen) before
   // "md:hidden", which "max-md:hidden" can never supply.
-  it("offers Remote scoring twice (D4): the desktop button hides on phones, the phone icon hides on desktop, and both share one accessible name", () => {
-    const html = consoleHtml({ deviceHandover: true });
-    expect(html).toMatch(/data-role="device-handover"[^>]*class="[^"]*\smax-md:hidden"/);
+  it("offers Remote scoring ONCE (D4), as a panel-bar button: no phone twin, one accessible name", () => {
+    const html = consoleHtml({ deviceHandover: true, panel: null });
+    expect(html.match(/data-role="device-handover"/g)).toHaveLength(1);
     expect(html).toMatch(/data-role="device-handover"[^>]*>Remote scoring</);
-    expect(html).toMatch(/<button[^>]*data-role="device-handover-phone"[^>]*>/);
-    expect(html).toMatch(/data-role="device-handover-phone"[^>]*class="[^"]*\smd:hidden"/);
-    expect(html).toMatch(/data-role="device-handover-phone"[^>]*aria-label="Remote scoring"/);
+    expect(html, "no second phone tree").not.toContain("device-handover-phone");
+    expect(html.match(/data-role="device-handover"[^>]*class="([^"]*)"/)![1], "shown at every width").not.toMatch(/hidden/);
+    expect(html).toMatch(/data-role="device-handover"[^>]*aria-expanded="false"/);
   });
 
-  // Spec 2026-09-30 §2 (P1): Stream is the SECOND control that exists twice, beside Remote scoring.
-  it("offers Stream twice when mounted: desktop btn-ghost min-h-11 max-md:hidden, phone 44px md:hidden, one accessible name — and BEFORE the hand-over control in both places", () => {
-    const html = consoleHtml({ deviceHandover: true, stream: { mode: "stop-only" } });
-    expect(html).toMatch(/data-role="fixture-stream"[^>]*class="btn btn-ghost min-h-11\smax-md:hidden"/);
+  // Owner 2026-11-11: Stream · Remote scoring · Lineup · Match rules · Match actions, in that order for every sport.
+  it("offers Stream ONCE when mounted — the first button, a full-width row on phones, before Remote scoring", () => {
+    const html = consoleHtml({ deviceHandover: true, stream: { mode: "stop-only" }, panel: null });
+    expect(html.match(/data-role="fixture-stream"/g)).toHaveLength(1);
+    expect(html).toMatch(/data-role="fixture-stream"[^>]*class="btn btn-ghost min-h-11 min-w-0 justify-center max-md:col-span-2"/);
     expect(html).toMatch(/data-role="fixture-stream"[^>]*>Stream</);
-    expect(html).toMatch(/data-role="fixture-stream-phone"[^>]*class="[^"]*\sh-11 w-11\s[^"]*\smd:hidden"/);
-    expect(html).toMatch(/data-role="fixture-stream-phone"[^>]*aria-label="Stream"/);
-    expect(html.indexOf('data-role="fixture-stream-phone"')).toBeGreaterThan(-1);
-    expect(html.indexOf('data-role="fixture-stream-phone"')).toBeLessThan(html.indexOf('data-role="device-handover-phone"'));
+    expect(html).not.toContain("fixture-stream-phone");
     expect(html.indexOf('data-role="fixture-stream"')).toBeLessThan(html.indexOf('data-role="device-handover"'));
+    // the bar is a 2-column grid on phones and a wrapping row from md — one DOM
+    expect(html).toMatch(/data-role="console-panel-bar"[^>]*class="grid grid-cols-2 gap-2 md:flex md:flex-wrap md:items-center"/);
   });
 
   it("renders neither Stream control without a mount — the positive pair's other half", () => {
     const html = consoleHtml({ deviceHandover: true });
     expect(html).not.toMatch(/data-role="fixture-stream"/);
-    expect(html).not.toMatch(/data-role="fixture-stream-phone"/);
-    expect(html).not.toMatch(/data-role="console-stream"/);
+    expect(html).not.toMatch(/data-panel="stream"/);
   });
 
   it("Review Focus 4: Stream stays reachable when the Scoring section does not render — finalized, cancelled, read-only (frozen) and TBD-sided", () => {
@@ -615,15 +622,11 @@ describe("phone composition — the match strip (spec §3.1)", () => {
     ];
     let checked = 0;
     for (const s of shapes) {
-      const html = consoleHtml({ ...s.props, stream: { mode: "stop-only" } });
+      const html = consoleHtml({ ...s.props, stream: { mode: "stop-only" }, panel: null });
       expect(html, s.name).not.toMatch(/data-role="console-scoring"/);
-      expect(html, s.name).toMatch(/data-role="console-stream"/);
-      expect(html, s.name).toMatch(/data-role="fixture-stream"/);
-      expect(html, s.name).toMatch(/data-role="fixture-stream-phone"/);
-      // Closed, the card is an empty box on a phone — it hides there until the strip icon opens it.
-      expect(html, s.name).toMatch(/<section class="card p-5 max-md:p-3 max-md:hidden" data-role="console-stream">/);
-      // …and it holds the ONE desktop Stream button.
+      // The bar offers the ONE Stream button whether or not the Scoring card exists.
       expect(html.match(/data-role="fixture-stream"/g), s.name).toHaveLength(1);
+      expect(html, s.name).not.toContain("fixture-stream-phone");
       checked++;
     }
     expect(checked).toBe(4);
@@ -634,42 +637,43 @@ describe("phone composition — the match strip (spec §3.1)", () => {
   // whole attribute value so a class list that still carries `max-md:hidden` cannot match.
   // B3 N-2 (T9b): the card names itself ALWAYS — open or closed, in BOTH mounts. The panel inside no longer carries a
   // visible title (spec §3.1: no heading, the frame is labelled for assistive tech), and the stop probe never did.
-  it("the OPEN fallback card shows on phones (no max-md:hidden); open or closed, in BOTH mounts, it keeps its own heading", () => {
+  it("an opened Stream panel is its own card in the panel area at every width; open or closed, the title appears at most once, in the panel chrome", () => {
     const shapes: { name: string; props: Parameters<typeof consoleHtml>[0] }[] = [
       { name: "finalized", props: { status: "finalized" } },
       { name: "cancelled", props: { status: "cancelled" } },
       { name: "read-only", props: { canEdit: false } },
       { name: "TBD side", props: { away: null } },
+      { name: "live (Scoring card present)", props: {} },
     ];
     const mounts: { name: string; stream: FixtureStreamMount }[] = [
       { name: "stop-only", stream: { mode: "stop-only" } },
       { name: "panel", stream: PANEL_MOUNT },
     ];
-    const heading = `<h2 class="text-sm font-semibold text-slate-700">${messages["stream.title"]}</h2>`;
+    const heading = `<h2 class="min-w-0 truncate text-sm font-semibold text-slate-700">${messages["stream.title"]}</h2>`;
     let checked = 0;
     for (const s of shapes) for (const mount of mounts) {
       const at = `${s.name}, ${mount.name}`;
       const open = consoleHtml({ ...s.props, stream: mount.stream, streamReturn: true });
-      expect(open, `${at}: open`).toMatch(/<section class="card p-5 max-md:p-3" data-role="console-stream">/);
-      expect(open, `${at}: the body is inside the card`).toMatch(/data-role="console-stream">[\s\S]*data-role="fixture-stream-body"/);
-      expect(open.split(heading).length - 1, `${at}: open, the card names itself once`).toBe(1);
+      expect(open, `${at}: open`).toMatch(/<section id="console-panel-stream" data-role="console-panel" data-panel="stream"[^>]*class="card min-w-0 p-5 max-md:p-3"/);
+      expect(open, `${at}: the body is inside the panel`).toMatch(/data-panel="stream"[\s\S]*data-role="fixture-stream-body"/);
+      expect(open.split(heading).length - 1, `${at}: open, the panel names itself once`).toBe(1);
+      expect(open, `${at}: it has its close X`).toContain('aria-label="Close Stream this match"');
       const closed = consoleHtml({ ...s.props, stream: mount.stream });
-      expect(closed, `${at}: closed`).toMatch(/<section class="card p-5 max-md:p-3 max-md:hidden" data-role="console-stream">/);
-      expect(closed.split(heading).length - 1, `${at}: closed, the card names itself once`).toBe(1);
+      expect(closed, `${at}: closed`).not.toContain('data-panel="stream"');
+      expect(closed.split(heading).length - 1, `${at}: closed, nothing to name`).toBe(0);
       checked++;
     }
     expect(checked).toBe(shapes.length * mounts.length);
-    // The panel mount really rendered the panel: its frame carries the name the card's heading shows.
+    // The panel mount really rendered the panel: its frame carries the name the chrome's heading shows.
     const panelOpen = consoleHtml({ status: "finalized", stream: PANEL_MOUNT, streamReturn: true });
     expect(panelOpen).toContain(`data-testid="stream-panel" aria-label="${messages["stream.title"]}"`);
     expect(panelOpen, "the panel has no visible heading of its own").not.toMatch(/data-testid="stream-panel"[^>]*>\s*<h3/);
   });
 
   // Spec §2 (T9b): the Stream button's dot and label read the page's ONE session — the same one the panel reads.
-  it("the Stream control's dot and label follow the shared session: none idle, red + 'Live' while live, amber while waiting — both twins", () => {
+  it("the Stream control's dot and label follow the shared session: none idle, red + 'Live' while live, amber while waiting", () => {
     const dotOf = (html: string, role: string) => new RegExp(`data-role="${role}"[^>]*data-dot="([a-z]+)"`).exec(html)?.[1] ?? null;
     const labelOf = (html: string) => /data-role="fixture-stream"[^>]*>(?:<span[^>]*><\/span>)?([^<]*)</.exec(html)?.[1];
-    const ariaOf = (html: string) => /data-role="fixture-stream-phone"[^>]*aria-label="([^"]*)"/.exec(html)?.[1];
     const rows: { name: string; view: StreamSessionView | null; dot: string | null; label: string }[] = [
       { name: "no session", view: null, dot: null, label: messages["stream.button"] },
       { name: "waiting", view: streamView("warming"), dot: "amber", label: messages["stream.button"] },
@@ -680,11 +684,9 @@ describe("phone composition — the match strip (spec §3.1)", () => {
     let checked = 0;
     for (const r of rows) {
       const html = consoleHtml({ stream: { mode: "stop-only" }, streamView: r.view });
-      expect(dotOf(html, "fixture-stream"), `${r.name}: desktop dot`).toBe(r.dot);
-      expect(dotOf(html, "fixture-stream-phone"), `${r.name}: phone dot`).toBe(r.dot);
-      expect(labelOf(html), `${r.name}: desktop label`).toBe(r.label);
-      // WCAG 1.4.1: the dot is colour only, so the icon twin's NAME says it too.
-      expect(ariaOf(html), `${r.name}: the phone twin's accessible name`).toBe(r.label);
+      expect(dotOf(html, "fixture-stream"), `${r.name}: dot`).toBe(r.dot);
+      // WCAG 1.4.1: the dot is colour only, so the button's own TEXT says it too.
+      expect(labelOf(html), `${r.name}: label`).toBe(r.label);
       if (r.dot === null) expect(html, `${r.name}: no data-dot at all`).not.toContain('data-dot="');
       checked++;
     }
@@ -702,7 +704,6 @@ describe("phone composition — the match strip (spec §3.1)", () => {
   it("?stream=open opens the stream panel on first render (streamReturn), and only then", () => {
     const opened = consoleHtml({ stream: { mode: "stop-only" }, streamReturn: true });
     expect(opened).toMatch(/data-role="fixture-stream"[^>]*aria-expanded="true"/);
-    expect(opened).toMatch(/data-role="fixture-stream-phone"[^>]*aria-expanded="true"/);
     expect(opened).toMatch(/data-role="fixture-stream-body"/);
     // One panel at a time: the hand-over panel is closed while Stream is open.
     expect(opened).toMatch(/data-role="device-handover"[^>]*aria-expanded="false"/);
@@ -713,15 +714,16 @@ describe("phone composition — the match strip (spec §3.1)", () => {
     expect(consoleHtml({ streamReturn: true })).not.toMatch(/data-role="fixture-stream-body"/);
   });
 
-  it("an OPEN stream panel keeps a started, pad-less Scoring section on phones — exactly as an open hand-over panel does", () => {
-    // Decided football: the pad unmounts (no post-phase panel), so the section would hide on a phone…
+  it("an OPEN stream panel renders in the panel area, never inside the Scoring card — a started, pad-less card stays hidden at every width", () => {
+    // Decided football: the pad unmounts (no post-phase panel), so the Scoring card has nothing left in it…
     const decided = { outcome: { kind: "win", winner: "e-home" } };
     const scoringClass = (html: string) => /<section class="([^"]*)" data-role="console-scoring">/.exec(html)?.[1];
-    expect(scoringClass(consoleHtml({ ...decided, stream: { mode: "stop-only" } })), "closed: nothing to show on a phone").toBe(
-      "card p-5 max-md:p-3 max-md:hidden",
-    );
-    // …unless the stream panel is open inside it.
-    expect(scoringClass(consoleHtml({ ...decided, stream: { mode: "stop-only" }, streamReturn: true }))).toBe("card p-5 max-md:p-3");
+    expect(scoringClass(consoleHtml({ ...decided, stream: { mode: "stop-only" } }))).toBe("card p-5 max-md:p-3 hidden");
+    // …and an open stream panel does not change that: it lives above the card, in its own.
+    const open = consoleHtml({ ...decided, stream: { mode: "stop-only" }, streamReturn: true });
+    expect(scoringClass(open)).toBe("card p-5 max-md:p-3 hidden");
+    expect(open.indexOf('data-panel="stream"')).toBeGreaterThan(-1);
+    expect(open.indexOf('data-panel="stream"')).toBeLessThan(open.indexOf('data-role="console-scoring"'));
   });
 
   it("renders neither hand-over control when the page says this fixture may not be handed over", () => {

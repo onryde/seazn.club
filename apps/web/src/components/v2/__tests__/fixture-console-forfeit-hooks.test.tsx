@@ -79,6 +79,7 @@ function baseProps(shape: Shape, noNextMatch = false) {
     canOrganise: true,
     stageKind: null,
     viewerPlan: "community" as const,
+    initialPanel: "actions" as const,
     scorePadV2: {
       moduleVersion: generic.version,
       resolvedConfig: CFG,

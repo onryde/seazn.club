@@ -1,0 +1,136 @@
+// The fixture console's header panel bar (owner request 2026-11-11): five panels, ONE open at a time, same button
+// order for every sport, Remote scoring alone closes itself after 20 s idle, and leaving the Lineup panel with unsaved
+// edits asks first. Expected values are literals from the owner's request, never read back from the code under test.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nextOpenPanel, type OpenPanel } from "@/lib/fixture-stream-mount";
+import {
+  PANEL_ORDER,
+  REMOTE_SCORING_IDLE_MS,
+  autoCloseMsFor,
+  createIdleTimer,
+  idleActivityHandlers,
+  offeredPanels,
+  requestPanel,
+  type PanelKey,
+} from "@/lib/fixture-console-panels";
+
+const ALL: PanelKey[] = ["stream", "handover", "lineup", "rules", "actions"];
+
+describe("button order", () => {
+  it("is Stream · Remote scoring · Lineup · Match rules · Match actions", () => {
+    expect([...PANEL_ORDER]).toEqual(["stream", "handover", "lineup", "rules", "actions"]);
+  });
+
+  it("offeredPanels keeps that order for every one of the 32 offer combinations, and drops only what is not offered", () => {
+    let checked = 0;
+    for (let mask = 0; mask < 32; mask++) {
+      const offer = Object.fromEntries(ALL.map((k, i) => [k, (mask & (1 << i)) !== 0])) as Record<PanelKey, boolean>;
+      const got = offeredPanels(offer);
+      expect(got, `mask ${mask}`).toEqual(ALL.filter((k) => offer[k]));
+      checked++;
+    }
+    expect(checked).toBe(32);
+  });
+});
+
+describe("ONE panel open at a time (5 x 5 sequence)", () => {
+  it("after opening each panel from every starting state, exactly the clicked one is open; clicking it again closes it", () => {
+    let steps = 0;
+    for (const from of [null, ...ALL] as OpenPanel[]) {
+      for (const clicked of ALL) {
+        const after = nextOpenPanel(from, clicked);
+        // exactly one panel is open (a single value), and it is not the previous one unless that was the one clicked
+        expect(after === null ? 0 : ALL.filter((k) => k === after).length).toBe(from === clicked ? 0 : 1);
+        expect(after).toBe(from === clicked ? null : clicked);
+        steps++;
+      }
+    }
+    expect(steps).toBe(30);
+  });
+
+  it("a walk through all five in turn leaves exactly one open after every step, Match actions included", () => {
+    let open: OpenPanel = null;
+    const seen: OpenPanel[] = [];
+    for (const k of [...ALL, ...ALL.slice(0, -1).reverse()]) {
+      open = nextOpenPanel(open, k);
+      seen.push(open);
+      expect(open).toBe(k);
+    }
+    expect(seen).toHaveLength(9);
+  });
+});
+
+describe("Remote scoring idle auto-close", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("only Remote scoring closes itself, after 20 s", () => {
+    expect(REMOTE_SCORING_IDLE_MS).toBe(20_000);
+    expect(ALL.map((k) => [k, autoCloseMsFor(k)])).toEqual([
+      ["stream", null],
+      ["handover", 20_000],
+      ["lineup", null],
+      ["rules", null],
+      ["actions", null],
+    ]);
+  });
+
+  it("fires 20 s after the last interaction, not 20 s after opening", () => {
+    const onIdle = vi.fn();
+    const t = createIdleTimer(REMOTE_SCORING_IDLE_MS, onIdle);
+    t.restart();
+    vi.advanceTimersByTime(19_000);
+    t.restart(); // an interaction at 19 s
+    vi.advanceTimersByTime(19_000); // 38 s after opening: would have fired at 20 s without the restart
+    expect(onIdle).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1_000);
+    expect(onIdle).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(60_000);
+    expect(onIdle).toHaveBeenCalledTimes(1); // one-shot
+  });
+
+  it("pointer, keyboard, focus and copy inside the panel each restart the timer (the wrapper's real handlers)", () => {
+    const restart = vi.fn();
+    const h = idleActivityHandlers(restart);
+    const names = Object.keys(h).sort();
+    expect(names).toEqual(
+      ["onClickCapture", "onCopyCapture", "onFocusCapture", "onKeyDownCapture", "onPointerDownCapture", "onPointerMoveCapture"],
+    );
+    for (const n of names) (h as Record<string, () => void>)[n]!();
+    expect(restart).toHaveBeenCalledTimes(6);
+  });
+
+  it("stop() cancels it", () => {
+    const onIdle = vi.fn();
+    const t = createIdleTimer(1000, onIdle);
+    t.restart();
+    t.stop();
+    vi.advanceTimersByTime(5000);
+    expect(onIdle).not.toHaveBeenCalled();
+  });
+});
+
+describe("leaving the Lineup panel with unsaved edits asks first", () => {
+  it("clean: the click goes through; dirty: any way out is held for the prompt, nothing changes", () => {
+    let held = 0;
+    let passed = 0;
+    for (const clicked of [...ALL, "close"] as const) {
+      const clean = requestPanel("lineup", clicked, false);
+      expect(clean.confirm).toBe(false);
+      expect(clean.next).toBe(clicked === "lineup" || clicked === "close" ? null : clicked);
+      passed++;
+      const dirty = requestPanel("lineup", clicked, true);
+      expect(dirty).toEqual({ next: "lineup", confirm: true });
+      held++;
+    }
+    expect(passed).toBe(6);
+    expect(held).toBe(6);
+  });
+
+  it("dirty edits only matter while Lineup is the open panel", () => {
+    for (const current of [null, "stream", "handover", "rules", "actions"] as OpenPanel[]) {
+      expect(requestPanel(current, "lineup", true)).toEqual({ next: "lineup", confirm: false });
+    }
+    expect(requestPanel("rules", "close", true)).toEqual({ next: null, confirm: false });
+  });
+});

@@ -417,12 +417,13 @@ describe("fixture console phone classes — the empty scoring section hides itse
     expect(html).not.toContain('data-role="device-handover"');
   });
 
-  it("decided + started WITH the Remote scoring button (md+ only): hidden on a phone only — max-md:hidden, never hidden", () => {
+  it("decided + started WITH the Remote scoring button: the button lives in the panel bar now, so the card is still hidden at EVERY width (2026-11-11)", () => {
     const html = consoleHtml({ status: "decided", outcome: { kind: "win", winner: "e-home" }, deviceHandover: true });
     const section = tokens(html);
-    expect(html, "premise: the md+ button renders").toContain('data-role="device-handover"');
-    expect(section).toContain("max-md:hidden");
-    expect(section).not.toContain("hidden");
+    expect(html, "premise: the button renders (in the bar, above the card)").toContain('data-role="device-handover"');
+    expect(html.indexOf('data-role="device-handover"')).toBeLessThan(html.indexOf('data-role="console-scoring"'));
+    expect(section).toContain("hidden");
+    expect(section).not.toContain("max-md:hidden");
   });
 
   it("in_play + not decided: the section is visible on phones (the pad itself renders inside it)", () => {
