@@ -152,7 +152,7 @@ describe("utcDayStart (pure, #292 discipline)", () => {
 
 describe.skipIf(!HAS_DB)("earnGrantVolumeToday (v17 gap #296)", () => {
   it("counts exactly the rows at/after the passed anchor — deterministic via a future window no neighbor suite can touch", async () => {
-    // Neighbor suites (credits-earn, publish-earn-gate, referral-grants, …)
+    // Neighbor suites (credits-earn, publish-earn-gate, …)
     // insert earn_grant rows with created_at = now(), which can never land
     // at/after a FUTURE anchor — so the window's contents are fully
     // test-owned and the delta is exact, unlike a live-window `before + 2`

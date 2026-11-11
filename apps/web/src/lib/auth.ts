@@ -9,7 +9,6 @@ import { getLimit, orgPlanKey } from "@/lib/entitlements";
 import { orgAddonForPlan } from "@/lib/org-addons";
 import { grantMonthly, walletIdFor } from "@/lib/credits";
 import { isReservedSlug } from "@/lib/public-site";
-import { consumeReferralCookie } from "@/lib/referral";
 import { routes } from "@/lib/routes";
 import { setRequestActor } from "@/server/request-context";
 import { slugify, uniqueSlug } from "@/server/usecases/slugs";
@@ -320,11 +319,7 @@ export async function assertMayOwnAnotherOrg(userId: string): Promise<void> {
  * (`assertMayOwnAnotherOrg`) is what stops a free user minting orgs for ever;
  * the per-GROUP cap is enforced on the explicit attach path, not here.
  */
-export async function createOrgForUser(
-  userId: string,
-  name: string,
-  opts?: { referredByOrgId?: string | null },
-): Promise<Organization> {
+export async function createOrgForUser(userId: string, name: string): Promise<Organization> {
   // Readable slugs can collide when two same-named orgs sign up concurrently
   // (check-then-insert race) — retry past the unique index, then salt.
   let org: Organization | undefined;
@@ -348,8 +343,8 @@ export async function createOrgForUser(
           values (${userId}, 'community', 'active', 1)
           returning id`;
         const [o] = await tx<Organization[]>`
-          insert into organizations (name, slug, created_by, subscription_id, referred_by_org_id)
-          values (${name}, ${slug}, ${userId}, ${s.id}, ${opts?.referredByOrgId ?? null})
+          insert into organizations (name, slug, created_by, subscription_id)
+          values (${name}, ${slug}, ${userId}, ${s.id})
           returning id, name, slug, created_by, created_at, logo_url, logo_storage_path, payment_instructions, default_payment_method, branding, timezone`;
         await tx`
           insert into org_members (org_id, user_id, role)
@@ -379,13 +374,6 @@ export async function createOrgForUser(
     console.error(`[credits] bootstrap grant failed for org ${org.id}`, err);
   }
 
-  // Growth-loop welcome credit (SPEC-5 §2) used to fire HERE, immediately on
-  // signup-via-referral — moved by v17 gap #296 to only pay out once the
-  // referred org publishes a competition with a division
-  // (server/usecases/competitions.ts's patchCompetition,
-  // shouldFireGrowthEarnGrants). referred_by_org_id is still stamped on the
-  // insert above (#267 T2) so that later signal can find the referrer.
-
   await invalidateUserOrgs(userId);
   return org;
 }
@@ -402,11 +390,7 @@ export async function ensureActiveOrg(userId: string): Promise<string> {
     if (target.id !== activeId) await setActiveOrgId(target.id);
     return target.id;
   }
-  // Best-effort referral consume: this RSC-render auto-provision path is the
-  // one `consumeReferralCookie`'s cookie-clear try/catch exists for (see
-  // lib/referral.ts) — a failed clear here never blocks org creation.
-  const referredByOrgId = await consumeReferralCookie(userId);
-  const created = await createOrgForUser(userId, "My organization", { referredByOrgId });
+  const created = await createOrgForUser(userId, "My organization");
   await setActiveOrgId(created.id);
   return created.id;
 }

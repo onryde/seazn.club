@@ -754,19 +754,13 @@ export async function recordPassGrant(
  * amounts are what an org gets for each milestone, and `LIFETIME_EARN_CAP` is
  * the hard ceiling on how many `earn_grant` credits ANY single wallet can ever
  * accrue across all earn sources combined — so the loop can never mint unbounded
- * free credits no matter how many milestones an org hits (or a referral source a
- * later task adds). Defaults: 10 for onboarding, 10 for the first paid
+ * free credits no matter how many milestones an org hits. Defaults: 10 for onboarding, 10 for the first paid
  * competition, 100 lifetime — a new org can earn its way to at most 100 free
  * credits ($25 of COGS at $0.25/credit) before every further earn no-ops.
  */
 export const ONBOARDING_EARN = 10;
 export const FIRST_PAID_EARN = 10;
 export const LIFETIME_EARN_CAP = 100;
-
-/** Referrer's reward when a referred org reaches its first paid competition (SPEC-5 §2). */
-export const REFERRAL_EARN = 20;
-/** A newly-referred org's welcome credits at signup-via-referral (SPEC-5 §2). */
-export const REFERRAL_WELCOME_EARN = 10;
 
 /**
  * Grant an org free AI credits for a growth milestone (SPEC-5 §2): onboarding
@@ -798,7 +792,7 @@ export const REFERRAL_WELCOME_EARN = 10;
 export async function recordEarnGrant(
   walletId: string,
   orgId: string,
-  reason: "onboarding" | "first_paid" | "referral" | "referral_welcome",
+  reason: "onboarding" | "first_paid",
   ref: string,
   amount: number,
 ): Promise<{ granted: number }> {
@@ -853,7 +847,7 @@ export async function recordEarnGrant(
  */
 export async function tryEarnGrant(
   orgId: string,
-  reason: "onboarding" | "first_paid" | "referral" | "referral_welcome",
+  reason: "onboarding" | "first_paid",
   amount: number,
 ): Promise<number> {
   try {

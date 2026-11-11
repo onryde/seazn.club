@@ -96,8 +96,27 @@ export const W2D_PIN_BEFORE: W2dPinBefore = JSON.parse(
 /** The scenario's one organization: every recorded row belongs to it. */
 export const W2D_PIN_ORG_ID = W2D_PIN_BEFORE.orgId;
 
+/** Columns the recording holds that a later migration DROPPED on purpose (V500 removed the referral programme). They are
+ *  stripped from the recorded row, but only while the recorded value is null — a non-null value would be data the twin
+ *  silently loses, so that throws instead. Every other recorded-but-gone column still throws in `insertableColumns`. */
+const RETIRED_COLUMNS: Partial<Record<W2dPinTable, readonly string[]>> = {
+  organizations: ["referral_code", "referred_by_org_id"],
+};
+
+function withoutRetired(table: W2dPinTable, row: Record<string, unknown>): Record<string, unknown> {
+  const retired = RETIRED_COLUMNS[table] ?? [];
+  const out = { ...row };
+  for (const c of retired) {
+    if (!(c in out)) continue;
+    if (out[c] !== null) throw new Error(`w2d-pin twin: ${table}.${c} was dropped but the recording holds a value for it`);
+    delete out[c];
+  }
+  return out;
+}
+
 /** The two values that are unique across the database, replaced (see the header). Deterministic, from the ids. */
-function adjusted(table: W2dPinTable, row: Record<string, unknown>): Record<string, unknown> {
+function adjusted(table: W2dPinTable, recorded: Record<string, unknown>): Record<string, unknown> {
+  const row = withoutRetired(table, recorded);
   if (table === "users") return { ...row, email: `w2d-pin-twin+${String(row.id).slice(0, 8)}@example.test` };
   if (table === "organizations") return { ...row, slug: `w2d-pin-twin-${String(row.id).slice(0, 8)}`, subscription_id: null };
   return row;

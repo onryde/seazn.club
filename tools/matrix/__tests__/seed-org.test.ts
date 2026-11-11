@@ -158,7 +158,7 @@ describe("matrixSqlOver — the real queries, driven over a fake client", () => 
       "db show data_directory", "BEGIN", "tx show data_directory", "tx insert into subscriptions", "tx insert into organizations", "tx insert into org_members", "COMMIT",
     ]);
     const stmts = seen.filter((s): s is Stmt => typeof s !== "string");
-    expect(stmts.map((s) => s.values)).toEqual([[], [], ["u1"], ["Matrix 1", "m-r-1", "u1", "s1", null], ["o1", "u1"]]);
+    expect(stmts.map((s) => s.values)).toEqual([[], [], ["u1"], ["Matrix 1", "m-r-1", "u1", "s1"], ["o1", "u1"]]);
     expect(stmts[4]!.text).toMatch(/values \(\$, \$, 'owner'\)$/);
   });
 
@@ -685,7 +685,7 @@ describe("mirror pin: createOrgForUser's inserts (a product change reds here)", 
   it("still inserts subscriptions, organizations, org_members with the columns seed-org mirrors", () => {
     expect(body.length).toBeGreaterThan(0);
     expect(body).toMatch(/insert into subscriptions\s*\(\s*owner_user_id,\s*plan_key,\s*status,\s*quantity_paid\s*\)/);
-    expect(body).toMatch(/insert into organizations\s*\(\s*name,\s*slug,\s*created_by,\s*subscription_id,\s*referred_by_org_id\s*\)/);
+    expect(body).toMatch(/insert into organizations\s*\(\s*name,\s*slug,\s*created_by,\s*subscription_id\s*\)/);
     expect(body).toMatch(/insert into org_members\s*\(\s*org_id,\s*user_id,\s*role\s*\)/);
   });
 

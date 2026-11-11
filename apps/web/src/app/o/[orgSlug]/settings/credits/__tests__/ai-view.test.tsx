@@ -1,7 +1,7 @@
-// The AI side's markup (components/billing-credits.tsx). One thing is pinned here: the "Invite & earn" referral card is
-// hidden (owner, 2026-11-11). Its copy is gone from the dictionaries and its reads from the view model (credits-tab.ts,
-// pinned by its own "reads no referral data" test), so the card is asserted absent by its markup — `data-referral` and
-// the `/refer/` link — in every locale. The /refer route and the referral grants are untouched.
+// The AI side's markup (components/billing-credits.tsx). One thing is pinned here: there is no "Invite & earn" referral
+// card — the referral programme is removed (owner, 2026-11-11). Its copy is gone from the dictionaries and its reads from
+// the view model (credits-tab.ts), so the card is asserted absent by its markup — `data-referral` and the `/refer/` link —
+// in every locale.
 //
 // Expected strings come from the dictionary FILES read off disk, never from the component's own keys.
 //

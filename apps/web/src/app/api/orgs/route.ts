@@ -1,6 +1,5 @@
 import { createOrgForUser, getUserOrgs, requireUser, setActiveOrgId } from "@/lib/auth";
 import { handler } from "@/lib/http";
-import { consumeReferralCookie } from "@/lib/referral";
 import { createOrgSchema } from "@/lib/types";
 import { log } from "@/server/logger";
 
@@ -19,13 +18,7 @@ export async function POST(req: Request) {
   return handler(async () => {
     const user = await requireUser();
     const { name, attachToGroupId } = createOrgSchema.parse(await req.json());
-    // Consume before create because the referrer must be stamped IN the insert.
-    // If createOrgForUser throws the cookie is already spent — accepted: a
-    // first-org create (the only real referral case) can't hit the org-quota
-    // throw, and an Nth-org failure means the user already has orgs and so was
-    // never a fresh referral. No attribution is lost in a case that mattered.
-    const referredByOrgId = await consumeReferralCookie(user.id);
-    const org = await createOrgForUser(user.id, name, { referredByOrgId });
+    const org = await createOrgForUser(user.id, name);
     await setActiveOrgId(org.id);
     if (!attachToGroupId) return org;
     try {

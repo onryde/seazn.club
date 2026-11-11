@@ -10,12 +10,7 @@ import { orgPlanKey } from "@/lib/entitlements";
  * (whose spend/grant functions this must not touch) plus the plan's monthly
  * grant cap and the shared-pool org count.
  *
- * No referral reads (owner, 2026-11-11: the "Invite & earn" card is hidden).
- * The view used to mint the org's referral code on first read
- * (`getOrCreateReferralCode`) — a WRITE on a GET, for a card nobody sees — and
- * count referred orgs and referral earnings. The /refer route, the attribution
- * cookie and the referral grants are untouched; a card that comes back brings
- * its own reads.
+ * No referral reads: the referral programme is removed (owner, 2026-11-11).
  *
  * All numbers are derived from the append-only ledger + the plan matrix — there
  * is no `spent_this_period` counter to drift (see `credits.ts` for why the

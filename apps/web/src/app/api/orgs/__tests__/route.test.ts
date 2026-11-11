@@ -9,8 +9,6 @@ vi.mock("@/lib/auth", () => ({
   setActiveOrgId: vi.fn(async () => {}),
   getUserOrgs: vi.fn(async () => []),
 }));
-const consumeReferralCookie = vi.fn<(userId: string) => Promise<string | null>>(async () => null);
-vi.mock("@/lib/referral", () => ({ consumeReferralCookie: (...a: [string]) => consumeReferralCookie(...a) }));
 const attachOrgToGroup = vi.fn();
 vi.mock("@/server/usecases/billing-groups", () => ({ attachOrgToGroup: (...a: unknown[]) => attachOrgToGroup(...a) }));
 
@@ -29,8 +27,6 @@ const post = async (body: unknown) => {
 beforeEach(() => {
   attachOrgToGroup.mockReset();
   createOrgForUser.mockClear();
-  consumeReferralCookie.mockReset();
-  consumeReferralCookie.mockResolvedValue(null);
 });
 
 it("no attachToGroupId → org created individual, attach never called", async () => {
@@ -49,12 +45,10 @@ it("eligible attachToGroupId → attach called, charged surfaced", async () => {
   expect(r.json.data!.attach).toEqual({ ok: true, charged: true });
 });
 
-it("consumes the referral cookie and threads it into createOrgForUser (#267 T2)", async () => {
-  consumeReferralCookie.mockResolvedValue("referrer-org-1");
-  const r = await post({ name: "Referred" });
+it("creates the org with only the user and the name — no attribution argument", async () => {
+  const r = await post({ name: "Plain" });
   expect(r.status).toBe(200);
-  expect(consumeReferralCookie).toHaveBeenCalledWith("user-1");
-  expect(createOrgForUser).toHaveBeenCalledWith("user-1", "Referred", { referredByOrgId: "referrer-org-1" });
+  expect(createOrgForUser).toHaveBeenCalledWith("user-1", "Plain");
 });
 
 it("attach failure → org still created standalone, reason surfaced (200)", async () => {

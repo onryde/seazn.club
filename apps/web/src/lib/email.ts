@@ -1257,7 +1257,7 @@ export interface EarnGrantVolumeAlertEmail {
 }
 
 /** Internal staff alert (v17 gap #296 farm-watch): today's earn_grant ledger
- *  rows (onboarding + referral-welcome + referral + first_paid, pooled
+ *  rows (onboarding + first_paid, pooled
  *  across every wallet) crossed the daily alert threshold — the backstop
  *  for the publish-with-division gate, in case the gate itself is being
  *  worked (many throwaway orgs each publishing one bare competition).
@@ -1270,7 +1270,7 @@ export function earnGrantVolumeAlertEmail(opts: EarnGrantVolumeAlertEmail): Emai
   const subject = `Earn-grant volume alert: ${opts.count} today (threshold ${opts.threshold})`;
   const bodyText =
     `${opts.count} earn_grant credit rows have landed today, at or above the alert threshold of ` +
-    `${opts.threshold} (v17 gap #296 farm-watch — onboarding/referral-welcome earn grants gated on a ` +
+    `${opts.threshold} (v17 gap #296 farm-watch — onboarding earn grants gated on a` +
     `published competition with a division). Check /admin/revenue for the AI credit margin panel and ` +
     `recent signups sharing an IP or email domain pattern; farmed accounts spend differently from real ` +
     `ones (immediately, on large runs, then never again).`;

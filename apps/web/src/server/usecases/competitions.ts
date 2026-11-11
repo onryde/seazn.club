@@ -3,13 +3,12 @@ import "server-only";
 // Server Components call — the only writer. Auth happens in the route (an
 // AuthCtx proves it); tenancy is enforced by withTenant + RLS.
 import { z } from "zod";
-import { sql, withTenant } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { getLimit, invalidateOrgEntitlements, requireFeature, withinLimit } from "@/lib/entitlements";
 import { publicDashboardsReason } from "@/lib/feature-copy";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS, type AnalyticsEvent } from "@/lib/analytics-events";
-import { log } from "@/server/logger";
 import { FIXTURE_DELETED_REASON } from "@/server/email-outbox/cancel";
 import { cancelBoardInvites } from "./external-play/cancel-invites";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -24,7 +23,7 @@ import {
 import { orgLiveCacheKey } from "@/server/public-site/org-live-cache-key";
 import { cacheDel } from "@/lib/cache";
 import { competitionIsListed, UNLISTED_STATUS } from "@/lib/competition-listing";
-import { ONBOARDING_EARN, REFERRAL_WELCOME_EARN, tryEarnGrant } from "@/lib/credits";
+import { ONBOARDING_EARN, tryEarnGrant } from "@/lib/credits";
 import { invalidateSlugCache } from "@/server/slug-resolve";
 import { dropPublicCompetitionRefs } from "@/server/public-site/public-ref-cache";
 import {
@@ -872,32 +871,16 @@ export async function patchCompetition(
   if (shouldFireMadePublic(oldVisibility, patch.visibility)) {
     await fireCompetitionMadePublic(auth, id);
   }
-  // Growth-loop gate (SPEC-5 §2, v17 gap #296): onboarding + referral-welcome
-  // earn credits pay out only once this org proves a human is running a real
-  // competition — publishing one with at least one (non-archived) division —
-  // never at signup or onboarding-complete alone (moved off auth.ts's
-  // createOrgForUser and api/onboarding/complete/route.ts). Both grants are
-  // idempotent per org (tryEarnGrant never throws), so re-publishing, or
-  // publishing a second/third competition, is always a safe no-op.
-  //
-  // Best-effort, and the try/catch is load-bearing: this whole block runs
-  // AFTER the tenant transaction has committed. `tryEarnGrant` never throws,
-  // but the `referred_by_org_id` read is a raw query — a transient DB error
-  // there would escape as a 500 for a publish that already succeeded, and the
-  // grant would be lost for good, because the gate only fires on the
-  // TRANSITION into "published" and the row is already published on any
-  // retry. Swallow and log instead; the caller gets its row either way.
+  // Growth-loop gate (SPEC-5 §2, v17 gap #296): the onboarding earn credits
+  // pay out only once this org proves a human is running a real competition —
+  // publishing one with at least one (non-archived) division — never at signup
+  // or onboarding-complete alone (moved off auth.ts's createOrgForUser and
+  // api/onboarding/complete/route.ts). The grant is idempotent per org and
+  // `tryEarnGrant` never throws, so re-publishing, or publishing a second/third
+  // competition, is a safe no-op, and a grant hiccup never fails a publish that
+  // has already committed.
   if (shouldFireGrowthEarnGrants(statusChangedTo, publishedDivisionCount)) {
-    try {
-      await tryEarnGrant(auth.orgId, "onboarding", ONBOARDING_EARN);
-      const [orgRow] = await sql<{ referred_by_org_id: string | null }[]>`
-        select referred_by_org_id from organizations where id = ${auth.orgId}`;
-      if (orgRow?.referred_by_org_id) {
-        await tryEarnGrant(auth.orgId, "referral_welcome", REFERRAL_WELCOME_EARN);
-      }
-    } catch (err) {
-      log.error({ err, orgId: auth.orgId }, "competitions: growth earn grants failed");
-    }
+    await tryEarnGrant(auth.orgId, "onboarding", ONBOARDING_EARN);
   }
   return row;
 }

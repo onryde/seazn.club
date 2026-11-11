@@ -6,13 +6,7 @@ import { getStripe } from "@/lib/stripe";
 import { rateLimit } from "@/lib/rate-limit";
 import { log } from "@/server/logger";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
-import {
-  FIRST_PAID_EARN,
-  recordEarnGrant,
-  REFERRAL_EARN,
-  tryEarnGrant,
-  walletIdFor,
-} from "@/lib/credits";
+import { FIRST_PAID_EARN, tryEarnGrant } from "@/lib/credits";
 import { audit } from "../audit";
 import type { RegistrationGroupRow, RegistrationWithGroupRow } from "./types";
 import { hashRegistrationToken } from "./helpers";
@@ -492,23 +486,6 @@ async function confirmPaidRegistration(
     // never blocks the webhook ACK; orgId is the ORGANISER (reg.org_id mirrors the
     // division's/competition's org), not the registrant.
     await tryEarnGrant(outcome.orgId, "first_paid", FIRST_PAID_EARN);
-    // Growth loop (SPEC-5 §2): if THIS org was itself referred, its first paid
-    // competition earns the REFERRER credits. Keyed on the referred org
-    // (ref = outcome.orgId) → once per referred org; a later paid comp no-ops.
-    // Grantee/wallet = the referrer; the referrer's lifetime cap bounds a prolific
-    // referrer. Self-referral was blocked when referred_by_org_id was stamped (T2),
-    // so no self-check needed. Best-effort — never block the webhook ACK.
-    try {
-      const [refRow] = await sql<{ referred_by_org_id: string | null }[]>`
-        select referred_by_org_id from organizations where id = ${outcome.orgId}`;
-      const referrerOrgId = refRow?.referred_by_org_id ?? null;
-      if (referrerOrgId) {
-        const referrerWallet = await walletIdFor(referrerOrgId);
-        await recordEarnGrant(referrerWallet, referrerOrgId, "referral", outcome.orgId, REFERRAL_EARN);
-      }
-    } catch (err) {
-      log.error({ err, orgId: outcome.orgId }, "credits: referral grant failed for referrer");
-    }
     return;
   }
   // Refunds happen OUTSIDE the tx (network). A failure surfaces on the
