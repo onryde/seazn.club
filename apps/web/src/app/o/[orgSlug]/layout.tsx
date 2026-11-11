@@ -58,11 +58,7 @@ export default async function OrgLayout({
           afterwards by ActiveOrgSync, so the nav must not wait for it. */}
       <Nav orgSlug={resolved.slug} />
       <ActiveOrgSync orgId={resolved.id} stale={activeOrgId !== resolved.id} />
-      <Breadcrumbs
-        orgName={resolved.name}
-        orgs={orgs.map((o) => ({ name: o.name, slug: o.slug }))}
-        names={names}
-      />
+      <Breadcrumbs orgName={resolved.name} names={names} />
       {children}
     </DictProvider>
   );

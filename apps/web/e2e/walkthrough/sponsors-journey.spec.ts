@@ -11,7 +11,7 @@
 // against docs/contracts/relay-job.v1.json before it is sent. No airing is ever built by hand: each one is a line the
 // page printed.
 //
-//   J10  the top bar: Sponsors (labelled) reaches the hub; Settings and Sign out are icons with names and tooltips; 1280, 320
+//   J10  the top bar: Sponsors (labelled) reaches the hub; Settings and Sign out are in the account menu (2026-11-11); 1280, 320
 //   J1   a sponsor added through the form (name, link; no tier - its deal sets that) — on the public match page's board
 //   J2   On stream: tick one, tick a second, untick it, tick it again — the plan the console preview reads follows each tap
 //   J3   the plan the compositor's page reads (the relay door): the ticked sponsors only, each with its short code — and the
@@ -190,29 +190,32 @@ test.afterAll(async () => {
   await releaseStandInOrg(org);
 });
 
-test("J10 the top bar: Sponsors is a labelled link to the hub; Settings and Sign out are icons named for a screen reader, with a tooltip — at 1280 and 320", async () => {
-  test.setTimeout(4 * NAV_MS + 16 * ACT_MS);
+test("J10 the top bar: Sponsors is a labelled link to the hub; Settings and Sign out are one tap into the account menu — at 1280 and 320", async () => {
+  test.setTimeout(4 * NAV_MS + 20 * ACT_MS);
   const { page, orgSlug } = owner();
-  const settingsWord = say(EN_CONSOLE, "nav.settings");
+  const menuWord = say(EN_CONSOLE, "nav.account.menu");
+  const orgSettingsWord = say(EN_CONSOLE, "nav.account.orgSettings");
   const signOutWord = say(EN_CONSOLE, "nav.signOut");
   const sponsorsWord = say(EN_CONSOLE, "nav.sponsors");
   const tourWord = say(EN_CONSOLE, "tour.dialogLabel");
   const bar = page.locator("header.app-gantry");
-  const checkIcons = async (width: number) => {
-    const settings = bar.getByTestId("nav-settings");
-    await expect(settings, `@${width}: Settings is on the bar`).toBeVisible();
-    await expect(settings, "named for a screen reader").toHaveAttribute("aria-label", settingsWord);
-    await expect(settings, "and the same word as its tooltip").toHaveAttribute("title", settingsWord);
-    expect((await settings.innerText()).trim(), "an icon alone: no painted word").toBe("");
-    const signOut = bar.getByRole("button", { name: signOutWord, exact: true });
-    await expect(signOut, `@${width}: Sign out is on the bar`).toBeVisible();
-    await expect(signOut).toHaveAttribute("title", signOutWord);
-    expect((await signOut.innerText()).trim(), "an icon alone: no painted word").toBe("");
-    // Before the hover, so a tour over the bar is named here rather than read as the hover's timeout.
+  const checkAccountMenu = async (width: number) => {
+    // The account menu (owner, Option A, 2026-11-11) took the Settings and Sign-out icons off the bar.
+    await expect(bar.getByTestId("nav-settings"), `@${width}: no Settings icon on the bar`).toHaveCount(0);
+    await expect(bar.getByRole("button", { name: signOutWord, exact: true }), `@${width}: no Sign-out icon on the bar`).toHaveCount(0);
+    // Before the open, so a tour over the bar is named here rather than read as the click's timeout.
     await expect(page.getByRole("dialog", { name: tourWord }), `@${width}: no product tour over the bar (marked seen in setup)`).toHaveCount(0);
-    // The tooltip is the browser's own (`title`): hovering is what a mouse user does; its paint is not in the DOM.
-    await settings.hover();
-    await expect(settings).toHaveAttribute("title", settingsWord);
+    const trigger = bar.getByRole("button", { name: menuWord, exact: true });
+    await expect(trigger, `@${width}: the account menu is on the bar, named for a screen reader`).toBeVisible();
+    await trigger.click();
+    const settings = page.getByTestId("account-menu-settings");
+    await expect(settings, `@${width}: Organisation settings is in the menu`).toBeVisible();
+    await expect(settings).toHaveText(orgSettingsWord);
+    await expect(settings).toHaveAttribute("href", routes.orgSettings(orgSlug));
+    await expect(page.getByTestId("account-menu-signout"), `@${width}: Sign out is in the menu`).toHaveText(signOutWord);
+    await expectNoHorizontalScroll(page);
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("account-menu"), `@${width}: Escape closes the menu`).toHaveCount(0);
     await expectNoHorizontalScroll(page);
   };
 
@@ -221,17 +224,17 @@ test("J10 the top bar: Sponsors is a labelled link to the hub; Settings and Sign
   const sponsors = bar.getByTestId("nav-sponsors");
   await expect(sponsors, "1280: Sponsors is a labelled link").toBeVisible();
   expect((await sponsors.innerText()).trim(), "its word is painted").toBe(sponsorsWord);
-  await checkIcons(1280);
+  await checkAccountMenu(1280);
   await sponsors.click();
   await expect(page.getByTestId("sponsors-tab-overview"), "the link reaches the hub, on Overview").toBeVisible();
   await expect(page).toHaveURL(new RegExp(`${escapeRe(routes.orgSponsors(orgSlug))}(\\?|$)`));
 
   // 320: the labelled link folds (nav.tsx: `hidden min-[350px]:flex` for an org without a logo); the Competitions home's
-  // Sponsors entry is the way in at every width, and the two icons stay.
+  // Sponsors entry is the way in at every width, and the account menu stays (a bottom sheet here).
   await page.setViewportSize({ width: 320, height: 800 });
   await page.goto(routes.orgHome(orgSlug));
   await expect(bar.getByTestId("nav-sponsors"), "320: the labelled link is folded away").toBeHidden();
-  await checkIcons(320);
+  await checkAccountMenu(320);
   await page.getByTestId("org-home-sponsors").click();
   await expect(page.getByTestId("sponsors-tab-overview"), "320: the home's entry reaches the hub").toBeVisible();
   await expectNoHorizontalScroll(page);

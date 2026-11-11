@@ -169,15 +169,20 @@ test("the Competitions home's Sponsors entry opens the hub at 320, where the top
   await expect(page.getByTestId("nav-sponsors")).toBeVisible();
   await expect(page.getByTestId("nav-sponsors")).toHaveAttribute("href", `/o/${org.slug}/sponsors`);
 
-  // On a desktop (owner ruling 2026-11-01) Sponsors paints its word like Dashboard and Directory, and Settings is the gear alone: no
-  // words painted or hidden, reached by role + its name, with the same words as its tooltip.
+  // On a desktop (owner ruling 2026-11-01) Sponsors paints its word like Dashboard and Directory. Settings is no longer a bar icon
+  // (the account menu, 2026-11-11): it is one tap into the menu, named, and still points at this org's Settings.
   await page.setViewportSize({ width: 1280, height: 800 });
   await expect(page.getByTestId("nav-sponsors"), "a labelled link at 1280").toHaveText(CONSOLE["nav.sponsors"] ?? "");
-  const settings = page.locator("header.app-gantry nav").getByRole("link", { name: CONSOLE["nav.settings"] ?? "", exact: true });
-  await expect(settings, "Settings is found by its accessible name").toBeVisible();
+  await expect(page.locator('header.app-gantry [data-testid="nav-settings"]'), "no Settings icon on the bar").toHaveCount(0);
+  const trigger = page.locator("header.app-gantry").getByRole("button", { name: CONSOLE["nav.account.menu"] ?? "", exact: true });
+  await expect(trigger, "the account menu is found by its accessible name").toBeVisible();
+  await trigger.click();
+  const settings = page.getByTestId("account-menu-settings");
+  await expect(settings, "Organisation settings is in the menu").toBeVisible();
   await expect(settings).toHaveAttribute("href", `/o/${org.slug}/settings`);
-  await expect(settings).toHaveAttribute("title", CONSOLE["nav.settings"] ?? "");
-  await expect(settings, "Settings paints no words").toHaveText("");
+  await expect(settings).toHaveText(CONSOLE["nav.account.orgSettings"] ?? "");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("account-menu")).toHaveCount(0);
 });
 
 test("on stream: the first tick turns the rotation on at Normal, the dial and a competition's own scope persist, and the preview names the sport's breaks", async ({ page, request }) => {

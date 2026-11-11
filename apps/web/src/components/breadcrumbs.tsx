@@ -1,88 +1,28 @@
 "use client";
 // Breadcrumb trail + universal back button for the /o console (v3/01 §3–4).
 // Derived entirely from the pathname — zero per-page wiring. The org segment
-// doubles as the org switcher (plain links to /o/[slug]; ActiveOrgSync
-// repairs the cookie on arrival). Mobile collapses to "‹ parent", which IS
+// is plain text (org switching lives in the account menu). Mobile collapses to "‹ parent", which IS
 // the back affordance; desktop gets a 44px chevron whose parent name shows
 // on hover. Back always targets the structural parent, never history.back().
 import Link from "@/components/ui/console-link";
-import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { buildCrumbs, type BreadcrumbNameMap } from "@/lib/breadcrumb-chain";
-import { orgSwitchTarget } from "@/components/org-switcher";
 import { useMsg } from "@/components/i18n/dict-provider";
 
 export type { BreadcrumbNameMap };
 
 interface BreadcrumbsProps {
   orgName: string;
-  orgs: { name: string; slug: string }[];
   names: BreadcrumbNameMap;
 }
 
-function OrgCrumb({
-  orgName,
-  orgs,
-  pathname,
-}: Pick<BreadcrumbsProps, "orgName" | "orgs"> & { pathname: string }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  // The org segment doubles as the switcher. Land on the SAME page under the
-  // target org (Settings → Settings) instead of always bouncing to the org
-  // home — the "switching org redirects to the dashboard" bug. orgSwitchTarget
-  // transfers org-level paths (/o/<slug>, /settings…) and falls back to the new
-  // org home for entity paths (/c, /d) that can't exist under another org.
-  const oldSlug = pathname.match(/^\/o\/([^/]+)/)?.[1];
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [open]);
-
-  if (orgs.length < 2) {
-    return <span className="truncate font-medium text-cream/90">{orgName}</span>;
-  }
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        className="flex max-w-48 items-center gap-1 rounded-md px-1.5 py-1 font-medium text-cream/90 transition hover:bg-cream/10"
-      >
-        <span className="truncate">{orgName}</span>
-        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-cream/50" strokeWidth={2} />
-      </button>
-      {open && (
-        <div
-          role="menu"
-          className="absolute left-0 top-full z-30 mt-1 w-56 rounded-lg border border-cream/10 bg-night-2 py-1 shadow-xl"
-        >
-          {orgs.map((o) => (
-            <Link
-              key={o.slug}
-              role="menuitem"
-              href={orgSwitchTarget(pathname, oldSlug, o.slug)}
-              onClick={() => setOpen(false)}
-              className={`block truncate px-3 py-2 text-sm transition hover:bg-cream/10 hover:text-cream ${
-                o.name === orgName ? "font-medium text-lime-400" : "text-cream/80"
-              }`}
-            >
-              {o.name}
-            </Link>
-          ))}
-        </div>
-      )}
-    </div>
-  );
+/** The org segment is the trail's root and plain text: switching organisation lives in the gantry's account menu. */
+function OrgCrumb({ orgName }: Pick<BreadcrumbsProps, "orgName">) {
+  return <span className="truncate font-medium text-cream/90">{orgName}</span>;
 }
 
-export function Breadcrumbs({ orgName, orgs, names }: BreadcrumbsProps) {
+export function Breadcrumbs({ orgName, names }: BreadcrumbsProps) {
   const pathname = usePathname();
   const msg = useMsg();
   const crumbs = buildCrumbs({ pathname, orgName, names, t: msg });
@@ -110,20 +50,20 @@ export function Breadcrumbs({ orgName, orgs, names }: BreadcrumbsProps) {
 
         {/* Mobile (§3 wireframe): the trail collapses to "‹ parent" — the
             back link above IS the affordance, so just show where it goes.
-            Org home keeps the switcher. */}
+            Org home shows the org's name. */}
         {parent ? (
           <Link href={parent.href} className="min-w-0 truncate py-3 sm:hidden">
             {parent.label}
           </Link>
         ) : (
           <div className="flex min-w-0 items-center py-2 sm:hidden">
-            <OrgCrumb orgName={orgName} orgs={orgs} pathname={pathname} />
+            <OrgCrumb orgName={orgName} />
           </div>
         )}
 
         {/* Desktop trail: every level links; the current page is plain text. */}
         <nav aria-label="Breadcrumb" className="hidden min-w-0 items-center gap-1 py-2 sm:flex">
-          <OrgCrumb orgName={orgName} orgs={orgs} pathname={pathname} />
+          <OrgCrumb orgName={orgName} />
           {crumbs.slice(1).map((crumb, i) => {
             const isLast = i === crumbs.length - 2;
             return (

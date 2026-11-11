@@ -19,12 +19,13 @@
 // Each shot is the state's own region. The org TOP BAR has its own shots (the nav sign-off, coordinator 2026-11-08):
 //   nav-logo-<w>              `header.app-gantry` of an org with a logo, at 320/768/1280
 //   nav-name43-<w>            the same bar for an org with a 43-character name
-//   nav-settings-tooltip-1280 Settings hovered. The browser's own `title` tooltip is NOT in the DOM and headless Chromium
-//                             paints none into a screenshot: the shot shows the hover state, the witness asserts the title.
+//   nav-account-menu-1280     the account menu open (owner, Option A, 2026-11-11): the bar and the dropdown under it, one
+//                             clip of the page - the menu is portalled to <body>, so a shot of the header alone would miss it.
 // Before each: Sponsors (folded to the home's entry below 350 — nav.tsx `hidden min-[350px]:flex`, so it is asserted HIDDEN
-// at 320, and above it the link AND its label span visible), Settings and Sign out visible AND tappable inside the viewport
-// (elementFromPoint), the bar's content inside its box, and no page scroll. At 320 the logo org's crest stands alone (nav.tsx
-// folds its wordmark there: CI e2e 42438561906 measured that bar 354px wide, Sign out past the edge).
+// at 320, and above it the link AND its label span visible), the account menu trigger visible AND tappable inside the viewport
+// (elementFromPoint), no Settings or Sign-out icon left on the bar (both live in the menu since 2026-11-11), the bar's content
+// inside its box, and no page scroll. At 320 the logo org's crest stands alone (nav.tsx folds its wordmark there: CI e2e
+// 42438561906 measured that bar 354px wide, its last control past the edge).
 //
 // ANTI-VACUITY (AGENTS.md class 10): the last test asserts every file exists, is a PNG, and that no two are
 // byte-identical — a capture that errored before a shot, or two states that never opened, cannot pass it.
@@ -52,8 +53,8 @@ const EMPTY_JAR = { cookies: [], origins: [] };
 
 const UI: Record<string, string> = JSON.parse(readFileSync(fileURLToPath(new URL("../../src/dictionaries/en/ui.json", import.meta.url)), "utf8"));
 const CONSOLE: Record<string, string> = JSON.parse(readFileSync(fileURLToPath(new URL("../../src/dictionaries/en/console.json", import.meta.url)), "utf8"));
-/** The top bar's shots, by name: both orgs at every width, and Settings hovered at 1280. */
-const NAV_SHOTS = [...WIDTHS.flatMap((w) => [`nav-logo-${w}`, `nav-name43-${w}`]), "nav-settings-tooltip-1280"];
+/** The top bar's shots, by name: both orgs at every width, and the account menu open at 1280. */
+const NAV_SHOTS = [...WIDTHS.flatMap((w) => [`nav-logo-${w}`, `nav-name43-${w}`]), "nav-account-menu-1280"];
 const LONG_ORG = "Harbourside Northern Athletic Club U21 Team";
 const NAV_LOGO_URL = "https://crest.nav-capture.example/crest.png";
 const navShotPath = (name: string) => join(DIR!, `${name}.png`);
@@ -277,9 +278,10 @@ test.describe("the org top bar (nav sign-off)", () => {
     expect(at.hit, `${width}: a tap at ${what}'s centre reaches it`).toBe(true);
   }
 
-  /** The bar at this width, witnessed: Sponsors (hidden at 320, where the home's entry stands in), Settings, Sign out, the
-   *  bar's content inside its own box, Settings and Sign out tappable inside the viewport, no page scroll. CI e2e 42438561906
-   *  measured the logo org's bar 354px wide at 320, Sign out wholly past the edge: nav.tsx now folds a logo org's wordmark there. */
+  /** The bar at this width, witnessed: Sponsors (hidden at 320, where the home's entry stands in), the account menu trigger,
+   *  the bar's content inside its own box, the trigger tappable inside the viewport, no page scroll. CI e2e 42438561906
+   *  measured the logo org's bar 354px wide at 320, its last control wholly past the edge: nav.tsx now folds a logo org's
+   *  wordmark there. */
   async function witnessBar(o: StandInOrg, width: number): Promise<Locator> {
     const { page } = o;
     await page.setViewportSize({ width, height: 900 });
@@ -294,14 +296,14 @@ test.describe("the org top bar (nav sign-off)", () => {
       await expect(sponsors, `${width}: Sponsors is on the bar`).toBeVisible();
       await expect(sponsors.getByText(word("nav.sponsors"), { exact: true }), `${width}: its label is painted`).toBeVisible();
     }
-    const settings = header.getByTestId("nav-settings");
-    const signOut = header.getByRole("button", { name: word("nav.signOut"), exact: true });
-    await expect(settings, `${width}: the Settings icon`).toBeVisible();
-    await expect(signOut, `${width}: the Sign out icon`).toBeVisible();
+    // Settings and Sign out moved into the account menu (owner, Option A, 2026-11-11): the bar's last control is its trigger.
+    await expect(header.getByTestId("nav-settings"), `${width}: no Settings icon on the bar`).toHaveCount(0);
+    await expect(header.getByRole("button", { name: word("nav.signOut"), exact: true }), `${width}: no Sign-out icon on the bar`).toHaveCount(0);
+    const trigger = header.getByRole("button", { name: word("nav.account.menu"), exact: true });
+    await expect(trigger, `${width}: the account menu trigger`).toBeVisible();
     const fit = await header.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
     expect(fit.scroll, `${width}: the bar's content fits its box`).toBeLessThanOrEqual(fit.client);
-    await expectTappable(settings, width, "Settings");
-    await expectTappable(signOut, width, "Sign out");
+    await expectTappable(trigger, width, "the account menu trigger");
     // Whatever the wordmark does at this width, the home link keeps its name (nav.tsx folds it with `sr-only`, never `hidden`).
     await expect(header.getByRole("link", { name: "Seazn Club" }), `${width}: the home link is still named Seazn Club`).toHaveAttribute("href", "/");
     await expectNoHorizontalScroll(page);
@@ -333,13 +335,22 @@ test.describe("the org top bar (nav sign-off)", () => {
     });
   }
 
-  test("the top bar @1280: Settings hovered, its tooltip text", async () => {
+  test("the top bar @1280: the account menu open, Organisation settings and Sign out inside it", async () => {
     const header = await witnessBar(longOrg!, 1280);
-    const settings = header.getByTestId("nav-settings");
-    await settings.hover();
-    await expect(settings, "the tooltip's text is the browser's own title").toHaveAttribute("title", word("nav.settings"));
-    await expect(settings, "and the same name for a screen reader").toHaveAttribute("aria-label", word("nav.settings"));
-    await header.screenshot({ path: navShotPath("nav-settings-tooltip-1280"), animations: "disabled" });
+    const page = longOrg!.page;
+    await header.getByRole("button", { name: word("nav.account.menu"), exact: true }).click();
+    const menu = page.getByTestId("account-menu");
+    await expect(menu, "witness: the menu is open").toBeVisible();
+    await expect(page.getByTestId("account-menu-settings"), "Organisation settings, named").toHaveText(word("nav.account.orgSettings"));
+    await expect(page.getByTestId("account-menu-settings")).toHaveAttribute("href", routes.orgSettings(longOrg!.orgSlug));
+    await expect(page.getByTestId("account-menu-signout"), "Sign out, named").toHaveText(word("nav.signOut"));
+    await expectTappable(page.getByTestId("account-menu-signout"), 1280, "Sign out");
+    // One clip from the bar's top to the menu's foot: the menu is portalled to <body>, outside the header's box.
+    const hb = (await header.boundingBox())!;
+    const mb = (await menu.boundingBox())!;
+    await page.screenshot({ path: navShotPath("nav-account-menu-1280"), animations: "disabled", clip: { x: 0, y: hb.y, width: 1280, height: Math.ceil(mb.y + mb.height - hb.y + 8) } });
+    await page.keyboard.press("Escape");
+    await expect(menu, "Escape closes it").toHaveCount(0);
   });
 });
 

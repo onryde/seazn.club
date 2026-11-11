@@ -6,7 +6,7 @@ import { test, expect, type Locator, type Page } from "@playwright/test";
 import { activeOrg, apiJson, claimProfileBySql, loginUi } from "./helpers";
 
 // Screenshot + layout evidence for the top-nav Streaming page and YouTube Connect on it (T9; owner 2026-10-27, spec D3: Streaming is
-// its own page, between Directory and Settings in the nav; the Directory keeps four tabs).
+// its own page, after Directory in the nav; the Directory keeps four tabs).
 //
 // Walked as a first-time visitor (own empty storageState + a login per test, which auto-provisions an org) so it runs with --no-deps. The
 // round trip to Google is the FAKE YouTube (YOUTUBE_DRIVER=fake, e2e.yml): the consent form posts to the real route, the real
@@ -22,20 +22,20 @@ test.use({ storageState: { cookies: [], origins: [] } });
 
 const SHOTS = process.env.YOUTUBE_SHOTS_DIR ?? resolve(process.cwd(), "../../.superpowers/sdd/shots/youtube-streaming");
 const WIDTHS = [1280, 768, 320] as const;
-/** The nav budget is measured here: the phone floor and the width just above it (335 was 3px over), the dual-role link's own threshold (350),
- *  the widths around `md`/`lg` where the labels appear (768-836 is where fr/nl Sign-out was pushed out), and desktop. Every one must FIT.
+/** The nav budget is measured here: the phone floor and the width just above it (335 was 3px over), the Sponsors link's threshold (349/350),
+ *  the phone widths the fullest bar was measured at (360/375/389/390/430), the widths around `md`/`lg` where the labels and the account
+ *  trigger's name appear (768-836 is where fr/nl once pushed the last control out), and desktop. Every one must FIT.
  *
- *  R4 sponsors-on-stream added the Sponsors link, which makes the worst case SIX links on a phone (Streaming + a claimed player): 349/350
- *  bracket the Sponsors link's own threshold, and 360/375/389/390/430 are the phone widths the six-link bar was measured at (390 is where
- *  Player home returns). Owner ruling 2026-11-01: Settings is its icon alone at every width and Sponsors takes the label it gave back, so
- *  the labels ride main's rung again (md for the org nav, lg for the dual-role nav) and the old xl band (1100/1279) is gone. */
+ *  The account menu (owner, Option A, 2026-11-11) took Settings, the display name, Sign out and Player home out of the bar: it ends in ONE
+ *  trigger (the avatar; the name beside it from `lg`), and a claimed player's bar is the same bar as everyone else's. */
 const NAV_WIDTHS = [320, 335, 349, 350, 360, 375, 389, 390, 430, 640, 700, 768, 800, 836, 1023, 1024, 1280] as const;
-/** The gantry's phone thresholds (nav.tsx) for an org without a logo, as every org here is: the Sponsors link shows from 350; Player home,
- *  on a bar that also has Streaming, from 390. A logo org's thresholds (390 and 430) are pinned by nav-sponsors.test.tsx. */
+/** The gantry's phone threshold (nav.tsx) for an org without a logo, as every org here is: the Sponsors link shows from 350. A logo org's
+ *  threshold (390) is pinned by nav-sponsors.test.tsx. */
 const SPONSORS_FROM_PX = 350;
-const PLAYER_HOME_STREAMING_FROM_PX = 390;
-/** Where the labels come on (nav.tsx `navLabelClass`, main's rung): Tailwind `md` for the org nav, `lg` for the dual-role nav. */
-const LABELS_FROM_PX = { org: 768, dualRole: 1024 } as const;
+/** Where the labels come on (nav.tsx `navLabelClass`): Tailwind `md`, for every bar. */
+const LABELS_FROM_PX = 768;
+/** Where the account trigger paints the display name beside the avatar: Tailwind `lg`. */
+const ACCOUNT_NAME_FROM_PX = 1024;
 
 const BANNER_WAIT_MS = 5_000;
 const asked = new WeakSet<Page>();
@@ -142,12 +142,12 @@ async function expectReadsBefore(first: Locator, second: Locator, label: string)
 }
 
 /** The top gantry fits: every link in its <nav> shares one row (no wrap) and ends inside the viewport (nothing clipped or pushed), the
- *  Sign-out button (the control that used to be pushed out) ends inside it too, and each link's centre hit-tests to the link itself.
- *  And the labels (owner 2026-11-01): Settings is its icon alone at every width - no painted words, named by aria-label with the same
- *  words as its title tooltip, the last link - while every other shown link paints its label exactly from `labelsFrom`. Sign out is
- *  its icon alone at every width too (a second owner ruling the same day), named and tooltipped the same way. */
-async function expectGantryFits(page: Page, where: string, opts: { playerHome?: boolean; labelsFrom: number }): Promise<void> {
-  const seen = await page.evaluate(() => {
+ *  account trigger (the bar's last control - the one a squeezed row used to push out) ends inside it too and is its own hit target, and
+ *  each link's centre hit-tests to the link itself. Every shown link paints its label exactly from `md`; the trigger paints the display
+ *  name exactly from `lg`. Nothing the account menu took out of the bar (Settings, Sign out, Player home) is in it. */
+async function expectGantryFits(page: Page, where: string, opts: { locale: string }): Promise<void> {
+  const words = dictOf("console", opts.locale);
+  const seen = await page.evaluate((signOutWord) => {
     const links = Array.from(document.querySelectorAll("header.app-gantry nav a")).filter((a) => {
       const r = a.getBoundingClientRect();
       return r.width > 0 && r.height > 0;
@@ -155,17 +155,28 @@ async function expectGantryFits(page: Page, where: string, opts: { playerHome?: 
     const rects = links.map((a) => a.getBoundingClientRect());
     const tops = rects.map((r) => Math.round(r.top));
     const header = document.querySelector("header.app-gantry")!.getBoundingClientRect();
-    const signOutEl = document.querySelector("header.app-gantry button[title]") as HTMLElement;
-    const signOut = signOutEl.getBoundingClientRect();
     const covered = links.filter((a) => {
       const r = a.getBoundingClientRect();
       const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
       return !(at !== null && (at === a || a.contains(at)));
     }).length;
+    const trigger = document.querySelector('header.app-gantry [data-testid="account-menu-trigger"]') as HTMLElement | null;
+    const tr = trigger?.getBoundingClientRect();
+    const trAt = tr ? document.elementFromPoint(tr.left + tr.width / 2, tr.top + tr.height / 2) : null;
+    const nameSpan = trigger?.querySelector("span.truncate") as HTMLElement | null;
     return {
       vw: document.documentElement.clientWidth,
-      signOutRight: signOut.right,
-      signOutName: { aria: signOutEl.getAttribute("aria-label"), title: signOutEl.getAttribute("title"), text: signOutEl.textContent?.trim() ?? "" },
+      trigger: trigger && tr
+        ? {
+            right: tr.right,
+            left: tr.left,
+            aria: trigger.getAttribute("aria-label"),
+            own: trAt !== null && (trAt === trigger || trigger.contains(trAt)),
+            namePainted: !!nameSpan && nameSpan.getBoundingClientRect().width > 0,
+          }
+        : null,
+      signOutInBar: Array.from(document.querySelectorAll("header.app-gantry [aria-label]")).filter((el) => el.getAttribute("aria-label") === signOutWord).length,
+      settingsInBar: document.querySelectorAll('header.app-gantry [data-testid="nav-settings"]').length,
       covered,
       n: links.length,
       tops,
@@ -176,45 +187,36 @@ async function expectGantryFits(page: Page, where: string, opts: { playerHome?: 
       hrefs: links.map((a) => a.getAttribute("href") ?? ""),
       // innerText, not textContent: a `hidden` label span is in the markup at every width; only a PAINTED label is in innerText.
       painted: links.map((a) => (a as HTMLElement).innerText.trim()),
-      settings: (() => {
-        const s = document.querySelector('header.app-gantry nav a[data-testid="nav-settings"]') as HTMLElement | null;
-        return s ? { aria: s.getAttribute("aria-label"), title: s.getAttribute("title"), text: s.textContent?.trim() ?? "" } : null;
-      })(),
     };
-  });
-  // Settings, the gear alone (owner ruling 2026-11-01): shown, last, no words in it at all, and named twice over by the same words.
-  expect(seen.settings, `${where}: the Settings link is in the gantry`).not.toBeNull();
-  expect(seen.testids.at(-1), `${where}: Settings is the last nav link`).toBe("nav-settings");
-  expect(seen.settings!.text, `${where}: Settings has no words, painted or hidden`).toBe("");
-  expect(seen.settings!.aria, `${where}: Settings is named`).toBeTruthy();
-  expect(seen.settings!.title, `${where}: Settings' tooltip says what its name says`).toBe(seen.settings!.aria);
-  // Sign out, the door icon alone (owner ruling 2026-11-01): no words in it at any width, named, and the tooltip says the same.
-  expect(seen.signOutName.text, `${where}: Sign out has no words, painted or hidden`).toBe("");
-  expect(seen.signOutName.aria, `${where}: Sign out is named`).toBeTruthy();
-  expect(seen.signOutName.title, `${where}: Sign out's tooltip says what its name says`).toBe(seen.signOutName.aria);
-  // Every other shown link paints its label from the bar's rung, and not before: icons-together or labels-together.
-  const labelled = seen.painted.filter((_, i) => seen.testids[i] !== "nav-settings");
-  expect(labelled.length, `${where}: labelled links to look at`).toBeGreaterThanOrEqual(2);
+  }, words["nav.signOut"] ?? "");
+  // The account trigger: there, named in this locale's words, inside the viewport, its own hit target, the name painted from lg only.
+  expect(seen.trigger, `${where}: the account trigger is in the gantry`).not.toBeNull();
+  expect(seen.trigger!.aria, `${where}: the trigger is named in ${opts.locale}`).toBe(words["nav.account.menu"]);
+  expect(seen.trigger!.left, `${where}: the trigger starts inside the viewport`).toBeGreaterThanOrEqual(0);
+  expect(seen.trigger!.right, `${where}: the trigger ends at ${Math.round(seen.trigger!.right)}px of ${seen.vw}px`).toBeLessThanOrEqual(seen.vw);
+  expect(seen.trigger!.own, `${where}: something else is painted over the trigger's centre`).toBe(true);
+  expect(seen.trigger!.namePainted, `${where}: the display name is ${seen.vw >= ACCOUNT_NAME_FROM_PX ? "painted" : "folded"} at ${seen.vw}px`).toBe(
+    seen.vw >= ACCOUNT_NAME_FROM_PX,
+  );
+  // What the menu took out of the bar is not in it.
+  expect(seen.settingsInBar, `${where}: no Settings icon in the bar`).toBe(0);
+  expect(seen.signOutInBar, `${where}: no Sign-out control in the bar`).toBe(0);
+  expect(seen.hrefs.includes("/me"), `${where}: no Player home link in the bar`).toBe(false);
+  // Every shown link paints its label from md, and not before: icons-together or labels-together.
+  expect(seen.painted.length, `${where}: labelled links to look at`).toBeGreaterThanOrEqual(2);
   expect(
-    labelled.map((t) => t.length > 0),
-    `${where}: labels ${seen.vw >= opts.labelsFrom ? "ON" : "off"} at ${seen.vw}px (from ${opts.labelsFrom}): ${JSON.stringify(labelled)}`,
-  ).toEqual(labelled.map(() => seen.vw >= opts.labelsFrom));
-  expect(seen.n, `${where}: the gantry has links to measure`).toBeGreaterThanOrEqual(3);
+    seen.painted.map((t) => t.length > 0),
+    `${where}: labels ${seen.vw >= LABELS_FROM_PX ? "ON" : "off"} at ${seen.vw}px (from ${LABELS_FROM_PX}): ${JSON.stringify(seen.painted)}`,
+  ).toEqual(seen.painted.map(() => seen.vw >= LABELS_FROM_PX));
+  expect(seen.n, `${where}: the gantry has links to measure`).toBeGreaterThanOrEqual(2);
   expect(seen.testids, `${where}: the Streaming item is among them`).toContain("nav-streaming");
   // The Sponsors link (R4 S11): `hidden min-[350px]:flex` - there from 350, gone below it (the Competitions home's own entry covers 320).
   expect(seen.testids.includes("nav-sponsors"), `${where}: Sponsors is ${seen.vw >= SPONSORS_FROM_PX ? "shown" : "hidden"} at ${seen.vw}px`).toBe(
     seen.vw >= SPONSORS_FROM_PX,
   );
-  // Player home folds first (owner ruling): on this bar (Streaming offered) it returns only from 390. Checked where the org has one.
-  if (opts.playerHome) {
-    expect(seen.hrefs.includes("/me"), `${where}: Player home is ${seen.vw >= PLAYER_HOME_STREAMING_FROM_PX ? "shown" : "folded"} at ${seen.vw}px`).toBe(
-      seen.vw >= PLAYER_HOME_STREAMING_FROM_PX,
-    );
-  }
   expect(new Set(seen.tops).size, `${where}: the nav links wrap onto ${new Set(seen.tops).size} rows (tops ${seen.tops.join(",")})`).toBe(1);
   expect(seen.maxRight, `${where}: the last nav link ends at ${Math.round(seen.maxRight)}px of ${seen.vw}px`).toBeLessThanOrEqual(seen.vw + 1);
   expect(seen.headerScrollW, `${where}: the gantry scrolls sideways (${seen.headerScrollW} > ${seen.vw})`).toBeLessThanOrEqual(seen.vw + 1);
-  expect(seen.signOutRight, `${where}: Sign out ends at ${Math.round(seen.signOutRight)}px of ${seen.vw}px`).toBeLessThanOrEqual(seen.vw);
   expect(seen.covered, `${where}: ${seen.covered} nav link(s) have something else painted over their centre`).toBe(0);
 }
 
@@ -317,8 +319,8 @@ async function connectThroughConsent(page: Page): Promise<void> {
 // ---------------------------------------------------------------------------------------------------------------------
 // The nav item
 // ---------------------------------------------------------------------------------------------------------------------
-test("Streaming nav item: present between Directory and Settings, and the gantry fits at every width (all four locales' labels)", async ({ page }) => {
-  test.setTimeout(budget({ navs: NAV_WIDTHS.length * 2 + 4, acts: 12 }));
+test("Streaming nav item: present between Directory and Sponsors, and the gantry fits at every width (all four locales' labels)", async ({ page }) => {
+  test.setTimeout(budget({ navs: NAV_WIDTHS.length * 2 + 4, acts: 16 }));
   const { orgSlug } = await rig(page, "nav");
 
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -327,7 +329,7 @@ test("Streaming nav item: present between Directory and Settings, and the gantry
   await expect(link, "the Streaming nav item").toBeVisible();
   await expect(link).toHaveAttribute("href", "/streaming");
   await expect(link).toHaveAttribute("aria-label", dictOf("console")["nav.streaming"] ?? "");
-  // Order: Directory, Streaming, Sponsors, then Settings LAST (owner ruling 2026-11-01: the gear alone, beside help and Sign out).
+  // Order: Directory, Streaming, then Sponsors closing the links (Settings went into the account menu, 2026-11-11).
   const order = await page.evaluate(() =>
     Array.from(document.querySelectorAll("header.app-gantry nav a")).map((a) => a.getAttribute("href") ?? ""),
   );
@@ -335,14 +337,18 @@ test("Streaming nav item: present between Directory and Settings, and the gantry
   expect(at("/directory"), "Directory is in the nav").toBeGreaterThan(-1);
   expect(at("/directory")).toBeLessThan(at("/streaming"));
   expect(at("/streaming")).toBeLessThan(at(`/o/${orgSlug}/sponsors`));
-  expect(at(`/o/${orgSlug}/sponsors`), "Sponsors sits between Streaming and Settings").toBeLessThan(at(`/o/${orgSlug}/settings`));
-  expect(at(`/o/${orgSlug}/settings`), "Settings closes the bar").toBe(order.length - 1);
-  // At 1280 Sponsors paints its word, and Settings is reached by its name alone (role + aria-label), its words only in the tooltip.
+  expect(at(`/o/${orgSlug}/sponsors`), "Sponsors closes the links").toBe(order.length - 1);
+  expect(at(`/o/${orgSlug}/settings`), "Settings is not a bar link").toBe(-1);
+  // At 1280 Sponsors paints its word; Settings is one tap into the account menu, named and pointing at this org.
   await expect(page.getByTestId("nav-sponsors"), "Sponsors is a labelled link at 1280").toHaveText(dictOf("console")["nav.sponsors"] ?? "");
-  const settings = page.locator("header.app-gantry nav").getByRole("link", { name: dictOf("console")["nav.settings"] ?? "", exact: true });
-  await expect(settings, "Settings is found by its accessible name").toBeVisible();
-  await expect(settings).toHaveAttribute("title", dictOf("console")["nav.settings"] ?? "");
-  await expect(settings, "and paints no words").toHaveText("");
+  await page.getByTestId("account-menu-trigger").click();
+  const settings = page.getByTestId("account-menu-settings");
+  await expect(settings, "Organisation settings is in the account menu").toBeVisible();
+  await expect(settings).toHaveAttribute("href", `/o/${orgSlug}/settings`);
+  await expect(settings).toHaveText(dictOf("console")["nav.account.orgSettings"] ?? "");
+  await shot(page, "nav-1280-account-menu");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("account-menu"), "Escape closes the menu").toHaveCount(0);
   await shot(page, "nav-1280");
 
   // The page the item leads to is the Streaming one (the nav marks no current item, so the heading is the proof).
@@ -352,44 +358,46 @@ test("Streaming nav item: present between Directory and Settings, and the gantry
   for (const w of NAV_WIDTHS) {
     await page.setViewportSize({ width: w, height: 800 });
     await page.waitForTimeout(150);
-    await expectGantryFits(page, `en at ${w}`, { labelsFrom: LABELS_FROM_PX.org });
+    await expectGantryFits(page, `en at ${w}`, { locale: "en" });
   }
   for (const locale of ["es", "fr", "nl"] as const) {
     await page.context().addCookies([{ name: "seazn_locale", value: locale, url: new URL(page.url()).origin }]);
     await open(page, "/streaming");
     await expect(page.getByTestId("nav-streaming")).toHaveAttribute("aria-label", dictOf("console", locale)["nav.streaming"] ?? "");
-    // Sign out is its icon alone at every width: it is still NAMED, in this locale's words (by role + name, not by painted text).
-    await expect(page.locator("header.app-gantry").getByRole("button", { name: dictOf("console", locale)["nav.signOut"] ?? "" })).toBeVisible();
     for (const w of NAV_WIDTHS) {
       await page.setViewportSize({ width: w, height: 800 });
       await page.waitForTimeout(150);
-      await expectGantryFits(page, `${locale} at ${w}`, { labelsFrom: LABELS_FROM_PX.org });
+      await expectGantryFits(page, `${locale} at ${w}`, { locale });
     }
   }
 });
 
-test("Streaming nav item, dual-role: an organiser who is ALSO a claimed player (six links with Sponsors, Player home folding first on phones, labels from lg, Settings the gear alone) fits at every width in all four locales", async ({ page }) => {
-  test.setTimeout(budget({ navs: 4 + 2, acts: 12 })); // navs = page OPENS (one per locale); the width loop only resizes
+test("Streaming nav item, dual-role: an organiser who is ALSO a claimed player gets the SAME bar (Player home is in the account menu), and it fits at every width in all four locales", async ({ page }) => {
+  test.setTimeout(budget({ navs: 4 + 2, acts: 16 })); // navs = page OPENS (one per locale); the width loop only resizes
   const { email } = await rig(page, "navdual");
-  // The dual-role seam (nav.tsx isPlayer): a claimed player profile adds the Player home link. Own throwaway account, never a shared identity.
+  // The dual-role seam (nav.tsx isPlayer): a claimed player profile adds Player home to the ACCOUNT MENU. Own throwaway account.
   await claimProfileBySql(email);
   for (const locale of ["en", "es", "fr", "nl"] as const) {
     await page.context().addCookies([{ name: "seazn_locale", value: locale, url: new URL(page.url()).origin }]);
     await page.setViewportSize({ width: 1280, height: 900 });
     await open(page, "/streaming");
-    // The locale witness: the page really is in this locale (a cookie that silently failed would measure English four times). The Streaming
-    // item's name and Sign-out's name (it paints no label at any width) come from this locale's own dictionary, by role + name.
+    // The locale witness: the page really is in this locale (a cookie that silently failed would measure English four times).
     await expect(page.getByTestId("nav-streaming"), `${locale}: the nav speaks ${locale}`).toHaveAttribute("aria-label", dictOf("console", locale)["nav.streaming"] ?? "");
-    await expect(
-      page.locator("header.app-gantry").getByRole("button", { name: dictOf("console", locale)["nav.signOut"] ?? "" }),
-      `${locale}: Sign out is named in ${locale}`,
-    ).toBeVisible();
     const links = await page.locator("header.app-gantry nav a").count();
-    expect(links, `${locale}: Dashboard, Directory, Streaming, Sponsors, Player home and Settings`).toBe(6);
+    expect(links, `${locale}: Dashboard, Directory, Streaming and Sponsors - the same bar as a non-player's`).toBe(4);
+    // Player home, and Sign out, named in this locale - one tap into the account menu.
+    await page.getByTestId("account-menu-trigger").click();
+    const home = page.getByTestId("account-menu-player-home");
+    await expect(home, `${locale}: Player home is in the account menu`).toBeVisible();
+    await expect(home).toHaveAttribute("href", "/me");
+    await expect(home).toHaveText(dictOf("console", locale)["nav.playerHome"] ?? "");
+    await expect(page.getByTestId("account-menu-signout"), `${locale}: Sign out is named in ${locale}`).toHaveText(dictOf("console", locale)["nav.signOut"] ?? "");
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("account-menu")).toHaveCount(0);
     for (const w of NAV_WIDTHS) {
       await page.setViewportSize({ width: w, height: 800 });
       await page.waitForTimeout(150);
-      await expectGantryFits(page, `dual-role ${locale} at ${w}`, { playerHome: true, labelsFrom: LABELS_FROM_PX.dualRole });
+      await expectGantryFits(page, `dual-role ${locale} at ${w}`, { locale });
     }
   }
 });
