@@ -37,8 +37,8 @@ const RULING_70 = [
   "swiss_knockout|carrom|club-29|R4",
   "swiss_knockout|generic|score|R4",
 ] as const;
-/** The committed baseline's run directory (L1, L2, L3): the W3 truth run's CI artifact (W3 App B Task 12). */
-const BASELINE_DIR = `${TRUTH_RUNS}/w3-final/ci`;
+/** The committed baseline's run directory (L1, L2, L3): the W4 truth run's CI artifact (W4 App B Task 17; W3 Task 12 before it). */
+const BASELINE_DIR = `${TRUTH_RUNS}/w4-final/ci`;
 /** The W1d record the ruling was made on: three dispatches, kept as history (the ruling's justification). */
 const W1D_DIR = `${TRUTH_RUNS}/w1d-baseline`;
 /** The W1d record's own third dispatch (run 37346206686, tag matrix-truth/w1d-baseline): the run the ruling's evidence reads from. */
@@ -117,9 +117,9 @@ describe("ruling 70 is retired (W3, SW-H1): the live baseline carries no block, 
 
 // --- the committed baseline -------------------------------------------------------------------------------------------
 
-describe("the committed baseline (W3 truth run, CI 41818942253) shows no SW-H1", () => {
+describe("the committed baseline (W4 truth run, CI 42992170592; W3 run 41818942253 before it) shows no SW-H1", () => {
   it("the committed baseline holds none of the three cells red on \"paired nobody\"", () => {
-    expect(baseline.runId).toBe("ci-41818942253-1-l3");
+    expect(baseline.runId).toBe("ci-42992170592-1-l3");
     let checked = 0;
     for (const id of RULING_70) {
       const c = baseline.cases.find((x) => x.caseId === id);
@@ -132,7 +132,7 @@ describe("the committed baseline (W3 truth run, CI 41818942253) shows no SW-H1",
     expect(stateOf("swiss_knockout|hockey|fih-outdoor|R4")).not.toBe("red");
     const said = baseline.cases.filter((c) => PAIRED_NOBODY.test(c.reason ?? ""));
     expect(said.map((c) => c.caseId)).toEqual([]);
-    expect(baseline.cases.length, "the sweep read the whole layer").toBe(930);
+    expect(baseline.cases.length, "the sweep read the whole layer").toBe(851);
   });
 
   it("the committed triage keys no L3 red to SW-H1, while the SW-H1 rules stay and still key an empty success should one come back", () => {
