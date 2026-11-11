@@ -1,6 +1,11 @@
 // Settings → Preferences: the tab that collects everything which changes how
 // the product READS rather than what it contains.
 //
+// Settings C8 (owner 2026-11-11): the ORGANISATION defaults (scheduling timezone,
+// public language, entry-fee currency) moved again, from here to the
+// Organisation tab's card, so Preferences keeps only your own settings. Same
+// rule as every move below: present there, gone here.
+//
 // Four of its five controls used to live somewhere else, and each move is a
 // thing that can silently half-happen — the control appears in its new home
 // while the old copy is still rendered on the old tab, so nothing looks broken
@@ -109,10 +114,16 @@ vi.mock("@/components/org-registration-currency", () => ({
   ),
 }));
 vi.mock("@/components/org-logo", () => ({ OrgLogo: () => <div /> }));
-vi.mock("@/components/org-brand-color", () => ({ OrgBrandColor: () => <div /> }));
-vi.mock("@/components/org-switcher", () => ({ OrgSwitcher: () => <div /> }));
-vi.mock("@/components/org-rename", () => ({ OrgRename: () => <div /> }));
-vi.mock("@/components/org-about", () => ({ OrgAbout: () => <div /> }));
+// The Organisation card is a router island (its own suite: org-profile-card.test.tsx). Stubbed to render the two
+// things this suite reads off it — the org's name and the defaults slot the page hands it.
+vi.mock("@/components/org-profile-card", () => ({
+  OrgProfileCard: ({ initialName, defaults }: { initialName: string; defaults?: import("react").ReactNode }) => (
+    <div data-testid="org-profile-card">
+      <span>{initialName}</span>
+      {defaults}
+    </div>
+  ),
+}));
 vi.mock("@/components/tour-replay", () => ({ TourReplayButton: () => <div /> }));
 vi.mock("@/components/api-keys", () => ({ ApiKeysPanel: () => <div /> }));
 vi.mock("@/components/org-team", () => ({ OrgTeam: () => <div /> }));
@@ -188,16 +199,33 @@ beforeEach(() => {
 });
 
 describe("settings → preferences", () => {
-  it("mounts all seven controls", async () => {
+  it("mounts your own four controls, and none of the organisation's", async () => {
     const html = await render("preferences");
 
-    expect(html).toContain("my-timezone");
-    expect(html).toContain("my-language");
-    expect(html).toContain("my-currency");
-    expect(html).toContain("org-timezone");
-    expect(html).toContain("org-language");
-    expect(html).toContain("org-reg-currency");
-    expect(html).toContain("cookie-settings");
+    let checked = 0;
+    for (const id of ["my-timezone", "my-language", "my-currency", "cookie-settings"]) {
+      expect(html, id).toContain(id);
+      checked++;
+    }
+    for (const id of ["org-timezone", "org-language", "org-reg-currency"]) {
+      expect(html, `${id} moved to the Organisation tab`).not.toContain(id);
+      checked++;
+    }
+    expect(checked).toBe(7);
+  });
+
+  it("the organisation tab carries the three organisation defaults, inside its card", async () => {
+    const html = await render("organization");
+
+    let checked = 0;
+    for (const id of ["org-timezone", "org-language", "org-reg-currency"]) {
+      expect(html, id).toContain(id);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(html).toContain('data-testid="org-profile-card"');
+    // …and none of your own: those stayed on Preferences.
+    expect(html).not.toContain("my-timezone");
   });
 
   it("seeds the org language from the column, not from the viewer's locale", async () => {
@@ -206,12 +234,12 @@ describe("settings → preferences", () => {
     // showing English for a club whose public pages are already French, and
     // saving it would silently rewrite them.
     orgRow.default_locale = "fr";
-    expect(await render("preferences")).toContain('data-locale="fr"');
+    expect(await render("organization")).toContain('data-locale="fr"');
   });
 
   it("falls back to English when the org has never set one", async () => {
     orgRow.default_locale = null;
-    expect(await render("preferences")).toContain('data-locale="en"');
+    expect(await render("organization")).toContain('data-locale="en"');
   });
 
   it("seeds the entry-fee currency from the ORG column, not the subscription's", async () => {
@@ -219,15 +247,14 @@ describe("settings → preferences", () => {
     // club charges entrants in INR.
     sqlRow.currency = "eur";
     orgRow.currency = "inr";
-    const html = await render("preferences");
-
-    expect(html).toContain('data-current="inr"');
-    expect(html).toContain("billed in EUR");
+    // The two facts now sit on two tabs: the entry-fee currency on Organisation, the billing note on Preferences.
+    expect(await render("organization")).toContain('data-current="inr"');
+    expect(await render("preferences")).toContain("billed in EUR");
   });
 
   it("leaves the entry-fee currency unlocked while no Stripe account is attached", async () => {
     orgRow.stripe_account_id = null;
-    expect(await render("preferences")).toContain('data-locked="no"');
+    expect(await render("organization")).toContain('data-locked="no"');
   });
 
   it("locks the entry-fee currency to the settlement currency once connected", async () => {
@@ -235,7 +262,7 @@ describe("settings → preferences", () => {
     // every sync, so an editable control here would save and then revert.
     orgRow.stripe_account_id = "acct_123";
     orgRow.currency = "inr";
-    expect(await render("preferences")).toContain('data-locked="inr"');
+    expect(await render("organization")).toContain('data-locked="inr"');
   });
 
   it("names the UNSUPPORTED settlement code when the account settles outside the allowlist", async () => {
@@ -243,7 +270,7 @@ describe("settings → preferences", () => {
     orgRow.stripe_account_id = "acct_123";
     orgRow.currency = "gbp";
     orgRow.stripe_unsupported_currency = "sek";
-    const html = await render("preferences");
+    const html = await render("organization");
 
     expect(html).toContain('data-locked="sek"');
     expect(html).not.toContain('data-locked="gbp"');
@@ -286,25 +313,20 @@ describe("settings → preferences", () => {
     expect(html).toContain("owner@example.com");
   });
 
-  it("the organisation tab no longer carries the scheduling timezone", async () => {
-    const html = await render("organization");
-
-    expect(html).not.toContain("org-timezone");
-    expect(html).toContain("Riverside Community Club");
-  });
-
-  it("hides the org scheduling timezone from a member who cannot edit", async () => {
+  it("hides the organisation defaults from a member who cannot edit", async () => {
     requireOrgPage.mockResolvedValue({
       user: { id: "u2", email: "viewer@example.com", display_name: "V", timezone: null, locale: null },
       org: { ...ORG, role: "viewer" },
       canEdit: false,
       auth: { orgId: ORG.id, via: "session", userId: "u2", role: "viewer", keyId: null },
     });
-    const html = await render("preferences");
-
-    expect(html).not.toContain("org-timezone");
+    const org = await render("organization");
+    expect(org).not.toContain("org-timezone");
+    expect(org).not.toContain("org-reg-currency");
+    // The card itself still renders for them (read-only), so this is not a blank-render false pass.
+    expect(org).toContain('data-testid="org-profile-card"');
     // Their own preferences are still theirs to set.
-    expect(html).toContain("my-timezone");
+    expect(await render("preferences")).toContain("my-timezone");
   });
 
   it("is reachable from the sidebar and marks itself current", async () => {
