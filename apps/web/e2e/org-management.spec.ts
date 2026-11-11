@@ -1,8 +1,8 @@
 import { test, expect } from "@playwright/test";
 import { TAG, activeOrg, apiJson, type OrgInfo } from "./helpers";
 
-// Org administration: rename the active org, create a second org from the
-// switcher, and switch between orgs. Runs on the Pro account (community owns
+// Org administration: rename the active org, create a second org, and switch
+// between orgs. Runs on the Pro account (community owns
 // at most 1 org — orgs.max_owned). The active org lives in the `seazn_org`
 // cookie, and every test starts from the storageState snapshot — so activation
 // never leaks between tests; only the rename (a DB write) persists.
@@ -15,10 +15,11 @@ test.describe.serial("org management", () => {
     const newName = `Renamed ${TAG}`;
 
     await page.goto("/settings");
-    // The settings page has other Save buttons — scope to the rename row.
-    const renameRow = page.locator("label", { hasText: "Organization name" });
-    await renameRow.getByRole("textbox").fill(newName);
-    await renameRow.getByRole("button", { name: "Save" }).click();
+    // Settings C8 (owner 2026-11-11): the name is a field of the Organisation
+    // card, saved by the card's one "Save changes" (scoped to the card — the
+    // org defaults beside it keep Save buttons of their own).
+    await page.getByLabel("Organization name").fill(newName);
+    await page.getByTestId("org-profile-card").getByRole("button", { name: "Save changes" }).click();
     // PROMPT-30: renaming regenerates the slug and lands on the new URL —
     // wait for the NEW slug (the old settings URL matches the pattern too).
     await page.waitForURL(
@@ -32,13 +33,13 @@ test.describe.serial("org management", () => {
     original = { ...original, name: newName };
   });
 
-  test("create a second org from the switcher", async ({ page }) => {
+  test("create a second org", async ({ page }) => {
     secondOrgName = `Second Org ${TAG}`;
 
-    await page.goto("/settings");
-    await page.getByRole("button", { name: /switch organi[sz]ation/i }).click();
-    await page.getByRole("button", { name: /new organi[sz]ation/i }).click();
-    await page.waitForURL(/\/orgs\/new/, { timeout: 20_000 });
+    // Settings C8 (owner 2026-11-11) took the OrgSwitcher off the settings
+    // page; its "New organisation" entry moves to the account menu, which
+    // ships separately. The create form itself is what this test proves.
+    await page.goto("/orgs/new");
 
     await page.getByPlaceholder("My Sports Club").fill(secondOrgName);
     await page.getByRole("button", { name: /create organi[sz]ation/i }).click();
@@ -53,16 +54,17 @@ test.describe.serial("org management", () => {
     // Fresh context → the setup org is active again (cookie from storageState).
     expect((await activeOrg(page)).id).toBe(original.id);
 
-    // Over to the second org…
+    // Over to the second org — through the breadcrumb org dropdown (`OrgCrumb`),
+    // the switcher a person reaches for on any page now that settings C8 took
+    // the settings-header OrgSwitcher away.
     await page.goto("/settings");
     let beforeSwitch = new URL(page.url()).pathname;
-    await page.getByRole("button", { name: /switch organi[sz]ation/i }).click();
-    await page.getByRole("button", { name: new RegExp(secondOrgName) }).click();
-    // OrgSwitcher flips the cookie with a POST and THEN hard-navigates
-    // (window.location.assign). The cookie is already observable (so the poll
-    // below passes) while that load is still in flight, and a page.goto issued
-    // into it is cancelled with net::ERR_ABORTED. Wait for the switcher's own
-    // navigation to land before driving the page again.
+    await page.getByRole("button", { name: original.name, exact: true }).click();
+    await page.getByRole("menuitem", { name: secondOrgName, exact: true }).click();
+    // The crumb is a plain link to the same page under the other org; the
+    // cookie follows a beat later (ActiveOrgSync POSTs from the org layout).
+    // Wait for the navigation to land before driving the page again — a
+    // page.goto issued into it is cancelled with net::ERR_ABORTED.
     await page.waitForURL((u) => u.pathname !== beforeSwitch, { timeout: 20_000 });
     await expect
       .poll(async () => (await activeOrg(page)).name, { timeout: 20_000 })
@@ -76,8 +78,8 @@ test.describe.serial("org management", () => {
 
     // …and back to the original.
     beforeSwitch = new URL(page.url()).pathname;
-    await page.getByRole("button", { name: /switch organi[sz]ation/i }).click();
-    await page.getByRole("button", { name: new RegExp(original.name) }).click();
+    await page.getByRole("button", { name: secondOrgName, exact: true }).click();
+    await page.getByRole("menuitem", { name: original.name, exact: true }).click();
     await page.waitForURL((u) => u.pathname !== beforeSwitch, { timeout: 20_000 });
     await expect
       .poll(async () => (await activeOrg(page)).id, { timeout: 20_000 })
@@ -98,9 +100,10 @@ test.describe.serial("org management", () => {
       "/api/orgs",
     );
     const originalTz = orgs?.find((o) => o.id === org.id)?.timezone ?? null;
-    // Preferences, not the Organisation tab: the scheduling timezone moved
-    // there with the rest of the "how the product reads" controls.
-    await page.goto("/settings?tab=preferences");
+    // The Organisation tab: settings C8 (owner 2026-11-11) moved the org
+    // defaults (timezone, public language, currency) into the Organisation
+    // card under brand colour, each keeping its own Save.
+    await page.goto("/settings?tab=organization");
 
     const tz = page.getByRole("combobox", { name: "Organisation scheduling timezone" });
     await expect(tz).toBeVisible();

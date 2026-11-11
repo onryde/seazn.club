@@ -144,8 +144,10 @@ async function readOrgDefaults(orgId: string): Promise<OrgDefaults> {
 /**
  * The Save button belonging to `control`.
  *
- * The preferences tab renders THREE separate org forms in one `<section>`, each
- * with its own "Save", so scoping to the section is not enough. Playwright
+ * The Organisation tab renders THREE separate org-default forms in one group of
+ * its card (settings C8, owner 2026-11-11 — they used to sit on Preferences),
+ * each with its own "Save", beside the card's own "Save changes", so scoping to
+ * the group is not enough. Playwright
  * returns matches in document order and an ancestor precedes its descendant, so
  * `.last()` on "divs containing both this control and a Save" is the innermost
  * such div — the component's own root.
@@ -619,13 +621,14 @@ test("api tab: a minted key shows its secret once, actually works, and dies when
 });
 
 // ---------------------------------------------------------------------------
-// preferences — the ORGANISATION half (safe: it writes the seeded org)
+// organisation defaults (safe: it writes the seeded org) — on the Organisation
+// tab since settings C8 (owner 2026-11-11); Preferences keeps the user's own half
 // ---------------------------------------------------------------------------
 
-test("preferences tab: the org's timezone, public language and entry-fee currency persist", async ({
+test("organisation tab: the org's timezone, public language and entry-fee currency persist", async ({
   page,
 }) => {
-  await page.goto(settingsUrl(org.slug, "preferences"));
+  await page.goto(settingsUrl(org.slug, "organization"));
 
   const orgTz = page.getByRole("combobox", { name: "Organisation scheduling timezone" });
   const orgLang = page.getByRole("combobox", { name: "Organisation public language" });

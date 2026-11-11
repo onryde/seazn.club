@@ -828,99 +828,57 @@ test("division tab rail overflows reachably, never clipped", async ({ page, requ
 });
 
 /**
- * Settings W2 task 4 — the org identity row at `/settings?tab=organization`.
- *
- * The row exists to say WHICH organisation you are in, and at phone widths it
- * did not. The name block was `flex-1`, i.e. `flex: 1 1 0%`, so it was the
- * only child of that row that could yield: the 44px avatar is `shrink-0`, and
- * the role badge and the org switcher both size to their content. At 320 the
- * card's inner width is ~240px, those three take nearly all of it, and the
- * one thing the row is for was left a sliver. `min-w-0` was already present,
- * so the usual `truncate` diagnosis is NOT the cause here.
+ * Settings C8 (owner 2026-11-11, mock set11c01 O1) — the Organisation card at
+ * `/settings?tab=organization`. It replaced the W2 identity row (avatar, name,
+ * role badge, OrgSwitcher), whose phone defect was a name squeezed to a sliver
+ * by the chrome beside it; this keeps that defect's gate on the new home of
+ * the name.
  *
  * Nothing in `apps/web` vitest can see any of this — that suite is
  * `environment: "node"`, so it has no layout at all — and the page-level
- * no-horizontal-scroll audit above passes either way, because a squeezed
- * `truncate` box produces no page overflow. This is the gate.
+ * no-horizontal-scroll audit passes either way, because a squeezed input
+ * produces no page overflow. This is the gate.
  *
  * Two assertions, because either alone is satisfiable the wrong way:
  *
- *  - the name's RENDERED box is wide enough to read. A reachability check
- *    ("the name is visible") passes at 38px, which is the defect.
- *  - the row's COMPOSITION, in both directions: below `md` the chrome sits on
- *    its own line, at `md` and up it stays on the name's line. That second
- *    branch is the "≥768 must not change" guard, and the pair together is
- *    what stops the fix being "make the badge smaller" — a phone view showing
- *    the same controls at smaller sizes is a groomed shrink.
+ *  - the name field's RENDERED box is wide enough to read. A reachability
+ *    check ("the field is visible") passes at 38px, which was the old defect.
+ *  - the card's COMPOSITION: every width project here is below `lg` (1024),
+ *    where the card is one column — the long text (About) sits BELOW the
+ *    decisions (name, brand colour, defaults), never beside them. A two-column
+ *    card at 320 is exactly the squeeze this guards against.
  */
-test("settings identity row: the org name keeps a readable share, and the chrome wraps below md", async ({
+test("settings organisation card: the org name keeps a readable share, and the card is one column below lg", async ({
   page,
 }) => {
   const width = projectViewport()?.width ?? 0;
-  const isPhone = width < 768;
 
   await page.goto("/settings?tab=organization", { waitUntil: "load" });
-  const name = page.getByTestId("org-identity-name");
+  const card = page.getByTestId("org-profile-card");
+  const name = card.getByTestId("org-name-input");
   await expect(name).toBeVisible();
-  // A row that renders an empty name would satisfy every box assertion below.
-  await expect(name).not.toHaveText("");
+  // A field that renders an empty name would satisfy every box assertion below.
+  await expect(name).not.toHaveValue("");
 
-  // The 140px floor is NOT a soft margin, and it is not tightest at the
-  // narrowest width. Measured after the fix: 320→182, 360→222, 375→168,
-  // 390→183, 430→223. 375 sits LOWER than 320 because the badge's 57px still
-  // fits on the first line there and takes 57+12 out of the name's share,
-  // while at 320 it wraps away and gives that space back. So the width with
-  // the least headroom over this floor is 375, not 320 — a change that looks
-  // safe when eyeballed at 320 can breach it at 375 first. Check 375 whenever
-  // anything joins or leaves this row.
-  //
-  // Both halves are SOFT so neither can hide behind the other. A hard first
-  // expectation aborts the test, which is how one half of a two-part gate ends
-  // up never having been watched to fail — failure class 3, an assertion only
-  // ever seen to pass is decoration. Measured 2026-09-05 on the pre-fix bundle:
-  // the width half reported red at all five phone projects (6/46/61/76/116 px)
-  // and the composition half never ran at all, because this expectation stopped
-  // the test first. Soft, they both report on every red, at every width.
+  // Soft, both halves, so neither can hide behind the other (failure class 3).
   const box = await name.boundingBox();
-  expect(box, "identity name has no box").not.toBeNull();
+  expect(box, "org name field has no box").not.toBeNull();
   expect
-    .soft(
-      Math.round(box!.width),
-      `org name box at viewport ${width}px, text ${JSON.stringify(await name.textContent())}`,
-    )
-    .toBeGreaterThan(140);
+    .soft(Math.round(box!.width), `org name field at viewport ${width}px, value ${JSON.stringify(await name.inputValue())}`)
+    .toBeGreaterThan(200);
 
-  // Composition, measured as "do the first and last children of the identity
-  // row share a line" — NOT as a comparison of box sizes. With `items-center`
-  // two children on one flex line always overlap vertically; two children on
-  // different lines never do.
-  const geom = await page.evaluate(() => {
-    const el = document.querySelector<HTMLElement>('[data-testid="org-identity-name"]');
-    const row = el?.parentElement?.parentElement ?? null;
-    if (!row) return null;
-    const kids = Array.from(row.children) as HTMLElement[];
-    const rects = kids.map((k) => k.getBoundingClientRect());
-    const first = rects[0];
-    const last = rects[rects.length - 1];
-    if (!first || !last) return null;
-    return {
-      children: kids.length,
-      sameLine: first.top < last.bottom - 1 && last.top < first.bottom - 1,
-      tops: rects.map((r) => Math.round(r.top)),
-      bottoms: rects.map((r) => Math.round(r.bottom)),
-    };
+  const geom = await card.evaluate((form) => {
+    const left = form.querySelector<HTMLElement>(':scope > [data-split="left"]');
+    const right = form.querySelector<HTMLElement>(':scope > [data-split="right"]');
+    if (!left || !right) return null;
+    const l = left.getBoundingClientRect();
+    const r = right.getBoundingClientRect();
+    return { leftBottom: Math.round(l.bottom), rightTop: Math.round(r.top), leftWidth: Math.round(l.width), rightWidth: Math.round(r.width) };
   });
-  expect(geom, "identity row not found from the name testid").not.toBeNull();
-  // Pin the shape this measurement assumes: avatar, name block, badge,
-  // switcher. If the row gains or loses a child, `first`/`last` stop meaning
-  // what this test thinks they mean, and it should red rather than drift.
-  expect(geom!.children, "identity row child count").toBe(4);
-  const seen = `tops ${geom!.tops.join(",")} bottoms ${geom!.bottoms.join(",")}`;
-  if (isPhone) {
-    expect.soft(geom!.sameLine, `${width}px: chrome must wrap BELOW the name — ${seen}`).toBe(false);
-  } else {
-    expect.soft(geom!.sameLine, `${width}px: the row must stay on ONE line — ${seen}`).toBe(true);
-  }
+  expect(geom, "the card's two split columns were not found").not.toBeNull();
+  const seen = `left bottom ${geom!.leftBottom}, right top ${geom!.rightTop}, widths ${geom!.leftWidth}/${geom!.rightWidth}`;
+  expect.soft(geom!.rightTop, `${width}px: About must sit BELOW the decisions — ${seen}`).toBeGreaterThanOrEqual(geom!.leftBottom - 1);
+  expect.soft(geom!.rightWidth, `${width}px: one column — both halves share the card's width — ${seen}`).toBe(geom!.leftWidth);
 });
 
 /**
@@ -2001,17 +1959,21 @@ test("page smokes: settings save + invoice/plan card render", async ({ page }) =
   await page.goto("/settings?tab=organization");
   const nameInput = page.getByLabel(/organi[sz]ation name/i);
   await expect(nameInput).toBeVisible();
-  // Two "Save" buttons live on this tab (rename + payment details) — scope
-  // to the rename form's own label container.
-  const renameForm = page.locator("label", { has: nameInput });
+  // Settings C8 (owner 2026-11-11): the name is a field of the Organisation
+  // card, saved by its one "Save changes"; the org defaults beside it keep Save
+  // buttons of their own, so scope to the card.
+  const card = page.getByTestId("org-profile-card");
+  const saveBarNote = card.getByTestId("settings-save-bar-message");
   const orgName = await nameInput.inputValue();
   await nameInput.fill(`${orgName} ✓`);
-  await renameForm.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(renameForm.getByText("Saved.")).toBeVisible();
-  // Restore — other specs assert on the org name.
+  await card.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(saveBarNote).toHaveText("Saved.");
+  // Restore — other specs assert on the org name. Editing again replaces the
+  // note with the unsaved list, so the second "Saved." is the second save's.
   await nameInput.fill(orgName);
-  await renameForm.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(renameForm.getByText("Saved.")).toBeVisible();
+  await expect(saveBarNote).not.toHaveText("Saved.");
+  await card.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(saveBarNote).toHaveText("Saved.");
 
   // Billing: the plan card is the invoice-adjacent surface every org has.
   await page.goto("/settings/billing");
