@@ -165,7 +165,7 @@ describe("createIdleTimer with its DEFAULT timers (browser `this` rule)", () => 
   it("calls setTimeout/clearTimeout detached from the timers object: a browser throws Illegal invocation otherwise", () => {
     const calls: string[] = [];
     const strict = (name: string) =>
-      function (this: unknown, ..._a: unknown[]) {
+      function (this: unknown) {
         if (this !== globalThis) throw new TypeError("Illegal invocation");
         calls.push(name);
         return 1;

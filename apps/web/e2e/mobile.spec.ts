@@ -5703,11 +5703,16 @@ for (const [sportKey, short] of WIDTH_MATRIX_CLOCK_SPORTS) {
 // position keys (`packages/engine/src/sports/*`), the names carry `projectTag()` (two width projects share one CI process).
 // ---------------------------------------------------------------------------
 
-/** Open every phone-disclosure instance whose toggle is visible at this width; returns how many instances exist. */
+/**
+ * Open everything the console folds: the header bar's Lineup panel (the heavy block the old Lineup disclosure held; the
+ * bar is one control per panel at every width, so it is opened by its own button) and every phone-disclosure instance
+ * whose toggle is visible at this width. Returns how many things were opened (panel + disclosures), so a caller can
+ * still prove it was not vacuous.
+ */
 async function openEveryPhoneFold(page: Page): Promise<number> {
+  expect(await openConsolePanel(page, "lineup"), "the console offers the Lineup panel (a football/volleyball/hockey fixture)").toBe(true);
+  let opened = 1;
   const toggles = page.locator('[data-role="phone-disclosure-toggle"]');
-  // Attached, not visible: a fold's toggle may be `md:hidden` here, and a hidden control cannot be clicked.
-  await expect(toggles.first(), "the console renders its folds (the lineup disclosure at least)").toBeAttached({ timeout: 20_000 });
   const n = await toggles.count();
   for (let i = 0; i < n; i++) {
     const toggle = toggles.nth(i);
@@ -5715,8 +5720,9 @@ async function openEveryPhoneFold(page: Page): Promise<number> {
     if ((await toggle.getAttribute("aria-expanded")) === "true") continue;
     await toggle.click();
     await expect(toggle, `fold ${i + 1} of ${n} opens`).toHaveAttribute("aria-expanded", "true");
+    opened++;
   }
-  return n;
+  return opened;
 }
 
 const VB_COURT = ["S", "OH", "MB", "OPP", "OH", "MB"] as const;

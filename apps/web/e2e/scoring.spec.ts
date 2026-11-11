@@ -7,6 +7,7 @@ import {
   expandAllFolds,
   createStageAndGenerate,
   expectNoHorizontalScroll,
+  seedRosteredFixture,
   seedScoredDivision,
   TAG,
   divisionPath,
@@ -233,6 +234,37 @@ test("Remote scoring opens without crashing the console, closes itself when idle
   // Left alone, it closes by itself.
   await expect(panel).toBeHidden({ timeout: IDLE + 10_000 });
   await expect(button).toHaveAttribute("aria-expanded", "false");
+});
+
+test("Lineup is offered for tennis doubles and not for tennis singles; the other panels stay", async ({ page, request }) => {
+  // Owner 2026-11-11: when BOTH sides are one-person entrants there is no lineup to pick, so the bar drops Lineup. Read from
+  // the entrant kind (singles = individual, doubles = pair), so the same fixture shape in any future singles sport inherits it.
+  const mk = (variantKey: string, entrantKind: "individual" | "pair", label: string) =>
+    seedRosteredFixture(request, {
+      label: `${label} ${TAG}`,
+      sportKey: "tennis",
+      variantKey,
+      entrantKind,
+      home: entrantKind === "pair" ? [{ fullName: "Dee Home One" }, { fullName: "Dee Home Two" }] : [{ fullName: "Sam Home" }],
+      away: entrantKind === "pair" ? [{ fullName: "Dee Away One" }, { fullName: "Dee Away Two" }] : [{ fullName: "Sam Away" }],
+    });
+  const singles = await mk("tour", "individual", "Singles Bar");
+  const doubles = await mk("doubles-noad-mtb10", "pair", "Doubles Bar");
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const bar = (p: Page) => p.locator('[data-role="console-panel-bar"] button[aria-controls^="console-panel-"]');
+
+  await page.goto(await fixturePath(page.request, singles.fixtureId));
+  await expect(page.locator('[data-role="console-panel-bar"]')).toBeVisible({ timeout: 20_000 });
+  const singlesPanels = await bar(page).evaluateAll((els) => els.map((e) => e.getAttribute("aria-controls")!.replace("console-panel-", "")));
+  expect(singlesPanels, "singles: no Lineup, the other panels stay").not.toContain("lineup");
+  expect(singlesPanels, "singles: Stream, Remote scoring, Match rules and Match actions remain").toEqual(
+    expect.arrayContaining(["handover", "rules", "actions"]),
+  );
+  await expect(page.getByTestId("lineup-toggle")).toHaveCount(0);
+
+  await page.goto(await fixturePath(page.request, doubles.fixtureId));
+  await expect(page.locator('[data-role="console-panel-bar"]')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("lineup-toggle"), "doubles keep Lineup").toHaveCount(1);
 });
 
 test("forfeit records core.forfeit with the side and the reason, and ends the fixture", async ({

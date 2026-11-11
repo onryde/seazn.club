@@ -129,6 +129,39 @@ describe("phone placement: the bar sits BELOW the pad, in one DOM (design of rec
   });
 });
 
+describe("Lineup is hidden when BOTH sides are one-person entrants (read from the entrant kind, not a sport list)", () => {
+  const withKinds = (sport: string, home: string, away: string) =>
+    renderToStaticMarkup(
+      <FixtureConsole {...consoleProps(sport, { home: { ...side("e1", "Home"), kind: home }, away: { ...side("e2", "Away"), kind: away } })} />,
+    );
+  it("singles of every sport that declares both an individual and a pair kind: no Lineup, the other four stay; doubles and teams keep it", () => {
+    let swept = 0;
+    for (const mod of builtinModules) {
+      const kinds = mod.entrantModel?.kinds ?? [];
+      if (!(kinds.includes("individual") && kinds.includes("pair"))) continue;
+      if (NO_LINEUP.has(mod.key)) continue;
+      swept++;
+      const singles = barOf(withKinds(mod.key, "individual", "individual"));
+      expect(singles, `${mod.key} singles`).toEqual(BAR_ORDER.filter((b) => b !== "lineup"));
+      expect(barOf(withKinds(mod.key, "pair", "pair")), `${mod.key} doubles`).toContain("lineup");
+      // one single, one pair is not "both one-person": the editor stays
+      expect(barOf(withKinds(mod.key, "individual", "pair")), `${mod.key} mixed`).toContain("lineup");
+    }
+    // anti-vacuity: the engine's own declarations name at least tennis, badminton and table tennis
+    expect(swept).toBeGreaterThanOrEqual(3);
+    for (const key of ["tennis", "badminton", "tabletennis"]) {
+      expect(builtinModules.find((m) => m.key === key)?.entrantModel?.kinds, key).toContain("individual");
+    }
+    expect(barOf(withKinds("football", "team", "team"))).toContain("lineup");
+  });
+
+  it("the roster/availability block takes over where the Lineup panel is hidden for singles", () => {
+    const html = withKinds("tennis", "individual", "individual");
+    expect(html).not.toContain('data-testid="lineup-toggle"');
+    expect(html).toContain("availability");
+  });
+});
+
 describe("what hides each button", () => {
   const html = (over: Partial<ConsoleProps>, sport = "football") => renderToStaticMarkup(<FixtureConsole {...consoleProps(sport, over)} />);
 

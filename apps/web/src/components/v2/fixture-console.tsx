@@ -17,6 +17,7 @@ import { ShareButton } from "@/components/share-button";
 import {
   AvailabilityRoster,
   LineupEditor,
+  bothSidesSinglePerson,
   lineupEditorApplies,
   type PositionGroupIn,
 } from "@/components/v2/lineup-editor";
@@ -1169,7 +1170,7 @@ export function FixtureConsole({
   // The panel bar (owner 2026-11-11). Each flag is that panel's own gate — Stream: the page's mount decision; Remote
   // scoring: the console's `canHandOver`; Lineup: both sides known and the module declares a lineup (`lineupEditorApplies`);
   // Match rules: there is a rules block (organiser) or a read-only format line to show; Match actions: it offers any.
-  const offerLineup = !!home && !!away && lineupEditorApplies(sport);
+  const offerLineup = !!home && !!away && lineupEditorApplies(sport) && !bothSidesSinglePerson(home, away);
   const offerRules = !!matchRules || (matchFormatLine !== undefined && matchFormatLine !== "");
   const offered = offeredPanels({
     stream: !!stream,
@@ -1959,7 +1960,7 @@ export function FixtureConsole({
           went with them, so an organiser of any individual-entrant sport lost
           the only surface saying who had RSVP'd out. See
           `AvailabilityRoster`'s own note. */}
-      {home && away && !lineupEditorApplies(sport) && (
+      {home && away && !offerLineup && (
         <div className="grid gap-4 lg:grid-cols-2">
           {(["home", "away"] as const).map((sideKey) => {
             const s = sides[sideKey]!;

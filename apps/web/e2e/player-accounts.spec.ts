@@ -185,7 +185,9 @@ test.describe("player accounts (PROMPT-53)", () => {
     const fixture = mine.data!.upcoming[0]!;
     await page.goto(`/o/${orgSlug}/c/${compSlug}/d/${divSlug}/f/${fixture.fixture_no}`);
 
-    await openConsolePanel(page, "lineup");
+    // `generic` declares no lineup, so the console offers no Lineup panel and the roster block carries the chips; a sport that
+    // does offer it would hold them in the panel.
+    await openConsolePanel(page, "lineup", { optional: true });
     // Ada RSVP'd out → ✗ with the note as tooltip; Ben never claimed → "—".
     const adaChip = page.getByLabel(`${ada.full_name}: unavailable — away that weekend`);
     await expect(adaChip.first()).toBeVisible({ timeout: 20_000 });

@@ -932,6 +932,9 @@ test.describe("R2006: the OBS tab's score style grid", () => {
             const cell = opt.querySelector<HTMLElement>("span[aria-hidden]")!;
             const canvas = opt.querySelector<HTMLElement>('[data-testid="ovl-preview-canvas"]')!;
             const c = canvas.getBoundingClientRect();
+            // Below md the Stream panel opens BELOW the pad (chrome down, 2026-09-02), so an option can sit past the first
+            // 900px: a tap needs it scrolled into view first, as a thumb does it (elementFromPoint is null off-screen).
+            opt.scrollIntoView({ block: "center" });
             const box = opt.getBoundingClientRect();
             const hit = document.elementFromPoint(box.left + box.width / 2, box.top + Math.min(box.height / 2, 40));
             return {

@@ -1760,13 +1760,16 @@ test.describe("W4 B5b - joint winners on a final (X-CH-4)", () => {
       const hit = await hitTest(offer);
       expect(hit.ok, `${w}: the action is what a tap lands on`).toBe(true);
       expect(hit.h, `${w}: a 44px tap target`).toBeGreaterThanOrEqual(44);
-      // It never sits above the pad: the Scoring card comes first in the page.
+      // Header panel bar (owner 2026-11-11, design 2026-09-02 "chrome down"): from md the bar and its open panel sit in
+      // the header, ABOVE the Scoring card; below md they sit BELOW it. Pinned by where the two render, per width.
       const order = await page.evaluate(() => {
         const scoring = document.querySelector('[data-role="console-scoring"]');
         const o = document.querySelector('[data-testid="joint-winners-open"]');
-        return !!scoring && !!o && !!(scoring.compareDocumentPosition(o) & Node.DOCUMENT_POSITION_FOLLOWING);
+        if (!scoring || !o) return null;
+        return o.getBoundingClientRect().top > scoring.getBoundingClientRect().top;
       });
-      expect(order, `${w}: the action follows the Scoring card`).toBe(true);
+      expect(order, `${w}: both the Scoring card and the action rendered`).not.toBeNull();
+      expect(order, `${w}: the action is ${w >= 768 ? "above" : "below"} the Scoring card`).toBe(w < 768);
       await crop(page.locator('[data-role="match-actions"]'), "joint-offer", w);
       widths++;
     }

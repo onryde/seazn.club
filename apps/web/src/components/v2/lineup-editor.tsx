@@ -3,6 +3,7 @@
 // Per-fixture lineup editor: pick starters/bench from the entrant's roster,
 // assign positions/order from the module catalog. PUT replaces the lineup
 // (doc 08 §3); the engine validates size/roles at the scoring door.
+import { entrantKindCap } from "@seazn/engine/sport";
 import { useEffect, useRef, useState } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import {
@@ -151,6 +152,17 @@ export function draftFromSavedLineup(lineup: LineupSlotIn[]): SlotDraft[] {
     role: s.role ?? "player",
     pair_order: s.pair_order ?? null,
   }));
+}
+
+/**
+ * A lineup of one person per side has nothing to pick: both entrants are single people (singles tennis, badminton,
+ * table tennis, chess...). Read from the entrant's OWN declared `kind` through the engine's own cap for that kind
+ * (`entrantKindCap`: individual = 1, pair = 2, team = open) — never from a sport-name list, so a future singles sport
+ * inherits it. An unknown kind (a fixture that predates the field) keeps the editor.
+ */
+export function bothSidesSinglePerson(home: { kind?: string | null } | null | undefined, away: { kind?: string | null } | null | undefined): boolean {
+  const single = (k: string | null | undefined) => !!k && entrantKindCap(k) === 1;
+  return single(home?.kind) && single(away?.kind);
 }
 
 /**
