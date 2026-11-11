@@ -3823,6 +3823,8 @@ export type DictionaryKey =
   | "lineup.menu.close"
   | "lineup.menu.makeCaptain"
   | "lineup.menu.markRole"
+  | "lineup.menu.moveDown"
+  | "lineup.menu.moveUp"
   | "lineup.menu.open"
   | "lineup.menu.pairOrderLabel"
   | "lineup.menu.remove"
