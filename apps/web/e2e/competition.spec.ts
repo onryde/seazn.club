@@ -121,7 +121,8 @@ test("a second competition of the same name creates cleanly with its own slug", 
 // Settings are organised into tabs (General / Branding / Archived); one form
 // spans them, so an unsaved edit must survive a tab switch and save from any
 // tab. Showcase stays inline on General (under visibility, which gates it);
-// Archived only appears once something is archived.
+// Archived only appears once something is archived. Settings C8 (owner
+// 2026-11-11): Branding is always a tab, and the one Save reads "Save changes".
 test("competition settings tabs share one form", async ({ page, request }) => {
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
     name: `Tabs ${TAG}`,
@@ -143,7 +144,7 @@ test("competition settings tabs share one form", async ({ page, request }) => {
   await tablist.getByRole("tab", { name: "Branding" }).click();
   await expect(page.getByText("Brand color")).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Name", exact: true })).toHaveCount(0);
-  await page.getByRole("button", { name: /save settings/i }).click();
+  await page.getByRole("button", { name: /save changes/i }).click();
   await expect(page.getByText("Saved.")).toBeVisible();
 
   // The General edit rode along.

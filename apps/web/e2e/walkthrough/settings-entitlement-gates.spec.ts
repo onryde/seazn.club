@@ -83,7 +83,8 @@ async function orgBranding(
 }
 
 /** The `--ps-accent` custom property off the ONE element on this page that
- *  carries it — `OrgAbout`'s Preview pane (`org-about.tsx:57`,
+ *  carries it — the About editor's Preview pane in the Organisation card
+ *  (`org-profile-card.tsx`, settings C8; `OrgAbout` before it),
  *  `publicThemeStyleChain` -> `publicThemeStyle` -> `resolvePublicTheme`,
  *  `src/lib/public-theme.ts`). Read via the live DOM's computed style, never
  *  a raw-HTML string match (AGENTS.md: a Next HTML grep for an omitted prop
@@ -114,7 +115,7 @@ const HEX = "#003366";
 // Finding A — brand colour has no write-side check
 // ---------------------------------------------------------------------------
 
-test("Finding A: PATCH brand colour has no feature check, and OrgAbout's preview is the reachable read-mask exception", async ({
+test("Finding A: PATCH brand colour has no feature check, and the About preview is the reachable read-mask exception", async ({
   request,
   page,
 }) => {
@@ -138,9 +139,9 @@ test("Finding A: PATCH brand colour has no feature check, and OrgAbout's preview
       .toBe(HEX);
 
     // The read mask (public-site/data.ts, V230, V306) hides this from the
-    // PUBLIC org page — but page.tsx:386 hands `active.branding` to
-    // `OrgAbout` UNCONDITIONALLY (gated only on `canEdit`, never on plan),
-    // and its preview is unmasked. Drive it and look, per _RULES.md §9 — a
+    // PUBLIC org page — but the settings page hands `active.branding` to the
+    // Organisation card UNCONDITIONALLY (its About editor is gated only on
+    // `canEdit`, never on plan), and its preview is unmasked. Drive it and look, per _RULES.md §9 — a
     // claim about what a person SEES is settled by the browser, not the code.
     await page.goto(settingsUrl(org.slug, "organization"));
     const accent = await aboutPreviewAccent(page);
@@ -282,16 +283,16 @@ test("Case 7: a Pro org downgraded to Free keeps its saved brand colour visible 
 
     await page.goto(settingsUrl(org.slug, "organization"));
 
-    // "Still rendered?" — page.tsx:369's EDIT widget (OrgBrandColor) is
-    // gated on `dashboard.branding` and is now replaced by the upsell...
+    // "Still rendered?" — the Organisation card's colour picker is gated on
+    // `dashboard.theme` and is now replaced by the upsell...
     await expect(
       page.getByText(ui("settings.upgrade.brandColor")),
       "OBSERVED: the colour PICKER must fall back to the upsell once downgraded",
     ).toBeVisible({ timeout: READ_MS });
 
     // ...but the VALUE is still rendered elsewhere on the same tab, via the
-    // same reachable exception Finding A exercises (OrgAbout is gated only
-    // on canEdit, never on plan).
+    // same reachable exception Finding A exercises (the card's About editor
+    // is gated only on canEdit, never on plan).
     const accent = await aboutPreviewAccent(page);
     expect(
       accent,

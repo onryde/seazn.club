@@ -259,7 +259,8 @@ test("case #2 — the entry-fee currency select locks once Connect is attached, 
   await detachConnect(org.orgId);
   const held = (await readOrgMoney(org.orgId)).currency;
 
-  await page.goto(settingsUrl(org.slug, "preferences"));
+  // The org defaults live in the Organisation card since settings C8 (owner 2026-11-11).
+  await page.goto(settingsUrl(org.slug, "organization"));
   const select = page.getByTestId("reg-currency-select");
   await expect(select, "unattached: the organiser can still choose").toBeEnabled({
     timeout: READ_MS,
@@ -303,7 +304,8 @@ test("case #25 — a currency chosen before Connect attached is stranded, visibl
   await detachConnect(org.orgId);
   const held = (await readOrgMoney(org.orgId)).currency;
 
-  await page.goto(settingsUrl(org.slug, "preferences"));
+  // The org defaults live in the Organisation card since settings C8 (owner 2026-11-11).
+  await page.goto(settingsUrl(org.slug, "organization"));
   const options = await currencyOptions(page);
   const stranded = otherThan(options, held);
 
