@@ -866,10 +866,16 @@ body {
   background: var(--mk-night-2);
   border-bottom: 1px solid rgb(245 240 232 / 0.08);
 }
-/* Purple focus rings sit at 2.6:1 on night — the gantry flips them lime. */
+/* Purple focus rings sit at 2.6:1 on night — the gantry flips them lime. The
+   account menu is portalled to <body>, out of .app-gantry, so it names itself;
+   its rows are flush to the panel's edges, so the ring is drawn inside them. */
 .app-gantry :where(a, button):focus-visible,
-.app-crumbs :where(a, button):focus-visible {
+.app-crumbs :where(a, button):focus-visible,
+.app-account-menu :where(a, button):focus-visible {
   outline-color: var(--mk-lime);
+}
+.app-account-menu :where(a, button):focus-visible {
+  outline-offset: -2px;
 }
 /* Auth tunnel (spec §6): full night stage; the white auth card stays — a
    floodlit ticket window. Lime + violet beams from the top corners. */

@@ -1,13 +1,12 @@
-// The console nav's Sponsors and Settings items (R4 sponsors-on-stream).
+// The console nav's Sponsors item and the bar's width budget (R4 sponsors-on-stream; the account menu, 2026-11-11).
 //
-// OWNER RULING 2026-11-01 (replaces 2026-10-31 "a"): "instead of putting sponsor icon, can we put setting as a icon all time".
-// Settings is its icon alone at every width (named by aria-label, with a title tooltip), and Sponsors is an ordinary
-// labelled link on the SAME label rung as Dashboard, Directory and Streaming - the width Settings' label gave back pays for it.
-// So the labelled links are the ones main had (Settings' label swapped for Sponsors'), and main's rung holds again: the org
-// nav's labels at md, the dual-role nav's at lg (the owner's 2026-10-28 "tighten" ruling: tablets keep their labels).
-// Phones are icon-only either way; there Sponsors is still `hidden min-[350px]:flex` and Player home still folds first. An org
-// with a LOGO carries 38px more in the row (the 28px logo and its 10px gap), so both fold thresholds move up for it - never
-// showing more than an org without a logo would at the same width.
+// OWNER RULING 2026-11-01: Sponsors is an ordinary labelled link on the SAME label rung as Dashboard, Directory and Streaming.
+// OWNER PICK 2026-11-11 (Option A, the account menu): the Settings icon, the display name, Sign out and Player home left the bar
+// for one account trigger at its right end (components/account-menu.tsx; its own suite is account-menu.test.tsx and the bar-level
+// facts are nav-account-menu.test.tsx). So the bar is the same for a claimed player as for anyone else: labels at md for every
+// bar. Phones are icon-only; there Sponsors is still `hidden min-[350px]:flex`. An org with a LOGO carries 38px more in the row
+// (the 28px logo and its 10px gap), so the Sponsors fold moves up for it - never showing more than an org without a logo would
+// at the same width.
 //
 // What a unit test CAN pin is the markup that makes the width budget true: which links are in the bar at which width, the
 // label each one carries and the rung it is revealed at. That the budget really fits is measured in a browser at every
@@ -76,9 +75,9 @@ function navLinks(html: string): NavLink[] {
   }));
 }
 const sponsorsLink = (html: string): NavLink | undefined => navLinks(html).find((l) => l.testid === "nav-sponsors");
-const settingsLink = (html: string): NavLink | undefined => navLinks(html).find((l) => l.testid === "nav-settings");
 
-/** The org shapes the bar can take: streaming offered or not x a claimed player or not. */
+/** The org shapes the bar can take: streaming offered or not x a claimed player or not (a claimed player no longer changes the
+ *  bar - Player home lives in the account menu - and the shapes keep both so that stays proven, not assumed). */
 const SHAPES = [
   { streaming: false, player: false },
   { streaming: true, player: false },
@@ -110,24 +109,26 @@ beforeEach(() => {
 afterEach(() => setRelayDriversForTest(null));
 
 describe("Nav > Sponsors item", () => {
-  it("is a link to the org's Sponsors hub, named, after Directory/Streaming - and Settings, the icon, closes the bar", async () => {
+  it("is a link to the org's Sponsors hub, named, after Directory/Streaming - and it closes the links (Settings went to the account menu)", async () => {
     const html = await render();
     const a = sponsorsLink(html);
     expect(a, "the Sponsors link is in the nav").toBeDefined();
     expect(a!.href).toBe("/o/riverside/sponsors");
     expect(a!.aria).toBe("Sponsors");
     const order = navLinks(html).map((l) => l.href);
-    expect(order).toEqual(["/o/riverside", "/directory", "/streaming", "/o/riverside/sponsors", "/o/riverside/settings"]);
+    expect(order).toEqual(["/o/riverside", "/directory", "/streaming", "/o/riverside/sponsors"]);
   });
 
-  it("without Streaming the order is Dashboard, Directory, Sponsors, Settings", async () => {
+  it("without Streaming the order is Dashboard, Directory, Sponsors", async () => {
     const order = navLinks(await renderShape({ streaming: false, player: false })).map((l) => l.href);
-    expect(order).toEqual(["/o/riverside", "/directory", "/o/riverside/sponsors", "/o/riverside/settings"]);
+    expect(order).toEqual(["/o/riverside", "/directory", "/o/riverside/sponsors"]);
   });
 
-  it("dual-role: Player home joins the labelled links and Settings stays LAST, beside the other icon-only controls (help, Sign out)", async () => {
-    const order = navLinks(await renderShape({ streaming: true, player: true })).map((l) => l.href);
-    expect(order).toEqual(["/o/riverside", "/directory", "/streaming", "/o/riverside/sponsors", "/me", "/o/riverside/settings"]);
+  it("dual-role: a claimed player's links are the SAME links - Player home is in the account menu, not the bar", async () => {
+    const player = navLinks(await renderShape({ streaming: true, player: true })).map((l) => l.href);
+    const plain = navLinks(await renderShape({ streaming: true, player: false })).map((l) => l.href);
+    expect(player).toEqual(["/o/riverside", "/directory", "/streaming", "/o/riverside/sponsors"]);
+    expect(player).toEqual(plain);
   });
 
   it("carries a VISIBLE label, in the same span shape as its labelled siblings, in every locale (16 cells counted)", async () => {
@@ -167,9 +168,9 @@ describe("Nav > Sponsors item", () => {
     expect(checked).toBe(2 * SHAPES.length);
   });
 
-  it("every other link is shown at every width, and a plain org (3 default links + Sponsors) has exactly one link that is hidden below 350", async () => {
+  it("every other link is shown at every width, and a plain org (2 default links + Sponsors) has exactly one link that is hidden below 350", async () => {
     const links = navLinks(await renderShape({ streaming: false, player: false }));
-    expect(links.length).toBe(4);
+    expect(links.length).toBe(3);
     const hiddenBelow350 = links.filter((l) => tokens(l.cls).includes("hidden"));
     expect(hiddenBelow350.map((l) => l.testid)).toEqual(["nav-sponsors"]);
     for (const l of links.filter((x) => x.testid !== "nav-sponsors")) expect(tokens(l.cls), l.href).toContain("flex");
@@ -199,7 +200,7 @@ describe("Nav > Sponsors item", () => {
     m.getUserOrgs.mockResolvedValue([]);
     const html = await render();
     expect(sponsorsLink(html)).toBeUndefined();
-    expect(navLinks(html).map((l) => l.href)).toEqual(["/orgs/new", "/directory", "/orgs/new"]);
+    expect(navLinks(html).map((l) => l.href)).toEqual(["/orgs/new", "/directory"]);
   });
 
   it("every locale has its own label (no English fallback leaking into es/fr/nl) and the rendered link carries it", async () => {
@@ -218,92 +219,13 @@ describe("Nav > Sponsors item", () => {
   });
 });
 
-describe("Nav > Settings is its icon alone at every width (owner 2026-11-01)", () => {
-  it("no label span at all, in any org shape or locale - named by aria-label AND a title tooltip in that locale's words (16 cells counted)", async () => {
-    let checked = 0;
-    for (const locale of LOCALES) {
-      m.locale.value = locale;
-      const name = DICTS[locale]!["nav.settings"];
-      expect(typeof name, locale).toBe("string");
-      for (const shape of SHAPES) {
-        const a = settingsLink(await renderShape(shape));
-        expect(a, `${locale} ${JSON.stringify(shape)}: the Settings link is in the nav`).toBeDefined();
-        expect(a!.href).toBe("/o/riverside/settings");
-        expect(a!.label, `${locale} ${JSON.stringify(shape)}: no label span`).toBeNull();
-        expect(a!.inner, `${locale}: no visible words inside the link`).not.toContain(name!);
-        expect(a!.aria, `${locale}: the accessible name`).toBe(name);
-        expect(a!.title, `${locale}: the mouse user's tooltip`).toBe(name);
-        checked++;
-      }
-    }
-    expect(checked).toBe(LOCALES.length * SHAPES.length);
-    // Translated, not English everywhere: four locales, four words.
-    expect(new Set(LOCALES.map((l) => DICTS[l]!["nav.settings"])).size).toBe(LOCALES.length);
-  });
-
-  it("is shown at every width (a bare `flex`, never `hidden`) and is the LAST link of every shape", async () => {
-    let checked = 0;
-    for (const shape of SHAPES) {
-      const links = navLinks(await renderShape(shape));
-      const a = links.find((l) => l.testid === "nav-settings");
-      expect(a, JSON.stringify(shape)).toBeDefined();
-      expect(tokens(a!.cls), JSON.stringify(shape)).toContain("flex");
-      expect(tokens(a!.cls), JSON.stringify(shape)).not.toContain("hidden");
-      expect(links.at(-1)!.testid, JSON.stringify(shape)).toBe("nav-settings");
-      checked++;
-    }
-    expect(checked).toBe(SHAPES.length);
-  });
-
-  it("its padding: 6px on phones (a 28px icon, as every phone link), 12px in the sm band, and 6px again from where the bar's labels come on - md for the org nav, lg for the dual-role nav - never the labelled links' 4px (a 24px target)", async () => {
-    // Where the labels are on the bar is at its fullest, and the 12px a bare icon gets in the sm band would come straight out of the
-    // org chip: the 38-character club name lost its last characters at 1280 with it (nav-E report). Below its labels' rung the
-    // dual-role nav is all icons at sm's 12px (40px wide), and Settings matches them there (review of 2900e56916).
-    let checked = 0;
-    for (const shape of SHAPES) {
-      const toks = tokens(settingsLink(await renderShape(shape))!.cls);
-      const where = JSON.stringify(shape);
-      expect(toks, where).toContain("px-1.5");
-      expect(toks, where).toContain("sm:px-3");
-      expect(toks, `${where}: never 4px`).not.toContain("md:px-1");
-      expect(toks.filter((t) => /^(md|lg|xl):px-/.test(t)), `${where}: 6px from the labels' rung, through desktop`).toEqual([shape.player ? "lg:px-1.5" : "md:px-1.5"]);
-      checked++;
-    }
-    expect(checked).toBe(SHAPES.length);
-  });
-
-  it("with no organisation there is no club name to make room for: Settings keeps sm's 12px at every width from sm (player and not)", async () => {
-    let checked = 0;
-    for (const player of [false, true]) {
-      m.getUserOrgs.mockResolvedValue([]);
-      m.hasClaimedProfile.mockResolvedValue(player);
-      const html = await render();
-      expect(html, "no org chip").not.toContain('data-tour="org-chip"');
-      const toks = tokens(settingsLink(html)!.cls);
-      expect(toks, `player ${player}`).toEqual(expect.arrayContaining(["px-1.5", "sm:px-3"]));
-      expect(toks.filter((t) => /^(md|lg|xl):px-/.test(t)), `player ${player}: no override`).toEqual([]);
-      checked++;
-    }
-    expect(checked).toBe(2);
-  });
-
-  it("with no organisation yet it still opens /orgs/new and is still an icon (the empty case)", async () => {
-    m.getUserOrgs.mockResolvedValue([]);
-    const a = settingsLink(await render());
-    expect(a).toBeDefined();
-    expect(a!.href).toBe("/orgs/new");
-    expect(a!.label).toBeNull();
-    expect(a!.title).toBe("Settings");
-  });
-});
-
 describe("Nav > one box height for every gantry control, icon or labelled (CI e2e 41298006103)", () => {
   // A labelled link is 32px tall (a 20px line of text-sm + py-1.5) and a bare 16px icon only 28, so in the `items-center` nav
-  // the icon-only Settings sat 2px lower than its labelled neighbours wherever the labels were on - and the gantry probe in
+  // an icon-only control sat 2px lower than its labelled neighbours wherever the labels were on - and the gantry probe in
   // youtube-streaming.shots.spec.ts read that as a wrap (tops 12,12,12,12,14 at 768 en and dual-role 1024). Every nav link and
-  // the Sign-out button therefore carry the same `min-h-8` (32px): one height whether the words are painted or not, at every
+  // the account trigger therefore carry the same `min-h-8` (32px): one height whether the words are painted or not, at every
   // width. `min-`, not a fixed `h-8`, so a label that ever wrapped would still grow the box and show as a second row.
-  it("every nav link, in every org shape (with and without a logo), carries min-h-8 - 4+5+5+6 links x 2 = 40 counted", async () => {
+  it("every nav link, in every org shape (with and without a logo), carries min-h-8 - 3+4+3+4 links x 2 = 28 counted", async () => {
     let checked = 0;
     for (const logo of [false, true]) {
       for (const shape of SHAPES) {
@@ -313,70 +235,60 @@ describe("Nav > one box height for every gantry control, icon or labelled (CI e2
         }
       }
     }
-    expect(checked).toBe(2 * (4 + 5 + 5 + 6));
+    expect(checked).toBe(2 * (3 + 4 + 3 + 4));
   });
 
-  it("the Sign-out button carries the same min-h-8", async () => {
-    const cls = (await render()).match(/<button\b[^>]*\bclass="([^"]*)"/)?.[1];
-    expect(cls, "the gantry renders its Sign-out button").toBeDefined();
+  it("the account trigger carries the same min-h-8", async () => {
+    const cls = (await render()).match(/<button\b[^>]*\bdata-testid="account-menu-trigger"[^>]*>/)?.[0].match(/\bclass="([^"]*)"/)?.[1];
+    expect(cls, "the gantry renders its account trigger").toBeDefined();
     expect(tokens(cls)).toContain("min-h-8");
   });
 });
 
-describe("Nav > the label rung is main's again (owner 2026-10-28: md for the org nav's labels, lg for the dual-role nav's)", () => {
-  // The rule's literal, from main: a claimed player's bar waits for lg, every other bar shows its labels from md. Settings no longer
-  // has a label, so the labelled links are exactly main's set with Settings' word swapped for Sponsors'.
-  const rungFor = (player: boolean): string => (player ? "hidden lg:inline" : "hidden md:inline");
-
-  it("each org shape: every labelled link takes the shape's rung, and every link but Settings IS labelled (four shapes, 3+4+4+5 = 16 labels counted)", async () => {
+describe("Nav > one label rung for every bar: md (the dual-role lg rung went with Player home, 2026-11-11)", () => {
+  // Main's rule was: a claimed player's bar waits for lg, every other bar shows its labels from md - because Player home added a
+  // link. Player home is in the account menu now, so every bar has the same links and the same rung.
+  it("each org shape: every link is labelled and takes `hidden md:inline` (four shapes, 3+4+3+4 = 14 labels counted)", async () => {
     let labels = 0;
     for (const shape of SHAPES) {
-      const links = navLinks(await renderShape(shape));
-      for (const l of links) {
-        if (l.testid === "nav-settings") continue;
-        expect(l.label, `${JSON.stringify(shape)} ${l.href}`).toBe(rungFor(shape.player));
+      for (const l of navLinks(await renderShape(shape))) {
+        expect(l.label, `${JSON.stringify(shape)} ${l.href}`).toBe("hidden md:inline");
         labels++;
       }
     }
-    expect(labels).toBe(3 + 4 + 4 + 5);
+    expect(labels).toBe(3 + 4 + 3 + 4);
   });
 
-  it("no link anywhere is revealed at xl (the six-label rung went with Settings' label)", async () => {
+  it("no link anywhere is revealed at lg or xl (no second rung survives)", async () => {
     let checked = 0;
     for (const shape of SHAPES) {
       const html = await renderShape(shape);
-      expect(html, JSON.stringify(shape)).not.toMatch(/(?:^|[\s"])xl:inline(?:[\s"]|$)/);
+      expect(html, JSON.stringify(shape)).not.toMatch(/(?:^|[\s"])(?:lg|xl):inline(?:[\s"]|$)/);
       checked++;
     }
     expect(checked).toBe(SHAPES.length);
   });
 
   // The labelled links' spacing from md. The club name in the org chip is the row's only flexible item, so every px the links take
-  // comes out of it; with one more link than main had, the links give the room back in their own padding and gaps (measured, nav-E
-  // report: the 38-character club name keeps its last characters at 1280 and 8+ characters at 768, as on main).
-  //   org nav, labels on from md: md..lg 4px side padding and a 4px icon-to-word gap; from lg main's 12px and 6px gap again.
-  //   dual-role nav, icons until lg: main's 12px from sm, with no override at all.
-  // From lg, Sign out paints no words (owner 2026-11-01, a second ruling the same day), and the width they took pays for main's 12px.
+  // comes out of it (measured, nav-E report: the 38-character club name keeps its last characters at 1280 and 8+ characters at 768).
+  //   bar with an org, labels on from md: md..lg 4px side padding and a 4px icon-to-word gap; from lg main's 12px and 6px gap.
   const spacing = (toks: string[]): string[] => toks.filter((t) => /^(md|lg|xl):(px|gap)-/.test(t)).sort();
 
-  it("from md: the org nav's labelled links take md:px-1 md:gap-1 then main's lg:px-3 lg:gap-1.5; the dual-role nav's keep main's padding, no override (16 labelled links)", async () => {
+  it("from md: every labelled link of a bar with an org takes md:px-1 md:gap-1 then main's lg:px-3 lg:gap-1.5 (14 links)", async () => {
     let md = 0;
-    let other = 0;
     for (const shape of SHAPES) {
       for (const l of navLinks(await renderShape(shape))) {
-        if (l.testid === "nav-settings") continue;
         const toks = tokens(l.cls);
-        if (l.label === "hidden md:inline") { expect(spacing(toks), l.href).toEqual(["lg:gap-1.5", "lg:px-3", "md:gap-1", "md:px-1"]); md++; }
-        else { expect(spacing(toks), l.href).toEqual([]); other++; }
+        expect(spacing(toks), `${JSON.stringify(shape)} ${l.href}`).toEqual(["lg:gap-1.5", "lg:px-3", "md:gap-1", "md:px-1"]);
         expect(toks, `${l.href}: sm's 12px everywhere it is not overridden`).toContain("sm:px-3");
         expect(toks, `${l.href}: not the 8px of the first 2026-11-01 build`).not.toContain("lg:px-2");
+        md++;
       }
     }
-    expect(md).toBe(3 + 4);
-    expect(other).toBe(4 + 5);
+    expect(md).toBe(3 + 4 + 3 + 4);
   });
 
-  it("with no organisation (no chip to make room for) the bar keeps main's spacing: no md:gap-0 on the nav, no md:gap-1 on a link - the non-player bar keeps B3's md:px-1 lg:px-3, the player bar none (2 bars)", async () => {
+  it("with no organisation (no chip to make room for) the bar keeps main's spacing: no md:gap-0 on the nav, no md:gap-1 on a link, B3's md:px-1 lg:px-3 - player or not (2 bars)", async () => {
     let checked = 0;
     for (const player of [false, true]) {
       m.getUserOrgs.mockResolvedValue([]);
@@ -385,9 +297,9 @@ describe("Nav > the label rung is main's again (owner 2026-10-28: md for the org
       const navToks = tokens(html.match(/<nav class="([^"]*)">/)?.[1]);
       expect(navToks, `player ${player}`).toEqual(expect.arrayContaining(["gap-0", "sm:gap-0.5"]));
       expect(navToks, `player ${player}: the links keep sm's 2px gap`).not.toContain("md:gap-0");
-      const labelled = navLinks(html).filter((l) => l.testid !== "nav-settings");
-      expect(labelled.length, `player ${player}: Dashboard, Directory (+ Player home)`).toBe(player ? 3 : 2);
-      for (const l of labelled) expect(spacing(tokens(l.cls)), `player ${player} ${l.href}`).toEqual(player ? [] : ["lg:px-3", "md:px-1"]);
+      const labelled = navLinks(html);
+      expect(labelled.length, `player ${player}: Dashboard, Directory`).toBe(2);
+      for (const l of labelled) expect(spacing(tokens(l.cls)), `player ${player} ${l.href}`).toEqual(["lg:px-3", "md:px-1"]);
       checked++;
     }
     expect(checked).toBe(2);
@@ -405,36 +317,29 @@ describe("Nav > the label rung is main's again (owner 2026-10-28: md for the org
   });
 });
 
-describe("Nav > Player home folds first (OWNER RULING 6.1), and only where the bar needs it", () => {
-  it("a streaming org's Player home is `hidden min-[390px]:flex`; without Streaming it keeps the precedent `min-[350px]:flex`", async () => {
-    const withStreaming = navLinks(await renderShape({ streaming: true, player: true })).find((l) => l.href === "/me");
-    const without = navLinks(await renderShape({ streaming: false, player: true })).find((l) => l.href === "/me");
-    expect(tokens(withStreaming!.cls)).toContain("min-[390px]:flex");
-    expect(tokens(withStreaming!.cls)).not.toContain("min-[350px]:flex");
-    expect(withStreaming!.cls).toMatch(/(?:^|\s)hidden\s+min-\[390px\]:flex(?:\s|$)/);
-    expect(tokens(without!.cls)).toContain("min-[350px]:flex");
-    expect(tokens(without!.cls)).not.toContain("min-[390px]:flex");
-    for (const l of [withStreaming!, without!]) expect(tokens(l.cls)).not.toContain("flex");
-  });
-
-  it("an org with a logo moves each threshold up one step: 430 with Streaming, 390 without", async () => {
-    const withStreaming = navLinks(await renderShape({ streaming: true, player: true, logo: true })).find((l) => l.href === "/me");
-    const without = navLinks(await renderShape({ streaming: false, player: true, logo: true })).find((l) => l.href === "/me");
-    expect(withStreaming!.cls).toMatch(/(?:^|\s)hidden\s+min-\[430px\]:flex(?:\s|$)/);
-    expect(without!.cls).toMatch(/(?:^|\s)hidden\s+min-\[390px\]:flex(?:\s|$)/);
-    for (const l of [withStreaming!, without!]) {
-      expect(tokens(l.cls).filter((t) => /^min-\[\d+px\]:flex$/.test(t)), "exactly one threshold").toHaveLength(1);
-      expect(tokens(l.cls)).not.toContain("flex");
+describe("Nav > the phone budget: what is SHOWN at each width fits it", () => {
+  it("Player home is never a bar link, in any org shape, with or without a logo (it lives in the account menu) - 8 bars", async () => {
+    let checked = 0;
+    for (const logo of [false, true]) {
+      for (const shape of SHAPES) {
+        const html = await renderShape({ ...shape, logo });
+        expect(navLinks(html).map((l) => l.href), JSON.stringify({ ...shape, logo })).not.toContain("/me");
+        checked++;
+      }
     }
+    expect(checked).toBe(2 * SHAPES.length);
   });
 
   // The phone budget, as a count of what is SHOWN at each width. Each icon-only link is 28px (a 16px icon + 6px of side
-  // padding each side, `px-1.5`), the links touch (gap-0), and everything else in the row is fixed below `sm`: the
-  // wordmark, the "?" and Sign-out icons, the gaps and the 16px page padding. Calibrated on what was measured in a browser
-  // (nav.tsx): the 4-link nav fits 320 with 4px to spare, the 5-link nav fits 350 with 6 - so Sign-out's right edge is at
-  // 28N + 204 and must be <= the viewport. The real thing is measured by youtube-streaming.shots.spec.ts and mobile.spec.ts.
+  // padding each side, `px-1.5`), the links touch (gap-0), and everything else in the row is fixed below `sm`: the 16px page
+  // padding, the 80px wordmark, the header's two 16px gaps, the right group's two 4px gaps, the 32px "?" and the 32px account
+  // trigger (a 28px avatar in `p-0.5`). The 2026-11-01 bar was measured in a browser with the 36px Sign-out icon where the
+  // trigger now sits: its right edge at 28N + 204. The trigger is 4px narrower, so the last control's right edge is at 28N + 200
+  // and must be <= the viewport. The real thing is measured by youtube-streaming.shots.spec.ts and mobile.spec.ts.
   const LINK_PX = 28;
-  const FIXED_PX = 204;
+  const SIGN_OUT_PX = 36;
+  const TRIGGER_PX = 32;
+  const FIXED_PX = 204 - SIGN_OUT_PX + TRIGGER_PX;
   const shownAt = (links: NavLink[], vw: number): NavLink[] =>
     links.filter((l) => {
       const toks = tokens(l.cls);
@@ -443,9 +348,9 @@ describe("Nav > Player home folds first (OWNER RULING 6.1), and only where the b
       return min !== undefined && vw >= Number(min);
     });
 
-  it("the worst case (Streaming + claimed player + Sponsors) fits every phone width with Player home folded where it must be", async () => {
+  it("the fullest bar (Streaming + Sponsors, a claimed player) fits every phone width, Sponsors folded below 350", async () => {
     const links = navLinks(await renderShape({ streaming: true, player: true }));
-    expect(links.length).toBe(6);
+    expect(links.length).toBe(4);
     const widths = [320, 335, 349, 350, 360, 375, 389, 390, 430];
     const shown: Record<number, number> = {};
     for (const vw of widths) {
@@ -453,8 +358,8 @@ describe("Nav > Player home folds first (OWNER RULING 6.1), and only where the b
       shown[vw] = n;
       expect(LINK_PX * n + FIXED_PX, `${vw}px: ${n} links need ${LINK_PX * n + FIXED_PX}px`).toBeLessThanOrEqual(vw);
     }
-    // The fold is real, not vacuous: all six only from 390, five from 350, four below.
-    expect(shown).toEqual({ 320: 4, 335: 4, 349: 4, 350: 5, 360: 5, 375: 5, 389: 5, 390: 6, 430: 6 });
+    // The fold is real, not vacuous: all four from 350, three below.
+    expect(shown).toEqual({ 320: 3, 335: 3, 349: 3, 350: 4, 360: 4, 375: 4, 389: 4, 390: 4, 430: 4 });
   });
 
   it("every other org shape fits the same widths with nothing folded but Sponsors", async () => {
@@ -470,16 +375,15 @@ describe("Nav > Player home folds first (OWNER RULING 6.1), and only where the b
     expect(checked).toBe(24);
   });
 
-  // An org logo sits in the row too: a 28px square (`h-7 w-7`) and the wordmark link's 10px gap. Measured in a browser (nav-E report,
-  // en, Streaming org): with the logo, five icon links fit from exactly 382px (= 28 x 5 + 204 + 38) and six from 410. The rule a
-  // folding link must keep is relational: it only ever appears where the bar FITS with it, and a logo org never shows more links than
-  // an org without one at the same width. The links that never fold (Dashboard, Directory, Streaming, Settings) overran 320-353 with a
-  // logo too - main did (34px at 320, the same four links) - until the wordmark fold the last two tests below pin.
+  // An org logo sits in the row too: a 28px square (`h-7 w-7`) and the wordmark link's 10px gap (measured in a browser, nav-E
+  // report). The rule a folding link must keep is relational: it only ever appears where the bar FITS with it, and a logo org never
+  // shows more links than an org without one at the same width. The links that never fold (Dashboard, Directory, Streaming) still
+  // overrun 320 with a logo (28 x 3 + 200 + 38 = 322) - which is what the wordmark fold the last two tests below pin is for.
   const LOGO_PX = 38;
   const PHONE_WIDTHS = [320, 335, 349, 350, 353, 354, 360, 375, 381, 382, 389, 390, 409, 410, 412, 429, 430, 500, 639];
   const isFolding = (l: NavLink): boolean => tokens(l.cls).includes("hidden");
 
-  it("with a logo, a folding link (Sponsors, Player home) is shown only where the bar fits with it - every org shape x 19 phone widths", async () => {
+  it("with a logo, the folding link (Sponsors) is shown only where the bar fits with it - every org shape x 19 phone widths", async () => {
     let checked = 0;
     let foldingShown = 0;
     for (const shape of SHAPES) {
@@ -500,19 +404,19 @@ describe("Nav > Player home folds first (OWNER RULING 6.1), and only where the b
     expect(foldingShown, "anti-vacuity: the fit rule ran where a folding link was shown").toBeGreaterThan(0);
   });
 
-  it("with a logo, the worst case (Streaming + claimed player) shows four links below 390, five from 390, all six from 430", async () => {
+  it("with a logo, the fullest bar (Streaming + Sponsors) shows three links below 390 and all four from 390", async () => {
     const links = navLinks(await renderShape({ streaming: true, player: true, logo: true }));
-    expect(links.length).toBe(6);
+    expect(links.length).toBe(4);
     const shown = Object.fromEntries([320, 350, 389, 390, 429, 430].map((vw) => [vw, shownAt(links, vw).length]));
-    expect(shown).toEqual({ 320: 4, 350: 4, 389: 4, 390: 5, 429: 5, 430: 6 });
+    expect(shown).toEqual({ 320: 3, 350: 3, 389: 3, 390: 4, 429: 4, 430: 4 });
   });
 
   // The Seazn wordmark is the row's other fixed width: its PNG drawn 28px tall (`h-7 w-auto`), so as wide as the asset's own aspect
   // ratio makes it - read here off the file's IHDR, never off nav.tsx. CI e2e 42438561906 (sponsors-capture, the top bar @320 for an
-  // org with a logo and Streaming) measured the gantry's content 354px wide in a 320px box - 28 x 4 + 204 + 38, to the pixel - so Sign
-  // out sat wholly past the viewport, where html's `overflow-x: clip` cut it off: no scroll, no way to sign out. Below 360 a logo
-  // org's wordmark therefore gives its place to the club's crest (`max-[360px]:sr-only`: out of the row, still in the home link's
-  // name), handing back its own width and the crest's 10px gap beside it.
+  // org with a logo and Streaming) measured the gantry's content 354px wide in a 320px box - 28 x 4 + 204 + 38, to the pixel - so the
+  // last control sat wholly past the viewport, where html's `overflow-x: clip` cut it off. Below 360 a logo org's wordmark therefore
+  // gives its place to the club's crest (`max-[360px]:sr-only`: out of the row, still in the home link's name), handing back its own
+  // width and the crest's 10px gap beside it. The account menu's bar is narrower and still needs it at 320 (322px).
   const CREST_PX = 28;
   const WORDMARK_SRC = "/logo-wide-night.png";
   const wordmarkPx = (): number => {
@@ -530,7 +434,7 @@ describe("Nav > Player home folds first (OWNER RULING 6.1), and only where the b
     return at === undefined ? null : Number(at);
   };
 
-  it("with a logo, the WHOLE bar fits every phone width - Sign out never past the viewport: the wordmark yields its place where the four links that never fold overrun (every org shape x 19 widths)", async () => {
+  it("with a logo, the WHOLE bar fits every phone width - the account trigger never past the viewport: the wordmark yields its place where the links that never fold overrun (every org shape x 19 widths)", async () => {
     const wordmark = wordmarkPx();
     let checked = 0;
     let rescued = 0;
@@ -543,7 +447,7 @@ describe("Nav > Player home folds first (OWNER RULING 6.1), and only where the b
         const whole = LINK_PX * n + FIXED_PX + LOGO_PX;
         const folded = below !== null && vw < below;
         const need = folded ? whole - wordmark - (LOGO_PX - CREST_PX) : whole;
-        expect(need, `${JSON.stringify(shape)} + logo at ${vw}px: ${n} links${folded ? ", the wordmark folded" : ""} - Sign out's right edge at ${need}px`).toBeLessThanOrEqual(vw);
+        expect(need, `${JSON.stringify(shape)} + logo at ${vw}px: ${n} links${folded ? ", the wordmark folded" : ""} - the trigger's right edge at ${need}px`).toBeLessThanOrEqual(vw);
         if (folded && whole > vw) rescued++;
         checked++;
       }
@@ -566,7 +470,7 @@ describe("Nav > Player home folds first (OWNER RULING 6.1), and only where the b
         if (logo) {
           expect(toks.filter((t) => /^max-\[\d+px\]:sr-only$/.test(t)), `${where}: exactly one fold`).toHaveLength(1);
           expect(toks, `${where}: still drawn 28px tall at its own ratio where it shows`).toEqual(expect.arrayContaining(["h-7", "w-auto"]));
-          // Folds only where it must: the bar fits WITH the wordmark from 354 (28 x 4 + 204 + 38), so the fold stops by the 360
+          // Folds only where it must: the bar fits WITH the wordmark from 322 (28 x 3 + 200 + 38), so the fold stops by the 360
           // matrix width - a fold reaching further up (say `max-[639px]`) would take the mark from phones that have room for it.
           expect(wordmarkFoldBelow(cls), `${where}: the fold stops by 360 - from there the wordmark fits beside the crest`).toBeLessThanOrEqual(360);
           const crest = tokens(imgClass(html, LOGO_URL));
