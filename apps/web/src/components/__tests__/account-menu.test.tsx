@@ -29,7 +29,7 @@ vi.mock("next/navigation", () => ({
   usePathname: () => h.pathname.value,
 }));
 
-import { accountMenuModel, initialsOf, type AccountMenuOrgInput } from "@/lib/account-menu";
+import { accountMenuModel, initialsOf, resetOnBfcacheRestore, type AccountMenuOrgInput } from "@/lib/account-menu";
 import { orgSwitchTarget, switchActiveOrg } from "@/lib/org-switch";
 import { AccountMenu, AccountMenuPanel, type AccountMenuLabels, type AccountMenuProps } from "../account-menu";
 
@@ -551,5 +551,24 @@ describe("AccountMenu - the island", () => {
     (propsOf(byTestId(island.tree(), "account-menu-signout")!).onClick as () => void)();
     await flush();
     expect(h.signOutClient).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("bfcache restore (back/forward after a switch or sign-out)", () => {
+  it("a persisted pageshow resets; a normal load does not (both directions)", () => {
+    const reset = vi.fn();
+    expect(resetOnBfcacheRestore({ persisted: true }, reset)).toBe(true);
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(resetOnBfcacheRestore({ persisted: false }, reset)).toBe(false);
+    expect(reset, "a fresh load must not touch the hold").toHaveBeenCalledTimes(1);
+  });
+
+  it("the island wires it: a pageshow listener that clears the ref AND the state and closes, removed on unmount", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../account-menu.tsx", import.meta.url), "utf8");
+    const block = src.slice(src.indexOf('addEventListener("pageshow"') - 700, src.indexOf('removeEventListener("pageshow"') + 80);
+    expect(block).toContain("resetOnBfcacheRestore(e");
+    for (const reset of ["busyRef.current = false", "setBusy(false)", "setBusyOrgId(null)", "setOpen(false)"]) expect(block, reset).toContain(reset);
+    expect(block).toContain('removeEventListener("pageshow"');
   });
 });

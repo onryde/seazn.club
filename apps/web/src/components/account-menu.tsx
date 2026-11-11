@@ -18,7 +18,7 @@ import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEv
 import { createPortal } from "react-dom";
 import { usePathname } from "next/navigation";
 import { Check, ChevronDown, CircleUserRound, LogOut, Plus, Settings, UserRound } from "lucide-react";
-import { accountMenuModel, initialsOf, type AccountMenuModel, type AccountMenuOrgInput } from "@/lib/account-menu";
+import { resetOnBfcacheRestore, accountMenuModel, initialsOf, type AccountMenuModel, type AccountMenuOrgInput } from "@/lib/account-menu";
 import { switchActiveOrg } from "@/lib/org-switch";
 import { useSignOut } from "@/components/logout-button";
 import type { OrgRole } from "@/lib/types";
@@ -279,6 +279,20 @@ export function AccountMenu({ user, orgs, activeOrgId, isPlayer, labels }: Accou
       window.cancelAnimationFrame(raf);
     };
   }, [open]);
+
+  // Back/forward can restore this page from the bfcache with its state intact: a switch or sign-out that was in flight would leave
+  // the menu disabled for good. Reset the hold (ref AND state, so the double-submit guard re-arms) and close.
+  useEffect(() => {
+    const onPageShow = (e: PageTransitionEvent) =>
+      resetOnBfcacheRestore(e, () => {
+        busyRef.current = false;
+        setBusy(false);
+        setBusyOrgId(null);
+        setOpen(false);
+      });
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
 
   // A navigation (a link item, a soft sign-out) ends the menu's moment: close it when the path changes.
   // (State adjusted during render, React's documented pattern, rather than a set-state-in-effect.)

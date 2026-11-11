@@ -74,3 +74,11 @@ export function accountMenuModel(input: {
     playerHomeHref: input.isPlayer ? routes.me() : null,
   };
 }
+
+/** A page restored from the back/forward cache keeps its React state, so a menu that was busy (switching org, signing out) when
+ *  the user left would stay disabled. On a persisted `pageshow` the caller resets; a normal load (persisted false) changes nothing. */
+export function resetOnBfcacheRestore(event: { persisted: boolean }, reset: () => void): boolean {
+  if (!event.persisted) return false;
+  reset();
+  return true;
+}
