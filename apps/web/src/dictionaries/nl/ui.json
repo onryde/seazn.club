@@ -8161,6 +8161,8 @@
   "sponsors.pkg.retireShort": "Intrekken",
   "sponsors.pkg.created": "Pakket gemaakt: {name}.",
   "sponsors.pkg.retiredDone": "{name} is ingetrokken. Nieuwe deals kunnen het niet meer gebruiken.",
+  "sponsors.pkg.showRetired": "Ingetrokken tonen ({count})",
+  "sponsors.pkg.allRetired": "Alle pakketten zijn ingetrokken. Toon ingetrokken pakketten om ze te zien.",
   "sponsors.pkg.tiersHint": "Andere niveaus dan Partner en pakketten voor één competitie vereisen een betaald abonnement. Een Event Pass geldt alleen voor de eigen competitie.",
   "sponsors.pkg.onlineNote": "Online facturen worden betaald op je Stripe-account, met dezelfde platformkosten als inschrijfgelden.",
   "sponsors.pkg.onlineLocked": "Online facturen versturen vereist een betaald abonnement. Een Event Pass geldt alleen voor de eigen competitie.",

@@ -1084,6 +1084,17 @@ test("packages: a package's used-by count follows its deals, and Retire takes it
     dialog.getByRole("button", { name: ui("sponsors.pkg.retireConfirm.label"), exact: true }).click(),
   ]);
   expect(retired.status(), `retire answered ${retired.status()}: ${await retired.text()}`).toBe(200);
+  // Retired packages are hidden by default (owner, 2026-11-11: "show retire switch? otherwise hide retired"): the card has left the
+  // list, and the switch - drawn now that one package is retired - says how many are hidden and brings them back.
+  const showRetired = page.getByTestId("package-retired-switch");
+  await expect(card, "the retired card leaves the list").toHaveCount(0);
+  await expect(showRetired, "the first retired package brings the switch").toBeVisible();
+  await expect(showRetired, "and it starts off").toHaveAttribute("aria-checked", "false");
+  await expect(page.getByTestId("package-retired-filter"), "naming how many it hides").toContainText(ui("sponsors.pkg.showRetired", { count: "1" }));
+  await expect(async () => {
+    if ((await showRetired.getAttribute("aria-checked")) !== "true") await showRetired.click();
+    await expect(showRetired, "a tap turns it on").toHaveAttribute("aria-checked", "true", { timeout: 1_500 });
+  }).toPass({ timeout: 15_000 });
   await expect(card.getByTestId("package-retired"), "the card reads Retired").toBeVisible();
   await expect(card.getByTestId("package-retire"), "and offers no second Retire").toHaveCount(0);
   await expect(usedBy, "the deal already on it carries on: still counted").toHaveText(ui("sponsors.pkg.usedBy.one", { count: "1" }));

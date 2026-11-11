@@ -42,6 +42,9 @@ import type { Dict } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
 import type { SponsorPackageRow } from "@/server/usecases/sponsors";
 import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
 
 const en = uiEn as unknown as Dict;
 const msg = (key: MessageKey, vars?: Record<string, string | number>) => t(en, key, vars);
@@ -667,7 +670,12 @@ describe("Retire asks first, then retires, then the list re-reads (P4)", () => {
     expect(confirmMock).toHaveBeenCalledTimes(2);
     expect(calls.filter((c) => c.method === "DELETE").map((c) => c.url)).toEqual([`/api/v1/orgs/${ORG}/sponsor-packages/${GOLD.id}`]);
     expect(calls.filter((c) => c.method === "GET")).toHaveLength(1);
-    expect(m.byId("package-retired"), "the list now shows it retired").toHaveLength(1);
+    // Retired packages are hidden by default (owner, 2026-11-11: "show retire switch? otherwise hide retired"): the card has left the
+    // list, and the Show retired switch is how it comes back, still reading Retired. The sequence is pinned below.
+    expect(m.byId("package-card"), "the retired card left the list").toHaveLength(FIVE.length - 1);
+    expect(m.byId("package-retired"), "no retired card is drawn while the switch is off").toHaveLength(0);
+    await m.tap("package-retired-switch");
+    expect(m.byId("package-retired"), "the switch brings it back, reading Retired").toHaveLength(1);
     expect(m.text()).toContain(msg("sponsors.pkg.retiredDone", { name: "Gold Season" }));
   });
 
@@ -676,6 +684,191 @@ describe("Retire asks first, then retires, then the list re-reads (P4)", () => {
     expect(body).toContain("Gold Season");
     expect(body).not.toMatch(/\border/i);
     expect(body).toMatch(/deal/i);
+  });
+});
+
+// Retired packages are hidden unless the switch is on (owner, 2026-11-11, on a screenshot of the Packages tab: "show retire switch?
+// otherwise hide retired"). The switch is the house slim switch (`slimSwitch`, the On stream tab's), named "Show retired (N)" and drawn only
+// when N > 0; a retired package is a record, not a price on the list, so the default view is the packages a club can sell today.
+//
+// Killers (one at a time, restore from a cp backup):
+//   R1  default  draw every package whatever the switch says (`shown = packages`)          -> "the default view hides retired packages"
+//   R2  absent   draw the switch at N = 0 (`retired.length > 0` -> `true`)                 -> "no retired package: no switch"
+describe("retired packages are hidden unless the Show retired switch is on", () => {
+  const OLD_GOLD = pkg({ id: "p-old-gold", name: "Old Gold", tier: "gold", price_cents: 55_000, competition_id: "c-season", active: false, used_by: 7 });
+  const OLD_PARTNER = pkg({ id: "p-old-partner", name: "Old Partner", tier: "partner", price_cents: 9_000, active: false, used_by: 0 });
+  /** The server's order: active first, then retired. */
+  const SEVEN = [...FIVE, OLD_GOLD, OLD_PARTNER];
+  const ids = (m: ReturnType<typeof mount>) => m.byId("package-card").map((el) => String(propsOf(el)["data-package-id"]));
+  const switchLabel = (m: ReturnType<typeof mount>) => flat(textOf(m.one("package-retired-filter") as ReactElement));
+
+  it("the default view hides retired packages: five active cards, no Retired chip, and the retired names are not on the page (counted)", () => {
+    const html = listHtml({ initialPackages: SEVEN });
+    expect(countOf(html, "package-card"), "the five active packages").toBe(5);
+    expect(countOf(html, "package-retired"), "no Retired chip").toBe(0);
+    let checked = 0;
+    for (const p of FIVE) {
+      expect(html, `${p.name} is drawn`).toContain(`data-package-id="${p.id}"`);
+      checked++;
+    }
+    for (const p of [OLD_GOLD, OLD_PARTNER]) {
+      expect(html, `${p.name} is hidden`).not.toContain(`data-package-id="${p.id}"`);
+      expect(flat(html), `${p.name} is hidden`).not.toContain(p.name);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(7);
+  });
+
+  it("no retired package: no switch at all (N = 0), for an empty list, for five active ones, and for a viewer", () => {
+    let checked = 0;
+    for (const over of [{ initialPackages: [] }, { initialPackages: FIVE }, { initialPackages: FIVE, canEdit: false }]) {
+      const html = listHtml(over);
+      expect(countOf(html, "package-retired-filter"), JSON.stringify({ n: over.initialPackages.length, edit: over.canEdit })).toBe(0);
+      expect(countOf(html, "package-retired-switch")).toBe(0);
+      expect(flat(html)).not.toContain(msg("sponsors.pkg.showRetired", { count: 0 }));
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(3);
+  });
+
+  it("with retired packages the switch is there, off, and its label carries N: 1, 2 and 3 retired (counted); a viewer gets it too", () => {
+    let checked = 0;
+    for (const n of [1, 2, 3]) {
+      const retired = Array.from({ length: n }, (_, i) => pkg({ id: `r${i}`, name: `Retired ${i}`, active: false }));
+      for (const canEdit of [true, false]) {
+        const html = listHtml({ initialPackages: [...FIVE, ...retired], canEdit });
+        const tag = testidTag(html, "package-retired-switch");
+        const label = `n=${n} edit=${canEdit}`;
+        expect(tag, `${label}: the switch is drawn`).toBeDefined();
+        expect(tag, label).toContain('role="switch"');
+        expect(tag, `${label}: off`).toContain('aria-checked="false"');
+        expect(innerOf(html, "package-retired-filter"), label).toContain(msg("sponsors.pkg.showRetired", { count: n }));
+        expect(msg("sponsors.pkg.showRetired", { count: n }), `${label}: the words carry the count`).toContain(`(${n})`);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(6);
+  });
+
+  it("the switch is the house slim one: a 44px tap target holding a 24 x 44 track and a 20px knob, labelled by its visible words", () => {
+    const html = listHtml({ initialPackages: SEVEN });
+    const tag = testidTag(html, "package-retired-switch")!;
+    expect(tag).toMatch(/class="[^"]*\bh-11\b[^"]*\bw-14\b/);
+    expect(testidTag(html, "package-retired-switch-track"), "the slim track").toMatch(/class="[^"]*\bh-6\b[^"]*\bw-11\b/);
+    expect(testidTag(html, "package-retired-switch-knob"), "the knob").toMatch(/class="[^"]*\bh-5\b[^"]*\bw-5\b/);
+    const labelId = /aria-labelledby="([^"]+)"/.exec(tag)?.[1];
+    expect(labelId, "named by an element").toBeDefined();
+    expect(html, "that element exists and holds the visible label").toMatch(new RegExp(`<label[^>]*\\bid="${labelId}"[^>]*>[^<]*Show retired`));
+  });
+
+  it("switch on: the retired cards appear, still reading Retired, AFTER the active ones, with their used-by line; off again hides them (counted)", async () => {
+    const m = mount({ initialPackages: SEVEN });
+    expect(ids(m), "off: the five active, in the server's order").toEqual(FIVE.map((p) => p.id));
+    await m.tap("package-retired-switch");
+    expect(propsOf(m.one("package-retired-switch"))["aria-checked"], "now on").toBe(true);
+    expect(ids(m), "on: all seven, retired last").toEqual(SEVEN.map((p) => p.id));
+    expect(m.byId("package-retired"), "two Retired chips").toHaveLength(2);
+    expect(m.byId("package-retire"), "and no Retire button on a retired card: five, the active ones'").toHaveLength(5);
+    expect(m.byId("package-used-by").map((el) => flat(textOf(el))), "a retired card keeps its used-by line (7 is only on the retired one)").toContain(msg("sponsors.pkg.usedBy.other", { count: 7 }));
+    expect(switchLabel(m), "the label does not change with the state").toContain(msg("sponsors.pkg.showRetired", { count: 2 }));
+    await m.tap("package-retired-switch");
+    expect(ids(m), "off again").toEqual(FIVE.map((p) => p.id));
+    expect(m.byId("package-retired")).toHaveLength(0);
+  });
+
+  it("retired cards come after the active ones whatever order the list arrives in (a local retire does not move the card until the re-read)", async () => {
+    const m = mount({ initialPackages: [OLD_GOLD, TITLE, OLD_PARTNER, GOLD, SILVER] });
+    await m.tap("package-retired-switch");
+    expect(ids(m)).toEqual([TITLE.id, GOLD.id, SILVER.id, OLD_GOLD.id, OLD_PARTNER.id]);
+  });
+
+  it("the sequence: retire one while the switch is off - the card leaves, the notice says so, the switch appears at 1, then 2, and flipping it shows them", async () => {
+    const m = mount();
+    expect(m.byId("package-retired-filter"), "premise: nothing retired, no switch").toHaveLength(0);
+    expect(ids(m)).toEqual(FIVE.map((p) => p.id));
+
+    // The re-read answers with what the server now holds: the retired one marked, active first.
+    const retireByName = (name: string) => m.island.tree().find((el) => propsOf(el)["data-testid"] === "package-retire" && String(propsOf(el)["aria-label"]).includes(name))!;
+    const serverAfter = (retiredPkgs: SponsorPackageRow[]) => {
+      const gone = new Set(retiredPkgs.map((p) => p.id));
+      return [...FIVE.filter((p) => !gone.has(p.id)), ...retiredPkgs.map((p) => ({ ...p, active: false }))];
+    };
+    answer = (_url, method) => (method === "DELETE" ? { status: 200, body: { data: { ...GOLD, active: false } } } : { status: 200, body: { data: serverAfter([GOLD]) } });
+    (propsOf(retireByName("Gold Season")).onClick as () => void)();
+    await flush();
+    expect(ids(m), "the card left the grid").toEqual(FIVE.filter((p) => p.id !== GOLD.id).map((p) => p.id));
+    expect(m.text(), "the notice stays").toContain(msg("sponsors.pkg.retiredDone", { name: "Gold Season" }));
+    expect(m.byId("package-retired-filter"), "the switch appears once there is one retired package").toHaveLength(1);
+    expect(switchLabel(m)).toContain(msg("sponsors.pkg.showRetired", { count: 1 }));
+
+    answer = (_url, method) => (method === "DELETE" ? { status: 200, body: { data: { ...SILVER, active: false } } } : { status: 200, body: { data: serverAfter([GOLD, SILVER]) } });
+    (propsOf(retireByName("Silver Season")).onClick as () => void)();
+    await flush();
+    expect(switchLabel(m), "the count follows").toContain(msg("sponsors.pkg.showRetired", { count: 2 }));
+    expect(m.byId("package-card")).toHaveLength(3);
+
+    await m.tap("package-retired-switch");
+    expect(ids(m), "on: the three active, then the two retired").toEqual([TITLE.id, PARTNER.id, SIXES.id, GOLD.id, SILVER.id]);
+    expect(m.byId("package-retired")).toHaveLength(2);
+  });
+
+  it("all packages retired, switch off: it does NOT say there are no packages - it says every package is retired, the switch stays, and it opens the list (counted)", async () => {
+    const allRetired = FIVE.map((p) => ({ ...p, active: false }));
+    const html = listHtml({ initialPackages: allRetired });
+    expect(countOf(html, "package-card"), "no card while off").toBe(0);
+    expect(countOf(html, "package-empty"), "NOT the no-packages-yet copy").toBe(0);
+    expect(innerOf(html, "package-all-retired"), "its own words").toBe(msg("sponsors.pkg.allRetired"));
+    expect(msg("sponsors.pkg.allRetired")).not.toBe(msg("sponsors.pkg.empty"));
+    expect(countOf(html, "package-retired-switch"), "the switch is the way out").toBe(1);
+    expect(innerOf(html, "package-retired-filter")).toContain(msg("sponsors.pkg.showRetired", { count: 5 }));
+
+    const m = mount({ initialPackages: allRetired });
+    const legend = m.island.tree().find((el) => el.type === TierLegend)!;
+    expect(propsOf(legend).startOpen, "the legend still sees a list with packages in it").toBe(false);
+    await m.tap("package-retired-switch");
+    expect(m.byId("package-card"), "switch on: all five, greyed with their chip").toHaveLength(5);
+    expect(m.byId("package-retired")).toHaveLength(5);
+    expect(m.byId("package-all-retired"), "and the note is gone").toHaveLength(0);
+  });
+
+  it("the pair: a list with no package of any kind still says no packages yet, with no all-retired note and no switch", () => {
+    const html = listHtml({ initialPackages: [] });
+    expect(countOf(html, "package-empty")).toBe(1);
+    expect(countOf(html, "package-all-retired")).toBe(0);
+    expect(countOf(html, "package-retired-switch")).toBe(0);
+    // And one active package among retired ones is a list, not an empty state.
+    const mixed = listHtml({ initialPackages: [PARTNER, OLD_GOLD] });
+    expect(countOf(mixed, "package-card")).toBe(1);
+    expect(countOf(mixed, "package-all-retired")).toBe(0);
+    expect(countOf(mixed, "package-empty")).toBe(0);
+  });
+
+  it("the tier legend and the used-by line are unchanged by the switch", () => {
+    const hidden = listHtml({ initialPackages: SEVEN });
+    expect(countOf(hidden, "tier-legend-row"), "four tiers").toBe(4);
+    expect(innerOf(hidden, "package-used-by"), "the first card's used-by line").toBe(msg("sponsors.pkg.usedBy.one", { count: 1 }));
+    expect(countOf(hidden, "package-used-by"), "one per drawn card").toBe(5);
+  });
+
+  it("the words exist in all four locales as whole phrases: Show retired carries {count}, the all-retired note is a sentence, and the locales differ (4 checked)", () => {
+    const dicts = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as Record<string, Record<string, string>>;
+    const labels = new Set<string>();
+    const notes = new Set<string>();
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(dicts)) {
+      const label = dict["sponsors.pkg.showRetired"];
+      const note = dict["sponsors.pkg.allRetired"];
+      expect(typeof label, `${locale}: showRetired`).toBe("string");
+      expect(label, `${locale}: carries the count`).toContain("{count}");
+      expect(typeof note, `${locale}: allRetired`).toBe("string");
+      expect(note, `${locale}: a sentence`).toMatch(/[.]$/);
+      labels.add(label!);
+      notes.add(note!);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(labels.size, "not English four times").toBe(4);
+    expect(notes.size, "not English four times").toBe(4);
   });
 });
 

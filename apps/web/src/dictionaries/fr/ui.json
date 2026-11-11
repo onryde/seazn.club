@@ -8161,6 +8161,8 @@
   "sponsors.pkg.retireShort": "Retirer",
   "sponsors.pkg.created": "Offre créée : {name}.",
   "sponsors.pkg.retiredDone": "{name} est retirée. Les nouveaux accords ne peuvent plus l'utiliser.",
+  "sponsors.pkg.showRetired": "Afficher les retirées ({count})",
+  "sponsors.pkg.allRetired": "Toutes les offres sont retirées. Affichez les retirées pour les voir.",
   "sponsors.pkg.tiersHint": "Les niveaux autres que Partner et les offres pour une seule compétition nécessitent une offre payante. Un Event Pass ne couvre que sa propre compétition.",
   "sponsors.pkg.onlineNote": "Les factures en ligne sont payées sur votre compte Stripe, avec la même commission de plateforme que les frais d'inscription.",
   "sponsors.pkg.onlineLocked": "L'envoi de factures en ligne nécessite une offre payante. Un Event Pass ne couvre que sa propre compétition.",
