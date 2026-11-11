@@ -20,7 +20,7 @@ are console-only (an API key gets 403), so no key-holding consumer reads them.
 | Online create (201) | `{ deal, checkout_url: "https://checkout.stripe.com/…" }` | `{ deal, invoice_url: "<origin>/r/sponsor/invoice/<token>" }` |
 | Offline or complimentary create (201) | `{ deal, checkout_url: null }` | `{ deal, invoice_url: null }` (nothing was emailed) |
 | Send invoice, online (200) | `{ deal, checkout_url: "https://checkout.stripe.com/…" }` | `{ deal, invoice_url: "<origin>/r/sponsor/invoice/<token>" }` |
-| Send invoice, offline (200) | `{ deal, checkout_url: null }` | `{ deal, invoice_url: "<origin>/r/sponsor/invoice/<token>" }` |
+| Send invoice, offline | 409 `deal_not_invoiceable` (an offline deal had no invoice to send) | 200 `{ deal, invoice_url: "<origin>/r/sponsor/invoice/<token>" }` (a deal with a billing email; 422 `no_billing_email` without one) |
 | The 51st invoice email of an organisation in any 24 hours (online create, or either send) | sent | 429 `invoice_send_limit`, nothing written or sent |
 
 Every send mints a new token, so each answer's `invoice_url` differs from the last, and an earlier one opens nothing. A reader of
