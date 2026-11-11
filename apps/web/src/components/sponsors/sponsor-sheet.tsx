@@ -37,7 +37,7 @@ import { dealHref } from "@/lib/sponsors-hub";
  *  is (T24 m8): an ended deal still due is not on the list's row once the sponsor has a newer deal, so the sponsor's page is where
  *  the club waives it, behind the same confirm as on the deal's page. It was in the runtime list and missing from this type and
  *  its words: the type guard below let it through and the page threw reading its label. */
-export type SheetDealAction = Extract<DealAction, "send_invoice" | "resend_invoice" | "mark_paid" | "write_off" | "approve" | "end_now">;
+export type SheetDealAction = Exclude<DealAction, "refund">;
 
 /** The order the buttons are drawn in: `DEAL_ACTIONS` (the engine's order) narrowed to what this page runs. A list, not a second
  *  set of rules - whether a deal OFFERS an action is `allowedActions`. */

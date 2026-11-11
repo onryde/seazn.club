@@ -137,13 +137,21 @@ test("list: each row shows one next action and the chip its deal state names", a
   const stepsDeal = await newDeal(request, org.orgId, steps, { package_id: pkg, go_live: "on_approval" });
   expect(await dealStatus(request, org.orgId, stepsDeal), "premise: awaiting payment, approval after").toBe("awaiting_payment");
   // Selling online is `sponsors.monetize` plus Connect, which a community org has neither of, so the online deal is SQL-seeded
-  // the way Send invoice leaves one: awaiting payment, its sponsor hidden (D8).
+  // the way Send invoice leaves one: awaiting payment, its sponsor hidden (D8), and NUMBERED from the org's invoice counter (V500).
+  // Every online deal is numbered at create, and the row offers Resend only to a numbered deal: an unnumbered one is a pre-V500
+  // staging shape the API refuses with 409 deal_not_invoiceable (T24 m5), so its row only opens the deal.
   await withDb(async (sql) => {
     await sql`
+      with n as (
+        insert into sponsor_invoice_counters (org_id, last_number) values (${org.orgId}, 1)
+        on conflict (org_id) do update set last_number = sponsor_invoice_counters.last_number + 1
+        returning last_number)
       insert into sponsor_orders (org_id, package_id, sponsor_id, sponsor_name, sponsor_email, amount_cents, currency, status,
-                                  deal_status, payment_method, go_live, tier, includes_on_stream, package_name, competition_id)
-      values (${org.orgId}, ${pkg}, ${online}, 'Oakfield Dental', 'pay@deals.e2e.test', 25000, 'gbp', 'pending',
-              'awaiting_payment', 'online', 'on_payment', 'partner', false, 'Partner board', ${null})`;
+                                  deal_status, payment_method, go_live, tier, includes_on_stream, package_name, competition_id,
+                                  invoice_number)
+      select ${org.orgId}, ${pkg}, ${online}, 'Oakfield Dental', 'pay@deals.e2e.test', 25000, 'gbp', 'pending',
+             'awaiting_payment', 'online', 'on_payment', 'partner', false, 'Partner board', ${null}, n.last_number
+        from n`;
     await sql`update sponsors set status = 'inactive' where id = ${online}`;
   });
 

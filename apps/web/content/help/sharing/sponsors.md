@@ -58,7 +58,7 @@ Every online and offline deal has an invoice; a complimentary deal has none. Inv
 
 **Numbering.** Invoice numbers run per organisation, starting at **SP-0001**: the next deal takes the next number, and a number is never reused, even when the deal ends. The number is on the invoice and its PDF, and it is the reference an offline sponsor puts on their transfer.
 
-**Where the details live.** Open **Settings → Payments** and fill in **Sponsor invoices**: the address printed under your club's name, and the bank details printed on offline invoices. They are not the same as the offline payment instructions you write for players on the registration page, which are worded for entrants and never appear on a sponsor invoice. An invoice picks up the details as they are when the sponsor opens it, so a change shows on invoices already sent. Only owners and admins can change them.
+**Where the details live.** Open **Settings → Connect** and fill in **Sponsor invoices**: the address printed under your club's name, and the bank details printed on offline invoices. They are not the same as the offline payment instructions you write for players on the registration page, which are worded for entrants and never appear on a sponsor invoice. An invoice picks up the details as they are when the sponsor opens it, so a change shows on invoices already sent when they are opened. An invoice email already sent keeps the bank details it was sent with: after changing them, use **Resend invoice** so the sponsor has the new ones. Only owners and admins can change them.
 
 **What the sponsor gets.** An email with a link to the invoice page. It needs no login. It shows who it is from and to, what the sponsor gets (tier, competitions, whether they are on your stream), the total, and a stamp that reads **Unpaid**, **Paid**, **Refunded**, **Cancelled**, **Written off** or **Ended**. **Download PDF** gives the same invoice as a file, and **Print** prints the page. The invoice is written in your organisation's language.
 
@@ -77,6 +77,6 @@ Every online and offline deal has an invoice; a complimentary deal has none. Inv
 
 **A sponsor says their invoice link doesn't open?** You have sent a newer one since: every resend replaces the earlier link. Ask them to use your latest email, or copy the link from the deal after you press **Resend invoice** and send it yourself.
 
-**Where do I change the bank details on an invoice?** **Settings → Payments → Sponsor invoices**. See Invoices above.
+**Where do I change the bank details on an invoice?** **Settings → Connect → Sponsor invoices**. See Invoices above.
 
 **A sponsor paid but isn't showing?** Open the sponsor's deal: its page shows whether the payment has arrived. An online payment is confirmed by Stripe (usually seconds). If the deal goes live only after you approve it, press **Approve**. Contact support if a paid deal stays pending.

@@ -29,11 +29,11 @@ import { pdfTextRuns } from "../pdf-uris";
 import { routes } from "../../src/lib/routes";
 
 /**
- * Sponsor deals PR 3 — the invoices walkthrough. Task 21 wrote the first half (the club's invoice details on Settings → Payments);
+ * Sponsor deals PR 3 — the invoices walkthrough. Task 21 wrote the first half (the club's invoice details on Settings → Connect);
  * Task 24 is the rest: what a SPONSOR sees. Two legs, run the way the people involved run them:
  *
  *  1. COMMUNITY (no Stripe, no paid plan — the plan that must be able to record a sponsor's cash payment and print the invoice for
- *     it, anti-goal 4). The club types its address and bank details on Settings → Payments, adds a sponsor and a package, and adds an
+ *     it, anti-goal 4). The club types its address and bank details on Settings → Connect, adds a sponsor and a package, and adds an
  *     OFFLINE deal with the sponsor's billing email from the Add deal sheet. The offline create emails nothing, so it answers no
  *     link; the club presses Resend invoice, which mints the invoice page's link (and the banner's copy button copies THAT link).
  *     The sponsor, signed out, opens it: the invoice's number, the club's address, the bank details and no pay button; the PDF says
@@ -328,7 +328,7 @@ test.describe("community: an offline invoice printed from the club's own details
     }
   });
 
-  test("invoice details save on Settings → Payments, persist across a reload, change one field at a time, and clear", async ({
+  test("invoice details save on Settings → Connect, persist across a reload, change one field at a time, and clear", async ({
     page,
   }: {
     page: Page;
@@ -423,7 +423,7 @@ test.describe("community: an offline invoice printed from the club's own details
     const PACKAGE_NAME = `Partner board ${TAG}-${RUN}`;
     const PRICE_CENTS = 25_000;
 
-    // 1. Settings → Payments: the club's details, typed into the card and saved, then read back from the COLUMNS.
+    // 1. Settings → Connect: the club's details, typed into the card and saved, then read back from the COLUMNS.
     const c = card(page);
     await page.goto(routes.connect(org.slug));
     await expect(c.root).toBeVisible({ timeout: READ_MS });
@@ -759,6 +759,7 @@ test.describe("community: an offline invoice printed from the club's own details
 
     const paid = await dealOf(request, org.orgId, dealId);
     expect([paid.deal_status, paid.payment_status], "it stays ended, and is now paid").toEqual(["ended", "paid"]);
+    await expect(row.getByTestId("deal-chip"), "the row reads plain Ended once paid").toHaveText(ui("sponsors.deal.chip.ended"));
     await expect(row.getByTestId("deal-chip"), "the row no longer says unpaid").not.toHaveText(ui("sponsors.deal.chip.endedUnpaid"));
 
     const sponsorSide = await sponsorBrowser(browser);
