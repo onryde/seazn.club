@@ -126,7 +126,7 @@ function deadlineMsFor(input: SolveBuildInput): number {
  * automatic, and the failure mode if it is skipped is the same silent greedy
  * board as above.
  */
-const DEFAULT_HOST = "placement.flycast:50051";
+const DEFAULT_HOST = "placement-prod.flycast:50051";
 
 /**
  * Wire enum -> outcome vocabulary. An unmapped value (including proto3's
