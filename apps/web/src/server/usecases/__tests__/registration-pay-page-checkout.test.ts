@@ -387,6 +387,24 @@ describe.skipIf(!HAS_DB)("payFromPayPage (player payment page, Task 3)", () => {
     expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
   });
 
+  it("charges_enabled false with a reusable stored session (23 h left) → 503, nothing handed out, zero create (Review Focus 5)", async () => {
+    const { rig, reg } = await cardEntry();
+    const token = await linkFor(reg);
+    await payFromPayPage(token, ORIGIN);
+    const s1 = (await payPointer(reg.id))!;
+    const now = new Date();
+    stripeMock.store.get(s1)!.expires_at = Math.floor(now.getTime() / 1000) + 23 * 3600; // reusable on every other count
+    await sql`update organizations set stripe_charges_enabled = false where id = ${rig.orgId}`;
+    stripeMock.checkoutRetrieve.mockClear();
+
+    const err = await rejection(payFromPayPage(token, ORIGIN, now));
+    expect(err.status).toBe(503);
+    expect(stripeMock.checkoutRetrieve).not.toHaveBeenCalled(); // the stored session is never looked at, so never handed out
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1); // the first press only
+    expect(stripeMock.checkoutExpire).not.toHaveBeenCalled();
+    expect(await payPointer(reg.id)).toBe(s1);
+  });
+
   it("return URLs point at the page", async () => {
     const { reg } = await cardEntry();
     const token = await linkFor(reg);

@@ -22,9 +22,10 @@ const stripeUnavailable = () =>
  * same shape as `ensureDealCheckout`:
  * 1. the page's document at press time (`null` → 404) - so an organiser's switch to offline, a mark-paid or a waiver after the
  *    page loaded, or a passed deadline the hourly sweep has not caught yet, refuses here: anything but `pay` → 409;
- * 2. the stored session, if any: `complete` → 409 (paid in Stripe, the webhook has not landed); `open`, covering exactly this
+ * 2. Connect live, else 503 - before any reuse, so a disabled account is handed nothing;
+ * 3. the stored session, if any: `complete` → 409 (paid in Stripe, the webhook has not landed); `open`, covering exactly this
  *    entry and with more than the margin left → handed out again (no mint); any other `open` one → expired first;
- * 3. Connect live, else 503; then one mint for `[entry]` returning to the page, claiming the pointer on the value read in 2.
+ * 4. one mint for `[entry]` returning to the page, claiming the pointer on the value read in 3.
  * A Stripe failure reading or expiring the stored session refuses (502) rather than mint beside a session that may still pay.
  */
 export async function payFromPayPage(token: string, origin: string, now: Date = new Date()): Promise<string> {
@@ -32,6 +33,15 @@ export async function payFromPayPage(token: string, origin: string, now: Date = 
   if (doc === null) throw new HttpError(404, "Not found");
   if (doc.state !== "pay") {
     throw new HttpError(409, "This entry has nothing to pay online right now", "REGISTRATION_NOT_PAYABLE");
+  }
+
+  // Connect live BEFORE any session is handed out (Review Focus 5, controller ruling): with charges off, Pay answers 503 and
+  // neither reuses a stored session nor mints.
+  const [row] = await sql<{ division_id: string }[]>`select division_id from registrations where id = ${doc.registrationId}`;
+  if (!row) throw new HttpError(404, "Not found"); // deleted between the document read and here
+  const ctx = await divisionCtx(sql, row.division_id);
+  if (!ctx.charges_enabled) {
+    throw new HttpError(503, "Payments are not set up for this organiser yet");
   }
 
   const read = doc.paySessionId;
@@ -61,12 +71,6 @@ export async function payFromPayPage(token: string, origin: string, now: Date = 
     }
   }
 
-  const [row] = await sql<{ division_id: string }[]>`select division_id from registrations where id = ${doc.registrationId}`;
-  if (!row) throw new HttpError(404, "Not found"); // deleted between the document read and here
-  const ctx = await divisionCtx(sql, row.division_id);
-  if (!ctx.charges_enabled) {
-    throw new HttpError(503, "Payments are not set up for this organiser yet");
-  }
   const returnBase = `${origin}${registrationPayPath(token)}?src=pay`;
   return mintEntryPayPageCheckout(doc.groupId, doc.registrationId, ctx, origin, returnBase, read);
 }
