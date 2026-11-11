@@ -1528,12 +1528,6 @@ export async function cleanup(tag: string): Promise<void> {
     // row is dropped inline after the claim assertions to free the seat; this
     // clears the leftover user row at teardown.
     `delivered+emailinvitee_${tag}@resend.dev`,
-    // #267 referralSuite — referrer + referred, own orgs. Both rows go in the
-    // same `delete from organizations` statement, so the self-referencing
-    // `referred_by_org_id` FK (NO ACTION, checked at end-of-statement) never
-    // trips: by the time it's checked, both rows are already gone together.
-    `delivered+referrer_${tag}@resend.dev`,
-    `delivered+referred_${tag}@resend.dev`,
     // #293 extraOrgAddonSuite — the Pro payer (whose four seeded fill
     // organisations carry created_by = this user and so go with the purge
     // below), the non-payer co-owner, and the community owner.

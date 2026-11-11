@@ -3,13 +3,12 @@ import "server-only";
 // Server Components call — the only writer. Auth happens in the route (an
 // AuthCtx proves it); tenancy is enforced by withTenant + RLS.
 import { z } from "zod";
-import { sql, withTenant } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { getLimit, invalidateOrgEntitlements, requireFeature, withinLimit } from "@/lib/entitlements";
 import { publicDashboardsReason } from "@/lib/feature-copy";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS, type AnalyticsEvent } from "@/lib/analytics-events";
-import { log } from "@/server/logger";
 import { FIXTURE_DELETED_REASON } from "@/server/email-outbox/cancel";
 import { cancelBoardInvites } from "./external-play/cancel-invites";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -24,7 +23,7 @@ import {
 import { orgLiveCacheKey } from "@/server/public-site/org-live-cache-key";
 import { cacheDel } from "@/lib/cache";
 import { competitionIsListed, UNLISTED_STATUS } from "@/lib/competition-listing";
-import { ONBOARDING_EARN, REFERRAL_WELCOME_EARN, tryEarnGrant } from "@/lib/credits";
+import { ONBOARDING_EARN, tryEarnGrant } from "@/lib/credits";
 import { invalidateSlugCache } from "@/server/slug-resolve";
 import { dropPublicCompetitionRefs } from "@/server/public-site/public-ref-cache";
 import {
@@ -559,6 +558,16 @@ function isRetirePatch(patch: PatchCompetition): boolean {
   );
 }
 
+/** A `discovery` patch over the stored blob: omitted keys keep their value, an explicit null clears one. The column is
+ *  `not null default '{}'` (V207); anything stored that is not a plain object merges as empty rather than spreading. */
+function mergeDiscovery(
+  stored: unknown,
+  patch: NonNullable<PatchCompetition["discovery"]>,
+): NonNullable<PatchCompetition["discovery"]> {
+  const base = stored !== null && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+  return { ...base, ...patch };
+}
+
 export async function patchCompetition(
   auth: AuthCtx,
   id: string,
@@ -652,10 +661,11 @@ export async function patchCompetition(
         slug: string;
         starts_on: string | null;
         ends_on: string | null;
+        discovery: Record<string, unknown> | null;
         org_slug: string | null;
       }[]
     >`
-      select visibility, discoverable, status, name, slug, starts_on, ends_on,
+      select visibility, discoverable, status, name, slug, starts_on, ends_on, discovery,
              (select o.slug from organizations o where o.id = competitions.org_id) as org_slug
       from competitions where id = ${id}`;
     if (!before) throw new HttpError(404, "competition not found");
@@ -698,6 +708,11 @@ export async function patchCompetition(
     }
 
     const effective = { ...patch };
+    // `discovery` MERGES key by key into the stored blob, the way an org's branding colour does (lib/org-branding): a key the
+    // patch leaves out keeps its stored value, and only an explicit null clears one. It was a whole-column replace, so the
+    // settings form - which stopped asking for city and country (owner, 2026-11-11) and so no longer sends them - would have
+    // erased the stored pair, which the Discover card still shows and filters on, on every save.
+    if (patch.discovery) effective.discovery = mergeDiscovery(before.discovery, patch.discovery);
     // Rename regenerates the slug (v3/01 §2); the old slug keeps redirecting
     // via slug_history, so links and QR codes survive.
     const regenerating = !patch.slug && !!patch.name && patch.name !== before.name;
@@ -872,32 +887,16 @@ export async function patchCompetition(
   if (shouldFireMadePublic(oldVisibility, patch.visibility)) {
     await fireCompetitionMadePublic(auth, id);
   }
-  // Growth-loop gate (SPEC-5 §2, v17 gap #296): onboarding + referral-welcome
-  // earn credits pay out only once this org proves a human is running a real
-  // competition — publishing one with at least one (non-archived) division —
-  // never at signup or onboarding-complete alone (moved off auth.ts's
-  // createOrgForUser and api/onboarding/complete/route.ts). Both grants are
-  // idempotent per org (tryEarnGrant never throws), so re-publishing, or
-  // publishing a second/third competition, is always a safe no-op.
-  //
-  // Best-effort, and the try/catch is load-bearing: this whole block runs
-  // AFTER the tenant transaction has committed. `tryEarnGrant` never throws,
-  // but the `referred_by_org_id` read is a raw query — a transient DB error
-  // there would escape as a 500 for a publish that already succeeded, and the
-  // grant would be lost for good, because the gate only fires on the
-  // TRANSITION into "published" and the row is already published on any
-  // retry. Swallow and log instead; the caller gets its row either way.
+  // Growth-loop gate (SPEC-5 §2, v17 gap #296): the onboarding earn credits
+  // pay out only once this org proves a human is running a real competition —
+  // publishing one with at least one (non-archived) division — never at signup
+  // or onboarding-complete alone (moved off auth.ts's createOrgForUser and
+  // api/onboarding/complete/route.ts). The grant is idempotent per org and
+  // `tryEarnGrant` never throws, so re-publishing, or publishing a second/third
+  // competition, is a safe no-op, and a grant hiccup never fails a publish that
+  // has already committed.
   if (shouldFireGrowthEarnGrants(statusChangedTo, publishedDivisionCount)) {
-    try {
-      await tryEarnGrant(auth.orgId, "onboarding", ONBOARDING_EARN);
-      const [orgRow] = await sql<{ referred_by_org_id: string | null }[]>`
-        select referred_by_org_id from organizations where id = ${auth.orgId}`;
-      if (orgRow?.referred_by_org_id) {
-        await tryEarnGrant(auth.orgId, "referral_welcome", REFERRAL_WELCOME_EARN);
-      }
-    } catch (err) {
-      log.error({ err, orgId: auth.orgId }, "competitions: growth earn grants failed");
-    }
+    await tryEarnGrant(auth.orgId, "onboarding", ONBOARDING_EARN);
   }
   return row;
 }

@@ -2,9 +2,8 @@ export const dynamic = "force-dynamic";
 import Link from "@/components/ui/console-link";
 import {
   Building2, Users,
-  Pencil, Image as ImageIcon, Palette,
-  User, Mail, Download, ShieldOff, Compass, BookOpen, Cookie, KeyRound,
-  Clock, Newspaper, SlidersHorizontal, Languages, Coins, CalendarClock, Globe, Receipt,
+  User, Mail, Download, ShieldOff, Cookie, KeyRound,
+  Clock, Newspaper, SlidersHorizontal, Languages, Coins, Globe, Receipt,
   type LucideIcon,
 } from "lucide-react";
 import { getUserOrgs } from "@/lib/auth";
@@ -15,11 +14,8 @@ import { sql } from "@/lib/db";
 import { hasFeature, hasFeatureOnAnyPass } from "@/lib/entitlements";
 import { type OrgMember } from "@/lib/types";
 import { OrgTeam } from "@/components/org-team";
-import { OrgSwitcher } from "@/components/org-switcher";
-import { OrgRename } from "@/components/org-rename";
 import { OrgLogo } from "@/components/org-logo";
-import { OrgBrandColor } from "@/components/org-brand-color";
-import { OrgAbout } from "@/components/org-about";
+import { OrgProfileCard } from "@/components/org-profile-card";
 import { OrgTimezone } from "@/components/org-timezone";
 import { listPosts, type OrgPost } from "@/server/usecases/org-posts";
 import { NewsTab } from "@/components/news/news-tab";
@@ -237,12 +233,6 @@ export default async function SettingsPage({
   // `subscriptionCurrency` is read separately, only to say so in words.
   let displayCurrency: Awaited<ReturnType<typeof preferredCurrency>> | null = null;
   let subscriptionCurrency: string | null = null;
-  let orgDefaults: {
-    locale: ReturnType<typeof toLocale>;
-    currency: ReturnType<typeof asCurrency>;
-    /** Non-null ⇒ pinned by a connected Stripe account, not editable. */
-    currencyLockedTo: string | null;
-  } | null = null;
   if (tab === "preferences") {
     displayCurrency = await preferredCurrency(null);
     const [row] = await sql<{ currency: string | null }[]>`
@@ -250,7 +240,17 @@ export default async function SettingsPage({
       join organizations o on o.subscription_id = s.id
       where o.id = ${active.id}`;
     subscriptionCurrency = row?.currency ?? null;
+  }
 
+  // Organisation tab — the org's defaults (owner 2026-11-11: moved here from Preferences, which keeps only your own
+  // settings). Read for an editor only: nobody else is shown them.
+  let orgDefaults: {
+    locale: ReturnType<typeof toLocale>;
+    currency: ReturnType<typeof asCurrency>;
+    /** Non-null ⇒ pinned by a connected Stripe account, not editable. */
+    currencyLockedTo: string | null;
+  } | null = null;
+  if (tab === "organization" && canEdit) {
     // The org's own PUBLIC-facing defaults, both read straight off the row.
     //
     // `stripe_account_id` and `stripe_unsupported_currency` are read here
@@ -293,7 +293,7 @@ export default async function SettingsPage({
 
   return (
     <>
-      <div className="mx-auto max-w-5xl px-4 py-4 md:py-8">
+      <div className="mx-auto max-w-6xl px-4 py-4 md:py-8">
         <div className="flex flex-col gap-4 md:flex-row md:gap-8">
 
           <SettingsNav orgSlug={orgSlug} active={tab} dict={dict} context={navCtx} />
@@ -302,59 +302,50 @@ export default async function SettingsPage({
           {/* ── Panel ── */}
           <main className="min-w-0 flex-1">
 
-            {/* ── ORGANISATION ── */}
+            {/* ── ORGANISATION ──
+                One C8 card (owner 2026-11-11, mock set11c01 O1): who the organisation is on the left, its About on the
+                right, one Save. The org switcher left this page — switching lives in the account menu and the
+                breadcrumb's org crumb — and with it the identity row, whose only job was naming the org the switcher
+                was beside: the name field now says it. The defaults moved here from Preferences. The tour replay is
+                a quiet line under the card. */}
             {tab === "organization" && (
-              <section className="card p-6">
-                <SectionHeader icon={Building2}>{t(dict, "settings.nav.organization")}</SectionHeader>
-
-                {/* The identity row exists to say WHICH organisation you are in,
-                    and below `md` it did not. Measured at 320 on 2026-09-05: the
-                    row's inner width is 238px and its four children took
-                    44 (avatar) + 6 (the NAME) + 57 (badge) + 95 (switcher) + 3×12
-                    gaps — the org name rendered SIX pixels wide against a 107px
-                    natural width. `min-w-0` was already present, so the usual
-                    `truncate` diagnosis is not the cause: the avatar and the
-                    switcher are both `shrink-0` and the badge sat at its own
-                    min-content, so the `flex-1` name block — `flex: 1 1 0%`,
-                    whose 0% basis makes it infinitely willing to yield — was the
-                    only child that could give, and gave everything.
-                    `grow basis-40` gives it a 10rem basis instead, which is too
-                    wide to share a line with the badge and the switcher, so those
-                    two wrap onto their own row. ONE DOM branched, per the phone
-                    composition design of record: `md:flex-nowrap` and `md:basis-0`
-                    restore `flex-1`'s exact behaviour at 768 and up, which must
-                    not change. Gated by "settings identity row: the org name keeps
-                    a readable share, and the chrome wraps below md" in
-                    e2e/mobile.spec.ts — nothing in apps/web vitest can see this,
-                    that suite is `environment: "node"` and has no layout at all. */}
-                <div className="flex flex-wrap items-center gap-3 md:flex-nowrap">
-                  <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-purple-500 to-fuchsia-500 text-lg font-bold text-white">
-                    {active.name.charAt(0).toUpperCase()}
-                  </span>
-                  <div className="min-w-0 grow basis-40 md:basis-0">
-                    <p
-                      data-testid="org-identity-name"
-                      className="truncate text-sm font-semibold text-slate-800"
-                    >
-                      {active.name}
-                    </p>
-                    <p className="truncate font-mono text-xs text-purple-600">{active.slug}</p>
-                  </div>
-                  <span className={`badge ${ROLE_BADGE[active.role]}`}>{roleLabel(dict, active.role)}</span>
-                  <OrgSwitcher orgs={orgs} activeId={active.id} />
-                </div>
-
-                {canEdit && (
-                  <div className="mt-5 border-t border-slate-100 pt-5" data-tour="org-rename">
-                    <SubSection icon={Pencil} label={t(dict, "settings.org.rename")} />
-                    <OrgRename orgId={active.id} initialName={active.name} />
-                  </div>
-                )}
-
-                {canEdit && (
-                  <div className="mt-5 border-t border-slate-100 pt-5">
-                    <SubSection icon={ImageIcon} label={t(dict, "settings.org.logo")} />
-                    {canBrandLogo ? (
+              <div>
+                <SectionHeader
+                  icon={Building2}
+                  action={<span className={`badge ${ROLE_BADGE[active.role]}`}>{roleLabel(dict, active.role)}</span>}
+                >
+                  {t(dict, "settings.nav.organization")}
+                </SectionHeader>
+                <OrgProfileCard
+                  orgId={active.id}
+                  orgSlug={active.slug}
+                  initialName={active.name}
+                  initialBranding={active.branding}
+                  initialAbout={orgAbout}
+                  canEdit={canEdit}
+                  brandGate={
+                    canBrandColor
+                      ? { locked: false }
+                      : {
+                          locked: true,
+                          // D23: the logo is free, this control is Pro. It names `dashboard.theme` (V397) — badging
+                          // it `dashboard.branding` would print "Contact us" for a self-serve Pro upgrade, because
+                          // featurePlan() routes that key to enterprise.
+                          notice: (
+                            <p className="flex flex-wrap items-center gap-2 text-sm text-slate-500" data-feature="dashboard.theme">
+                              <PlanBadge feature="dashboard.theme" />
+                              <span>
+                                {t(dict, "settings.upgrade.brandColor")}{" "}
+                                <Link href={routes.billing(orgSlug)} className="text-purple-600 underline">
+                                  {t(dict, "settings.upgrade.link")}
+                                </Link>
+                              </span>
+                            </p>
+                          ),
+                        }
+                  }
+                  logo={
+                    canBrandLogo ? (
                       <OrgLogo
                         orgId={active.id}
                         initialLogoUrl={
@@ -364,58 +355,48 @@ export default async function SettingsPage({
                         }
                       />
                     ) : (
-                      // `branding` is granted on every plan (V310), so only a staff
-                      // override reaches this branch — nothing on sale lifts it, so
-                      // no plan badge and no billing link.
+                      // `branding` is granted on every plan (V310), so only a staff override reaches this branch —
+                      // nothing on sale lifts it, so no plan badge and no billing link.
                       <p className="text-sm text-slate-500" data-override-only data-feature="branding">
                         {t(dict, "settings.logo.switchedOff")}
                       </p>
-                    )}
+                    )
+                  }
+                />
+                {canEdit && orgDefaults && (
+                  // Its own card, directly below the Organisation card (owner 2026-11-11, option B): each field keeps
+                  // its own Save, so none of them belongs inside the profile form.
+                  <section className="card mt-4 space-y-5 p-5 sm:p-6" data-testid="org-defaults">
+                    <h3 className="text-sm font-semibold text-slate-800">{t(dict, "settings.prefs.org")}</h3>
+                  {/* Scheduling timezone (V305): the VENUE lane every division inherits. */}
+                  <div>
+                    <SubSection icon={Clock} label={t(dict, "settings.org.timezone")} />
+                    <OrgTimezone orgId={active.id} initialTimezone={active.timezone} />
                   </div>
-                )}
-
-                {canEdit && (
-                  <div className="mt-5 border-t border-slate-100 pt-5">
-                    {/* D23: the logo above is free, this control is Pro. The
-                        chip explains the split so the neighbouring upsell
-                        doesn't read as arbitrary. It names `dashboard.theme`
-                        (V397) — badging it `dashboard.branding` would print
-                        "Contact us" for a self-serve Pro upgrade, because
-                        featurePlan() routes that key to enterprise. */}
-                    <SubSection
-                      icon={Palette}
-                      label={t(dict, "settings.org.brandColor")}
-                      tip="settings.brand-colour"
+                  {/* The org's PUBLIC language: public pages, embeds, calendar.ics, OG images, the slideshow,
+                      and the locale frozen onto each registration. */}
+                  <div>
+                    <SubSection icon={Globe} label={t(dict, "settings.org.publicLanguage")} />
+                    <OrgPublicLanguage orgId={active.id} initialLocale={orgDefaults.locale} />
+                  </div>
+                  {/* The entry-fee currency (V365) — what an ENTRANT is quoted, not what the club is billed.
+                      Locked while a Connect account is attached; the control says so and the API refuses. */}
+                  <div>
+                    <SubSection icon={Receipt} label={t(dict, "settings.org.regCurrency")} />
+                    <OrgRegistrationCurrency
+                      orgId={active.id}
+                      initialCurrency={orgDefaults.currency}
+                      lockedTo={orgDefaults.currencyLockedTo}
                     />
-                    {canBrandColor ? (
-                      <OrgBrandColor orgId={active.id} initialBranding={active.branding} />
-                    ) : (
-                      <p className="flex items-center gap-2 text-sm text-slate-500">
-                        <PlanBadge feature="dashboard.theme" />
-                        {t(dict, "settings.upgrade.brandColor")}{" "}
-                        <Link href={routes.billing(orgSlug)} className="text-purple-600 underline">
-                          {t(dict, "settings.upgrade.link")}
-                        </Link>
-                      </p>
-                    )}
                   </div>
+                  </section>
                 )}
-
                 {canEdit && (
-                  <div className="mt-5 border-t border-slate-100 pt-5">
-                    <SubSection icon={BookOpen} label={t(dict, "settings.org.about")} />
-                    <OrgAbout orgId={active.id} initialValue={orgAbout} branding={active.branding} />
-                  </div>
-                )}
-
-
-                {canEdit && (
-                  <div className="mt-5 border-t border-slate-100 pt-5">
-                    <SubSection icon={Compass} label={t(dict, "settings.org.tour")} />
+                  <div className="mt-2">
                     <TourReplayButton />
                   </div>
                 )}
-              </section>
+              </div>
             )}
 
             {/* ── NEWS ── */}
@@ -518,45 +499,6 @@ export default async function SettingsPage({
                     )}
                   </div>
                 </section>
-
-                {/* Organisation — scheduling timezone (V305): the VENUE lane
-                    every division inherits. Divisions no longer ask for a
-                    timezone at all. */}
-                {canEdit && orgDefaults && (
-                  <section className="card p-5">
-                    <SectionHeader icon={CalendarClock}>{t(dict, "settings.prefs.org")}</SectionHeader>
-                    <SubSection icon={Clock} label={t(dict, "settings.org.timezone")} />
-                    <OrgTimezone orgId={active.id} initialTimezone={active.timezone} />
-
-                    {/* The org's PUBLIC language. Read for a long time by every
-                        entrant-facing surface — public pages, embeds,
-                        calendar.ics, OG images, the slideshow, and the locale
-                        frozen onto each registration — and written by nothing
-                        until now, so a club whose members read French had no
-                        way to say so. Sits directly under the personal
-                        language picker above precisely because the pair is
-                        what makes each one legible. */}
-                    <div className="mt-5 border-t border-slate-100 pt-5">
-                      <SubSection icon={Globe} label={t(dict, "settings.org.publicLanguage")} />
-                      <OrgPublicLanguage orgId={active.id} initialLocale={orgDefaults.locale} />
-                    </div>
-
-                    {/* The entry-fee currency (V365) — what an ENTRANT is
-                        quoted, not what the club is billed. Same story: the
-                        column and its allowlist have existed since RS001b with
-                        no UI to reach them. Locked while a Connect account is
-                        attached; the control says so and the API refuses the
-                        write rather than letting the next sync revert it. */}
-                    <div className="mt-5 border-t border-slate-100 pt-5">
-                      <SubSection icon={Receipt} label={t(dict, "settings.org.regCurrency")} />
-                      <OrgRegistrationCurrency
-                        orgId={active.id}
-                        initialCurrency={orgDefaults.currency}
-                        lockedTo={orgDefaults.currencyLockedTo}
-                      />
-                    </div>
-                  </section>
-                )}
 
                 {/* Privacy & cookies — analytics consent can be changed/withdrawn here. */}
                 <section className="card p-5">

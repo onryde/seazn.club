@@ -24,11 +24,21 @@ vi.mock("@/server/page-auth", () => ({ requireOrgPage }));
 vi.mock("@/lib/auth", () => ({ getUserOrgs }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale }));
 vi.mock("@/components/org-logo", () => ({ OrgLogo: () => <div data-testid="org-logo-uploader" /> }));
-vi.mock("@/components/org-brand-color", () => ({ OrgBrandColor: () => <div /> }));
-vi.mock("@/components/org-switcher", () => ({ OrgSwitcher: () => <div /> }));
-vi.mock("@/components/org-rename", () => ({ OrgRename: () => <div /> }));
-vi.mock("@/components/org-about", () => ({ OrgAbout: () => <div /> }));
+// Settings C8: rename, brand colour and About are one Organisation card (a router island, with its own suite). Stubbed
+// to render what the page hands it: the name, the logo slot and the defaults slot.
+vi.mock("@/components/org-profile-card", () => ({
+  OrgProfileCard: (p: { initialName: string; logo?: import("react").ReactNode; defaults?: import("react").ReactNode }) => (
+    <div data-testid="org-profile-card">
+      <span>{p.initialName}</span>
+      {p.logo}
+      {p.defaults}
+    </div>
+  ),
+}));
 vi.mock("@/components/org-timezone", () => ({ OrgTimezone: () => <div /> }));
+// The organisation defaults render on the Organisation tab now (settings C8), and each is a router island.
+vi.mock("@/components/org-public-language", () => ({ OrgPublicLanguage: () => <div /> }));
+vi.mock("@/components/org-registration-currency", () => ({ OrgRegistrationCurrency: () => <div /> }));
 vi.mock("@/components/tour-replay", () => ({ TourReplayButton: () => <div /> }));
 // The moved bodies. If the page still mounted either, this would show it.
 vi.mock("@/components/org-sponsors", () => ({ OrgSponsors: () => <div data-testid="org-sponsors" /> }));

@@ -51,10 +51,18 @@ test.describe("settings shell", () => {
     await expect(page.getByRole("button", { name: "Cookie settings" })).toBeVisible();
   });
 
-  test("preferences gathers both timezones, language and currency", async ({ page }) => {
+  test("preferences keeps your own timezone; the organisation defaults sit in their own card", async ({ page }) => {
     await page.goto("/settings?tab=preferences");
     await expect(page.getByRole("combobox", { name: "Your timezone" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Organisation defaults" })).toBeVisible();
+    // Settings C8 (owner 2026-11-11) moved the org's defaults into their own
+    // card below the Organisation card. "Your timezone" above is the
+    // positive pair: the tab rendered, and the org's defaults are not on it.
+    await expect(page.getByRole("combobox", { name: "Organisation public language" })).toHaveCount(0);
+    await page.goto("/settings?tab=organization");
+    const defaults = page.getByTestId("org-defaults");
+    await expect(page.getByTestId("org-profile-card").getByTestId("org-defaults")).toHaveCount(0);
+    await expect(defaults).toContainText("Organisation defaults");
+    await expect(defaults.getByRole("combobox", { name: "Organisation public language" })).toBeVisible();
     // …and the Account tab kept none of them.
     await page.goto("/settings?tab=account");
     await expect(page.getByRole("combobox", { name: "Your timezone" })).toHaveCount(0);
@@ -68,7 +76,8 @@ test.describe("settings shell", () => {
   test("organisation defaults expose the public language and the entry-fee currency", async ({
     page,
   }) => {
-    await page.goto("/settings?tab=preferences");
+    // The Organisation card, since settings C8 (owner 2026-11-11).
+    await page.goto("/settings?tab=organization");
 
     const language = page.getByRole("combobox", { name: "Organisation public language" });
     await expect(language).toBeVisible();

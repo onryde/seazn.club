@@ -10,6 +10,7 @@ import {
   TAG,
   type RosteredFixture,
 } from "./helpers";
+import { consolePanel, openConsolePanel } from "./helpers/console-panels";
 import { ledger, openLiveConsole, pad, postEvent } from "./scorepad-v3-football-kit";
 
 // ScoringPad v3, wave R3/task D — the coverage football's conversion OWES
@@ -103,21 +104,15 @@ async function sendHeldNow(page: Page): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// The lineup PhoneDisclosure folds itself the moment the match starts, LIVE
-// — no reload. phone-disclosure.tsx's `desktopCollapsible` effect only ever
-// OPENED (`startOpen: true -> open`) and had no branch for `startOpen`
-// flipping to `false`, so a lineup left open pre-match stayed open forever
-// once `fixture-console.tsx`'s own `send()` resynced `live` client-side after
-// `core.start` — `started` (and therefore `startOpen={!started}`) updates
-// immediately with no `page.reload()` in the loop (`send()`'s own doc: a real
-// `resync()` plus `router.refresh()`, neither of which remounts this client
-// component or its `useState`). Pre-existing coverage
-// (`mobile.spec.ts`'s "lineup editor role/pair-order selects hold at phone
-// width") only ever opens the disclosure and never starts the match, so it
-// never touched the close path this test is for.
+// The Lineup panel (header panel bar, owner 2026-11-11) locks the moment the match starts, LIVE — no reload. The lineup
+// cards used to be per-side disclosures that folded themselves on Start match; they are now one Lineup panel opened from the
+// bar, and what Start match changes is the EDITABILITY: `canEdit={canEdit && live.status === "scheduled"}`, so every row loses
+// its ⋯ menu and the Save button goes — in the SAME tab, because `send()` resyncs `live` client-side with no remount.
+// Pre-existing coverage (`mobile.spec.ts`'s "lineup editor role/pair-order selects hold at phone width") only ever opens
+// the panel and never starts the match, so it never touched the lock this test is for.
 // ---------------------------------------------------------------------------
 
-test("football v3: the lineup disclosure closes itself the moment Start match is pressed, same tab, no reload", async ({
+test("football v3: the lineup locks the moment Start match is pressed, same tab, no reload", async ({
   page,
 }) => {
   const fx = await seedRosteredFixture(page.request, {
@@ -129,39 +124,25 @@ test("football v3: the lineup disclosure closes itself the moment Start match is
   });
   await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
 
-  // The lineup disclosures only: W2c's match rules box is a phone disclosure too, and it neither opens
-  // pre-match nor folds on Start match.
-  const toggles = page.locator(
-    '[data-role="phone-disclosure"]:not(:has([data-testid="match-rules-block"])) > [data-role="phone-disclosure-toggle"]',
-  );
-  await expect(toggles.first(), "no lineup disclosure rendered").toBeAttached({ timeout: 20_000 });
-  const count = await toggles.count();
-  expect(count, "expected one lineup disclosure per side").toBeGreaterThanOrEqual(2);
-  // `desktopCollapsible`'s open-at-desktop default is a layout effect, not
-  // SSR state (phone-disclosure.test.tsx's own PR #782 note) — poll rather
-  // than assert once.
-  for (let i = 0; i < count; i++) {
-    await expect(toggles.nth(i), `lineup disclosure ${i} did not open pre-match`).toHaveAttribute(
-      "aria-expanded",
-      "true",
-      { timeout: 20_000 },
-    );
-  }
+  await openConsolePanel(page, "lineup");
+  const menus = consolePanel(page, "lineup").getByTestId("lineup-row-menu-button");
+  const saves = consolePanel(page, "lineup").getByRole("button", { name: "Save lineup" });
+  // Pre-match the lineup is editable: a ⋯ menu per row of the side showing (a phone shows one side at a time).
+  await expect(menus.first(), "no editable lineup row pre-match").toBeVisible({ timeout: 20_000 });
+  const before = await menus.count();
+  expect(before, "anti-vacuity: at least one editable row").toBeGreaterThan(0);
+  await expect(saves.first()).toBeVisible();
 
   await page.getByRole("button", { name: "Start match", exact: true }).click();
   await expect
     .poll(async () => (await ledger(page.request, fx.fixtureId)).map((e) => e.type), { timeout: 20_000 })
     .toContain("core.start");
 
-  // No `page.reload()` anywhere above this line — the fold has to happen to
-  // the SAME `open` state this test already observed `true` on.
-  for (let i = 0; i < count; i++) {
-    await expect(toggles.nth(i), `lineup disclosure ${i} stayed open after Start match, same tab`).toHaveAttribute(
-      "aria-expanded",
-      "false",
-      { timeout: 20_000 },
-    );
-  }
+  // No `page.reload()` anywhere above this line — the lock has to happen to the SAME mounted editors this test already
+  // saw editable. The panel itself stays open; only the controls go.
+  await expect(menus, "rows stayed editable after Start match, same tab").toHaveCount(0, { timeout: 20_000 });
+  await expect(saves).toHaveCount(0);
+  await expect(consolePanel(page, "lineup"), "the Lineup panel is still open, now read-only").toBeVisible();
 });
 
 // ---------------------------------------------------------------------------

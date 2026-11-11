@@ -275,9 +275,9 @@ or `fixture-console.tsx` at a phone width. Not derivable from the code:
 
 - **One DOM, branched — never a second phone tree.** Everything below
   Tailwind `md` (768) is `max-md:*`; everything phone-only is `md:hidden`.
-  Exactly TWO controls are duplicated (amended 2026-09-30, fixture-page stream spec §2): the device hand-over (now
-  labelled *Remote scoring*) and *Stream*; each desktop twin carries `max-md:hidden`. ≥768 is unchanged and must stay
-  that way.
+  NO control is duplicated any more (amended 2026-11-11, PR #1177): Stream, Remote scoring, Lineup, Match rules
+  and Match actions are ONE panel bar, one panel open at a time — in the header from `md`, below the pad on
+  phones (`order-*`). The 2026-09-30 phone twins (`*-phone`) are gone; never reintroduce them.
 - **`/\bmd:hidden\b/` also matches inside `max-md:hidden`**, so an assertion
   written that way passes on its own inversion. Anchor on `\s...hidden"`.
 - **A wrapper between a grid and its card kills equal-height stretch**, and

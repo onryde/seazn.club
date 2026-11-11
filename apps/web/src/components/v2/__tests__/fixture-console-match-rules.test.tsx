@@ -17,7 +17,7 @@ const side = (id: string, name: string): SideInfo => ({ id, name, kind: "team", 
 const badminton = moduleFor("badminton")!;
 const stage = badminton.configSchema.parse(badminton.variants.short) as Record<string, unknown>;
 
-function consoleHtml(withBlock: boolean, override: Record<string, unknown> | null = null, opts: { line?: string; viewer?: boolean } = {}): string {
+function consoleHtml(withBlock: boolean, override: Record<string, unknown> | null = null, opts: { line?: string; viewer?: boolean; panel?: "rules" } = {}): string {
   return renderToStaticMarkup(
     <FixtureConsole
       fixture={{ id: "f1", status: "scheduled", scheduled_at: null, venue_name: null, court_name: null, round_no: 1 }}
@@ -31,6 +31,7 @@ function consoleHtml(withBlock: boolean, override: Record<string, unknown> | nul
       matchFormatLine={opts.line}
       stageKind="league"
       viewerPlan="community"
+      initialPanel={opts.panel}
       matchRules={
         withBlock
           ? matchRulesBlockProps("f1", {
@@ -51,34 +52,39 @@ function consoleHtml(withBlock: boolean, override: Record<string, unknown> | nul
     />,
   );
 }
-const toggles = (html: string): string[] => [...html.matchAll(/<button[^>]*data-role="phone-disclosure-toggle"[^>]*>.*?<\/button>/gs)].map((m) => m[0]);
+/** The Match rules button of the header panel bar (owner 2026-11-11), whole. */
+const ruleButton = (html: string): string | undefined => /<button[^>]*data-testid="match-rules-toggle"[^>]*>.*?<\/button>/s.exec(html)?.[0];
+/** The Match rules panel's opening tag. */
+const rulesPanelTag = (html: string): string | undefined => /<section[^>]*data-panel="rules"[^>]*>/.exec(html)?.[0];
 
 describe("the console mounts the match rules block", () => {
-  it("handed matchRules: the block is on the page, inside a phone disclosure that is folded below md (not at md and up)", () => {
+  it("handed matchRules: the block is on the page, in the Match rules panel — hidden until its bar button opens it, at every width", () => {
     const html = consoleHtml(true);
     expect(html).toContain('data-testid="match-rules-block"');
-    const toggle = toggles(html).find((t) => t.includes(EN["matchRules.title"]!));
-    expect(toggle, "a disclosure toggle titled 'Match rules'").toBeDefined();
-    expect(toggle).toContain(`aria-label="${EN["matchRules.show"]}"`);
-    expect(toggle, "phone-only: the toggle hides from md up").toMatch(/\smd:hidden/);
-    // The block sits in that disclosure's body, which is folded on a phone and a plain card from md.
-    const at = html.indexOf('data-testid="match-rules-block"');
-    const bodyOpen = html.lastIndexOf('<div class="grid flex-1 max-md:hidden"', at);
-    expect(bodyOpen, "the block's disclosure body is max-md:hidden").toBeGreaterThan(-1);
+    const button = ruleButton(html);
+    expect(button, "a bar button titled 'Match rules'").toBeDefined();
+    expect(button).toContain(EN["matchRules.title"]!);
+    expect(button).toContain('aria-expanded="false"');
+    expect(button).toContain('aria-controls="console-panel-rules"');
+    expect(rulesPanelTag(html), "closed: the panel is hidden (not just on a phone) but stays mounted for its draft").toMatch(/class="[^"]*\shidden"/);
+    expect(html.indexOf('data-panel="rules"')).toBeLessThan(html.indexOf('data-testid="match-rules-block"'));
+    const open = consoleHtml(true, null, { panel: "rules" });
+    expect(rulesPanelTag(open), "open: no hiding class").not.toMatch(/\bhidden\b/);
+    expect(ruleButton(open)).toContain('aria-expanded="true"');
   });
 
-  it("not handed matchRules (a scorer, a viewer, a frozen competition): no block and no extra disclosure", () => {
-    const withBlock = consoleHtml(true);
+  it("not handed matchRules (a scorer, a viewer, a frozen competition) and no line: no block, no button, no panel", () => {
     const without = consoleHtml(false);
     expect(without).not.toContain("match-rules-block");
-    expect(toggles(withBlock).length - toggles(without).length, "exactly one disclosure more").toBe(1);
+    expect(ruleButton(without)).toBeUndefined();
+    expect(rulesPanelTag(without)).toBeUndefined();
+    expect(ruleButton(consoleHtml(true)), "the positive pair: handed the block, it has its button").toBeDefined();
   });
 
-  it("an override in force shows on the closed phone row too, so the phone organiser sees it without opening", () => {
-    const toggle = toggles(consoleHtml(true, { bestOf: 1 })).find((t) => t.includes(EN["matchRules.title"]!))!;
-    expect(toggle).toContain(EN["matchRules.overridden"]);
-    const quiet = toggles(consoleHtml(true)).find((t) => t.includes(EN["matchRules.title"]!))!;
-    expect(quiet).not.toContain(EN["matchRules.overridden"]);
+  it("an override in force shows on the button itself, so the organiser sees it without opening the panel", () => {
+    const button = ruleButton(consoleHtml(true, { bestOf: 1 }))!;
+    expect(button).toContain(EN["matchRules.overridden"]);
+    expect(ruleButton(consoleHtml(true))).not.toContain(EN["matchRules.overridden"]);
   });
 });
 

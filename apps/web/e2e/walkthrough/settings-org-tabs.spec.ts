@@ -87,8 +87,9 @@ const L = {
   sponsorLink: ui("settings.org.sponsors.link"),
   addSponsor: ui("settings.org.sponsors.add"),
   saveSponsor: ui("sponsors.save"),
-  orgSave: ui("settings.org.save"),
-  aboutSave: ui("settings.org.about.save"),
+  /** Settings C8 (owner 2026-11-11): the Organisation card has ONE Save for name, brand colour and About. */
+  saveChanges: ui("settings.org.saveChanges"),
+  discard: ui("settings.saveBar.discard"),
   // The editors' ACCESSIBLE NAMES are their on-screen labels (PB3: the grey hint is drawn now, so it is `aria-placeholder`, not the name).
   aboutBox: ui("settings.org.about"),
   newsBody: ui("news.composer.body"),
@@ -279,51 +280,53 @@ test("organisation tab: about and brand colour persist, and an unknown tab lands
   // Case 24's W2 share, folded in as a per-tab assertion rather than a test of
   // its own: page.tsx:119 falls an unrecognised `?tab=` back to "organization"
   // (`SETTINGS_TABS.includes(rawTab) ? rawTab : "organization"`). Nothing else
-  // on the settings page renders `org-identity-name`, so this is a real probe
-  // of WHICH panel came back — not merely that the route was a 200.
+  // on the settings page renders `org-name-input` (the Organisation card's name
+  // field), so this is a real probe of WHICH panel came back — not merely that
+  // the route was a 200.
   await page.goto(settingsUrl(org.slug, "bogus"));
-  await expect(page.getByTestId("org-identity-name")).toHaveText(org.name, { timeout: READ_MS });
+  await expect(page.getByTestId("org-name-input")).toHaveValue(org.name, { timeout: READ_MS });
 
   await page.goto(settingsUrl(org.slug, "organization"));
 
-  // Brand colour is a swatch picker, not a text field: `OrgBrandColor` PATCHes
-  // `{ branding: { colors: { primary } } }` on SELECT, with no save button.
+  // Settings C8 (owner 2026-11-11): brand colour and About are fields of ONE
+  // card with ONE Save (`org-profile-card.tsx`). Picking a swatch only moves
+  // the form — nothing leaves the page until Save — so every PATCH to this org
+  // is counted, and exactly one must carry both edits.
+  let orgPatches = 0;
+  page.on("request", (r) => {
+    if (r.method() === "PATCH" && r.url().includes(`/api/orgs/${org.orgId}`)) orgPatches++;
+  });
+
   const chip = page.getByRole("button", { name: SWATCH_LABEL, exact: true });
   await expect(chip, "Pro org must get the colour picker, not the upsell").toBeVisible({
     timeout: READ_MS,
   });
-  const colourPatch = page.waitForResponse(
-    (r) => r.url().includes(`/api/orgs/${org.orgId}`) && r.request().method() === "PATCH",
-  );
   await chip.click();
-  expect((await colourPatch).status(), "brand colour PATCH").toBe(200);
-
-  // Count only the PATCHes that carry `about`, so the brand-colour write above
-  // cannot be mistaken for a second save of this one.
-  let aboutPatches = 0;
-  page.on("request", (r) => {
-    if (r.method() !== "PATCH" || !r.url().includes(`/api/orgs/${org.orgId}`)) return;
-    const body = r.postDataJSON() as Record<string, unknown> | null;
-    if (body && "about" in body) aboutPatches++;
-  });
+  await expect(chip, "the swatch is picked in the form").toHaveAttribute("aria-pressed", "true");
 
   await typeProse(page, L.aboutBox, about);
-  const saveAbout = page.getByRole("button", { name: L.aboutSave, exact: true });
-  const aboutPatch = page.waitForResponse(
-    (r) =>
-      r.url().includes(`/api/orgs/${org.orgId}`) &&
-      r.request().method() === "PATCH" &&
-      "about" in ((r.request().postDataJSON() as Record<string, unknown> | null) ?? {}),
+  const save = page.getByRole("button", { name: L.saveChanges, exact: true });
+  const profilePatch = page.waitForResponse(
+    (r) => r.url().includes(`/api/orgs/${org.orgId}`) && r.request().method() === "PATCH",
   );
-  await saveAbout.click();
-  expect((await aboutPatch).status(), "about PATCH").toBe(200);
+  await save.click();
+  const patched = await profilePatch;
+  expect(patched.status(), "profile PATCH").toBe(200);
+  const sent = (patched.request().postDataJSON() as Record<string, unknown> | null) ?? {};
+  expect(Object.keys(sent).sort(), "one body carries both edits, and nothing that did not change").toEqual([
+    "about",
+    "branding",
+  ]);
 
-  // Double-submit, case 24's other W2 share: `disabled={!dirty || busy}` must
-  // put the control out of reach the moment it is used. `dirty` also goes false
-  // on success, so the button stays disabled after the save settles — a second
-  // save is unreachable, and exactly one write left the page.
-  await expect(saveAbout, "Save must disable itself while/after saving").toBeDisabled();
-  expect(aboutPatches, "one click on Save must produce exactly one write").toBe(1);
+  // Double-submit, case 24's other W2 share: after the save settles nothing is
+  // unsaved — Discard goes out of reach — and a second Save sends nothing
+  // (`profilePatch` returns null on a clean form), so exactly one write left
+  // the page.
+  await expect(
+    page.getByRole("button", { name: L.discard, exact: true }),
+    "nothing is unsaved once the save settles",
+  ).toBeDisabled({ timeout: READ_MS });
+  await save.click();
 
   // "Did it persist" — an API read, and NOT the PATCH's own echo.
   await expect
@@ -332,6 +335,7 @@ test("organisation tab: about and brand colour persist, and an unknown tab lands
       message: "brand colour must be readable back off GET /api/orgs",
     })
     .toBe(SWATCH.hex);
+  expect(orgPatches, "one Save (and a second on a clean form) must produce exactly one write").toBe(1);
 
   // "Does it render back" — the ONE reload this tab gets.
   await page.reload();
@@ -658,8 +662,8 @@ test("organisation tab: a rename regenerates the slug and the page follows it", 
   const renamed = `Renamed ${TAG} FC`;
   await page.goto(settingsUrl(org.slug, "organization"));
 
-  // Scoped to the rename block: OrgRename's wrapping <label> holds the Save
-  // button as well as the input, so its text content is not just its own copy.
+  // The name field sits in the tour's `org-rename` anchor inside the
+  // Organisation card (`org-profile-card.tsx`).
   const nameField = page.locator('[data-tour="org-rename"]').locator("input");
   await expect(nameField).toHaveValue(org.name, { timeout: READ_MS });
   await nameField.fill(renamed);
@@ -667,15 +671,12 @@ test("organisation tab: a rename regenerates the slug and the page follows it", 
   const patch = page.waitForResponse(
     (r) => r.url().includes(`/api/orgs/${org.orgId}`) && r.request().method() === "PATCH",
   );
-  // Scoped to the rename block: `settings.org.save` is "Save", and an unscoped
-  // exact match would be ambiguous the moment another control on this tab
-  // gains one.
-  await page
-    .locator('[data-tour="org-rename"]')
-    .getByRole("button", { name: L.orgSave, exact: true })
-    .click();
+  // Settings C8: the card's one Save (scoped to the card — the org defaults
+  // under brand colour keep Save buttons of their own).
+  await page.getByTestId("org-profile-card").getByRole("button", { name: L.saveChanges, exact: true }).click();
   const res = await patch;
   expect(res.status(), "rename PATCH").toBe(200);
+  expect(Object.keys((res.request().postDataJSON() as Record<string, unknown> | null) ?? {}), "a rename sends the name alone").toEqual(["name"]);
   const newSlug = ((await res.json()) as { data: { slug: string } }).data.slug;
   expect(newSlug, "a rename regenerates the slug (PROMPT-30)").not.toBe(org.slug);
 
@@ -692,9 +693,10 @@ test("organisation tab: a rename regenerates the slug and the page follows it", 
     .toBe(renamed);
   expect((await orgRow(page.request)).slug, "…and so must the new slug").toBe(newSlug);
 
-  // "Does it render back": `router.refresh()` re-runs the server component, so
-  // the identity row is a real re-read rather than client state.
-  await expect(page.getByTestId("org-identity-name")).toHaveText(renamed, { timeout: READ_MS });
+  // "Does it render back": a fresh load of the new URL re-reads the org from
+  // the server, so the name field is a real re-read rather than client state.
+  await page.reload();
+  await expect(page.getByTestId("org-name-input")).toHaveValue(renamed, { timeout: READ_MS });
 
   // Keep the file's shared handle honest for anything that runs after this.
   org.slug = newSlug;

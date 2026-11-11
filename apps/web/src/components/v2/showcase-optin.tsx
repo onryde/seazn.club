@@ -13,6 +13,7 @@ export function ShowcaseOptIn({
   checked,
   onChange,
   capped,
+  disabled = false,
 }: {
   visibility: string;
   checked: boolean;
@@ -20,12 +21,16 @@ export function ShowcaseOptIn({
   /** No public slot is left, so this one is created private whatever was picked (PB3 m5): the switch is off with THAT reason, not
    *  "set visibility to public" under a Public that is already selected. REQUIRED, like the form's other cap props. */
   capped: boolean;
+  /** Read-only (competition settings: a viewer, or a competition frozen over quota): the switch keeps its state and takes no
+   *  input. Not a reason the organiser can act on here, so no amber line - the page says why it is read-only. */
+  disabled?: boolean;
 }) {
   const msg = useMsg();
   const isPublic = visibility === "public";
+  const live = isPublic && !disabled;
   return (
     <div data-testid="showcase-optin">
-      <label className={`flex min-h-11 items-center gap-4 ${isPublic ? "cursor-pointer" : "cursor-not-allowed"}`}>
+      <label className={`flex min-h-11 items-center gap-4 ${live ? "cursor-pointer" : "cursor-not-allowed"}`}>
         <span className="grid min-w-0 flex-1 gap-0.5">
           <span id="showcase-title" className={`text-sm font-semibold ${isPublic ? "text-slate-800" : "text-slate-500"}`}>
             {msg("showcase.label")}
@@ -39,7 +44,7 @@ export function ShowcaseOptIn({
         <input
           type="checkbox"
           role="switch"
-          disabled={!isPublic}
+          disabled={!live}
           checked={isPublic && checked}
           onChange={(e) => onChange(e.target.checked)}
           aria-labelledby="showcase-title"

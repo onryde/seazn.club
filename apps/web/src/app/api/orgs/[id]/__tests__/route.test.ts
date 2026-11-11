@@ -156,6 +156,71 @@ describe.skipIf(!HAS_DB)("PATCH /api/orgs/[id] refuses the removed `sponsors` ar
   });
 });
 
+// Settings C8 (owner 2026-11-11): the Organisation tab saves the name, the brand colour and About with ONE button, in ONE
+// request, so a save lands whole or not at all. Before this arm every body was a single key, and the three would have been
+// three requests: a rename could land and the About behind it fail.
+describe.skipIf(!HAS_DB)("PATCH /api/orgs/[id] — the Organisation tab's one save (name + colour + About)", () => {
+  const row = async (id: string) =>
+    (
+      await sql<{ name: string; slug: string; about: string | null; branding: Record<string, unknown> }[]>`
+        select name, slug, about, branding from organizations where id = ${id}`
+    )[0]!;
+
+  it("all three in one body land together, and the rename regenerates the slug as a rename alone does", async () => {
+    const org = await seedOrg();
+    const name = `Harbour Vale ${randomUUID().slice(0, 8)}`;
+    const res = await PATCH(
+      patchReq({ name, about: "Club nights are Tuesdays.", branding: { colors: { primary: "#0f766e" } } }),
+      { params: Promise.resolve({ id: org.id }) },
+    );
+    expect(res.status).toBe(200);
+    const after = await row(org.id);
+    expect(after.name).toBe(name);
+    expect(after.about).toBe("Club nights are Tuesdays.");
+    expect(after.branding).toEqual({ colors: { primary: "#0f766e" } });
+    expect(after.slug, "a rename riding with other keys still regenerates the slug").not.toBe(org.slug);
+    expect(invalidateSlugCache).toHaveBeenCalledWith("org", null, org.slug, after.slug);
+  });
+
+  it("any subset saves on its own: About + colour without a name is not a rename", async () => {
+    const org = await seedOrg();
+    const res = await PATCH(patchReq({ about: null, branding: { colors: { primary: null } } }), {
+      params: Promise.resolve({ id: org.id }),
+    });
+    expect(res.status).toBe(200);
+    const after = await row(org.id);
+    expect(after.slug).toBe(org.slug);
+    expect(after.about).toBeNull();
+    expect(invalidateSlugCache).not.toHaveBeenCalled();
+  });
+
+  it("all or nothing: one bad part refuses the whole body, and neither the name nor the colour is written", async () => {
+    const org = await seedOrg();
+    const before = await row(org.id);
+    const refused: unknown[] = [
+      { name: "Should not land", branding: { colors: { primary: "#zzzzzz" } } },
+      { name: "Should not land", about: "x".repeat(20_001) },
+      { name: "", about: "fine" },
+      // An unknown key beside the three is refused like any unknown key.
+      { name: "Should not land", timezone: "Europe/London", about: "fine" },
+    ];
+    let checked = 0;
+    for (const body of refused) {
+      const res = await PATCH(patchReq(body), { params: Promise.resolve({ id: org.id }) });
+      expect(res.status, JSON.stringify(body).slice(0, 80)).toBe(400);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every refused body was sent").toBe(refused.length);
+    expect(await row(org.id), "nothing was written by any refused body").toEqual(before);
+  });
+
+  it("the empty body is still 'Nothing to update', not a silent 200", async () => {
+    const org = await seedOrg();
+    const res = await PATCH(patchReq({}), { params: Promise.resolve({ id: org.id }) });
+    expect(res.status).toBe(400);
+  });
+});
+
 afterAll(async () => {
   if (!HAS_DB) return; // DB-less unit job: connecting just to disconnect throws
   await sql.end();

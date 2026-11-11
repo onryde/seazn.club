@@ -129,18 +129,16 @@ export async function v1Suite(admin: Session, orgId: string, orgSlug: string): P
   // phone), and it never catches "phone present, desktop absent" either.
   // One `canHandOver` predicate now drives both copies, so the real
   // invariant is that their presence is EQUAL — both rendered, or neither.
-  const deviceHandoverDesktop = fixturePage.body.includes('data-role="device-handover"');
-  const deviceHandoverPhone = fixturePage.body.includes('data-role="device-handover-phone"');
+  // Console panel bar (owner-approved 2026-11-11, PR #1177): Stream and Remote scoring are ONE button each in the
+  // panel bar at every width — the phone twins (`*-phone`) are gone, so the invariant is "one copy, never two".
+  const streamButton = fixturePage.body.includes('data-role="fixture-stream"');
   check(
-    "fixture console: phone hand-over icon ships beside the desktop button (both present, or both absent)",
-    deviceHandoverDesktop === deviceHandoverPhone,
+    "fixture console: no phone twin of the hand-over or Stream button ships (one panel-bar button each)",
+    !fixturePage.body.includes('data-role="device-handover-phone"') && !fixturePage.body.includes('data-role="fixture-stream-phone"'),
   );
-  // Spec 2026-09-30 §2: Stream now has a desktop button and a phone strip icon, driven by ONE mount — equal presence.
-  // The smoke admin is an owner on an entitled org (V426: every plan grants streaming.overlay), so both must be HERE:
-  // equality alone would pass on a page that dropped both.
-  const streamDesktop = fixturePage.body.includes('data-role="fixture-stream"');
-  const streamPhone = fixturePage.body.includes('data-role="fixture-stream-phone"');
-  check("fixture console: the Stream button and its phone icon both ship on an organiser's fixture page", streamDesktop && streamPhone);
+  // The smoke admin is an owner on an entitled org (V426: every plan grants streaming.overlay), so Stream must be HERE —
+  // the absence check above would pass on a page that dropped the bar entirely.
+  check("fixture console: the Stream panel button ships on an organiser's fixture page", streamButton);
 
   // Scheduling console (doc 12, PROMPT-17): scoring is closed until the
   // explicit start; auto pass proposes without persisting; start opens scoring.

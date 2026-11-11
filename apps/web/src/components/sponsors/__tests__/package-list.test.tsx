@@ -225,7 +225,7 @@ describe("the tier legend sits under the price list, on every plan, with or with
     expect(toggle, "the legend's toggle is phone-only").toMatch(/class="[^"]*\smd:hidden"/);
     expect(toggle, "folded on first paint (a list with packages)").toContain('aria-expanded="false"');
     const controls = /aria-controls="([^"]+)"/.exec(toggle)?.[1];
-    expect(html.slice(fold), "its body is hidden below md and nothing else is").toMatch(new RegExp(`<div class="grid flex-1 max-md:hidden" id="${controls}">`));
+    expect(html.slice(fold), "its body is hidden below md and nothing else is").toMatch(new RegExp(`<div class="grid min-w-0 flex-1 grid-cols-\\[minmax\\(0,1fr\\)\\] max-md:hidden" id="${controls}">`));
     expect(at(html, "tier-legend-fold"), "the fold sits before the note").toBeLessThan(at(html, "package-online-note"));
     // Nothing between the fold's end and the note takes height on a phone: only closing wrappers lie between them.
     const afterLegend = html.slice(html.indexOf("</section>", fold) + "</section>".length, at(html, "package-online-note"));

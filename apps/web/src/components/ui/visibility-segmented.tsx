@@ -29,6 +29,7 @@ export function VisibilitySegmented({
   value,
   onChange,
   capped,
+  disabled = false,
 }: {
   value: VisibilityKey | string;
   onChange: (next: VisibilityKey) => void;
@@ -38,6 +39,8 @@ export function VisibilitySegmented({
    * icon. REQUIRED so a caller cannot quietly stop passing it (a literal `false` on the form would put the promise back).
    */
   capped: boolean;
+  /** Read-only (competition settings: a viewer, or a competition frozen over quota). The choice still shows; nothing picks. */
+  disabled?: boolean;
 }) {
   const msg = useMsg();
   const selected = VISIBILITY_OPTIONS.find((o) => o.value === value);
@@ -60,17 +63,20 @@ export function VisibilitySegmented({
           return (
             <label
               key={opt.value}
-              className={`relative flex min-h-11 min-w-0 cursor-pointer items-center justify-center gap-1.5 rounded-[7px] px-1 text-xs font-medium transition has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-purple-600 sm:px-2 sm:text-sm ${
+              className={`relative flex min-h-11 min-w-0 items-center justify-center gap-1.5 rounded-[7px] px-1 text-xs font-medium transition has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-purple-600 sm:px-2 sm:text-sm ${
                 active
                   ? "bg-purple-600 text-white shadow-sm"
-                  : "text-slate-700 hover:bg-white hover:text-purple-700"
-              }`}
+                  : disabled
+                    ? "text-slate-500"
+                    : "text-slate-700 hover:bg-white hover:text-purple-700"
+              } ${disabled ? "cursor-not-allowed opacity-70" : "cursor-pointer"}`}
             >
               <input
                 type="radio"
                 name="visibility"
                 value={opt.value}
                 checked={active}
+                disabled={disabled}
                 onChange={() => onChange(opt.value)}
                 className="sr-only"
               />

@@ -23,6 +23,7 @@ import { apiJson, expectNoHorizontalScroll, fixturePath, seedRosteredFixture, TA
 import { dismissConsent, freshOrg, waitForHydration } from "../directory-kit";
 import { consentedAnonymousState } from "../scorepad-a11y-kit";
 import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
+import { holdRemoteScoringOpen } from "../helpers/console-panels";
 
 // A fresh user: the shared storage state is the Pro org, which would prove nothing.
 test.use({ storageState: { cookies: [], origins: [] } });
@@ -99,6 +100,7 @@ test("a Community organiser opens Remote scoring, hands out the QR, and a signed
 
   // ---- THE TEST, organiser: console -> Remote scoring -> Create -> the QR.
   await page.setViewportSize({ width: 1280, height: 900 });
+  await holdRemoteScoringOpen(page);
   await page.goto(await fixturePath(page.request, fx.fixtureId));
   const anchor = page.locator('[data-testid="score-pad"]');
   await expect(anchor).toBeVisible({ timeout: STEP_MS });

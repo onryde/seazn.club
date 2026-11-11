@@ -24,10 +24,8 @@ function fmtDay(iso: string, locale: Locale): string {
  * placeholder (D1 is fast-follow — rendered, not wired), and the run history
  * with a CSV export.
  *
- * The "Invite & earn" referral card (SPEC-5 §2, #267) that sat below the wallet
- * is hidden (owner, 2026-11-11), and the view model no longer reads referral
- * data (credits-tab.ts). The /refer/<code> route, the attribution cookie and
- * the referral grants are untouched; git history has the card and its copy.
+ * The referral programme is removed (owner, 2026-11-11), so there is no
+ * "Invite & earn" card below the wallet.
  *
  * Reuses the billing page's card/eyebrow/meter idiom (the same `.card` +
  * purple-600 eyebrow + slate body as Usage) so it reads as one more section on

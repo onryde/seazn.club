@@ -20,14 +20,24 @@ import { isRegistrationCurrency } from "@/lib/currency";
 import { EDITOR_ROLES, renameOrgSchema, type Organization } from "@/lib/types";
 import { z } from "zod";
 
+// Brand color ({ colors: { primary } }, same shape as competitions.branding).
+// primary: null clears back to the platform default. Writes are accepted on
+// any plan — reads are gated by dashboard.branding, like competitions.
+const brandingSchema = z.object({
+  colors: z.object({
+    primary: z.string().regex(/^#[0-9a-f]{6}$/i).nullable(),
+  }).strict(),
+}).strict();
+// Org "about" (v3/06 §2): Markdown, rendered on the public org page.
+const aboutSchema = z.string().max(20_000).nullable();
+
 const orgPatchSchema = z.union([
   renameOrgSchema,
   z.object({ logo_storage_path: z.string().max(500).nullable() }).strict(),
   z.object({ payment_instructions: z.string().max(5000).nullable() }).strict(),
   // Default payment method for NEW division registration settings (spec §3).
   z.object({ default_payment_method: z.enum(["offline", "stripe"]) }).strict(),
-  // Org "about" (v3/06 §2): Markdown, rendered on the public org page.
-  z.object({ about: z.string().max(20_000).nullable() }).strict(),
+  z.object({ about: aboutSchema }).strict(),
   // Scheduling timezone (V305) — the VENUE lane, inherited by every division
   // that has no stored tz. null clears it back to UTC. Validated against the
   // runtime's Intl, the same rule as users.timezone (lib/tz isValidIana).
@@ -55,15 +65,15 @@ const orgPatchSchema = z.union([
   // settlement currency while one is attached, so the write is REFUSED rather
   // than silently reverted by the next syncConnectAccount.
   z.object({ currency: z.string().refine(isRegistrationCurrency, { message: "Unsupported currency" }) }).strict(),
-  // Brand color ({ colors: { primary } }, same shape as competitions.branding).
-  // primary: null clears back to the platform default. Writes are accepted on
-  // any plan — reads are gated by dashboard.branding, like competitions.
+  z.object({ branding: brandingSchema }).strict(),
+  // The Organisation tab's ONE Save (settings C8, owner 2026-11-11): the name, the brand colour and About together, so a
+  // save lands whole or not at all — three requests could rename the org and then fail the About behind it. Each key takes
+  // the shape its own arm above takes; any subset is accepted, and an empty body is the "Nothing to update" 400 below.
+  // LAST, so a single-key body still matches its own arm first.
   z.object({
-    branding: z.object({
-      colors: z.object({
-        primary: z.string().regex(/^#[0-9a-f]{6}$/i).nullable(),
-      }).strict(),
-    }).strict(),
+    name: renameOrgSchema.shape.name.optional(),
+    about: aboutSchema.optional(),
+    branding: brandingSchema.optional(),
   }).strict(),
   // No `sponsors` arm (R4 fix batch 3): sponsors live in the `sponsors` table only (/api/v1/orgs/{id}/sponsors). The
   // arm wrote the legacy `branding.sponsors` blob, which V492 strips; a body naming it is refused like any unknown key.
@@ -82,7 +92,7 @@ export async function PATCH(
     const updates: Record<string, unknown> = {};
     let previousSlug: string | null = null;
     let renameFrom: { slug: string; to: string } | null = null;
-    if ("name" in body) {
+    if ("name" in body && body.name !== undefined) {
       updates.name = body.name;
       // Rename regenerates the slug (v3/01 §2, PROMPT-30); the old slug keeps
       // redirecting via slug_history so shared /o and /live links survive.
@@ -113,7 +123,7 @@ export async function PATCH(
       }
       updates.default_payment_method = body.default_payment_method;
     }
-    if ("about" in body) updates.about = body.about;
+    if ("about" in body && body.about !== undefined) updates.about = body.about;
     if ("timezone" in body) updates.timezone = body.timezone;
     if ("default_locale" in body) updates.default_locale = body.default_locale;
     if ("currency" in body) {
@@ -134,7 +144,7 @@ export async function PATCH(
     }
     // Branding writes MERGE into the blob (lib/org-branding): the colour must
     // not clobber any other key the column holds.
-    if ("branding" in body) {
+    if ("branding" in body && body.branding) {
       const [current] = await sql<{ branding: unknown }[]>`
         select branding from organizations where id = ${id}`;
       if (!current) throw new HttpError(404, "Organization not found");

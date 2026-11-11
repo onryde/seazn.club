@@ -22,11 +22,12 @@ export function fixtureStreamMode(i: {
   return i.activeSession ? "stop-only" : null;
 }
 
-/** The console opens at most ONE of its two disclosure panels at a time — Remote scoring (hand-over) or Stream. */
-export type OpenPanel = "handover" | "stream" | null;
+/** The console opens at most ONE of its five header panels at a time (owner 2026-11-11): Stream, Remote scoring
+ *  (`handover`), Lineup, Match rules, Match actions. */
+export type OpenPanel = "stream" | "handover" | "lineup" | "rules" | "actions" | null;
 
 /** A click on a panel's control: the open one closes, any other one takes over. */
-export function nextOpenPanel(current: OpenPanel, clicked: "handover" | "stream"): OpenPanel {
+export function nextOpenPanel(current: OpenPanel, clicked: Exclude<OpenPanel, null>): OpenPanel {
   return current === clicked ? null : clicked;
 }
 

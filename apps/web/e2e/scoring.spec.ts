@@ -7,6 +7,7 @@ import {
   expandAllFolds,
   createStageAndGenerate,
   expectNoHorizontalScroll,
+  seedRosteredFixture,
   seedScoredDivision,
   TAG,
   divisionPath,
@@ -164,12 +165,12 @@ test("Start match takes the fixture live and records core.start", async ({ page,
   await expect(page.getByRole("button", { name: "Start match", exact: true })).toHaveCount(0);
 });
 
-test("match actions: closed behind its toggle on a wide screen, open on a phone, beside Remote scoring", async ({
+test("match actions: closed behind its header-bar button at every width; wide: above the pad, phone: below it", async ({
   page,
   request,
 }) => {
-  // The console's layout (feat/fixture-console-layout): Forfeit and Abandon live in a Match actions panel. From 768 px
-  // it starts closed and a button beside Remote scoring opens it; a phone has no toggle and shows the panel open.
+  // Header panel bar (owner 2026-11-11): Match actions is one button of the bar, closed at EVERY width. From 768 px the bar
+  // sits above the pad; below it the bar and its open panel sit BELOW the pad (design 2026-09-02, chrome down).
   const { fixtureId } = await seedLiveFixture(request, "Layout");
   await postEvent(request, fixtureId, "core.start");
   const forfeit = page.getByTestId("score-forfeit");
@@ -183,18 +184,87 @@ test("match actions: closed behind its toggle on a wide screen, open on a phone,
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await expect(forfeit).toBeVisible();
-  // Owner report 2026-11-05: it opens directly under the Scoring header, not at the end of the page.
+  // Owner report 2026-11-05: it opens directly under the button that opened it, above the pad on a wide screen.
   const panelBox = await page.locator('[data-role="match-actions"]').boundingBox();
   const toggleBox = await toggle.boundingBox();
   const padBox = await page.getByTestId("score-pad").boundingBox();
   expect(panelBox!.y, "below the button that opened it").toBeGreaterThan(toggleBox!.y);
-  expect(panelBox!.y, "above the pad, not at the end of the page").toBeLessThan(padBox!.y);
+  expect(panelBox!.y, "above the pad on a wide screen").toBeLessThan(padBox!.y);
   await toggle.click();
   await expect(forfeit).toBeHidden();
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(toggle).toBeHidden();
+  await expect(toggle).toBeVisible();
+  await expect(forfeit).toBeHidden();
+  await toggle.click();
   await expect(forfeit).toBeVisible();
+  const phonePad = await page.getByTestId("score-pad").boundingBox();
+  const phonePanel = await page.locator('[data-role="match-actions"]').boundingBox();
+  const phoneToggle = await toggle.boundingBox();
+  expect(phoneToggle!.y, "phone: the bar sits below the pad").toBeGreaterThan(phonePad!.y);
+  expect(phonePanel!.y, "phone: the opened panel is next to (below) its button").toBeGreaterThan(phoneToggle!.y);
+});
+
+test("Remote scoring opens without crashing the console, closes itself when idle, and a click inside restarts the clock", async ({
+  page,
+  request,
+}) => {
+  // Regression: the idle timer once called the browser's setTimeout as a method of a plain object ("Illegal invocation"),
+  // which replaced the whole console with the error boundary on a production build. Unit tests (node) cannot see that.
+  const IDLE = 4_000;
+  const { fixtureId } = await seedLiveFixture(request, "Idle");
+  await postEvent(request, fixtureId, "core.start");
+  await page.addInitScript((ms) => {
+    (window as unknown as Record<string, unknown>)["__seaznRemoteScoringIdleMs"] = ms;
+  }, IDLE);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(await fixturePath(page.request, fixtureId));
+  const button = page.locator('[data-role="device-handover"]');
+  const panel = page.locator('[data-role="console-panel"][data-panel="handover"]');
+  await expect(button).toBeVisible({ timeout: 20_000 });
+  await button.click();
+  await expect(panel).toBeVisible();
+  await expect(page.getByText("Something went wrong"), "the console did not hit its error boundary").toHaveCount(0);
+  await expect(page.locator('[data-role="console-panel-bar"]')).toBeVisible();
+  // A click inside the panel restarts the clock: still open after the ORIGINAL deadline has passed.
+  await page.waitForTimeout(IDLE * 0.6);
+  await panel.click({ position: { x: 5, y: 5 } });
+  await page.waitForTimeout(IDLE * 0.7); // 1.3 x IDLE after opening, 0.7 x since the click
+  await expect(panel, "a click inside restarted the idle clock").toBeVisible();
+  // Left alone, it closes by itself.
+  await expect(panel).toBeHidden({ timeout: IDLE + 10_000 });
+  await expect(button).toHaveAttribute("aria-expanded", "false");
+});
+
+test("Lineup is offered for tennis doubles and not for tennis singles; the other panels stay", async ({ page, request }) => {
+  // Owner 2026-11-11: when BOTH sides are one-person entrants there is no lineup to pick, so the bar drops Lineup. Read from
+  // the entrant kind (singles = individual, doubles = pair), so the same fixture shape in any future singles sport inherits it.
+  const mk = (variantKey: string, entrantKind: "individual" | "pair", label: string) =>
+    seedRosteredFixture(request, {
+      label: `${label} ${TAG}`,
+      sportKey: "tennis",
+      variantKey,
+      entrantKind,
+      home: entrantKind === "pair" ? [{ fullName: "Dee Home One" }, { fullName: "Dee Home Two" }] : [{ fullName: "Sam Home" }],
+      away: entrantKind === "pair" ? [{ fullName: "Dee Away One" }, { fullName: "Dee Away Two" }] : [{ fullName: "Sam Away" }],
+    });
+  const singles = await mk("tour", "individual", "Singles Bar");
+  const doubles = await mk("doubles-noad-mtb10", "pair", "Doubles Bar");
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const bar = (p: Page) => p.locator('[data-role="console-panel-bar"] button[aria-controls^="console-panel-"]');
+
+  await page.goto(await fixturePath(page.request, singles.fixtureId));
+  await expect(page.locator('[data-role="console-panel-bar"]')).toBeVisible({ timeout: 20_000 });
+  const singlesPanels = await bar(page).evaluateAll((els) => els.map((e) => e.getAttribute("aria-controls")!.replace("console-panel-", "")));
+  expect(singlesPanels, "singles: no Lineup, the other panels stay").not.toContain("lineup");
+  expect(singlesPanels, "singles: Remote scoring, Match rules and Match actions remain (Stream's offer is plan-gated, pinned by the panel-bar unit sweep)").toEqual(
+    expect.arrayContaining(["handover", "rules", "actions"]),
+  );
+  await expect(page.getByTestId("lineup-toggle")).toHaveCount(0);
+
+  await page.goto(await fixturePath(page.request, doubles.fixtureId));
+  await expect(page.locator('[data-role="console-panel-bar"]')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("lineup-toggle"), "doubles keep Lineup").toHaveCount(1);
 });
 
 test("forfeit records core.forfeit with the side and the reason, and ends the fixture", async ({

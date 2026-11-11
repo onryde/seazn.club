@@ -109,8 +109,10 @@ export default async function CompetitionSettingsPage({
 
   return (
     <>
-      <main className="mx-auto max-w-2xl px-4 py-8">
-        <div className="mb-6">
+      {/* The C8 card (owner 2026-11-11) is two columns from `lg`, so the page widens there to the New competition
+          form's width; below `lg` it keeps its single-column measure. */}
+      <main className="mx-auto max-w-2xl px-4 py-8 lg:max-w-6xl">
+        <div className="mb-4">
           {/* Same entry point as the competition header — settings is where an
               organiser goes when a limit is on their mind, and the pass is the
               cheapest answer to most of them. */}
@@ -140,9 +142,6 @@ export default async function CompetitionSettingsPage({
             goProLabel={t(dict, trialAvailable ? "upgrade.proCard.cta" : "upgrade.proCard.ctaNoTrial")}
             canBuy={canEdit}
           />
-          <h1 className="mt-1 text-xl font-semibold tracking-tight text-slate-900">
-            {t(dict, "comp.settings.title", { name: competition.name })}
-          </h1>
         </div>
         <CompetitionSettings
           competition={{
@@ -159,6 +158,9 @@ export default async function CompetitionSettingsPage({
             discovery: (competition.discovery ?? {}) as Record<string, string | null>,
             branding: competition.branding,
           }}
+          // The heading moved into the island: the status chip sits beside it.
+          title={t(dict, "comp.settings.title", { name: competition.name })}
+          billingHref={routes.billing(orgSlug)}
           orgId={org.id}
           canEdit={canEdit}
           discoveryBranding={discoveryBranding}

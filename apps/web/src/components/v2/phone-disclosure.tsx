@@ -27,6 +27,11 @@ export interface PhoneDisclosureProps {
    *  the prop going false does not fold what they have open (Sponsors hub, Packages: an empty price list opens its tier legend, and
    *  the first package created leaves it open). Ignored when `desktopCollapsible` is set. */
   phoneStartOpen?: boolean;
+  /** Extra classes on the root (e.g. `max-md:hidden` to park an inactive card
+   *  behind a phone-only switch — one DOM, never a second tree). */
+  className?: string;
+  /** `data-testid` on the root. */
+  testId?: string;
 }
 
 /** Phone-only disclosure by default (spec
@@ -91,6 +96,8 @@ export function PhoneDisclosure({
   startOpen = true,
   desktopCollapsible = false,
   phoneStartOpen = false,
+  className,
+  testId,
 }: PhoneDisclosureProps) {
   // Always starts closed on the server AND the hydration render — matches
   // spec 2026-09-02-scorepad-v3-phone-composition §3.10's phone-narrow
@@ -143,7 +150,12 @@ export function PhoneDisclosure({
   // page).
   const bodyId = useId();
   return (
-    <div data-role="phone-disclosure" data-open={open} className="flex flex-col min-w-0">
+    <div
+      data-role="phone-disclosure"
+      data-open={open}
+      data-testid={testId}
+      className={`flex flex-col min-w-0${className ? ` ${className}` : ""}`}
+    >
       <button
         type="button"
         data-role="phone-disclosure-toggle"
@@ -160,7 +172,7 @@ export function PhoneDisclosure({
         </span>
       </button>
       <div
-        className={open ? "grid flex-1" : desktopCollapsible ? "grid flex-1 hidden" : "grid flex-1 max-md:hidden"}
+        className={`grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)]${open ? "" : desktopCollapsible ? " hidden" : " max-md:hidden"}`}
         id={bodyId}
       >
         {children}

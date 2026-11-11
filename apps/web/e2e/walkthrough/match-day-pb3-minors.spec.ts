@@ -177,12 +177,12 @@ for (const width of [1280, 768, 320] as const) {
         labelKey: "settings.org.about",
         editor: EDITOR,
         saveTyped: async (p) => {
-          await p.getByRole("button", { name: uiEn["settings.org.about.save"]!, exact: true }).click();
+          await p.getByRole("button", { name: uiEn["settings.org.saveChanges"]!, exact: true }).click();
           await expect.poll(orgValue("about"), { timeout: NAV_MS }).not.toBeNull();
           return orgValue("about")();
         },
         saveEmpty: async (p) => {
-          await p.getByRole("button", { name: uiEn["settings.org.about.save"]!, exact: true }).click();
+          await p.getByRole("button", { name: uiEn["settings.org.saveChanges"]!, exact: true }).click();
           await expect.poll(async () => (await orgValue("about")()) ?? "", { timeout: NAV_MS }).toBe("");
           return orgValue("about")();
         },

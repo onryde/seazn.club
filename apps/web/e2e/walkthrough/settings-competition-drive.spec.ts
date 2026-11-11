@@ -164,14 +164,20 @@ function field(page: Page, label: string) {
   return page.locator("label").filter({ hasText: anchored }).locator("input");
 }
 
-/** The visibility radio cards (`visibility-picker.tsx`) — the accessible name
- *  is the whole card, label plus consequence sentence, so this is a substring
- *  match on the label half. */
+/** The visibility segments (`visibility-segmented.tsx`, settings C8 2026-11-11): each segment's radio is visually
+ *  hidden inside its <label>, and its accessible name is the label alone. Read state off the radio… */
 function visibilityRadio(page: Page, key: "private" | "unlisted" | "public") {
-  return page.getByRole("radio", { name: L.visibility[key] });
+  return page.getByRole("radio", { name: L.visibility[key], exact: true });
 }
 
-const showcase = (page: Page) => page.getByRole("checkbox", { name: L.showcase });
+/** …and pick by tapping the segment, as a person does: the radio itself is `sr-only`, so a click aimed at it lands on
+ *  the label that covers it (Playwright would report the label intercepting the pointer). */
+async function pickVisibility(page: Page, key: "private" | "unlisted" | "public") {
+  await page.locator("label").filter({ has: visibilityRadio(page, key) }).click();
+}
+
+/** The Showcase opt-in (`showcase-optin.tsx`): a checkbox with `role="switch"` since settings C8. */
+const showcase = (page: Page) => page.getByRole("switch", { name: L.showcase });
 
 /**
  * Submit the one form this page has, and hand back the request body it sent.
@@ -266,24 +272,24 @@ test("general fields persist across the reload, and the rename that regenerates 
     // than in the youth test because only this test has the fixture for it:
     // a competition that is `private` with NO divisions at all.
     //
-    // `visibility-picker.tsx:51` gates on `hasYouthDivisions && value ===
-    // "private" && next !== "private"`. The youth test kills the whole block,
+    // `pickVisibility()` in competition-settings.tsx gates on `hasYouthDivisions
+    // && form.visibility === "private" && next !== "private"`. The youth test kills the whole block,
     // but nothing kills the FIRST conjunct on its own: drop it and every
     // organiser leaving Private is asked to confirm guardian consent they were
     // never asked for. That mutant is invisible to the youth test (it seeds a
     // youth division), invisible to case #10 (it starts public, so the second
     // conjunct is already false), and there is no other coverage of this
-    // component anywhere in the tree. (The New competition form no longer
-    // mounts it: since Match Day C8 it uses `visibility-segmented.tsx`, so this
-    // settings page is the picker's only mount.)
+    // component anywhere in the tree. (The New competition form has no youth
+    // guard at all — a competition being created has no divisions — so this
+    // settings page is the guard's only home.)
     //
     // Order matters. `toBeChecked()` FIRST: an interstitial holds the radio at
-    // its old value (`pick()` returns before `onChange`), so a public radio
+    // its old value (the guard returns before the form moves), so a public radio
     // that ends up checked is positive proof the transition was not gated.
     // `toHaveCount(0)` alone would be a silence test, satisfied by a click the
     // page never processed — and satisfied instantly, before a dialog that was
     // going to open had opened.
-    await visibilityRadio(page, "public").click();
+    await pickVisibility(page, "public");
     // Proof that REACT processed the click, before either assertion below is
     // read. Both of those are satisfiable pre-hydration: the browser checks a
     // native radio itself, and `toHaveCount(0)` is trivially true while no
@@ -291,8 +297,8 @@ test("general fields persist across the reload, and the rename that regenerates 
     // witnessing nothing, and the `hasYouthDivisions &&` mutant this negative
     // control exists to kill would survive.
     //
-    // The showcase opt-in is `disabled={readOnly || form.visibility !==
-    // "public"}` (competition-settings.tsx:355) — CLIENT form state. The
+    // The showcase opt-in is disabled unless the FORM's visibility is public
+    // (`ShowcaseOptIn`'s `live`) — CLIENT form state. The
     // competition is private on the server, so SSR renders it disabled; only a
     // hydrated React state change can enable it. Same assertion, same purpose,
     // as the confirm-path case below.
@@ -417,10 +423,10 @@ test("case #10: the showcase opt-in clears when visibility leaves public — in 
     await saveSettings(page, comp.id);
     expect((await readComp(request, comp.id)).discoverable, "opt-in must reach the row").toBe(true);
 
-    // Drop to "link only" through the picker — a real click on the radio
-    // cards, not an API-only flip: design §7 frames this case as a UI question
+    // Drop to "link only" through the segmented control — a real tap on the
+    // segment, not an API-only flip: design §7 frames this case as a UI question
     // ("does the UI show a stale true?").
-    await visibilityRadio(page, "unlisted").click();
+    await pickVisibility(page, "unlisted");
     const dropBody = await saveSettings(page, comp.id);
 
     await page.reload();
@@ -495,7 +501,7 @@ test("the youth interstitial gates leaving Private: declining changes nothing, c
     // (competition-settings.tsx:355) — the state the confirm below leaves.
     await expect(showcase(page)).toBeDisabled();
 
-    await visibilityRadio(page, "public").click();
+    await pickVisibility(page, "public");
     const dialog = page.getByRole("alertdialog");
     await expect(dialog, "leaving Private with a youth division must interstitial").toBeVisible();
     // `role="alertdialog"`, not `dialog` (confirm-provider.tsx:153) — a
@@ -504,8 +510,8 @@ test("the youth interstitial gates leaving Private: declining changes nothing, c
 
     await dialog.getByRole("button", { name: L.cancel, exact: true }).click();
     await expect(dialog).toBeHidden();
-    // A decline is a true no-op: `pick()` returns before `onChange` fires, so
-    // not even the local form state moved.
+    // A decline is a true no-op: the guard returns before the form moves, so
+    // not even the local form state changed.
     await expect(visibilityRadio(page, "private")).toBeChecked();
     await expect(visibilityRadio(page, "public")).not.toBeChecked();
     await expect(showcase(page)).toBeDisabled();
@@ -513,7 +519,7 @@ test("the youth interstitial gates leaving Private: declining changes nothing, c
       "private",
     );
 
-    await visibilityRadio(page, "public").click();
+    await pickVisibility(page, "public");
     await page
       .getByRole("alertdialog")
       .getByRole("button", { name: L.youthConfirm, exact: true })
@@ -538,11 +544,11 @@ test("branding tab: the competition accent colour persists and comes back select
   const comp = await seedCompetition(request, org.orgId, { visibility: "private" });
   try {
     await page.goto(routes.competitionSettings(org.slug, comp.slug));
-    // The tab is rendered only when the org holds `dashboard.theme`
-    // (competition-settings.tsx:201, page.tsx:53 — `dashboard.theme` since
-    // V397, NOT `dashboard.branding`), which Pro has by default
-    // (V397__dashboard_theme_key.sql:44). Its presence is that entitlement's
-    // positive case; Task 2 owns the negative one.
+    // The palette is drawn only when the org holds `dashboard.theme`
+    // (page.tsx — `dashboard.theme` since V397, NOT `dashboard.branding`),
+    // which Pro has by default (V397__dashboard_theme_key.sql:44). The TAB is
+    // always there since settings C8; the palette's presence is that
+    // entitlement's positive case, and Task 2 owns the negative one.
     await page.getByRole("tab", { name: L.brandingTab, exact: true }).click();
 
     const chip = page.getByRole("button", { name: SWATCH_LABEL, exact: true });
