@@ -524,11 +524,13 @@ describe("END TO END: a tile tapped on a clocked pad reaches the fold WITH its `
   });
 
   it("the REAL swap slot's own `at` survives the chassis — the producer the deleted decision was written for", () => {
-    // Gap 2, driven end to end rather than argued. `buildSwap` stamps from
-    // `state.asOf` through football's `stampOf`, which is a DIFFERENT source
-    // from the pad clock and deliberately so. Here the fold says 761 and the
-    // live clock says 1200; the payload that reaches the engine must say 761,
-    // because football chose it.
+    // Gap 2, driven end to end rather than argued. Football owns a
+    // substitution's stamp (ruling 154, superseding R3-2's stamp from
+    // `state.asOf`): the stoppage of the sub before it, or the live reading
+    // floored at the fold's asOf. Here the last stamped event is a GOAL at
+    // 761, so the sub joins nothing and takes the live 1200, and the chassis
+    // must then leave the skin's `at` alone (by reference), whatever its own
+    // clock reads at the tap.
     const stampedState = foldFootball(cfg, [
       ["core.start"],
       ["football.goal", { by: "H", at: { period: "H1", elapsed: 761 } }],
@@ -547,12 +549,13 @@ describe("END TO END: a tile tapped on a clocked pad reaches the fold WITH its `
       stageKind: null,
       canOrganise: true,
       entrantNames: {},
+      clockAt: { period: "H1", elapsed: 1200 },
     });
     const built = slots[0]!.buildEvent("p-off", "p-on");
-    expect(built.payload).toMatchObject({ at: { period: "H1", elapsed: 761 } });
+    expect(built.payload).toMatchObject({ at: { period: "H1", elapsed: 1200 } });
 
     const live = startClock(reseatClock(null, { period: "H1" })!, T0);
-    const out = stampFor(footballModule!, built.type, built.payload, live, T0 + 1_200_000);
+    const out = stampFor(footballModule!, built.type, built.payload, live, T0 + 1_201_000);
     expect(out).toBe(built.payload); // by reference — the chassis did not touch it
     expect(footballSchemas[built.type]!.safeParse(out).success).toBe(true);
   });

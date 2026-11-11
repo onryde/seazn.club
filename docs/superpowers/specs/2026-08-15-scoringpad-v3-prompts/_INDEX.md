@@ -830,7 +830,7 @@ the review that opened the wave.
 | # | Decision | Ruling |
 |---|---|---|
 | R3-1 | How far does the card flow go? | **Three colours inline + reason at band ≥2.** `[Yellow] [Red] [2nd Yellow]` on the tile, person via the dock, and a guided-sheet `Offence?` step that appears ONLY at band ≥2. Rejected the brief's yellow/red, which would leave `second_yellow` and all 13 `CardReason` values unreachable |
-| R3-2 | One sub per sheet, or a batched window? | **One pair per SwapSheet, `at` STAMPED from the view clock.** Three subs at one stoppage share a stamp and the engine folds them into one window itself. Rejected batching (needs a new chassis primitive all of R4-R7 inherit) and rejected omitting `at` (the `subWindows` cap would silently never fire) |
+| R3-2 | One sub per sheet, or a batched window? | **Stamp source SUPERSEDED 2026-11-11 by the controller's ruling 154 (owner approval 2026-11-11; see "ruling 154" below). One pair per SwapSheet stands.** Was: **One pair per SwapSheet, `at` STAMPED from the view clock.** Three subs at one stoppage share a stamp and the engine folds them into one window itself. Rejected batching (needs a new chassis primitive all of R4-R7 inherit) and rejected omitting `at` (the `subWindows` cap would silently never fire) |
 | R3-3 | Football's band-2/band-3 entitlement collapse | **Band 3 reuses `scoring.ball_by_ball`.** See the finding below — a NEW key would not have created an upsell |
 | R3-4 | Where do the five non-tile event types live? | **The generic More sheet**, cricket's precedent. Tiles: Goal / Card / Sub / Period per side, Pen minor. `football.shot`, `football.sinbin.start`, `football.sinbin.end`, `football.shootout.kick` ride More |
 
@@ -1212,6 +1212,24 @@ verbatim ("football's own `fidelityTiers` already carries
 false. The code is still CORRECT — hockey and icehockey genuinely do share one
 key — only the justification is stale. Not fixed here: R3's engine exception is
 scoped to football alone. **R6 (period pair) or R8 owns the comment.**
+
+### R3-2 superseded — ruling 154, a substitution's stamp (2026-11-11)
+
+The stamp source below (the fold's `asOf`) is SUPERSEDED. The phone's replay of the 2022 World Cup final (F-R3) showed that
+`asOf`, the time of the last thing anybody RECORDED, gives wrong minutes (a 64' substitution read 55') and window counts that
+are wrong in both directions. The controller's ruling 154 (seazn.club.capture, S2-5; adopted for the web with engine 7.0.0,
+owner approval 2026-11-11 as relayed in the controller's brief) replaces it, in `v3/skins/football-subs.ts` (`subStampOf`, mirroring the phone's
+`src/domain/scoring/footballClock.ts`):
+
+- a sub JOINS the stoppage when the newest standing stamped event in the current period is itself a substitution (either
+  team; `football.sub`, `core.lineup.substitution` or `core.lineup.replacement`) and the live pad-clock reading is at most
+  `SUB_STOPPAGE_SECONDS` (120) past that event's stamp; it then takes that exact stamp, so the engine counts one window;
+- otherwise it takes the live reading (`PadHostView.clockAt`), floored at `asOf` in the same period, as the host stamps a
+  goal or a card;
+- with no reading, or a reading of another period (a break, a clock nobody started), it stays unstamped (`at: undefined`,
+  the key still present so the host does not fill it).
+
+The staleness guard below survives as the FLOOR's guard (`currentAsOf`). Tests: `v3/skins/__tests__/football-et-subs.test.ts`.
 
 ### R3 — where the `at` stamp comes from (found during scoping, 2026-08-24)
 

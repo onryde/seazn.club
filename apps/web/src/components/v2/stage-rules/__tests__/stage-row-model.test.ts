@@ -246,7 +246,8 @@ describe("which knockout setups leave a level match behind a decider - the RULEB
 describe("a detail of a decider is held while its decider is off - the pairing is the engine's `detailOf` (M-4)", () => {
   // The rulebook's pairs (the same table the engine's sweep pins): field key -> the decider it only means something under.
   const PAIRS: Record<string, Record<string, string>> = {
-    football: { shootoutAttempts: "shootout" },
+    // Engine 7.0.0: the extra pair of Law 3 means something only in extra time; both boxes edit the one key.
+    football: { shootoutAttempts: "shootout", extraTimeSubs: "extraTime", extraTimeWindows: "extraTime" },
     hockey: { shootoutAttempts: "shootout" },
     icehockey: { overtimeMinutes: "overtime", shootoutAttempts: "shootout" },
     // W2e Task 28 (ruling 157, Task 7): what a tied super over does only means something while the super over is on. Fix round 1
@@ -629,7 +630,8 @@ describe("the stage sections: every shown field is in exactly one section (count
     const sections = stageSections(football, "knockout", null);
     const tops = (id: string) => (sections.find((s) => s.id === id)?.fields ?? []).flatMap((f) => f.edits.map((e) => e.split(".")[0]!));
     expect(sections.map((s) => s.id), "the order the row shows them in").toEqual(["format", "deciders", "abandon"]);
-    expect(tops("deciders").sort()).toEqual(["extraTime", "shootout", "shootoutAttempts"]);
+    // Engine 7.0.0: the extra pair sits beside extra time; both of its boxes edit `extraTimeSubs`.
+    expect(tops("deciders").sort()).toEqual(["extraTime", "extraTimeSubs", "extraTimeSubs", "shootout", "shootoutAttempts"]);
     expect(tops("abandon")).toEqual(["abandonPolicy"]);
     expect(tops("format")).toContain("halfMinutes");
     expect(tops("format")).not.toContain("shootoutAttempts");

@@ -189,6 +189,24 @@ export function clearedSequenceKeys(sportKey: string, values: Record<string, str
  * field showed blank on reopen no matter what was saved — most visibly
  * Task I's shoot-out points pair, retired in W2d).
  */
+/** Controller ruling 161's field message for a pair with one box filled and one blank. */
+export const RULE_PAIR_INCOMPLETE: MessageKey = "rules.pair.incomplete";
+
+/**
+ * Controller ruling 161: the paired fields (`RuleField.pairedWith`) with exactly one of the pair filled, each mapped to the
+ * message the control draws beside itself. Both boxes of an incomplete pair are named, so the organiser sees the refusal at
+ * the box they left blank as well as at the one they typed in. Empty when every pair is whole or blank.
+ */
+export function rulePairProblems(sportKey: string, values: Record<string, string>): ReadonlyMap<string, MessageKey> {
+  const filled = (key: string): boolean => (values[key] ?? "") !== "";
+  const out = new Map<string, MessageKey>();
+  for (const field of rulesFor(sportKey)) {
+    if (field.pairedWith === undefined) continue;
+    if (filled(field.key) !== filled(field.pairedWith)) out.set(field.key, RULE_PAIR_INCOMPLETE);
+  }
+  return out;
+}
+
 export function hydrateRuleValues(
   sportKey: string,
   config: unknown,

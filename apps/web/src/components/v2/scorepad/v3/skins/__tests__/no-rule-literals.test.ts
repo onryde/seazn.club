@@ -151,9 +151,9 @@ const NAMES_CHECKED_AT_CLOSE = 49;
 const DISTINCT_BANNED_NAMES = 31;
 
 /** Skin source files (`*.ts`/`*.tsx`, `__tests__` excluded) at 17948f93a8, plus `football-match-time.ts` (S2-5
- *  ruling 108) and `football-match-time-cfg.ts` (its engine half, split out by the S2-5 final review's I1). Re-pin
- *  when a skin file is added. */
-const PINNED_SKIN_FILES = 15;
+ *  ruling 108), `football-match-time-cfg.ts` (its engine half, split out by the S2-5 final review's I1) and
+ *  `football-subs.ts` (engine 7.0.0's extra-time caps and ruling 154's sub stamp). Re-pin when a skin file is added. */
+const PINNED_SKIN_FILES = 16;
 
 const PLAIN_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 

@@ -228,7 +228,8 @@ describe("FB-PH-2: the period sheet: options are the cfg's markers, blocked is e
 
 describe("FB-SU-2: the substitution window cap the sub slot refuses on is the one the fold enforces", () => {
   // Rolling subs, so the same two players swap back and forth. After `used` stamped windows a clock publish moves `asOf` to a LATER
-  // stamp, which is the stamp the skin would send: a new window, so the cap decides.
+  // stamp, and the live clock reads it: the stamp the skin would send (ruling 154: no sub is the newest stamped event, so it joins
+  // no stoppage), a new window, so the cap decides.
   function afterWindows(cfg: FootballCfg, used: number): FootballState {
     let state = live(cfg);
     for (let k = 1; k <= used; k++) {
@@ -247,9 +248,10 @@ describe("FB-SU-2: the substitution window cap the sub slot refuses on is the on
     let allowedSeen = 0;
     for (const { cap, used } of cases) {
       const cfg = footballCfg({ rollingSubs: true, ...(cap === undefined ? {} : { subWindows: cap }) });
-      expect(rules.subWindowsCap(cfg)).toBe(cap);
+      // H1: before extra time the cap in force is the declared one (engine 7.0.0 asks for the phase).
+      expect(rules.subWindowsCap(cfg, "H1")).toBe(cap);
       const state = afterWindows(cfg, used);
-      const slot = buildSwap(viewFor(cfg, state), t)[0]!;
+      const slot = buildSwap(viewFor(cfg, state, { clockAt: { period: "H1", elapsed: 3000 } }), t)[0]!;
       const off = state.squads.home.onPitch.at(-1)!;
       const on = state.squads.home.bench.at(-1)!;
       const event = slot.buildEvent(off, on);
@@ -257,7 +259,7 @@ describe("FB-SU-2: the substitution window cap the sub slot refuses on is the on
       expect(slot.policyOk, `cap ${cap}, ${used} windows used: the slot must agree with the fold (fold ${accepted ? "accepts" : "refuses"})`).toBe(accepted);
       if (!accepted) {
         expect(slot.policyMessage).toContain("pad.football.context.sub.blocked.subWindows");
-        expect(slot.policyMessage).toContain(`"windows":${rules.subWindowsCap(cfg)}`);
+        expect(slot.policyMessage).toContain(`"windows":${rules.subWindowsCap(cfg, state.phase)}`);
         refusedSeen++;
       } else allowedSeen++;
       count(2);

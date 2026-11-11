@@ -36,7 +36,9 @@
 //
 // STILL MIRRORED, and pinned against the fold where they are driven:
 // second-yellow eligibility (`cardCandidates`, football.ts `applyCard`), the
-// `maxSubs` arithmetic (`subPolicy`, football's `lineupPolicy`). The "decided"
+// count of ordinary substitutions (`subPolicy`, football's `liftSide`). The two
+// caps themselves are the engine's, in force in the current phase (engine
+// 7.0.0's extra-time allowance, `subCapsOf` in ./football-subs.ts). The "decided"
 // phases are `POST_PHASES` (`@seazn/engine/pad`, pad wave P4.2), the one set
 // every sport's fold and skin read.
 //
@@ -69,6 +71,7 @@ import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import type { SportTone } from "../sport-theme";
 import type { PadClockSpec } from "../clock";
 import { matchClock } from "./football-match-time";
+import { subCapsOf, subStampOf } from "./football-subs";
 import { matchTimeCfgOf } from "./football-match-time-cfg";
 import { retirementSlotsOf, retirementTilesOf } from "../retirement-slot";
 import {
@@ -247,7 +250,7 @@ const SIDES: readonly Side[] = ["home", "away"];
  *
  * The guard mirrors football's own (unexported) `footballPosition`: a stamp
  * left over from a phase the match has since left must never read as "now".
- * `buildSwap` depends on this same decision for the `at` it stamps.
+ * `currentAsOf` below makes the same decision for the floor of a substitution's stamp.
  *
  * With `clock()` on the skin, Pause/Start/Correct publish `football.clock`
  * and seed `asOf`; the strip still prefers the fold's reading when present.
@@ -290,19 +293,17 @@ export function buildFootballClock(view: PadHostView): PadClockSpec | null {
 }
 
 /**
- * The stamp a NEW event may carry, or `undefined`.
+ * The fold's `asOf` when it names the CURRENT phase, or `undefined`: the floor a substitution's own reading is raised to
+ * (`subStampOf`, ./football-subs.ts), as the host floors a goal or a card (S2-5 ruling 107).
  *
- * R3-2 rules a substitution is stamped, and `_INDEX.md`'s own "where the `at`
- * stamp comes from" note fixes the source as the fold's `asOf` — the same
- * `GameTime` `readClock` reads — WITH the staleness guard: if `asOf` is
- * missing, or names a phase the match has left, OMIT `at` rather than stamp a
- * wrong one. `at` is `.optional()` on every football payload, so omitting is
- * legal; the cost is that the substitution consumes no window, which is the
- * honest failure. A WRONG stamp silently mis-attributes a stoppage — and,
- * through `applySub`'s window arithmetic, could refuse a legal substitution or
- * admit an illegal one. Do not "fix" this later by stamping unconditionally.
+ * The staleness guard is R3-2's and stays: an `asOf` left over from a phase the match has since left is no floor. What R3-2
+ * no longer decides is the stamp itself. It stamped a substitution with this `asOf`, the time of the last thing anybody
+ * RECORDED, and the phone's replay of the 2022 World Cup final showed what that costs: a 64' substitution read 55', and the
+ * window counts went wrong in both directions. The controller's
+ * ruling 154 replaces it (owner approval 2026-11-11): a sub joins the stoppage of the substitution before it for 120 s,
+ * else takes the live clock's reading, else is unstamped. `buildSwap` reads it from `subStampOf`.
  */
-function stampOf(state: FootballStateShape): GameTimeShape | undefined {
+function currentAsOf(state: FootballStateShape): GameTimeShape | undefined {
   const asOf = state.asOf;
   if (!asOf || asOf.period !== readPhase(state)) return undefined;
   if (typeof asOf.elapsed !== "number" || !Number.isFinite(asOf.elapsed) || asOf.elapsed < 0) return undefined;
@@ -1107,8 +1108,11 @@ export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedShe
  * `pad.<sport>.context.<thing>.blocked.<reason>`, and `_INDEX.md` routes this
  * copy to the skin task explicitly.
  *
+ * Both caps are the ones in force in the current phase (engine 7.0.0: extra
+ * time may raise them, `subCapsOf`).
+ *
  * The window cap is evaluated against the stamp this skin would actually
- * SEND (`stampOf`, with its staleness guard) — not against "some stamp":
+ * SEND (`stamp`, ruling 154's `subStampOf`) — not against "some stamp":
  * an unstamped substitution joins no window and consumes none, so refusing it
  * on a window cap would refuse a substitution the fold accepts. Equally, a
  * stamp EQUAL to a window the side has already opened joins that window rather
@@ -1119,6 +1123,7 @@ function subPolicy(
   state: FootballStateShape,
   cfg: FootballCfgShape,
   side: Side,
+  stamp: GameTimeShape | undefined,
   t: TFn,
 ): { ok: boolean; message?: string } {
   const squad = squadOf(state, side);
@@ -1145,15 +1150,17 @@ function subPolicy(
   // engine exception is spent.
   const exemptUsed = Object.values(squad.exemptUsed).reduce((total, n) => total + n, 0);
   const ordinarySubs = Math.max(0, squad.offUsed.length - exemptUsed);
-  if (!rolling && cfg.maxSubs !== undefined && ordinarySubs >= cfg.maxSubs) {
+  // Engine 7.0.0 (F-R3): both caps are the ones in force in THIS phase, raised by `extraTimeSubs` once extra time is reached,
+  // and read from the engine (`subCapsOf`, ./football-subs.ts), never off the cfg.
+  const caps = subCapsOf(cfg, readPhase(state));
+  if (!rolling && caps.maxSubs !== undefined && ordinarySubs >= caps.maxSubs) {
     return {
       ok: false,
-      message: t("pad.football.context.sub.blocked.maxSubs", { used: ordinarySubs, max: cfg.maxSubs }),
+      message: t("pad.football.context.sub.blocked.maxSubs", { used: ordinarySubs, max: caps.maxSubs }),
     };
   }
 
-  const stamp = stampOf(state);
-  const windowCap = footballPadRules.subWindowsCap(cfg);
+  const windowCap = caps.subWindows;
   if (stamp !== undefined && windowCap !== undefined) {
     const known = squad.subWindows.some((w) => w.period === stamp.period && w.elapsed === stamp.elapsed);
     if (!known && squad.subWindows.length >= windowCap) {
@@ -1286,11 +1293,12 @@ export function buildSwap(view: PadHostView, t: TFn): SwapSlot[] {
   // legal-but-refused, which is a returned slot with `policyOk: false`).
   if (!inPlay(readPhase(state))) return [];
 
+  // Ruling 154: one stamp for both sides, the one `buildEvent` sends and `subPolicy` judges the window cap by.
+  const stamp = subStampOf(view.events, readPhase(state), view.clockAt, currentAsOf(state));
   return SIDES.map((side) => {
     const by = entrantOf(state, side);
-    const policy = subPolicy(state, cfg, side, t);
+    const policy = subPolicy(state, cfg, side, stamp, t);
     const { candidates, blocked } = onCandidates(state, cfg, side, t);
-    const stamp = stampOf(state);
     return {
       id: swapSlotId(side),
       candidateMeta: footballCandidateMeta(view.squads, side, t),
@@ -1308,8 +1316,9 @@ export function buildSwap(view: PadHostView, t: TFn): SwapSlot[] {
       candidates,
       blocked,
       buildEvent: (off, on) => ({
-        // THE `at` KEY IS ALWAYS PRESENT, and that presence is the whole of the
-        // guard `stampOf` above documents (R6 fix pass 2, gap 6).
+        // THE `at` KEY IS ALWAYS PRESENT (R6 fix pass 2, gap 6): the skin owns a
+        // substitution's stamp (ruling 154, `subStampOf`), and with no reading it
+        // decides to leave it empty.
         //
         // `stampPayload` (../clock.ts) hands a skin-supplied `at` back BY
         // REFERENCE whatever its value, `undefined` included — "the skin owns
@@ -1317,7 +1326,7 @@ export function buildSwap(view: PadHostView, t: TFn): SwapSlot[] {
         // deliberate-omission channel and a SPREAD of `{}` is not. Spreading
         // left no key at all, which reads as "expressed no opinion", so the
         // host's live clock filled the blank this skin had decided to leave
-        // empty. That is exactly the "fix" `stampOf`'s own comment forbids:
+        // empty. A substitution with no reading must stay unstamped:
         // `applySub`'s window arithmetic reads this `at`, and a wrong one can
         // refuse a legal substitution or admit an illegal one.
         //

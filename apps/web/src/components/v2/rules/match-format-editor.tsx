@@ -19,7 +19,7 @@
 // control is the same `RuleFieldControl`, so the scopes cannot drift. One DOM at every width: the grids stack on a phone.
 import { useId, useMemo } from "react";
 import { useMsg } from "@/components/i18n/dict-provider";
-import { buildRuleOverride, fieldOptionText, setRuleValue, visibleRuleFields, type RuleField } from "@/lib/match-rules";
+import { buildRuleOverride, fieldOptionText, rulePairProblems, setRuleValue, visibleRuleFields, type RuleField } from "@/lib/match-rules";
 import { divisionOnlyStageKeys } from "@/lib/online-time-control";
 import type { StageKind } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
@@ -108,6 +108,9 @@ export function StageRuleFields({
   // W2e T33a: what a write door would refuse the cfg this stage would play with, beside the fields it is about (a best of 1 with a
   // match tie-break; a set target under the floor), not only after Save. The save's own refusal is unchanged.
   const problems = useMemo(() => (resolved === null ? null : ruleProblemsOf(sportKey, resolved).invalid), [sportKey, resolved]);
+  // Controller ruling 161: a pair with one box filled and one blank, said beside both boxes. The half it builds is refused by the
+  // schema (so `resolved` is null and the door's sentences are silent), which is why this is read from the values, not the cfg.
+  const pairs = useMemo(() => rulePairProblems(sportKey, values), [sportKey, values]);
 
   const edit = (key: string, raw: string) => onChange(setRuleValue(sportKey, values, key, raw, divisionConfig));
 
@@ -150,11 +153,7 @@ export function StageRuleFields({
                       sequenceInherits={divisionConfig}
                       optionStates={s.id === "abandon" ? optionStates : undefined}
                       describedBy={s.id === "abandon" && reasons.length > 0 ? reasonId : undefined}
-                      problem={
-                        problems?.get(field.key) === undefined
-                          ? undefined
-                          : { text: problems.get(field.key)!.map((message) => configIssueText({ path: [], message }, msg)).join(" "), idScope: reasonId }
-                      }
+                      problem={fieldProblem(pairs.get(field.key), problems?.get(field.key), msg, reasonId)}
                     />
                     <span className={`mt-1 block text-[11px] ${set ? "text-teal-800" : "text-slate-600"}`}>
                       {msg(set ? "stageRules.source.stage" : "stageRules.source.division")}
@@ -181,6 +180,17 @@ export function StageRuleFields({
         ))}
     </div>
   );
+}
+
+/** What a control draws beside itself: ruling 161's pair message first, then the write door's sentences, localized. */
+function fieldProblem(
+  pair: MessageKey | undefined,
+  sentences: readonly string[] | undefined,
+  msg: ReturnType<typeof useMsg>,
+  idScope: string,
+): { text: string; idScope: string } | undefined {
+  const texts = [...(pair === undefined ? [] : [msg(pair)]), ...(sentences ?? []).map((message) => configIssueText({ path: [], message }, msg))];
+  return texts.length === 0 ? undefined : { text: texts.join(" "), idScope };
 }
 
 /** The fields the division's grid draws: the sport's visible rule fields, less those another control stands in for (`omit`)
@@ -232,6 +242,7 @@ export function MatchRuleFields({
   const fields = divisionGridFields(sportKey, values, inherited, omit, state);
   if (fields.length === 0) return null;
   const edit = (key: string, raw: string) => onChange(setRuleValue(sportKey, values, key, raw, inherited));
+  const pairs = rulePairProblems(sportKey, values);
   return (
     // Every box and picker holds the 44px tap floor (fix round 1, M7).
     <div className="grid gap-4 sm:grid-cols-3 [&_input]:min-h-11 [&_select]:min-h-11">
@@ -239,6 +250,7 @@ export function MatchRuleFields({
         const lock = lockLineFor(field.key, lockedFields, field.edits);
         const heldBy = state?.held.get(field.key);
         const problems = state?.invalid.get(field.key);
+        const pair = pairs.get(field.key);
         return (
           // An ordered list needs the row's width; a number or a picker sits in a column.
           <div
@@ -255,7 +267,7 @@ export function MatchRuleFields({
               onEdit={(raw) => edit(field.key, raw)}
               disabled={disabled || lock !== undefined || heldBy !== undefined}
               inherited={inherited}
-              problem={problems === undefined ? undefined : { text: problems.map((message) => configIssueText({ path: [], message }, msg)).join(" "), idScope: "division" }}
+              problem={fieldProblem(pair, problems, msg, "division")}
             />
             {heldBy !== undefined && (
               <p className="mt-1 text-[11px] leading-snug text-slate-700" data-testid={`rule-field-off-${field.key}`}>

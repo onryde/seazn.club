@@ -284,15 +284,16 @@ describe("tools/matrix import boundary", () => {
   // language - `ruleOptionFor` / `ruleOptionText` / `borrowOption` (the option itself, and its text), `optionText` / `fieldOptionText`
   // (an option's or a field's option text through `msg`), and `SINGLE_SET_POINTS_LABEL_KEY` (the best-of-1 relabel's key).
   const MATCH_RULES_API = [
-    "SINGLE_SET_POINTS_LABEL", "SINGLE_SET_POINTS_LABEL_KEY", "SPORT_RULES", "alignBestOfOnePoints", "borrowOption", "borrowOptionLabel",
+    "RULE_PAIR_INCOMPLETE", "SINGLE_SET_POINTS_LABEL", "SINGLE_SET_POINTS_LABEL_KEY", "SPORT_RULES", "alignBestOfOnePoints", "borrowOption", "borrowOptionLabel",
     "buildRuleOverride", "clearedSequenceKeys", "configKeysFor", "fieldOptionText", "hydrateRuleValues", "keysEmittedBy", "optionText", "ruleContextFor",
-    "ruleOptionFor", "ruleOptionLabel", "ruleOptionText", "rulesFor", "setRuleValue",
+    "ruleOptionFor", "ruleOptionLabel", "ruleOptionText", "rulePairProblems", "rulesFor", "setRuleValue",
     "showsOnePointsField", "visibleRuleFields",
   ];
   // `rulesFor` joined the public surface in the W2c batch-6 fix round (T20-2): the settings form reads a sport's fields
   // through it instead of `SPORT_RULES[key] ?? []`, whose prototype-key answer is a function that cannot be iterated.
   // `ruleContextFor` joined in W2e Task 8c (owner D19): the division builder hands a variant's preset to the fields that scale
-  // a value by it (cricket's overs, in the preset's over length).
+  // a value by it (cricket's overs, in the preset's over length). `rulePairProblems` and `RULE_PAIR_INCOMPLETE` joined with
+  // engine 7.0.0 (controller ruling 161): the stage form names a paired field left half-filled (football's extra-time subs).
   it("the match-rules directory is a tree plain node can load: every relative import names its .ts, and node loads the whole public API", () => {
     const dir = join(REPO, MATCH_RULES_DIR);
     const files = readdirSync(dir).filter((f) => f.endsWith(".ts")).sort();

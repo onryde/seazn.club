@@ -74,7 +74,8 @@ export function levelsOf(field: RuleField): Level[] {
   }
 }
 
-export interface Factor { readonly name: string; readonly levels: readonly Level[] }
+/** `pairedWith`: the field factor this one is a both-or-neither PAIR with (RuleField.pairedWith, controller ruling 161). */
+export interface Factor { readonly name: string; readonly levels: readonly Level[]; readonly pairedWith?: string }
 
 export function factorsFor(sport: string): Factor[] {
   return [
@@ -89,7 +90,7 @@ export function factorsFor(sport: string): Factor[] {
     // The fields with boundary classes. A sequence field (an ordered list: chess's tie-break rungs) IS shown by the editor
     // since W2c Task 17 built its control, but it is neither a bound nor an option set, so it has no boundary classes and
     // is no variant factor; its states (default order, empty, reordered) are covered by the sequence field's own tests.
-    ...(SPORT_RULES[sport] ?? []).filter((f) => f.kind !== "sequence").map((f) => ({ name: f.key, levels: levelsOf(f) })),
+    ...(SPORT_RULES[sport] ?? []).filter((f) => f.kind !== "sequence").map((f) => ({ name: f.key, levels: levelsOf(f), ...(f.pairedWith === undefined ? {} : { pairedWith: f.pairedWith }) })),
   ];
 }
 
@@ -135,6 +136,9 @@ export interface SportVariants {
   readonly uncoverable: Uncoverable[];
 }
 
+/** The mark on an uncoverable pair listed BY CONSTRUCTION: one field of a both-or-neither pair filled, its partner blank. */
+export const PAIR_HALF = "a half of a both-or-neither pair (controller ruling 161, RuleField.pairedWith)";
+
 export class VariantGenerationStuck extends Error {
   constructor(sport: string, factor: string, at: string) {
     super(`variants: ${sport}: no valid level for '${factor}' after ${at} — refusing to skip the pair`);
@@ -147,9 +151,10 @@ export class VariantGenerationStuck extends Error {
  *  spends ~106k rescue validations (it was ~27k before pointsPerCoin added a
  *  factor: every uncoverable pair is searched exhaustively, so one more factor
  *  multiplies that search), cricket ~15k, football none. Football's non-row
- *  product is ~5.3M, so one product change that refused a football level
- *  everywhere would otherwise search for minutes. Past the budget the
- *  generation stops by name instead. The budget keeps ~5x headroom over carrom
+ *  product is ~85M (~5.3M before engine 7.0.0's extra-time pair, whose halves
+ *  are listed by construction, never searched: PAIR_HALF), so one product
+ *  change that refused a football level everywhere would otherwise search for
+ *  minutes. Past the budget the generation stops by name instead. The budget keeps ~5x headroom over carrom
  *  and stays under football's product, which the bounded-search test needs. */
 export const RESCUE_BUDGET = 500_000;
 
@@ -198,6 +203,14 @@ export function buildSportVariants(sport: string, deps: { validate?: typeof buil
   // The search is exhaustive, so a listed pair has no valid completion at all.
   // Row is never varied: validate takes (sport, preset, values), so the row
   // cannot change its answer. The search is bounded by RESCUE_BUDGET.
+  /** Each factor's mutual `pairedWith` partner (its index), or -1. */
+  const partnerOf = fs.map((f, k) => (k < 2 ? -1 : fs.findIndex((g, m) => m >= 2 && g.name === f.pairedWith && g.pairedWith === f.name)));
+  // Controller ruling 161: two fields that are a PAIR (each names the other in `pairedWith`) are both filled or both blank. A pair
+  // of their levels with exactly one blank is a half, and only the pair's own two fields build its key, so no level of any OTHER
+  // factor can complete it: such a pair is listed by construction, never searched (football's product is ~85M, and an exhaustive
+  // search of it trips RESCUE_BUDGET). It is still validated first: a half the product accepted would be covered, not listed.
+  const isPairHalf = (i: number, a: number, j: number, b: number): boolean =>
+    partnerOf[i] === j && (lvl(i, a).raw === "") !== (lvl(j, b).raw === "");
   const isDefault = (k: number, v: number): boolean => (k === 1 ? v === presetIx : lvl(k, v).raw === "");
   let rescueSpent = 0;
   let rescuing = "";
@@ -233,6 +246,11 @@ export function buildSportVariants(sport: string, deps: { validate?: typeof buil
     asg[j] = b;
     const r = check(asg);
     if (r.ok) continue;
+    if (isPairHalf(i, a, j, b)) {
+      uncovered.delete(pk);
+      uncoverable.push({ sport, a: label(i, a), b: label(j, b), reason: `${r.reason} — ${PAIR_HALF}: only the pair's own fields build its key, so no other factor's level completes it (listed without a search)` });
+      continue;
+    }
     const free: number[] = [];
     for (let k = 1; k < F; k++) if (k !== i && k !== j) free.push(k);
     rescuing = `${label(i, a)} × ${label(j, b)}`;
@@ -259,21 +277,27 @@ export function buildSportVariants(sport: string, deps: { validate?: typeof buil
     asg[j] = b;
     for (let k = 0; k < F; k++) {
       if (asg[k] >= 0) continue;
-      let best = -1;
+      // A both-or-neither pair (ruling 161) whose partner is still open is filled JOINTLY: one at a time, the first of the two
+      // could only ever be blank (its partner reads blank), and every filled level of the pair would cost a case of its own.
+      const p = partnerOf[k];
+      const joint = p > k && asg[p] < 0;
+      let best: readonly [number, number] | null = null;
       let bestGain = -1;
-      for (let v = 0; v < fs[k].levels.length; v++) {
+      for (let v = 0; v < fs[k].levels.length; v++) for (let w = 0; w < (joint ? fs[p].levels.length : 1); w++) {
         const trial = [...asg];
         trial[k] = v;
+        if (joint) trial[p] = w;
         if (!check(trial).ok) continue;
         let gain = 0;
-        for (let m = 0; m < F; m++) {
-          if (m === k || trial[m] < 0) continue;
-          if (uncovered.has(m < k ? key(m, trial[m], k, v) : key(k, v, m, trial[m]))) gain++;
+        for (const n of joint ? [k, p] : [k]) for (let m = 0; m < F; m++) {
+          if (m === n || trial[m] < 0 || (joint && m === k && n === p)) continue;
+          if (uncovered.has(m < n ? key(m, trial[m], n, trial[n]) : key(n, trial[n], m, trial[m]))) gain++;
         }
-        if (gain > bestGain) { best = v; bestGain = gain; }
+        if (gain > bestGain) { best = [v, w]; bestGain = gain; }
       }
-      if (best < 0) throw new VariantGenerationStuck(sport, fs[k].name, asg.map((x, f) => (x >= 0 ? label(f, x) : "")).filter(Boolean).join(", "));
-      asg[k] = best;
+      if (best === null) throw new VariantGenerationStuck(sport, fs[k].name, asg.map((x, f) => (x >= 0 ? label(f, x) : "")).filter(Boolean).join(", "));
+      asg[k] = best[0];
+      if (joint) asg[p] = best[1];
     }
     const built = check(asg);
     if (!built.ok) throw new VariantGenerationStuck(sport, "(complete case)", built.reason);
