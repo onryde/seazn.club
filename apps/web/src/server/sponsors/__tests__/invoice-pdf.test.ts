@@ -97,6 +97,10 @@ describe("invoicePdf", () => {
       for (const state of INVOICE_STATES) {
         const { all, runs } = await textOf(invoice({ locale, state, dealEnded: state !== "unpaid" && state !== "paid", bankDetails: state === "unpaid" ? "Sort code 12-34-56" : null }));
         expect(all, `${locale} ${state}`).toContain(t(ui, INVOICE_STATE_KEY[state]));
+        // The stamp is ONE run of its own, exactly its word: the walkthrough (e2e/walkthrough/sponsor-invoices.spec.ts) reads a
+        // sponsor's PDF as `runs.includes(word)`, and the "prints no other stamp" check below is an exact-run one too, so the
+        // positive half is held to the same reading (a stamp split across runs would pass the joined-text line above and fail both).
+        expect(runs.map((r) => r.text), `${locale} ${state} prints its stamp as one run`).toContain(t(ui, INVOICE_STATE_KEY[state]));
         for (const other of INVOICE_STATES.filter((s) => s !== state)) {
           expect(runs.map((r) => r.text), `${locale} ${state} prints no ${other} stamp`).not.toContain(t(ui, INVOICE_STATE_KEY[other]));
         }
