@@ -3,6 +3,7 @@
 // Board action layer (v3/04 §2): every schedule write, optimistic overrides,
 // debounced re-validation, realtime refresh, and the optimistic-concurrency
 // resync (v3/11 gap 10). Views stay dumb — they call these.
+import { tooFewGroupEntrantsText } from "@/lib/group-precondition";
 import { tooFewOfferFrom } from "@/components/v2/third-place-use-shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -389,6 +390,9 @@ export function useBoardActions(
         // W3 T11 review I1: the board's Start (and any board action a Swiss refusal answers — SWISS_ROUNDS_ABOVE_MAX at
         // Start) says it in the reader's language with what to do next, never the server's English sentence.
         setError(swissRefusalText(err.code, err.extra, msg, plural));
+      } else if (err instanceof ApiV1Error && err.code === "STAGE_NOT_READY" && err.extra.reason === "group_too_few_entrants") {
+        // C38 review I1: Start / Publish all draws the first stage; its group-size refusal in the reader's language.
+        setError(tooFewGroupEntrantsText(err.extra, msg));
       } else if (err instanceof ApiV1Error && isKnockoutRefusalCode(err.code)) {
         // W4 B1a review #1: a knockout refusal (BYE_LINE_NOT_PLACEABLE — a drag onto a bye line) in the reader's
         // language, from the refusal table's own key (lib/knockout-refusals.ts), never the server's English sentence.

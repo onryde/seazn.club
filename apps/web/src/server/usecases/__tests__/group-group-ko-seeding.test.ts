@@ -15,7 +15,7 @@ import { EngineError } from "@seazn/engine/core";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants, patchEntrant } from "../entrants";
-import { completeStage, confirmSeedProposal, createStages, generateStageFixtures, getSeedProposal } from "../stages";
+import { completeStage, confirmSeedProposal, createStages, generateStageFixtures, getSeedProposal, rebuildStageFixtures } from "../stages";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -54,6 +54,9 @@ async function rig(n: number, sport?: { key: string; variant: string; config: Re
   ] as never);
   return { auth, division, entrants, stages: stages as { id: string }[] };
 }
+
+const TOO_FEW = (err: unknown) => EngineError.is(err, "STAGE_NOT_READY") && (err.data as { reason?: string }).reason === "group_too_few_entrants";
+const fixtureIds = async (stageId: string) => (await sql<{ id: string }[]>`select id from fixtures where stage_id = ${stageId} order by id`).map((r) => r.id);
 
 const stageCounts = async (stageId: string) => {
   const [{ f }] = await sql<{ f: string }[]>`select count(*)::text as f from fixtures where stage_id = ${stageId}`;
@@ -157,6 +160,55 @@ describe.skipIf(!HAS_DB)("group -> group -> knockout: a pool of one is refused b
     const done = await completeStage(r.auth, s1!.id);
     expect(done.completed).toBe(true);
     expect(await getSeedProposal(r.auth, s2!.id)).not.toBeNull();
+  });
+
+  it("I2a: a SECOND Generate after a withdrawal on an already-drawn stage is not refused and changes nothing (the draw stands)", async () => {
+    const r = await rig(8);
+    await generateStageFixtures(r.auth, r.stages[0]!.id);
+    const before = await fixtureIds(r.stages[0]!.id);
+    expect(before.length, "premise: drawn").toBeGreaterThan(0);
+    await patchEntrant(r.auth, r.entrants[7]!.id, { status: "withdrawn" }); // 7 active in 4 pools - the refused field, but already drawn
+    await expect(generateStageFixtures(r.auth, r.stages[0]!.id)).resolves.toBeDefined();
+    expect(await fixtureIds(r.stages[0]!.id)).toEqual(before);
+  });
+
+  it("I2b: a withdrawal BEFORE the draw is judged on the live field - 8 with one out is refused, 9 with one out is drawn", async () => {
+    const out = await rig(8);
+    await patchEntrant(out.auth, out.entrants[7]!.id, { status: "withdrawn" });
+    await expect(generateStageFixtures(out.auth, out.stages[0]!.id)).rejects.toSatisfy(TOO_FEW);
+    expect(await stageCounts(out.stages[0]!.id)).toEqual({ fixtures: 0, pools: 0 });
+    const ok = await rig(9);
+    await patchEntrant(ok.auth, ok.entrants[8]!.id, { status: "withdrawn" });
+    await generateStageFixtures(ok.auth, ok.stages[0]!.id);
+    expect((await poolsOf(ok.stages[0]!.id)).size).toBe(FIRST_POOLS);
+  });
+
+  it("I2c: Rebuild of a drawn, unstarted stage after a withdrawal into the refused field is refused whole - the draw is kept", async () => {
+    const r = await rig(8);
+    await generateStageFixtures(r.auth, r.stages[0]!.id);
+    const before = await fixtureIds(r.stages[0]!.id);
+    await patchEntrant(r.auth, r.entrants[7]!.id, { status: "withdrawn" });
+    await expect(rebuildStageFixtures(r.auth, r.stages[0]!.id)).rejects.toSatisfy(TOO_FEW);
+    expect(await fixtureIds(r.stages[0]!.id)).toEqual(before);
+  });
+
+  it("control: a knockout-only division of 7 is not a group stage - drawn, nobody refused", async () => {
+    const auth = await seedOrg();
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "K " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+    const division = await createDivision(auth, comp.id, { name: "Open", slug: "open", sport_key: "generic", variant_key: "score", config: CFG } as never);
+    await createEntrants(auth, division.id, Array.from({ length: 7 }, (_, i) => ({ kind: "individual" as const, display_name: "K" + (i + 1), seed: i + 1, members: [] })));
+    const [ko] = (await createStages(auth, division.id, [{ seq: 1, kind: "knockout", name: "KO", config: {} }] as never)) as { id: string }[];
+    await generateStageFixtures(auth, ko!.id);
+    expect((await stageCounts(ko!.id)).fixtures).toBeGreaterThan(0);
+  });
+
+  it("control: a ladder names no fixture at generate (challenges come later) yet is never refused - the guard is the group stage's alone", async () => {
+    const auth = await seedOrg();
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "L " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+    const division = await createDivision(auth, comp.id, { name: "Open", slug: "open", sport_key: "generic", variant_key: "score", config: CFG } as never);
+    await createEntrants(auth, division.id, Array.from({ length: 7 }, (_, i) => ({ kind: "individual" as const, display_name: "L" + (i + 1), seed: i + 1, members: [] })));
+    const [lad] = (await createStages(auth, division.id, [{ seq: 1, kind: "ladder", name: "Ladder", config: {} }] as never)) as { id: string }[];
+    await expect(generateStageFixtures(auth, lad!.id)).resolves.toBeDefined();
   });
 
   it("another sport: a football division refuses the same 7-into-4 field by the same name", async () => {
