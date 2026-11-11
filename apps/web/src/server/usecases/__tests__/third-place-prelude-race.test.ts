@@ -33,7 +33,6 @@ vi.mock("@/lib/stripe", async (io) => ({
 }));
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: vi.fn() }));
 
-import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { engineBracketRows } from "@/lib/__tests__/engine-bracket-rows";
 import { declaredVariant } from "@/server/engine-db/__tests__/helpers/seed-bracket";
