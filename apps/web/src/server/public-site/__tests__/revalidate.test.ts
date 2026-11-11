@@ -44,16 +44,20 @@ describe("public-site revalidation profiles", () => {
     expect(broadcastRevalidate).toHaveBeenCalledWith(["org-public:riverside"], "expire");
   });
 
-  it("division/competition tags keep stale-while-revalidate", () => {
+  it("the division tag expires (read-your-own-writes) and the competition tag keeps SWR, competition first", () => {
     fireDivisionRevalidate("d1", "c1");
-    expect(revalidateTag).toHaveBeenCalledWith("division:d1", "max");
-    expect(revalidateTag).toHaveBeenCalledWith("competition:c1", "max");
-    expect(broadcastRevalidate).toHaveBeenCalledWith(["division:d1", "competition:c1"], "swr");
+    expect(revalidateTag.mock.calls).toEqual([
+      ["competition:c1", "max"],
+      ["division:d1", { expire: 0 }],
+    ]);
+    expect(broadcastRevalidate).toHaveBeenCalledWith(["division:d1"], "expire");
+    expect(broadcastRevalidate).toHaveBeenCalledWith(["competition:c1"], "swr");
   });
 
-  it("division-only broadcast omits the competition tag when none is passed", () => {
+  it("division-only call expires the division and touches no competition tag", () => {
     fireDivisionRevalidate("d1");
-    expect(broadcastRevalidate).toHaveBeenCalledWith(["division:d1"], "swr");
+    expect(revalidateTag.mock.calls).toEqual([["division:d1", { expire: 0 }]]);
+    expect(broadcastRevalidate.mock.calls).toEqual([[["division:d1"], "expire"]]);
   });
 
   it("discovery tag keeps stale-while-revalidate", () => {
