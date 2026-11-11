@@ -259,6 +259,42 @@ describe.skipIf(!HAS_DB)("PATCH /api/orgs/[id] sponsor invoice details", () => {
     expect(checked, "anti-vacuity: both arms were driven").toBe(2);
   });
 
+  // Fix round 1 (I1): a blank is "nothing to print", and the column must never hold one. A client that is not this card (a script,
+  // an older tab) sending "   " would otherwise store a blank that a later invoice reads as a real address (and `|| null` guards
+  // downstream would not see it as empty). So the ROUTE normalises: trimmed, and an empty result is null - on both arms.
+  it("I1: a blank value ('', spaces, tab/newline whitespace) is stored as null, over a stored value too (both arms, count reported)", async () => {
+    let checked = 0;
+    for (const arm of ARMS) {
+      for (const blank of ["", "   ", "\n\t "]) {
+        const org = await seedOrg();
+        await sql`update organizations set ${sql({ [arm.key]: "kept" })} where id = ${org.id}`;
+        const res = await send(org.id, { [arm.key]: blank });
+        expect(res.status, `${arm.key}=${JSON.stringify(blank)} accepted`).toBe(200);
+        expect((await stored(org.id))[arm.key], `${arm.key}=${JSON.stringify(blank)} stored as null, not the blank`).toBeNull();
+        expect((await stored(org.id))[arm.other], `${arm.other} untouched`).toBeNull();
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 2 arms x 3 blanks").toBe(6);
+  });
+
+  it("I1: text is stored trimmed, and its inner whitespace is left alone (positive pair of the blank rule; both arms, count reported)", async () => {
+    let checked = 0;
+    for (const arm of ARMS) {
+      for (const [sent, expected] of [
+        [" x ", "x"],
+        ["  \n x  y\n12 Mill Lane \t", "x  y\n12 Mill Lane"],
+      ] as const) {
+        const org = await seedOrg();
+        const res = await send(org.id, { [arm.key]: sent });
+        expect(res.status, `${arm.key}=${JSON.stringify(sent)} accepted`).toBe(200);
+        expect((await stored(org.id))[arm.key], `${arm.key}=${JSON.stringify(sent)} trimmed at the ends only`).toBe(expected);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 2 arms x 2 texts").toBe(4);
+  });
+
   it("the second write of the pair keeps the first (two sequential PATCHes, F30), and a re-save overwrites", async () => {
     const org = await seedOrg();
     expect((await send(org.id, { sponsor_invoice_address: "12 Mill Lane" })).status).toBe(200);

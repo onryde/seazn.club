@@ -35,6 +35,11 @@ vi.mock("../../_components/settings-nav", () => ({
   SettingsShell: ({ children }: { children: React.ReactNode }) => <div data-testid="shell">{children}</div>,
   navContext: vi.fn(async () => null),
 }));
+// The Sponsor invoices island calls useRouter() (it refreshes the route after a save); a static render has no app router mounted.
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ refresh: () => {} }),
+}));
 vi.mock("@/components/org-payment-instructions", () => ({
   OrgPaymentInstructions: () => <div data-testid="connect-panel" />,
 }));

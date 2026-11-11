@@ -4224,6 +4224,7 @@
   "settings.sponsorInvoices.saving": "Guardando…",
   "settings.sponsorInvoices.saved": "Guardado",
   "settings.sponsorInvoices.saveFailed": "No se pudieron guardar los datos de facturación. Inténtalo de nuevo.",
+  "settings.sponsorInvoices.partialSaved": "Dirección guardada. No se pudieron guardar los datos bancarios. Inténtalo de nuevo.",
   "settings.sponsorInvoices.notAllowed": "Solo los propietarios y los administradores pueden cambiar los datos de facturación.",
   "connect.attention.title": "Stripe necesita más información",
   "connect.attention.body": "Los pagos están en pausa hasta completar la incorporación — reanúdala abajo.",

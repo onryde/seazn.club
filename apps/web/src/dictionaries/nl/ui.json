@@ -4224,6 +4224,7 @@
   "settings.sponsorInvoices.saving": "Opslaan…",
   "settings.sponsorInvoices.saved": "Opgeslagen",
   "settings.sponsorInvoices.saveFailed": "De factuurgegevens konden niet worden opgeslagen. Probeer het opnieuw.",
+  "settings.sponsorInvoices.partialSaved": "Adres opgeslagen. De bankgegevens konden niet worden opgeslagen. Probeer het opnieuw.",
   "settings.sponsorInvoices.notAllowed": "Alleen eigenaren en beheerders kunnen de factuurgegevens wijzigen.",
   "connect.attention.title": "Stripe heeft meer informatie nodig",
   "connect.attention.body": "Uitbetalingen zijn gepauzeerd tot de onboarding is voltooid — hervat deze hieronder.",

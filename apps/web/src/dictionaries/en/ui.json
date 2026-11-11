@@ -4277,6 +4277,7 @@
   "settings.sponsorInvoices.saving": "Saving…",
   "settings.sponsorInvoices.saved": "Saved",
   "settings.sponsorInvoices.saveFailed": "Couldn't save the invoice details. Try again.",
+  "settings.sponsorInvoices.partialSaved": "Address saved. The bank details couldn't be saved. Try again.",
   "settings.sponsorInvoices.notAllowed": "Only owners and admins can change the invoice details.",
   "connect.attention.title": "Stripe needs more information",
   "connect.attention.body": "Payouts are paused until onboarding is completed — resume it below.",

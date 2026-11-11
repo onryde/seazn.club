@@ -7542,6 +7542,7 @@ export type DictionaryKey =
   | "settings.sponsorInvoices.bankPlaceholder"
   | "settings.sponsorInvoices.hint"
   | "settings.sponsorInvoices.notAllowed"
+  | "settings.sponsorInvoices.partialSaved"
   | "settings.sponsorInvoices.save"
   | "settings.sponsorInvoices.saveFailed"
   | "settings.sponsorInvoices.saved"

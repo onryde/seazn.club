@@ -25,6 +25,13 @@
 //   K8  partial       do not record what saved before the failure          -> "a half-saved pair retries only what failed"
 //   K9  stop          keep going after a failed first PATCH                -> "a failed first PATCH stops the second"
 //   K10 canEdit       render Save and editable fields for a viewer         -> "a member who cannot edit"
+// Fix round 1 killers:
+//   F1  partial       say the generic failure after a half-saved pair      -> "a half-saved pair says what saved"
+//   F2  required      give canEdit a default of true again                 -> "canEdit is required: left out, the card is read-only"
+//   F3  a11y          drop role="status" / aria-live from the status line  -> "the status line is a polite live region"
+//   F4  clear         keep the old error up when a new save starts         -> "a new save clears the previous error at once"
+//   F5  refresh       drop router.refresh() after a successful save        -> "a successful save refreshes the route"
+//   F6  refresh-early refresh after EACH PATCH, or after a failed one      -> "the route refreshes once, only when everything saved"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
@@ -38,6 +45,10 @@ import uiEn from "@/dictionaries/en/ui.json";
 import uiEs from "@/dictionaries/es/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
 import uiNl from "@/dictionaries/nl/ui.json";
+
+// The island refreshes the route after a save (like org-payment-instructions.tsx): the router is the spy.
+const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 
 const en = uiEn as unknown as Dict;
 const msg = (key: MessageKey) => t(en, key);
@@ -55,6 +66,7 @@ let answer: (call: Call, n: number) => Promise<{ status: number; body: unknown }
 const fetchMock = vi.fn();
 
 beforeEach(() => {
+  refresh.mockClear();
   calls.length = 0;
   answer = () => ({ status: 200, body: { ok: true, data: {} } });
   fetchMock.mockReset();
@@ -76,6 +88,7 @@ function mount(over: Partial<Parameters<typeof OrgSponsorInvoiceDetails>[0]> = {
     orgId: ORG,
     initialAddress: null,
     initialBankDetails: null,
+    canEdit: true,
     ...over,
   };
   const island = renderIsland(OrgSponsorInvoiceDetails, props);
@@ -119,7 +132,7 @@ describe("it opens at what is stored", () => {
 
   it("carries the brief's labels and hint, read from the dictionary, and the caps the server enforces", () => {
     const html = renderToStaticMarkup(
-      <OrgSponsorInvoiceDetails orgId={ORG} initialAddress={null} initialBankDetails={null} />,
+      <OrgSponsorInvoiceDetails orgId={ORG} initialAddress={null} initialBankDetails={null} canEdit />,
     );
     expect(html).toContain("Sponsor invoices");
     expect(html).toContain("Address on invoices");
@@ -134,7 +147,7 @@ describe("it opens at what is stored", () => {
 
   it("first paint holds the stored values in the markup (not just in state)", () => {
     const html = renderToStaticMarkup(
-      <OrgSponsorInvoiceDetails orgId={ORG} initialAddress="Riverside CC, 12 Mill Lane" initialBankDetails="Sort 12-34-56" />,
+      <OrgSponsorInvoiceDetails orgId={ORG} initialAddress="Riverside CC, 12 Mill Lane" initialBankDetails="Sort 12-34-56" canEdit />,
     );
     expect(html).toMatch(/<textarea[^>]*data-testid="sponsor-invoice-address"[^>]*>Riverside CC, 12 Mill Lane<\/textarea>/);
     expect(html).toMatch(/<textarea[^>]*data-testid="sponsor-invoice-bank-details"[^>]*>Sort 12-34-56<\/textarea>/);
@@ -142,7 +155,7 @@ describe("it opens at what is stored", () => {
 
   it("every textarea is labelled by its visible label and described by the hint", () => {
     const html = renderToStaticMarkup(
-      <OrgSponsorInvoiceDetails orgId={ORG} initialAddress={null} initialBankDetails={null} />,
+      <OrgSponsorInvoiceDetails orgId={ORG} initialAddress={null} initialBankDetails={null} canEdit />,
     );
     let checked = 0;
     for (const [testId, label] of [
@@ -171,7 +184,7 @@ describe("the chrome is the dictionary's, in every locale", () => {
       const dict = DICTS[locale];
       const html = renderToStaticMarkup(
         <DictProvider dict={dict} locale={locale}>
-          <OrgSponsorInvoiceDetails orgId={ORG} initialAddress={null} initialBankDetails={null} />
+          <OrgSponsorInvoiceDetails orgId={ORG} initialAddress={null} initialBankDetails={null} canEdit />
         </DictProvider>,
       );
       for (const key of [
@@ -411,7 +424,7 @@ describe("a refusal reads the dictionary's words, and a half-saved pair keeps wh
     await m.save();
     await flush();
     expect(calls.map((c) => Object.keys(c.body))).toEqual([[ADDRESS], [BANK]]);
-    expect(m.status()).toBe(msg("settings.sponsorInvoices.saveFailed"));
+    expect(m.status(), "it says what saved and what did not, not the generic failure").toBe(msg("settings.sponsorInvoices.partialSaved"));
     expect(m.saveDisabled(), "the bank details are still unsaved").toBe(false);
 
     answer = () => ({ status: 200, body: { ok: true, data: {} } });
@@ -457,6 +470,181 @@ describe("a refusal reads the dictionary's words, and a half-saved pair keeps wh
   });
 });
 
+describe("a half-saved pair says what saved (fix round 1, M1)", () => {
+  it("the first PATCH answered 200 and the second failed: the words name the address as saved and the bank details as not, in red, and NOT the generic failure", async () => {
+    answer = (_call, n) =>
+      n === 2 ? { status: 500, body: { ok: false, error: "boom" } } : { status: 200, body: { ok: true, data: {} } };
+    const m = mount();
+    m.typeAddress("12 Mill Lane");
+    m.typeBank("Sort 12-34-56");
+    await m.save();
+    await flush();
+    expect(m.status()).toBe(msg("settings.sponsorInvoices.partialSaved"));
+    expect(m.status()).not.toBe(msg("settings.sponsorInvoices.saveFailed"));
+    expect(m.status()).not.toBe(msg("settings.sponsorInvoices.saved"));
+    // The English the owner approved: the address is the one that saved, the bank details the one to try again.
+    expect(msg("settings.sponsorInvoices.partialSaved")).toBe("Address saved. The bank details couldn't be saved. Try again.");
+    expect(propsOf(m.find("sponsor-invoices-status")).className as string, "an error, not a success").toContain("text-red-600");
+  });
+
+  it("positive pair: when the FIRST PATCH is the one refused nothing saved, so it is still the generic failure (500) or who-can-change (401)", async () => {
+    let checked = 0;
+    for (const [status, key] of [
+      [500, "settings.sponsorInvoices.saveFailed"],
+      [401, "settings.sponsorInvoices.notAllowed"],
+    ] as const) {
+      answer = () => ({ status, body: { ok: false } });
+      const m = mount();
+      m.typeAddress("12 Mill Lane");
+      m.typeBank("Sort 12-34-56");
+      await m.save();
+      await flush();
+      expect(m.status(), `first PATCH ${status}`).toBe(msg(key));
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(2);
+  });
+
+  it("a single changed field that fails is the generic failure: there is no earlier field to have saved (both fields, count reported)", async () => {
+    let checked = 0;
+    for (const typeInto of ["typeAddress", "typeBank"] as const) {
+      answer = () => ({ status: 500, body: { ok: false } });
+      const m = mount();
+      m[typeInto]("x");
+      await m.save();
+      await flush();
+      expect(m.status(), typeInto).toBe(msg("settings.sponsorInvoices.saveFailed"));
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(2);
+  });
+
+  it("the retry after a half-save clears the partial words, sends the bank details alone, and says Saved", async () => {
+    answer = (_call, n) =>
+      n === 2 ? { status: 500, body: { ok: false } } : { status: 200, body: { ok: true, data: {} } };
+    const m = mount();
+    m.typeAddress("12 Mill Lane");
+    m.typeBank("Sort 12-34-56");
+    await m.save();
+    await flush();
+    answer = () => ({ status: 200, body: { ok: true, data: {} } });
+    await m.save();
+    await flush();
+    expect(calls.map((c) => Object.keys(c.body))).toEqual([[ADDRESS], [BANK], [BANK]]);
+    expect(m.status()).toBe(msg("settings.sponsorInvoices.saved"));
+  });
+
+  it("the partial words exist in all four locales, each translated (none left in English), and are their own words, not the generic failure's", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const words = t(DICTS[locale], "settings.sponsorInvoices.partialSaved" as MessageKey);
+      expect(words, `${locale}: present`).not.toBe("");
+      expect(words, `${locale}: not the raw key`).not.toContain("settings.sponsorInvoices");
+      expect(words, `${locale}: not the generic failure`).not.toBe(t(DICTS[locale], "settings.sponsorInvoices.saveFailed" as MessageKey));
+      if (locale !== "en") expect(words, `${locale}: translated`).not.toBe(msg("settings.sponsorInvoices.partialSaved" as MessageKey));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: 4 locales").toBe(4);
+  });
+});
+
+describe("the status line (fix round 1, M4)", () => {
+  it("is a polite live region, mounted from first paint so a screen reader hears the change (markup AND tree)", () => {
+    const html = renderToStaticMarkup(
+      <OrgSponsorInvoiceDetails orgId={ORG} initialAddress={null} initialBankDetails={null} canEdit />,
+    );
+    const tag = html.match(/<p[^>]*data-testid="sponsor-invoices-status"[^>]*>/)?.[0] ?? "";
+    expect(tag, "the status paragraph is in the first-paint markup, empty").not.toBe("");
+    expect(tag).toMatch(/\srole="status"/);
+    expect(tag).toMatch(/\saria-live="polite"/);
+    const m = mount();
+    const props = propsOf(m.find("sponsor-invoices-status"));
+    expect(props.role).toBe("status");
+    expect(props["aria-live"]).toBe("polite");
+    expect(m.status(), "and it is empty until there is something to say").toBe("");
+  });
+
+  it("a new save clears the previous error at once, before the new answer arrives", async () => {
+    answer = () => ({ status: 500, body: { ok: false } });
+    const m = mount();
+    m.typeAddress("x");
+    await m.save();
+    await flush();
+    expect(m.status(), "the error is up").toBe(msg("settings.sponsorInvoices.saveFailed"));
+
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    answer = async () => {
+      await held;
+      return { status: 200, body: { ok: true, data: {} } };
+    };
+    const retry = m.save();
+    await flush();
+    expect(calls.length, "the retry is in flight").toBe(2);
+    expect(m.status(), "the old error is gone while the retry is open").toBe("");
+    release();
+    await retry;
+    await flush();
+    expect(m.status()).toBe(msg("settings.sponsorInvoices.saved"));
+  });
+});
+
+describe("a successful save refreshes the route (fix round 1, M6)", () => {
+  it("one PATCH saved: the route is refreshed once", async () => {
+    const m = mount();
+    m.typeAddress("12 Mill Lane");
+    await m.save();
+    await flush();
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("two PATCHes saved: refreshed ONCE, after the last answer (not once per PATCH, and not before the second has answered)", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    answer = async (_call, n) => {
+      if (n === 2) await held;
+      return { status: 200, body: { ok: true, data: {} } };
+    };
+    const m = mount();
+    m.typeAddress("12 Mill Lane");
+    m.typeBank("Sort 12-34-56");
+    const saving = m.save();
+    await flush();
+    expect(calls.length, "the second PATCH is open").toBe(2);
+    expect(refresh, "the first answered 200 but the pair is not done").not.toHaveBeenCalled();
+    release();
+    await saving;
+    await flush();
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("nothing saved, or the pair only half saved: no refresh (first PATCH refused, second refused, nothing changed)", async () => {
+    // first PATCH refused
+    answer = () => ({ status: 500, body: { ok: false } });
+    const a = mount();
+    a.typeAddress("x");
+    a.typeBank("y");
+    await a.save();
+    await flush();
+    expect(refresh, "first refused").not.toHaveBeenCalled();
+    // second PATCH refused after the first saved
+    answer = (_call, n) => (n === 2 ? { status: 500, body: { ok: false } } : { status: 200, body: { ok: true, data: {} } });
+    calls.length = 0;
+    const b = mount();
+    b.typeAddress("x");
+    b.typeBank("y");
+    await b.save();
+    await flush();
+    expect(calls.length, "both were sent").toBe(2);
+    expect(refresh, "half saved").not.toHaveBeenCalled();
+    // nothing changed: Save sends and refreshes nothing
+    const c = mount({ initialAddress: "x" });
+    await c.save();
+    await flush();
+    expect(refresh, "pristine").not.toHaveBeenCalled();
+  });
+});
+
 describe("a member who cannot edit", () => {
   it("sees the stored values read-only, with the reason and no Save", () => {
     const m = mount({ canEdit: false, initialAddress: "12 Mill Lane", initialBankDetails: "Sort 12-34-56" });
@@ -465,6 +653,14 @@ describe("a member who cannot edit", () => {
     expect(propsOf(m.find("sponsor-invoice-bank-details")).readOnly).toBe(true);
     expect(m.has("sponsor-invoices-save")).toBe(false);
     expect(textOf(m.island.tree()[0]!)).toContain(msg("settings.sponsorInvoices.notAllowed"));
+  });
+
+  it("canEdit is required: a mount that leaves it out is read-only, never an editor by default", () => {
+    // The prop is required by the type (the page always passes it); this pins the fail-safe if a caller ever slips it through.
+    const m = mount({ canEdit: undefined as unknown as boolean });
+    expect(m.has("sponsor-invoices-save")).toBe(false);
+    expect(propsOf(m.find("sponsor-invoice-address")).readOnly).toBe(true);
+    expect(propsOf(m.find("sponsor-invoice-bank-details")).readOnly).toBe(true);
   });
 
   it("positive pair: an editor has Save, editable fields and no reason line", () => {

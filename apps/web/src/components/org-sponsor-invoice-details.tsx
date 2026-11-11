@@ -15,15 +15,18 @@
 //
 // The words a refusal reads are the dictionary's, keyed on STATUS, never the server's English: 401 (requireOrgRole's AuthError
 // folded onto 401 by lib/http.ts: signed out, not a member, or not an editor) says who can change this; every other status
-// (400 a ZodError this card's caps make unreachable, 404 org not found, 500) is the generic.
+// (400 a ZodError this card's caps make unreachable, 404 org not found, 500) is the generic. A refusal AFTER an earlier PATCH
+// answered 200 says so instead ("Address saved. The bank details couldn't be saved."): the address is on file and the person
+// must not think it is lost. After the last PATCH answers 200 the route is refreshed, like the rest of Settings -> Payments.
 import { useId, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/client";
 import { useMsg } from "@/components/i18n/dict-provider";
 
 const ADDRESS_MAX = 1000;
 const BANK_MAX = 2000;
 
-type Notice = "saved" | "saveFailed" | "notAllowed" | null;
+type Notice = "saved" | "partialSaved" | "saveFailed" | "notAllowed" | null;
 
 /** What the server holds is trimmed text, and "" means nothing stored (null). */
 const clean = (v: string | null | undefined): string => (v ?? "").trim();
@@ -32,14 +35,16 @@ export function OrgSponsorInvoiceDetails({
   orgId,
   initialAddress,
   initialBankDetails,
-  canEdit = true,
+  canEdit,
 }: {
   orgId: string;
   initialAddress: string | null;
   initialBankDetails: string | null;
-  canEdit?: boolean;
+  /** Required, no default: the page passes its own auth answer, and a caller that forgets it must not hand out an editor card. */
+  canEdit: boolean;
 }) {
   const msg = useMsg();
+  const router = useRouter();
   const base = useId();
   const [address, setAddress] = useState(initialAddress ?? "");
   const [bank, setBank] = useState(initialBankDetails ?? "");
@@ -67,16 +72,26 @@ export function OrgSponsorInvoiceDetails({
     inFlight.current = true;
     setBusy(true);
     setNotice(null);
+    // How many PATCHes answered 200 before one failed: any means part of the pair is on file.
+    let savedBeforeFailure = 0;
     try {
       for (const change of changes) {
         // One key per PATCH (F30). null clears the column; the server never stores "".
         await api(`/api/orgs/${orgId}`, { method: "PATCH", json: { [change.column]: change.text || null } });
         setStored((s) => ({ ...s, [change.field]: change.text }));
+        savedBeforeFailure++;
       }
       setNotice("saved");
+      router.refresh();
     } catch (err) {
       console.error("save sponsor invoice details failed", err);
-      setNotice(err instanceof ApiError && err.status === 401 ? "notAllowed" : "saveFailed");
+      setNotice(
+        savedBeforeFailure > 0
+          ? "partialSaved"
+          : err instanceof ApiError && err.status === 401
+            ? "notAllowed"
+            : "saveFailed",
+      );
     } finally {
       inFlight.current = false;
       setBusy(false);
