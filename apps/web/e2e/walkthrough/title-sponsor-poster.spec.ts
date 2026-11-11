@@ -240,6 +240,11 @@ test("W1b organiser: the Poster field with a stored poster at 1280, 768 and 320 
   expect(storedPoster, "W1 stored a poster").not.toBe("");
   await standInStorage(page, org.orgId);
   const shots = new Map<number, Buffer>();
+  // The field's own measured width at each viewport: the sheet is a side dialog from 768 up (`modal.tsx`: `w-full md:max-w-lg`, 512px, with no
+  // `lg:` rule), so 1280 and 768 draw the SAME 512px sheet and an element shot of the field is pixel-identical at the two (CI e2e 43103487857:
+  // "every width's shot differs", Expected 3, Received 2). Below 768 the page is the phone body, a different layout. The check therefore
+  // asks for what is true: the states opened and the phone layout differs, and two widths may match only when they measure the same.
+  const fieldWidths = new Map<number, number>();
   for (const width of [1280, 768, 320] as const) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto(sponsorEditUrl(org.slug, A.id));
@@ -266,13 +271,23 @@ test("W1b organiser: the Poster field with a stored poster at 1280, 768 and 320 
       expect(reach.width, `${width}: and ${HIT_TARGET_FLOOR_PX}px wide`).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
     }
     await expectNoHorizontalScroll(page);
+    const box = await field.boundingBox();
+    expect(box, `${width}: the field has a box to measure`).not.toBeNull();
+    fieldWidths.set(width, Math.round(box!.width));
     shots.set(width, await shot(testInfo, `poster-field-${width}`, field));
   }
-  // Three widths, three pictures: a capture that errored before a shot, or two states that never opened, cannot pass.
+  // A capture that errored before a shot, or a state that never opened, cannot pass: three shots, each with pixels, and the phone layout
+  // is not the desktop one.
   expect(shots.size, "shots taken").toBe(3);
-  const digests = new Set([...shots.values()].map((b) => createHash("sha256").update(b).digest("hex")));
   for (const [width, bytes] of shots) expect(bytes.length, `${width}: the shot has pixels`).toBeGreaterThan(1_000);
-  expect(digests.size, "every width's shot differs").toBe(3);
+  const digest = (width: number): string => createHash("sha256").update(shots.get(width)!).digest("hex");
+  const widthsNote = `field widths: 1280 -> ${fieldWidths.get(1280)}px, 768 -> ${fieldWidths.get(768)}px, 320 -> ${fieldWidths.get(320)}px`;
+  expect(digest(320), `the 320 shot differs from the 1280 shot: the phone layout is its own (${widthsNote})`).not.toBe(digest(1280));
+  // 768 may equal 1280 only when the field measured the same at both (the same 512px sheet); a different width with the same pixels is a
+  // capture that did not open the state it names.
+  if (fieldWidths.get(768) !== fieldWidths.get(1280)) {
+    expect(digest(768), `the 768 shot differs from the 1280 shot, the field being a different width (${widthsNote})`).not.toBe(digest(1280));
+  }
 });
 
 test("W2 visitor, 1280: the panel carries the poster (its src names the stored url and it arrived), the hero sentence has no picture", async ({ browser }, testInfo) => {
