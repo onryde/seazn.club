@@ -8136,6 +8136,10 @@
   "sponsors.pkg.legend.turns.one": "{count} tour dans la rotation de la diffusion",
   "sponsors.pkg.legend.turns.other": "{count} tours dans la rotation de la diffusion",
   "sponsors.pkg.legend.plan": "Les niveaux supérieurs et toute offre pour une seule compétition nécessitent une offre payante ou un Event Pass pour cette compétition. Même sans offre payante, vous pouvez vendre {partner} pour toute l'organisation.",
+  "sponsors.pkg.legend.planBoard.one": "Avec votre offre, tous les sponsors apparaissent dans une seule bande et ont un tour dans la diffusion, sauf sur une compétition avec un Event Pass.",
+  "sponsors.pkg.legend.planBoard.other": "Avec votre offre, tous les sponsors apparaissent dans une seule bande et ont {count} tours dans la diffusion, sauf sur une compétition avec un Event Pass.",
+  "sponsors.pkg.legend.show": "Afficher ce que donne chaque niveau",
+  "sponsors.pkg.legend.hide": "Masquer ce que donne chaque niveau",
   "sponsors.showAgain": "Réafficher sur le site",
   "sponsors.showAgainLabel": "Réafficher sur le site : {name}"
 }

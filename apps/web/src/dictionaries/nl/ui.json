@@ -8136,6 +8136,10 @@
   "sponsors.pkg.legend.turns.one": "{count} beurt in de stream-rotatie",
   "sponsors.pkg.legend.turns.other": "{count} beurten in de stream-rotatie",
   "sponsors.pkg.legend.plan": "Hogere niveaus en elk pakket voor één competitie vereisen een betaald abonnement of een Event Pass voor die competitie. Elk abonnement kan {partner} verkopen voor de hele organisatie.",
+  "sponsors.pkg.legend.planBoard.one": "In jouw abonnement staan alle sponsors in één strook en krijgt elke sponsor één beurt in de stream, behalve bij een competitie met een Event Pass.",
+  "sponsors.pkg.legend.planBoard.other": "In jouw abonnement staan alle sponsors in één strook en krijgt elke sponsor {count} beurten in de stream, behalve bij een competitie met een Event Pass.",
+  "sponsors.pkg.legend.show": "Wat elk niveau oplevert tonen",
+  "sponsors.pkg.legend.hide": "Wat elk niveau oplevert verbergen",
   "sponsors.showAgain": "Weer tonen op de site",
   "sponsors.showAgainLabel": "Weer tonen op de site: {name}"
 }

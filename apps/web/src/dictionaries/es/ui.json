@@ -8136,6 +8136,10 @@
   "sponsors.pkg.legend.turns.one": "{count} turno en la rotación de la emisión",
   "sponsors.pkg.legend.turns.other": "{count} turnos en la rotación de la emisión",
   "sponsors.pkg.legend.plan": "Los niveles superiores y cualquier paquete de una sola competición requieren un plan de pago o un Event Pass para esa competición. Todos los planes pueden vender {partner} para toda la organización.",
+  "sponsors.pkg.legend.planBoard.one": "En tu plan, todos los patrocinadores aparecen en una sola franja y tienen un turno en la emisión, salvo en una competición con un Event Pass.",
+  "sponsors.pkg.legend.planBoard.other": "En tu plan, todos los patrocinadores aparecen en una sola franja y tienen {count} turnos en la emisión, salvo en una competición con un Event Pass.",
+  "sponsors.pkg.legend.show": "Mostrar qué incluye cada nivel",
+  "sponsors.pkg.legend.hide": "Ocultar qué incluye cada nivel",
   "sponsors.showAgain": "Volver a mostrar en el sitio",
   "sponsors.showAgainLabel": "Volver a mostrar en el sitio: {name}"
 }

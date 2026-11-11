@@ -8136,6 +8136,10 @@
   "sponsors.pkg.legend.turns.one": "{count} turn in the stream rotation",
   "sponsors.pkg.legend.turns.other": "{count} turns in the stream rotation",
   "sponsors.pkg.legend.plan": "Higher tiers, and any package for one competition, need a paid plan or an Event Pass for that competition. Every plan can sell {partner} for the whole organisation.",
+  "sponsors.pkg.legend.planBoard.one": "On your plan every sponsor shows in one strip and takes one turn on stream, except on a competition with an Event Pass.",
+  "sponsors.pkg.legend.planBoard.other": "On your plan every sponsor shows in one strip and takes {count} turns on stream, except on a competition with an Event Pass.",
+  "sponsors.pkg.legend.show": "Show what each tier gets",
+  "sponsors.pkg.legend.hide": "Hide what each tier gets",
   "sponsors.showAgain": "Show on site again",
   "sponsors.showAgainLabel": "Show on site again: {name}"
 }
