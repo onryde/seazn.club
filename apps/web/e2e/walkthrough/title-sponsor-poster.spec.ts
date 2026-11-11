@@ -27,6 +27,9 @@
 //   W7   organiser: Remove poster, Save - the row reads null, and the visitor's page shows the logo card
 //   W8   both sponsors downgraded to partner over the API: no panel, no band, no hero sentence, the hero's grid is the plain one, and
 //        the poster is still on the row (a downgrade takes the placement away, never the picture)
+//   W9   organiser, 1280 / 320: B (a partner now, no poster) - the Title poster is folded behind "+ Add a title poster", a 44px target a
+//        tap reaches; tapped, the field opens with focus on its tile; no sideways scroll. A (a partner holding a poster) opens straight
+//        onto its field (owner, 2026-11-11, option B: "what two image upload?")
 //
 // NOT DRIVEN, named plainly: the storage bucket's own refusal of an oversize object (413, a stand-in answers 200), and the browser's
 // paint of the crossfade (it is a CSS transition; the data-current attribute is what is asserted).
@@ -200,9 +203,12 @@ test("W1 organiser: pick a wide picture and read the crop warning, pick a 4:5 on
   await page.goto(sponsorUrl(org.slug, A.id));
   const sheet = sheetOf(page, 1280);
   await expect(sheet.getByTestId("sponsor-sheet-name")).toHaveText(A.name);
-  await expect(sheet.getByTestId("sponsor-sheet-detail-poster"), "premise: no poster yet").toContainText(say("sponsors.sheet.noPoster"));
+  await expect(sheet.getByTestId("sponsor-sheet-detail-name"), "premise: the read-only details are drawn").toBeVisible();
+  await expect(sheet.getByTestId("sponsor-sheet-detail-poster"), "premise: no poster yet, so no Title poster row").toHaveCount(0);
   await tapUntil(sheet.getByTestId("sponsor-sheet-edit"), sheet.getByTestId("sponsor-poster-field"), "Edit opens the editor, with its Poster field");
   const field = sheet.getByTestId("sponsor-poster-field");
+  // A is a Title sponsor: its editor opens straight onto the Title poster, never behind the fold a non-Title sponsor gets (W9).
+  await expect(sheet.getByTestId("sponsor-poster-toggle"), "a Title sponsor's Title poster is not folded away").toHaveCount(0);
   await expect(field.getByTestId("sponsor-poster-remove"), "premise: nothing to remove before a pick").toHaveCount(0);
 
   await pickPoster(page, field, "wide.png", wide);
@@ -522,7 +528,9 @@ test("W7 organiser: Remove poster, Save - the row reads null and the visitor's p
   expect(saved.status(), `PATCH answered ${saved.status()}: ${await saved.text()}`).toBe(200);
   expect(saved.request().postDataJSON(), "the save says the poster is gone, and nothing else").toEqual({ poster_path: null });
   await expect.poll(() => posterOf(A.id), { message: "the row reads null", timeout: READ_MS }).toBeNull();
-  await expect(sheet.getByTestId("sponsor-sheet-detail-poster"), "the page says the logo shows instead").toContainText(say("sponsors.sheet.noPoster"));
+  // The save re-reads the list before it closes the editor, so the read-only details drawn next are the saved ones: no poster, no row.
+  await expect(sheet.getByTestId("sponsor-sheet-detail-name"), "the editor closed onto the read-only details").toBeVisible({ timeout: NAV_MS });
+  await expect(sheet.getByTestId("sponsor-sheet-detail-poster"), "no poster: the page draws no Title poster row").toHaveCount(0);
 
   // The visitor: A's slide is the card a sponsor without a poster gets. Reduced motion, so A is the one on show while it is read.
   const v = await visitor(browser, { width: 1280, reducedMotion: true });
@@ -578,4 +586,49 @@ test("W8 both sponsors downgraded to partner: no panel, no band, no hero sentenc
   // The downgrade took the PLACEMENT away, not the picture: the row still holds the poster, so a plan that comes back has it to show.
   expect(await posterOf(A.id), "A's poster survived the downgrade").toBe(storedPoster);
   await expectNoHorizontalScroll(v.page);
+});
+
+test("W9 organiser: a partner with no poster sees the Title poster folded; a tap opens it onto its tile; a partner holding one opens straight onto it", async ({ page }) => {
+  test.setTimeout(6 * NAV_MS + 12 * ACT_MS);
+  expect(B.id, "W6 made B").not.toBe("");
+  expect(await posterOf(B.id), "premise: B holds no poster").toBeNull();
+  expect(await posterOf(A.id), "premise: A holds its poster again (W8 put it back)").toBe(storedPoster);
+  await standInStorage(page, org.orgId);
+  for (const width of [1280, 320] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(sponsorEditUrl(org.slug, B.id));
+    const sheet = sheetOf(page, width);
+    const toggle = sheet.getByTestId("sponsor-poster-toggle");
+    const field = sheet.getByTestId("sponsor-poster-field");
+    await expect(sheet.getByTestId("sponsor-sheet-editor"), `${width}: the editor is open`).toBeVisible({ timeout: NAV_MS });
+    // One DOM at every width: the toggle is visible at 1280 and at 320 alike, so it is asserted visible, never clicked "if visible".
+    await expect(toggle, `${width}: B is a partner with no poster - the Title poster is folded behind its toggle`).toBeVisible();
+    await expect(toggle).toContainText(say("sponsors.poster.add"));
+    await expect(toggle).toContainText(say("sponsors.poster.addHint"));
+    await expect(toggle, `${width}: and says it is collapsed`).toHaveAttribute("aria-expanded", "false");
+    await expect(field, `${width}: the field is not drawn while folded`).toHaveCount(0);
+    await toggle.scrollIntoViewIfNeeded();
+    const reach = await toggle.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return { height: r.height, hit: at !== null && (at === el || el.contains(at)) };
+    });
+    expect(reach.hit, `${width}: a tap at the toggle's centre lands on it`).toBe(true);
+    expect(reach.height, `${width}: the toggle is ${HIT_TARGET_FLOOR_PX}px tall`).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+    await expectNoHorizontalScroll(page);
+    // A tap before React has attached is lost, not queued (AGENTS.md class 20): tap until the field is drawn.
+    await tapUntil(toggle, field, `${width}: a tap opens the Title poster`);
+    await expect(toggle, `${width}: the toggle is gone once open`).toHaveCount(0);
+    await expect(field.getByTestId("sponsor-poster-tile"), `${width}: focus moved to the tile, ready to pick`).toBeFocused();
+    await expect(field.getByTestId("sponsor-poster-remove"), `${width}: nothing to remove yet`).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+  }
+  // A is a partner too now (W8), but it holds a poster: its editor opens straight onto the field, with no toggle and no focus taken.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(sponsorEditUrl(org.slug, A.id));
+  const sheetA = sheetOf(page, 1280);
+  await expect(sheetA.getByTestId("sponsor-poster-field"), "A holds a poster: the field is open").toBeVisible({ timeout: NAV_MS });
+  await expect(sheetA.getByTestId("sponsor-poster-tile").locator("img"), "showing it").toHaveAttribute("src", storedPoster);
+  await expect(sheetA.getByTestId("sponsor-poster-toggle"), "and no toggle").toHaveCount(0);
+  await expect(sheetA.getByTestId("sponsor-poster-tile"), "a field open from the start does not take focus").not.toBeFocused();
 });

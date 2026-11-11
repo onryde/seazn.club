@@ -438,7 +438,7 @@ for (const width of WIDTHS) {
       const row = region.getByTestId("sponsor-sheet-detail-poster");
       const thumb = row.getByTestId("sponsor-sheet-poster-thumb");
       await expect(thumb, "witness: the Poster row shows the stored poster").toHaveAttribute("src", poster);
-      await expect(row, "witness: and not the words for no poster").not.toContainText(word(UI_EN, "sponsors.sheet.noPoster"));
+      await expect(row, "witness: one Title poster row").toHaveCount(1);
       await arrived(thumb, "the thumbnail");
       await regionShot(page, shotPath("details", width), `details @${width}`, region);
     });
