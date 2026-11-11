@@ -156,7 +156,8 @@ test.describe("player accounts (PROMPT-53)", () => {
   test("player: RSVP Out with a note from the /me hero", async () => {
     await playerPage.goto("/me");
     // Hero = next match; Ada has exactly one fixture (vs Ben). exact: true —
-    // substring matching would hit the header's "Sign out" button.
+    // substring matching would hit any "Sign out" button (the header's,
+    // before the account menu took it in 2026-11-11).
     await playerPage.getByRole("button", { name: "Out", exact: true }).first().click();
     await expect(playerPage.getByText("Saved").first()).toBeVisible();
     const note = playerPage

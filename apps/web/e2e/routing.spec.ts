@@ -107,15 +107,19 @@ test("fresh login lands on /o/[slug]; two org tabs stay independent", async ({ b
   // the seazn_org cookie is only corrected afterwards by ActiveOrgSync — so pin
   // the cookie to org B, exactly the state that first render sees, and load org
   // A. The nav used to read that cookie and point Settings at org B, which is
-  // how "switch org, click Settings" landed on the org just left.
+  // how "switch org, click Settings" landed on the org just left. Settings
+  // lives in the account menu since 2026-11-11, and the menu's tick is the
+  // same question asked of the org list: org A, not the cookie's org B.
   const seazn = (await context.cookies()).find((c) => c.name === "seazn_org")!;
   await context.addCookies([{ ...seazn, value: orgB.id }]);
   await pageA.goto(`/o/${orgA.slug}`);
-  await expect(pageA.getByRole("link", { name: "Settings" })).toHaveAttribute(
-    "href",
-    `/o/${orgA.slug}/settings`,
-  );
-  await pageA.getByRole("link", { name: "Settings" }).click();
+  await pageA.getByTestId("account-menu-trigger").click();
+  await expect(pageA.getByTestId(`account-menu-org-${orgA.slug}`)).toHaveAttribute("aria-checked", "true");
+  await expect(pageA.getByTestId(`account-menu-org-${orgB.slug}`)).toHaveAttribute("aria-checked", "false");
+  const settings = pageA.getByTestId("account-menu-settings");
+  await expect(settings).toHaveText("Organisation settings");
+  await expect(settings).toHaveAttribute("href", `/o/${orgA.slug}/settings`);
+  await settings.click();
   await expect(pageA).toHaveURL(new RegExp(`/o/${orgA.slug}/settings`));
   await context.close();
 });

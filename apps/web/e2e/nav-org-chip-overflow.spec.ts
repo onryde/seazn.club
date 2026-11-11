@@ -6,7 +6,8 @@
 // simply the org NAME's width, and the right-hand group was squeezed from
 // 553px to 336px at 768 — the help icon rendered sliced in half at the
 // viewport edge and the account control and Sign out button were off-screen
-// entirely.
+// entirely. (Since 2026-11-11 the account menu is the bar's last control and
+// Sign out lives inside it - the control a squeezed row would cost.)
 //
 // NOTE the symptom, because the obvious gate does NOT see it:
 // `document.scrollWidth - clientWidth` is 0 at every width, before and after.
@@ -27,6 +28,8 @@
 // 768 is the pinch point specifically because the nav LABELS switch on at
 // `md`=768: 700px is better off than 768px. Above it the chip recovers
 // linearly (800→86 · 850→136 · 900→186 · 1024→272=full).
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { test, expect, type Page } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { TAG, loginUi, expectNoHorizontalScroll } from "./helpers";
@@ -46,8 +49,8 @@ async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promi
   }
 }
 
-/** A signed-in org whose NAME is the variable under test. */
-async function seedNamedOrg(name: string): Promise<{ slug: string; email: string }> {
+/** A signed-in org whose NAME is the variable under test (and, optionally, its logo: an https URL the gantry paints as-is). */
+async function seedNamedOrg(name: string, logoUrl: string | null = null): Promise<{ slug: string; email: string }> {
   const tag = randomBytes(5).toString("hex");
   const email = `delivered+chip-${TAG}-${tag}@resend.dev`;
   const slug = `chip-${TAG}-${tag}`;
@@ -56,8 +59,8 @@ async function seedNamedOrg(name: string): Promise<{ slug: string; email: string
       insert into users (email, display_name, email_verified)
       values (${email}, ${OWNER_NAME}, true) returning id`;
     const [org] = await sql<{ id: string }[]>`
-      insert into organizations (name, slug, status, created_by)
-      values (${name}, ${slug}, 'active', ${owner!.id}) returning id`;
+      insert into organizations (name, slug, status, created_by, logo_url)
+      values (${name}, ${slug}, 'active', ${owner!.id}, ${logoUrl}) returning id`;
     await sql`insert into org_members (org_id, user_id, role)
               values (${org!.id}, ${owner!.id}, 'owner')`;
   });
@@ -79,6 +82,16 @@ const LONG_NAME = "Northamptonshire Badminton Association";
 
 // The signed-in viewer's own display name — folded away in the 768-1023 band.
 const OWNER_NAME = "Chip Owner";
+
+// Copy from the dictionary itself, never typed, so a copy edit moves the expectation with it.
+const consoleDict = (locale: string): Record<string, string> =>
+  JSON.parse(readFileSync(fileURLToPath(new URL(`../src/dictionaries/${locale}/console.json`, import.meta.url)), "utf8")) as Record<string, string>;
+
+/** The account menu's widths: the brief's bar (owner, Option A, 2026-11-11). */
+const MENU_WIDTHS = [320, 360, 375, 390, 430, 768, 834, 1280] as const;
+const LOCALES = ["en", "es", "fr", "nl"] as const;
+/** An org crest from a host that never answers: the gantry reserves its 28px box either way, which is what the budget is about. */
+const LOGO_URL = "https://crest.nav-chip.example/crest.png";
 
 test.describe("gantry org chip does not push the page sideways", () => {
   test("a 38-character club name leaves the gantry row un-overflowed at every width", async ({
@@ -107,23 +120,94 @@ test.describe("gantry org chip does not push the page sideways", () => {
     }
   });
 
-  test("Sign out stays inside the viewport at 768 — the control the break cost", async ({
+  test("the account menu stays inside the viewport at 768 — and Sign out, the control the break cost, is one tap into it", async ({
     page,
   }) => {
     // The defect's real consequence, asserted on the control a user loses
-    // rather than on a pixel count. Pre-fix this button's right edge sat at
-    // ~877 against a 768 viewport, clipped and unreachable.
+    // rather than on a pixel count. Pre-fix the bar's last control (then the
+    // Sign-out button) sat at ~877 against a 768 viewport, clipped and
+    // unreachable. The account menu is that last control now.
     const org = await seedNamedOrg(LONG_NAME);
     await signIn(page, org.email);
     await page.setViewportSize({ width: 768, height: 900 });
     await page.goto(`/o/${org.slug}/settings/connect`);
 
-    const signOut = page.locator("header.app-gantry").getByRole("button", { name: /sign out/i });
+    const trigger = page.locator("header.app-gantry").getByTestId("account-menu-trigger");
+    await expect(trigger).toBeVisible();
+    const box = await trigger.boundingBox();
+    expect(box, "the account trigger has a box at 768").not.toBeNull();
+    expect(box!.x, "the trigger starts inside the viewport").toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width, "the trigger ENDS inside the viewport").toBeLessThanOrEqual(768);
+
+    await trigger.click();
+    const signOut = page.getByTestId("account-menu-signout");
     await expect(signOut).toBeVisible();
-    const box = await signOut.boundingBox();
-    expect(box, "Sign out has a box at 768").not.toBeNull();
-    expect(box!.x, "Sign out starts inside the viewport").toBeGreaterThanOrEqual(0);
-    expect(box!.x + box!.width, "Sign out ENDS inside the viewport").toBeLessThanOrEqual(768);
+    await expect(signOut).toHaveText(consoleDict("en")["nav.signOut"] ?? "");
+    const so = await signOut.boundingBox();
+    expect(so, "Sign out has a box").not.toBeNull();
+    expect(so!.x, "Sign out starts inside the viewport").toBeGreaterThanOrEqual(0);
+    expect(so!.x + so!.width, "Sign out ENDS inside the viewport").toBeLessThanOrEqual(768);
+  });
+
+  test("the bar and its open account menu hold at every width x locale, with a 38-character club name, with and without a logo", async ({
+    page,
+  }) => {
+    // The brief's bar (owner, Option A, 2026-11-11): no horizontal overflow at 320/360/375/390/430/768/834/1280 in en/es/fr/nl, with
+    // the realistic 38-character name, with and without a crest - closed AND open. Resized in place (the layout is CSS; one load per
+    // org x locale), so the clock is spent on the 64 cells, not on reloads.
+    const cells = 2 * LOCALES.length * MENU_WIDTHS.length;
+    test.setTimeout(Math.max(120_000, 2 * LOCALES.length * 15_000 + cells * 4_000));
+    let checked = 0;
+    for (const logo of [false, true]) {
+      const org = await seedNamedOrg(LONG_NAME, logo ? LOGO_URL : null);
+      await page.context().clearCookies();
+      await signIn(page, org.email);
+      for (const locale of LOCALES) {
+        const words = consoleDict(locale);
+        await page.context().addCookies([{ name: "seazn_locale", value: locale, url: new URL(page.url()).origin }]);
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await page.goto(`/o/${org.slug}/settings/connect`);
+        const trigger = page.locator("header.app-gantry").getByTestId("account-menu-trigger");
+        // The locale witness: the trigger is named in THIS locale (a cookie that silently failed would measure English four times).
+        await expect(trigger, `${locale}: the trigger speaks ${locale}`).toHaveAttribute("aria-label", words["nav.account.menu"] ?? "");
+        await expect(page.locator(`header.app-gantry img[src="${LOGO_URL}"]`), `logo ${logo}: the crest is ${logo ? "" : "not "}in the bar`).toHaveCount(logo ? 1 : 0);
+        for (const width of MENU_WIDTHS) {
+          const where = `${locale} logo=${logo} @${width}`;
+          await page.setViewportSize({ width, height: 800 });
+          await expectNoHorizontalScroll(page);
+          const row = await page.evaluate(() => {
+            const r = document.querySelector("header.app-gantry > div") as HTMLElement | null;
+            return r ? r.scrollWidth - r.clientWidth : null;
+          });
+          expect(row, `${where}: the gantry row does not overflow`).toBe(0);
+          const tb = await trigger.boundingBox();
+          expect(tb, `${where}: the trigger is laid out`).not.toBeNull();
+          expect(tb!.x + tb!.width, `${where}: the trigger ends inside the viewport`).toBeLessThanOrEqual(width);
+
+          await trigger.click();
+          const menu = page.getByTestId("account-menu");
+          await expect(menu, `${where}: the menu opens`).toBeVisible();
+          const mb = (await menu.boundingBox())!;
+          expect(mb.x, `${where}: the menu starts inside the viewport`).toBeGreaterThanOrEqual(0);
+          expect(mb.x + mb.width, `${where}: the menu ends inside the viewport`).toBeLessThanOrEqual(width + 0.5);
+          const signOut = page.getByTestId("account-menu-signout");
+          await expect(signOut, `${where}: Sign out is in the menu, in ${locale}`).toHaveText(words["nav.signOut"] ?? "");
+          const sb = (await signOut.boundingBox())!;
+          if (width < 768) {
+            // Phones: a bottom sheet the full width of the screen, with 48px rows (owner, Option A).
+            expect(Math.round(mb.width), `${where}: the sheet spans the screen`).toBe(width);
+            expect(sb.height, `${where}: a 48px row`).toBeGreaterThanOrEqual(47.5);
+          } else {
+            expect(Math.round(mb.width), `${where}: the dropdown is 300px`).toBe(300);
+          }
+          await expectNoHorizontalScroll(page);
+          await page.keyboard.press("Escape");
+          await expect(menu, `${where}: Escape closes it`).toHaveCount(0);
+          checked++;
+        }
+      }
+    }
+    expect(checked, "anti-vacuity: every width x locale x logo cell ran").toBe(cells);
   });
 
   test("the chip still SHOWS the club name at 768 — truncated, not dropped", async ({ page }) => {
@@ -198,7 +282,9 @@ test.describe("gantry org chip does not push the page sideways", () => {
   }) => {
     // Option B, owner-approved 2026-09-21. At 768-1023 the gantry cannot fit
     // both the org chip and the viewer's display name; the 76px goes to the
-    // chip (55px -> 143px). This is the fold's BOTH-DIRECTIONS pair: a
+    // chip (55px -> 143px). Since 2026-11-11 the name is painted INSIDE the
+    // account trigger, beside the avatar, on the same `lg` rung. This is the
+    // fold's BOTH-DIRECTIONS pair: a
     // one-sided assertion here would be satisfied by deleting the span
     // outright, which is a different and worse change.
     //
