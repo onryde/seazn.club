@@ -59,6 +59,13 @@ const probes = (f: RuleField): string[] =>
 function outputsOf(f: RuleField): { probe: string; out: Record<string, unknown> }[] {
   const out: { probe: string; out: Record<string, unknown> }[] = [];
   for (const v of probes(f)) {
+    // A PAIRED field (controller ruling 161, `pairedWith`) is judged as the pair, both boxes at the probe: one box alone is a
+    // form the editor refuses by design (its half fails the schema on purpose), which `rulePairProblems` and the field's own
+    // tests cover, so it is not a build this contract asks the engine to accept.
+    if (f.pairedWith !== undefined) {
+      out.push({ probe: v, out: f.build(v, { [f.key]: v, [f.pairedWith]: v }) });
+      continue;
+    }
     out.push({ probe: v, out: f.build(v, {}) }, { probe: v, out: f.build(v, { [f.key]: v }) });
   }
   if (f.buildOnBlank) out.push({ probe: "blank", out: f.buildOnBlank({}) }, { probe: "blank", out: f.buildOnBlank({ [f.key]: "" }) });

@@ -8,13 +8,13 @@ import type { RuleField } from "./types.ts";
  *  shape (a hand-edited 20-minute extra time hydrates blank rather than being rounded to "on" and rewritten). */
 const EXTRA_TIME = { on: { enabled: true, halfMinutes: 15 }, off: { enabled: false, halfMinutes: 15 } } as const;
 
-/** Law 3.2's extra-time allowance: one more substitution and one more opportunity. What a blank box beside a filled one means. */
-const LAW_3_EXTRA = 1;
-
-/** `extraTimeSubs` from the two boxes' raw values; a blank one is Law 3's one (the engine requires both leaves). */
+/** `extraTimeSubs` from the two boxes' raw values: a leaf per filled box. Both are required by the engine, so a pair with one box
+ *  blank builds a half the schema refuses (controller ruling 161: no silent default; `rulePairProblems` says why beside both). */
 function extraTimeSubsOf(subs: string | undefined, windows: string | undefined): Record<string, unknown> {
-  const n = (raw: string | undefined) => (raw === undefined || raw === "" ? LAW_3_EXTRA : Number(raw));
-  return { extraTimeSubs: { subs: n(subs), windows: n(windows) } };
+  const filled = (raw: string | undefined): raw is string => raw !== undefined && raw !== "";
+  return {
+    extraTimeSubs: { ...(filled(subs) ? { subs: Number(subs) } : {}), ...(filled(windows) ? { windows: Number(windows) } : {}) },
+  };
 }
 
 export const FOOTBALL_RULES: RuleField[] = [
@@ -122,20 +122,20 @@ export const FOOTBALL_RULES: RuleField[] = [
   },
   // Engine 7.0.0 (F-R3; IFAB Law 3.2) - the extra substitution and the extra substitution opportunity a competition that plays
   // extra time may allow in it. ONE engine key, `extraTimeSubs: { subs, windows }`, both leaves required, so two number boxes
-  // that each build the whole object: its own value, and the other box's, or Law 3's one when that box is blank. Optional with
-  // no engine default, so both blank stores nothing. Read only from extra time on (`effectiveSubCaps`); the form has no way to
-  // hold them while extra time is off unless the engine declares the key a detail of `extraTime` (`detailOf`), which 7.0.0 does
-  // not. The engine gives no maximum; three is the web's own bound (Law 3 allows one).
+  // that are a PAIR (controller ruling 161, `pairedWith`): both filled build the whole object, both blank store nothing, and
+  // one alone is refused. The engine declares the key a detail of `extraTime` (`detailOf`), so the stage form holds both
+  // while extra time is off. The engine gives no maximum; three is the web's own bound (Law 3 allows one).
   {
     key: "extraTimeSubs",
     edits: ["extraTimeSubs"],
     label: "Extra subs in extra time",
     labelKey: "rules.field.extraTimeSubs.label",
-    help: "Substitutions a side may add in extra time, on top of Substitutes allowed (Law 3 allows one). Extra time only. Blank = none, or 1 if extra windows are set.",
+    help: "Substitutions a side may add in the added periods after a level match, on top of Substitutes allowed (Law 3 allows one). Fill in with the extra windows, or leave both blank for none.",
     helpKey: "rules.field.extraTimeSubs.help",
     kind: "number",
     min: 0,
     max: 3,
+    pairedWith: "extraTimeWindows",
     build: (v, values) => extraTimeSubsOf(v, values.extraTimeWindows),
     read: readNestedNumber("extraTimeSubs", "subs"),
   },
@@ -144,11 +144,12 @@ export const FOOTBALL_RULES: RuleField[] = [
     edits: ["extraTimeSubs"],
     label: "Extra windows in extra time",
     labelKey: "rules.field.extraTimeWindows.label",
-    help: "Stoppages a side may add for substitutions in extra time, on top of Substitution windows allowed (Law 3 allows one). Extra time only. Blank = none, or 1 if extra subs are set.",
+    help: "Stoppages a side may add for substitutions in the added periods after a level match, on top of Substitution windows allowed (Law 3 allows one). Fill in with the extra subs, or leave both blank for none.",
     helpKey: "rules.field.extraTimeWindows.help",
     kind: "number",
     min: 0,
     max: 3,
+    pairedWith: "extraTimeSubs",
     build: (v, values) => extraTimeSubsOf(values.extraTimeSubs, v),
     read: readNestedNumber("extraTimeSubs", "windows"),
   },

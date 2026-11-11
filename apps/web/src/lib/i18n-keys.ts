@@ -6798,6 +6798,7 @@ export type DictionaryKey =
   | "rules.field.winBy.label"
   | "rules.off"
   | "rules.on"
+  | "rules.pair.incomplete"
   | "rulesStrip.format"
   | "rulesStrip.format.save"
   | "rulesStrip.lead"

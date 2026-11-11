@@ -59,6 +59,12 @@ export interface RuleField {
    */
   emptyValue?: string;
   /**
+   * Controller ruling 161: the key of the field this one is a PAIR with. Both are filled or both are blank; one filled and one
+   * blank is refused with a field message beside both (`rulePairProblems`), and its build writes the half it has, which the
+   * engine's schema refuses at the write door, so nothing is defaulted silently. Football's `extraTimeSubs` boxes.
+   */
+  pairedWith?: string;
+  /**
    * Maps the entered value onto the override object (top-level key).
    * `values` is the full raw form snapshot for this sport — read a sibling
    * key from it when one field must assemble a nested object that several

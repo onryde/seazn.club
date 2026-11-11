@@ -232,7 +232,9 @@ describe("a decider's detail is held while the decider is off, with the reason b
     expect(off).toContain("Only used when Penalty shootout is on");
     const on = at({ shootout: true });
     expect(held(blockOf(on, "shootoutAttempts"))).toBe(false);
-    expect(on).not.toContain("stage-rule-detail-off-");
+    expect(on).not.toContain("stage-rule-detail-off-shootoutAttempts");
+    // Engine 7.0.0: extra time is off in this division, so ITS details (the extra pair) are held either way, by their own switch.
+    expect(on).toContain('data-testid="stage-rule-detail-off-extraTimeSubs"');
     // Nothing else is held: the half length stays editable with the shoot-out off.
     expect(held(blockOf(off, "halfMinutes"))).toBe(false);
   });
@@ -422,7 +424,9 @@ describe("R157 the five fields are drawn by the real stage row, from the diction
       }
     }
     expect(declared.length, "the engine declares held details").toBeGreaterThan(0);
-    expect([...held].sort(), "every engine-declared detail key is a held field, one to one").toEqual([...declared].sort());
+    // Engine 7.0.0 (ruling 161): football's extra pair is two boxes over ONE engine key, so a key may be held by more than one field.
+    expect([...new Set(held)].sort(), "every engine-declared detail key is a held field, and no other").toEqual([...declared].sort());
+    expect(held.filter((k) => k === "football.extraTimeSubs").length, "the pair: both of its boxes are held").toBe(2);
     expect(judged, "five judgements (four dictionaries and the fallback) per held field").toBe(held.length * 5);
   });
 
