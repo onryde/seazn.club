@@ -460,11 +460,11 @@ function LineupRow({
     <li
       data-testid="lineup-row"
       data-slot={s.slot}
-      className="flex min-w-0 items-center gap-2 text-xs"
+      className="flex min-w-0 items-center gap-2 text-xs max-md:grid max-md:grid-cols-[1.5rem_auto_minmax(0,1fr)_auto] max-md:gap-y-1"
     >
-      <span className="w-6 shrink-0 text-right font-mono text-slate-400">{`${number}.`}</span>
+      <span className="w-6 shrink-0 text-right font-mono text-slate-400 max-md:col-start-1">{`${number}.`}</span>
       <AvailabilityChip personName={s.full_name} info={availability} />
-      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+      <span className="flex min-w-0 flex-1 items-center gap-1.5 max-md:col-start-3">
         <span className="min-w-[2.5rem] truncate font-medium text-slate-700">{s.full_name}</span>
         {flagged.map((r) =>
           r.key === "captain" ? (
@@ -501,7 +501,7 @@ function LineupRow({
           disabled={!canEdit}
           value={s.position_key ?? ""}
           onChange={(e) => onAction({ type: "position", value: e.target.value || null })}
-          className="select min-h-11 w-28 shrink-0 px-2 py-1 text-xs max-md:w-24"
+          className="select min-h-11 w-28 shrink-0 px-2 py-1 text-xs max-md:col-span-3 max-md:col-start-1 max-md:w-full"
           aria-label={msg("lineup.positionAria", { name: s.full_name })}
           data-testid="lineup-position-select"
         >
@@ -520,7 +520,7 @@ function LineupRow({
           onChange={(e) =>
             onAction({ type: "pairOrder", value: e.target.value ? Number(e.target.value) : null })
           }
-          className="select min-h-11 w-28 shrink-0 px-2 py-1 text-xs max-md:w-24"
+          className="select min-h-11 w-28 shrink-0 px-2 py-1 text-xs max-md:col-span-3 max-md:col-start-1 max-md:w-full"
           aria-label={msg("lineup.pairOrderAria", { name: s.full_name })}
           data-testid="lineup-pairorder-select"
         >

@@ -2283,6 +2283,38 @@ test("lineup editor role/pair-order selects hold at phone width", async ({ page,
       measured++;
     }
 
+    // Option A two-line row (owner 2026-11-11): below md the select drops to its own line under the name, so a long name
+    // keeps most of the row and the select shows its full option text; from md the row is ONE line. Measured on the row
+    // whose name is the 43-char one, never on a short stand-in.
+    const longRow = card.getByTestId("lineup-row").filter({ hasText: "Featherstonehaugh" }).first();
+    await expect(longRow, `${side}: the 43-char row is rendered`).toBeVisible();
+    const geo = await longRow.evaluate((row) => {
+      const q = (sel: string) => row.querySelector<HTMLElement>(sel);
+      const name = Array.from(row.querySelectorAll<HTMLElement>("span.truncate")).find((e) => e.textContent?.includes("Featherstonehaugh"))!;
+      const select = q('[data-testid="lineup-position-select"], [data-testid="lineup-pairorder-select"]');
+      const rr = row.getBoundingClientRect();
+      const nr = name.getBoundingClientRect();
+      return {
+        rowW: rr.width,
+        nameW: nr.width,
+        nameTop: nr.top,
+        nameMid: nr.top + nr.height / 2,
+        selTop: select ? select.getBoundingClientRect().top : null,
+        selMid: select ? select.getBoundingClientRect().top + select.getBoundingClientRect().height / 2 : null,
+        selOverflow: select ? select.scrollWidth - select.clientWidth : null,
+      };
+    });
+    expect(geo.selTop, `${side}: the row offers its select (anti-vacuity)`).not.toBeNull();
+    expect(geo.selOverflow!, `${side}: the select's own text is clipped`).toBeLessThanOrEqual(0);
+    if (viewportWidth < 768) {
+      expect(geo.nameW / geo.rowW, `${side}: the name is ${geo.nameW}px of a ${geo.rowW}px row`).toBeGreaterThanOrEqual(0.6);
+      expect(geo.selTop!, `${side}: below md the select sits on its own line under the name`).toBeGreaterThan(geo.nameTop + 8);
+    } else {
+      // Rows are items-center, so the one-line proof is the vertical CENTRES within 4px (tops differ by the select's 44px height).
+      expect(Math.abs(geo.selMid! - geo.nameMid), `${side}: from md the row is one line (name/select centres within 4px)`).toBeLessThanOrEqual(4);
+    }
+    await expectNoHorizontalScroll(page);
+
     // Open the first row's menu: every control in it is a 44px target, the Role
     // segmented control is in it, and it fits the page (the state that matters).
     await buttons.first().click();

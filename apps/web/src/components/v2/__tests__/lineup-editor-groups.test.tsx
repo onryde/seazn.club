@@ -184,6 +184,18 @@ describe("grouping by slot", () => {
     expect(html).toMatch(/class="min-w-\[2.5rem\] truncate[^"]*">Bartholomew/);
   });
 
+  it("phone two-line row (Option A): the row is a grid below md, the select drops to its own full-width line; staff rows have no select line", () => {
+    const html = editor({ side: sideOf([slot(1, "starting"), slot(2, "starting", { role: "coach" })]), positionGroups: [{ key: "GK", name: "Goalkeeper" }] });
+    const rows = html.split('data-testid="lineup-row"').slice(1);
+    expect(rows.length).toBe(2);
+    for (const r of rows) expect(r).toMatch(/\bmax-md:grid\b/);
+    expect(rows[0]).toMatch(/data-testid="lineup-position-select"/);
+    expect(rows[0]).toMatch(/class="select[^"]*max-md:col-span-3[^"]*max-md:w-full/);
+    expect(rows[1]).not.toContain("lineup-position-select");
+    // wide row stays one flex line
+    expect(rows[0]).toMatch(/class="flex min-w-0 items-center gap-2 text-xs max-md:grid/);
+  });
+
   it("no one holds a role: no Coaches & staff group renders (empty case)", () => {
     expect(editor({ side: sideOf(mixed) })).not.toContain('data-testid="lineup-group-staff"');
   });
