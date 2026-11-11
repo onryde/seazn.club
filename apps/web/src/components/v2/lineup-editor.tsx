@@ -3,8 +3,17 @@
 // Per-fixture lineup editor: pick starters/bench from the entrant's roster,
 // assign positions/order from the module catalog. PUT replaces the lineup
 // (doc 08 §3); the engine validates size/roles at the scoring door.
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import {
+  applyLineupAction,
+  groupSlots,
+  lineupMenuItems,
+  primaryControlFor,
+  type LineupAction,
+  type MenuItem,
+  type PrimaryControl,
+} from "@/components/v2/lineup-actions";
 import type {
   SideInfo,
   LineupSlotIn,
@@ -265,6 +274,262 @@ export function unmetPositionMinimums(
     .filter((g) => g.short > 0);
 }
 
+/**
+ * The ⋯ menu's body: a dropdown at `md`+, a bottom sheet below it — ONE node,
+ * switched by `max-md:`/`md:` classes (phone-composition rule: never a second
+ * tree). Presentational and stateless so a static render can prove which
+ * controls it offers; `RowMenu` below owns open/close.
+ */
+export function LineupMenuPanel({
+  name,
+  items,
+  onAction,
+  onClose,
+}: {
+  name: string;
+  items: MenuItem[];
+  onAction: (action: LineupAction) => void;
+  onClose: () => void;
+}) {
+  const msg = useMsg();
+  const itemCls =
+    "flex min-h-11 w-full items-center rounded-lg px-3 text-left text-sm disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent";
+  return (
+    <div
+      role="menu"
+      aria-label={msg("lineup.menu.open", { name })}
+      data-testid="lineup-row-menu"
+      className="z-50 bg-white shadow-xl ring-1 ring-slate-200 max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:max-h-[80dvh] max-md:overflow-y-auto max-md:rounded-t-2xl max-md:p-3 max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:absolute md:right-0 md:top-full md:mt-1 md:w-64 md:rounded-xl md:p-1"
+    >
+      <div className="mb-1 flex min-h-11 items-center justify-between gap-2 px-3 md:hidden">
+        <span className="min-w-0 truncate text-sm font-semibold text-slate-900">{name}</span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="min-h-11 shrink-0 px-2 text-sm text-slate-500"
+        >
+          {msg("lineup.menu.close")}
+        </button>
+      </div>
+      {items.map((item) =>
+        item.kind === "segment" ? (
+          <div key={item.id} role="group" aria-label={msg(item.labelKey)} className="px-3 py-1" data-testid={`lineup-menu-${item.id}`}>
+            <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              {msg(item.labelKey)}
+            </p>
+            <div className="grid auto-cols-fr grid-flow-col gap-1">
+              {item.options.map((o) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={o.selected}
+                  data-testid={`lineup-menu-${item.id}-${o.id}`}
+                  onClick={() => onAction(o.action)}
+                  className={`min-h-11 rounded-lg border px-2 text-xs font-medium ${
+                    o.selected
+                      ? "border-purple-600 bg-purple-600 text-white"
+                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  {o.labelKey ? msg(o.labelKey) : o.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <button
+            key={item.id}
+            type="button"
+            role="menuitem"
+            disabled={item.disabled}
+            data-testid={`lineup-menu-${item.id}`}
+            onClick={() => onAction(item.action)}
+            className={`${itemCls} ${item.danger ? "text-red-600 hover:bg-red-50" : "text-slate-700 hover:bg-slate-50"}`}
+          >
+            {msg(item.labelKey, item.params)}
+          </button>
+        ),
+      )}
+    </div>
+  );
+}
+
+/** The ⋯ trigger and its popover. Dismissal matches `help-menu.tsx`: outside
+ *  pointer-down, Escape, and after choosing an item. The ≥44px tap target is
+ *  the button's own `h-11 w-11`. */
+function RowMenu({
+  name,
+  items,
+  onAction,
+}: {
+  name: string;
+  items: MenuItem[];
+  onAction: (action: LineupAction) => void;
+}) {
+  const msg = useMsg();
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setOpen(false);
+        buttonRef.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative shrink-0">
+      <button
+        ref={buttonRef}
+        type="button"
+        aria-label={msg("lineup.menu.open", { name })}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        data-testid="lineup-row-menu-button"
+        onClick={() => setOpen((v) => !v)}
+        className={`inline-flex h-11 w-11 items-center justify-center rounded-lg text-lg leading-none text-slate-500 hover:bg-slate-100 hover:text-slate-800 ${open ? "bg-slate-100" : ""}`}
+      >
+        <span aria-hidden="true">⋯</span>
+      </button>
+      {open && (
+        <>
+          <div
+            aria-hidden="true"
+            className="fixed inset-0 z-40 bg-slate-900/30 md:hidden"
+            onClick={() => setOpen(false)}
+          />
+          <LineupMenuPanel
+            name={name}
+            items={items}
+            onClose={() => setOpen(false)}
+            onAction={(action) => {
+              onAction(action);
+              setOpen(false);
+            }}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+/** One player: number · availability + name (+ badges) · the sport's ONE
+ *  primary control · ⋯ . Everything else lives in the menu. */
+function LineupRow({
+  s,
+  number,
+  availability,
+  primary,
+  positionGroups,
+  canEdit,
+  roles,
+  menuItems,
+  onAction,
+}: {
+  s: SlotDraft;
+  number: number;
+  availability: PersonAvailability | undefined;
+  primary: PrimaryControl;
+  positionGroups: PositionGroupIn[];
+  canEdit: boolean;
+  roles: { key: string; name?: string }[];
+  menuItems: MenuItem[];
+  onAction: (action: LineupAction) => void;
+}) {
+  const msg = useMsg();
+  const flagged = roles.filter((r) => s.roles.includes(r.key));
+  return (
+    <li
+      data-testid="lineup-row"
+      data-slot={s.slot}
+      className="flex min-w-0 items-center gap-2 text-xs"
+    >
+      <span className="w-6 shrink-0 text-right font-mono text-slate-400">{`${number}.`}</span>
+      <AvailabilityChip personName={s.full_name} info={availability} />
+      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        <span className="min-w-[2.5rem] truncate font-medium text-slate-700">{s.full_name}</span>
+        {flagged.map((r) =>
+          r.key === "captain" ? (
+            <span
+              key={r.key}
+              data-testid="lineup-badge-captain"
+              title={msg("lineup.badge.captain")}
+              aria-label={msg("lineup.badge.captain")}
+              className="shrink-0 rounded bg-lime-400 px-1 text-[10px] font-bold leading-4 text-slate-900"
+            >
+              C
+            </span>
+          ) : (
+            <span
+              key={r.key}
+              data-testid="lineup-badge-flag"
+              className="shrink-0 rounded bg-slate-100 px-1 text-[10px] font-semibold uppercase leading-4 text-slate-600"
+            >
+              {r.name ?? r.key}
+            </span>
+          ),
+        )}
+        {s.role !== "player" && (
+          <span
+            data-testid="lineup-badge-role"
+            className="shrink-0 rounded bg-slate-100 px-1 text-[10px] font-semibold uppercase leading-4 text-slate-600"
+          >
+            {msg(s.role === "coach" ? "lineup.role.coach" : "lineup.role.staff")}
+          </span>
+        )}
+      </span>
+      {primary === "position" && (
+        <select
+          disabled={!canEdit}
+          value={s.position_key ?? ""}
+          onChange={(e) => onAction({ type: "position", value: e.target.value || null })}
+          className="select min-h-11 w-28 shrink-0 px-2 py-1 text-xs max-md:w-24"
+          aria-label={msg("lineup.positionAria", { name: s.full_name })}
+          data-testid="lineup-position-select"
+        >
+          <option value="">{msg("lineup.positionPlaceholder")}</option>
+          {positionGroups.map((g) => (
+            <option key={g.key} value={g.key}>
+              {g.name}
+            </option>
+          ))}
+        </select>
+      )}
+      {primary === "pairOrder" && (
+        <select
+          disabled={!canEdit}
+          value={s.pair_order ?? ""}
+          onChange={(e) =>
+            onAction({ type: "pairOrder", value: e.target.value ? Number(e.target.value) : null })
+          }
+          className="select min-h-11 w-28 shrink-0 px-2 py-1 text-xs max-md:w-24"
+          aria-label={msg("lineup.pairOrderAria", { name: s.full_name })}
+          data-testid="lineup-pairorder-select"
+        >
+          <option value="">{msg("lineup.pairOrderPlaceholder")}</option>
+          <option value="1">{msg("lineup.pairOrder.first")}</option>
+          <option value="2">{msg("lineup.pairOrder.second")}</option>
+        </select>
+      )}
+      {canEdit && <RowMenu name={s.full_name} items={menuItems} onAction={onAction} />}
+    </li>
+  );
+}
+
 export function LineupEditor({
   fixtureId,
   side,
@@ -329,6 +594,15 @@ export function LineupEditor({
   const inLineup = new Set(slots.map((s) => s.person_id));
   const startingCount = slots.filter((s) => s.slot === "starting").length;
   const unmet = unmetPositionMinimums(positionGroups, slots);
+  const groups = groupSlots(slots);
+  const primary = primaryControlFor({ positionGroupCount: positionGroups.length, pairShaped });
+
+  /** Every row edit goes through `applyLineupAction` (lineup-actions.ts) — the
+   *  same function the tests drive, so a tap and a test take one path. */
+  function apply(personId: string, action: LineupAction) {
+    setSlots((prev) => applyLineupAction(prev, personId, action));
+    setSaved(false);
+  }
 
   function add(member: SideInfo["members"][number], slot: "starting" | "bench") {
     setSlots((prev) => [
@@ -438,163 +712,48 @@ export function LineupEditor({
         </p>
       )}
 
-      <ul className="space-y-1.5">
-        {slots.map((s, i) => (
-          <li key={s.person_id} className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="w-7 font-mono text-slate-400">{i + 1}.</span>
-            <span className="w-36 truncate font-medium text-slate-700">{s.full_name}</span>
-            <AvailabilityChip personName={s.full_name} info={availability[s.person_id]} />
-            <select
-              disabled={!canEdit}
-              value={s.slot}
-              onChange={(e) => {
-                const v = e.target.value as "starting" | "bench";
-                setSlots((prev) => prev.map((x, j) => (j === i ? { ...x, slot: v } : x)));
-                setSaved(false);
-              }}
-              className="select min-h-11 w-24 px-2 py-1 text-xs"
-              aria-label={msg("lineup.slotAria", { name: s.full_name })}
-            >
-              <option value="starting">{msg("lineup.slotStarting")}</option>
-              <option value="bench">{msg("lineup.slotBench")}</option>
-            </select>
-            {positionGroups.length > 0 && (
-              <select
-                disabled={!canEdit}
-                value={s.position_key ?? ""}
-                onChange={(e) => {
-                  const v = e.target.value || null;
-                  setSlots((prev) =>
-                    prev.map((x, j) => (j === i ? { ...x, position_key: v } : x)),
-                  );
-                  setSaved(false);
-                }}
-                className="select min-h-11 w-32 px-2 py-1 text-xs"
-                aria-label={msg("lineup.positionAria", { name: s.full_name })}
-                data-testid="lineup-position-select"
-              >
-                <option value="">{msg("lineup.positionPlaceholder")}</option>
-                {positionGroups.map((g) => (
-                  <option key={g.key} value={g.key}>
-                    {g.name}
-                  </option>
-                ))}
-              </select>
-            )}
-            <select
-              disabled={!canEdit}
-              value={s.role}
-              onChange={(e) => {
-                const v = e.target.value as "player" | "coach" | "staff";
-                setSlots((prev) => prev.map((x, j) => (j === i ? { ...x, role: v } : x)));
-                setSaved(false);
-              }}
-              className="select min-h-11 w-24 px-2 py-1 text-xs"
-              aria-label={msg("lineup.roleAria", { name: s.full_name })}
-              data-testid="lineup-role-select"
-            >
-              <option value="player">{msg("lineup.role.player")}</option>
-              <option value="coach">{msg("lineup.role.coach")}</option>
-              <option value="staff">{msg("lineup.role.staff")}</option>
-            </select>
-            {pairShaped && (
-              <select
-                disabled={!canEdit}
-                value={s.pair_order ?? ""}
-                onChange={(e) => {
-                  const v = e.target.value ? Number(e.target.value) : null;
-                  setSlots((prev) =>
-                    prev.map((x, j) => (j === i ? { ...x, pair_order: v } : x)),
-                  );
-                  setSaved(false);
-                }}
-                className="select min-h-11 w-32 px-2 py-1 text-xs"
-                aria-label={msg("lineup.pairOrderAria", { name: s.full_name })}
-                data-testid="lineup-pairorder-select"
-              >
-                <option value="">{msg("lineup.pairOrderPlaceholder")}</option>
-                <option value="1">{msg("lineup.pairOrder.first")}</option>
-                <option value="2">{msg("lineup.pairOrder.second")}</option>
-              </select>
-            )}
-            {roles.map((r) => (
-              <label
-                key={r.key}
-                className="flex items-center gap-1 text-slate-500"
-                data-testid="lineup-role-flag"
-              >
-                <input
-                  type="checkbox"
-                  disabled={!canEdit}
-                  checked={s.roles.includes(r.key)}
-                  onChange={(e) => {
-                    setSlots((prev) =>
-                      prev.map((x, j) =>
-                        j === i
-                          ? {
-                              ...x,
-                              roles: e.target.checked
-                                ? [...x.roles, r.key]
-                                : x.roles.filter((k) => k !== r.key),
-                            }
-                          : x,
-                      ),
-                    );
-                    setSaved(false);
-                  }}
-                />
-                {r.name ?? r.key}
-              </label>
-            ))}
-            {canEdit && (
-              <span className="flex gap-1">
-                <button
-                  type="button"
-                  disabled={i === 0}
-                  onClick={() => {
-                    setSlots((prev) => {
-                      const next = [...prev];
-                      [next[i - 1], next[i]] = [next[i], next[i - 1]];
-                      return next;
-                    });
-                    setSaved(false);
-                  }}
-                  className="text-slate-400 hover:text-slate-700"
-                  aria-label={msg("lineup.moveUp", { name: s.full_name })}
-                >
-                  ↑
-                </button>
-                <button
-                  type="button"
-                  disabled={i === slots.length - 1}
-                  onClick={() => {
-                    setSlots((prev) => {
-                      const next = [...prev];
-                      [next[i], next[i + 1]] = [next[i + 1], next[i]];
-                      return next;
-                    });
-                    setSaved(false);
-                  }}
-                  className="text-slate-400 hover:text-slate-700"
-                  aria-label={msg("lineup.moveDown", { name: s.full_name })}
-                >
-                  ↓
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSlots((prev) => prev.filter((_, j) => j !== i));
-                    setSaved(false);
-                  }}
-                  className="text-red-500 hover:underline"
-                >
-                  ×
-                </button>
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
+      {slots.length > 0 && (
+        <div className="space-y-3">
+          {(
+            [
+              ["starting", groups.starting],
+              ["bench", groups.bench],
+            ] as const
+          ).map(([key, rows]) => (
+            <section key={key} data-testid={`lineup-group-${key}`} className="min-w-0">
+              <h4 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                {key === "starting"
+                  ? msg("lineup.group.starting")
+                  : msg("lineup.group.benchCount", { n: rows.length })}
+              </h4>
+              {rows.length === 0 ? (
+                <p className="text-xs text-slate-400">{msg("lineup.group.none")}</p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {rows.map(({ s, index }) => (
+                    <LineupRow
+                      key={s.person_id}
+                      s={s}
+                      number={index + 1}
+                      availability={availability[s.person_id]}
+                      primary={primary}
+                      positionGroups={positionGroups}
+                      canEdit={canEdit}
+                      roles={roles}
+                      menuItems={
+                        canEdit
+                          ? lineupMenuItems({ slots, personId: s.person_id, roles, pairShaped, primary })
+                          : []
+                      }
+                      onAction={(action) => apply(s.person_id, action)}
+                    />
+                  ))}
+                </ul>
+              )}
+            </section>
+          ))}
+        </div>
+      )}
 
       {canEdit && (
         <div className="mt-3 space-y-2 border-t border-slate-100 pt-2">

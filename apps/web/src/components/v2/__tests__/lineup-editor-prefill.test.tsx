@@ -43,15 +43,21 @@ const base = {
   onSaved: () => {},
 };
 
-// "Slot for {name}" is the aria-label a LINEUP ROW's slot select carries — the
+// "More actions for {name}" is the aria-label a LINEUP ROW's ⋯ button carries
+// (the slot select it replaced is gone — Starting/Bench are groups now) — the
 // add-picker below lists roster names too, so bare name matching can't tell a
-// prefilled row from a pickable member.
+// prefilled row from a pickable member. Rows are counted per group via
+// `data-slot`.
+const rows = (html: string, slot: "starting" | "bench") =>
+  html.split(`data-testid="lineup-row" data-slot="${slot}"`).length - 1;
 describe("LineupEditor roster auto-prefill", () => {
   it("prefills a draft from the roster when nothing is saved: first lineupSize start, rest bench", () => {
     const html = wrap(<LineupEditor {...base} side={side({})} canEdit={true} />);
-    expect(html).toContain("Slot for Player 1");
-    expect(html).toContain("Slot for Player 2");
-    expect(html).toContain("Slot for Player 3");
+    expect(html).toContain("More actions for Player 1");
+    expect(html).toContain("More actions for Player 2");
+    expect(html).toContain("More actions for Player 3");
+    expect(rows(html, "starting")).toBe(2);
+    expect(rows(html, "bench")).toBe(1);
     expect(html).toContain("2/2 starting");
     expect(html).not.toContain("No lineup submitted");
   });
@@ -59,7 +65,8 @@ describe("LineupEditor roster auto-prefill", () => {
   it("keeps the honest empty state for read-only viewers", () => {
     const html = wrap(<LineupEditor {...base} side={side({})} canEdit={false} />);
     expect(html).toContain("No lineup submitted.");
-    expect(html).not.toContain("Slot for Player 1");
+    expect(html).not.toContain("More actions for Player 1");
+    expect(rows(html, "starting") + rows(html, "bench")).toBe(0);
   });
 
   it("a saved lineup wins over the roster prefill", () => {
@@ -81,8 +88,10 @@ describe("LineupEditor roster auto-prefill", () => {
         })}
       />,
     );
-    expect(html).toContain("Slot for Player 2");
-    expect(html).not.toContain("Slot for Player 1");
+    expect(html).toContain("More actions for Player 2");
+    expect(html).not.toContain("More actions for Player 1");
+    expect(rows(html, "starting")).toBe(1);
+    expect(rows(html, "bench")).toBe(0);
     expect(html).toContain("1/2 starting");
   });
 });

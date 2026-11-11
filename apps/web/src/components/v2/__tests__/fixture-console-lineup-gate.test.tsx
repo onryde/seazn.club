@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { builtinModules } from "@seazn/engine/sports";
 import { FixtureConsole, type SideInfo } from "@/components/v2/fixture-console";
-import { lineupEditorApplies } from "@/components/v2/lineup-editor";
+import { draftFromSavedLineup, lineupEditorApplies } from "@/components/v2/lineup-editor";
+import { lineupMenuItems } from "@/components/v2/lineup-actions";
 import { lineupCatalogFor } from "@/server/usecases/lineup-catalog";
 
 vi.mock("next/navigation", () => ({
@@ -153,10 +154,28 @@ describe("lineup columns render only where the module declares them", () => {
       else expect(html).not.toContain(POSITION);
     });
 
-    it(`${key}: role flags ${hasRoles ? "present" : "absent"}`, () => {
+    // The per-row role checkboxes moved into the ⋯ menu (lineup editor
+    // groups, 2026-11-11). A closed menu is not in a static render, so the
+    // console must still offer the ⋯ button on every row, and the menu the
+    // editor builds for that row must carry exactly one flag item per role
+    // the catalog declares (and none for a sport that declares none).
+    it(`${key}: role flags ${hasRoles ? "reachable in the ⋯ menu" : "absent"}`, () => {
       const html = consoleHtml(key);
-      if (hasRoles) expect(html).toContain(ROLE_FLAG);
-      else expect(html).not.toContain(ROLE_FLAG);
+      expect(html).not.toContain(ROLE_FLAG);
+      expect(html).toContain('data-testid="lineup-row-menu-button"');
+      const flagIds = lineupMenuItems({
+        slots: draftFromSavedLineup([
+          { person_id: "p1", full_name: "Alex Stone", slot: "starting", position_key: null, order_no: 1, roles: [] },
+        ]),
+        personId: "p1",
+        roles: catalog.roles ?? [],
+        pairShaped: false,
+        primary: "none",
+      })
+        .filter((i) => i.id.startsWith("flag:"))
+        .map((i) => i.id);
+      expect(flagIds).toEqual((catalog.roles ?? []).map((r) => `flag:${r.key}`));
+      expect(flagIds.length > 0).toBe(hasRoles);
     });
   }
 
@@ -262,5 +281,40 @@ describe("a fixture with no lineup to pick still shows the roster's availability
     );
     expect(html).not.toContain('data-testid="availability-roster"');
     expect(html, "no toggle with nothing behind it either").not.toContain('data-role="phone-disclosure-toggle"');
+  });
+});
+
+// Lineup editor groups (2026-11-11): below `md` the two team cards stack, so the
+// console shows ONE at a time behind a Home/Away switch. One DOM — both editors
+// stay mounted (each keeps its unsaved draft), the inactive card is
+// `max-md:hidden`, and the switch is `md:hidden`.
+describe("phone Home/Away switch for the lineup cards", () => {
+  const cardClass = (html: string, side: "home" | "away") => {
+    const m = html.match(new RegExp(`data-testid="lineup-team-${side}" class="([^"]*)"`));
+    expect(m, `no ${side} lineup card`).not.toBeNull();
+    return m![1]!;
+  };
+
+  it("every sport with an editor: the switch is phone-only, Home starts active, Away is parked, and both editors are in the DOM", () => {
+    let checked = 0;
+    for (const mod of builtinModules) {
+      const catalog = lineupCatalogFor(mod, {});
+      if (!lineupEditorApplies({ lineupSize: catalog.lineup.size, benchMax: catalog.lineup.benchMax ?? 0 })) continue;
+      const html = consoleHtml(mod.key);
+      expect(html, mod.key).toMatch(/data-testid="lineup-team-switch" class="[^"]*\smd:hidden(\s|")/);
+      expect(html.split('data-testid="lineup-team-switch-').length - 1, mod.key).toBe(2);
+      expect(html, mod.key).toMatch(/aria-pressed="true"[^>]*data-testid="lineup-team-switch-home"/);
+      expect(html, mod.key).toMatch(/aria-pressed="false"[^>]*data-testid="lineup-team-switch-away"/);
+      expect(cardClass(html, "home"), mod.key).not.toMatch(/(^|\s)max-md:hidden(\s|$)/);
+      expect(cardClass(html, "away"), mod.key).toMatch(/(^|\s)max-md:hidden(\s|$)/);
+      expect(html.split(EDITOR).length - 1, mod.key).toBe(2);
+      checked++;
+    }
+    expect(checked).toBe(builtinModules.length - HIDDEN.size);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("a sport with no lineup editor gets no switch", () => {
+    for (const key of HIDDEN) expect(consoleHtml(key), key).not.toContain('data-testid="lineup-team-switch"');
   });
 });

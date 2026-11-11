@@ -223,9 +223,25 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
       await activityToggle.click();
     }
     // Lineup disclosures: rows visible, editors folded.
+    // The lineup cards are the ONE exception to "every toggle is visible":
+    // below `md` only the team picked in the Home/Away switch shows (inactive
+    // card is `max-md:hidden`), so toggles inside a `lineup-team-*` card are
+    // required visible only for the active one — and exactly one is.
     const disclosures = page.locator('[data-role="phone-disclosure-toggle"]');
     const disclosureCount = await disclosures.count();
-    for (let i = 0; i < disclosureCount; i++) await expect(disclosures.nth(i)).toBeVisible();
+    let lineupShown = 0;
+    let lineupTotal = 0;
+    for (let i = 0; i < disclosureCount; i++) {
+      const toggle = disclosures.nth(i);
+      const inLineupCard = await toggle.evaluate((n) => n.closest('[data-testid^="lineup-team-"]') !== null);
+      if (inLineupCard) {
+        lineupTotal++;
+        if (await toggle.isVisible()) lineupShown++;
+        continue;
+      }
+      await expect(toggle).toBeVisible();
+    }
+    if (lineupTotal > 0) expect(lineupShown, "exactly one lineup card shows below md").toBe(1);
     // Review fix (Important 3, final review) — nothing here ever OPENED a
     // disclosure: every prior assertion ran with the body CLOSED, so
     // `phone-disclosure.tsx`'s open branch (`aria-expanded="true"`,
@@ -2206,59 +2222,81 @@ test("lineup editor role/pair-order selects hold at phone width", async ({ page,
 
   await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
 
-  const roleSelects = page.getByTestId("lineup-role-select");
-  // Below `md` each lineup card sits inside a `PhoneDisclosure`
-  // (`fixture-console.tsx`, one per side) whose body is `max-md:hidden` until
-  // the row is tapped — spec 2026-09-02-scorepad-v3-phone-composition §3.10.
-  // So at five of this file's seven width projects the selects are present in
-  // the DOM but UNPAINTED: `boundingBox()` returns null and `toBeVisible()`
-  // never resolves. The fold is the approved design, so the fix is to open the
-  // disclosure, NOT to weaken what this test asserts — the 44px floor still
-  // has to hold in the state a scorer actually reaches these controls in, and
-  // `expectNoHorizontalScroll` at the foot now runs with the body open, which
-  // is the state that shipped a 106px overflow at 320px during this wave.
+  // Lineup editor groups (2026-11-11): the per-row Role select moved into the ⋯
+  // menu, so the touch floor now has to hold for the ⋯ trigger, for every item
+  // of the OPEN menu (a bottom sheet below `md`, a dropdown above it), and for
+  // the one inline control a row keeps (tennis pairs: the pair-order select).
   //
-  // Wait ATTACHED first (the editor is client-rendered) — visibility is
-  // exactly what the fold denies, so it cannot be the wait condition here.
-  await expect(roleSelects.first(), "no role select rendered").toBeAttached({ timeout: 30_000 });
-  // BOTH sides, not the first: each side mounts its own disclosure, so opening
-  // one leaves the other's selects boxless and the loop below fails on them.
-  // Gated on the toggle being VISIBLE rather than on a width literal.
-  //
-  // The lineup's own PhoneDisclosure is `desktopCollapsible` (PR #782, fold
-  // the lineup once the match starts, every width) — its toggle is visible at
-  // every width here, not just phone-narrow. At `tablet-768`/`tablet-834`
-  // (real `md`-and-up viewports) the body also starts OPEN pre-match, since
-  // this fixture never sends `core.start`, so the toggle may already read
-  // `aria-expanded="true"` before any click — only click when it does not.
-  const lineupDisclosures = page.locator('[data-role="phone-disclosure"]:has([data-testid="lineup-role-select"])');
-  expect(await lineupDisclosures.count(), "lineup editor is not inside a PhoneDisclosure").toBeGreaterThan(0);
-  for (const wrapper of await lineupDisclosures.all()) {
-    const toggle = wrapper.locator('[data-role="phone-disclosure-toggle"]');
-    if (!(await toggle.isVisible())) continue;
-    if ((await toggle.getAttribute("aria-expanded")) !== "true") {
-      await toggle.click();
+  // Below `md` only ONE team card shows, behind a Home/Away switch
+  // (`md:hidden`), and each card sits inside a `PhoneDisclosure` whose body is
+  // folded until its toggle is tapped (spec 2026-09-02 §3.10) — so each side is
+  // driven in turn: switch to it (only when the switch is visible), open ITS
+  // disclosure (only when its toggle says closed), then measure. The fold is
+  // the approved design; nothing here is weakened to fit it.
+  const menuButtons = page.getByTestId("lineup-row-menu-button");
+  // Wait ATTACHED first (the editor is client-rendered) — visibility is exactly
+  // what the fold denies, so it cannot be the wait condition here.
+  await expect(menuButtons.first(), "no ⋯ menu button rendered").toBeAttached({ timeout: 30_000 });
+  let measured = 0;
+  for (const side of ["home", "away"] as const) {
+    const teamSwitch = page.getByTestId(`lineup-team-switch-${side}`);
+    if (await teamSwitch.isVisible()) {
+      await teamSwitch.click();
+      await expect(teamSwitch).toHaveAttribute("aria-pressed", "true");
     }
+    const card = page.getByTestId(`lineup-team-${side}`);
+    await expect(card, `${side} lineup card is not showing`).toBeVisible();
+    // The lineup's own PhoneDisclosure is `desktopCollapsible` (PR #782) and at
+    // `tablet-768`/`tablet-834` starts OPEN pre-match, so only click when closed.
+    const toggle = card.locator('[data-role="phone-disclosure-toggle"]');
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+    const buttons = card.getByTestId("lineup-row-menu-button");
+    await expect(buttons.first(), `${side}: ⋯ button still folded after its disclosure was opened`).toBeVisible({
+      timeout: 30_000,
+    });
+    for (const button of await buttons.all()) {
+      const box = await button.boundingBox();
+      expect(box, "⋯ button has no box").not.toBeNull();
+      expect(box!.height, `⋯ button touch target is ${box!.height}px tall`).toBeGreaterThanOrEqual(44);
+      expect(box!.width, `⋯ button touch target is ${box!.width}px wide`).toBeGreaterThanOrEqual(44);
+      measured++;
+    }
+
+    // Open the first row's menu: every control in it is a 44px target, the Role
+    // segmented control is in it, and it fits the page (the state that matters).
+    await buttons.first().click();
+    const menu = card.getByTestId("lineup-row-menu");
+    await expect(menu).toBeVisible();
+    await expect(menu.getByTestId("lineup-menu-role-coach"), "Role control missing from the ⋯ menu").toBeVisible();
+    const items = menu.locator('[role="menuitem"]:visible, [role="menuitemradio"]:visible');
+    expect(await items.count(), "⋯ menu has no visible items").toBeGreaterThan(3);
+    for (const item of await items.all()) {
+      const box = await item.boundingBox();
+      expect(box, "menu item has no box").not.toBeNull();
+      expect(box!.height, `menu item touch target is ${box!.height}px`).toBeGreaterThanOrEqual(44);
+    }
+    await expectNoHorizontalScroll(page);
+    await page.keyboard.press("Escape");
+    await expect(menu, "Escape did not dismiss the ⋯ menu").toBeHidden();
   }
-  await expect(roleSelects.first(), "role select still folded after its disclosure was opened").toBeVisible({
-    timeout: 30_000,
-  });
-  for (const select of await roleSelects.all()) {
-    const box = await select.boundingBox();
-    expect(box, "role select has no box").not.toBeNull();
-    expect(box!.height, `role select touch target is ${box!.height}px`).toBeGreaterThanOrEqual(44);
-  }
+  expect(measured, "no ⋯ button was measured").toBeGreaterThan(0);
 
   const pairOrderSelects = page.getByTestId("lineup-pairorder-select");
-  await expect(pairOrderSelects.first(), "no pair-order select rendered — entrant.kind did not reach isPairShaped").toBeVisible({
+  await expect(pairOrderSelects.first(), "no pair-order select rendered — entrant.kind did not reach isPairShaped").toBeAttached({
     timeout: 30_000,
   });
+  // The side showing now (away) is the one with a box on a phone; measure what is visible.
+  let pairMeasured = 0;
   for (const select of await pairOrderSelects.all()) {
+    if (!(await select.isVisible())) continue;
     const box = await select.boundingBox();
     expect(box, "pair-order select has no box").not.toBeNull();
     expect(box!.height, `pair-order select touch target is ${box!.height}px`).toBeGreaterThanOrEqual(44);
+    pairMeasured++;
   }
+  expect(pairMeasured, "no visible pair-order select was measured").toBeGreaterThan(0);
 
   await expectNoHorizontalScroll(page);
 });
