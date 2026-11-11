@@ -4352,6 +4352,7 @@ export type DictionaryKey =
   | "method.resign"
   | "method.stalemate"
   | "method.time"
+  | "nav.account.error"
   | "nav.account.menu"
   | "nav.account.newOrg"
   | "nav.account.orgSettings"

@@ -4,7 +4,7 @@
 import { routes } from "@/lib/routes";
 import { EDITOR_ROLES, type OrgRole } from "@/lib/types";
 
-/** Where "+ New organisation" goes - and where Organisation settings goes for a user with no organisation yet. */
+/** Where "+ New organisation" goes. */
 export const NEW_ORG_HREF = "/orgs/new";
 
 export interface AccountMenuOrgInput {
@@ -28,8 +28,9 @@ export interface AccountMenuModel {
   orgs: AccountMenuOrgItem[];
   current: AccountMenuOrgItem | null;
   newOrgHref: string;
-  /** Organisation settings: the current org's Settings, or /orgs/new when there is no org to set up. */
-  settingsHref: string;
+  /** Organisation settings: the current org's Settings; null without an org (the "+ New organisation" row already goes to
+   *  /orgs/new, a second row to the same place would be a duplicate). */
+  settingsHref: string | null;
   /** The personal Account tab (a Settings tab, so it needs an org to live under); null without one. */
   profileHref: string | null;
   /** Player home, for a claimed player only. */
@@ -68,7 +69,7 @@ export function accountMenuModel(input: {
     orgs,
     current,
     newOrgHref: NEW_ORG_HREF,
-    settingsHref: current ? routes.orgSettings(current.slug) : NEW_ORG_HREF,
+    settingsHref: current ? routes.orgSettings(current.slug) : null,
     profileHref: current ? routes.orgSettings(current.slug, "account") : null,
     playerHomeHref: input.isPlayer ? routes.me() : null,
   };

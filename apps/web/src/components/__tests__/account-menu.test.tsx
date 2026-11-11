@@ -47,6 +47,7 @@ const LABELS: AccountMenuLabels = {
   playerHome: "Player home",
   signOut: "Sign out",
   switching: "Switching…",
+  error: "Could not complete that.",
   roles: { viewer: "Viewer" },
 };
 
@@ -54,12 +55,12 @@ const LABELS: AccountMenuLabels = {
 // 1. The item model
 // ---------------------------------------------------------------------------------------------------------------------------
 describe("accountMenuModel", () => {
-  it("EMPTY CASE FIRST - signed in with no organisation: no org rows, nothing ticked, Settings opens /orgs/new, no Account item", () => {
+  it("EMPTY CASE FIRST - signed in with no organisation: no org rows, nothing ticked, no Settings item (it would duplicate + New organisation), no Account item", () => {
     const m = accountMenuModel({ orgs: [], activeOrgId: null, isPlayer: false });
     expect(m.orgs).toEqual([]);
     expect(m.current).toBeNull();
     expect(m.orgs.filter((o) => o.current), "zero ticked").toHaveLength(0);
-    expect(m.settingsHref).toBe("/orgs/new");
+    expect(m.settingsHref, "no org, no Organisation settings").toBeNull();
     expect(m.newOrgHref).toBe("/orgs/new");
     expect(m.profileHref, "the Account tab lives under an org's Settings - none to open").toBeNull();
     expect(m.playerHomeHref).toBeNull();
@@ -254,9 +255,9 @@ const itemSet = (html: string): string[] =>
     });
 
 describe("AccountMenuPanel - the item set in each state", () => {
-  it("no org: who, + New organisation, Organisation settings -> /orgs/new, Sign out. No org rows, no Account item", () => {
+  it("no org: who, + New organisation, Sign out. No org rows, no Organisation settings, no Account item", () => {
     const html = renderToStaticMarkup(<AccountMenuPanel {...panelProps({ model: accountMenuModel({ orgs: [], activeOrgId: null, isPlayer: false }) })} />);
-    expect(itemSet(html)).toEqual(["account-menu", "account-menu-new-org=/orgs/new", "account-menu-settings=/orgs/new", "account-menu-signout"]);
+    expect(itemSet(html)).toEqual(["account-menu", "account-menu-new-org=/orgs/new", "account-menu-signout"]);
   });
 
   it("one org, editor: who, the org ticked, + New organisation, Organisation settings, Account, Sign out", () => {
@@ -301,6 +302,23 @@ describe("AccountMenuPanel - the item set in each state", () => {
     // The org with a logo shows its logo; the others their initials.
     expect(html).toContain('src="https://cdn.example.test/nba.png"');
     expect(html).toContain(">RB<");
+  });
+
+  it("ARIA: the sheet container is a modal dialog with a name, and the role=menu stays inside it", () => {
+    const html = renderToStaticMarkup(<AccountMenuPanel {...panelProps()} />);
+    const tag = html.match(/<div\b[^>]*data-testid="account-menu"[^>]*>/)?.[0] ?? "";
+    expect(tag).toContain('role="dialog"');
+    expect(tag).toContain('aria-modal="true"');
+    expect(tag).toContain('aria-label="Account menu"');
+    expect(html.indexOf('role="dialog"')).toBeLessThan(html.indexOf('role="menu"'));
+  });
+
+  it("the inline error row shows only when given (positive and negative pair), and the whole menu holds while busy", () => {
+    expect(renderToStaticMarkup(<AccountMenuPanel {...panelProps()} />)).not.toContain("account-menu-error");
+    const html = renderToStaticMarkup(<AccountMenuPanel {...panelProps({ error: "Could not complete that.", busy: true })} />);
+    expect(html).toContain('data-testid="account-menu-error"');
+    expect(html).toContain(">Could not complete that.<");
+    expect(html.match(/<button\b[^>]*disabled=""/g)).toHaveLength(2); // the org row and Sign out
   });
 
   it("who: the display name and the email; with no email the name stands alone", () => {
@@ -429,6 +447,60 @@ describe("AccountMenu - the island", () => {
     expect(h.api).not.toHaveBeenCalled();
     expect(assign).not.toHaveBeenCalled();
     expect(byTestId(island.tree(), "account-menu"), "closed after choosing").toBeUndefined();
+  });
+
+  it("a failed switch (403/5xx/network): the error row shows, no throw, no navigation, and the rows are enabled again", async () => {
+    h.api.mockRejectedValue(new Error("403"));
+    const island = renderIsland(AccountMenu, islandProps(), (n) => expand(n));
+    (propsOf(byTestId(island.tree(), "account-menu-trigger")!).onClick as () => void)();
+    expect(byTestId(island.tree(), "account-menu-error"), "no error before").toBeUndefined();
+    (propsOf(byTestId(island.tree(), "account-menu-org-kettering")!).onClick as () => void)();
+    await flush();
+    expect(h.api).toHaveBeenCalledTimes(1);
+    expect(assign).not.toHaveBeenCalled();
+    expect(textOf(byTestId(island.tree(), "account-menu-error")!)).toBe("Could not complete that.");
+    expect(propsOf(byTestId(island.tree(), "account-menu-org-kettering")!).disabled, "retry possible").toBe(false);
+    expect(byTestId(island.tree(), "account-menu"), "menu stays open").toBeDefined();
+  });
+
+  it("a second switch while one is in flight is ignored, and after a successful navigation the hold stays (no second POST)", async () => {
+    const island = renderIsland(AccountMenu, islandProps({ orgs: [RIVERSIDE, KETTERING, NORTHANTS] }), (n) => expand(n));
+    (propsOf(byTestId(island.tree(), "account-menu-trigger")!).onClick as () => void)();
+    const tap = (slug: string) => (propsOf(byTestId(island.tree(), `account-menu-org-${slug}`)!).onClick as () => void)();
+    tap("kettering");
+    tap("northants"); // same tick: in flight
+    await flush();
+    tap("northants"); // after a successful navigation: still held until unload
+    await flush();
+    expect(h.api.mock.calls).toEqual([["/api/orgs/active", { method: "POST", json: { org_id: KETTERING.id } }]]);
+    expect(assign).toHaveBeenCalledTimes(1);
+    expect(propsOf(byTestId(island.tree(), "account-menu-org-northants")!).disabled).toBe(true);
+  });
+
+  it("a failed sign-out: the error row shows, no navigation, no throw - and Sign out can be tried again", async () => {
+    h.signOutClient.mockRejectedValueOnce(new Error("net"));
+    const island = renderIsland(AccountMenu, islandProps(), (n) => expand(n));
+    (propsOf(byTestId(island.tree(), "account-menu-trigger")!).onClick as () => void)();
+    (propsOf(byTestId(island.tree(), "account-menu-signout")!).onClick as () => void)();
+    await flush();
+    expect(h.push).not.toHaveBeenCalled();
+    expect(textOf(byTestId(island.tree(), "account-menu-error")!)).toBe("Could not complete that.");
+    (propsOf(byTestId(island.tree(), "account-menu-signout")!).onClick as () => void)();
+    await flush();
+    expect(h.signOutClient).toHaveBeenCalledTimes(2);
+    expect(h.push.mock.calls).toEqual([["/"]]);
+  });
+
+  it("a double tap on Sign out signs out once", async () => {
+    const island = renderIsland(AccountMenu, islandProps(), (n) => expand(n));
+    (propsOf(byTestId(island.tree(), "account-menu-trigger")!).onClick as () => void)();
+    const tap = () => (propsOf(byTestId(island.tree(), "account-menu-signout")!).onClick as () => void)();
+    tap();
+    tap();
+    await flush();
+    tap();
+    await flush();
+    expect(h.signOutClient).toHaveBeenCalledTimes(1);
   });
 
   it("open -> Sign out: the shared sign-out runs FIRST, then the soft navigation to the marketing home", async () => {

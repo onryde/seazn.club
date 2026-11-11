@@ -35,6 +35,8 @@ export interface AccountMenuLabels {
   playerHome: string;
   signOut: string;
   switching: string;
+  /** Inline error row: a switch or sign-out that could not complete. */
+  error: string;
   /** The role hint for each role that cannot edit (a viewer). */
   roles: Partial<Record<OrgRole, string>>;
 }
@@ -92,6 +94,8 @@ export function AccountMenuPanel({
   model,
   labels,
   busyOrgId,
+  busy = false,
+  error = null,
   position,
   onSwitch,
   onSignOut,
@@ -104,6 +108,10 @@ export function AccountMenuPanel({
   model: AccountMenuModel;
   labels: AccountMenuLabels;
   busyOrgId: string | null;
+  /** Any action in flight (a switch that navigated, or a sign-out): every row is held until the page unloads. */
+  busy?: boolean;
+  /** Inline error row copy, or null. */
+  error?: string | null;
   position: Position | null;
   onSwitch: (orgId: string) => void;
   onSignOut: () => void;
@@ -116,6 +124,10 @@ export function AccountMenuPanel({
     <div
       ref={panelRef}
       id={id}
+      // One DOM: the phone sheet is a modal dialog over a scrim; the same container is the md+ dropdown.
+      role="dialog"
+      aria-modal="true"
+      aria-label={labels.menu}
       data-testid="account-menu"
       style={style}
       onKeyDown={onKeyDown}
@@ -143,7 +155,7 @@ export function AccountMenuPanel({
               role="menuitemradio"
               aria-checked={o.current}
               data-testid={`account-menu-org-${o.slug}`}
-              disabled={busyOrgId !== null}
+              disabled={busy || busyOrgId !== null}
               onClick={() => onSwitch(o.id)}
               className={`${ITEM} ${o.current ? "font-semibold text-cream" : ""}`}
             >
@@ -168,10 +180,12 @@ export function AccountMenuPanel({
           </Link>
         </div>
         <div role="group" className="border-t border-cream/10 p-1.5">
-          <Link href={model.settingsHref} role="menuitem" data-testid="account-menu-settings" onClick={onClose} className={ITEM}>
-            <Settings aria-hidden="true" className={ICON} strokeWidth={1.75} />
-            {labels.orgSettings}
-          </Link>
+          {model.settingsHref ? (
+            <Link href={model.settingsHref} role="menuitem" data-testid="account-menu-settings" onClick={onClose} className={ITEM}>
+              <Settings aria-hidden="true" className={ICON} strokeWidth={1.75} />
+              {labels.orgSettings}
+            </Link>
+          ) : null}
           {model.profileHref ? (
             <Link href={model.profileHref} role="menuitem" data-testid="account-menu-profile" onClick={onClose} className={ITEM}>
               <UserRound aria-hidden="true" className={ICON} strokeWidth={1.75} />
@@ -186,12 +200,18 @@ export function AccountMenuPanel({
           ) : null}
         </div>
         <div role="group" className="border-t border-cream/10 p-1.5">
+          {error ? (
+            <p role="alert" data-testid="account-menu-error" className="px-2.5 py-2 text-xs text-red-300">
+              {error}
+            </p>
+          ) : null}
           <button
             type="button"
             role="menuitem"
             data-testid="account-menu-signout"
+            disabled={busy || busyOrgId !== null}
             onClick={onSignOut}
-            className={`${ITEM} text-red-300 hover:bg-red-500/10 hover:text-red-200`}
+            className={`${ITEM} text-red-300 hover:bg-red-500/10 hover:text-red-200 disabled:opacity-60`}
           >
             <LogOut aria-hidden="true" className="h-4 w-4 shrink-0" strokeWidth={1.75} />
             {labels.signOut}
@@ -207,6 +227,10 @@ const ITEM_SELECTOR = '[role="menuitem"],[role="menuitemradio"]:not([disabled])'
 export function AccountMenu({ user, orgs, activeOrgId, isPlayer, labels }: AccountMenuProps) {
   const [open, setOpen] = useState(false);
   const [busyOrgId, setBusyOrgId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Synchronous twin of the busy state: two taps in one tick both see the same stale render, so the guard reads this.
+  const busyRef = useRef(false);
   const [position, setPosition] = useState<Position | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -256,6 +280,14 @@ export function AccountMenu({ user, orgs, activeOrgId, isPlayer, labels }: Accou
     };
   }, [open]);
 
+  // A navigation (a link item, a soft sign-out) ends the menu's moment: close it when the path changes.
+  // (State adjusted during render, React's documented pattern, rather than a set-state-in-effect.)
+  const [seenPath, setSeenPath] = useState(pathname);
+  if (seenPath !== pathname) {
+    setSeenPath(pathname);
+    setOpen(false);
+  }
+
   const onPanelKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Tab") {
       e.preventDefault();
@@ -276,12 +308,38 @@ export function AccountMenu({ user, orgs, activeOrgId, isPlayer, labels }: Accou
   };
 
   async function onSwitch(orgId: string) {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setError(null);
     setBusyOrgId(orgId);
+    let hold = false;
     try {
       const result = await switchActiveOrg({ orgs, fromId: model.current?.id ?? null, toId: orgId, pathname });
-      if (result !== "navigated") setOpen(false);
+      // A "navigated" switch stays busy until the page unloads: re-enabling the rows would let a second tap POST again.
+      if (result === "navigated") hold = true;
+      else setOpen(false);
+    } catch {
+      setError(labels.error);
     } finally {
-      setBusyOrgId(null);
+      if (!hold) {
+        busyRef.current = false;
+        setBusyOrgId(null);
+      }
+    }
+  }
+
+  async function onSignOut() {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setError(null);
+    setBusy(true);
+    try {
+      await signOut();
+      // Success keeps the hold: the soft navigation to "/" unmounts the gantry.
+    } catch {
+      setError(labels.error);
+      busyRef.current = false;
+      setBusy(false);
     }
   }
 
@@ -328,9 +386,11 @@ export function AccountMenu({ user, orgs, activeOrgId, isPlayer, labels }: Accou
                 model={model}
                 labels={labels}
                 busyOrgId={busyOrgId}
+                busy={busy}
+                error={error}
                 position={position}
                 onSwitch={(id) => void onSwitch(id)}
-                onSignOut={() => void signOut()}
+                onSignOut={() => void onSignOut()}
                 onClose={() => close()}
                 onKeyDown={onPanelKeyDown}
                 panelRef={panelRef}

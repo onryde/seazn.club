@@ -31,10 +31,6 @@ describe("floodlit console theme", () => {
     const html = renderToStaticMarkup(
       <Breadcrumbs
         orgName="Riverside"
-        orgs={[
-          { name: "Riverside", slug: "riverside" },
-          { name: "Northside", slug: "northside" },
-        ]}
         names={{ comps: { "summer-open": "Summer Open" }, divs: {} }}
       />,
     );
@@ -44,6 +40,10 @@ describe("floodlit console theme", () => {
     // Trail still derives from the pathname.
     expect(html).toContain("Summer Open");
     expect(html).toContain("Riverside");
+    // Org switching moved to the account menu: the org crumb is text, not a picker (a user with two orgs saw one before).
+    expect(html).not.toContain("aria-haspopup");
+    expect(html).not.toContain('role="menu"');
+    expect(html).not.toContain("<button");
   });
 
   it("night stage mounts the brand mark (not a text lockup) over its children", () => {

@@ -135,6 +135,7 @@ describe("Nav -> AccountMenu: what the bar hands the menu", () => {
       expect(l.organisation, locale).toBe(u["settings.nav.group.organisation"]);
       expect(l.profile, `${locale}: the Account item is named as the Settings tab it opens`).toBe(u["settings.nav.account"]);
       expect(l.switching, locale).toBe(u["settings.org.switch.busy"]);
+      expect(l.error, locale).toBe(c["nav.account.error"]);
       for (const v of Object.values(l).filter((x) => typeof x === "string")) expect(v, `${locale}: a real string`).toMatch(/\S/);
       checked++;
     }
@@ -187,12 +188,13 @@ describe("Nav -> AccountMenu -> the real panel (the props Nav passed, folded thr
     expect(panelFrom(lastProps())).not.toContain('data-testid="account-menu-player-home"');
   });
 
-  it("no organisation yet: no org rows, Settings -> /orgs/new, no Account item - and the menu is still mounted (Sign out stays reachable)", async () => {
+  it("no organisation yet: no org rows, no Organisation settings, no Account item - and the menu is still mounted (Sign out stays reachable)", async () => {
     m.getUserOrgs.mockResolvedValue([]);
     await render();
     const html = panelFrom(lastProps());
     expect(html).not.toContain("account-menu-org-");
-    expect(html).toMatch(/href="\/orgs\/new"[^>]*data-testid="account-menu-settings"|data-testid="account-menu-settings"[^>]*href="\/orgs\/new"/);
+    expect(html).not.toContain('data-testid="account-menu-settings"');
+    expect(html).toContain('data-testid="account-menu-new-org"');
     expect(html).not.toContain('data-testid="account-menu-profile"');
     expect(html).toContain('data-testid="account-menu-signout"');
   });

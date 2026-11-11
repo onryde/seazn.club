@@ -7,6 +7,7 @@
   "nav.signIn": "Iniciar sesión",
   "nav.signOut": "Cerrar sesión",
   "nav.orgLogoAlt": "Logotipo de la organización",
+  "nav.account.error": "No se pudo completar. Inténtalo de nuevo.",
   "nav.account.menu": "Menú de la cuenta",
   "nav.account.newOrg": "Nueva organización",
   "nav.account.orgSettings": "Ajustes de la organización",

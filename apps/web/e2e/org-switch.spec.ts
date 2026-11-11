@@ -5,8 +5,7 @@ import { loginUi, apiJson, TAG, setEntitlementOverrideSql } from "./helpers";
 // bounce to the dashboard (`/o/<slug>`). The user has reported this 3× and it
 // survived #274 — so this reproduces it end to end, against BOTH switch
 // affordances: the settings-header `OrgSwitcher` (the one #274 touched) and
-// the always-visible breadcrumb org dropdown (`OrgCrumb`), which is what a
-// user reaches for on any page.
+// the gantry's account menu, which is what a user reaches for on any page.
 //
 // The wait after each switch MUST name org B's slug. `/\/o\/[^/]+(\/|$)/`
 // matches the PRE-CLICK url (`/o/<A>/settings`) too, so it resolves instantly
@@ -63,18 +62,18 @@ test("settings OrgSwitcher stays on the settings page under the new org", async 
   );
 });
 
-test("breadcrumb org dropdown stays on the same page under the new org", async ({ page }) => {
+test("account menu org switch stays on the same page under the new org; the breadcrumb org crumb is no longer a picker", async ({ page }) => {
   const { orgA, orgB } = await seedTwoOrgUser(page);
 
   await page.goto(`/o/${orgA.slug}/settings`);
-  // The breadcrumb org crumb (top dark bar) is the always-visible switcher.
-  // Its trigger shows org A's name with a chevron; open it and click org B.
-  await page.getByRole("button", { name: orgA.name }).click();
-  await page.getByRole("menuitem", { name: orgB.name }).click();
+  // The strip under the gantry carries the trail only: the org crumb is text, with no button to open.
+  await expect(page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("button")).toHaveCount(0);
+  await page.getByTestId("account-menu-trigger").click();
+  await page.getByTestId(`account-menu-org-${orgB.slug}`).click();
 
   await page.waitForURL((u) => u.pathname.startsWith(`/o/${orgB.slug}`), { timeout: 20_000 });
   await page.waitForLoadState("networkidle");
-  expect(page.url(), "breadcrumb switch from settings should stay on settings under org B").toContain(
+  expect(page.url(), "account menu switch from settings should stay on settings under org B").toContain(
     `/o/${orgB.slug}/settings`,
   );
 });

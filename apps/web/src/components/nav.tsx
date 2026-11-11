@@ -112,6 +112,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
         playerHome: t(dict, "nav.playerHome"),
         signOut: t(dict, "nav.signOut"),
         switching: t(ui, "settings.org.switch.busy"),
+        error: t(dict, "nav.account.error"),
         roles: Object.fromEntries(
           ORG_ROLES.filter((r) => !(EDITOR_ROLES as readonly string[]).includes(r)).map((r) => [r, t(ui, `role.${r}`)]),
         ),
