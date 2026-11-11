@@ -195,14 +195,46 @@ describe("CompetitionSettings C8 — the Status chip is form state, saved by the
 });
 
 describe("CompetitionSettings C8 — city and country are gone, and stay stored", () => {
-  it("no city or country field is drawn", () => {
-    const text = textOf(mount({ discoverable: true }).tree());
-    let checked = 0;
-    for (const key of ["compset.city", "compset.country", "compset.slug"]) {
-      expect(text, key).not.toContain(say(key));
-      checked++;
+  it("no city or country field is drawn — by input name, placeholder and old test id", () => {
+    const tree = mount({ discoverable: true, discoveryBranding: true }).tree();
+    const inputs = tree.filter((el) => el.type === "input" || el.type === "select");
+    expect(inputs.length, "anti-vacuity: the form draws inputs").toBeGreaterThan(0);
+    for (const el of inputs) {
+      expect(String(propsOf(el).name ?? ""), "input name").not.toMatch(/city|country/i);
+      expect(String(propsOf(el)["data-testid"] ?? ""), "input testid").not.toMatch(/city|country/i);
     }
-    expect(checked).toBe(3);
+    expect(tree.some((el) => /compset-(city|country)/.test(String(propsOf(el)["data-testid"] ?? "")))).toBe(false);
+    expect(textOf(tree)).not.toContain("Harbour Vale, United Kingdom");
+  });
+
+  it("the dead keys are gone from the English dictionary", () => {
+    const dead = ["compset.city", "compset.country", "compset.slug"];
+    for (const k of dead) expect(Object.hasOwn(uiEn, k), k).toBe(false);
+  });
+
+  it("the hero field is a text input (a stored storage path must not block Save), and a relative path saves", async () => {
+    const island = mount({
+      discoveryBranding: true,
+      discovery: { tagline: "t", hero_image_path: "heroes/o1/abc.png" },
+    });
+    const brandingTab = tabNamed(island.tree(), "compset.tab.branding")!;
+    (propsOf(brandingTab).onClick as () => void)();
+    const hero = island.tree().find((el) => el.type === "input" && propsOf(el).placeholder === "https://")!;
+    expect(hero, "the hero input is drawn on the Branding tab").toBeDefined();
+    expect(propsOf(hero).type).toBe("text");
+    expect(propsOf(hero).value).toBe("heroes/o1/abc.png");
+    await submit(island);
+    expect(api).toHaveBeenCalledTimes(1);
+    expect((sent().discovery as { hero_image_path: string }).hero_image_path).toBe("heroes/o1/abc.png");
+  });
+
+  it("a blank name (General's required input is unmounted on Branding) is refused with the missing-name message, nothing sent", async () => {
+    const island = mount();
+    typeName(island, "   ");
+    (propsOf(tabNamed(island.tree(), "compset.tab.branding")!).onClick as () => void)();
+    await submit(island);
+    expect(api).not.toHaveBeenCalled();
+    expect(textOf(island.tree())).toContain(say("comp.wizard.missing.name"));
   });
 
   it("an org without discovery.branding sends NO discovery key at all", async () => {

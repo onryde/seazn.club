@@ -75,7 +75,7 @@ vi.mock("@/components/org-timezone", () => ({ OrgTimezone: () => <div /> }));
 vi.mock("@/components/org-public-language", () => ({ OrgPublicLanguage: () => <div /> }));
 vi.mock("@/components/org-registration-currency", () => ({ OrgRegistrationCurrency: () => <div /> }));
 vi.mock("@/components/tour-replay", () => ({
-  TourReplayButton: ({ variant }: { variant?: string }) => <div data-testid="tour-replay" data-variant={variant ?? "row"} />,
+  TourReplayButton: () => <div data-testid="tour-replay" />,
 }));
 // The switcher left this page (switching is the account menu's and the breadcrumb's). A marker, so a re-mount reds.
 vi.mock("@/components/org-switcher", async (importOriginal) => ({
@@ -202,7 +202,7 @@ describe("settings → organisation: the C8 card", () => {
     // The defaults moved here from Preferences, into the card.
     const card = html.slice(html.indexOf('data-testid="org-profile-card"'));
     expect(card).toContain('data-testid="org-defaults"');
-    expect(html).toContain('data-testid="tour-replay" data-variant="link"');
+    expect(html).toContain('data-testid="tour-replay"');
     // The role badge stays beside the heading.
     expect(html).toContain(">Owner<");
   });
