@@ -7973,6 +7973,7 @@ export type DictionaryKey =
   | "sponsors.error.invoiceNotSentCheck"
   | "sponsors.error.invoiceSavedNoLink"
   | "sponsors.error.invoiceSavedResend"
+  | "sponsors.error.invoiceSendLimit"
   | "sponsors.error.lockedByDeal"
   | "sponsors.error.needsPayment"
   | "sponsors.error.noBillingEmail"

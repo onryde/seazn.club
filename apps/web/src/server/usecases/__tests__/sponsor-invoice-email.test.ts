@@ -40,6 +40,25 @@ vi.mock("@/server/sponsors/invoice-doc", async (importOriginal) => {
     }),
   };
 });
+/** T23 review m1: a one-shot hook run before the `at`-th `withTenant` call once armed - a writer landing between a send's
+ *  unlocked read (call 1, `preflight`) and its locked transaction (call 2). Disarmed, every call passes straight through. */
+const gap = vi.hoisted(() => ({ hook: null as null | (() => Promise<void>), at: 0, calls: 0, fired: 0 }));
+vi.mock("@/lib/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/db")>();
+  const withTenant = (async (...args: Parameters<typeof actual.withTenant>) => {
+    if (gap.hook) {
+      gap.calls++;
+      if (gap.calls === gap.at) {
+        const hook = gap.hook;
+        gap.hook = null;
+        gap.fired++;
+        await hook();
+      }
+    }
+    return actual.withTenant(...args);
+  }) as typeof actual.withTenant;
+  return { ...actual, withTenant };
+});
 // The owner's notice renderer, wrapped so the atomicity case can make it fail once.
 vi.mock("@/lib/email", async (importOriginal) => {
   const orig = await importOriginal<typeof import("@/lib/email")>();
@@ -55,6 +74,7 @@ import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness
 import { invoiceDocByToken } from "@/server/sponsors/invoice-doc";
 import { processStripeEvent, replayEvent, runEvent } from "@/server/usecases/billing-events";
 import {
+  INVOICE_EMAILS_PER_DAY,
   createDeal,
   endDealNow,
   markDealPaid,
@@ -86,6 +106,7 @@ const eventIds: string[] = [];
 
 beforeEach(() => {
   minted.length = 0;
+  Object.assign(gap, { hook: null, at: 0, calls: 0, fired: 0 });
   stubOutboxEnv();
   vi.stubEnv("OAUTH_BASE_URL", APP);
   stripe.create.mockReset().mockImplementation(idempotentCreate());
@@ -141,6 +162,28 @@ const dealRow = async (id: string) =>
   (await sql<{ status: string; deal_status: string; ended_reason: string | null; invoice_send_count: number; invoice_sent_at: Date | null; paid_at: Date | null; invoice_token_hash: Buffer | null }[]>`
     select status, deal_status, ended_reason, invoice_send_count, invoice_sent_at, paid_at, invoice_token_hash from sponsor_orders where id = ${id}`)[0]!;
 
+/** Arm the gap hook: `hook` runs once, just before the `at`-th `withTenant` call from here on. */
+function arm(at: number, hook: () => Promise<unknown>): void {
+  Object.assign(gap, { hook: async () => void (await hook()), at, calls: 0 });
+}
+/** Every `sponsor_invoice` row of the org, whatever its status - what the daily cap counts, read here by the test's own query. */
+async function invoiceRowsOfOrg(orgId: string): Promise<number> {
+  return (await sql<{ n: number }[]>`select count(*)::int as n from email_outbox where org_id = ${orgId} and kind = 'sponsor_invoice'`)[0]!.n;
+}
+/** `n` inert copies of the real invoice row `id` (status `replaced`, no body; each its own ref and once-key, so neither the replace
+ *  rule nor the once-index touches them): rows the cap counts that nothing will ever send. */
+async function seedInvoiceRows(id: string, n: number): Promise<string> {
+  const tag = `seed-${uniq()}`;
+  await sql`
+    insert into email_outbox
+    select (jsonb_populate_record(null::email_outbox, to_jsonb(o) || jsonb_build_object(
+             'id', gen_random_uuid(), 'ref_id', o.ref_id || ':' || ${tag} || '-' || g, 'dedupe_key', ${tag} || '-' || g,
+             'status', 'replaced', 'body_sealed', null, 'created_at', now(), 'status_at', now()))).*
+      from email_outbox o, generate_series(1, ${n}::int) g
+     where o.id = ${id}`;
+  return tag;
+}
+
 /** A rig org, its package and sponsor. */
 async function shop(opts: Parameters<typeof rigOrg>[0] = {}) {
   const o = await rigOrg(opts);
@@ -191,24 +234,28 @@ describe.skipIf(!HAS_DB)("the sponsor's invoice email links the numbered invoice
     expect(after.invoice_token_hash!.equals(before.invoice_token_hash!), "the create's token still stands: nothing rotated").toBe(true);
     // The positive pair: the same deal with an address sends.
     await sql`update sponsor_orders set sponsor_email = ${`billing-${uniq()}@test.local`} where id = ${deal.id}`;
-    await expect(sendDealInvoice(o.auth, deal.id, ORIGIN)).resolves.toMatchObject({ checkout_url: null });
-    expect(await rowsOf("sponsor_invoice", deal.id)).toHaveLength(1);
+    const sent = await sendDealInvoice(o.auth, deal.id, ORIGIN);
+    const rows = await rowsOf("sponsor_invoice", deal.id);
+    expect(rows).toHaveLength(1);
+    expect(sent.invoice_url, "the answer is the link the email carries").toBe(linkIn(rows[0]!.text).url);
   });
 
   it("ONLINE: the email links the invoice page (never checkout.stripe), says it is paid by card there, carries no bank details, in the org's language", async () => {
     const { o, p, s } = await shop({ locale: "es", bank: BANK });
     const es = await getDictionary("es", "emails");
-    const { deal, checkout_url } = await createDeal(o.auth, s.id, dealInput(p.id, { payment_method: "online" }), ORIGIN);
-    expect(checkout_url, "premise: the console still gets its copy link").toMatch(/^https:\/\/checkout\.stripe\.test\//);
+    const { deal, invoice_url } = await createDeal(o.auth, s.id, dealInput(p.id, { payment_method: "online" }), ORIGIN);
+    const [{ checkout_url }] = await sql<{ checkout_url: string }[]>`select checkout_url from sponsor_orders where id = ${deal.id}`;
+    expect(checkout_url, "premise: the deal holds a Checkout session (the invoice page's Pay by card reaches it)").toMatch(/^https:\/\/checkout\.stripe\.test\//);
     const [row, ...more] = await rowsOf("sponsor_invoice", deal.id);
     expect(more, "one email").toEqual([]);
     expect(row!.subject).toBe(dictionarySubject("es", "sponsorInvoice.subject", { number: "SP-0001", orgName: o.name }));
     const { url, token } = linkIn(row!.text);
     expect(url).toBe(`${ORIGIN}/r/sponsor/invoice/${minted.filter((m) => m.dealId === deal.id).at(-1)!.token}`);
+    expect(invoice_url, "the console's copy link is that same page (T23 review I1)").toBe(url);
     expect(row!.html, "the button links the same page").toContain(`href="${url}"`);
     for (const part of [row!.text, row!.html]) {
       expect(part).not.toContain("checkout.stripe");
-      expect(part).not.toContain(checkout_url!);
+      expect(part).not.toContain(checkout_url);
       expect(part).not.toContain("Sort code 12-34-56");
     }
     expect(row!.text).toContain(t(es, "sponsorInvoice.payByCard"));
@@ -223,7 +270,6 @@ describe.skipIf(!HAS_DB)("the sponsor's invoice email links the numbered invoice
     const { deal } = await createDeal(o.auth, s.id, dealInput(p.id, { payment_method: "offline", sponsor_email: "pay@harbour.test" }), ORIGIN);
     expect(await rowsOf("sponsor_invoice", deal.id), "an offline create mails nothing (the club sends)").toEqual([]);
     const sent = await sendDealInvoice(o.auth, deal.id, ORIGIN);
-    expect(sent.checkout_url).toBeNull();
     expect(stripe.create, "no Stripe for an offline invoice").not.toHaveBeenCalled();
     expect(sent.deal.deal_status, "the deal's status does not move").toBe(deal.deal_status);
     const [row] = await rowsOf("sponsor_invoice", deal.id);
@@ -234,7 +280,8 @@ describe.skipIf(!HAS_DB)("the sponsor's invoice email links the numbered invoice
     expect(row!.text).not.toContain(t(en, "sponsorInvoice.payByCard"));
     expect(row!.text).not.toContain(t(en, "sponsorInvoice.noBankDetails", { orgName: o.name }));
     expect(row!.text).not.toContain("checkout.stripe");
-    const { token } = linkIn(row!.text);
+    const { url, token } = linkIn(row!.text);
+    expect(sent.invoice_url, "the answer is the link the email carries").toBe(url);
     expect((await invoiceDocByToken(token))?.bankDetails, "the page it opens carries the same details").toBe(BANK);
     const after = await dealRow(deal.id);
     expect(after.invoice_send_count).toBe(1);
@@ -299,6 +346,126 @@ describe.skipIf(!HAS_DB)("the sponsor's invoice email links the numbered invoice
   });
 });
 
+describe.skipIf(!HAS_DB)("T23 review fixes: the answer's link, the in-lock re-check, the daily cap (DB)", () => {
+  it("I1: every answer that sent an email carries invoice_url - exactly the link that email carries - and never a Checkout url; online create and resend, offline send and resend; a create that mailed nothing answers null (5 counted)", async () => {
+    let checked = 0;
+    const answered = (out: object, rows: Row[], label: string) => {
+      expect(Object.keys(out).sort(), `${label}: the answer's fields`).toEqual(["deal", "invoice_url"]);
+      const url = (out as { invoice_url: string | null }).invoice_url;
+      expect(url, `${label}: the link the newest email carries`).toBe(linkIn(rows.at(-1)!.text).url);
+      expect(url, label).not.toContain("checkout.stripe");
+      checked++;
+      return url!;
+    };
+    const { o, p, s } = await shop({ bank: BANK });
+    // ONLINE: the create sends, the resend sends again with a new link.
+    const made = await createDeal(o.auth, s.id, dealInput(p.id, { payment_method: "online" }), ORIGIN);
+    const [{ checkout_url }] = await sql<{ checkout_url: string }[]>`select checkout_url from sponsor_orders where id = ${made.deal.id}`;
+    expect(checkout_url, "premise: a Checkout session exists to leak").toMatch(/checkout\.stripe/);
+    const onFirst = answered(made, await rowsOf("sponsor_invoice", made.deal.id), "online create");
+    const onAgain = answered(await sendDealInvoice(o.auth, made.deal.id, ORIGIN), await rowsOf("sponsor_invoice", made.deal.id), "online resend");
+    expect(onAgain, "the resend's link is the new one").not.toBe(onFirst);
+    expect(JSON.stringify(made), "no Checkout url anywhere in the answer").not.toContain(checkout_url);
+    // OFFLINE: the create mails nothing (null); the send and the resend each answer their own link.
+    const s2 = await rigSponsor(o);
+    const off = await createDeal(o.auth, s2.id, dealInput(p.id, { payment_method: "offline", sponsor_email: "pay@harbour.test" }), ORIGIN);
+    expect(Object.keys(off).sort()).toEqual(["deal", "invoice_url"]);
+    expect(off.invoice_url, "an offline create sends no email, so it has no link").toBeNull();
+    checked++;
+    const offFirst = answered(await sendDealInvoice(o.auth, off.deal.id, ORIGIN), await rowsOf("sponsor_invoice", off.deal.id), "offline send");
+    const offAgain = answered(await sendDealInvoice(o.auth, off.deal.id, ORIGIN), await rowsOf("sponsor_invoice", off.deal.id), "offline resend");
+    expect(offAgain).not.toBe(offFirst);
+    expect(await invoiceDocByToken(linkIn(`${offFirst}`).token), "the earlier answer's link opens nothing").toBeNull();
+    expect(checked).toBe(5);
+  });
+
+  it("m1: a Mark as paid, or a Write off, landing between an offline send's unlocked read and its lock: the send is 409 deal_not_invoiceable, nothing queued, counted or rotated (2 counted, the hook fired each time)", async () => {
+    let checked = 0;
+    // Mark as paid lands in the gap: a running offline deal, unpaid, with an address - offered Resend when it was read.
+    const { o, p, s } = await shop({ bank: BANK });
+    const { deal } = await createDeal(o.auth, s.id, dealInput(p.id, { payment_method: "offline", go_live: "immediate", sponsor_email: "pay@harbour.test" }), ORIGIN);
+    const before = await dealRow(deal.id);
+    arm(2, () => markDealPaid(o.auth, deal.id));
+    expect(await refusal(() => sendDealInvoice(o.auth, deal.id, ORIGIN))).toEqual({ status: 409, code: "deal_not_invoiceable" });
+    expect(gap.fired, "the Mark as paid ran in the gap").toBe(1);
+    let after = await dealRow(deal.id);
+    expect(after.status, "premise: the Mark as paid committed").toBe("paid");
+    expect(await rowsOf("sponsor_invoice", deal.id), "no invoice for a paid deal").toEqual([]);
+    expect([after.invoice_send_count, after.invoice_sent_at], "not counted").toEqual([0, null]);
+    expect(after.invoice_token_hash!.equals(before.invoice_token_hash!), "not rotated").toBe(true);
+    checked++;
+
+    // Write off lands in the gap: an offline deal ended unpaid after it ran (still due, so offered Resend when it was read).
+    const due = await endedDue({ sponsor_email: "pay@harbour.test" }, { bank: BANK });
+    const dueBefore = await dealRow(due.id);
+    arm(2, () => writeOffDeal(due.o.auth, due.id));
+    expect(await refusal(() => sendDealInvoice(due.o.auth, due.id, ORIGIN))).toEqual({ status: 409, code: "deal_not_invoiceable" });
+    expect(gap.fired, "the Write off ran in the gap").toBe(2);
+    after = await dealRow(due.id);
+    expect(after.ended_reason, "premise: the Write off committed").toBe("written_off");
+    expect(await rowsOf("sponsor_invoice", due.id), "no invoice for a written-off deal").toEqual([]);
+    expect(after.invoice_send_count).toBe(dueBefore.invoice_send_count);
+    expect(after.invoice_token_hash!.equals(dueBefore.invoice_token_hash!), "not rotated").toBe(true);
+    checked++;
+
+    // The positive pair: with nothing in the gap, the same kind of send goes.
+    const ok = await endedDue({ sponsor_email: "pay@harbour.test" }, { bank: BANK });
+    arm(2, async () => {});
+    await sendDealInvoice(ok.o.auth, ok.id, ORIGIN);
+    expect(await rowsOf("sponsor_invoice", ok.id)).toHaveLength(1);
+    expect(checked).toBe(2);
+  });
+
+  it("m7: at most INVOICE_EMAILS_PER_DAY invoice emails per org in 24 hours - the 50th send goes, the 51st is 429 invoice_send_limit (offline and online sends, and an online create, refused before Stripe or any write); rows older than 24 hours stop counting; another org is untouched", async () => {
+    expect(INVOICE_EMAILS_PER_DAY, "the PO ruling: 50 a day").toBe(50);
+    const { o, p, s } = await shop({ bank: BANK });
+    // The empty case: an org with no invoices sends (and counts its own rows from zero).
+    expect(await invoiceRowsOfOrg(o.orgId)).toBe(0);
+    const online = await createDeal(o.auth, s.id, dealInput(p.id, { payment_method: "online" }), ORIGIN); // row 1
+    const s2 = await rigSponsor(o);
+    const off = (await createDeal(o.auth, s2.id, dealInput(p.id, { payment_method: "offline", sponsor_email: "pay@harbour.test" }), ORIGIN)).deal;
+    await sendDealInvoice(o.auth, off.id, ORIGIN); // row 2
+    const [real] = await rowsOf("sponsor_invoice", off.id);
+    const tag = await seedInvoiceRows(real!.id, INVOICE_EMAILS_PER_DAY - 3);
+    expect(await invoiceRowsOfOrg(o.orgId), "premise: one short of the cap").toBe(INVOICE_EMAILS_PER_DAY - 1);
+
+    await sendDealInvoice(o.auth, off.id, ORIGIN); // the 50th goes
+    expect(await invoiceRowsOfOrg(o.orgId), "the 50th was queued").toBe(INVOICE_EMAILS_PER_DAY);
+
+    // The 51st, every way: refused, nothing queued, counted, rotated or sent to Stripe.
+    const offBefore = await dealRow(off.id);
+    const onBefore = await dealRow(online.deal.id);
+    stripe.create.mockClear();
+    stripe.retrieve.mockClear();
+    stripe.expire.mockClear();
+    const LIMIT = { status: 429, code: "invoice_send_limit" };
+    expect(await refusal(() => sendDealInvoice(o.auth, off.id, ORIGIN)), "offline resend").toEqual(LIMIT);
+    expect(await refusal(() => sendDealInvoice(o.auth, online.deal.id, ORIGIN)), "online resend").toEqual(LIMIT);
+    const s3 = await rigSponsor(o);
+    expect(await refusal(() => createDeal(o.auth, s3.id, dealInput(p.id, { payment_method: "online" }), ORIGIN)), "online create").toEqual(LIMIT);
+    expect(await invoiceRowsOfOrg(o.orgId), "nothing queued").toBe(INVOICE_EMAILS_PER_DAY);
+    for (const [label, id, was] of [["offline", off.id, offBefore], ["online", online.deal.id, onBefore]] as const) {
+      const now = await dealRow(id);
+      expect(now.invoice_send_count, `${label}: not counted`).toBe(was.invoice_send_count);
+      expect(now.invoice_token_hash!.equals(was.invoice_token_hash!), `${label}: not rotated`).toBe(true);
+    }
+    expect((await sql`select 1 from sponsor_orders where sponsor_id = ${s3.id}`).length, "the refused create wrote no deal").toBe(0);
+    expect([stripe.create.mock.calls.length, stripe.retrieve.mock.calls.length, stripe.expire.mock.calls.length], "Stripe untouched").toEqual([0, 0, 0]);
+    // A deal that mails nothing is not an invoice email: an offline create at the cap is saved.
+    await expect(createDeal(o.auth, s3.id, dealInput(p.id, { payment_method: "offline", sponsor_email: "pay@harbour.test" }), ORIGIN)).resolves.toMatchObject({ invoice_url: null });
+    // Another org at the same moment is untouched.
+    const other = await shop();
+    const od = (await createDeal(other.o.auth, other.s.id, dealInput(other.p.id, { payment_method: "offline", sponsor_email: "pay@harbour.test" }), ORIGIN)).deal;
+    await sendDealInvoice(other.o.auth, od.id, ORIGIN);
+    expect(await rowsOf("sponsor_invoice", od.id)).toHaveLength(1);
+
+    // A rolling window: once the seeded rows are older than 24 hours, the org is back under the cap and sends.
+    await sql`update email_outbox set created_at = now() - make_interval(hours => 25) where org_id = ${o.orgId} and dedupe_key like ${`${tag}-%`}`;
+    await sendDealInvoice(o.auth, online.deal.id, ORIGIN);
+    expect((await dealRow(online.deal.id)).invoice_send_count, "the online resend went").toBe(onBefore.invoice_send_count + 1);
+  });
+});
+
 describe.skipIf(!HAS_DB)("the owner hears when a sponsor pays by card: sponsor_deal_paid (DB)", () => {
   it("through runEvent: ONE notice to the org's owner, in the OWNER's language (an fr owner of an nl org reads French), naming the sponsor and the amount, saying they are live, linking the deal; a replay and a redelivery on a new event id add nothing", async () => {
     const { o, p, s } = await shop({ locale: "nl" });
@@ -313,6 +480,10 @@ describe.skipIf(!HAS_DB)("the owner hears when a sponsor pays by card: sponsor_d
 
     const [row, ...more] = await rowsOf("sponsor_deal_paid", deal.id);
     expect(more, "one notice").toEqual([]);
+    // T23 review m2: the once-key is the PAYMENT, written out (`onceKey(kind, ref, id)` with no suffix is the id itself): one
+    // notice per payment intent - a redelivery adds nothing, a different payment on the same deal is told.
+    const [{ dedupe_key }] = await sql<{ dedupe_key: string }[]>`select dedupe_key from email_outbox where id = ${row!.id}`;
+    expect(dedupe_key).toBe(intent);
     expect(row!.recipient).toBe(owner!.email.toLowerCase());
     expect(row!.recipient_user_id, "an account kind: the owner's account").toBe(o.auth.userId);
     expect(row!.subject).toBe(dictionarySubject("fr", "sponsorDealPaid.subject", { sponsorName: "Harbour Bank", orgName: o.name }));

@@ -71,6 +71,8 @@ describe("sponsorSaveErrorKey - the envelope's code, to the dictionary", () => {
       // An offline invoice with no billing email (Task 23, F13), and Write off with nothing still due.
       no_billing_email: "sponsors.error.noBillingEmail",
       deal_nothing_due: "sponsors.error.nothingDue",
+      // The org's daily invoice-email cap (T23 review m7): its own words, never the shared rate-limit line.
+      invoice_send_limit: "sponsors.error.invoiceSendLimit",
       deal_changed: "sponsors.error.dealChanged",
       // Mark as paid's refusal (F37). Resend's own sentence is a per-write override, below.
       deal_paid_online: "sponsors.error.dealPaidOnline",

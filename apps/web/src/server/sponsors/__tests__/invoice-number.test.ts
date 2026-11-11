@@ -279,7 +279,7 @@ describe.skipIf(!HAS_DB)("createDeal numbers online and offline deals in its own
     expect([off.deal.invoice_number, await storedNumber(off.deal.id)], "offline: the first number").toEqual([1, 1]);
     const on = await createDeal(o.auth, await sponsor(o), input(p, "online", "on_payment"), ORIGIN);
     expect([on.deal.invoice_number, await storedNumber(on.deal.id)], "online: the next").toEqual([2, 2]);
-    expect(on.checkout_url, "premise: the online invoice was sent").not.toBeNull();
+    expect(on.invoice_url, "premise: the online invoice was sent").not.toBeNull();
     expect((await getDeal(o.auth, on.deal.id)).invoice_number, "the deal read carries it").toBe(2);
     expect(await counter(o.orgId)).toBe(2);
 

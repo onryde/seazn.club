@@ -83,6 +83,13 @@ export function payLinkStillOpen(deals: readonly SponsorDeal[], sent: SponsorDea
   return current.deal_status !== "ended" && isUnpaid(current.payment_status);
 }
 
+/** What a send says it did (T23 review m3), read off the deal as it was BEFORE the send: a deal whose invoice never went out says
+ *  "Invoice sent"; only one already sent says "sent again" and that the new email replaces the earlier link. Not the action's
+ *  name: an OFFLINE deal's first send is offered as Resend invoice (it has no draft to send from), and it replaces nothing. */
+export function invoiceNoticeKey(before: Pick<SponsorDeal, "invoice_sent_at">): MessageKey {
+  return before.invoice_sent_at === null ? "sponsors.deal.notice.invoiceSent" : "sponsors.deal.notice.invoiceResent";
+}
+
 /** Does Mark as paid retire a pay link? An online deal whose invoice went out has a Checkout session the server expires when the club
  *  records the payment (markDealPaid -> retireBefore "refuse"), so the sponsor cannot pay it a second time. */
 export function markPaidRetiresPayLink(deal: SponsorDeal): boolean {

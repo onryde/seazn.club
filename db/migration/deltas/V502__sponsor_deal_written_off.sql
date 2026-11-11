@@ -15,8 +15,10 @@
 --   * sponsor_orders_ended_reason_check: V495's seven reasons, restated, plus `written_off`. lib/sponsor-deals.ts END_REASONS is the
 --     same list (server/sponsors/__tests__/deal-values-db.test.ts reads it back).
 --   * sponsor_orders_written_off_unpaid_offline (new): a written-off deal is an OFFLINE deal whose money is still unpaid (`pending`,
---     or `failed`, which an offline deal never reaches but the domain treats as unpaid). A card payment is never written off (an
---     online deal ended unpaid claims nothing: its invoice reads "Ended"), and a paid or refunded one has nothing to write off.
+--     or `failed`, which an offline deal never reaches but the domain treats as unpaid) and that WENT LIVE (`live_at` set: the
+--     sponsor had the placement, which is what made the money owed - lib/sponsor-deals.ts `endedStillDue`; T23 review m9). A card
+--     payment is never written off (an online deal ended unpaid claims nothing: its invoice reads "Ended"), a paid or refunded one
+--     has nothing to write off, and one that never went live owed nothing.
 --     `ended_reason <> 'written_off'` is NULL on an open deal, and a CHECK passes on NULL, which is right: only a written-off row is
 --     constrained.
 --
@@ -32,4 +34,4 @@ alter table sponsor_orders
     check (ended_reason in ('refunded', 'dispute_lost', 'ended_now', 'expired', 'competition_finished', 'legacy',
                             'duplicate_payment', 'written_off')),
   add constraint sponsor_orders_written_off_unpaid_offline
-    check (ended_reason <> 'written_off' or (payment_method = 'offline' and status in ('pending', 'failed')));
+    check (ended_reason <> 'written_off' or (payment_method = 'offline' and status in ('pending', 'failed') and live_at is not null));

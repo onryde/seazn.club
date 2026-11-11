@@ -71,7 +71,15 @@ const BASE: SponsorDeal = {
   marked_paid_by: null, approved_at: null, approved_by: null, live_at: null, ended_at: null, ended_reason: null, parked_at: null,
   disputed_at: null, dispute_id: null, has_payment_intent: false, invoice_number: null,
 };
-const deal = (over: Partial<SponsorDeal>): SponsorDeal => ({ ...BASE, ...over });
+/** D11: an online or offline deal is numbered when it is made, a complimentary one never (an unnumbered online or offline deal is
+ *  pre-numbering stg data, and offers no send: lib/sponsor-deals.test.ts sweeps it). */
+const deal = (over: Partial<SponsorDeal>): SponsorDeal => ({
+  ...BASE,
+  invoice_number: (over.payment_method ?? BASE.payment_method) === "complimentary" ? null : 1,
+  ...over,
+});
+/** The invoice page's link, as a send answers it (`invoice_url`; the route shape `/r/sponsor/invoice/<token>`). */
+const INVOICE_LINK = "https://app.example/r/sponsor/invoice/tok_abcdefghijklmnopqrstuvwx";
 
 /** Screen 5, first state: "Paid online, waiting for approval - Quay Fisheries". */
 const QUAY = deal({
@@ -750,8 +758,11 @@ describe("'Going live will': what the deal switches on, true to the deal's state
 
 describe("the pay link banner on the page", () => {
   it("shows the link the last send made, with a copy control, and nothing when there is none", () => {
-    const markup = html({ deal: RIDGE, payLink: "https://checkout.stripe.test/c/pay_123" });
-    expect(textOfMarkup(findOne(markup, "sponsor-pay-link-url").outer)).toBe("https://checkout.stripe.test/c/pay_123");
+    const markup = html({ deal: RIDGE, payLink: INVOICE_LINK });
+    expect(textOfMarkup(findOne(markup, "sponsor-pay-link-url").outer)).toBe(INVOICE_LINK);
+    // The link is a credential (its token opens the invoice and its Pay by card): session replay must never record it. The
+    // painters sweep cannot follow a url the SERVER builds into an API reply, so the class is pinned here, on the rendered banner.
+    expect(findOne(markup, "sponsor-pay-link").outer, "the banner carries ph-no-capture").toMatch(/^<div[^>]*\sclass="ph-no-capture[\s"]/);
     expect(findAll(markup, "sponsor-pay-link")).toHaveLength(1);
     expect(findAll(html({ deal: RIDGE }), "sponsor-pay-link")).toHaveLength(0);
   });
@@ -1016,10 +1027,10 @@ describe("the writes the deal page makes", () => {
   });
 
   it("D7 the pay-link banner follows its deal: a Resend shows the link, and it goes when the deal can no longer be paid", async () => {
-    const LINK = "https://checkout.stripe.test/c/pay_abc";
+    const LINK = INVOICE_LINK;
     const sent = mk({ ...RIDGE, id: "dr1" });
     answer = (url, method) => {
-      if (method === "POST" && url.endsWith("/send-invoice")) return { status: 200, body: { ok: true, data: { deal: sent, checkout_url: LINK } } };
+      if (method === "POST" && url.endsWith("/send-invoice")) return { status: 200, body: { ok: true, data: { deal: sent, invoice_url: LINK } } };
       return defaultAnswer(url, method);
     };
     const m = mount([SUBJECT], hubOf({ deals: [sent], dealId: "dr1" }));
@@ -1040,7 +1051,7 @@ describe("the writes the deal page makes", () => {
     const other = mk({ ...RIDGE, id: "d-other" });
     const mine = mk({ ...RIDGE, id: "d-mine" });
     answer = (url, method) => {
-      if (method === "POST" && url.endsWith("/send-invoice")) return { status: 200, body: { ok: true, data: { deal: other, checkout_url: "https://checkout.stripe.test/c/other" } } };
+      if (method === "POST" && url.endsWith("/send-invoice")) return { status: 200, body: { ok: true, data: { deal: other, invoice_url: `${INVOICE_LINK}other` } } };
       return defaultAnswer(url, method);
     };
     const m = mount([SUBJECT], hubOf({ deals: [other, mine], dealId: "d-mine" }));
@@ -1054,7 +1065,7 @@ describe("the writes the deal page makes", () => {
   it("the banner also follows an Add deal create: its answer carries the link, shown on the sponsor's page", async () => {
     const created = mk({ ...RIDGE, id: "d-new" });
     answer = (url, method) => {
-      if (method === "POST" && url.endsWith("/sponsors/a/deals")) return { status: 201, body: { ok: true, data: { deal: created, checkout_url: "https://checkout.stripe.test/c/new" } } };
+      if (method === "POST" && url.endsWith("/sponsors/a/deals")) return { status: 201, body: { ok: true, data: { deal: created, invoice_url: `${INVOICE_LINK}new` } } };
       return defaultAnswer(url, method);
     };
     const m = mount([SUBJECT], hubOf({ deals: [], dealId: null }));
@@ -1065,7 +1076,41 @@ describe("the writes the deal page makes", () => {
       package_id: "p0", competition_id: null, payment_method: "online", go_live: "on_payment", sponsor_email: "x@example.com",
     });
     await flush();
-    expect(m.words("sponsor-pay-link-url")).toEqual(["https://checkout.stripe.test/c/new"]);
+    expect(m.words("sponsor-pay-link-url")).toEqual([`${INVOICE_LINK}new`]);
+  });
+
+  it("T23 review I1: an answer that carries only a checkout_url (an older server) paints no banner - the console shows the invoice link and nothing else", async () => {
+    const sent = mk({ ...RIDGE, id: "dc1" });
+    answer = (url, method) => {
+      if (method === "POST" && url.endsWith("/send-invoice")) return { status: 200, body: { ok: true, data: { deal: sent, checkout_url: "https://checkout.stripe.test/c/raw" } } };
+      return defaultAnswer(url, method);
+    };
+    const m = mount([SUBJECT], hubOf({ deals: [sent], dealId: "dc1" }));
+    m.action("resend_invoice");
+    await flush();
+    expect(m.has("sponsor-pay-link"), "a Checkout url is never painted").toBe(false);
+    expect(m.text()).not.toContain("checkout.stripe");
+  });
+
+  it("T23 review m3: what a send says is read off the deal BEFORE it - a first send (an offline deal's first is offered as Resend) says 'Invoice sent'; only a deal already sent says 'sent again' (2 counted)", async () => {
+    let checked = 0;
+    for (const [label, before, words] of [
+      ["an offline deal never sent", mk({ ...MARLOW, id: "dm1", sponsor_email: "pay@marlow.example", invoice_sent_at: null }), "Invoice sent for Quay Fisheries."],
+      ["an online deal already sent", mk({ ...RIDGE, id: "dm2" }), "Invoice sent again for Quay Fisheries."],
+    ] as const) {
+      expect(allowedActions(before), `premise: ${label} offers Resend`).toContain("resend_invoice");
+      answer = (url, method) => {
+        if (method === "POST" && url.endsWith("/send-invoice")) return { status: 200, body: { ok: true, data: { deal: before, invoice_url: INVOICE_LINK } } };
+        return defaultAnswer(url, method);
+      };
+      const m = mount([SUBJECT], hubOf({ deals: [before], dealId: before.id }));
+      m.action("resend_invoice");
+      await flush();
+      expect(m.text(), label).toContain(words);
+      if (before.invoice_sent_at === null) expect(m.text(), label).not.toContain("sent again");
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });
 

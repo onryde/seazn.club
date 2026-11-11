@@ -311,8 +311,8 @@ describe.skipIf(!HAS_DB)("sponsor deals schema — the constraints are real", ()
     const w = await world();
     let accepted = 0;
     for (const r of ENDED_REASONS) {
-      // A write-off is of an unpaid OFFLINE deal (sponsor_orders_written_off_unpaid_offline, tested below).
-      const shape = r === "written_off" ? { ...ended(r), payment_method: "offline" } : ended(r);
+      // A write-off is of an unpaid OFFLINE deal that went live (sponsor_orders_written_off_unpaid_offline, tested below).
+      const shape = r === "written_off" ? { ...ended(r), payment_method: "offline", live_at: new Date() } : ended(r);
       await expect(insertDeal(deal(w, await sponsor(w), shape)), r).resolves.toBeTruthy();
       accepted++;
     }
@@ -321,19 +321,24 @@ describe.skipIf(!HAS_DB)("sponsor deals schema — the constraints are real", ()
       .rejects.toMatchObject(refusedBy("23514", "sponsor_orders_ended_reason_check"));
   });
 
-  it("written_off_unpaid_offline: a write-off is of an unpaid OFFLINE deal only; every other method or money refused by name (7 rows reported)", async () => {
+  it("written_off_unpaid_offline: a write-off is of an unpaid OFFLINE deal that went live only; every other method, money or a deal never live refused by name (9 rows reported)", async () => {
     expect(readdirSync(DELTAS_DIR).filter((f) => WRITTEN_OFF_DELTA.test(f)), "the written-off delta, by suffix").toHaveLength(1);
     const w = await world();
+    // Every row but the never-live ones went live: the money is owed because the sponsor had the placement (`endedStillDue`, m9).
+    const WENT_LIVE = { live_at: new Date() };
     const ACCEPTED: [string, Deal][] = [
-      ["offline, pending", { payment_method: "offline", status: "pending" }],
-      ["offline, failed", { payment_method: "offline", status: "failed" }],
+      ["offline, pending, went live", { payment_method: "offline", status: "pending", ...WENT_LIVE }],
+      ["offline, failed, went live", { payment_method: "offline", status: "failed", ...WENT_LIVE }],
     ];
     const REFUSED: [string, Deal][] = [
-      ["online, pending (a card deal ended unpaid claims nothing)", { payment_method: "online", status: "pending" }],
-      ["online, failed", { payment_method: "online", status: "failed" }],
-      ["offline, paid (nothing left to write off)", { payment_method: "offline", status: "paid" }],
-      ["offline, refunded", { payment_method: "offline", status: "refunded" }],
-      ["complimentary (never invoiced)", { ...COMPLIMENTARY, go_live: "immediate" }],
+      ["online, pending (a card deal ended unpaid claims nothing)", { payment_method: "online", status: "pending", ...WENT_LIVE }],
+      ["online, failed", { payment_method: "online", status: "failed", ...WENT_LIVE }],
+      ["offline, paid (nothing left to write off)", { payment_method: "offline", status: "paid", ...WENT_LIVE }],
+      ["offline, refunded", { payment_method: "offline", status: "refunded", ...WENT_LIVE }],
+      ["complimentary (never invoiced)", { ...COMPLIMENTARY, go_live: "immediate", ...WENT_LIVE }],
+      // T23 review m9: a deal that never went live owed nothing, so there is nothing to write off.
+      ["offline, pending, never live", { payment_method: "offline", status: "pending", live_at: null }],
+      ["offline, failed, never live", { payment_method: "offline", status: "failed", live_at: null }],
     ];
     let checked = 0;
     for (const [label, shape] of ACCEPTED) {
@@ -345,7 +350,7 @@ describe.skipIf(!HAS_DB)("sponsor deals schema — the constraints are real", ()
         .rejects.toMatchObject(refusedBy("23514", "sponsor_orders_written_off_unpaid_offline"));
       checked++;
     }
-    expect(checked, "rows checked").toBe(7);
+    expect(checked, "rows checked").toBe(9);
     // The other reasons are untouched by it: an online deal ended unpaid by the sweep is still accepted.
     await expect(insertDeal(deal(w, await sponsor(w), { ...ended("expired"), payment_method: "online", status: "pending" }))).resolves.toBeTruthy();
   });

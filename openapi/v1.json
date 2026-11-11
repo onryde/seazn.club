@@ -75814,7 +75814,7 @@
     },
     "/api/v1/orgs/{id}/sponsors/{sponsorId}/deals": {
       "post": {
-        "summary": "Add a deal to a sponsor: a package (its name, tier, stream tick and price are copied onto the deal), a scope inside the package's, how it is paid (`online` · `offline` · `complimentary`) and when it goes live (`on_payment` · `immediate` · `on_approval`; complimentary cannot go live on payment, 422 `on_payment_needs_payment`). A deal added beside a live one queues behind it, unless `end_current` ends the live one first. `ends_on` is a day in the organisation's timezone, today or later (422 `ends_on_in_past`). Answers `{ deal, checkout_url }`; the url is null for an offline or complimentary deal. An online deal sends its invoice to the sponsor's billing email at once and answers its Checkout url; when Stripe cannot mint the link the deal stays as created and the answer is 502 `stripe_unavailable` (Send invoice retries it). A tier above partner or a competition scope is `sponsors.tiers` (402), selling online is `sponsors.monetize` (402) and needs Stripe connected (409 `connect_required`) and the sponsor's billing email (422 `sponsor_email_required`). Editors only (owner / admin); never key-accessible",
+        "summary": "Add a deal to a sponsor: a package (its name, tier, stream tick and price are copied onto the deal), a scope inside the package's, how it is paid (`online` · `offline` · `complimentary`) and when it goes live (`on_payment` · `immediate` · `on_approval`; complimentary cannot go live on payment, 422 `on_payment_needs_payment`). A deal added beside a live one queues behind it, unless `end_current` ends the live one first. `ends_on` is a day in the organisation's timezone, today or later (422 `ends_on_in_past`). Answers `{ deal, invoice_url }`; the url is null for an offline or complimentary deal. An online deal sends its invoice to the sponsor's billing email at once and answers the link that email carries (`invoice_url`, the deal's numbered invoice page - never a payment link); when Stripe cannot mint the payment link the deal stays as created and the answer is 502 `stripe_unavailable` (Send invoice retries it). A tier above partner or a competition scope is `sponsors.tiers` (402), selling online is `sponsors.monetize` (402) and needs Stripe connected (409 `connect_required`) and the sponsor's billing email (422 `sponsor_email_required`); an online deal past the organisation's invoice emails for the day (50 in any 24 hours) is 429 `invoice_send_limit`, before anything is written. Editors only (owner / admin); never key-accessible",
         "tags": [
           "sponsors"
         ],
@@ -76243,7 +76243,7 @@
                           ],
                           "additionalProperties": false
                         },
-                        "checkout_url": {
+                        "invoice_url": {
                           "anyOf": [
                             {
                               "type": "string"
@@ -76256,7 +76256,7 @@
                       },
                       "required": [
                         "deal",
-                        "checkout_url"
+                        "invoice_url"
                       ],
                       "additionalProperties": false
                     },
@@ -76302,7 +76302,7 @@
                       "has_payment_intent": true,
                       "invoice_number": -9007199254740991
                     },
-                    "checkout_url": "example"
+                    "invoice_url": "example"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -76531,6 +76531,50 @@
           },
           "422": {
             "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
             "content": {
               "application/json": {
                 "schema": {
@@ -80683,7 +80727,7 @@
     },
     "/api/v1/orgs/{id}/sponsor-deals/{dealId}/send-invoice": {
       "post": {
-        "summary": "Send, or resend, a deal's invoice to the sponsor's billing email: answers `{ deal, checkout_url }`. The email links the deal's numbered invoice page, never a payment link, and every send replaces that page's link (the earlier email's link stops opening). An ONLINE deal: its payment link (`checkout_url`, for the console to copy) is reused while more than 10 minutes are left of it; otherwise the old link is closed first and a new one made; a draft moves to awaiting payment. An OFFLINE deal with a billing email: the invoice carries the club's bank details, the deal does not move, and `checkout_url` is null. 409 `deal_not_invoiceable` when the deal is paid, ended, complimentary or has no invoice number, `deal_paid_online` when the sponsor has just paid, `connect_required` without Stripe connected (online), `deal_changed` when the deal moved meanwhile; 422 `no_billing_email` for an offline deal with no billing email; 402 when the plan no longer sells online; 502 `stripe_unavailable` when Stripe cannot (the deal is not moved and nothing is sent; its old link may already be closed, and sending again makes a new one). Editors only; never key-accessible",
+        "summary": "Send, or resend, a deal's invoice to the sponsor's billing email: answers `{ deal, invoice_url }`, `invoice_url` being the link the email carries (the deal's numbered invoice page, for the console to copy - never a payment link). Every send replaces that page's link (the earlier email's link stops opening). An ONLINE deal: its payment link (reached only from the invoice page's Pay by card) is reused while more than 10 minutes are left of it; otherwise the old link is closed first and a new one made; a draft moves to awaiting payment. An OFFLINE deal with a billing email: the invoice carries the club's bank details and the deal does not move. 409 `deal_not_invoiceable` when the deal is paid, ended, complimentary or has no invoice number, `deal_paid_online` when the sponsor has just paid, `connect_required` without Stripe connected (online), `deal_changed` when the deal moved meanwhile; 422 `no_billing_email` for an offline deal with no billing email; 402 when the plan no longer sells online; 429 `invoice_send_limit` past the organisation's invoice emails for the day (50 in any 24 hours; nothing is sent or moved); 502 `stripe_unavailable` when Stripe cannot (the deal is not moved and nothing is sent; its old link may already be closed, and sending again makes a new one). Editors only; never key-accessible",
         "tags": [
           "sponsors"
         ],
@@ -81023,20 +81067,13 @@
                           ],
                           "additionalProperties": false
                         },
-                        "checkout_url": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
+                        "invoice_url": {
+                          "type": "string"
                         }
                       },
                       "required": [
                         "deal",
-                        "checkout_url"
+                        "invoice_url"
                       ],
                       "additionalProperties": false
                     },
@@ -81082,7 +81119,7 @@
                       "has_payment_intent": true,
                       "invoice_number": -9007199254740991
                     },
-                    "checkout_url": "example"
+                    "invoice_url": "example"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -81311,6 +81348,50 @@
           },
           "422": {
             "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
             "content": {
               "application/json": {
                 "schema": {

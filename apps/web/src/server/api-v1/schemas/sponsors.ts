@@ -74,18 +74,19 @@ export const CreateSponsorDeal = z
   })
   .strict();
 
-/** F11: the create answers the deal and, for an online deal, the Checkout url its invoice carries (null otherwise). The url
- *  rides beside the deal, never on it: SponsorDeal stays url-free. */
+/** F11: the create answers the deal and, for an online deal, the link its invoice email carries - the deal's numbered invoice
+ *  page, never a Checkout url (T23 review I1: no Checkout url leaves the server but to the sponsor's own Pay by card). Null for a
+ *  deal no email went for (offline, complimentary). The url rides beside the deal, never on it: SponsorDeal stays url-free. */
 export const SponsorDealCreated = z.object({
   deal: SponsorDeal,
-  checkout_url: z.string().nullable(),
+  invoice_url: z.string().nullable(),
 });
 
-/** Send invoice (Task 7; Task 23): the deal after the send and, for an ONLINE deal, its Checkout url (beside the deal, never on
- *  it; the console's copy link). The email itself links the numbered invoice page, never this url. Null for an offline deal. */
+/** Send invoice (Task 7; Task 23): the deal after the send and the link the email carries - the invoice page, with the new token
+ *  this send minted (beside the deal, never on it; the console's copy link). Online and offline alike. */
 export const SponsorDealInvoiceSent = z.object({
   deal: SponsorDeal,
-  checkout_url: z.string().nullable(),
+  invoice_url: z.string(),
 });
 
 export const Sponsor = z.object({

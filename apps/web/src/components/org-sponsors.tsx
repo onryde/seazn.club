@@ -26,7 +26,7 @@ import { SMALL_BTN, SponsorSheet, SponsorSheetBody } from "@/components/sponsors
 import { DealPageBody } from "@/components/sponsors/deal-page";
 import { PayLinkBanner } from "@/components/sponsors/pay-link-banner";
 import {
-  endConfirmBodyKey, endKeepsPayment, markPaidRetiresPayLink, payLinkStillOpen, refundConfirmBodyKey, refundPlacementKey,
+  endConfirmBodyKey, endKeepsPayment, invoiceNoticeKey, markPaidRetiresPayLink, payLinkStillOpen, refundConfirmBodyKey, refundPlacementKey,
 } from "@/components/sponsors/deal-copy";
 import { createDealWrite, sponsorSaveErrorKey } from "@/components/sponsors/save-error";
 import type { SponsorWrite } from "@/components/sponsors/save-error";
@@ -529,8 +529,9 @@ export function OrgSponsors({
   const [error, setError] = useState<string | null>(null);
   /** What a write that changes nothing on screen says it did (Resend invoice: the chip stays "Awaiting payment"). */
   const [notice, setNotice] = useState<string | null>(null);
-  /** The pay link the last send, resend or online Add deal answered with, and the deal it pays: shown only while that deal can still
-   *  be paid (`payLinkStillOpen`), so End now, Mark as paid or a payment takes it down with the deal. */
+  /** The invoice link the last send, resend or online Add deal answered with (`invoice_url`: the link the email carries, never a
+   *  Checkout url), and its deal: shown only while that deal can still be paid (`payLinkStillOpen`), so End now, Mark as paid or a
+   *  payment takes it down with the deal. */
   const [payLink, setPayLink] = useState<{ deal: SponsorDeal; url: string } | null>(null);
 
   /** A call on the org's v1 API (`path` after `/orgs/{id}`); the envelope's payload back. */
@@ -808,12 +809,13 @@ export function OrgSponsors({
         async () => {
           try {
             const answer = (await v1(`/sponsor-deals/${deal.id}/${DEAL_ROUTE[action]}`, { method: "POST" })) as
-              | { deal?: SponsorDeal; checkout_url?: string | null }
+              | { deal?: SponsorDeal; invoice_url?: string | null }
               | null;
             if (action === "resend_invoice" || action === "send_invoice") {
-              // The answer carries the pay link beside the deal (F11); the deal itself carries no url.
-              setPayLink(answer?.checkout_url ? { deal: answer.deal ?? deal, url: answer.checkout_url } : null);
-              setNotice(msg(action === "resend_invoice" ? "sponsors.deal.notice.invoiceResent" : "sponsors.deal.notice.invoiceSent", { name }));
+              // The answer carries the invoice link beside the deal (F11); the deal itself carries no url.
+              setPayLink(answer?.invoice_url ? { deal: answer.deal ?? deal, url: answer.invoice_url } : null);
+              // By the deal BEFORE the send: an offline deal's first send is offered as Resend, and replaces nothing (m3).
+              setNotice(msg(invoiceNoticeKey(deal), { name }));
             }
           } finally {
             await refresh().catch(() => {});
@@ -836,11 +838,11 @@ export function OrgSponsors({
     setNotice(null);
     try {
       const made = (await v1(`/sponsors/${s.id}/deals`, { method: "POST", body: JSON.stringify(body) })) as
-        | { deal?: SponsorDeal; checkout_url?: string | null }
+        | { deal?: SponsorDeal; invoice_url?: string | null }
         | null;
-      // F11: the pay link rides beside the deal in the create's answer. An online create that did not make one (a Stripe refusal) is
+      // F11: the invoice link rides beside the deal in the create's answer. An online create that did not send (a Stripe refusal) is
       // handled below; a create that sends no invoice has none.
-      setPayLink(made?.deal && made.checkout_url ? { deal: made.deal, url: made.checkout_url } : null);
+      setPayLink(made?.deal && made.invoice_url ? { deal: made.deal, url: made.invoice_url } : null);
       setNotice(msg(body.payment_method === "online" ? "sponsors.deal.notice.invoiceSent" : "sponsors.dealSheet.notice.saved", { name: s.name }));
     } catch (err) {
       if (!(err instanceof ApiV1Error) || err.code !== "stripe_unavailable" || body.payment_method !== "online") throw err;

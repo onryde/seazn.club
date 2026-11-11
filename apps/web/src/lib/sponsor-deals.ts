@@ -223,15 +223,16 @@ export function endedStillDue(
 /** The fields `allowedActions` reads. */
 export type DealActionFacts = Pick<
   SponsorDeal,
-  "deal_status" | "payment_method" | "payment_status" | "disputed_at" | "ended_reason" | "sponsor_email" | "live_at"
+  "deal_status" | "payment_method" | "payment_status" | "disputed_at" | "ended_reason" | "sponsor_email" | "live_at" | "invoice_number"
 >;
 
 /** The actions a deal offers, in DEAL_ACTIONS order. TOTAL (F15): every deal_status × payment_status × method answers.
  *  Task 6 refuses with 409, before any write, every action this does not offer (F12). `send_invoice` is online-only (a draft
  *  waits for it). `resend_invoice` is offered on an unpaid deal that is due: an online one, or an offline one with a billing
  *  email to send it to (F13) - an offline invoice is emailed, never paid by card - and an offline deal still due after it ended
- *  (`endedStillDue`) with an email. `mark_paid` on every unpaid deal that is due, ended-and-still-due included (the deal stays
- *  ended); `write_off` only on an ended deal still due. */
+ *  (`endedStillDue`) with an email. Neither send is offered on a deal with no invoice number (made before invoices were numbered,
+ *  T23 review m5): it has no invoice page for the email to link, so the server would refuse it. `mark_paid` on every unpaid deal
+ *  that is due, ended-and-still-due included (the deal stays ended); `write_off` only on an ended deal still due. */
 export function allowedActions(d: DealActionFacts): DealAction[] {
   const s = d.deal_status;
   const online = d.payment_method === "online";
@@ -241,9 +242,10 @@ export function allowedActions(d: DealActionFacts): DealAction[] {
   const payable = s === "awaiting_payment" || s === "live" || s === "scheduled";
   const hasEmail = d.sponsor_email !== null && d.sponsor_email !== "";
   const endedDue = endedStillDue(d);
+  const numbered = d.invoice_number !== null;
   const offered: Record<DealAction, boolean> = {
-    send_invoice: s === "draft" && online && unpaid,
-    resend_invoice: (payable && unpaid && (online || (offline && hasEmail))) || (endedDue && hasEmail),
+    send_invoice: numbered && s === "draft" && online && unpaid,
+    resend_invoice: numbered && ((payable && unpaid && (online || (offline && hasEmail))) || (endedDue && hasEmail)),
     mark_paid: (payable && unpaid) || endedDue,
     write_off: endedDue,
     approve: s === "awaiting_approval",
@@ -350,6 +352,7 @@ export function invoiceActionOnCreate(rule: GoLiveRule, queued: boolean): "send_
     ended_reason: null,
     sponsor_email: "billing@example.invalid", // an online deal always has one (the V495 CHECK online_has_email)
     live_at: null,
+    invoice_number: 1, // every online deal is numbered when it is created (D11, createDeal)
   });
   if (offered.includes("send_invoice")) return "send_invoice";
   if (offered.includes("resend_invoice")) return "resend_invoice";

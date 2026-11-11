@@ -253,7 +253,7 @@ describe.skipIf(!HAS_DB)("every offline and complimentary combination follows sp
         const where = `${label} after ${step.action}`;
         if (step.action === "create") {
           const out = await createDeal(o.auth, id, input(p, { payment_method: row.method, go_live: row.rule }), ORIGIN);
-          expect(out.checkout_url, `${where}: no checkout url for a deal that is not online (F11)`).toBeNull();
+          expect(out.invoice_url, `${where}: no invoice link for a deal that is not online - nothing was emailed (F11)`).toBeNull();
           dealId = out.deal.id;
         } else if (step.action === "mark_paid") {
           await markDealPaid(o.auth, dealId);

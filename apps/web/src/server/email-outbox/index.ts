@@ -22,6 +22,7 @@ export {
   cancelQueuedEmails,
 } from "./cancel";
 export {
+  emailsQueuedWithin,
   latestEmailStatus,
   latestStatusesOfRows,
   lockQueuedEmails,

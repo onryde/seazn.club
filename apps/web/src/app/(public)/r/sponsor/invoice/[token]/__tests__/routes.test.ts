@@ -119,7 +119,8 @@ async function deal(o: RigOrg, method: "online" | "offline") {
   const mine = minted.filter((m) => m.dealId === out.deal.id);
   // createDeal mints one (F9); an online create also sends its invoice, which mints the one it mails (Task 23). The last is in effect.
   expect(mine, "premise: createDeal minted, and an online create's send minted again").toHaveLength(method === "online" ? 2 : 1);
-  return { id: out.deal.id, token: mine.at(-1)!.token, checkoutUrl: out.checkout_url };
+  // The deal's stored Checkout session (the answer never carries it, T23 review I1): what Pay by card redirects to.
+  return { id: out.deal.id, token: mine.at(-1)!.token, checkoutUrl: (await stored(out.deal.id)).checkout_url };
 }
 
 describe("before the lookup", () => {

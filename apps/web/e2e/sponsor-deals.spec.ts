@@ -707,11 +707,11 @@ test("add deal (community): offline, after I approve -> Save deal -> Mark as pai
 
   const res = await saveDeal(page, s.sponsorId);
   expect(res.status(), `create answered ${res.status()}: ${await res.text()}`).toBe(201);
-  const created = ((await res.json()) as { data: { deal: Deal & { go_live: string; payment_method: string }; checkout_url: string | null } }).data;
+  const created = ((await res.json()) as { data: { deal: Deal & { go_live: string; payment_method: string }; invoice_url: string | null } }).data;
   expect({ status: created.deal.deal_status, go_live: created.deal.go_live, method: created.deal.payment_method }, "what was shown is what was made").toEqual({
     status: "awaiting_payment", go_live: "on_approval", method: "offline",
   });
-  expect(created.checkout_url, "an offline deal has no pay link").toBeNull();
+  expect(created.invoice_url, "an offline create emails nothing: no invoice link").toBeNull();
   await expect(sheet, "saved: the sheet closes").toHaveCount(0);
   await expect(page.getByTestId("sponsor-notice")).toHaveText(ui("sponsors.dealSheet.notice.saved", { name: s.name }));
   await expectRow(page, s.sponsorId, ui("sponsors.deal.chip.awaitingPayment"), ui("sponsors.deal.action.markPaid"), "a saved offline deal waits for the club's money");

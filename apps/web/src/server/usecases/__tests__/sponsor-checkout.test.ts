@@ -96,7 +96,8 @@ async function sellOnline(auth: AuthCtx, packageId: string, name: string, email:
     { package_id: packageId, competition_id: null, payment_method: "online", go_live: "on_payment", sponsor_email: email, ends_on: null },
     "https://app.test",
   );
-  return { sponsorId, deal: out.deal, checkout_url: out.checkout_url };
+  // The deal's stored Checkout session: the answer carries only the emailed invoice link (T23 review I1).
+  return { sponsorId, deal: out.deal, checkout_url: (await sql<{ checkout_url: string | null }[]>`select checkout_url from sponsor_orders where id = ${out.deal.id}`)[0]!.checkout_url };
 }
 
 /** The sponsor a deal names now, and its status and tier. */

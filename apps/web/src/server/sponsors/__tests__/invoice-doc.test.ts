@@ -170,7 +170,8 @@ describe("invoiceState and cardPayable: the rules, total over every deal shape (
   });
 
   it("payable: online AND a payment would move the deal (unpaid; awaiting payment, live or scheduled) - never offline, a draft, or ended (counted)", () => {
-    const base = { disputed_at: null, ended_reason: null, sponsor_email: "billing@acme.test", live_at: null } as const;
+    // Numbered, as every online and offline deal is when it is made (D11); a send is the one action the number gates.
+    const base = { disputed_at: null, ended_reason: null, sponsor_email: "billing@acme.test", live_at: null, invoice_number: 1 } as const;
     const cases: [Parameters<typeof cardPayable>[0], boolean][] = [
       [{ ...base, payment_method: "online", payment_status: "pending", deal_status: "awaiting_payment" }, true],
       [{ ...base, payment_method: "online", payment_status: "failed", deal_status: "awaiting_payment" }, true],
@@ -359,7 +360,7 @@ describe.skipIf(!HAS_DB)("the invoice document, from the real token (DB, F9)", (
     const token = tokenOf(out.deal.id);
     expect(await invoiceDocByToken(token)).toMatchObject({ state: "unpaid", payable: true, cardUnavailable: false });
     clearStripe();
-    expect(await payInvoice(token, ORIGIN), "pay answers the deal's Checkout link").toBe(out.checkout_url);
+    expect(await payInvoice(token, ORIGIN), "pay answers the deal's Checkout link").toBe((await sql<{ checkout_url: string | null }[]>`select checkout_url from sponsor_orders where id = ${out.deal.id}`)[0]!.checkout_url);
     expect(stripeCalls(), "pay reached Stripe (the stored session's retrieve)").toBeGreaterThan(0);
   });
 

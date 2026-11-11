@@ -83,6 +83,9 @@ let seq = 0;
 /** A whole deal: an online, on_payment, pending draft unless overridden. Ended rows owe ended_at and ended_reason. */
 function deal(over: Partial<SponsorDeal> = {}): SponsorDeal {
   seq++;
+  // D11: an online or offline deal is numbered when it is created; a complimentary one never is. The unnumbered (pre-numbering)
+  // deal is its own sweep below.
+  const numbered = (over.payment_method ?? "online") !== "complimentary";
   return {
     id: `deal-${seq}`,
     sponsor_id: "sponsor-1",
@@ -114,7 +117,7 @@ function deal(over: Partial<SponsorDeal> = {}): SponsorDeal {
     disputed_at: null,
     dispute_id: null,
     has_payment_intent: false,
-    invoice_number: null,
+    invoice_number: numbered ? 7 : null,
     ...over,
   };
 }
@@ -291,7 +294,7 @@ describe("invoiceActionOnCreate — which invoice action an ONLINE deal offers r
       // The same deal, built by the lifecycle table, offers it - and never the other one.
       const offered = allowedActions({
         deal_status: initialStatus("online", rule, queued), payment_method: "online", payment_status: initialPaymentStatus("online"),
-        disputed_at: null, ended_reason: null, sponsor_email: "accounts@harbourside.example", live_at: null,
+        disputed_at: null, ended_reason: null, sponsor_email: "accounts@harbourside.example", live_at: null, invoice_number: 1,
       });
       expect(offered, `${rule}/queued=${queued}`).toContain(action);
       expect(offered).not.toContain(action === "send_invoice" ? "resend_invoice" : "send_invoice");
@@ -709,6 +712,43 @@ describe("allowedActions — the full action table (F15): deal_status × payment
       checked++;
     }
     expect(checked, "reasons checked").toBe(8);
+  });
+});
+
+describe("allowedActions — a deal with NO invoice number (made before invoices were numbered; T23 review m5)", () => {
+  // The server refuses a send of an unnumbered deal (it has no invoice page for the email to link), so offering one is a button
+  // that always answers 409. Expected: the numbered twin's actions minus the two sends - every other action is untouched.
+  const SENDS = new Set<string>(["send_invoice", "resend_invoice"]);
+
+  it("the empty case first: a numbered deal that offers a send (the twin this sweep strips) exists, and an unnumbered one offers no send", () => {
+    const numbered = deal({ deal_status: "draft", payment_method: "online" });
+    expect(allowedActions(numbered)).toContain("send_invoice");
+    expect(allowedActions({ ...numbered, invoice_number: null })).not.toContain("send_invoice");
+  });
+
+  it("every deal_status × payment_status × method × end reason × live_at, with and without an email: no send offered, nothing else moves (rows and send rows reported)", () => {
+    let checked = 0;
+    let twinsWithSend = 0;
+    for (const s of SPEC_DEAL_STATUSES as DealStatus[]) {
+      for (const p of SPEC_PAYMENT_STATUSES as PaymentStatus[]) {
+        for (const m of SPEC_PAYMENT_METHODS as PaymentMethod[]) {
+          for (const reason of [null, ...SPEC_END_REASONS] as (EndReason | null)[]) {
+            for (const liveAt of [T0, null]) {
+              for (const email of ["accounts@harbourside.example", null]) {
+                const base = { deal_status: s, payment_status: p, payment_method: m, ended_reason: reason, live_at: liveAt, sponsor_email: email };
+                const twin = allowedActions(deal({ ...base, invoice_number: 12 }));
+                if (twin.some((a) => SENDS.has(a))) twinsWithSend++;
+                const label = `${s}/${p}/${m}/${reason ?? "-"}/${liveAt ? "live" : "never"}/${email ? "email" : "none"}`;
+                expect(allowedActions(deal({ ...base, invoice_number: null })), label).toEqual(twin.filter((a) => !SENDS.has(a)));
+                checked++;
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(checked, "rows checked").toBe(6 * 5 * 3 * 9 * 2 * 2);
+    expect(twinsWithSend, "anti-vacuity: numbered twins that offer a send").toBeGreaterThan(0);
   });
 });
 

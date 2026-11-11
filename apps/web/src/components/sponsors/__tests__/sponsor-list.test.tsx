@@ -1171,7 +1171,8 @@ describe("the status line is one live region that is always mounted, so only its
     await flush();
     const after = statusEls(m);
     expect(after, "still exactly one region").toHaveLength(1);
-    expect(propsOf(after[0]!).children).toBe("Invoice sent again for Ridge Gold Physiotherapy.");
+    // Task 23's words: a resend says its new email replaces the earlier link (the deal's invoice was already sent).
+    expect(propsOf(after[0]!).children).toBe("Invoice sent again for Ridge Gold Physiotherapy. The new email replaces the earlier link.");
   });
 
   it("the next write clears the words (the region stays)", async () => {
@@ -1367,7 +1368,7 @@ describe("Add deal on a row opens the Add deal sheet for that sponsor; the sheet
   });
 
   it("onCreate POSTs the body as given to /sponsors/{id}/deals, re-reads the list and the deals, and says what happened (offline -> 'Deal saved')", async () => {
-    answer = (url, method) => (method === "GET" ? { status: 200, body: { data: [] } } : { status: 201, body: { data: { deal: {}, checkout_url: null } } });
+    answer = (url, method) => (method === "GET" ? { status: 200, body: { data: [] } } : { status: 201, body: { data: { deal: {}, invoice_url: null } } });
     const m = mount(ROWS, { hub: HUB_WITH_PACKAGES });
     m.click("Add deal: Northbank Print");
     await (propsOf(sheetsIn(m)[0]!).onCreate as (b: CreateDealBody) => Promise<void>)(BODY);
@@ -1377,7 +1378,7 @@ describe("Add deal on a row opens the Add deal sheet for that sponsor; the sheet
   });
 
   it("an online deal says the invoice went out", async () => {
-    answer = (url, method) => (method === "GET" ? { status: 200, body: { data: [] } } : { status: 201, body: { data: { deal: {}, checkout_url: "https://pay.example" } } });
+    answer = (url, method) => (method === "GET" ? { status: 200, body: { data: [] } } : { status: 201, body: { data: { deal: {}, invoice_url: "https://app.example/r/sponsor/invoice/tok_abcdefghijklmnopqrstuvwx" } } });
     const m = mount(ROWS, { hub: HUB_WITH_PACKAGES });
     m.click("Add deal: Northbank Print");
     await (propsOf(sheetsIn(m)[0]!).onCreate as (b: CreateDealBody) => Promise<void>)({ ...BODY, payment_method: "online", sponsor_email: "pay@northbank.example" });

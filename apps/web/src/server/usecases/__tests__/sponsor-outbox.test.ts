@@ -115,7 +115,8 @@ async function sellOnline(s: { auth: AuthCtx; orgId: string; packageId: string }
     { package_id: s.packageId, competition_id: null, payment_method: "online", go_live: "on_payment", sponsor_email: to, ends_on: null },
     "https://app.test",
   );
-  return { order: out.deal, checkout_url: out.checkout_url, sponsorId: sp!.id };
+  // The deal's stored Checkout session: the answer carries only the emailed invoice link (T23 review I1).
+  return { order: out.deal, checkout_url: (await sql<{ checkout_url: string | null }[]>`select checkout_url from sponsor_orders where id = ${out.deal.id}`)[0]!.checkout_url, sponsorId: sp!.id };
 }
 
 const ownerAuth = (o: { orgId: string; ownerId: string }): AuthCtx => ({ orgId: o.orgId, via: "session", userId: o.ownerId, role: "owner", keyId: null });

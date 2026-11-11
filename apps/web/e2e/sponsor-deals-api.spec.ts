@@ -72,7 +72,7 @@ async function publicPage(request: APIRequestContext, orgSlug: string, compSlug:
 }
 
 async function createDeal(request: APIRequestContext, orgId: string, sponsorId: string, over: Record<string, unknown>) {
-  return apiJson<{ deal: Deal; checkout_url: string | null }>(request, `/api/v1/orgs/${orgId}/sponsors/${sponsorId}/deals`, "POST", {
+  return apiJson<{ deal: Deal; invoice_url: string | null }>(request, `/api/v1/orgs/${orgId}/sponsors/${sponsorId}/deals`, "POST", {
     competition_id: null, payment_method: "offline", go_live: "on_payment", ...over,
   });
 }
@@ -90,7 +90,7 @@ test("community: add sponsor → offline when-paid deal hides it → mark paid �
 
   const made = await createDeal(request, s.org.orgId, s.sponsorId, { package_id: s.packageId });
   expect(made.status, JSON.stringify(made.error)).toBe(201);
-  expect(made.data!.checkout_url, "an offline deal has no pay link (F11)").toBeNull();
+  expect(made.data!.invoice_url, "an offline create emails nothing, so it answers no invoice link (F11)").toBeNull();
   expect(made.data!.deal.deal_status).toBe("awaiting_payment");
   const hidden = await publicPage(request, s.org.slug, s.comp.slug);
   expect(hidden, "a deal waiting for its money hides the sponsor").not.toContain(s.name);
@@ -156,7 +156,7 @@ test("complimentary straight away is live at once", async ({ request }) => {
   const made = await createDeal(request, s.org.orgId, s.sponsorId, { package_id: s.packageId, payment_method: "complimentary", go_live: "immediate" });
   expect(made.status, JSON.stringify(made.error)).toBe(201);
   expect(made.data!.deal).toMatchObject({ deal_status: "live", payment_status: "none" });
-  expect(made.data!.checkout_url).toBeNull();
+  expect(made.data!.invoice_url).toBeNull();
   const page = await publicPage(request, s.org.slug, s.comp.slug);
   expect(page).toContain(s.name);
   expect(page).toContain(`/s/${s.sponsorId}`);

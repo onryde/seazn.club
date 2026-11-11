@@ -84,7 +84,13 @@ const DEAL: SponsorDeal = {
   approved_at: null, approved_by: null, live_at: null, ended_at: null, ended_reason: null, parked_at: null, disputed_at: null,
   dispute_id: null, has_payment_intent: false, invoice_number: null,
 };
-const deal = (over: Partial<SponsorDeal>): SponsorDeal => ({ ...DEAL, sponsor_id: "a", ...over });
+/** D11: an online or offline deal is numbered when it is made, a complimentary one never. */
+const deal = (over: Partial<SponsorDeal>): SponsorDeal => ({
+  ...DEAL,
+  sponsor_id: "a",
+  invoice_number: (over.payment_method ?? DEAL.payment_method) === "complimentary" ? null : 1,
+  ...over,
+});
 
 const sponsor = (over: Partial<SponsorItem> = {}): SponsorItem => ({
   id: "a", name: "Ridge Gold Physiotherapy", competition_id: null, url: "https://ridgegoldphysio.co.uk/", logo_path: null, poster_path: null,
@@ -500,7 +506,9 @@ describe("the buttons ARE allowedActions (the engine's answer), never a client c
     const T: [string, Partial<SponsorDeal>, string[]][] = [
       ["online draft, unpaid", { deal_status: "draft", payment_status: "pending", payment_method: "online" }, ["send_invoice", "end_now"]],
       ["online, awaiting payment", { deal_status: "awaiting_payment", payment_status: "pending", payment_method: "online" }, ["resend_invoice", "mark_paid", "end_now"]],
-      ["offline, awaiting payment", { deal_status: "awaiting_payment", payment_status: "pending", payment_method: "offline" }, ["mark_paid", "end_now"]],
+      // Task 23 (F13): an offline invoice is emailed when the deal has a billing email to send it to.
+      ["offline, awaiting payment, billing email", { deal_status: "awaiting_payment", payment_status: "pending", payment_method: "offline" }, ["resend_invoice", "mark_paid", "end_now"]],
+      ["offline, awaiting payment, no billing email", { deal_status: "awaiting_payment", payment_status: "pending", payment_method: "offline", sponsor_email: null }, ["mark_paid", "end_now"]],
       ["paid, awaiting approval", { deal_status: "awaiting_approval", payment_status: "paid", go_live: "on_approval" }, ["approve", "end_now"]],
       ["live and paid", { deal_status: "live", payment_status: "paid" }, ["end_now"]],
       ["complimentary and live", { deal_status: "live", payment_status: "none", payment_method: "complimentary", go_live: "immediate" }, ["end_now"]],
@@ -1004,7 +1012,8 @@ describe("the deal buttons write through the deal routes, ask where the money or
     const CASES: [string, Partial<SponsorDeal>, string, string][] = [
       ["approve", { deal_status: "awaiting_approval", payment_status: "paid", go_live: "on_approval" }, "approve", ""],
       ["send_invoice", { deal_status: "draft", payment_status: "pending" }, "send-invoice", `Invoice sent for ${LONG_NAME}.`],
-      ["resend_invoice", { deal_status: "awaiting_payment", payment_status: "pending" }, "send-invoice", `Invoice sent again for ${LONG_NAME}.`],
+      // An online deal awaiting payment has had its invoice sent (the send is what moved it there).
+      ["resend_invoice", { deal_status: "awaiting_payment", payment_status: "pending", invoice_sent_at: "2026-10-02T09:00:00.000Z" }, "send-invoice", `Invoice sent again for ${LONG_NAME}.`],
     ];
     let checked = 0;
     for (const [name, over, route, notice] of CASES) {

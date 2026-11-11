@@ -974,7 +974,7 @@ async function sponsorInvoiceScenario(): Promise<KindScenario> {
       );
       expect(out.deal.payment_status, "premise: the real online deal is unpaid").toBe("pending");
       expect(out.deal.invoice_number, "premise: the org's first invoice").toBe(1);
-      expect(out.checkout_url, "premise: the console's copy link is the minted session").toBe("https://checkout.stripe.test/session");
+      expect(out.invoice_url, "premise: the console's copy link is the emailed invoice page, never the session").toMatch(/^https:\/\/sweep\.test\/r\/sponsor\/invoice\//);
     },
   };
 }

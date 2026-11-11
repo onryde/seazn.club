@@ -51,11 +51,11 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
   const paidName = `Deal Paid ${tag}`;
   const paidSponsor = await addSponsor(paidName);
   const made = await createDeal(paidSponsor, {});
-  const madeData = made.status === 201 ? v1data<{ deal: Deal; checkout_url: string | null }>(made) : null;
+  const madeData = made.status === 201 ? v1data<{ deal: Deal; invoice_url: string | null }>(made) : null;
   const hiddenPage = await publicPage();
   check(
     "sd offline deal created hidden (201)",
-    made.status === 201 && madeData?.checkout_url === null && madeData.deal.deal_status === "awaiting_payment" && !hiddenPage.includes(paidName),
+    made.status === 201 && madeData?.invoice_url === null && madeData.deal.deal_status === "awaiting_payment" && !hiddenPage.includes(paidName),
   );
   const before = await sponsorCount();
   const paid = madeData ? await v1(free, `/api/v1/orgs/${org.id}/sponsor-deals/${madeData.deal.id}/mark-paid`, "POST") : null;
@@ -314,7 +314,7 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
         (await db<{ h: Buffer | null }[]>`select invoice_token_hash as h from sponsor_orders where id = ${id}`)[0]?.h ?? null;
       const before = emailedDeal ? await hashOf(emailedDeal.id) : null;
       const sent = emailedDeal ? await v1(free, `/api/v1/orgs/${org.id}/sponsor-deals/${emailedDeal.id}/send-invoice`, "POST") : null;
-      const sentData = sent?.status === 200 ? v1data<{ deal: Deal; checkout_url: string | null }>(sent) : null;
+      const sentData = sent?.status === 200 ? v1data<{ deal: Deal; invoice_url: string }>(sent) : null;
       const after = emailedDeal ? await hashOf(emailedDeal.id) : null;
       const rows = emailedDeal
         ? await db<{ recipient: string; subject: string }[]>`
@@ -323,9 +323,10 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
         : [];
       check(
         "sd offline invoice email queued with the invoice link",
-        sentData !== null && sentData.checkout_url === null && sentData.deal.deal_status === emailedDeal?.deal_status &&
+        sentData !== null && /\/r\/sponsor\/invoice\/[A-Za-z0-9_-]{20,}$/.test(sentData.invoice_url) &&
+          !sentData.invoice_url.includes("checkout.stripe") && sentData.deal.deal_status === emailedDeal?.deal_status &&
           before !== null && after !== null && !before.equals(after) &&
-          rows.length === 1 && rows[0]!.recipient === billing.toLowerCase() && /^Invoice SP-\d{4,} — /.test(rows[0]!.subject),
+          rows.length === 1 && rows[0]?.recipient === billing.toLowerCase() && /^Invoice SP-\d{4,} — /.test(rows[0]?.subject ?? ""),
       );
 
       // The invoice page and its PDF for that deal. The emailed token cannot be read back (above), so this row plants a KNOWN
