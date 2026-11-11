@@ -443,7 +443,7 @@ describe.skipIf(!HAS_DB)("sendDealInvoice mints a NEW token on every send of a N
     expect(await invoiceDocByToken(minted[1]!.token)).toMatchObject({ number: "SP-0001" });
   });
 
-  it("an UNNUMBERED online deal (a deal made before V500: seeded as the smoke suite seeds one) has no invoice page to link: refused 409 before Stripe, nothing minted or written", async () => {
+  it("an UNNUMBERED online deal (a deal made before V501: seeded as the smoke suite seeds one) has no invoice page to link: refused 409 before Stripe, nothing minted or written", async () => {
     const o = await rigOrg();
     const p = await rigPackage(o);
     const s = await rigSponsor(o);

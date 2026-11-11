@@ -137,8 +137,8 @@ test("list: each row shows one next action and the chip its deal state names", a
   const stepsDeal = await newDeal(request, org.orgId, steps, { package_id: pkg, go_live: "on_approval" });
   expect(await dealStatus(request, org.orgId, stepsDeal), "premise: awaiting payment, approval after").toBe("awaiting_payment");
   // Selling online is `sponsors.monetize` plus Connect, which a community org has neither of, so the online deal is SQL-seeded
-  // the way Send invoice leaves one: awaiting payment, its sponsor hidden (D8), and NUMBERED from the org's invoice counter (V500).
-  // Every online deal is numbered at create, and the row offers Resend only to a numbered deal: an unnumbered one is a pre-V500
+  // the way Send invoice leaves one: awaiting payment, its sponsor hidden (D8), and NUMBERED from the org's invoice counter (V501).
+  // Every online deal is numbered at create, and the row offers Resend only to a numbered deal: an unnumbered one is a pre-V501
   // staging shape the API refuses with 409 deal_not_invoiceable (T24 m5), so its row only opens the deal.
   await withDb(async (sql) => {
     await sql`

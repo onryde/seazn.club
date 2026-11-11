@@ -1,4 +1,4 @@
--- V501 — the email outbox's sponsor_deal_paid kind (plan docs/superpowers/plans/2026-11-07-sponsor-deals.md, Task 23, D13).
+-- V502 — the email outbox's sponsor_deal_paid kind (plan docs/superpowers/plans/2026-11-07-sponsor-deals.md, Task 23, D13).
 --
 -- WHAT THIS ADDS. One kind, `sponsor_deal_paid`: the notice to the org's owner (an ACCOUNT, `orgOwnerRecipient`, in the owner's
 -- language) that a sponsor has paid a deal online. It is what tells an "After I approve" club to act. It is queued by the payment

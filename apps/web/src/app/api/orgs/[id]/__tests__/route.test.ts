@@ -223,7 +223,7 @@ describe.skipIf(!HAS_DB)("PATCH /api/orgs/[id] — the Organisation tab's one sa
   });
 });
 
-// Sponsor deals, Task 21: the two columns V500 added (`sponsor_invoice_address`, `sponsor_invoice_bank_details`) are written by
+// Sponsor deals, Task 21: the two columns V501 added (`sponsor_invoice_address`, `sponsor_invoice_bank_details`) are written by
 // two arms of the same union as `payment_instructions` - each a single-key `.strict()` object, no combined arm (F30). So:
 //   - each arm stores its own column and nothing else, and null clears it;
 //   - a key the arm does not know is refused EVEN BESIDE a valid arm (F30: a body of `{ foo: 1 }` alone matches no arm and would
