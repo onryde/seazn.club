@@ -154,7 +154,7 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // X-PL-2: under two first-match losers there is no bracket to draw; `maybeProposePlate` completes the plate by name instead,
     // and a direct propose is refused by name rather than writing an empty draw.
     if (firstLossPlate && resolvedProgression.qualifiers.length < 2) throw knockoutRefusal("PLATE_FIELD_TOO_SMALL");
-    if (firstLossPlate) await writeProgressionSetupFixtures(tx, stageId);
+    if (firstLossPlate) await writeProgressionSetupFixtures(tx, stageId, { checkSeats: true });
     const qualifiers = firstLossPlate ? await reseedPlateQualifiers(tx, stage, resolvedProgression.qualifiers) : resolvedProgression.qualifiers;
     // W2d T12 (spec §5.9): stored under the division lock held above, so a re-proposal seats the same draw.
     await persistCrossGroupDraws(tx, resolved, newLotsDraws);

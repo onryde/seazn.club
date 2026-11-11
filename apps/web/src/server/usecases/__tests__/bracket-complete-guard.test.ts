@@ -235,8 +235,9 @@ describe.runIf(HAS_DB)("W4 T6 AN-2: a bracket completes only with every match de
 
   it("R-1 consequence stays: a third-place line whose BOTH seats are departure-dead is no match owed — the stage completes on its final", async () => {
     // single-sport: badminton. withdrawal-w2b.test.ts's legacy shape (a disqualification written without the cascade):
-    // both semi losers departed, so the third-place line is a bye line nobody can play. Refusing here would hold the
-    // stage open forever behind a line with nobody in it.
+    // both semi losers departed, so the third-place line is a line nobody can play. Since M-1 / X-TP-7 (3b8913816b) it is
+    // settled as a double walkover (forfeited, both seats empty), no longer left scheduled; either way it is no match
+    // owed, and refusing here would hold the stage open forever behind a line with nobody in it.
     const s = await seedBracket({ sport: "badminton", variant: "bwf", stageKind: "knockout", entrants: 4, stageConfig: { thirdPlace: true } });
     const semis = (await linesOf(s.stageId)).filter((l) => l.winner_to_fixture !== null);
     for (const semi of semis) {
@@ -244,7 +245,7 @@ describe.runIf(HAS_DB)("W4 T6 AN-2: a bracket completes only with every match de
       await playBadminton(s.auth, semi.id, true);
     }
     const third = await fixtureRow(semis[0]!.loser_to_fixture!);
-    expect([third.status, third.home_entrant_id, third.away_entrant_id], "premise: an empty, unplayable line").toEqual(["scheduled", null, null]);
+    expect([third.status, third.home_entrant_id, third.away_entrant_id], "premise: an empty, unplayable line, settled as a double walkover").toEqual(["forfeited", null, null]);
     expect(await undecided(s.stageId), "the final is the one line owed").toEqual([semis[0]!.winner_to_fixture]);
     await playBadminton(s.auth, semis[0]!.winner_to_fixture!, true);
     expect(await undecided(s.stageId), "nothing owed").toEqual([]);

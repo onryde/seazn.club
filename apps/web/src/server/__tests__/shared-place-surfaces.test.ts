@@ -17,7 +17,7 @@ import { sql } from "@/lib/db";
 import { buildTemplateStages } from "@/lib/format-templates";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CreateStage } from "@/server/api-v1/schemas";
-import { fixtureRow, playBadminton, rowsOf, type FixtureRow } from "@/server/engine-db/__tests__/helpers/w2b-rig";
+import { playBadminton, rowsOf, type FixtureRow } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 import { seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { StandingsTable } from "@/components/public-site/standings-table";
 import { createCompetition } from "@/server/usecases/competitions";
@@ -77,7 +77,6 @@ async function finished(thirdPlace: boolean): Promise<Scene> {
   const ev = done.events.find((e) => e.type === "stage_completed") as unknown as Done;
   return { auth: s.auth, divisionId: s.divisionId, stageId: s.stageId, places: ev.places, losers: await semiFinalLosers(s.stageId) };
 }
-const rankOf = (places: readonly Place[], id: string) => places.find((p) => p.entrantId === id)?.rank;
 const ranksSorted = (places: readonly Place[]) => places.map((p) => p.rank).sort((a, b) => a - b);
 
 const checked: string[] = [];
