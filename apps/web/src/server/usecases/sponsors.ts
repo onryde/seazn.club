@@ -379,6 +379,9 @@ export async function deleteSponsor(auth: AuthCtx, id: string): Promise<void> {
   // Every refusal before the first expire (review I1): Stripe is asked about EVERY stored session first, so a completed one
   // (money in flight) or one nobody can read refuses the delete with no link closed. Then each open one is expired and
   // forgotten in its own statement: a later failure leaves no dead link stored on a deal that stays.
+  // Since the invoices delta (Task 20, F10) this branch is reachable ONLY for an online deal made before that delta: every online
+  // deal created since carries an invoice number, which `dealHoldsHistory` refused above, and the only other unnumbered online
+  // rows (a webhook's duplicate payment) are paid, so they are refused there too. It stays for those pre-delta rows (staging).
   const held = before.flatMap((d): WithSession[] =>
     d.checkout_session_id === null ? [] : [{ id: d.id, checkout_session_id: d.checkout_session_id }]);
   const asStripeRefusal = async <T>(fn: () => Promise<T>): Promise<T> => {
