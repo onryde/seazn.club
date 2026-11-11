@@ -1294,7 +1294,7 @@
   "settings.nav.group.organisation": "Organisatie",
   "settings.nav.group.money": "Financiën",
   "settings.nav.group.you": "Jij",
-  "settings.nav.creditsLeft": "{count} AI-credits",
+  "settings.nav.streamCreditsLeft": "Streamingcredits: {count}",
   "settings.account.changeEmail": "E-mail wijzigen",
   "settings.account.lichess.title": "Lichess",
   "settings.account.lichess.desc": "Koppel je Lichess-account om online schaakpartijen te spelen die op Seazn worden georganiseerd.",

@@ -7,9 +7,10 @@ import {
 import { routes } from "@/lib/routes";
 import { t, type Dict } from "@/lib/i18n";
 import { ScrollActiveTabIntoView } from "@/components/ui/scroll-active-tab-into-view";
+import { sql } from "@/lib/db";
 import { orgPlanKey } from "@/lib/entitlements";
 import { planLabel } from "@/lib/plan-label";
-import { balance, walletIdFor } from "@/lib/credits";
+import { creditBreakdown } from "@/server/usecases/stream-credits";
 
 /** Panels the tabbed Settings index renders inline (`?tab=`). */
 export type SettingsTab =
@@ -130,9 +131,9 @@ function NavLink({
  * genuinely different things and faking one from the other reads badly at both:
  *
  *   desktop  a vertical rail, grouped under three headers (ten flat rows is
- *            a list you scan, not one you read), plus the org's plan and credit
- *            balance at the top so an owner sees them from every Settings page
- *            rather than only from Billing and Credits.
+ *            a list you scan, not one you read), plus the org's plan and
+ *            streaming-credit balance at the top so an owner sees them from every
+ *            Settings page rather than only from Billing and Credits.
  *   phones   one sticky horizontal strip pinned below the gantry header (which
  *            is also sticky at top:0 — pinning both to 0 makes them compete and
  *            this row loses, scrolling out of view entirely). Headers have
@@ -149,11 +150,25 @@ function NavLink({
 export interface NavContext {
   /** Already localized through `planLabel` — the rail does no plan logic. */
   plan: string;
-  credits: number;
+  /** The org's match (streaming) credits still held — the balance Settings → Credits → Streaming shows. */
+  streamCredits: number;
 }
 
 /**
- * The rail's plan + credit balance, resolved by the PAGE and passed in.
+ * The rail's plan + streaming-credit balance, resolved by the PAGE and passed in.
+ * Streaming, not AI (owner, 2026-11-11: streaming credits are promoted over AI
+ * credits); the AI balance is one tap away on the Credits tab.
+ *
+ * The balance is `creditBreakdown`'s total — the same authority, over the same
+ * ledger, that the Streaming side's headline (`getStreamCreditsTab` → `total`)
+ * reads. It is a DISPLAY read, like the session projection's balance and the
+ * /admin panel (stream-credits.ts, lane-close m7): it never grants this month's
+ * free credits. A grant here would be a ledger write on every Settings render,
+ * and for an org whose plan does not stream, a grant that must never happen.
+ * The Credits page reads it after its Streaming side's own read (which grants),
+ * so the two numbers agree there; elsewhere, across a month turn and before an
+ * acting reader (the division page, a go-live, the Streaming tab) has rolled
+ * the month, it shows the ledger as it stands.
  *
  * Deliberately not fetched inside `SettingsNav`: an async component nested in
  * the tree would make the rail unrenderable by the synchronous static
@@ -166,8 +181,8 @@ export interface NavContext {
  */
 export async function navContext(orgId: string): Promise<NavContext | null> {
   try {
-    const [plan, walletId] = await Promise.all([orgPlanKey(orgId), walletIdFor(orgId)]);
-    return { plan: planLabel(plan), credits: await balance(walletId) };
+    const [plan, stream] = await Promise.all([orgPlanKey(orgId), creditBreakdown(sql, orgId)]);
+    return { plan: planLabel(plan), streamCredits: stream.total };
   } catch {
     return null;
   }
@@ -191,18 +206,20 @@ export function SettingsNav({
         {t(dict, "settings.nav.title")}
       </p>
 
-      {/* Plan + credits, desktop only — the phone strip is one row and has no
-          room for it. Both were previously visible only from the page that
-          owns them, which is exactly where an owner is NOT looking when they
-          run out mid-schedule. */}
+      {/* Plan + streaming credits, desktop only — the phone strip is one row
+          and has no room for it. Both were previously visible only from the
+          page that owns them, which is exactly where an owner is NOT looking
+          when they run out mid-schedule. The link is the bare Credits URL:
+          the Streaming side is that page's default. */}
       {context && (
         <div className="mb-4 hidden rounded-lg border border-purple-100 bg-purple-50/40 px-3 py-2 md:block">
           <p className="text-sm font-semibold text-slate-800">{context.plan}</p>
           <Link
             href={routes.credits(orgSlug)}
+            data-testid="settings-nav-stream-credits"
             className="text-xs text-purple-700 underline-offset-2 hover:underline"
           >
-            {t(dict, "settings.nav.creditsLeft", { count: context.credits })}
+            {t(dict, "settings.nav.streamCreditsLeft", { count: context.streamCredits })}
           </Link>
         </div>
       )}

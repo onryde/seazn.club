@@ -1,11 +1,12 @@
-// Settings → Credits has two sides, AI and Streaming (owner decision 2026-10-20, Option A), told apart by the URL —
-// `?kind=stream` — and the page reads ONLY the side it was asked for. The page's own wiring is under test here: which
+// Settings → Credits has two sides, Streaming and AI (owner decision 2026-10-20, Option A), told apart by the URL. Streaming
+// is the default side (owner, 2026-11-11: streaming credits come first): the bare URL, and `?kind=stream` from links made
+// before, open it; `?kind=ai` opens the AI side. The page reads ONLY the side it was asked for. The page's own wiring is under test here: which
 // side renders, what it reads, when it reconciles a Stripe return and what it hands the Streaming view. The views are
 // stubbed to echo their props as attributes (their own markup is credits/__tests__/stream-view.test.tsx); the data
 // modules are fakes that record how they were called.
 //
 // Mutant table (each applied once by hand, the named test must go red):
-//   P1 default side     `creditsKindOf` → "stream" for an absent / unknown value   → "an absent, unknown or repeated kind is the AI side"
+//   P1 default side     `creditsKindOf` → "ai" for an absent / unknown value       → "an absent, unknown or repeated kind is the Streaming side"
 //   P2 one side's data  load both sides' data on every render                      → "each side reads only its own data"
 //   P3 reconcile order  read the balance BEFORE reconciling the return             → "a Stripe return is reconciled before the balance is read"
 //   P4 reconcile gate   reconcile on any `checkout` value / with no session id     → "only a success return with a session id is reconciled"
@@ -13,12 +14,17 @@
 //   P6 who reads        read as a different actor / org than the page resolved     → "the Streaming side reads as the page's own actor, for the page's own org"
 //   P7 notice           invert paid / processing, or show a notice for `not_ours`  → "the notice says whether the credits are already in the balance"
 //   P8 payer            show the rail to a payer who is not a member               → "a payer who is not a member gets the Streaming side without the rail"
+//   P9 rail after read  resolve the rail's context BEFORE the side's own read       → "the rail's streaming balance is the number the Streaming side shows"
+//   P10 rail source     the rail reads the AI wallet again                          → "the rail shows the streaming balance on the AI side too"
+//   P11 switch order    AI first again                                              → "the switch is on both sides, Streaming first"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prerender } from "react-dom/static";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 const {
   requireBillingPage, resolveLocale, preferredCurrency, getCreditsTab, getStreamCreditsTab, reconcile,
-  orgPlanKey, walletIdFor, balance,
+  orgPlanKey, walletIdFor, balance, ledger,
 } = vi.hoisted(() => ({
   requireBillingPage: vi.fn(),
   resolveLocale: vi.fn(),
@@ -29,9 +35,20 @@ const {
   orgPlanKey: vi.fn(),
   walletIdFor: vi.fn(),
   balance: vi.fn(),
+  // The org's match-credit ledger as the rail's reader sees it: `org_stream_credits` summed by bucket.
+  ledger: { monthly: 0, pack: 0, fail: false },
 }));
 
-vi.mock("@/lib/db", () => ({ sql: vi.fn(async () => []) }));
+// The real `creditBreakdown` (server/usecases/stream-credits.ts, the Streaming side's own authority for the balance) runs
+// over this: a statement on `org_stream_credits` answers the ledger above, anything else answers nothing.
+vi.mock("@/lib/db", () => ({
+  sql: vi.fn(async (strings: unknown) => {
+    const text = Array.isArray(strings) ? strings.join("?") : "";
+    if (!text.includes("org_stream_credits")) return [];
+    if (ledger.fail) throw new Error("ledger unavailable");
+    return [{ monthly: String(ledger.monthly), pack: String(ledger.pack) }];
+  }),
+}));
 vi.mock("@/server/page-auth", () => ({ requireBillingPage, requireOrgPage: vi.fn() }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale }));
 vi.mock("@/lib/currency-server", () => ({ preferredCurrency }));
@@ -42,9 +59,10 @@ vi.mock("@/lib/entitlements", () => ({ orgPlanKey }));
 vi.mock("@/lib/credits", () => ({ walletIdFor, balance }));
 vi.mock("@/components/billing-credits", () => ({ BillingCredits: () => <div data-testid="ai-credits-panel" /> }));
 vi.mock("@/components/billing-stream-credits", () => ({
-  BillingStreamCredits: (p: { notice: string | null; cursor?: string; orgId: string; orgSlug: string; currency: string; view: { marker: string } }) => (
+  BillingStreamCredits: (p: { notice: string | null; cursor?: string; orgId: string; orgSlug: string; currency: string; view: { marker: string; total?: number } }) => (
     <div
       data-testid="stream-credits-panel"
+      data-total={p.view.total ?? "none"}
       data-notice={p.notice ?? "none"}
       data-cursor={p.cursor ?? "none"}
       data-org={p.orgId}
@@ -55,7 +73,21 @@ vi.mock("@/components/billing-stream-credits", () => ({
   ),
 }));
 
+import { sql } from "@/lib/db";
+import { creditBreakdown } from "@/server/usecases/stream-credits";
 import CreditsSettingsPage from "../page";
+
+// Expected copy comes from the dictionary FILE, never from the component's own key.
+const EN: Record<string, string> = JSON.parse(readFileSync(path.join(process.cwd(), "src/dictionaries/en/ui.json"), "utf8"));
+const fill = (s: string, vars: Record<string, string | number>) => s.replace(/\{(\w+)\}/g, (_, k: string) => String(vars[k]));
+/** The rail's balance line for `count`, as the dictionary spells it. */
+const railLine = (count: number) => fill(EN["settings.nav.streamCreditsLeft"] ?? "<missing settings.nav.streamCreditsLeft>", { count });
+/** The rail's balance link: its href and its text, or null when the rail has none. */
+function railLink(out: string): { href: string; text: string } | null {
+  const m = /<a[^>]*href="([^"]*)"[^>]*data-testid="settings-nav-stream-credits"[^>]*>([^<]*)<\/a>|<a[^>]*data-testid="settings-nav-stream-credits"[^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>/.exec(out);
+  if (!m) return null;
+  return { href: (m[1] ?? m[3])!, text: (m[2] ?? m[4])! };
+}
 
 const ORG = { id: "org-1", name: "Riverside", slug: "riverside", role: "owner" };
 const AUTH = { orgId: "org-1", via: "session", userId: "u1", role: "owner", keyId: null };
@@ -89,53 +121,108 @@ beforeEach(() => {
   orgPlanKey.mockResolvedValue("pro");
   walletIdFor.mockResolvedValue("w1");
   balance.mockResolvedValue(37);
+  ledger.monthly = 3;
+  ledger.pack = 9;
+  ledger.fail = false;
 });
 
 describe("Settings → Credits: which side", () => {
-  it("an absent, unknown or repeated kind is the AI side (P1) — and the Streaming side reads only for kind=stream", async () => {
+  it("an absent, unknown or repeated kind is the Streaming side (P1) — and the AI side reads only for kind=ai", async () => {
     let checked = 0;
-    for (const sp of [{}, { kind: "ai" }, { kind: "" }, { kind: "Stream" }, { kind: "streaming" }, { kind: ["stream", "ai"] }, { kind: ["stream", "stream"] }] as SP[]) {
+    // `{}` is the bare URL every Credits link now opens; `kind=stream` is what links made while AI was the default carry.
+    for (const sp of [{}, { kind: "stream" }, { kind: "" }, { kind: "AI" }, { kind: "ai " }, { kind: "streaming" }, { kind: ["ai", "stream"] }, { kind: ["ai", "ai"] }] as SP[]) {
       vi.clearAllMocks();
       requireBillingPage.mockResolvedValue({ org: ORG, auth: AUTH, user: { id: "u1" }, viaPayer: false });
       const out = await render(sp);
       const label = JSON.stringify(sp);
-      expect(out, label).toContain('data-testid="ai-credits-panel"');
-      expect(out, label).not.toContain('data-testid="stream-credits-panel"');
-      expect(getStreamCreditsTab, label).not.toHaveBeenCalled();
+      expect(out, label).toContain('data-testid="stream-credits-panel"');
+      expect(out, label).not.toContain('data-testid="ai-credits-panel"');
+      expect(getCreditsTab, label).not.toHaveBeenCalled();
       checked++;
     }
-    expect(checked).toBe(7);
-    // positive pair
-    const stream = await render({ kind: "stream" });
-    expect(stream).toContain('data-testid="stream-credits-panel"');
-    expect(stream).not.toContain('data-testid="ai-credits-panel"');
+    expect(checked, "anti-vacuity: every Streaming-side URL was rendered").toBe(8);
+    // positive pair: kind=ai, exactly, is the AI side
+    getStreamCreditsTab.mockClear();
+    const ai = await render({ kind: "ai" });
+    expect(ai).toContain('data-testid="ai-credits-panel"');
+    expect(ai).not.toContain('data-testid="stream-credits-panel"');
+    expect(getStreamCreditsTab).not.toHaveBeenCalled();
   });
 
   it("each side reads only its own data (P2)", async () => {
     await render({});
-    expect(getCreditsTab).toHaveBeenCalledTimes(1);
-    expect(getStreamCreditsTab).not.toHaveBeenCalled();
-    vi.clearAllMocks();
-    requireBillingPage.mockResolvedValue({ org: ORG, auth: AUTH, user: { id: "u1" }, viaPayer: false });
-    getStreamCreditsTab.mockResolvedValue({ marker: "view-1" });
-    await render({ kind: "stream" });
     expect(getStreamCreditsTab).toHaveBeenCalledTimes(1);
     expect(getCreditsTab).not.toHaveBeenCalled();
+    vi.clearAllMocks();
+    requireBillingPage.mockResolvedValue({ org: ORG, auth: AUTH, user: { id: "u1" }, viaPayer: false });
+    await render({ kind: "ai" });
+    expect(getCreditsTab).toHaveBeenCalledTimes(1);
+    expect(getStreamCreditsTab).not.toHaveBeenCalled();
   });
 
-  it("the switch is on both sides, names the current one, and the default side keeps its bare URL", async () => {
-    for (const [sp, current, other] of [[{}, "ai", "stream"], [{ kind: "stream" }, "stream", "ai"]] as const) {
+  it("the switch is on both sides, Streaming first (P11), names the current one, and the default side keeps the bare URL", async () => {
+    let checked = 0;
+    for (const [sp, current, other] of [[{}, "stream", "ai"], [{ kind: "stream" }, "stream", "ai"], [{ kind: "ai" }, "ai", "stream"]] as const) {
       const out = await render(sp);
-      expect(out).toContain('data-testid="credits-kind-switch"');
-      const links = [...out.matchAll(/<a[^>]*data-testid="credits-kind-(ai|stream)"[^>]*>/g)].map((m) => m[0]);
-      expect(links).toHaveLength(2);
-      const cur = links.find((l) => l.includes(`credits-kind-${current}"`))!;
-      const oth = links.find((l) => l.includes(`credits-kind-${other}"`))!;
-      expect(cur).toContain('aria-current="page"');
-      expect(oth).not.toContain("aria-current");
-      expect(links.find((l) => l.includes('credits-kind-ai"'))).toContain('href="/o/riverside/settings/credits"');
-      expect(links.find((l) => l.includes('credits-kind-stream"'))).toContain('href="/o/riverside/settings/credits?kind=stream"');
+      const label = JSON.stringify(sp);
+      expect(out, label).toContain('data-testid="credits-kind-switch"');
+      const links = [...out.matchAll(/<a[^>]*data-testid="credits-kind-(ai|stream)"[^>]*>/g)];
+      expect(links.map((m) => m[1]), `${label}: Streaming, then AI`).toEqual(["stream", "ai"]);
+      const tag = (k: string) => links.find((m) => m[1] === k)![0];
+      expect(tag(current), label).toContain('aria-current="page"');
+      expect(tag(other), label).not.toContain("aria-current");
+      expect(tag("stream"), label).toContain('href="/o/riverside/settings/credits"');
+      expect(tag("ai"), label).toContain('href="/o/riverside/settings/credits?kind=ai"');
+      checked++;
     }
+    expect(checked).toBe(3);
+  });
+});
+
+describe("Settings → Credits: the rail's streaming balance", () => {
+  it("the rail's streaming balance is the number the Streaming side shows — read after that side's own read, which grants the month first (P9)", async () => {
+    // A month's first visit: the ledger holds 9 bought credits and none of this month's free ones until the Streaming
+    // side's read grants them (`relayCredits` → `ensureMonthlyStreamGrant`). Stubbed here as a read that writes the grant
+    // into the ledger and then answers the balance through the SAME authority the rail reads.
+    ledger.monthly = 0;
+    ledger.pack = 9;
+    const before = (await creditBreakdown(sql, "org-1")).total;
+    getStreamCreditsTab.mockImplementation(async () => {
+      ledger.monthly = 5;
+      return { marker: "view-1", total: (await creditBreakdown(sql, "org-1")).total };
+    });
+    const out = await render({});
+    const shown = Number(/data-testid="stream-credits-panel"[^>]*data-total="(\d+)"/.exec(out)?.[1] ?? Number.NaN);
+    expect(shown, "the Streaming side shows the granted balance").toBe((await creditBreakdown(sql, "org-1")).total);
+    expect(shown, "differential: the grant moved the balance, or this test cannot tell the order").not.toBe(before);
+    const rail = railLink(out);
+    expect(rail, "the rail's balance link").not.toBeNull();
+    expect(rail!.text).toBe(railLine(shown));
+    expect(rail!.text).not.toBe(railLine(before));
+  });
+
+  it("the rail shows the streaming balance on the AI side too, never the AI wallet's (P10), and links to the Streaming side", async () => {
+    let checked = 0;
+    for (const sp of [{ kind: "ai" }, {}] as SP[]) {
+      const out = await render(sp);
+      const expected = (await creditBreakdown(sql, "org-1")).total;
+      expect(expected, "differential: the AI wallet's 37 is not the streaming balance").not.toBe(await balance());
+      const rail = railLink(out);
+      expect(rail, JSON.stringify(sp)).not.toBeNull();
+      expect(rail!.text).toBe(railLine(expected));
+      expect(rail!.href, "the bare URL — the Streaming side").toBe("/o/riverside/settings/credits");
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a ledger read that fails drops the rail's header, not the page", async () => {
+    ledger.fail = true;
+    const out = await render({ kind: "ai" });
+    expect(out).toContain('data-testid="ai-credits-panel"');
+    expect(railLink(out)).toBeNull();
+    // the rail itself is still there — only its plan/balance header is skipped
+    expect(out).toContain("/o/riverside/settings?tab=organization");
   });
 });
 
@@ -160,7 +247,7 @@ describe("Settings → Credits → Streaming: what the page hands the view", () 
       { kind: "stream", checkout: "cancel", session_id: "cs_1" },
       { kind: "stream", session_id: "cs_1" },
       { kind: "stream", checkout: "success", session_id: ["cs_1", "cs_2"] },
-      { checkout: "success", session_id: "cs_1" }, // the AI side: a return there is not this ledger's
+      { kind: "ai", checkout: "success", session_id: "cs_1" }, // the AI side: a return there is not this ledger's
     ] as SP[]) {
       reconcile.mockClear();
       await render(sp);
@@ -175,6 +262,11 @@ describe("Settings → Credits → Streaming: what the page hands the view", () 
     expect(reconcile).toHaveBeenCalledTimes(1);
     expect(reconcile).toHaveBeenCalledWith("org-1", "cs_live");
     expect(reconcile.mock.invocationCallOrder[0]!, "reconciled before the balance is read").toBeLessThan(getStreamCreditsTab.mock.invocationCallOrder[0]!);
+
+    // The bare URL is the Streaming side now, so a success return to it is this ledger's too.
+    reconcile.mockClear();
+    await render({ checkout: "success", session_id: "cs_bare" });
+    expect(reconcile).toHaveBeenCalledWith("org-1", "cs_bare");
   });
 
   it("the notice says whether the credits are already in the balance (P7); no return, no notice", async () => {

@@ -11,12 +11,17 @@
 // Every link in the sidebar points at a member-gated route, so showing it to
 // them would be a menu of ten 404s. Both directions are asserted — a fix
 // that shows the nav to everyone would pass a "nav is present" test.
+//
+// The rail's header (desktop) carries the plan and the org's STREAMING credit balance (owner, 2026-11-11: streaming
+// credits are promoted over AI credits), read through the Streaming side's own authority for that number.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prerender } from "react-dom/static";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 const {
   requireOrgPage, requireBillingPage, resolveLocale, preferredCurrency, getCreditsTab,
-  orgPlanKey, walletIdFor, balance,
+  orgPlanKey, walletIdFor, balance, ledger,
 } = vi.hoisted(() => ({
   requireOrgPage: vi.fn(),
   requireBillingPage: vi.fn(),
@@ -26,10 +31,19 @@ const {
   orgPlanKey: vi.fn(),
   walletIdFor: vi.fn(),
   balance: vi.fn(),
+  // The org's match-credit ledger, summed by bucket, as `org_stream_credits` would answer it.
+  ledger: { monthly: 0, pack: 0, fail: false },
 }));
 
+// A statement on `org_stream_credits` (the real `creditBreakdown` runs over this mock) answers the ledger above; any other
+// answers the Connect page's row.
 vi.mock("@/lib/db", () => ({
-  sql: vi.fn(async () => [{ payment_instructions: null, default_payment_method: "offline" }]),
+  sql: vi.fn(async (strings: unknown) => {
+    const text = Array.isArray(strings) ? strings.join("?") : "";
+    if (!text.includes("org_stream_credits")) return [{ payment_instructions: null, default_payment_method: "offline" }];
+    if (ledger.fail) throw new Error("ledger unavailable");
+    return [{ monthly: String(ledger.monthly), pack: String(ledger.pack) }];
+  }),
 }));
 vi.mock("@/server/page-auth", () => ({ requireOrgPage, requireBillingPage }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale }));
@@ -43,19 +57,33 @@ vi.mock("@/components/org-payment-instructions", () => ({
 vi.mock("@/components/billing-credits", () => ({
   BillingCredits: () => <div data-testid="credits-panel" />,
 }));
-// The Credits page now has a Streaming side too (`?kind=stream`). These tests are about the sidebar and the AI side — the
-// default, which every old link opens — so the Streaming side's data modules are stubbed; credits/__tests__/page.test.tsx
-// is the one that drives that side.
+// The Credits page has two sides; Streaming is the default (the bare URL) and AI is `?kind=ai`. These tests are about the
+// sidebar, so both sides' data modules are stubbed; credits/__tests__/page.test.tsx is the one that drives the sides.
 vi.mock("@/server/usecases/stream-credits-tab", () => ({ getStreamCreditsTab: vi.fn() }));
 vi.mock("@/server/usecases/stream-credits-checkout", () => ({ reconcileStreamCreditsReturn: vi.fn() }));
 vi.mock("@/components/billing-stream-credits", () => ({ BillingStreamCredits: () => <div data-testid="stream-credits-panel" /> }));
 
 import { getDictionary } from "@/lib/i18n";
+import { sql } from "@/lib/db";
+import { creditBreakdown } from "@/server/usecases/stream-credits";
+import { creditsKindOf } from "@/components/credits-kind-switch";
 import { SettingsShell, SETTINGS_TABS, navContext } from "../_components/settings-nav";
 import ConnectSettingsPage from "../connect/page";
 import CreditsSettingsPage from "../credits/page";
 
 const ORG = { id: "org-1", name: "Riverside", slug: "riverside", role: "owner" };
+
+// Expected copy comes from the dictionary FILES, never from the component's own key.
+const dictFile = (loc: string): Record<string, string> =>
+  JSON.parse(readFileSync(path.join(process.cwd(), "src/dictionaries", loc, "ui.json"), "utf8"));
+const fill = (s: string, vars: Record<string, string | number>) => s.replace(/\{(\w+)\}/g, (_, k: string) => String(vars[k]));
+const esc = (s: string) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#x27;");
+/** The rail's balance link (`data-testid="settings-nav-stream-credits"`): its href and text, or null. */
+function railLink(out: string): { href: string; text: string } | null {
+  const m = /<a[^>]*href="([^"]*)"[^>]*data-testid="settings-nav-stream-credits"[^>]*>([^<]*)<\/a>|<a[^>]*data-testid="settings-nav-stream-credits"[^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>/.exec(out);
+  if (!m) return null;
+  return { href: (m[1] ?? m[3])!, text: (m[2] ?? m[4])! };
+}
 
 async function html(element: React.ReactElement): Promise<string> {
   const { prelude } = await prerender(element);
@@ -82,6 +110,9 @@ beforeEach(() => {
   orgPlanKey.mockResolvedValue("pro");
   walletIdFor.mockResolvedValue("w1");
   balance.mockResolvedValue(37);
+  ledger.monthly = 3;
+  ledger.pack = 9;
+  ledger.fail = false;
 });
 
 describe("the Settings sidebar", () => {
@@ -135,23 +166,31 @@ describe("the Settings sidebar", () => {
     expect(links).toHaveLength(1);
   });
 
-  it("shows the plan and credit balance when the page hands it context", async () => {
-    const dict = await getDictionary("en", "ui");
-    const out = await html(
-      <SettingsShell
-        orgSlug="riverside"
-        active="billing"
-        dict={dict}
-        context={{ plan: "Pro", credits: 37 }}
-      >
-        <p>panel</p>
-      </SettingsShell>,
-    );
-
+  it("shows the plan and the streaming credit balance, linked to the Streaming side, in every locale", async () => {
     // Both used to be visible only from the page that owns them — which is
     // exactly where an owner is NOT looking when they run out mid-schedule.
-    expect(out).toContain("Pro");
-    expect(out).toContain("37 AI credits");
+    let checked = 0;
+    for (const loc of ["en", "nl", "fr", "es"] as const) {
+      const dict = await getDictionary(loc, "ui");
+      const out = await html(
+        <SettingsShell orgSlug="riverside" active="billing" dict={dict} context={{ plan: "Pro", streamCredits: 12 }}>
+          <p>panel</p>
+        </SettingsShell>,
+      );
+      const file = dictFile(loc);
+      const rail = railLink(out);
+      expect(out, loc).toContain("Pro");
+      expect(rail, `${loc}: the balance link`).not.toBeNull();
+      expect(file["settings.nav.streamCreditsLeft"], `${loc} has the copy`).toBeTruthy();
+      expect(rail!.text, loc).toBe(esc(fill(file["settings.nav.streamCreditsLeft"]!, { count: 12 })));
+      // Whatever URL the rail links, the Credits page's own parser must read it as the Streaming side.
+      const url = new URL(rail!.href, "https://seazn.test");
+      expect(url.pathname, loc).toBe("/o/riverside/settings/credits");
+      const kinds = url.searchParams.getAll("kind");
+      expect(creditsKindOf(kinds.length > 1 ? kinds : kinds[0]), loc).toBe("stream");
+      checked++;
+    }
+    expect(checked, "anti-vacuity: all four locales were rendered").toBe(4);
   });
 
   it("renders the rail without context rather than failing", async () => {
@@ -162,8 +201,15 @@ describe("the Settings sidebar", () => {
       </SettingsShell>,
     );
 
-    expect(out).not.toContain("AI credits");
+    expect(railLink(out)).toBeNull();
     expect(out).toContain("/o/riverside/settings?tab=organization");
+    // positive pair: the same shell WITH context has the link the assertion above looks for
+    const withCtx = await html(
+      <SettingsShell orgSlug="riverside" active="billing" dict={dict} context={{ plan: "Pro", streamCredits: 0 }}>
+        <p>panel</p>
+      </SettingsShell>,
+    );
+    expect(railLink(withCtx)).not.toBeNull();
   });
 
   it("is dropped for a payer who is not a member of this org", async () => {
@@ -189,12 +235,19 @@ describe("route-owning Settings pages mount the sidebar", () => {
     expect(out).toContain("/o/riverside/settings?tab=organization");
   });
 
-  it("Credits does for a member", async () => {
-    const out = await html(
-      await CreditsSettingsPage({ params: Promise.resolve({ orgSlug: "riverside" }), searchParams: Promise.resolve({}) }),
-    );
-    expect(out).toContain("credits-panel");
-    expect(out).toContain("/o/riverside/settings?tab=organization");
+  // Both sides, each anchored on its own panel's `data-testid="` (a bare "credits-panel" is a substring of
+  // "stream-credits-panel", so it would pass on either side).
+  it("Credits does for a member, on both sides", async () => {
+    let checked = 0;
+    for (const [kind, panel] of [[undefined, "stream-credits-panel"], ["ai", "credits-panel"]] as const) {
+      const out = await html(
+        await CreditsSettingsPage({ params: Promise.resolve({ orgSlug: "riverside" }), searchParams: Promise.resolve(kind ? { kind } : {}) }),
+      );
+      expect(out, String(kind)).toContain(`data-testid="${panel}"`);
+      expect(out, String(kind)).toContain("/o/riverside/settings?tab=organization");
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("Credits does NOT for a payer arriving from the bill", async () => {
@@ -203,20 +256,45 @@ describe("route-owning Settings pages mount the sidebar", () => {
       await CreditsSettingsPage({ params: Promise.resolve({ orgSlug: "riverside" }), searchParams: Promise.resolve({}) }),
     );
 
-    expect(out).toContain("credits-panel");
+    expect(out).toContain('data-testid="stream-credits-panel"');
     expect(out).not.toContain("/o/riverside/settings?tab=organization");
   });
 });
 
 describe("navContext", () => {
-  it("returns the plan label and the wallet balance", async () => {
-    expect(await navContext("org-1")).toEqual({ plan: "Pro", credits: 37 });
+  it("returns the plan label and the org's streaming balance — the Streaming side's own number, never the AI wallet's", async () => {
+    // Expected from the Streaming side's authority over the same ledger, not a literal: `creditBreakdown`'s total is the
+    // balance Settings -> Credits -> Streaming shows (stream-credits-tab.ts `total`).
+    const expected = (await creditBreakdown(sql, "org-1")).total;
+    expect(expected, "differential: the AI wallet's 37 is not the streaming balance").not.toBe(37);
+    expect(await navContext("org-1")).toEqual({ plan: "Pro", streamCredits: expected });
+    // a second call over a ledger that moved answers the new number (no memo)
+    ledger.pack = 20;
+    expect(await navContext("org-1")).toEqual({ plan: "Pro", streamCredits: (await creditBreakdown(sql, "org-1")).total });
+    // the empty ledger is 0, not null: an org that never streamed still gets the rail header
+    ledger.monthly = 0;
+    ledger.pack = 0;
+    expect(await navContext("org-1")).toEqual({ plan: "Pro", streamCredits: 0 });
+  });
+
+  it("is a display read: it never writes the ledger and never reads the AI wallet", async () => {
+    vi.mocked(sql).mockClear();
+    await navContext("org-1");
+    const statements = vi.mocked(sql).mock.calls.map((c) => (Array.isArray(c[0]) ? (c[0] as string[]).join("?") : ""));
+    const onLedger = statements.filter((t) => t.includes("org_stream_credits"));
+    expect(onLedger.length, "anti-vacuity: the ledger was read").toBeGreaterThan(0);
+    for (const t of onLedger) expect(t.trim().toLowerCase().startsWith("select"), t).toBe(true);
+    expect(balance).not.toHaveBeenCalled();
+    expect(walletIdFor).not.toHaveBeenCalled();
   });
 
   it("returns null rather than taking the page down when a read fails", async () => {
     // The rail is navigation. A credits outage must not 500 every Settings
     // page in the product.
-    balance.mockRejectedValue(new Error("wallet unavailable"));
+    ledger.fail = true;
+    expect(await navContext("org-1")).toBeNull();
+    ledger.fail = false;
+    orgPlanKey.mockRejectedValue(new Error("entitlements unavailable"));
     expect(await navContext("org-1")).toBeNull();
   });
 });

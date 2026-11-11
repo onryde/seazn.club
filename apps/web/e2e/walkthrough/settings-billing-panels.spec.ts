@@ -342,10 +342,11 @@ test("the Credits tab's buy control opens the seed's pack ladder, choosing nothi
     if (new URL(r.url()).pathname === CREDIT_PACK_CHECKOUT) checkoutPosts.push(r.method());
   });
 
-  await page.goto(routes.credits(org.slug));
+  // The AI side by name: the Credits tab's bare URL opens its Streaming side (owner, 2026-11-11).
+  await page.goto(routes.creditsAi(org.slug));
   await expect(
     page.getByRole("heading", { level: 1, name: ui("settings.nav.credits") }),
-    "routes.credits must land on the Credits page, not the organisation tab",
+    "routes.creditsAi must land on the Credits page, not the organisation tab",
   ).toBeVisible({ timeout: READ_MS });
 
   const trigger = page.locator("[data-buy-credits]").first();
@@ -403,7 +404,7 @@ test("the credits CSV export appears only once the wallet has ledger history, an
   page: Page;
   request: APIRequestContext;
 }) => {
-  test.setTimeout(budget(2, 4));
+  test.setTimeout(budget(3, 4));
 
   // COMMUNITY, and the plan is the point: `seedSettingsOrg`'s Pro path splits
   // the org onto a fresh billing group, which changes `walletIdFor` and strands
@@ -417,9 +418,16 @@ test("the credits CSV export appears only once the wallet has ledger history, an
       "a new org is bootstrapped a monthly grant (lib/auth.ts createOrgForUser) — with an empty wallet the positive arm below proves nothing",
     ).toBeGreaterThan(0);
 
-    await page.goto(routes.credits(wallet.slug));
+    // Reached the way a payer does: from the billing page's "Manage AI credits", which names the AI side — the Credits
+    // tab's bare URL opens Streaming (owner, 2026-11-11).
+    await page.goto(routes.billing(wallet.slug));
+    const manage = page.getByRole("link", { name: ui("billing.credits.link"), exact: true });
+    await expect(manage).toHaveAttribute("href", routes.creditsAi(wallet.slug), { timeout: READ_MS });
+    await manage.click();
+    await expect(page).toHaveURL((u) => `${u.pathname}${u.search}` === routes.creditsAi(wallet.slug));
     const credits = page.locator("[data-credits]");
     await expect(credits).toBeVisible({ timeout: READ_MS });
+    await expect(page.locator("[data-credits-stream]"), "the AI side, not Streaming").toHaveCount(0);
 
     // The DB's number, rendered. Scoped to the row that carries the "Balance"
     // label so it cannot be satisfied by the same digits in the history table.

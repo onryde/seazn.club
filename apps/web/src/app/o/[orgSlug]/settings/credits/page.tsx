@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
-// Credits — its own Settings tab (SPEC-6 §A3, moved off the billing page), with two sides: AI (the default, and what every
-// link made before the tab had two sides still opens) and Streaming (`?kind=stream`, owner decision 2026-10-20, Option A:
-// match credits, the free allowance, the packs and the history, mirroring the AI side).
+// Credits — its own Settings tab (SPEC-6 §A3, moved off the billing page), with two sides (owner decision 2026-10-20,
+// Option A): Streaming — match credits, the free allowance, the packs and the history — and AI, its mirror. Streaming is the
+// default (owner, 2026-11-11: streaming credits come first): the bare URL and `?kind=stream` open it, `?kind=ai` opens AI.
 // Both wallets are the ORG's, not the payer's: an org owner inside a billing group they don't pay for must still see the
 // pool they spend from, so this page is member-visible and NOT payer-gated. The credit-pack purchases + CSV exports it
 // mounts are session-authed inside their own handlers.
@@ -34,11 +34,6 @@ export default async function CreditsSettingsPage({
   const kind = creditsKindOf(sp.kind);
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "ui");
-  // The rail's plan + credit-balance header. Skipped for a payer who is not a
-  // member: they get no rail at all (see SettingsShell.showNav), so the two
-  // reads would be paid for nothing. It shows the AI balance on both sides of
-  // the tab: it is the plan header, and the match-credit balance is one tap away.
-  const navCtx = viaPayer ? null : await navContext(org.id);
 
   // The currency both packs ladders are priced in: the group's locked one.
   const currency = await preferredCurrency(orgId);
@@ -85,6 +80,12 @@ export default async function CreditsSettingsPage({
       />
     );
   }
+
+  // The rail's plan + streaming-balance header, on both sides. Read AFTER the side's own read: the Streaming side grants
+  // this month's free credits before it reads its balance (and a Stripe return is reconciled before that), so a rail read
+  // first would print the pre-grant number beside the granted one. Skipped for a payer who is not a member: they get no
+  // rail at all (see SettingsShell.showNav), so the reads would be paid for nothing.
+  const navCtx = viaPayer ? null : await navContext(org.id);
 
   return (
     <SettingsShell orgSlug={orgSlug} context={navCtx} active="credits" dict={dict} showNav={!viaPayer}>

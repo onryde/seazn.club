@@ -1294,7 +1294,7 @@
   "settings.nav.group.organisation": "Organisation",
   "settings.nav.group.money": "Finances",
   "settings.nav.group.you": "Vous",
-  "settings.nav.creditsLeft": "{count} crédits IA",
+  "settings.nav.streamCreditsLeft": "Crédits de diffusion : {count}",
   "settings.account.changeEmail": "Changer l'e-mail",
   "settings.account.lichess.title": "Lichess",
   "settings.account.lichess.desc": "Liez votre compte Lichess pour jouer les parties d'échecs en ligne organisées sur Seazn.",

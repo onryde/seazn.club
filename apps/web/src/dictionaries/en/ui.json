@@ -1294,7 +1294,7 @@
   "settings.nav.group.organisation": "Organisation",
   "settings.nav.group.money": "Money",
   "settings.nav.group.you": "You",
-  "settings.nav.creditsLeft": "{count} AI credits",
+  "settings.nav.streamCreditsLeft": "Streaming credits: {count}",
   "settings.account.changeEmail": "Change email",
   "settings.account.lichess.title": "Lichess",
   "settings.account.lichess.desc": "Link your Lichess account to play online chess fixtures organised on Seazn.",

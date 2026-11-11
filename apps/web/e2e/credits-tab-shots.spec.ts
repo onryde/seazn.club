@@ -14,9 +14,10 @@ import { seedStreamHistory } from "./helpers/stream-history-seed";
 import { STREAM_CREDIT_PACKS } from "../src/lib/stream-credit-packs";
 import { STREAM_HISTORY_CSV_HEADER } from "../src/server/usecases/stream-credit-history-csv";
 
-// Screenshot + axe evidence for Settings -> Credits, which has two sides: AI (the default, and what every old link opens)
-// and Streaming (`?kind=stream`, owner decision 2026-10-20, Option A). Own empty storageState + a login per test
-// (auto-provisions an org, which gets a bootstrap credit grant) so it runs with --no-deps.
+// Screenshot + axe evidence for Settings -> Credits, which has two sides (owner decision 2026-10-20, Option A): Streaming —
+// the default since 2026-11-11 (owner: streaming credits come first), opened by the bare URL and by `?kind=stream` — and AI
+// (`?kind=ai`). Own empty storageState + a login per test (auto-provisions an org, which gets a bootstrap credit grant) so
+// it runs with --no-deps.
 //
 // The Streaming side is walked two ways: with a realistic ledger (every row kind, a long entrant name, past one page, the
 // export, the buy tiles opening the checkout), and for an org whose plan does not stream (the empty state). Each at 1280,
@@ -173,7 +174,7 @@ async function expectNoSeriousAxe(page: Page, where: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// AI side — the default
+// AI side — `?kind=ai`; the bare URL is the Streaming side
 // ---------------------------------------------------------------------------------------------------------------------
 
 test("Credits tab, AI side: nav entry, the switch, desktop + mobile, axe", async ({ page }) => {
@@ -191,24 +192,41 @@ test("Credits tab, AI side: nav entry, the switch, desktop + mobile, axe", async
   //
   // `exact: true` is load-bearing: Playwright's `name` is a SUBSTRING match,
   // and the rail's plan header carries a second link to the same route
-  // reading "10 AI credits". Without it this resolves to two elements and
-  // fails strict mode — which is what it did.
+  // (its streaming-credit balance, "Streaming credits: N"). Without it this
+  // could resolve to two elements and fail strict mode — which it once did.
   await open(page, `/o/${org.slug}/settings?tab=organization`);
   await expect(page.getByRole("link", { name: en("settings.nav.credits"), exact: true })).toBeVisible();
+  // The rail's header: the plan, then the org's streaming credits, linking to the Credits tab's default (Streaming) side.
+  const railBalance = page.getByTestId("settings-nav-stream-credits");
+  const reEscape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  await expect(railBalance).toHaveText(new RegExp(`^${reEscape(en("settings.nav.streamCreditsLeft", { count: "§" })).replace("§", "\\d+")}$`));
+  await expect(railBalance).toHaveAttribute("href", `/o/${org.slug}/settings/credits`);
   await shot(page, "settings-nav-desktop");
 
-  // The page, desktop: it opens on the AI side (every old link did), with the switch naming it.
+  // The bare URL opens the Streaming side, the switch naming it, Streaming first.
   await open(page, `/o/${org.slug}/settings/credits`);
   await expect(page.getByRole("heading", { level: 1, name: en("settings.nav.credits") })).toBeVisible();
+  await expect(page.getByTestId("credits-kind-stream")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("credits-kind-ai")).not.toHaveAttribute("aria-current", "page");
+  await expect(page.locator("[data-credits-stream]"), "the Streaming card").toBeVisible();
+  await expect(page.locator("[data-credits]"), "not the AI wallet card").toHaveCount(0);
+  const order = await page.getByTestId("credits-kind-switch").locator("a").evaluateAll((as) => as.map((a) => a.getAttribute("data-testid")));
+  expect(order, "Streaming first, then AI").toEqual(["credits-kind-stream", "credits-kind-ai"]);
+
+  // The AI side, desktop: `?kind=ai`.
+  await open(page, `/o/${org.slug}/settings/credits?kind=ai`);
   await expect(page.getByTestId("credits-kind-ai")).toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("credits-kind-stream")).not.toHaveAttribute("aria-current", "page");
   await expect(page.locator("[data-credits]"), "the AI wallet card").toBeVisible();
   await expect(page.locator("[data-credits-stream]"), "not the Streaming card").toHaveCount(0);
+  // The "Invite & earn" referral card is hidden (owner, 2026-11-11).
+  await expect(page.locator("[data-referral]")).toHaveCount(0);
+  await expect(page.getByText(en("billing.credits.referral.title"))).toHaveCount(0);
   await page.waitForTimeout(300);
   await shot(page, "credits-desktop");
 
-  // axe on /settings/credits (serious/critical only).
-  await expectNoSeriousAxe(page, "on /settings/credits");
+  // axe on the AI side (serious/critical only).
+  await expectNoSeriousAxe(page, "on /settings/credits?kind=ai");
 
   // Mobile 375px — no horizontal page scroll.
   await page.setViewportSize({ width: 375, height: 800 });
@@ -218,14 +236,20 @@ test("Credits tab, AI side: nav entry, the switch, desktop + mobile, axe", async
 
   // The switch is two links the keyboard and a thumb can reach: 44px each at 375.
   await expectTappable(page.getByTestId("credits-kind-stream"), "the Streaming switch");
+  await expectTappable(page.getByTestId("credits-kind-ai"), "the AI switch");
+  // Streaming is the bare URL…
   await page.getByTestId("credits-kind-stream").click();
-  await expect(page).toHaveURL(/\/settings\/credits\?kind=stream$/);
+  await expect(page).toHaveURL(/\/settings\/credits$/);
   await expect(page.locator("[data-credits-stream]")).toBeVisible();
   await expect(page.getByTestId("credits-kind-stream")).toHaveAttribute("aria-current", "page");
-  // …and back: the AI side keeps its bare URL.
+  // …and back: the AI side is `?kind=ai`.
   await page.getByTestId("credits-kind-ai").click();
-  await expect(page).toHaveURL(/\/settings\/credits$/);
+  await expect(page).toHaveURL(/\/settings\/credits\?kind=ai$/);
   await expect(page.locator("[data-credits]")).toBeVisible();
+  // A link made while AI was the default (`?kind=stream`) still opens Streaming.
+  await open(page, `/o/${org.slug}/settings/credits?kind=stream`);
+  await expect(page.getByTestId("credits-kind-stream")).toHaveAttribute("aria-current", "page");
+  await expect(page.locator("[data-credits-stream]")).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -251,12 +275,13 @@ test("Credits tab, Streaming side: the ledger, the pager, the export and the buy
   const [fx] = await withDb((sql) => sql<{ fixture_no: number }[]>`select fixture_no from fixtures where id = ${rig.fixtureId}`);
   const fixtureHref = `/o/${rig.orgSlug}/c/${rig.compSlug}/d/${rig.divSlug}/f/${fx!.fixture_no}`;
 
-  // --- 1280: the Streaming side, reached through the switch ---------------------------------------------------------
+  // --- 1280: the Streaming side, reached through the switch from the AI side ----------------------------------------
   await page.setViewportSize({ width: 1280, height: 900 });
-  await open(page, `/o/${rig.orgSlug}/settings/credits`);
+  await open(page, `/o/${rig.orgSlug}/settings/credits?kind=ai`);
   await expect(page.getByTestId("credits-kind-ai")).toHaveAttribute("aria-current", "page");
   await page.getByTestId("credits-kind-stream").click();
-  await expect(page).toHaveURL(/\/settings\/credits\?kind=stream$/);
+  await expect(page).toHaveURL(/\/settings\/credits$/);
+  await expect(page.getByTestId("credits-kind-stream")).toHaveAttribute("aria-current", "page");
   const history = page.getByTestId("credits-stream-history");
   await expect(history).toBeVisible({ timeout: NAV_MS });
 
@@ -279,6 +304,9 @@ test("Credits tab, Streaming side: the ledger, the pager, the export and the buy
 
   // The balance, in match credits.
   await expect(page.getByTestId("credits-stream-balance")).toHaveText(credits(ledger.total));
+  // The rail's header beside it prints the same number, read from the same ledger after this page's own read granted
+  // the month (owner, 2026-11-11: the rail shows streaming credits, not AI).
+  await expect(page.getByTestId("settings-nav-stream-credits")).toHaveText(en("settings.nav.streamCreditsLeft", { count: ledger.total }));
   // The free meter: "N of M used", one segment per free credit (only with a grant).
   if (ledger.granted > 0) {
     await expect(page.getByTestId("credits-stream-free-used")).toHaveText(
