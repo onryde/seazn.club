@@ -329,6 +329,13 @@ describe("settings → preferences", () => {
     expect(await render("preferences")).toContain("my-timezone");
   });
 
+  it("the Organisation tab keeps the same left rail as every other tab (owner 2026-11-11: no top menu for Organisation alone)", async () => {
+    const rail = '<aside class="w-full md:w-44 md:shrink-0"';
+    const tabs = ["organization", "preferences", "account"] as const;
+    for (const tab of tabs) expect(await render(tab), `${tab}: left rail`).toContain(rail);
+    expect(tabs.length, "tabs checked").toBeGreaterThan(0);
+  });
+
   it("is reachable from the sidebar and marks itself current", async () => {
     const html = await render("preferences");
 
