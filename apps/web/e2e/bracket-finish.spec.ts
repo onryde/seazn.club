@@ -1754,6 +1754,9 @@ test.describe("W4 B5b - joint winners on a final (X-CH-4)", () => {
       await expect(offer).toHaveText(ui("jointWinners.action"));
       await expectNoHorizontalScroll(page);
       // Hit-test: the point at the button's centre IS the button (nothing paints over it, it is not clipped off-screen).
+      // The organiser block sits below the pad (4A), and at 320 that is past the first 900px (measured y 1484): a tap needs the
+      // button scrolled into the viewport first, as a thumb does it - `elementFromPoint` answers null for a point outside it.
+      await offer.scrollIntoViewIfNeeded();
       const hit = await hitTest(offer);
       expect(hit.ok, `${w}: the action is what a tap lands on`).toBe(true);
       expect(hit.h, `${w}: a 44px tap target`).toBeGreaterThanOrEqual(44);
