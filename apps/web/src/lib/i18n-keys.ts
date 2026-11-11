@@ -7779,6 +7779,7 @@ export type DictionaryKey =
   | "sponsors.deal.chip.awaitingPayment"
   | "sponsors.deal.chip.draft"
   | "sponsors.deal.chip.ended"
+  | "sponsors.deal.chip.endedUnpaid"
   | "sponsors.deal.chip.live"
   | "sponsors.deal.chip.liveAwaitingPayment"
   | "sponsors.deal.chip.liveOnHold"

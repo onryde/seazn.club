@@ -298,17 +298,22 @@ export function pickRowDeal(deals: readonly SponsorDeal[]): SponsorDeal | null {
 export type RowAction = "add_deal" | "open_deal" | "resend_invoice" | "mark_paid" | "approve";
 
 /** F15's precedence, first match wins:
- *  1. no deal, or ended → add_deal;
+ *  1. no deal, or ended → add_deal - except an ended deal still due (`endedStillDue`, T24 m8: an offline invoice the sponsor owes
+ *     after its term ran out), whose row offers mark_paid: the money is the thing to chase, and a new deal can wait. Write off is on
+ *     the sponsor's page and the deal's own;
  *  2. awaiting_approval → approve;
- *  3. unpaid and not draft or scheduled → resend_invoice (online) or mark_paid (offline);
+ *  3. unpaid and not draft or scheduled → resend_invoice (online) or mark_paid (offline). An ONLINE deal with no invoice number
+ *     (made before invoices were numbered) has no invoice to resend (`allowedActions` does not offer it, the server answers 409
+ *     deal_not_invoiceable; T24 m5), so its row opens the deal, where what it can do is;
  *  4. draft or scheduled → open_deal;
  *  5. otherwise (live with payment paid or none) → null. */
 export function rowNextAction(d: SponsorDeal | null): RowAction | null {
-  if (d === null || d.deal_status === "ended") return "add_deal";
+  if (d === null) return "add_deal";
+  if (d.deal_status === "ended") return endedStillDue(d) ? "mark_paid" : "add_deal";
   if (d.deal_status === "awaiting_approval") return "approve";
   const queued = d.deal_status === "draft" || d.deal_status === "scheduled";
   if (isUnpaid(d.payment_status) && !queued) {
-    if (d.payment_method === "online") return "resend_invoice";
+    if (d.payment_method === "online") return allowedActions(d).includes("resend_invoice") ? "resend_invoice" : "open_deal";
     if (d.payment_method === "offline") return "mark_paid";
   }
   if (queued) return "open_deal";
@@ -316,11 +321,13 @@ export function rowNextAction(d: SponsorDeal | null): RowAction | null {
 }
 
 /** A deal's status chip. `paid` is derived (D2): a scheduled deal that is paid. "Live · awaiting payment" is a live
- *  deal still unpaid; "on hold" is a live deal parked by a dispute. */
+ *  deal still unpaid; "on hold" is a live deal parked by a dispute; "Ended · unpaid" (`endedDue`, T24 m8) is an ended deal whose
+ *  invoice is still due (`endedStillDue`). */
 export type DealChip = {
   kind: "draft" | "awaiting_payment" | "paid" | "scheduled" | "awaiting_approval" | "live" | "ended";
   awaitingPayment: boolean;
   onHold: boolean;
+  endedDue: boolean;
 };
 
 export function dealChip(d: SponsorDeal): DealChip {
@@ -330,6 +337,7 @@ export function dealChip(d: SponsorDeal): DealChip {
     kind,
     awaitingPayment: live && isUnpaid(d.payment_status),
     onHold: live && Boolean(d.parked_at),
+    endedDue: endedStillDue(d),
   };
 }
 

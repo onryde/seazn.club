@@ -539,6 +539,7 @@
   "sponsors.deal.chip.none": "Sin acuerdo",
   "sponsors.deal.chip.liveAwaitingPayment": "Activo · pendiente de pago",
   "sponsors.deal.chip.liveOnHold": "Activo · en pausa",
+  "sponsors.deal.chip.endedUnpaid": "Terminado · sin pagar",
   "sponsors.deal.action.addDeal": "Añadir acuerdo",
   "sponsors.deal.action.openDeal": "Abrir acuerdo",
   "sponsors.deal.action.resendInvoice": "Reenviar factura",

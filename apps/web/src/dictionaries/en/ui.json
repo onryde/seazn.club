@@ -539,6 +539,7 @@
   "sponsors.deal.chip.none": "No deal",
   "sponsors.deal.chip.liveAwaitingPayment": "Live · awaiting payment",
   "sponsors.deal.chip.liveOnHold": "Live · on hold",
+  "sponsors.deal.chip.endedUnpaid": "Ended · unpaid",
   "sponsors.deal.action.addDeal": "Add deal",
   "sponsors.deal.action.openDeal": "Open deal",
   "sponsors.deal.action.resendInvoice": "Resend invoice",

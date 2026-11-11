@@ -499,7 +499,7 @@ describe("a deal for a competition the page does not hold says so in words, neve
 
 describe("the buttons ARE allowedActions (the engine's answer), never a client copy - and 'Open deal' is always there (S4)", () => {
   const WORDS: Record<string, string> = {
-    send_invoice: "Send invoice", resend_invoice: "Resend invoice", mark_paid: "Mark as paid", approve: "Approve", end_now: "End now",
+    send_invoice: "Send invoice", resend_invoice: "Resend invoice", mark_paid: "Mark as paid", write_off: "Write off", approve: "Approve", end_now: "End now",
   };
 
   it("hand-typed rows from the spec's table (§5.2): what each state offers", () => {
@@ -514,6 +514,11 @@ describe("the buttons ARE allowedActions (the engine's answer), never a client c
       ["complimentary and live", { deal_status: "live", payment_status: "none", payment_method: "complimentary", go_live: "immediate" }, ["end_now"]],
       ["scheduled and paid", { deal_status: "scheduled", payment_status: "paid" }, ["end_now"]],
       ["ended", { deal_status: "ended", payment_status: "paid", ended_reason: "expired" }, []],
+      // T24 m8: an offline deal that went live and ended unpaid (its term ran out) is still owed - Mark as paid and Write off are on the
+      // sponsor's page, beside Resend invoice. The twin that never went live owes nothing and offers none of them (the pair).
+      ["ended, offline, still due, billing email", { deal_status: "ended", payment_status: "pending", payment_method: "offline", ended_reason: "expired", live_at: "2026-10-02T09:00:00.000Z" }, ["resend_invoice", "mark_paid", "write_off"]],
+      ["ended, offline, still due, no billing email", { deal_status: "ended", payment_status: "pending", payment_method: "offline", ended_reason: "competition_finished", live_at: "2026-10-02T09:00:00.000Z", sponsor_email: null }, ["mark_paid", "write_off"]],
+      ["ended, offline, expired but never live", { deal_status: "ended", payment_status: "pending", payment_method: "offline", ended_reason: "expired", live_at: null }, []],
     ];
     let checked = 0;
     for (const [label, over, want] of T) {
@@ -532,23 +537,29 @@ describe("the buttons ARE allowedActions (the engine's answer), never a client c
   it("every status x payment x method the model can produce: the drawn buttons are allowedActions minus Refund (which asks about money, on the deal's page)", () => {
     let checked = 0;
     let withButtons = 0;
+    let writeOffRows = 0;
     for (const deal_status of DEAL_STATUSES) {
       for (const payment_method of PAYMENT_METHODS) {
         const payments = payment_method === "complimentary" ? [initialPaymentStatus("complimentary")] : PAYMENT_STATUSES.filter((p) => p !== "none");
         for (const payment_status of payments) {
           for (const go_live of GO_LIVE_RULES) {
             if (payment_method === "complimentary" && go_live === "on_payment") continue;
-            const d = deal({ id: "t", deal_status, payment_status, payment_method, go_live, ended_reason: deal_status === "ended" ? "expired" : null });
-            const want = allowedActions(d).filter((a) => a !== "refund");
-            const drawn = findAll(bodyHtml({ deals: [d] }), "sponsor-sheet-deal-action").map((b) => attrOf(b.open, "data-action"));
-            expect(drawn, `${deal_status}/${payment_status}/${payment_method}/${go_live}`).toEqual(want);
-            if (want.length) withButtons++;
-            checked++;
+            // `live_at` both ways: an ended deal that never went live owes nothing, one that did is still due (Write off, T24 m8).
+            for (const live_at of ["2026-10-02T09:00:00.000Z", null]) {
+              const d = deal({ id: "t", deal_status, payment_status, payment_method, go_live, live_at, ended_reason: deal_status === "ended" ? "expired" : null });
+              const want = allowedActions(d).filter((a) => a !== "refund");
+              const drawn = findAll(bodyHtml({ deals: [d] }), "sponsor-sheet-deal-action").map((b) => attrOf(b.open, "data-action"));
+              expect(drawn, `${deal_status}/${payment_status}/${payment_method}/${go_live}/${live_at ? "live" : "never live"}`).toEqual(want);
+              if (want.includes("write_off")) writeOffRows++;
+              if (want.length) withButtons++;
+              checked++;
+            }
           }
         }
       }
     }
     expect(checked, "the sweep is not vacuous").toBeGreaterThan(60);
+    expect(writeOffRows, "anti-vacuity: the rows that offer Write off are in the sweep (offline x pending/failed x on_payment/immediate/on_approval, live)").toBeGreaterThan(0);
     expect(withButtons, "and both arms are exercised").toBeGreaterThan(10);
     expect(withButtons).toBeLessThan(checked);
   });

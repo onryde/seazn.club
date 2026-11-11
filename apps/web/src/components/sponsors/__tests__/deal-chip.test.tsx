@@ -14,6 +14,7 @@
 //   C3  variant        drop the `onHold` arm of the label                               -> "a live deal parked by a dispute"
 //   C4  vocabulary     a one-off `bg-amber-100` on the awaiting_payment chip            -> "no new colours"
 //   C5  contrast       "No deal" keeps archived's `text-slate-400`                        -> "'No deal' reads at AA"
+//   C6  variant        drop the `endedDue` arm of the label (T24 m8)                    -> "an ended deal still due"
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DealChip, DEAL_CHIP_MSG } from "@/components/sponsors/deal-chip";
@@ -116,6 +117,51 @@ describe("each chip kind reads its words, in all four locales", () => {
 
   it("no deal: the chip says so", () => {
     expect(text(html(null))).toBe("No deal");
+  });
+});
+
+describe("an ended deal still due (T24 m8): 'Ended · unpaid', so the row does not read like a finished account", () => {
+  /** An OFFLINE deal that went live, then ended unpaid because its term ran out: the sponsor had the placement, so the money is owed. */
+  const DUE = { deal_status: "ended", payment_method: "offline", payment_status: "pending", live_at: "2026-11-01T10:00:00.000Z", ended_at: "2026-11-05T10:00:00.000Z", ended_reason: "expired" } as const;
+
+  it("has words in all four locales, each starting from the locale's own Ended and translated (1 key x 4 locales)", () => {
+    const key = "sponsors.deal.chip.endedUnpaid";
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const words = DICTS[locale]![key];
+      expect(typeof words === "string" && words.trim().length > 0, `${key} in ${locale}`).toBe(true);
+      const plain = DICTS[locale]!["sponsors.deal.chip.ended"]!;
+      expect(words!.startsWith(plain), `${locale}: starts from the locale's own Ended`).toBe(true);
+      expect(words!.length, `${locale}: says more than Ended`).toBeGreaterThan(plain.length);
+      if (locale !== "en") expect(words, `${locale}: not the English sentence`).not.toBe(DICTS.en![key]);
+      checked++;
+    }
+    expect(checked, "1 key x 4 locales").toBe(4);
+  });
+
+  it("reads 'Ended · unpaid' for a deal still due, and plain 'Ended' for every ended deal that is not (the pair; 6 rows checked)", () => {
+    expect(text(html(deal(DUE)))).toBe("Ended · unpaid");
+    expect(text(html(deal({ ...DUE, ended_reason: "competition_finished", payment_status: "failed" })))).toBe("Ended · unpaid");
+    const NOT_DUE: [string, Partial<SponsorDeal>][] = [
+      ["End now (the club cancelled)", { ended_reason: "ended_now" }],
+      ["paid", { payment_status: "paid" }],
+      ["online (a card link claims nothing once gone)", { payment_method: "online" }],
+      ["written off", { ended_reason: "written_off" }],
+    ];
+    let checked = 2;
+    for (const [label, over] of NOT_DUE) {
+      expect(text(html(deal({ ...DUE, ...over }))), label).toBe("Ended");
+      checked++;
+    }
+    expect(checked, "rows checked").toBe(6);
+  });
+
+  it("wears the lime 'money due' recipe the Awaiting payment chip wears - a status-chip recipe, no colour of its own - and no pulse dot", () => {
+    const tokens = classOf(html(deal(DUE))).split(/\s+/);
+    for (const t of CHIP_STYLE.in_progress.split(/\s+/)) expect(tokens, t).toContain(t);
+    // Not the grey of a finished account: that is the one thing this chip exists to differ from.
+    for (const t of CHIP_STYLE.completed.split(/\s+/)) expect(tokens, `not completed's ${t}`).not.toContain(t);
+    expect(html(deal(DUE))).not.toContain("chip-pulse-dot");
   });
 });
 

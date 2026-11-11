@@ -33,8 +33,11 @@ import { allowedActions, DEAL_ACTIONS, isLiveDeal, isOpenDeal, type DealAction, 
 import type { ReportLinkDefaults, ReportLinkSummary } from "@/lib/sponsor-report";
 import { dealHref } from "@/lib/sponsors-hub";
 
-/** The deal actions this page can run. Refund is not among them: it asks about the money and lives on the deal's own page. */
-export type SheetDealAction = Extract<DealAction, "send_invoice" | "resend_invoice" | "mark_paid" | "approve" | "end_now">;
+/** The deal actions this page can run. Refund is not among them: it asks about the money and lives on the deal's own page. Write off
+ *  is (T24 m8): an ended deal still due is not on the list's row once the sponsor has a newer deal, so the sponsor's page is where
+ *  the club waives it, behind the same confirm as on the deal's page. It was in the runtime list and missing from this type and
+ *  its words: the type guard below let it through and the page threw reading its label. */
+export type SheetDealAction = Extract<DealAction, "send_invoice" | "resend_invoice" | "mark_paid" | "write_off" | "approve" | "end_now">;
 
 /** The order the buttons are drawn in: `DEAL_ACTIONS` (the engine's order) narrowed to what this page runs. A list, not a second
  *  set of rules - whether a deal OFFERS an action is `allowedActions`. */
@@ -44,6 +47,7 @@ const ACTION_MSG: Record<SheetDealAction, MessageKey> = {
   send_invoice: "sponsors.deal.action.sendInvoice",
   resend_invoice: "sponsors.deal.action.resendInvoice",
   mark_paid: "sponsors.deal.action.markPaid",
+  write_off: "sponsors.deal.action.writeOff",
   approve: "sponsors.deal.action.approve",
   end_now: "sponsors.deal.action.endNow",
 };
@@ -236,7 +240,7 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
                 disabled={busy}
                 aria-label={msg("sponsors.sheet.dealActionFor", { action: msg(ACTION_MSG[a]), package: d.package_name })}
                 onClick={() => onDealAction(d, a)}
-                className={`btn ${a === "approve" ? "btn-primary" : "btn-ghost"} px-3 py-1.5 text-xs max-md:min-h-11 ${a === "end_now" ? "text-red-600" : ""}`}
+                className={`btn ${a === "approve" ? "btn-primary" : "btn-ghost"} px-3 py-1.5 text-xs max-md:min-h-11 ${a === "end_now" || a === "write_off" ? "text-red-600" : ""}`}
               >
                 {msg(ACTION_MSG[a])}
               </button>

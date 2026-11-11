@@ -881,7 +881,9 @@ describe("an ENDED deal still due (Task 23 carries 1 and 4): late Mark as paid, 
           const label = `${reason}/${p}/${email ? "email" : "no email"}`;
           expect(endedStillDue(d), label).toBe(isDue);
           expect(allowedActions(d), label).toEqual(isDue ? (email ? [RI, MP, WO] : [MP, WO]) : []);
-          expect(rowNextAction(d), `${label}: the row still offers a new deal`).toBe("add_deal");
+          // The row's one action (T24 m8): an ended deal still due offers Mark as paid, the money is what to chase; every other ended
+          // deal offers a new deal.
+          expect(rowNextAction(d), `${label}: the row's one action`).toBe(isDue ? "mark_paid" : "add_deal");
           if (isDue) due++;
           checked++;
         }
@@ -1019,6 +1021,118 @@ describe("rowNextAction — the precedence (F15), first match wins", () => {
   });
 });
 
+describe("rowNextAction — the row agrees with allowedActions (T24: m5 an unnumbered deal, m8 an ended deal still due)", () => {
+  const SEND_ACTIONS = new Set<string>(["send_invoice", "resend_invoice"]);
+
+  it("m5, the empty case first: a numbered online deal awaiting payment offers Resend invoice on its row; its unnumbered twin does not (the pair)", () => {
+    const numbered = deal({ deal_status: "awaiting_payment", payment_status: "pending", payment_method: "online", invoice_number: 7 });
+    expect(rowNextAction(numbered), "the positive: a numbered online unpaid row offers Resend").toBe("resend_invoice");
+    expect(allowedActions(numbered), "premise: the deal itself offers it").toContain("resend_invoice");
+    const unnumbered = { ...numbered, invoice_number: null };
+    expect(allowedActions(unnumbered), "premise: the unnumbered deal does not offer a send (the server answers 409 deal_not_invoiceable)").not.toContain("resend_invoice");
+    expect(rowNextAction(unnumbered), "the row says what the deal says").not.toBe("resend_invoice");
+    // It is not left without a next step: it opens the deal, where its real actions (Mark as paid, End now) are.
+    expect(rowNextAction(unnumbered)).toBe("open_deal");
+  });
+
+  it("m5: an unnumbered deal's row never names a send, and every row action that writes is one the deal offers (rows, unnumbered rows and send rows reported)", () => {
+    let checked = 0;
+    let unnumberedRows = 0;
+    let sendRows = 0;
+    let writeRows = 0;
+    for (const s of SPEC_DEAL_STATUSES as DealStatus[]) {
+      for (const p of SPEC_PAYMENT_STATUSES as PaymentStatus[]) {
+        for (const m of SPEC_PAYMENT_METHODS as PaymentMethod[]) {
+          for (const reason of [null, ...SPEC_END_REASONS] as (EndReason | null)[]) {
+            for (const liveAt of [T0, null]) {
+              for (const email of ["accounts@harbourside.example", null]) {
+                for (const number of [7, null]) {
+                  const d = deal({
+                    deal_status: s, payment_status: p, payment_method: m, ended_reason: reason, live_at: liveAt, sponsor_email: email,
+                    invoice_number: number, ended_at: s === "ended" ? T0 : null,
+                  });
+                  const next = rowNextAction(d);
+                  const label = `${s}/${p}/${m}/${reason ?? "-"}/${liveAt ? "live" : "never"}/${email ? "email" : "none"}/${number ?? "unnumbered"}`;
+                  if (number === null) {
+                    unnumberedRows++;
+                    expect(SEND_ACTIONS.has(next ?? ""), `${label}: an unnumbered deal's row names no send`).toBe(false);
+                  }
+                  if (next === "resend_invoice" || next === "mark_paid" || next === "approve") {
+                    expect(allowedActions(d) as string[], `${label}: the row's write is one the deal offers`).toContain(next);
+                    writeRows++;
+                    if (next === "resend_invoice") sendRows++;
+                  }
+                  checked++;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(checked, "rows checked").toBe(6 * 5 * 3 * 9 * 2 * 2 * 2);
+    expect(unnumberedRows, "unnumbered rows checked").toBe(checked / 2);
+    expect(writeRows, "anti-vacuity: rows whose action writes").toBeGreaterThan(0);
+    expect(sendRows, "anti-vacuity: rows that offer Resend invoice (the numbered ones)").toBeGreaterThan(0);
+  });
+
+  it("m8, the empty case first: an ended deal that is not due still offers a new deal; the due ones offer Mark as paid (hand-typed rows, from the rule: an OFFLINE deal that went live, then ended unpaid by its term or its competition)", () => {
+    const ended = (over: Partial<SponsorDeal>) =>
+      deal({ deal_status: "ended", ended_at: T0, payment_method: "offline", payment_status: "pending", live_at: T0, ended_reason: "expired", ...over });
+    const ROWS: [string, SponsorDeal, RowAction][] = [
+      ["the empty case: ended by End now (the club cancelled)", ended({ ended_reason: "ended_now" }), "add_deal"],
+      ["expired, never went live", ended({ live_at: null }), "add_deal"],
+      ["online, expired after going live (its card link is gone; it claims nothing)", ended({ payment_method: "online" }), "add_deal"],
+      ["offline, paid, expired", ended({ payment_status: "paid" }), "add_deal"],
+      ["offline, refunded, expired", ended({ payment_status: "refunded", ended_reason: "refunded" }), "add_deal"],
+      ["already written off (the waiver is the answer)", ended({ ended_reason: "written_off" }), "add_deal"],
+      ["complimentary, expired", ended({ payment_method: "complimentary", payment_status: "none" }), "add_deal"],
+      ["offline, live, expired, pending", ended({}), "mark_paid"],
+      ["offline, live, competition finished, pending", ended({ ended_reason: "competition_finished" }), "mark_paid"],
+      ["offline, live, expired, a failed payment (the domain's unpaid)", ended({ payment_status: "failed" }), "mark_paid"],
+      ["the same, with no billing email (Mark as paid needs none)", ended({ sponsor_email: null }), "mark_paid"],
+    ];
+    let checked = 0;
+    for (const [label, d, want] of ROWS) {
+      expect(rowNextAction(d), label).toBe(want);
+      checked++;
+    }
+    expect(checked, "rows checked").toBe(11);
+    expect(ROWS.filter(([, , want]) => want === "mark_paid"), "anti-vacuity: some rows are due").toHaveLength(4);
+  });
+
+  it("m8: only the ENDED branch moved — an open deal's row is what it was (every status but ended, unpaid offline and online, 4 rows)", () => {
+    expect(rowNextAction(deal({ deal_status: "awaiting_payment", payment_method: "offline", live_at: T0, ended_reason: "expired" }))).toBe("mark_paid");
+    expect(rowNextAction(deal({ deal_status: "live", payment_status: "paid", payment_method: "offline", live_at: T0, ended_reason: "expired" }))).toBeNull();
+    expect(rowNextAction(deal({ deal_status: "draft", payment_method: "online" }))).toBe("open_deal");
+    expect(rowNextAction(deal({ deal_status: "awaiting_approval", payment_method: "offline", live_at: T0, ended_reason: "expired" }))).toBe("approve");
+  });
+});
+
+describe("dealChip — an ended deal still due (T24 m8)", () => {
+  const ended = (over: Partial<SponsorDeal>) =>
+    deal({ deal_status: "ended", ended_at: T0, payment_method: "offline", payment_status: "pending", live_at: T0, ended_reason: "expired", ...over });
+
+  it("the empty case first: no ended deal that is not due is flagged; the due ones are (hand-typed rows)", () => {
+    const ROWS: [string, SponsorDeal, boolean][] = [
+      ["ended by End now", ended({ ended_reason: "ended_now" }), false],
+      ["never went live", ended({ live_at: null }), false],
+      ["online", ended({ payment_method: "online" }), false],
+      ["paid", ended({ payment_status: "paid" }), false],
+      ["written off", ended({ ended_reason: "written_off" }), false],
+      ["a live deal with the same money fields", deal({ deal_status: "live", payment_method: "offline", live_at: T0, ended_reason: "expired" }), false],
+      ["offline, live, expired, pending", ended({}), true],
+      ["offline, live, competition finished, failed", ended({ ended_reason: "competition_finished", payment_status: "failed" }), true],
+    ];
+    let checked = 0;
+    for (const [label, d, want] of ROWS) {
+      expect(dealChip(d).endedDue, label).toBe(want);
+      checked++;
+    }
+    expect(checked, "rows checked").toBe(8);
+  });
+});
+
 describe("dealChip (spec §5.2 chips, D2: Paid is derived)", () => {
   it("kind and awaitingPayment over every deal_status × payment_status (30 rows checked)", () => {
     // [status, payment, kind, awaitingPayment]. "Live · awaiting payment" is live + unpaid; a scheduled deal shows Paid
@@ -1042,7 +1156,7 @@ describe("dealChip (spec §5.2 chips, D2: Paid is derived)", () => {
     expect(TABLE.length).toBe(30);
     let checked = 0;
     for (const [s, p, kind, awaiting] of TABLE) {
-      expect(dealChip(rowDeal(s, p, p === "none" ? "complimentary" : "online")), `${s}/${p}`).toEqual({ kind, awaitingPayment: awaiting, onHold: false });
+      expect(dealChip(rowDeal(s, p, p === "none" ? "complimentary" : "online")), `${s}/${p}`).toEqual({ kind, awaitingPayment: awaiting, onHold: false, endedDue: false });
       checked++;
     }
     expect(checked, "rows checked").toBe(30);
@@ -1057,7 +1171,7 @@ describe("dealChip (spec §5.2 chips, D2: Paid is derived)", () => {
     }
     expect(checked, "statuses checked").toBe(6);
     // Both flags at once: live, unpaid, parked.
-    expect(dealChip(deal({ deal_status: "live", payment_status: "pending", parked_at: T0 }))).toEqual({ kind: "live", awaitingPayment: true, onHold: true });
+    expect(dealChip(deal({ deal_status: "live", payment_status: "pending", parked_at: T0 }))).toEqual({ kind: "live", awaitingPayment: true, onHold: true, endedDue: false });
     // The negative's positive pair: the same live deal unparked is not on hold.
     expect(dealChip(deal({ deal_status: "live", payment_status: "paid" })).onHold).toBe(false);
   });

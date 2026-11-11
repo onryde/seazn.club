@@ -90,7 +90,14 @@ const DEAL: SponsorDeal = {
   approved_at: null, approved_by: null, live_at: null, ended_at: null, ended_reason: null, parked_at: null, disputed_at: null,
   dispute_id: null, has_payment_intent: false, invoice_number: null,
 };
-const deal = (over: Partial<SponsorDeal>): SponsorDeal => ({ ...DEAL, ...over });
+/** D11: an online or offline deal is numbered when it is made, a complimentary one never. A row offers Resend invoice only for a numbered
+ *  deal (T24 m5: an unnumbered one has no invoice page to link), so a fixture that stood in for a real deal without a number would
+ *  test the stg-only shape. */
+const deal = (over: Partial<SponsorDeal>): SponsorDeal => ({
+  ...DEAL,
+  invoice_number: (over.payment_method ?? DEAL.payment_method) === "complimentary" ? null : 1,
+  ...over,
+});
 
 const sponsor = (over: Partial<SponsorItem> & { id: string; name: string }): SponsorItem => ({
   competition_id: null, url: null, logo_path: null, poster_path: null, tier: "partner", display_order: 0, status: "active", click_count: 0,
@@ -1453,5 +1460,70 @@ describe("Add deal on a row opens the Add deal sheet for that sponsor; the sheet
       checked++;
     }
     expect(checked).toBe(2);
+  });
+});
+
+// --- an ended deal still due (T24 m8): the row says so and puts the money first ---------------------------------------------------------
+
+describe("an ended deal still due: 'Ended · unpaid', Mark as paid, and a new deal only once it is settled (T24 m8)", () => {
+  /** An OFFLINE deal that went live, then ended unpaid because its term ran out - the sponsor had the placement, so the money is owed. */
+  const due = (over: Partial<SponsorDeal> = {}, id = "u1", name = "Quay Chandlers") =>
+    sponsor({
+      id, name, status: "inactive",
+      deal: deal({
+        id: `d-${id}`, sponsor_id: id, deal_status: "ended", payment_status: "pending", payment_method: "offline", package_name: "Partner",
+        tier: "partner", amount_cents: 30_000, live_at: "2026-08-01T12:00:00.000Z", ended_at: "2026-08-31T12:00:00.000Z", ended_reason: "expired", ...over,
+      }),
+    });
+
+  it("the row's chip reads Ended · unpaid and its one action is Mark as paid (a button named for the sponsor); the sub-line still says when it ended", () => {
+    const row = rowOf(listHtml([due()]), "u1");
+    expect(textOfMarkup(findOne(row, "deal-chip").outer)).toBe("Ended · unpaid");
+    const actions = findAll(row, "sponsor-row-action");
+    expect(actions, "exactly one action").toHaveLength(1);
+    expect(attrOf(actions[0]!.open, "data-action")).toBe("mark_paid");
+    expect(textOfMarkup(actions[0]!.outer)).toBe("Mark as paid");
+    expect(attrOf(actions[0]!.open, "aria-label")).toBe("Mark as paid: Quay Chandlers");
+    expect(actions[0]!.open.startsWith("<button "), "a write, so a button").toBe(true);
+    expect(textOfMarkup(findOne(row, "sponsor-row-sub").outer)).toBe("Partner · £300 · Ended 31 Aug");
+    // The empty case's pair: no row of the list offers Add deal where the money is still owed.
+    expect(textOfMarkup(row)).not.toContain("Add deal");
+  });
+
+  it("every ended deal that is NOT due keeps plain 'Ended' and Add deal (the pair; 5 rows checked)", () => {
+    const NOT_DUE: [string, Partial<SponsorDeal>][] = [
+      ["paid", { payment_status: "paid" }],
+      ["the club ended it (End now)", { ended_reason: "ended_now" }],
+      ["it never went live", { live_at: null }],
+      ["an online deal", { payment_method: "online" }],
+      ["written off", { ended_reason: "written_off" }],
+    ];
+    let checked = 0;
+    for (const [label, over] of NOT_DUE) {
+      const row = rowOf(listHtml([due(over)]), "u1");
+      expect(textOfMarkup(findOne(row, "deal-chip").outer), label).toBe("Ended");
+      expect(attrOf(findOne(row, "sponsor-row-action").open, "data-action"), label).toBe("add_deal");
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+
+  it("a viewer sees the chip and no button", () => {
+    const row = rowOf(listHtml([due()], { canEdit: false }), "u1");
+    expect(textOfMarkup(findOne(row, "deal-chip").outer)).toBe("Ended · unpaid");
+    expect(findAll(row, "sponsor-row-action")).toHaveLength(0);
+  });
+
+  it("tapping Mark as paid asks in the ended deal's words (it stays ended, the invoice reads Paid), then POSTs that deal's mark-paid", async () => {
+    answer = (url, method) => (method === "GET" ? { status: 200, body: { data: [due()] } } : { status: 200, body: { data: {} } });
+    const m = mount([due()]);
+    m.click("Mark as paid: Quay Chandlers");
+    await flush();
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    const asked = confirmMock.mock.calls[0]![0] as { title: string; body: string };
+    expect(asked.title).toBe("Record £300 from Quay Chandlers as received?");
+    expect(asked.body, "the ended deal's body, not the go-live rule's").toBe(msg("sponsors.deal.markPaid.bodyEnded"));
+    expect(asked.body).not.toContain("go-live rule");
+    expect(POSTS()).toEqual([`/api/v1/orgs/${ORG}/sponsor-deals/d-u1/mark-paid`]);
   });
 });

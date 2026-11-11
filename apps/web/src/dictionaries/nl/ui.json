@@ -539,6 +539,7 @@
   "sponsors.deal.chip.none": "Geen deal",
   "sponsors.deal.chip.liveAwaitingPayment": "Live · wacht op betaling",
   "sponsors.deal.chip.liveOnHold": "Live · in de wacht",
+  "sponsors.deal.chip.endedUnpaid": "Beëindigd · onbetaald",
   "sponsors.deal.action.addDeal": "Deal toevoegen",
   "sponsors.deal.action.openDeal": "Deal openen",
   "sponsors.deal.action.resendInvoice": "Factuur opnieuw versturen",
