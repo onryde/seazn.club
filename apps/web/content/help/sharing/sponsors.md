@@ -28,6 +28,8 @@ A **package** is a price on your list: a name, a price, a tier, where it applies
 
 Each package shows how many sponsors hold a deal on it. **Retire** stops new deals using a package. Deals already on it carry on, and past deals keep its name and price.
 
+Under the price list, **What each tier gets** explains the four tiers in plain words: the Title sponsor is named under the competition name, Gold gets a large logo panel on the sponsor board and Silver a smaller one, and a Partner is listed by name in the Partners line. It also shows how many turns each tier takes in the stream rotation. It is there on every plan, and on a plan without tiers it says what to upgrade for.
+
 ## Deals: putting a sponsor on a package
 
 A **deal** is one sponsor on one package. Open a sponsor on the **Sponsors** tab and choose **Add deal**, then pick the package, how it is paid and when the sponsor goes live. A sponsor's tier and where it shows come only from its deals, never from the sponsor's own editor. A new sponsor with no deal shows as a Partner for the whole organisation (sponsors you added before keep the tier they hold), and one you want to show higher for free gets a **Complimentary** deal on the package you choose. While a deal is live it also sets the sponsor's On stream setting, so that is locked on the sponsor too.

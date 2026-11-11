@@ -8128,6 +8128,14 @@
   "sponsors.pkg.tiersHint": "Los niveles distintos de Partner y los paquetes de una sola competición requieren un plan de pago. Un Event Pass cubre solo su propia competición.",
   "sponsors.pkg.onlineNote": "Las facturas en línea se pagan a tu cuenta de Stripe, con la misma comisión de plataforma que las cuotas de inscripción.",
   "sponsors.pkg.onlineLocked": "Enviar facturas en línea requiere un plan de pago. Un Event Pass cubre solo su propia competición.",
+  "sponsors.pkg.legend.heading": "Qué incluye cada nivel",
+  "sponsors.pkg.legend.tier.title": "Aparece bajo el nombre de la competición en tus páginas públicas.",
+  "sponsors.pkg.legend.tier.gold": "Un recuadro grande con su logotipo en el panel de patrocinadores.",
+  "sponsors.pkg.legend.tier.silver": "Un recuadro más pequeño con su logotipo en el panel de patrocinadores.",
+  "sponsors.pkg.legend.tier.partner": "Aparece por su nombre en la línea de Socios.",
+  "sponsors.pkg.legend.turns.one": "{count} turno en la rotación de la emisión",
+  "sponsors.pkg.legend.turns.other": "{count} turnos en la rotación de la emisión",
+  "sponsors.pkg.legend.plan": "Los niveles superiores y cualquier paquete de una sola competición requieren un plan de pago o un Event Pass para esa competición. Todos los planes pueden vender {partner} para toda la organización.",
   "sponsors.showAgain": "Volver a mostrar en el sitio",
   "sponsors.showAgainLabel": "Volver a mostrar en el sitio: {name}"
 }

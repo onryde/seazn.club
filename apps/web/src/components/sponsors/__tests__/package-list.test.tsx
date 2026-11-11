@@ -21,6 +21,7 @@
 //   P4  retire    DELETE without asking                                                   -> "Retire asks first"
 //   P5  map       show the generic words for a package's 422                               -> "a package refusal reads its own words"
 //   P6  viewer    draw Create and Retire for a viewer                                      -> "a viewer"
+//   L7  placement draw the tier legend above the cards                                      -> "with packages: after the last card"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
@@ -141,6 +142,46 @@ const mount = (over: Partial<Parameters<typeof PackageList>[0]> = {}) => {
 async function flush() {
   for (let i = 0; i < 12; i++) await new Promise((resolve) => setTimeout(resolve, 0));
 }
+
+// --- the tier legend (owner, 2026-11-11: "some description or legend in package under the panel for explain the different tier usage") ---
+// Its own words and weights are tier-legend.test.tsx's; what the LIST owes is where it sits and on whom it shows.
+
+const at = (html: string, id: string) => html.indexOf(`data-testid="${id}"`);
+
+describe("the tier legend sits under the price list, on every plan, with or without packages", () => {
+  it("with packages: after the last card, before the online-invoices note (L7 placement)", () => {
+    const html = listHtml();
+    const lastCard = html.lastIndexOf('data-testid="package-card"');
+    expect(countOf(html, "package-card"), "premise: the five fixture cards are drawn").toBe(5);
+    expect(countOf(html, "tier-legend")).toBe(1);
+    expect(at(html, "tier-legend"), "after the cards").toBeGreaterThan(lastCard);
+    expect(at(html, "tier-legend"), "before the note").toBeLessThan(at(html, "package-online-note"));
+  });
+
+  it("with none: after the empty state, before the note - a club with no packages is told what a tier is when it needs it most", () => {
+    const html = listHtml({ initialPackages: [] });
+    expect(countOf(html, "package-empty")).toBe(1);
+    expect(countOf(html, "tier-legend")).toBe(1);
+    expect(at(html, "tier-legend")).toBeGreaterThan(at(html, "package-empty"));
+    expect(at(html, "tier-legend")).toBeLessThan(at(html, "package-online-note"));
+  });
+
+  it("on every plan and for a viewer: four rows each, and the plan line only where the plan has no organisation-wide tiers (8 checked)", () => {
+    let checked = 0;
+    for (const tiersOrgWide of [true, false]) {
+      for (const canEdit of [true, false]) {
+        for (const initialPackages of [FIVE, []]) {
+          const html = listHtml({ tiersOrgWide, canEdit, initialPackages });
+          const label = `tiers=${tiersOrgWide} edit=${canEdit} packages=${initialPackages.length}`;
+          expect(countOf(html, "tier-legend-row"), `${label}: four tiers`).toBe(4);
+          expect(countOf(html, "tier-legend-plan"), `${label}: the plan line`).toBe(tiersOrgWide ? 0 : 1);
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBe(8);
+  });
+});
 
 // --- the empty case first -----------------------------------------------------------------------------------------------------------
 

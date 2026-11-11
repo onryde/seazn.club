@@ -8128,6 +8128,14 @@
   "sponsors.pkg.tiersHint": "Tiers other than Partner, and packages for one competition, need a paid plan. An Event Pass covers only its own competition.",
   "sponsors.pkg.onlineNote": "Online invoices are paid to your Stripe account, with the same platform fee as entry fees.",
   "sponsors.pkg.onlineLocked": "Sending online invoices needs a paid plan. An Event Pass covers only its own competition.",
+  "sponsors.pkg.legend.heading": "What each tier gets",
+  "sponsors.pkg.legend.tier.title": "Named under the competition name on your public pages.",
+  "sponsors.pkg.legend.tier.gold": "A large logo panel on the sponsor board.",
+  "sponsors.pkg.legend.tier.silver": "A smaller logo panel on the sponsor board.",
+  "sponsors.pkg.legend.tier.partner": "Listed by name in the Partners line.",
+  "sponsors.pkg.legend.turns.one": "{count} turn in the stream rotation",
+  "sponsors.pkg.legend.turns.other": "{count} turns in the stream rotation",
+  "sponsors.pkg.legend.plan": "Higher tiers, and any package for one competition, need a paid plan or an Event Pass for that competition. Every plan can sell {partner} for the whole organisation.",
   "sponsors.showAgain": "Show on site again",
   "sponsors.showAgainLabel": "Show on site again: {name}"
 }

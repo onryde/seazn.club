@@ -18,3 +18,13 @@ export const TIER_BADGE: Record<SponsorTier, string> = {
   silver: "bg-slate-200 text-slate-600",
   partner: "bg-slate-100 text-slate-500",
 };
+
+// The Packages tab's "What each tier gets" legend (components/sponsors/tier-legend.tsx): one sentence per tier, the words for
+// what the public board really draws for it (the Title in the hero under the competition name, Gold and Silver as logo panels,
+// Partner as a name in the Partners line - components/public-site/sponsors-board.tsx).
+export const TIER_LEGEND_MSG: Record<SponsorTier, MessageKey> = {
+  title: "sponsors.pkg.legend.tier.title",
+  gold: "sponsors.pkg.legend.tier.gold",
+  silver: "sponsors.pkg.legend.tier.silver",
+  partner: "sponsors.pkg.legend.tier.partner",
+};

@@ -88,6 +88,20 @@ test("tabs: the hub opens on Overview and each tab opens its own panel, in the d
   await page.goto(sponsorsUrl(org.slug, "packages"));
   await expect(page.getByTestId("sponsor-package-list"), "Packages is the price list").toBeVisible();
   await expect(page.getByTestId("sponsors-tab-packages"), "headed with the tab's own name").toContainText(UI["sponsors.hub.tab.packages"] ?? "");
+  // The legend under the price list (owner, 2026-11-11): its heading, and the four tiers highest first, each with its own chip words.
+  const legend = page.getByTestId("tier-legend");
+  await expect(legend, "the tier legend is under the price list").toBeVisible();
+  await expect(legend, "headed 'What each tier gets'").toContainText(UI["sponsors.pkg.legend.heading"] ?? "");
+  const legendRows = page.getByTestId("tier-legend-row");
+  await expect(legendRows, "one row per tier").toHaveCount(4);
+  expect(await legendRows.evaluateAll((els) => els.map((el) => el.getAttribute("data-tier"))), "highest tier first").toEqual(["title", "gold", "silver", "partner"]);
+  await expect(page.getByTestId("tier-legend-chip"), "each row names its tier").toHaveText([
+    UI["sponsors.tier.titleTier"] ?? "",
+    UI["sponsors.tier.gold"] ?? "",
+    UI["sponsors.tier.silver"] ?? "",
+    UI["sponsors.tier.partner"] ?? "",
+  ]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), "the legend adds no sideways scroll").toBe(true);
   await page.goto(sponsorsUrl(org.slug, "sponsors"));
   await expect(page.getByTestId("sponsor-package-list"), "Sponsors does not carry the price list").toHaveCount(0);
   await expect(page.getByRole("button", { name: UI["settings.org.sponsors.add"] ?? "", exact: true }), "the add form moved to the Sponsors tab").toBeVisible();

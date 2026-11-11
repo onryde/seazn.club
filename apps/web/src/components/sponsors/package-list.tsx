@@ -20,6 +20,7 @@ import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { priceLabel } from "@/components/sponsors/deal-copy";
 import { sponsorSaveErrorKey } from "@/components/sponsors/save-error";
+import { TierLegend } from "@/components/sponsors/tier-legend";
 import { TIER_BADGE, TIER_MSG } from "@/components/sponsors/tier-labels";
 import { apiV1 } from "@/lib/client-v1";
 import { placementNeedsTiers } from "@/lib/sponsor-deal-policy";
@@ -441,6 +442,8 @@ export function PackageList({ orgId, initialPackages, competitions, tiersOrgWide
           ))}
         </div>
       )}
+      {/* What a tier is, under the price list: it explains the cards above, and an empty list needs it most (owner, 2026-11-11). */}
+      <TierLegend tiersOrgWide={tiersOrgWide} />
       <p data-testid="package-online-note" className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs text-slate-500">
         {hasMonetize ? (
           <span>{msg("sponsors.pkg.onlineNote")}</span>

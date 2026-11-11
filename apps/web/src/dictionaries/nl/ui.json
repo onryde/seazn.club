@@ -8128,6 +8128,14 @@
   "sponsors.pkg.tiersHint": "Andere niveaus dan Partner en pakketten voor één competitie vereisen een betaald abonnement. Een Event Pass geldt alleen voor de eigen competitie.",
   "sponsors.pkg.onlineNote": "Online facturen worden betaald op je Stripe-account, met dezelfde platformkosten als inschrijfgelden.",
   "sponsors.pkg.onlineLocked": "Online facturen versturen vereist een betaald abonnement. Een Event Pass geldt alleen voor de eigen competitie.",
+  "sponsors.pkg.legend.heading": "Wat elk niveau oplevert",
+  "sponsors.pkg.legend.tier.title": "Genoemd onder de naam van de competitie op je openbare pagina's.",
+  "sponsors.pkg.legend.tier.gold": "Een groot logopaneel op het sponsorbord.",
+  "sponsors.pkg.legend.tier.silver": "Een kleiner logopaneel op het sponsorbord.",
+  "sponsors.pkg.legend.tier.partner": "Bij naam genoemd in de regel Partners.",
+  "sponsors.pkg.legend.turns.one": "{count} beurt in de stream-rotatie",
+  "sponsors.pkg.legend.turns.other": "{count} beurten in de stream-rotatie",
+  "sponsors.pkg.legend.plan": "Hogere niveaus en elk pakket voor één competitie vereisen een betaald abonnement of een Event Pass voor die competitie. Elk abonnement kan {partner} verkopen voor de hele organisatie.",
   "sponsors.showAgain": "Weer tonen op de site",
   "sponsors.showAgainLabel": "Weer tonen op de site: {name}"
 }
