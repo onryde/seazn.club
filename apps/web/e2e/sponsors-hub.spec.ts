@@ -219,6 +219,18 @@ test("on stream: the first tick turns the rotation on at Normal, the dial and a 
       el.scrollIntoView({ block: "center", inline: "nearest" });
       const r = el.getBoundingClientRect();
       const track = el.querySelector('[data-testid="on-stream-switch-track"]')?.getBoundingClientRect() ?? null;
+      // The visible track against the button's own rect: a track that overhangs its 44px target would paint a hit the button never takes.
+      const inside =
+        track === null
+          ? null
+          : {
+              left: track.left - r.left,
+              right: r.right - track.right,
+              top: track.top - r.top,
+              bottom: r.bottom - track.bottom,
+              dx: Math.abs(track.left + track.width / 2 - (r.left + r.width / 2)),
+              dy: Math.abs(track.top + track.height / 2 - (r.top + r.height / 2)),
+            };
       const hits = (x: number, y: number): boolean => {
         const at = document.elementFromPoint(x, y);
         return at !== null && (at === el || el.contains(at));
@@ -227,6 +239,7 @@ test("on stream: the first tick turns the rotation on at Normal, the dial and a 
         width: r.width,
         height: r.height,
         trackHeight: track?.height ?? null,
+        inside,
         corners: [hits(r.left + 3, r.top + 3), hits(r.right - 3, r.top + 3), hits(r.left + 3, r.bottom - 3), hits(r.right - 3, r.bottom - 3), hits(r.left + r.width / 2, r.top + r.height / 2)],
       };
     });
@@ -235,6 +248,14 @@ test("on stream: the first tick turns the rotation on at Normal, the dial and a 
     expect(probe.corners, "a tap at each corner and the centre of the target lands on the switch").toEqual([true, true, true, true, true]);
     expect(probe.trackHeight, "the track is drawn (a slim one inside the target)").not.toBeNull();
     expect(probe.trackHeight!, "the drawn track is slim, not a 44px pill").toBeLessThanOrEqual(32);
+    expect(probe.inside, "the track's rect was measured").not.toBeNull();
+    const { left, right, top, bottom, dx, dy } = probe.inside!;
+    expect(left, "the track starts inside the button (its left edge is not left of the button's)").toBeGreaterThanOrEqual(0);
+    expect(right, "the track ends inside the button (its right edge is not right of the button's)").toBeGreaterThanOrEqual(0);
+    expect(top, "the track's top is inside the button").toBeGreaterThanOrEqual(0);
+    expect(bottom, "the track's bottom is inside the button").toBeGreaterThanOrEqual(0);
+    expect(dx, "the track is centred across the button, to the pixel").toBeLessThanOrEqual(1);
+    expect(dy, "the track is centred down the button, to the pixel").toBeLessThanOrEqual(1);
     await expect(page.getByTestId("on-stream-dial-normal"), "no row: the dial opens at Normal").toHaveAttribute("aria-checked", "true");
     await expect(page.getByTestId(`on-stream-tick-${harbour}`)).not.toBeChecked();
     await expect(page.getByTestId(`on-stream-tick-${ridge}`)).not.toBeChecked();
