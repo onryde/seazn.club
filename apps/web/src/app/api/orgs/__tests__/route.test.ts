@@ -5,7 +5,7 @@ const createOrgForUser = vi.fn<
 >(async (_u, name) => ({ id: "org-9", name, slug: "s" }));
 vi.mock("@/lib/auth", () => ({
   requireUser: vi.fn(async () => ({ id: "user-1" })),
-  createOrgForUser: (...a: [string, string, unknown?]) => createOrgForUser(...a),
+  createOrgForUser: (...a: [string, string]) => createOrgForUser(...a),
   setActiveOrgId: vi.fn(async () => {}),
   getUserOrgs: vi.fn(async () => []),
 }));

@@ -128,6 +128,14 @@ describe("shouldAlertOnEarnGrantVolume (pure, v17 gap #296)", () => {
   });
 });
 
+describe("earnGrantVolumeAlertEmail body (pure)", () => {
+  it("joins its sentences with a space — no 'gated on apublished' after the referral rewrite", () => {
+    const { text } = earnGrantVolumeAlertEmail({ count: 12, threshold: 10 } as Parameters<typeof earnGrantVolumeAlertEmail>[0]);
+    expect(text).toContain("gated on a published competition");
+    expect(text).not.toMatch(/[a-z]published/);
+  });
+});
+
 describe("utcDayStart (pure, #292 discipline)", () => {
   // The SQL comparison itself (timestamptz column vs timestamptz PARAMETER)
   // is TZ-immune by construction — see utcMonthStart's docstring for the

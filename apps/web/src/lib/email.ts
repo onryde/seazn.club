@@ -1270,7 +1270,7 @@ export function earnGrantVolumeAlertEmail(opts: EarnGrantVolumeAlertEmail): Emai
   const subject = `Earn-grant volume alert: ${opts.count} today (threshold ${opts.threshold})`;
   const bodyText =
     `${opts.count} earn_grant credit rows have landed today, at or above the alert threshold of ` +
-    `${opts.threshold} (v17 gap #296 farm-watch — onboarding earn grants gated on a` +
+    `${opts.threshold} (v17 gap #296 farm-watch — onboarding earn grants gated on a ` +
     `published competition with a division). Check /admin/revenue for the AI credit margin panel and ` +
     `recent signups sharing an IP or email domain pattern; farmed accounts spend differently from real ` +
     `ones (immediately, on large runs, then never again).`;
