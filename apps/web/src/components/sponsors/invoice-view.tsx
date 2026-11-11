@@ -27,8 +27,7 @@
 import type { CSSProperties } from "react";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
-import { INVOICE_STATE_KEY, invoiceMoney, invoiceNoteKey, type InvoiceState } from "@/lib/sponsor-invoice";
-import { fmtIsoDay } from "@/lib/sponsor-report";
+import { INVOICE_STATE_KEY, invoiceDay, invoiceMoney, invoiceNoteKey, type InvoiceState } from "@/lib/sponsor-invoice";
 import { PrintButton } from "@/components/print-button";
 import { InvoicePayForm } from "@/components/sponsors/invoice-pay-form";
 import { TIER_MSG } from "@/components/sponsors/tier-labels";
@@ -105,7 +104,7 @@ export function SponsorInvoiceView({
               <dt className="text-ink-muted">{t(ui, "sponsors.invoice.number")}</dt>
               <dd data-testid="invoice-number" className="font-display text-lg leading-tight font-semibold tabular-nums text-ink">{doc.number}</dd>
               <dt className="text-ink-muted">{t(ui, "sponsors.invoice.date")}</dt>
-              <dd className="text-ink">{fmtIsoDay(doc.locale, doc.issuedOn)}</dd>
+              <dd data-testid="invoice-date" className="text-ink">{invoiceDay(doc.locale, doc.issuedOn)}</dd>
             </dl>
           </div>
         </header>

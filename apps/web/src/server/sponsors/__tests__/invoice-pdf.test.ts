@@ -69,7 +69,8 @@ describe("invoicePdf", () => {
       t(en, "sponsors.invoice.title"),
       t(en, "sponsors.invoice.billedTo"),
       t(en, "sponsors.invoice.total"),
-      "Nov 9, 2026",
+      // English prints day-month-year (the PR 3 fix round): this line read the US "Nov 9, 2026" until then.
+      "9 Nov 2026",
     ]) {
       expect(all, s).toContain(s);
     }
@@ -164,6 +165,19 @@ describe("invoicePdf", () => {
     expect(bare.runs.filter((r) => r.text === "£250.00")).toHaveLength(2);
     expect(pdfImages(bare.pdf)).toHaveLength(0);
   });
+
+  it("prints the date day-month-year in every language: en '11 Nov 2026' (never the US 'Nov 11, 2026'), es, fr and nl as before (4 counted)", async () => {
+    // Typed from each language's own way of writing a date, never from the renderer.
+    const WANT: Record<string, string> = { en: "11 Nov 2026", es: "11 nov 2026", fr: "11 nov. 2026", nl: "11 nov 2026" };
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const { all } = await textOf(invoice({ locale, issuedOn: "2026-11-11" }));
+      expect(all, locale).toContain(WANT[locale]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect((await textOf(invoice({ issuedOn: "2026-11-11" }))).all, "never the US order").not.toContain("Nov 11, 2026");
+  }, 5 * RENDER_BUDGET_MS);
 
   it("draws in the document's own language: French labels, a French date and a euro amount", async () => {
     const { all, runs } = await textOf(invoice({ locale: "fr", line: { description: "Panneau or — Toutes", amountCents: 123_456, currency: "eur" } }));

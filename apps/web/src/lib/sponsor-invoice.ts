@@ -4,6 +4,8 @@
 //
 // No I/O, no server import: Task 23's email builds the same link from here.
 import type { MessageKey } from "@/lib/messages";
+import { intlLocaleFor } from "@/lib/public-date-locale";
+import { fmtIsoDay } from "@/lib/sponsor-report";
 
 /** What an invoice says about its money (review I3: every way a deal ends unpaid, said truthfully):
  *  - `paid`, `refunded`: by the money;
@@ -44,6 +46,14 @@ export function invoiceNoteKey(state: InvoiceState, dealEnded: boolean): Message
  *  the scrubbers drop it (`/r/sponsor/invoice/` in lib/scrub-score-url.ts, matched BEFORE `/r/sponsor/`). */
 export function invoicePath(token: string): string {
   return `/r/sponsor/invoice/${token}`;
+}
+
+/** The invoice's date (`issuedOn`, a `YYYY-MM-DD` day) as the page and the PDF print it, in the document's language. English is
+ *  day-month-year, "11 Nov 2026" - never bare `en`'s US "Nov 11, 2026" (the house rule for public dates, `intlLocaleFor`; owner
+ *  ruling 2026-09-16, applied to invoices by the PR 3 fix round). Every other locale is Intl's own medium date. The ONE format both
+ *  renderers read. */
+export function invoiceDay(locale: string, day: string): string {
+  return fmtIsoDay(intlLocaleFor(locale), day);
 }
 
 /** The club's own copy of a deal's invoice, as the PDF its sponsor gets: the console route

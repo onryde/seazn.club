@@ -138,6 +138,18 @@ const renderView = (doc: SponsorInvoiceDoc, ui = es, paymentRecording = false) =
 const classTokens = (cls: string) => new Set(cls.split(/\s+/).filter(Boolean));
 
 describe("the view: layout, ink and what it says (no database)", () => {
+  it("the date reads day-month-year in every language: en '11 Nov 2026' (never the US 'Nov 11, 2026'), es, fr and nl as before (4 counted)", async () => {
+    // Typed from each language's own way of writing a date, never from the view.
+    const WANT: [string, string][] = [["en", "11 Nov 2026"], ["es", "11 nov 2026"], ["fr", "11 nov. 2026"], ["nl", "11 nov 2026"]];
+    let checked = 0;
+    for (const [locale, want] of WANT) {
+      const html = renderView(viewDoc({ locale: locale as SponsorInvoiceDoc["locale"], issuedOn: "2026-11-11" }), await getDictionary(locale as "en", "ui"));
+      expect(html.match(/data-testid="invoice-date"[^>]*>([^<]*)</)?.[1], locale).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
   it("320px: the bill-to block and its stamp STACK below sm and sit side by side from sm - es 'Pendiente de pago' never squeezes the sponsor's name (review I5)", () => {
     const row = classTokens(BILLED_ROW_CLASS);
     for (const want of ["flex", "flex-col", "min-w-0", "sm:flex-row", "sm:justify-between"]) expect(row.has(want), want).toBe(true);

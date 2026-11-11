@@ -13,8 +13,7 @@ import "server-only";
 // who wants to pay by card opens the link the club sent.
 import PDFDocument from "pdfkit";
 import { getDictionary, t } from "@/lib/i18n";
-import { INVOICE_STATE_KEY, invoiceMoney, invoiceNoteKey, type InvoiceState } from "@/lib/sponsor-invoice";
-import { fmtIsoDay } from "@/lib/sponsor-report";
+import { INVOICE_STATE_KEY, invoiceDay, invoiceMoney, invoiceNoteKey, type InvoiceState } from "@/lib/sponsor-invoice";
 import { TIER_MSG } from "@/components/sponsors/tier-labels";
 import { MARGIN, resolveLogo } from "@/server/doc-render";
 import { FONT, PALETTE, registerFonts } from "@/server/doc-theme";
@@ -84,7 +83,7 @@ export async function invoicePdf(doc: SponsorInvoiceDoc): Promise<Buffer> {
   pdf.font(FONT.body).fontSize(8).fillColor(PALETTE.mute)
     .text(t(ui, "sponsors.invoice.date"), rightX, pdf.y + 6, { width: rightW, align: "right" });
   pdf.font(FONT.bodyMed).fontSize(10).fillColor(PALETTE.ink)
-    .text(fmtIsoDay(doc.locale, doc.issuedOn), rightX, pdf.y + 1, { width: rightW, align: "right" });
+    .text(invoiceDay(doc.locale, doc.issuedOn), rightX, pdf.y + 1, { width: rightW, align: "right" });
   const rightY = pdf.y;
 
   // The brand rule: lime, with the red ball resting on its right end (doc-render's masthead mark).
