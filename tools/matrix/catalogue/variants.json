@@ -5,9 +5,9 @@
     {
       "sport": "football",
       "defaultPreset": "11-a-side",
-      "factors": 13,
-      "pairs": 1810,
-      "covered": 1810,
+      "factors": 15,
+      "pairs": 2346,
+      "covered": 2340,
       "cases": [
         {
           "id": "football#001",
@@ -23,6 +23,8 @@
             "maxSubs": "min",
             "rollingSubs": "on",
             "subWindows": "min",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "min",
             "concussionSubs": "min",
             "sinBinMinutes": "min",
             "abandon": "option:replay"
@@ -36,6 +38,8 @@
             "maxSubs": "0",
             "rollingSubs": "on",
             "subWindows": "0",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "0",
             "concussionSubs": "0",
             "sinBinMinutes": "1",
             "abandon": "replay"
@@ -52,6 +56,10 @@
             "maxSubs": 0,
             "rollingSubs": true,
             "subWindows": 0,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 0
+            },
             "concussionSubs": 0,
             "sinBinMinutes": 1,
             "abandonPolicy": "replay"
@@ -72,6 +80,8 @@
             "maxSubs": "max",
             "rollingSubs": "off",
             "subWindows": "max",
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "max",
             "concussionSubs": "max",
             "sinBinMinutes": "max",
             "abandon": "option:award"
@@ -85,6 +95,8 @@
             "maxSubs": "10",
             "rollingSubs": "off",
             "subWindows": "10",
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "3",
             "concussionSubs": "5",
             "sinBinMinutes": "15",
             "abandon": "award"
@@ -101,6 +113,10 @@
             "maxSubs": 10,
             "rollingSubs": false,
             "subWindows": 10,
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 3
+            },
             "concussionSubs": 5,
             "sinBinMinutes": 15,
             "abandonPolicy": "award"
@@ -121,6 +137,8 @@
             "maxSubs": "interior",
             "rollingSubs": "blank",
             "subWindows": "interior",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "interior",
             "concussionSubs": "interior",
             "sinBinMinutes": "interior",
             "abandon": "blank"
@@ -131,6 +149,8 @@
             "teamSize": "8",
             "maxSubs": "5",
             "subWindows": "5",
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "2",
             "concussionSubs": "3",
             "sinBinMinutes": "8"
           },
@@ -140,6 +160,10 @@
             "teamSize": 8,
             "maxSubs": 5,
             "subWindows": 5,
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 2
+            },
             "concussionSubs": 3,
             "sinBinMinutes": 8
           },
@@ -159,6 +183,8 @@
             "maxSubs": "blank",
             "rollingSubs": "blank",
             "subWindows": "blank",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
             "concussionSubs": "blank",
             "sinBinMinutes": "blank",
             "abandon": "option:replay"
@@ -192,8 +218,10 @@
             "maxSubs": "interior",
             "rollingSubs": "on",
             "subWindows": "blank",
-            "concussionSubs": "max",
-            "sinBinMinutes": "interior",
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "interior",
+            "concussionSubs": "blank",
+            "sinBinMinutes": "min",
             "abandon": "option:award"
           },
           "values": {
@@ -202,8 +230,9 @@
             "teamSize": "11",
             "maxSubs": "5",
             "rollingSubs": "on",
-            "concussionSubs": "5",
-            "sinBinMinutes": "8",
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "2",
+            "sinBinMinutes": "1",
             "abandon": "award"
           },
           "overrides": {
@@ -212,8 +241,11 @@
             "teamSize": 11,
             "maxSubs": 5,
             "rollingSubs": true,
-            "concussionSubs": 5,
-            "sinBinMinutes": 8,
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 2
+            },
+            "sinBinMinutes": 1,
             "abandonPolicy": "award"
           },
           "scorable": null
@@ -232,7 +264,9 @@
             "maxSubs": "blank",
             "rollingSubs": "off",
             "subWindows": "min",
-            "concussionSubs": "interior",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "min",
+            "concussionSubs": "max",
             "sinBinMinutes": "blank",
             "abandon": "blank"
           },
@@ -243,7 +277,9 @@
             "teamSize": "8",
             "rollingSubs": "off",
             "subWindows": "0",
-            "concussionSubs": "3"
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "0",
+            "concussionSubs": "5"
           },
           "overrides": {
             "halfMinutes": 5,
@@ -255,7 +291,11 @@
             "teamSize": 8,
             "rollingSubs": false,
             "subWindows": 0,
-            "concussionSubs": 3
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 0
+            },
+            "concussionSubs": 5
           },
           "scorable": null
         },
@@ -273,7 +313,9 @@
             "maxSubs": "max",
             "rollingSubs": "on",
             "subWindows": "interior",
-            "concussionSubs": "blank",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "max",
+            "concussionSubs": "interior",
             "sinBinMinutes": "max",
             "abandon": "blank"
           },
@@ -284,6 +326,9 @@
             "maxSubs": "10",
             "rollingSubs": "on",
             "subWindows": "5",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "3",
+            "concussionSubs": "3",
             "sinBinMinutes": "15"
           },
           "overrides": {
@@ -296,6 +341,11 @@
             "maxSubs": 10,
             "rollingSubs": true,
             "subWindows": 5,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 3
+            },
+            "concussionSubs": 3,
             "sinBinMinutes": 15
           },
           "scorable": null
@@ -314,8 +364,10 @@
             "maxSubs": "min",
             "rollingSubs": "off",
             "subWindows": "max",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
             "concussionSubs": "min",
-            "sinBinMinutes": "blank",
+            "sinBinMinutes": "interior",
             "abandon": "option:award"
           },
           "values": {
@@ -328,6 +380,7 @@
             "rollingSubs": "off",
             "subWindows": "10",
             "concussionSubs": "0",
+            "sinBinMinutes": "8",
             "abandon": "award"
           },
           "overrides": {
@@ -343,6 +396,7 @@
             "rollingSubs": false,
             "subWindows": 10,
             "concussionSubs": 0,
+            "sinBinMinutes": 8,
             "abandonPolicy": "award"
           },
           "scorable": null
@@ -361,8 +415,10 @@
             "maxSubs": "max",
             "rollingSubs": "on",
             "subWindows": "min",
-            "concussionSubs": "interior",
-            "sinBinMinutes": "min",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "max",
+            "concussionSubs": "blank",
+            "sinBinMinutes": "interior",
             "abandon": "option:replay"
           },
           "values": {
@@ -374,8 +430,9 @@
             "maxSubs": "10",
             "rollingSubs": "on",
             "subWindows": "0",
-            "concussionSubs": "3",
-            "sinBinMinutes": "1",
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "3",
+            "sinBinMinutes": "8",
             "abandon": "replay"
           },
           "overrides": {
@@ -390,8 +447,11 @@
             "maxSubs": 10,
             "rollingSubs": true,
             "subWindows": 0,
-            "concussionSubs": 3,
-            "sinBinMinutes": 1,
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 3
+            },
+            "sinBinMinutes": 8,
             "abandonPolicy": "replay"
           },
           "scorable": null
@@ -410,8 +470,10 @@
             "maxSubs": "min",
             "rollingSubs": "blank",
             "subWindows": "interior",
-            "concussionSubs": "min",
-            "sinBinMinutes": "interior",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "interior",
+            "concussionSubs": "max",
+            "sinBinMinutes": "blank",
             "abandon": "option:replay"
           },
           "values": {
@@ -420,8 +482,9 @@
             "teamSize": "5",
             "maxSubs": "0",
             "subWindows": "5",
-            "concussionSubs": "0",
-            "sinBinMinutes": "8",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "2",
+            "concussionSubs": "5",
             "abandon": "replay"
           },
           "overrides": {
@@ -430,8 +493,11 @@
             "teamSize": 5,
             "maxSubs": 0,
             "subWindows": 5,
-            "concussionSubs": 0,
-            "sinBinMinutes": 8,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 2
+            },
+            "concussionSubs": 5,
             "abandonPolicy": "replay"
           },
           "scorable": null
@@ -450,8 +516,10 @@
             "maxSubs": "min",
             "rollingSubs": "off",
             "subWindows": "blank",
-            "concussionSubs": "min",
-            "sinBinMinutes": "max",
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "min",
+            "concussionSubs": "interior",
+            "sinBinMinutes": "min",
             "abandon": "blank"
           },
           "values": {
@@ -461,8 +529,10 @@
             "teamSize": "8",
             "maxSubs": "0",
             "rollingSubs": "off",
-            "concussionSubs": "0",
-            "sinBinMinutes": "15"
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "0",
+            "concussionSubs": "3",
+            "sinBinMinutes": "1"
           },
           "overrides": {
             "halfMinutes": 5,
@@ -474,8 +544,12 @@
             "teamSize": 8,
             "maxSubs": 0,
             "rollingSubs": false,
-            "concussionSubs": 0,
-            "sinBinMinutes": 15
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 0
+            },
+            "concussionSubs": 3,
+            "sinBinMinutes": 1
           },
           "scorable": null
         },
@@ -493,8 +567,10 @@
             "maxSubs": "interior",
             "rollingSubs": "blank",
             "subWindows": "max",
-            "concussionSubs": "max",
-            "sinBinMinutes": "min",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "min",
+            "concussionSubs": "min",
+            "sinBinMinutes": "max",
             "abandon": "option:award"
           },
           "values": {
@@ -504,8 +580,10 @@
             "teamSize": "11",
             "maxSubs": "5",
             "subWindows": "10",
-            "concussionSubs": "5",
-            "sinBinMinutes": "1",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "0",
+            "concussionSubs": "0",
+            "sinBinMinutes": "15",
             "abandon": "award"
           },
           "overrides": {
@@ -518,8 +596,12 @@
             "teamSize": 11,
             "maxSubs": 5,
             "subWindows": 10,
-            "concussionSubs": 5,
-            "sinBinMinutes": 1,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 0
+            },
+            "concussionSubs": 0,
+            "sinBinMinutes": 15,
             "abandonPolicy": "award"
           },
           "scorable": null
@@ -538,7 +620,9 @@
             "maxSubs": "interior",
             "rollingSubs": "off",
             "subWindows": "min",
-            "concussionSubs": "blank",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
+            "concussionSubs": "max",
             "sinBinMinutes": "min",
             "abandon": "option:replay"
           },
@@ -548,6 +632,7 @@
             "maxSubs": "5",
             "rollingSubs": "off",
             "subWindows": "0",
+            "concussionSubs": "5",
             "sinBinMinutes": "1",
             "abandon": "replay"
           },
@@ -560,6 +645,7 @@
             "maxSubs": 5,
             "rollingSubs": false,
             "subWindows": 0,
+            "concussionSubs": 5,
             "sinBinMinutes": 1,
             "abandonPolicy": "replay"
           },
@@ -579,9 +665,11 @@
             "maxSubs": "blank",
             "rollingSubs": "on",
             "subWindows": "max",
-            "concussionSubs": "max",
-            "sinBinMinutes": "interior",
-            "abandon": "option:replay"
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "interior",
+            "concussionSubs": "min",
+            "sinBinMinutes": "blank",
+            "abandon": "option:award"
           },
           "values": {
             "halfMinutes": "33",
@@ -591,9 +679,10 @@
             "teamSize": "8",
             "rollingSubs": "on",
             "subWindows": "10",
-            "concussionSubs": "5",
-            "sinBinMinutes": "8",
-            "abandon": "replay"
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "2",
+            "concussionSubs": "0",
+            "abandon": "award"
           },
           "overrides": {
             "halfMinutes": 33,
@@ -606,9 +695,12 @@
             "teamSize": 8,
             "rollingSubs": true,
             "subWindows": 10,
-            "concussionSubs": 5,
-            "sinBinMinutes": 8,
-            "abandonPolicy": "replay"
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 2
+            },
+            "concussionSubs": 0,
+            "abandonPolicy": "award"
           },
           "scorable": null
         },
@@ -626,9 +718,11 @@
             "maxSubs": "blank",
             "rollingSubs": "blank",
             "subWindows": "interior",
-            "concussionSubs": "max",
-            "sinBinMinutes": "max",
-            "abandon": "option:award"
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "max",
+            "concussionSubs": "interior",
+            "sinBinMinutes": "min",
+            "abandon": "option:replay"
           },
           "values": {
             "halfMinutes": "60",
@@ -637,9 +731,11 @@
             "shootoutAttempts": "6",
             "teamSize": "5",
             "subWindows": "5",
-            "concussionSubs": "5",
-            "sinBinMinutes": "15",
-            "abandon": "award"
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "3",
+            "concussionSubs": "3",
+            "sinBinMinutes": "1",
+            "abandon": "replay"
           },
           "overrides": {
             "halfMinutes": 60,
@@ -651,9 +747,13 @@
             "shootoutAttempts": 6,
             "teamSize": 5,
             "subWindows": 5,
-            "concussionSubs": 5,
-            "sinBinMinutes": 15,
-            "abandonPolicy": "award"
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 3
+            },
+            "concussionSubs": 3,
+            "sinBinMinutes": 1,
+            "abandonPolicy": "replay"
           },
           "scorable": null
         },
@@ -671,8 +771,10 @@
             "maxSubs": "max",
             "rollingSubs": "off",
             "subWindows": "interior",
-            "concussionSubs": "min",
-            "sinBinMinutes": "blank",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
+            "concussionSubs": "blank",
+            "sinBinMinutes": "max",
             "abandon": "blank"
           },
           "values": {
@@ -683,7 +785,7 @@
             "maxSubs": "10",
             "rollingSubs": "off",
             "subWindows": "5",
-            "concussionSubs": "0"
+            "sinBinMinutes": "15"
           },
           "overrides": {
             "halfMinutes": 5,
@@ -693,7 +795,7 @@
             "maxSubs": 10,
             "rollingSubs": false,
             "subWindows": 5,
-            "concussionSubs": 0
+            "sinBinMinutes": 15
           },
           "scorable": null
         },
@@ -711,7 +813,9 @@
             "maxSubs": "min",
             "rollingSubs": "blank",
             "subWindows": "max",
-            "concussionSubs": "interior",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "min",
+            "concussionSubs": "blank",
             "sinBinMinutes": "max",
             "abandon": "option:award"
           },
@@ -722,7 +826,8 @@
             "shootoutAttempts": "6",
             "maxSubs": "0",
             "subWindows": "10",
-            "concussionSubs": "3",
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "0",
             "sinBinMinutes": "15",
             "abandon": "award"
           },
@@ -736,7 +841,10 @@
             "shootoutAttempts": 6,
             "maxSubs": 0,
             "subWindows": 10,
-            "concussionSubs": 3,
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 0
+            },
             "sinBinMinutes": 15,
             "abandonPolicy": "award"
           },
@@ -756,8 +864,10 @@
             "maxSubs": "interior",
             "rollingSubs": "on",
             "subWindows": "min",
-            "concussionSubs": "interior",
-            "sinBinMinutes": "interior",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "interior",
+            "concussionSubs": "min",
+            "sinBinMinutes": "max",
             "abandon": "blank"
           },
           "values": {
@@ -768,8 +878,10 @@
             "maxSubs": "5",
             "rollingSubs": "on",
             "subWindows": "0",
-            "concussionSubs": "3",
-            "sinBinMinutes": "8"
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "2",
+            "concussionSubs": "0",
+            "sinBinMinutes": "15"
           },
           "overrides": {
             "halfMinutes": 60,
@@ -782,8 +894,12 @@
             "maxSubs": 5,
             "rollingSubs": true,
             "subWindows": 0,
-            "concussionSubs": 3,
-            "sinBinMinutes": 8
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 2
+            },
+            "concussionSubs": 0,
+            "sinBinMinutes": 15
           },
           "scorable": null
         },
@@ -801,8 +917,10 @@
             "maxSubs": "blank",
             "rollingSubs": "on",
             "subWindows": "blank",
-            "concussionSubs": "blank",
-            "sinBinMinutes": "min",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "max",
+            "concussionSubs": "min",
+            "sinBinMinutes": "interior",
             "abandon": "option:replay"
           },
           "values": {
@@ -810,7 +928,10 @@
             "shootoutAttempts": "10",
             "teamSize": "11",
             "rollingSubs": "on",
-            "sinBinMinutes": "1",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "3",
+            "concussionSubs": "0",
+            "sinBinMinutes": "8",
             "abandon": "replay"
           },
           "overrides": {
@@ -818,7 +939,12 @@
             "shootoutAttempts": 10,
             "teamSize": 11,
             "rollingSubs": true,
-            "sinBinMinutes": 1,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 3
+            },
+            "concussionSubs": 0,
+            "sinBinMinutes": 8,
             "abandonPolicy": "replay"
           },
           "scorable": null
@@ -837,9 +963,11 @@
             "maxSubs": "max",
             "rollingSubs": "on",
             "subWindows": "blank",
-            "concussionSubs": "interior",
-            "sinBinMinutes": "interior",
-            "abandon": "option:award"
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "min",
+            "concussionSubs": "max",
+            "sinBinMinutes": "min",
+            "abandon": "option:replay"
           },
           "values": {
             "extraTime": "on",
@@ -848,9 +976,11 @@
             "teamSize": "8",
             "maxSubs": "10",
             "rollingSubs": "on",
-            "concussionSubs": "3",
-            "sinBinMinutes": "8",
-            "abandon": "award"
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "0",
+            "concussionSubs": "5",
+            "sinBinMinutes": "1",
+            "abandon": "replay"
           },
           "overrides": {
             "extraTime": {
@@ -862,9 +992,13 @@
             "teamSize": 8,
             "maxSubs": 10,
             "rollingSubs": true,
-            "concussionSubs": 3,
-            "sinBinMinutes": 8,
-            "abandonPolicy": "award"
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 0
+            },
+            "concussionSubs": 5,
+            "sinBinMinutes": 1,
+            "abandonPolicy": "replay"
           },
           "scorable": null
         },
@@ -882,6 +1016,8 @@
             "maxSubs": "interior",
             "rollingSubs": "on",
             "subWindows": "interior",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "max",
             "concussionSubs": "blank",
             "sinBinMinutes": "blank",
             "abandon": "option:award"
@@ -895,6 +1031,8 @@
             "maxSubs": "5",
             "rollingSubs": "on",
             "subWindows": "5",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "3",
             "abandon": "award"
           },
           "overrides": {
@@ -909,6 +1047,10 @@
             "maxSubs": 5,
             "rollingSubs": true,
             "subWindows": 5,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 3
+            },
             "abandonPolicy": "award"
           },
           "scorable": null
@@ -927,7 +1069,9 @@
             "maxSubs": "min",
             "rollingSubs": "blank",
             "subWindows": "blank",
-            "concussionSubs": "blank",
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "interior",
+            "concussionSubs": "min",
             "sinBinMinutes": "interior",
             "abandon": "option:replay"
           },
@@ -937,6 +1081,9 @@
             "shootout": "off",
             "shootoutAttempts": "6",
             "maxSubs": "0",
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "2",
+            "concussionSubs": "0",
             "sinBinMinutes": "8",
             "abandon": "replay"
           },
@@ -949,6 +1096,11 @@
             "shootout": false,
             "shootoutAttempts": 6,
             "maxSubs": 0,
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 2
+            },
+            "concussionSubs": 0,
             "sinBinMinutes": 8,
             "abandonPolicy": "replay"
           },
@@ -968,8 +1120,10 @@
             "maxSubs": "max",
             "rollingSubs": "off",
             "subWindows": "max",
-            "concussionSubs": "min",
-            "sinBinMinutes": "max",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "min",
+            "concussionSubs": "max",
+            "sinBinMinutes": "min",
             "abandon": "blank"
           },
           "values": {
@@ -978,8 +1132,10 @@
             "maxSubs": "10",
             "rollingSubs": "off",
             "subWindows": "10",
-            "concussionSubs": "0",
-            "sinBinMinutes": "15"
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "0",
+            "concussionSubs": "5",
+            "sinBinMinutes": "1"
           },
           "overrides": {
             "halfMinutes": 33,
@@ -987,8 +1143,12 @@
             "maxSubs": 10,
             "rollingSubs": false,
             "subWindows": 10,
-            "concussionSubs": 0,
-            "sinBinMinutes": 15
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 0
+            },
+            "concussionSubs": 5,
+            "sinBinMinutes": 1
           },
           "scorable": null
         },
@@ -1006,9 +1166,11 @@
             "maxSubs": "min",
             "rollingSubs": "on",
             "subWindows": "min",
-            "concussionSubs": "max",
-            "sinBinMinutes": "max",
-            "abandon": "option:replay"
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "max",
+            "concussionSubs": "interior",
+            "sinBinMinutes": "blank",
+            "abandon": "option:award"
           },
           "values": {
             "extraTime": "on",
@@ -1018,9 +1180,10 @@
             "maxSubs": "0",
             "rollingSubs": "on",
             "subWindows": "0",
-            "concussionSubs": "5",
-            "sinBinMinutes": "15",
-            "abandon": "replay"
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "3",
+            "concussionSubs": "3",
+            "abandon": "award"
           },
           "overrides": {
             "extraTime": {
@@ -1033,9 +1196,12 @@
             "maxSubs": 0,
             "rollingSubs": true,
             "subWindows": 0,
-            "concussionSubs": 5,
-            "sinBinMinutes": 15,
-            "abandonPolicy": "replay"
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 3
+            },
+            "concussionSubs": 3,
+            "abandonPolicy": "award"
           },
           "scorable": null
         },
@@ -1053,9 +1219,11 @@
             "maxSubs": "blank",
             "rollingSubs": "on",
             "subWindows": "blank",
-            "concussionSubs": "min",
-            "sinBinMinutes": "interior",
-            "abandon": "blank"
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "interior",
+            "concussionSubs": "interior",
+            "sinBinMinutes": "max",
+            "abandon": "option:replay"
           },
           "values": {
             "halfMinutes": "5",
@@ -1064,8 +1232,11 @@
             "shootoutAttempts": "1",
             "teamSize": "5",
             "rollingSubs": "on",
-            "concussionSubs": "0",
-            "sinBinMinutes": "8"
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "2",
+            "concussionSubs": "3",
+            "sinBinMinutes": "15",
+            "abandon": "replay"
           },
           "overrides": {
             "halfMinutes": 5,
@@ -1077,8 +1248,13 @@
             "shootoutAttempts": 1,
             "teamSize": 5,
             "rollingSubs": true,
-            "concussionSubs": 0,
-            "sinBinMinutes": 8
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 2
+            },
+            "concussionSubs": 3,
+            "sinBinMinutes": 15,
+            "abandonPolicy": "replay"
           },
           "scorable": null
         },
@@ -1096,8 +1272,10 @@
             "maxSubs": "min",
             "rollingSubs": "off",
             "subWindows": "min",
-            "concussionSubs": "min",
-            "sinBinMinutes": "min",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
+            "concussionSubs": "blank",
+            "sinBinMinutes": "blank",
             "abandon": "option:award"
           },
           "values": {
@@ -1109,8 +1287,6 @@
             "maxSubs": "0",
             "rollingSubs": "off",
             "subWindows": "0",
-            "concussionSubs": "0",
-            "sinBinMinutes": "1",
             "abandon": "award"
           },
           "overrides": {
@@ -1125,8 +1301,6 @@
             "maxSubs": 0,
             "rollingSubs": false,
             "subWindows": 0,
-            "concussionSubs": 0,
-            "sinBinMinutes": 1,
             "abandonPolicy": "award"
           },
           "scorable": null
@@ -1145,25 +1319,35 @@
             "maxSubs": "min",
             "rollingSubs": "blank",
             "subWindows": "min",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "min",
             "concussionSubs": "max",
-            "sinBinMinutes": "blank",
-            "abandon": "option:replay"
+            "sinBinMinutes": "interior",
+            "abandon": "option:award"
           },
           "values": {
             "halfMinutes": "33",
             "shootoutAttempts": "6",
             "maxSubs": "0",
             "subWindows": "0",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "0",
             "concussionSubs": "5",
-            "abandon": "replay"
+            "sinBinMinutes": "8",
+            "abandon": "award"
           },
           "overrides": {
             "halfMinutes": 33,
             "shootoutAttempts": 6,
             "maxSubs": 0,
             "subWindows": 0,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 0
+            },
             "concussionSubs": 5,
-            "abandonPolicy": "replay"
+            "sinBinMinutes": 8,
+            "abandonPolicy": "award"
           },
           "scorable": null
         },
@@ -1181,8 +1365,10 @@
             "maxSubs": "max",
             "rollingSubs": "blank",
             "subWindows": "max",
-            "concussionSubs": "blank",
-            "sinBinMinutes": "max",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "interior",
+            "concussionSubs": "min",
+            "sinBinMinutes": "blank",
             "abandon": "option:replay"
           },
           "values": {
@@ -1192,7 +1378,9 @@
             "teamSize": "11",
             "maxSubs": "10",
             "subWindows": "10",
-            "sinBinMinutes": "15",
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "2",
+            "concussionSubs": "0",
             "abandon": "replay"
           },
           "overrides": {
@@ -1205,7 +1393,11 @@
             "teamSize": 11,
             "maxSubs": 10,
             "subWindows": 10,
-            "sinBinMinutes": 15,
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 2
+            },
+            "concussionSubs": 0,
             "abandonPolicy": "replay"
           },
           "scorable": null
@@ -1224,8 +1416,10 @@
             "maxSubs": "min",
             "rollingSubs": "on",
             "subWindows": "min",
-            "concussionSubs": "max",
-            "sinBinMinutes": "min",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
+            "concussionSubs": "interior",
+            "sinBinMinutes": "interior",
             "abandon": "blank"
           },
           "values": {
@@ -1237,8 +1431,8 @@
             "maxSubs": "0",
             "rollingSubs": "on",
             "subWindows": "0",
-            "concussionSubs": "5",
-            "sinBinMinutes": "1"
+            "concussionSubs": "3",
+            "sinBinMinutes": "8"
           },
           "overrides": {
             "halfMinutes": 5,
@@ -1252,8 +1446,8 @@
             "maxSubs": 0,
             "rollingSubs": true,
             "subWindows": 0,
-            "concussionSubs": 5,
-            "sinBinMinutes": 1
+            "concussionSubs": 3,
+            "sinBinMinutes": 8
           },
           "scorable": null
         },
@@ -1271,8 +1465,10 @@
             "maxSubs": "blank",
             "rollingSubs": "off",
             "subWindows": "max",
-            "concussionSubs": "min",
-            "sinBinMinutes": "interior",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "interior",
+            "concussionSubs": "interior",
+            "sinBinMinutes": "min",
             "abandon": "option:replay"
           },
           "values": {
@@ -1283,8 +1479,10 @@
             "teamSize": "11",
             "rollingSubs": "off",
             "subWindows": "10",
-            "concussionSubs": "0",
-            "sinBinMinutes": "8",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "2",
+            "concussionSubs": "3",
+            "sinBinMinutes": "1",
             "abandon": "replay"
           },
           "overrides": {
@@ -1298,8 +1496,12 @@
             "teamSize": 11,
             "rollingSubs": false,
             "subWindows": 10,
-            "concussionSubs": 0,
-            "sinBinMinutes": 8,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 2
+            },
+            "concussionSubs": 3,
+            "sinBinMinutes": 1,
             "abandonPolicy": "replay"
           },
           "scorable": null
@@ -1318,8 +1520,10 @@
             "maxSubs": "max",
             "rollingSubs": "blank",
             "subWindows": "interior",
-            "concussionSubs": "interior",
-            "sinBinMinutes": "min",
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "min",
+            "concussionSubs": "blank",
+            "sinBinMinutes": "max",
             "abandon": "option:award"
           },
           "values": {
@@ -1328,8 +1532,9 @@
             "teamSize": "8",
             "maxSubs": "10",
             "subWindows": "5",
-            "concussionSubs": "3",
-            "sinBinMinutes": "1",
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "0",
+            "sinBinMinutes": "15",
             "abandon": "award"
           },
           "overrides": {
@@ -1338,8 +1543,11 @@
             "teamSize": 8,
             "maxSubs": 10,
             "subWindows": 5,
-            "concussionSubs": 3,
-            "sinBinMinutes": 1,
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 0
+            },
+            "sinBinMinutes": 15,
             "abandonPolicy": "award"
           },
           "scorable": null
@@ -1358,8 +1566,10 @@
             "maxSubs": "interior",
             "rollingSubs": "on",
             "subWindows": "interior",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "max",
             "concussionSubs": "min",
-            "sinBinMinutes": "max",
+            "sinBinMinutes": "interior",
             "abandon": "option:replay"
           },
           "values": {
@@ -1368,8 +1578,10 @@
             "maxSubs": "5",
             "rollingSubs": "on",
             "subWindows": "5",
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "3",
             "concussionSubs": "0",
-            "sinBinMinutes": "15",
+            "sinBinMinutes": "8",
             "abandon": "replay"
           },
           "overrides": {
@@ -1381,8 +1593,12 @@
             "maxSubs": 5,
             "rollingSubs": true,
             "subWindows": 5,
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 3
+            },
             "concussionSubs": 0,
-            "sinBinMinutes": 15,
+            "sinBinMinutes": 8,
             "abandonPolicy": "replay"
           },
           "scorable": null
@@ -1401,6 +1617,8 @@
             "maxSubs": "min",
             "rollingSubs": "on",
             "subWindows": "min",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "min",
             "concussionSubs": "blank",
             "sinBinMinutes": "min",
             "abandon": "option:replay"
@@ -1414,6 +1632,8 @@
             "maxSubs": "0",
             "rollingSubs": "on",
             "subWindows": "0",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "0",
             "sinBinMinutes": "1",
             "abandon": "replay"
           },
@@ -1429,6 +1649,10 @@
             "maxSubs": 0,
             "rollingSubs": true,
             "subWindows": 0,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 0
+            },
             "sinBinMinutes": 1,
             "abandonPolicy": "replay"
           },
@@ -1448,8 +1672,10 @@
             "maxSubs": "max",
             "rollingSubs": "off",
             "subWindows": "max",
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "max",
             "concussionSubs": "min",
-            "sinBinMinutes": "blank",
+            "sinBinMinutes": "max",
             "abandon": "option:award"
           },
           "values": {
@@ -1461,7 +1687,10 @@
             "maxSubs": "10",
             "rollingSubs": "off",
             "subWindows": "10",
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "3",
             "concussionSubs": "0",
+            "sinBinMinutes": "15",
             "abandon": "award"
           },
           "overrides": {
@@ -1476,7 +1705,12 @@
             "maxSubs": 10,
             "rollingSubs": false,
             "subWindows": 10,
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 3
+            },
             "concussionSubs": 0,
+            "sinBinMinutes": 15,
             "abandonPolicy": "award"
           },
           "scorable": null
@@ -1495,8 +1729,10 @@
             "maxSubs": "interior",
             "rollingSubs": "blank",
             "subWindows": "interior",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
             "concussionSubs": "max",
-            "sinBinMinutes": "max",
+            "sinBinMinutes": "blank",
             "abandon": "blank"
           },
           "values": {
@@ -1505,8 +1741,7 @@
             "teamSize": "8",
             "maxSubs": "5",
             "subWindows": "5",
-            "concussionSubs": "5",
-            "sinBinMinutes": "15"
+            "concussionSubs": "5"
           },
           "overrides": {
             "halfMinutes": 33,
@@ -1514,8 +1749,7 @@
             "teamSize": 8,
             "maxSubs": 5,
             "subWindows": 5,
-            "concussionSubs": 5,
-            "sinBinMinutes": 15
+            "concussionSubs": 5
           },
           "scorable": null
         },
@@ -1533,16 +1767,20 @@
             "maxSubs": "blank",
             "rollingSubs": "on",
             "subWindows": "blank",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "interior",
             "concussionSubs": "interior",
-            "sinBinMinutes": "min",
+            "sinBinMinutes": "interior",
             "abandon": "option:replay"
           },
           "values": {
             "extraTime": "on",
             "shootout": "on",
             "rollingSubs": "on",
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "2",
             "concussionSubs": "3",
-            "sinBinMinutes": "1",
+            "sinBinMinutes": "8",
             "abandon": "replay"
           },
           "overrides": {
@@ -1552,8 +1790,12 @@
             },
             "shootout": true,
             "rollingSubs": true,
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 2
+            },
             "concussionSubs": 3,
-            "sinBinMinutes": 1,
+            "sinBinMinutes": 8,
             "abandonPolicy": "replay"
           },
           "scorable": null
@@ -1572,6 +1814,8 @@
             "maxSubs": "min",
             "rollingSubs": "on",
             "subWindows": "min",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "min",
             "concussionSubs": "min",
             "sinBinMinutes": "min",
             "abandon": "option:replay"
@@ -1585,6 +1829,8 @@
             "maxSubs": "0",
             "rollingSubs": "on",
             "subWindows": "0",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "0",
             "concussionSubs": "0",
             "sinBinMinutes": "1",
             "abandon": "replay"
@@ -1601,6 +1847,10 @@
             "maxSubs": 0,
             "rollingSubs": true,
             "subWindows": 0,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 0
+            },
             "concussionSubs": 0,
             "sinBinMinutes": 1,
             "abandonPolicy": "replay"
@@ -1621,6 +1871,8 @@
             "maxSubs": "max",
             "rollingSubs": "off",
             "subWindows": "max",
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "max",
             "concussionSubs": "max",
             "sinBinMinutes": "max",
             "abandon": "option:award"
@@ -1634,6 +1886,8 @@
             "maxSubs": "10",
             "rollingSubs": "off",
             "subWindows": "10",
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "3",
             "concussionSubs": "5",
             "sinBinMinutes": "15",
             "abandon": "award"
@@ -1650,6 +1904,10 @@
             "maxSubs": 10,
             "rollingSubs": false,
             "subWindows": 10,
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 3
+            },
             "concussionSubs": 5,
             "sinBinMinutes": 15,
             "abandonPolicy": "award"
@@ -1670,6 +1928,8 @@
             "maxSubs": "interior",
             "rollingSubs": "blank",
             "subWindows": "interior",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "interior",
             "concussionSubs": "interior",
             "sinBinMinutes": "interior",
             "abandon": "blank"
@@ -1680,6 +1940,8 @@
             "teamSize": "8",
             "maxSubs": "5",
             "subWindows": "5",
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "2",
             "concussionSubs": "3",
             "sinBinMinutes": "8"
           },
@@ -1689,6 +1951,10 @@
             "teamSize": 8,
             "maxSubs": 5,
             "subWindows": 5,
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 2
+            },
             "concussionSubs": 3,
             "sinBinMinutes": 8
           },
@@ -1708,6 +1974,8 @@
             "maxSubs": "blank",
             "rollingSubs": "on",
             "subWindows": "blank",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
             "concussionSubs": "blank",
             "sinBinMinutes": "blank",
             "abandon": "option:replay"
@@ -1743,6 +2011,8 @@
             "maxSubs": "min",
             "rollingSubs": "on",
             "subWindows": "min",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "min",
             "concussionSubs": "min",
             "sinBinMinutes": "min",
             "abandon": "option:replay"
@@ -1756,6 +2026,8 @@
             "maxSubs": "0",
             "rollingSubs": "on",
             "subWindows": "0",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "0",
             "concussionSubs": "0",
             "sinBinMinutes": "1",
             "abandon": "replay"
@@ -1772,6 +2044,10 @@
             "maxSubs": 0,
             "rollingSubs": true,
             "subWindows": 0,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 0
+            },
             "concussionSubs": 0,
             "sinBinMinutes": 1,
             "abandonPolicy": "replay"
@@ -1792,6 +2068,8 @@
             "maxSubs": "max",
             "rollingSubs": "off",
             "subWindows": "max",
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "max",
             "concussionSubs": "max",
             "sinBinMinutes": "max",
             "abandon": "option:award"
@@ -1805,6 +2083,8 @@
             "maxSubs": "10",
             "rollingSubs": "off",
             "subWindows": "10",
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "3",
             "concussionSubs": "5",
             "sinBinMinutes": "15",
             "abandon": "award"
@@ -1821,6 +2101,10 @@
             "maxSubs": 10,
             "rollingSubs": false,
             "subWindows": 10,
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 3
+            },
             "concussionSubs": 5,
             "sinBinMinutes": 15,
             "abandonPolicy": "award"
@@ -1841,6 +2125,8 @@
             "maxSubs": "interior",
             "rollingSubs": "blank",
             "subWindows": "interior",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "interior",
             "concussionSubs": "interior",
             "sinBinMinutes": "interior",
             "abandon": "blank"
@@ -1851,6 +2137,8 @@
             "teamSize": "8",
             "maxSubs": "5",
             "subWindows": "5",
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "2",
             "concussionSubs": "3",
             "sinBinMinutes": "8"
           },
@@ -1860,6 +2148,10 @@
             "teamSize": 8,
             "maxSubs": 5,
             "subWindows": 5,
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 2
+            },
             "concussionSubs": 3,
             "sinBinMinutes": 8
           },
@@ -1879,6 +2171,8 @@
             "maxSubs": "blank",
             "rollingSubs": "on",
             "subWindows": "blank",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
             "concussionSubs": "blank",
             "sinBinMinutes": "blank",
             "abandon": "option:replay"
@@ -1914,6 +2208,8 @@
             "maxSubs": "min",
             "rollingSubs": "on",
             "subWindows": "min",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "min",
             "concussionSubs": "min",
             "sinBinMinutes": "min",
             "abandon": "option:replay"
@@ -1927,6 +2223,8 @@
             "maxSubs": "0",
             "rollingSubs": "on",
             "subWindows": "0",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "0",
             "concussionSubs": "0",
             "sinBinMinutes": "1",
             "abandon": "replay"
@@ -1943,6 +2241,10 @@
             "maxSubs": 0,
             "rollingSubs": true,
             "subWindows": 0,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 0
+            },
             "concussionSubs": 0,
             "sinBinMinutes": 1,
             "abandonPolicy": "replay"
@@ -1963,6 +2265,8 @@
             "maxSubs": "max",
             "rollingSubs": "off",
             "subWindows": "max",
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "max",
             "concussionSubs": "max",
             "sinBinMinutes": "max",
             "abandon": "option:award"
@@ -1976,6 +2280,8 @@
             "maxSubs": "10",
             "rollingSubs": "off",
             "subWindows": "10",
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "3",
             "concussionSubs": "5",
             "sinBinMinutes": "15",
             "abandon": "award"
@@ -1992,6 +2298,10 @@
             "maxSubs": 10,
             "rollingSubs": false,
             "subWindows": 10,
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 3
+            },
             "concussionSubs": 5,
             "sinBinMinutes": 15,
             "abandonPolicy": "award"
@@ -2012,6 +2322,8 @@
             "maxSubs": "interior",
             "rollingSubs": "blank",
             "subWindows": "interior",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "interior",
             "concussionSubs": "interior",
             "sinBinMinutes": "interior",
             "abandon": "blank"
@@ -2022,6 +2334,8 @@
             "teamSize": "8",
             "maxSubs": "5",
             "subWindows": "5",
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "2",
             "concussionSubs": "3",
             "sinBinMinutes": "8"
           },
@@ -2031,6 +2345,10 @@
             "teamSize": 8,
             "maxSubs": 5,
             "subWindows": 5,
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 2
+            },
             "concussionSubs": 3,
             "sinBinMinutes": 8
           },
@@ -2050,6 +2368,8 @@
             "maxSubs": "blank",
             "rollingSubs": "on",
             "subWindows": "blank",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
             "concussionSubs": "blank",
             "sinBinMinutes": "blank",
             "abandon": "option:replay"
@@ -2085,6 +2405,8 @@
             "maxSubs": "min",
             "rollingSubs": "on",
             "subWindows": "min",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "min",
             "concussionSubs": "min",
             "sinBinMinutes": "min",
             "abandon": "option:replay"
@@ -2098,6 +2420,8 @@
             "maxSubs": "0",
             "rollingSubs": "on",
             "subWindows": "0",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "0",
             "concussionSubs": "0",
             "sinBinMinutes": "1",
             "abandon": "replay"
@@ -2114,6 +2438,10 @@
             "maxSubs": 0,
             "rollingSubs": true,
             "subWindows": 0,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 0
+            },
             "concussionSubs": 0,
             "sinBinMinutes": 1,
             "abandonPolicy": "replay"
@@ -2134,6 +2462,8 @@
             "maxSubs": "max",
             "rollingSubs": "off",
             "subWindows": "max",
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "max",
             "concussionSubs": "max",
             "sinBinMinutes": "max",
             "abandon": "option:award"
@@ -2147,6 +2477,8 @@
             "maxSubs": "10",
             "rollingSubs": "off",
             "subWindows": "10",
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "3",
             "concussionSubs": "5",
             "sinBinMinutes": "15",
             "abandon": "award"
@@ -2163,6 +2495,10 @@
             "maxSubs": 10,
             "rollingSubs": false,
             "subWindows": 10,
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 3
+            },
             "concussionSubs": 5,
             "sinBinMinutes": 15,
             "abandonPolicy": "award"
@@ -2183,6 +2519,8 @@
             "maxSubs": "interior",
             "rollingSubs": "blank",
             "subWindows": "interior",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "interior",
             "concussionSubs": "interior",
             "sinBinMinutes": "interior",
             "abandon": "blank"
@@ -2193,6 +2531,8 @@
             "teamSize": "8",
             "maxSubs": "5",
             "subWindows": "5",
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "2",
             "concussionSubs": "3",
             "sinBinMinutes": "8"
           },
@@ -2202,6 +2542,10 @@
             "teamSize": 8,
             "maxSubs": 5,
             "subWindows": 5,
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 2
+            },
             "concussionSubs": 3,
             "sinBinMinutes": 8
           },
@@ -2221,6 +2565,8 @@
             "maxSubs": "blank",
             "rollingSubs": "on",
             "subWindows": "blank",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
             "concussionSubs": "blank",
             "sinBinMinutes": "blank",
             "abandon": "option:replay"
@@ -2256,6 +2602,8 @@
             "maxSubs": "min",
             "rollingSubs": "on",
             "subWindows": "min",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "min",
             "concussionSubs": "min",
             "sinBinMinutes": "min",
             "abandon": "option:replay"
@@ -2269,6 +2617,8 @@
             "maxSubs": "0",
             "rollingSubs": "on",
             "subWindows": "0",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "0",
             "concussionSubs": "0",
             "sinBinMinutes": "1",
             "abandon": "replay"
@@ -2285,6 +2635,10 @@
             "maxSubs": 0,
             "rollingSubs": true,
             "subWindows": 0,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 0
+            },
             "concussionSubs": 0,
             "sinBinMinutes": 1,
             "abandonPolicy": "replay"
@@ -2305,6 +2659,8 @@
             "maxSubs": "max",
             "rollingSubs": "off",
             "subWindows": "max",
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "max",
             "concussionSubs": "max",
             "sinBinMinutes": "max",
             "abandon": "option:award"
@@ -2318,6 +2674,8 @@
             "maxSubs": "10",
             "rollingSubs": "off",
             "subWindows": "10",
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "3",
             "concussionSubs": "5",
             "sinBinMinutes": "15",
             "abandon": "award"
@@ -2334,6 +2692,10 @@
             "maxSubs": 10,
             "rollingSubs": false,
             "subWindows": 10,
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 3
+            },
             "concussionSubs": 5,
             "sinBinMinutes": 15,
             "abandonPolicy": "award"
@@ -2354,6 +2716,8 @@
             "maxSubs": "interior",
             "rollingSubs": "blank",
             "subWindows": "interior",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "interior",
             "concussionSubs": "interior",
             "sinBinMinutes": "interior",
             "abandon": "blank"
@@ -2364,6 +2728,8 @@
             "teamSize": "8",
             "maxSubs": "5",
             "subWindows": "5",
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "2",
             "concussionSubs": "3",
             "sinBinMinutes": "8"
           },
@@ -2373,6 +2739,10 @@
             "teamSize": 8,
             "maxSubs": 5,
             "subWindows": 5,
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 2
+            },
             "concussionSubs": 3,
             "sinBinMinutes": 8
           },
@@ -2392,6 +2762,8 @@
             "maxSubs": "blank",
             "rollingSubs": "on",
             "subWindows": "blank",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
             "concussionSubs": "blank",
             "sinBinMinutes": "blank",
             "abandon": "option:replay"
@@ -2427,6 +2799,8 @@
             "maxSubs": "min",
             "rollingSubs": "on",
             "subWindows": "min",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "min",
             "concussionSubs": "min",
             "sinBinMinutes": "min",
             "abandon": "option:replay"
@@ -2440,6 +2814,8 @@
             "maxSubs": "0",
             "rollingSubs": "on",
             "subWindows": "0",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "0",
             "concussionSubs": "0",
             "sinBinMinutes": "1",
             "abandon": "replay"
@@ -2456,6 +2832,10 @@
             "maxSubs": 0,
             "rollingSubs": true,
             "subWindows": 0,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 0
+            },
             "concussionSubs": 0,
             "sinBinMinutes": 1,
             "abandonPolicy": "replay"
@@ -2476,6 +2856,8 @@
             "maxSubs": "max",
             "rollingSubs": "off",
             "subWindows": "max",
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "max",
             "concussionSubs": "max",
             "sinBinMinutes": "max",
             "abandon": "option:award"
@@ -2489,6 +2871,8 @@
             "maxSubs": "10",
             "rollingSubs": "off",
             "subWindows": "10",
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "3",
             "concussionSubs": "5",
             "sinBinMinutes": "15",
             "abandon": "award"
@@ -2505,6 +2889,10 @@
             "maxSubs": 10,
             "rollingSubs": false,
             "subWindows": 10,
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 3
+            },
             "concussionSubs": 5,
             "sinBinMinutes": 15,
             "abandonPolicy": "award"
@@ -2525,6 +2913,8 @@
             "maxSubs": "interior",
             "rollingSubs": "blank",
             "subWindows": "interior",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "interior",
             "concussionSubs": "interior",
             "sinBinMinutes": "interior",
             "abandon": "blank"
@@ -2535,6 +2925,8 @@
             "teamSize": "8",
             "maxSubs": "5",
             "subWindows": "5",
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "2",
             "concussionSubs": "3",
             "sinBinMinutes": "8"
           },
@@ -2544,6 +2936,10 @@
             "teamSize": 8,
             "maxSubs": 5,
             "subWindows": 5,
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 2
+            },
             "concussionSubs": 3,
             "sinBinMinutes": 8
           },
@@ -2563,6 +2959,8 @@
             "maxSubs": "blank",
             "rollingSubs": "on",
             "subWindows": "blank",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
             "concussionSubs": "blank",
             "sinBinMinutes": "blank",
             "abandon": "option:replay"
@@ -2598,6 +2996,8 @@
             "maxSubs": "min",
             "rollingSubs": "on",
             "subWindows": "min",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "min",
             "concussionSubs": "min",
             "sinBinMinutes": "min",
             "abandon": "option:replay"
@@ -2611,6 +3011,8 @@
             "maxSubs": "0",
             "rollingSubs": "on",
             "subWindows": "0",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "0",
             "concussionSubs": "0",
             "sinBinMinutes": "1",
             "abandon": "replay"
@@ -2627,6 +3029,10 @@
             "maxSubs": 0,
             "rollingSubs": true,
             "subWindows": 0,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 0
+            },
             "concussionSubs": 0,
             "sinBinMinutes": 1,
             "abandonPolicy": "replay"
@@ -2647,6 +3053,8 @@
             "maxSubs": "max",
             "rollingSubs": "off",
             "subWindows": "max",
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "max",
             "concussionSubs": "max",
             "sinBinMinutes": "max",
             "abandon": "option:award"
@@ -2660,6 +3068,8 @@
             "maxSubs": "10",
             "rollingSubs": "off",
             "subWindows": "10",
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "3",
             "concussionSubs": "5",
             "sinBinMinutes": "15",
             "abandon": "award"
@@ -2676,6 +3086,10 @@
             "maxSubs": 10,
             "rollingSubs": false,
             "subWindows": 10,
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 3
+            },
             "concussionSubs": 5,
             "sinBinMinutes": 15,
             "abandonPolicy": "award"
@@ -2696,6 +3110,8 @@
             "maxSubs": "interior",
             "rollingSubs": "blank",
             "subWindows": "interior",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "interior",
             "concussionSubs": "interior",
             "sinBinMinutes": "interior",
             "abandon": "blank"
@@ -2706,6 +3122,8 @@
             "teamSize": "8",
             "maxSubs": "5",
             "subWindows": "5",
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "2",
             "concussionSubs": "3",
             "sinBinMinutes": "8"
           },
@@ -2715,6 +3133,10 @@
             "teamSize": 8,
             "maxSubs": 5,
             "subWindows": 5,
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 2
+            },
             "concussionSubs": 3,
             "sinBinMinutes": 8
           },
@@ -2734,6 +3156,8 @@
             "maxSubs": "blank",
             "rollingSubs": "on",
             "subWindows": "blank",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
             "concussionSubs": "blank",
             "sinBinMinutes": "blank",
             "abandon": "option:replay"
@@ -2769,6 +3193,8 @@
             "maxSubs": "min",
             "rollingSubs": "on",
             "subWindows": "min",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "min",
             "concussionSubs": "min",
             "sinBinMinutes": "min",
             "abandon": "option:replay"
@@ -2782,6 +3208,8 @@
             "maxSubs": "0",
             "rollingSubs": "on",
             "subWindows": "0",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "0",
             "concussionSubs": "0",
             "sinBinMinutes": "1",
             "abandon": "replay"
@@ -2798,6 +3226,10 @@
             "maxSubs": 0,
             "rollingSubs": true,
             "subWindows": 0,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 0
+            },
             "concussionSubs": 0,
             "sinBinMinutes": 1,
             "abandonPolicy": "replay"
@@ -2818,6 +3250,8 @@
             "maxSubs": "max",
             "rollingSubs": "off",
             "subWindows": "max",
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "max",
             "concussionSubs": "max",
             "sinBinMinutes": "max",
             "abandon": "option:award"
@@ -2831,6 +3265,8 @@
             "maxSubs": "10",
             "rollingSubs": "off",
             "subWindows": "10",
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "3",
             "concussionSubs": "5",
             "sinBinMinutes": "15",
             "abandon": "award"
@@ -2847,6 +3283,10 @@
             "maxSubs": 10,
             "rollingSubs": false,
             "subWindows": 10,
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 3
+            },
             "concussionSubs": 5,
             "sinBinMinutes": 15,
             "abandonPolicy": "award"
@@ -2867,6 +3307,8 @@
             "maxSubs": "interior",
             "rollingSubs": "blank",
             "subWindows": "interior",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "interior",
             "concussionSubs": "interior",
             "sinBinMinutes": "interior",
             "abandon": "blank"
@@ -2877,6 +3319,8 @@
             "teamSize": "8",
             "maxSubs": "5",
             "subWindows": "5",
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "2",
             "concussionSubs": "3",
             "sinBinMinutes": "8"
           },
@@ -2886,6 +3330,10 @@
             "teamSize": 8,
             "maxSubs": 5,
             "subWindows": 5,
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 2
+            },
             "concussionSubs": 3,
             "sinBinMinutes": 8
           },
@@ -2905,6 +3353,8 @@
             "maxSubs": "blank",
             "rollingSubs": "on",
             "subWindows": "blank",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
             "concussionSubs": "blank",
             "sinBinMinutes": "blank",
             "abandon": "option:replay"
@@ -2940,6 +3390,8 @@
             "maxSubs": "min",
             "rollingSubs": "on",
             "subWindows": "min",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "min",
             "concussionSubs": "min",
             "sinBinMinutes": "min",
             "abandon": "option:replay"
@@ -2953,6 +3405,8 @@
             "maxSubs": "0",
             "rollingSubs": "on",
             "subWindows": "0",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "0",
             "concussionSubs": "0",
             "sinBinMinutes": "1",
             "abandon": "replay"
@@ -2969,6 +3423,10 @@
             "maxSubs": 0,
             "rollingSubs": true,
             "subWindows": 0,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 0
+            },
             "concussionSubs": 0,
             "sinBinMinutes": 1,
             "abandonPolicy": "replay"
@@ -2989,6 +3447,8 @@
             "maxSubs": "max",
             "rollingSubs": "off",
             "subWindows": "max",
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "max",
             "concussionSubs": "max",
             "sinBinMinutes": "max",
             "abandon": "option:award"
@@ -3002,6 +3462,8 @@
             "maxSubs": "10",
             "rollingSubs": "off",
             "subWindows": "10",
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "3",
             "concussionSubs": "5",
             "sinBinMinutes": "15",
             "abandon": "award"
@@ -3018,6 +3480,10 @@
             "maxSubs": 10,
             "rollingSubs": false,
             "subWindows": 10,
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 3
+            },
             "concussionSubs": 5,
             "sinBinMinutes": 15,
             "abandonPolicy": "award"
@@ -3038,6 +3504,8 @@
             "maxSubs": "interior",
             "rollingSubs": "blank",
             "subWindows": "interior",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "interior",
             "concussionSubs": "interior",
             "sinBinMinutes": "interior",
             "abandon": "blank"
@@ -3048,6 +3516,8 @@
             "teamSize": "8",
             "maxSubs": "5",
             "subWindows": "5",
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "2",
             "concussionSubs": "3",
             "sinBinMinutes": "8"
           },
@@ -3057,6 +3527,10 @@
             "teamSize": 8,
             "maxSubs": 5,
             "subWindows": 5,
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 2
+            },
             "concussionSubs": 3,
             "sinBinMinutes": 8
           },
@@ -3076,6 +3550,8 @@
             "maxSubs": "blank",
             "rollingSubs": "on",
             "subWindows": "blank",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
             "concussionSubs": "blank",
             "sinBinMinutes": "blank",
             "abandon": "option:replay"
@@ -3111,6 +3587,8 @@
             "maxSubs": "min",
             "rollingSubs": "on",
             "subWindows": "min",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "min",
             "concussionSubs": "min",
             "sinBinMinutes": "min",
             "abandon": "option:replay"
@@ -3124,6 +3602,8 @@
             "maxSubs": "0",
             "rollingSubs": "on",
             "subWindows": "0",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "0",
             "concussionSubs": "0",
             "sinBinMinutes": "1",
             "abandon": "replay"
@@ -3140,6 +3620,10 @@
             "maxSubs": 0,
             "rollingSubs": true,
             "subWindows": 0,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 0
+            },
             "concussionSubs": 0,
             "sinBinMinutes": 1,
             "abandonPolicy": "replay"
@@ -3160,6 +3644,8 @@
             "maxSubs": "max",
             "rollingSubs": "off",
             "subWindows": "max",
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "max",
             "concussionSubs": "max",
             "sinBinMinutes": "max",
             "abandon": "option:award"
@@ -3173,6 +3659,8 @@
             "maxSubs": "10",
             "rollingSubs": "off",
             "subWindows": "10",
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "3",
             "concussionSubs": "5",
             "sinBinMinutes": "15",
             "abandon": "award"
@@ -3189,6 +3677,10 @@
             "maxSubs": 10,
             "rollingSubs": false,
             "subWindows": 10,
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 3
+            },
             "concussionSubs": 5,
             "sinBinMinutes": 15,
             "abandonPolicy": "award"
@@ -3209,6 +3701,8 @@
             "maxSubs": "interior",
             "rollingSubs": "blank",
             "subWindows": "interior",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "interior",
             "concussionSubs": "interior",
             "sinBinMinutes": "interior",
             "abandon": "blank"
@@ -3219,6 +3713,8 @@
             "teamSize": "8",
             "maxSubs": "5",
             "subWindows": "5",
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "2",
             "concussionSubs": "3",
             "sinBinMinutes": "8"
           },
@@ -3228,6 +3724,10 @@
             "teamSize": 8,
             "maxSubs": 5,
             "subWindows": 5,
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 2
+            },
             "concussionSubs": 3,
             "sinBinMinutes": 8
           },
@@ -3247,6 +3747,8 @@
             "maxSubs": "blank",
             "rollingSubs": "on",
             "subWindows": "blank",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
             "concussionSubs": "blank",
             "sinBinMinutes": "blank",
             "abandon": "option:replay"
@@ -3282,6 +3784,8 @@
             "maxSubs": "min",
             "rollingSubs": "on",
             "subWindows": "min",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "min",
             "concussionSubs": "min",
             "sinBinMinutes": "min",
             "abandon": "option:replay"
@@ -3295,6 +3799,8 @@
             "maxSubs": "0",
             "rollingSubs": "on",
             "subWindows": "0",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "0",
             "concussionSubs": "0",
             "sinBinMinutes": "1",
             "abandon": "replay"
@@ -3311,6 +3817,10 @@
             "maxSubs": 0,
             "rollingSubs": true,
             "subWindows": 0,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 0
+            },
             "concussionSubs": 0,
             "sinBinMinutes": 1,
             "abandonPolicy": "replay"
@@ -3331,6 +3841,8 @@
             "maxSubs": "max",
             "rollingSubs": "off",
             "subWindows": "max",
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "max",
             "concussionSubs": "max",
             "sinBinMinutes": "max",
             "abandon": "option:award"
@@ -3344,6 +3856,8 @@
             "maxSubs": "10",
             "rollingSubs": "off",
             "subWindows": "10",
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "3",
             "concussionSubs": "5",
             "sinBinMinutes": "15",
             "abandon": "award"
@@ -3360,6 +3874,10 @@
             "maxSubs": 10,
             "rollingSubs": false,
             "subWindows": 10,
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 3
+            },
             "concussionSubs": 5,
             "sinBinMinutes": 15,
             "abandonPolicy": "award"
@@ -3380,6 +3898,8 @@
             "maxSubs": "interior",
             "rollingSubs": "blank",
             "subWindows": "interior",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "interior",
             "concussionSubs": "interior",
             "sinBinMinutes": "interior",
             "abandon": "blank"
@@ -3390,6 +3910,8 @@
             "teamSize": "8",
             "maxSubs": "5",
             "subWindows": "5",
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "2",
             "concussionSubs": "3",
             "sinBinMinutes": "8"
           },
@@ -3399,6 +3921,10 @@
             "teamSize": 8,
             "maxSubs": 5,
             "subWindows": 5,
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 2
+            },
             "concussionSubs": 3,
             "sinBinMinutes": 8
           },
@@ -3418,6 +3944,8 @@
             "maxSubs": "blank",
             "rollingSubs": "on",
             "subWindows": "blank",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
             "concussionSubs": "blank",
             "sinBinMinutes": "blank",
             "abandon": "option:replay"
@@ -3453,6 +3981,8 @@
             "maxSubs": "min",
             "rollingSubs": "on",
             "subWindows": "min",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "min",
             "concussionSubs": "min",
             "sinBinMinutes": "min",
             "abandon": "option:replay"
@@ -3466,6 +3996,8 @@
             "maxSubs": "0",
             "rollingSubs": "on",
             "subWindows": "0",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "0",
             "concussionSubs": "0",
             "sinBinMinutes": "1",
             "abandon": "replay"
@@ -3482,6 +4014,10 @@
             "maxSubs": 0,
             "rollingSubs": true,
             "subWindows": 0,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 0
+            },
             "concussionSubs": 0,
             "sinBinMinutes": 1,
             "abandonPolicy": "replay"
@@ -3502,6 +4038,8 @@
             "maxSubs": "max",
             "rollingSubs": "off",
             "subWindows": "max",
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "max",
             "concussionSubs": "max",
             "sinBinMinutes": "max",
             "abandon": "option:award"
@@ -3515,6 +4053,8 @@
             "maxSubs": "10",
             "rollingSubs": "off",
             "subWindows": "10",
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "3",
             "concussionSubs": "5",
             "sinBinMinutes": "15",
             "abandon": "award"
@@ -3531,6 +4071,10 @@
             "maxSubs": 10,
             "rollingSubs": false,
             "subWindows": 10,
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 3
+            },
             "concussionSubs": 5,
             "sinBinMinutes": 15,
             "abandonPolicy": "award"
@@ -3551,6 +4095,8 @@
             "maxSubs": "interior",
             "rollingSubs": "blank",
             "subWindows": "interior",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "interior",
             "concussionSubs": "interior",
             "sinBinMinutes": "interior",
             "abandon": "blank"
@@ -3561,6 +4107,8 @@
             "teamSize": "8",
             "maxSubs": "5",
             "subWindows": "5",
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "2",
             "concussionSubs": "3",
             "sinBinMinutes": "8"
           },
@@ -3570,6 +4118,10 @@
             "teamSize": 8,
             "maxSubs": 5,
             "subWindows": 5,
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 2
+            },
             "concussionSubs": 3,
             "sinBinMinutes": 8
           },
@@ -3589,6 +4141,8 @@
             "maxSubs": "blank",
             "rollingSubs": "on",
             "subWindows": "blank",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
             "concussionSubs": "blank",
             "sinBinMinutes": "blank",
             "abandon": "option:replay"
@@ -3624,6 +4178,8 @@
             "maxSubs": "min",
             "rollingSubs": "blank",
             "subWindows": "min",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "min",
             "concussionSubs": "min",
             "sinBinMinutes": "min",
             "abandon": "option:replay"
@@ -3636,6 +4192,8 @@
             "teamSize": "5",
             "maxSubs": "0",
             "subWindows": "0",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "0",
             "concussionSubs": "0",
             "sinBinMinutes": "1",
             "abandon": "replay"
@@ -3651,6 +4209,10 @@
             "teamSize": 5,
             "maxSubs": 0,
             "subWindows": 0,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 0
+            },
             "concussionSubs": 0,
             "sinBinMinutes": 1,
             "abandonPolicy": "replay"
@@ -3671,8 +4233,10 @@
             "maxSubs": "min",
             "rollingSubs": "on",
             "subWindows": "blank",
-            "concussionSubs": "interior",
-            "sinBinMinutes": "min",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "min",
+            "concussionSubs": "min",
+            "sinBinMinutes": "interior",
             "abandon": "option:replay"
           },
           "values": {
@@ -3682,8 +4246,10 @@
             "teamSize": "5",
             "maxSubs": "0",
             "rollingSubs": "on",
-            "concussionSubs": "3",
-            "sinBinMinutes": "1",
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "0",
+            "concussionSubs": "0",
+            "sinBinMinutes": "8",
             "abandon": "replay"
           },
           "overrides": {
@@ -3696,8 +4262,12 @@
             "teamSize": 5,
             "maxSubs": 0,
             "rollingSubs": true,
-            "concussionSubs": 3,
-            "sinBinMinutes": 1,
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 0
+            },
+            "concussionSubs": 0,
+            "sinBinMinutes": 8,
             "abandonPolicy": "replay"
           },
           "scorable": null
@@ -3716,9 +4286,11 @@
             "maxSubs": "interior",
             "rollingSubs": "on",
             "subWindows": "interior",
-            "concussionSubs": "interior",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "max",
+            "concussionSubs": "min",
             "sinBinMinutes": "min",
-            "abandon": "option:replay"
+            "abandon": "blank"
           },
           "values": {
             "halfMinutes": "5",
@@ -3728,9 +4300,10 @@
             "maxSubs": "5",
             "rollingSubs": "on",
             "subWindows": "5",
-            "concussionSubs": "3",
-            "sinBinMinutes": "1",
-            "abandon": "replay"
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "3",
+            "concussionSubs": "0",
+            "sinBinMinutes": "1"
           },
           "overrides": {
             "halfMinutes": 5,
@@ -3743,9 +4316,12 @@
             "maxSubs": 5,
             "rollingSubs": true,
             "subWindows": 5,
-            "concussionSubs": 3,
-            "sinBinMinutes": 1,
-            "abandonPolicy": "replay"
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 3
+            },
+            "concussionSubs": 0,
+            "sinBinMinutes": 1
           },
           "scorable": null
         },
@@ -3763,8 +4339,10 @@
             "maxSubs": "blank",
             "rollingSubs": "on",
             "subWindows": "min",
-            "concussionSubs": "blank",
-            "sinBinMinutes": "blank",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
+            "concussionSubs": "min",
+            "sinBinMinutes": "min",
             "abandon": "option:replay"
           },
           "values": {
@@ -3774,6 +4352,8 @@
             "shootoutAttempts": "1",
             "rollingSubs": "on",
             "subWindows": "0",
+            "concussionSubs": "0",
+            "sinBinMinutes": "1",
             "abandon": "replay"
           },
           "overrides": {
@@ -3786,6 +4366,8 @@
             "shootoutAttempts": 1,
             "rollingSubs": true,
             "subWindows": 0,
+            "concussionSubs": 0,
+            "sinBinMinutes": 1,
             "abandonPolicy": "replay"
           },
           "scorable": null
@@ -3804,8 +4386,10 @@
             "maxSubs": "blank",
             "rollingSubs": "on",
             "subWindows": "min",
-            "concussionSubs": "interior",
-            "sinBinMinutes": "min",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
+            "concussionSubs": "min",
+            "sinBinMinutes": "max",
             "abandon": "option:replay"
           },
           "values": {
@@ -3816,8 +4400,8 @@
             "teamSize": "5",
             "rollingSubs": "on",
             "subWindows": "0",
-            "concussionSubs": "3",
-            "sinBinMinutes": "1",
+            "concussionSubs": "0",
+            "sinBinMinutes": "15",
             "abandon": "replay"
           },
           "overrides": {
@@ -3831,8 +4415,8 @@
             "teamSize": 5,
             "rollingSubs": true,
             "subWindows": 0,
-            "concussionSubs": 3,
-            "sinBinMinutes": 1,
+            "concussionSubs": 0,
+            "sinBinMinutes": 15,
             "abandonPolicy": "replay"
           },
           "scorable": null
@@ -3851,7 +4435,9 @@
             "maxSubs": "min",
             "rollingSubs": "off",
             "subWindows": "interior",
-            "concussionSubs": "min",
+            "extraTimeSubs": "blank",
+            "extraTimeWindows": "blank",
+            "concussionSubs": "interior",
             "sinBinMinutes": "blank",
             "abandon": "option:replay"
           },
@@ -3864,7 +4450,7 @@
             "maxSubs": "0",
             "rollingSubs": "off",
             "subWindows": "5",
-            "concussionSubs": "0",
+            "concussionSubs": "3",
             "abandon": "replay"
           },
           "overrides": {
@@ -3879,7 +4465,7 @@
             "maxSubs": 0,
             "rollingSubs": false,
             "subWindows": 5,
-            "concussionSubs": 0,
+            "concussionSubs": 3,
             "abandonPolicy": "replay"
           },
           "scorable": null
@@ -3898,7 +4484,9 @@
             "maxSubs": "min",
             "rollingSubs": "on",
             "subWindows": "blank",
-            "concussionSubs": "blank",
+            "extraTimeSubs": "min",
+            "extraTimeWindows": "min",
+            "concussionSubs": "max",
             "sinBinMinutes": "blank",
             "abandon": "option:replay"
           },
@@ -3910,6 +4498,9 @@
             "teamSize": "5",
             "maxSubs": "0",
             "rollingSubs": "on",
+            "extraTimeSubs": "0",
+            "extraTimeWindows": "0",
+            "concussionSubs": "5",
             "abandon": "replay"
           },
           "overrides": {
@@ -3923,6 +4514,11 @@
             "teamSize": 5,
             "maxSubs": 0,
             "rollingSubs": true,
+            "extraTimeSubs": {
+              "subs": 0,
+              "windows": 0
+            },
+            "concussionSubs": 5,
             "abandonPolicy": "replay"
           },
           "scorable": null
@@ -3941,7 +4537,9 @@
             "maxSubs": "min",
             "rollingSubs": "on",
             "subWindows": "min",
-            "concussionSubs": "max",
+            "extraTimeSubs": "max",
+            "extraTimeWindows": "min",
+            "concussionSubs": "min",
             "sinBinMinutes": "min",
             "abandon": "option:replay"
           },
@@ -3954,7 +4552,9 @@
             "maxSubs": "0",
             "rollingSubs": "on",
             "subWindows": "0",
-            "concussionSubs": "5",
+            "extraTimeSubs": "3",
+            "extraTimeWindows": "0",
+            "concussionSubs": "0",
             "sinBinMinutes": "1",
             "abandon": "replay"
           },
@@ -3970,7 +4570,11 @@
             "maxSubs": 0,
             "rollingSubs": true,
             "subWindows": 0,
-            "concussionSubs": 5,
+            "extraTimeSubs": {
+              "subs": 3,
+              "windows": 0
+            },
+            "concussionSubs": 0,
             "sinBinMinutes": 1,
             "abandonPolicy": "replay"
           },
@@ -3979,7 +4583,7 @@
         {
           "id": "football#093",
           "sport": "football",
-          "row": "swiss_knockout",
+          "row": "group_playoffs",
           "preset": "11-a-side",
           "classes": {
             "halfMinutes": "min",
@@ -3990,8 +4594,10 @@
             "maxSubs": "min",
             "rollingSubs": "on",
             "subWindows": "min",
+            "extraTimeSubs": "interior",
+            "extraTimeWindows": "min",
             "concussionSubs": "min",
-            "sinBinMinutes": "interior",
+            "sinBinMinutes": "min",
             "abandon": "option:replay"
           },
           "values": {
@@ -4003,8 +4609,10 @@
             "maxSubs": "0",
             "rollingSubs": "on",
             "subWindows": "0",
+            "extraTimeSubs": "2",
+            "extraTimeWindows": "0",
             "concussionSubs": "0",
-            "sinBinMinutes": "8",
+            "sinBinMinutes": "1",
             "abandon": "replay"
           },
           "overrides": {
@@ -4019,14 +4627,55 @@
             "maxSubs": 0,
             "rollingSubs": true,
             "subWindows": 0,
+            "extraTimeSubs": {
+              "subs": 2,
+              "windows": 0
+            },
             "concussionSubs": 0,
-            "sinBinMinutes": 8,
+            "sinBinMinutes": 1,
             "abandonPolicy": "replay"
           },
           "scorable": null
         }
       ],
-      "uncoverable": []
+      "uncoverable": [
+        {
+          "sport": "football",
+          "a": "extraTimeSubs=min",
+          "b": "extraTimeWindows=blank",
+          "reason": "sport-cfg: football/11-a-side config invalid — extraTimeSubs.windows: Invalid input: expected number, received undefined — a half of a both-or-neither pair (controller ruling 161, RuleField.pairedWith): only the pair's own fields build its key, so no other factor's level completes it (listed without a search)"
+        },
+        {
+          "sport": "football",
+          "a": "extraTimeSubs=max",
+          "b": "extraTimeWindows=blank",
+          "reason": "sport-cfg: football/11-a-side config invalid — extraTimeSubs.windows: Invalid input: expected number, received undefined — a half of a both-or-neither pair (controller ruling 161, RuleField.pairedWith): only the pair's own fields build its key, so no other factor's level completes it (listed without a search)"
+        },
+        {
+          "sport": "football",
+          "a": "extraTimeSubs=interior",
+          "b": "extraTimeWindows=blank",
+          "reason": "sport-cfg: football/11-a-side config invalid — extraTimeSubs.windows: Invalid input: expected number, received undefined — a half of a both-or-neither pair (controller ruling 161, RuleField.pairedWith): only the pair's own fields build its key, so no other factor's level completes it (listed without a search)"
+        },
+        {
+          "sport": "football",
+          "a": "extraTimeSubs=blank",
+          "b": "extraTimeWindows=min",
+          "reason": "sport-cfg: football/11-a-side config invalid — extraTimeSubs.subs: Invalid input: expected number, received undefined — a half of a both-or-neither pair (controller ruling 161, RuleField.pairedWith): only the pair's own fields build its key, so no other factor's level completes it (listed without a search)"
+        },
+        {
+          "sport": "football",
+          "a": "extraTimeSubs=blank",
+          "b": "extraTimeWindows=max",
+          "reason": "sport-cfg: football/11-a-side config invalid — extraTimeSubs.subs: Invalid input: expected number, received undefined — a half of a both-or-neither pair (controller ruling 161, RuleField.pairedWith): only the pair's own fields build its key, so no other factor's level completes it (listed without a search)"
+        },
+        {
+          "sport": "football",
+          "a": "extraTimeSubs=blank",
+          "b": "extraTimeWindows=interior",
+          "reason": "sport-cfg: football/11-a-side config invalid — extraTimeSubs.subs: Invalid input: expected number, received undefined — a half of a both-or-neither pair (controller ruling 161, RuleField.pairedWith): only the pair's own fields build its key, so no other factor's level completes it (listed without a search)"
+        }
+      ]
     },
     {
       "sport": "cricket",
