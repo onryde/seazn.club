@@ -328,9 +328,12 @@ export function SponsorList(props: SponsorListProps) {
           >
             {/* The visible words ARE the accessible name ("41 clicks"), so a screen reader keeps the count; the title says what a click is.
                 No icon: the words carry it, and 768-1279 has no spare width for both beside the deal cell. */}
+            {/* From md the label sits in a box of one fixed least width, text to the right, so "1 click" and "41 clicks" take the same room and
+                the controls after it - and, because the tray is the last column, the pencil and the deal cell before it - stand in the same
+                place on every row. 5rem holds "999 klikken" (the longest of the four languages) with room to spare. */}
             <span
               data-testid="sponsor-row-clicks"
-              className="shrink-0 whitespace-nowrap pr-2 text-xs tabular-nums text-slate-500"
+              className="shrink-0 whitespace-nowrap pr-2 text-xs tabular-nums text-slate-500 md:min-w-[5rem] md:text-right"
               title={msg("sponsors.row.clicksHint")}
             >
               {clicks}
@@ -360,7 +363,12 @@ export function SponsorList(props: SponsorListProps) {
                       <ArrowDown className="h-3.5 w-3.5" />
                     </button>
                   </>
-                ) : null}
+                ) : (
+                  // A group of one draws NO arrows (nothing to swap with), but from md the room they would take stays, so this row's tray is
+                  // as wide as its neighbours' and the columns line up. Two 28px buttons and the 4px gap between them: 3.75rem. Not a
+                  // control: aria-hidden, nothing focusable in it, and gone below md (a phone's tray wraps and has no columns to keep).
+                  <div data-testid="sponsor-row-move-spacer" aria-hidden="true" className="shrink-0 max-md:hidden md:w-[3.75rem]" />
+                )}
                 <button
                   type="button"
                   aria-label={msg("settings.org.sponsors.remove", { name: s.name })}

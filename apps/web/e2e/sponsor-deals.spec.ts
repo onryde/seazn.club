@@ -334,6 +334,26 @@ test("list at 320 and 375: the ⋯ fold holds clicks, move and delete and the pe
       expect(nameBox.x + nameBox.width, `${width}: the name ends before the pencil`).toBeLessThanOrEqual(pencilBox.x + 0.5);
       expect(pencilBox.x + pencilBox.width, `${width}: the pencil ends before the deal cell`).toBeLessThanOrEqual(dealBox.x + 0.5);
       await expect(long.getByTestId("sponsor-row-logo"), `${width}: the logo tile is on the row`).toBeVisible();
+      // Every row's tray is one width from md, so the same control stands in the same column on every row (owner, 2026-11-11): the two Gold
+      // rows have arrows, the lone Partner row has a spacer in their place, and their clicks read "0 clicks" alike. Left edges, in px.
+      const columns = await Promise.all(
+        [longId, mateId, shortId].map((id) =>
+          rowOf(page, id).evaluate((row) => {
+            const left = (el: Element | null): number => el!.getBoundingClientRect().left;
+            return {
+              pencil: left(row.querySelector('[data-testid="sponsor-row-edit"]')),
+              deal: left(row.querySelector('[data-testid="sponsor-row-deal"]')),
+              clicks: left(row.querySelector('[data-testid="sponsor-row-clicks"]')),
+              remove: left(row.querySelector('[data-testid="sponsor-row-tools"]')!.lastElementChild),
+            };
+          }),
+        ),
+      );
+      expect(columns, `${width}: three rows were measured`).toHaveLength(3);
+      for (const col of ["pencil", "deal", "clicks", "remove"] as const) {
+        const xs = columns.map((c) => c[col]);
+        expect(Math.max(...xs) - Math.min(...xs), `${width}: the ${col} is in one column on every row (left edges ${xs.join(", ")})`).toBeLessThanOrEqual(1);
+      }
     }
 
     // The 43-character name is cut with an ellipsis and stays inside the screen; it is clipped only where the row is that narrow.

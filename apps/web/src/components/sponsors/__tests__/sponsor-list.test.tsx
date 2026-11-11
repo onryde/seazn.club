@@ -40,6 +40,8 @@
 //   L28 sub-line       the sub-line loses `max-[376px]:line-clamp-2` (the price is cut mid-number)      -> "below 376 the sub-line takes two lines"
 //   L29 lone sponsor   the arrows are drawn for a group of one (`canReorder` -> true)                  -> "a sponsor alone in its group has no arrows"
 //   L30 clicks words   the clicks span goes back to the bare number                                    -> "the clicks read as a counted noun"
+//   L31 spacer         the group-of-one spacer is dropped                                             -> "a lone row keeps the arrows' room"
+//   L32 clicks width   the clicks span loses `md:min-w-[5rem]`                                         -> "every row's tray is the same width"
 //   L16 live region    the notice renders only while it has text                                      -> "always mounted"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -1021,6 +1023,123 @@ describe("Move: the first and last row of a GROUP cannot move further", () => {
     const labels = [...rowOf(enMarkup, "s2").matchAll(/<button\b[^>]*>/g)].map((m) => attrOf(m[0], "aria-label"));
     expect(labels).toContain("Move Ridge Gold Physiotherapy up on your public board");
     expect(labels).toContain("Move Ridge Gold Physiotherapy down on your public board");
+  });
+});
+
+describe("From md every row's tray is the same width, so the pencil, the deal and the controls stand in the same columns (owner, 2026-11-11)", () => {
+  // Each row is its own grid: the name takes what is left (`1fr`), so the pencil and the deal cell sit where the tray's width leaves them.
+  // The tray was as wide as its contents - "1 click" against "41 clicks", three buttons against one - and every row drifted. Now the
+  // clicks box has one least width and a row without arrows keeps their room in a spacer. What a browser then DRAWS is measured in
+  // `e2e/sponsor-deals.spec.ts` (x of the pencil, the deal cell, the clicks and the delete on every row); here, the markup that makes it so.
+  const REM = (token: string): number => {
+    const m = /^(?:md:)?(?:min-w|w)-\[(\d+(?:\.\d+)?)rem\]$/.exec(token) ?? /^(?:md:)?(?:min-w|w)-(\d+(?:\.\d+)?)$/.exec(token);
+    if (!m) throw new Error(`not a width token: ${token}`);
+    return token.includes("[") ? Number(m[1]) : Number(m[1]) * 0.25;
+  };
+  const trayOf = (markup: string, id: string) => findOne(rowOf(markup, id), "sponsor-row-tools");
+
+  it("the clicks box has a least width from md and its words stand to the right - and not below md, where the tray wraps (8 rows)", () => {
+    const markup = listHtml(ROWS);
+    let checked = 0;
+    for (const m of MOCKUP) {
+      const tokens = classTokens(findOne(rowOf(markup, m.s.id), "sponsor-row-clicks").open);
+      expect(tokens, `${m.s.name}: a least width from md`).toContain("md:min-w-[5rem]");
+      expect(tokens, `${m.s.name}: words to the right from md`).toContain("md:text-right");
+      // Whole tokens: an unprefixed `min-w-[5rem]` would hold a phone's tray open too.
+      expect(tokens, `${m.s.name}: no least width below md`).not.toContain("min-w-[5rem]");
+      expect(tokens, `${m.s.name}: nor right-aligned below md`).not.toContain("text-right");
+      checked++;
+    }
+    expect(checked).toBe(8);
+  });
+
+  it("a sponsor alone in its group keeps the arrows' room in an aria-hidden spacer with nothing in it; a group of two or more has none (8 rows, one spacer: Harbourside)", () => {
+    const markup = listHtml(ROWS);
+    let withSpacer: string[] = [];
+    let checked = 0;
+    for (const m of MOCKUP) {
+      const tray = trayOf(markup, m.s.id);
+      const spacers = findAll(tray.outer, "sponsor-row-move-spacer");
+      const size = MOCKUP.filter((o) => o.group === m.group).length;
+      expect(spacers.length, `${m.s.name} (group ${m.group} of ${size}): a spacer exactly when alone`).toBe(size === 1 ? 1 : 0);
+      if (spacers.length === 1) {
+        withSpacer = [...withSpacer, m.s.id];
+        const sp = spacers[0]!;
+        expect(attrOf(sp.open, "aria-hidden"), "hidden from the accessibility tree").toBe("true");
+        expect(sp.open.startsWith("<div "), "a plain block, not a control").toBe(true);
+        // Nothing to reach inside it: no button, link, field, tab stop, or any words.
+        expect(sp.outer, "it is empty").toBe(`${sp.open}</div>`);
+        expect(attrOf(sp.open, "tabindex"), "no tab stop").toBeUndefined();
+        expect(attrOf(sp.open, "role"), "no role").toBeUndefined();
+        const tokens = classTokens(sp.open);
+        expect(tokens, "gone below md").toContain("max-md:hidden");
+        expect(tokens, "does not shrink").toContain("shrink-0");
+      }
+      // The arrows stay ABSENT in the tray as a whole - the spacer is not hidden buttons.
+      if (size === 1) {
+        const labels = [...tray.outer.matchAll(/<button\b[^>]*>/g)].map((b) => attrOf(b[0], "aria-label"));
+        expect(labels, `${m.s.name}: only the delete`).toEqual([msg("settings.org.sponsors.remove", { name: m.s.name })]);
+      }
+      checked++;
+    }
+    expect(checked, "all eight rows").toBe(8);
+    expect(withSpacer, "premise: Harbourside is the only sponsor alone in its group").toEqual(["s1"]);
+  });
+
+  it("a viewer's tray has no spacer (it has no arrows to make room for), and its rows still match each other (8 rows)", () => {
+    const markup = listHtml(ROWS, { canEdit: false });
+    let checked = 0;
+    for (const m of MOCKUP) {
+      expect(findAll(rowOf(markup, m.s.id), "sponsor-row-move-spacer"), m.s.name).toHaveLength(0);
+      expect(classTokens(findOne(rowOf(markup, m.s.id), "sponsor-row-clicks").open), `${m.s.name}: the same least width`).toContain("md:min-w-[5rem]");
+      checked++;
+    }
+    expect(checked).toBe(8);
+  });
+
+  it("the spacer is the width of what it stands in for, and every editor row's tray adds up to the same width (clicks box + controls + gaps; 8 rows)", () => {
+    const markup = listHtml(ROWS);
+    // Read from the markup of the neighbours, not typed here: an arrow is `w-7`, the tray's gap is `gap-1`, the clicks box has its least width.
+    const arrowToken = classTokens(
+      [...trayOf(markup, "s2").outer.matchAll(/<button\b[^>]*>/g)].map((b) => b[0]).find((b) => attrOf(b, "aria-label") === msg("settings.org.sponsors.moveUp", { name: "Ridge Gold Physiotherapy" }))!,
+    ).find((t) => /^w-\d/.test(t));
+    expect(arrowToken, "premise: an arrow button has a width token").toBeDefined();
+    const arrow = REM(arrowToken!);
+    const gapToken = classTokens(trayOf(markup, "s2").open).find((t) => /^gap-\d/.test(t));
+    expect(gapToken, "premise: the tray has a gap token").toBeDefined();
+    const gap = Number(gapToken!.slice(4)) * 0.25;
+    const spacerToken = classTokens(findOne(rowOf(markup, "s1"), "sponsor-row-move-spacer").open).find((t) => t.startsWith("md:w-"));
+    expect(spacerToken, "premise: the spacer has a width from md").toBeDefined();
+    expect(REM(spacerToken!), "two arrows and the gap between them").toBeCloseTo(2 * arrow + gap, 5);
+
+    const totals = new Map<string, number>();
+    for (const m of MOCKUP) {
+      const tray = trayOf(markup, m.s.id);
+      const clicksBox = REM(classTokens(findOne(tray.outer, "sponsor-row-clicks").open).find((t) => t.startsWith("md:min-w-"))!);
+      const buttons = [...tray.outer.matchAll(/<button\b[^>]*>/g)].length;
+      const spacer = findAll(tray.outer, "sponsor-row-move-spacer").length;
+      const items = 1 + buttons + spacer;
+      totals.set(m.s.id, clicksBox + buttons * arrow + spacer * REM(spacerToken!) + (items - 1) * gap);
+    }
+    expect(totals.size, "all eight rows were summed").toBe(8);
+    expect([...new Set(totals.values())].map((v) => Number(v.toFixed(4))), "one width for every row").toHaveLength(1);
+    // Premise that makes the sum able to differ: the rows really are built differently (three buttons against one and a spacer).
+    expect(new Set(MOCKUP.map((m) => findAll(trayOf(markup, m.s.id).outer, "sponsor-row-move-spacer").length)).size, "both shapes are in the fixture").toBe(2);
+  });
+
+  it("the sequence: a group that grows from one to two loses its spacer and gains its arrows; a flat list of one has the spacer too", () => {
+    const solo = sponsor({ id: "g1", name: "Native Gold One", tier: "gold", display_order: 0 });
+    const mate = sponsor({ id: "g2", name: "Native Gold Two", tier: "gold", display_order: 1 });
+    let checked = 0;
+    for (const hasTiers of [true, false]) {
+      const one = listHtml([solo], { hasTiers });
+      expect(findAll(one, "sponsor-row-move-spacer"), `hasTiers=${hasTiers}: alone, a spacer`).toHaveLength(1);
+      const two = listHtml([solo, mate], { hasTiers });
+      expect(findAll(two, "sponsor-row-move-spacer"), `hasTiers=${hasTiers}: with a mate, none`).toHaveLength(0);
+      expect([...two.matchAll(/<button\b[^>]*aria-label="Move /g)].length, `hasTiers=${hasTiers}: and four arrows`).toBe(4);
+      checked++;
+    }
+    expect(checked, "tiered and flat").toBe(2);
   });
 });
 
