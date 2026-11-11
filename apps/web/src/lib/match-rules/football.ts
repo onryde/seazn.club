@@ -1,12 +1,21 @@
 // Football's curated match-rule fields. Client-safe: no "use client", no JSX,
 // no `@/components` or `@/server` import.
 import { football } from "@seazn/engine/sports/football";
-import { abandonOptions, readBool, readNumber, readText, readShape } from "./shared.ts";
+import { abandonOptions, readBool, readNestedNumber, readNumber, readText, readShape } from "./shared.ts";
 import type { RuleField } from "./types.ts";
 
 /** Football's extra time as the field writes it: two extra halves of 15 minutes, on or off. `read` holds only that exact
  *  shape (a hand-edited 20-minute extra time hydrates blank rather than being rounded to "on" and rewritten). */
 const EXTRA_TIME = { on: { enabled: true, halfMinutes: 15 }, off: { enabled: false, halfMinutes: 15 } } as const;
+
+/** Law 3.2's extra-time allowance: one more substitution and one more opportunity. What a blank box beside a filled one means. */
+const LAW_3_EXTRA = 1;
+
+/** `extraTimeSubs` from the two boxes' raw values; a blank one is Law 3's one (the engine requires both leaves). */
+function extraTimeSubsOf(subs: string | undefined, windows: string | undefined): Record<string, unknown> {
+  const n = (raw: string | undefined) => (raw === undefined || raw === "" ? LAW_3_EXTRA : Number(raw));
+  return { extraTimeSubs: { subs: n(subs), windows: n(windows) } };
+}
 
 export const FOOTBALL_RULES: RuleField[] = [
   {
@@ -110,6 +119,38 @@ export const FOOTBALL_RULES: RuleField[] = [
     max: 10,
     build: (v) => ({ subWindows: Number(v) }),
     read: readNumber("subWindows"),
+  },
+  // Engine 7.0.0 (F-R3; IFAB Law 3.2) - the extra substitution and the extra substitution opportunity a competition that plays
+  // extra time may allow in it. ONE engine key, `extraTimeSubs: { subs, windows }`, both leaves required, so two number boxes
+  // that each build the whole object: its own value, and the other box's, or Law 3's one when that box is blank. Optional with
+  // no engine default, so both blank stores nothing. Read only from extra time on (`effectiveSubCaps`); the form has no way to
+  // hold them while extra time is off unless the engine declares the key a detail of `extraTime` (`detailOf`), which 7.0.0 does
+  // not. The engine gives no maximum; three is the web's own bound (Law 3 allows one).
+  {
+    key: "extraTimeSubs",
+    edits: ["extraTimeSubs"],
+    label: "Extra subs in extra time",
+    labelKey: "rules.field.extraTimeSubs.label",
+    help: "Substitutions a side may add in extra time, on top of Substitutes allowed (Law 3 allows one). Extra time only. Blank = none, or 1 if extra windows are set.",
+    helpKey: "rules.field.extraTimeSubs.help",
+    kind: "number",
+    min: 0,
+    max: 3,
+    build: (v, values) => extraTimeSubsOf(v, values.extraTimeWindows),
+    read: readNestedNumber("extraTimeSubs", "subs"),
+  },
+  {
+    key: "extraTimeWindows",
+    edits: ["extraTimeSubs"],
+    label: "Extra windows in extra time",
+    labelKey: "rules.field.extraTimeWindows.label",
+    help: "Stoppages a side may add for substitutions in extra time, on top of Substitution windows allowed (Law 3 allows one). Extra time only. Blank = none, or 1 if extra subs are set.",
+    helpKey: "rules.field.extraTimeWindows.help",
+    kind: "number",
+    min: 0,
+    max: 3,
+    build: (v, values) => extraTimeSubsOf(values.extraTimeSubs, v),
+    read: readNestedNumber("extraTimeSubs", "windows"),
   },
   // A COUNT of extra substitutes (IFAB concussion trial), held outside `maxSubs`. Absent means the trial is not in force
   // here, and the kernel then refuses a concussion substitute; 0 is a value of its own and is stored. The engine gives it

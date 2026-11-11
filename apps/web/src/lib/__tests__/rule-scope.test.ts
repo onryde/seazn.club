@@ -136,7 +136,7 @@ describe("rule-scope — web reads the engine declaration (D2)", () => {
     const stageFields = stageFieldsFor(ctx);
     expect(stageFields.length, "the stage form is not empty").toBeGreaterThan(0);
     for (const f of stageFields) for (const k of f.edits) expect(pointsKeys, `${f.key} edits ${k}, a points key`).not.toContain(k);
-    inOrder(keysOf(stageFieldsFor(ctx)), ["halfMinutes", "extraTime", "shootout", "teamSize", "maxSubs", "subWindows", "sinBinMinutes"]);
+    inOrder(keysOf(stageFieldsFor(ctx)), ["halfMinutes", "extraTime", "shootout", "teamSize", "maxSubs", "subWindows", "extraTimeSubs", "extraTimeWindows", "sinBinMinutes"]);
     // A sport whose points keys have no field yet answers an empty points form rather than a crash.
     expect(pointsFieldsFor({ module: mod("tennis"), stageKind: "league", variant: null })).toEqual([]);
   });
