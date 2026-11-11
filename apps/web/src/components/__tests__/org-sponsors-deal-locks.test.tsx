@@ -151,6 +151,7 @@ const stripTags = (h: string) => h.replace(/<[^>]*>/g, "").replace(/&#x27;/g, "'
 /** The picker's tile: the one button in the form that carries the logo label. */
 const tileIn = (html: string) => [...html.matchAll(/<button\b[^>]*\baria-label="Logo"[^>]*>([\s\S]*?)<\/button>/g)];
 const attr = (tag: string, name: string) => new RegExp(`\\s${name}="([^"]*)"`).exec(tag)?.[1] ?? null;
+const classTokens = (cls: string) => cls.split(/\s+/).filter(Boolean);
 
 describe("the logo tile: an icon with an accessible name, and one hint that says what it takes (owner, 2026-11-11)", () => {
   it("the tile shows no visible Logo word - an icon only - and keeps its accessible name (empty and with a picked preview)", () => {
@@ -701,6 +702,9 @@ describe("Show on site again (now on the sponsor's page, Task 15): a hidden spon
 //   P4d owner    drop the owner comparison after the measuring `await`                                        -> "a slow pick that lands after"
 //   P5  crop     draw the crop warning whatever `crop.warn` says                                              -> "crop: warn true shows"
 //   P6  reset    `startEdit` keeps the poster draft of the last editor                                        -> "an abandoned pick is not carried"
+//   I1  region   drop `role="status"` / `empty:hidden`, wrap the region in the warning, key it on the warning, or give Remove a bare class
+//                                                                                                            -> "the warning's live region is one element"
+//   M3  413      a poster's 413 (grant or PUT) says the logo's sentence, or a logo's says the poster's        -> "over the storage's cap"
 const POSTER_NONE: PosterDraft = { file: null, preview: null, removed: false, crop: null };
 const POSTER_STORED = "https://cdn.example/posters/old.png";
 const POSTER_NEW = "https://cdn.example/posters/new.png";
@@ -884,6 +888,38 @@ describe("the poster tile: the live 4:5 crop, Remove, and the crop warning", () 
     }
     expect(checked).toBe(5);
     expect(warned, "both sentences were exercised").toBe(2);
+  });
+
+  it("the warning's live region is one element in one place whether or not it has a warning, hides itself when empty; Remove is a phone-sized tap target (fix round 1, I1)", () => {
+    // A screen reader announces a warning that ARRIVES in a live region that was already there: a wrapper that appears together with the
+    // warning (or is re-keyed when it changes) is not announced. Static markup cannot tell "same element" from "a new one", so the island's
+    // own tree is read: the region sits in the same slot of the same parent, unkeyed, with and without a warning.
+    const WARN: PosterDraft["crop"] = { side: "width", percent: 55, warn: true };
+    const regionOf = (crop: PosterDraft["crop"]) => {
+      const island = renderIsland(PosterField, { value: { ...POSTER_NONE, file: pngFile(), preview: "blob:picked", crop }, onPick: () => {}, onRemove: () => {} });
+      const tree = island.tree();
+      const regions = tree.filter((e) => propsOf(e).role === "status");
+      expect(regions, `crop ${JSON.stringify(crop)}: exactly one role="status" region`).toHaveLength(1);
+      const region = regions[0]!;
+      const parent = tree.find((e) => [propsOf(e).children].flat().includes(region))!;
+      const slot = [propsOf(parent).children].flat().indexOf(region);
+      return { region, slot, parentTestId: propsOf(parent)["data-testid"] ?? null, hasWarning: tree.some((e) => propsOf(e)["data-testid"] === "sponsor-poster-crop") };
+    };
+    const without = regionOf(null);
+    const withWarning = regionOf(WARN);
+    expect(without.hasWarning, "premise: the first draw has no warning").toBe(false);
+    expect(withWarning.hasWarning, "premise: the second draw has one").toBe(true);
+    expect(withWarning.slot, "the region is in the same slot of its parent with and without the warning").toBe(without.slot);
+    expect(withWarning.region.type, "and is the same kind of element").toBe(without.region.type);
+    expect(withWarning.region.key, "never keyed on the warning (a changed key remounts it)").toBeNull();
+    expect(without.region.key).toBeNull();
+    for (const { region } of [without, withWarning]) {
+      expect(classTokens(propsOf(region).className as string), "empty, it draws nothing and takes no gap").toContain("empty:hidden");
+    }
+    // Remove: the shared small button, which grows to a thumb-sized tap target on a phone (the sponsor sheet's own SMALL_BTN).
+    const island = renderIsland(PosterField, { value: { ...POSTER_NONE, preview: POSTER_STORED }, onPick: () => {}, onRemove: () => {} });
+    const remove = island.tree().find((e) => propsOf(e)["data-testid"] === "sponsor-poster-remove")!;
+    expect(classTokens(propsOf(remove).className as string), "Remove is at least 44px tall below md").toContain("max-md:min-h-11");
   });
 });
 
@@ -1197,6 +1233,43 @@ describe("the poster field through the island: a save, a removal, a refusal, and
     expect(calls.filter((c) => c.method === "PATCH"), "storage PUT 500: nothing saved").toHaveLength(0);
     checked++;
     expect(checked).toBe(3);
+  });
+
+  it("over the storage's cap (413, on the grant or on the PUT) a poster says the POSTER size words and a logo still says the logo's (fix round 1, M3; 4 checked)", async () => {
+    vi.stubGlobal("createImageBitmap", bitmapOf(1080, 1350));
+    const hintMb = Number(/up to (\d+) MB/.exec(flat(stripTags(formMarkup({ poster: posterProp() }))))?.[1]);
+    expect(Number.isInteger(hintMb) && hintMb > 0, "premise: the hint carries a whole number of MB").toBe(true);
+    const POSTER_WORDS = msg("sponsors.poster.tooBig", { mb: hintMb });
+    const LOGO_WORDS = msg("settings.org.sponsors.tooBig");
+    expect(POSTER_WORDS, "premise: the two sentences differ (a mapping that mixed them up would show it)").not.toBe(LOGO_WORDS);
+    const REFUSALS = {
+      grant: (url: string, method: string) => (url.includes("/content-upload") && method === "POST" ? { status: 413, body: { ok: false, error: "Payload Too Large" } } : { status: 200, body: { data: [] } }),
+      put: (url: string, method: string) =>
+        url.includes("/content-upload") && method === "POST" ? CONTENT_UPLOAD_OK : url === "https://storage.example/put" ? { status: 413, body: {} } : { status: 200, body: { data: [] } },
+    };
+    let checked = 0;
+    for (const where of ["grant", "put"] as const) {
+      for (const what of ["poster", "logo"] as const) {
+        calls.length = 0;
+        answer = REFUSALS[where];
+        const m = mount([row({ id: "a", name: "Quay Chandlers" })]);
+        m.edit("Quay Chandlers");
+        if (what === "poster") {
+          await posterOf(m)!.onPick(pngFile());
+          await flush();
+        } else {
+          (propsOf(m.form()).onChange as (fn: (p: typeof DRAFT) => unknown) => void)((p) => ({ ...p, file: pngFile(1, "logo.png") }));
+        }
+        await save(m);
+        const label = `${what} 413 on the ${where}`;
+        expect(calls.some((c) => c.url.includes("/content-upload")), `${label}: the upload was attempted`).toBe(true);
+        expect(m.text(), label).toContain(what === "poster" ? POSTER_WORDS : LOGO_WORDS);
+        expect(m.text(), `${label}: not the other file's words`).not.toContain(what === "poster" ? LOGO_WORDS : POSTER_WORDS);
+        expect(calls.filter((c) => c.method === "PATCH"), `${label}: nothing saved`).toHaveLength(0);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
   });
 
   it("an abandoned pick is not carried into the next editor: Cancel then Edit again, and a second sponsor's pencil, both open at what is STORED", async () => {

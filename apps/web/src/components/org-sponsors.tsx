@@ -500,6 +500,7 @@ export function OrgSponsors({
   // after a newer pick or after Remove is stale and is dropped (`pickPoster`). `posterOwner` is the sponsor the editor is open for (the
   // URL's `?edit=` answer): a pick that was started for one sponsor never lands in another's draft. It is a ref read AFTER the measuring,
   // set by an effect, so a pick made the moment the page hydrates is not mistaken for a stale one (a counter bumped on mount ate it).
+  // That hydration window cannot be witnessed in the node harness (it runs effects synchronously): the owner comparison itself is pinned.
   const [poster, setPoster] = useState<PosterDraft>(posterDraftOf(initialSponsors.find((s) => s.id === editParamId)));
   const posterSeq = useRef(0);
   const posterOwner = useRef(editParamId);
@@ -583,8 +584,10 @@ export function OrgSponsors({
     setDeals((await v1("/sponsor-deals", { method: "GET" })) as SponsorDeal[]);
   }
 
-  /** Upload a picked logo to storage; returns its public URL. */
-  async function uploadLogo(file: File): Promise<string> {
+  /** Upload a picked logo or poster to storage; returns its public URL. `kind` says whose words a file over the storage's cap (413) gets:
+   *  the logo's "Sponsor logos can be up to 2 MB" is untrue of a poster, so a poster says its own (`sponsors.poster.tooBig`). */
+  async function uploadLogo(file: File, kind: "logo" | "poster" = "logo"): Promise<string> {
+    const tooBig = () => (kind === "poster" ? msg("sponsors.poster.tooBig", { mb: LOGO_MAX_MB }) : msg("settings.org.sponsors.tooBig"));
     const res = await fetch(`/api/orgs/${orgId}/content-upload`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -597,7 +600,7 @@ export function OrgSponsors({
     // The envelope's `error` is the server's English sentence (or a structured object): never shown, whatever the status. The STATUS
     // says which words are true (batch H review m6): a type the route will not take (400 validation, 415 or 422) is a different fix
     // from "not allowed to upload at all" (401, 403), and a file over the cap (413) is the size limit - never the generic refusal.
-    if (!res.ok) throw new Error(msg(logoUploadRefusalKey(res.status)));
+    if (!res.ok) throw new Error(res.status === 413 ? tooBig() : msg(logoUploadRefusalKey(res.status)));
     const grant = json.data;
     if (!grant?.upload_url || !grant.public_url) {
       throw new Error(msg("settings.org.sponsors.uploadNotAllowed"));
@@ -607,7 +610,7 @@ export function OrgSponsors({
       headers: { "Content-Type": file.type },
       body: file,
     });
-    if (!put.ok) throw new Error(msg(put.status === 413 ? "settings.org.sponsors.tooBig" : "settings.org.logo.uploadFailed"));
+    if (!put.ok) throw new Error(put.status === 413 ? tooBig() : msg("settings.org.logo.uploadFailed"));
     return grant.public_url;
   }
 
@@ -685,7 +688,7 @@ export function OrgSponsors({
       // save from here never carries either.
       const uploaded: { logo?: string; poster?: string } = {};
       if (edit.file) uploaded.logo = await uploadLogo(edit.file);
-      if (poster.file) uploaded.poster = await uploadLogo(poster.file);
+      if (poster.file) uploaded.poster = await uploadLogo(poster.file, "poster");
       const patch = sponsorEditPatch(s, edit, poster, uploaded);
       if (Object.keys(patch).length > 0) {
         await api(`/${s.id}`, { method: "PATCH", body: JSON.stringify(patch) });
