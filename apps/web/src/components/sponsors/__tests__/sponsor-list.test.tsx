@@ -1,8 +1,9 @@
 // Sponsor deals PR 2, Task 14 - the Sponsors tab's list (components/sponsors/sponsor-list.tsx): each sponsor row carries its
-// deal's chip and ONE next action (`rowNextAction`, lib/sponsor-deals.ts, F15), grouped by the deal's tier.
+// deal's chip and ONE next action (`rowNextAction`, lib/sponsor-deals.ts, F15), grouped by the tier each sponsor shows at now.
 //
-// Every expectation is typed from the MOCKUP (screen 1 of 2026-11-01_sponsor-deals-mockups: the eight rows, their chips, sub-lines,
-// actions and the group counts 1 / 1 / 2 / 4) or from spec §6 - never read back from the component. vitest is
+// Every expectation is typed from the MOCKUP (screen 1 of 2026-11-01_sponsor-deals-mockups: the eight rows, their chips, sub-lines
+// and actions), from spec §6, or from the owner's own rulings of 2026-11-11 (the group is the tier a sponsor shows at NOW - Title 1,
+// Partner 7 here - and the pencil is the one way in) - never read back from the component. vitest is
 // `environment: "node"`: the list's markup is read from `renderToStaticMarkup`; a click is the element's own handler called, in the
 // tree `_sponsor-tree.tsx` expands (SponsorList, SponsorRowMore and DealChip are stateless; every bit of state is OrgSponsors').
 // What neither can see (CSS, real widths, a real tap) is `e2e/sponsor-deals.spec.ts`, run by CI at 320 / 768 / 1280.
@@ -12,8 +13,10 @@
 // Killers (one at a time, restore from a cp backup):
 //   L1  one action     render `allowedActions(deal)[1]` beside the row's action                       -> "one action at most"
 //   L2  precedence     `rowNextAction(deal)` -> a draft row offers Send invoice                       -> "the eight mockup rows"
-//   L3  group key      group by `s.deal?.tier ?? s.tier` (the OLD key: the waiting deal's tier)        -> "a waiting gold deal"
+//   L3  group key      group by `s.deal?.tier ?? s.tier` (the OLD key: the waiting deal's tier)        -> "a waiting title deal on a partner sponsor sits in PARTNER"
 //   L4  fold           drop `max-md:hidden` from the tray                                              -> "the tray is hidden below md"
+//   L20 pencil         the pencil goes back INTO the tray (folded with the rest)                       -> "the PENCIL is not in the tray"
+//   L21 pencil         the pencil's cell is `max-md:hidden` (never shown on a phone)                   -> "the PENCIL is not in the tray"
 //   L5  fold twice     render the controls a second time (a phone copy)                                -> "each control exists once"
 //   L6  viewer         drop the `canEdit &&` guard on the action                                      -> "a viewer"
 //   L7  tap            the toggle loses `h-11 w-11`                                                    -> "the toggle is a 44px target"
@@ -35,6 +38,8 @@ import type { ReactElement } from "react";
 
 const confirmMock = vi.hoisted(() => vi.fn<(opts?: unknown) => Promise<boolean>>(async () => true));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMock }));
+// The island reads a router (to clear the pencil's ?edit=1 once its editor is done); nothing in this file navigates.
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {}, refresh: () => {}, replace: () => {} }) }));
 
 import { OrgSponsors, SponsorForm, type SponsorItem, type SponsorsHubData } from "@/components/org-sponsors";
 import { AddDealSheet, type CreateDealBody } from "@/components/sponsors/add-deal-sheet";
@@ -496,9 +501,9 @@ describe("a 43-character name truncates, and every ancestor can shrink (phone co
   });
 });
 
-describe("below md the clicks and the edit, move and delete controls fold behind a 44px ⋯ (spec §6.1, mockup screen 1)", () => {
-  const CONTROLS = (name: string) => [
-    msg("sponsors.edit", { name }),
+describe("below md the clicks and the move and delete controls fold behind a 44px ⋯; the pencil does not (spec §6.1, mockup screen 1; owner, 2026-11-11)", () => {
+  /** What the ⋯ folds. The pencil is NOT among them: it is the one way into a sponsor, so it is on the row whether the tray is open or not. */
+  const FOLDED = (name: string) => [
     msg("settings.org.sponsors.moveUp", { name }),
     msg("settings.org.sponsors.moveDown", { name }),
     msg("settings.org.sponsors.remove", { name }),
@@ -509,18 +514,43 @@ describe("below md the clicks and the edit, move and delete controls fold behind
     for (const open of [false, true]) {
       const markup = listHtml(ROWS, { moreOpenId: open ? "s1" : null });
       const row = rowOf(markup, "s1");
-      for (const label of CONTROLS(LONG_NAME)) {
+      for (const label of [...FOLDED(LONG_NAME), msg("sponsors.edit", { name: LONG_NAME })]) {
         expect(row.split(`aria-label="${label}"`).length - 1, `${label} (open=${open})`).toBe(1);
         checked++;
       }
       expect(row.split('data-testid="sponsor-row-clicks"').length - 1, `clicks (open=${open})`).toBe(1);
       const tray = findOne(row, "sponsor-row-tools");
       expect(classTokens(tray.open).includes("max-md:hidden"), `the tray is hidden below md while closed (open=${open})`).toBe(!open);
-      // The controls are INSIDE the tray (that is what folding them means), so hiding the tray hides all of them.
-      for (const label of CONTROLS(LONG_NAME)) expect(tray.outer, label).toContain(`aria-label="${label}"`);
+      // The folded controls are INSIDE the tray (that is what folding them means), so hiding the tray hides all of them.
+      for (const label of FOLDED(LONG_NAME)) expect(tray.outer, label).toContain(`aria-label="${label}"`);
       expect(tray.outer).toContain('data-testid="sponsor-row-clicks"');
     }
-    expect(checked, "4 controls x 2 states").toBe(8);
+    expect(checked, "3 folded controls + the pencil, x 2 states").toBe(8);
+  });
+
+  it("the PENCIL is not in the tray: it sits beside the ⋯, on the row, and nothing about it is hidden below md - open or shut (owner, 2026-11-11: editors did not know where to tap)", () => {
+    let checked = 0;
+    for (const open of [false, true]) {
+      const row = rowOf(listHtml(ROWS, { moreOpenId: open ? "s1" : null }), "s1");
+      const tray = findOne(row, "sponsor-row-tools");
+      expect(tray.outer, `the tray does not hold the pencil (open=${open})`).not.toContain('data-testid="sponsor-row-edit"');
+      const lead = findOne(row, "sponsor-row-lead");
+      const pencil = findOne(lead.outer, "sponsor-row-edit");
+      const more = findOne(lead.outer, "sponsor-row-more");
+      expect(lead.outer.indexOf(pencil.open), `the pencil comes before the ⋯, in the same cell (open=${open})`).toBeLessThan(lead.outer.indexOf(more.open));
+      // Nothing between the pencil and the row hides it below md: not the link, not its cell. (`hidden` as a WHOLE token: the substring
+      // also sits inside `max-md:hidden`.)
+      for (const el of [pencil.open, lead.open]) {
+        const tokens = classTokens(el);
+        expect(tokens, `open=${open}`).not.toContain("max-md:hidden");
+        expect(tokens, `open=${open}`).not.toContain("hidden");
+      }
+      // 44px, on a phone, like the ⋯ beside it.
+      expect(classTokens(pencil.open)).toEqual(expect.arrayContaining(["max-md:h-11", "max-md:w-11"]));
+      expect(classTokens(more.open)).toEqual(expect.arrayContaining(["h-11", "w-11"]));
+      checked++;
+    }
+    expect(checked, "open and shut").toBe(2);
   });
 
   it("a row not opened keeps its own tray folded while another row's is open", () => {
@@ -556,14 +586,13 @@ describe("below md the clicks and the edit, move and delete controls fold behind
     expect(toggled).toEqual(["s1"]);
   });
 
-  it("the tray's controls are 44px targets below md (the icon buttons and the pencil grow on a phone)", () => {
+  it("the tray's controls are 44px targets below md (the icon buttons grow on a phone)", () => {
     const tray = findOne(rowOf(listHtml(ROWS, { moreOpenId: "s1" }), "s1"), "sponsor-row-tools");
     const buttons = [...tray.outer.matchAll(/<button\b[^>]*>/g)].map((m) => m[0]);
     expect(buttons.length, "up, down, delete").toBe(3);
-    // The pencil is a link now, and it is held to the same 44px.
-    const links = [...tray.outer.matchAll(/<a\b[^>]*>/g)].map((m) => m[0]);
-    expect(links.length, "the pencil").toBe(1);
-    for (const b of [...buttons, ...links]) {
+    // The pencil is a link and is NOT in the tray (it is beside the ⋯): the tray holds no link at all.
+    expect([...tray.outer.matchAll(/<a\b[^>]*>/g)].length, "no link in the tray").toBe(0);
+    for (const b of buttons) {
       const tokens = classTokens(b);
       expect(tokens, b).toContain("max-md:h-11");
       expect(tokens, b).toContain("max-md:w-11");
@@ -670,8 +699,9 @@ describe("the row's name is plain text; the pencil is the one way in (owner, 202
       expect(attrOf(open[0]!.open, "href"), r.id).toBe(sponsorHref(SLUG, r.id));
       expect(attrOf(open[0]!.open, "href"), `${r.id}: no edit flag for a viewer`).not.toContain("edit=");
       expect(attrOf(open[0]!.open, "aria-label"), r.id).toBe(`Open ${r.name}`);
-      // 44px on a phone, like every other control in the tray.
+      // 44px on a phone, and in the same cell an editor's pencil is in (there is nothing to fold for a viewer).
       expect(classTokens(open[0]!.open), `${r.id}: phone tap area`).toEqual(expect.arrayContaining(["max-md:h-11", "max-md:w-11"]));
+      expect(findOne(row, "sponsor-row-lead").outer, `${r.id}: in the row's lead cell, where the pencil is`).toContain('data-testid="sponsor-row-open"');
       expect(findAll(row, "sponsor-row-edit"), `${r.id}: no pencil for a viewer`).toHaveLength(0);
       checked++;
     }

@@ -14,8 +14,9 @@
 // a viewer's is the same button opening the page read-only (`sponsorHref`). The name is plain text. The row has no editor of its own -
 // the sponsor's page owns it - and Show on site again lives there too (spec §10.3).
 //
-// One DOM. Below md (768) the clicks and the edit / move / delete controls fold into a tray that is `max-md:hidden` until the ⋯
-// (SponsorRowMore) opens it; from md up they sit inline. The controls exist once.
+// One DOM. The way in sits in the row's lead cell, beside the ⋯, and is on screen at every width: it is what people look for, so a
+// phone never makes an editor open a menu to find it. Below md (768) the clicks and the move / delete controls fold into a tray that
+// is `max-md:hidden` until the ⋯ (SponsorRowMore) opens it; from md up they sit inline. The controls exist once.
 import type { ReactNode } from "react";
 import Link from "@/components/ui/console-link";
 import { ArrowDown, ArrowUp, ChevronRight, MousePointerClick, Pencil, Trash2 } from "lucide-react";
@@ -255,7 +256,7 @@ export function SponsorList(props: SponsorListProps) {
       <li key={s.id} data-testid="sponsor-row" data-sponsor-id={s.id} className="px-3 py-2.5">
         <div
           data-testid="sponsor-row-grid"
-          className="grid grid-cols-[2.25rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 md:grid-cols-[2.25rem_minmax(0,1fr)_auto_auto]"
+          className="grid grid-cols-[2.25rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 md:grid-cols-[2.25rem_minmax(0,1fr)_auto_auto_auto]"
         >
           {s.logo_path ? (
             // Stored via content-upload - an absolute CDN URL.
@@ -280,7 +281,19 @@ export function SponsorList(props: SponsorListProps) {
               {subline(s, { msg, locale, tz, competitions, hasTiers })}
             </p>
           </div>
-          {canEdit ? <SponsorRowMore name={s.name} open={open} controlsId={trayId} onToggle={() => onToggleMore(s.id)} /> : null}
+          {/* The lead cell: the one way in, then (below md, editors only) the ⋯ that opens the rest. Never folded - see the header. */}
+          <div data-testid="sponsor-row-lead" className="flex items-center">
+            {canEdit ? (
+              <Link href={sponsorEditHref(orgSlug, s.id)} data-testid="sponsor-row-edit" aria-label={msg("sponsors.edit", { name: s.name })} className={ICON_BUTTON}>
+                <Pencil className="h-3.5 w-3.5" />
+              </Link>
+            ) : (
+              <Link href={sponsorHref(orgSlug, s.id)} data-testid="sponsor-row-open" aria-label={msg("sponsors.open", { name: s.name })} className={ICON_BUTTON}>
+                <ChevronRight className="h-4 w-4" />
+              </Link>
+            )}
+            {canEdit ? <SponsorRowMore name={s.name} open={open} controlsId={trayId} onToggle={() => onToggleMore(s.id)} /> : null}
+          </div>
           <div
             data-testid="sponsor-row-deal"
             className="col-span-2 col-start-2 flex min-w-0 flex-wrap items-center justify-between gap-2 md:col-span-1 md:col-start-auto md:w-72"
@@ -302,16 +315,6 @@ export function SponsorList(props: SponsorListProps) {
               <MousePointerClick className="h-3.5 w-3.5" strokeWidth={1.75} />
               {s.click_count}
             </span>
-            {/* The one way in: an editor's pencil opens the sponsor's page with its editor open, a viewer's button opens it read-only. */}
-            {canEdit ? (
-              <Link href={sponsorEditHref(orgSlug, s.id)} data-testid="sponsor-row-edit" aria-label={msg("sponsors.edit", { name: s.name })} className={ICON_BUTTON}>
-                <Pencil className="h-3.5 w-3.5" />
-              </Link>
-            ) : (
-              <Link href={sponsorHref(orgSlug, s.id)} data-testid="sponsor-row-open" aria-label={msg("sponsors.open", { name: s.name })} className={ICON_BUTTON}>
-                <ChevronRight className="h-4 w-4" />
-              </Link>
-            )}
             {canEdit ? (
               <>
                 <button

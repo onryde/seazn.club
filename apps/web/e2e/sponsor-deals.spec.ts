@@ -234,9 +234,10 @@ test("list at 320: the ⋯ fold holds clicks, edit, move and delete; no sideways
 
     const more = long.getByTestId("sponsor-row-more");
     const tools = long.getByTestId("sponsor-row-tools");
+    // The pencil is a LINK (to the sponsor's page with its editor open) and is NOT folded: it is on the row at every width, beside the ⋯.
+    const pencil = long.getByRole("link", { name: ui("sponsors.edit", { name: LONG }), exact: true });
+    // What the ⋯ folds below 768: the three buttons (and the clicks count).
     const controls = [
-      // The pencil is a LINK (to the sponsor's page with its editor open); the other three are buttons.
-      long.getByRole("link", { name: ui("sponsors.edit", { name: LONG }), exact: true }),
       long.getByRole("button", { name: ui("settings.org.sponsors.moveUp", { name: LONG }), exact: true }),
       long.getByRole("button", { name: ui("settings.org.sponsors.moveDown", { name: LONG }), exact: true }),
       long.getByRole("button", { name: ui("settings.org.sponsors.remove", { name: LONG }), exact: true }),
@@ -253,10 +254,30 @@ test("list at 320: the ⋯ fold holds clicks, edit, move and delete; no sideways
       await expect(tools, `${width}: folded, the tools are not on screen`).toBeHidden();
       await expect(clicks, `${width}: nor the clicks count`).toBeHidden();
       for (const c of controls) await expect(c, `${width}: nor the controls`).toBeHidden();
+      // ... but the pencil is: an editor never opens a menu to find the way in (owner, 2026-11-11). A 44px target, on the ⋯'s own line and
+      // right beside it, and hit-tested (paint is not a tap area).
+      await expect(pencil, `${width}: the pencil is on the row with the fold shut`).toBeVisible();
+      const shutBox = (await pencil.boundingBox())!;
+      expect(shutBox.width, `${width}: the pencil is 44px wide`).toBeGreaterThanOrEqual(44);
+      expect(shutBox.height, `${width}: and 44px tall`).toBeGreaterThanOrEqual(44);
+      expect(Math.abs(shutBox.y + shutBox.height / 2 - (moreBox!.y + moreBox!.height / 2)), `${width}: on the same line as the ⋯`).toBeLessThanOrEqual(2);
+      expect(moreBox!.x - (shutBox.x + shutBox.width), `${width}: right beside the ⋯, not apart from it`).toBeLessThanOrEqual(12);
+      expect(moreBox!.x - (shutBox.x + shutBox.width), `${width}: and to its left, not on top of it`).toBeGreaterThanOrEqual(-1);
+      expect(
+        await pencil.evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          const hit = (y: number) => { const t = document.elementFromPoint(r.left + r.width / 2, y); return t === el || el.contains(t); };
+          return hit(r.top + 2) && hit(r.bottom - 2);
+        }),
+        `${width}: both ends of the pencil hit the pencil`,
+      ).toBe(true);
       await expectNoHorizontalScroll(page);
 
       await openSponsorRowTools(page, LONG);
       await expect(more).toHaveAttribute("aria-expanded", "true");
+      await expect(pencil, `${width}: open, the pencil has not moved off the row`).toBeVisible();
+      const openBox = (await pencil.boundingBox())!;
+      expect({ x: Math.round(openBox.x), y: Math.round(openBox.y) }, `${width}: and it is where it was`).toEqual({ x: Math.round(shutBox.x), y: Math.round(shutBox.y) });
       await expect(clicks, `${width}: open, the clicks count is there`).toBeVisible();
       for (const c of controls) {
         await expect(c, `${width}: open, every control is there`).toBeVisible();
@@ -273,7 +294,7 @@ test("list at 320: the ⋯ fold holds clicks, edit, move and delete; no sideways
       await expect(more, `${width}: no ⋯ from 768`).toBeHidden();
       await expect(tools, `${width}: the tools are inline`).toBeVisible();
       await expect(clicks).toBeVisible();
-      for (const c of controls) await expect(c, `${width}: every control is inline`).toBeVisible();
+      for (const c of [pencil, ...controls]) await expect(c, `${width}: every control is inline`).toBeVisible();
       await expect(long.getByRole("link", { name: ui("sponsors.edit", { name: LONG }) }), `${width}: one Edit, not two`).toHaveCount(1);
     }
 
@@ -422,10 +443,11 @@ test("sponsor page: phones get their own page with back; desktop a side sheet ov
   await expect(listView).toBeVisible();
   await expect(rowOf(page, other)).toBeVisible();
 
-  // --- The pencil's tap area on a phone: a 44px target inside the row's ⋯ tray. Hit-test it, do not just measure paint.
-  await openSponsorRowTools(page, NAME);
+  // --- The pencil's tap area on a phone: a 44px target beside the ⋯, on the row with the tray SHUT (an editor opens no menu to find it).
+  // Hit-test it, do not just measure paint.
   const pencil = rowOf(page, sponsorId).getByTestId("sponsor-row-edit");
-  await expect(pencil, "open, the pencil is on the row").toBeVisible();
+  await expect(rowOf(page, sponsorId).getByTestId("sponsor-row-more"), "premise: the tray is shut").toHaveAttribute("aria-expanded", "false");
+  await expect(pencil, "shut, the pencil is on the row").toBeVisible();
   const hit = await pencil.evaluate((el) => {
     const r = el.getBoundingClientRect();
     const top = document.elementFromPoint(r.left + r.width / 2, r.top + 2);
@@ -1082,19 +1104,11 @@ async function controlSet(page: Page, sponsorId: string): Promise<string[]> {
 const urlIs = (expected: string) => (u: URL): boolean => u.pathname + u.search === expected;
 
 /** Follows a row's pencil - the ONE way into a sponsor from the list (owner, 2026-11-11: the name is plain text) - to the sponsor's own
- *  page with its editor open. Below 768 the pencil sits in the row's ⋯ tray, so the fold is opened first, and only where the ⋯ is on
- *  screen (gated on the toggle, never on a width literal). A click before the island hydrates is a plain anchor navigation, which is
- *  exactly what the pencil is, so it needs no retry. */
+ *  page with its editor open. The pencil is on the row at every width (beside the ⋯ on a phone; it is never folded into the tray), so
+ *  there is nothing to open first. A click before the island hydrates is a plain anchor navigation, which is exactly what the pencil
+ *  is, so it needs no retry. */
 async function followPencil(page: Page, sponsorId: string): Promise<void> {
-  const row = rowOf(page, sponsorId);
-  const more = row.getByTestId("sponsor-row-more");
-  if (await more.isVisible()) {
-    await expect(async () => {
-      if ((await more.getAttribute("aria-expanded")) !== "true") await more.click();
-      await expect(more).toHaveAttribute("aria-expanded", "true", { timeout: 1_000 });
-    }).toPass({ timeout: 15_000 });
-  }
-  await row.getByTestId("sponsor-row-edit").click();
+  await rowOf(page, sponsorId).getByTestId("sponsor-row-edit").click();
 }
 
 test("T19 golden path (community, UI only): a package, a sponsor, an offline deal paid on payment, Mark as paid, on the public page, End now, off it", async ({ page, request }) => {

@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { apiJson, expectNoHorizontalScroll, withDb } from "./helpers";
 import { postSignedEvent, stripeEvent, stripeUid } from "./_stripe-events";
-import { dealUrl, openSponsorRowTools, releaseSettingsOrg, seedCompetition, seedSettingsOrg, sponsorsUrl, type SeededOrg } from "./settings-support";
+import { dealUrl, releaseSettingsOrg, seedCompetition, seedSettingsOrg, sponsorsUrl, type SeededOrg } from "./settings-support";
 
 /** Copy read from the dictionary the page renders from, never retyped (this folder's idiom: sponsors-hub.spec.ts). */
 const UI: Record<string, string> = JSON.parse(
@@ -302,8 +302,6 @@ test("a sponsor under a live deal: On stream tick, tier and competition are lock
     // (owner, 2026-11-11: "why showing tier in sponsor edit?"; a deal sets those two, the sponsor's page shows them read-only). It
     // used to draw both as selects, disabled for this sponsor with a note.
     await page.goto(sponsorsUrl(org.slug, "sponsors"));
-    // Below md the row's pencil sits behind its ⋯ (sponsor deals Task 14); the helper opens the fold only where the ⋯ is on screen.
-    await openSponsorRowTools(page, LONG);
     // The pencil is a link to the sponsor's own page with its editor open - a side panel from 768, a page below it (owner, 2026-11-11).
     await page.getByRole("link", { name: ui("sponsors.edit", { name: LONG }) }).click();
     const panel = width >= 768 ? page.getByRole("dialog") : page;
