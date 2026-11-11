@@ -4,7 +4,7 @@
 // POST /api/v1/fixtures/{id}/events with optimistic concurrency: every event
 // carries expected_seq + an idempotency key (doc 08 §4); a 409 resyncs from
 // the ledger and replays the UI.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import type { PadSpec } from "@seazn/engine/sport";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
@@ -22,7 +22,6 @@ import {
 } from "@/components/v2/lineup-editor";
 import { ScoringErrorBoundary } from "@/components/v2/scoring-error-boundary";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
-import { Video } from "lucide-react";
 import {
   FixtureStreamPanel,
   PhoneStopProbe,
@@ -30,10 +29,17 @@ import {
   type StreamPanelFixture,
 } from "@/components/v2/fixture-stream-panel";
 import { StreamSessionProvider, useSharedPhoneSession } from "@/components/v2/stream-session-provider";
-import { nextOpenPanel, streamButtonState, type OpenPanel } from "@/lib/fixture-stream-mount";
+import { streamButtonState, type OpenPanel } from "@/lib/fixture-stream-mount";
+import {
+  autoCloseMsFor,
+  idleActivityHandlers,
+  offeredPanels,
+  requestPanel,
+  type PanelKey,
+} from "@/lib/fixture-console-panels";
+import { useIdleClose } from "@/components/v2/use-idle-close";
 import { officialLabelKey } from "@/lib/official-label";
 import { PhoneDisclosure } from "@/components/v2/phone-disclosure";
-import { useMediaQuery } from "@/lib/use-client-snapshot";
 import type { MatchRulesBlockProps } from "@/components/v2/match-rules-block";
 import { MatchFormatEditor } from "@/components/v2/rules/match-format-editor";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
@@ -95,60 +101,104 @@ export type FixtureStreamMount =
   | { mode: "panel"; context: StreamPanelContext; fixture: StreamPanelFixture; entrantNames: Record<string, string>; tz: string }
   | { mode: "stop-only" };
 
-/**
- * Spec 2026-09-30 §2 (T9b): the Stream control — the desktop button or its phone twin. Its dot and label read the page's
- * ONE session (`useSharedPhoneSession`, under the console's `StreamSessionProvider`), so they can never disagree with
- * the panel. A component of its own because the provider must sit ABOVE the reader. The dot is colour only, so the
- * twin's accessible name follows the state too ("Live" while live — WCAG 1.4.1).
- */
-function StreamControl({
-  variant,
-  fixtureId,
+/** One button of the header panel bar (owner 2026-11-11). On a phone the bar is a 2-column grid of equal buttons; from
+ *  `md` it is a wrapping row. One DOM either way. */
+function PanelButton({
+  panel,
   open,
-  onToggle,
+  onClick,
+  children,
+  className = "",
+  attrs,
 }: {
-  variant: "desktop" | "phone";
-  fixtureId: string;
+  panel: PanelKey;
   open: boolean;
-  onToggle: () => void;
+  onClick: () => void;
+  children: ReactNode;
+  className?: string;
+  attrs?: Record<string, string | undefined>;
 }) {
-  const msg = useMsg();
-  const { shown } = useSharedPhoneSession(fixtureId);
-  const { dot, labelKey } = streamButtonState(shown);
-  const label = msg(labelKey);
-  const dotClass = dot === "red" ? "bg-red-600" : "bg-amber-500";
-  if (variant === "desktop") {
-    return (
-      <button
-        type="button"
-        data-role="fixture-stream"
-        data-dot={dot ?? undefined}
-        aria-expanded={open}
-        onClick={onToggle}
-        className={`btn btn-ghost min-h-11${open ? " bg-purple-50 ring-1 ring-purple-300" : ""} max-md:hidden`}
-      >
-        {dot && <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />}
-        {label}
-      </button>
-    );
-  }
   return (
     <button
       type="button"
-      data-role="fixture-stream-phone"
-      data-dot={dot ?? undefined}
-      aria-label={label}
+      {...attrs}
       aria-expanded={open}
-      onClick={onToggle}
-      className={`relative flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 ${
-        open ? "border-purple-300 bg-purple-50" : "border-slate-200"
-      } md:hidden`}
+      aria-controls={`console-panel-${panel}`}
+      onClick={onClick}
+      className={`btn btn-ghost min-h-11 min-w-0 justify-center${open ? " bg-purple-50 ring-1 ring-purple-300" : ""} ${className}`}
     >
-      <Video aria-hidden="true" className="h-5 w-5" strokeWidth={1.75} />
-      {dot && (
-        <span aria-hidden className={`absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full border-2 border-white ${dotClass}`} />
-      )}
+      {children}
     </button>
+  );
+}
+
+/**
+ * Spec 2026-09-30 §2 (T9b): the Stream button. Its dot and label read the page's ONE session (`useSharedPhoneSession`,
+ * under the console's `StreamSessionProvider`), so they can never disagree with the panel. A component of its own because
+ * the provider must sit ABOVE the reader. The dot is colour only, so the label follows the state too ("Live" while live —
+ * WCAG 1.4.1).
+ */
+function StreamControl({ fixtureId, open, onToggle }: { fixtureId: string; open: boolean; onToggle: () => void }) {
+  const msg = useMsg();
+  const { shown } = useSharedPhoneSession(fixtureId);
+  const { dot, labelKey } = streamButtonState(shown);
+  const dotClass = dot === "red" ? "bg-red-600" : "bg-amber-500";
+  return (
+    <PanelButton
+      panel="stream"
+      open={open}
+      onClick={onToggle}
+      className="max-md:col-span-2"
+      attrs={{ "data-role": "fixture-stream", "data-dot": dot ?? undefined }}
+    >
+      {dot && <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />}
+      {msg(labelKey)}
+    </PanelButton>
+  );
+}
+
+/** One open panel's chrome: its title and the 44px close X (owner 2026-11-11). `hidden` keeps a panel whose body holds
+ *  an unsaved draft mounted while another panel is open. */
+function ConsolePanel({
+  panel,
+  title,
+  closeLabel,
+  onClose,
+  hidden = false,
+  children,
+  extraProps,
+}: {
+  panel: PanelKey;
+  title: string;
+  closeLabel: string;
+  onClose: () => void;
+  hidden?: boolean;
+  children: ReactNode;
+  extraProps?: Record<string, unknown>;
+}) {
+  return (
+    <section
+      id={`console-panel-${panel}`}
+      data-role="console-panel"
+      data-panel={panel}
+      aria-label={title}
+      className={`card min-w-0 p-5 max-md:p-3${hidden ? " hidden" : ""}`}
+      {...extraProps}
+    >
+      <div className="mb-3 flex min-w-0 items-center justify-between gap-2">
+        <h2 className="min-w-0 truncate text-sm font-semibold text-slate-700">{title}</h2>
+        <button
+          type="button"
+          data-testid="console-panel-close"
+          aria-label={closeLabel}
+          onClick={onClose}
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-lg leading-none text-slate-500 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400"
+        >
+          <span aria-hidden="true">✕</span>
+        </button>
+      </div>
+      {children}
+    </section>
   );
 }
 
@@ -422,6 +472,9 @@ interface Props {
   stream?: FixtureStreamMount;
   /** `?stream=open` on the URL: open the stream panel on first render (checkout return, run-sheet chip). */
   streamReturn?: boolean;
+  /** Which header panel is open on the first render (default: none, or Stream for `streamReturn`). Static-markup tests use
+   *  it to render a panel's body, since they cannot click its button. */
+  initialPanel?: OpenPanel;
   /** W2c Task 19 (S2) - the match rules block's facts (`loadFixtureMatchRules`, minus its function-valued `fields`), decided
    *  by the page: organisers only. Absent => no block. */
   matchRules?: MatchRulesBlockProps;
@@ -573,6 +626,7 @@ export function FixtureConsole({
   deviceHandover = false,
   stream,
   streamReturn = false,
+  initialPanel,
   matchRules,
   matchFormatLine,
   viewerPlan,
@@ -606,14 +660,36 @@ export function FixtureConsole({
   const [forfeitRefusal, setForfeitRefusal] = useState<string | null>(null);
   /** The row whose Void is in flight — the panel dims exactly that button. */
   const [voidingId, setVoidingId] = useState<string | null>(null);
-  // Spec 2026-09-30 §2: ONE panel open at a time — Remote scoring or Stream (`nextOpenPanel`). `detailsOpen` and the
-  // PhoneDisclosures stay independent. `?stream=open` (streamReturn) opens Stream on the first render only.
-  const [openPanel, setOpenPanel] = useState<OpenPanel>(() => (stream && streamReturn ? "stream" : null));
+  // Owner 2026-11-11: ONE of the five header panels open at a time — Stream, Remote scoring, Lineup, Match rules, Match
+  // actions (`requestPanel`/`nextOpenPanel`). `detailsOpen` and the PhoneDisclosures stay independent. `?stream=open`
+  // (streamReturn) opens Stream on the first render only.
+  const [openPanel, setOpenPanel] = useState<OpenPanel>(() => initialPanel ?? (stream && streamReturn ? "stream" : null));
   const handoverOpen = openPanel === "handover";
-  // Owner 2026-11-05: Forfeit and Abandon open from a button beside Remote scoring (desktop); on a phone the card stays
-  // in the one DOM, always open (ScoringPad v3 phone composition: no second phone tree).
-  const [matchActionsOpen, setMatchActionsOpen] = useState(false);
   const streamOpen = openPanel === "stream";
+  // Lineup drafts that hold unsaved edits (by side id), and the in-page "discard?" prompt that guards leaving the panel
+  // over them. Discarding bumps `lineupEpoch`, which remounts both editors from their saved lineups.
+  const [dirtySides, setDirtySides] = useState<ReadonlySet<string>>(() => new Set());
+  const [leavePending, setLeavePending] = useState<PanelKey | "close" | null>(null);
+  const [lineupEpoch, setLineupEpoch] = useState(0);
+  const lineupDirty = dirtySides.size > 0;
+  const clickPanel = (clicked: PanelKey | "close") => {
+    const r = requestPanel(openPanel, clicked, lineupDirty);
+    if (r.confirm) setLeavePending(clicked);
+    else {
+      setLeavePending(null);
+      setOpenPanel(r.next);
+    }
+  };
+  const discardLineup = () => {
+    if (leavePending === null) return;
+    const target = leavePending;
+    setLeavePending(null);
+    setDirtySides(new Set());
+    setLineupEpoch((e) => e + 1);
+    setOpenPanel(requestPanel("lineup", target, false).next);
+  };
+  // Remote scoring closes itself after 20 s with no interaction inside it; the others never do.
+  const restartIdle = useIdleClose(handoverOpen, autoCloseMsFor("handover"), () => setOpenPanel(null));
   const [detailsOpen, setDetailsOpen] = useState(false);
   // Phone (<md): the two lineup cards stack, so one team shows at a time behind
   // a Home/Away switch. Purely a view choice — both editors stay mounted (each
@@ -1029,22 +1105,16 @@ export function FixtureConsole({
   // action in the Match actions panel (it folds on phones, below the pad), never a card above the pad. Held: beside Settle.
   const offerJointInPanel = jointOffer && scoring && !!home && !!away && !held;
   const offerOrganiserActions = offerForfeit || offerAbandon || offerJointInPanel;
-  const wideLayout = useMediaQuery("(min-width: 768px)");
-  const wideOpen = wideLayout && matchActionsOpen;
-  // The Match actions panel (R7/C2, D-12). From 768 px it opens directly under the Scoring header, beside the toggle
-  // that opened it, and is absent while closed; a phone shows it open, below the pad and ledger. Rendered in one place
-  // at a time, so its test ids stay unique.
+  // The Match actions panel (R7/C2, D-12). Since 2026-11-11 it is one of the five header panels: absent until its button
+  // opens it, at every width, and titled by the panel chrome (`ConsolePanel`).
   const matchActionsPanel =
     scoring && home && away && offerOrganiserActions ? (
         <section
           data-role="match-actions"
           id="match-actions-panel"
-          className={`rounded-2xl border border-purple-100 bg-purple-50/40 p-4${wideOpen ? " mb-4" : ""}`}
+          className="rounded-2xl border border-purple-100 bg-purple-50/40 p-4"
         >
-          <h2 className="text-[11px] font-semibold uppercase tracking-[0.09em] text-purple-800">
-            {msg("score.matchActions")}
-          </h2>
-          <p className="mt-0.5 text-xs text-slate-600">{msg("score.matchActionsNote")}</p>
+          <p className="text-xs text-slate-600">{msg("score.matchActionsNote")}</p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             {offerForfeit && (
               <button
@@ -1095,6 +1165,18 @@ export function FixtureConsole({
           )}
         </section>
     ) : null;
+  // The panel bar (owner 2026-11-11). Each flag is that panel's own gate — Stream: the page's mount decision; Remote
+  // scoring: the console's `canHandOver`; Lineup: both sides known and the module declares a lineup (`lineupEditorApplies`);
+  // Match rules: there is a rules block (organiser) or a read-only format line to show; Match actions: it offers any.
+  const offerLineup = !!home && !!away && lineupEditorApplies(sport);
+  const offerRules = !!matchRules || (matchFormatLine !== undefined && matchFormatLine !== "");
+  const offered = offeredPanels({
+    stream: !!stream,
+    handover: canHandOver,
+    lineup: offerLineup,
+    rules: offerRules,
+    actions: matchActionsPanel !== null,
+  });
   // Owner ruling 17 — the padSpec resolved purely to decide whether a
   // DECIDED fixture still keeps the pad mounted (`shouldMountPad` above).
   // `scorePadV2?.resolvedConfig ?? sport.config` is the SAME cfg fallback
@@ -1126,15 +1208,15 @@ export function FixtureConsole({
   // decided cricket fixture whose pad now renders its post-phase Scorecard
   // panel keeps this section's phone chrome too.
   // Spec 2026-09-30 §2: an open stream panel is content too, exactly as an open hand-over panel is.
-  const consoleScoringEmptyOnPhone =
-    started && !(scorePadV2 && mountPad) && !(canHandOver && handoverOpen) && !(stream && streamOpen);
+  // Since 2026-11-11 no panel renders inside this card (they live in the panel area above it), so what is left is the pad
+  // and Start match.
+  const consoleScoringEmptyOnPhone = started && !(scorePadV2 && mountPad);
   // Loop R M7(a): at md and up the header row still renders the "Scoring" heading, and beside it only the Stream and
   // Remote scoring buttons (Start match is gone once started). With neither, a card that is empty on a phone is a heading
   // over nothing at 768 and 1280 too — an official on a held fixture saw exactly that — so it is hidden at every width.
-  const consoleScoringEmpty = consoleScoringEmptyOnPhone && !stream && !canHandOver;
-  // The Scoring section's own gate (below). Where it does not render — finalized, cancelled, read-only (frozen) or a
-  // TBD side — Stream gets its own card, so Stop stays reachable (spec 2026-09-30 §2, Review Focus 4).
-  const scoringSection = scoring && !!home && !!away;
+  const consoleScoringEmpty = consoleScoringEmptyOnPhone;
+  // Stream is a bar button, not part of the Scoring card, so Stop stays reachable on a finalized, cancelled, read-only or
+  // TBD-sided fixture too (spec 2026-09-30 §2, Review Focus 4).
   const streamBody =
     stream && streamOpen ? (
       // Mockup option-a: on a phone the frame is a sheet across the card's full width (the card's `p-3` taken back).
@@ -1152,10 +1234,6 @@ export function FixtureConsole({
         )}
       </div>
     ) : null;
-  const toggleStream = () => setOpenPanel((p) => nextOpenPanel(p, "stream"));
-  const streamButton = stream ? (
-    <StreamControl variant="desktop" fixtureId={fixture.id} open={streamOpen} onToggle={toggleStream} />
-  ) : null;
 
   const sides = { home, away };
   // R7/C5 (D-6) — what to CALL each side, resolved ONCE here and read by the
@@ -1351,31 +1429,6 @@ export function FixtureConsole({
           <span className={`badge normal-case ${STATUS_STYLE[live.status] ?? ""}`}>
             {scoreStatusLabel(msg, live.status)}
           </span>
-          {/* Spec 2026-09-30 §2 — Stream's phone twin, BEFORE ⇄. Same classes as the hand-over icon. */}
-          {stream && <StreamControl variant="phone" fixtureId={fixture.id} open={streamOpen} onToggle={toggleStream} />}
-          {canHandOver && (
-            <button
-              type="button"
-              data-role="device-handover-phone"
-              aria-label={msg("score.handOverDevice")}
-              aria-expanded={handoverOpen}
-              onClick={() => setOpenPanel((p) => nextOpenPanel(p, "handover"))}
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 md:hidden"
-            >
-              <svg
-                aria-hidden="true"
-                viewBox="0 0 20 20"
-                className="h-5 w-5"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={1.75}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M3 7h11M11 4l3 3-3 3M17 13H6M9 10l-3 3 3 3" />
-              </svg>
-            </button>
-          )}
         </div>
         <div className="max-md:mt-1 max-md:flex max-md:items-center max-md:justify-between max-md:gap-2">
           {/* S2-4 Task 10 fix round 1 (gap 8): a suppressed headline still holds its line, empty and unseen, so the
@@ -1537,6 +1590,184 @@ export function FixtureConsole({
         </section>
       )}
 
+      {/* THE PANEL BAR (owner 2026-11-11). Stream · Remote scoring · Lineup · Match rules · Match actions, in that order for
+          every sport; ONE panel open at a time. A phone shows a 2-column grid of equal buttons (Stream on its own full
+          row), from `md` a wrapping row — one DOM, no overflow menu. */}
+      {offered.length > 0 && (
+        <div
+          data-role="console-panel-bar"
+          role="group"
+          aria-label={msg("console.panel.barAria")}
+          className="grid grid-cols-2 gap-2 md:flex md:flex-wrap md:items-center"
+        >
+          {offered.map((k) => {
+            switch (k) {
+              case "stream":
+                return <StreamControl key={k} fixtureId={fixture.id} open={streamOpen} onToggle={() => clickPanel("stream")} />;
+              case "handover":
+                return (
+                  <PanelButton key={k} panel={k} open={handoverOpen} onClick={() => clickPanel("handover")} attrs={{ "data-role": "device-handover" }}>
+                    {msg("score.handOverDevice")}
+                  </PanelButton>
+                );
+              case "lineup":
+                return (
+                  <PanelButton key={k} panel={k} open={openPanel === "lineup"} onClick={() => clickPanel("lineup")} attrs={{ "data-testid": "lineup-toggle" }}>
+                    {msg("console.phone.lineup")}
+                  </PanelButton>
+                );
+              case "rules":
+                return (
+                  <PanelButton key={k} panel={k} open={openPanel === "rules"} onClick={() => clickPanel("rules")} attrs={{ "data-testid": "match-rules-toggle" }}>
+                    <span className="flex min-w-0 flex-col items-center leading-tight">
+                      <span className="max-w-full truncate">{msg("matchRules.title")}</span>
+                      {matchRules?.override != null && (
+                        <span data-testid="match-rules-overridden" className="max-w-full truncate text-[11px] font-normal text-purple-700">
+                          {msg("matchRules.overridden")}
+                        </span>
+                      )}
+                    </span>
+                  </PanelButton>
+                );
+              case "actions":
+                return (
+                  <PanelButton key={k} panel={k} open={openPanel === "actions"} onClick={() => clickPanel("actions")} attrs={{ "data-testid": "match-actions-toggle" }}>
+                    {msg("score.matchActions")}
+                  </PanelButton>
+                );
+            }
+          })}
+        </div>
+      )}
+
+      {stream && streamOpen && (
+        <ConsolePanel panel="stream" title={msg("stream.title")} closeLabel={msg("console.panel.close", { panel: msg("stream.title") })} onClose={() => clickPanel("close")}>
+          {streamBody}
+        </ConsolePanel>
+      )}
+
+      {canHandOver && handoverOpen && (
+        <ConsolePanel
+          panel="handover"
+          title={msg("score.handOverDevice")}
+          closeLabel={msg("console.panel.close", { panel: msg("score.handOverDevice") })}
+          onClose={() => clickPanel("close")}
+          extraProps={idleActivityHandlers(restartIdle)}
+        >
+          <DeviceLinkPanel fixtureId={fixture.id} sportKey={sport.key} embedded />
+        </ConsolePanel>
+      )}
+
+      {/* Lineup and Match rules stay MOUNTED while closed (`hidden`): each holds an editable draft that a click on another
+          button must not throw away. Only the explicit, confirmed discard remounts the lineup (`lineupEpoch`). */}
+      {offerLineup && home && away && (
+        <ConsolePanel
+          panel="lineup"
+          title={msg("console.phone.lineup")}
+          closeLabel={msg("console.panel.close", { panel: msg("console.phone.lineup") })}
+          onClose={() => clickPanel("close")}
+          hidden={openPanel !== "lineup"}
+        >
+          {leavePending !== null && (
+            <div role="alert" data-testid="lineup-discard-prompt" className="mb-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              <p>{msg("lineup.discard.message")}</p>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <button type="button" data-testid="lineup-discard-keep" onClick={() => setLeavePending(null)} className="btn btn-ghost min-h-11">
+                  {msg("lineup.discard.keep")}
+                </button>
+                <button type="button" data-testid="lineup-discard-confirm" onClick={discardLineup} className="btn btn-danger min-h-11">
+                  {msg("lineup.discard.confirm")}
+                </button>
+              </div>
+            </div>
+          )}
+          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4 md:grid-cols-2">
+            <div
+              role="group"
+              aria-label={msg("lineup.phone.switchAria")}
+              data-testid="lineup-team-switch"
+              className="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1 md:hidden"
+            >
+              {(["home", "away"] as const).map((sideKey) => (
+                <button
+                  key={sideKey}
+                  type="button"
+                  aria-pressed={lineupPhoneSide === sideKey}
+                  data-testid={`lineup-team-switch-${sideKey}`}
+                  onClick={() => setLineupPhoneSide(sideKey)}
+                  className={`min-h-11 rounded-lg px-3 text-sm font-semibold ${
+                    lineupPhoneSide === sideKey ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
+                  }`}
+                >
+                  {msg(sideKey === "home" ? "lineup.phone.home" : "lineup.phone.away")}
+                </button>
+              ))}
+            </div>
+            {(["home", "away"] as const).map((sideKey) => {
+              const s = sides[sideKey]!;
+              return (
+                <div
+                  key={`${s.id}-${lineupEpoch}`}
+                  data-testid={`lineup-team-${sideKey}`}
+                  className={`min-w-0${lineupPhoneSide === sideKey ? "" : " max-md:hidden"}`}
+                >
+                  <LineupEditor
+                    fixtureId={fixture.id}
+                    // R7/C5 — the editor titles itself with `side.name`; hand it the RESOLVED one rather than the entry
+                    // label (`entrantDisplayName`, one resolution serving every reader).
+                    side={{ ...s, name: entrantDisplayName(s) }}
+                    positionGroups={sport.positionGroups}
+                    roles={sport.roles}
+                    lineupSize={sport.lineupSize}
+                    canEdit={canEdit && live.status === "scheduled"}
+                    onSaved={() => router.refresh()}
+                    availability={availability}
+                    onDirtyChange={(dirty) =>
+                      setDirtySides((prev) => {
+                        if (prev.has(s.id) === dirty) return prev;
+                        const next = new Set(prev);
+                        if (dirty) next.add(s.id);
+                        else next.delete(s.id);
+                        return next;
+                      })
+                    }
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </ConsolePanel>
+      )}
+
+      {offerRules && (
+        <ConsolePanel
+          panel="rules"
+          title={msg("matchRules.title")}
+          closeLabel={msg("console.panel.close", { panel: msg("matchRules.title") })}
+          onClose={() => clickPanel("close")}
+          hidden={openPanel !== "rules"}
+        >
+          {matchRules ? (
+            <MatchFormatEditor scope="fixture" mode="edit" block={matchRules} />
+          ) : (
+            <div data-testid="match-format-card" role="group" aria-label={msg("rulesStrip.format")} className="min-w-0">
+              <MatchFormatEditor scope="fixture" mode="locked" line={matchFormatLine!} />
+            </div>
+          )}
+        </ConsolePanel>
+      )}
+
+      {matchActionsPanel && openPanel === "actions" && (
+        <ConsolePanel
+          panel="actions"
+          title={msg("score.matchActions")}
+          closeLabel={msg("console.panel.close", { panel: msg("score.matchActions") })}
+          onClose={() => clickPanel("close")}
+        >
+          {matchActionsPanel}
+        </ConsolePanel>
+      )}
+
       {/* SCORING (R7/C2 + C3). The pad, and beside its heading the two
           controls that belong to scoring rather than to authority: `Start
           match`, the one thing to press before kick-off and the only filled
@@ -1556,30 +1787,6 @@ export function FixtureConsole({
           <div className={`mb-3 flex flex-wrap items-center justify-between gap-2${started ? " max-md:hidden" : ""}`}>
             <h2 className="text-sm font-semibold text-slate-700 max-md:hidden">{msg("score.scoring")}</h2>
             <div className="flex flex-wrap items-center gap-2">
-              {streamButton}
-              {canHandOver && (
-                <button
-                  type="button"
-                  data-role="device-handover"
-                  aria-expanded={handoverOpen}
-                  onClick={() => setOpenPanel((p) => nextOpenPanel(p, "handover"))}
-                  className="btn btn-ghost min-h-11 max-md:hidden"
-                >
-                  {msg("score.handOverDevice")}
-                </button>
-              )}
-              {offerOrganiserActions && (
-                <button
-                  type="button"
-                  data-testid="match-actions-toggle"
-                  aria-expanded={matchActionsOpen}
-                  aria-controls="match-actions-panel"
-                  onClick={() => setMatchActionsOpen((o) => !o)}
-                  className="btn btn-ghost min-h-11 max-md:hidden"
-                >
-                  {msg("score.matchActions")}
-                </button>
-              )}
               {!started && (
                 <button
                   type="button"
@@ -1593,19 +1800,6 @@ export function FixtureConsole({
               )}
             </div>
           </div>
-
-          {wideOpen && matchActionsPanel}
-
-          {canHandOver && handoverOpen && (
-            <div className="mb-4">
-              <DeviceLinkPanel
-                fixtureId={fixture.id}
-                sportKey={sport.key}
-                embedded
-              />
-            </div>
-          )}
-          {streamBody}
 
           {/* Sport pad — S13/#422: the v2 registry, unconditionally (the flag
               and the eight v1 pads it used to choose between are gone).
@@ -1656,22 +1850,6 @@ export function FixtureConsole({
           straight under the Scoring card, above the ledger and lineups, so it is in view at 768 and 1280 (m5). */}
       {scoring && home && away && !canOrganise && held && (
         <HeldNote msg={msg} cause={heldCause({ outcome: live.outcome, events })} table={inTableStage(stageKind)} />
-      )}
-
-      {/* Spec 2026-09-30 §2 + Review Focus 4: the Scoring section renders only while this fixture can be scored with both
-          sides known. A finalized, cancelled, read-only (frozen) or TBD-sided fixture can still have a stream on air, and
-          Stop must stay reachable there — so Stream gets its own card whenever the Scoring section is absent. On a phone
-          the card is empty until the strip icon opens the body, so it hides there while closed. */}
-      {stream && !scoringSection && (
-        <section className={`card p-5 max-md:p-3${streamOpen ? "" : " max-md:hidden"}`} data-role="console-stream">
-          {/* B3 N-2 (T9b): the card ALWAYS names itself, open or closed, in both mounts — the panel inside no longer carries
-              a visible title (spec §3.1), and the stop probe never did. */}
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 max-md:hidden">
-            <h2 className="text-sm font-semibold text-slate-700">{msg("stream.title")}</h2>
-            {streamButton}
-          </div>
-          {streamBody}
-        </section>
       )}
 
       {/* THE ledger (R7/C1, D-4). One panel, one component — the same
@@ -1768,71 +1946,6 @@ export function FixtureConsole({
           )
         }
       />
-      {/* Lineups (locked once the fixture starts). Gated on the module's own
-          declaration as well as on the two sides: a sport that nominates one
-          unit and admits no bench has no lineup to pick (R7 D-1). */}
-      {home && away && lineupEditorApplies(sport) && (
-        <div className="grid gap-4 lg:grid-cols-2">
-          <div
-            role="group"
-            aria-label={msg("lineup.phone.switchAria")}
-            data-testid="lineup-team-switch"
-            className="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1 md:hidden lg:col-span-2"
-          >
-            {(["home", "away"] as const).map((sideKey) => (
-              <button
-                key={sideKey}
-                type="button"
-                aria-pressed={lineupPhoneSide === sideKey}
-                data-testid={`lineup-team-switch-${sideKey}`}
-                onClick={() => setLineupPhoneSide(sideKey)}
-                className={`min-h-11 rounded-lg px-3 text-sm font-semibold ${
-                  lineupPhoneSide === sideKey ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
-                }`}
-              >
-                {msg(sideKey === "home" ? "lineup.phone.home" : "lineup.phone.away")}
-              </button>
-            ))}
-          </div>
-          {(["home", "away"] as const).map((sideKey) => {
-            const s = sides[sideKey]!;
-            return (
-              <PhoneDisclosure
-                key={s.id}
-                testId={`lineup-team-${sideKey}`}
-                className={lineupPhoneSide === sideKey ? undefined : "max-md:hidden"}
-                summary={entrantDisplayName(s)}
-                aside={msg("console.phone.lineup")}
-                showLabel={msg("lineup.phone.show")}
-                hideLabel={msg("lineup.phone.hide")}
-                // Once the match has started the lineup is locked
-                // (`canEdit` below) and worth folding away on desktop too —
-                // every sport shares this console, so the fold is universal
-                // rather than a per-sport gate (2026-09-14).
-                desktopCollapsible
-                startOpen={!started}
-              >
-                <LineupEditor
-                  fixtureId={fixture.id}
-                  // R7/C5 — the editor titles itself with `side.name`; hand it
-                  // the RESOLVED one rather than the entry label. Resolved at
-                  // the call site because `lineup-editor.tsx` is another wave's
-                  // file this week, and because one resolution serving every
-                  // reader is the point of `entrantDisplayName`.
-                  side={{ ...s, name: entrantDisplayName(s) }}
-                  positionGroups={sport.positionGroups}
-                  roles={sport.roles}
-                  lineupSize={sport.lineupSize}
-                  canEdit={canEdit && live.status === "scheduled"}
-                  onSaved={() => router.refresh()}
-                  availability={availability}
-                />
-              </PhoneDisclosure>
-            );
-          })}
-        </div>
-      )}
-
       {/* …and where there is no lineup to pick, the ROSTER and its
           availability still show. R7/B's gate above was reasoning about the
           lineup CONTROLS; availability merely lived in the same component and
@@ -1871,28 +1984,6 @@ export function FixtureConsole({
         </div>
       )}
 
-      {/* W2c Task 19 (S2): the format THIS match plays, over its stage's - change it before the start, correct it live,
-          read it locked. Organisers only (the page decides; absent => nothing here). One DOM: below `md` the disclosure
-          folds it, from `md` up it is a plain card. */}
-      {matchRules && (
-        <PhoneDisclosure
-          summary={msg("matchRules.title")}
-          aside={matchRules.override !== null ? msg("matchRules.overridden") : undefined}
-          showLabel={msg("matchRules.show")}
-          hideLabel={msg("matchRules.hide")}
-        >
-          <MatchFormatEditor scope="fixture" mode="edit" block={matchRules} />
-        </PhoneDisclosure>
-      )}
-      {!matchRules && matchFormatLine !== undefined && matchFormatLine !== "" && (
-        <section className="card min-w-0 p-4" aria-label={msg("rulesStrip.format")} data-testid="match-format-card">
-          <h3 className="text-sm font-semibold text-slate-800">{msg("rulesStrip.format")}</h3>
-          <div className="mt-2">
-            <MatchFormatEditor scope="fixture" mode="locked" line={matchFormatLine} />
-          </div>
-        </section>
-      )}
-
       {/* THE AUTHORITY BAND (R7/C2, D-12; Finalize in it per R7-3a).
           These three used to be a bare row of buttons ABOVE the scoring
           card — no container, no heading, nothing saying they end the match,
@@ -1903,7 +1994,6 @@ export function FixtureConsole({
           hierarchy failure D-12 is. */}
       {/* W2a: rendered only when it holds a control — a scorer on an in-play match, or anyone on a held one, would
           otherwise get a named, explained container with nothing in it. */}
-      {!wideLayout && matchActionsPanel}
       {/* W2b Task 11 (spec §7): a refused forfeit closed its dialog; the reason stays here, outside the band, so a
           refusal that resynced the match into its decided state is still read. Design audit 1.4: in the console's own
           error-banner treatment (the `error` line under the header, the app's house alert) — one red banner style. */}

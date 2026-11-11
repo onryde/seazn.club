@@ -44,6 +44,8 @@ interface Over {
   canOrganise?: boolean;
   home?: SideInfo | null;
   away?: SideInfo | null;
+  /** Render with every header panel CLOSED (the default a visitor lands on). Otherwise Match actions is opened first. */
+  closed?: boolean;
 }
 function html(over: Over = {}): string {
   const status = over.status ?? "scheduled";
@@ -71,6 +73,7 @@ function html(over: Over = {}): string {
       recorderNames={{ "user-1": "Dana Okafor" }}
       scorePadV2={{ moduleVersion: football.version, resolvedConfig: CFG, initialEvents: [], entitlements: {}, stageKind: null, identity: { recordedBy: "user-1", deviceLinkId: null } }}
       viewerPlan="community"
+      initialPanel={over.closed ? undefined : "actions"}
     />,
   );
 }
@@ -148,7 +151,7 @@ describe("B5b T13: the Declare joint winners offer (X-CH-6)", () => {
 });
 
 describe("B5b T13 review I-3: where the action lives (pick 4A: the organiser block, never above the pad)", () => {
-  it("not held (scheduled, in play): inside the Match actions panel, which sits BELOW the Scoring card, as a ghost (secondary) button", () => {
+  it("not held (scheduled, in play): inside the Match actions panel (closed until its header button opens it), as a ghost (secondary) button", () => {
     let checked = 0;
     for (const status of ["scheduled", "in_play"]) {
       const out = html({ status });
@@ -156,7 +159,9 @@ describe("B5b T13 review I-3: where the action lives (pick 4A: the organiser blo
       expect(panel, `${status}: the panel renders`).toBeGreaterThan(-1);
       const offer = out.indexOf(OFFER);
       expect(offer, `${status}: the offer is inside the panel`).toBeGreaterThan(panel);
-      expect(out.indexOf('data-role="console-scoring"'), `${status}: ... and after the Scoring card (never above the pad)`).toBeLessThan(offer);
+      // Since 2026-11-11 the panel opens from the header bar, above the Scoring card, and ONLY on request: a visitor lands
+      // with it closed, so the ruling is never a card above the pad by default.
+      expect(html({ status, closed: true }), `${status}: closed by default`).not.toContain(OFFER);
       const btn = out.slice(out.lastIndexOf("<button", offer), out.indexOf("</button>", offer));
       expect(btn, `${status}: lower emphasis than Settle / Start`).toContain("btn-ghost");
       checked++;

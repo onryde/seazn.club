@@ -42,6 +42,9 @@ export interface PositionGroupIn {
 interface Props {
   fixtureId: string;
   side: SideInfo;
+  /** Reports whether the draft holds edits the scorer has not saved (set by any edit, cleared by a successful Save).
+   *  The console asks before closing the Lineup panel over them. */
+  onDirtyChange?: (dirty: boolean) => void;
   /** The catalog groups that govern THIS fixture — the module's per-config
    *  catalog (`resolvePositions`, R7 B2), never its static `positions`.
    *  `min`/`max` ride along because they are the half the per-config hook
@@ -538,9 +541,20 @@ export function LineupEditor({
   lineupSize,
   canEdit,
   onSaved,
+  onDirtyChange,
   availability = {},
 }: Props) {
   const msg = useMsg();
+  // Unsaved edits: any row action or add sets it, a successful Save clears it. The auto-populated first draft is NOT an
+  // edit (nothing the scorer did). Reported up through a ref'd callback so a fresh inline function never re-fires it.
+  const [dirty, setDirty] = useState(false);
+  const onDirtyRef = useRef(onDirtyChange);
+  useEffect(() => {
+    onDirtyRef.current = onDirtyChange;
+  });
+  useEffect(() => {
+    onDirtyRef.current?.(dirty);
+  }, [dirty]);
   // Pair-shaped once, from the entrant's own declared kind (see
   // isPairShaped's own doc comment) — not per-slot, since it describes the
   // ENTRANT, not a row. Computed before the draft's lazy initializer below
@@ -602,6 +616,7 @@ export function LineupEditor({
   function apply(personId: string, action: LineupAction) {
     setSlots((prev) => applyLineupAction(prev, personId, action));
     setSaved(false);
+    setDirty(true);
   }
 
   function add(member: SideInfo["members"][number], slot: "starting" | "bench") {
@@ -619,6 +634,7 @@ export function LineupEditor({
       },
     ]);
     setSaved(false);
+    setDirty(true);
   }
 
   /** RS011 review round 3, finding 1: `override` is only ever passed on a
@@ -641,6 +657,7 @@ export function LineupEditor({
       });
       setEligibilityGate(null);
       setSaved(true);
+      setDirty(false);
       onSaved();
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "ELIGIBILITY_VIOLATION") {
