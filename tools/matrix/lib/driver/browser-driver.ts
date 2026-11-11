@@ -456,7 +456,17 @@ function padCheck(items: readonly Item[]): CheckResult {
   return { ...c, evidence: more > 0 ? [...all.slice(0, PAD_EVIDENCE_NOTES), `+${more} more`] : all };
 }
 
-const toStageRef = (s: StageOut): StageRef => ({ id: s.id, seq: s.seq, kind: s.kind, config: s.config, status: s.status });
+/** True when the stage's declared progression feeds it ONLY from losers' takes (a plate). Read off the stored sources, not
+ *  mirrored from the product's champion.ts. A stage with no sources, or any source taking winners, is not. */
+const LOSERS_TAKES: ReadonlySet<string> = new Set(["roundLosers", "firstLosses"]);
+export function isLosersFedOnly(s: StageRef): boolean {
+  const sources = (s.progression as { sources?: unknown } | null | undefined)?.sources;
+  if (!Array.isArray(sources) || sources.length === 0) return false;
+  return sources.every((src: { take?: unknown }) => Array.isArray(src?.take) && src.take.length > 0
+    && src.take.every((t: { kind?: unknown }) => typeof t?.kind === "string" && LOSERS_TAKES.has(t.kind)));
+}
+
+const toStageRef = (s: StageOut): StageRef => ({ id: s.id, seq: s.seq, kind: s.kind, config: s.config, status: s.status, progression: s.progression });
 /** An API-only row with no builder control: a knob row (catalogue.ts KNOB_ROWS) is built by the builder, so the browser drives it. */
 const isApiOnly = (row: string): row is Exclude<ApiOnlyRowKey, KnobRowKey> => (API_ONLY_ROWS as readonly string[]).includes(row) && !isKnobRow(row);
 type ChampionWant = { kind: "abstain"; reason: string } | { kind: "fail"; note: string } | { kind: "name"; name: string } | { kind: "none" };
@@ -1246,7 +1256,10 @@ export class BrowserDriver implements OrganiserDriver {
    *  completion that served no title (a fake that predates it) falls back to finalRanks[0]; a table stage's banner is proven by its
    *  table. A joint title abstains: the banner's wording for two winners is the Q4a script's own check, not this one's. */
   #championWant(stages: readonly StageRef[], names: ReadonlyMap<string, string>): ChampionWant {
-    const decisive = [...stages].sort((a, b) => b.seq - a.seq)[0];
+    // RB4-C1 crowns the winner of the decided FINAL. A stage whose every source takes only losers (a plate: firstLosses /
+    // roundLosers) is a consolation and never the title's stage (RB4-P1..P6), so it is skipped before the latest wins.
+    const contenders = stages.filter((s) => !isLosersFedOnly(s));
+    const decisive = [...(contenders.length > 0 ? contenders : stages)].sort((a, b) => b.seq - a.seq)[0];
     if (decisive === undefined) return { kind: "abstain", reason: "the division has no stage" };
     if (!PUBLIC_BRACKET_KINDS.has(decisive.kind)) return { kind: "abstain", reason: `the decisive stage is a ${decisive.kind} — its table is the proof` };
     if (!this.#finalRanks.has(decisive.id)) return { kind: "abstain", reason: `the decisive ${decisive.kind} stage was not completed by this case` };
