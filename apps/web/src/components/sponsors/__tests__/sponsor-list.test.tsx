@@ -32,9 +32,12 @@
 //   L18 pencil         the pencil links to the plain sponsor URL (no `edit=1`)                         -> "the pencil is a link to the sponsor's page with its editor open"
 //   L19 viewer         the viewer gets the pencil (edit link) instead of Open                          -> "a viewer's row opens the page read-only"
 //   L22 chips          a chip goes back to `shrink-0` (it runs under the pencil in a 130px column)      -> "a chip may shrink and truncate"
-//   L23 tiny phones    the logo tile loses `max-[360px]:hidden`                                       -> "below 360 the logo tile is hidden"
-//   L24 tiny phones    the name loses `max-[360px]:line-clamp-2` (back to one truncated line)         -> "below 360 the name wraps to two lines"
+//   L23 tiny phones    the logo tile loses `max-[376px]:hidden`                                       -> "below 376 the logo tile is hidden"
+//   L24 tiny phones    the name loses `max-[376px]:line-clamp-2` (back to one truncated line)         -> "below 376 the name wraps to two lines"
 //   L25 viewer         the viewer's Open cell or button is `max-md:hidden`                             -> "a viewer's Open is on screen on a phone"
+//   L26 chip title     a chip loses its `title` (a cut "Disputed - parked" cannot be read)               -> "a truncated chip carries its full words as its title"
+//   L27 breakpoint     the narrow layout goes back to `max-[360px]` (a 360 / 375 phone is cramped)      -> "the narrow layout starts below 376"
+//   L28 sub-line       the sub-line loses `max-[376px]:line-clamp-2` (the price is cut mid-number)      -> "below 376 the sub-line takes two lines"
 //   L16 live region    the notice renders only while it has text                                      -> "always mounted"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -48,6 +51,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {}, refresh:
 import { OrgSponsors, SponsorForm, type SponsorItem, type SponsorsHubData } from "@/components/org-sponsors";
 import { AddDealSheet, type CreateDealBody } from "@/components/sponsors/add-deal-sheet";
 import { canShowAgain, groupTierOf, SponsorList, tierComing, type SponsorListProps } from "@/components/sponsors/sponsor-list";
+import { DictProvider } from "@/components/i18n/dict-provider";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { expandSponsorTree } from "./_sponsor-tree";
 import { attrOf, classTokens, findAll, findOne, textOfMarkup } from "./_markup";
@@ -505,7 +509,7 @@ describe("a 43-character name truncates, and every ancestor can shrink (phone co
   });
 });
 
-describe("a chip on the name line can never run under the pencil, and below 360 the name gets the room (owner, 2026-11-11; seen at 320: a 80px name column)", () => {
+describe("a chip on the name line can never run under the pencil, and below 376 the name gets the room (owner, 2026-11-11; seen at 320: a 80px name column)", () => {
   const LOST = sponsor({ id: "c1", name: "Lost One", dispute_lost: true });
   const PARKED = sponsor({ id: "c2", name: "Parked One", dispute_parked: true });
   const PAID = sponsor({ id: "c3", name: "Paid One", paid_order_id: "o1" });
@@ -529,36 +533,92 @@ describe("a chip on the name line can never run under the pencil, and below 360 
     expect(checked, "four kinds of chip").toBe(4);
   });
 
-  it("below 360 the logo tile is hidden and the grid is two columns (name, pencil), the deal and the tray starting at the first; from 360 nothing changes (the markup carries both)", () => {
+  it("a truncated chip carries its full words as its title, so a cut word can be read on hover or long-press (4 kinds x 4 locales)", () => {
+    const DICTS = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as const;
+    // The three badges' words come from each locale's own dictionary file, not from the component.
+    const KEYS = { c1: "sponsors.lostBadge", c2: "sponsors.parkedBadge", c3: "sponsors.paidBadge" } as const;
+    const seen = new Set<string>();
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const markup = renderToStaticMarkup(
+        <DictProvider dict={DICTS[locale] as unknown as Dict} locale={locale}>
+          <SponsorList {...listProps([LOST, PARKED, PAID, WAITING])} />
+        </DictProvider>,
+      );
+      for (const id of ["c1", "c2", "c3", "c4"] as const) {
+        const chips = findAll(findOne(rowOf(markup, id), "sponsor-row-name").outer, id === "c4" ? "sponsor-row-tier-hint" : "sponsor-row-badge");
+        expect(chips, `${locale} ${id}: exactly one chip`).toHaveLength(1);
+        const words = textOfMarkup(chips[0]!.outer);
+        expect(words.length, `${locale} ${id}: the chip has words`).toBeGreaterThan(0);
+        if (id !== "c4") expect(words, `${locale} ${id}: the locale's own words`).toBe((DICTS[locale] as Record<string, string>)[KEYS[id]]);
+        expect(attrOf(chips[0]!.open, "title"), `${locale} ${id}: the title is the chip's own words, in full`).toBe(words);
+        seen.add(`${locale}:${words}`);
+        checked++;
+      }
+    }
+    expect(checked, "four kinds of chip in four locales").toBe(16);
+    expect(seen.size, "the four locales really rendered four different sets of words").toBeGreaterThan(12);
+  });
+
+  it("below 376 the logo tile is hidden and the grid is two columns (name, pencil), the deal and the tray starting at the first; from 376 nothing changes (the markup carries both)", () => {
     const row = rowOf(listHtml(ROWS), "s1");
     const grid = findOne(row, "sponsor-row-grid");
     const cls = classTokens(grid.open);
     expect(cls, "the three-column grid is still the base").toContain("grid-cols-[2.25rem_minmax(0,1fr)_auto]");
-    expect(cls, "below 360 it is name + pencil").toContain("max-[360px]:grid-cols-[minmax(0,1fr)_auto]");
+    expect(cls, "below 376 it is name + pencil").toContain("max-[376px]:grid-cols-[minmax(0,1fr)_auto]");
     expect(cls, "from md it is unchanged").toContain("md:grid-cols-[2.25rem_minmax(0,1fr)_auto_auto_auto]");
     const logo = findOne(row, "sponsor-row-logo");
-    expect(classTokens(logo.open), "below 360 the logo tile is hidden").toContain("max-[360px]:hidden");
+    expect(classTokens(logo.open), "below 376 the logo tile is hidden").toContain("max-[376px]:hidden");
     // The hidden tile is the ONLY thing taking the first column, so the next cells start at the first column there.
     for (const id of ["sponsor-row-deal", "sponsor-row-tools"]) {
       const tokens = classTokens(findOne(row, id).open);
-      expect(tokens, `${id}: starts at column 1 below 360`).toContain("max-[360px]:col-start-1");
-      expect(tokens, `${id}: spans both columns (all of them, below 360)`).toContain("col-span-2");
-      expect(tokens, `${id}: and still starts at column 2 from 360`).toContain("col-start-2");
+      expect(tokens, `${id}: starts at column 1 below 376`).toContain("max-[376px]:col-start-1");
+      expect(tokens, `${id}: spans both columns (all of them, below 376)`).toContain("col-span-2");
+      expect(tokens, `${id}: and still starts at column 2 from 376`).toContain("col-start-2");
     }
   });
 
-  it("below 360 the name wraps to two lines (line-clamp-2) instead of cutting at about nine characters; from 360 it still truncates on one line (8 rows checked)", () => {
+  it("below 376 the name wraps to two lines (line-clamp-2) instead of cutting at about nine characters; from 376 it still truncates on one line (8 rows checked)", () => {
     let checked = 0;
     for (const r of ROWS) {
       const text = classTokens(findOne(findOne(rowOf(listHtml(ROWS), r.id), "sponsor-row-name").outer, "sponsor-row-name-text").open);
-      expect(text, `${r.id}: two lines below 360`).toEqual(expect.arrayContaining(["max-[360px]:line-clamp-2", "max-[360px]:whitespace-normal", "max-[360px]:break-words"]));
-      expect(text, `${r.id}: from 360 it is the one truncated line it was`).toEqual(expect.arrayContaining(["truncate", "min-w-0", "max-w-full"]));
+      expect(text, `${r.id}: two lines below 376`).toEqual(expect.arrayContaining(["max-[376px]:line-clamp-2", "max-[376px]:whitespace-normal", "max-[376px]:break-words"]));
+      expect(text, `${r.id}: from 376 it is the one truncated line it was`).toEqual(expect.arrayContaining(["truncate", "min-w-0", "max-w-full"]));
       checked++;
     }
     expect(checked).toBe(8);
   });
 
-  it("the logo tile exists once per row, image or initial, and carries the same hidden-below-360 class either way (stored logo and initial both checked)", () => {
+  it("the narrow layout starts below 376, not below 360: a 360 and a 375 phone (the commonest widths) get it, and the old 360 bound is gone (every narrow token on 8 rows)", () => {
+    // `max-[N]` is `width < N` in Tailwind v4, so 376 puts 360 and 375 inside the narrow layout and 376 itself outside.
+    let checked = 0;
+    for (const r of ROWS) {
+      const row = rowOf(listHtml(ROWS), r.id);
+      for (const el of [
+        findOne(row, "sponsor-row-grid"), findOne(row, "sponsor-row-logo"), findOne(row, "sponsor-row-deal"), findOne(row, "sponsor-row-tools"),
+        findOne(row, "sponsor-row-sub"), findOne(findOne(row, "sponsor-row-name").outer, "sponsor-row-name-text"),
+      ]) {
+        const narrow = classTokens(el.open).filter((c) => c.startsWith("max-["));
+        expect(narrow.length, `${r.id}: carries narrow-layout tokens`).toBeGreaterThan(0);
+        for (const c of narrow) expect(c, `${r.id}: ${c}`).toMatch(/^max-\[376px\]:/);
+        checked++;
+      }
+    }
+    expect(checked, "6 elements on 8 rows").toBe(48);
+  });
+
+  it("below 376 the sub-line takes two lines (line-clamp-2) so a price is not cut mid-number; from 376 it is the one truncated line it was (8 rows checked)", () => {
+    let checked = 0;
+    for (const r of ROWS) {
+      const tokens = classTokens(findOne(rowOf(listHtml(ROWS), r.id), "sponsor-row-sub").open);
+      expect(tokens, `${r.id}: two lines below 376`).toEqual(expect.arrayContaining(["max-[376px]:line-clamp-2", "max-[376px]:whitespace-normal", "max-[376px]:break-words"]));
+      expect(tokens, `${r.id}: from 376 it is the one truncated line it was`).toEqual(expect.arrayContaining(["truncate", "text-xs"]));
+      checked++;
+    }
+    expect(checked).toBe(8);
+  });
+
+  it("the logo tile exists once per row, image or initial, and carries the same hidden-below-376 class either way (stored logo and initial both checked)", () => {
     const withLogo = sponsor({ id: "c5", name: "Logo One", logo_path: "https://cdn.example/logo.png" });
     const markup = listHtml([withLogo, PAID]);
     let checked = 0;
@@ -566,7 +626,7 @@ describe("a chip on the name line can never run under the pencil, and below 360 
       const logos = findAll(rowOf(markup, id), "sponsor-row-logo");
       expect(logos, `${id}: one logo tile`).toHaveLength(1);
       expect(logos[0]!.open.startsWith(tag), `${id}: ${tag}`).toBe(true);
-      expect(classTokens(logos[0]!.open), id).toContain("max-[360px]:hidden");
+      expect(classTokens(logos[0]!.open), id).toContain("max-[376px]:hidden");
       checked++;
     }
     expect(checked).toBe(2);

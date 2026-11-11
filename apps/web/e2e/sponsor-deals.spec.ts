@@ -8,8 +8,8 @@
 //     (`mark-paid`, `approve`) and the row following the answer;
 //   - the ⋯ fold: below 768 the clicks count and the move / delete controls sit behind it while the edit pencil stays on the row
 //     beside it, from 768 they are all inline, and each tap target is 44px where a finger is the pointer;
-//   - a 43-character sponsor name in a 320px row: no logo tile below 360, the name wraps to two lines and is cut with an ellipsis
-//     after them, inside the screen, no sideways scroll; from 360 one truncated line.
+//   - a 43-character sponsor name in a phone row: below 376 (a 320, 360 or 375 phone) no logo tile, the name and the sub-line wrap to
+//     two lines, the name is cut with an ellipsis after them at 320, inside the screen, no sideways scroll; from 376 one truncated line.
 //
 // Copy is read from the dictionary the page renders from, never retyped (this folder's idiom: sponsor-deals-api.spec.ts).
 import { readFileSync } from "node:fs";
@@ -205,9 +205,9 @@ test("list: each row shows one next action and the chip its deal state names", a
   expect(await expectAtMostOneActionPerRow(page), "every row was looked at again").toBe(5);
 });
 
-test("list at 320: the ⋯ fold holds clicks, move and delete and the pencil stays on the row; no sideways scroll; a 43-character name wraps to two lines and is cut", async ({ page, request }) => {
-  // Three widths, each a page load with the fold opened and closed.
-  test.setTimeout(150_000);
+test("list at 320 and 375: the ⋯ fold holds clicks, move and delete and the pencil stays on the row; no sideways scroll; a 43-character name wraps to two lines", async ({ page, request }) => {
+  // Four widths, each a page load with the fold opened and closed.
+  test.setTimeout(180_000);
   // A competition-scoped or tiered sponsor is a Pro placement (`sponsors.tiers`), so this one org is Pro.
   const org = await seedSettingsOrg(request, { plan: "pro", label: "list-fold" });
   seeded.push(org);
@@ -220,7 +220,8 @@ test("list at 320: the ⋯ fold holds clicks, move and delete and the pencil sta
   const deal = await newDeal(request, org.orgId, longId, { package_id: gold, payment_method: "complimentary", go_live: "immediate" });
   expect(await dealStatus(request, org.orgId, deal), "premise: live").toBe("live");
 
-  const widths = [320, 768, 1280];
+  // 375 is the widest phone that still gets the narrow layout (below 376), 768 the first width with no ⋯.
+  const widths = [320, 375, 768, 1280];
   let checked = 0;
   for (const width of widths) {
     await page.setViewportSize({ width, height: 900 });
@@ -317,6 +318,11 @@ test("list at 320: the ⋯ fold holds clicks, move and delete and the pencil sta
     // The name is plain text, not a link (owner, 2026-11-11: the pencil is the one way in).
     await expect(long.getByTestId("sponsor-row-name-link"), `${width}: the name is not a link`).toHaveCount(0);
     expect(await name.evaluate((el) => el.closest("a") === null), `${width}: and no anchor wraps it`).toBe(true);
+    const sub = long.getByTestId("sponsor-row-sub");
+    const subStyle = await sub.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return { clamp: cs.webkitLineClamp, whiteSpace: cs.whiteSpace };
+    });
     const box = await name.evaluate((el) => {
       const cs = getComputedStyle(el);
       return {
@@ -326,13 +332,16 @@ test("list at 320: the ⋯ fold holds clicks, move and delete and the pencil sta
     });
     expect({ overflow: box.overflow, ellipsis: box.ellipsis }, `${width}: the name is built to truncate`).toEqual({ overflow: "hidden", ellipsis: "ellipsis" });
     expect(box.right, `${width}: the name ends inside the screen`).toBeLessThanOrEqual(width);
-    if (width < 360) {
-      // Below 360 the row has no logo tile and the name gets two lines instead of being cut at about nine characters (owner ruling).
-      await expect(long.getByTestId("sponsor-row-logo"), `${width}: no logo tile below 360`).toBeHidden();
+    if (width < 376) {
+      // Below 376 (a 320, 360 or 375 phone) the row has no logo tile, the name gets two lines instead of being cut at about nine or
+      // fourteen characters (owner ruling), and the sub-line takes two lines so a price is not cut mid-number.
+      await expect(long.getByTestId("sponsor-row-logo"), `${width}: no logo tile below 376`).toBeHidden();
       expect(box.lines, `${width}: the name wraps to two lines`).toBe(2);
-      expect(box.clippedY, `${width}: the 43 characters need more than two lines, so they are cut after the second`).toBe(true);
+      if (width === 320) expect(box.clippedY, "320: the 43 characters need more than two lines, so they are cut after the second").toBe(true);
+      expect(subStyle, `${width}: the sub-line may take two lines`).toEqual({ clamp: "2", whiteSpace: "normal" });
     } else {
-      expect(box.lines, `${width}: from 360 the name is one truncated line`).toBe(1);
+      expect(box.lines, `${width}: from 376 the name is one truncated line`).toBe(1);
+      expect(subStyle, `${width}: and the sub-line is the one truncated line it was`).toEqual({ clamp: "none", whiteSpace: "nowrap" });
     }
     await expectNoHorizontalScroll(page);
     checked++;
@@ -1505,9 +1514,9 @@ test("T19 widths: list, sponsor page, Add deal sheet and deal page fit 320 / 768
     const listName = await lineBreaks(listNameEl);
     expect(listName.chars, `${width}: the list measured every letter of the name`).toBe(LONG.replace(/\s/g, "").length);
     expect(listName.midWord, `${width}: the list's name never breaks inside a word`).toEqual([]);
-    // The list's name is CUT (the other half of "a long name fits"), built to end in an ellipsis. From 360 it is ONE line, clipped by
-    // width. Below 360 the row has no logo tile and the name gets TWO lines (owner ruling 2026-11-11): the box is two lines tall and the
-    // 43 characters need more, so they are clipped by height. `lines` above counts every letter's row, including the clamped ones.
+    // The list's name is CUT (the other half of "a long name fits"), built to end in an ellipsis. From 376 it is ONE line, clipped by
+    // width. Below 376 the row has no logo tile and the name gets TWO lines (owner ruling 2026-11-11): the box is two lines tall and, at
+    // 320, the 43 characters need more, so they are clipped by height. `lines` above counts every letter's row, including the clamped ones.
     const cut = await listNameEl.evaluate((el) => {
       const cs = getComputedStyle(el);
       const box = el.getBoundingClientRect();
@@ -1517,8 +1526,8 @@ test("T19 widths: list, sponsor page, Add deal sheet and deal page fit 320 / 768
       };
     });
     expect({ overflow: cut.overflow, ellipsis: cut.ellipsis }, `${width}: the list's name is built to truncate`).toEqual({ overflow: "hidden", ellipsis: "ellipsis" });
-    if (width < 360) {
-      await expect(rowOf(page, longId).getByTestId("sponsor-row-logo"), `${width}: no logo tile below 360`).toBeHidden();
+    if (width < 376) {
+      await expect(rowOf(page, longId).getByTestId("sponsor-row-logo"), `${width}: no logo tile below 376`).toBeHidden();
       expect(cut.boxLines, `${width}: the list's name box is two lines tall`).toBe(2);
       expect(listName.lines, `${width}: and the 43 characters need more than those two lines`).toBeGreaterThan(2);
       expect(cut.clippedY, `${width}: so the name is cut after the second line`).toBe(true);

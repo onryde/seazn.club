@@ -218,17 +218,21 @@ export function SponsorList(props: SponsorListProps) {
     // pencil beside it (a longer word - French, Dutch - or "Disputed - parked" did). `max-w-full` caps it at the name line; the flex-wrap
     // line it sits in puts it under the name first.
     const cls = "min-w-0 max-w-full truncate rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase";
+    // The `title` holds the same words in full: a chip that was cut ("En disputa - ret...") can still be read on hover or long-press.
+    const chip = (words: string, tone: string) => (
+      <span data-testid="sponsor-row-badge" title={words} className={`${cls} ${tone}`}>{words}</span>
+    );
     if (s.dispute_lost) {
       // The activating order was written off by a lost dispute - the placement stays down; say why.
-      return <span data-testid="sponsor-row-badge" className={`${cls} bg-rose-200 text-rose-900`}>{msg("sponsors.lostBadge")}</span>;
+      return chip(msg("sponsors.lostBadge"), "bg-rose-200 text-rose-900");
     }
     if (s.dispute_parked) {
       // Parked by an open payment dispute - the handler took it down; it returns if the dispute is won.
-      return <span data-testid="sponsor-row-badge" className={`${cls} bg-rose-100 text-rose-700`}>{msg("sponsors.parkedBadge")}</span>;
+      return chip(msg("sponsors.parkedBadge"), "bg-rose-100 text-rose-700");
     }
     if (s.paid_order_id) {
       // Bought through a package - ties the sponsor list back to the Sell section's orders.
-      return <span data-testid="sponsor-row-badge" className={`${cls} bg-emerald-50 text-emerald-700`}>{msg("sponsors.paidBadge")}</span>;
+      return chip(msg("sponsors.paidBadge"), "bg-emerald-50 text-emerald-700");
     }
     return null;
   }
@@ -238,13 +242,15 @@ export function SponsorList(props: SponsorListProps) {
   function tierHint(s: SponsorItem): ReactNode {
     const next = hasTiers ? tierComing(s) : null;
     if (next === null) return null;
+    const words = msg("sponsors.row.tierWhenLive", { tier: msg(TIER_MSG[next]) });
     return (
       <span
         data-testid="sponsor-row-tier-hint"
         data-tier={next}
+        title={words}
         className={`min-w-0 max-w-full truncate rounded-full px-2 py-0.5 text-[10px] font-medium ${TIER_BADGE[next]}`}
       >
-        {msg("sponsors.row.tierWhenLive", { tier: msg(TIER_MSG[next]) })}
+        {words}
       </span>
     );
   }
@@ -259,16 +265,17 @@ export function SponsorList(props: SponsorListProps) {
       <li key={s.id} data-testid="sponsor-row" data-sponsor-id={s.id} className="px-3 py-2.5">
         <div
           data-testid="sponsor-row-grid"
-          className="grid grid-cols-[2.25rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 max-[360px]:grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[2.25rem_minmax(0,1fr)_auto_auto_auto]"
+          className="grid grid-cols-[2.25rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 max-[376px]:grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[2.25rem_minmax(0,1fr)_auto_auto_auto]"
         >
-          {/* Below 360 the logo tile goes (the name needs the 48px, and the tile is decoration), the grid is name + pencil, and the deal
-              and tray cells start at the first column. From 360 it is the row it was. */}
+          {/* Below 376 (a 320, 360 or 375 phone: the commonest widths) the logo tile goes (the name needs the 48px, and the tile is
+              decoration), the grid is name + pencil, the deal and tray cells start at the first column, and the name and the sub-line
+              may take two lines. From 376 it is the row it was. `max-[376px]` is "width < 376" in Tailwind v4. */}
           {s.logo_path ? (
             // Stored via content-upload - an absolute CDN URL.
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={s.logo_path} alt="" data-testid="sponsor-row-logo" className="h-9 w-9 rounded object-contain ring-1 ring-slate-200 max-[360px]:hidden" />
+            <img src={s.logo_path} alt="" data-testid="sponsor-row-logo" className="h-9 w-9 rounded object-contain ring-1 ring-slate-200 max-[376px]:hidden" />
           ) : (
-            <span data-testid="sponsor-row-logo" className="grid h-9 w-9 place-items-center rounded bg-slate-100 text-xs font-semibold text-slate-500 max-[360px]:hidden">
+            <span data-testid="sponsor-row-logo" className="grid h-9 w-9 place-items-center rounded bg-slate-100 text-xs font-semibold text-slate-500 max-[376px]:hidden">
               {s.name.charAt(0).toUpperCase()}
             </span>
           )}
@@ -276,13 +283,13 @@ export function SponsorList(props: SponsorListProps) {
             {/* A badge (Disputed - parked, Paid ...) wraps under the name instead of squeezing it to "O..." in a 160px column. */}
             <p data-testid="sponsor-row-name" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-sm font-medium text-slate-800">
               {/* Plain text: the pencil is the one way into the sponsor (a name that looked like a link was the thing people did not find). */}
-              <span data-testid="sponsor-row-name-text" className="block min-w-0 max-w-full truncate max-[360px]:line-clamp-2 max-[360px]:whitespace-normal max-[360px]:break-words">
+              <span data-testid="sponsor-row-name-text" className="block min-w-0 max-w-full truncate max-[376px]:line-clamp-2 max-[376px]:whitespace-normal max-[376px]:break-words">
                 {s.name}
               </span>
               {badge(s)}
               {tierHint(s)}
             </p>
-            <p data-testid="sponsor-row-sub" className="truncate text-xs text-slate-500">
+            <p data-testid="sponsor-row-sub" className="truncate text-xs text-slate-500 max-[376px]:line-clamp-2 max-[376px]:whitespace-normal max-[376px]:break-words">
               {subline(s, { msg, locale, tz, competitions, hasTiers })}
             </p>
           </div>
@@ -301,7 +308,7 @@ export function SponsorList(props: SponsorListProps) {
           </div>
           <div
             data-testid="sponsor-row-deal"
-            className="col-span-2 col-start-2 flex min-w-0 flex-wrap items-center justify-between gap-2 max-[360px]:col-start-1 md:col-span-1 md:col-start-auto md:w-72"
+            className="col-span-2 col-start-2 flex min-w-0 flex-wrap items-center justify-between gap-2 max-[376px]:col-start-1 md:col-span-1 md:col-start-auto md:w-72"
           >
             <DealChip deal={s.deal} />
             {action(s)}
@@ -309,7 +316,7 @@ export function SponsorList(props: SponsorListProps) {
           <div
             id={trayId}
             data-testid="sponsor-row-tools"
-            className={`col-span-2 col-start-2 flex min-w-0 flex-wrap items-center gap-1 max-[360px]:col-start-1 md:col-span-1 md:col-start-auto md:shrink-0 md:flex-nowrap md:justify-end ${folded ? "max-md:hidden" : ""}`}
+            className={`col-span-2 col-start-2 flex min-w-0 flex-wrap items-center gap-1 max-[376px]:col-start-1 md:col-span-1 md:col-start-auto md:shrink-0 md:flex-nowrap md:justify-end ${folded ? "max-md:hidden" : ""}`}
           >
             <span
               data-testid="sponsor-row-clicks"
