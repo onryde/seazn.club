@@ -189,34 +189,25 @@ export function SettingsNav({
   active,
   dict,
   context = null,
-  compact = false,
 }: {
   orgSlug: string;
   active: SettingsNavKey;
   dict: Dict;
-  /**
-   * The phone strip at EVERY width (owner 2026-11-11, option 1): the Organisation tab drops the rail so its two cards get
-   * the full content width, and this strip above them keeps every other tab one tap away. Same links, same tree — only
-   * the `md:` rail variants are left off, so `aria-current` still appears once.
-   */
-  compact?: boolean;
   /** From `navContext(orgId)`. Omit and the plan/credits header is skipped. */
   context?: NavContext | null;
 }) {
   return (
-    <aside className={compact ? "w-full" : "w-full md:w-44 md:shrink-0"} data-nav-shape={compact ? "strip" : "rail"}>
-      {!compact && (
+    <aside className="w-full md:w-44 md:shrink-0">
       <p className="mb-3 hidden px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500 md:block">
         {t(dict, "settings.nav.title")}
       </p>
-      )}
 
       {/* Plan + streaming credits, desktop only — the phone strip is one row
           and has no room for it. Both were previously visible only from the
           page that owns them, which is exactly where an owner is NOT looking
           when they run out mid-schedule. The link is the bare Credits URL:
           the Streaming side is that page's default. */}
-      {context && !compact && (
+      {context && (
         <div className="mb-4 hidden rounded-lg border border-purple-100 bg-purple-50/40 px-3 py-2 md:block">
           <p className="text-sm font-semibold text-slate-800">{context.plan}</p>
           <Link
@@ -236,21 +227,13 @@ export function SettingsNav({
           which is a screen reader hearing two current pages.
           Desktop: the wrappers become blocks again and the headers appear. */}
       <ScrollActiveTabIntoView className="contents">
-        <nav
-          className={
-            compact
-              ? "scroll-x scroll-x-fade sticky top-[var(--app-header-h)] z-30 -mx-4 flex gap-1 whitespace-nowrap bg-[var(--background)]/90 px-4 py-2 backdrop-blur"
-              : "scroll-x scroll-x-fade sticky top-[var(--app-header-h)] z-30 -mx-4 flex gap-1 whitespace-nowrap bg-[var(--background)]/90 px-4 py-2 backdrop-blur md:static md:z-auto md:mx-0 md:block md:bg-transparent md:p-0 md:backdrop-blur-none"
-          }
-        >
+        <nav className="scroll-x scroll-x-fade sticky top-[var(--app-header-h)] z-30 -mx-4 flex gap-1 whitespace-nowrap bg-[var(--background)]/90 px-4 py-2 backdrop-blur md:static md:z-auto md:mx-0 md:block md:bg-transparent md:p-0 md:backdrop-blur-none">
           {GROUPS.map(({ group, labelKey }) => (
-            <div key={group} className={compact ? "contents" : "contents md:mb-4 md:block md:last:mb-0"}>
-              {!compact && (
-                <p className="hidden px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-400 md:mb-1 md:block">
-                  {t(dict, labelKey)}
-                </p>
-              )}
-              <div className={compact ? "contents" : "contents md:block md:space-y-0.5"}>
+            <div key={group} className="contents md:mb-4 md:block md:last:mb-0">
+              <p className="hidden px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-400 md:mb-1 md:block">
+                {t(dict, labelKey)}
+              </p>
+              <div className="contents md:block md:space-y-0.5">
                 {ITEMS.filter((i) => i.group === group).map((item) => (
                   <NavLink key={item.key} item={item} orgSlug={orgSlug} active={active} dict={dict} />
                 ))}
@@ -260,17 +243,13 @@ export function SettingsNav({
         </nav>
       </ScrollActiveTabIntoView>
 
-      {!compact && (
-        <>
-          <div className="my-4 hidden border-t border-purple-100 md:block" />
-          <Link
-            href={routes.orgHome(orgSlug)}
-            className="hidden rounded-lg px-3 py-2 text-sm text-slate-500 transition hover:bg-slate-50 hover:text-slate-600 md:block"
-          >
-            ← {t(dict, "settings.nav.backToCompetitions")}
-          </Link>
-        </>
-      )}
+      <div className="my-4 hidden border-t border-purple-100 md:block" />
+      <Link
+        href={routes.orgHome(orgSlug)}
+        className="hidden rounded-lg px-3 py-2 text-sm text-slate-500 transition hover:bg-slate-50 hover:text-slate-600 md:block"
+      >
+        ← {t(dict, "settings.nav.backToCompetitions")}
+      </Link>
     </aside>
   );
 }

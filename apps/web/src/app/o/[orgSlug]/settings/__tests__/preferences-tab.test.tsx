@@ -336,23 +336,6 @@ describe("settings → preferences", () => {
     expect(html).toContain('aria-current="page"');
   });
 
-  // Owner 2026-11-11, option 1: only the Organisation tab drops the rail. `data-nav-shape` is the nav's own declaration
-  // of the shape it drew; the class check anchors on `="`/whitespace so `md:w-44` cannot match inside another token.
-  it("Preferences and Account keep the left rail; Organisation alone shows the compact strip", async () => {
-    const shapes: Record<string, string[]> = {};
-    for (const tab of ["organization", "preferences", "account"]) {
-      const html = await render(tab);
-      shapes[tab] = [...html.matchAll(/data-nav-shape="(\w+)"/g)].map((m) => m[1]!);
-      if (tab !== "organization") {
-        const at = html.indexOf('data-nav-shape="rail"');
-        expect(at, `${tab}: the rail is drawn`).toBeGreaterThan(-1);
-        const start = html.lastIndexOf('class="', at) + 7;
-        expect(html.slice(start, html.indexOf('"', start)).split(/\s+/), tab).toContain("md:w-44");
-      }
-    }
-    expect(shapes).toEqual({ organization: ["strip"], preferences: ["rail"], account: ["rail"] });
-  });
-
   it("falls back to the organisation tab for an unknown ?tab", async () => {
     const html = await render("preferencez");
     expect(html).toContain("Riverside Community Club");
