@@ -59,7 +59,26 @@ async function refuseBrokenDependentCuts(tx: Tx, source: StageRow, playoff: bool
   }
 }
 
+/** Thrown inside the locked transaction when the unlocked prelude read (does the stage hold lines?) no longer matches the locked one. */
+class StalePrelude extends Error {}
+
 export async function patchKnockoutStage(
+  auth: AuthCtx,
+  stageId: string,
+  body: { thirdPlace: ThirdPlaceMode },
+): Promise<PatchKnockoutStageResult> {
+  // m-1: the prelude below is read OUTSIDE the division lock, so its decision (do the sealed setup counts need reading?) can go
+  // stale; the locked read is the one that decides, and a mismatch runs the whole attempt again on a fresh prelude (once: lines
+  // are only ever added by Generate, which holds the same lock, so the second read is stable under it).
+  try {
+    return await patchKnockoutStageOnce(auth, stageId, body);
+  } catch (e) {
+    if (!(e instanceof StalePrelude)) throw e;
+    return patchKnockoutStageOnce(auth, stageId, body);
+  }
+}
+
+async function patchKnockoutStageOnce(
   auth: AuthCtx,
   stageId: string,
   body: { thirdPlace: ThirdPlaceMode },
@@ -81,9 +100,12 @@ export async function patchKnockoutStage(
   const write = await withTenant(
     auth.orgId,
     async (tx) => {
+      // m-1: the lock first (the division id never changes), THEN the stage is read, so every decision below is made on the locked read.
+      const [owner] = await tx<{ division_id: string }[]>`select division_id from stages where id = ${stageId}`;
+      if (!owner) throw new HttpError(404, "stage not found");
+      await tx`select pg_advisory_xact_lock(hashtext(${"division:" + owner.division_id}))`;
       const [stage] = await tx<StageRow[]>`select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
       if (!stage) throw new HttpError(404, "stage not found");
-      await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
       if (stage.kind !== "knockout") throw knockoutRefusal("STAGE_NOT_KNOCKOUT");
 
       const rows = await tx<{ id: string; home_entrant_id: string | null; away_entrant_id: string | null }[]>`
@@ -129,6 +151,9 @@ export async function patchKnockoutStage(
         return { result: { ...base, regenerated: ids.length > 0 }, generated: null, removedIds: ids, changed: true };
       }
       if (root || qualified) {
+        // m-1: lines landed after the prelude was read (a Generate) and this redraws a root bracket over them: the sealed setup counts
+        // were never read, so the attachment check below would run on zero. Run again on a fresh prelude.
+        if (root && rows.length > 0 && !readsSealed) throw new StalePrelude();
         if (readsSealed && sealed === undefined) throw new Error("patchKnockoutStage: the sealed setup counts were not read");
         const attachments = await stageAttachmentCounts(tx, stageId, sealed ?? { streams: 0, youtubeBroadcasts: 0 });
         if (Object.values(attachments).some((c) => c > 0)) throw knockoutRefusal("KO_REDRAW_WOULD_CLEAR_SETUP", { attachments });
