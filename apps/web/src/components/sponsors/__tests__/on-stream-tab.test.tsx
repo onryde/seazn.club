@@ -179,6 +179,95 @@ describe("the rotation - the dial opens AT the stored value (D12)", () => {
   });
 });
 
+// Owner on stg (2026-11-07): "why has big fat button?" - the switch's TRACK was the 44px tap target itself (h-11 w-14, painted), so it
+// read as a fat pill. The fix keeps the 44px target and draws a slim switch inside it. vitest has no layout, so this reads the
+// Tailwind spacing classes the way the browser would (N -> N * 4px) off the real element tree; the picture itself (and the hit-test at
+// the target's corners) is checked in a browser against the compiled CSS in the task report. Expected sizes are the house floor (44) and
+// a plain slim ratio, not numbers read back from the component.
+describe("the rotation switch: a slim switch inside a 44px tap target", () => {
+  const TAP_FLOOR_PX = 44;
+  const classesOf = (el: ReactElement): string[] => String(propsOf(el).className ?? "").split(/\s+/).filter(Boolean);
+  /** `h-11` -> 44 (a 4px spacing step); `h-0.5` -> 2. null when the element names no such class. */
+  const px = (classes: string[], axis: "h" | "w" | "min-h" | "min-w" | "left"): number | null => {
+    const hit = classes.map((c) => new RegExp(`^${axis}-(\\d+(?:\\.\\d+)?)$`).exec(c)).find((r) => r !== null);
+    return hit ? Number(hit[1]) * 4 : null;
+  };
+  const parts = (enabled: boolean) => {
+    const m = mount({ settings: { enabled, frequency: "normal" } });
+    const button = m.find("on-stream-switch");
+    const track = m.find("on-stream-switch-track");
+    const knob = m.find("on-stream-switch-knob");
+    return { button, track, knob, m };
+  };
+
+  it("the button is a transparent target of at least 44 x 44 that paints no track colour of its own (on and off, counted)", () => {
+    let checked = 0;
+    for (const enabled of [true, false]) {
+      const { button } = parts(enabled);
+      const cls = classesOf(button);
+      const h = Math.max(px(cls, "h") ?? 0, px(cls, "min-h") ?? 0);
+      const w = Math.max(px(cls, "w") ?? 0, px(cls, "min-w") ?? 0);
+      expect(h, `enabled=${enabled}: tap height`).toBeGreaterThanOrEqual(TAP_FLOOR_PX);
+      expect(w, `enabled=${enabled}: tap width`).toBeGreaterThanOrEqual(TAP_FLOOR_PX);
+      expect(cls.filter((c) => /^(bg|from|to|via)-/.test(c)), `enabled=${enabled}: the target paints nothing`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the track inside it is slim: shorter than the target, a pill at least 1.5x wider than tall, and it carries the on/off colour", () => {
+    const on = parts(true);
+    const off = parts(false);
+    for (const [label, p] of [["on", on], ["off", off]] as const) {
+      const cls = classesOf(p.track);
+      const h = px(cls, "h")!;
+      const w = px(cls, "w")!;
+      expect(h, `${label}: the track names a height`).toBeGreaterThan(0);
+      expect(h, `${label}: slimmer than the 44px target (not the old 44px-tall pill)`).toBeLessThanOrEqual(32);
+      expect(w / h, `${label}: a pill, wider than tall`).toBeGreaterThanOrEqual(1.5);
+      expect(cls, `${label}: a pill`).toContain("rounded-full");
+    }
+    expect(classesOf(on.track), "on: purple").toContain("bg-purple-600");
+    expect(classesOf(off.track), "off: slate, not purple").toContain("bg-slate-300");
+    expect(classesOf(off.track)).not.toContain("bg-purple-600");
+  });
+
+  it("the knob sits inside the track at both ends of its travel, and moves between off and on", () => {
+    const place = (enabled: boolean) => {
+      const { track, knob } = parts(enabled);
+      const trackW = px(classesOf(track), "w")!;
+      const trackH = px(classesOf(track), "h")!;
+      const kc = classesOf(knob);
+      const size = px(kc, "w")!;
+      const inset = (kc.map((c) => /^left-(\d+(?:\.\d+)?)$/.exec(c)).find((r) => r !== null)?.[1] ?? "0") as string;
+      // translate-x-N moves it N * 4px; a negative or absent one is 0.
+      const shift = kc.map((c) => /^translate-x-(\d+(?:\.\d+)?)$/.exec(c)).find((r) => r !== null)?.[1] ?? "0";
+      return { trackW, trackH, size, left: Number(inset) * 4 + Number(shift) * 4 };
+    };
+    const off = place(false);
+    const on = place(true);
+    for (const [label, p] of [["off", off], ["on", on]] as const) {
+      expect(p.size, `${label}: the knob is smaller than the track is tall`).toBeLessThan(p.trackH);
+      expect(p.left, `${label}: the knob starts inside the track's left edge`).toBeGreaterThanOrEqual(0);
+      expect(p.left + p.size, `${label}: and ends inside its right edge`).toBeLessThanOrEqual(p.trackW);
+    }
+    expect(on.left, "on: the knob has travelled right of where it rests off").toBeGreaterThan(off.left);
+  });
+
+  it("only the button is interactive: the track and knob are decoration (aria-hidden, no handlers), so a tap anywhere on the target is the switch's", () => {
+    const { track, knob, m } = parts(true);
+    expect(propsOf(track)["aria-hidden"], "track hidden from the accessibility tree").toBe("true");
+    for (const el of [track, knob]) {
+      expect(propsOf(el).onClick, "no handler of its own").toBeUndefined();
+      expect(propsOf(el).role, "no role of its own").toBeUndefined();
+    }
+    // The role=switch element is the ONE control: exactly one in the tree, and it is the one the label points at.
+    const switches = m.island.tree().filter((e) => propsOf(e).role === "switch");
+    expect(switches).toHaveLength(1);
+    expect(propsOf(switches[0]!)["aria-labelledby"]).toBe("on-stream-switch-label");
+  });
+});
+
 describe("the rotation - what a click sends", () => {
   it("a dial move PUTs the scope's whole setting: org scope -> competitionId null, the new frequency, enabled kept", async () => {
     const m = mount({ settings: { enabled: false, frequency: "light" } });

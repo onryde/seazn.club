@@ -3,7 +3,8 @@
 // The ⋯ on a sponsor's row below md (sponsor deals PR 2, Task 14; spec §6.1: "on phones, the clicks count and the edit, move and
 // delete actions move into a ⋯ menu"). It is only the toggle: the controls it folds stay ONCE in the row (the list marks their
 // tray `max-md:hidden` until this is open), so there is no second phone copy of them. `md:hidden` - from 768 up the controls are
-// inline and this is gone. A 44px target (`h-11 w-11`), the house's tap floor (ui/card-menu.tsx `tap`).
+// inline and this is gone. A 44px target (`h-11 w-11`), the house's tap floor (ui/card-menu.tsx `tap`). The edit pencil is NOT
+// folded behind it: it sits beside this toggle in the row's lead cell, on screen whether the tray is open or not (owner, 2026-11-11).
 import { MoreHorizontal } from "lucide-react";
 import { useMsg } from "@/components/i18n/dict-provider";
 

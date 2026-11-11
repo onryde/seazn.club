@@ -2,7 +2,7 @@
 
 - **Status:** design, 2026-11-01. The owner approved the direction ("yes"), the mockups ("perfect mockup") and option B ("B").
 - **Mockups (layout only; the build uses the house theme):** `~/seazn-artifacts/2026-11-01_sponsor-deals-mockups_6472cb56/index.html` (served locally at http://127.0.0.1:8765/2026-11-01_sponsor-deals-mockups_6472cb56/index.html; the claude.ai artifact link is dead)
-- **Depends on:** R4 PR A (`feat/r4-sponsors`). It provides the Sponsors hub at `/o/:slug/sponsors` (tabs Overview, Sponsors, On stream, Packages), `sponsors.on_stream`, `lib/sponsor-tiers.ts` and the sponsor report links. Build this programme only after PR A has merged.
+- **Depends on:** R4 PR A (`feat/r4-sponsors`). It provides the Sponsors hub at `/o/:slug/sponsors` (tabs Overview, Sponsors, Packages, On stream - the order the owner set on 2026-11-11), `sponsors.on_stream`, `lib/sponsor-tiers.ts` and the sponsor report links. Build this programme only after PR A has merged.
 
 ## 1. Why
 
@@ -57,9 +57,9 @@ The owner's model, in their words: add the sponsor first "with link or image etc
 ### 5.1 Entities
 
 - **Sponsor** (existing table `sponsors`): name, url, logo_path, display_order, status, tier, competition_id, on_stream.
-  - Today a sponsor's own tier, competition and status are edited directly.
+  - Before this programme, a sponsor's own tier, competition and status were edited directly.
   - After this programme, a sponsor **with a live deal** takes its tier, scope and visibility from that deal.
-  - A sponsor **with no deal** behaves as today: the club sets the fields by hand, within plan limits.
+  - A sponsor **with no deal** shows as entered: its name, link and logo, as a plain Partner for the whole organisation. Its tier and scope are not edited by hand in any screen; a deal sets them, and a **complimentary** deal covers a favour such as a free Gold. The API still accepts both fields on a sponsor, unchanged. (owner, 2026-11-11: "A".) Sponsors that already hold another tier keep it, and the sponsor's page shows it read-only; this is a screen change, with no data move and no migration.
 - **Package** (existing table `sponsor_packages`): add an `includes` set covering website board, slideshow and on stream. The existing price, currency, tier, competition and active fields stay.
 - **Deal**: evolve `sponsor_orders`. The data-change rule applies: a loud migration, no silent re-meaning.
   - **Columns:** sponsor_id (required from creation), package_id, a snapshot of the scope and of the package's price/tier/includes at creation (a later package edit does not move an existing deal), payment_method (`online` | `offline` | `complimentary`), go_live (`on_payment` | `immediate` | `on_approval`), starts_at / ends_at (optional), status, an invoice number, and timestamps for each step.
@@ -142,13 +142,13 @@ Tiers on community stay governed by `sponsors.tiers` as today. Whether a communi
   - "Add deal" on a sponsor that already has a live deal creates a deal that **starts when the current one ends**. The sheet says so, and it also offers "End the current deal now" instead.
   - A guard enforces at most one Live deal per sponsor.
   - Two simultaneous placements for one sponsor (for example Gold org-wide plus Title on one cup) are out of scope. That case is rare.
-- **What a live deal locks (controller's call).** While a deal is live, the sponsor's tier, scope and on-stream setting come from the deal and are read-only on the sponsor page; change them by ending the deal or adding a new one. Name, logo and link stay editable.
+- **What a live deal locks (controller's call).** While a deal is live, the sponsor's tier, scope and on-stream setting come from the deal and are read-only on the sponsor page; change them by ending the deal or adding a new one. Name, logo and link stay editable. Since the owner's 2026-11-11 ruling ("A", §5.1) the sponsor editor never offers the tier or the scope, live deal or not, so the live-deal lock now guards the on-stream box and the API (`sponsor_locked_by_deal`).
 - **`includes` is "On stream" only (controller's call).** Every sponsor already appears on the website board and the slideshow; nothing gates those per sponsor. A package therefore has one include toggle, On stream, which maps to `sponsors.on_stream`. Remove "website board" and "slideshow" from the mockup's includes list, so no label promises something the system cannot withhold.
 - **Package scope vs deal scope (controller's call).** A package is either "any competition" or one named competition. When a deal is made, the club picks the deal's scope within what the package allows: the whole org, or one competition.
   - `ends_at` is optional.
   - A deal scoped to one competition with no `ends_at` ends when that competition is finished (its derived phase), not on a stored copy of its date. Moving the competition's dates therefore moves the end with it.
 
-- **Visibility before go-live (owner, 2026-11-01: "1 Ok").** A sponsor with no deal shows on the site as soon as it is added, exactly as today. A sponsor whose only deal is waiting for payment or approval stays hidden until that deal goes live.
+- **Visibility before go-live (owner, 2026-11-01: "1 Ok").** A sponsor with no deal shows on the site as soon as it is added, exactly as today, as a plain Partner for the whole organisation (owner, 2026-11-11: "A"; §5.1). A sponsor whose only deal is waiting for payment or approval stays hidden until that deal goes live.
 - **No backfill (owner, 2026-11-01: "No customer in prod for sponsor").** No real sponsor orders exist in prod, so the switch is clean: no backfill of old orders into deals. The migration is still loud (§5.1), and the dispute and refund columns stay.
 
 ## 9. Left to the builder
@@ -163,4 +163,4 @@ Tiers on community stay governed by `sponsors.tiers` as today. Whether a communi
 
 1. **Community tier:** no. On the community plan every deal is Partner, until the club upgrades. Tiers stay gated by `sponsors.tiers` as today. (The plan isolates this in one task, so a later change is cheap.)
 2. **Bank details for offline invoices:** a separate setting from the registrant payment instructions.
-3. **After all of a sponsor's deals have ended:** the club may switch the sponsor back on by hand, as for a sponsor with no deal.
+3. **After all of a sponsor's deals have ended:** the club may switch the sponsor back on by hand, as for a sponsor with no deal. Its tier and scope are not edited by hand either (a deal sets them; §5.1, owner 2026-11-11: "A").

@@ -79,11 +79,9 @@ function ui(key: string, vars: Record<string, string | number> = {}): string {
 // control's own text (a <select>'s option labels; an <input>'s value once it is
 // prefilled, as the sponsor edit form's always is). A locator written that way
 // works on the empty add form and silently stops matching on the edit form.
-// Fields are located as "the input inside the label that says X" instead, and
-// the two SponsorForm selects by an option VALUE — which also disambiguates
-// them from `sponsor-packages.tsx`, whose Tier and Competition labels come from
-// the SAME two dictionary keys and which renders for any org with
-// `sponsors.monetize`.
+// Fields are located as "the input inside the label that says X" instead. The
+// tier and scope selects the sponsor form once carried are looked for by an
+// option VALUE further down, only to be found ABSENT (a deal sets them now).
 const L = {
   sponsorName: ui("settings.org.sponsors.name"),
   sponsorLink: ui("settings.org.sponsors.link"),
@@ -456,7 +454,7 @@ test("news tab: compose a draft, publish it, archive it, then delete only it", a
 // SPONSORS (CRUD half)
 // ---------------------------------------------------------------------------
 
-test("Sponsors hub, Sponsors tab: add three, reorder, edit tier and scope, delete only one", async ({ page }) => {
+test("Sponsors hub, Sponsors tab: add three, reorder, edit name and link (the form has no tier or scope), delete only one", async ({ page }) => {
   test.setTimeout(budget(2, 6));
 
   const A = `Alpha Tools ${TAG}`;
@@ -475,11 +473,11 @@ test("Sponsors hub, Sponsors tab: add three, reorder, edit tier and scope, delet
   const addName = field(page, L.sponsorName).first();
   const addLink = field(page, L.sponsorLink).first();
   // The tier select is the one offering "gold"; the scope select is the one
-  // offering this org's competition. The ADD form has neither (sponsor deals
+  // offering this org's competition. Neither form has them (sponsor deals
   // Task 14: a new sponsor is a name, a logo and a link, and its deal sets the
-  // tier and where it shows), so they are looked for to be found ABSENT; they
-  // come back in the row's EDIT form below, where a sponsor with no deal is
-  // placed by hand.
+  // tier and where it shows; the owner, 2026-11-11: the EDIT form is the same),
+  // so they are looked for to be found ABSENT, on the add form here and on the
+  // row's edit form below.
   const addTier = page
     .locator("select")
     .filter({ has: page.locator('option[value="gold"]') })
@@ -562,29 +560,32 @@ test("Sponsors hub, Sponsors tab: add three, reorder, edit tier and scope, delet
     )
     .toEqual([A, C, B]);
 
-  // --- edit: name, link, tier and scope, on the row that is now in the middle.
+  // --- edit: name and link, on the row that is now in the middle. The edit form asks for nothing else: a sponsor's tier and scope come
+  // from its deals, so the form has no select for either (owner, 2026-11-11: "why showing tier in sponsor edit?").
+  const before = mine(await listSponsors(page.request)).find((s) => s.name === B);
+  expect(before, "premise: the sponsor about to be edited is on the server").toBeDefined();
+  // The row's pencil is a link to the sponsor's own page with its editor open (a side panel at this width; owner, 2026-11-11).
   await page
-    .getByRole("button", { name: ui("sponsors.edit", { name: B }), exact: true })
+    .getByRole("link", { name: ui("sponsors.edit", { name: B }), exact: true })
     .click();
-  // Exactly one <li> holds a sponsor-name field at a time: the row being edited.
-  const editRow = page
-    .locator("li")
-    .filter({ has: page.locator("label").filter({ hasText: L.sponsorName }) });
+  // Exactly one editor is open at a time: the sponsor page's Details editor.
+  const editRow = page.getByRole("dialog").getByTestId("sponsor-sheet-editor");
+  await expect(editRow, "one editor is open").toHaveCount(1);
   await field(editRow, L.sponsorName).fill(B2);
   await field(editRow, L.sponsorLink).fill("bravo-bakery.example.org");
-  await editRow
-    .locator("select")
-    .filter({ has: page.locator('option[value="gold"]') })
-    .selectOption("gold");
-  await editRow
-    .locator("select")
-    .filter({ has: page.locator(`option[value="${comp.id}"]`) })
-    .selectOption(comp.id);
+  await expect(editRow.locator("select"), "the edit form has no tier or scope select").toHaveCount(0);
+  await expect(addTier, "nor does anything else on the tab offer a tier").toHaveCount(0);
+  await expect(addScope, "or a scope").toHaveCount(0);
   const patched = page.waitForResponse(
     (r) => /\/sponsors\/[0-9a-f-]{36}$/.test(r.url()) && r.request().method() === "PATCH",
   );
   await editRow.getByRole("button", { name: L.saveSponsor, exact: true }).click();
-  expect((await patched).status(), "edit").toBe(200);
+  const patchRes = await patched;
+  expect(patchRes.status(), "edit").toBe(200);
+  expect(JSON.parse(patchRes.request().postData() ?? "null"), "the save carries the name and link and no tier or scope").toEqual({
+    name: B2,
+    url: "https://bravo-bakery.example.org",
+  });
 
   await expect
     .poll(
@@ -597,14 +598,35 @@ test("Sponsors hub, Sponsors tab: add three, reorder, edit tier and scope, delet
           competition_id: row.competition_id,
         };
       },
-      { timeout: READ_MS, message: "every edited field must persist together" },
+      { timeout: READ_MS, message: "the edited fields persist and the stored tier and scope are untouched" },
     )
     .toEqual({
       name: B2,
       url: "https://bravo-bakery.example.org",
-      tier: "gold",
-      competition_id: comp.id,
+      tier: before!.tier,
+      competition_id: before!.competition_id,
     });
+
+  // The panel is modal over the list: close it before the list's own controls are used again (Escape until it has closed: the first press
+  // can land before the panel's focus trap is up).
+  const panel = page.getByRole("dialog");
+  await expect(async () => {
+    if ((await panel.count()) === 0) return;
+    await page.keyboard.press("Escape");
+    await expect(panel).toHaveCount(0, { timeout: 2_000 });
+  }).toPass({ timeout: 15_000 });
+
+  // The API still takes both on a PATCH (this screen no longer sends them): a tier and a scope set through it persist and read back.
+  const viaApi = await apiJson(page.request, `/api/v1/orgs/${org.orgId}/sponsors/${before!.id}`, "PATCH", {
+    tier: "gold",
+    competition_id: comp.id,
+  });
+  expect(viaApi.status, `PATCH tier and scope: ${JSON.stringify(viaApi.error)}`).toBe(200);
+  const afterApi = mine(await listSponsors(page.request)).find((s) => s.id === before!.id);
+  expect({ tier: afterApi?.tier, competition_id: afterApi?.competition_id }, "the API's tier and scope read back").toEqual({
+    tier: "gold",
+    competition_id: comp.id,
+  });
 
   // --- delete, last, because it removes its own subject.
   const removed = page.waitForResponse(

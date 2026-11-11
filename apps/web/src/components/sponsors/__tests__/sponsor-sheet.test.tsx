@@ -10,7 +10,8 @@
 // Every sweep reports how many it checked (TEST-STRATEGY: zero is a failure).
 //
 // Killers (one at a time, restore from a cp backup):
-//   S1  F28 live        render the tier <select> (the editor's showPlacement) while locked        -> "a live deal: no tier or scope control"
+//   S1  editor          render a tier <select> in the sponsor page's editor                       -> "the editor has no tier or competition control"
+//   S1b placement note  drop the placement note (hasTiers, not locked)                              -> "a deal sets the tier: the note"
 //   S2  F28 live        show the 'Tier now' line for a live deal                                  -> "a live deal: no 'Tier now' line"
 //   S3  F28 open        drop the 'Tier now' line for an open deal                                 -> "an open deal: the line"
 //   S4  actions         draw every action on every deal (ignore allowedActions)                   -> "buttons are allowedActions"
@@ -27,7 +28,7 @@ import type { ReactElement } from "react";
 
 const confirmMock = vi.hoisted(() => vi.fn<(opts?: unknown) => Promise<boolean>>(async () => true));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMock }));
-const nav = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
+const nav = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn(), replace: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => nav }));
 const mdUp = vi.hoisted(() => ({ value: null as boolean | null }));
 vi.mock("@/components/ui/use-md-up", () => ({ useMdUp: () => mdUp.value }));
@@ -43,7 +44,8 @@ import {
   sponsorDealGroups,
   type SponsorSheetBodyProps,
 } from "@/components/sponsors/sponsor-sheet";
-import { canShowAgain } from "@/components/sponsors/sponsor-list";
+import { canShowAgain, SponsorList } from "@/components/sponsors/sponsor-list";
+import { SponsorRowMore } from "@/components/sponsors/sponsor-row-more";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { expandSponsorTree } from "./_sponsor-tree";
 import { attrOf, classTokens, findAll, findOne, textOfMarkup } from "./_markup";
@@ -178,11 +180,11 @@ describe("Details: a LIVE deal owns the tier, scope and stream; an OPEN deal cha
 
   // The sponsor's STORED tier differs from the deal's in every case that has one, so a component that read the wrong source
   // (the stored tier for a live deal, the deal's for a closed one) shows the wrong word.
-  const CASES: { label: string; s: SponsorItem; deals: SponsorDeal[]; shownTier: string; shownScope: string; note: boolean; tierNow: boolean; editorPlacement: boolean; stream: "locked" | "free" }[] = [
-    { label: "a live deal", s: sponsor({ tier: "partner", locked_by_deal: true, deal: LIVE_DEAL }), deals: [LIVE_DEAL], shownTier: "Gold", shownScope: "Season 2026/27", note: true, tierNow: false, editorPlacement: false, stream: "locked" },
-    { label: "an open deal", s: sponsor({ tier: "partner", has_open_deal: true, status: "inactive", deal: OPEN_DEAL }), deals: [OPEN_DEAL], shownTier: "Partner", shownScope: "All competitions", note: false, tierNow: true, editorPlacement: true, stream: "free" },
-    { label: "no deal", s: sponsor({ tier: "silver", deal: null }), deals: [], shownTier: "Silver", shownScope: "All competitions", note: false, tierNow: false, editorPlacement: true, stream: "free" },
-    { label: "every deal ended", s: sponsor({ tier: "silver", status: "inactive", deal: ENDED_DEAL }), deals: [ENDED_DEAL], shownTier: "Silver", shownScope: "All competitions", note: false, tierNow: false, editorPlacement: true, stream: "free" },
+  const CASES: { label: string; s: SponsorItem; deals: SponsorDeal[]; shownTier: string; shownScope: string; note: boolean; tierNow: boolean; stream: "locked" | "free" }[] = [
+    { label: "a live deal", s: sponsor({ tier: "partner", locked_by_deal: true, deal: LIVE_DEAL }), deals: [LIVE_DEAL], shownTier: "Gold", shownScope: "Season 2026/27", note: true, tierNow: false, stream: "locked" },
+    { label: "an open deal", s: sponsor({ tier: "partner", has_open_deal: true, status: "inactive", deal: OPEN_DEAL }), deals: [OPEN_DEAL], shownTier: "Partner", shownScope: "All competitions", note: false, tierNow: true, stream: "free" },
+    { label: "no deal", s: sponsor({ tier: "silver", deal: null }), deals: [], shownTier: "Silver", shownScope: "All competitions", note: false, tierNow: false, stream: "free" },
+    { label: "every deal ended", s: sponsor({ tier: "silver", status: "inactive", deal: ENDED_DEAL }), deals: [ENDED_DEAL], shownTier: "Silver", shownScope: "All competitions", note: false, tierNow: false, stream: "free" },
   ];
 
   it("the four cases show the right source, the lock note only for a live deal, and 'Tier now X. Y when the deal goes live' only for an open one (4 checked)", () => {
@@ -193,6 +195,10 @@ describe("Details: a LIVE deal owns the tier, scope and stream; an OPEN deal cha
       expect(textOfMarkup(findOne(markup, "sponsor-sheet-detail-scope").outer), `${c.label}: scope`).toBe(c.shownScope);
       expect(findAll(markup, "sponsor-sheet-locked-note").length, `${c.label}: lock note`).toBe(c.note ? 1 : 0);
       if (c.note) expect(textOfMarkup(findOne(markup, "sponsor-sheet-locked-note").outer)).toBe(msg("sponsors.deal.lockedNote"));
+      // Owner, 2026-11-11: the tier and scope are read-only, and a deal sets them. The lock note says so for a live deal; every other
+      // case (hasTiers) carries the placement note instead - never both, never neither. Typed from the brief, not read from the page.
+      expect(findAll(markup, "sponsor-sheet-placement-note").length, `${c.label}: placement note`).toBe(c.note ? 0 : 1);
+      if (!c.note) expect(textOfMarkup(findOne(markup, "sponsor-sheet-placement-note").outer), `${c.label}: its words`).toBe("A deal sets the tier and where this sponsor shows.");
       expect(findAll(markup, "sponsor-sheet-tier-now").length, `${c.label}: Tier now`).toBe(c.tierNow ? 1 : 0);
       if (c.tierNow) {
         expect(textOfMarkup(findOne(markup, "sponsor-sheet-tier-now").outer), "the brief's line, typed").toBe("Tier now Partner. Gold when the deal goes live.");
@@ -281,6 +287,7 @@ describe("Details: a LIVE deal owns the tier, scope and stream; an OPEN deal cha
     const markup = bodyHtml({ hasTiers: false });
     expect(findAll(markup, "sponsor-sheet-detail-tier")).toHaveLength(0);
     expect(findAll(markup, "sponsor-sheet-detail-scope")).toHaveLength(0);
+    expect(findAll(markup, "sponsor-sheet-placement-note"), "nothing to explain: the tier is not drawn").toHaveLength(0);
     expect(findAll(markup, "sponsor-sheet-detail-name")).toHaveLength(1);
     expect(findAll(markup, "sponsor-sheet-detail-link")).toHaveLength(1);
     expect(findAll(markup, "sponsor-sheet-stream")).toHaveLength(1);
@@ -365,18 +372,18 @@ describe("Deals: this sponsor's deals, the current ones then the past ones, newe
 
   it("each deal: its chip, its price, 'package · scope', and where the money stands", () => {
     const rows = [
-      deal({ id: "r1", deal_status: "live", payment_status: "paid", package_name: "Gold Season", amount_cents: 60_000, competition_id: "c-season", paid_at: "2026-10-16T12:00:00.000Z" }),
-      deal({ id: "r2", deal_status: "awaiting_payment", payment_status: "pending", payment_method: "online", package_name: "Silver Season", amount_cents: 30_000, invoice_sent_at: "2026-10-28T10:00:00.000Z" }),
-      deal({ id: "r3", deal_status: "awaiting_payment", payment_status: "pending", payment_method: "offline", package_name: "Silver Season", amount_cents: 30_000 }),
+      deal({ id: "r1", deal_status: "live", payment_status: "paid", package_name: "Gold Season", tier: "gold", amount_cents: 60_000, competition_id: "c-season", paid_at: "2026-10-16T12:00:00.000Z" }),
+      deal({ id: "r2", deal_status: "awaiting_payment", payment_status: "pending", payment_method: "online", package_name: "Silver Season", tier: "silver", amount_cents: 30_000, invoice_sent_at: "2026-10-28T10:00:00.000Z" }),
+      deal({ id: "r3", deal_status: "awaiting_payment", payment_status: "pending", payment_method: "offline", package_name: "Silver Season", tier: "silver", amount_cents: 30_000 }),
       deal({ id: "r4", deal_status: "live", payment_status: "none", payment_method: "complimentary", go_live: "immediate", package_name: "Partner", amount_cents: 0, competition_id: "c-winter" }),
       deal({ id: "r5", deal_status: "draft", payment_status: "pending", payment_method: "online", package_name: "Partner", amount_cents: 12_050 }),
       deal({ id: "r6", deal_status: "ended", payment_status: "paid", package_name: "Partner", amount_cents: 12_000, ended_at: "2026-08-31T12:00:00.000Z", ended_reason: "expired" }),
     ];
     const markup = bodyHtml({ deals: rows });
     const WANT: Record<string, { chip: string; price: string; what: string; state: string | null }> = {
-      r1: { chip: "Live", price: "£600", what: "Gold Season · Season 2026/27", state: "Paid 16 Oct" },
-      r2: { chip: "Awaiting payment", price: "£300", what: "Silver Season · All competitions", state: "Online invoice sent 28 Oct" },
-      r3: { chip: "Awaiting payment", price: "£300", what: "Silver Season · All competitions", state: "Bank transfer" },
+      r1: { chip: "Live", price: "£600", what: "Gold Season · Gold · Season 2026/27", state: "Paid 16 Oct" },
+      r2: { chip: "Awaiting payment", price: "£300", what: "Silver Season · Silver · All competitions", state: "Online invoice sent 28 Oct" },
+      r3: { chip: "Awaiting payment", price: "£300", what: "Silver Season · Silver · All competitions", state: "Bank transfer" },
       r4: { chip: "Live", price: "Complimentary", what: "Partner · Winter League 2026/27", state: null },
       r5: { chip: "Draft", price: "£120.50", what: "Partner · All competitions", state: "Not sent yet" },
       r6: { chip: "Ended", price: "£120", what: "Partner · All competitions", state: "Ended 31 Aug" },
@@ -396,6 +403,31 @@ describe("Deals: this sponsor's deals, the current ones then the past ones, newe
   });
 });
 
+describe("a deal's tier word sits between its package and its scope, by the same rule as the list (hasTiers, or a higher tier on the deal)", () => {
+  const whatOf = (markup: string, id: string) => {
+    const d = dealsIn(markup).find((x) => attrOf(x.open, "data-deal-id") === id)!;
+    return textOfMarkup(findOne(d.outer, "sponsor-sheet-deal-what").outer);
+  };
+  const rows = [
+    deal({ id: "tp", package_name: "Club Package", tier: "partner", competition_id: "c-season" }),
+    deal({ id: "tt", package_name: "Testing001 Gold", tier: "title", competition_id: "c-season" }),
+    deal({ id: "te", package_name: "Partner", tier: "partner", competition_id: "c-season" }),
+  ];
+
+  it("with tiers: Partner and Title both say their word; a package named for its tier does not repeat it (3 checked)", () => {
+    const markup = bodyHtml({ deals: rows, hasTiers: true });
+    expect(whatOf(markup, "tp")).toBe("Club Package · Partner · Season 2026/27");
+    expect(whatOf(markup, "tt")).toBe("Testing001 Gold · Title · Season 2026/27");
+    expect(whatOf(markup, "te")).toBe("Partner · Season 2026/27");
+  });
+
+  it("without tiers: a Partner deal says none, the Title deal still does (the pair)", () => {
+    const markup = bodyHtml({ deals: rows, hasTiers: false });
+    expect(whatOf(markup, "tp")).toBe("Club Package · Season 2026/27");
+    expect(whatOf(markup, "tt")).toBe("Testing001 Gold · Title · Season 2026/27");
+  });
+});
+
 describe("a deal for a competition the page does not hold says so in words, never a bare ellipsis", () => {
   it("'package · This package's competition' - and a competition the page holds keeps its own name (the pair); the fallback is translated", () => {
     const rows = [
@@ -407,9 +439,9 @@ describe("a deal for a competition the page does not hold says so in words, neve
       const d = dealsIn(markup).find((x) => attrOf(x.open, "data-deal-id") === id)!;
       return textOfMarkup(findOne(d.outer, "sponsor-sheet-deal-what").outer);
     };
-    expect(whatOf("gone"), "an unknown competition").toBe(`Cup Partner · ${msg("sponsors.dealSheet.scopeUnknown")}`);
+    expect(whatOf("gone"), "an unknown competition").toBe(`Cup Partner · Partner · ${msg("sponsors.dealSheet.scopeUnknown")}`);
     expect(whatOf("gone"), "never the bare glyph").not.toContain("…");
-    expect(whatOf("known")).toBe("Cup Partner · Season 2026/27");
+    expect(whatOf("known")).toBe("Cup Partner · Partner · Season 2026/27");
     // The key exists, in words of its own, in every other locale: a locale cannot be left on English.
     let checked = 0;
     for (const [locale, dict] of [["es", uiEs], ["fr", uiFr], ["nl", uiNl]] as const) {
@@ -602,7 +634,7 @@ const refuseWith = (status: number, code: string) => ({ status, body: { ok: fals
 function hubOf(over: Partial<SponsorsHubData> = {}): SponsorsHubData {
   return {
     orgSlug: SLUG, orgTimezone: null, deals: [], packages: [], tiersOrgWide: true, tiersCompetitionIds: [], hasMonetize: true, monetizeOrgWide: true, monetizeCompetitionIds: [], finishedCompetitionIds: [],
-    chargesEnabled: true, sponsorId: "a", dealId: null, dealCreatedByName: null, dealCompetitionFinished: false, reportLinks: [LINK],
+    chargesEnabled: true, sponsorId: "a", editSponsor: false, dealId: null, dealCreatedByName: null, dealCompetitionFinished: false, reportLinks: [LINK],
     reportDefaults: DEFAULTS, ...over,
   };
 }
@@ -659,7 +691,7 @@ describe("OrgSponsors opens the sponsor's page for hub.sponsorId and hides the l
     }
   });
 
-  it("the sheet shows the SELECTED sponsor (not the first row), and the list behind it draws no second editor for it", () => {
+  it("the sheet shows the SELECTED sponsor (not the first row), and its editor is the ONLY one: the list rows draw none", () => {
     const m = mount([S, OTHER], hubOf({ sponsorId: "b" }));
     const sheet = m.all("sponsor-sheet");
     expect(propsOf(sheet[0]!)["data-sponsor-id"]).toBe("b");
@@ -667,28 +699,188 @@ describe("OrgSponsors opens the sponsor's page for hub.sponsorId and hides the l
     expect(m.has("sponsor-sheet-editor"), "the sheet draws the editor").toBe(true);
     // The "Add a sponsor" form is also a SponsorForm; an EDITOR is the one with a Cancel.
     const editors = m.island.tree().filter((e) => e.type === SponsorForm && propsOf(e).onCancel !== undefined);
-    expect(editors, "ONE editor open - the list's inline one is suppressed for the sponsor whose page is open").toHaveLength(1);
+    expect(editors, "ONE editor open - a list row has no editor of its own any more").toHaveLength(1);
     expect(propsOf(editors[0]!).compact, "in the panel it is one column").toBe(true);
   });
 
-  it("F28 in the editor: a live deal -> NO tier/competition control (showPlacement off); an open deal or none -> present and enabled", () => {
+  // The list's pencil is a link to `?sponsor=<id>&edit=1`; the island stays mounted across that client navigation, so the arrival is a
+  // PROP change (`hub.editSponsor` / `hub.sponsorId`), not a mount. `rerender` is that navigation.
+  const editorsIn = (m: ReturnType<typeof mount>) => m.island.tree().filter((e) => e.type === SponsorForm && propsOf(e).onCancel !== undefined);
+  const goTo = (m: ReturnType<typeof mount>, hub: SponsorsHubData) => m.island.rerender({ ...m.props, hub });
+  const BOTH = [sponsor({ id: "a", url: "https://a.example/" }), sponsor({ id: "b", name: "Quay Fisheries", url: "https://quay.example/" })];
+
+  it("arriving by the pencil (?edit=1) opens the editor on THAT sponsor with its own name and link; the plain URL opens none (the pair)", () => {
+    const opened = mount(BOTH, hubOf({ sponsorId: "b", editSponsor: true }));
+    expect(opened.has("sponsor-sheet-editor"), "the Details editor is open").toBe(true);
+    expect(editorsIn(opened)).toHaveLength(1);
+    expect(propsOf(editorsIn(opened)[0]!).value).toMatchObject({ name: "Quay Fisheries", url: "https://quay.example/", file: null });
+    const plain = mount(BOTH, hubOf({ sponsorId: "b", editSponsor: false }));
+    expect(plain.has("sponsor-sheet-editor")).toBe(false);
+    expect(editorsIn(plain)).toHaveLength(0);
+    expect(plain.has("sponsor-sheet-edit"), "the read-only page offers its own Edit button").toBe(true);
+  });
+
+  it("the pencil clicked from the list (a client navigation: the same island, new props) opens the editor - and a SECOND pencil does too (4 arrivals checked)", () => {
+    const m = mount(BOTH, hubOf({ sponsorId: null }));
+    expect(m.has("sponsor-sheet")).toBe(false);
+    let checked = 0;
+    for (const id of ["b", "a", "b"]) {
+      goTo(m, hubOf({ sponsorId: id, editSponsor: true }));
+      expect(m.has("sponsor-sheet-editor"), `pencil for ${id}`).toBe(true);
+      expect(propsOf(editorsIn(m)[0]!).value, `pencil for ${id}: its own name`).toMatchObject({ name: BOTH.find((r) => r.id === id)!.name });
+      checked++;
+      // Cancel, and back to the list: the next pencil is a fresh arrival.
+      (propsOf(editorsIn(m)[0]!).onCancel as () => void)();
+      expect(m.has("sponsor-sheet-editor"), `after Cancel (${id})`).toBe(false);
+      goTo(m, hubOf({ sponsorId: null }));
+    }
+    // The sponsor's other pencil without passing through the list: a → b straight.
+    goTo(m, hubOf({ sponsorId: "a", editSponsor: true }));
+    goTo(m, hubOf({ sponsorId: "b", editSponsor: true }));
+    expect(propsOf(editorsIn(m)[0]!).value, "a then b: b's draft, not a's").toMatchObject({ name: "Quay Fisheries" });
+    checked++;
+    expect(checked).toBe(4);
+  });
+
+  it("leaving the edit URL (the Back link to the plain page) closes the editor, and the page's own Edit button still opens it", () => {
+    const m = mount(BOTH, hubOf({ sponsorId: "b", editSponsor: true }));
+    expect(m.has("sponsor-sheet-editor")).toBe(true);
+    goTo(m, hubOf({ sponsorId: "b", editSponsor: false }));
+    expect(m.has("sponsor-sheet-editor"), "the plain URL is the read-only page").toBe(false);
+    m.tap("sponsor-sheet-edit");
+    expect(m.has("sponsor-sheet-editor"), "its own Edit button opens it, as before").toBe(true);
+    expect(propsOf(editorsIn(m)[0]!).value).toMatchObject({ name: "Quay Fisheries" });
+  });
+
+  it("a write or re-read that does not change the URL leaves an open editor open (the same ?edit=1 is not a new arrival)", () => {
+    const m = mount(BOTH, hubOf({ sponsorId: "b", editSponsor: true }));
+    const typed = propsOf(editorsIn(m)[0]!).onChange as (fn: (p: Record<string, unknown>) => Record<string, unknown>) => void;
+    typed((p) => ({ ...p, name: "Typed but not saved" }));
+    goTo(m, hubOf({ sponsorId: "b", editSponsor: true, deals: [] }));
+    expect(propsOf(editorsIn(m)[0]!).value, "the draft survives a re-render with the same URL").toMatchObject({ name: "Typed but not saved" });
+  });
+
+  it("the pencil's arrival closes the ⋯ tray the reader had open on the row (the tray belongs to the list; it would still be open on the way back)", () => {
+    const m = mount(BOTH, hubOf({ sponsorId: null }));
+    const listProps = () => propsOf(m.island.tree().find((e) => e.type === SponsorList)!);
+    const more = m.island.tree().find((e) => e.type === SponsorRowMore && propsOf(e).name === "Quay Fisheries")!;
+    (propsOf(more).onToggle as () => void)();
+    expect(listProps().moreOpenId, "premise: the ⋯ is open").toBe("b");
+    goTo(m, hubOf({ sponsorId: "b", editSponsor: true }));
+    expect(listProps().moreOpenId, "the pencil took the reader off the list").toBeNull();
+  });
+
+  // `?edit=1` is the pencil's flag, not a state worth keeping: once the editor is done (Saved or Cancelled) the URL goes back to the plain
+  // sponsor page, so Back, a reload or a copied link is the read-only page and a second pencil is a fresh arrival.
+  describe("after Save or Cancel the pencil's ?edit=1 is cleared from the URL (router.replace to the plain sponsor page)", () => {
+    const PLAIN = (id: string) => `/o/${SLUG}/sponsors?tab=sponsors&sponsor=${id}`;
+    const okPatch = () => {
+      answer = (url, method) => (method === "PATCH" ? { status: 200, body: { data: sponsor() } } : method === "GET" && url.endsWith("/sponsors") ? { status: 200, body: { data: [sponsor({ name: "New name" })] } } : defaultAnswer(url, method));
+    };
+    const change = (m: ReturnType<typeof mount>, over: Record<string, unknown>) =>
+      (propsOf(editorsIn(m)[0]!).onChange as (fn: (p: Record<string, unknown>) => Record<string, unknown>) => void)((p) => ({ ...p, ...over }));
+
+    it("Cancel on an editor the pencil opened replaces the URL with the plain sponsor page, once, and closes the editor", () => {
+      const m = mount(BOTH, hubOf({ sponsorId: "b", editSponsor: true }));
+      expect(nav.replace, "premise: arriving by the pencil replaces nothing").not.toHaveBeenCalled();
+      (propsOf(editorsIn(m)[0]!).onCancel as () => void)();
+      expect(nav.replace).toHaveBeenCalledTimes(1);
+      expect(nav.replace).toHaveBeenCalledWith(PLAIN("b"));
+      expect(nav.replace.mock.calls[0]![0], "no edit flag left in it").not.toContain("edit=");
+      expect(m.has("sponsor-sheet-editor"), "and the editor is closed").toBe(false);
+    });
+
+    it("Save on an editor the pencil opened PATCHes, then replaces the URL with the plain sponsor page - after the write, not before it", async () => {
+      okPatch();
+      const m = mount(BOTH, hubOf({ sponsorId: "b", editSponsor: true }));
+      change(m, { name: "New name" });
+      (propsOf(editorsIn(m)[0]!).onSubmit as () => void)();
+      expect(nav.replace, "not before the save has answered").not.toHaveBeenCalled();
+      await flush();
+      expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(1);
+      expect(nav.replace).toHaveBeenCalledTimes(1);
+      expect(nav.replace).toHaveBeenCalledWith(PLAIN("b"));
+      expect(m.has("sponsor-sheet-editor"), "closed after saving").toBe(false);
+    });
+
+    it("Save with nothing changed still closes the editor and still clears the URL (no PATCH is sent)", async () => {
+      const m = mount(BOTH, hubOf({ sponsorId: "b", editSponsor: true }));
+      (propsOf(editorsIn(m)[0]!).onSubmit as () => void)();
+      await flush();
+      expect(calls.filter((c) => c.method === "PATCH"), "nothing to send").toHaveLength(0);
+      expect(nav.replace).toHaveBeenCalledWith(PLAIN("b"));
+      expect(m.has("sponsor-sheet-editor")).toBe(false);
+    });
+
+    it("a REFUSED save leaves the editor open and the URL alone (the sequence: the failed save, then a good one)", async () => {
+      answer = (url, method) => (method === "PATCH" ? { status: 409, body: { ok: false, error: "x" } } : defaultAnswer(url, method));
+      const m = mount(BOTH, hubOf({ sponsorId: "b", editSponsor: true }));
+      change(m, { name: "New name" });
+      (propsOf(editorsIn(m)[0]!).onSubmit as () => void)();
+      await flush();
+      expect(calls.filter((c) => c.method === "PATCH"), "premise: the save was attempted").toHaveLength(1);
+      expect(m.has("sponsor-sheet-editor"), "still open").toBe(true);
+      expect(nav.replace, "and the URL is not touched").not.toHaveBeenCalled();
+      okPatch();
+      (propsOf(editorsIn(m)[0]!).onSubmit as () => void)();
+      await flush();
+      expect(nav.replace).toHaveBeenCalledTimes(1);
+      expect(nav.replace).toHaveBeenCalledWith(PLAIN("b"));
+    });
+
+    it("an editor opened by the page's OWN Edit button (no flag in the URL) has nothing to clear: Cancel and Save replace nothing", async () => {
+      okPatch();
+      const m = mount(BOTH, hubOf({ sponsorId: "b", editSponsor: false }));
+      m.tap("sponsor-sheet-edit");
+      expect(editorsIn(m)).toHaveLength(1);
+      (propsOf(editorsIn(m)[0]!).onCancel as () => void)();
+      expect(m.has("sponsor-sheet-editor")).toBe(false);
+      m.tap("sponsor-sheet-edit");
+      change(m, { name: "New name" });
+      (propsOf(editorsIn(m)[0]!).onSubmit as () => void)();
+      await flush();
+      expect(m.has("sponsor-sheet-editor"), "saved and closed").toBe(false);
+      expect(nav.replace, "no flag, no replace").not.toHaveBeenCalled();
+    });
+
+    it("the cleared URL is what reaches the island next: the editor stays closed on the plain URL, and a second pencil opens it again (a fresh arrival)", () => {
+      const m = mount(BOTH, hubOf({ sponsorId: "b", editSponsor: true }));
+      (propsOf(editorsIn(m)[0]!).onCancel as () => void)();
+      goTo(m, hubOf({ sponsorId: "b", editSponsor: false }));
+      expect(m.has("sponsor-sheet-editor")).toBe(false);
+      goTo(m, hubOf({ sponsorId: "b", editSponsor: true }));
+      expect(m.has("sponsor-sheet-editor"), "the same sponsor's pencil again").toBe(true);
+    });
+  });
+
+  it("the editor has NO tier or competition control, whatever the sponsor's deals or the plan (owner, 2026-11-11): 3 deal states x 2 plans checked", () => {
     const LIVE = deal({ id: "dl", deal_status: "live", tier: "gold" });
-    const CASES: [string, SponsorItem, SponsorDeal[], boolean][] = [
-      ["a live deal", sponsor({ locked_by_deal: true, deal: LIVE }), [LIVE], false],
-      ["an open deal", sponsor({ has_open_deal: true, deal: deal({ id: "do", deal_status: "draft", payment_status: "pending" }) }), [], true],
-      ["no deal", sponsor(), [], true],
+    const CASES: [string, SponsorItem, SponsorDeal[]][] = [
+      ["a live deal", sponsor({ locked_by_deal: true, deal: LIVE }), [LIVE]],
+      ["an open deal", sponsor({ has_open_deal: true, deal: deal({ id: "do", deal_status: "draft", payment_status: "pending" }) }), []],
+      ["no deal", sponsor(), []],
     ];
     let checked = 0;
-    for (const [label, s, deals, controls] of CASES) {
-      const m = mount([s], hubOf({ deals }));
-      m.tap("sponsor-sheet-edit");
-      const form = m.island.tree().find((e) => e.type === SponsorForm && propsOf(e).onCancel !== undefined)!;
-      const html = renderToStaticMarkup(form);
-      expect(/<select\b/.test(html), `${label}: tier/competition selects`).toBe(controls);
-      if (controls) expect(/<select\b[^>]*\sdisabled/.test(html), `${label}: enabled`).toBe(false);
-      checked++;
+    for (const hasTiers of [true, false]) {
+      for (const [label, s, deals] of CASES) {
+        const m = mount([s], hubOf({ deals }), { hasTiers });
+        m.tap("sponsor-sheet-edit");
+        const form = m.island.tree().find((e) => e.type === SponsorForm && propsOf(e).onCancel !== undefined)!;
+        const html = renderToStaticMarkup(form);
+        expect(/<select\b/.test(html), `${label}, tiers=${hasTiers}: a select`).toBe(false);
+        expect(html, `${label}, tiers=${hasTiers}: a lock note`).not.toContain("sponsor-locked-note");
+        checked++;
+      }
     }
-    expect(checked).toBe(3);
+    expect(checked).toBe(6);
+  });
+
+  it("while the editor is open the Details card holds the editor and not the read-only tier and competition rows (nothing to confuse with a control)", () => {
+    const m = mount([sponsor({ tier: "silver" })], hubOf());
+    m.tap("sponsor-sheet-edit");
+    expect(m.has("sponsor-sheet-editor")).toBe(true);
+    expect(m.has("sponsor-sheet-detail-tier"), "no tier row beside the editor").toBe(false);
+    expect(m.has("sponsor-sheet-placement-note")).toBe(false);
   });
 
   it("saving name and link PATCHes only what changed and closes the editor (the existing saveEdit, now from the page)", async () => {

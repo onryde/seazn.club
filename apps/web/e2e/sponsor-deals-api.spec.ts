@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { apiJson, expectNoHorizontalScroll, withDb } from "./helpers";
 import { postSignedEvent, stripeEvent, stripeUid } from "./_stripe-events";
-import { dealUrl, openSponsorRowTools, releaseSettingsOrg, seedCompetition, seedSettingsOrg, sponsorsUrl, type SeededOrg } from "./settings-support";
+import { dealUrl, releaseSettingsOrg, seedCompetition, seedSettingsOrg, sponsorsUrl, type SeededOrg } from "./settings-support";
 
 /** Copy read from the dictionary the page renders from, never retyped (this folder's idiom: sponsors-hub.spec.ts). */
 const UI: Record<string, string> = JSON.parse(
@@ -298,17 +298,21 @@ test("a sponsor under a live deal: On stream tick, tier and competition are lock
     await expect(page.getByTestId(`on-stream-locked-${freeId}`), `${width}: and carries no note`).toHaveCount(0);
     await expectNoHorizontalScroll(page);
 
-    // Sponsors tab: the edit form's tier and competition are locked, with the same note.
+    // Sponsors tab: the edit form is a name, a link and a logo - no tier or competition control at all, so no lock note either
+    // (owner, 2026-11-11: "why showing tier in sponsor edit?"; a deal sets those two, the sponsor's page shows them read-only). It
+    // used to draw both as selects, disabled for this sponsor with a note.
     await page.goto(sponsorsUrl(org.slug, "sponsors"));
-    // Below md the row's Edit sits behind its ⋯ (sponsor deals Task 14); the helper opens the fold only where the ⋯ is on screen.
-    await openSponsorRowTools(page, LONG);
-    await page.getByRole("button", { name: ui("sponsors.edit", { name: LONG }) }).click();
-    const note = page.getByTestId("sponsor-locked-note");
-    await expect(note, `${width}: the locked edit form says why`).toHaveText(ui("sponsors.deal.lockedNote"));
-    const fields = note.locator("xpath=..");
-    await expect(fields.getByLabel(ui("sponsors.tierLabel")), `${width}: tier is the deal's`).toBeDisabled();
-    await expect(fields.getByLabel(ui("sponsors.scopeLabel")), `${width}: scope is the deal's`).toBeDisabled();
-    await expect(fields.getByLabel(ui("settings.org.sponsors.name")), `${width}: the name stays editable`).toBeEnabled();
+    // The pencil is a link to the sponsor's own page with its editor open - a side panel from 768, a page below it (owner, 2026-11-11).
+    await page.getByRole("link", { name: ui("sponsors.edit", { name: LONG }) }).click();
+    const panel = width >= 768 ? page.getByRole("dialog") : page;
+    // The editor is the one holding a Cancel, inside the sponsor's page: counted, so the negatives below are never asserted on nothing.
+    const editRow = panel.getByTestId("sponsor-sheet-editor");
+    await expect(editRow, `${width}: exactly one editor is open`).toHaveCount(1);
+    await expect(editRow.getByRole("button", { name: ui("confirm.cancel"), exact: true }), `${width}: and it is the editor (it has a Cancel)`).toHaveCount(1);
+    await expect(editRow.getByLabel(ui("settings.org.sponsors.name")), `${width}: the name is editable`).toBeEnabled();
+    await expect(editRow.getByLabel(ui("settings.org.sponsors.link")), `${width}: the link is editable`).toBeEnabled();
+    await expect(editRow.locator("select"), `${width}: no tier or competition select, even for a sponsor a live deal owns`).toHaveCount(0);
+    await expect(editRow.getByTestId("sponsor-locked-note"), `${width}: and no note about locked fields that are not there`).toHaveCount(0);
     await expectNoHorizontalScroll(page);
 
     // Packages tab (the price list since Task 18): the package is a card, and counts this sponsor - the one with the long name - as

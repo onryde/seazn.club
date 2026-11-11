@@ -24,7 +24,7 @@ import type { ReactElement } from "react";
 
 const confirmMock = vi.hoisted(() => vi.fn<(opts?: unknown) => Promise<boolean>>(async () => true));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMock }));
-const nav = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
+const nav = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn(), replace: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => nav }));
 const mdUp = vi.hoisted(() => ({ value: null as boolean | null }));
 vi.mock("@/components/ui/use-md-up", () => ({ useMdUp: () => mdUp.value }));
@@ -109,7 +109,7 @@ const OLD_ANCHOR = deal({
 const noop = () => {};
 function props(over: Partial<DealPageBodyProps> = {}): DealPageBodyProps {
   return {
-    deal: QUAY, sponsorName: "Quay Fisheries", orgId: ORG, canEdit: true, busy: false, tz: "UTC", orgTz: "UTC", competitions: COMPS,
+    deal: QUAY, sponsorName: "Quay Fisheries", orgId: ORG, hasTiers: true, canEdit: true, busy: false, tz: "UTC", orgTz: "UTC", competitions: COMPS,
     createdBy: "Sam Patel", competitionFinished: false, payLink: null, error: null, notice: null, onAction: noop, ...over,
   };
 }
@@ -129,10 +129,33 @@ beforeEach(() => {
 
 // --- the header: the package, the price, the sponsor and the chip -----------------------------------------------------------------
 
+describe("the header's tier word follows the sponsor page's rule (hasTiers, or a deal that carries a higher tier)", () => {
+  const name = (over: Partial<DealPageBodyProps>) => textOfMarkup(findOne(html(over), "deal-page-name").outer);
+  const CLUB = (tier: SponsorDeal["tier"]) => deal({ package_name: "Club Package", tier });
+
+  it("with tiers every tier says its word, between the package and the price (4 checked)", () => {
+    let checked = 0;
+    for (const [tier, word] of [["title", "Title"], ["gold", "Gold"], ["silver", "Silver"], ["partner", "Partner"]] as const) {
+      expect(name({ deal: CLUB(tier), hasTiers: true }), tier).toBe(`Club Package · ${word} · £300`);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("without tiers a Partner deal says none, and a deal carrying a higher tier still does (the pair)", () => {
+    expect(name({ deal: CLUB("partner"), hasTiers: false })).toBe("Club Package · £300");
+    expect(name({ deal: CLUB("title"), hasTiers: false })).toBe("Club Package · Title · £300");
+  });
+
+  it("a package named for its own tier does not say it twice", () => {
+    expect(name({ deal: deal({ package_name: "Partner", tier: "partner" }), hasTiers: true })).toBe("Partner · £300");
+  });
+});
+
 describe("the header (acceptance: the package, the price, the sponsor and the chip)", () => {
-  it("reads 'Silver Season · £300', the sponsor, and the deal's chip (screen 5, Quay Fisheries)", () => {
+  it("reads 'Silver Season · Silver · £300', the sponsor, and the deal's chip (screen 5, Quay Fisheries; the tier word is the owner's, 2026-11-11)", () => {
     const markup = html();
-    expect(textOfMarkup(findOne(markup, "deal-page-name").outer)).toBe("Silver Season · £300");
+    expect(textOfMarkup(findOne(markup, "deal-page-name").outer)).toBe("Silver Season · Silver · £300");
     expect(textOfMarkup(findOne(markup, "deal-page-sponsor").outer)).toBe("Quay Fisheries");
     const chip = findOne(markup, "deal-chip");
     expect(attrOf(chip.open, "data-chip-kind")).toBe("awaiting_approval");
@@ -346,7 +369,7 @@ describe("a legacy (pre-deals) deal opened by id (the empty case)", () => {
     expect(findAll(markup, "deal-page-action")).toHaveLength(0);
     expect(findAll(markup, "deal-page-actions"), "not even an empty row").toHaveLength(0);
     expect(findAll(markup, "deal-page-evidence")).toHaveLength(0);
-    expect(textOfMarkup(findOne(markup, "deal-page-name").outer)).toBe("Gold package · £300");
+    expect(textOfMarkup(findOne(markup, "deal-page-name").outer)).toBe("Gold package · Gold · £300");
     expect(attrOf(findOne(markup, "deal-chip").open, "data-chip-kind")).toBe("ended");
     expect(stepWords(markup, "ended")).toEqual(["Ended", "1 Oct 2026 · From before deals existed"]);
     expect(findAll(markup, "deal-page-going-live"), "an ended deal switches nothing on").toHaveLength(0);
@@ -768,13 +791,13 @@ const sponsor = (over: Partial<SponsorItem> = {}): SponsorItem => ({
 function hubOf(over: Partial<SponsorsHubData> = {}): SponsorsHubData {
   return {
     orgSlug: SLUG, orgTimezone: null, deals: [], packages: [], tiersOrgWide: true, tiersCompetitionIds: [], hasMonetize: true, monetizeOrgWide: true, monetizeCompetitionIds: [], finishedCompetitionIds: [],
-    chargesEnabled: true, sponsorId: "a", dealId: null, dealCreatedByName: null, dealCompetitionFinished: false, reportLinks: [],
+    chargesEnabled: true, sponsorId: "a", editSponsor: false, dealId: null, dealCreatedByName: null, dealCompetitionFinished: false, reportLinks: [],
     reportDefaults: { from: "2026-01-01", to: "2026-11-09", competitionId: null }, ...over,
   };
 }
-function mount(rows: SponsorItem[], hub: SponsorsHubData, opts: { canEdit?: boolean } = {}) {
+function mount(rows: SponsorItem[], hub: SponsorsHubData, opts: { canEdit?: boolean; hasTiers?: boolean } = {}) {
   const p: Parameters<typeof OrgSponsors>[0] = {
-    orgId: ORG, initialSponsors: rows, competitions: COMPS, hasTiers: true, billingHref: "/billing", canEdit: opts.canEdit ?? true, hub,
+    orgId: ORG, initialSponsors: rows, competitions: COMPS, hasTiers: opts.hasTiers ?? true, billingHref: "/billing", canEdit: opts.canEdit ?? true, hub,
   };
   served.rows = rows;
   served.deals = hub.deals;
@@ -801,6 +824,22 @@ describe("D4 hub.dealId opens the deal page on top of its sponsor (the seam, thr
     expect(m.has("sponsor-sheet")).toBe(false);
     expect(propsOf(m.all("deal-page")[0]!)["data-deal-id"]).toBe("dq");
     expect(String(propsOf(m.all("sponsors-list-view")[0]!).className).split(/\s+/)).toContain("max-md:hidden");
+  });
+
+  it("the plan's tiers reach the deal page THROUGH THE ISLAND: a plan without tiers hands it hasTiers=false (a Partner deal's header says no tier word), a plan with tiers hands it true (the pair)", () => {
+    // The unit tests above hand `hasTiers` to DealPageBody directly; this is the wire between the two (a `hasTiers={true}` written in
+    // the island would leave every one of them green).
+    const partner = deal({ id: "dp", sponsor_id: "a", package_name: "Club Package", tier: "partner", amount_cents: 30_000 });
+    let checked = 0;
+    for (const [hasTiers, header] of [[false, "Club Package · £300"], [true, "Club Package · Partner · £300"]] as const) {
+      const m = mount([SUBJECT], hubOf({ deals: [partner], dealId: "dp" }), { hasTiers });
+      const body = m.island.tree().find((e) => e.type === DealPageBody);
+      expect(body, `premise: the deal page is open (hasTiers=${hasTiers})`).toBeDefined();
+      expect(propsOf(body!).hasTiers, `the island hands DealPageBody the plan's hasTiers (${hasTiers})`).toBe(hasTiers);
+      expect(m.words("deal-page-name"), `the header it draws (hasTiers=${hasTiers})`).toEqual([header]);
+      checked++;
+    }
+    expect(checked, "both plans").toBe(2);
   });
 
   it("closing and going back lead to the SPONSOR's page, not the list (the wrapper's close target)", () => {

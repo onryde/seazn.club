@@ -2,20 +2,22 @@
 
 // Sponsors tab manager (v10 PROMPT-56, replaces the blob editor). Rows are
 // first-class `sponsors` table entries; the list (components/sponsors/sponsor-list.tsx)
-// groups them by their deal's tier and gives each its deal's chip and one next
+// groups them by the tier each shows at now (its own - a deal still waiting to go
+// live changes nothing until it does) and gives each its deal's chip and one next
 // action (sponsor deals PR 2, Task 14). This island owns the state and every
-// write; the list is stateless. "Add a sponsor" asks for a name, a logo and a
-// link only - the tier and where a sponsor shows come from its deal - while the
-// EDIT form still places a sponsor with no deal by hand. Tiers above partner and
-// per-competition scoping are Pro (`sponsors.tiers`); without it the manager is
-// the free un-tiered strip with an upsell note.
+// write; the list is stateless. "Add a sponsor" and the EDIT form both ask for a
+// name, a logo and a link only - the tier and where a sponsor shows come from its
+// deal (owner, 2026-11-11: "why showing tier in sponsor edit?"), and the sponsor's
+// page shows them read-only. The API still takes both on a PATCH. Tiers above
+// partner and per-competition scoping are Pro (`sponsors.tiers`); without it the
+// manager is the free un-tiered strip with an upsell note.
 import { useId, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "@/components/ui/console-link";
 import { ImagePlus } from "lucide-react";
 import { useViewerTz } from "@/components/client-time";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
-import { TIER_MSG } from "@/components/sponsors/tier-labels";
 import { SponsorList, dealPrice, groupTierOf, sameOrderBand, type DealWrite } from "@/components/sponsors/sponsor-list";
 import { AddDealSheet, type CreateDealBody } from "@/components/sponsors/add-deal-sheet";
 import { SponsorSheet, SponsorSheetBody } from "@/components/sponsors/sponsor-sheet";
@@ -27,6 +29,7 @@ import {
 import { createDealWrite, sponsorSaveErrorKey } from "@/components/sponsors/save-error";
 import type { SponsorWrite } from "@/components/sponsors/save-error";
 import { ApiV1Error } from "@/lib/client-v1";
+import { intlLocaleFor } from "@/lib/public-date-locale";
 import type { DealAction, SponsorDeal } from "@/lib/sponsor-deals";
 import type { ReportLinkDefaults, ReportLinkSummary } from "@/lib/sponsor-report";
 import { sponsorHref, sponsorsHref } from "@/lib/sponsors-hub";
@@ -34,6 +37,14 @@ import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
 import type { SponsorPackageRow } from "@/server/usecases/sponsors";
 
 const MAX_LOGO_BYTES = 2 * 1024 * 1024;
+/** What the logo picker takes: the file input's `accept` and the hint under the tile are both read from this one list, so the hint
+ *  cannot name a format the picker does not offer (owner, 2026-11-11: "are there will be any particular format of image to be?"). */
+const LOGO_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
+const LOGO_ACCEPT = LOGO_TYPES.join(",");
+/** Each accepted type as people say it. A `Record` over the list: a type added to it without a name is a type error. */
+const LOGO_FORMAT_NAME: Record<(typeof LOGO_TYPES)[number], string> = { "image/png": "PNG", "image/jpeg": "JPG", "image/webp": "WebP" };
+/** The cap in the unit the hint says. The same constant `pickLogo` enforces, so the number in the hint is the number that refuses. */
+const LOGO_MAX_MB = MAX_LOGO_BYTES / (1024 * 1024);
 
 /** The tier list's one authority is lib/sponsor-tiers.ts; re-exported for the console's own importers. */
 export { SPONSOR_TIERS, type SponsorTier };
@@ -61,7 +72,7 @@ export interface SponsorItem {
   /** The deal the row shows (sponsor deals D8: `pickRowDeal` over the sponsor's deals), or null when the sponsor has none - the
    *  WHOLE deal, as the list reads send it: the chip, the sub-line and the row's one action all read it. */
   deal: SponsorDeal | null;
-  /** A live deal owns this sponsor's tier, competition, stream and status (D9): the form offers none of them. */
+  /** A live deal owns this sponsor's tier, competition, stream and status (D9): the stream box is locked, and the page says why. */
   locked_by_deal: boolean;
   /** A deal waits to go live (draft, awaiting payment or approval, scheduled): it holds the sponsor's status (D9). */
   has_open_deal: boolean;
@@ -104,6 +115,8 @@ export interface SponsorsHubData {
   finishedCompetitionIds: string[];
   /** `?sponsor=` after the page checked it is one of this org's sponsors; null shows the list. */
   sponsorId: string | null;
+  /** `?edit=1` (the list's pencil) on an editor's page with a sponsor selected: the sponsor's page opens with its Details editor open. */
+  editSponsor: boolean;
   /** `?deal=` after the page checked it is one of the selected sponsor's deals; null shows the sponsor's page. */
   dealId: string | null;
   /** The selected deal's creator, by display name (a removed member or a deleted user reads null); null with no deal selected. */
@@ -119,16 +132,17 @@ export interface SponsorsHubData {
 interface Draft {
   name: string;
   url: string;
-  tier: SponsorTier;
-  competition_id: string;
   /** Picked in the form, uploaded on submit. */
   file: File | null;
   /** Object URL preview for the picked file, else the stored logo. */
   preview: string | null;
 }
-const EMPTY_DRAFT: Draft = {
-  name: "", url: "", tier: "partner", competition_id: "", file: null, preview: null,
-};
+const EMPTY_DRAFT: Draft = { name: "", url: "", file: null, preview: null };
+
+/** What the editor opens with: the sponsor's own name, link and logo (an empty form for no sponsor). */
+function draftOf(s: SponsorItem | undefined): Draft {
+  return s === undefined ? EMPTY_DRAFT : { name: s.name, url: s.url ?? "", file: null, preview: s.logo_path };
+}
 
 /** The route each deal write POSTs. Send and Resend invoice are one route: the server sends a draft's first invoice and re-sends an
  *  open one's the same way (ensureDealCheckout). */
@@ -178,7 +192,8 @@ function isValidSponsorUrl(raw: string): boolean {
   }
 }
 
-/** The one sponsor form — add and edit share it; logo travels with it.
+/** The one sponsor form — add and edit share it; logo travels with it. A sponsor is a name, a link and a logo here: its tier and
+ *  where it shows come from its deals (spec §6.1; owner, 2026-11-11), so the form has no control for either, on any plan.
  *  Hoisted out of OrgSponsors: a nested component definition would remount
  *  (and drop focus) on every parent render. */
 export function SponsorForm({
@@ -188,10 +203,6 @@ export function SponsorForm({
   onCancel,
   submitLabel,
   busy,
-  hasTiers,
-  showPlacement,
-  lockedByDeal,
-  competitions,
   onPickLogo,
   compact = false,
 }: {
@@ -201,26 +212,22 @@ export function SponsorForm({
   onCancel?: () => void;
   submitLabel: string;
   busy: boolean;
-  hasTiers: boolean;
-  /** Offer the tier and competition at all (only on a plan with tiers). Off on the ADD form: a new sponsor is a name, a logo and a
-   *  link, and its tier and where it shows come from its first deal (spec §6.1). On when EDITING, where a sponsor with no deal is
-   *  placed by hand. */
-  showPlacement: boolean;
-  /** A live deal sets the tier and the competition (D9): both selects are disabled and the form says why. Name, link and logo
-   *  stay editable. Always false on the add form. */
-  lockedByDeal: boolean;
-  competitions: { id: string; name: string }[];
   onPickLogo: (file: File, set: (fn: (prev: Draft) => Draft) => void) => void;
   /** One column of fields under the logo, whatever the viewport: for the sponsor page's side panel, where `sm:` (a VIEWPORT query)
-   *  would put two fields side by side in a 360px panel. The list's inline editor and the add box leave it off. */
+   *  would put two fields side by side in a 360px panel. The add box leaves it off. */
   compact?: boolean;
 }) {
   const msg = useMsg();
+  const locale = useLocaleOrDefault();
   // House uploader pattern (org-logo, prose-editor): a real button clicks a
   // ref'd hidden input — label-wrapped file inputs misfire in some browsers.
   const fileRef = useRef<HTMLInputElement>(null);
-  // The deal-lock note's id: the disabled selects point at it so the reason is announced with them, not only shown.
-  const lockNoteId = useId();
+  const hintId = useId();
+  // The formats are written the way the page's language writes a list ("PNG, JPG or WebP" / "PNG, JPG ou WebP"): `intlLocaleFor` keeps
+  // English on en-GB, whose list has no serial comma (the owner's sentence), where bare "en" would add one.
+  const formats = new Intl.ListFormat(intlLocaleFor(locale), { style: "long", type: "disjunction" }).format(
+    LOGO_ACCEPT.split(",").map((type) => LOGO_FORMAT_NAME[type as (typeof LOGO_TYPES)[number]]),
+  );
   const urlInvalid = value.url.trim() !== "" && !isValidSponsorUrl(value.url);
   return (
       <div className="flex flex-wrap items-start gap-4">
@@ -229,22 +236,21 @@ export function SponsorForm({
           onClick={() => fileRef.current?.click()}
           className="group grid h-20 w-20 shrink-0 cursor-pointer place-items-center overflow-hidden rounded-xl border border-dashed border-slate-300 bg-white text-slate-400 hover:border-purple-400 hover:text-purple-600"
           aria-label={msg("sponsors.logoLabel")}
+          aria-describedby={hintId}
         >
           {value.preview ? (
             // Preview is an object URL for a picked file or the stored CDN URL.
             // eslint-disable-next-line @next/next/no-img-element
             <img src={value.preview} alt="" className="h-full w-full object-contain p-1.5" />
           ) : (
-            <span className="grid place-items-center gap-1 text-center">
-              <ImagePlus className="mx-auto h-5 w-5" strokeWidth={1.75} />
-              <span className="px-1 text-[10px] leading-tight">{msg("sponsors.logoLabel")}</span>
-            </span>
+            // An icon, no word: the button's name is its aria-label, and what it takes is the hint beside it (owner, 2026-11-11).
+            <ImagePlus className="h-6 w-6" strokeWidth={1.75} aria-hidden="true" />
           )}
         </button>
         <input
           ref={fileRef}
           type="file"
-          accept="image/png,image/jpeg,image/webp"
+          accept={LOGO_ACCEPT}
           className="hidden"
           onChange={(e) => {
             const f = e.target.files?.[0];
@@ -253,7 +259,11 @@ export function SponsorForm({
           }}
         />
         <div className={compact ? "w-full min-w-0" : "min-w-0 flex-1"}>
-          {/* 2-col rows: name+link, then tier+competition; single stack on mobile (and always, when compact). */}
+          {/* What the tile takes, beside it - never typed twice: the formats are the input's `accept`, the size is the cap `pickLogo` refuses at. */}
+          <p id={hintId} className="mb-3 text-xs text-slate-500">
+            {msg("sponsors.logoHint", { formats, mb: LOGO_MAX_MB })}
+          </p>
+          {/* Name and link side by side from sm; a single stack on mobile (and always, when compact). */}
           <div className={`grid gap-3 ${compact ? "" : "sm:grid-cols-2"}`}>
             <label className="block">
               <span className="label">{msg("settings.org.sponsors.name")}</span>
@@ -279,52 +289,6 @@ export function SponsorForm({
                 </span>
               ) : null}
             </label>
-            {showPlacement && hasTiers ? (
-              <label className="block">
-                <span className="label">{msg("sponsors.tierLabel")}</span>
-                <select
-                  value={value.tier}
-                  disabled={busy || lockedByDeal}
-                  aria-describedby={lockedByDeal ? lockNoteId : undefined}
-                  onChange={(e) =>
-                    onChange((prev) => ({ ...prev, tier: e.target.value as SponsorTier }))
-                  }
-                  className="input w-full"
-                >
-                  {SPONSOR_TIERS.map((t) => (
-                    <option key={t} value={t}>
-                      {msg(TIER_MSG[t])}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-            {showPlacement && hasTiers ? (
-              <label className="block">
-                <span className="label">{msg("sponsors.scopeLabel")}</span>
-                <select
-                  value={value.competition_id}
-                  disabled={busy || lockedByDeal}
-                  aria-describedby={lockedByDeal ? lockNoteId : undefined}
-                  onChange={(e) =>
-                    onChange((prev) => ({ ...prev, competition_id: e.target.value }))
-                  }
-                  className="input w-full"
-                >
-                  <option value="">{msg("sponsors.scopeAll")}</option>
-                  {competitions.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-            {showPlacement && hasTiers && lockedByDeal ? (
-              <p id={lockNoteId} className={`text-xs text-slate-500 ${compact ? "" : "sm:col-span-2"}`} data-testid="sponsor-locked-note">
-                {msg("sponsors.deal.lockedNote")}
-              </p>
-            ) : null}
           </div>
           <div className="mt-3 flex items-center gap-2">
             <button
@@ -367,6 +331,7 @@ export function OrgSponsors({
   const msg = useMsg();
   const confirm = useConfirm();
   const locale = useLocaleOrDefault();
+  const router = useRouter();
   const tz = useViewerTz();
   const [sponsors, setSponsors] = useState<SponsorItem[]>(initialSponsors);
   // The org's deals, for the sponsor page and the confirms that name what a deal's end does to the others. The server's list is the
@@ -380,10 +345,22 @@ export function OrgSponsors({
   }
   const [addDealFor, setAddDealFor] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [edit, setEdit] = useState<Draft>(EMPTY_DRAFT);
+  // The sponsor page opens with its editor open when the URL says so (`?edit=1`: the list's pencil, the one way in from the list). The
+  // island stays mounted across that client navigation, so the URL's answer is compared by identity in render (never an effect, and
+  // not just as the initial state, which would miss every pencil after the first).
+  const editParamId = hub.editSponsor ? hub.sponsorId : null;
+  const [editingId, setEditingId] = useState<string | null>(editParamId);
+  const [edit, setEdit] = useState<Draft>(draftOf(initialSponsors.find((s) => s.id === editParamId)));
+  const [seenEditParamId, setSeenEditParamId] = useState(editParamId);
   /** The row whose ⋯ is open below md (one at a time). */
   const [moreOpenId, setMoreOpenId] = useState<string | null>(null);
+  if (seenEditParamId !== editParamId) {
+    setSeenEditParamId(editParamId);
+    setEditingId(editParamId);
+    setEdit(draftOf(sponsors.find((s) => s.id === editParamId)));
+    // The row's tray belongs to the list; the pencil took the reader off it, and a tray left open would still be open on the way back.
+    setMoreOpenId(null);
+  }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** What a write that changes nothing on screen says it did (Resend invoice: the chip stays "Awaiting payment"). */
@@ -508,38 +485,34 @@ export function OrgSponsors({
     });
   }
 
+  /** The editor is done (saved or cancelled): the pencil's `?edit=1` has served its purpose, so the URL goes back to the plain sponsor
+   *  page - a reload, Back or a copied link is the read-only page, and the next pencil is a fresh arrival. Only when the flag is in the
+   *  URL: an editor the page's own Edit button opened has nothing to clear, and a replace to the same URL is a needless round trip. */
+  function leaveEditUrl() {
+    if (editParamId !== null) router.replace(sponsorHref(hub.orgSlug, editParamId));
+  }
+
+  /** The sponsor page's own Edit button (the list's pencil is a link: it arrives here through `?edit=1`). */
   function startEdit(s: SponsorItem) {
-    // The ⋯ tray belongs to the row's controls; the editor replaces them, and a tray left open would still be open on Cancel.
-    setMoreOpenId(null);
     setEditingId(s.id);
-    setEdit({
-      name: s.name,
-      url: s.url ?? "",
-      tier: s.tier,
-      competition_id: s.competition_id ?? "",
-      file: null,
-      preview: s.logo_path,
-    });
+    setEdit(draftOf(s));
   }
 
   function saveEdit(s: SponsorItem) {
     void run(async () => {
-      // Send only what changed — promoting tier / scoping is the Pro line, and
-      // a no-op field must not trip the gate on a downgraded org's legacy row.
+      // Send only what changed. The editor is a name, a link and a logo: the sponsor's tier and scope are its deals' to set (the API
+      // still takes them, for callers that are not this screen), so a save from here never carries either.
       const patch: Record<string, unknown> = {};
       if (edit.name.trim() && edit.name.trim() !== s.name) patch.name = edit.name.trim();
       const url = normalizeUrl(edit.url) || null;
       if (url !== s.url) patch.url = url;
-      if (edit.tier !== s.tier) patch.tier = edit.tier;
-      if ((edit.competition_id || null) !== s.competition_id) {
-        patch.competition_id = edit.competition_id || null;
-      }
       if (edit.file) patch.logo_path = await uploadLogo(edit.file);
       if (Object.keys(patch).length > 0) {
         await api(`/${s.id}`, { method: "PATCH", body: JSON.stringify(patch) });
         await refresh();
       }
       setEditingId(null);
+      leaveEditUrl();
     });
   }
 
@@ -697,7 +670,7 @@ export function OrgSponsors({
     });
   }
 
-  /** Swap within the rendered group (the deal's tier, as the list draws it), persist the global order. */
+  /** Swap within the rendered group (the tier each sponsor shows at now, `groupTierOf`, as the list draws it), persist the global order. */
   function move(id: string, delta: -1 | 1) {
     const row = sponsors.find((s) => s.id === id);
     if (!row) return;
@@ -734,8 +707,6 @@ export function OrgSponsors({
   // The sponsor the Add deal sheet is open for - from either the list's row or the sponsor's page. A sponsor the list no longer holds
   // (deleted since) opens nothing.
   const addDealSponsor = addDealFor === null ? undefined : sponsors.find((s) => s.id === addDealFor);
-  // The sponsor's editor is the page's while its page is open; the list behind a side panel must not draw a second one.
-  const listEditingId = selected !== undefined && editingId === selected.id ? null : editingId;
 
   return (
     <div className="space-y-5">
@@ -753,6 +724,7 @@ export function OrgSponsors({
             deal={selectedDeal}
             sponsorName={selected.name}
             orgId={orgId}
+            hasTiers={hasTiers}
             canEdit={canEdit}
             busy={busy}
             tz={tz}
@@ -792,14 +764,12 @@ export function OrgSponsors({
                 value={edit}
                 onChange={(fn) => setEdit(fn)}
                 onSubmit={() => saveEdit(selected)}
-                onCancel={() => setEditingId(null)}
+                onCancel={() => {
+                  setEditingId(null);
+                  leaveEditUrl();
+                }}
                 submitLabel={msg("sponsors.save")}
                 busy={busy}
-                hasTiers={hasTiers}
-                // A live deal owns the tier and the competition (D9, F28): the page shows them as the deal's and offers no control.
-                showPlacement={!selected.locked_by_deal}
-                lockedByDeal={false}
-                competitions={competitions}
                 onPickLogo={pickLogo}
                 compact
               />
@@ -841,10 +811,6 @@ export function OrgSponsors({
               onSubmit={create}
               submitLabel={msg("settings.org.sponsors.add")}
               busy={busy}
-              hasTiers={hasTiers}
-              showPlacement={false}
-              lockedByDeal={false}
-              competitions={competitions}
               onPickLogo={pickLogo}
             />
             {!hasTiers ? (
@@ -866,25 +832,8 @@ export function OrgSponsors({
           orgSlug={hub.orgSlug}
           tz={tz}
           competitions={competitions}
-          editingId={listEditingId}
-          renderEditor={(s) => (
-            <SponsorForm
-              value={edit}
-              onChange={(fn) => setEdit(fn)}
-              onSubmit={() => saveEdit(s)}
-              onCancel={() => setEditingId(null)}
-              submitLabel={msg("sponsors.save")}
-              busy={busy}
-              hasTiers={hasTiers}
-              showPlacement
-              lockedByDeal={s.locked_by_deal}
-              competitions={competitions}
-              onPickLogo={pickLogo}
-            />
-          )}
           moreOpenId={moreOpenId}
           onToggleMore={(id) => setMoreOpenId((open) => (open === id ? null : id))}
-          onEdit={startEdit}
           onMove={move}
           onRemove={remove}
           onAction={dealAction}

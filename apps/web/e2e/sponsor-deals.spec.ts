@@ -6,9 +6,10 @@
 //   - the REAL producers behind each row - deals created through the API, one by SQL the way Send invoice leaves it - read
 //     back through the real list route into the real island, and the buttons on the row writing through the real routes
 //     (`mark-paid`, `approve`) and the row following the answer;
-//   - the ⋯ fold: below 768 the clicks count and the edit / move / delete controls sit behind it, from 768 they are inline,
-//     and each tap target is 44px where a finger is the pointer;
-//   - a 43-character sponsor name in a 320px row: cut with an ellipsis, inside the screen, no sideways scroll.
+//   - the ⋯ fold: below 768 the clicks count and the move / delete controls sit behind it while the edit pencil stays on the row
+//     beside it, from 768 they are all inline, and each tap target is 44px where a finger is the pointer;
+//   - a 43-character sponsor name in a phone row: below 376 (a 320, 360 or 375 phone) no logo tile, the name and the sub-line wrap to
+//     two lines, the name is cut with an ellipsis after them at 320, inside the screen, no sideways scroll; from 376 one truncated line.
 //
 // Copy is read from the dictionary the page renders from, never retyped (this folder's idiom: sponsor-deals-api.spec.ts).
 import { readFileSync } from "node:fs";
@@ -16,7 +17,8 @@ import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Locator, type Page, type Response } from "@playwright/test";
 import { apiJson, expectNoHorizontalScroll, setBoolEntitlementOverrideSql, setOrgConnectSql, withDb } from "./helpers";
 import {
-  dealUrl, openSponsorRowTools, releaseSettingsOrg, seedCompetition, seedMemberIdentity, seedSettingsOrg, sponsorsUrl, sponsorUrl, tapUntil, type SeededOrg,
+  dealUrl, openSponsorRowTools, releaseSettingsOrg, seedCompetition, seedMemberIdentity, seedSettingsOrg, sponsorEditUrl, sponsorsUrl, sponsorUrl, tapUntil,
+  type SeededOrg,
 } from "./settings-support";
 
 const UI: Record<string, string> = JSON.parse(
@@ -203,9 +205,9 @@ test("list: each row shows one next action and the chip its deal state names", a
   expect(await expectAtMostOneActionPerRow(page), "every row was looked at again").toBe(5);
 });
 
-test("list at 320: the ⋯ fold holds clicks, edit, move and delete; no sideways scroll; a 43-character name truncates", async ({ page, request }) => {
-  // Three widths, each a page load with the fold opened and closed.
-  test.setTimeout(150_000);
+test("list at 320 and 375: the ⋯ fold holds clicks, move and delete and the pencil stays on the row; no sideways scroll; a 43-character name wraps to two lines", async ({ page, request }) => {
+  // Four widths, each a page load with the fold opened and closed.
+  test.setTimeout(180_000);
   // A competition-scoped or tiered sponsor is a Pro placement (`sponsors.tiers`), so this one org is Pro.
   const org = await seedSettingsOrg(request, { plan: "pro", label: "list-fold" });
   seeded.push(org);
@@ -218,7 +220,8 @@ test("list at 320: the ⋯ fold holds clicks, edit, move and delete; no sideways
   const deal = await newDeal(request, org.orgId, longId, { package_id: gold, payment_method: "complimentary", go_live: "immediate" });
   expect(await dealStatus(request, org.orgId, deal), "premise: live").toBe("live");
 
-  const widths = [320, 768, 1280];
+  // 375 is the widest phone that still gets the narrow layout (below 376), 768 the first width with no ⋯.
+  const widths = [320, 375, 768, 1280];
   let checked = 0;
   for (const width of widths) {
     await page.setViewportSize({ width, height: 900 });
@@ -226,15 +229,17 @@ test("list at 320: the ⋯ fold holds clicks, edit, move and delete; no sideways
     const long = rowOf(page, longId);
     await expect(long, `${width}: the long-named sponsor is listed`).toBeVisible();
 
-    // The group a row sits under is its deal's tier: the live gold deal puts this partner-added sponsor in Gold; the other stays Partner.
+    // The group a row sits under is the tier its sponsor shows at NOW: the live gold deal made this partner-added sponsor a Gold; the other stays Partner.
     await expect(page.locator('[data-testid="sponsor-group"][data-tier="gold"]').getByTestId("sponsor-row"), `${width}: the gold deal's sponsor is under Gold`).toHaveCount(1);
     await expect(page.locator('[data-testid="sponsor-group"][data-tier="gold"]').locator(`[data-sponsor-id="${longId}"]`)).toHaveCount(1);
     await expect(page.locator('[data-testid="sponsor-group"][data-tier="partner"]').locator(`[data-sponsor-id="${shortId}"]`), `${width}: the other stays under Partner`).toHaveCount(1);
 
     const more = long.getByTestId("sponsor-row-more");
     const tools = long.getByTestId("sponsor-row-tools");
+    // The pencil is a LINK (to the sponsor's page with its editor open) and is NOT folded: it is on the row at every width, beside the ⋯.
+    const pencil = long.getByRole("link", { name: ui("sponsors.edit", { name: LONG }), exact: true });
+    // What the ⋯ folds below 768: the three buttons (and the clicks count).
     const controls = [
-      long.getByRole("button", { name: ui("sponsors.edit", { name: LONG }), exact: true }),
       long.getByRole("button", { name: ui("settings.org.sponsors.moveUp", { name: LONG }), exact: true }),
       long.getByRole("button", { name: ui("settings.org.sponsors.moveDown", { name: LONG }), exact: true }),
       long.getByRole("button", { name: ui("settings.org.sponsors.remove", { name: LONG }), exact: true }),
@@ -251,10 +256,36 @@ test("list at 320: the ⋯ fold holds clicks, edit, move and delete; no sideways
       await expect(tools, `${width}: folded, the tools are not on screen`).toBeHidden();
       await expect(clicks, `${width}: nor the clicks count`).toBeHidden();
       for (const c of controls) await expect(c, `${width}: nor the controls`).toBeHidden();
+      // ... but the pencil is: an editor never opens a menu to find the way in (owner, 2026-11-11). A 44px target, on the ⋯'s own line and
+      // right beside it, and hit-tested (paint is not a tap area).
+      await expect(pencil, `${width}: the pencil is on the row with the fold shut`).toBeVisible();
+      // On screen first: `elementFromPoint` answers null for a point below the fold, and every box below is in viewport coordinates.
+      await pencil.scrollIntoViewIfNeeded();
+      const shutBox = (await pencil.boundingBox())!;
+      const moreNow = (await more.boundingBox())!;
+      const rowTop = (await long.boundingBox())!.y;
+      expect(shutBox.width, `${width}: the pencil is 44px wide`).toBeGreaterThanOrEqual(44);
+      expect(shutBox.height, `${width}: and 44px tall`).toBeGreaterThanOrEqual(44);
+      expect(Math.abs(shutBox.y + shutBox.height / 2 - (moreNow.y + moreNow.height / 2)), `${width}: on the same line as the ⋯`).toBeLessThanOrEqual(2);
+      expect(moreNow.x - (shutBox.x + shutBox.width), `${width}: right beside the ⋯, not apart from it`).toBeLessThanOrEqual(12);
+      expect(moreNow.x - (shutBox.x + shutBox.width), `${width}: and to its left, not on top of it`).toBeGreaterThanOrEqual(-1);
+      expect(
+        await pencil.evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          const hit = (y: number) => { const t = document.elementFromPoint(r.left + r.width / 2, y); return t === el || el.contains(t); };
+          return hit(r.top + 2) && hit(r.bottom - 2);
+        }),
+        `${width}: both ends of the pencil hit the pencil`,
+      ).toBe(true);
       await expectNoHorizontalScroll(page);
 
       await openSponsorRowTools(page, LONG);
       await expect(more).toHaveAttribute("aria-expanded", "true");
+      await expect(pencil, `${width}: open, the pencil has not moved off the row`).toBeVisible();
+      const openBox = (await pencil.boundingBox())!;
+      const openRowTop = (await long.boundingBox())!.y;
+      // Compared against the row's own top, so a scroll between the two does not read as the pencil moving.
+      expect({ x: Math.round(openBox.x), y: Math.round(openBox.y - openRowTop) }, `${width}: and it is where it was in its row`).toEqual({ x: Math.round(shutBox.x), y: Math.round(shutBox.y - rowTop) });
       await expect(clicks, `${width}: open, the clicks count is there`).toBeVisible();
       for (const c of controls) {
         await expect(c, `${width}: open, every control is there`).toBeVisible();
@@ -271,19 +302,47 @@ test("list at 320: the ⋯ fold holds clicks, edit, move and delete; no sideways
       await expect(more, `${width}: no ⋯ from 768`).toBeHidden();
       await expect(tools, `${width}: the tools are inline`).toBeVisible();
       await expect(clicks).toBeVisible();
-      for (const c of controls) await expect(c, `${width}: every control is inline`).toBeVisible();
-      await expect(long.getByRole("button", { name: ui("sponsors.edit", { name: LONG }) }), `${width}: one Edit, not two`).toHaveCount(1);
+      for (const c of [pencil, ...controls]) await expect(c, `${width}: every control is inline`).toBeVisible();
+      await expect(long.getByRole("link", { name: ui("sponsors.edit", { name: LONG }) }), `${width}: one Edit, not two`).toHaveCount(1);
+      // Where the pencil sits from md: after the name and before the deal cell, with nothing overlapping either side of it.
+      const nameBox = (await long.getByTestId("sponsor-row-name-text").boundingBox())!;
+      const pencilBox = (await pencil.boundingBox())!;
+      const dealBox = (await long.getByTestId("sponsor-row-deal").boundingBox())!;
+      expect(nameBox.x + nameBox.width, `${width}: the name ends before the pencil`).toBeLessThanOrEqual(pencilBox.x + 0.5);
+      expect(pencilBox.x + pencilBox.width, `${width}: the pencil ends before the deal cell`).toBeLessThanOrEqual(dealBox.x + 0.5);
+      await expect(long.getByTestId("sponsor-row-logo"), `${width}: the logo tile is on the row`).toBeVisible();
     }
 
     // The 43-character name is cut with an ellipsis and stays inside the screen; it is clipped only where the row is that narrow.
     const name = long.getByTestId("sponsor-row-name-text");
+    // The name is plain text, not a link (owner, 2026-11-11: the pencil is the one way in).
+    await expect(long.getByTestId("sponsor-row-name-link"), `${width}: the name is not a link`).toHaveCount(0);
+    expect(await name.evaluate((el) => el.closest("a") === null), `${width}: and no anchor wraps it`).toBe(true);
+    const sub = long.getByTestId("sponsor-row-sub");
+    const subStyle = await sub.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return { clamp: cs.webkitLineClamp, whiteSpace: cs.whiteSpace };
+    });
     const box = await name.evaluate((el) => {
       const cs = getComputedStyle(el);
-      return { overflow: cs.overflowX, ellipsis: cs.textOverflow, clipped: el.scrollWidth > el.clientWidth, right: el.getBoundingClientRect().right };
+      return {
+        overflow: cs.overflowX, ellipsis: cs.textOverflow, right: el.getBoundingClientRect().right,
+        lines: Math.round(el.getBoundingClientRect().height / parseFloat(cs.lineHeight)), clippedY: el.scrollHeight > el.clientHeight + 1,
+      };
     });
     expect({ overflow: box.overflow, ellipsis: box.ellipsis }, `${width}: the name is built to truncate`).toEqual({ overflow: "hidden", ellipsis: "ellipsis" });
     expect(box.right, `${width}: the name ends inside the screen`).toBeLessThanOrEqual(width);
-    if (width === 320) expect(box.clipped, "320: the 43 characters do not fit, so they are cut").toBe(true);
+    if (width < 376) {
+      // Below 376 (a 320, 360 or 375 phone) the row has no logo tile, the name gets two lines instead of being cut at about nine or
+      // fourteen characters (owner ruling), and the sub-line takes two lines so a price is not cut mid-number.
+      await expect(long.getByTestId("sponsor-row-logo"), `${width}: no logo tile below 376`).toBeHidden();
+      expect(box.lines, `${width}: the name wraps to two lines`).toBe(2);
+      if (width === 320) expect(box.clippedY, "320: the 43 characters need more than two lines, so they are cut after the second").toBe(true);
+      expect(subStyle, `${width}: the sub-line may take two lines`).toEqual({ clamp: "2", whiteSpace: "normal" });
+    } else {
+      expect(box.lines, `${width}: from 376 the name is one truncated line`).toBe(1);
+      expect(subStyle, `${width}: and the sub-line is the one truncated line it was`).toEqual({ clamp: "none", whiteSpace: "nowrap" });
+    }
     await expectNoHorizontalScroll(page);
     checked++;
   }
@@ -310,8 +369,27 @@ test("a viewer sees the sponsors and their chips - and no action, no ⋯, no edi
     await expect(rowOf(page, noneId).getByTestId("deal-chip")).toHaveText(ui("sponsors.deal.chip.none"));
     await expect(page.getByTestId("sponsor-row-action"), "a viewer is offered no next action").toHaveCount(0);
     await expect(page.getByTestId("sponsor-row-more"), "nor a ⋯ - there is nothing behind it").toHaveCount(0);
-    await expect(page.getByRole("button", { name: ui("sponsors.edit", { name: "Quay Fisheries" }) }), "nor Edit").toHaveCount(0);
+    await expect(page.getByRole("link", { name: ui("sponsors.edit", { name: "Quay Fisheries" }) }), "nor the Edit pencil").toHaveCount(0);
     await expect(page.getByRole("button", { name: ui("settings.org.sponsors.remove", { name: "Quay Fisheries" }) }), "nor Remove").toHaveCount(0);
+    // The pair: what a viewer DOES get in that place is Open - the same button, to the page read-only (no edit flag), a 44px target.
+    const openBtn = page.getByRole("link", { name: ui("sponsors.open", { name: "Quay Fisheries" }), exact: true });
+    await expect(openBtn, "a viewer's row has its Open button").toHaveCount(1);
+    expect(await openBtn.getAttribute("href"), "it opens the plain sponsor page").toBe(sponsorUrl(org.slug, unpaidId));
+    // Like the editor's pencil, Open is NOT folded on a phone: it is the viewer's only way in, so it is on the row at 320, on screen and
+    // hit-testable (a `max-md:hidden` on it would leave `boundingBox()` null, not a 44px box).
+    await expect(openBtn, "320: the viewer's Open is on the row, not folded away").toBeVisible();
+    await openBtn.scrollIntoViewIfNeeded();
+    expect(
+      await openBtn.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const hit = (y: number) => { const t = document.elementFromPoint(r.left + r.width / 2, y); return t === el || el.contains(t); };
+        return hit(r.top + 2) && hit(r.bottom - 2);
+      }),
+      "320: both ends of Open hit Open",
+    ).toBe(true);
+    const openBox = (await openBtn.boundingBox())!;
+    expect(openBox.width, "Open: a 44px target").toBeGreaterThanOrEqual(44);
+    expect(openBox.height, "Open: a 44px target").toBeGreaterThanOrEqual(44);
     // With no controls to fold, the clicks count stays on the row at 320.
     await expect(rowOf(page, unpaidId).getByTestId("sponsor-row-clicks"), "the clicks count is not folded away for a viewer").toBeVisible();
     await expectNoHorizontalScroll(page);
@@ -347,10 +425,11 @@ test("sponsor page: phones get their own page with back; desktop a side sheet ov
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(listUrl);
   await expect(page.getByTestId("sponsor-row")).toHaveCount(2);
-  const nameLink = rowOf(page, sponsorId).getByTestId("sponsor-row-name-link");
-  await nameLink.click();
-  await expect(page).toHaveURL(new RegExp(`sponsor=${sponsorId}`));
+  await expect(rowOf(page, sponsorId).getByTestId("sponsor-row-name-link"), "the name is plain text, not a link").toHaveCount(0);
+  await followPencil(page, sponsorId);
+  await expect(page).toHaveURL(urlIs(sponsorEditUrl(org.slug, sponsorId)));
   await expect(dialog, "from 768 the sponsor's page is a panel").toBeVisible();
+  await expect(dialog.getByTestId("sponsor-sheet-editor"), "the pencil opens it with the Details editor already open").toBeVisible();
   await expect(sheet, "one body, inside the panel").toHaveCount(1);
   await expect(dialog.getByTestId("sponsor-sheet")).toHaveCount(1);
   await expect(listView, "the list is still there behind the panel").toBeVisible();
@@ -409,16 +488,27 @@ test("sponsor page: phones get their own page with back; desktop a side sheet ov
   await expect(listView).toBeVisible();
   await expect(rowOf(page, other)).toBeVisible();
 
-  // --- The name's tap area on a phone is a 44px target that the row does not pay for: hit-test it, do not just measure paint.
-  const link = rowOf(page, sponsorId).getByTestId("sponsor-row-name-link");
-  const hit = await link.evaluate((el) => {
+  // --- The pencil's tap area on a phone: a 44px target beside the ⋯, on the row with the tray SHUT (an editor opens no menu to find it).
+  // Hit-test it, do not just measure paint.
+  const pencil = rowOf(page, sponsorId).getByTestId("sponsor-row-edit");
+  await expect(rowOf(page, sponsorId).getByTestId("sponsor-row-more"), "premise: the tray is shut").toHaveAttribute("aria-expanded", "false");
+  await expect(pencil, "shut, the pencil is on the row").toBeVisible();
+  // On screen first: `elementFromPoint` answers null for a point below the fold.
+  await pencil.scrollIntoViewIfNeeded();
+  const hit = await pencil.evaluate((el) => {
     const r = el.getBoundingClientRect();
     const top = document.elementFromPoint(r.left + r.width / 2, r.top + 2);
     const bottom = document.elementFromPoint(r.left + r.width / 2, r.bottom - 2);
-    return { height: r.height, top: top === el || el.contains(top), bottom: bottom === el || el.contains(bottom) };
+    return { width: r.width, height: r.height, top: top === el || el.contains(top), bottom: bottom === el || el.contains(bottom) };
   });
-  expect(hit.height, "the name link's box is 44px tall on a phone").toBeGreaterThanOrEqual(44);
-  expect(hit.top && hit.bottom, "and both ends of it hit the link").toBe(true);
+  expect(hit.height, "the pencil's box is 44px tall on a phone").toBeGreaterThanOrEqual(44);
+  expect(hit.width, "and 44px wide").toBeGreaterThanOrEqual(44);
+  expect(hit.top && hit.bottom, "and both ends of it hit the pencil").toBe(true);
+  await expectNoHorizontalScroll(page);
+  await pencil.click();
+  await expect(page).toHaveURL(urlIs(sponsorEditUrl(org.slug, sponsorId)));
+  await expect(pageBody, "on a phone the pencil opens the sponsor's page, not a dialog").toBeVisible();
+  await expect(page.getByTestId("sponsor-sheet-editor"), "with the editor open").toBeVisible();
   await expectNoHorizontalScroll(page);
 });
 
@@ -440,6 +530,7 @@ test("sponsor page: a live deal's tier and stream are read-only; name and link s
   await expect(dialog).toBeVisible();
   await expect(dialog.getByTestId("sponsor-sheet-detail-tier"), "the deal's tier").toContainText(ui("sponsors.tier.gold"));
   await expect(dialog.getByTestId("sponsor-sheet-locked-note")).toHaveText(ui("sponsors.deal.lockedNote"));
+  await expect(dialog.getByTestId("sponsor-sheet-placement-note"), "the lock note already says a deal owns them: one note, not two").toHaveCount(0);
   await expect(dialog.getByTestId("sponsor-sheet-tier-now"), "a live deal changes nothing later: no 'Tier now' line").toHaveCount(0);
   await expect(dialog.getByTestId("sponsor-sheet-stream"), "a live deal owns the stream").toBeDisabled();
   const edit = dialog.getByTestId("sponsor-sheet-edit");
@@ -465,14 +556,20 @@ test("sponsor page: a live deal's tier and stream are read-only; name and link s
     name: NEW_NAME, url: "https://ridge-gold.example.com", tier: "gold",
   });
 
-  // --- The pair: a sponsor with NO deal keeps its tier and competition controls, and its stream box works.
+  // --- The pair: a sponsor with NO deal is a plain Partner for the whole organisation, read-only, with the note that a deal sets it
+  // (owner, 2026-11-11: "A"); its stream box works; and its editor has no tier or competition control either - there is no screen
+  // that edits them by hand now.
   await page.goto(`${sponsorsUrl(org.slug, "sponsors")}&sponsor=${freeId}`);
   await expect(dialog).toBeVisible();
   await expect(dialog.getByTestId("sponsor-sheet-locked-note"), "no deal, no lock").toHaveCount(0);
+  await expect(dialog.getByTestId("sponsor-sheet-detail-tier"), "no deal: a plain Partner").toContainText(ui("sponsors.tier.partner"));
+  await expect(dialog.getByTestId("sponsor-sheet-detail-scope"), "for the whole organisation").toHaveText(ui("sponsors.scopeAll"));
+  await expect(dialog.getByTestId("sponsor-sheet-placement-note"), "and says a deal sets them").toHaveText(ui("sponsors.sheet.placementNote"));
   const stream = dialog.getByTestId("sponsor-sheet-stream");
   await expect(stream).toBeEnabled();
   await tapUntil(dialog.getByTestId("sponsor-sheet-edit"), dialog.getByTestId("sponsor-sheet-editor"), "Edit opens the editor");
-  await expect(dialog.getByTestId("sponsor-sheet-editor").locator("select"), "tier and competition are the club's to set").toHaveCount(2);
+  await expect(dialog.getByTestId("sponsor-sheet-editor").getByRole("textbox"), "the editor holds the name and the link").toHaveCount(2);
+  await expect(dialog.getByTestId("sponsor-sheet-editor").locator("select"), "no tier or competition control: a deal sets them").toHaveCount(0);
   await dialog.getByTestId("sponsor-sheet-editor").getByRole("button", { name: ui("confirm.cancel"), exact: true }).click();
   await expect(dialog.getByTestId("sponsor-sheet-editor")).toHaveCount(0);
   const [toggled] = await Promise.all([
@@ -1053,6 +1150,14 @@ async function controlSet(page: Page, sponsorId: string): Promise<string[]> {
 
 const urlIs = (expected: string) => (u: URL): boolean => u.pathname + u.search === expected;
 
+/** Follows a row's pencil - the ONE way into a sponsor from the list (owner, 2026-11-11: the name is plain text) - to the sponsor's own
+ *  page with its editor open. The pencil is on the row at every width (beside the ⋯ on a phone; it is never folded into the tray), so
+ *  there is nothing to open first. A click before the island hydrates is a plain anchor navigation, which is exactly what the pencil
+ *  is, so it needs no retry. */
+async function followPencil(page: Page, sponsorId: string): Promise<void> {
+  await rowOf(page, sponsorId).getByTestId("sponsor-row-edit").click();
+}
+
 test("T19 golden path (community, UI only): a package, a sponsor, an offline deal paid on payment, Mark as paid, on the public page, End now, off it", async ({ page, request }) => {
   // Five page loads, a package, a sponsor, a deal, two confirms and four polls of the cached public page.
   test.setTimeout(360_000);
@@ -1131,8 +1236,8 @@ test("T19 golden path (community, UI only): a package, a sponsor, an offline dea
   expect(await dealStatus(request, org.orgId, made.id), "the server agrees").toBe("live");
   await expectPublic(request, shown, true, "live: on the public page");
 
-  // --- 5. End now, from the deal's own page, reached by the taps a person makes: the name, then the deal's Open.
-  await rowOf(page, sponsorId).getByTestId("sponsor-row-name-link").click();
+  // --- 5. End now, from the deal's own page, reached by the taps a person makes: the row's pencil, then the deal's Open.
+  await followPencil(page, sponsorId);
   const open = page.getByTestId("sponsor-sheet-deal-open");
   await expect(open, "the sponsor's page lists its one deal").toHaveCount(1);
   await open.click();
@@ -1232,6 +1337,9 @@ test("T19 break: Back from a deal lands on its sponsor, and from the sponsor on 
   const dealId = await newDeal(request, s.org.orgId, s.sponsorId, { package_id: s.pkg });
   const listUrl = sponsorsUrl(s.org.slug, "sponsors");
   const sponsorPage = sponsorUrl(s.org.slug, s.sponsorId);
+  // The way in from the list is the pencil, which arrives at the sponsor's page with its editor open (`&edit=1`); Back from a deal leads
+  // to the PLAIN sponsor page. Two URLs of one page, and the history holds whichever way it was reached.
+  const sponsorEditPage = sponsorEditUrl(s.org.slug, s.sponsorId);
   const dealPage = dealUrl(s.org.slug, s.sponsorId, dealId);
   const sheet = page.getByTestId("sponsor-sheet");
   const deal = page.getByTestId("deal-page");
@@ -1241,8 +1349,8 @@ test("T19 break: Back from a deal lands on its sponsor, and from the sponsor on 
   // --- A phone, by the page's own Back link.
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(listUrl);
-  await rowOf(page, s.sponsorId).getByTestId("sponsor-row-name-link").click();
-  await expect(page).toHaveURL(urlIs(sponsorPage));
+  await followPencil(page, s.sponsorId);
+  await expect(page).toHaveURL(urlIs(sponsorEditPage));
   await expect(sheet, "the sponsor's page").toBeVisible();
   await page.getByTestId("sponsor-sheet-deal-open").click();
   await expect(page).toHaveURL(urlIs(dealPage));
@@ -1259,14 +1367,14 @@ test("T19 break: Back from a deal lands on its sponsor, and from the sponsor on 
   await expect(sheet, "Back from the sponsor: no sponsor page").toHaveCount(0);
   await expect(listView, "the list").toBeVisible();
 
-  // --- The same way in, by the browser's own back button: each step undoes exactly one.
-  await rowOf(page, s.sponsorId).getByTestId("sponsor-row-name-link").click();
-  await expect(page).toHaveURL(urlIs(sponsorPage));
+  // --- The same way in, by the browser's own back button: each step undoes exactly one (the history holds the pencil's URL).
+  await followPencil(page, s.sponsorId);
+  await expect(page).toHaveURL(urlIs(sponsorEditPage));
   await page.getByTestId("sponsor-sheet-deal-open").click();
   await expect(page).toHaveURL(urlIs(dealPage));
   await expect(deal).toBeVisible();
   await page.goBack();
-  await expect(page).toHaveURL(urlIs(sponsorPage));
+  await expect(page).toHaveURL(urlIs(sponsorEditPage));
   await expect(sheet, "the browser's Back from the deal: its sponsor").toBeVisible();
   await expect(deal).toHaveCount(0);
   await page.goBack();
@@ -1274,7 +1382,7 @@ test("T19 break: Back from a deal lands on its sponsor, and from the sponsor on 
   await expect(listView, "and again: the list").toBeVisible();
   await expect(sheet).toHaveCount(0);
   await page.goForward();
-  await expect(page).toHaveURL(urlIs(sponsorPage));
+  await expect(page).toHaveURL(urlIs(sponsorEditPage));
   await expect(sheet, "Forward returns to the sponsor, not past it").toBeVisible();
 
   // --- A desktop: the deal is a panel, and Escape closes it to the sponsor's panel, and that to the list.
@@ -1406,15 +1514,27 @@ test("T19 widths: list, sponsor page, Add deal sheet and deal page fit 320 / 768
     const listName = await lineBreaks(listNameEl);
     expect(listName.chars, `${width}: the list measured every letter of the name`).toBe(LONG.replace(/\s/g, "").length);
     expect(listName.midWord, `${width}: the list's name never breaks inside a word`).toEqual([]);
-    // The list's name is CUT, not wrapped (the other half of "a long name fits"): one line at every width, built to end in an ellipsis,
-    // and at 320 the 43 characters really do not fit, so they are clipped.
-    expect(listName.lines, `${width}: the list's name is ONE line - cut with an ellipsis, never wrapped onto a second`).toBe(1);
+    // The list's name is CUT (the other half of "a long name fits"), built to end in an ellipsis. From 376 it is ONE line, clipped by
+    // width. Below 376 the row has no logo tile and the name gets TWO lines (owner ruling 2026-11-11): the box is two lines tall and, at
+    // 320, the 43 characters need more, so they are clipped by height. `lines` above counts every letter's row, including the clamped ones.
     const cut = await listNameEl.evaluate((el) => {
       const cs = getComputedStyle(el);
-      return { overflow: cs.overflowX, ellipsis: cs.textOverflow, clipped: el.scrollWidth > el.clientWidth };
+      const box = el.getBoundingClientRect();
+      return {
+        overflow: cs.overflowX, ellipsis: cs.textOverflow, clippedX: el.scrollWidth > el.clientWidth, clippedY: el.scrollHeight > el.clientHeight + 1,
+        boxLines: Math.round(box.height / parseFloat(cs.lineHeight)),
+      };
     });
     expect({ overflow: cut.overflow, ellipsis: cut.ellipsis }, `${width}: the list's name is built to truncate`).toEqual({ overflow: "hidden", ellipsis: "ellipsis" });
-    if (width === 320) expect(cut.clipped, "320: the 43 characters do not fit the row, so the name is cut").toBe(true);
+    if (width < 376) {
+      await expect(rowOf(page, longId).getByTestId("sponsor-row-logo"), `${width}: no logo tile below 376`).toBeHidden();
+      expect(cut.boxLines, `${width}: the list's name box is two lines tall`).toBe(2);
+      expect(listName.lines, `${width}: and the 43 characters need more than those two lines`).toBeGreaterThan(2);
+      expect(cut.clippedY, `${width}: so the name is cut after the second line`).toBe(true);
+    } else {
+      expect(cut.boxLines, `${width}: the list's name box is ONE line`).toBe(1);
+      expect(listName.lines, `${width}: and its letters sit on one line - cut with an ellipsis, never wrapped onto a second`).toBe(1);
+    }
     measured++;
     screens++;
 

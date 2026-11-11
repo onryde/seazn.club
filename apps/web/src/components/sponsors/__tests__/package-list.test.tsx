@@ -21,6 +21,10 @@
 //   P4  retire    DELETE without asking                                                   -> "Retire asks first"
 //   P5  map       show the generic words for a package's 422                               -> "a package refusal reads its own words"
 //   P6  viewer    draw Create and Retire for a viewer                                      -> "a viewer"
+//   L7  placement draw the tier legend above the cards                                      -> "with packages: after the last card"
+//   F9  start     hand the legend startOpen=true whatever the list holds                    -> "startOpen is exactly: the list has no packages"
+//   F10 link      hand the legend a literal billing href instead of the page's own          -> "the legend's upgrade link ... the page's billing href"
+//   F11 fold      mount the legend without its phone fold                                    -> "the legend is folded below md"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
@@ -30,6 +34,7 @@ vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMo
 
 import { Modal } from "@/components/modal";
 import { PackageCard, PackageCreateSheet, PackageList, parsePriceCents, type PackageCardProps } from "@/components/sponsors/package-list";
+import { TierLegend } from "@/components/sponsors/tier-legend";
 import { expandWithHooks, propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
 import { t } from "@/lib/i18n-runtime";
@@ -141,6 +146,92 @@ const mount = (over: Partial<Parameters<typeof PackageList>[0]> = {}) => {
 async function flush() {
   for (let i = 0; i < 12; i++) await new Promise((resolve) => setTimeout(resolve, 0));
 }
+
+// --- the tier legend (owner, 2026-11-11: "some description or legend in package under the panel for explain the different tier usage") ---
+// Its own words and weights are tier-legend.test.tsx's; what the LIST owes is where it sits and on whom it shows.
+
+const at = (html: string, id: string) => html.indexOf(`data-testid="${id}"`);
+
+describe("the tier legend sits under the price list, on every plan, with or without packages", () => {
+  it("with packages: after the last card, before the online-invoices note (L7 placement)", () => {
+    const html = listHtml();
+    const lastCard = html.lastIndexOf('data-testid="package-card"');
+    expect(countOf(html, "package-card"), "premise: the five fixture cards are drawn").toBe(5);
+    expect(countOf(html, "tier-legend")).toBe(1);
+    expect(at(html, "tier-legend"), "after the cards").toBeGreaterThan(lastCard);
+    expect(at(html, "tier-legend"), "before the note").toBeLessThan(at(html, "package-online-note"));
+  });
+
+  it("with none: after the empty state, before the note - a club with no packages is told what a tier is when it needs it most", () => {
+    const html = listHtml({ initialPackages: [] });
+    expect(countOf(html, "package-empty")).toBe(1);
+    expect(countOf(html, "tier-legend")).toBe(1);
+    expect(at(html, "tier-legend")).toBeGreaterThan(at(html, "package-empty"));
+    expect(at(html, "tier-legend")).toBeLessThan(at(html, "package-online-note"));
+  });
+
+  it("on every plan and for a viewer: four rows each, and the plan line (its board sentence and its tiers sentence) only where the plan has no organisation-wide tiers (8 checked)", () => {
+    let checked = 0;
+    for (const tiersOrgWide of [true, false]) {
+      for (const canEdit of [true, false]) {
+        for (const initialPackages of [FIVE, []]) {
+          const html = listHtml({ tiersOrgWide, canEdit, initialPackages });
+          const label = `tiers=${tiersOrgWide} edit=${canEdit} packages=${initialPackages.length}`;
+          expect(countOf(html, "tier-legend-row"), `${label}: four tiers`).toBe(4);
+          expect(countOf(html, "tier-legend-plan"), `${label}: the plan line`).toBe(tiersOrgWide ? 0 : 1);
+          expect(countOf(html, "tier-legend-plan-board"), `${label}: what its pages and stream do`).toBe(tiersOrgWide ? 0 : 1);
+          expect(countOf(html, "tier-legend-plan-tiers"), `${label}: what needs a paid plan`).toBe(tiersOrgWide ? 0 : 1);
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBe(8);
+  });
+
+  it("startOpen is exactly: the list has no packages - the legend opens on a phone when the tab has nothing else to say, and folds when the price list is the page (2 x 2 checked)", () => {
+    let checked = 0;
+    for (const tiersOrgWide of [true, false]) {
+      for (const [initialPackages, want] of [[[], true], [FIVE, false], [[TITLE], false]] as const) {
+        const legendEl = mount({ tiersOrgWide, initialPackages: [...initialPackages] })
+          .island.tree()
+          .find((el) => el.type === TierLegend);
+        expect(legendEl, `tiers=${tiersOrgWide} packages=${initialPackages.length}: the list mounts the legend`).toBeDefined();
+        expect(propsOf(legendEl!).startOpen, `tiers=${tiersOrgWide} packages=${initialPackages.length}`).toBe(want);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(6);
+  });
+
+  it("the legend's upgrade link is the page's billing href, an editor's, and only on a plan without tiers (2 x 2 checked)", () => {
+    let checked = 0;
+    for (const tiersOrgWide of [true, false]) {
+      for (const canEdit of [true, false]) {
+        const html = listHtml({ tiersOrgWide, canEdit, billingHref: "/o/club/settings/billing", hasMonetize: true });
+        const want = !tiersOrgWide && canEdit;
+        expect(countOf(html, "tier-legend-upgrade"), `tiers=${tiersOrgWide} edit=${canEdit}`).toBe(want ? 1 : 0);
+        if (want) expect(testidTag(html, "tier-legend-upgrade"), "the page's own href").toContain('href="/o/club/settings/billing"');
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("the legend is folded below md, and the online note sits right after the fold: on a phone with packages the note rises by the legend's whole height (the closed body is max-md:hidden)", () => {
+    const html = listHtml({ hasMonetize: false });
+    const fold = at(html, "tier-legend-fold");
+    expect(fold, "premise: the fold is drawn").toBeGreaterThan(-1);
+    const toggle = /<button\b[^>]*data-role="phone-disclosure-toggle"[^>]*>/.exec(html.slice(fold))?.[0] ?? "";
+    expect(toggle, "the legend's toggle is phone-only").toMatch(/class="[^"]*\smd:hidden"/);
+    expect(toggle, "folded on first paint (a list with packages)").toContain('aria-expanded="false"');
+    const controls = /aria-controls="([^"]+)"/.exec(toggle)?.[1];
+    expect(html.slice(fold), "its body is hidden below md and nothing else is").toMatch(new RegExp(`<div class="grid flex-1 max-md:hidden" id="${controls}">`));
+    expect(at(html, "tier-legend-fold"), "the fold sits before the note").toBeLessThan(at(html, "package-online-note"));
+    // Nothing between the fold's end and the note takes height on a phone: only closing wrappers lie between them.
+    const afterLegend = html.slice(html.indexOf("</section>", fold) + "</section>".length, at(html, "package-online-note"));
+    expect(afterLegend.replace(/<\/div>/g, "").replace(/<p\s*$/, "").trim(), "only the closing wrappers lie between the legend and the note").toBe("");
+  });
+});
 
 // --- the empty case first -----------------------------------------------------------------------------------------------------------
 

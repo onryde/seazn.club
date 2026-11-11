@@ -20,6 +20,13 @@ export interface PhoneDisclosureProps {
    *  sections that should fold once some event fires (2026-09-14, fixture
    *  console lineup/roster: collapse once the match starts, every sport). */
   desktopCollapsible?: boolean;
+  /** The phone-only variant's own "start open" (default false: below `md` a fold is closed until tapped, spec §3.10). `startOpen` above
+   *  is not it - that prop belongs to `desktopCollapsible` and is ignored without it. True opens the fold on the render after hydration
+   *  (the server and the hydration render stay closed), at any width; at `md` and up the body is always shown and the toggle hidden, so
+   *  only a phone sees the difference. Seeded once per change of the prop, never on a plain re-render: a reader's tap is theirs, and
+   *  the prop going false does not fold what they have open (Sponsors hub, Packages: an empty price list opens its tier legend, and
+   *  the first package created leaves it open). Ignored when `desktopCollapsible` is set. */
+  phoneStartOpen?: boolean;
 }
 
 /** Phone-only disclosure by default (spec
@@ -83,6 +90,7 @@ export function PhoneDisclosure({
   children,
   startOpen = true,
   desktopCollapsible = false,
+  phoneStartOpen = false,
 }: PhoneDisclosureProps) {
   // Always starts closed on the server AND the hydration render — matches
   // spec 2026-09-02-scorepad-v3-phone-composition §3.10's phone-narrow
@@ -106,8 +114,8 @@ export function PhoneDisclosure({
   const hydrated = useHydrated();
   const wide = useMediaQuery("(min-width: 768px)");
   const [open, setOpen] = useState(false);
-  const seed = `${desktopCollapsible}|${startOpen}|${hydrated}`;
-  const [seededFor, setSeededFor] = useState(() => `${desktopCollapsible}|${startOpen}|false`);
+  const seed = `${desktopCollapsible}|${startOpen}|${hydrated}|${phoneStartOpen}`;
+  const [seededFor, setSeededFor] = useState(() => `${desktopCollapsible}|${startOpen}|false|${phoneStartOpen}`);
   if (seededFor !== seed) {
     setSeededFor(seed);
     // `startOpen` isn't just the mount-time default for `desktopCollapsible`
@@ -122,6 +130,9 @@ export function PhoneDisclosure({
     if (desktopCollapsible) {
       if (!startOpen) setOpen(false);
       else if (hydrated && wide) setOpen(true);
+    } else if (phoneStartOpen && hydrated) {
+      // The phone-only variant: open once hydrated, at any width (the toggle is `md:hidden`, the body is not hidden at `md`).
+      setOpen(true);
     }
   }
   // Review fix: the activity toggle already carries `aria-controls`; this

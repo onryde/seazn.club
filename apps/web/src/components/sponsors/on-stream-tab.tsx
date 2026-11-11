@@ -220,12 +220,20 @@ export function OnStreamTab(props: OnStreamTabProps) {
             data-testid="on-stream-switch"
             disabled={busy}
             onClick={() => saveSettings({ enabled: !on, frequency })}
-            className={`relative inline-flex h-11 w-14 shrink-0 items-center rounded-full transition disabled:opacity-60 ${on ? "bg-purple-600" : "bg-slate-300"}`}
+            className="inline-flex h-11 w-14 shrink-0 items-center justify-center rounded-lg transition disabled:opacity-60"
           >
+            {/* The button is only the 44px tap target and paints nothing; the slim switch (a 24 x 44 track, a 20px knob) is drawn
+                inside it. The track used to BE the button (44px tall), which read as a fat pill. */}
             <span
               aria-hidden="true"
-              className={`absolute top-1/2 h-6 w-6 -translate-y-1/2 rounded-full bg-white shadow transition-all ${on ? "left-[calc(100%-1.75rem)]" : "left-1"}`}
-            />
+              data-testid="on-stream-switch-track"
+              className={`relative block h-6 w-11 rounded-full transition-colors motion-reduce:transition-none ${on ? "bg-purple-600" : "bg-slate-300"}`}
+            >
+              <span
+                data-testid="on-stream-switch-knob"
+                className={`absolute left-0.5 top-0.5 block h-5 w-5 rounded-full bg-white shadow transition-transform motion-reduce:transition-none ${on ? "translate-x-5" : "translate-x-0"}`}
+              />
+            </span>
           </button>
         </div>
         {!on && (

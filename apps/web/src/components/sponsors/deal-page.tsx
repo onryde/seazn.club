@@ -21,7 +21,7 @@ import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { DealChip } from "@/components/sponsors/deal-chip";
 import { PayLinkBanner } from "@/components/sponsors/pay-link-banner";
 import { CARD, SECTION_TITLE, SMALL_BTN } from "@/components/sponsors/sponsor-sheet";
-import { dealPrice } from "@/components/sponsors/sponsor-list";
+import { dealPrice, dealTierWord } from "@/components/sponsors/sponsor-list";
 import { TIER_BADGE, TIER_MSG } from "@/components/sponsors/tier-labels";
 import { CHIP_BASE } from "@/components/ui/status-chip-style";
 import { fmtPublicDate } from "@/lib/format";
@@ -80,6 +80,8 @@ export interface DealPageBodyProps {
   /** The sponsor's current name: it heads the page and names the sponsor in the timeline's sentences. */
   sponsorName: string;
   orgId: string;
+  /** The plan places tiers (somewhere): the header says the deal's tier beside its package, as the sponsor page's Tier row does. */
+  hasTiers: boolean;
   canEdit: boolean;
   /** A write is in flight: every control that would start another is disabled. */
   busy: boolean;
@@ -102,7 +104,7 @@ export interface DealPageBodyProps {
 }
 
 export function DealPageBody(props: DealPageBodyProps) {
-  const { deal, sponsorName, orgId, canEdit, busy, tz, orgTz, competitions, createdBy, competitionFinished, payLink, error, notice, onAction } = props;
+  const { deal, sponsorName, orgId, hasTiers, canEdit, busy, tz, orgTz, competitions, createdBy, competitionFinished, payLink, error, notice, onAction } = props;
   const msg = useMsg();
   const locale = useLocaleOrDefault();
 
@@ -289,7 +291,7 @@ export function DealPageBody(props: DealPageBodyProps) {
         </span>
         <div className="min-w-0 flex-1">
           <h2 id={nameId} data-testid="deal-page-name" className="min-w-0 break-words text-base font-semibold text-slate-900">
-            {`${deal.package_name} · ${price}`}
+            {[deal.package_name, dealTierWord(deal, hasTiers, msg), price].filter((part) => part !== null).join(" · ")}
           </h2>
           <p data-testid="deal-page-sponsor" className="min-w-0 break-words text-xs text-slate-500">
             {sponsorName}

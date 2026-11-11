@@ -14,7 +14,7 @@ import {
 import type { SettingsTab } from "../src/app/o/[orgSlug]/settings/_components/settings-nav";
 // The hub's URL builder is dependency-free (it imports only the console route builders), so unlike settings-nav it IS
 // importable as a value from this process.
-import { dealHref, sponsorHref, sponsorsHref, type SponsorsTab } from "../src/lib/sponsors-hub";
+import { dealHref, sponsorEditHref, sponsorHref, sponsorsHref, type SponsorsTab } from "../src/lib/sponsors-hub";
 
 /**
  * Support for the W2 settings walkthrough specs.
@@ -57,17 +57,27 @@ export function sponsorUrl(slug: string, sponsorId: string): string {
   return sponsorHref(slug, sponsorId);
 }
 
+/**
+ * `/o/{slug}/sponsors?tab=sponsors&sponsor={id}&edit=1` - a sponsor's own page with its Details editor already open: where a row's pencil
+ * goes (owner, 2026-11-11: the pencil is the one way in from the list; the name is plain text).
+ */
+export function sponsorEditUrl(slug: string, sponsorId: string): string {
+  return sponsorEditHref(slug, sponsorId);
+}
+
 /** `/o/{slug}/sponsors?tab=sponsors&sponsor={id}&deal={id}` - one deal's own page, on top of its sponsor (sponsor deals PR 2, Task 17). */
 export function dealUrl(slug: string, sponsorId: string, dealId: string): string {
   return dealHref(slug, sponsorId, dealId);
 }
 
 /**
- * A sponsor's row on the Sponsors tab, with its edit / move / delete controls reachable. Below `md` those controls (and the
- * clicks count) are folded behind the row's own ⋯ (`sponsor-row-more`, sponsor deals Task 14); from 768 up the ⋯ is gone and they
- * are inline. So this opens the fold ONLY where the toggle is on screen - gated on the toggle being visible, never on a width
- * literal (a width test would be wrong at 768/834 and would click a hidden control). Retried until the island has hydrated: a
- * click on the server-rendered ⋯ before React attaches does nothing, and `aria-expanded` is what says it took.
+ * A sponsor's row on the Sponsors tab, with its move / delete controls reachable. Below `md` those controls (and the clicks count)
+ * are folded behind the row's own ⋯ (`sponsor-row-more`, sponsor deals Task 14); from 768 up the ⋯ is gone and they are inline.
+ * The edit pencil is NOT among them: it is on the row at every width, beside the ⋯ (owner, 2026-11-11), so reaching it needs no fold.
+ *
+ * This opens the fold only where the toggle is on screen. It gates on the toggle being visible, never on a width literal: a width
+ * test would be wrong at 768/834 and would click a hidden control. It retries until the island has hydrated, because a click on the
+ * server-rendered ⋯ before React attaches does nothing and `aria-expanded` is what says it took.
  * Returns the row; `name` must pick out exactly one.
  */
 export async function openSponsorRowTools(page: Page, name: string): Promise<Locator> {

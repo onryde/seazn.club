@@ -4,8 +4,8 @@
 // this repo, so each hub inlines its own `<nav>`), with one difference: every tab is a 44px-tall target
 // (`min-h-11`), because this bar is the way around the page on a phone. It scrolls inside its own `.scroll-x`
 // container at 320 (four tabs do not fit one row there) and never widens the page - and `ScrollActiveTabIntoView` (the
-// Settings and Directory precedent) brings the current tab into view on arrival, since at 320 the fourth tab ("Packages
-// and orders") otherwise lands off-screen and the reader cannot see which one is selected.
+// Settings and Directory precedent) brings the current tab into view on arrival, since at 320 the fourth tab ("On stream";
+// "Packages" is the third) otherwise lands off-screen and the reader cannot see which one is selected.
 import Link from "@/components/ui/console-link";
 import { ScrollActiveTabIntoView } from "@/components/ui/scroll-active-tab-into-view";
 import type { LucideIcon } from "lucide-react";

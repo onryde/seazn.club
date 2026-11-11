@@ -12,9 +12,11 @@ import {
   legacySettingsSponsorsTarget,
   onStreamHref,
   resolveDealParam,
+  resolveEditParam,
   resolveOnStreamScope,
   resolveSponsorParam,
   resolveSponsorsTab,
+  sponsorEditHref,
   sponsorHref,
   sponsorsHref,
   sponsorsTabsFor,
@@ -22,8 +24,15 @@ import {
 import { routes } from "@/lib/routes";
 
 describe("SPONSORS_TABS", () => {
-  it("is the four tabs the spec names, Overview first (the default), in the order they are laid out", () => {
-    expect(SPONSORS_TABS).toEqual(["overview", "sponsors", "on_stream", "packages"]);
+  // Owner, 2026-11-11: "move the package tab next to sponsors then stream" - Packages (the price list a deal is made from) sits right
+  // after Sponsors, and On stream is last. Typed from that ruling, not read back from the declaration.
+  it("is the four tabs in the owner's order: Overview (the default), Sponsors, Packages, On stream", () => {
+    expect(SPONSORS_TABS).toEqual(["overview", "sponsors", "packages", "on_stream"]);
+  });
+
+  it("Packages is the tab right after Sponsors, and On stream is last (the order itself, not just the set)", () => {
+    expect(SPONSORS_TABS.indexOf("packages")).toBe(SPONSORS_TABS.indexOf("sponsors") + 1);
+    expect(SPONSORS_TABS.at(-1)).toBe("on_stream");
   });
 
   it("the editor-only set is a strict, non-empty subset of the declared tabs (nothing invented, nothing vacuous)", () => {
@@ -245,5 +254,33 @@ describe("sponsorHref / dealHref (the sponsor's page and a deal on it are ?spons
     expect(resolveSponsorsTab(url.searchParams.get("tab") ?? undefined, true)).toBe("sponsors");
     expect(resolveSponsorParam(url.searchParams.get("sponsor") ?? undefined, [{ id: SPONSOR_A }])).toBe(SPONSOR_A);
     expect(resolveDealParam(url.searchParams.get("deal") ?? undefined, [{ id: SPONSOR_B }])).toBe(SPONSOR_B);
+  });
+});
+
+describe("sponsorEditHref / resolveEditParam (the list's pencil: the sponsor's page with its editor open)", () => {
+  it("the pencil's URL is the sponsor's own URL plus &edit=1, and the page reads back exactly that (the round trip)", () => {
+    expect(sponsorEditHref("acme", SPONSOR_A)).toBe(`${sponsorHref("acme", SPONSOR_A)}&edit=1`);
+    const url = new URL(sponsorEditHref("acme", SPONSOR_A), "https://x.test");
+    expect(url.searchParams.get("sponsor")).toBe(SPONSOR_A);
+    expect(resolveEditParam(url.searchParams.get("edit") ?? undefined)).toBe(true);
+    // the viewer's link is the plain one, which opens nothing
+    expect(resolveEditParam(new URL(sponsorHref("acme", SPONSOR_A), "https://x.test").searchParams.get("edit") ?? undefined)).toBe(false);
+  });
+
+  it("only the exact value 1 opens the editor: absent, empty, 0, true, yes, a repeated value and an inherited key do not (7 checked)", () => {
+    const cases: [string | string[] | undefined, boolean][] = [
+      ["1", true], [undefined, false], ["", false], ["0", false], ["true", false], ["yes", false], [["1", "1"], false],
+    ];
+    let checked = 0;
+    for (const [raw, want] of cases) {
+      expect(resolveEditParam(raw), JSON.stringify(raw)).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(7);
+  });
+
+  it("an id with & or = is encoded before the edit flag, so it cannot smuggle ?edit= (the pair with the encoding test above)", () => {
+    expect(sponsorEditHref("acme", "a&edit=1")).toBe("/o/acme/sponsors?tab=sponsors&sponsor=a%26edit%3D1&edit=1");
+    expect(new URL(sponsorHref("acme", "a&edit=1"), "https://x.test").searchParams.get("edit")).toBeNull();
   });
 });

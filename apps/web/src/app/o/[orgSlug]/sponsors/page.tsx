@@ -31,6 +31,7 @@ import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import {
   resolveDealParam,
+  resolveEditParam,
   resolveOnStreamScope,
   resolveSponsorParam,
   resolveSponsorsTab,
@@ -71,6 +72,7 @@ export default async function SponsorsHubPage({
     period?: string | string[];
     sponsor?: string | string[];
     deal?: string | string[];
+    edit?: string | string[];
   }>;
 }) {
   const { orgSlug } = await params;
@@ -79,7 +81,7 @@ export default async function SponsorsHubPage({
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "ui");
 
-  const { tab: rawTab, scope: rawScope, period: rawPeriod, sponsor: rawSponsor, deal: rawDeal } = await searchParams;
+  const { tab: rawTab, scope: rawScope, period: rawPeriod, sponsor: rawSponsor, deal: rawDeal, edit: rawEdit } = await searchParams;
   const tab = resolveSponsorsTab(rawTab, canEdit);
 
   // ORG-LEVEL, so `hasFeatureOnAnyPass` and not `hasFeature` - the Settings tab's own reasoning, unchanged: the
@@ -120,6 +122,8 @@ export default async function SponsorsHubPage({
     // selected sponsor's own deals. Anything else is the list again - never a 404, never a crash.
     const sponsorId = resolveSponsorParam(rawSponsor, sponsorRows);
     const dealId = sponsorId === null ? null : resolveDealParam(rawDeal, deals.filter((d) => d.sponsor_id === sponsorId));
+    // `?edit=1` (the list's pencil) opens the selected sponsor's Details editor - an editor's, so a viewer's link to it is the read-only page.
+    const editSponsor = sponsorId !== null && canEdit && resolveEditParam(rawEdit);
     // The deal page's two server reads (Task 17), only while a deal is selected: who created it, and - for an open deal that ends with
     // its competition (no end date of its own) - whether the desk says that competition has finished. The timeline words both.
     const selectedDeal = dealId === null ? null : (deals.find((d) => d.id === dealId) ?? null);
@@ -155,7 +159,7 @@ export default async function SponsorsHubPage({
           hub={{
             orgSlug, orgTimezone: active.timezone, deals, packages, tiersOrgWide: tiers.orgWide, tiersCompetitionIds: tiers.competitionIds,
             hasMonetize, monetizeOrgWide: monetize.orgWide, monetizeCompetitionIds: monetize.competitionIds,
-            chargesEnabled, finishedCompetitionIds, sponsorId, dealId, dealCreatedByName, dealCompetitionFinished, reportLinks, reportDefaults,
+            chargesEnabled, finishedCompetitionIds, sponsorId, editSponsor, dealId, dealCreatedByName, dealCompetitionFinished, reportLinks, reportDefaults,
           }}
         />
       </HubPanel>
