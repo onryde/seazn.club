@@ -166,6 +166,30 @@ describe("the figures and the list", () => {
     expect(checked).toBe(4);
   });
 
+  it("every date reads day-month-year: en '2 Jun 2026' (never the US 'Jun 2, 2026') on a showing, the period and 'as of'; es, fr and nl as before (4 counted)", async () => {
+    // Typed from each language's own way of writing a date (the owner's 2026-09-16 day-month rule for public pages; the
+    // invoice's date reads the same way), never from the view. The fixture's days: a showing on 2 June, the period 1-30 June,
+    // as of 1 July.
+    const WANT = {
+      en: { showing: "2 Jun 2026", from: "1 Jun 2026", to: "30 Jun 2026", asOf: "1 Jul 2026" },
+      es: { showing: "2 jun 2026", from: "1 jun 2026", to: "30 jun 2026", asOf: "1 jul 2026" },
+      fr: { showing: "2 juin 2026", from: "1 juin 2026", to: "30 juin 2026", asOf: "1 juil. 2026" },
+      nl: { showing: "2 jun 2026", from: "1 jun 2026", to: "30 jun 2026", asOf: "1 jul 2026" },
+    } as const;
+    let checked = 0;
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const ui = await getDictionary(locale, "ui");
+      const want = WANT[locale];
+      const html = renderToStaticMarkup(<SponsorReportView report={report()} ui={ui} locale={locale} />);
+      expect(html.match(/<time dateTime="2026-06-02T10:00:00.000Z">([^<]*)<\/time>/)?.[1], `${locale}: the showing's day`).toBe(want.showing);
+      expect(html, `${locale}: the period`).toContain(esc(t(ui, "sponsorReport.period", { from: want.from, to: want.to })));
+      expect(html, `${locale}: as of`).toContain(esc(t(ui, "sponsorReport.asOf", { date: want.asOf })));
+      if (locale === "en") for (const us of ["Jun 2, 2026", "Jun 1, 2026", "Jun 30, 2026", "Jul 1, 2026"]) expect(html, `never the US ${us}`).not.toContain(us);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
   it("says it lists the latest N of M only when it lists fewer than were shown", () => {
     const latest = (shown: number, total: number) => esc(t(en, "sponsorReport.showings.latest", { shown, total }));
     expect(draw(report({ timesShown: 50, showings: [showing(), showing()] }))).toContain(latest(2, 50));

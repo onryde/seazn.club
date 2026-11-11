@@ -8201,7 +8201,7 @@
   "sponsors.error.invoiceSendLimit": "Vous avez envoyé beaucoup de factures aujourd'hui. Réessayez demain ou contactez le support.",
   "sponsors.error.disputeParked": "Une contestation de paiement en cours retire ce sponsor de vos pages publiques. Il revient de lui-même si la contestation est gagnée.",
   "sponsors.error.invoiceSavedNoLink": "L'accord est enregistré, mais Stripe n'a pas répondu : aucune facture n'a encore été envoyée. Ouvrez l'accord et appuyez sur Envoyer la facture pour réessayer.",
-  "sponsors.error.invoiceSavedResend": "L'accord est enregistré, mais Stripe n'a pas répondu : aucune facture n'a encore été envoyée. Appuyez sur Renvoyer la facture sur l'accord pour réessayer.",
+  "sponsors.error.invoiceSavedResend": "L'accord est enregistré, mais Stripe n'a pas répondu : aucune facture n'a encore été envoyée. Appuyez sur Envoyer la facture sur l'accord pour réessayer.",
   "sponsors.error.resendStripeUnavailable": "Stripe n'a pas répondu : la facture n'a pas été envoyée. Réessayez dans un instant.",
   "sponsors.error.resendPaidOnline": "Le sponsor a déjà payé cette facture en ligne : elle n'a donc pas été renvoyée. Le paiement est en cours d'enregistrement ; rechargez dans un instant.",
   "sponsors.deal.confirm.end.title": "Terminer cet accord maintenant ?",

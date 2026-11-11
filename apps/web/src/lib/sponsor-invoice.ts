@@ -51,7 +51,7 @@ export function invoicePath(token: string): string {
 /** The invoice's date (`issuedOn`, a `YYYY-MM-DD` day) as the page and the PDF print it, in the document's language. English is
  *  day-month-year, "11 Nov 2026" - never bare `en`'s US "Nov 11, 2026" (the house rule for public dates, `intlLocaleFor`; owner
  *  ruling 2026-09-16, applied to invoices by the PR 3 fix round). Every other locale is Intl's own medium date. The ONE format both
- *  renderers read. */
+ *  renderers read - and the sponsor REPORT's days too (report-view.tsx, final re-review N3), so the two pages a sponsor opens agree. */
 export function invoiceDay(locale: string, day: string): string {
   return fmtIsoDay(intlLocaleFor(locale), day);
 }

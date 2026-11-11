@@ -1424,11 +1424,11 @@ describe("Add deal on a row opens the Add deal sheet for that sponsor; the sheet
     expect(calls.filter((c) => c.method === "GET"), "a refusal can mean a deal moved: re-read both").toHaveLength(2);
   });
 
-  it("an ONLINE Stripe refusal RESOLVES (the deal may be saved, so the sheet must close) and the page says it: Send for a draft, Resend for a deal that is live, 'look at the deals' when the current deal was being ended", async () => {
+  it("an ONLINE Stripe refusal RESOLVES (the deal may be saved, so the sheet must close) and the page says it: its own words for a draft and for a deal that is live (both name Send invoice: nothing went out), 'look at the deals' when the current deal was being ended", async () => {
     answer = (url, method) =>
       method === "POST" ? { status: 502, body: { ok: false, error: { code: "stripe_unavailable", message: "server english" } } } : { status: 200, body: { data: ROWS } };
-    // Expected words from the lifecycle table (a draft is sent, a live/scheduled deal is resent) and
-    // the create's own Stripe calls.
+    // Expected words from the lifecycle table (a draft offers send_invoice; a live/scheduled deal offers resend_invoice, which reads
+    // Send invoice while nothing has gone out - final review m1, re-review N1) and the create's own Stripe calls.
     const CASES: Array<[string, Partial<CreateDealBody>, MessageKey]> = [
       ["on_payment, no end", { go_live: "on_payment" }, "sponsors.error.invoiceSavedNoLink"],
       ["on_approval, no end", { go_live: "on_approval" }, "sponsors.error.invoiceSavedNoLink"],
@@ -1452,7 +1452,7 @@ describe("Add deal on a row opens the Add deal sheet for that sponsor; the sheet
       checked++;
     }
     expect(checked).toBe(CASES.length);
-    // The two sentences differ, or the Send/Resend split above proves nothing.
+    // The two sentences differ, or the key split above proves nothing (add-deal-sheet.test.tsx reads the button each one names).
     expect(msg("sponsors.error.invoiceSavedResend")).not.toBe(msg("sponsors.error.invoiceSavedNoLink"));
   });
 

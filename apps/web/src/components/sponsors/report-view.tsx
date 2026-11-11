@@ -13,7 +13,9 @@ import type { CSSProperties } from "react";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { plural, t } from "@/lib/i18n-runtime";
 import { fmtNumber } from "@/lib/format";
-import { fmtIsoDay, fmtOnScreen, type SponsorReport, type SponsorReportShowing } from "@/lib/sponsor-report";
+import { fmtOnScreen, type SponsorReport, type SponsorReportShowing } from "@/lib/sponsor-report";
+// The public day as the invoice prints it: English day-month-year ("2 Jun 2026"), never bare `en`'s US order (final re-review N3).
+import { invoiceDay } from "@/lib/sponsor-invoice";
 import { PrintButton } from "@/components/print-button";
 import { breakMsgKey } from "@/components/sponsors/break-labels";
 
@@ -106,7 +108,7 @@ function Showing({ s, ui, locale }: { s: SponsorReportShowing; ui: Dict; locale:
             </span>
           </p>
           <p className="mt-0.5 text-xs text-ink-muted">
-            <time dateTime={s.startedAt}>{fmtIsoDay(locale, s.startedAt.slice(0, 10))}</time>
+            <time dateTime={s.startedAt}>{invoiceDay(locale, s.startedAt.slice(0, 10))}</time>
           </p>
         </figcaption>
       </figure>
@@ -117,7 +119,7 @@ function Showing({ s, ui, locale }: { s: SponsorReportShowing; ui: Dict; locale:
 export function SponsorReportView({ report, ui, locale }: { report: SponsorReport; ui: Dict; locale: Locale }) {
   const { sponsor } = report;
   const scope = report.competition ?? t(ui, "sponsorReport.scope.all");
-  const period = t(ui, "sponsorReport.period", { from: fmtIsoDay(locale, report.period.from), to: fmtIsoDay(locale, report.period.to) });
+  const period = t(ui, "sponsorReport.period", { from: invoiceDay(locale, report.period.from), to: invoiceDay(locale, report.period.to) });
   const latest = report.timesShown > report.showings.length;
   return (
     <main
@@ -206,7 +208,7 @@ export function SponsorReportView({ report, ui, locale }: { report: SponsorRepor
           <div className="min-w-0 max-w-prose space-y-1">
             <p>{t(ui, "sponsorReport.footnote")}</p>
             <p>{t(ui, "sponsorReport.viewersNote")}</p>
-            <p>{t(ui, "sponsorReport.asOf", { date: fmtIsoDay(locale, report.asOf.slice(0, 10)) })}</p>
+            <p>{t(ui, "sponsorReport.asOf", { date: invoiceDay(locale, report.asOf.slice(0, 10)) })}</p>
           </div>
           <div className="shrink-0">
             <PrintButton label={t(ui, "sponsorReport.print")} />

@@ -8201,7 +8201,7 @@
   "sponsors.error.invoiceSendLimit": "You've sent a lot of invoices today. Try again tomorrow, or contact support.",
   "sponsors.error.disputeParked": "An open payment dispute is keeping this sponsor off your public pages. It comes back by itself if the dispute is won.",
   "sponsors.error.invoiceSavedNoLink": "The deal is saved, but Stripe didn't answer, so no invoice has gone out yet. Open the deal and press Send invoice to try again.",
-  "sponsors.error.invoiceSavedResend": "The deal is saved, but Stripe didn't answer, so no invoice has gone out yet. Press Resend invoice on the deal to try again.",
+  "sponsors.error.invoiceSavedResend": "The deal is saved, but Stripe didn't answer, so no invoice has gone out yet. Press Send invoice on the deal to try again.",
   "sponsors.error.resendStripeUnavailable": "Stripe didn't answer, so the invoice wasn't sent. Try again in a moment.",
   "sponsors.error.resendPaidOnline": "The sponsor has already paid this invoice online, so it wasn't sent again. The payment is being recorded; reload in a moment.",
   "sponsors.deal.confirm.end.title": "End this deal now?",
