@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "mode": "regression",
+  "exit": 0,
+  "layer": "L1",
+  "runs": [
+    "ci-42992170592-1-l1"
+  ],
+  "plannedNotRun": null,
+  "compared": 207,
+  "skipped": 22,
+  "skippedIds": [
+    "page_playoff_only|football|11-a-side|LIFECYCLE@1280",
+    "page_playoff_only|cricket|t20|LIFECYCLE@1280",
+    "page_playoff_only|boardgame|blitz|LIFECYCLE@1280",
+    "page_playoff_only|carrom|club-29|LIFECYCLE@1280",
+    "page_playoff_only|generic|score|LIFECYCLE@1280",
+    "page_playoff_only|volleyball|beach|LIFECYCLE@1280",
+    "page_playoff_only|badminton|bwf-3x15|LIFECYCLE@1280",
+    "page_playoff_only|tabletennis|bo5|LIFECYCLE@1280",
+    "page_playoff_only|tennis|tour|LIFECYCLE@1280",
+    "page_playoff_only|icehockey|iihf|LIFECYCLE@1280",
+    "page_playoff_only|hockey|fih-outdoor|LIFECYCLE@1280",
+    "stepladder_only|football|11-a-side|LIFECYCLE@1280",
+    "stepladder_only|cricket|t20|LIFECYCLE@1280",
+    "stepladder_only|boardgame|blitz|LIFECYCLE@1280",
+    "stepladder_only|carrom|club-29|LIFECYCLE@1280",
+    "stepladder_only|generic|score|LIFECYCLE@1280",
+    "stepladder_only|volleyball|beach|LIFECYCLE@1280",
+    "stepladder_only|badminton|bwf-3x15|LIFECYCLE@1280",
+    "stepladder_only|tabletennis|bo5|LIFECYCLE@1280",
+    "stepladder_only|tennis|tour|LIFECYCLE@1280",
+    "stepladder_only|icehockey|iihf|LIFECYCLE@1280",
+    "stepladder_only|hockey|fih-outdoor|LIFECYCLE@1280"
+  ],
+  "unexpectedSkips": [],
+  "sample": false,
+  "faults": [],
+  "differing": [],
+  "missing": [],
+  "regressed": [],
+  "absent": []
+}
