@@ -226,16 +226,19 @@ describe.skipIf(!HAS_DB)("W4 B5a T11: both finalists out leaves the title vacant
     expect((await fixtureRow(final.id)).status).toBe("scheduled");
   });
 
-  it("X-CH-3 a reversal after the stage SEEDED another is refused by name (VACANT_TITLE_ALREADY_SEEDED)", async () => {
+  it("X-CH-3 a reversal after a stage that TAKES this stage's ranks was seeded is refused by name (VACANT_TITLE_ALREADY_SEEDED)", async () => {
     const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 2 });
     const final = await finalOf(s.stageId);
     const [a, b] = [final.home_entrant_id!, final.away_entrant_id!];
     await bothOut(s, a, b);
     await completeStage(s.auth, s.stageId);
-    // A later stage whose draw this stage's ranks filled: a confirmed seed proposal on it.
+    // A later stage whose draw this stage's ranks filled (it takes rankRange 1-2 of it): a confirmed seed proposal on it. A stage with no
+    // such take is no dependent, so an unrelated one would not refuse.
     const [next] = await sql<{ id: string }[]>`
-      insert into stages (division_id, org_id, seq, kind, name, status, config)
-      select division_id, org_id, 2, 'knockout', 'Next', 'pending', '{}'::jsonb from stages where id = ${s.stageId} returning id`;
+      insert into stages (division_id, org_id, seq, kind, name, status, config, progression)
+      select division_id, org_id, 2, 'knockout', 'Next', 'pending', '{}'::jsonb,
+             ${sql.json({ timing: "setup", placement: "rank_order", sources: [{ stage: { stageId: s.stageId }, take: [{ kind: "rankRange", from: 1, to: 2 }] }] } as never)}
+        from stages where id = ${s.stageId} returning id`;
     await sql`insert into stage_seed_proposals (org_id, stage_id, computed, status, confirmed_at)
               select org_id, ${next!.id}, '{}'::jsonb, 'confirmed', now() from stages where id = ${s.stageId}`;
     await expect(patchEntrant(s.auth, a, { status: "confirmed" })).rejects.toMatchObject({ status: 409, code: "VACANT_TITLE_ALREADY_SEEDED" });
