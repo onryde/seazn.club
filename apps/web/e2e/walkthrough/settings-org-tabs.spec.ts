@@ -79,11 +79,9 @@ function ui(key: string, vars: Record<string, string | number> = {}): string {
 // control's own text (a <select>'s option labels; an <input>'s value once it is
 // prefilled, as the sponsor edit form's always is). A locator written that way
 // works on the empty add form and silently stops matching on the edit form.
-// Fields are located as "the input inside the label that says X" instead, and
-// the two SponsorForm selects by an option VALUE — which also disambiguates
-// them from `sponsor-packages.tsx`, whose Tier and Competition labels come from
-// the SAME two dictionary keys and which renders for any org with
-// `sponsors.monetize`.
+// Fields are located as "the input inside the label that says X" instead. The
+// tier and scope selects the sponsor form once carried are looked for by an
+// option VALUE further down, only to be found ABSENT (a deal sets them now).
 const L = {
   sponsorName: ui("settings.org.sponsors.name"),
   sponsorLink: ui("settings.org.sponsors.link"),
@@ -456,7 +454,7 @@ test("news tab: compose a draft, publish it, archive it, then delete only it", a
 // SPONSORS (CRUD half)
 // ---------------------------------------------------------------------------
 
-test("Sponsors hub, Sponsors tab: add three, reorder, edit tier and scope, delete only one", async ({ page }) => {
+test("Sponsors hub, Sponsors tab: add three, reorder, edit name and link (the form has no tier or scope), delete only one", async ({ page }) => {
   test.setTimeout(budget(2, 6));
 
   const A = `Alpha Tools ${TAG}`;

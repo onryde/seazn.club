@@ -381,7 +381,8 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
               </p>
             ) : hasTiers ? (
               // The tier and the scope are read-only here and in the editor alike: a deal sets them (owner, 2026-11-11). While a live deal
-              // holds them the note above already says so; otherwise this one says what to do to change them.
+              // holds them the note above already says so; otherwise this one says only WHAT sets them (a deal) - it names no button and
+              // no step, so it does not tell the reader how to change them.
               <p data-testid="sponsor-sheet-placement-note" className="mt-3 text-xs text-slate-500">
                 {msg("sponsors.sheet.placementNote")}
               </p>
