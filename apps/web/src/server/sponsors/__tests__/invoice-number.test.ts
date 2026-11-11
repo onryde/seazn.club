@@ -114,9 +114,38 @@ describe.skipIf(!HAS_DB)("allocateInvoiceNumber: one counter per org, in sequenc
     expect([await counter(a), await counter(b)]).toEqual([3, 2]);
   });
 
-  it("10 concurrent allocations for one org answer exactly {1..10}: no number twice, none skipped (the race)", async () => {
+  it("10 concurrent allocations for one org answer exactly {1..10}: no number twice, none skipped (the race, with at least 2 transactions proven open at once)", async () => {
     const o = await bareOrg();
-    const got = await Promise.all(Array.from({ length: 10 }, () => allocate(o)));
+    // The race is real only if transactions OVERLAP: run one after another (a pool of one connection, or a loop), ten allocations
+    // pass even for an allocator that reads the counter and then writes it. So no allocation runs until BARRIER transactions are
+    // open at the same time, each holding its own connection; a run that never gets there fails here by name instead of passing
+    // as a race it never ran. 2 is the least overlap that races, and fits the pool's default of 5 (lib/db.ts DB_POOL_MAX).
+    const BARRIER = 2;
+    let inFlight = 0;
+    let peak = 0;
+    let open!: () => void;
+    const opened = new Promise<void>((resolve) => { open = resolve; });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const neverOpened = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`the barrier never opened: at most ${peak} transaction(s) were open at once, so the allocations ran one after another and raced nothing`)), 5_000);
+    });
+    let got: number[];
+    try {
+      got = await Promise.all(Array.from({ length: 10 }, () => withTenant(o, async (tx) => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        if (inFlight >= BARRIER) open();
+        try {
+          await Promise.race([opened, neverOpened]);
+          return await allocateInvoiceNumber(tx, o);
+        } finally {
+          inFlight--;
+        }
+      })));
+    } finally {
+      clearTimeout(timer);
+    }
+    expect(peak, "transactions open at once (the overlap the race needs)").toBeGreaterThanOrEqual(BARRIER);
     expect(got.length, "allocations made").toBe(10);
     expect([...got].sort((x, y) => x - y)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     expect(await counter(o)).toBe(10);
