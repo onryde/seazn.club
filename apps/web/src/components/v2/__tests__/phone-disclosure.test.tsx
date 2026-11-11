@@ -99,6 +99,6 @@ describe("PhoneDisclosure phoneStartOpen", () => {
       </PhoneDisclosure>,
     );
     expect(h).toMatch(/data-role="phone-disclosure-toggle"[^>]*aria-expanded="false"/);
-    expect(h).toMatch(/<div class="grid flex-1 max-md:hidden" id="[^"]+"><p data-role="body">the legend<\/p><\/div>/);
+    expect(h).toMatch(/<div class="grid min-w-0 flex-1 grid-cols-\[minmax\(0,1fr\)\] max-md:hidden" id="[^"]+"><p data-role="body">the legend<\/p><\/div>/);
   });
 });

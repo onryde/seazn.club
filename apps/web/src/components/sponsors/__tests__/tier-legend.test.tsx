@@ -296,7 +296,7 @@ describe("the legend folds below md: one DOM, the toggle md:hidden, md and up un
     expect(toggle, "named by the show label").toContain(`aria-label="${msg("sponsors.pkg.legend.show")}"`);
     expect(textOf(/<button\b[^>]*data-role="phone-disclosure-toggle"[^>]*>([\s\S]*?)<\/button>/.exec(html)?.[1] ?? "").startsWith("What each tier gets"), "the summary is the heading").toBe(true);
     const controls = /aria-controls="([^"]+)"/.exec(toggle)?.[1];
-    expect(html, "the body it controls is folded below md").toMatch(new RegExp(`<div class="grid flex-1 max-md:hidden" id="${controls}">`));
+    expect(html, "the body it controls is folded below md").toMatch(new RegExp(`<div class="grid min-w-0 flex-1 grid-cols-\\[minmax\\(0,1fr\\)\\] max-md:hidden" id="${controls}">`));
     expect(rowsOf(html), "one DOM: the four rows are in the markup, folded not removed").toHaveLength(4);
   });
 
