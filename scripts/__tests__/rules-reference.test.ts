@@ -55,6 +55,10 @@ const AMENDED_TEXT: Readonly<Record<string, { says: string; by: string }>> = {
     says: "Volleyball retirement (incomplete team) = winner given the sets and points it needed; the retiring side keeps what it won, and both sides take the table points of that credited set score (retiring at two sets all is a 3-2 loss).",
     by: "owner ruling 108 (2026-10-11): retiring at two sets all is the 3-2 loss's point",
   },
+  "X-WD-4": {
+    says: "When both sides of a fixture have withdrawn, the fixture is a double walkover (X-DW-*); a final goes to settle (X-DW-3), except the deciding final, whose title is then vacant (X-CH-3), and a third-place play-off, whose 3rd is then vacant (X-TP-7) (rulings 267 and 274).",
+    by: "rulings 267 and 274: the deciding final goes vacant (X-CH-3) and a third-place play-off's 3rd goes vacant (X-TP-7)",
+  },
   "X-WD-1": {
     says: "When a side withdraws from a held (needs_decision) bracket fixture, the fixture is walked over to the remaining side, reason \"withdrew\", with the sport's retirement credit.",
     by: "W2b ledger I-1 and Task 15 review M-6: the sport's own retirement credit",
