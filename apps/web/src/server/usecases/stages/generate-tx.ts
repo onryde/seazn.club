@@ -420,6 +420,29 @@ export async function generateStageFixturesTx(
     );
   }
 
+  // C38 (ST-G5, matrix row group_group_ko): the guard above only sees "no pairing at all". A POOLED group stage's first
+  // draw can pair every pool but one: 7 entrants snaked into 4 pools leave pool A holding seed 1 alone. A pool's members
+  // are the entrants its fixtures name, so that entrant stood in no pool - no table row, no pool A for `topNPerGroup` to
+  // read - and the stage's completion answered 409 STAGE_COMPLETED_SEEDING_FAILED. The setup path already refuses the same
+  // field (setup-fixtures.ts F2a, "a placed seed with nowhere to land"); this is the plain path's half, with the same name
+  // and numbers, before any fixture is inserted (the pools rows above roll back with it). First draw only: a stage that
+  // already has fixtures is a re-draw after a withdrawal, and judging it again would strand a started board. (No `gen`/pool-count
+  // condition: an empty `gen` was refused above, and a single pool pairs everyone, so neither can reach here with a stranded entrant.)
+  if (stage.kind === "group" && existing.length === 0) {
+    const referenced = new Set<string>();
+    for (const g of gen) for (const side of [g.home, g.away, g.award]) if (typeof side === "string") referenced.add(side);
+    const stranded = entrants.filter((e) => !referenced.has(e.id));
+    if (stranded.length > 0) {
+      const groups = poolCount(stage.config);
+      const required = groups * 2;
+      throw new EngineError(
+        "STAGE_NOT_READY",
+        `not enough entrants to fill ${groups} groups — each group needs at least 2 (have ${entrants.length}, need ${required}); use fewer groups or add entrants`,
+        { stageId, reason: "group_too_few_entrants", groups, entrants: entrants.length, required, stranded: stranded.map((e) => e.id) },
+      );
+    }
+  }
+
   const byKey = new Map<string, string>(); // ext_key → fixture uuid
   for (const f of existing) if (f.ext_key) byKey.set(f.ext_key, f.id);
 

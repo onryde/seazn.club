@@ -14,6 +14,7 @@
 // Delete) on the left, the Match rules / Points / Tie-breaks buttons on the right -
 // and its rows sit under one bar per round (the round's name, "N of M played", and
 // its time span), not under day headings.
+import { tooFewGroupEntrantsText } from "@/lib/group-precondition";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -2827,16 +2828,7 @@ export function generatePreconditionMessage(
       .join(", ");
     return msg(held.length === 1 ? "schedule.error.completeHeldOne" : "schedule.error.completeHeldMany", { matches: named });
   }
-  if (err.extra.reason === "group_too_few_entrants") {
-    const groups = Number(err.extra.groups ?? 1);
-    return groups > 1
-      ? msg("schedule.error.tooFewGroupEntrants", {
-          required: Number(err.extra.required ?? groups * 2),
-          have: Number(err.extra.entrants ?? 0),
-          groups,
-        })
-      : msg("schedule.error.tooFewEntrants");
-  }
+  if (err.extra.reason === "group_too_few_entrants") return tooFewGroupEntrantsText(err.extra, msg);
   // F2a (P7 follow-up): the SEEDED-path analogue — a `.progression`
   // (timing: "setup") group stage whose placed seeds can't fill its
   // configured pools

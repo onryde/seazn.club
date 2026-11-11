@@ -2438,7 +2438,7 @@
   "schedule.notice.completed": "Stage completed.",
   "schedule.notice.stageAdded": "Stage added — {n} fixture(s) generated for the top {topN}.",
   "schedule.notice.stageAddedLater": "Stage added — fixtures will generate when the previous stage completes.",
-  "schedule.error.tooFewGroupEntrants": "Can't generate matches yet — {groups} groups need at least {required} entrants in total (have {have}). Add more entrants or assign them to groups first.",
+  "schedule.error.tooFewGroupEntrants": "Can't generate matches yet — {groups} groups need at least {required} entrants in total, 2 per group (have {have}). Use fewer groups or add entrants.",
   "schedule.error.tooFewEntrants": "Can't generate matches yet — add at least 2 entrants to this stage first.",
   "schedule.error.tooFewSeededQualifiers": "Can't generate matches yet — {groups} groups need at least {required} qualifiers in total (have {have}); {stranded} would never receive a match. Increase the qualifiers or reduce the group count first.",
   "schedule.error.tooFewQualifiers": "Can't generate matches yet — the seeding rules for this stage don't produce enough qualifiers to generate any matches ({stranded} of {qualifiers} would never receive one). Increase the qualifiers in the seeding rules or check the source stage's results first.",

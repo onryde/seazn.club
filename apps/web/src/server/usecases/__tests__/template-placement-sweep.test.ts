@@ -27,6 +27,12 @@
 // the bye semi's loser (G1, knockout half) does not exist. The sweep holds those combos as REFUSED, each asserted to be refused
 // by that rule and judged against its arithmetic (fewer than four entrants). G1's double-elimination half is W6's.
 //
+// A POOLED group stage whose first draw would leave an entrant in a pool of one (groups * 2 > its field) is refused the same
+// way (C38, ST-G5): STAGE_NOT_READY with reason `group_too_few_entrants`, before any fixture is written. Before C38 the n=3
+// two-pool combo drew and placed, then 409'd at completion. The sweep holds those combos as REFUSED BY NAME, derived from the
+// rule (groups * 2 > field), exactly as it holds X-TP-5 above. A combo both rules would refuse is the group's: the group stage
+// is generated first, so its refusal is the one the server raises.
+//
 // Two sports, one per entrant kind the registry DECLARES as a default (a team sport and an individual one - different
 // scoring, different entrant model), each the registry's first that is offered every in-scope template. The placement
 // reads no sport field (schedule/ never reads the module); two sports prove that rather than assume it.
@@ -229,6 +235,18 @@ const takesFirstLosses = (d: StageDraft): boolean => d.progression?.sources.some
 const poolSizes = (n: number, count: number): number[] =>
   Array.from({ length: count }, (_, i) => Math.floor(n / count) + (i < n % count ? 1 : 0));
 
+/** C38 (ST-G5): the first POOLED group stage of `drafts` whose field cannot give each pool two entrants (groups * 2 > field),
+ *  with its pool count (the draft's own `pools.count`, as the product's `poolCount` reads it) and field (`fieldOf`); else null. */
+function groupRefusal(drafts: readonly StageDraft[], n: number): { at: number; groups: number; k: number } | null {
+  for (const [at, d] of drafts.entries()) {
+    if (d.kind !== "group") continue;
+    const groups = Number((d.config.pools as { count?: unknown } | undefined)?.count ?? 1);
+    const k = fieldOf(drafts, at, n);
+    if (groups > 1 && groups * 2 > k) return { at, groups, k };
+  }
+  return null;
+}
+
 // ─── The rig ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 interface Row extends ByeLineRow {
@@ -313,6 +331,8 @@ describe.skipIf(!HAS_DB)("every in-scope format template is generated as the eng
   let enumerated = 0;
   /** Combos Generate refuses by X-TP-5 (a third place under four entrants), with the field the knockout stage was drawn at. */
   const refusedThird: Array<{ label: string; entrants: number }> = [];
+  /** C38 (ST-G5): combos whose first pooled group draw strands an entrant (groups * 2 > field), refused by name. */
+  const refusedGroups: Array<{ label: string; entrants: number; required: number }> = [];
   /** W4 T8: the first-loss plates the sweep met with no day-one lines (one per ko_plate combo that reached its stage loop). */
   let platesWithoutLines = 0;
 
@@ -332,6 +352,29 @@ describe.skipIf(!HAS_DB)("every in-scope format template is generated as the eng
         server = (e as { code?: string }).code ?? `(no code) ${(e as Error).message}`;
       }
       gated.push({ label, gate: gate.code, server });
+      return;
+    }
+    // C38 (ST-G5): a pooled group stage whose field cannot give every pool two entrants is refused at Generate. Judged BEFORE
+    // X-TP-5 because the server raises it first: stages generate in order and the group stage precedes the knockout it feeds
+    // (a group_ko third=true n=3 combo is refused by the group draw, never reaching the knockout's third-place check).
+    const groupRefusedAt = groupRefusal(drafts, n);
+    if (groupRefusedAt !== null) {
+      let refusal: unknown = null;
+      for (const s of stages) {
+        try {
+          await generateStageFixtures(auth, s.id);
+        } catch (e) {
+          refusal = e;
+          break;
+        }
+      }
+      // The usecase throws the engine's own EngineError, whose payload is `data` (the HTTP layer maps it to `extra`).
+      const named = refusal as { code?: unknown; data?: { reason?: unknown; entrants?: unknown } };
+      expect(
+        [named.code, named.data?.reason, named.data?.entrants],
+        `${label}: Generate refuses ${groupRefusedAt.groups} groups at ${groupRefusedAt.k} entrants by name`,
+      ).toEqual(["STAGE_NOT_READY", "group_too_few_entrants", groupRefusedAt.k]);
+      refusedGroups.push({ label, entrants: groupRefusedAt.k, required: groupRefusedAt.groups * 2 });
       return;
     }
     // X-TP-5 (engine 5.0.0): a third-place match needs two real semi-finals. The field each knockout stage is drawn at is the
@@ -437,11 +480,11 @@ describe.skipIf(!HAS_DB)("every in-scope format template is generated as the eng
         const sum = (f: (c: Checked) => number) => cs.reduce((s, c) => s + f(c), 0);
         return `${k}: combos=${cs.length} rows=${sum((c) => c.rows)} placed=${sum((c) => c.placed)} off=${sum((c) => c.off)} fated=${sum((c) => c.fated)}`;
       });
-    console.info(`placement sweep: ${checked.length} combos checked + ${gated.length} gated = ${enumerated} enumerated\n  ${by((c) => c.template).join("\n  ")}`);
+    console.info(`placement sweep: ${checked.length} combos checked + ${gated.length} gated + ${refusedThird.length} refused (third place) + ${refusedGroups.length} refused (groups) = ${enumerated} enumerated\n  ${by((c) => c.template).join("\n  ")}`);
     if (problems.length > 0) console.info(`placement sweep problems (${problems.length}):\n  ${problems.join("\n  ")}`);
 
     // Anti-vacuity: every combo asked ends as a checked placement or a counted refusal, and there were some of each.
-    expect(checked.length + gated.length + refusedThird.length, "every enumerated combo was checked, refused by the size gate or refused by X-TP-5").toBe(enumerated);
+    expect(checked.length + gated.length + refusedThird.length + refusedGroups.length, "every enumerated combo was checked, refused by the size gate, refused by X-TP-5 or refused by the group draw (C38)").toBe(enumerated);
     const expectedCombos = IN_SCOPE.reduce((sum, t) => sum + SPORTS.length * FIELDS.length * (drawsKnockout(t) ? 2 : 1), 0);
     expect(enumerated, "the combos enumerated are every (template, sport, field, third place) the declarations name").toBe(expectedCombos);
     expect(checked.length, "combos checked").toBeGreaterThan(0);
@@ -489,7 +532,7 @@ describe.skipIf(!HAS_DB)("every in-scope format template is generated as the eng
       IN_SCOPE.flatMap((t) =>
         FIELDS.flatMap((n) => {
           const drafts = draftsFor(t, n, true);
-          return drafts.some((d, at) => d.kind === "knockout" && !takesFirstLosses(d) && fieldOf(drafts, at, n) < 4) && stageGraphSizeGate(drafts, n) === null
+          return drafts.some((d, at) => d.kind === "knockout" && !takesFirstLosses(d) && fieldOf(drafts, at, n) < 4) && stageGraphSizeGate(drafts, n) === null && groupRefusal(drafts, n) === null
             ? [`${t} ${s.key} n=${n} q=${topNFor(t, n)} third=true`]
             : [];
         }),
@@ -498,6 +541,21 @@ describe.skipIf(!HAS_DB)("every in-scope format template is generated as the eng
     expect(expectedRefused.length, "anti-vacuity: the rule names refused combos").toBeGreaterThan(0);
     expect(refusedThird.map((r) => r.label).sort(), "the combos Generate refuses by X-TP-5").toEqual(expectedRefused);
     for (const r of refusedThird) expect(r.entrants, `${r.label}: refused under four entrants`).toBeLessThan(4);
+    // C38 (ST-G5): the combos whose first pooled group draw strands an entrant are REFUSED by name. Derived from the rule
+    // (groups * 2 > field) over every (template, sport, field, third place), minus the size gate's: none more, none fewer.
+    const expectedGroupRefused = SPORTS.flatMap((s) =>
+      IN_SCOPE.flatMap((t) =>
+        FIELDS.flatMap((n) =>
+          (drawsKnockout(t) ? [false, true] : [false]).flatMap((third) => {
+            const drafts = draftsFor(t, n, third);
+            return stageGraphSizeGate(drafts, n) === null && groupRefusal(drafts, n) !== null ? [`${t} ${s.key} n=${n} q=${topNFor(t, n)} third=${third}`] : [];
+          }),
+        ),
+      ),
+    ).sort();
+    expect(expectedGroupRefused.length, "anti-vacuity: the rule names group-refused combos").toBeGreaterThan(0);
+    expect(refusedGroups.map((r) => r.label).sort(), "the combos Generate refuses by the group draw (C38)").toEqual(expectedGroupRefused);
+    for (const r of refusedGroups) expect(r.entrants, `${r.label}: refused with fewer entrants than 2 per group`).toBeLessThan(r.required);
     // Nothing else went wrong.
     expect(problems, "anything outside the refused combos is a placement or generation fault").toEqual([]);
   });
