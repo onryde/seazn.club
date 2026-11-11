@@ -20,6 +20,11 @@ export interface PhoneDisclosureProps {
    *  sections that should fold once some event fires (2026-09-14, fixture
    *  console lineup/roster: collapse once the match starts, every sport). */
   desktopCollapsible?: boolean;
+  /** Extra classes on the root (e.g. `max-md:hidden` to park an inactive card
+   *  behind a phone-only switch — one DOM, never a second tree). */
+  className?: string;
+  /** `data-testid` on the root. */
+  testId?: string;
 }
 
 /** Phone-only disclosure by default (spec
@@ -83,6 +88,8 @@ export function PhoneDisclosure({
   children,
   startOpen = true,
   desktopCollapsible = false,
+  className,
+  testId,
 }: PhoneDisclosureProps) {
   // Always starts closed on the server AND the hydration render — matches
   // spec 2026-09-02-scorepad-v3-phone-composition §3.10's phone-narrow
@@ -132,7 +139,12 @@ export function PhoneDisclosure({
   // page).
   const bodyId = useId();
   return (
-    <div data-role="phone-disclosure" data-open={open} className="flex flex-col min-w-0">
+    <div
+      data-role="phone-disclosure"
+      data-open={open}
+      data-testid={testId}
+      className={`flex flex-col min-w-0${className ? ` ${className}` : ""}`}
+    >
       <button
         type="button"
         data-role="phone-disclosure-toggle"

@@ -26,8 +26,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { builtinModules } from "@seazn/engine/sports";
 import { makeEnvelope } from "@seazn/engine/testkit";
 import type { AnySportModule } from "@seazn/engine/sport";
+import { lineupMenuItems, primaryControlFor } from "@/components/v2/lineup-actions";
 import {
   LineupEditor,
+  LineupMenuPanel,
   draftFromSavedLineup,
   isPairShaped,
   toPutSlot,
@@ -139,10 +141,26 @@ describe("toPutSlot — role (the regression: save() used to omit this key entir
 });
 
 describe("LineupEditor renders a role control per slot", () => {
-  it("shows a role select for a prefilled draft row", () => {
+  it("a prefilled draft row's ⋯ button is there, and its menu carries the Player/Coach/Staff role control", () => {
     const side: SideInfo = { id: "e1", name: "Home", members: [member(1)], lineup: [] };
     const html = wrap(<LineupEditor {...base} positionGroups={[]} side={side} canEdit={true} />);
-    expect(html).toContain("Role for Player 1");
+    expect(html).toContain("More actions for Player 1");
+    // The menu is closed in a static render, so open it the way the row does:
+    // the editor's own item list, rendered by the editor's own panel.
+    const items = lineupMenuItems({
+      slots: draftFromSavedLineup([
+        { person_id: member(1).person_id, full_name: "Player 1", slot: "starting", position_key: null, order_no: 1, roles: [], role: "coach" },
+      ]),
+      personId: member(1).person_id,
+      roles: [],
+      pairShaped: false,
+      primary: "none",
+    });
+    const panel = wrap(<LineupMenuPanel name="Player 1" items={items} onAction={() => {}} onClose={() => {}} />);
+    for (const label of ["Player", "Coach", "Staff"]) expect(panel).toContain(`>${label}</button>`);
+    // the draft's role is the pressed one
+    expect(panel).toMatch(/aria-checked="true"[^>]*data-testid="lineup-menu-role-coach"/);
+    expect(panel).toMatch(/aria-checked="false"[^>]*data-testid="lineup-menu-role-player"/);
   });
 });
 
@@ -257,7 +275,23 @@ describe("LineupEditor renders a pair-order control only for a pair-shaped entra
     const html = wrap(
       <LineupEditor {...base} positionGroups={volleyballPositions} lineupSize={2} side={side} canEdit={true} />,
     );
-    expect(html).toContain("Pair order for Player 1");
+    // The position select is this sport's ONE inline control, so the pair
+    // order is not a second select on the row — it must still be reachable,
+    // and it is: through the ⋯ menu.
+    expect(html).toContain('data-testid="lineup-position-select"');
+    expect(html).not.toContain('data-testid="lineup-pairorder-select"');
+    const items = lineupMenuItems({
+      slots: draftFromSavedLineup([
+        { person_id: member(1).person_id, full_name: "Player 1", slot: "starting", position_key: null, order_no: 1, roles: [], pair_order: 2 },
+      ]),
+      personId: member(1).person_id,
+      roles: [],
+      pairShaped: isPairShaped(side.kind),
+      primary: primaryControlFor({ positionGroupCount: volleyballPositions.length, pairShaped: true }),
+    });
+    const panel = wrap(<LineupMenuPanel name="Player 1" items={items} onAction={() => {}} onClose={() => {}} />);
+    expect(panel).toContain('data-testid="lineup-menu-pairOrder"');
+    expect(panel).toMatch(/aria-checked="true"[^>]*data-testid="lineup-menu-pairOrder-2"/);
   });
 
   // Finding 1's false positive: a generic TEAM entrant that happens to hold

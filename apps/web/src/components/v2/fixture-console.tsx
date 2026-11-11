@@ -615,6 +615,10 @@ export function FixtureConsole({
   const [matchActionsOpen, setMatchActionsOpen] = useState(false);
   const streamOpen = openPanel === "stream";
   const [detailsOpen, setDetailsOpen] = useState(false);
+  // Phone (<md): the two lineup cards stack, so one team shows at a time behind
+  // a Home/Away switch. Purely a view choice — both editors stay mounted (each
+  // keeps its own unsaved draft); the inactive card is `max-md:hidden`.
+  const [lineupPhoneSide, setLineupPhoneSide] = useState<"home" | "away">("home");
 
   /** Re-read `/state` and the full ledger. `timeoutMs` bounds the pair — see
    *  `OPPORTUNISTIC_RESYNC_MS` for who passes one and why the callers that do
@@ -1769,11 +1773,34 @@ export function FixtureConsole({
           unit and admits no bench has no lineup to pick (R7 D-1). */}
       {home && away && lineupEditorApplies(sport) && (
         <div className="grid gap-4 lg:grid-cols-2">
+          <div
+            role="group"
+            aria-label={msg("lineup.phone.switchAria")}
+            data-testid="lineup-team-switch"
+            className="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1 md:hidden lg:col-span-2"
+          >
+            {(["home", "away"] as const).map((sideKey) => (
+              <button
+                key={sideKey}
+                type="button"
+                aria-pressed={lineupPhoneSide === sideKey}
+                data-testid={`lineup-team-switch-${sideKey}`}
+                onClick={() => setLineupPhoneSide(sideKey)}
+                className={`min-h-11 rounded-lg px-3 text-sm font-semibold ${
+                  lineupPhoneSide === sideKey ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
+                }`}
+              >
+                {msg(sideKey === "home" ? "lineup.phone.home" : "lineup.phone.away")}
+              </button>
+            ))}
+          </div>
           {(["home", "away"] as const).map((sideKey) => {
             const s = sides[sideKey]!;
             return (
               <PhoneDisclosure
                 key={s.id}
+                testId={`lineup-team-${sideKey}`}
+                className={lineupPhoneSide === sideKey ? undefined : "max-md:hidden"}
                 summary={entrantDisplayName(s)}
                 aside={msg("console.phone.lineup")}
                 showLabel={msg("lineup.phone.show")}
