@@ -467,7 +467,6 @@
   "sponsors.open": "Abrir {name}",
   "sponsors.row.tierWhenLive": "{tier} al activarse",
   "sponsors.save": "Guardar",
-  "sponsors.clicks": "{count} clics",
   "sponsors.row.clicks.one": "{count} clic",
   "sponsors.row.clicks.other": "{count} clics",
   "sponsors.row.clicksHint": "Pulsaciones que llevan a su sitio web",

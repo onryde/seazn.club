@@ -467,7 +467,6 @@
   "sponsors.open": "Ouvrir {name}",
   "sponsors.row.tierWhenLive": "{tier} une fois en ligne",
   "sponsors.save": "Enregistrer",
-  "sponsors.clicks": "{count} clics",
   "sponsors.row.clicks.one": "{count} clic",
   "sponsors.row.clicks.other": "{count} clics",
   "sponsors.row.clicksHint": "Appuis qui mènent à leur site web",

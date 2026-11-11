@@ -46,6 +46,7 @@ import {
 } from "@/components/sponsors/sponsor-sheet";
 import { canShowAgain, SponsorList } from "@/components/sponsors/sponsor-list";
 import { SponsorRowMore } from "@/components/sponsors/sponsor-row-more";
+import { DictProvider } from "@/components/i18n/dict-provider";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { expandSponsorTree } from "./_sponsor-tree";
 import { attrOf, classTokens, findAll, findOne, textOfMarkup } from "./_markup";
@@ -360,6 +361,37 @@ describe("Details: a LIVE deal owns the tier, scope and stream; an OPEN deal cha
     expect(textOfMarkup(findOne(markup, "sponsor-sheet-name").outer)).toBe("Ridge Gold Physiotherapy");
     expect(textOfMarkup(findOne(markup, "sponsor-sheet-meta").outer)).toBe("ridgegoldphysio.co.uk · 12 clicks");
     expect(textOfMarkup(findAll(markup, "deal-chip")[0]!.outer), "the head's chip is the row's deal").toBe("Live");
+  });
+
+  it("the head's click count is a counted noun in the reader's own plural form - 4 locales x 0, 1, 2 and 41 (the list row's keys: \"1 clicks\" is the defect)", () => {
+    const byLocale = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as const;
+    // What a locale calls n clicks: the plural FORM its CLDR rule picks, read from that locale's own dictionary file (never from the component).
+    const words = (locale: (typeof LOCALES)[number], n: number) => {
+      const category = new Intl.PluralRules(locale).select(n);
+      if (category !== "one" && category !== "other") throw new Error(`${locale} puts ${n} in "${category}", which the head has no words for`);
+      const raw = (byLocale[locale] as Record<string, string>)[`sponsors.row.clicks.${category}`];
+      if (raw === undefined) throw new Error(`${locale} has no sponsors.row.clicks.${category}`);
+      return raw.replaceAll("{count}", String(n));
+    };
+    let checked = 0;
+    for (const locale of LOCALES) {
+      // The premise that lets the sweep fail: a locale's singular and plural are different words.
+      expect(words(locale, 1), `${locale}: the singular is not the plural`).not.toBe(words(locale, 2));
+      for (const n of [0, 1, 2, 41]) {
+        const markup = renderToStaticMarkup(
+          <DictProvider dict={byLocale[locale] as unknown as Dict} locale={locale}>
+            <SponsorSheetBody {...bodyProps({ sponsor: sponsor({ click_count: n }) })} />
+          </DictProvider>,
+        );
+        const meta = textOfMarkup(findOne(markup, "sponsor-sheet-meta").outer);
+        expect(meta, `${locale} ${n}: the host, then the locale's own words for the count`).toBe(`ridgegoldphysio.co.uk · ${words(locale, n)}`);
+        checked++;
+      }
+    }
+    expect(checked, "4 locales x 4 counts").toBe(16);
+    // And the owner's English, typed: 1 click is singular.
+    const one = renderToStaticMarkup(<SponsorSheetBody {...bodyProps({ sponsor: sponsor({ click_count: 1 }) })} />);
+    expect(textOfMarkup(findOne(one, "sponsor-sheet-meta").outer)).toBe("ridgegoldphysio.co.uk · 1 click");
   });
 });
 

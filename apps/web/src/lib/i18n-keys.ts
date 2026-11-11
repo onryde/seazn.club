@@ -7736,7 +7736,6 @@ export type DictionaryKey =
   | "sponsorReport.throttled.title"
   | "sponsorReport.viewersNote"
   | "sponsors.break.inPlay"
-  | "sponsors.clicks"
   | "sponsors.deal.action.addDeal"
   | "sponsors.deal.action.approve"
   | "sponsors.deal.action.endNow"

@@ -761,6 +761,29 @@ describe("retired packages are hidden unless the Show retired switch is on", () 
     expect(html, "that element exists and holds the visible label").toMatch(new RegExp(`<label[^>]*\\bid="${labelId}"[^>]*>[^<]*Show retired`));
   });
 
+  it("the label's words are part of the tap: its `for` is the switch's id, and that id is on the page exactly once (a browser forwards a label tap to the control with that id)", () => {
+    // Node has no DOM to tap through, so the wiring that makes a label tap toggle the switch is read where it lives: the label's `for`
+    // against the button's `id` - a label pointing at an id nothing carries (or two things carry) toggles nothing, or the wrong thing.
+    let checked = 0;
+    for (const n of [1, 3]) {
+      const retired = Array.from({ length: n }, (_, i) => pkg({ id: `r${i}`, name: `Retired ${i}`, active: false }));
+      const html = listHtml({ initialPackages: [...FIVE, ...retired] });
+      const button = testidTag(html, "package-retired-switch")!;
+      const labelId = /aria-labelledby="([^"]+)"/.exec(button)?.[1];
+      const label = new RegExp(`<label[^>]*\\bid="${labelId}"[^>]*>`).exec(html)?.[0];
+      expect(label, `n=${n}: the label is drawn`).toBeDefined();
+      const forId = /\bfor="([^"]+)"/.exec(label!)?.[1];
+      const buttonId = /\bid="([^"]+)"/.exec(button)?.[1];
+      expect(forId, `n=${n}: the label names a control`).toBeTruthy();
+      expect(buttonId, `n=${n}: the switch carries an id`).toBeTruthy();
+      expect(forId, `n=${n}: the label's for is the switch's id`).toBe(buttonId);
+      // Anchored on whitespace: `data-testid="package-retired-switch"` ends in `id="package-retired-switch"` too.
+      expect(html.match(new RegExp(`\\sid="${buttonId}"`, "g"))?.length, `n=${n}: that id is on the page once`).toBe(1);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(2);
+  });
+
   it("switch on: the retired cards appear, still reading Retired, AFTER the active ones, with their used-by line; off again hides them (counted)", async () => {
     const m = mount({ initialPackages: SEVEN });
     expect(ids(m), "off: the five active, in the server's order").toEqual(FIVE.map((p) => p.id));

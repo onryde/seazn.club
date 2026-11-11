@@ -20,7 +20,7 @@ import { ArrowLeft, Eye, Pencil } from "lucide-react";
 import Link from "@/components/ui/console-link";
 import { Modal } from "@/components/modal";
 import { useMdUp } from "@/components/ui/use-md-up";
-import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { DealChip } from "@/components/sponsors/deal-chip";
 import { PayLinkBanner } from "@/components/sponsors/pay-link-banner";
 import { ShareReport } from "@/components/sponsors/share-report";
@@ -167,6 +167,7 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
     onShowAgain, onAddDeal, onDealAction, error, notice, payLink, reportLinks, reportDefaults,
   } = props;
   const msg = useMsg();
+  const plural = useMsgPlural();
   const locale = useLocaleOrDefault();
 
   const { current, past } = sponsorDealGroups(deals, sponsor.id);
@@ -287,7 +288,7 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
             {sponsor.name}
           </h2>
           <p data-testid="sponsor-sheet-meta" className="min-w-0 truncate text-xs text-slate-500">
-            {[url ? hostOf(url) : null, msg("sponsors.clicks", { count: sponsor.click_count })].filter(Boolean).join(" · ")}
+            {[url ? hostOf(url) : null, plural("sponsors.row.clicks", sponsor.click_count)].filter(Boolean).join(" · ")}
           </p>
           <div className="mt-1.5 flex min-w-0">
             <DealChip deal={sponsor.deal} />

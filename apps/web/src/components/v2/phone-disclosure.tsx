@@ -22,7 +22,7 @@ export interface PhoneDisclosureProps {
   desktopCollapsible?: boolean;
   /** The phone-only variant's own "start open" (default false: below `md` a fold is closed until tapped, spec §3.10). `startOpen` above
    *  is not it - that prop belongs to `desktopCollapsible` and is ignored without it. True opens the fold on the render after hydration
-   *  (the server and the hydration render stay closed), at any width; at `md` and up the body is always shown and the toggle hidden, so
+   *  (the server and the hydration render stay closed, unless `allWidths` is set: then the first render is open), at any width; at `md` and up the body is always shown and the toggle hidden, so
    *  only a phone sees the difference. Seeded once per change of the prop, never on a plain re-render: a reader's tap is theirs, and
    *  the prop going false does not fold what they have open (Sponsors hub, Packages: an empty price list opens its tier legend, and
    *  the first package created leaves it open). Ignored when `desktopCollapsible` is set. */
@@ -109,7 +109,8 @@ export function PhoneDisclosure({
 }: PhoneDisclosureProps) {
   // The toggle and the fold apply at every width for either variant; only how they are SEEDED differs (see `allWidths`).
   const everyWidth = desktopCollapsible || allWidths;
-  // Always starts closed on the server AND the hydration render — matches
+  // Except for `allWidths` + `phoneStartOpen` (the initial `useState` below opens it: its seed is a prop, not a width, so the server and
+  // the client agree), it always starts closed on the server AND the hydration render — matches
   // spec 2026-09-02-scorepad-v3-phone-composition §3.10's phone-narrow
   // default exactly, with no SSR/hydration mismatch. `desktopCollapsible`
   // widths (>= Tailwind's `md`, 768px) then open to `startOpen` on the render

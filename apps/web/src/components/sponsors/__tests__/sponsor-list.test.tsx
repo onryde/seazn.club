@@ -1134,17 +1134,24 @@ describe("From md every row's tray is the same width, so the pencil, the deal an
     // cell, so a 288px deal cell left the name 84px and a 208px one leaves it 164px (the owner's floor is 160). The width is a rem value read
     // off the markup, and the arithmetic below is the check that it stays inside the floor.
     const markup = listHtml(ROWS);
-    const REM_PER_STEP = 0.25;
+    const REM_PER_STEP = 0.25; // Tailwind's spacing scale: w-N is N * 0.25rem
+    // What was measured at 768 (the numbers in the comment above): the grid, then what is not the name or the deal cell.
+    const GRID_PX = 660, LOGO_PX = 36, PENCIL_PX = 28, TRAY_PX = 11 * 16, GAPS_PX = 4 * 12;
+    const AVAILABLE_AT_768_PX = GRID_PX - LOGO_PX - PENCIL_PX - TRAY_PX - GAPS_PX;
+    const NAME_FLOOR_PX = 160; // the owner's floor
+    expect(AVAILABLE_AT_768_PX, "premise: the measured 372px for the name and the deal cell").toBe(372);
     let checked = 0;
     for (const m of MOCKUP) {
       const tokens = classTokens(findOne(rowOf(markup, m.s.id), "sponsor-row-deal").open);
       expect(tokens, `${m.s.name}: 13rem from md`).toContain("md:w-52");
       expect(tokens, `${m.s.name}: 18rem from lg, as it was`).toContain("lg:w-72");
       expect(tokens, `${m.s.name}: not 18rem at md any more`).not.toContain("md:w-72");
-      const mdPx = 52 * REM_PER_STEP * 16;
-      const NAME_FLOOR_PX = 160;
-      const AVAILABLE_AT_768_PX = 372; // measured: see above
-      expect(AVAILABLE_AT_768_PX - mdPx, `${m.s.name}: the name column at 768 stays at or above the owner's floor`).toBeGreaterThanOrEqual(NAME_FLOOR_PX);
+      // The cell's width at md is the token the row RENDERS, parsed - not a number typed beside the assertion above, which would stay true
+      // whatever the row drew.
+      const mdTokens = tokens.filter((t) => /^md:w-\d+$/.test(t));
+      expect(mdTokens, `${m.s.name}: exactly one md width token`).toHaveLength(1);
+      const mdPx = Number(mdTokens[0]!.slice("md:w-".length)) * REM_PER_STEP * 16;
+      expect(AVAILABLE_AT_768_PX - mdPx, `${m.s.name}: the name column at 768 (${mdTokens[0]} = ${mdPx}px) stays at or above the owner's floor`).toBeGreaterThanOrEqual(NAME_FLOOR_PX);
       checked++;
     }
     expect(checked, "all eight rows").toBe(8);

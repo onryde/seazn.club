@@ -252,18 +252,6 @@ test("list at 320 and 375: the ⋯ fold holds clicks, move and delete and the pe
     ];
     const clicks = long.getByTestId("sponsor-row-clicks");
 
-    // A sponsor ALONE in its group has nothing to move past: no arrows at all, only its delete (owner, 2026-11-11). Counted in the DOM, so
-    // the fold does not matter; the pair is Harbourside's own arrows, which the loop below finds visible.
-    const alone = rowOf(page, shortId);
-    for (const key of ["settings.org.sponsors.moveUp", "settings.org.sponsors.moveDown"]) {
-      await expect(alone.getByRole("button", { name: ui(key, { name: SHORT }), exact: true }), `${width}: ${SHORT} is alone in Partner, so no ${key}`).toHaveCount(0);
-    }
-    await expect(alone.getByRole("button", { name: ui("settings.org.sponsors.remove", { name: SHORT }), exact: true }), `${width}: its delete is there`).toHaveCount(1);
-    // What the arrows say, to a pointer and to a screen reader: the same words, naming the sponsor and the board.
-    for (const [c, key] of [[controls[0]!, "settings.org.sponsors.moveUp"], [controls[1]!, "settings.org.sponsors.moveDown"]] as const) {
-      await expect(c, `${width}: ${key} carries its words as a title`).toHaveAttribute("title", ui(key, { name: LONG }));
-    }
-
     if (width < 768) {
       // Phone: the fold is shut, and the ⋯ is a 44px target that opens it.
       await expect(more, `${width}: the ⋯ is on the row`).toBeVisible();
@@ -394,6 +382,24 @@ test("list at 320 and 375: the ⋯ fold holds clicks, move and delete and the pe
       expect(subStyle, `${width}: and the sub-line is the one truncated line it was`).toEqual({ clamp: "none", whiteSpace: "nowrap" });
     }
     await expectNoHorizontalScroll(page);
+
+    // The move arrows, read with each row's tray OPEN - the way an owner reaches them. Below 768 the tray is folded behind the ⋯ (display:none),
+    // where `getByRole` sees nothing: a "no arrows" count taken shut passes for any row, and a "delete is there" count fails. Only ONE row's tray
+    // is open at a time, so each row is opened in turn; openSponsorRowTools opens the fold only where the ⋯ is on screen (768+ it is inline).
+    // A sponsor ALONE in its group has nothing to move past: no arrows, only its delete (owner, 2026-11-11). Its delete found in the same tray
+    // is the positive pair (the scan can see inside the tray), and Harbourside's own two arrows, visible just below, are the other.
+    const alone = await openSponsorRowTools(page, SHORT);
+    await expect(alone.getByTestId("sponsor-row-tools"), `${width}: ${SHORT}'s tray is open`).toBeVisible();
+    await expect(alone.getByRole("button", { name: ui("settings.org.sponsors.remove", { name: SHORT }), exact: true }), `${width}: its delete is there`).toHaveCount(1);
+    for (const key of ["settings.org.sponsors.moveUp", "settings.org.sponsors.moveDown"]) {
+      await expect(alone.getByRole("button", { name: ui(key, { name: SHORT }), exact: true }), `${width}: ${SHORT} is alone in Partner, so no ${key}`).toHaveCount(0);
+    }
+    // What the arrows say, to a pointer and to a screen reader: the same words, naming the sponsor and the board.
+    await openSponsorRowTools(page, LONG);
+    for (const [c, key] of [[controls[0]!, "settings.org.sponsors.moveUp"], [controls[1]!, "settings.org.sponsors.moveDown"]] as const) {
+      await expect(c, `${width}: ${LONG} has ${key} (two sponsors share Gold)`).toBeVisible();
+      await expect(c, `${width}: ${key} carries its words as a title`).toHaveAttribute("title", ui(key, { name: LONG }));
+    }
     checked++;
   }
   expect(checked, "every width was walked").toBe(widths.length);

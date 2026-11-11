@@ -473,8 +473,8 @@ export function PackageList({ orgId, initialPackages, competitions, tiersOrgWide
           ))}
         </div>
       )}
-      {/* What a tier is, under the price list: it explains the cards above, and an empty list needs it most (owner, 2026-11-11). Folded
-          below md, open there only while the list is empty; an editor on a plan without tiers gets the billing link on its plan line. */}
+      {/* What a tier is, under the price list: it explains the cards above, and an empty list needs it most (owner, 2026-11-11). A fold at
+          every width, open only while the list is empty; an editor on a plan without tiers gets the billing link on its plan line. */}
       <TierLegend tiersOrgWide={tiersOrgWide} billingHref={billingHref} canEdit={canEdit} startOpen={packages.length === 0} />
       <p data-testid="package-online-note" className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs text-slate-500">
         {hasMonetize ? (

@@ -467,7 +467,6 @@
   "sponsors.open": "Open {name}",
   "sponsors.row.tierWhenLive": "{tier} when live",
   "sponsors.save": "Save",
-  "sponsors.clicks": "{count} clicks",
   "sponsors.row.clicks.one": "{count} click",
   "sponsors.row.clicks.other": "{count} clicks",
   "sponsors.row.clicksHint": "Taps through to their website",
