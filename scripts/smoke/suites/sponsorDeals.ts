@@ -7,6 +7,7 @@ import {
   html,
   newSession,
   postSignedStripeWebhook,
+  raw,
   signIn,
   smokeDb,
   tag,
@@ -210,6 +211,30 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
       sheet.includes('data-testid="sponsor-sheet-detail-tier"') &&
       sheet.includes('data-testid="sponsor-sheet-placement-note"') &&
       ownHub.body.includes('data-testid="sponsors-list-view"'),
+  );
+
+  // --- PR 3 Task 21: Settings -> Payments carries the "Sponsor invoices" card on EVERY plan. The community owner above saves both
+  // fields the way the card does (two single-key PATCHes, F30), and the real server's page answers 200 with the card OPEN AT those
+  // values (the page's own read of the two V500 columns); the Pro org's page carries the card too, with nothing stored yet.
+  const invoiceAddress = `Smoke Club ${tag}, 12 Mill Lane`;
+  const invoiceBank = `Sort 12-34-56 Acc 12345678 ${tag}`;
+  const savedAddress = await raw(free, `/api/orgs/${org.id}`, "PATCH", { sponsor_invoice_address: invoiceAddress });
+  const savedBank = await raw(free, `/api/orgs/${org.id}`, "PATCH", { sponsor_invoice_bank_details: invoiceBank });
+  const communityPayments = await html(free, `/o/${org.slug}/settings/connect`);
+  const proPayments = proSlug ? await html(admin, `/o/${proSlug}/settings/connect`) : null;
+  const areaBody = (page: string, testId: string) =>
+    page.match(new RegExp(`<textarea[^>]*data-testid="${testId}"[^>]*>([\\s\\S]*?)</textarea>`))?.[1] ?? null;
+  check(
+    "sd settings Payments renders the Sponsor invoices card",
+    savedAddress.status === 200 && savedBank.status === 200 &&
+      communityPayments.status === 200 &&
+      communityPayments.body.includes('data-testid="sponsor-invoices-card"') &&
+      communityPayments.body.includes("Sponsor invoices") &&
+      areaBody(communityPayments.body, "sponsor-invoice-address") === invoiceAddress &&
+      areaBody(communityPayments.body, "sponsor-invoice-bank-details") === invoiceBank &&
+      proPayments?.status === 200 &&
+      proPayments.body.includes('data-testid="sponsor-invoices-card"') &&
+      areaBody(proPayments.body, "sponsor-invoice-address") !== null,
   );
 
   // --- T9, the hourly sweep's route (D20): the cron secret guards it, and the right one answers the sweep's counts. CI sets

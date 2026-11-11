@@ -35,6 +35,12 @@ const orgPatchSchema = z.union([
   renameOrgSchema,
   z.object({ logo_storage_path: z.string().max(500).nullable() }).strict(),
   z.object({ payment_instructions: z.string().max(5000).nullable() }).strict(),
+  // Sponsor invoice details (V500, sponsor deals Task 21): what every sponsor invoice prints, written in Settings → Payments.
+  // The bank details are a setting of their own, NOT payment_instructions (spec §10 Q2: that text is written for players).
+  // Two arms of one key each, never a combined one (F30): a body naming both is refused like any unknown key, and the card
+  // sends one PATCH per changed field. null clears a field back to "nothing to print".
+  z.object({ sponsor_invoice_address: z.string().max(1000).nullable() }).strict(),
+  z.object({ sponsor_invoice_bank_details: z.string().max(2000).nullable() }).strict(),
   // Default payment method for NEW division registration settings (spec §3).
   z.object({ default_payment_method: z.enum(["offline", "stripe"]) }).strict(),
   z.object({ about: aboutSchema }).strict(),
@@ -106,6 +112,8 @@ export async function PATCH(
     }
     if ("logo_storage_path" in body) updates.logo_storage_path = body.logo_storage_path;
     if ("payment_instructions" in body) updates.payment_instructions = body.payment_instructions;
+    if ("sponsor_invoice_address" in body) updates.sponsor_invoice_address = body.sponsor_invoice_address;
+    if ("sponsor_invoice_bank_details" in body) updates.sponsor_invoice_bank_details = body.sponsor_invoice_bank_details;
     if ("default_payment_method" in body) {
       // `stripe` is only a legitimate default once the account can take a
       // charge. The connect settings page already disables the radio on

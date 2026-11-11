@@ -7,7 +7,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
-import type { User } from "@/lib/types";
+import { EDITOR_ROLES, type User } from "@/lib/types";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -34,6 +34,8 @@ vi.mock("@/server/slug-resolve", async (importOriginal) => {
 });
 
 import { invalidateSlugCache } from "@/server/slug-resolve";
+import { requireOrgRole } from "@/lib/auth";
+import { AuthError } from "@/lib/errors";
 import { PATCH } from "../route";
 
 async function seedOrg(): Promise<{ id: string; slug: string }> {
@@ -218,6 +220,130 @@ describe.skipIf(!HAS_DB)("PATCH /api/orgs/[id] — the Organisation tab's one sa
     const org = await seedOrg();
     const res = await PATCH(patchReq({}), { params: Promise.resolve({ id: org.id }) });
     expect(res.status).toBe(400);
+  });
+});
+
+// Sponsor deals, Task 21: the two columns V500 added (`sponsor_invoice_address`, `sponsor_invoice_bank_details`) are written by
+// two arms of the same union as `payment_instructions` - each a single-key `.strict()` object, no combined arm (F30). So:
+//   - each arm stores its own column and nothing else, and null clears it;
+//   - a key the arm does not know is refused EVEN BESIDE a valid arm (F30: a body of `{ foo: 1 }` alone matches no arm and would
+//     be refused whatever the arms' strictness - only a valid arm plus an unknown key tells a `.strict()` arm from a loosened one);
+//   - a body naming BOTH columns matches no arm (the island sends two PATCHes instead);
+//   - the length caps are the brief's (1000 and 2000 characters), at the boundary and one past it;
+//   - the write is the org's own and rides the same role guard as every other arm (requireOrgRole with EDITOR_ROLES).
+describe.skipIf(!HAS_DB)("PATCH /api/orgs/[id] sponsor invoice details", () => {
+  const ARMS = [
+    { key: "sponsor_invoice_address", other: "sponsor_invoice_bank_details", max: 1000 },
+    { key: "sponsor_invoice_bank_details", other: "sponsor_invoice_address", max: 2000 },
+  ] as const;
+  const stored = async (id: string) =>
+    (
+      await sql<{ sponsor_invoice_address: string | null; sponsor_invoice_bank_details: string | null }[]>`
+        select sponsor_invoice_address, sponsor_invoice_bank_details from organizations where id = ${id}`
+    )[0]!;
+  const send = (id: string, body: unknown) => PATCH(patchReq(body), { params: Promise.resolve({ id }) });
+
+  it("each arm stores its own column, leaves the other alone, and null clears it (count reported)", async () => {
+    let checked = 0;
+    for (const arm of ARMS) {
+      const org = await seedOrg();
+      const first = await send(org.id, { [arm.key]: "Riverside CC, 12 Mill Lane" });
+      expect(first.status, `${arm.key} accepted`).toBe(200);
+      expect((await stored(org.id))[arm.key], `${arm.key} stored`).toBe("Riverside CC, 12 Mill Lane");
+      expect((await stored(org.id))[arm.other], `${arm.other} untouched`).toBeNull();
+      const cleared = await send(org.id, { [arm.key]: null });
+      expect(cleared.status, `${arm.key}: null accepted`).toBe(200);
+      expect((await stored(org.id))[arm.key], `${arm.key} cleared`).toBeNull();
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both arms were driven").toBe(2);
+  });
+
+  it("the second write of the pair keeps the first (two sequential PATCHes, F30), and a re-save overwrites", async () => {
+    const org = await seedOrg();
+    expect((await send(org.id, { sponsor_invoice_address: "12 Mill Lane" })).status).toBe(200);
+    expect((await send(org.id, { sponsor_invoice_bank_details: "Sort 12-34-56, acc 12345678" })).status).toBe(200);
+    expect(await stored(org.id)).toEqual({
+      sponsor_invoice_address: "12 Mill Lane",
+      sponsor_invoice_bank_details: "Sort 12-34-56, acc 12345678",
+    });
+    expect((await send(org.id, { sponsor_invoice_address: "14 Mill Lane" })).status).toBe(200);
+    expect(await stored(org.id)).toEqual({
+      sponsor_invoice_address: "14 Mill Lane",
+      sponsor_invoice_bank_details: "Sort 12-34-56, acc 12345678",
+    });
+  });
+
+  it("F30: an unknown key beside a VALID arm is a 400 'Invalid input' and stores nothing (both arms, null and text, count reported)", async () => {
+    let checked = 0;
+    for (const arm of ARMS) {
+      for (const value of ["12 Mill Lane", null]) {
+        const org = await seedOrg();
+        // Seed a stored value so "nothing stored" also proves a null body did not clear it.
+        await sql`update organizations set ${sql({ [arm.key]: "kept" })} where id = ${org.id}`;
+        const res = await send(org.id, { [arm.key]: value, foo: 1 });
+        expect(res.status, `${arm.key}=${JSON.stringify(value)} + foo`).toBe(400);
+        expect(((await res.json()) as { error?: string }).error).toBe("Invalid input");
+        expect((await stored(org.id))[arm.key], `${arm.key} untouched by the refused body`).toBe("kept");
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 2 arms x 2 values").toBe(4);
+  });
+
+  it("a body naming BOTH columns matches no arm: 400 and neither is written (no combined arm, F30)", async () => {
+    const org = await seedOrg();
+    const res = await send(org.id, { sponsor_invoice_address: "12 Mill Lane", sponsor_invoice_bank_details: "Sort 12-34-56" });
+    expect(res.status).toBe(400);
+    expect(await stored(org.id)).toEqual({ sponsor_invoice_address: null, sponsor_invoice_bank_details: null });
+  });
+
+  it("the length caps are 1000 and 2000 characters: the cap itself is stored, one past it is a 400 (count reported)", async () => {
+    let checked = 0;
+    for (const arm of ARMS) {
+      const org = await seedOrg();
+      const atCap = "x".repeat(arm.max);
+      expect((await send(org.id, { [arm.key]: atCap })).status, `${arm.key} at ${arm.max}`).toBe(200);
+      expect((await stored(org.id))[arm.key]).toBe(atCap);
+      const over = await send(org.id, { [arm.key]: atCap + "x" });
+      expect(over.status, `${arm.key} at ${arm.max + 1}`).toBe(400);
+      expect((await stored(org.id))[arm.key], "the refused write left the capped value").toBe(atCap);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both arms").toBe(2);
+  });
+
+  it("a non-string value is a 400 (a number, an object, an array)", async () => {
+    const org = await seedOrg();
+    let checked = 0;
+    for (const arm of ARMS) {
+      for (const value of [7, { a: 1 }, ["x"], true]) {
+        expect((await send(org.id, { [arm.key]: value })).status, `${arm.key}=${JSON.stringify(value)}`).toBe(400);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(8);
+    expect(await stored(org.id)).toEqual({ sponsor_invoice_address: null, sponsor_invoice_bank_details: null });
+  });
+
+  it("writes only the named org's row", async () => {
+    const mine = await seedOrg();
+    const other = await seedOrg();
+    expect((await send(mine.id, { sponsor_invoice_address: "Mine" })).status).toBe(200);
+    expect(await stored(other.id)).toEqual({ sponsor_invoice_address: null, sponsor_invoice_bank_details: null });
+  });
+
+  it("rides the editor-role guard: a member the guard refuses gets a 401 and stores nothing; an editor passes through requireOrgRole(id, EDITOR_ROLES)", async () => {
+    const org = await seedOrg();
+    vi.mocked(requireOrgRole).mockRejectedValueOnce(new AuthError("Insufficient permissions"));
+    const refused = await send(org.id, { sponsor_invoice_bank_details: "Sort 12-34-56" });
+    expect(refused.status).toBe(401);
+    expect(await stored(org.id)).toEqual({ sponsor_invoice_address: null, sponsor_invoice_bank_details: null });
+
+    vi.mocked(requireOrgRole).mockClear();
+    expect((await send(org.id, { sponsor_invoice_bank_details: "Sort 12-34-56" })).status).toBe(200);
+    expect(requireOrgRole).toHaveBeenCalledTimes(1);
+    expect(requireOrgRole).toHaveBeenCalledWith(org.id, EDITOR_ROLES);
   });
 });
 

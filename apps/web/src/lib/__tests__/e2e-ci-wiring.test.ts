@@ -308,6 +308,10 @@ const WALKTHROUGH_SPECS: string[] = [
   // and, at 320, the band, taps it and is counted, a second Title sponsor rotates in on the page's driven clock, Remove falls back to the
   // logo card, and a downgrade takes the placement away. Storage is stood in for at the browser's boundary (helpers/poster-art.ts).
   "title-sponsor-poster.spec.ts",
+  // Sponsor deals PR 3 (Tasks 21 and 24): the invoices walkthrough. Task 21's half is the club's invoice details on Settings -> Payments
+  // (typed, saved, read back from the columns, reloaded, one field at a time, cleared) on a COMMUNITY org, no Stripe; Task 24 adds the
+  // invoice page and the Stripe sandbox journey to the same file, which skip like settings-sponsor-monetize's without their secrets.
+  "sponsor-invoices.spec.ts",
 
   // Settings W5 — competition settings (`/o/{org}/c/{comp}/settings`), the
   // surface the suite never navigated to before this wave: general/branding
