@@ -691,3 +691,27 @@ export async function reconcileRegistrationGroupBySession(
     return false;
   }
 }
+
+/**
+ * Reconcile-on-return for the player payment page (plan 2026-11-11-player-payment-page, Task 3): Stripe sends the player back to
+ * `/r/pay/<token>?…&session_id=…`, and this confirms the entry when the webhook is late. Keyed on the ENTRY (the page resolves its
+ * token to one), and the caller's `sessionId` is compared to that entry's own stored `pay_session_id` BEFORE any Stripe call - an
+ * old tab or a forged query never reaches `sessions.retrieve` (the same posture as the two siblings above). Rate-limited per entry
+ * like the group sibling, because the page has no `pending` gate of its own to stop a reload loop. Best-effort; never throws.
+ */
+export async function reconcileRegistrationByPaySession(registrationId: string, sessionId: string): Promise<boolean> {
+  try {
+    if (!GROUP_ID_RE.test(registrationId)) return false; // a uuid, like a group id
+    await rateLimit(`reg-pay-reconcile:${registrationId}`, { max: 5, windowSeconds: 60 });
+    const [reg] = await sql<{ pay_session_id: string | null }[]>`
+      select pay_session_id from registrations where id = ${registrationId}`;
+    if (!reg?.pay_session_id || sessionId !== reg.pay_session_id) return false;
+    const session = await getStripe().checkout.sessions.retrieve(sessionId);
+    if (session.payment_status !== "paid") return false;
+    if (!checkoutRegistrationIds(session).includes(registrationId)) return false;
+    await handleRegistrationCheckoutCompleted(session);
+    return true;
+  } catch {
+    return false;
+  }
+}

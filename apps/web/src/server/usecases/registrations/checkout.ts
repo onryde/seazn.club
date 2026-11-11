@@ -1,7 +1,7 @@
 import "server-only";
 // Minting and resuming a Stripe checkout for a registration or a cart (see ./index.ts).
 import type Stripe from "stripe";
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { getStripe } from "@/lib/stripe";
 import { isRegistrationCurrency } from "@/lib/currency";
@@ -186,7 +186,61 @@ export async function createRegistrationCheckout(
   ctx: DivisionCtx,
   origin: string,
   token: string | null,
+  opts: RegistrationCheckoutOpts = {},
 ): Promise<string> {
+  return (await mintRegistrationCheckout(groupId, registrationIds, ctx, origin, token, opts)).url;
+}
+
+/** `createRegistrationCheckout`'s optional sixth argument. `returnBase` replaces the computed return base (the in-app status
+ *  page for a token, else `/r/<ref>?src=email`); it must already carry its query string, since `&checkout=…` is appended to it. */
+export interface RegistrationCheckoutOpts {
+  returnBase?: string;
+}
+
+/** The player payment page's mint (plan 2026-11-11-player-payment-page, Task 3): `entryPointer` claims the entry's own
+ *  `registrations.pay_session_id` in the SAME transaction as the cart stamp, conditional on the value the caller read. */
+interface MintOpts extends RegistrationCheckoutOpts {
+  entryPointer?: { registrationId: string; read: string | null };
+}
+
+/** Thrown inside the stamp transaction to roll the cart stamp back when the entry pointer moved since it was read. */
+class EntryPointerMoved extends Error {}
+
+/**
+ * Mints one session for one entry from its payment page, claiming the entry's `pay_session_id` (read as `read` before minting).
+ * One transaction stamps the cart AND the entry pointer, both conditional, BEFORE the prior session is considered for
+ * expiry: a press that read the page before another press stamped must lose WITHOUT moving the cart pointer, or its
+ * supersede step would expire the session the other press already handed out (both presses would then end with nothing
+ * payable). A loser expires its own session and answers 409 `REGISTRATION_CHECKOUT_CONFLICT`, like a lost cart race.
+ */
+export async function mintEntryPayPageCheckout(
+  groupId: string,
+  registrationId: string,
+  ctx: DivisionCtx,
+  origin: string,
+  returnBase: string,
+  read: string | null,
+): Promise<string> {
+  const session = await mintRegistrationCheckout(groupId, [registrationId], ctx, origin, null, {
+    returnBase,
+    entryPointer: { registrationId, read },
+  });
+  return session.url;
+}
+
+async function mintRegistrationCheckout(
+  groupId: string,
+  registrationIds: string[],
+  ctx: DivisionCtx,
+  origin: string,
+  token: string | null,
+  opts: MintOpts,
+): Promise<{ id: string; url: string }> {
+  // An assumption held as a guard: the base is suffixed with `&checkout=…`, so one without a query string would build a
+  // return URL whose first parameter hides inside the path.
+  if (opts.returnBase !== undefined && !opts.returnBase.includes("?")) {
+    throw new Error("createRegistrationCheckout: returnBase must already carry its query string");
+  }
   const entries = await sql<RegistrationWithGroupRow[]>`
     select ${regGroupCols(sql)}
     from registrations r join registration_groups g on g.id = r.group_id
@@ -229,10 +283,10 @@ export async function createRegistrationCheckout(
   // meanwhile. Caught by `next build`'s type check, which runs the whole app —
   // not by the vitest suites, which never typecheck.
   const destination = org.stripe_account_id;
-  const returnBase = token
+  const returnBase = opts.returnBase ?? (token
     ? `${origin}${routes.publicRegisterStatus(ctx.org_slug, ctx.comp_slug)}` +
       `?rid=${groupId}&token=${encodeURIComponent(token)}`
-    : `${origin}/r/${firstEntry.ref_code}?src=email`;
+    : `${origin}/r/${firstEntry.ref_code}?src=email`);
   // The rate this charge uses: the competition's locked rate if it has one,
   // otherwise the live plan rate. Resolved ONCE and both charged and frozen onto
   // the registration, so the paid transition can stamp the competition with the
@@ -316,12 +370,40 @@ export async function createRegistrationCheckout(
   // NOT a row lock held across the Stripe call above — serialising every
   // checkout mint on one row for the length of a network round-trip is worse
   // than the race it closes.
-  const [stamped] = await sql<{ id: string }[]>`
-    update registration_groups
-    set checkout_session_id = ${session.id}, fee_percent = ${feePercent}, updated_at = now()
-    where id = ${groupId}
-      and checkout_session_id is not distinct from ${firstEntry.checkout_session_id}
-    returning id`;
+  //
+  // The payment page's entry pointer (`opts.entryPointer`) is claimed in the same transaction, on the same "is not distinct
+  // from the value read" terms; either condition failing rolls both back (see `mintEntryPayPageCheckout`).
+  const stampGroup = async (db: typeof sql | Tx) => {
+    const [row] = await db<{ id: string }[]>`
+      update registration_groups
+      set checkout_session_id = ${session.id}, fee_percent = ${feePercent}, updated_at = now()
+      where id = ${groupId}
+        and checkout_session_id is not distinct from ${firstEntry.checkout_session_id}
+      returning id`;
+    return row !== undefined;
+  };
+  const pointer = opts.entryPointer;
+  let stamped: boolean;
+  if (!pointer) {
+    stamped = await stampGroup(sql);
+  } else {
+    try {
+      stamped = await sql.begin(async (tx) => {
+        if (!(await stampGroup(tx))) return false;
+        const [claimed] = await tx<{ id: string }[]>`
+          update registrations
+          set pay_session_id = ${session.id}, updated_at = now()
+          where id = ${pointer.registrationId} and group_id = ${groupId}
+            and pay_session_id is not distinct from ${pointer.read}
+          returning id`;
+        if (!claimed) throw new EntryPointerMoved();
+        return true;
+      });
+    } catch (err) {
+      if (!(err instanceof EntryPointerMoved)) throw err;
+      stamped = false;
+    }
+  }
   if (!stamped) {
     // Lost the race: a concurrent mint already stamped a DIFFERENT session
     // in between this call's read and this update. Nobody has THIS
@@ -349,7 +431,7 @@ export async function createRegistrationCheckout(
   if (firstEntry.checkout_session_id) {
     await expireSupersededCheckoutSession(firstEntry.checkout_session_id, registrationIds);
   }
-  return session.url;
+  return { id: session.id, url: session.url };
 }
 
 /**
