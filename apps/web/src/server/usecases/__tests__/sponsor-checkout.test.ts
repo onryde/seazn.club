@@ -308,8 +308,8 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
       },
     });
 
-    // The sponsor contact's invoice is one outbox row for this order, sent by the request (after it returned), carrying the link
-    // Stripe returned and the package's price.
+    // The sponsor contact's invoice is one outbox row for this order, sent by the request (after it returned), carrying the
+    // numbered invoice page's link and the package's price - never the Checkout link Stripe returned (Task 23, D14).
     await vi.waitFor(
       async () => {
         const [r] = await sql<{ status: string }[]>`
@@ -327,7 +327,8 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
       .filter((c) => c.idempotencyKey === idempotencyKey(invoices[0]!.id));
     expect(sent).toHaveLength(1);
     expect(sent[0]!.to).toBe("pay@acme.test");
-    expect(sent[0]!.text).toContain("https://stripe.test/session");
+    expect(sent[0]!.text).toMatch(/\/r\/sponsor\/invoice\/[A-Za-z0-9_-]{20,}/);
+    expect(sent[0]!.text).not.toContain("https://stripe.test/session");
     expect(sent[0]!.text).toContain("£500.00");
   });
 

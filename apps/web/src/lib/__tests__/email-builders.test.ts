@@ -21,6 +21,8 @@ import {
   registrationPromotedTemplate,
   registrationTemplate,
   sponsorInvoiceTemplate,
+  sponsorDealPaidTemplate,
+  DEAL_PAID_NEXT,
   sponsorReceiptTemplate,
   sponsorRefundTemplate,
   sponsorDisputeAlertTemplate,
@@ -41,6 +43,28 @@ import { officialRoleLabel } from "../email-templates/official-assigned";
 import { PASS_KEYS, type PassKey } from "@/lib/currency";
 
 const LINK = "https://seazn.club/x?token=abc";
+
+// Sponsor deals Task 23: the invoice links its numbered page (D14), never a Checkout session.
+const INVOICE_URL = "https://seazn.club/r/sponsor/invoice/tok_abc123";
+const BANK = "Riverside Racquets CIC\nSort code 12-34-56 <main>\nAccount 12345678";
+const invoiceArgs = {
+  orgName: "Riverside Racquets",
+  packageName: "Gold — Spring Open",
+  sponsorName: "Court & Co <Ltd>",
+  amountCents: 25_000,
+  currency: "gbp",
+  number: "SP-0042",
+  invoiceUrl: INVOICE_URL,
+};
+const DEAL_URL = "https://seazn.club/o/riverside/sponsors?tab=sponsors&sponsor=s1&deal=d1";
+const dealPaidArgs = {
+  orgName: "Riverside Racquets",
+  packageName: "Gold — Spring Open",
+  sponsorName: "Court & Co <Ltd>",
+  amountCents: 25_000,
+  currency: "gbp",
+  dealUrl: DEAL_URL,
+};
 
 // Single-entry shaped — feeds paymentReminderTemplate/registrationPromotedTemplate
 // below, which are UNCHANGED by RS005 W4 (only registrationTemplate went
@@ -151,21 +175,18 @@ function makeBuilders(
       ),
       "disputeLost.subject",
     ],
+    ["sponsor-invoice-card", sponsorInvoiceTemplate({ ...invoiceArgs, pay: { by: "card" } }, dict), "sponsorInvoice.subject"],
     [
-      "sponsor-invoice",
-      sponsorInvoiceTemplate(
-        {
-          orgName: "Riverside Racquets",
-          packageName: "Gold — Spring Open",
-          sponsorName: "Court & Co <Ltd>",
-          amountCents: 25_000,
-          currency: "gbp",
-          checkoutUrl: LINK,
-        },
-        dict,
-      ),
+      "sponsor-invoice-transfer",
+      sponsorInvoiceTemplate({ ...invoiceArgs, pay: { by: "transfer", bankDetails: BANK } }, dict),
       "sponsorInvoice.subject",
     ],
+    [
+      "sponsor-invoice-transfer-no-details",
+      sponsorInvoiceTemplate({ ...invoiceArgs, pay: { by: "transfer", bankDetails: null } }, dict),
+      "sponsorInvoice.subject",
+    ],
+    ["sponsor-deal-paid", sponsorDealPaidTemplate({ ...dealPaidArgs, next: "live" }, dict), "sponsorDealPaid.subject"],
     [
       "sponsor-receipt",
       sponsorReceiptTemplate(
@@ -427,6 +448,77 @@ describe("email builders compose from the html templates", () => {
     );
     expect(dispute.subject.toLowerCase()).toContain("dispute");
     expect(dispute.text).toContain("SZ-XXXX-YYYY");
+  });
+
+  it("sponsor invoice by card: the number, the invoice page as its button and text link, the card line; no Checkout link, no bank panel", () => {
+    const en = emailsEn as Record<string, string>;
+    const out = sponsorInvoiceTemplate({ ...invoiceArgs, pay: { by: "card" } }, en as Dict);
+    expect(out.subject).toBe("Invoice SP-0042 — Riverside Racquets");
+    expect(out.html).toContain(`href="${INVOICE_URL}"`);
+    expect(out.text).toContain(INVOICE_URL);
+    for (const part of [out.html, out.text]) {
+      expect(part).toContain("SP-0042");
+      expect(part).toContain(en["sponsorInvoice.payByCard"]);
+      expect(part).not.toContain(en["sponsorInvoice.payByTransfer"].split("{")[0]!.trim());
+      expect(part).not.toContain("checkout.stripe.com");
+      expect(part).not.toContain("Sort code");
+    }
+    expect(out.text).toContain("£250.00");
+    expect(out.html).toContain("Court &amp; Co &lt;Ltd&gt;");
+    expect(out.html).not.toContain("<Ltd>");
+  });
+
+  it("sponsor invoice by transfer: the bank details (escaped, every line) and the reference line; no card line", () => {
+    const en = emailsEn as Record<string, string>;
+    const out = sponsorInvoiceTemplate({ ...invoiceArgs, pay: { by: "transfer", bankDetails: BANK } }, en as Dict);
+    expect(out.html).toContain(`href="${INVOICE_URL}"`);
+    expect(out.html).toContain("Sort code 12-34-56 &lt;main&gt;");
+    expect(out.html).not.toContain("<main>");
+    expect(out.html).toContain(en["sponsorInvoice.bankTitle"]);
+    expect(out.text).toContain(BANK);
+    const reference = en["sponsorInvoice.payByTransfer"].replace("{number}", "SP-0042");
+    for (const part of [out.html, out.text]) {
+      expect(part).toContain(reference);
+      expect(part).not.toContain(en["sponsorInvoice.payByCard"]);
+      expect(part).not.toContain(en["sponsorInvoice.noBankDetails"].split("{")[0]!.trim());
+    }
+  });
+
+  it("sponsor invoice by transfer with no bank details set: says whom to ask, and draws no empty panel", () => {
+    const en = emailsEn as Record<string, string>;
+    const out = sponsorInvoiceTemplate({ ...invoiceArgs, pay: { by: "transfer", bankDetails: null } }, en as Dict);
+    const ask = en["sponsorInvoice.noBankDetails"].replace("{orgName}", "Riverside Racquets");
+    expect(out.html).toContain(ask);
+    expect(out.text).toContain(ask);
+    expect(out.html).not.toContain(en["sponsorInvoice.bankTitle"]);
+    expect(out.html).not.toContain(en["sponsorInvoice.payByCard"]);
+    expect(out.html).toContain(`href="${INVOICE_URL}"`);
+  });
+
+  it("sponsor deal paid: every next step says its own line and links the deal; sponsor name escaped (5 steps checked)", () => {
+    const en = emailsEn as Record<string, string>;
+    const LINES: Record<string, string> = {
+      live: "They are live now.",
+      approve: "Approve the deal to put them live.",
+      scheduled: "They go live when their current deal ends.",
+      duplicate: en["sponsorDealPaid.next.duplicate"],
+      check: en["sponsorDealPaid.next.check"],
+    };
+    let checked = 0;
+    for (const next of DEAL_PAID_NEXT) {
+      const out = sponsorDealPaidTemplate({ ...dealPaidArgs, next }, en as Dict);
+      expect(out.subject, next).toBe("Court & Co <Ltd> paid for their sponsorship — Riverside Racquets");
+      expect(out.text, next).toContain(LINES[next]);
+      expect(out.text, next).toContain("£250.00");
+      expect(out.text, next).toContain(DEAL_URL);
+      expect(out.html, next).toContain(`href="${DEAL_URL.replace(/&/g, "&amp;")}"`);
+      expect(out.html, next).toContain("Court &amp; Co &lt;Ltd&gt;");
+      for (const other of DEAL_PAID_NEXT.filter((o) => o !== next)) {
+        expect(out.text, `${next} does not say ${other}`).not.toContain(LINES[other]);
+      }
+      checked++;
+    }
+    expect(checked, "steps checked").toBe(5);
   });
 
   it("CTA builders carry the link in a button href", () => {

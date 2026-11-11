@@ -42,8 +42,10 @@ const SPEC_STATUSES = [
 
 // Typed from the phase-3 spec's kind table (wave order), never read from constants.ts: the two phase-1 kinds, the five wave-1
 // kinds, wave 2's ten in the table's row order, wave 3's eight in the table's row order, wave 4's nine in the table's row
-// order, then wave 5's seventeen (the funnel reminder and sixteen staff alerts) in the table's row order. The vocabulary test
-// compares constants.ts with it, and the live-CHECK read compares the database's constraint with it as well.
+// order, then wave 5's seventeen (the funnel reminder and sixteen staff alerts) in the table's row order, then the one kind born on
+// the outbox after phase 3: sponsor deals Task 23's `sponsor_deal_paid` (plan 2026-11-07-sponsor-deals, D13; its delta is found by
+// suffix, `__email_outbox_sponsor_deal_paid.sql`). The vocabulary test compares constants.ts with it, and the live-CHECK read compares
+// the database's constraint with it as well.
 const SPEC_KINDS = [
   "magic_link", "chess_invite", "registration_confirmation", "payment_reminder", "registration_promoted",
   "refund_issued", "solo_signup_assigned",
@@ -58,6 +60,7 @@ const SPEC_KINDS = [
   "staff_pass_unknown_competition", "staff_stream_credit_clawback", "staff_extra_org_reprice_failed", "staff_dispute_alert",
   "staff_connect_bank_changed", "staff_stuck_events", "staff_stream_pack_price_drift", "staff_ai_run_cost",
   "staff_earn_grant_volume", "staff_extra_org_allowance",
+  "sponsor_deal_paid",
 ];
 
 describe("email outbox vocabularies (constants.ts)", () => {
@@ -66,10 +69,10 @@ describe("email outbox vocabularies (constants.ts)", () => {
     expect([...OUTBOX_STATUSES]).toEqual(SPEC_STATUSES);
   });
 
-  it("the kinds are the spec's fifty-one, in the spec's wave order", () => {
+  it("the kinds are the spec's fifty-one, in the spec's wave order, then sponsor deals' sponsor_deal_paid: fifty-two", () => {
     // The spec's Counts: "wave 1 has 5 kinds, wave 2 has 10, wave 3 has 8, wave 4 has 9 and wave 5 has 17, which makes 49. With
-    // `magic_link` and `chess_invite` that is 51."
-    expect(SPEC_KINDS.length).toBe(51);
+    // `magic_link` and `chess_invite` that is 51." Sponsor deals Task 23 (D13) adds one: 52.
+    expect(SPEC_KINDS.length).toBe(52);
     expect([...OUTBOX_KINDS]).toEqual(SPEC_KINDS);
   });
 
@@ -257,7 +260,8 @@ describe.skipIf(!HAS_DB)("email_outbox (V470)", () => {
     expect(kinds.length).toBeGreaterThan(0);
     expect(statuses).toEqual([...OUTBOX_STATUSES].sort());
     expect(kinds).toEqual([...OUTBOX_KINDS].sort());
-    // And the database's list is the spec's own fifty-one, read against the typed list, not only against constants.ts.
+    // And the database's list is the spec's own fifty-one plus sponsor_deal_paid, read against the typed list, not only against
+    // constants.ts.
     expect(kinds).toEqual([...SPEC_KINDS].sort());
   });
 

@@ -21,6 +21,7 @@ import { sponsorRefusal } from "@/lib/sponsor-refusals";
 import {
   allowedActions,
   DealRuleError,
+  formatInvoiceNumber,
   initialPaymentStatus,
   initialStatus,
   statusAfterApproved,
@@ -46,7 +47,8 @@ import {
   type ServerDeal,
 } from "@/server/sponsors/deal-apply";
 import { assertOnlineAllowed, assertPlacementAllowed } from "@/server/sponsors/deal-gates";
-import { cardPayable, invoiceDealByToken, mintInvoiceToken, needsInvoiceToken } from "@/server/sponsors/invoice-doc";
+import { cardPayable, invoiceBankDetails, invoiceDealByToken, mintInvoiceToken } from "@/server/sponsors/invoice-doc";
+import { invoicePath } from "@/lib/sponsor-invoice";
 import { allocateInvoiceNumber } from "@/server/sponsors/invoice-number";
 import { assertOutboxCanQueue, dispatchNow } from "@/server/email-outbox";
 import { log } from "@/server/logger";
@@ -112,7 +114,16 @@ function notOffered(d: ServerDeal, action: DealAction): HttpError {
       return sponsorRefusal(409, "only a paid deal can be refunded, once", "deal_not_refundable");
     case "send_invoice":
     case "resend_invoice":
+      // The one refusal an email would cure (F13): an offline deal that would offer Resend invoice if it had a billing email.
+      if (!d.sponsor_email && allowedActions({ ...d, sponsor_email: "billing@example.invalid" }).includes("resend_invoice")) {
+        return sponsorRefusal(422, "this deal has no billing email to send its invoice to: add one first", "no_billing_email");
+      }
       return sponsorRefusal(409, "this deal has no invoice to send", "deal_not_invoiceable");
+    case "write_off":
+      if (d.payment_status === "paid" || d.payment_status === "refunded") {
+        return sponsorRefusal(409, "this deal is already paid", "deal_already_paid");
+      }
+      return sponsorRefusal(409, "only an offline invoice still due after its deal ended can be written off", "deal_nothing_due");
   }
 }
 
@@ -341,23 +352,35 @@ export async function createDeal(
 }
 
 /**
- * Send (or resend) an online deal's invoice (spec §5.2; D14, F32, F3): online only, for a draft, or an unpaid deal awaiting
- * payment, live or scheduled — else 409 `deal_not_invoiceable` before Stripe (F12). The plan is asked again
- * (`sponsors.monetize`: an org that lost it mints nothing), Connect must take charges, and the outbox must be able to queue
- * (P-W2-1) — all before Stripe. Then `ensureDealCheckout` (outside any transaction) reuses the stored session while more than
- * 10 minutes are left of it AND Stripe still calls it open, else retires it (a session Stripe cannot read is a 502 and
- * nothing is minted) and mints `sponsor-deal-<id>-<count + 1>`. ONE transaction in the lock order
- * (F2) stores the session, counts the send, moves a draft to awaiting payment and queues the invoice with once-key
- * `<id>:<count + 1>`. After commit, the request makes the invoice's first attempt and awaits the public expiry (F1).
+ * Send (or resend) a deal's invoice (spec §5.2, §7; D14, F32, F3; Task 23): to the deal's billing email, a link to its numbered
+ * invoice page - never a Checkout session (owner ruling: no sponsor ever receives a raw Checkout link). Offered as
+ * `allowedActions` says (F13): an online deal that is a draft, or unpaid and awaiting payment, live or scheduled; an offline deal
+ * with an email that is unpaid and due (an ended one still due included). Else 409 `deal_not_invoiceable` - or 422
+ * `no_billing_email` for an offline deal an email would make sendable - before Stripe or any write (F12). A deal with no invoice
+ * number (made before invoices were numbered) has no invoice page to link: 409 `deal_not_invoiceable`.
+ *
+ * Every send ROTATES the invoice token (`mintInvoiceToken`, Task 22's first one included): the new link is the one mailed, and
+ * the earlier one opens nothing. Every send counts (`invoice_send_count`, the once-key `<id>:<count + 1>`) and stamps
+ * `invoice_sent_at`. Then by method:
+ *  - ONLINE: the plan is asked again (`sponsors.monetize`), Connect must take charges, and the outbox must be able to queue
+ *    (P-W2-1) - all before Stripe. `ensureDealCheckout` (outside any transaction) reuses the stored session while more than 10
+ *    minutes are left of it AND Stripe still calls it open, else retires it and mints `sponsor-deal-<id>-<count + 1>`; the
+ *    session is stored, and a draft moves to awaiting payment. The answer carries the session's url (the console's copy link).
+ *  - OFFLINE: no Stripe and no plan gate (an offline deal sells on any plan); the deal's status does not move (`invoice_sent_at`
+ *    is informational), and the answer's `checkout_url` is null. The email carries the club's bank details.
+ * ONE transaction in the lock order (F2) records the send, mints the token and queues the invoice. After commit, the request
+ * makes the invoice's first attempt and awaits the public expiry (F1).
  */
 export async function sendDealInvoice(
   auth: AuthCtx,
   dealId: string,
   origin: string,
-): Promise<{ deal: SponsorDeal; checkout_url: string }> {
+): Promise<{ deal: SponsorDeal; checkout_url: string | null }> {
   return atBoundary(async () => {
     const pre = await preflight(auth, dealId, ["send_invoice", "resend_invoice"]);
-    if (pre.sponsor_id === null) throw notOffered(pre, "send_invoice"); // a legacy row is never invoiceable
+    // A legacy row is never invoiceable, and a deal numbered before invoices had pages has no page to link.
+    if (pre.sponsor_id === null || pre.invoice_number === null) throw notOffered(pre, "send_invoice");
+    if (pre.payment_method === "offline") return sendOfflineInvoice(auth, pre, origin);
     await assertOnlineAllowed(auth.orgId, pre.competition_id);
     const org = await checkoutOrg(auth.orgId);
     assertOutboxCanQueue();
@@ -383,10 +406,7 @@ export async function sendDealInvoice(
                checkout_expires_at = to_timestamp(${session.expires_at}),
                invoice_send_count = ${sendNo}, invoice_sent_at = ${now}, deal_status = ${statusAfterInvoiceSent(current)}
          where id = ${dealId}`;
-      // F9 (Task 22): a numbered deal made before invoice tokens has none; its next send gives it one. A deal that has one keeps
-      // it (rotation on a resend is Task 23's), and an unnumbered deal has no invoice to open.
-      if (await needsInvoiceToken(tx, dealId)) await mintInvoiceToken(tx, dealId);
-      queued = await queueSponsorInvoice(tx, { deal: { ...current, org_id: auth.orgId }, checkoutUrl: session.url, sendNo });
+      queued = await queueInvoiceSend(tx, auth.orgId, current, origin, sendNo, { by: "card" });
       await applyDealsToSponsor(tx, pre.sponsor_id!, auth.userId, { now });
       return reread(tx, dealId);
     });
@@ -394,6 +414,58 @@ export async function sendDealInvoice(
     if (first) deferred(() => dispatchNow([first]));
     await expirePublicSponsors(auth.orgId, "sponsor.deal.send_invoice");
     return { deal, checkout_url: session.url };
+  });
+}
+
+/** An OFFLINE deal's send (Task 23, F13): `sendDealInvoice`'s transaction without Stripe. Re-checked under the lock; the deal's
+ *  status does not move. */
+async function sendOfflineInvoice(
+  auth: AuthCtx,
+  pre: ServerDeal,
+  origin: string,
+): Promise<{ deal: SponsorDeal; checkout_url: null }> {
+  assertOutboxCanQueue();
+  let queued: string | null = null;
+  const deal = await withTenant(auth.orgId, async (tx) => {
+    const locked = await lockSponsorAndDeals(tx, pre.sponsor_id!);
+    const current = locked?.deals.find((d) => d.id === pre.id);
+    if (!locked || !current) throw new HttpError(404, "deal not found");
+    if (!allowedActions(current).includes("resend_invoice")) throw notOffered(current, "resend_invoice");
+    const sendNo = current.invoice_send_count + 1;
+    const now = new Date();
+    await tx`update sponsor_orders set invoice_send_count = ${sendNo}, invoice_sent_at = ${now} where id = ${pre.id}`;
+    queued = await queueInvoiceSend(tx, auth.orgId, current, origin, sendNo, {
+      by: "transfer",
+      bankDetails: await invoiceBankDetails(tx, auth.orgId),
+    });
+    await applyDealsToSponsor(tx, pre.sponsor_id!, auth.userId, { now });
+    return reread(tx, pre.id);
+  });
+  const first = queued as string | null;
+  if (first) deferred(() => dispatchNow([first]));
+  await expirePublicSponsors(auth.orgId, "sponsor.deal.send_invoice");
+  return { deal, checkout_url: null };
+}
+
+/** One send's invoice, on `tx`: a NEW token for the deal's invoice page (`mintInvoiceToken` replaces the stored hash, so the
+ *  link any earlier email carried opens nothing), then the email that links it. The deal is numbered (the caller refused an
+ *  unnumbered one before any write). */
+async function queueInvoiceSend(
+  tx: Tx,
+  orgId: string,
+  deal: ServerDeal,
+  origin: string,
+  sendNo: number,
+  pay: Parameters<typeof queueSponsorInvoice>[1]["pay"],
+): Promise<string | null> {
+  if (deal.invoice_number === null) throw new Error(`sponsor deal ${deal.id} has no invoice number: its send was not refused first`);
+  const token = await mintInvoiceToken(tx, deal.id);
+  return queueSponsorInvoice(tx, {
+    deal: { ...deal, org_id: orgId },
+    number: formatInvoiceNumber(deal.invoice_number),
+    invoiceUrl: `${origin.replace(/\/$/, "")}${invoicePath(token)}`,
+    pay,
+    sendNo,
   });
 }
 
@@ -451,7 +523,10 @@ export async function payInvoice(token: string, origin: string): Promise<string>
 }
 
 /** Mark as paid (offline). Only an unpaid deal (`pending`, or `failed`: F15) the deal offers it on; on a When-paid rule it
- *  goes live (or queues), on After-I-approve it waits for the club (anti-goal 2), and a live or scheduled one stays put.
+ *  goes live (or queues), on After-I-approve it waits for the club (anti-goal 2), and a live or scheduled one stays put. An
+ *  ENDED offline deal still due (`endedStillDue`: it went live, then its term ran out or its competition finished unpaid; Task
+ *  23 carry 1) is marked paid too and stays ended - the money arrived late, the placement is over, and nothing is revived. No
+ *  email for a payment marked by hand (D13): the invoice page reads Paid.
  *
  *  The rule (T8 review I1): `payment_intent_id` names the Stripe charge that PAID the deal — the payment webhook writes it with
  *  `paid`, and a refund goes through Stripe exactly when it is set. A payment marked by hand has no charge, so it clears the
@@ -496,6 +571,18 @@ export async function endDealNow(auth: AuthCtx, dealId: string): Promise<Sponsor
     if (deal.checkout_session_id !== expected) throw dealChanged();
     await tx`update sponsor_orders set deal_status = 'ended', ended_at = ${now}, ended_reason = 'ended_now' where id = ${deal.id}`;
     return deal.id;
+  });
+}
+
+/** Write off (Task 23 carry 4, from the T22 re-review): the club waives an offline invoice still due after its deal ended
+ *  (`endedStillDue`), so the invoice stops asking ("Nothing due — written off by <club>"). Only the reason moves: the money stays
+ *  unpaid (`pending`: nothing was paid), `ended_reason` becomes `written_off` (the house precedent: a money event rewrites an
+ *  ended deal's reason, as a refund writes `refunded`), and `ended_at` keeps the day the deal ended. The deal was already ended,
+ *  so its sponsor does not move. No email (D13). Offered on nothing else: 409 (`deal_nothing_due`, `deal_already_paid`). */
+export async function writeOffDeal(auth: AuthCtx, dealId: string): Promise<SponsorDeal> {
+  return runAction(auth, dealId, "write_off", "sponsor.deal.write_off", async (tx, { deal }) => {
+    await tx`update sponsor_orders set ended_reason = 'written_off' where id = ${deal.id}`;
+    return null;
   });
 }
 

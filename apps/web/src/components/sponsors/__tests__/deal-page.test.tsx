@@ -203,12 +203,28 @@ describe("the header (acceptance: the package, the price, the sponsor and the ch
 
 describe("the buttons are the engine's answer, in DEAL_ACTIONS order (F27)", () => {
   const WORDS: Record<DealAction, string> = {
-    send_invoice: "Send invoice", resend_invoice: "Resend invoice", mark_paid: "Mark as paid", approve: "Approve", refund: "Refund", end_now: "End now",
+    send_invoice: "Send invoice", resend_invoice: "Resend invoice", mark_paid: "Mark as paid", write_off: "Write off", approve: "Approve",
+    refund: "Refund", end_now: "End now",
   };
   // Typed from spec §5.2 and the mockup's "Actions by state" - NOT read from allowedActions.
   const CASES: { label: string; d: SponsorDeal; want: DealAction[] }[] = [
     { label: "paid online, awaiting approval (screen 5: Approve, Refund, End now)", d: QUAY, want: ["approve", "refund", "end_now"] },
-    { label: "offline, awaiting payment (screen 5: Mark as paid, End now)", d: MARLOW, want: ["mark_paid", "end_now"] },
+    { label: "offline, awaiting payment, no billing email (screen 5: Mark as paid, End now)", d: MARLOW, want: ["mark_paid", "end_now"] },
+    {
+      label: "offline, awaiting payment, with a billing email (Task 23, F13: Resend invoice too)",
+      d: deal({ ...MARLOW, sponsor_email: "accounts@marlow.example" }),
+      want: ["resend_invoice", "mark_paid", "end_now"],
+    },
+    {
+      label: "offline, went live, then its end date passed unpaid (Task 23 carries 1 and 4: still due)",
+      d: deal({ ...MARLOW, sponsor_email: "accounts@marlow.example", deal_status: "ended", live_at: "2026-10-01T10:00:00.000Z", ended_reason: "expired", ended_at: "2026-10-30T10:00:00.000Z" }),
+      want: ["resend_invoice", "mark_paid", "write_off"],
+    },
+    {
+      label: "the same, written off: nothing is due any more",
+      d: deal({ ...MARLOW, deal_status: "ended", live_at: "2026-10-01T10:00:00.000Z", ended_reason: "written_off", ended_at: "2026-10-30T10:00:00.000Z" }),
+      want: [],
+    },
     { label: "online, invoice sent, awaiting payment (Mark as paid, Resend invoice, End now)", d: RIDGE, want: ["resend_invoice", "mark_paid", "end_now"] },
     { label: "online draft, not sent", d: KESTREL, want: ["send_invoice", "end_now"] },
     { label: "live and paid (Refund, End now)", d: HARBOUR, want: ["refund", "end_now"] },

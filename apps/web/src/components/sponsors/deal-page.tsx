@@ -35,6 +35,7 @@ const ACTION_MSG: Record<DealAction, MessageKey> = {
   send_invoice: "sponsors.deal.action.sendInvoice",
   resend_invoice: "sponsors.deal.action.resendInvoice",
   mark_paid: "sponsors.deal.action.markPaid",
+  write_off: "sponsors.deal.action.writeOff",
   approve: "sponsors.deal.action.approve",
   refund: "sponsors.deal.action.refund",
   end_now: "sponsors.deal.action.endNow",
@@ -49,6 +50,7 @@ const REASON_MSG: Record<EndReason, MessageKey> = {
   competition_finished: "sponsors.deal.timeline.reason.competitionFinished",
   legacy: "sponsors.deal.timeline.reason.legacy",
   duplicate_payment: "sponsors.deal.timeline.reason.duplicatePayment",
+  written_off: "sponsors.deal.timeline.reason.writtenOff",
 };
 
 const PAYMENT_MSG: Record<PaymentMethod, MessageKey> = {
@@ -323,7 +325,7 @@ export function DealPageBody(props: DealPageBodyProps) {
               disabled={busy}
               aria-label={msg("sponsors.sheet.dealActionFor", { action: msg(ACTION_MSG[a]), package: deal.package_name })}
               onClick={() => onAction(deal, a)}
-              className={`btn ${a === "approve" ? "btn-primary" : "btn-ghost"} px-3 py-1.5 text-xs max-md:min-h-11 ${a === "end_now" || a === "refund" ? "text-red-600" : ""}`}
+              className={`btn ${a === "approve" ? "btn-primary" : "btn-ghost"} px-3 py-1.5 text-xs max-md:min-h-11 ${a === "end_now" || a === "refund" || a === "write_off" ? "text-red-600" : ""}`}
             >
               {msg(ACTION_MSG[a])}
             </button>

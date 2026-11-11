@@ -178,7 +178,7 @@ const rowsTo = (kind: OutboxKind, email: string) =>
       from email_outbox
      where kind = ${kind} and lower(recipient) = lower(${email})`;
 
-type Sent = { to: string; subject: string; text: string; idempotencyKey: string };
+type Sent = { to: string; subject: string; text: string; html: string; idempotencyKey: string };
 const transportCallsFor = (rowId: string): Sent[] =>
   deliverMock.mock.calls.map((c) => c[0] as Sent).filter((c) => c.idempotencyKey === idempotencyKey(rowId));
 
@@ -221,14 +221,20 @@ describe.skipIf(!HAS_DB)("a sponsor checkout sends its invoice through the outbo
       status: "sent",
       cleared: true,
     });
-    const subject = dictionarySubject("fr", "sponsorInvoice.subject", { orgName: s.orgName });
-    expect(subject, "the French subject is not the English one").not.toBe(dictionarySubject("en", "sponsorInvoice.subject", { orgName: s.orgName }));
+    // The org's first invoice is SP-0001 (spec §7, D11); the subject names it (Task 23).
+    expect(order.invoice_number, "premise: the org's first invoice").toBe(1);
+    const vars = { number: "SP-0001", orgName: s.orgName };
+    const subject = dictionarySubject("fr", "sponsorInvoice.subject", vars);
+    expect(subject, "the French subject is not the English one").not.toBe(dictionarySubject("en", "sponsorInvoice.subject", vars));
     expect(row!.subject).toBe(subject);
     const calls = transportCallsFor(row!.id);
     expect(calls, "one transport call under the row's key").toHaveLength(1);
     expect(calls[0]).toMatchObject({ to, subject });
-    // The mail carries the link Stripe returned (the Stripe mock's own value).
-    expect(calls[0]!.text).toContain(CHECKOUT_URL);
+    // Task 23 (D14; owner ruling): the mail links the numbered invoice page on the request's origin, never the Checkout session
+    // Stripe returned (the Stripe mock's own value) - the sponsor pays from the page.
+    expect(calls[0]!.text).toMatch(/https:\/\/app\.test\/r\/sponsor\/invoice\/[A-Za-z0-9_-]{20,}/);
+    expect(calls[0]!.text).not.toContain(CHECKOUT_URL);
+    expect(calls[0]!.html).not.toContain(CHECKOUT_URL);
   });
 
   it("two online deals for one package are two invoices, and neither replaces the other", async () => {

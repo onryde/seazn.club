@@ -26,6 +26,10 @@
 //     makes the first attempt.
 //   - sponsor_receipt: the real `handleSponsorPaymentSucceeded` on a pending order in an `nl` org: the receipt is queued to the sponsor
 //     contact in the transaction that pays the deal (and applies it to its sponsor), and the worker makes the first attempt.
+//   - sponsor_deal_paid (sponsor deals Task 23, D13; born on the outbox, so it is in none of phase 3's waves): the REAL dispatcher,
+//     `runEvent`, on a signed-webhook-shaped `payment_intent.succeeded` for a pending online deal in an `nl` org whose owner's account
+//     is `fr`: the notice is queued to the owner's ACCOUNT, in the owner's language, in the transaction that records the payment, and
+//     the worker makes the first attempt.
 //   - sponsor_refund: the real `refundSponsorOrder` of a paid order in an `es` org (Stripe's refund is mocked): the notice is queued in
 //     the transaction that records the refund, at its own savepoint, and the request that did it makes the first attempt.
 //   - sponsor_dispute_alert: the real `handleSponsorDispute` (`created`) on a paid sponsor order whose org owner's account is `fr`: the
@@ -252,6 +256,7 @@ import {
   maybeAlertOrgRepriceFailed,
   notifyStaffDispute,
   processStripeEvent,
+  runEvent,
 } from "@/server/usecases/billing-events";
 import { alertStreamPackPriceDrift, StreamPackPriceDriftError } from "@/lib/relay-checkout";
 import { maybeAlertExpensiveRun } from "@/server/usecases/ai-runs-admin";
@@ -352,6 +357,8 @@ const SPEC_KINDS = [
   "staff_ai_run_cost",
   "staff_earn_grant_volume",
   "staff_extra_org_allowance",
+  // Sponsor deals Task 23 (plan 2026-11-07-sponsor-deals, D13): born on the outbox after phase 3, so after every wave.
+  "sponsor_deal_paid",
 ] as const satisfies readonly OutboxKind[];
 
 /** The legend: [to, transactional]. A = an account, resolved at send; L = a literal address; S = the staff address. T = transactional. */
@@ -411,6 +418,8 @@ const SPEC_FACTS: KindFacts = {
   staff_ai_run_cost: ["staff", true],
   staff_earn_grant_volume: ["staff", true],
   staff_extra_org_allowance: ["staff", true],
+  // Sponsor deals Task 23: to the org owner's account (`orgOwnerRecipient`), not transactional (a sponsor and money mail, N).
+  sponsor_deal_paid: ["account", false],
 };
 
 /** What the real producers create beyond the rows the hand-made scenarios name: the seeded round's people and organisation. (The
@@ -442,6 +451,8 @@ async function cleanUp(): Promise<void> {
   // The staff press's audit row references its staff member without a cascade.
   await sql`delete from staff_audit_log where actor_id in (select id from users where email like ${like})`;
   await sql`delete from funnel_drafts where email like ${like}`;
+  // The sponsor_deal_paid scenario's webhook event, claimed on the billing ledger by `runEvent`.
+  await sql`delete from billing_events where id like ${`evt_${RUN}_%`}`;
   await sql`delete from users where email like ${like} or id = any(${made.userIds}::uuid[])`;
 }
 
@@ -474,13 +485,13 @@ afterEach(() => {
 });
 
 describe("the spec's lists (no database)", () => {
-  it("the spec lists fifty-one kinds and the code's registry is exactly them, in the spec's order", () => {
+  it("the spec lists fifty-one kinds, sponsor deals adds one, and the code's registry is exactly them, in the spec's order", () => {
     expect([...OUTBOX_KINDS]).toEqual([...SPEC_KINDS]);
-    // The spec's Counts: "With `magic_link` and `chess_invite` that is 51."
-    expect(SPEC_KINDS).toHaveLength(51);
+    // The spec's Counts: "With `magic_link` and `chess_invite` that is 51." Sponsor deals Task 23 adds sponsor_deal_paid: 52.
+    expect(SPEC_KINDS).toHaveLength(52);
   });
 
-  it("the legend has TWENTY literal kinds, FIFTEEN account kinds and SIXTEEN staff kinds; THIRTY-TWO are transactional", () => {
+  it("the legend has TWENTY literal kinds, SIXTEEN account kinds (sponsor deals' sponsor_deal_paid the sixteenth) and SIXTEEN staff kinds; THIRTY-TWO are transactional", () => {
     const by = (to: string): string[] => SPEC_KINDS.filter((k) => SPEC_FACTS[k][0] === to);
     expect(by("literal")).toEqual([
       "magic_link",
@@ -524,6 +535,8 @@ describe("the spec's lists (no database)", () => {
       "group_transfer_complete",
       "group_org_removed",
       "group_org_left",
+      // Sponsor deals Task 23: the owner's "a sponsor has paid" notice.
+      "sponsor_deal_paid",
     ]);
     expect(by("staff"), "the sixteen staff alerts are wave 5's, in the table's row order").toEqual([
       "staff_registration_refund_failed",
@@ -582,7 +595,8 @@ describe("the spec's lists (no database)", () => {
       "staff_earn_grant_volume",
       "staff_extra_org_allowance",
     ]);
-    // The spec's legend: "The 19 N kinds are the senders that pass no `transactional: true` today", so 51 - 19 = 32 are T.
+    // The spec's legend: "The 19 N kinds are the senders that pass no `transactional: true` today", so 51 - 19 = 32 are T. Sponsor deals'
+    // sponsor_deal_paid is N, so 52 - 20 = 32 still.
     expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toHaveLength(32);
   });
 
@@ -945,7 +959,8 @@ async function sponsorInvoiceScenario(): Promise<KindScenario> {
   return {
     locale: "fr",
     subjectKey: "sponsorInvoice.subject",
-    subjectVars: { orgName: s.orgName },
+    // A fresh org's first invoice is SP-0001 (spec §7, D11: per org from 1); the premise below pins it.
+    subjectVars: { number: "SP-0001", orgName: s.orgName },
     recipient,
     firstAttempt: "request",
     run: async () => {
@@ -958,7 +973,8 @@ async function sponsorInvoiceScenario(): Promise<KindScenario> {
         "https://sweep.test",
       );
       expect(out.deal.payment_status, "premise: the real online deal is unpaid").toBe("pending");
-      expect(out.checkout_url, "premise: its invoice carries the minted link").toBe("https://checkout.stripe.test/session");
+      expect(out.deal.invoice_number, "premise: the org's first invoice").toBe(1);
+      expect(out.checkout_url, "premise: the console's copy link is the minted session").toBe("https://checkout.stripe.test/session");
     },
   };
 }
@@ -979,6 +995,41 @@ async function sponsorReceiptScenario(): Promise<KindScenario> {
       await handleSponsorPaymentSucceeded({ id: o.intent, metadata: { kind: "sponsor", order_id: o.orderId } } as unknown as Stripe.PaymentIntent);
       const [order] = await sql<{ status: string }[]>`select status from sponsor_orders where id = ${o.orderId}`;
       expect(order!.status, "premise: the real handler activated the order").toBe("paid");
+    },
+  };
+}
+
+/** The REAL dispatcher (`runEvent`: the billing ledger's claim, then the dispatch the signed webhook route and the staff replay share) on
+ *  a `payment_intent.succeeded` for a pending online deal in an `nl` org whose one owner's account is `fr` (sponsor deals Task 23, D13):
+ *  the owner's notice is queued to their ACCOUNT, in THEIR language (an `fr` owner of an `nl` org reads French), in the transaction that
+ *  records the payment, and the first attempt is the worker's (a webhook has no response to defer behind). */
+async function sponsorDealPaidScenario(): Promise<KindScenario> {
+  const o = await seedSponsorOrder({ status: "pending", defaultLocale: "nl", ownerLocale: "fr", prefix: RUN });
+  made.orgIds.push(o.orgId);
+  made.userIds.push(o.ownerId);
+  const event = {
+    id: `evt_${RUN}_deal_paid`,
+    object: "event",
+    type: "payment_intent.succeeded",
+    created: Math.floor(Date.now() / 1000),
+    livemode: false,
+    data: {
+      object: {
+        id: o.intent, object: "payment_intent", amount: 25000, amount_received: 25000, currency: "gbp", status: "succeeded",
+        metadata: { kind: "sponsor", order_id: o.orderId, org_id: o.orgId },
+      },
+    },
+  } as unknown as Stripe.Event;
+  return {
+    locale: "fr",
+    subjectKey: "sponsorDealPaid.subject",
+    subjectVars: { sponsorName: "Acme Corp", orgName: o.orgName },
+    recipient: o.ownerEmail,
+    firstAttempt: "worker",
+    run: async () => {
+      expect(await runEvent(event), "premise: the dispatcher claimed and ran the payment").toBe(true);
+      const [order] = await sql<{ status: string }[]>`select status from sponsor_orders where id = ${o.orderId}`;
+      expect(order!.status, "premise: the real handler paid the deal").toBe("paid");
     },
   };
 }
@@ -2142,6 +2193,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
 
     // The staff alert's language is the platform's, never the org's: the French subject is a different sentence, so a producer that
     // took the org's locale would fail the English one below.
+    const dealPaid = await sponsorDealPaidScenario();
+    expect(dictionarySubject("fr", dealPaid.subjectKey, dealPaid.subjectVars), "the owner's fr subject differs from the org's nl one").not.toBe(
+      dictionarySubject("nl", dealPaid.subjectKey, dealPaid.subjectVars),
+    );
+
     const staffDispute = await staffDisputeAlertScenario();
     expect(dictionarySubject("fr", staffDispute.subjectKey, staffDispute.subjectVars)).not.toBe(
       dictionarySubject("en", staffDispute.subjectKey, staffDispute.subjectVars),
@@ -2200,13 +2256,15 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         staff_ai_run_cost: aiRunCostScenario(),
         staff_earn_grant_volume: earnGrantVolumeScenario(),
         staff_extra_org_allowance: extraOrgAllowanceScenario(),
+        sponsor_deal_paid: dealPaid,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
 
     const moved = SPEC_KINDS.filter((k) => !NOT_YET_MOVED.includes(k));
-    // The spec's count, typed: "With `magic_link` and `chess_invite` that is 51." Every kind has moved, so every one was swept.
-    expect(out.checked, "anti-vacuity: every kind the spec lists was swept").toBe(51);
+    // The spec's count, typed: "With `magic_link` and `chess_invite` that is 51." Every kind has moved, so every one was swept; sponsor
+    // deals Task 23's sponsor_deal_paid makes 52.
+    expect(out.checked, "anti-vacuity: every kind the spec lists was swept").toBe(52);
     expect(out.checked).toBeGreaterThan(0);
     expect(out.kinds, "and they are exactly the spec's moved kinds, in the spec's order").toEqual(moved);
   }, 60_000);

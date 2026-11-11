@@ -10,8 +10,8 @@ import "server-only";
 //
 // THE TOKEN (F9): 32 random bytes, base64url (`mintReportToken`), stored only as its sha256 (`hashReportToken`) in
 // `sponsor_orders.invoice_token_hash`. The raw token leaves only through `mintInvoiceToken`'s return value. createDeal mints it
-// in its own transaction; sendDealInvoice mints one for a numbered deal that has none (a deal made before this task); Task 23
-// mails it and rotates it on a resend. A complimentary deal has no number, so it never has one.
+// in its own transaction; every send mints a new one and mails it (Task 23: the earlier link stops opening). A complimentary deal
+// has no number, so it never has one.
 //
 // THE DOCUMENT is in the ORG's language (`default_locale`): the club issues it, whoever opens it.
 import { sql, withTenant, type Tx } from "@/lib/db";
@@ -19,7 +19,14 @@ import { HttpError } from "@/lib/errors";
 import { hasFeature } from "@/lib/entitlements";
 import { getDictionary, t } from "@/lib/i18n";
 import { toLocale, type Locale } from "@/lib/i18n-constants";
-import { allowedActions, formatInvoiceNumber, type PaymentMethod, type SponsorDeal } from "@/lib/sponsor-deals";
+import {
+  allowedActions,
+  endedStillDue,
+  formatInvoiceNumber,
+  type DealActionFacts,
+  type PaymentMethod,
+  type SponsorDeal,
+} from "@/lib/sponsor-deals";
 import type { InvoiceState } from "@/lib/sponsor-invoice";
 import type { SponsorTier } from "@/lib/sponsor-tiers";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -67,8 +74,9 @@ export interface SponsorInvoiceDoc {
  * The invoice's state (lib/sponsor-invoice.ts INVOICE_STATES), from the deal's money first: `paid`, `refunded`; an unpaid deal
  * still running is `unpaid`. An unpaid deal that ENDED says what is true of how it ended (review I3), read from `ended_reason`:
  *  - `ended_now`: the club cancelled it - `void`, nothing is due;
- *  - `expired` / `competition_finished` (the sweep) on an OFFLINE deal that went live (`live_at`): the sponsor had the placement
- *    and has not paid - still `unpaid`, with its bank details (product-owner recommendation, task-22-report.md fix round 1);
+ *  - `written_off`: the club waived what was still due (Task 23) - `written_off`, nothing is due;
+ *  - still due (`endedStillDue`: an OFFLINE deal that went live, ended by the sweep): the sponsor had the placement and has not
+ *    paid - still `unpaid`, with its bank details (product-owner recommendation, task-22-report.md fix round 1);
  *  - anything else (it never went live, an online deal, a pre-deals row): `ended`, which claims nothing - contact the club.
  * A complimentary deal (`none`) is never numbered, so it never has an invoice to ask about: a refusal, not a guess.
  */
@@ -84,8 +92,8 @@ export function invoiceState(
     case "failed": {
       if (d.deal_status !== "ended") return "unpaid";
       if (d.ended_reason === "ended_now") return "void";
-      const termRanOut = d.ended_reason === "expired" || d.ended_reason === "competition_finished";
-      return termRanOut && d.payment_method === "offline" && d.live_at !== null ? "unpaid" : "ended";
+      if (d.ended_reason === "written_off") return "written_off";
+      return endedStillDue(d) ? "unpaid" : "ended";
     }
     case "none":
       throw new Error("sponsor invoices: a complimentary deal has no invoice (it is never numbered)");
@@ -98,9 +106,7 @@ export function invoiceState(
  * webhook accepts (F12): a draft (its invoice never sent) or an awaiting-approval deal would take the money and only raise an
  * owner alert, and an ended one is not due. Offline invoices are paid by transfer, never here.
  */
-export function cardPayable(
-  d: Pick<SponsorDeal, "payment_method" | "deal_status" | "payment_status" | "disputed_at" | "ended_reason">,
-): boolean {
+export function cardPayable(d: DealActionFacts): boolean {
   return d.payment_method === "online" && allowedActions(d).includes("mark_paid");
 }
 
@@ -117,13 +123,6 @@ export async function mintInvoiceToken(tx: Tx, dealId: string): Promise<string> 
     returning id`;
   if (rows.length !== 1) throw new Error(`sponsor invoices: deal ${dealId} has no invoice number, so it has no invoice link`);
   return token;
-}
-
-/** Does this numbered deal still lack a token (a deal numbered before tokens were minted)? On `tx`. */
-export async function needsInvoiceToken(tx: Tx, dealId: string): Promise<boolean> {
-  const [row] = await tx<{ needs: boolean }[]>`
-    select invoice_number is not null and invoice_token_hash is null as needs from sponsor_orders where id = ${dealId}`;
-  return row?.needs ?? false;
 }
 
 /**
@@ -198,6 +197,14 @@ interface OrgRow {
 /** A blank setting is no setting: null, "" and whitespace-only are absent (the org PATCH normalises blanks to null since T21,
  *  and a row written before it may still hold ""). */
 const filled = (s: string | null): string | null => (s !== null && s.trim() !== "" ? s.trim() : null);
+
+/** The club's bank details for an OFFLINE invoice's email (Task 23), as its invoice settings hold them - the same setting, read
+ *  the same way (`filled`), as the invoice page's. Null when the club has set none. On `tx`. */
+export async function invoiceBankDetails(tx: Tx, orgId: string): Promise<string | null> {
+  const [org] = await tx<{ sponsor_invoice_bank_details: string | null }[]>`
+    select sponsor_invoice_bank_details from organizations where id = ${orgId}`;
+  return filled(org?.sponsor_invoice_bank_details ?? null);
+}
 
 /** Build the document for a numbered deal, on `tx` (its org's tenant). Null when the org is soft-deleted. Card payability here is
  *  the deal's alone (`cardPayable`); `withCardGate` adds the club's, outside the transaction. */

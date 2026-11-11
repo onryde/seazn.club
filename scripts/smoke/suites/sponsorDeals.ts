@@ -296,6 +296,59 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
     );
   }
 
+  // --- PR 3 Task 23: an OFFLINE invoice is emailed (F13), on the community org whose bank details the Task 21 rows saved, for a deal
+  // on its OWN sponsor (F33). Send invoice answers 200 with no payment session, the deal does not move, the send ROTATES the invoice
+  // token (F9: the stored hash changes), and exactly one `sponsor_invoice` row for the deal is queued to the billing address with the
+  // numbered subject. The row's body (the link itself) is sealed and, on this keyless server, scrubbed by the request's own first
+  // attempt, so smoke cannot read the emailed token back (sponsor-invoice-email.test.ts opens the real body and follows its link).
+  if (!process.env.DATABASE_URL) {
+    check("sd offline invoice email: skipped (no DATABASE_URL to read the outbox) - sponsor-invoice-email.test.ts covers it", true);
+  } else {
+    const billing = `delivered+deal_invoice_${tag}@resend.dev`;
+    const emailSponsor = await addSponsor(`Deal Emailed ${tag}`);
+    const emailed = await createDeal(emailSponsor, { sponsor_email: billing });
+    const emailedDeal = emailed.status === 201 ? v1data<{ deal: Deal }>(emailed).deal : null;
+    const db = smokeDb();
+    try {
+      const hashOf = async (id: string) =>
+        (await db<{ h: Buffer | null }[]>`select invoice_token_hash as h from sponsor_orders where id = ${id}`)[0]?.h ?? null;
+      const before = emailedDeal ? await hashOf(emailedDeal.id) : null;
+      const sent = emailedDeal ? await v1(free, `/api/v1/orgs/${org.id}/sponsor-deals/${emailedDeal.id}/send-invoice`, "POST") : null;
+      const sentData = sent?.status === 200 ? v1data<{ deal: Deal; checkout_url: string | null }>(sent) : null;
+      const after = emailedDeal ? await hashOf(emailedDeal.id) : null;
+      const rows = emailedDeal
+        ? await db<{ recipient: string; subject: string }[]>`
+            select recipient, subject from email_outbox
+             where kind = 'sponsor_invoice' and ref_type = 'sponsor_order' and ref_id = ${emailedDeal.id}`
+        : [];
+      check(
+        "sd offline invoice email queued with the invoice link",
+        sentData !== null && sentData.checkout_url === null && sentData.deal.deal_status === emailedDeal?.deal_status &&
+          before !== null && after !== null && !before.equals(after) &&
+          rows.length === 1 && rows[0]!.recipient === billing.toLowerCase() && /^Invoice SP-\d{4,} — /.test(rows[0]!.subject),
+      );
+
+      // The invoice page and its PDF for that deal. The emailed token cannot be read back (above), so this row plants a KNOWN
+      // token's hash on the deal the way the send stored its own (the same sha256 as server/sponsors/report-token.ts).
+      const knownToken = randomBytes(32).toString("base64url");
+      if (emailedDeal) {
+        await db`update sponsor_orders set invoice_token_hash = ${createHash("sha256").update(knownToken, "utf8").digest()}
+                  where id = ${emailedDeal.id} and invoice_number is not null`;
+      }
+      const page = await html(newSession(), `/r/sponsor/invoice/${knownToken}`);
+      const pdf = await fetch(`${BASE}/r/sponsor/invoice/${knownToken}/pdf`);
+      const bytes = Buffer.from(await pdf.arrayBuffer());
+      check(
+        "sd invoice pdf is application/pdf for an invoice token; the page reads unpaid with the bank details",
+        page.status === 200 && page.body.includes('data-state="unpaid"') && page.body.includes(invoiceBank) &&
+          pdf.status === 200 && pdf.headers.get("content-type") === "application/pdf" &&
+          bytes.subarray(0, 5).toString("latin1") === "%PDF-",
+      );
+    } finally {
+      await db.end();
+    }
+  }
+
   // --- T9, the hourly sweep's route (D20): the cron secret guards it, and the right one answers the sweep's counts. CI sets
   // CRON_SECRET for the smoke job and its server alike (ci.yml), so a wrong secret is exactly a 401.
   const wrongCron = await fetch(`${BASE}/api/cron/sponsor-deals`, { method: "POST", headers: { "x-cron-secret": "definitely-wrong-sponsor-deals" } });

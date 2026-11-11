@@ -99,6 +99,9 @@ const SPEC_LEGEND: Record<string, [to: "account" | "literal" | "staff", transact
   staff_ai_run_cost: ["staff", true],
   staff_earn_grant_volume: ["staff", true],
   staff_extra_org_allowance: ["staff", true],
+  // Sponsor deals Task 23 (plan 2026-11-07-sponsor-deals, D13): the owner's "a sponsor has paid" notice, to the owner's ACCOUNT, not
+  // transactional (a sponsor and money mail, like the sponsor kinds of wave 2).
+  sponsor_deal_paid: ["account", false],
 };
 
 /** A `db` that records the statements it is handed and answers like postgres.js does for an insert: a row list carrying the
@@ -159,8 +162,8 @@ describe("the kind facts guard (no database)", () => {
       expect(OUTBOX_KIND_FACTS[kind as OutboxKind], kind).toEqual({ to, transactional });
       checked++;
     }
-    // The spec's Counts: "With `magic_link` and `chess_invite` that is 51."
-    expect(checked, "every kind of the legend was compared").toBe(51);
+    // The spec's Counts: "With `magic_link` and `chess_invite` that is 51." Sponsor deals Task 23 adds sponsor_deal_paid: 52.
+    expect(checked, "every kind of the legend was compared").toBe(52);
     // The other direction: the code declares no kind the legend does not.
     expect(Object.keys(OUTBOX_KIND_FACTS).sort()).toEqual(Object.keys(SPEC_LEGEND).sort());
   });

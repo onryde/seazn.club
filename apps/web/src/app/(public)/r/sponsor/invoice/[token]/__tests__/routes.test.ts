@@ -117,8 +117,9 @@ async function deal(o: RigOrg, method: "online" | "offline") {
   const s = await rigSponsor(o);
   const out = await createDeal(o.auth, s.id, dealInput(p.id, { payment_method: method }), ORIGIN);
   const mine = minted.filter((m) => m.dealId === out.deal.id);
-  expect(mine, "premise: createDeal minted one token").toHaveLength(1);
-  return { id: out.deal.id, token: mine[0]!.token, checkoutUrl: out.checkout_url };
+  // createDeal mints one (F9); an online create also sends its invoice, which mints the one it mails (Task 23). The last is in effect.
+  expect(mine, "premise: createDeal minted, and an online create's send minted again").toHaveLength(method === "online" ? 2 : 1);
+  return { id: out.deal.id, token: mine.at(-1)!.token, checkoutUrl: out.checkout_url };
 }
 
 describe("before the lookup", () => {

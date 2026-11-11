@@ -215,6 +215,7 @@ const DEAL_ROUTE: Record<DealAction, string> = {
   send_invoice: "send-invoice",
   resend_invoice: "send-invoice",
   mark_paid: "mark-paid",
+  write_off: "write-off",
   approve: "approve",
   refund: "refund",
   end_now: "end",
@@ -755,9 +756,24 @@ export function OrgSponsors({
       if (action === "mark_paid") {
         const ok = await confirm({
           title: msg("sponsors.deal.markPaid.title", { amount: dealPrice(deal, locale), name }),
-          body: [msg("sponsors.deal.markPaid.body"), ...(markPaidRetiresPayLink(deal) ? [msg("sponsors.deal.confirm.markPaid.payLink", { name })] : [])].join(" "),
+          // An ended deal still due (Task 23 carry 1) does not follow its go-live rule: it stays ended, and its invoice reads Paid.
+          body: [
+            msg(deal.deal_status === "ended" ? "sponsors.deal.markPaid.bodyEnded" : "sponsors.deal.markPaid.body"),
+            ...(markPaidRetiresPayLink(deal) ? [msg("sponsors.deal.confirm.markPaid.payLink", { name })] : []),
+          ].join(" "),
           confirmLabel: msg("sponsors.deal.action.markPaid"),
           tone: "default",
+        });
+        if (!ok) return;
+      }
+      if (action === "write_off") {
+        // Task 23 carry 4: waiving what is still due is final, so it asks first, in the words the invoice will then say.
+        const amount = dealPrice(deal, locale);
+        const ok = await confirm({
+          title: msg("sponsors.deal.confirm.writeOff.title", { amount, name }),
+          body: msg("sponsors.deal.confirm.writeOff.body", { name }),
+          confirmLabel: msg("sponsors.deal.confirm.writeOff.label", { amount }),
+          tone: "danger",
         });
         if (!ok) return;
       }

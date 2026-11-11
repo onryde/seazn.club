@@ -22,13 +22,15 @@
 // and the buttons go; the sheet is the invoice.
 //
 // The token is a bearer credential. It reaches this file only inside `pdfHref` and `payAction`, and both elements that carry
-// them are `ph-no-capture` (PostHog replay never records them; lib/__tests__/scrub-secret-painters.test.ts).
+// them are `ph-no-capture` (PostHog replay never records them; lib/__tests__/scrub-secret-painters.test.ts). The pay form is
+// its own client island (invoice-pay-form.tsx: a double click sends one post, Task 23).
 import type { CSSProperties } from "react";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { INVOICE_STATE_KEY, invoiceMoney, invoiceNoteKey, type InvoiceState } from "@/lib/sponsor-invoice";
 import { fmtIsoDay } from "@/lib/sponsor-report";
 import { PrintButton } from "@/components/print-button";
+import { InvoicePayForm } from "@/components/sponsors/invoice-pay-form";
 import { TIER_MSG } from "@/components/sponsors/tier-labels";
 import type { SponsorInvoiceDoc } from "@/server/sponsors/invoice-doc";
 
@@ -42,6 +44,7 @@ export const STAMP_CLASS: Record<InvoiceState, string> = {
   unpaid: "border-[var(--mk-live)] text-[var(--mk-live)]",
   refunded: "border-ink-muted text-ink-muted",
   void: "border-ink-muted text-ink-muted",
+  written_off: "border-ink-muted text-ink-muted",
   ended: "border-ink-muted text-ink-muted",
 };
 
@@ -156,10 +159,7 @@ export function SponsorInvoiceView({
               </p>
             ) : null}
             {showPay ? (
-              <form method="post" action={payAction} data-testid="invoice-pay" className="ph-no-capture min-w-0 print:hidden">
-                <button type="submit" className="btn btn-primary w-full sm:w-auto">{t(ui, "sponsors.invoice.payByCard")}</button>
-                <p className="mt-2 text-xs text-ink-muted">{t(ui, "sponsors.invoice.payNote", { amount })}</p>
-              </form>
+              <InvoicePayForm action={payAction} label={t(ui, "sponsors.invoice.payByCard")} note={t(ui, "sponsors.invoice.payNote", { amount })} />
             ) : null}
             {doc.cardUnavailable ? (
               <p data-testid="invoice-card-unavailable" className="min-w-0 text-sm font-medium break-words text-ink">

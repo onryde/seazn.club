@@ -31,8 +31,14 @@ const DEAL_STATUSES = ["draft", "awaiting_payment", "awaiting_approval", "schedu
 const PAYMENT_METHODS = ["online", "offline", "complimentary"];
 const GO_LIVE = ["on_payment", "immediate", "on_approval"];
 /** The brief's six, plus `duplicate_payment` (controller ruling F3: a second, different intent on an already-paid deal is
- *  recorded by Task 8 as its own ENDED, paid row). */
-const ENDED_REASONS = ["refunded", "dispute_lost", "ended_now", "expired", "competition_finished", "legacy", "duplicate_payment"];
+ *  recorded by Task 8 as its own ENDED, paid row), plus `written_off` (Task 23 carry 4: the club waived an offline invoice
+ *  still due after its deal ended; the CHECK is redefined by the `__sponsor_deal_written_off.sql` delta, which the catalog
+ *  reads below carry). */
+const ENDED_REASONS = [
+  "refunded", "dispute_lost", "ended_now", "expired", "competition_finished", "legacy", "duplicate_payment", "written_off",
+];
+/** The written-off delta, found by its SUFFIX like this file's own. */
+const WRITTEN_OFF_DELTA = /^V\d+__sponsor_deal_written_off\.sql$/;
 /** D2: money keeps its meaning, plus `none` for complimentary. */
 const PAYMENT_STATUSES = ["pending", "paid", "failed", "refunded", "none"];
 
@@ -301,16 +307,47 @@ describe.skipIf(!HAS_DB)("sponsor deals schema — the constraints are real", ()
       .rejects.toMatchObject(refusedBy("23514", "sponsor_orders_tier_check"));
   });
 
-  it("ended_reason: each of the seven accepted on an ended deal, anything else refused by name (count reported)", async () => {
+  it("ended_reason: each of the eight accepted on an ended deal, anything else refused by name (count reported)", async () => {
     const w = await world();
     let accepted = 0;
     for (const r of ENDED_REASONS) {
-      await expect(insertDeal(deal(w, await sponsor(w), ended(r))), r).resolves.toBeTruthy();
+      // A write-off is of an unpaid OFFLINE deal (sponsor_orders_written_off_unpaid_offline, tested below).
+      const shape = r === "written_off" ? { ...ended(r), payment_method: "offline" } : ended(r);
+      await expect(insertDeal(deal(w, await sponsor(w), shape)), r).resolves.toBeTruthy();
       accepted++;
     }
-    expect(accepted).toBe(7);
+    expect(accepted).toBe(8);
     await expect(insertDeal(deal(w, await sponsor(w), ended("bored"))))
       .rejects.toMatchObject(refusedBy("23514", "sponsor_orders_ended_reason_check"));
+  });
+
+  it("written_off_unpaid_offline: a write-off is of an unpaid OFFLINE deal only; every other method or money refused by name (7 rows reported)", async () => {
+    expect(readdirSync(DELTAS_DIR).filter((f) => WRITTEN_OFF_DELTA.test(f)), "the written-off delta, by suffix").toHaveLength(1);
+    const w = await world();
+    const ACCEPTED: [string, Deal][] = [
+      ["offline, pending", { payment_method: "offline", status: "pending" }],
+      ["offline, failed", { payment_method: "offline", status: "failed" }],
+    ];
+    const REFUSED: [string, Deal][] = [
+      ["online, pending (a card deal ended unpaid claims nothing)", { payment_method: "online", status: "pending" }],
+      ["online, failed", { payment_method: "online", status: "failed" }],
+      ["offline, paid (nothing left to write off)", { payment_method: "offline", status: "paid" }],
+      ["offline, refunded", { payment_method: "offline", status: "refunded" }],
+      ["complimentary (never invoiced)", { ...COMPLIMENTARY, go_live: "immediate" }],
+    ];
+    let checked = 0;
+    for (const [label, shape] of ACCEPTED) {
+      await expect(insertDeal(deal(w, await sponsor(w), { ...ended("written_off"), ...shape })), label).resolves.toBeTruthy();
+      checked++;
+    }
+    for (const [label, shape] of REFUSED) {
+      await expect(insertDeal(deal(w, await sponsor(w), { ...ended("written_off"), ...shape })), label)
+        .rejects.toMatchObject(refusedBy("23514", "sponsor_orders_written_off_unpaid_offline"));
+      checked++;
+    }
+    expect(checked, "rows checked").toBe(7);
+    // The other reasons are untouched by it: an online deal ended unpaid by the sweep is still accepted.
+    await expect(insertDeal(deal(w, await sponsor(w), { ...ended("expired"), payment_method: "online", status: "pending" }))).resolves.toBeTruthy();
   });
 
   it("comp_needs_no_payment: a complimentary deal goes live immediately or on approval, never on payment", async () => {
@@ -614,8 +651,9 @@ describe.skipIf(!HAS_DB)("sponsor deals schema — the constraints are real", ()
         throw ROLLBACK;
       })).rejects.toBe(ROLLBACK);
       expect(touched, "rows the legacy block touched").toBe(1);
-      // The brief's ten named CHECKs plus the money status one; zero would mean nothing was validated.
-      expect(reimposed, "CHECKs re-imposed on the rewritten row").toBe(11);
+      // The brief's ten named CHECKs plus the money status one, plus Task 23's written_off_unpaid_offline (the
+      // `__sponsor_deal_written_off.sql` delta); zero would mean nothing was validated.
+      expect(reimposed, "CHECKs re-imposed on the rewritten row").toBe(12);
       expect(got).toEqual({
         deal_status: "ended",
         ended_reason: "legacy",

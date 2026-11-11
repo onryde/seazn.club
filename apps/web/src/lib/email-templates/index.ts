@@ -28,6 +28,12 @@ export { claimInviteTemplate, type ClaimInviteArgs } from "./claim-invite";
 export { sponsorInvoiceTemplate, type SponsorInvoiceArgs } from "./sponsor-invoice";
 export { sponsorReceiptTemplate, type SponsorReceiptArgs } from "./sponsor-receipt";
 export { sponsorRefundTemplate, type SponsorRefundArgs } from "./sponsor-refund";
+export {
+  sponsorDealPaidTemplate,
+  type SponsorDealPaidArgs,
+  type DealPaidNext,
+  DEAL_PAID_NEXT,
+} from "./sponsor-deal-paid";
 export { trialEndingTemplate, type TrialEndingArgs } from "./trial-ending";
 export {
   sponsorDisputeAlertTemplate,

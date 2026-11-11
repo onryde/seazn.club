@@ -21,12 +21,14 @@ import { FONT, PALETTE, registerFonts } from "@/server/doc-theme";
 import type { SponsorInvoiceDoc } from "./invoice-doc";
 
 /** The stamp's ink, the house print palette and the page's twin (components/sponsors/invoice-view.tsx STAMP_CLASS): unpaid
- *  reads due (the brand's red ball), paid reads settled (night), a refund, a cancellation or an ended deal reads closed (greys). */
+ *  reads due (the brand's red ball), paid reads settled (night), a refund, a cancellation, a write-off or an ended deal reads
+ *  closed (greys). */
 const STAMP_INK: Record<InvoiceState, string> = {
   paid: PALETTE.night,
   unpaid: PALETTE.ball,
   refunded: PALETTE.slate,
   void: PALETTE.mute,
+  written_off: PALETTE.mute,
   ended: PALETTE.mute,
 };
 

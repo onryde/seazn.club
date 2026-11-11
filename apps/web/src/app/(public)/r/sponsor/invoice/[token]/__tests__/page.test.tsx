@@ -151,7 +151,7 @@ describe("the view: layout, ink and what it says (no database)", () => {
     expect(html).toContain(`>${esc(t(es, "sponsors.invoice.state.unpaid"))}<`);
   });
 
-  it("the stamp wears house tokens only, never a raw palette colour; every token it names is declared in globals.css (5 states counted, review m6)", () => {
+  it("the stamp wears house tokens only, never a raw palette colour; every token it names is declared in globals.css (6 states counted, review m6; Task 23 written_off)", () => {
     const css = readFileSync(resolve(process.cwd(), "src/app/globals.css"), "utf8");
     let checked = 0;
     for (const state of INVOICE_STATES) {
@@ -166,17 +166,18 @@ describe("the view: layout, ink and what it says (no database)", () => {
       expect(openTag(renderView(viewDoc({ state, payable: false })), "invoice-state"), state).toContain(cls);
       checked++;
     }
-    expect(checked).toBe(5);
+    expect(checked).toBe(6);
     // Due and settled differ, so the stamp's ink alone tells them apart.
     expect(STAMP_CLASS.unpaid).not.toBe(STAMP_CLASS.paid);
   });
 
-  it("says what is true of every way it ended: cancelled by the club, ended and still due (with how to pay), ended with nothing claimed (3 counted, review I3)", () => {
+  it("says what is true of every way it ended: cancelled by the club, ended and still due (with how to pay), ended with nothing claimed, written off by the club (4 counted, review I3; Task 23)", () => {
     const club = "Club Bádminton Ribera";
     const cases: [string, Partial<SponsorInvoiceDoc>, string, boolean][] = [
       ["End now", { state: "void", dealEnded: true, payable: false }, t(es, "sponsors.invoice.stateNote.void"), false],
       ["offline, ran live, term ran out", { state: "unpaid", dealEnded: true, method: "offline", payable: false, bankDetails: "IBAN ES91 2100 0418 4502 0005 1332" }, t(es, "sponsors.invoice.stateNote.endedDue"), true],
       ["ended, nothing claimed", { state: "ended", dealEnded: true, payable: false }, t(es, "sponsors.invoice.stateNote.ended", { club }), false],
+      ["written off", { state: "written_off", dealEnded: true, method: "offline", payable: false, bankDetails: null }, t(es, "sponsors.invoice.stateNote.writtenOff", { club }), false],
     ];
     let checked = 0;
     for (const [label, over, note, bank] of cases) {
@@ -186,8 +187,9 @@ describe("the view: layout, ink and what it says (no database)", () => {
       expect(html, label).not.toContain('data-testid="invoice-pay"');
       checked++;
     }
-    expect(checked).toBe(3);
+    expect(checked).toBe(4);
     expect(t(es, "sponsors.invoice.stateNote.ended", { club }), "the club is named").toContain(club);
+    expect(t(es, "sponsors.invoice.stateNote.writtenOff", { club }), "the club that wrote it off is named").toContain(club);
     // The positive pair: an invoice due while its deal runs carries no note (the page says how to pay).
     expect(renderView(viewDoc())).not.toContain('data-testid="invoice-state-note"');
   });

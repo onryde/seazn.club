@@ -362,6 +362,7 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "GET /orgs/:id/sponsor-deals",
   "GET /orgs/:id/sponsor-deals/:dealId",
   "POST /orgs/:id/sponsor-deals/:dealId/mark-paid",
+  "POST /orgs/:id/sponsor-deals/:dealId/write-off",
   "POST /orgs/:id/sponsor-deals/:dealId/approve",
   "POST /orgs/:id/sponsor-deals/:dealId/end",
   "POST /orgs/:id/sponsor-deals/:dealId/refund",

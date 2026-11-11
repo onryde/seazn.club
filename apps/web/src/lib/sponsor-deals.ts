@@ -16,12 +16,13 @@ export const GO_LIVE_RULES = ["on_payment", "immediate", "on_approval"] as const
 /** D2: the money column `status` (the API's `payment_status`), plus `none` for a complimentary deal. */
 export const PAYMENT_STATUSES = ["pending", "paid", "failed", "refunded", "none"] as const;
 /** `legacy`: a pre-deals order (D6). `duplicate_payment`: a second, different payment on a paid deal, recorded as its own
- *  ended, paid row (F3). */
+ *  ended, paid row (F3). `written_off`: the club waived an offline invoice still due after its deal ended (`endedStillDue`,
+ *  Task 23): the deal was already ended, its money stays unpaid, and the reason says why nothing is owed. */
 export const END_REASONS = [
-  "refunded", "dispute_lost", "ended_now", "expired", "competition_finished", "legacy", "duplicate_payment",
+  "refunded", "dispute_lost", "ended_now", "expired", "competition_finished", "legacy", "duplicate_payment", "written_off",
 ] as const;
 /** The order allowedActions answers in. */
-export const DEAL_ACTIONS = ["send_invoice", "resend_invoice", "mark_paid", "approve", "refund", "end_now"] as const;
+export const DEAL_ACTIONS = ["send_invoice", "resend_invoice", "mark_paid", "write_off", "approve", "refund", "end_now"] as const;
 
 export type DealStatus = (typeof DEAL_STATUSES)[number];
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
@@ -196,21 +197,55 @@ export function statusAfterApproved(d: Pick<SponsorDeal, "deal_status">, otherLi
  *  to a dispute. */
 const NOT_REFUNDABLE_AFTER: ReadonlySet<EndReason> = new Set<EndReason>(["refunded", "dispute_lost"]);
 
+/** End reasons that leave an offline deal's money still owed: its term ran out (`expired`) or its competition finished, both by
+ *  the sweep. `ended_now` is the club cancelling (nothing due, the invoice reads void), and every other reason is money already
+ *  settled or a row that was never a deal. */
+const STILL_DUE_AFTER: ReadonlySet<EndReason> = new Set<EndReason>(["expired", "competition_finished"]);
+
+/** Is this an ENDED deal whose invoice is still due (review I3; Task 23 carries 1 and 4)? An OFFLINE deal that went live
+ *  (`live_at`), then ended unpaid because its term ran out or its competition finished: the sponsor had the placement, so the
+ *  money is owed. The club can still mark it paid (the deal stays ended) or write it off (`written_off`). An online deal ended
+ *  unpaid claims nothing (its card link is gone), and one that never went live had nothing to pay for. The invoice reads it as
+ *  `unpaid` (server/sponsors/invoice-doc.ts `invoiceState`). */
+export function endedStillDue(
+  d: Pick<SponsorDeal, "deal_status" | "payment_method" | "payment_status" | "live_at" | "ended_reason">,
+): boolean {
+  return (
+    d.deal_status === "ended" &&
+    d.payment_method === "offline" &&
+    isUnpaid(d.payment_status) &&
+    d.live_at !== null &&
+    d.ended_reason !== null &&
+    STILL_DUE_AFTER.has(d.ended_reason)
+  );
+}
+
+/** The fields `allowedActions` reads. */
+export type DealActionFacts = Pick<
+  SponsorDeal,
+  "deal_status" | "payment_method" | "payment_status" | "disputed_at" | "ended_reason" | "sponsor_email" | "live_at"
+>;
+
 /** The actions a deal offers, in DEAL_ACTIONS order. TOTAL (F15): every deal_status × payment_status × method answers.
- *  Task 6 refuses with 409, before any write, every action this does not offer (F12). `*_invoice` is online-only here;
- *  Task 23 adds resend_invoice for offline deals with an email (F13). */
-export function allowedActions(
-  d: Pick<SponsorDeal, "deal_status" | "payment_method" | "payment_status" | "disputed_at" | "ended_reason">,
-): DealAction[] {
+ *  Task 6 refuses with 409, before any write, every action this does not offer (F12). `send_invoice` is online-only (a draft
+ *  waits for it). `resend_invoice` is offered on an unpaid deal that is due: an online one, or an offline one with a billing
+ *  email to send it to (F13) - an offline invoice is emailed, never paid by card - and an offline deal still due after it ended
+ *  (`endedStillDue`) with an email. `mark_paid` on every unpaid deal that is due, ended-and-still-due included (the deal stays
+ *  ended); `write_off` only on an ended deal still due. */
+export function allowedActions(d: DealActionFacts): DealAction[] {
   const s = d.deal_status;
   const online = d.payment_method === "online";
+  const offline = d.payment_method === "offline";
   const paidFor = d.payment_method !== "complimentary";
   const unpaid = paidFor && isUnpaid(d.payment_status);
   const payable = s === "awaiting_payment" || s === "live" || s === "scheduled";
+  const hasEmail = d.sponsor_email !== null && d.sponsor_email !== "";
+  const endedDue = endedStillDue(d);
   const offered: Record<DealAction, boolean> = {
     send_invoice: s === "draft" && online && unpaid,
-    resend_invoice: payable && online && unpaid,
-    mark_paid: payable && unpaid,
+    resend_invoice: (payable && unpaid && (online || (offline && hasEmail))) || (endedDue && hasEmail),
+    mark_paid: (payable && unpaid) || endedDue,
+    write_off: endedDue,
     approve: s === "awaiting_approval",
     refund:
       paidFor &&
@@ -313,6 +348,8 @@ export function invoiceActionOnCreate(rule: GoLiveRule, queued: boolean): "send_
     payment_status: initialPaymentStatus("online"),
     disputed_at: null,
     ended_reason: null,
+    sponsor_email: "billing@example.invalid", // an online deal always has one (the V495 CHECK online_has_email)
+    live_at: null,
   });
   if (offered.includes("send_invoice")) return "send_invoice";
   if (offered.includes("resend_invoice")) return "resend_invoice";

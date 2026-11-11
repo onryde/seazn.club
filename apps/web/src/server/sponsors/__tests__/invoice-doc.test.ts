@@ -85,11 +85,12 @@ afterAll(async () => {
   if (HAS_DB) await cleanUp();
 });
 
-/** The token the real producer minted for this deal (exactly one so far). */
+/** The token in effect for this deal: the LAST one the real producers minted. createDeal mints one for every numbered deal (F9);
+ *  an online create then sends its invoice, and every send mints a new one (Task 23), so an online deal starts with two. */
 function tokenOf(dealId: string): string {
   const mine = minted.filter((m) => m.dealId === dealId);
-  expect(mine, `premise: one token minted for ${dealId}`).toHaveLength(1);
-  return mine[0]!.token;
+  expect(mine.length, `premise: a token minted for ${dealId}`).toBeGreaterThan(0);
+  return mine.at(-1)!.token;
 }
 
 /** An org, a package, a sponsor and a deal made by the REAL createDeal. */
@@ -152,21 +153,24 @@ describe("invoiceState and cardPayable: the rules, total over every deal shape (
       [{ ...run, payment_status: "pending", deal_status: "ended", ended_reason: "expired", live_at: LIVE_AT }, "ended"],
       [{ ...run, payment_status: "failed", deal_status: "ended", ended_reason: "competition_finished" }, "ended"],
       [{ ...run, payment_status: "pending", deal_status: "ended", ended_reason: "legacy", payment_method: "offline", live_at: LIVE_AT }, "ended"],
+      // The club waived what was still due (Task 23 carry 4): nothing is due, and the invoice says who decided.
+      [{ ...run, payment_status: "pending", deal_status: "ended", ended_reason: "written_off", payment_method: "offline", live_at: LIVE_AT }, "written_off"],
+      [{ ...run, payment_status: "failed", deal_status: "ended", ended_reason: "written_off", payment_method: "offline", live_at: LIVE_AT }, "written_off"],
     ];
     let checked = 0;
     for (const [deal, state] of cases) {
       expect(invoiceState(deal), JSON.stringify(deal)).toBe(state);
       checked++;
     }
-    expect(checked).toBe(16);
+    expect(checked).toBe(18);
     // Every state is reached by some row (the sweep is total over the five).
-    expect(new Set(cases.map(([, st]) => st))).toEqual(new Set(["paid", "refunded", "unpaid", "void", "ended"]));
+    expect(new Set(cases.map(([, st]) => st))).toEqual(new Set(["paid", "refunded", "unpaid", "void", "written_off", "ended"]));
     // "Cannot happen" is a refusal: a complimentary deal is never numbered, so it is never asked for a state.
     expect(() => invoiceState({ ...run, payment_status: "none", deal_status: "live" })).toThrow(/complimentary/);
   });
 
   it("payable: online AND a payment would move the deal (unpaid; awaiting payment, live or scheduled) - never offline, a draft, or ended (counted)", () => {
-    const base = { disputed_at: null, ended_reason: null } as const;
+    const base = { disputed_at: null, ended_reason: null, sponsor_email: "billing@acme.test", live_at: null } as const;
     const cases: [Parameters<typeof cardPayable>[0], boolean][] = [
       [{ ...base, payment_method: "online", payment_status: "pending", deal_status: "awaiting_payment" }, true],
       [{ ...base, payment_method: "online", payment_status: "failed", deal_status: "awaiting_payment" }, true],
@@ -179,6 +183,8 @@ describe("invoiceState and cardPayable: the rules, total over every deal shape (
       [{ ...base, payment_method: "online", payment_status: "refunded", deal_status: "ended", ended_reason: "refunded" }, false],
       [{ ...base, payment_method: "offline", payment_status: "pending", deal_status: "awaiting_payment" }, false],
       [{ ...base, payment_method: "complimentary", payment_status: "none", deal_status: "live" }, false],
+      // Still due after it ended (Task 23): the club can mark it paid, but an offline invoice is never paid by card.
+      [{ ...base, payment_method: "offline", payment_status: "pending", deal_status: "ended", ended_reason: "expired", live_at: "2026-06-01T10:00:00.000Z" }, false],
     ];
     let checked = 0;
     for (const [deal, payable] of cases) {
@@ -187,7 +193,7 @@ describe("invoiceState and cardPayable: the rules, total over every deal shape (
       if (payable) expect(allowedActions(deal)).toContain("mark_paid");
       checked++;
     }
-    expect(checked).toBe(11);
+    expect(checked).toBe(12);
   });
 });
 
@@ -419,8 +425,8 @@ describe.skipIf(!HAS_DB)("the invoice document, from the real token (DB, F9)", (
   });
 });
 
-describe.skipIf(!HAS_DB)("sendDealInvoice mints for a NUMBERED online deal with no token; keyed on the number, never the method (F9, carry m6)", () => {
-  it("a numbered deal with no token (made before this task) gets one on its next send, and it resolves; a later send keeps it", async () => {
+describe.skipIf(!HAS_DB)("sendDealInvoice mints a NEW token on every send of a NUMBERED deal; keyed on the number, never the method (F9, carry m6; Task 23)", () => {
+  it("a numbered deal with no token (made before T22) gets one on its next send, and it resolves; a later send ROTATES it: a new hash, the old link opens nothing", async () => {
     const { o, id } = await made({ payment_method: "online" });
     tokenOf(id); // createDeal's own
     await sql`update sponsor_orders set invoice_token_hash = null where id = ${id}`; // as a deal made between T20 and T22 is
@@ -428,14 +434,15 @@ describe.skipIf(!HAS_DB)("sendDealInvoice mints for a NUMBERED online deal with 
     await sendDealInvoice(o.auth, id, ORIGIN);
     const token = tokenOf(id);
     expect(await invoiceDocByToken(token)).toMatchObject({ number: "SP-0001", state: "unpaid", payable: true });
-    const kept = (await invoiceCols(id)).invoice_token_hash;
+    const first = (await invoiceCols(id)).invoice_token_hash;
     await sendDealInvoice(o.auth, id, ORIGIN);
-    expect(minted, "no second mint: rotation is Task 23's").toHaveLength(1);
-    expect((await invoiceCols(id)).invoice_token_hash, "the same hash").toEqual(kept);
-    expect(await invoiceDocByToken(token)).not.toBeNull();
+    expect(minted, "the second send mints again (Task 23: every send rotates)").toHaveLength(2);
+    expect((await invoiceCols(id)).invoice_token_hash, "a new hash").not.toEqual(first);
+    expect(await invoiceDocByToken(token), "the earlier link opens nothing").toBeNull();
+    expect(await invoiceDocByToken(minted[1]!.token)).toMatchObject({ number: "SP-0001" });
   });
 
-  it("an UNNUMBERED online deal (a deal made before V500: seeded as the smoke suite seeds one) is sent but never minted - no number, no invoice", async () => {
+  it("an UNNUMBERED online deal (a deal made before V500: seeded as the smoke suite seeds one) has no invoice page to link: refused 409 before Stripe, nothing minted or written", async () => {
     const o = await rigOrg();
     const p = await rigPackage(o);
     const s = await rigSponsor(o);
@@ -445,10 +452,13 @@ describe.skipIf(!HAS_DB)("sendDealInvoice mints for a NUMBERED online deal with 
       values (${o.orgId}, ${p.id}, ${s.id}, ${s.name}, ${`old-${uniq()}@test.local`}, 25000, 'gbp', 'pending',
               'awaiting_payment', 'online', 'on_payment', 'partner', false, ${p.name}, ${null})
       returning id`;
-    const out = await sendDealInvoice(o.auth, row!.id, ORIGIN);
-    expect(out.checkout_url, "premise: the send itself worked").toMatch(/^https:\/\/checkout\.stripe\.test\//);
+    clearStripe();
+    await expect(sendDealInvoice(o.auth, row!.id, ORIGIN)).rejects.toMatchObject({ status: 409, code: "deal_not_invoiceable" });
+    expect(stripeCalls(), "refused before Stripe").toBe(0);
     expect(minted).toEqual([]);
     expect(await invoiceCols(row!.id)).toEqual({ invoice_number: null, invoice_token_hash: null });
+    const [sent] = await sql<{ invoice_send_count: number }[]>`select invoice_send_count from sponsor_orders where id = ${row!.id}`;
+    expect(sent!.invoice_send_count, "no send was counted").toBe(0);
   });
 });
 

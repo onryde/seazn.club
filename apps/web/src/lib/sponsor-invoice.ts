@@ -10,9 +10,10 @@ import type { MessageKey } from "@/lib/messages";
  *  - `unpaid`: still due - including an OFFLINE deal that went live and then ended unpaid (its term ran out, or its competition
  *    finished): the sponsor had the placement, so the money is still owed and the invoice keeps its bank details;
  *  - `void`: the club ended the deal (End now) before it was paid - nothing is due;
+ *  - `written_off`: an invoice still due after its deal ended, which the club waived (Task 23) - nothing is due;
  *  - `ended`: any other deal that ended unpaid (it never went live, or it was paid by card) - no claim either way: contact the
  *    club. */
-export const INVOICE_STATES = ["paid", "unpaid", "refunded", "void", "ended"] as const;
+export const INVOICE_STATES = ["paid", "unpaid", "refunded", "void", "written_off", "ended"] as const;
 export type InvoiceState = (typeof INVOICE_STATES)[number];
 
 /** Each state's stamp, and the line under it. Typed key maps - the i18n house rule bans dynamic keys. */
@@ -21,12 +22,14 @@ export const INVOICE_STATE_KEY: Record<InvoiceState, MessageKey> = {
   unpaid: "sponsors.invoice.state.unpaid",
   refunded: "sponsors.invoice.state.refunded",
   void: "sponsors.invoice.state.void",
+  written_off: "sponsors.invoice.state.writtenOff",
   ended: "sponsors.invoice.state.ended",
 };
 export const INVOICE_STATE_NOTE_KEY: Record<Exclude<InvoiceState, "unpaid">, MessageKey> = {
   paid: "sponsors.invoice.stateNote.paid",
   refunded: "sponsors.invoice.stateNote.refunded",
   void: "sponsors.invoice.stateNote.void",
+  written_off: "sponsors.invoice.stateNote.writtenOff",
   ended: "sponsors.invoice.stateNote.ended",
 };
 

@@ -90,7 +90,7 @@ describe("invoicePdf", () => {
     expect([...LOCALES]).toEqual(["en", "fr", "es", "nl"]);
   });
   for (const locale of LOCALES) {
-    it(`stamps each state in ${locale}'s word, with the line that says where it stands (5 states)`, async () => {
+    it(`stamps each state in ${locale}'s word, with the line that says where it stands (6 states)`, async () => {
       const ui = await getDictionary(locale, "ui");
       const club = { club: "Riverside Shuttlers" };
       let checked = 0;
@@ -110,7 +110,7 @@ describe("invoicePdf", () => {
         expect(runs.filter((r) => r.text.includes("\u0000")), `${locale} ${state}`).toEqual([]);
         checked += 1;
       }
-      expect(checked).toBe(5);
+      expect(checked).toBe(6);
     }, INVOICE_STATES.length * RENDER_BUDGET_MS);
   }
 

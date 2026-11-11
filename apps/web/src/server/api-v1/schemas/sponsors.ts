@@ -81,10 +81,11 @@ export const SponsorDealCreated = z.object({
   checkout_url: z.string().nullable(),
 });
 
-/** Send invoice (Task 7): the deal after the send and the Checkout url the invoice carries (beside the deal, never on it). */
+/** Send invoice (Task 7; Task 23): the deal after the send and, for an ONLINE deal, its Checkout url (beside the deal, never on
+ *  it; the console's copy link). The email itself links the numbered invoice page, never this url. Null for an offline deal. */
 export const SponsorDealInvoiceSent = z.object({
   deal: SponsorDeal,
-  checkout_url: z.string(),
+  checkout_url: z.string().nullable(),
 });
 
 export const Sponsor = z.object({

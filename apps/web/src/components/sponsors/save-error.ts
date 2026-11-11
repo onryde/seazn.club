@@ -45,6 +45,8 @@ export const SAVE_ERROR_MSG: Readonly<Record<EnvelopeCode | SponsorRefusalCode, 
   deal_not_refundable: "sponsors.error.notRefundable",
   deal_disputed: "sponsors.error.dealDisputed",
   deal_not_invoiceable: "sponsors.error.notInvoiceable",
+  no_billing_email: "sponsors.error.noBillingEmail",
+  deal_nothing_due: "sponsors.error.nothingDue",
   deal_changed: "sponsors.error.dealChanged",
   illegal_transition: "sponsors.error.dealChanged",
   // Mark as paid's refusal (F37): the sponsor's own payment is in flight. Resend says it its own way (below).
