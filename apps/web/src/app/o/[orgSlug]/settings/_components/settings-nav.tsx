@@ -210,36 +210,6 @@ export function SettingsNav({
 }) {
   return (
     <aside className={compact ? "w-full" : "w-full md:w-44 md:shrink-0"} data-nav-shape={compact ? "strip" : "rail"}>
-      {/* The Organisation tab's plan line (owner 2026-11-11, option B): the rail's plan + streaming-credit balance, its Credits
-          link and its back link, on ONE line above the strip because this tab has no rail. Same `context`, same routes. It
-          wraps (never clips): chips first, then Buy credits and the back link; `ml-auto` pushes the back link right. */}
-      {compact && context && (
-        <div data-testid="settings-plan-line" className="mb-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
-          <span data-testid="settings-plan-line-plan" className="rounded-full bg-purple-50 px-2.5 py-1 font-semibold text-slate-800">
-            {context.plan}
-          </span>
-          <span data-testid="settings-plan-line-credits" className="rounded-full border border-purple-100 px-2.5 py-1 text-xs text-slate-700">
-            {t(dict, "settings.nav.streamCreditsLeft", { count: context.streamCredits })}
-          </span>
-          {/* Phones: a forced break, so the line is always chips / links (two short lines), never a lucky one-line fit. */}
-          <span aria-hidden="true" className="basis-full md:hidden" />
-          <Link
-            href={routes.credits(orgSlug)}
-            data-testid="settings-plan-line-buy"
-            className="text-xs font-medium text-purple-700 underline-offset-2 hover:underline"
-          >
-            {t(dict, "stream.auto.buyCredits")} →
-          </Link>
-          <Link
-            href={routes.orgHome(orgSlug)}
-            data-testid="settings-plan-line-back"
-            className="ml-auto text-sm text-slate-500 transition hover:text-slate-700"
-          >
-            ← {t(dict, "settings.nav.backToCompetitions")}
-          </Link>
-        </div>
-      )}
-
       {!compact && (
       <p className="mb-3 hidden px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500 md:block">
         {t(dict, "settings.nav.title")}
