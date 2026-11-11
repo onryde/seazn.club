@@ -82,6 +82,9 @@ export const VERDICTS: Record<string, true | string> = {
   // R4 S14: the sponsor report link IS a credential (32 random bytes; whoever holds it reads that sponsor's figures), though it
   // sits under `/r/` beside the registration lookup above.
   "(public)/r/sponsor/[token]": true,
+  // Sponsor deals T22: the invoice link is the same kind of credential (32 random bytes; whoever holds it reads the invoice and
+  // can open its Checkout), with its /pdf and /pay handlers.
+  "(public)/r/sponsor/invoice/[token]": true,
   "api/v1/public/registrations/by-ref/[ref]": "the same reference; the withdrawal token rides the request body",
 };
 

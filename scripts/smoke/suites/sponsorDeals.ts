@@ -1,9 +1,11 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP/DB helpers, tag): see the header of that file.
+import { createHash, randomBytes } from "node:crypto";
 import {
   BASE,
   type Session,
   call,
   check,
+  cookieHeader,
   html,
   newSession,
   postSignedStripeWebhook,
@@ -236,6 +238,61 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
       proPayments.body.includes('data-testid="sponsor-invoices-card"') &&
       areaBody(proPayments.body, "sponsor-invoice-address") !== null,
   );
+
+  // --- PR 3 Task 22: the numbered invoice. Its page answers one opaque 404 for a token that opens nothing.
+  const unknownInvoice = await html(newSession(), `/r/sponsor/invoice/${randomBytes(32).toString("base64url")}`);
+  check(
+    "sd invoice page 404 for an unknown token",
+    unknownInvoice.status === 404 && unknownInvoice.body.includes('data-testid="sponsor-invoice-not-found"') &&
+      !unknownInvoice.body.includes('data-testid="sponsor-invoice"'),
+  );
+
+  // The console's copy, for a numbered offline deal on its OWN sponsor (F33) of the Pro org: "read" auth, so the viewer gets it.
+  const invoiceSponsor = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${proOrgId}/sponsors`, "POST", { name: `Deal Invoice ${tag}` }),
+  ).id;
+  const invoiceDeal = await v1(admin, `/api/v1/orgs/${proOrgId}/sponsors/${invoiceSponsor}/deals`, "POST", {
+    package_id: proPkg.id, competition_id: null, payment_method: "offline", go_live: "on_payment",
+  });
+  const invoiceDealId = invoiceDeal.status === 201 ? v1data<{ deal: Deal }>(invoiceDeal).deal.id : "";
+  const consolePdf = invoiceDealId
+    ? await fetch(`${BASE}/api/v1/orgs/${proOrgId}/sponsor-deals/${invoiceDealId}/invoice.pdf`, { headers: { cookie: cookieHeader(viewer) } })
+    : null;
+  const pdfBytes = consolePdf ? Buffer.from(await consolePdf.arrayBuffer()) : Buffer.alloc(0);
+  check(
+    "sd console invoice.pdf is application/pdf (read auth)",
+    consolePdf?.status === 200 &&
+      consolePdf.headers.get("content-type") === "application/pdf" &&
+      /^attachment; filename="SP-\d{4,}\.pdf"$/.test(consolePdf.headers.get("content-disposition") ?? "") &&
+      pdfBytes.subarray(0, 5).toString("latin1") === "%PDF-",
+  );
+
+  // Pay refuses a paid invoice. The raw token leaves the app only in the invoice email (Task 23), so this row plants a KNOWN
+  // token's hash on the deal it just marked paid (the same sha256 as server/sponsors/report-token.ts hashReportToken); the
+  // smoke row that opens a REAL emailed token is Task 23's (F9).
+  if (!process.env.DATABASE_URL) {
+    check("sd pay refuses a paid invoice (409): skipped (no DATABASE_URL to plant a known token) - routes.test.ts covers it", true);
+  } else {
+    const markedPaid = invoiceDealId ? await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-deals/${invoiceDealId}/mark-paid`, "POST") : null;
+    const knownToken = randomBytes(32).toString("base64url");
+    const db = smokeDb();
+    try {
+      await db`update sponsor_orders set invoice_token_hash = ${createHash("sha256").update(knownToken, "utf8").digest()}
+                where id = ${invoiceDealId} and invoice_number is not null`;
+    } finally {
+      await db.end();
+    }
+    const payRes = await fetch(`${BASE}/r/sponsor/invoice/${knownToken}/pay`, { method: "POST", redirect: "manual" });
+    const invoicePage = await html(newSession(), `/r/sponsor/invoice/${knownToken}`);
+    check(
+      "sd pay refuses a paid invoice (409)",
+      markedPaid?.status === 200 && v1data<Deal>(markedPaid).payment_status === "paid" &&
+        payRes.status === 409 && !payRes.headers.get("location") &&
+        // The positive pair: the same token opens the invoice, stamped paid, with no pay form.
+        invoicePage.status === 200 && invoicePage.body.includes('data-testid="sponsor-invoice"') &&
+        invoicePage.body.includes('data-state="paid"') && !invoicePage.body.includes('data-testid="invoice-pay"'),
+    );
+  }
 
   // --- T9, the hourly sweep's route (D20): the cron secret guards it, and the right one answers the sweep's counts. CI sets
   // CRON_SECRET for the smoke job and its server alike (ci.yml), so a wrong secret is exactly a 401.

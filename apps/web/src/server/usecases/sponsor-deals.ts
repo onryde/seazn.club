@@ -46,6 +46,7 @@ import {
   type ServerDeal,
 } from "@/server/sponsors/deal-apply";
 import { assertOnlineAllowed, assertPlacementAllowed } from "@/server/sponsors/deal-gates";
+import { cardPayable, invoiceDealByToken, mintInvoiceToken, needsInvoiceToken } from "@/server/sponsors/invoice-doc";
 import { allocateInvoiceNumber } from "@/server/sponsors/invoice-number";
 import { assertOutboxCanQueue, dispatchNow } from "@/server/email-outbox";
 import { log } from "@/server/logger";
@@ -325,6 +326,9 @@ export async function createDeal(
           ${auth.userId}, ${status === "live" ? now : null}, ${invoiceNumber})
         returning id`;
       if (!row) throw new Error("insert into sponsor_orders returned no row");
+      // F9 (Task 22): a numbered deal has an invoice, so it gets the token its invoice page opens with, in this transaction. Keyed
+      // on the NUMBER (one authority), never the method. The raw token is not kept here: Task 23 mails it.
+      if (invoiceNumber !== null) await mintInvoiceToken(tx, row.id);
       await applyDealsToSponsor(tx, sponsorId, auth.userId, { now, endedDealId });
       return reread(tx, row.id);
     });
@@ -379,6 +383,9 @@ export async function sendDealInvoice(
                checkout_expires_at = to_timestamp(${session.expires_at}),
                invoice_send_count = ${sendNo}, invoice_sent_at = ${now}, deal_status = ${statusAfterInvoiceSent(current)}
          where id = ${dealId}`;
+      // F9 (Task 22): a numbered deal made before invoice tokens has none; its next send gives it one. A deal that has one keeps
+      // it (rotation on a resend is Task 23's), and an unnumbered deal has no invoice to open.
+      if (await needsInvoiceToken(tx, dealId)) await mintInvoiceToken(tx, dealId);
       queued = await queueSponsorInvoice(tx, { deal: { ...current, org_id: auth.orgId }, checkoutUrl: session.url, sendNo });
       await applyDealsToSponsor(tx, pre.sponsor_id!, auth.userId, { now });
       return reread(tx, dealId);
@@ -387,6 +394,51 @@ export async function sendDealInvoice(
     if (first) deferred(() => dispatchNow([first]));
     await expirePublicSponsors(auth.orgId, "sponsor.deal.send_invoice");
     return { deal, checkout_url: session.url };
+  });
+}
+
+/** The sponsor's Pay by card on an invoice that cannot take a card payment now (paid, refunded, ended, offline, a draft). */
+const notCardPayable = () =>
+  sponsorRefusal(409, "this invoice cannot be paid by card: it is paid, offline, not sent yet, or the deal has ended", "deal_not_payable");
+
+/**
+ * Pay by card from the invoice page (Task 22; D14, F32): the sponsor's token names the deal, and the answer is the Checkout url
+ * to send them to. No session and no login: the token is the credential, and it names nothing but this one deal.
+ *
+ * Refusals come first, before Stripe: a token that names no numbered deal is 404 (the page's own opaque answer); an invoice
+ * that is not `cardPayable` is 409 `deal_not_payable` and mints nothing. Then the same gates a send asks (`sponsors.monetize`,
+ * Connect taking charges). The session is `ensureDealCheckout`'s - the ONE reuse-or-retire-and-mint rule (F32), not restated
+ * here. A reused session is answered as it is. A minted one is stored in the one lock order (F2), compare-and-set against what
+ * the deal held when it was read (`deal_changed` otherwise), and it moves `invoice_send_count` on by one: that count numbers
+ * the deal's Stripe keys (`sponsor-deal-<id>-<count + 1>`), so a later mint - a send's or another pay's - takes a fresh key
+ * rather than replaying this session. Nothing else moves: paying is not a send (no email, no `invoice_sent_at`).
+ */
+export async function payInvoice(token: string, origin: string): Promise<string> {
+  return atBoundary(async () => {
+    const found = await invoiceDealByToken(token);
+    if (!found) throw new HttpError(404, "invoice not found");
+    const pre = await withTenant(found.orgId, (tx) => readDeal(tx, found.dealId));
+    if (!pre) throw new HttpError(404, "invoice not found");
+    // A legacy row (no sponsor) is never numbered; a guard for the lock below.
+    if (!cardPayable(pre) || pre.sponsor_id === null) throw notCardPayable();
+    await assertOnlineAllowed(found.orgId, pre.competition_id);
+    const org = await checkoutOrg(found.orgId);
+    const session = await ensureDealCheckout(pre, org, origin);
+    if (!session.minted) return session.url;
+
+    await withTenant(found.orgId, async (tx) => {
+      const locked = await lockSponsorAndDeals(tx, pre.sponsor_id!);
+      const current = locked?.deals.find((d) => d.id === pre.id);
+      if (!locked || !current) throw new HttpError(404, "invoice not found");
+      if (!cardPayable(current)) throw notCardPayable();
+      if (current.checkout_session_id !== null || current.invoice_send_count !== pre.invoice_send_count) throw dealChanged();
+      await tx`
+        update sponsor_orders
+           set checkout_session_id = ${session.id}, checkout_url = ${session.url},
+               checkout_expires_at = to_timestamp(${session.expires_at}), invoice_send_count = ${pre.invoice_send_count + 1}
+         where id = ${pre.id}`;
+    });
+    return session.url;
   });
 }
 

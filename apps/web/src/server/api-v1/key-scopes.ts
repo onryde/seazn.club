@@ -451,6 +451,8 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   // registrant/sponsor PII bundles.
   "GET /registrations/:id/evidence",
   "GET /orgs/:id/sponsor-deals/:dealId/evidence",
+  // Sponsor deals T22: a deal's invoice PDF carries the sponsor's billing email and the club's bank details - console-only.
+  "GET /orgs/:id/sponsor-deals/:dealId/invoice.pdf",
   // Browser-upload handshake (v8): signed URLs are a console UX, not an API
   // surface — a leaked key must not mint writable storage URLs.
   "POST /divisions/:id/logo-upload-url",
