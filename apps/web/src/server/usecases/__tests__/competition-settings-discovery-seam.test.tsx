@@ -111,7 +111,7 @@ describe.skipIf(!HAS_DB)("competition settings → PATCH schema → patchCompeti
     expect(row.discovery).toMatchObject(STORED);
   });
 
-  it("an entitled form (it sends tagline and hero): the stored pair still survives, saved twice", async () => {
+  it("an entitled form (it sends the tagline): the stored pair still survives, saved twice", async () => {
     const owner = await seedOwner();
     const comp = await located(owner);
     await saveThroughIsland(owner, comp, true, "Renamed once");
@@ -119,6 +119,6 @@ describe.skipIf(!HAS_DB)("competition settings → PATCH schema → patchCompeti
     const row = await stored(comp.id);
     expect(row.name).toBe("Renamed twice");
     expect(row.discovery).toMatchObject(STORED);
-    expect(row.discovery).toMatchObject({ tagline: null, hero_image_path: null });
+    expect(row.discovery).toMatchObject({ tagline: null });
   });
 });

@@ -54,15 +54,19 @@ test.describe.serial("org management", () => {
     // Fresh context → the setup org is active again (cookie from storageState).
     expect((await activeOrg(page)).id).toBe(original.id);
 
-    // Over to the second org — through the breadcrumb org dropdown (`OrgCrumb`),
-    // the switcher a person reaches for on any page now that settings C8 took
-    // the settings-header OrgSwitcher away.
+    // Over to the second org — through the account menu, the one place
+    // organisations are switched now (settings C8 took the settings-header
+    // OrgSwitcher away; the breadcrumb org crumb is text, not a picker).
+    const { data: orgs } = await apiJson<{ id: string; slug: string; name: string }[]>(
+      page.request,
+      "/api/orgs",
+    );
+    const slugOf = (name: string) => orgs?.find((o) => o.name === name)?.slug ?? "";
     await page.goto("/settings");
     let beforeSwitch = new URL(page.url()).pathname;
-    await page.getByRole("button", { name: original.name, exact: true }).click();
-    await page.getByRole("menuitem", { name: secondOrgName, exact: true }).click();
-    // The crumb is a plain link to the same page under the other org; the
-    // cookie follows a beat later (ActiveOrgSync POSTs from the org layout).
+    await page.getByTestId("account-menu-trigger").click();
+    await page.getByTestId(`account-menu-org-${slugOf(secondOrgName)}`).click();
+    // The cookie follows a beat later (ActiveOrgSync POSTs from the org layout).
     // Wait for the navigation to land before driving the page again — a
     // page.goto issued into it is cancelled with net::ERR_ABORTED.
     await page.waitForURL((u) => u.pathname !== beforeSwitch, { timeout: 20_000 });
@@ -78,8 +82,8 @@ test.describe.serial("org management", () => {
 
     // …and back to the original.
     beforeSwitch = new URL(page.url()).pathname;
-    await page.getByRole("button", { name: secondOrgName, exact: true }).click();
-    await page.getByRole("menuitem", { name: original.name, exact: true }).click();
+    await page.getByTestId("account-menu-trigger").click();
+    await page.getByTestId(`account-menu-org-${slugOf(original.name)}`).click();
     await page.waitForURL((u) => u.pathname !== beforeSwitch, { timeout: 20_000 });
     await expect
       .poll(async () => (await activeOrg(page)).id, { timeout: 20_000 })
