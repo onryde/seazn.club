@@ -9,6 +9,10 @@
 //
 // The save payload is NOT defined here: `toPutSlot` in lineup-editor.tsx is
 // unchanged, and `order_no` is still the row's index in the draft array.
+//
+// Move up / move down within a group is OWNER-APPROVED (2026-11-11): the old
+// editor's ▲/▼ arrows move into the ⋯ menu, and "up" means up within the
+// group the scorer is looking at (Starting, Bench, or Coaches & staff).
 import type { SlotDraft } from "@/components/v2/lineup-editor";
 import type { MessageKey } from "@/lib/messages";
 
@@ -23,13 +27,21 @@ export type LineupAction =
   | { type: "move"; dir: "up" | "down" }
   | { type: "remove" };
 
+export type LineupGroupKey = "starting" | "bench" | "staff";
+
+/** The editor's group of one row: anyone whose role is not "player" is in
+ *  Coaches & staff (whatever their stored slot), players by their slot. */
+export function groupKeyOf(s: Pick<SlotDraft, "role" | "slot">): LineupGroupKey {
+  return s.role !== "player" ? "staff" : s.slot;
+}
+
 /** The row that is the nearest neighbour of `index` IN ITS OWN GROUP
- *  (Starting / Bench), or -1. The editor shows two groups, so "up" means up
- *  within the group the scorer is looking at. */
+ *  (Starting / Bench / Coaches & staff), or -1. "up" means up within the group
+ *  the scorer is looking at. */
 function groupNeighbour(slots: SlotDraft[], index: number, dir: "up" | "down"): number {
   const step = dir === "up" ? -1 : 1;
   for (let j = index + step; j >= 0 && j < slots.length; j += step) {
-    if (slots[j]!.slot === slots[index]!.slot) return j;
+    if (groupKeyOf(slots[j]!) === groupKeyOf(slots[index]!)) return j;
   }
   return -1;
 }
@@ -70,16 +82,21 @@ export function applyLineupAction(
   }
 }
 
-/** Starting and bench rows, each carrying its index in the FULL draft (that
- *  index is what `toPutSlot` turns into `order_no`). */
+/** Starting, bench and coaches/staff rows, each carrying its index in the FULL
+ *  draft (that index is what `toPutSlot` turns into `order_no`). The row number
+ *  the editor SHOWS is the row's place within its own group, never that index. */
 export function groupSlots(slots: SlotDraft[]): {
   starting: { s: SlotDraft; index: number }[];
   bench: { s: SlotDraft; index: number }[];
+  staff: { s: SlotDraft; index: number }[];
 } {
-  const starting: { s: SlotDraft; index: number }[] = [];
-  const bench: { s: SlotDraft; index: number }[] = [];
-  slots.forEach((s, index) => (s.slot === "starting" ? starting : bench).push({ s, index }));
-  return { starting, bench };
+  const out = { starting: [], bench: [], staff: [] } as {
+    starting: { s: SlotDraft; index: number }[];
+    bench: { s: SlotDraft; index: number }[];
+    staff: { s: SlotDraft; index: number }[];
+  };
+  slots.forEach((s, index) => out[groupKeyOf(s)].push({ s, index }));
+  return out;
 }
 
 /** The one control a row keeps inline. A sport with a position catalog gets the
@@ -125,11 +142,15 @@ export function lineupMenuItems(opts: {
   const i = opts.slots.findIndex((s) => s.person_id === opts.personId);
   if (i < 0) return [];
   const s = opts.slots[i]!;
-  const items: MenuItem[] = [
-    s.slot === "starting"
-      ? { kind: "action", id: "slot", labelKey: "lineup.menu.toBench", action: { type: "slot", slot: "bench" } }
-      : { kind: "action", id: "slot", labelKey: "lineup.menu.toStarting", action: { type: "slot", slot: "starting" } },
-  ];
+  // Coaches & staff have no Starting/Bench: the item would move them nowhere visible.
+  const items: MenuItem[] =
+    s.role !== "player"
+      ? []
+      : [
+          s.slot === "starting"
+            ? { kind: "action", id: "slot", labelKey: "lineup.menu.toBench", action: { type: "slot", slot: "bench" } }
+            : { kind: "action", id: "slot", labelKey: "lineup.menu.toStarting", action: { type: "slot", slot: "starting" } },
+        ];
   for (const r of opts.roles) {
     const on = s.roles.includes(r.key);
     const name = r.name ?? r.key;

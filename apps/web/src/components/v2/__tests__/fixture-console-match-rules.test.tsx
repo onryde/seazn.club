@@ -63,7 +63,7 @@ describe("the console mounts the match rules block", () => {
     expect(toggle, "phone-only: the toggle hides from md up").toMatch(/\smd:hidden/);
     // The block sits in that disclosure's body, which is folded on a phone and a plain card from md.
     const at = html.indexOf('data-testid="match-rules-block"');
-    const bodyOpen = html.lastIndexOf('<div class="grid flex-1 max-md:hidden"', at);
+    const bodyOpen = html.lastIndexOf('<div class="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)] max-md:hidden"', at);
     expect(bodyOpen, "the block's disclosure body is max-md:hidden").toBeGreaterThan(-1);
   });
 

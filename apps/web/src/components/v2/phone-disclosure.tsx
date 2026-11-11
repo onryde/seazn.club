@@ -161,7 +161,7 @@ export function PhoneDisclosure({
         </span>
       </button>
       <div
-        className={open ? "grid flex-1" : desktopCollapsible ? "grid flex-1 hidden" : "grid flex-1 max-md:hidden"}
+        className={`grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)]${open ? "" : desktopCollapsible ? " hidden" : " max-md:hidden"}`}
         id={bodyId}
       >
         {children}

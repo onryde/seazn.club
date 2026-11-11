@@ -241,7 +241,14 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
       }
       await expect(toggle).toBeVisible();
     }
-    if (lineupTotal > 0) expect(lineupShown, "exactly one lineup card shows below md").toBe(1);
+    // Gate on the Home/Away switch being VISIBLE (it is `md:hidden`), never on a
+    // width literal: with the switch up, exactly one card shows; without it
+    // (>= md) both cards are shown side by side.
+    if (lineupTotal > 0) {
+      const phoneSwitch = await page.getByTestId("lineup-team-switch").first().isVisible();
+      if (phoneSwitch) expect(lineupShown, "exactly one lineup card shows with the Home/Away switch").toBe(1);
+      else expect(lineupShown, "both lineup cards show without the switch").toBe(lineupTotal);
+    }
     // Review fix (Important 3, final review) — nothing here ever OPENED a
     // disclosure: every prior assertion ran with the body CLOSED, so
     // `phone-disclosure.tsx`'s open branch (`aria-expanded="true"`,
@@ -2245,8 +2252,10 @@ test("lineup editor role/pair-order selects hold at phone width", async ({ page,
     sportKey: "tennis",
     variantKey: "tour",
     entrantKind: "pair",
-    home: [{ fullName: "Home One" }, { fullName: "Home Two" }],
-    away: [{ fullName: "Away One" }, { fullName: "Away Two" }],
+    // 43+ characters: the realistic long name that put the lineup card at 406px
+    // in a 288px column (nowrap name -> min-content). Both sides.
+    home: [{ fullName: "Bartholomew Maximilian Featherstonehaugh-Smythe" }, { fullName: "Home Two" }],
+    away: [{ fullName: "Bartholomew Maximilian Featherstonehaugh-Jones" }, { fullName: "Away Two" }],
   });
 
   await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
@@ -2285,7 +2294,25 @@ test("lineup editor role/pair-order selects hold at phone width", async ({ page,
     await expect(buttons.first(), `${side}: ⋯ button still folded after its disclosure was opened`).toBeVisible({
       timeout: 30_000,
     });
+    // Hit-test, not scrollWidth: an overflow that is CLIPPED leaves scrollWidth
+    // equal to clientWidth while the button is off-screen. Every ⋯ centre must
+    // be inside the viewport and be what a finger would actually land on.
+    const viewportWidth = page.viewportSize()!.width;
+    const cardBox = await card.boundingBox();
+    expect(cardBox!.width, `${side} lineup card is ${cardBox!.width}px in a ${viewportWidth}px viewport`).toBeLessThanOrEqual(
+      viewportWidth,
+    );
     for (const button of await buttons.all()) {
+      const hit = await button.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const x = r.left + r.width / 2;
+        el.scrollIntoView({ block: "center" });
+        const r2 = el.getBoundingClientRect();
+        const top = document.elementFromPoint(r2.left + r2.width / 2, r2.top + r2.height / 2);
+        return { inView: x >= 0 && x <= window.innerWidth, hit: top !== null && (top === el || el.contains(top)) };
+      });
+      expect(hit.inView, "⋯ button centre is off-screen horizontally").toBe(true);
+      expect(hit.hit, "⋯ button is not what elementFromPoint returns at its centre").toBe(true);
       const box = await button.boundingBox();
       expect(box, "⋯ button has no box").not.toBeNull();
       expect(box!.height, `⋯ button touch target is ${box!.height}px tall`).toBeGreaterThanOrEqual(44);
