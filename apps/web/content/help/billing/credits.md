@@ -1,50 +1,10 @@
 ---
-title: AI and match credits
-description: Two kinds of prepaid credit live on the Credits page in Settings. AI credits pay for AI scheduling and officials; match credits pay for streaming a match from a phone. Each has a monthly free allowance that resets, packs and Event Pass credits that never expire, and a history you can export.
+title: Match and AI credits
+description: Two kinds of prepaid credit live on the Credits page in Settings. Match credits pay for streaming a match from a phone; AI credits pay for AI scheduling and officials. Each has a monthly free allowance that resets, packs and Event Pass credits that never expire, and a history you can export.
 order: 5
 ---
 
-## What credits are
-
-AI features — **AI scheduling** and **AI officials** — spend **credits**, on every plan. What a run costs depends on how big the job is: credits buy the model a **thinking budget** (1 credit → up to 32K tokens, 2 → 64K, 3 → 128K), the console shows the price before anything is spent, and you can adjust it. Scheduling several divisions in one run gets a batch discount of one credit. [AI Schedule](/help/scheduling/ai-scheduling) explains the sizing in full.
-
-The **Credits** page in your organisation's **Settings** is the home for your wallet. It has two sides, switched at the top — **Streaming** and **AI**. It opens on **Streaming**; switch to **AI** for the AI wallet. The **Streaming credits** figure under your plan name at the top of the Settings menu is your match-credit balance, and links to the Streaming side. This article starts with the AI side; [match credits](#match-credits-streaming) are further down.
-
-## Your monthly grant
-
-Every plan comes with a monthly grant that **resets on the 1st of each month** — use it or lose it:
-
-- **Community** — 5 credits a month
-- **Pro** — 25 credits a month
-- **Enterprise** — 500 credits a month
-
-The grant meter on the Credits tab shows how much of this month's grant you've used and when it resets. Unused grant credits don't roll over — the pool is topped back up to the full amount each month.
-
-If a run fails before it produces anything usable it is **not charged**: the hold on your wallet is released and the run history shows the credits coming straight back, so a failed run never counts against your grant. A run that finishes — including one that reached its thinking budget and handed back a partial timetable — is charged what the card quoted.
-
-If a subscription lapses — a payment more than 14 days overdue, a comp that has ended, or a cancelled plan — the monthly grant falls back to the Community 10 a month until it is back in good standing, and the Credits tab shows that lower figure.
-
-## Packs and Event Pass credits never expire
-
-When your monthly grant runs low, you can **buy a credit pack**. Pack credits — and the **one-time credits an Event Pass adds** — go into a separate pool that **never expires**. AI runs always spend your monthly grant first, so a pack is only touched once the grant is gone. That way a pack you buy is never wasted while free grant credits remain.
-
-To buy one, use **Buy credits** on the Credits tab. Pick a pack from the ladder — the larger packs include **bonus credits** for the same price per credit, and the top pack is marked **best value** — and pay. Packs are charged in your billing group's currency, and the credits land in your wallet as soon as the payment clears.
-
-## Shared across a billing group
-
-Billing is group-level: one subscription can pay for several organisations. When it does, those organisations **share one credit wallet** — buy once, and any organisation in the group can spend from the pool. The monthly grant scales with the number of paid seats. The Credits tab shows a "shared across N organisations" note when your organisation is part of a group, and the run history records which organisation spent each credit.
-
-What happens to the credits you already hold depends on whether they are yours alone. If your organisation is **billed on its own**, they **move with you**: joining a group merges your unspent balance straight into the shared pool — monthly-grant credits stay monthly-grant credits, purchased and earned credits stay in their own never-expiring pool, exactly as before. If you are **already sharing a wallet** with other organisations, that balance **stays with them** — it is the whole group's pool, not your share of it — and you join the new group with a fresh wallet.
-
-Leaving a group depends on whether anyone is left to hold the pool. If **other organisations remain** on the group, you take **no share** with you — it is their pool, not your part of it — and your organisation goes back to its own bill with a fresh, empty wallet. If you are the **last organisation to leave**, the balance **comes with you**, bucket for bucket: there would be no group left to hold it otherwise.
-
-## Run history and export
-
-The run history lists each grant, purchase and AI run, newest first, with the credit change for each. Use **Export** to download the full history as a CSV.
-
-## Auto-topup
-
-Automatic top-ups — buying a pack automatically when your balance runs low — are **coming soon**. For now the Credits tab shows auto-topup as off; you can top up manually with a credit pack any time.
+The **Credits** page in your organisation's **Settings** is the home for your wallet. It has two sides, switched at the top — **Streaming** and **AI**. It opens on **Streaming**; switch to **AI** for the AI wallet. The **Streaming credits** figure under your plan name at the top of the Settings menu is your match-credit balance, and links to the Streaming side. This article follows the page: [match credits](#match-credits-streaming) first, then [AI credits](#ai-credits).
 
 ## Match credits (Streaming)
 
@@ -70,5 +30,45 @@ The history shows 25 rows to a page; use **Older** and **Latest** to move throug
 ### Streaming junior matches on YouTube
 
 YouTube doesn't allow live streams that show children under 16 unless an adult is visibly with them, and it can take live streaming away from a channel that breaks this rule. When you connect YouTube on the **Streaming** page, you tick a separate box confirming an adult will be visibly present whenever players under 16 are on camera; **Continue to Google** stays off until both boxes are ticked. Read YouTube's [child safety policy](https://support.google.com/youtube/answer/2801999) for the full rule.
+
+## AI credits
+
+Switch the Credits page to **AI** for the AI wallet. AI features — **AI scheduling** and **AI officials** — spend **credits**, on every plan. What a run costs depends on how big the job is: credits buy the model a **thinking budget** (1 credit → up to 32K tokens, 2 → 64K, 3 → 128K), the console shows the price before anything is spent, and you can adjust it. Scheduling several divisions in one run gets a batch discount of one credit. [AI Schedule](/help/scheduling/ai-scheduling) explains the sizing in full.
+
+### Your monthly grant
+
+Every plan comes with a monthly grant that **resets on the 1st of each month** — use it or lose it:
+
+- **Community** — 5 credits a month
+- **Pro** — 25 credits a month
+- **Enterprise** — 500 credits a month
+
+The grant meter on the Credits tab shows how much of this month's grant you've used and when it resets. Unused grant credits don't roll over — the pool is topped back up to the full amount each month.
+
+If a run fails before it produces anything usable it is **not charged**: the hold on your wallet is released and the run history shows the credits coming straight back, so a failed run never counts against your grant. A run that finishes — including one that reached its thinking budget and handed back a partial timetable — is charged what the card quoted.
+
+If a subscription lapses — a payment more than 14 days overdue, a comp that has ended, or a cancelled plan — the monthly grant falls back to the Community 10 a month until it is back in good standing, and the Credits tab shows that lower figure.
+
+### Packs and Event Pass credits never expire
+
+When your monthly grant runs low, you can **buy a credit pack**. Pack credits — and the **one-time credits an Event Pass adds** — go into a separate pool that **never expires**. AI runs always spend your monthly grant first, so a pack is only touched once the grant is gone. That way a pack you buy is never wasted while free grant credits remain.
+
+To buy one, use **Buy credits** on the Credits tab. Pick a pack from the ladder — the larger packs include **bonus credits** for the same price per credit, and the top pack is marked **best value** — and pay. Packs are charged in your billing group's currency, and the credits land in your wallet as soon as the payment clears.
+
+### Shared across a billing group
+
+Billing is group-level: one subscription can pay for several organisations. When it does, those organisations **share one credit wallet** — buy once, and any organisation in the group can spend from the pool. The monthly grant scales with the number of paid seats. The Credits tab shows a "shared across N organisations" note when your organisation is part of a group, and the run history records which organisation spent each credit.
+
+What happens to the credits you already hold depends on whether they are yours alone. If your organisation is **billed on its own**, they **move with you**: joining a group merges your unspent balance straight into the shared pool — monthly-grant credits stay monthly-grant credits, purchased and earned credits stay in their own never-expiring pool, exactly as before. If you are **already sharing a wallet** with other organisations, that balance **stays with them** — it is the whole group's pool, not your share of it — and you join the new group with a fresh wallet.
+
+Leaving a group depends on whether anyone is left to hold the pool. If **other organisations remain** on the group, you take **no share** with you — it is their pool, not your part of it — and your organisation goes back to its own bill with a fresh, empty wallet. If you are the **last organisation to leave**, the balance **comes with you**, bucket for bucket: there would be no group left to hold it otherwise.
+
+### Run history and export
+
+The run history lists each grant, purchase and AI run, newest first, with the credit change for each. Use **Export** to download the full history as a CSV.
+
+### Auto-topup
+
+Automatic top-ups — buying a pack automatically when your balance runs low — are **coming soon**. For now the Credits tab shows auto-topup as off; you can top up manually with a credit pack any time.
 
 See also [Plans at a glance](/help/billing/plans) and [Billing groups](/help/billing/groups).

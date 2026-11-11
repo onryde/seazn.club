@@ -111,7 +111,11 @@ describe("Settings → Credits: which side each link opens", () => {
     expect(article, "no step tells the reader to switch to the side the page already opens on").not.toContain("switch to **Streaming**");
     // The card is hidden (owner, 2026-11-11); the article must not send a reader looking for it.
     expect(article).not.toMatch(/Invite (&|&amp;|and) earn/i);
-    // positive pair: the article is the right one, and still describes the referral-free AI wallet
-    expect(article).toContain("## Match credits (Streaming)");
+    // The article reads in the page's order: the side it opens on is the article's first section.
+    const sections = [...article.matchAll(/^## (.+)$/gm)].map((m) => m[1]!);
+    expect(sections.length, "anti-vacuity: the article has sections").toBeGreaterThan(1);
+    expect(sections[0], "the first section is the side the page opens on").toBe(`Match credits (${opens})`);
+    expect(sections, "the other side follows").toContain("AI credits");
+    expect(article).not.toContain("This article starts with the AI side");
   });
 });

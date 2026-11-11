@@ -1,7 +1,7 @@
 // The AI side's markup (components/billing-credits.tsx). One thing is pinned here: the "Invite & earn" referral card is
-// hidden (owner, 2026-11-11). Only the card goes: the /refer/<code> route, the attribution cookie and the referral grants
-// are untouched, and so is the view model — getCreditsTab still reads the referral fields, so this is asserted with a view
-// that HAS a code and referrals, which is exactly the case the card used to render for.
+// hidden (owner, 2026-11-11). Its copy is gone from the dictionaries and its reads from the view model (credits-tab.ts,
+// pinned by its own "reads no referral data" test), so the card is asserted absent by its markup — `data-referral` and
+// the `/refer/` link — in every locale. The /refer route and the referral grants are untouched.
 //
 // Expected strings come from the dictionary FILES read off disk, never from the component's own keys.
 //
@@ -32,9 +32,6 @@ const VIEW: CreditsTabView = {
   packBalance: 35,
   sharedOrgCount: 1,
   history: [],
-  referralCode: "RIVER123",
-  referredCount: 2,
-  referralEarned: 40,
 };
 
 async function markup(loc: (typeof LOCALES)[number]): Promise<string> {
@@ -45,17 +42,15 @@ async function markup(loc: (typeof LOCALES)[number]): Promise<string> {
 }
 
 describe("Settings → Credits → AI", () => {
-  it("the AI side shows no Invite & earn card, in any locale — even for an org with a referral code and referrals (A1)", async () => {
+  it("the AI side shows no Invite & earn card, in any locale (A1)", async () => {
     let checked = 0;
     for (const loc of LOCALES) {
       const out = await markup(loc);
       const file = dictFile(loc);
       expect(out, loc).not.toContain("data-referral");
-      expect(out, loc).not.toContain(`/refer/${VIEW.referralCode}`);
-      for (const key of ["billing.credits.referral.title", "billing.credits.referral.desc", "billing.credits.referral.linkLabel", "billing.credits.referral.howItWorks"]) {
-        expect(file[key], `${loc} ${key} exists, so its absence below means something`).toBeTruthy();
-        expect(out, `${loc} ${key}`).not.toContain(esc(file[key]!));
-      }
+      expect(out, loc).not.toContain('href="/refer/');
+      // The card's copy left the dictionaries with it.
+      expect(Object.keys(file).filter((k) => k.startsWith("billing.credits.referral.")), loc).toEqual([]);
       // positive pair: the wallet card itself is still there, with its title
       expect(out, loc).toContain("data-credits");
       expect(out, loc).toContain(esc(file["billing.credits.title"]!));

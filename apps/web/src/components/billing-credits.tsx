@@ -25,9 +25,9 @@ function fmtDay(iso: string, locale: Locale): string {
  * with a CSV export.
  *
  * The "Invite & earn" referral card (SPEC-5 §2, #267) that sat below the wallet
- * is hidden (owner, 2026-11-11). Only the card: the /refer/<code> route, the
- * attribution cookie and the referral grants are untouched, and so is the view
- * model, which still carries `referralCode` / `referredCount` / `referralEarned`.
+ * is hidden (owner, 2026-11-11), and the view model no longer reads referral
+ * data (credits-tab.ts). The /refer/<code> route, the attribution cookie and
+ * the referral grants are untouched; git history has the card and its copy.
  *
  * Reuses the billing page's card/eyebrow/meter idiom (the same `.card` +
  * purple-600 eyebrow + slate body as Usage) so it reads as one more section on

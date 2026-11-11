@@ -221,7 +221,7 @@ test("Credits tab, AI side: nav entry, the switch, desktop + mobile, axe", async
   await expect(page.locator("[data-credits-stream]"), "not the Streaming card").toHaveCount(0);
   // The "Invite & earn" referral card is hidden (owner, 2026-11-11).
   await expect(page.locator("[data-referral]")).toHaveCount(0);
-  await expect(page.getByText(en("billing.credits.referral.title"))).toHaveCount(0);
+  await expect(page.locator('a[href^="/refer/"]')).toHaveCount(0);
   await page.waitForTimeout(300);
   await shot(page, "credits-desktop");
 
