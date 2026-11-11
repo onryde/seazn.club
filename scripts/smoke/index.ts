@@ -35,6 +35,7 @@ import { onlineChessDeskSuite } from "./suites/onlineChessDesk.ts";
 import { epochFloorOverrideSuite } from "./suites/epochFloorOverride.ts";
 import { registrationOpenFlowSuite } from "./suites/registrationOpenFlow.ts";
 import { youtubeConnectSuite } from "./suites/youtubeConnect.ts";
+import { registrationPayPageSuite } from "./suites/registrationPayPage.ts";
 
 // --- SMOKE_ONLY (review R1): run named suites alone, without a full smoke -----
 type SubsetCtx = { admin: Session; org2Id: string; org2Slug: string };
@@ -66,6 +67,7 @@ const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
   w4KnockoutB: () => w4KnockoutBSuite(),
   youtubeConnect: () => youtubeConnectSuite(),
   deviceLinkFootball: () => deviceLinkFootballSuite(),
+  registrationPayPage: () => registrationPayPageSuite(),
 };
 
 /** The subset's setup: the same calls main() makes for this state, in main()'s order — the admin sign-in, the plan

@@ -412,6 +412,12 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string }> = {
     verdict: "builds the invoice's PDF link and pay action from the token and hands both to SponsorInvoiceView as props; it paints nothing itself",
     handoff: "components/sponsors/invoice-view.tsx",
   },
+  // Player payment page (Task 4): the Pay form's action carries the token (`/r/pay/<token>/pay`).
+  "components/registrations/pay-page-view.tsx": { verdict: true },
+  "app/(public)/r/pay/[token]/page.tsx": {
+    verdict: "builds the Pay action from the token and hands it to PayPageView as a prop; it paints nothing itself",
+    handoff: "components/registrations/pay-page-view.tsx",
+  },
   "components/org-team.tsx": {
     verdict:
       "paints the MASKED link (`/join/abcd…wxyz`: first and last four characters, deliberate against shoulder-surfing); the full URL goes only to the clipboard",

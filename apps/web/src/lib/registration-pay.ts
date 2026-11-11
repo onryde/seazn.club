@@ -25,3 +25,32 @@ export const REG_PAY_PRIVATE_HEADERS = {
   "Referrer-Policy": "no-referrer",
   "X-Robots-Tag": "noindex, nofollow",
 } as const;
+
+/** The page's query, as far as the page reads it: Stripe's return (`checkout=success&session_id=...`, set by `payFromPayPage`'s
+ *  returnBase) and the Pay route's notice. Every other param is ignored. */
+export interface PayPageQuery {
+  checkout?: string;
+  session_id?: string;
+  notice?: string;
+}
+
+/**
+ * Whether the page shows "payment received - confirming" instead of Pay: only while the entry still reads `pay`, and only on a
+ * return that is PROVABLY this entry's - the notice the Pay route sends when Stripe says the payment is complete, or Stripe's own
+ * success return carrying the entry's CURRENT pay session. A `session_id` that is not that session (an old tab, a forged query)
+ * is nothing: no spinner, the page's normal state. An entry with no pay session never matches, not even an empty `session_id`.
+ */
+export function isPayConfirming(doc: { state: string; paySessionId: string | null }, q: PayPageQuery): boolean {
+  if (doc.state !== "pay") return false;
+  if (q.notice === PAY_RECORDING_NOTICE) return true;
+  return q.checkout === "success" && !!doc.paySessionId && q.session_id === doc.paySessionId;
+}
+
+/** An amount as the page prints it: the currency's own minor unit always shown (`€25.00`). */
+export function payPageMoney(locale: string, cents: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat(locale, { style: "currency", currency: currency.toUpperCase() }).format(cents / 100);
+  } catch {
+    return `${(cents / 100).toFixed(2)} ${currency.toUpperCase()}`;
+  }
+}

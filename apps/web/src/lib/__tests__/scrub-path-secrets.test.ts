@@ -39,6 +39,8 @@ import { VERDICTS, secretRoutes, SRC_DIR } from "./_route-scan";
 import { createInvite } from "@/server/usecases/invites";
 import { mintCheckinToken } from "@/server/usecases/checkin-token";
 import { mintReportToken } from "@/server/sponsors/report-token";
+import { mintPayToken } from "@/server/usecases/registrations/pay-token";
+import { registrationPayPath } from "@/lib/registration-pay";
 import { reportLinkPath } from "@/lib/sponsor-report";
 import { invoicePath } from "@/lib/sponsor-invoice";
 import { mintHomeToken } from "@/server/usecases/quick-match-tokens";
@@ -68,6 +70,8 @@ const MINTS = 300;
 const INVITES: string[] = [];
 const CHECKINS: string[] = [];
 const REPORTS: string[] = [];
+/** Player payment page tokens (`/r/pay/<token>`), from the REAL producer. */
+const PAYS: string[] = [];
 const tomorrow = new Date(Date.now() + 24 * 3600_000);
 await (async () => {
   for (let i = 0; i < MINTS; i++) {
@@ -75,12 +79,14 @@ await (async () => {
     INVITES.push(invite.token);
     CHECKINS.push(await mintCheckinToken(randomUUID(), tomorrow));
     REPORTS.push(mintReportToken());
+    PAYS.push(mintPayToken().token);
   }
 })();
 const KINDS: [string, string[]][] = [
   ["invite", INVITES],
   ["check-in", CHECKINS],
   ["sponsor report", REPORTS],
+  ["player pay page", PAYS],
 ];
 
 describe("premise: the tokens are real and varied", () => {
@@ -96,6 +102,10 @@ describe("premise: the tokens are real and varied", () => {
   });
   it("routes.checkin() is the page URL the organiser prints", () => {
     expect(routes.checkin(CHECKINS[0]!)).toBe(`/checkin/${CHECKINS[0]}`);
+  });
+  it("registrationPayPath() is the player payment page URL the mail carries (Task 4 scrubs it)", () => {
+    expect(registrationPayPath(PAYS[0]!)).toBe(`/r/pay/${PAYS[0]}`);
+    expect(PAYS.every((t) => /^[A-Za-z0-9_-]{43}$/.test(t)), "32 random bytes, base64url").toBe(true);
   });
   it("reportLinkPath() is the sponsor report URL the club shares (S13 builds it, S14 serves it)", () => {
     expect(reportLinkPath(REPORTS[0]!)).toBe(`/r/sponsor/${REPORTS[0]}`);
@@ -141,6 +151,53 @@ describe("every route with a secret segment is scrubbed, or is knowingly public"
     }
     expect(scrubbed).toBeGreaterThan(200);
     expect(kept).toBeGreaterThan(30);
+  });
+});
+
+// ---- the player payment page (Task 4): `/r/pay/<token>` and its Pay handler --------------------------------------------------
+
+describe("the player payment page's token is scrubbed from every URL shape (counted)", () => {
+  it("the sweep reaches /r/pay/[token] and its Pay handler, and each URL's token is gone: plain, encoded at depth 1 and 2, after an origin and a locale prefix", () => {
+    const route = secretRoutes().find((r) => r.key === "(public)/r/pay/[token]");
+    expect(route, "the file-system scan found the route").toBeDefined();
+    expect(VERDICTS["(public)/r/pay/[token]"]).toBe(true);
+    expect(route!.handlers.map((h) => h.key)).toEqual(["(public)/r/pay/[token]/pay"]);
+    let checked = 0;
+    for (const token of [PAYS[0]!, PAYS[1]!, PAYS[150]!, PAYS[299]!]) {
+      const shapes = [
+        registrationPayPath(token),
+        `${registrationPayPath(token)}/pay`,
+        `${registrationPayPath(token)}/pay?x=1`,
+        `${registrationPayPath(token)}?checkout=success&session_id=cs_test_a1`,
+        `/r/pay/${token}#top`,
+      ];
+      for (const shape of shapes) {
+        const forms = [
+          shape,
+          `${ORIGIN}${shape}`,
+          `${ORIGIN}/fr${shape}`,
+          `${ORIGIN}/login?next=${encode(shape, 1)}`,
+          `${ORIGIN}/login?next=${encode(shape, 2)}`,
+          lowerHex(`${ORIGIN}/login?next=${encode(shape, 2)}`),
+        ];
+        for (const url of forms) {
+          expect(url, "premise: the URL carries the token (plain or encoded)").toMatch(new RegExp(`${token}`));
+          const out = scrubScoreUrl(url);
+          expect(out, url).not.toContain(token);
+          expect(out, url).toContain(PLACEHOLDER);
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBe(4 * 5 * 6);
+  });
+
+  it("the regression pair: a registration reference and a sponsor report URL behave as before", () => {
+    expect(scrubScoreUrl("/r/ABC123")).toBe("/r/ABC123");
+    expect(scrubScoreUrl(`${ORIGIN}/r/ABC123?src=email`)).toBe(`${ORIGIN}/r/ABC123?src=email`);
+    expect(scrubScoreUrl(`/r/sponsor/${REPORTS[0]}`)).toBe(`/r/sponsor/${PLACEHOLDER}`);
+    // A sponsor token is not mistaken for a pay token and a pay token is not left half-scrubbed.
+    expect(scrubScoreUrl(`/r/pay/${PAYS[0]}`)).toBe(`/r/pay/${PLACEHOLDER}`);
   });
 });
 
@@ -192,7 +249,7 @@ describe("every /<path>/${token} template is scrubbed, or is knowingly public", 
     // stays a credential route (VERDICTS, swept above); there is just no template building it from a token.
     expect([...builders.keys()].sort()).toEqual(
       // `/q`: the scoring pad's way back to a quick match's home (app/score/[token]/page.tsx, quick match plan 1 Task 9).
-      expect.arrayContaining(["/join", "/checkin", "/api/checkin", "/claim", "/api/claims", "/api/invites", "/score", "/api/v1/capture/codes", "/r", "/api/v1/public/registrations/by-ref", "/r/sponsor", "/r/sponsor/invoice", "/q"]),
+      expect.arrayContaining(["/join", "/checkin", "/api/checkin", "/claim", "/api/claims", "/api/invites", "/score", "/api/v1/capture/codes", "/r", "/api/v1/public/registrations/by-ref", "/r/sponsor", "/r/sponsor/invoice", "/q", "/r/pay"]),
     );
     expect(builders.size).toBeGreaterThanOrEqual(11);
   });
@@ -324,6 +381,8 @@ describe("what must not be mangled", () => {
       "/r/RS-4K7Q2M",
       "/r/sponsor",
       "/o/acme/r/sponsor/not-a-root",
+      "/r/pay",
+      "/o/acme/r/pay/not-a-root",
     ];
     let checked = 0;
     for (const p of notSecrets) {
@@ -339,7 +398,7 @@ describe("what must not be mangled", () => {
   });
 
   it("a prefix with no secret after it is left alone; the positive pair: the real routes DO lose the secret", () => {
-    for (const bare of ["/join/", "/checkin/", "/api/invites/", "/api/checkin/", "/r/sponsor/", `${ORIGIN}/join/?from=qr`]) expect(scrubScoreUrl(bare), bare).toBe(bare);
+    for (const bare of ["/join/", "/checkin/", "/api/invites/", "/api/checkin/", "/r/sponsor/", "/r/pay/", `${ORIGIN}/join/?from=qr`]) expect(scrubScoreUrl(bare), bare).toBe(bare);
     for (const p of [`/join/${INVITES[0]}`, `/checkin/${CHECKINS[0]}`, `/api/invites/${INVITES[0]}/claim`, `/api/orgs/${randomUUID()}/invites/${INVITES[1]}/revoke`]) {
       expect(scrubScoreUrl(`${ORIGIN}${p}?seen=%2Fjoin%2F`)).not.toMatch(new RegExp(`${INVITES[0]}|${CHECKINS[0]}|${INVITES[1]}`));
     }
