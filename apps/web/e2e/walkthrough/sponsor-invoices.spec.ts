@@ -35,7 +35,7 @@ import { routes } from "../../src/lib/routes";
  *  1. COMMUNITY (no Stripe, no paid plan — the plan that must be able to record a sponsor's cash payment and print the invoice for
  *     it, anti-goal 4). The club types its address and bank details on Settings → Connect, adds a sponsor and a package, and adds an
  *     OFFLINE deal with the sponsor's billing email from the Add deal sheet. The offline create emails nothing, so it answers no
- *     link; the club presses Resend invoice, which mints the invoice page's link (and the banner's copy button copies THAT link).
+ *     link; the club presses Send invoice, which mints the invoice page's link (and the banner's copy button copies THAT link).
  *     The sponsor, signed out, opens it: the invoice's number, the club's address, the bank details and no pay button; the PDF says
  *     Unpaid. Resending again rotates the link (the old one is the one opaque 404, the new one opens). Mark as paid → the page and
  *     the PDF read Paid. A POST to Pay on the settled offline invoice answers 303 back to the invoice, never a dead-end screen. Two
@@ -484,9 +484,10 @@ test.describe("community: an offline invoice printed from the club's own details
     await expect(deal.getByTestId("deal-chip")).toHaveText(ui("sponsors.deal.chip.awaitingPayment"));
     await expect(page.getByTestId("sponsor-pay-link"), "no link yet: nothing was sent").toHaveCount(0);
     const resend = deal.locator('[data-testid="sponsor-sheet-deal-action"][data-action="resend_invoice"]');
-    await expect(resend, "an offline deal with a billing email offers Resend invoice").toHaveText(ui("sponsors.deal.action.resendInvoice"));
+    // Never sent yet, so the button says Send invoice (final review m1: the action is resend_invoice, the words follow invoice_sent_at).
+    await expect(resend, "an offline deal never sent offers Send invoice").toHaveText(ui("sponsors.deal.action.sendInvoice"));
 
-    // 3. Resend invoice: the first send of an offline deal. It answers the invoice page's link; the banner shows it and its copy
+    // 3. Send invoice: the first send of an offline deal. It answers the invoice page's link; the banner shows it and its copy
     //    button copies THAT link (T23 review I1: never a Checkout url).
     const sendResponse = (): Promise<PwResponse> =>
       page.waitForResponse(
@@ -545,7 +546,9 @@ test.describe("community: an offline invoice printed from the club's own details
     expect(new URL(unpaidPay.location, "http://x").pathname, "…back to the invoice page").toBe(firstPath);
     expect(unpaidPay.location, "…and never to Stripe").not.toContain("stripe.com");
 
-    // 5. Rotation: the club sends it again; the earlier link now opens nothing and the new one opens.
+    // 5. Rotation: the club sends it again - the button now says Resend invoice (the pair of m1's Send invoice above); the earlier
+    //    link then opens nothing and the new one opens.
+    await expect(resend, "once sent, the same button offers Resend invoice").toHaveText(ui("sponsors.deal.action.resendInvoice"));
     const [secondSend] = await Promise.all([sendResponse(), resend.click()]);
     expect(secondSend.status(), `POST send-invoice (again) answered ${secondSend.status()}`).toBeLessThan(300);
     const secondUrl = ((await secondSend.json()) as { data?: DealAnswer }).data?.invoice_url ?? "";

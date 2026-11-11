@@ -115,7 +115,7 @@ async function openMarkPaidConfirm(page: Page, sponsorId: string, name: string):
 }
 
 test("list: each row shows one next action and the chip its deal state names", async ({ page, request }) => {
-  // Seeding (five sponsors, four deals) plus two page loads and four taps.
+  // Seeding (five sponsors, four deals) plus four page loads, four taps and one PDF download.
   test.setTimeout(180_000);
   const org = await seedSettingsOrg(request, { plan: "community", label: "list-actions" });
   seeded.push(org);
@@ -137,22 +137,25 @@ test("list: each row shows one next action and the chip its deal state names", a
   const stepsDeal = await newDeal(request, org.orgId, steps, { package_id: pkg, go_live: "on_approval" });
   expect(await dealStatus(request, org.orgId, stepsDeal), "premise: awaiting payment, approval after").toBe("awaiting_payment");
   // Selling online is `sponsors.monetize` plus Connect, which a community org has neither of, so the online deal is SQL-seeded
-  // the way Send invoice leaves one: awaiting payment, its sponsor hidden (D8), and NUMBERED from the org's invoice counter (V501).
+  // the way Send invoice leaves one: awaiting payment, sent once (`invoice_sent_at`, so its next send is a RESEND - final review
+  // m1: a deal never sent reads Send invoice), its sponsor hidden (D8), and NUMBERED from the org's invoice counter (V501).
   // Every online deal is numbered at create, and the row offers Resend only to a numbered deal: an unnumbered one is a pre-V501
   // staging shape the API refuses with 409 deal_not_invoiceable (T24 m5), so its row only opens the deal.
-  await withDb(async (sql) => {
-    await sql`
+  const onlineDeal = await withDb(async (sql) => {
+    const [made] = await sql<{ id: string; invoice_number: number }[]>`
       with n as (
         insert into sponsor_invoice_counters (org_id, last_number) values (${org.orgId}, 1)
         on conflict (org_id) do update set last_number = sponsor_invoice_counters.last_number + 1
         returning last_number)
       insert into sponsor_orders (org_id, package_id, sponsor_id, sponsor_name, sponsor_email, amount_cents, currency, status,
                                   deal_status, payment_method, go_live, tier, includes_on_stream, package_name, competition_id,
-                                  invoice_number)
+                                  invoice_number, invoice_sent_at, invoice_send_count)
       select ${org.orgId}, ${pkg}, ${online}, 'Oakfield Dental', 'pay@deals.e2e.test', 25000, 'gbp', 'pending',
-             'awaiting_payment', 'online', 'on_payment', 'partner', false, 'Partner board', ${null}, n.last_number
-        from n`;
+             'awaiting_payment', 'online', 'on_payment', 'partner', false, 'Partner board', ${null}, n.last_number, now(), 1
+        from n
+      returning id, invoice_number`;
     await sql`update sponsors set status = 'inactive' where id = ${online}`;
+    return made!;
   });
 
   await page.goto(sponsorsUrl(org.slug, "sponsors"));
@@ -211,6 +214,29 @@ test("list: each row shows one next action and the chip its deal state names", a
   await expectRow(page, live, ui("sponsors.deal.chip.live"), null, "untouched: still live");
   await expectRow(page, online, ui("sponsors.deal.chip.awaitingPayment"), ui("sponsors.deal.action.resendInvoice"), "untouched: still awaiting payment");
   expect(await expectAtMostOneActionPerRow(page), "every row was looked at again").toBe(5);
+
+  // The club sees its invoice (final review I1): the numbered online deal's page shows its number, "SP-" and four digits (D11),
+  // and a Download invoice (PDF) link to the console's own route - no token, so opening it rotates nothing and sends nothing.
+  await page.goto(dealUrl(org.slug, online, onlineDeal.id));
+  const dealPage = page.getByTestId("deal-page");
+  await expect(dealPage, "the online deal's page").toBeVisible();
+  await expect(dealPage.getByTestId("deal-page-invoice-number"), "its number").toHaveText(`SP-${String(onlineDeal.invoice_number).padStart(4, "0")}`);
+  const pdf = dealPage.getByTestId("deal-page-invoice-pdf");
+  await expect(pdf, "the download link").toBeVisible();
+  await expect(pdf, "its words").toHaveText(ui("sponsors.deal.downloadInvoice"));
+  // Anchored: the WHOLE href, never a substring a "$undefined" or a longer path could also satisfy.
+  const pdfHref = `/api/v1/orgs/${org.orgId}/sponsor-deals/${onlineDeal.id}/invoice.pdf`;
+  await expect(pdf, "the console's invoice.pdf route, exactly").toHaveAttribute("href", pdfHref);
+  const download = await page.request.get(pdfHref);
+  expect(download.status(), `the link opens: ${download.status()}`).toBe(200);
+  expect(download.headers()["content-type"], "a PDF").toContain("application/pdf");
+  expect((await download.body()).subarray(0, 5).toString("latin1"), "the bytes are a PDF").toBe("%PDF-");
+  // ...and a complimentary deal has no invoice: no number, no link (the pair).
+  await page.goto(dealUrl(org.slug, live, liveDeal));
+  await expect(page.getByTestId("deal-page"), "the complimentary deal's page").toBeVisible();
+  await expect(page.getByTestId("deal-page-step").first(), "its timeline has drawn").toBeVisible();
+  await expect(page.getByTestId("deal-page-invoice-number"), "a complimentary deal: no number").toHaveCount(0);
+  await expect(page.getByTestId("deal-page-invoice-pdf"), "and no download").toHaveCount(0);
 });
 
 test("list at 320 and 375: the ⋯ fold holds clicks, move and delete and the pencil stays on the row; no sideways scroll; a 43-character name wraps to two lines", async ({ page, request }) => {
