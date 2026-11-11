@@ -350,6 +350,13 @@ test("list at 320 and 375: the ⋯ fold holds clicks, move and delete and the pe
         ),
       );
       expect(columns, `${width}: three rows were measured`).toHaveLength(3);
+      if (width === 768) {
+        // The name keeps room at the narrowest width with inline controls (owner, 2026-11-11: 84px cut "Harboursid..."; the floor is 160px).
+        for (const id of [longId, mateId, shortId]) {
+          const main = (await rowOf(page, id).getByTestId("sponsor-row-main").boundingBox())!;
+          expect(main.width, `${width}: the name column keeps at least 160px`).toBeGreaterThanOrEqual(160);
+        }
+      }
       for (const col of ["pencil", "deal", "clicks", "remove"] as const) {
         const xs = columns.map((c) => c[col]);
         expect(Math.max(...xs) - Math.min(...xs), `${width}: the ${col} is in one column on every row (left edges ${xs.join(", ")})`).toBeLessThanOrEqual(1);

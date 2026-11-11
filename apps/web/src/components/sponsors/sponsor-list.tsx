@@ -314,9 +314,12 @@ export function SponsorList(props: SponsorListProps) {
             )}
             {canEdit ? <SponsorRowMore name={s.name} open={open} controlsId={trayId} onToggle={() => onToggleMore(s.id)} /> : null}
           </div>
+          {/* The deal cell is a fixed track (so the chip and the button stand in one column on every row): 13rem from md, 18rem from lg. At 768
+              the name gets what the cell gives back - 164px, not 84 (owner, 2026-11-11: "Harboursid..." was cut too short). "No deal" + Add deal
+              and "Live" fit one line in 13rem; the widest pair ("Awaiting payment" + Mark as paid, 228px) wraps to two lines there. */}
           <div
             data-testid="sponsor-row-deal"
-            className="col-span-2 col-start-2 flex min-w-0 flex-wrap items-center justify-between gap-2 max-[376px]:col-start-1 md:col-span-1 md:col-start-auto md:w-72"
+            className="col-span-2 col-start-2 flex min-w-0 flex-wrap items-center justify-between gap-2 max-[376px]:col-start-1 md:col-span-1 md:col-start-auto md:w-52 lg:w-72"
           >
             <DealChip deal={s.deal} />
             {action(s)}

@@ -42,6 +42,7 @@
 //   L30 clicks words   the clicks span goes back to the bare number                                    -> "the clicks read as a counted noun"
 //   L31 spacer         the group-of-one spacer is dropped                                             -> "a lone row keeps the arrows' room"
 //   L32 clicks width   the clicks span loses `md:min-w-[5rem]`                                         -> "every row's tray is the same width"
+//   L33 deal track     the deal cell goes back to `md:w-72` (the name is cut to 84px at 768)           -> "the deal column is 13rem from md and 18rem from lg"
 //   L16 live region    the notice renders only while it has text                                      -> "always mounted"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -1125,6 +1126,28 @@ describe("From md every row's tray is the same width, so the pencil, the deal an
     expect([...new Set(totals.values())].map((v) => Number(v.toFixed(4))), "one width for every row").toHaveLength(1);
     // Premise that makes the sum able to differ: the rows really are built differently (three buttons against one and a spacer).
     expect(new Set(MOCKUP.map((m) => findAll(trayOf(markup, m.s.id).outer, "sponsor-row-move-spacer").length)).size, "both shapes are in the fixture").toBe(2);
+  });
+
+  it("the deal column is 13rem from md and 18rem from lg, on every row, so the name keeps 164px at 768 (the name was cut to 84px with 18rem) - 8 rows", () => {
+    // The track, not the name: a unit test cannot lay a row out. What was MEASURED on a build (768px viewport, real page chrome): the grid's
+    // content is 660px wide, the logo, pencil, tray (11rem) and four 12px gaps leave 660 - 36 - 28 - 176 - 48 = 372px for the name and the deal
+    // cell, so a 288px deal cell left the name 84px and a 208px one leaves it 164px (the owner's floor is 160). The width is a rem value read
+    // off the markup, and the arithmetic below is the check that it stays inside the floor.
+    const markup = listHtml(ROWS);
+    const REM_PER_STEP = 0.25;
+    let checked = 0;
+    for (const m of MOCKUP) {
+      const tokens = classTokens(findOne(rowOf(markup, m.s.id), "sponsor-row-deal").open);
+      expect(tokens, `${m.s.name}: 13rem from md`).toContain("md:w-52");
+      expect(tokens, `${m.s.name}: 18rem from lg, as it was`).toContain("lg:w-72");
+      expect(tokens, `${m.s.name}: not 18rem at md any more`).not.toContain("md:w-72");
+      const mdPx = 52 * REM_PER_STEP * 16;
+      const NAME_FLOOR_PX = 160;
+      const AVAILABLE_AT_768_PX = 372; // measured: see above
+      expect(AVAILABLE_AT_768_PX - mdPx, `${m.s.name}: the name column at 768 stays at or above the owner's floor`).toBeGreaterThanOrEqual(NAME_FLOOR_PX);
+      checked++;
+    }
+    expect(checked, "all eight rows").toBe(8);
   });
 
   it("the sequence: a group that grows from one to two loses its spacer and gains its arrows; a flat list of one has the spacer too", () => {
