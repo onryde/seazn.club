@@ -829,16 +829,31 @@ export async function reviveVacantFinal(
   return { fixtureId: f.id, now };
 }
 
-/** B5a T11/T12: refuse (409 VACANT_TITLE_ALREADY_SEEDED) when a later stage of the division was filled from this stage's
- *  ranks - a confirmed seed proposal on it, or its stored `config.qualified` draw. The ranks are not this stage's to change. */
+/** B5a T11/T12 (fix I-1): refuse (409 VACANT_TITLE_ALREADY_SEEDED) when a later stage of the division was filled from this stage's
+ *  RANKS - it holds a confirmed seed proposal or its stored `config.qualified` draw, AND one of its progression sources resolves to
+ *  this stage with a take that reads ranks (`rankRange`, `topNPerGroup`, `bestNth`, `picks`). A stage fed only by LOSERS' takes
+ *  (`firstLosses`, `roundLosers`: the Plate) never depends on the final's result, so it does not block (RB4-C3, X-CH-4). */
 export async function assertStageNotSeeded(tx: Tx, stageId: string): Promise<void> {
-  const [seeded] = await tx`
-    select 1 from stages n join stages s on s.division_id = n.division_id and n.seq > s.seq
-     where s.id = ${stageId}
+  const { resolveProgressionSource } = await import("@/server/usecases/stage-seeding");
+  const later = await tx<{ id: string; seq: number; division_id: string; progression: { sources: { stage: "previous" | { stageId: string }; take: { kind: string }[] }[] } | null }[]>`
+    select n.id, n.seq, n.division_id, n.progression
+      from stages n join stages s on s.division_id = n.division_id and n.seq > s.seq
+     where s.id = ${stageId} and n.progression is not null
        and (n.config ? 'qualified'
             or exists (select 1 from stage_seed_proposals p where p.stage_id = n.id and p.status = 'confirmed'))
-     limit 1`;
-  if (seeded) throw knockoutRefusal("VACANT_TITLE_ALREADY_SEEDED", { stage_id: stageId });
+     order by n.seq`;
+  for (const n of later) {
+    for (const src of n.progression?.sources ?? []) {
+      if (src.take.every((t) => t.kind === "firstLosses" || t.kind === "roundLosers")) continue;
+      let resolvedId: string | null = null;
+      try {
+        resolvedId = (await resolveProgressionSource(tx, { division_id: n.division_id, seq: n.seq }, src.stage)).id;
+      } catch {
+        // an unresolvable source cannot depend on this stage
+      }
+      if (resolvedId === stageId) throw knockoutRefusal("VACANT_TITLE_ALREADY_SEEDED", { stage_id: stageId });
+    }
+  }
 }
 
 /** B5a T11/T12: a completed stage whose final is open again goes back to `active`: its pool-null placement snapshot is
