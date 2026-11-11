@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { TAG, apiJson, activeOrg, loginUi, mintEmailClaimPathBySql, withDb } from "./helpers";
+import { openConsolePanel } from "./helpers/console-panels";
 import { CLAIM_EMAIL_SIGNIN_MS } from "../src/lib/claim-signin-window";
 
 // PROMPT-53 acceptance: invite → claim → RSVP on /me → organiser sees the
@@ -183,6 +184,7 @@ test.describe("player accounts (PROMPT-53)", () => {
     const fixture = mine.data!.upcoming[0]!;
     await page.goto(`/o/${orgSlug}/c/${compSlug}/d/${divSlug}/f/${fixture.fixture_no}`);
 
+    await openConsolePanel(page, "lineup");
     // Ada RSVP'd out → ✗ with the note as tooltip; Ben never claimed → "—".
     const adaChip = page.getByLabel(`${ada.full_name}: unavailable — away that weekend`);
     await expect(adaChip.first()).toBeVisible({ timeout: 20_000 });

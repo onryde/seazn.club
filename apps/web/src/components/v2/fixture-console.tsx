@@ -1622,7 +1622,7 @@ export function FixtureConsole({
                     <span className="flex min-w-0 flex-col items-center leading-tight">
                       <span className="max-w-full truncate">{msg("matchRules.title")}</span>
                       {matchRules?.override != null && (
-                        <span data-testid="match-rules-overridden" className="max-w-full truncate text-[11px] font-normal text-purple-700">
+                        <span data-testid="match-rules-toggle-overridden" className="max-w-full truncate text-[11px] font-normal text-purple-700">
                           {msg("matchRules.overridden")}
                         </span>
                       )}

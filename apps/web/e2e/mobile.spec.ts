@@ -58,6 +58,7 @@ import { FLOOR_MS, ROUTE_CHECK_MS } from "./spectator-w2-kit";
 import { withDb } from "./rs007-money-kit";
 import { STORAGE_KEY as GAME_2048_STORAGE_KEY, type GameState as Game2048State } from "../src/games/2048/state";
 import { openMatchActions } from "./helpers/match-actions";
+import { consolePanel, openConsolePanel } from "./helpers/console-panels";
 
 // v3/02 §4 viewport gate — runs ONLY in the mobile-se / mobile-14 projects
 // (375×667, 390×844). Every audited route must render with zero page-level
@@ -119,17 +120,18 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
   );
   console.log(`[phone-composition ${vp.width}x${vp.height}] ${controls.length} visible controls:\n  ${controls.join("\n  ")}`);
 
-  const deskHandover = page.locator('[data-role="device-handover"]');
-  const phoneHandover = page.locator('[data-role="device-handover-phone"]');
-  const handoverOffered = (await deskHandover.count()) > 0;
-  // Spec 2026-09-30 §2: Stream is the second twinned control — a desktop button and a phone strip icon, one mount.
-  const deskStream = page.locator('[data-role="fixture-stream"]');
-  const phoneStream = page.locator('[data-role="fixture-stream-phone"]');
-  const streamOffered = (await deskStream.count()) > 0;
-  // Twins are EQUAL in presence (one mount drives both) — never one without the other.
-  expect(await phoneStream.count(), "the stream twins are present together or not at all").toBe(await deskStream.count());
+  // Header panel bar (owner 2026-11-11): Remote scoring and Stream are ONE button each at every width — the old phone icon
+  // twins are gone (one DOM; a 2-column grid of equal buttons below md, Stream on its own full row).
+  const handoverButton = page.locator('[data-role="device-handover"]');
+  const handoverOffered = (await handoverButton.count()) > 0;
+  const streamButton = page.locator('[data-role="fixture-stream"]');
+  const streamOffered = (await streamButton.count()) > 0;
+  expect(
+    await page.locator('[data-role="device-handover-phone"], [data-role="fixture-stream-phone"]').count(),
+    "no phone twin of the bar's buttons exists any more",
+  ).toBe(0);
   // Anti-vacuity: both callers are an organiser's fixture page on the shared Pro org (AUTH_STATE), where streaming is
-  // entitled since V426 — so the twin checks below must have something to check.
+  // entitled since V426 — so the checks below must have something to check.
   expect(streamOffered, "an organiser's fixture page on an entitled org offers Stream").toBe(true);
   const detailsToggle = page.locator('[data-role="match-details-toggle"]');
   const scoringHeading = page.locator('[data-role="console-scoring"] h2');
@@ -138,14 +140,19 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
   const rowCount = await rows.count();
 
   if (phone) {
-    if (handoverOffered) {
-      await expect(phoneHandover).toBeVisible();
-      await expect(deskHandover).toBeHidden();
-    }
-    if (streamOffered) {
-      await expect(phoneStream).toBeVisible();
-      await expect(deskStream).toBeHidden();
-    }
+    if (handoverOffered) await expect(handoverButton).toBeVisible();
+    if (streamOffered) await expect(streamButton).toBeVisible();
+    // The bar below md: Stream owns a full row, every other button is the same width (a 2-column grid of equals).
+    const bar = page.locator('[data-role="console-panel-bar"]');
+    const barBox = await bar.boundingBox();
+    expect(barBox, "the panel bar renders").not.toBeNull();
+    const streamBox = await streamButton.boundingBox();
+    expect(streamBox!.width, "Stream is a full-width row on a phone").toBeGreaterThanOrEqual(barBox!.width - 1);
+    const others = await bar.locator("button:not([data-role='fixture-stream'])").evaluateAll((els) =>
+      els.map((e) => Math.round(e.getBoundingClientRect().width)),
+    );
+    expect(others.length, "anti-vacuity: the bar offers buttons besides Stream").toBeGreaterThan(1);
+    expect(new Set(others).size, `the bar's other buttons are equal widths, got ${others.join(",")}`).toBe(1);
     await expect(detailsToggle).toBeVisible();
     await expect(scoringHeading).toBeHidden();
     await expect(page.locator('[data-role="v3-headline"]')).toBeHidden();
@@ -222,32 +229,24 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
       );
       await activityToggle.click();
     }
-    // Lineup disclosures: rows visible, editors folded.
-    // The lineup cards are the ONE exception to "every toggle is visible":
-    // below `md` only the team picked in the Home/Away switch shows (inactive
-    // card is `max-md:hidden`), so toggles inside a `lineup-team-*` card are
-    // required visible only for the active one — and exactly one is.
+    // Phone-only disclosures left on the console (the availability roster of a one-player sport): every toggle is visible.
+    // The lineup cards are no longer disclosures — they live in the Lineup panel of the bar (2026-11-11), checked below.
     const disclosures = page.locator('[data-role="phone-disclosure-toggle"]');
     const disclosureCount = await disclosures.count();
-    let lineupShown = 0;
-    let lineupTotal = 0;
-    for (let i = 0; i < disclosureCount; i++) {
-      const toggle = disclosures.nth(i);
-      const inLineupCard = await toggle.evaluate((n) => n.closest('[data-testid^="lineup-team-"]') !== null);
-      if (inLineupCard) {
-        lineupTotal++;
-        if (await toggle.isVisible()) lineupShown++;
-        continue;
-      }
-      await expect(toggle).toBeVisible();
-    }
-    // Gate on the Home/Away switch being VISIBLE (it is `md:hidden`), never on a
-    // width literal: with the switch up, exactly one card shows; without it
-    // (>= md) both cards are shown side by side.
-    if (lineupTotal > 0) {
+    for (let i = 0; i < disclosureCount; i++) await expect(disclosures.nth(i)).toBeVisible();
+    // The Lineup panel (offered for every team/pair sport): closed on arrival; opened, it shows ONE team behind the Home/Away
+    // switch while the switch is visible (it is `md:hidden` — gate on it, never on a width literal), both cards otherwise.
+    if (await openConsolePanel(page, "lineup", { optional: true })) {
+      const cards = [page.getByTestId("lineup-team-home"), page.getByTestId("lineup-team-away")];
+      let shown = 0;
+      for (const card of cards) if (await card.isVisible()) shown++;
       const phoneSwitch = await page.getByTestId("lineup-team-switch").first().isVisible();
-      if (phoneSwitch) expect(lineupShown, "exactly one lineup card shows with the Home/Away switch").toBe(1);
-      else expect(lineupShown, "both lineup cards show without the switch").toBe(lineupTotal);
+      expect(shown, phoneSwitch ? "exactly one lineup card shows with the Home/Away switch" : "both lineup cards show without the switch").toBe(
+        phoneSwitch ? 1 : 2,
+      );
+      await expectNoHorizontalScroll(page);
+      await consolePanel(page, "lineup").getByTestId("console-panel-close").click();
+      await expect(consolePanel(page, "lineup"), "the close X closes the Lineup panel").toBeHidden();
     }
     // Review fix (Important 3, final review) — nothing here ever OPENED a
     // disclosure: every prior assertion ran with the body CLOSED, so
@@ -269,14 +268,8 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
       await expect(first).toHaveAttribute("aria-expanded", "false");
     }
   } else {
-    if (handoverOffered) {
-      await expect(deskHandover).toBeVisible();
-      await expect(phoneHandover).toBeHidden();
-    }
-    if (streamOffered) {
-      await expect(deskStream).toBeVisible();
-      await expect(phoneStream).toBeHidden();
-    }
+    if (handoverOffered) await expect(handoverButton).toBeVisible();
+    if (streamOffered) await expect(streamButton).toBeVisible();
     await expect(detailsToggle).toBeHidden();
     await expect(scoringHeading).toBeVisible();
     await expect(activityToggle).toBeHidden();
@@ -2266,11 +2259,10 @@ test("lineup editor role/pair-order selects hold at phone width", async ({ page,
   // the one inline control a row keeps (tennis pairs: the pair-order select).
   //
   // Below `md` only ONE team card shows, behind a Home/Away switch
-  // (`md:hidden`), and each card sits inside a `PhoneDisclosure` whose body is
-  // folded until its toggle is tapped (spec 2026-09-02 §3.10) — so each side is
-  // driven in turn: switch to it (only when the switch is visible), open ITS
-  // disclosure (only when its toggle says closed), then measure. The fold is
-  // the approved design; nothing here is weakened to fit it.
+  // (`md:hidden`), and the editor lives in the header bar's Lineup panel — so
+  // the panel is opened once, then each side is driven in turn: switch to it
+  // (only when the switch is visible), then measure.
+  await openConsolePanel(page, "lineup");
   const menuButtons = page.getByTestId("lineup-row-menu-button");
   // Wait ATTACHED first (the editor is client-rendered) — visibility is exactly
   // what the fold denies, so it cannot be the wait condition here.
@@ -2284,11 +2276,6 @@ test("lineup editor role/pair-order selects hold at phone width", async ({ page,
     }
     const card = page.getByTestId(`lineup-team-${side}`);
     await expect(card, `${side} lineup card is not showing`).toBeVisible();
-    // The lineup's own PhoneDisclosure is `desktopCollapsible` (PR #782) and at
-    // `tablet-768`/`tablet-834` starts OPEN pre-match, so only click when closed.
-    const toggle = card.locator('[data-role="phone-disclosure-toggle"]');
-    if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
-    await expect(toggle).toHaveAttribute("aria-expanded", "true");
 
     const buttons = card.getByTestId("lineup-row-menu-button");
     await expect(buttons.first(), `${side}: ⋯ button still folded after its disclosure was opened`).toBeVisible({
@@ -7345,13 +7332,10 @@ test("W2c match rules block at every width: the fold opens, the controls hold th
   /** Class 22: attached first, then open the fold only when its toggle is the visible kind. */
   const openFold = async (): Promise<void> => {
     await expect(block, "the block is attached at every width").toBeAttached({ timeout: 20_000 });
-    const toggle = page.locator('[data-role="phone-disclosure"]:has([data-testid="match-rules-block"]) > [data-role="phone-disclosure-toggle"]');
-    expect(await toggle.isVisible(), `the fold is a phone control (${projectWidth})`).toBe(projectWidth < 768);
-    if (await toggle.isVisible()) {
-      await assertTapFloor(toggle, "Match rules toggle");
-      await expect(block, "folded on a phone until the toggle is tapped").toBeHidden();
-      if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
-    }
+    const toggle = page.getByTestId("match-rules-toggle");
+    await assertTapFloor(toggle, "Match rules toggle");
+    await expect(block, "closed until the header button is tapped").toBeHidden();
+    await openConsolePanel(page, "rules");
     await expect(block).toBeVisible({ timeout: 20_000 });
   };
   const fits = async (label: string): Promise<void> => {

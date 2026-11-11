@@ -138,7 +138,7 @@ async function openFixture(page: Page, r: OverlayRig): Promise<void> {
   expect(fx.data?.fixture_no ?? 0, "the rig's fixture has a run-sheet number").toBeGreaterThan(0);
   await page.goto(`/o/${r.orgSlug}/c/${r.compSlug}/d/${r.divSlug}/f/${fx.data!.fixture_no}`);
   await expect(
-    page.locator('[data-role="console-scoring"], [data-role="console-stream"]').first(),
+    page.locator('[data-role="console-scoring"], [data-role="console-panel-bar"]').first(),
     "the fixture console rendered",
   ).toBeAttached({ timeout: 30_000 });
 }
@@ -1006,7 +1006,7 @@ test.describe("R2006: the OBS tab's score style grid", () => {
       await expect(checked()).toHaveAttribute("data-template", other);
       await expect.poll(async () => (await linkUrl()).searchParams.get("template")).toBe(other);
       await page.reload();
-      await expect(page.locator('[data-role="console-scoring"], [data-role="console-stream"]').first()).toBeAttached({ timeout: 30_000 });
+      await expect(page.locator('[data-role="console-scoring"], [data-role="console-panel-bar"]').first()).toBeAttached({ timeout: 30_000 });
       await streamControl(page).click();
       await page.locator('[data-testid="stream-tab-obs"]').click();
       await expect(checked(), "the stored pick, after a reload").toHaveAttribute("data-template", other);
