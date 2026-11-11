@@ -55,7 +55,8 @@
 // ── THE ONE THING THAT DID NOT CHANGE ──────────────────────────────────────
 // `landing.presentedBy` is "Presented by {sponsor}" — a whole SENTENCE with the
 // sponsor's name in it, in all four locales. It is rendered WHOLE, in display
-// type, with the logo beside it. A fixed "label above, name below" lockup pins
+// type (the match board adds the sponsor's logo beside it; the hero has the
+// poster instead and draws none). A fixed "label above, name below" lockup pins
 // English word order into the markup: a locale that puts the sponsor first, or
 // needs a different preposition before a name, has nowhere to go. The approved
 // mock drew that two-line lockup; the sentence wins on the i18n argument, and a
@@ -137,7 +138,8 @@ export interface SponsorsProps {
 
 /** The title sponsor's line: the whole "Presented by {sponsor}" sentence, light type for a dark slab, with the sponsor's logo
  *  beside it when `withLogo`. The hero and the match board draw this ONE node, so the two placements cannot word the title
- *  differently; they differ only in the logo: the hero's image is the poster beside or under it now, the match page has none. */
+ *  differently; they differ only in the logo: the hero passes `false` (its image is the poster beside or under it), the match
+ *  board passes `true` (it has no poster, so the logo is its only image). */
 function titleLine(s: ResolvedSponsor, dict: PublicDict, tag: BoardClickTag, withLogo: boolean) {
   return linked(
     s,
@@ -202,9 +204,9 @@ export function showcaseLabels(dict: PublicDict): ShowcaseLabels {
 export function TitleSponsorPanel({ sponsors, tiered, dict, clickTag }: SponsorsProps) {
   if (!hasTitleSponsor(sponsors, tiered)) return null;
   return (
-    <aside data-testid="mh-hero-poster" className="min-w-0 max-md:hidden md:w-[220px] lg:w-[300px]">
+    <div data-testid="mh-hero-poster" className="min-w-0 max-md:hidden md:w-[220px] lg:w-[300px]">
       <TitleSponsorShowcase slides={titleSlides(sponsors, tiered, dict, clickTag)} labels={showcaseLabels(dict)} variant="panel" />
-    </aside>
+    </div>
   );
 }
 

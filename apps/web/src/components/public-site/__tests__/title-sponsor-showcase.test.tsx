@@ -377,6 +377,18 @@ describe("TitleSponsorShowcase: markup", () => {
     expect(attrsOf(html({ slides: [B, C], variant: "band" }), "title-slide-fallback")[0]).not.toMatch(/\bpb-14\b/);
   });
 
+  it("a slide that is not on show takes no pointer either (pointer-events-none), and the one on show does, in both variants (count 6)", () => {
+    let checked = 0;
+    for (const variant of ["panel", "band"] as const) {
+      attrsOf(html({ variant }), "title-slide").forEach((slideAttrs, i) => {
+        const token = /(?:^|[\s"])pointer-events-none(?=[\s"])/;
+        expect(token.test(slideAttrs), `${variant} slide ${i}`).toBe(i !== 0);
+        checked += 1;
+      });
+    }
+    expect(checked, "slides checked").toBe(6);
+  });
+
   it("band dots sit on the court colour with no capsule, and clear 3:1 there too (count 2)", () => {
     const h = html({ variant: "band" });
     expect(attrsOf(h, "title-showcase-dots")[0]).not.toMatch(/\bbg-black\//);
@@ -571,10 +583,73 @@ describe("TitleSponsorShowcase: behaviour", () => {
     expect(byId(island, "title-slide-poster")).toHaveLength(1);
   });
 
-  it("slides that shrink under a showing index never leave nothing on show", () => {
+  it("failed posters ACCUMULATE: slide 0's and slide 2's posters both fail, and after a full lap both are still cards (D14)", () => {
+    const island = mount(); // A: poster, B: none, C: poster
+    const posterIn = (slideAt: number): ReactElement | undefined =>
+      walk(byId(island, "title-slide")[slideAt]!).find((el) => propsOf(el)["data-testid"] === "title-slide-poster");
+    const fail = (slideAt: number): void => {
+      const img = posterIn(slideAt);
+      expect(img, `slide ${slideAt} still has a poster to fail`).toBeDefined();
+      (propsOf(img!).onError as Handler<unknown>)({});
+    };
+    expect(byId(island, "title-slide-poster"), "before any failure").toHaveLength(2);
+
+    fail(0);
+    vi.advanceTimersByTime(TITLE_ROTATE_MS);
+    vi.advanceTimersByTime(TITLE_ROTATE_MS);
+    expect(currentId(island), "the rotation reached slide 2").toBe(C.id);
+    fail(2);
+    // A full lap: back to slide 0, through the slide that failed first.
+    vi.advanceTimersByTime(TITLE_ROTATE_MS);
+    expect(currentId(island), "wrapped to slide 0").toBe(A.id);
+
+    expect(byId(island, "title-slide-poster"), "no poster is left to load").toHaveLength(0);
+    let cards = 0;
+    for (const slideAt of [0, 1, 2]) {
+      const hasCard = walk(byId(island, "title-slide")[slideAt]!).some((el) => propsOf(el)["data-testid"] === "title-slide-fallback");
+      expect(hasCard, `slide ${slideAt} draws a card`).toBe(true);
+      cards += 1;
+    }
+    expect(cards, "slides checked").toBe(3);
+  });
+
+  it("a failed poster is a failed URL, not a failed sponsor: the same sponsor with a NEW poster after a refresh shows it", () => {
     const island = mount();
-    fire(dotsOf(island)[2]!, "onClick", {});
-    expect(currentId(island)).toBe(C.id);
+    const posterIn = (slideAt: number): ReactElement | undefined =>
+      walk(byId(island, "title-slide")[slideAt]!).find((el) => propsOf(el)["data-testid"] === "title-slide-poster");
+    (propsOf(posterIn(0)!).onError as Handler<unknown>)({});
+    expect(posterIn(0), "the failed poster is a card").toBeUndefined();
+
+    const replaced = { ...A, poster: "https://cdn.example/storage/a-poster-v2.png" } satisfies TitleSlide;
+    island.rerender({ slides: [replaced, B, C], labels: LABELS, variant: "panel" });
+    const img = posterIn(0);
+    expect(img, "the new poster is drawn, not the card").toBeDefined();
+    expect(propsOf(img!).src).toBe(replaced.poster);
+    expect(byId(island, "title-slide-poster"), "A's new poster and C's").toHaveLength(2);
+
+    // The twin: the old URL is still remembered as failed, so putting it back draws the card again.
+    island.rerender({ slides: [A, B, C], labels: LABELS, variant: "panel" });
+    expect(posterIn(0), "the old poster is still a card").toBeUndefined();
+    expect(byId(island, "title-slide-poster")).toHaveLength(1);
+  });
+
+  it("when the slide count changes under a running rotation it turns by the NEW count, and a shrunk list never leaves nothing on show", () => {
+    const island = mount();
+    expect(currentId(island)).toBe(A.id);
+    // Three beats after the list shrinks to two: A, B, A, B (a rotation still turning by the old count of three would go A, B, A, A).
+    island.rerender({ slides: [A, B], labels: LABELS, variant: "panel" });
+    expect(currentId(island), "the rerender itself moves nothing").toBe(A.id);
+    const seen: string[] = [];
+    for (let beat = 0; beat < 3; beat += 1) {
+      vi.advanceTimersByTime(TITLE_ROTATE_MS);
+      seen.push(currentId(island));
+    }
+    expect(seen, "two slides turn A, B, A, B").toEqual([B.id, A.id, B.id]);
+    // Growing back to three: the next beat reaches the third slide.
+    island.rerender({ slides: [A, B, C], labels: LABELS, variant: "panel" });
+    vi.advanceTimersByTime(TITLE_ROTATE_MS);
+    expect(currentId(island), "three slides again").toBe(C.id);
+    // The index is now 2 of 3; one slide left: it falls back to the first, and with none nothing is drawn.
     island.rerender({ slides: [A], labels: LABELS, variant: "panel" });
     expect(currentId(island), "index 2 of 1 slide falls back to the first").toBe(A.id);
     island.rerender({ slides: [], labels: LABELS, variant: "panel" });

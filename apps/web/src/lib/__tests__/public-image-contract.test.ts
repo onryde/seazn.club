@@ -51,8 +51,8 @@ const CASES: Case[] = [
     // a parameter rather than a per-call tier lookup. That is a STRONGER lock
     // than the pair it replaced, not a weaker one: width and height are the
     // same identifier, so they cannot drift apart at all — the CLS failure this
-    // contract exists for. What the callers pass (40 in the hero, 32/24/20 per
-    // board tier) is pinned by `sponsors-board.test.tsx`, which can see values.
+    // contract exists for. What the callers pass (40 for the match board's title
+    // line, 32/24/20 per board tier) is pinned by `sponsors-board.test.tsx`, which can see values.
     width: "px",
     height: "px",
   },

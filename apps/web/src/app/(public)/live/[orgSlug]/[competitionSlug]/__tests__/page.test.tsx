@@ -559,7 +559,7 @@ describe("the competition page mounts the landing", () => {
     expect(h.match(new RegExp(WRAPPER_GRID.replace(/[[\]()]/g, "\\$&"), "g")), "exactly one wrapper carries it").toHaveLength(1);
 
     // The panel is fed by the resolver's rows: the poster url is in it, encoded into the optimiser route, and each row's link.
-    const panelHtml = h.slice(panel, h.indexOf("</aside>", panel));
+    const panelHtml = h.slice(panel, band);
     expect(panelHtml).toContain(`/_next/image?url=${encodeURIComponent(POSTER_URL)}`);
     expect(panelHtml).toContain(`href="/s/sp1?src=site"`);
     expect(panelHtml, "the unlinked second row is a slide with no link").toContain(`data-sponsor-id="sp4"`);
@@ -631,7 +631,7 @@ describe("the competition page mounts the landing", () => {
     stub.hasFeature.mockResolvedValue(true);
     stub.resolveSponsors.mockResolvedValue([TITLE_WITH_POSTER, GOLD_SPONSOR]);
     const h = await render();
-    const panel = h.slice(h.indexOf(`data-testid="mh-hero-poster"`), h.indexOf("</aside>"));
+    const panel = h.slice(h.indexOf(`data-testid="mh-hero-poster"`), h.indexOf(`data-testid="mh-title-band"`));
     const band = h.slice(h.indexOf(`data-testid="mh-title-band"`), h.indexOf(`data-testid="mh-root"`));
     for (const [where, markup] of [["panel", panel], ["band", band]] as const) {
       expect(markup, `${where} holds the title sponsor`).toContain("Northbank Bank");

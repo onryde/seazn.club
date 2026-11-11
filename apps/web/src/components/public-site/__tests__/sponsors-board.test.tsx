@@ -587,7 +587,9 @@ describe("the title sponsor's poster: slides, panel and band", () => {
     expect(panel).not.toContain("md:hidden");
     expect(panel).toContain("md:w-[220px]");
     expect(panel).toContain("lg:w-[300px]");
-    expect(panelOf()).toMatch(/^<aside\b/);
+    // A plain box, not an <aside>: a complementary landmark inside <main> breaks axe's landmark-complementary-is-top-level.
+    expect(panelOf()).toMatch(/^<div data-testid="mh-hero-poster"/);
+    expect(panelOf()).not.toContain("<aside");
 
     const band = classTokens(bandOf(), "mh-title-band");
     expect(band).toContain("md:hidden");

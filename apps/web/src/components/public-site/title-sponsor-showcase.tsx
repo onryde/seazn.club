@@ -2,7 +2,7 @@
 
 // The Title sponsor's poster, on the public competition page (spec docs/superpowers/specs/2026-11-11-title-sponsor-hero-poster-design.md
 // §7). One client component draws it twice, told apart by `variant`:
-//   • "panel": from `md` up, a 4:5 poster beside the hero (the hero mounts it in a `max-md:hidden` aside), a micro-label above it
+//   • "panel": from `md` up, a 4:5 poster beside the hero (the hero mounts it in a `max-md:hidden` box), a micro-label above it
 //     and the sponsor's name below it;
 //   • "band": below `md`, a thumbnail, the whole "Presented by {sponsor}" sentence and a Visit button, in a strip under the hero
 //     (mounted in an `md:hidden` box).
@@ -24,8 +24,9 @@
 //
 // ── A POSTER THAT FAILS (D14) ──────────────────────────────────────────────────────────────────────────────────────────────────
 // Any http(s) host is accepted at write time, and the image optimiser only serves the configured storage host, so a poster can
-// 4xx. The browser's `error` event marks that slide broken, and it then draws the same card a sponsor without a poster gets:
-// the logo on white, or a monogram. The premium slot never shows a broken image. (This is the only thing that can catch it: the
+// 4xx. The browser's `error` event marks that poster URL broken (keyed by the URL, not the sponsor, so a sponsor who swaps in a
+// new poster is not stuck on the card), and the slide then draws the same card a sponsor without a poster gets: the logo on
+// white, or a monogram. The premium slot never shows a broken image. (This is the only thing that can catch it: the
 // server cannot know the image will fail.)
 //
 // ── NAMES NEVER CLIP (D8) ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -91,9 +92,10 @@ function slideFace(
   variant: ShowcaseVariant,
   failed: boolean,
   dotsBelow: boolean,
-  onFailed: (id: string) => void,
+  onFailed: (poster: string) => void,
 ): ReactNode {
   if (!slide.poster || failed) return fallbackCard(slide, variant, dotsBelow);
+  const poster = slide.poster; // the closure below cannot see the narrowing of `slide.poster`
   return (
     <Image
       data-testid="title-slide-poster"
@@ -103,7 +105,7 @@ function slideFace(
       height={POSTER_HEIGHT}
       sizes={SIZES[variant].poster}
       className="h-full w-full object-cover"
-      onError={() => onFailed(slide.id)}
+      onError={() => onFailed(poster)}
     />
   );
 }
@@ -174,7 +176,9 @@ export function TitleSponsorShowcase({
   const at = index < count ? index : 0;
   const current = slides[at]!;
   const panel = variant === "panel";
-  const markBroken = (id: string) => setBroken((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+  // Broken is a set of poster URLs, and it only grows: each failure adds to what the earlier ones left.
+  const markBroken = (poster: string) => setBroken((prev) => (prev.has(poster) ? prev : new Set(prev).add(poster)));
+  const isBroken = (slide: TitleSlide) => slide.poster !== null && broken.has(slide.poster);
 
   const Root = count >= 2 ? "section" : "div";
   const carousel = count >= 2 ? { "aria-roledescription": "carousel", "aria-label": labels.group } : {};
@@ -188,7 +192,7 @@ export function TitleSponsorShowcase({
     inert: i !== at,
   });
   const fade = (i: number) =>
-    `transition-opacity duration-700 motion-reduce:transition-none ${i === at ? "opacity-100" : "opacity-0"}`;
+    `transition-opacity duration-700 motion-reduce:transition-none ${i === at ? "opacity-100" : "pointer-events-none opacity-0"}`;
 
   // The panel's capsule is centred with `inset-x-0 mx-auto w-fit`, NOT `left-1/2 -translate-x-1/2`: a box pinned at `left: 50%`
   // may only be as wide as the half that remains, so four 44px dots (176px) wrapped into a 3 + 1 blob on a 300px poster.
@@ -260,10 +264,10 @@ export function TitleSponsorShowcase({
                       aria-label={slide.name}
                       className="block h-full w-full focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-white"
                     >
-                      {slideFace(slide, variant, broken.has(slide.id), count >= 2, markBroken)}
+                      {slideFace(slide, variant, isBroken(slide), count >= 2, markBroken)}
                     </a>
                   ) : (
-                    slideFace(slide, variant, broken.has(slide.id), count >= 2, markBroken)
+                    slideFace(slide, variant, isBroken(slide), count >= 2, markBroken)
                   )}
                 </div>
               ))}
@@ -290,7 +294,7 @@ export function TitleSponsorShowcase({
               const row = (
                 <>
                   <div className="relative aspect-[4/5] w-14 overflow-hidden rounded-md bg-white ring-1 ring-white/20">
-                    {slideFace(slide, variant, broken.has(slide.id), count >= 2, markBroken)}
+                    {slideFace(slide, variant, isBroken(slide), count >= 2, markBroken)}
                   </div>
                   <span
                     data-testid="title-band-sentence"
