@@ -101,6 +101,13 @@ and still renders.
   re-verifies these three properties against the tree before building on them, and adds the sequence tests below. A still-open
   CART session that covers this entry plus siblings is NOT expired by a per-entry mint (it is not subsumed). That is today's
   behaviour too; the webhook's handling of an entry paid twice is pinned by a test, not changed here.
+- **Return URLs (owner, 2026-11-11).** A session minted from the page sets BOTH `success_url` and `cancel_url` to the payment
+  page (today's `checkout.ts:273-274` return to the registration page; the page's mint must not). Cancel, Back or a closed tab
+  leaves the session open: pressing Pay again reuses it (the reuse rule); under 10 min left → expire, then re-mint.
+- **Paid, not yet recorded (owner, 2026-11-11).** When the page sees `checkout=success&session_id=…`, or an entry whose session
+  is `complete` before the webhook has fulfilled it, it shows "Payment received — confirming…" with NO Pay button and refreshes.
+  It reconciles via the existing return-and-confirm path, never by trusting the query string alone (mirror the sponsor invoice
+  page's payment-being-recorded notice). Test: success return before the webhook → no Pay; webhook lands → Paid.
 - Because the sweep no longer mints at send time, a reminder costs no Stripe call. The sweep's lease/claim stays as is
   (idempotent sends).
 
