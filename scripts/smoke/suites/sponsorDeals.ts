@@ -350,6 +350,78 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
     }
   }
 
+  // --- PR 3 Task 24: an OFFLINE deal that went live and then ended unpaid (its term ran out) is still DUE. It is the one ended deal
+  // that offers Mark as paid and Write off (lib/sponsor-deals.ts `endedStillDue`), and the sponsor list's row names it instead of
+  // saying a bare "Ended" with an Add deal. Made as a club makes it - a sponsor, an immediate offline deal with a billing email -
+  // and then the term ends: no route ends a deal that way (the hourly sweep does), so that one step is SQL, under the CHECKs
+  // `ended_shape` (V495) and `written_off_unpaid_offline` (V502: a written-off deal is offline, unpaid and went live).
+  if (!process.env.DATABASE_URL) {
+    check("sd ended-unpaid deal rows: skipped (no DATABASE_URL to end a deal) - sponsor-deals.test.ts and sponsor-list.test.tsx cover them", true);
+  } else {
+    type EndedDeal = Deal & { ended_reason: string | null };
+    const dueName = `Deal Ended Due ${tag}`;
+    const dueSponsor = await addSponsor(dueName);
+    const dueMade = await createDeal(dueSponsor, { go_live: "immediate", sponsor_email: `delivered+deal_due_${tag}@resend.dev` });
+    const dueDeal = dueMade.status === 201 ? v1data<{ deal: Deal }>(dueMade).deal : null;
+    const writeOff = (id: string) => v1(free, `/api/v1/orgs/${org.id}/sponsor-deals/${id}/write-off`, "POST");
+    // Nothing is due on a LIVE deal: the club cannot waive an invoice whose sponsor still has the placement.
+    const refusedLive = dueDeal ? await writeOff(dueDeal.id) : null;
+    check(
+      "sd write off is refused on a live deal (409), and the deal is untouched",
+      dueDeal?.deal_status === "live" && refusedLive?.status === 409 &&
+        v1data<EndedDeal>(await v1(free, `/api/v1/orgs/${org.id}/sponsor-deals/${dueDeal.id}`)).deal_status === "live",
+    );
+
+    const knownToken = randomBytes(32).toString("base64url");
+    const db = smokeDb();
+    let ended = 0;
+    try {
+      if (dueDeal) {
+        ended = (
+          await db`update sponsor_orders set deal_status = 'ended', ended_reason = 'expired', ended_at = now()
+                    where id = ${dueDeal.id} and deal_status = 'live' returning id`
+        ).length;
+        // The emailed token cannot be read back (the rows above), so a KNOWN token's hash is planted the way the send stores its own.
+        await db`update sponsor_orders set invoice_token_hash = ${createHash("sha256").update(knownToken, "utf8").digest()}
+                  where id = ${dueDeal.id} and invoice_number is not null`;
+      }
+    } finally {
+      await db.end();
+    }
+    const dueHub = await html(free, `/o/${org.slug}/sponsors?tab=sponsors`);
+    const dueAt = dueHub.body.indexOf(`data-sponsor-id="${dueSponsor}"`);
+    const dueRow = dueAt >= 0 ? dueHub.body.slice(dueAt, dueHub.body.indexOf("</li>", dueAt)) : "";
+    const dueBefore = await html(newSession(), `/r/sponsor/invoice/${knownToken}`);
+    check(
+      "sd ended-unpaid deal: the hub row reads Ended · unpaid with Mark as paid; the invoice still reads unpaid and says it is due",
+      ended === 1 && dueHub.status === 200 &&
+        dueRow.includes("Ended · unpaid") && (dueRow.match(/data-testid="sponsor-row-action"/g) ?? []).length === 1 &&
+        dueRow.includes('data-action="mark_paid"') &&
+        dueBefore.status === 200 && dueBefore.body.includes('data-state="unpaid"') &&
+        dueBefore.body.includes("This sponsorship has ended, and this invoice is still due.") &&
+        !dueBefore.body.includes('data-testid="invoice-pay"'),
+    );
+
+    const wroteOff = dueDeal ? await writeOff(dueDeal.id) : null;
+    const dueAfter = await html(newSession(), `/r/sponsor/invoice/${knownToken}`);
+    const wroteOffDeal = wroteOff?.status === 200 ? v1data<EndedDeal>(wroteOff) : null;
+    check(
+      "sd write off: the deal reads written_off with its money still unpaid; the invoice reads Written off and asks for nothing",
+      wroteOffDeal?.ended_reason === "written_off" && wroteOffDeal.payment_status === "pending" && wroteOffDeal.deal_status === "ended" &&
+        dueAfter.status === 200 && dueAfter.body.includes('data-state="written_off"') &&
+        dueAfter.body.includes("Nothing due — written off by") &&
+        !dueAfter.body.includes('data-testid="invoice-pay"') && !dueAfter.body.includes('data-testid="invoice-bank"'),
+    );
+
+    // Once is all: a deal already written off has nothing due, so a second write off is refused and changes nothing.
+    const writeOffAgain = dueDeal ? await writeOff(dueDeal.id) : null;
+    check(
+      "sd a second write off is refused (409)",
+      wroteOffDeal !== null && writeOffAgain?.status === 409 &&
+        v1data<EndedDeal>(await v1(free, `/api/v1/orgs/${org.id}/sponsor-deals/${dueDeal!.id}`)).ended_reason === "written_off",
+    );
+  }
+
   // --- T9, the hourly sweep's route (D20): the cron secret guards it, and the right one answers the sweep's counts. CI sets
   // CRON_SECRET for the smoke job and its server alike (ci.yml), so a wrong secret is exactly a 401.
   const wrongCron = await fetch(`${BASE}/api/cron/sponsor-deals`, { method: "POST", headers: { "x-cron-secret": "definitely-wrong-sponsor-deals" } });
