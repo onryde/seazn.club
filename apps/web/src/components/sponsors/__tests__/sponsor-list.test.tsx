@@ -27,10 +27,14 @@
 //   L12 arrows         the up/down `disabled` drops `sameOrderBand`                                   -> "the arrows between a native gold"
 //   L13 confirm        Mark as paid skips the confirm                                                  -> "Mark as paid asks first"
 //   L14 cancel         Mark as paid ignores a "no" and POSTs anyway                                   -> "cancelled: no POST"
-//   L15 pencil tray    the pencil's arrival stops clearing `moreOpenId`                               -> "the pencil does not leave the row's tray open" (sponsor-sheet.test.tsx)
+//   L15 pencil tray    the pencil's arrival stops clearing `moreOpenId`                               -> "the pencil's arrival closes the ⋯ tray the reader had open" (sponsor-sheet.test.tsx)
 //   L17 name           the name is a link again (`sponsor-row-name-link`)                              -> "the name is plain text"
 //   L18 pencil         the pencil links to the plain sponsor URL (no `edit=1`)                         -> "the pencil is a link to the sponsor's page with its editor open"
 //   L19 viewer         the viewer gets the pencil (edit link) instead of Open                          -> "a viewer's row opens the page read-only"
+//   L22 chips          a chip goes back to `shrink-0` (it runs under the pencil in a 130px column)      -> "a chip may shrink and truncate"
+//   L23 tiny phones    the logo tile loses `max-[360px]:hidden`                                       -> "below 360 the logo tile is hidden"
+//   L24 tiny phones    the name loses `max-[360px]:line-clamp-2` (back to one truncated line)         -> "below 360 the name wraps to two lines"
+//   L25 viewer         the viewer's Open cell or button is `max-md:hidden`                             -> "a viewer's Open is on screen on a phone"
 //   L16 live region    the notice renders only while it has text                                      -> "always mounted"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -498,6 +502,92 @@ describe("a 43-character name truncates, and every ancestor can shrink (phone co
     const text = classTokens(findOne(line.outer, "sponsor-row-name-text").open);
     expect(text, "the name can take a whole line").toContain("max-w-full");
     expect(text, "and still truncates there").toContain("truncate");
+  });
+});
+
+describe("a chip on the name line can never run under the pencil, and below 360 the name gets the room (owner, 2026-11-11; seen at 320: a 80px name column)", () => {
+  const LOST = sponsor({ id: "c1", name: "Lost One", dispute_lost: true });
+  const PARKED = sponsor({ id: "c2", name: "Parked One", dispute_parked: true });
+  const PAID = sponsor({ id: "c3", name: "Paid One", paid_order_id: "o1" });
+  const WAITING = sponsor({
+    id: "c4", name: "Waiting One", status: "inactive", has_open_deal: true,
+    deal: deal({ id: "dc4", sponsor_id: "c4", deal_status: "awaiting_payment", payment_status: "pending", package_name: "Gold Season", tier: "gold" }),
+  });
+
+  it("every chip on the name line - Dispute lost, Disputed - parked, Paid and '<Tier> when live' - may shrink and truncate instead of holding its width (4 kinds checked)", () => {
+    const markup = listHtml([LOST, PARKED, PAID, WAITING]);
+    let checked = 0;
+    for (const [id, words] of [["c1", "Dispute lost"], ["c2", "Disputed — parked"], ["c3", "Paid"], ["c4", "Gold when live"]] as const) {
+      const chips = findAll(findOne(rowOf(markup, id), "sponsor-row-name").outer, id === "c4" ? "sponsor-row-tier-hint" : "sponsor-row-badge");
+      expect(chips, `${id}: exactly one chip`).toHaveLength(1);
+      expect(textOfMarkup(chips[0]!.outer), `${id}: the chip says its words`).toBe(words);
+      const tokens = classTokens(chips[0]!.open);
+      expect(tokens, `${id}: a chip may shrink and truncate`).toEqual(expect.arrayContaining(["min-w-0", "max-w-full", "truncate"]));
+      expect(tokens, `${id}: and does not hold its full width`).not.toContain("shrink-0");
+      checked++;
+    }
+    expect(checked, "four kinds of chip").toBe(4);
+  });
+
+  it("below 360 the logo tile is hidden and the grid is two columns (name, pencil), the deal and the tray starting at the first; from 360 nothing changes (the markup carries both)", () => {
+    const row = rowOf(listHtml(ROWS), "s1");
+    const grid = findOne(row, "sponsor-row-grid");
+    const cls = classTokens(grid.open);
+    expect(cls, "the three-column grid is still the base").toContain("grid-cols-[2.25rem_minmax(0,1fr)_auto]");
+    expect(cls, "below 360 it is name + pencil").toContain("max-[360px]:grid-cols-[minmax(0,1fr)_auto]");
+    expect(cls, "from md it is unchanged").toContain("md:grid-cols-[2.25rem_minmax(0,1fr)_auto_auto_auto]");
+    const logo = findOne(row, "sponsor-row-logo");
+    expect(classTokens(logo.open), "below 360 the logo tile is hidden").toContain("max-[360px]:hidden");
+    // The hidden tile is the ONLY thing taking the first column, so the next cells start at the first column there.
+    for (const id of ["sponsor-row-deal", "sponsor-row-tools"]) {
+      const tokens = classTokens(findOne(row, id).open);
+      expect(tokens, `${id}: starts at column 1 below 360`).toContain("max-[360px]:col-start-1");
+      expect(tokens, `${id}: spans both columns (all of them, below 360)`).toContain("col-span-2");
+      expect(tokens, `${id}: and still starts at column 2 from 360`).toContain("col-start-2");
+    }
+  });
+
+  it("below 360 the name wraps to two lines (line-clamp-2) instead of cutting at about nine characters; from 360 it still truncates on one line (8 rows checked)", () => {
+    let checked = 0;
+    for (const r of ROWS) {
+      const text = classTokens(findOne(findOne(rowOf(listHtml(ROWS), r.id), "sponsor-row-name").outer, "sponsor-row-name-text").open);
+      expect(text, `${r.id}: two lines below 360`).toEqual(expect.arrayContaining(["max-[360px]:line-clamp-2", "max-[360px]:whitespace-normal", "max-[360px]:break-words"]));
+      expect(text, `${r.id}: from 360 it is the one truncated line it was`).toEqual(expect.arrayContaining(["truncate", "min-w-0", "max-w-full"]));
+      checked++;
+    }
+    expect(checked).toBe(8);
+  });
+
+  it("the logo tile exists once per row, image or initial, and carries the same hidden-below-360 class either way (stored logo and initial both checked)", () => {
+    const withLogo = sponsor({ id: "c5", name: "Logo One", logo_path: "https://cdn.example/logo.png" });
+    const markup = listHtml([withLogo, PAID]);
+    let checked = 0;
+    for (const [id, tag] of [["c5", "<img"], ["c3", "<span"]] as const) {
+      const logos = findAll(rowOf(markup, id), "sponsor-row-logo");
+      expect(logos, `${id}: one logo tile`).toHaveLength(1);
+      expect(logos[0]!.open.startsWith(tag), `${id}: ${tag}`).toBe(true);
+      expect(classTokens(logos[0]!.open), id).toContain("max-[360px]:hidden");
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a viewer's Open is on screen on a phone: neither its cell nor the link is hidden below md, and it keeps its 44px (8 rows checked)", () => {
+    const markup = listHtml(ROWS, { canEdit: false });
+    let checked = 0;
+    for (const r of ROWS) {
+      const row = rowOf(markup, r.id);
+      const lead = findOne(row, "sponsor-row-lead");
+      const open = findOne(lead.outer, "sponsor-row-open");
+      for (const el of [lead.open, open.open]) {
+        // `hidden` as a WHOLE token: the substring also sits inside `max-md:hidden`.
+        expect(classTokens(el), r.id).not.toContain("max-md:hidden");
+        expect(classTokens(el), r.id).not.toContain("hidden");
+      }
+      expect(classTokens(open.open), `${r.id}: 44px`).toEqual(expect.arrayContaining(["max-md:h-11", "max-md:w-11"]));
+      checked++;
+    }
+    expect(checked).toBe(8);
   });
 });
 

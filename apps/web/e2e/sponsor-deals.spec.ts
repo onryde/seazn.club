@@ -6,9 +6,10 @@
 //   - the REAL producers behind each row - deals created through the API, one by SQL the way Send invoice leaves it - read
 //     back through the real list route into the real island, and the buttons on the row writing through the real routes
 //     (`mark-paid`, `approve`) and the row following the answer;
-//   - the ⋯ fold: below 768 the clicks count and the edit / move / delete controls sit behind it, from 768 they are inline,
-//     and each tap target is 44px where a finger is the pointer;
-//   - a 43-character sponsor name in a 320px row: cut with an ellipsis, inside the screen, no sideways scroll.
+//   - the ⋯ fold: below 768 the clicks count and the move / delete controls sit behind it while the edit pencil stays on the row
+//     beside it, from 768 they are all inline, and each tap target is 44px where a finger is the pointer;
+//   - a 43-character sponsor name in a 320px row: no logo tile below 360, the name wraps to two lines and is cut with an ellipsis
+//     after them, inside the screen, no sideways scroll; from 360 one truncated line.
 //
 // Copy is read from the dictionary the page renders from, never retyped (this folder's idiom: sponsor-deals-api.spec.ts).
 import { readFileSync } from "node:fs";
@@ -204,7 +205,7 @@ test("list: each row shows one next action and the chip its deal state names", a
   expect(await expectAtMostOneActionPerRow(page), "every row was looked at again").toBe(5);
 });
 
-test("list at 320: the ⋯ fold holds clicks, edit, move and delete; no sideways scroll; a 43-character name truncates", async ({ page, request }) => {
+test("list at 320: the ⋯ fold holds clicks, move and delete and the pencil stays on the row; no sideways scroll; a 43-character name wraps to two lines and is cut", async ({ page, request }) => {
   // Three widths, each a page load with the fold opened and closed.
   test.setTimeout(150_000);
   // A competition-scoped or tiered sponsor is a Pro placement (`sponsors.tiers`), so this one org is Pro.
@@ -257,12 +258,16 @@ test("list at 320: the ⋯ fold holds clicks, edit, move and delete; no sideways
       // ... but the pencil is: an editor never opens a menu to find the way in (owner, 2026-11-11). A 44px target, on the ⋯'s own line and
       // right beside it, and hit-tested (paint is not a tap area).
       await expect(pencil, `${width}: the pencil is on the row with the fold shut`).toBeVisible();
+      // On screen first: `elementFromPoint` answers null for a point below the fold, and every box below is in viewport coordinates.
+      await pencil.scrollIntoViewIfNeeded();
       const shutBox = (await pencil.boundingBox())!;
+      const moreNow = (await more.boundingBox())!;
+      const rowTop = (await long.boundingBox())!.y;
       expect(shutBox.width, `${width}: the pencil is 44px wide`).toBeGreaterThanOrEqual(44);
       expect(shutBox.height, `${width}: and 44px tall`).toBeGreaterThanOrEqual(44);
-      expect(Math.abs(shutBox.y + shutBox.height / 2 - (moreBox!.y + moreBox!.height / 2)), `${width}: on the same line as the ⋯`).toBeLessThanOrEqual(2);
-      expect(moreBox!.x - (shutBox.x + shutBox.width), `${width}: right beside the ⋯, not apart from it`).toBeLessThanOrEqual(12);
-      expect(moreBox!.x - (shutBox.x + shutBox.width), `${width}: and to its left, not on top of it`).toBeGreaterThanOrEqual(-1);
+      expect(Math.abs(shutBox.y + shutBox.height / 2 - (moreNow.y + moreNow.height / 2)), `${width}: on the same line as the ⋯`).toBeLessThanOrEqual(2);
+      expect(moreNow.x - (shutBox.x + shutBox.width), `${width}: right beside the ⋯, not apart from it`).toBeLessThanOrEqual(12);
+      expect(moreNow.x - (shutBox.x + shutBox.width), `${width}: and to its left, not on top of it`).toBeGreaterThanOrEqual(-1);
       expect(
         await pencil.evaluate((el) => {
           const r = el.getBoundingClientRect();
@@ -277,7 +282,9 @@ test("list at 320: the ⋯ fold holds clicks, edit, move and delete; no sideways
       await expect(more).toHaveAttribute("aria-expanded", "true");
       await expect(pencil, `${width}: open, the pencil has not moved off the row`).toBeVisible();
       const openBox = (await pencil.boundingBox())!;
-      expect({ x: Math.round(openBox.x), y: Math.round(openBox.y) }, `${width}: and it is where it was`).toEqual({ x: Math.round(shutBox.x), y: Math.round(shutBox.y) });
+      const openRowTop = (await long.boundingBox())!.y;
+      // Compared against the row's own top, so a scroll between the two does not read as the pencil moving.
+      expect({ x: Math.round(openBox.x), y: Math.round(openBox.y - openRowTop) }, `${width}: and it is where it was in its row`).toEqual({ x: Math.round(shutBox.x), y: Math.round(shutBox.y - rowTop) });
       await expect(clicks, `${width}: open, the clicks count is there`).toBeVisible();
       for (const c of controls) {
         await expect(c, `${width}: open, every control is there`).toBeVisible();
@@ -296,6 +303,13 @@ test("list at 320: the ⋯ fold holds clicks, edit, move and delete; no sideways
       await expect(clicks).toBeVisible();
       for (const c of [pencil, ...controls]) await expect(c, `${width}: every control is inline`).toBeVisible();
       await expect(long.getByRole("link", { name: ui("sponsors.edit", { name: LONG }) }), `${width}: one Edit, not two`).toHaveCount(1);
+      // Where the pencil sits from md: after the name and before the deal cell, with nothing overlapping either side of it.
+      const nameBox = (await long.getByTestId("sponsor-row-name-text").boundingBox())!;
+      const pencilBox = (await pencil.boundingBox())!;
+      const dealBox = (await long.getByTestId("sponsor-row-deal").boundingBox())!;
+      expect(nameBox.x + nameBox.width, `${width}: the name ends before the pencil`).toBeLessThanOrEqual(pencilBox.x + 0.5);
+      expect(pencilBox.x + pencilBox.width, `${width}: the pencil ends before the deal cell`).toBeLessThanOrEqual(dealBox.x + 0.5);
+      await expect(long.getByTestId("sponsor-row-logo"), `${width}: the logo tile is on the row`).toBeVisible();
     }
 
     // The 43-character name is cut with an ellipsis and stays inside the screen; it is clipped only where the row is that narrow.
@@ -305,11 +319,21 @@ test("list at 320: the ⋯ fold holds clicks, edit, move and delete; no sideways
     expect(await name.evaluate((el) => el.closest("a") === null), `${width}: and no anchor wraps it`).toBe(true);
     const box = await name.evaluate((el) => {
       const cs = getComputedStyle(el);
-      return { overflow: cs.overflowX, ellipsis: cs.textOverflow, clipped: el.scrollWidth > el.clientWidth, right: el.getBoundingClientRect().right };
+      return {
+        overflow: cs.overflowX, ellipsis: cs.textOverflow, right: el.getBoundingClientRect().right,
+        lines: Math.round(el.getBoundingClientRect().height / parseFloat(cs.lineHeight)), clippedY: el.scrollHeight > el.clientHeight + 1,
+      };
     });
     expect({ overflow: box.overflow, ellipsis: box.ellipsis }, `${width}: the name is built to truncate`).toEqual({ overflow: "hidden", ellipsis: "ellipsis" });
     expect(box.right, `${width}: the name ends inside the screen`).toBeLessThanOrEqual(width);
-    if (width === 320) expect(box.clipped, "320: the 43 characters do not fit, so they are cut").toBe(true);
+    if (width < 360) {
+      // Below 360 the row has no logo tile and the name gets two lines instead of being cut at about nine characters (owner ruling).
+      await expect(long.getByTestId("sponsor-row-logo"), `${width}: no logo tile below 360`).toBeHidden();
+      expect(box.lines, `${width}: the name wraps to two lines`).toBe(2);
+      expect(box.clippedY, `${width}: the 43 characters need more than two lines, so they are cut after the second`).toBe(true);
+    } else {
+      expect(box.lines, `${width}: from 360 the name is one truncated line`).toBe(1);
+    }
     await expectNoHorizontalScroll(page);
     checked++;
   }
@@ -342,6 +366,18 @@ test("a viewer sees the sponsors and their chips - and no action, no ⋯, no edi
     const openBtn = page.getByRole("link", { name: ui("sponsors.open", { name: "Quay Fisheries" }), exact: true });
     await expect(openBtn, "a viewer's row has its Open button").toHaveCount(1);
     expect(await openBtn.getAttribute("href"), "it opens the plain sponsor page").toBe(sponsorUrl(org.slug, unpaidId));
+    // Like the editor's pencil, Open is NOT folded on a phone: it is the viewer's only way in, so it is on the row at 320, on screen and
+    // hit-testable (a `max-md:hidden` on it would leave `boundingBox()` null, not a 44px box).
+    await expect(openBtn, "320: the viewer's Open is on the row, not folded away").toBeVisible();
+    await openBtn.scrollIntoViewIfNeeded();
+    expect(
+      await openBtn.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const hit = (y: number) => { const t = document.elementFromPoint(r.left + r.width / 2, y); return t === el || el.contains(t); };
+        return hit(r.top + 2) && hit(r.bottom - 2);
+      }),
+      "320: both ends of Open hit Open",
+    ).toBe(true);
     const openBox = (await openBtn.boundingBox())!;
     expect(openBox.width, "Open: a 44px target").toBeGreaterThanOrEqual(44);
     expect(openBox.height, "Open: a 44px target").toBeGreaterThanOrEqual(44);
@@ -448,6 +484,8 @@ test("sponsor page: phones get their own page with back; desktop a side sheet ov
   const pencil = rowOf(page, sponsorId).getByTestId("sponsor-row-edit");
   await expect(rowOf(page, sponsorId).getByTestId("sponsor-row-more"), "premise: the tray is shut").toHaveAttribute("aria-expanded", "false");
   await expect(pencil, "shut, the pencil is on the row").toBeVisible();
+  // On screen first: `elementFromPoint` answers null for a point below the fold.
+  await pencil.scrollIntoViewIfNeeded();
   const hit = await pencil.evaluate((el) => {
     const r = el.getBoundingClientRect();
     const top = document.elementFromPoint(r.left + r.width / 2, r.top + 2);
@@ -1467,15 +1505,27 @@ test("T19 widths: list, sponsor page, Add deal sheet and deal page fit 320 / 768
     const listName = await lineBreaks(listNameEl);
     expect(listName.chars, `${width}: the list measured every letter of the name`).toBe(LONG.replace(/\s/g, "").length);
     expect(listName.midWord, `${width}: the list's name never breaks inside a word`).toEqual([]);
-    // The list's name is CUT, not wrapped (the other half of "a long name fits"): one line at every width, built to end in an ellipsis,
-    // and at 320 the 43 characters really do not fit, so they are clipped.
-    expect(listName.lines, `${width}: the list's name is ONE line - cut with an ellipsis, never wrapped onto a second`).toBe(1);
+    // The list's name is CUT (the other half of "a long name fits"), built to end in an ellipsis. From 360 it is ONE line, clipped by
+    // width. Below 360 the row has no logo tile and the name gets TWO lines (owner ruling 2026-11-11): the box is two lines tall and the
+    // 43 characters need more, so they are clipped by height. `lines` above counts every letter's row, including the clamped ones.
     const cut = await listNameEl.evaluate((el) => {
       const cs = getComputedStyle(el);
-      return { overflow: cs.overflowX, ellipsis: cs.textOverflow, clipped: el.scrollWidth > el.clientWidth };
+      const box = el.getBoundingClientRect();
+      return {
+        overflow: cs.overflowX, ellipsis: cs.textOverflow, clippedX: el.scrollWidth > el.clientWidth, clippedY: el.scrollHeight > el.clientHeight + 1,
+        boxLines: Math.round(box.height / parseFloat(cs.lineHeight)),
+      };
     });
     expect({ overflow: cut.overflow, ellipsis: cut.ellipsis }, `${width}: the list's name is built to truncate`).toEqual({ overflow: "hidden", ellipsis: "ellipsis" });
-    if (width === 320) expect(cut.clipped, "320: the 43 characters do not fit the row, so the name is cut").toBe(true);
+    if (width < 360) {
+      await expect(rowOf(page, longId).getByTestId("sponsor-row-logo"), `${width}: no logo tile below 360`).toBeHidden();
+      expect(cut.boxLines, `${width}: the list's name box is two lines tall`).toBe(2);
+      expect(listName.lines, `${width}: and the 43 characters need more than those two lines`).toBeGreaterThan(2);
+      expect(cut.clippedY, `${width}: so the name is cut after the second line`).toBe(true);
+    } else {
+      expect(cut.boxLines, `${width}: the list's name box is ONE line`).toBe(1);
+      expect(listName.lines, `${width}: and its letters sit on one line - cut with an ellipsis, never wrapped onto a second`).toBe(1);
+    }
     measured++;
     screens++;
 
