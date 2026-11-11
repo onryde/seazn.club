@@ -199,12 +199,27 @@ describe("settings → organisation: the C8 card", () => {
     expect(html).toContain('data-testid="org-profile-card"');
     expect(html).not.toContain("org-switcher-marker");
     expect(html).not.toContain('data-testid="org-identity-name"');
-    // The defaults moved here from Preferences, into the card.
-    const card = html.slice(html.indexOf('data-testid="org-profile-card"'));
-    expect(card).toContain('data-testid="org-defaults"');
+    // The defaults moved here from Preferences — into their OWN card, directly after the Organisation card (owner
+    // 2026-11-11, option B), not inside its form.
+    const profileAt = html.indexOf('data-testid="org-profile-card"');
+    const defaultsAt = html.indexOf('data-testid="org-defaults"');
+    expect(defaultsAt, "the defaults card is drawn").toBeGreaterThan(profileAt);
+    const profileForm = html.slice(profileAt, html.indexOf("</form>", profileAt));
+    expect(profileForm, "not inside the profile form").not.toContain('data-testid="org-defaults"');
+    expect(html.slice(defaultsAt, html.indexOf("</section>", defaultsAt))).toContain(">Organisation defaults<");
+    expect(html.indexOf('data-testid="tour-replay"'), "the tour link follows the defaults card").toBeGreaterThan(defaultsAt);
     expect(html).toContain('data-testid="tour-replay"');
     // The role badge stays beside the heading.
     expect(html).toContain(">Owner<");
+  });
+
+  it("the settings content wrapper has no 5xl cap: it is the nav bar's own width (6xl)", async () => {
+    grant({ branding: true, "dashboard.theme": true });
+    const html = await render();
+    const wrappers = [...html.matchAll(/class="([^"]*\bmx-auto\b[^"]*)"/g)].map((m) => m[1]!.split(/\s+/));
+    expect(wrappers.length, "anti-vacuity: the page draws a centred wrapper").toBeGreaterThan(0);
+    expect(wrappers.some((c) => c.includes("max-w-6xl"))).toBe(true);
+    for (const c of wrappers) expect(c, c.join(" ")).not.toContain("max-w-5xl");
   });
 
   it("View page points at the org's public page, opening a new tab", async () => {

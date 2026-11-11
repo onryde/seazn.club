@@ -293,7 +293,7 @@ export default async function SettingsPage({
 
   return (
     <>
-      <div className="mx-auto max-w-5xl px-4 py-4 md:py-8">
+      <div className="mx-auto max-w-6xl px-4 py-4 md:py-8">
         <div className="flex flex-col gap-4 md:flex-row md:gap-8">
 
           <SettingsNav orgSlug={orgSlug} active={tab} dict={dict} context={navCtx} />
@@ -362,34 +362,35 @@ export default async function SettingsPage({
                       </p>
                     )
                   }
-                  defaults={
-                    orgDefaults && (
-                      <>
-                        {/* Scheduling timezone (V305): the VENUE lane every division inherits. */}
-                        <div>
-                          <SubSection icon={Clock} label={t(dict, "settings.org.timezone")} />
-                          <OrgTimezone orgId={active.id} initialTimezone={active.timezone} />
-                        </div>
-                        {/* The org's PUBLIC language: public pages, embeds, calendar.ics, OG images, the slideshow,
-                            and the locale frozen onto each registration. */}
-                        <div>
-                          <SubSection icon={Globe} label={t(dict, "settings.org.publicLanguage")} />
-                          <OrgPublicLanguage orgId={active.id} initialLocale={orgDefaults.locale} />
-                        </div>
-                        {/* The entry-fee currency (V365) — what an ENTRANT is quoted, not what the club is billed.
-                            Locked while a Connect account is attached; the control says so and the API refuses. */}
-                        <div>
-                          <SubSection icon={Receipt} label={t(dict, "settings.org.regCurrency")} />
-                          <OrgRegistrationCurrency
-                            orgId={active.id}
-                            initialCurrency={orgDefaults.currency}
-                            lockedTo={orgDefaults.currencyLockedTo}
-                          />
-                        </div>
-                      </>
-                    )
-                  }
                 />
+                {canEdit && orgDefaults && (
+                  // Its own card, directly below the Organisation card (owner 2026-11-11, option B): each field keeps
+                  // its own Save, so none of them belongs inside the profile form.
+                  <section className="card mt-4 space-y-5 p-5 sm:p-6" data-testid="org-defaults">
+                    <h3 className="text-sm font-semibold text-slate-800">{t(dict, "settings.prefs.org")}</h3>
+                  {/* Scheduling timezone (V305): the VENUE lane every division inherits. */}
+                  <div>
+                    <SubSection icon={Clock} label={t(dict, "settings.org.timezone")} />
+                    <OrgTimezone orgId={active.id} initialTimezone={active.timezone} />
+                  </div>
+                  {/* The org's PUBLIC language: public pages, embeds, calendar.ics, OG images, the slideshow,
+                      and the locale frozen onto each registration. */}
+                  <div>
+                    <SubSection icon={Globe} label={t(dict, "settings.org.publicLanguage")} />
+                    <OrgPublicLanguage orgId={active.id} initialLocale={orgDefaults.locale} />
+                  </div>
+                  {/* The entry-fee currency (V365) — what an ENTRANT is quoted, not what the club is billed.
+                      Locked while a Connect account is attached; the control says so and the API refuses. */}
+                  <div>
+                    <SubSection icon={Receipt} label={t(dict, "settings.org.regCurrency")} />
+                    <OrgRegistrationCurrency
+                      orgId={active.id}
+                      initialCurrency={orgDefaults.currency}
+                      lockedTo={orgDefaults.currencyLockedTo}
+                    />
+                  </div>
+                  </section>
+                )}
                 {canEdit && (
                   <div className="mt-2">
                     <TourReplayButton />

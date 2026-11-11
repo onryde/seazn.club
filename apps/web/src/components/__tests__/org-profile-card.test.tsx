@@ -43,7 +43,6 @@ const mount = (o: { canEdit?: boolean; brandGate?: OrgBrandGate; about?: string 
       canEdit: o.canEdit ?? true,
       brandGate: o.brandGate ?? OPEN,
       logo: <div data-testid="logo-slot" />,
-      defaults: <div data-testid="defaults-slot" />,
     },
     expandSettingsCard,
   );
@@ -201,15 +200,14 @@ describe("OrgProfileCard — what it shows", () => {
     expect(publicThemeStyle({ colors: { primary: picked } }), "premise: the two colours theme differently").not.toEqual(saved);
   });
 
-  it("an editor gets the logo and the defaults; a viewer gets neither, nor a Save, and the name is read-only", () => {
+  it("an editor gets the logo (the defaults are their own card now, never inside this form); a viewer gets no logo, nor a Save, and the name is read-only", () => {
     const editor = mount().tree();
     expect(byTestId(editor, "logo-slot")).toBeDefined();
-    expect(byTestId(editor, "defaults-slot")).toBeDefined();
+    expect(byTestId(editor, "org-defaults"), "defaults live in their own card, outside this form").toBeUndefined();
     expect(byTestId(editor, "settings-save-bar")).toBeDefined();
 
     const viewer = mount({ canEdit: false }).tree();
     expect(byTestId(viewer, "logo-slot")).toBeUndefined();
-    expect(byTestId(viewer, "defaults-slot")).toBeUndefined();
     expect(byTestId(viewer, "settings-save-bar")).toBeUndefined();
     expect(propsOf(nameInput(viewer)).disabled).toBe(true);
     // The public page is still theirs to open.
