@@ -87,8 +87,8 @@ test.describe("player accounts (PROMPT-53)", () => {
     ben = await mk("Ben");
 
     await apiJson(request, `/api/v1/divisions/${divisionId}/entrants`, "POST", [
-      { kind: "individual", display_name: ada.full_name, seed: 1, members: [{ person_id: ada.id }] },
-      { kind: "individual", display_name: ben.full_name, seed: 2, members: [{ person_id: ben.id }] },
+      { kind: "team", display_name: ada.full_name, seed: 1, members: [{ person_id: ada.id }] },
+      { kind: "team", display_name: ben.full_name, seed: 2, members: [{ person_id: ben.id }] },
     ]);
     const stage = await apiJson<{ id: string }>(
       request,
@@ -185,6 +185,7 @@ test.describe("player accounts (PROMPT-53)", () => {
     const fixture = mine.data!.upcoming[0]!;
     await page.goto(`/o/${orgSlug}/c/${compSlug}/d/${divSlug}/f/${fixture.fixture_no}`);
 
+    // Team-kind entrants of one person each: singles (individual vs individual) deliberately show no roster block.
     // `generic` declares no lineup, so the console offers no Lineup panel and the roster block carries the chips; a sport that
     // does offer it would hold them in the panel.
     expect(await openConsolePanel(page, "lineup", { optional: true }), "generic declares no lineup: no Lineup panel is offered").toBe(false);

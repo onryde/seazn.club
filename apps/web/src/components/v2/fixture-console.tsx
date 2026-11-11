@@ -1959,8 +1959,11 @@ export function FixtureConsole({
           lineup CONTROLS; availability merely lived in the same component and
           went with them, so an organiser of any individual-entrant sport lost
           the only surface saying who had RSVP'd out. See
-          `AvailabilityRoster`'s own note. */}
-      {home && away && !offerLineup && (
+          `AvailabilityRoster`'s own note. Owner 2026-11-11: NOT for singles
+          (both sides one-person entrants — the same `bothSidesSinglePerson`
+          that hides Lineup): a one-row roster per side is noise, so the whole
+          block, headers included, is absent there. */}
+      {home && away && !offerLineup && !bothSidesSinglePerson(home, away) && (
         <div className="grid gap-4 lg:grid-cols-2">
           {(["home", "away"] as const).map((sideKey) => {
             const s = sides[sideKey]!;
