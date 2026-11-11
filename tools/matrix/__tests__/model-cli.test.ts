@@ -1009,7 +1009,7 @@ describe("model.ts --cell (W1-driving Task 14)", () => {
     for (const f of posted) expect(d.trace.filter((t) => t.startsWith(`putLineup ${f} `)), f).toHaveLength(2);
   });
   // D6 (ruling 52), typed from the ruling — never read from MODEL_FAMILY_ROUTE.
-  it.each([["swiss_playoff|generic", "W3"], ["ko_plate|badminton", "W4"], ["league_ko|generic", "W5"], ["ladder|generic", "W7"]] as const)("%s is refused by family (%s): exit 2, ModelUnsupported on stderr, before git, the base, the preflight or the DB", async (cell, wave) => {
+  it.each([["swiss_playoff|generic", "W3"], ["ko_plate|badminton", "W10"], ["league_ko|generic", "W5"], ["ladder|generic", "W7"]] as const)("%s is refused by family (%s): exit 2, ModelUnsupported on stderr, before git, the base, the preflight or the DB", async (cell, wave) => {
     const io = capture();
     const touched: string[] = [];
     const d = deps({

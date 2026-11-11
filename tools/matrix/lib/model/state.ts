@@ -408,7 +408,7 @@ const SINGLE = "the model drives single-stage rows";
  *  with a fixed field: a multi-stage row is its family's, and the ladder
  *  family (an open-window roster, rounds the organiser calls) is W7's. */
 const roundRobinFamily = (row: string) => new ModelUnsupported("W5", `${row} is multi-stage — a round robin or group stage seeding a later stage; ${SINGLE}`);
-const knockoutFamily = (row: string) => new ModelUnsupported("W4", `${row} is multi-stage — a knockout feeding a plate or a main draw; ${SINGLE}`);
+const knockoutFamily = (row: string) => new ModelUnsupported("W10", `${row} is multi-stage — a knockout feeding a plate or a main draw; ${SINGLE}`);
 const swissFamily = (row: string) => new ModelUnsupported("W3", `${row} is multi-stage — a swiss seeding a playoff or knockout; ${SINGLE}`);
 const ladderFamily = (row: string) => new ModelUnsupported("W7", `${row} is an open-window format — its roster never locks and its rounds are the organiser's to call; the model's commands assume a fixed field and a generated schedule`);
 const MODEL_FAMILY: Readonly<Record<string, (row: string) => ModelUnsupported>> = Object.freeze({
