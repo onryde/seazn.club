@@ -277,6 +277,9 @@ describe.skipIf(!HAS_DB)("W2d T9: the pin at activation (X-TB-2, OC2)", () => {
     const WRITE = /update\s+stages\s+set\s+status\s*=\s*'(active|complete)'/gi;
     const PIN = /\bpinStageTableRules\(\s*tx\s*,\s*stageId\s*\)/;
     const writers: { at: string; status: string; pinned: boolean }[] = [];
+    // A REOPEN (`... set status = 'active' where ... and status = 'complete'`, B5a T11/T12) starts nothing: the stage was
+    // started, and pinned, once already, and the pin is kept. It is counted on its own so a new one cannot slip in.
+    const reopens: string[] = [];
     for (const file of files) {
       const text = readFileSync(file, "utf8");
       for (const m of text.matchAll(WRITE)) {
@@ -294,6 +297,11 @@ describe.skipIf(!HAS_DB)("W2d T9: the pin at activation (X-TB-2, OC2)", () => {
           else if (text[close] === "}" && depth-- === 0) break;
         }
         const status = m[1]!.toLowerCase();
+        const statementEnd = text.indexOf("`", m.index);
+        if (status === "active" && /and\s+status\s*=\s*'complete'/i.test(text.slice(m.index, statementEnd))) {
+          reopens.push(`${relative(SERVER, file)}:${text.slice(0, m.index).split("\n").length}`);
+          continue;
+        }
         // an activation pins after its write (the stage's rules as they stand when it starts); a completion pins
         // before it (a stage completed straight from pending, fix I1) — either way inside the write's own block
         const span = status === "active" ? text.slice(m.index, close) : text.slice(open + 1, m.index);
@@ -303,6 +311,7 @@ describe.skipIf(!HAS_DB)("W2d T9: the pin at activation (X-TB-2, OC2)", () => {
     }
     const found = writers.map((w) => `${w.status}@${w.at}`).join(", ");
     expect(writers.filter((w) => w.status === "active").length, `activation writers found: ${found}`).toBe(2);
+    expect(reopens.length, `reopen writers found: ${reopens.join(", ")}`).toBe(1);
     expect(writers.filter((w) => w.status === "complete").length, `completion writers found: ${found}`).toBe(1);
     expect(writers.filter((w) => !w.pinned).map((w) => w.at), "every writer into a started status pins in its block").toEqual([]);
   });
