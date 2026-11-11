@@ -37,7 +37,7 @@ const orgPatchSchema = z.union([
   renameOrgSchema,
   z.object({ logo_storage_path: z.string().max(500).nullable() }).strict(),
   z.object({ payment_instructions: z.string().max(5000).nullable() }).strict(),
-  // Sponsor invoice details (V501, sponsor deals Task 21): what every sponsor invoice prints, written in Settings → Payments.
+  // Sponsor invoice details (V501, sponsor deals Task 21): what every sponsor invoice prints, written in Settings → Connect.
   // The bank details are a setting of their own, NOT payment_instructions (spec §10 Q2: that text is written for players).
   // Two arms of one key each, never a combined one (F30): a body naming both is refused like any unknown key, and the card
   // sends one PATCH per changed field. null clears a field back to "nothing to print", and so does a blank: the value is trimmed

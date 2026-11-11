@@ -1,4 +1,4 @@
-// Settings -> Payments page (sponsor deals Task 21): the "Sponsor invoices" card under the offline-instructions card.
+// Settings -> Connect page (sponsor deals Task 21): the "Sponsor invoices" card under the offline-instructions card.
 //
 // The page reads the org's two V501 columns and hands them to the island, with `canEdit` from the page's own auth. The island's
 // behaviour is org-sponsor-invoice-details.test.tsx's; this is the JOIN a person meets: the stored values on first paint, where
@@ -74,7 +74,7 @@ beforeEach(() => {
   rows.current = [{ payment_instructions: null, default_payment_method: "offline", charges_enabled: false, ...STORED }];
 });
 
-describe("Settings -> Payments draws the Sponsor invoices card", () => {
+describe("Settings -> Connect draws the Sponsor invoices card", () => {
   it("opens the card at the stored address and bank details, below the offline-instructions card", async () => {
     const page = await html();
     expect(page).toContain('data-testid="sponsor-invoices-card"');

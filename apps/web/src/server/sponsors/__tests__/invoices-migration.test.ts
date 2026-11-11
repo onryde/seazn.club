@@ -171,6 +171,21 @@ describe.skipIf(!HAS_DB)("sponsor invoices schema — the constraints are real",
     await expect(insertDeal(w, { invoice_number: null }), "a second unnumbered deal").resolves.toBeTruthy();
   });
 
+  it("sponsor_orders_invoice_number_check: 0 and -1 are refused by name (23514); 1 (the first number an org hands out) is accepted (final review m6)", async () => {
+    const w = await world();
+    let refused = 0;
+    for (const n of [0, -1]) {
+      await expect(insertDeal(w, { invoice_number: n }), String(n)).rejects.toMatchObject(refusedBy("23514", "sponsor_orders_invoice_number_check"));
+      refused++;
+    }
+    expect(refused, "numbers refused").toBe(2);
+    await expect(insertDeal(w, { invoice_number: 1 }), "the first number").resolves.toBeTruthy();
+    // A number set later (not at insert) meets the same CHECK: the fixed-number trigger lets null become a number, never 0.
+    const unnumbered = await insertDeal(w, { invoice_number: null });
+    await expect(sql`update sponsor_orders set invoice_number = 0 where id = ${unnumbered}`)
+      .rejects.toMatchObject(refusedBy("23514", "sponsor_orders_invoice_number_check"));
+  });
+
   it("sponsor_orders_invoice_token_hash_key: a repeated token hash is refused by name (23505), in another org too (a token names one invoice everywhere); a different hash and any number of null hashes are accepted", async () => {
     const w = await world();
     const elsewhere = await world();

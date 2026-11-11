@@ -215,7 +215,7 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
       ownHub.body.includes('data-testid="sponsors-list-view"'),
   );
 
-  // --- PR 3 Task 21: Settings -> Payments carries the "Sponsor invoices" card on EVERY plan. The community owner above saves both
+  // --- PR 3 Task 21: Settings -> Connect carries the "Sponsor invoices" card on EVERY plan. The community owner above saves both
   // fields the way the card does (two single-key PATCHes, F30), and the real server's page answers 200 with the card OPEN AT those
   // values (the page's own read of the two V501 columns); the Pro org's page carries the card too, with nothing stored yet.
   const invoiceAddress = `Smoke Club ${tag}, 12 Mill Lane`;

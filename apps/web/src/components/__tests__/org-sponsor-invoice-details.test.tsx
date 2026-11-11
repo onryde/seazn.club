@@ -1,4 +1,4 @@
-// Sponsor deals, Task 21 - the "Sponsor invoices" card on Settings -> Payments (components/org-sponsor-invoice-details.tsx).
+// Sponsor deals, Task 21 - the "Sponsor invoices" card on Settings -> Connect (components/org-sponsor-invoice-details.tsx).
 //
 // What a person meets, pinned from the side they meet it on:
 //   1. It OPENS AT what is stored (an address, bank details, or nothing), with the brief's two labels and hint; Save waits for an edit.

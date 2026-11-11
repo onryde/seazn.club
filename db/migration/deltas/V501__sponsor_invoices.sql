@@ -12,12 +12,14 @@
 --     drop this row consciously, after the deals it numbered.
 --   * sponsor_orders.invoice_number: the deal's number, shown as SP-0001 (lib/sponsor-deals.ts formatInvoiceNumber). An online
 --     or offline deal gets one when it is created; a complimentary deal has no invoice and never does. Unique per org. Fixed once
---     set (trigger sponsor_orders_invoice_number_fixed): null may become a number, a number never changes or clears.
+--     set (trigger sponsor_orders_invoice_number_fixed): null may become a number, a number never changes or clears. A number
+--     is 1 or more (sponsor_orders_invoice_number_check): the counter hands out nothing lower, and formatInvoiceNumber refuses
+--     anything lower, so a hand-written 0 would break the invoice page and its PDF instead of being refused here.
 --   * sponsor_orders.invoice_token_hash: sha256 of the token in the invoice page's link (Task 22 mints it, Task 23 rotates it),
 --     stored as a hash only, like sponsor_report_links.token_hash. Unique across every org: a token names one invoice.
 --   * organizations.sponsor_invoice_address and sponsor_invoice_bank_details: printed on every sponsor invoice; the bank
 --     details are what an offline invoice carries instead of a pay link (spec §10 answer 2: a setting of its own, separate from
---     the registrant payment instructions). Written in Settings → Payments (Task 21).
+--     the registrant payment instructions). Written in Settings → Connect (Task 21).
 --
 -- Nothing is backfilled. A legacy order (D6) is never given a number: it predates invoices and keeps the history it had. A deal
 -- made before this delta keeps none either (only staging has any: sponsor deals reach production with PR 3, owner 2026-11-10).
@@ -50,6 +52,8 @@ grant select, insert, update on sponsor_invoice_counters to app_user;
 alter table sponsor_orders
   add column invoice_number     int   null,
   add column invoice_token_hash bytea null,
+  -- NULL passes a CHECK: an unnumbered deal (complimentary, legacy, pre-numbering) stays allowed.
+  add constraint sponsor_orders_invoice_number_check check (invoice_number >= 1),
   add constraint sponsor_orders_org_invoice_number_key unique (org_id, invoice_number),
   add constraint sponsor_orders_invoice_token_hash_key unique (invoice_token_hash);
 

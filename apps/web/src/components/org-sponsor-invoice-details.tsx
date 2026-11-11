@@ -1,7 +1,7 @@
 "use client";
 
 // Sponsor invoices card (sponsor deals Task 21, spec §7 / D12): the address and the bank details every sponsor invoice prints, on
-// Settings → Payments, on every plan. The bank details are what an OFFLINE invoice carries instead of a pay link; they are a
+// Settings → Connect, on every plan. The bank details are what an OFFLINE invoice carries instead of a pay link; they are a
 // setting of their own and never the registrants' `payment_instructions` (spec §10 Q2: that text is written for players).
 //
 // Saving rides PATCH /api/orgs/{id}, whose arms are single-key and strict (F30): there is no arm that takes both fields. So the
@@ -17,7 +17,7 @@
 // folded onto 401 by lib/http.ts: signed out, not a member, or not an editor) says who can change this; every other status
 // (400 a ZodError this card's caps make unreachable, 404 org not found, 500) is the generic. A refusal AFTER an earlier PATCH
 // answered 200 says so instead ("Address saved. The bank details couldn't be saved."): the address is on file and the person
-// must not think it is lost. After the last PATCH answers 200 the route is refreshed, like the rest of Settings -> Payments.
+// must not think it is lost. After the last PATCH answers 200 the route is refreshed, like the rest of Settings -> Connect.
 import { useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/client";
