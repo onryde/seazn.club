@@ -61,6 +61,7 @@ const row = (over: Partial<SponsorItem> & { id: string }): SponsorItem => ({
   name: `Sponsor ${over.id}`,
   url: null,
   logo_path: null,
+  poster_path: null,
   tier: "gold",
   display_order: 0,
   status: "active",

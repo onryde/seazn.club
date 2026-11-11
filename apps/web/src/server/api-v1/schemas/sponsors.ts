@@ -93,6 +93,9 @@ export const Sponsor = z.object({
   name: z.string(),
   url: z.string().nullable(),
   logo_path: z.string().nullable(),
+  /** The optional 4:5 poster a Title sponsor shows in the public competition hero: a public CDN URL, or null (the hero then
+   *  draws the logo card). */
+  poster_path: z.string().nullable(),
   tier: SponsorTier,
   display_order: z.number().int(),
   status: SponsorStatus,
@@ -128,6 +131,9 @@ export const CreateSponsor = z.object({
   // http(s) only (R4 S10 fix round 1, m1): zod's `.url()` alone accepts `javascript:` and `data:`.
   url: z.string().url().max(500).refine(isRedirectableUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
   logo_path: z.string().max(500).nullish(),
+  // The same http(s)-only rule as `url` and the same 500-character cap as the DB's `sponsors_poster_path_check` (V503): next/image
+  // throws on a relative src, so a poster is never a bare storage path.
+  poster_path: z.string().url().max(500).refine(isRedirectableUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
   tier: SponsorTier.default("partner"),
   competition_id: Uuid.nullish(),
   status: SponsorStatus.default("active"),

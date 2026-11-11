@@ -87,7 +87,7 @@ const DEAL: SponsorDeal = {
 const deal = (over: Partial<SponsorDeal>): SponsorDeal => ({ ...DEAL, sponsor_id: "a", ...over });
 
 const sponsor = (over: Partial<SponsorItem> = {}): SponsorItem => ({
-  id: "a", name: "Ridge Gold Physiotherapy", competition_id: null, url: "https://ridgegoldphysio.co.uk/", logo_path: null,
+  id: "a", name: "Ridge Gold Physiotherapy", competition_id: null, url: "https://ridgegoldphysio.co.uk/", logo_path: null, poster_path: null,
   tier: "partner", display_order: 0, status: "active", click_count: 12, on_stream: false, paid_order_id: null, deal: null,
   locked_by_deal: false, has_open_deal: false, last_billing_email: null, ...over,
 });

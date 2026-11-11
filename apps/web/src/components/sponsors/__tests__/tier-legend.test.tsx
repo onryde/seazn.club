@@ -231,7 +231,7 @@ describe("I1: on a plan without tiers the legend says what its pages and its str
   });
 
   it("premise (the claim is what the product does): on a plan without tiers the board draws ONE flat strip of every sponsor, and the stream draws every card as a partner (4 + 4 checked)", () => {
-    const spons = (tier: SponsorTier): ResolvedSponsor => ({ id: `sp-${tier}`, name: `Sponsor ${tier}`, tier, url: null, logo: null });
+    const spons = (tier: SponsorTier): ResolvedSponsor => ({ id: `sp-${tier}`, name: `Sponsor ${tier}`, tier, url: null, logo: null, poster: null });
     const html = renderToStaticMarkup(
       <SponsorsBoard sponsors={SPONSOR_TIERS.map(spons)} tiered={false} dict={publicEn as unknown as Dict} clickTag={{ source: "site" }} includeTitle />,
     );

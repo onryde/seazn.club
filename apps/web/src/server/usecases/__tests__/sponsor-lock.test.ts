@@ -136,7 +136,7 @@ describe.skipIf(!HAS_DB)("a live deal locks its sponsor's tier, scope, stream an
     expect(checked, "locked fields checked").toBe(4);
   });
 
-  it("name, url and logo stay editable while a deal is live (count reported)", async () => {
+  it("name, url, logo and poster stay editable while a deal is live (count reported)", async () => {
     const o = await org();
     const id = await sponsor(o);
     await insertDeal(deal(o, id, LIVE));
@@ -144,13 +144,15 @@ describe.skipIf(!HAS_DB)("a live deal locks its sponsor's tier, scope, stream an
       ["name", { name: "Acme Holdings" }],
       ["url", { url: "https://acme.example/" }],
       ["logo_path", { logo_path: "logos/acme.png" }],
+      // The poster is no placement field (spec §6.2): a live Title deal's sponsor may still swap its poster.
+      ["poster_path", { poster_path: "https://cdn.example/p.png" }],
     ];
     let checked = 0;
     for (const [field, patch] of EDITABLE) {
       await expect(patchSponsor(o.auth, id, patch), field).resolves.toMatchObject(patch);
       checked++;
     }
-    expect(checked, "editable fields checked").toBe(3);
+    expect(checked, "editable fields checked").toBe(4);
   });
 
   it("a deal waiting to go live locks status only (409 sponsor_has_open_deal); tier, scope and stream stay editable (count reported)", async () => {

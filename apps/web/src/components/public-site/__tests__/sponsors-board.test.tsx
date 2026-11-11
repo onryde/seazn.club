@@ -33,6 +33,7 @@ const s = (over: Partial<ResolvedSponsor> & Pick<ResolvedSponsor, "name" | "tier
   id: `sp-${over.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
   url: null,
   logo: null,
+  poster: null,
   ...over,
 });
 
