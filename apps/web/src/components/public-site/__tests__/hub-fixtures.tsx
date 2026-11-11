@@ -353,7 +353,13 @@ export function knockoutView(
     rounds,
     drawable: true,
     championFixtureId: null,
+    title: null,
     ...over,
+    // The schema refuses a fixture without a title (and the reverse): a test that names only the fixture gets a
+    // single champion, the pre-W4 shape. A joint or vacant title is passed explicitly.
+    ...(over.title === undefined && over.championFixtureId
+      ? { title: { kind: "champion" as const, champion: `champion-of-${over.championFixtureId}` } }
+      : {}),
   };
 }
 

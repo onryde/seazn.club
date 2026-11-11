@@ -16,6 +16,8 @@
   "seeding.SEEDING_FIXTURES_ALREADY_FILLED": "Una de las posiciones de destino ya está cubierta. Vuelve a calcular la propuesta para ver qué queda.",
   "seeding.SEEDING_CARRY_SOURCE_INVALID": "El arrastre de puntos necesita una fase de origen con una tabla de puntos: una liga, un grupo o un sistema suizo. Una eliminatoria, una escalera o un americano transmiten a la fase siguiente un orden de clasificación final, no puntos, así que no hay nada que arrastrar. Desactiva el arrastre en esta fase o toma el origen de una liga, un grupo o un sistema suizo.",
   "seeding.SEEDING_NOTHING_TO_FILL": "No queda nadie para sembrar en esta fase: todos los clasificados se han retirado. Vuelve a calcular la propuesta cuando el cuadro esté definido.",
+  "seeding.SEEDING_ROUNDLOSERS_DE_SOURCE": "Una fase de doble eliminación no puede alimentar otra fase por perdedores de ronda: sus rondas se numeran por separado en el cuadro principal, el de consolación y la gran final, así que el corte elegiría a las personas equivocadas. Usa en su lugar las posiciones finales de la fase.",
+  "seeding.SEEDING_FIRSTLOSSES_DE_SOURCE": "Una fase de doble eliminación no puede alimentar otra fase por primeras derrotas: quien pierde pasa al cuadro de consolación y puede volver a perder, así que no hay una única primera derrota que esperar. Usa en su lugar las posiciones finales de la fase.",
   "ladder.LADDER_ENTRANT_FOREIGN": "Ambos jugadores deben estar en esta escalera. Actualiza la página: la escalera puede haber cambiado desde que la abriste.",
   "ladder.LADDER_ENTRANT_WITHDRAWN": "Ese jugador se ha retirado de esta división, así que no puede lanzar ni recibir retos.",
   "ladder.LADDER_CHALLENGE_NOT_UPWARD": "Solo puedes retar a alguien clasificado por encima de ti.",

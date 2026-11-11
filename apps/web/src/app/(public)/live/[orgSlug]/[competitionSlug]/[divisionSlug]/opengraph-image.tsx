@@ -7,7 +7,7 @@ import { getPublicDivision } from "@/server/public-site/data";
 import { CHAMPION_NAME_WIDTH, standingsCardModel } from "@/server/og/model";
 import { CardFrame, OG_SIZE } from "@/server/og/card";
 import { posterImageDataUrl } from "@/server/og/poster-image";
-import { BRACKET_KINDS, divisionChampion } from "@/server/public-site/champion";
+import { BRACKET_KINDS, decisiveStageOf, divisionTitle } from "@/server/public-site/champion";
 import type { StandingsSnapshotRow } from "@/server/public-site/data";
 import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
@@ -36,13 +36,14 @@ export default async function Image({ params }: Props) {
   // the placement table it writes on completion (rank only, every count zero) — never a table to show.
   // Owner ruling (OG pick A, R24 item 6; B6b fix round 1): a division whose FINAL stage is a bracket — bracket-only, or
   // a group/league feeding it — names its champion instead, once that bracket is complete: its final decided
-  // (`divisionChampion`, the moment the division page's banner crowns). Until then a division with a table keeps its
+  // (`divisionTitle`, the moment the division page's banner crowns). Until then a division with a table keeps its
   // table, and a bracket-only one its empty line. A final stage that is a table never crowns here.
   const stages = data?.stages ?? [];
   const isBracket = (stageId: string) => BRACKET_KINDS.has(stages.find((s) => s.id === stageId)?.kind ?? "");
   const table = data?.standings.find((s) => !isBracket(s.stage_id));
-  const finalStage = stages.reduce<(typeof stages)[number] | undefined>((last, s) => (!last || s.seq > last.seq ? s : last), undefined);
-  const championId = data && finalStage && BRACKET_KINDS.has(finalStage.kind) ? divisionChampion(data.stages, data.fixtures, data.standings) : null;
+  // C16: the DECISIVE stage, off the progression graph — a Plate is stored last but never titles the division.
+  const finalStage = decisiveStageOf(stages);
+  const title = data && finalStage && BRACKET_KINDS.has(finalStage.kind) ? divisionTitle(data.stages, data.fixtures, data.standings) : null;
   const rows = (table?.rows ?? []) as StandingsSnapshotRow[];
   // W2d T17: the table's own stage's rules — how its points print (RB2B-17).
   const rules = data?.stages.find((s) => s.id === table?.stage_id)?.table_rules ?? null;
@@ -67,7 +68,8 @@ export default async function Image({ params }: Props) {
     })),
     names: Object.fromEntries((data?.entrants ?? []).map((e) => [e.id, e.display_name])),
     rules,
-    championId,
+    title,
+    joinNames: (a, b) => t(dict, "title.jointNames", { a, b }),
   });
   const theme = model.theme;
 
@@ -107,7 +109,7 @@ export default async function Image({ params }: Props) {
             <ChampionLine
               name={model.champion.name}
               size={model.champion.size}
-              label={t(dict, "table.champion")}
+              label={t(dict, model.champion.joint ? "title.joint" : "table.champion")}
               accent={theme.accent}
               muted={theme.muted}
             />

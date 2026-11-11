@@ -390,6 +390,7 @@ export function DivisionBuilder({
     poolCount,
     legs,
     standingsCarry,
+    thirdPlace,
   } = formatKnobs;
   // C9 review 2 (N1): the kinds the division will take, and the formats it can play - the offer, the ranking, the
   // opening and Next all read this one list, so a division narrowed to Pairs or Teams is never offered Americano.
@@ -513,7 +514,7 @@ export function DivisionBuilder({
   /** The picked format's drafts (format-choice.ts `formatStagesFor`: B, round-4 review — one clampKnob over one set of
    *  bounds; the Top N read only where it is on screen). */
   function buildStages(): StageDraft[] {
-    return formatStagesFor(template, { qualified, swissRounds, poolCount, legs, standingsCarry });
+    return formatStagesFor(template, { qualified, swissRounds, poolCount, legs, standingsCarry, thirdPlace }, planEntrantCount);
   }
 
   // What the division will be created with (the variant's preset under the rules typed on Division rules): the points

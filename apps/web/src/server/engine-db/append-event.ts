@@ -1,6 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { withTenant, type Tx } from "@/lib/db";
+import { knockoutRefusal } from "@/server/usecases/knockout-refusal";
 import {
   advancesNobody,
   EngineError,
@@ -106,6 +107,8 @@ interface FixtureRow {
   away_entrant_id: string | null;
   status: string;
   outcome: unknown;
+  /** W4 V499: the final was ruled a joint title (`fixtures.joint_winners_at`); no event may land on it. */
+  joint_declared: boolean;
   /** V347 — the resolved cfg this fixture was SCORED under; null until its
    *  first event. See `fixture-cfg.ts` for why it exists. */
   config_snapshot: unknown;
@@ -309,12 +312,16 @@ export async function appendEventInTx(
 
   const [fixture] = await tx<FixtureRow[]>`
     select id, division_id, stage_id, home_entrant_id, away_entrant_id, status, outcome,
-           config_snapshot, rules_override, rules_version, winner_to_fixture, loser_to_fixture
+           config_snapshot, rules_override, rules_version, winner_to_fixture, loser_to_fixture,
+           joint_winners_at is not null as joint_declared
     from fixtures where id = ${fixtureId}
   `;
   if (!fixture) {
     throw new EngineError("INVALID_EVENT", `fixture ${fixtureId} not found`, { fixtureId });
   }
+  // W4 B5a (review I-3, X-CH-4): a final ruled joint holds `decided` + no outcome. Any append (a scorer's tap, a pad Undo, the
+  // organiser's settle) would fold and then break V499's shape check with a bare 23514, so the door refuses it by name first.
+  if (fixture.joint_declared) throw knockoutRefusal("FINAL_JOINT_WINNERS_DECLARED");
   if (LOCKED.has(fixture.status)) {
     throw new EngineError("ALREADY_DECIDED", `fixture ${fixtureId} is ${fixture.status}`, {
       fixtureId,

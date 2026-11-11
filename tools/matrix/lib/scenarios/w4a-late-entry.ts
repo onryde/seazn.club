@@ -185,7 +185,7 @@ function playedLoser(l: Line): string | null {
 }
 
 /** The loser of a decided, non-third-place line however it ended (a win, or an award - a walkover), else null. */
-function lineLoser(l: Line): string | null {
+export function lineLoser(l: Line): string | null {
   const o = l.outcome;
   if (l.thirdPlace || o === null) return null;
   if (o.kind === "award") return o.loser;

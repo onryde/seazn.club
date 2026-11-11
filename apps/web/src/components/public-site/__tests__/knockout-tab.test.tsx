@@ -1832,3 +1832,75 @@ describe("revealScrollLeft — the arithmetic behind scrolling the pressed chip 
     ).toBe(311);
   });
 });
+
+// W4 B2a (X-CH-1, X-CH-3; R24 pick 3A): the banner for the two titles with no winner side. Differential: the
+// pre-W4 banner returned null whenever the final had no `winnerIndex`, so a joint or vacant final showed nothing.
+describe("KnockoutTab — the title banner: joint winners and a vacant title", () => {
+  const noWinnerMatches = DONE_MATCHES.map((x) => (x.fixtureId === "f1" ? ko("f1", "completed", F, [S("Dev"), S("Eli")], null) : x));
+  const titled = (title: KnockoutViewT["title"]) =>
+    hubDoc({
+      matches: noWinnerMatches,
+      knockouts: [knockoutView("cup", "premier", ROUNDS, { championFixtureId: "f1", title })],
+    });
+  const sliceFrom = (h: string, testid: string) => {
+    const at = h.indexOf(`data-testid="${testid}"`);
+    expect(at, testid).toBeGreaterThan(-1);
+    return h.slice(at, h.indexOf(`data-testid="mh-knockout-rail-${VIEW}"`));
+  };
+
+  it("EMPTY: no title → no banner of any kind", () => {
+    const h = render(doneDoc(null));
+    for (const id of ["champion", "joint", "vacant"]) expect(h).not.toContain(`data-testid="mh-knockout-${id}-${VIEW}"`);
+  });
+
+  it("m1: a document cached BEFORE W4 has no `title` at all (undefined, not null): no banner, no throw", () => {
+    const old = doneDoc("f1");
+    const noTitle = {
+      ...old,
+      knockouts: old.knockouts.map((k) => Object.fromEntries(Object.entries(k).filter(([key]) => key !== "title"))),
+    } as unknown as CompetitionHubDocT;
+    expect(noTitle.knockouts[0]).not.toHaveProperty("title");
+    const h = render(noTitle);
+    for (const id of ["champion", "joint", "vacant"]) expect(h).not.toContain(`data-testid="mh-knockout-${id}-${VIEW}"`);
+  });
+
+  it("JOINT: both finalists named under ONE crown, with the Joint winners label, and no 'Beat X' line", () => {
+    const h = render(titled({ kind: "joint", winners: ["dev", "eli"] }));
+    const banner = sliceFrom(h, `mh-knockout-joint-${VIEW}`);
+    expect(banner).toContain(">Joint winners<");
+    expect(banner).toContain(">Dev and Eli<");
+    expect(banner).not.toContain("Beat");
+    expect(h).not.toContain(`data-testid="mh-knockout-champion-${VIEW}"`);
+    expect(banner.split("M1 10 0 2l4 3").length - 1, "one crown").toBe(1);
+    // Names wrap, never an ellipsis over a winner.
+    expect(banner).toContain("break-words");
+    expect(banner).not.toContain("truncate");
+  });
+
+  it("VACANT: 'Title vacant' with the reason, as a muted line — no names, no crown", () => {
+    const h = render(titled({ kind: "vacant" }));
+    const banner = sliceFrom(h, `mh-knockout-vacant-${VIEW}`);
+    expect(banner).toContain(">Title vacant<");
+    expect(banner).toContain(">Both finalists withdrew<");
+    expect(banner).not.toContain("Dev");
+    expect(banner).not.toContain("Eli");
+    expect(banner).not.toContain("M1 10 0 2l4 3");
+    expect(h).not.toContain(`data-testid="mh-knockout-champion-${VIEW}"`);
+  });
+
+  it("the three titles are three different banners (a sweep that would pass on one banner reused)", () => {
+    const ids = [
+      [titled({ kind: "joint", winners: ["dev", "eli"] }), "mh-knockout-joint-"],
+      [titled({ kind: "vacant" }), "mh-knockout-vacant-"],
+      [doneDoc("f1"), "mh-knockout-champion-"],
+    ] as const;
+    let checked = 0;
+    for (const [doc, prefix] of ids) {
+      const h = render(doc);
+      const present = ["mh-knockout-joint-", "mh-knockout-vacant-", "mh-knockout-champion-"].filter((p) => h.includes(`data-testid="${p}${VIEW}"`));
+      expect(present, prefix).toEqual([prefix]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+});

@@ -35,6 +35,7 @@ import { cachedIfFound } from "./cache-found";
 import { loadMatchCentre } from "./match-centre-load";
 import { competitionTag, divisionTag, orgTag, personTag } from "./cache-tags";
 import { variantLabel } from "./variant-label";
+import { stageFeedsOf, type StageFeed, type StageProgressionRow } from "./champion";
 import type { MatchCentreDocT } from "./match-centre-schema";
 import type { PlayerMatchLine, PlayerUpcomingRow } from "./public-player-matches";
 import { loadPublicExternalPlay, loadPublicPairedWhiteSide, loadPublicRoundOpenedAt } from "@/server/usecases/external-play-read";
@@ -60,9 +61,11 @@ function pluralStatMsg(locale: Locale, key: string, count: number): string {
 }
 
 /** timestamptz → ISO string before rows cross into client components. */
-const normalizeFixture = <T extends { scheduled_at: unknown }>(f: T): T => ({
+const normalizeFixture = <T extends { scheduled_at: unknown; joint_winners_at?: unknown }>(f: T): T => ({
   ...f,
   scheduled_at: isoDateTime(f.scheduled_at),
+  // W4 (V499): a joint-winners final carries when it was ruled; null/absent stays null.
+  ...("joint_winners_at" in f ? { joint_winners_at: f.joint_winners_at == null ? null : isoDateTime(f.joint_winners_at) } : {}),
 });
 
 /**
@@ -278,6 +281,8 @@ export interface PublicDivision {
 
 export interface PublicFixture {
   id: string;
+  /** W4 (V499): when the organiser ruled this unplayed final a JOINT title (status decided, outcome null); else null. */
+  joint_winners_at?: string | null;
   division_id: string;
   stage_id: string;
   pool_id: string | null;
@@ -440,6 +445,10 @@ export interface PublicStage {
    *  the slideshow read; null when the loader refused the stage (no status, no caption). Optional so a hand-built
    *  `PublicStage` in an existing test still type-checks. */
   table_rules?: StageTableRulesDoc | null;
+  /** W4 (C16): the stages this one is seeded from and which side of them (`stageFeedsOf`) — what the champion rule
+   *  reads to find the decisive stage. Derived from the stored progression, which itself stays private. Optional so a
+   *  hand-built `PublicStage` in an existing test still type-checks; absent = a root stage. */
+  feeds_from?: readonly StageFeed[];
 }
 
 export interface PublicStandings {
@@ -989,7 +998,7 @@ export async function readPublicDivisionDetail(
   { sequential = false }: { sequential?: boolean } = {},
 ) {
   const readStagesAndPools = async () => {
-    const stages = await sql<PublicStage[]>`
+    const stages = await sql<(PublicStage & StageProgressionRow)[]>`
       select id, division_id, seq, kind, name, status,
              qualify_count, qualify_per_group, next_stage_name, swiss_rounds, points_rule,
              has_rank_overrides,
@@ -997,11 +1006,22 @@ export async function readPublicDivisionDetail(
              -- FRAGMENT only, read off stages by the VIEW row's own id so the
              -- view still decides which rows exist and the rest of config
              -- (progression, cross-feeds) stays private.
-             (select x.config->'rules' from stages x where x.id = public_stages_v.id) as rules
+             (select x.config->'rules' from stages x where x.id = public_stages_v.id) as rules,
+             -- C16: the stored progression, for the champion rule graph ONLY (see stageFeedsOf); never published.
+             (select x.progression from stages x where x.id = public_stages_v.id) as progression
       from public_stages_v where division_id = ${division.id} order by seq`;
     // W2d Task 9: every stage's table rules in one read — its pin once started, else its live layers (OC2).
     const tableRules = await stageTableRulesDocs(sql, stages.map((st) => st.id));
     for (const st of stages) st.table_rules = tableRules[st.id] ?? null;
+    // C16: the progression graph, published as EDGES only. The stored progression is read off `stages` by the VIEW
+    // row's id (as `rules` is), inside this one read — an extra query here would cost the sequential path a connection
+    // — and is dropped before the row leaves.
+    const feeds = stageFeedsOf(stages);
+    for (const st of stages) {
+      const f = feeds.get(st.id);
+      if (f) st.feeds_from = f;
+      delete (st as { progression?: unknown }).progression;
+    }
     const pools = await sql<{ id: string; stage_id: string; key: string; name: string }[]>`
       select p.id, p.stage_id, p.key, p.name
       from public_pools_v p
@@ -1041,7 +1061,7 @@ export async function readPublicDivisionDetail(
                  v.home_entrant_id, v.away_entrant_id, v.home_slot_label, v.away_slot_label,
                  v.scheduled_at, v.venue, v.court_label,
                  v.status, v.outcome, v.summary, v.last_seq,
-                 v.lane, v.is_final, v.third_place, v.conditional,
+                 v.lane, v.is_final, v.third_place, v.conditional, v.joint_winners_at,
                  e.ext_key, e.winner_to_fixture, e.winner_to_slot, e.loser_to_fixture, e.loser_to_slot, e.expunged,
                  e.abandon_reason, e.has_active_abandon, e.no_result
           from public_fixtures_v v
@@ -1128,6 +1148,8 @@ export async function getPublicDivision(
     // v4 (per-stage format lines, 2026-09-24): every stage carries `rules`; a
     // v3 entry would read as "no stage overrides" and hide every stage line on
     // the hub and the division page until it expired.
+    // W4 B2a (C16): stages may now carry `feeds_from`. NOT a key bump, on purpose: the field is optional and an entry
+    // written before the deploy reads as "no feed" — the old highest-seq rule — until REVALIDATE_FAST expires it.
     // v5 (W2d Task 9): every stage carries `table_rules`; a v4 entry would read as "rules unreadable" and drop every
     // qualification status and tie-break caption until it expired.
     ["pub-div-v5", division.id],
@@ -1205,7 +1227,7 @@ export async function getPublicFixture(
                v.home_entrant_id, v.away_entrant_id, v.home_slot_label, v.away_slot_label,
                v.scheduled_at, v.venue, v.court_label,
                v.status, v.outcome, v.summary, v.last_seq,
-               v.lane, v.is_final, v.third_place, v.conditional, v.stream_url,
+               v.lane, v.is_final, v.third_place, v.conditional, v.joint_winners_at, v.stream_url,
                -- The feed edges, listed for the same reason as the three other
                -- reads above: PublicFixture declares them OPTIONAL, so a
                -- select that omits them compiles clean and reads undefined at

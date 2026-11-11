@@ -4,10 +4,12 @@ import "server-only";
 
 import { withTenant } from "@/lib/db";
 import { EngineError } from "@seazn/engine/core";
-import { carryDeltas, placementTable, resolveProgression, type BracketFixture, type PoolTable, type ProgressionSpec, type SourceShape, type SourceTables, type StandingsRow } from "@seazn/engine/competition";
+import { carryDeltas, placementTable, type BracketFixture, type PoolTable, type ProgressionSpec, type SourceShape, type SourceTables, type StandingsRow } from "@seazn/engine/competition";
 import { parseExtKey, bracketWinnerLoser, loadCrossGroupRules } from "@/server/engine-db/competition";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { engineFixtureStatus as toBracketFixtureStatus } from "@/lib/fixture-engine-status";
+import { resolveStoredProgression } from "../stored-progression";
+import { attachFeedRefs, engineRoundOf, laneDepthOf } from "@/server/engine-db/bracket-rounds";
 import { personalPointsLeaderboard } from "../americano";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
@@ -135,15 +137,17 @@ export async function loadBracketFixtures(tx: Tx, stageId: string): Promise<Brac
       winner_to_slot: number | null;
       loser_to_fixture: string | null;
       loser_to_slot: number | null;
+      joint_winners_at: Date | string | null;
     }[]
   >`
     select f.id, f.round_no, f.status, f.home_entrant_id, f.away_entrant_id, f.outcome, f.ext_key,
-           s.kind as stage_kind, f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot
+           s.kind as stage_kind, f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot, f.joint_winners_at
     from fixtures f join stages s on s.id = f.stage_id
     where f.stage_id = ${stageId}
     order by f.round_no, f.seq_in_round`;
   const seats = new Map(rows.map((r) => [r.id, [r.home_entrant_id, r.away_entrant_id] as const]));
-  return rows.map((f) => {
+  const laneDepth = laneDepthOf(rows.map((r) => ({ lane: parseExtKey(r.ext_key).bracket, roundNo: r.round_no })));
+  const built = rows.map((f) => {
     // X-BR-1: the completed-bracket rebuild seats from these rows too (level-seat.ts).
     assertNoLevelSeat({ fixtureId: f.id, stageKind: f.stage_kind, status: f.status, outcome: f.outcome });
     // W2b D20: …and a double walkover in them seated nobody.
@@ -156,10 +160,16 @@ export async function loadBracketFixtures(tx: Tx, stageId: string): Promise<Brac
     });
     const { bracket, thirdPlace } = parseExtKey(f.ext_key);
     const { winner, loser, walkedOver } = bracketWinnerLoser(f.outcome, f.home_entrant_id, f.away_entrant_id);
+    // W4 T12 (X-CH-4; review I-5): a final ruled joint reads as the engine's `jointWinners` row - the same mapping
+    // `toBracketFixture` (engine-db/competition.ts) makes. The engine asks a joint row to be a final, which only it can be.
+    const joint = f.joint_winners_at !== null;
     return {
       id: f.id,
-      round: f.round_no,
-      status: toBracketFixtureStatus(f.status),
+      // C5/C9: the ENGINE's round - 0-based per lane. A stored `roundLosers.round` is translated at the
+      // `resolveProgression` boundary (`resolveStoredProgression`), so the stored take rule keeps its meaning.
+      round: engineRoundOf(f.round_no, bracket, laneDepth),
+      status: joint ? "decided" : toBracketFixtureStatus(f.status),
+      ...(joint ? { isFinal: true, jointWinners: true } : {}),
       ...(bracket !== undefined ? { bracket } : {}),
       ...(thirdPlace ? { thirdPlace: true } : {}),
       ...(f.home_entrant_id !== null ? { home: f.home_entrant_id } : {}),
@@ -167,8 +177,12 @@ export async function loadBracketFixtures(tx: Tx, stageId: string): Promise<Brac
       ...(winner !== undefined ? { winner } : {}),
       ...(loser !== undefined ? { loser } : {}),
       ...(walkedOver !== undefined ? { walkedOver } : {}),
-    };
+    } satisfies BracketFixture as BracketFixture;
   });
+  // C6/C14: the feed of every seat (`homeFrom`/`awayFrom`), inverted from the stored forward edges, so `firstLossField` and
+  // the ranks can attribute a seat a withdrawal emptied.
+  attachFeedRefs(new Map(built.map((b) => [b.id, b])), rows);
+  return built;
 }
 
 export interface SeededStage {
@@ -313,7 +327,8 @@ export async function seedNextStage(auth: AuthCtx, completedStageId: string): Pr
     for (const s of progression.sources) {
       const source = await resolveProgressionSource(tx, next, s.stage);
       resolvedSources.push(source);
-      shapes.push(await sourceShapeOf(tx, source));
+      // W4 T8 (m4): the take rides along, so an `on_complete` `firstLosses` take sizes its slots from the source's first-loss field.
+      shapes.push(await sourceShapeOf(tx, source, s.take));
       // ANY OTHER named source must be complete NOW too, or this throws
       // STAGE_NOT_READY — caught by completeStage's existing best-effort
       // try/catch (Decision 4), same as today's single-source contract.
@@ -333,11 +348,12 @@ export async function seedNextStage(auth: AuthCtx, completedStageId: string): Pr
     // (seedNextStage seeds INTO it), so `next.kind` is the real targetKind
     // ruling 13's snake/bracket-target guard needs on this resolution path
     // too, not just at createStages' save-time validateStageProgression call.
-    const { qualifiers, newLotsDraws } = resolveProgression(
+    const { qualifiers, newLotsDraws } = resolveStoredProgression(
       progression,
       shapes,
       departedLoseBestNth(sourceTables, resolvedSources, await departedEntrantIds(tx, current.division_id)),
       next.kind,
+      resolvedSources.map((r) => r.kind),
     );
     // W2d T12 (spec §5.9): a cross-group draw best-Nth made is stored with its source, under the division lock held above.
     await persistCrossGroupDraws(tx, resolvedSources, newLotsDraws);

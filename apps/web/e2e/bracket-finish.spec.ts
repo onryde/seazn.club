@@ -10,6 +10,7 @@ import { ARMAGEDDON_RESULTS, TIEBREAK_RUNGS } from "@seazn/engine/sports/boardga
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { openMatchActions } from "./helpers/match-actions";
+import { DEFAULT_SETTLED_POLL_MS } from "../src/components/public-site/match-centre/use-live-fixture";
 
 // W2a spec §9 (format-matrix W2a, loop H): a bracket always finishes.
 //  - the console: a HELD fixture (a level result in a knockout, or an abandon that decided nobody) shows "Needs a
@@ -1686,5 +1687,182 @@ test.describe("W2a — the public match page and bracket (Task 13)", () => {
       shots++;
     }
     expect(shots).toBe(6);
+  });
+});
+
+// W4 app B, B5b Task 13 (X-CH-4, X-CH-6; owner picks 3A/4A): the organiser rules a rained-off final JOINT WINNERS from the
+// match console, the public pages say so, and the Undo opens the final again. Whole file, never a -g slice (AGENTS.md rule 21).
+test.describe("W4 B5b - joint winners on a final (X-CH-4)", () => {
+  /** A four-entrant knockout whose two semi-finals are decided, so the final is seated and unplayed. */
+  async function seatedFinal(page: Page, request: APIRequestContext) {
+    const org = await activeOrg(page);
+    const names = ["Harbourside Shuttlers Badminton Club Ladies", "W4 Ben", "W4 Cy", "W4 Di"]; // the first is a 43-character name
+    const ko = await knockout(request, "football", "11-a-side", names, "public");
+    for (const sf of ko.ready) {
+      await post(request, sf.id, "core.start");
+      await post(request, sf.id, "core.abandon", { reason: "floodlights" });
+      await post(request, sf.id, "core.settle", { winner: sf.home_entrant_id, method: "organiser" });
+    }
+    const finalId = await withDb(async (sql) => {
+      const rows = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${ko.stageId} and is_final and not third_place`;
+      expect(rows, "exactly one deciding final").toHaveLength(1);
+      return rows[0]!.id;
+    });
+    const before = await read(request, finalId);
+    expect([before.home_entrant_id, before.away_entrant_id].every((x) => x !== null), "both finalists seated").toBe(true);
+    return {
+      org, ko, finalId, status: before.status,
+      home: ko.nameOf.get(before.home_entrant_id!)!,
+      away: ko.nameOf.get(before.away_entrant_id!)!,
+      path: await fixturePath(request, finalId),
+      base: `/live/${org.slug}/${ko.compSlug}/${ko.divSlug}`,
+    };
+  }
+
+  /** A public page can serve one or two stale loads after a write (the org-tag expire): reload inside a bounded poll. */
+  async function publicCount(page: Page, url: string, testId: string, want: number) {
+    await expect
+      .poll(async () => {
+        await page.goto(url);
+        return page.getByTestId(testId).count();
+      }, { timeout: 30_000, message: `${testId} on ${url}` })
+      .toBe(want);
+  }
+
+  const hitTest = (el: Locator) =>
+    el.evaluate((node) => {
+      const r = node.getBoundingClientRect();
+      const at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return { ok: at !== null && node.contains(at), h: r.height };
+    });
+
+  test("X-CH-4 the organiser declares joint winners on an unplayed final from the Match actions panel and undoes it", async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const f = await seatedFinal(page, request);
+    expect(f.status).toBe("scheduled");
+
+    // The console: the action is a secondary one in the Match actions panel (4A: the organiser block, never above the pad),
+    // nothing is sent until the sheet is confirmed, and the sheet names BOTH finalists.
+    await page.goto(f.path);
+    await expect(page.getByTestId("joint-winners-offer")).toHaveCount(0);
+    let widths = 0;
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await openMatchActions(page);
+      const offer = page.getByTestId("joint-winners-open");
+      await expect(offer).toBeVisible();
+      await expect(offer).toHaveText(ui("jointWinners.action"));
+      await expectNoHorizontalScroll(page);
+      // Hit-test: the point at the button's centre IS the button (nothing paints over it, it is not clipped off-screen).
+      // The organiser block sits below the pad (4A), and at 320 that is past the first 900px (measured y 1484): a tap needs the
+      // button scrolled into the viewport first, as a thumb does it - `elementFromPoint` answers null for a point outside it.
+      await offer.scrollIntoViewIfNeeded();
+      const hit = await hitTest(offer);
+      expect(hit.ok, `${w}: the action is what a tap lands on`).toBe(true);
+      expect(hit.h, `${w}: a 44px tap target`).toBeGreaterThanOrEqual(44);
+      // It never sits above the pad: the Scoring card comes first in the page.
+      const order = await page.evaluate(() => {
+        const scoring = document.querySelector('[data-role="console-scoring"]');
+        const o = document.querySelector('[data-testid="joint-winners-open"]');
+        return !!scoring && !!o && !!(scoring.compareDocumentPosition(o) & Node.DOCUMENT_POSITION_FOLLOWING);
+      });
+      expect(order, `${w}: the action follows the Scoring card`).toBe(true);
+      await crop(page.locator('[data-role="match-actions"]'), "joint-offer", w);
+      widths++;
+    }
+    expect(widths).toBe(3);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await openMatchActions(page);
+    await page.getByTestId("joint-winners-open").click();
+    await expect(page.getByTestId("joint-winners-sheet")).toBeVisible();
+    await expect(page.getByTestId("joint-winners-confirm-text")).toHaveText(ui("jointWinners.confirm", { a: f.home, b: f.away }));
+    expect((await read(request, f.finalId)).status, "opening the sheet writes nothing").toBe("scheduled");
+    await page.getByTestId("joint-winners-confirm").click();
+
+    // The console now shows the declaration and the Undo - and no pad, Settle or offer.
+    await expect(page.getByTestId("joint-winners-declared")).toBeVisible();
+    await expect(page.getByTestId("joint-winners-undo")).toHaveText(ui("jointWinners.undo"));
+    await expect(page.getByTestId("joint-winners-open")).toHaveCount(0);
+    await expect(page.getByTestId("score-pad")).toHaveCount(0);
+    await expect(page.getByTestId("settle-open")).toHaveCount(0);
+    const declared = (await apiJson<{ status: string; outcome: unknown; joint_winners_at: string | null }>(request, `/api/v1/fixtures/${f.finalId}`)).data!;
+    expect([declared.status, declared.outcome]).toEqual(["decided", null]);
+    expect(declared.joint_winners_at, "the wire carries the ruling").toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await expectNoHorizontalScroll(page);
+      await crop(page.getByTestId("joint-winners-declared"), "joint-declared", w);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    // The public pages: the division banner, the bracket tile and the match page all say "Joint winners" - the match page
+    // still does after its first settled poll (review I-2), which replaces the document wholesale.
+    await publicCount(page, `${f.base}?tab=standings`, "division-title-joint", 1);
+    await dismissCookieBanner(page);
+    const tile = page.getByTestId("bracket-title-joint");
+    await expect(tile).toHaveCount(1);
+    await expect(tile).toContainText(say("title.joint"));
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await expectNoHorizontalScroll(page);
+      await crop(page.getByTestId("division-title-joint"), "joint-public-banner", w);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await publicCount(page, `${f.base}/fixtures/${f.finalId}`, "mc-status-line", 1);
+    await expect(page.getByTestId("mc-status-line")).toHaveText(say("title.joint"));
+    // Let the page's own poll answer (the shipped settled interval is the ceiling; CI only shortens it - never a sleep), then
+    // read the line again: it must survive the poll's own document (review I-2).
+    await page.waitForResponse((r) => r.url().includes(`/api/v1/public/fixtures/${f.finalId}`) && r.ok(), { timeout: DEFAULT_SETTLED_POLL_MS + 15_000 });
+    await expect(page.getByTestId("mc-status-line")).toHaveText(say("title.joint"));
+
+    // Undo, on a page LOADED in the declared state (review I-1: the console's live status must re-seed): the final is open
+    // again, the pad is back, the offer is back, the public title is gone.
+    await page.goto(f.path);
+    await expect(page.getByTestId("joint-winners-declared")).toBeVisible();
+    await page.getByTestId("joint-winners-undo").click();
+    await expect(page.getByTestId("joint-winners-declared")).toHaveCount(0);
+    await expect(page.getByTestId("score-pad")).toBeVisible();
+    await openMatchActions(page);
+    await expect(page.getByTestId("joint-winners-open")).toBeVisible();
+    const undone = (await apiJson<{ status: string; joint_winners_at: string | null }>(request, `/api/v1/fixtures/${f.finalId}`)).data!;
+    expect([undone.status, undone.joint_winners_at]).toEqual(["scheduled", null]);
+    await publicCount(page, `${f.base}?tab=standings`, "division-title-joint", 0);
+    await expect(page.getByTestId("bracket-title-joint")).toHaveCount(0);
+  });
+
+  test("X-CH-4 on a held final (abandoned, awaiting its settle) the action sits beside Settle; the ruling replaces the hold", async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const f = await seatedFinal(page, request);
+    await post(request, f.finalId, "core.start");
+    await post(request, f.finalId, "core.abandon", { reason: "storm" });
+    await page.goto(f.path);
+    const offer = page.getByTestId("joint-winners-open");
+    const settle = page.getByTestId("settle-open");
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await expect(offer).toBeVisible();
+      await expect(settle).toBeVisible();
+      for (const [name, el] of [["declare", offer], ["settle", settle]] as const) {
+        const hit = await hitTest(el);
+        expect(hit.ok, `${w}: ${name} is what a tap lands on`).toBe(true);
+        expect(hit.h, `${w}: ${name} is a 44px target`).toBeGreaterThanOrEqual(44);
+      }
+      await expectNoHorizontalScroll(page);
+      await crop(page.getByTestId("settle-open").locator("xpath=ancestor::section[1]"), "joint-held", w);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await offer.click();
+    await expect(page.getByTestId("joint-winners-confirm-text")).toHaveText(ui("jointWinners.confirm", { a: f.home, b: f.away }));
+    await page.getByTestId("joint-winners-confirm").click();
+    await expect(page.getByTestId("joint-winners-declared")).toBeVisible();
+    await expect(page.getByTestId("settle-open"), "the hold is gone with the ruling").toHaveCount(0);
+    const declared = (await apiJson<{ status: string; outcome: unknown; joint_winners_at: string | null }>(request, `/api/v1/fixtures/${f.finalId}`)).data!;
+    expect([declared.status, declared.outcome]).toEqual(["decided", null]);
+    expect(declared.joint_winners_at).not.toBeNull();
+    // Undo on the still-open page re-seeds the console: the abandoned final is held again (Settle and the offer are back).
+    await page.getByTestId("joint-winners-undo").click();
+    await expect(page.getByTestId("joint-winners-declared")).toHaveCount(0);
+    await expect(page.getByTestId("settle-open")).toBeVisible();
+    await expect(page.getByTestId("joint-winners-open")).toBeVisible();
   });
 });

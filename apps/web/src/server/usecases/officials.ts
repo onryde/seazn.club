@@ -822,6 +822,51 @@ export const SourceOfficialsInput = z.object({
 });
 export type SourceOfficialsInput = z.infer<typeof SourceOfficialsInput>;
 
+/** The fixture statuses that carry a result a sourcing can read (V432's settled set with a winner): a finalized or forfeited
+ *  fixture is as decided as a `decided` one. */
+const RESULT_SETTLED: ReadonlySet<string> = new Set(["decided", "finalized", "forfeited"]);
+
+/** A pending sourcing entry: the engine's English `reason`, and for a shared rank a code the panel localizes. */
+export interface PendingSource {
+  reason: string;
+  code?: "shared_rank";
+  rank?: number;
+  holders?: number;
+}
+
+type RankTake = { rank: number; poolId?: string | undefined };
+type SourceSpec = SourceOfficialsInput["sources"][number];
+type StandingsTableLike = { stageId: string; poolId: string | undefined; decided: boolean; rows: { entrantId: string; rank: number }[] };
+
+/**
+ * X-TP-3: takes of a rank that two or more rows of a DECIDED table hold are withheld from the engine's lookup (which takes
+ * the first row at a rank) and reported pending by name. A table not yet decided is left to the engine's own "stage not
+ * decided yet"; a rank held once, or by no one, is untouched.
+ */
+export function withholdSharedRanks(
+  sources: readonly SourceSpec[],
+  standings: readonly StandingsTableLike[],
+): { sources: SourceSpec[]; pending: PendingSource[] } {
+  const pending: PendingSource[] = [];
+  const kept: SourceSpec[] = [];
+  for (const source of sources) {
+    if (source.kind !== "rank") {
+      kept.push(source);
+      continue;
+    }
+    const take = (source.take as RankTake[]).filter((t) => {
+      const table = standings.find((s) => s.stageId === source.fromStage && (t.poolId === undefined ? s.poolId === undefined : s.poolId === t.poolId));
+      if (table === undefined || !table.decided) return true;
+      const holders = table.rows.filter((r) => r.rank === t.rank).length;
+      if (holders < 2) return true;
+      pending.push({ reason: `rank ${t.rank} is shared by ${holders} entrants`, code: "shared_rank", rank: t.rank, holders });
+      return false;
+    });
+    if (take.length > 0) kept.push({ ...source, take } as SourceSpec);
+  }
+  return { sources: kept, pending };
+}
+
 /** POST /stages/{id}/officials/source — resolve rank/result sourcing into
  *  entrant specs (pure resolver; propose-only, Jul3/02 §3). */
 export async function sourceOfficials(
@@ -830,7 +875,7 @@ export async function sourceOfficials(
   input: SourceOfficialsInput,
 ): Promise<{
   resolved: { entrant_id: string; display_name: string; official_id: string | null }[];
-  pending: { reason: string }[];
+  pending: PendingSource[];
 }> {
   await requireFeature(auth.orgId, "officials.auto", await competitionForStage(stageId));
   return withTenant(auth.orgId, async (tx) => {
@@ -838,10 +883,11 @@ export async function sourceOfficials(
       select division_id from stages where id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
 
-    // standings snapshots: decided = stage completed (rows frozen at complete)
+    // standings snapshots: decided = stage complete (rows frozen at complete). The status is V210's `complete`; the
+    // literal `completed` it read before never matched a row, so rank sourcing from a finished stage was always pending.
     const standingsRows = await tx<{ stage_id: string; pool_id: string | null; rows: unknown; final: boolean }[]>`
       select ss.stage_id, ss.pool_id, ss.rows,
-             (s.status = 'completed') as final
+             (s.status = 'complete') as final
       from standings_snapshots ss join stages s on s.id = ss.stage_id
       where s.division_id = (select division_id from stages where id = ${stageId})`;
     const fixturesRows = await tx<{ id: string; status: string; outcome: { kind?: string; winner?: string; loser?: string } | null }[]>`
@@ -851,20 +897,25 @@ export async function sourceOfficials(
       select id from entrants
       where division_id = ${stage.division_id} and status in ('withdrawn','disqualified')`;
 
-    const result = resolveOfficialSourcing(input.sources, {
+    const standings = standingsRows.map((s) => ({
+      stageId: s.stage_id,
+      poolId: s.pool_id ?? undefined,
+      decided: s.final,
+      rows: ((s.rows as { entrantId: string; rank?: number }[]) ?? [])
+        .filter((r) => r.rank !== undefined)
+        .map((r) => ({ entrantId: r.entrantId, rank: r.rank! })),
+    }));
+    // X-TP-3: a bracket's shared place (two semi-final losers both 3rd) names TWO entrants; the engine's lookup would take
+    // the first row it finds, an arbitrary one of them. Sourcing a shared rank is refused by name, never picked.
+    const { sources, pending: sharedPending } = withholdSharedRanks(input.sources, standings);
+
+    const result = resolveOfficialSourcing(sources, {
       // snapshot rows are engine StandingsRow[] (camelCase, `rank` from the
       // ranking pass)
-      standings: standingsRows.map((s) => ({
-        stageId: s.stage_id,
-        poolId: s.pool_id ?? undefined,
-        decided: s.final,
-        rows: ((s.rows as { entrantId: string; rank?: number }[]) ?? [])
-          .filter((r) => r.rank !== undefined)
-          .map((r) => ({ entrantId: r.entrantId, rank: r.rank! })),
-      })),
+      standings,
       fixtures: fixturesRows.map((f) => ({
         id: f.id,
-        decided: f.status === "decided",
+        decided: RESULT_SETTLED.has(f.status),
         winnerId: f.outcome?.winner,
         loserId: f.outcome?.loser,
       })),
@@ -889,7 +940,7 @@ export async function sourceOfficials(
         display_name: nameById.get(r.entrantId) ?? r.entrantId,
         official_id: officialByEntrant.get(r.entrantId) ?? null,
       })),
-      pending: result.pending.map((p) => ({ reason: p.reason })),
+      pending: [...result.pending.map((p): PendingSource => ({ reason: p.reason })), ...sharedPending],
     };
   });
 }

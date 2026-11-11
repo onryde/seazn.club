@@ -23,7 +23,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { completeStageIfReady } from "@/server/engine-db";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { fixtureRow, playBadminton, post } from "@/server/engine-db/__tests__/helpers/w2b-rig";
-import { divisionChampion, type ChampionFixture, type ChampionStage, type ChampionStandings } from "@/server/public-site/champion";
+import { divisionTitle, type ChampionFixture, type ChampionStage, type ChampionStandings } from "@/server/public-site/champion";
 import { createCompetition } from "../competitions";
 import { createDivision, patchDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -235,8 +235,9 @@ describe.runIf(HAS_DB)("W4 T6 AN-2: a bracket completes only with every match de
 
   it("R-1 consequence stays: a third-place line whose BOTH seats are departure-dead is no match owed — the stage completes on its final", async () => {
     // single-sport: badminton. withdrawal-w2b.test.ts's legacy shape (a disqualification written without the cascade):
-    // both semi losers departed, so the third-place line is a bye line nobody can play. Refusing here would hold the
-    // stage open forever behind a line with nobody in it.
+    // both semi losers departed, so the third-place line is a line nobody can play. Since M-1 / X-TP-7 (3b8913816b) it is
+    // settled as a double walkover (forfeited, both seats empty), no longer left scheduled; either way it is no match
+    // owed, and refusing here would hold the stage open forever behind a line with nobody in it.
     const s = await seedBracket({ sport: "badminton", variant: "bwf", stageKind: "knockout", entrants: 4, stageConfig: { thirdPlace: true } });
     const semis = (await linesOf(s.stageId)).filter((l) => l.winner_to_fixture !== null);
     for (const semi of semis) {
@@ -244,7 +245,7 @@ describe.runIf(HAS_DB)("W4 T6 AN-2: a bracket completes only with every match de
       await playBadminton(s.auth, semi.id, true);
     }
     const third = await fixtureRow(semis[0]!.loser_to_fixture!);
-    expect([third.status, third.home_entrant_id, third.away_entrant_id], "premise: an empty, unplayable line").toEqual(["scheduled", null, null]);
+    expect([third.status, third.home_entrant_id, third.away_entrant_id], "premise: an empty, unplayable line, settled as a double walkover").toEqual(["forfeited", null, null]);
     expect(await undecided(s.stageId), "the final is the one line owed").toEqual([semis[0]!.winner_to_fixture]);
     await playBadminton(s.auth, semis[0]!.winner_to_fixture!, true);
     expect(await undecided(s.stageId), "nothing owed").toEqual([]);
@@ -354,7 +355,8 @@ async function championOf(divisionId: string): Promise<string | null> {
       from fixtures f join stages s on s.id = f.stage_id where s.division_id = ${divisionId}`;
   const standings = await sql<ChampionStandings[]>`
     select ss.stage_id, ss.pool_id, ss.rows from standings_snapshots ss join stages s on s.id = ss.stage_id where s.division_id = ${divisionId}`;
-  return divisionChampion(stages, fixtures, standings);
+  const t = divisionTitle(stages, fixtures, standings);
+  return t?.kind === "champion" ? t.champion : null;
 }
 
 describe.runIf(HAS_DB)("W4 T6 X-CH-2 one finalist withdraws: the final walks over and the other is champion", () => {

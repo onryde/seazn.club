@@ -5,10 +5,15 @@
 // one as a parameter and never imports either itself (stays client-safe).
 import { describe, expect, it, vi } from "vitest";
 import { matchRef, resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
+import { descriptorLabel, type SlotDescriptor } from "@seazn/engine/competition";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { msgFor } from "@/lib/messages-i18n";
 import { LOCALES } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
+import enUi from "@/dictionaries/en/ui.json";
+import esUi from "@/dictionaries/es/ui.json";
+import frUi from "@/dictionaries/fr/ui.json";
+import nlUi from "@/dictionaries/nl/ui.json";
 
 describe("resolveSlotLabel — mechanics (mocked lookup, no real dictionary)", () => {
   it("never concatenates: the return value is exactly what lookup produced, untouched", () => {
@@ -80,6 +85,34 @@ describe("resolveSlotLabel — real dictionaries, all 4 locales, every slot.* ke
       });
     }
   }
+
+  // X-PL-6: the labels come from the ENGINE's own descriptorLabel, one descriptor per declared kind, so a kind the engine adds
+  // (or a key it renames) with no dictionary entry reds here — `slot.round_loser` shipped with none, rendering its raw key.
+  const UI: Record<string, object> = { en: enUi, es: esUi, fr: frUi, nl: nlUi };
+  const DESCRIPTORS: Record<SlotDescriptor["kind"], SlotDescriptor> = {
+    group_rank: { kind: "group_rank", pool: "A", rank: 3 },
+    rank_range: { kind: "rank_range", rank: 5 },
+    best_nth: { kind: "best_nth", nth: 3, position: 2 },
+    round_loser: { kind: "round_loser", round: 1, position: 3 },
+    first_loss: { kind: "first_loss", position: 2 },
+  };
+  it("every SlotDescriptor kind the engine declares resolves in all 4 locales, its numbers substituted (first_loss: 'First-match loser 2')", () => {
+    let checked = 0;
+    for (const d of Object.values(DESCRIPTORS)) {
+      const label = descriptorLabel(d);
+      for (const locale of LOCALES) {
+        const out = resolveSlotLabel(label, (k, v) => msgFor(locale, k, v), "schedule.tbd");
+        expect(out, `${locale} ${label.key}`).not.toBe(label.key);
+        expect(out, `${locale} ${label.key}`).not.toMatch(/\{[a-zA-Z]+\}/);
+        // msgFor falls back to English, so the locale's OWN file is asserted to carry the key (not an English leak).
+        expect((UI[locale] as Record<string, string>)[label.key], `${locale} dictionary carries ${label.key}`).toBeTypeOf("string");
+        checked++;
+      }
+    }
+    expect(checked).toBe(Object.keys(DESCRIPTORS).length * LOCALES.length);
+    expect(checked).toBeGreaterThan(0);
+    expect(resolveSlotLabel(descriptorLabel(DESCRIPTORS.first_loss), (k, v) => msgFor("en", k, v), "schedule.tbd")).toBe("First-match loser 2");
+  });
 
   it("null resolves to real per-locale fallback text, not the key and not hardcoded English", () => {
     for (const locale of LOCALES) {

@@ -86,7 +86,7 @@ interface Finals {
 }
 
 /** A league of four, played out (the better seed wins every line), completed, and its proposal confirmed into the finals. */
-async function seededFinals(sport: string, kind: FinalsKind): Promise<Finals> {
+async function seededFinals(sport: string, kind: FinalsKind, opts: { reverse?: boolean } = {}): Promise<Finals> {
   const m = builtinModules.find((x) => x.key === sport)!;
   const { auth } = await seedOrg("pro");
   const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: `T17 ${sport} ${randomUUID().slice(0, 6)}`, visibility: "private", branding: {} });
@@ -114,7 +114,10 @@ async function seededFinals(sport: string, kind: FinalsKind): Promise<Finals> {
   await startDivision(auth, division.id);
   const seedOf = new Map(entrants.map((e) => [e.id, e.seed ?? 99]));
   for (const f of await rowsOf(league!.id)) {
-    const better = (seedOf.get(f.home_entrant_id!) ?? 99) < (seedOf.get(f.away_entrant_id!) ?? 99) ? f.home_entrant_id! : f.away_entrant_id!;
+    // `reverse`: the WORSE registration seed wins every line, so the league's order (= the finals' draw seeds) is the REVERSE of
+    // the registration seeds - the case where reading a registration seed instead of the draw seed is wrong (C12).
+    const homeBetter = (seedOf.get(f.home_entrant_id!) ?? 99) < (seedOf.get(f.away_entrant_id!) ?? 99);
+    const better = homeBetter !== (opts.reverse === true) ? f.home_entrant_id! : f.away_entrant_id!;
     await win(auth, sport, f.id, better);
   }
   await completeStage(auth, league!.id);
@@ -122,7 +125,10 @@ async function seededFinals(sport: string, kind: FinalsKind): Promise<Finals> {
   expect(proposal.computed.ties, "premise: the better seed won every line, so the table has no tie").toEqual([]);
   await confirmSeedProposal(auth, finals!.id, { proposalId: proposal.id });
   const byName = new Map(entrants.map((e) => [e.display_name, e.id]));
-  const seed = { 1: byName.get("E1")!, 2: byName.get("E2")!, 3: byName.get("E3")!, 4: byName.get("E4")! };
+  const seed =
+    opts.reverse === true
+      ? { 1: byName.get("E4")!, 2: byName.get("E3")!, 3: byName.get("E2")!, 4: byName.get("E1")! }
+      : { 1: byName.get("E1")!, 2: byName.get("E2")!, 3: byName.get("E3")!, 4: byName.get("E4")! };
   return { auth, sport, divisionId: division.id, stageId: finals!.id, seed };
 }
 
@@ -265,5 +271,58 @@ describe.skipIf(!HAS_DB)("a withdrawal inside a final-stage page playoff (X-SP-5
     expect(walkedOverTo(await fixtureRow(q2.id))).toEqual({ status: "forfeited", kind: "award", winner: f.seed[3] });
     expect(pair(await fixtureRow(final.id))).toEqual(sorted(f.seed[1], f.seed[3]));
     expect(await nothingVoided(f.stageId)).toEqual({ rows: 0, events: 0 });
+  });
+});
+
+// W4 app PR B (C19, C12, C23; X-SP-4, X-SP-5): the RANK assertions the seating tests above left to PR B. The league's order is
+// the REVERSE of the registration seeds (`reverse`), so a rank read from a registration seed instead of the draw seed is
+// wrong. Expected ranks come from the rulebook rows and from fixture outcomes read from the database, never from the code:
+//  - RB4-S4 / X-SP-4: a withdrawn stepladder seed ranks as the loser of the rung she was due to enter. K=4: seed 2 enters
+//    R2, so she is R2's loser - 3rd, below the final's loser (2nd) and above R1's loser (4th).
+//  - RB4-S5 / X-SP-5: a withdrawn page-playoff entrant ranks below everyone still in the stage - 4th.
+const outcomeOf = (r: FixtureRow) => r.outcome as { winner: string; loser?: string | null };
+const loserOfRow = (r: FixtureRow) => (outcomeOf(r).winner === r.home_entrant_id ? r.away_entrant_id : r.home_entrant_id)!;
+/** The ranks `completeStage` answers (`stage_completed.finalRanks`, ids in rank order). */
+async function completeRanks(auth: AuthCtx, stageId: string): Promise<string[]> {
+  const done = await completeStage(auth, stageId);
+  expect(done.completed, "the stage completes").toBe(true);
+  const ev = done.events.find((e) => e.type === "stage_completed");
+  if (ev?.type !== "stage_completed") throw new Error("rig: no stage_completed event");
+  return ev.finalRanks;
+}
+
+describe.skipIf(!HAS_DB)("a withdrawn finalist stage seed is RANKED (X-SP-4 / X-SP-5; the draw order is not the registration order)", () => {
+  it.each(SPORTS)("%s: X-SP-4 stepladder - seed 2 withdraws before R1: she ranks 3rd (the loser of R2, the rung she was due to enter)", async (sport) => {
+    const f = await seededFinals(sport, "stepladder", { reverse: true });
+    const { r1, r2, final } = await rungs(f.stageId);
+    expect(pair(r1), "premise: the draw seeds are the league order, not the registration seeds").toEqual(sorted(f.seed[3], f.seed[4]));
+    await withdrawEntrantCascade(f.auth, f.seed[2]);
+    await win(f.auth, sport, r1.id, f.seed[4]); // the lower seed climbs
+    await win(f.auth, sport, final.id, f.seed[1]);
+    const ranks = await completeRanks(f.auth, f.stageId);
+    const r1After = await fixtureRow(r1.id);
+    const finalAfter = await fixtureRow(final.id);
+    expect(ranks, "every seed once: champion, final's loser, the withdrawn seed (R2's loser), R1's loser").toEqual([
+      outcomeOf(finalAfter).winner,
+      loserOfRow(finalAfter),
+      f.seed[2],
+      loserOfRow(r1After),
+    ]);
+    expect(ranks.indexOf(f.seed[2]) + 1).toBe(3);
+    // R2 was walked over to the climber (seed 4) the moment R1 decided: the comment's claim, asserted.
+    expect(walkedOverTo(await fixtureRow(r2.id)), "R2 walks over to R1's winner").toEqual({ status: "forfeited", kind: "award", winner: f.seed[4] });
+  });
+
+  it.each(SPORTS)("%s: X-SP-5 page playoff - seed 1 withdraws before Q1: she ranks 4th, below the eliminator's loser", async (sport) => {
+    const f = await seededFinals(sport, "page_playoff", { reverse: true });
+    const { q1, e, final } = await pageLines(f.stageId);
+    expect(pair(q1), "premise: Q1 is the draw's seeds 1 v 2").toEqual(sorted(f.seed[1], f.seed[2]));
+    await withdrawEntrantCascade(f.auth, f.seed[1]);
+    await win(f.auth, sport, e.id, f.seed[4]);
+    await win(f.auth, sport, final.id, f.seed[4]);
+    const ranks = await completeRanks(f.auth, f.stageId);
+    const eAfter = await fixtureRow(e.id);
+    expect(ranks).toEqual([f.seed[4], f.seed[2], loserOfRow(eAfter), f.seed[1]]);
+    expect(ranks.indexOf(f.seed[1]) + 1, "last: below everyone still in the stage").toBe(4);
   });
 });

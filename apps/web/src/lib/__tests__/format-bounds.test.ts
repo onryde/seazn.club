@@ -352,7 +352,7 @@ describe("the builder posts the legs the organiser picked", () => {
 });
 
 describe("a Top N the builder does not show never sizes a stage (fix round 1, I1)", () => {
-  // ko_plate and qualifying_main read the `qualified` knob (the Plate's round-1-losers count; the Main draw's intake),
+  // ko_plate and qualifying_main read the `qualified` knob (the Main draw's intake; the Plate takes no count, X-PL-6),
   // but the builder shows them no Top N control. A value typed for another template must not ride into them unseen:
   // they post the templates' default, 4 (the fix brief). 6 differs from it, so the wrong answer is visible.
   const SHOWN = 6;
@@ -365,10 +365,10 @@ describe("a Top N the builder does not show never sizes a stage (fix round 1, I1
   const takeOf = () =>
     (postedStages(/format-preview/)[1]?.progression as { sources: { take: Record<string, unknown>[] }[] }).sources[0]!.take;
 
-  it("Top 6 on league_ko, then Knockout + Plate: the Plate takes 4 round-1 losers; then Qualifying + Main draw: the Main draw takes 4", async () => {
+  it("Top 6 on league_ko, then Knockout + Plate: the Plate takes every first loss (no count); then Qualifying + Main draw: the Main draw takes 4", async () => {
     let checked = 0;
     for (const [template, want] of [
-      ["ko_plate", { kind: "roundLosers", round: 1, count: DEFAULT }],
+      ["ko_plate", { kind: "firstLosses" }], // X-PL-6: no count at all, whatever the Top N knob says
       ["qualifying_main", { kind: "rankRange", from: 1, to: DEFAULT }],
     ] as const) {
       const h = mountBuilder();

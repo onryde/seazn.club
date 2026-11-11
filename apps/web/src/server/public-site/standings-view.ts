@@ -271,6 +271,10 @@ export const TIE_BREAK_MSG_KEYS: Readonly<Record<string, TKey>> = {
   fewest_played: "table.tieBreak.fewest_played",
 } satisfies Record<PartialScheduleKey, DictionaryKey>;
 
+/** D1: the chip a bracket's shared place wears (R24 pick 2A). The only consumer is StandingsTable; a seed proposal's
+ *  `shared_place` tie has no copy here (no real producer reaches a snapshot row's tie note). */
+export const SHARED_PLACE_MSG_KEY = "table.tieBreak.shared_place" satisfies DictionaryKey;
+
 /** Sort key for a row the ranking pass has not ranked (a division with no
  *  played fixtures yet, or a row excluded from the cascade). Unranked rows go
  *  last. Deliberately NOT the `99` that `standings-table.tsx` uses: a division
@@ -581,7 +585,8 @@ export interface TableViewInput {
    *  above: a missing key and an explicit null are one thing to the renderer,
    *  which falls through `EntityLogo`'s chain to a neutral tile. */
   entrantColours: Record<string, string | null>;
-  championId: string | null;
+  /** W4: the entrants the division's title crowns — one, a joint pair, or none (vacant). Every one gets the crown. */
+  championIds: readonly string[];
   updatedAt: string;
   /** `t(dict, …)` bound by the caller, in the ORG's locale. The builder resolves
    *  every string it emits; nothing downstream re-derives one. */
@@ -681,7 +686,7 @@ export function buildTableView(input: TableViewInput): TableViewT {
       // rows, and the view's row order is its own. No status = null, which the
       // schema states as a required key (never an absent one).
       qual: qual !== null && Object.hasOwn(qual.rows, r.entrantId) ? qual.rows[r.entrantId]! : null,
-      champion: !level && input.championId === r.entrantId,
+      champion: !level && input.championIds.includes(r.entrantId),
       // Only a marked row carries the key (a cached document and a plain table are one shape: absent = nothing to mark).
       ...markersOf(r.entrantId),
     })),

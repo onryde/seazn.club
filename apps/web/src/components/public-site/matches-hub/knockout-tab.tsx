@@ -413,10 +413,60 @@ function roundBadge(
   return <span className="ml-2 text-xs opacity-80">{`${done}/${round.fixtureIds.length}`}</span>;
 }
 
+const CROWN = (
+  <svg width="14" height="12" viewBox="0 0 14 12" aria-hidden="true" className="shrink-0">
+    <path d="M1 10 0 2l4 3 3-5 3 5 4-3-1 8z" fill="currentColor" />
+  </svg>
+);
+
+/** R24 pick 3A: "Joint winners: X and Y" under ONE crown. Both names wrap (never an ellipsis over a winner). */
+function jointBanner(view: KnockoutViewT, final: HubMatchT, dict: PublicDict): ReactNode {
+  const [a, b] = final.header.sides;
+  return (
+    <div
+      data-testid={`mh-knockout-joint-${view.id}`}
+      className="relative flex min-w-0 items-center gap-3 overflow-hidden rounded-2xl bg-court px-4 pb-4 pt-5 text-court-ink"
+    >
+      <span aria-hidden="true" className="absolute inset-x-0 top-0 h-1 bg-accent"></span>
+      <div className="flex shrink-0 -space-x-2">
+        <EntityLogo src={a.badgeUrl} name={a.name} colour={a.colour} size={32} />
+        <EntityLogo src={b.badgeUrl} name={b.name} colour={b.colour} size={32} />
+      </div>
+      <div className="min-w-0">
+        <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.2em] text-court-muted">
+          {CROWN}
+          {t(dict, "title.joint")}
+        </p>
+        <p className="break-words font-display text-2xl font-bold uppercase leading-tight">
+          {t(dict, "title.jointNames", { a: a.name, b: b.name })}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/** "Title vacant" as a muted line (R24 pick 3A): no crown, no names, the reason beneath. */
+function vacantBanner(view: KnockoutViewT, dict: PublicDict): ReactNode {
+  return (
+    <div
+      data-testid={`mh-knockout-vacant-${view.id}`}
+      className="min-w-0 rounded-2xl border border-zinc-200 bg-surface px-4 py-3 text-ink-muted"
+    >
+      <p className="text-[11px] font-semibold uppercase tracking-[0.2em]">{t(dict, "title.vacant")}</p>
+      <p className="text-[13px]">{t(dict, "title.vacantReason")}</p>
+    </div>
+  );
+}
+
 function championBanner(view: KnockoutViewT, matches: MatchIndex, dict: PublicDict): ReactNode {
-  if (view.championFixtureId === null) return null;
+  // `== null`: a hub document cached before W4 has no `title` at all (undefined), and must read as "no banner".
+  if (view.championFixtureId === null || view.title == null) return null;
   const final = matches.get(view.championFixtureId);
-  if (final === undefined || final.winnerIndex === null) return null;
+  if (final === undefined) return null;
+  // W4 (X-CH-1): the deciding final can end in joint winners or in a vacant title; neither has a winner side.
+  if (view.title.kind === "vacant") return vacantBanner(view, dict);
+  if (view.title.kind === "joint") return jointBanner(view, final, dict);
+  if (final.winnerIndex === null) return null;
   const winner = final.header.sides[final.winnerIndex];
   const loser = final.header.sides[final.winnerIndex === 0 ? 1 : 0];
   // The label of the round that holds the crowning fixture — the same string

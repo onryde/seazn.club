@@ -1,0 +1,137 @@
+{
+  "scenario": "W4A_R6",
+  "cases": [
+    {
+      "caseId": "qualifying_main|football|11-a-side|W4A_R6",
+      "state": "works",
+      "reason": "10 checks, 128 items",
+      "scriptChecks": [
+        {
+          "id": "w4a-r6-lucky-loser-takes-the-seat",
+          "verdict": "pass",
+          "checked": 13
+        }
+      ]
+    },
+    {
+      "caseId": "qualifying_main|cricket|t20|W4A_R6",
+      "state": "works",
+      "reason": "10 checks, 128 items",
+      "scriptChecks": [
+        {
+          "id": "w4a-r6-lucky-loser-takes-the-seat",
+          "verdict": "pass",
+          "checked": 13
+        }
+      ]
+    },
+    {
+      "caseId": "qualifying_main|boardgame|blitz|W4A_R6",
+      "state": "works",
+      "reason": "9 checks, 108 items",
+      "scriptChecks": [
+        {
+          "id": "w4a-r6-lucky-loser-takes-the-seat",
+          "verdict": "pass",
+          "checked": 13
+        }
+      ]
+    },
+    {
+      "caseId": "qualifying_main|carrom|club-29|W4A_R6",
+      "state": "works",
+      "reason": "9 checks, 108 items",
+      "scriptChecks": [
+        {
+          "id": "w4a-r6-lucky-loser-takes-the-seat",
+          "verdict": "pass",
+          "checked": 13
+        }
+      ]
+    },
+    {
+      "caseId": "qualifying_main|generic|score|W4A_R6",
+      "state": "works",
+      "reason": "9 checks, 108 items",
+      "scriptChecks": [
+        {
+          "id": "w4a-r6-lucky-loser-takes-the-seat",
+          "verdict": "pass",
+          "checked": 13
+        }
+      ]
+    },
+    {
+      "caseId": "qualifying_main|volleyball|beach|W4A_R6",
+      "state": "works",
+      "reason": "10 checks, 128 items",
+      "scriptChecks": [
+        {
+          "id": "w4a-r6-lucky-loser-takes-the-seat",
+          "verdict": "pass",
+          "checked": 13
+        }
+      ]
+    },
+    {
+      "caseId": "qualifying_main|badminton|bwf-3x15|W4A_R6",
+      "state": "works",
+      "reason": "9 checks, 108 items",
+      "scriptChecks": [
+        {
+          "id": "w4a-r6-lucky-loser-takes-the-seat",
+          "verdict": "pass",
+          "checked": 13
+        }
+      ]
+    },
+    {
+      "caseId": "qualifying_main|tabletennis|bo5|W4A_R6",
+      "state": "works",
+      "reason": "9 checks, 108 items",
+      "scriptChecks": [
+        {
+          "id": "w4a-r6-lucky-loser-takes-the-seat",
+          "verdict": "pass",
+          "checked": 13
+        }
+      ]
+    },
+    {
+      "caseId": "qualifying_main|tennis|tour|W4A_R6",
+      "state": "works",
+      "reason": "9 checks, 108 items",
+      "scriptChecks": [
+        {
+          "id": "w4a-r6-lucky-loser-takes-the-seat",
+          "verdict": "pass",
+          "checked": 13
+        }
+      ]
+    },
+    {
+      "caseId": "qualifying_main|icehockey|iihf|W4A_R6",
+      "state": "works",
+      "reason": "10 checks, 128 items",
+      "scriptChecks": [
+        {
+          "id": "w4a-r6-lucky-loser-takes-the-seat",
+          "verdict": "pass",
+          "checked": 13
+        }
+      ]
+    },
+    {
+      "caseId": "qualifying_main|hockey|fih-outdoor|W4A_R6",
+      "state": "works",
+      "reason": "10 checks, 128 items",
+      "scriptChecks": [
+        {
+          "id": "w4a-r6-lucky-loser-takes-the-seat",
+          "verdict": "pass",
+          "checked": 13
+        }
+      ]
+    }
+  ]
+}

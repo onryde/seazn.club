@@ -179,6 +179,9 @@ interface FixtureRowLite {
   outcome: unknown;
   winner_to_fixture: string | null;
   loser_to_fixture: string | null;
+  /** The bracket-role flags (V368), carried by `listDivisionFixtures` rows. */
+  is_final?: boolean;
+  third_place?: boolean;
 }
 
 /** Void every effective (not-yet-voided) state-bearing event, newest first,
@@ -258,6 +261,17 @@ async function applyUpdate(
     await expungeAbandon(auth, fixture.id);
   }
   out.voided++;
+}
+
+/** X-CH-3's scope: the deciding final of a KNOCKOUT - `is_final`, never a third-place match - which feeds no next match
+ *  (the caller has asked `feedsNextMatch`). */
+function isDecidingFinalOfKnockout(step: { fixture: FixtureRowLite; bracket?: { kind: string } }): boolean {
+  return step.bracket?.kind === "knockout" && step.fixture.is_final === true && step.fixture.third_place !== true;
+}
+
+/** X-TP-7's scope: the third-place match of a KNOCKOUT (`third_place`), which feeds no next match. */
+function isThirdPlaceOfKnockout(step: { fixture: FixtureRowLite; bracket?: { kind: string } }): boolean {
+  return step.bracket?.kind === "knockout" && step.fixture.third_place === true;
 }
 
 /** X-WD-3 / X-WD-4's no-event writes (`writeDepartedSeat`), committed on their own and published like a score: the
@@ -406,10 +420,10 @@ export async function withdrawEntrantCascade(
           {
             id: stage.id,
             kind: stage.kind as "knockout" | "double_elim" | "stepladder",
-            // engine 5.0.0 made `entrants` required. The seated set is what this planner has always read (no behaviour
-            // change); app B's T2' widens it to the stage's full drawn roster.
-            // `bracketRoster` (engine-db/competition.ts) declares the same seated set at completion (plus
-            // `config.qualified` when stored); T2' unifies all three.
+            // engine 5.0.0 made `entrants` required. The seated set is what this planner reads, and it stays the
+            // seated set (B1 review M5 reverted a widening to the full drawn roster: the planner only walks lines
+            // over, so an entrant in no fixture has nothing to plan). The DRAWN roster is declared where ranks are
+            // read: `bracketRoster` (engine-db/competition.ts) adds the departed and `config.qualified` entrants.
             entrants: [...new Set(bracketFixtures.flatMap((b) => [b.home, b.away]).filter((id): id is string => id !== undefined))],
           },
           entrantId,
@@ -423,6 +437,37 @@ export async function withdrawEntrantCascade(
         for (const u of result.updates) {
           const f = byId.get(u.fixtureId);
           if (f) plan.push({ update: { ...u, walkoverBy: entrantId }, fixture: f, bracket: { kind: stage.kind, held: held.has(f.id) } });
+        }
+        // W4 fix round 1 (RB4-C3 / RB4-T6, PO ruling 2026-11-10): the planner walks over only UNSETTLED lines, so the SECOND
+        // finalist (or third-place side) to leave finds the line already walked over to her by the first. A walkover awarded
+        // for a withdrawal whose winner then departs is the vacant title (or the vacant 3rd) - a departure double walkover.
+        // The `withdrew` forfeit is voided and the line re-enters the plan; the branch below writes the no-event double
+        // walkover. Only a line whose whole ledger is that one forfeit: a played line stays as played (ruling 271), and
+        // anything else on the ledger is the organiser's.
+        if (stage.kind === "knockout") {
+          for (const f of mine) {
+            const o = f.outcome as { kind?: string; winner?: string; reason?: string } | null;
+            const scoped = f.is_final === true || f.third_place === true;
+            // PO ruling 2026-11-10 (I2): once the organiser has Completed the stage the walkover champion STANDS; a later
+            // departure takes the ordinary post-complete handling, never the vacant title.
+            if (stage.status === "complete" || !scoped || f.status !== "forfeited" || o?.kind !== "award" || o.winner !== entrantId) continue;
+            const other = f.home_entrant_id === entrantId ? f.away_entrant_id : f.home_entrant_id;
+            if (!other) continue;
+            const events = await listEvents(auth, f.id, 0);
+            const voided = new Set(events.filter((e) => e.voids_event_id !== null).map((e) => e.voids_event_id as string));
+            const effective = events.filter((e) => e.type !== "core.void" && !voided.has(e.id));
+            const only = effective.length > 0 && effective.every((e) => e.type === "core.forfeit" && (e.payload as { reason?: string } | null)?.reason === REASON);
+            if (!only) continue;
+            for (const e of effective) {
+              const state = await getFixtureState(auth, f.id);
+              await scoreEvent(auth, f.id, { expected_seq: state.last_seq, type: "core.void", payload: { event_id: e.id } }, CASCADE);
+            }
+            plan.push({
+              update: { fixtureId: f.id, status: "walkover", walkoverTo: other, walkoverBy: entrantId } as FixtureUpdate & { walkoverBy?: string },
+              fixture: { ...f, status: "scheduled", outcome: null },
+              bracket: { kind: stage.kind, held: false },
+            });
+          }
         }
       } else {
         // americano: remaining games void (expunged, D5); earned standings stand.
@@ -474,6 +519,27 @@ export async function withdrawEntrantCascade(
               else await departSeat(auth, u.fixtureId, entrantId, "double_walkover");
               settled.push(u.fixtureId);
               out.walkovers++;
+            } else if (isDecidingFinalOfKnockout(step) && !line.live) {
+              // W4 T11 (X-CH-3; WD-CASC's vacant half): both finalists are out and the final feeds nothing - the title is
+              // VACANT, automatically, written as a departure double walkover (no event, as a bye is written). It is
+              // reversible: a Reinstate of either finalist reads the line again (`reviveVacantFinal`). Only the DECIDING
+              // final of a knockout: a third-place match is Task 9's (X-TP-7), and a double-elimination grand final feeds
+              // its own reset, which a vacant grand final would leave owed for good (C32, parked).
+              await departSeat(auth, u.fixtureId, entrantId, "double_walkover");
+              settled.push(u.fixtureId);
+              out.walkovers++;
+            } else if (isThirdPlaceOfKnockout(step) && !line.live) {
+              // B4 T9 (X-TP-7, superseding X-DW-3's hold for THIS match): both sides of a third-place play-off are out, so 3rd is
+              // VACANT and both rank 4th - written as a departure double walkover (no event, as a bye is written), which
+              // seats nobody and lets the stage complete. With ONE side out the line stays a walkover (the branch above never
+              // reaches here: `walkoverTo` is the other, present, side).
+              await departSeat(auth, u.fixtureId, entrantId, "double_walkover");
+              settled.push(u.fixtureId);
+              out.walkovers++;
+            } else if (isDecidingFinalOfKnockout(step) || isThirdPlaceOfKnockout(step)) {
+              // Review m-3: a Start with nothing played is a live ledger the no-event write refuses; the final stays open and is
+              // NAMED, so the organiser is told it is theirs to settle or void.
+              out.left_to_organiser.push(u.fixtureId);
             }
             continue;
           }

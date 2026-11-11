@@ -70,6 +70,11 @@ export const Fixture = z.object({
   is_final: z.boolean().optional(),
   third_place: z.boolean().optional(),
   conditional: z.boolean().optional(),
+  /** W4 B5b (X-CH-4; V499): when the organiser ruled this unplayed final JOINT WINNERS - an ISO instant, else null. The
+   *  final is stored `decided` with NO `outcome`, so this is the one field that says why a decided match names no winner
+   *  (and the one the console reads to offer Undo). `.optional()` for the reason `ext_key` is: dozens of tests parse a
+   *  hand-built row that predates the column. */
+  joint_winners_at: z.string().nullable().optional(),
 });
 
 // ---------------------------------------------------------------------------

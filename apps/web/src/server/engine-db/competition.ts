@@ -48,8 +48,15 @@ import { liveCfg, resolveFixtureCfg } from "./fixture-cfg";
 import { forfeitPlayedFacts, playedFor } from "./forfeit-played";
 import { loadLotsDraws, persistLotsDraws, pinStageTableRules, tableRulesOf, type LoadedTableRules } from "./table-rules";
 import { swissAbsentRounds } from "./swiss-absent-rounds";
+import { attachFeedRefs, engineRoundOf, laneDepthOf } from "./bracket-rounds";
+import { bracketRosterOf, drawSeedsOf } from "./bracket-roster";
+import { rootBracketOrder } from "./knockout-draw";
 
 type Tx = postgres.TransactionSql;
+
+/** The double-elimination grand final's and bracket reset's ext_keys (`generateDoubleElim`: `gf`, `gf-reset`). */
+const GRAND_FINAL_KEY = "gf";
+const BRACKET_RESET_KEY = "gf-reset";
 
 // americano folds like a table stage (Jul3/08 §3): its pair fixtures feed the
 // standard standings machinery.
@@ -238,18 +245,25 @@ function toBracketFixture(
   f: FixtureRow,
   stageKind: string,
   seatsOf: (fixtureId: string) => readonly [string | null, string | null] | null,
+  /** The stage's winners'-side round count (`laneDepthOf`): the engine's round is 0-based per lane (C5/C9). */
+  laneDepth: number,
 ): BracketFixture {
   assertNoLevelSeat({ fixtureId: f.id, stageKind, status: f.status, outcome: f.outcome }); // X-BR-1
   // W2b D20: a double walkover seated nobody in the seats it feeds.
   assertAdvancingSeat({ fixtureId: f.id, stageKind, status: f.status, outcome: f.outcome, seatedEntrant: fedSeatOccupant(f, seatsOf) });
   const { bracket, thirdPlace } = parseExtKey(f.ext_key);
   const { winner, loser, walkedOver } = bracketWinnerLoser(f.outcome, f.home_entrant_id, f.away_entrant_id);
+  // W4 T12 (X-CH-4): joint winners are a column, not an outcome kind (the engine's kinds are closed): the final reads decided,
+  // naming no winner and no loser, and the engine's `jointWinners` flag crowns both seats. The shape is guarded in the
+  // engine (`jointWinnersOf`: a final, both seats, decided, no winner/loser/walkover) and in V499's check.
+  const joint = f.joint_winners_at !== null;
   return {
     id: f.id,
-    round: f.round_no,
+    round: engineRoundOf(f.round_no, bracket, laneDepth),
     isFinal: !thirdPlace,
     // D-G1: a recorded abandon that decided nobody is in play, never the generator's void (recorded-abandon.ts).
-    status: completionEngineStatus(stageKind, f),
+    status: joint ? "decided" : completionEngineStatus(stageKind, f),
+    ...(joint ? { jointWinners: true } : {}),
     ...(bracket !== undefined ? { bracket } : {}),
     ...(thirdPlace ? { thirdPlace: true } : {}),
     ...(f.home_entrant_id !== null ? { home: f.home_entrant_id } : {}),
@@ -318,6 +332,8 @@ interface FixtureRow {
   no_result: boolean;
   /** The match's number within its round - names a held match in the refusal (`completeStageIfReady`). */
   seq_in_round: number;
+  /** W4 T12 (V499; X-CH-4): when the organiser ruled this unplayed final joint winners - decided, no outcome, both seats. */
+  joint_winners_at: Date | string | null;
   /** W2b D20 — the feed edges, so the bracket read can assert a double walkover seated nobody. */
   winner_to_fixture: string | null;
   winner_to_slot: number | null;
@@ -374,7 +390,7 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
 
   const fixtures = await tx<FixtureRow[]>`
     select f.id, f.status, f.round_no, f.pool_id, f.home_entrant_id, f.away_entrant_id,
-           f.outcome, f.config_snapshot, f.rules_override, f.ext_key, m.state,
+           f.outcome, f.config_snapshot, f.rules_override, f.ext_key, m.state, f.joint_winners_at,
            f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot, f.seq_in_round,
            ${hasActiveAbandonSql(tx)} as has_active_abandon,
            ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged,
@@ -884,15 +900,41 @@ export async function tableStageCompletable(tx: Tx, stageId: string): Promise<bo
   return isTableStageComplete(toTableStage(inputs, new Map()), inputs.tableFixtures);
 }
 
-/** The `stage_completed` event as it crosses the wire and is stored: `finalRanks` stays entrant ids in rank order (the
- *  shape every API client, the bench, the matrix and the smoke suites read). The engine's own event carries `FinalPlace[]`
- *  since 5.0.0; `toWireEvent` flattens it (a tie keeps its rank order; app B's T3 adds `places` beside it). */
+/** W4 T3 (X-CH-1, X-FR-4): what a bracket's deciding final crowned, as it crosses the wire. `finalists` of a vacant title are
+ *  the deciding final's two seats (the engine's `{kind:"vacant"}` carries none - C7), `champion` / `winners` are the engine's. */
+export type WireTitle =
+  | { kind: "champion"; champion: string }
+  | { kind: "joint"; winners: [string, string] }
+  | { kind: "vacant"; finalists: string[] };
+
+/** The `stage_completed` event as it crosses the wire and is stored. `finalRanks` stays entrant ids in rank order (the
+ *  shape every API client, the bench, the matrix and the smoke suites read, so it is never replaced); `places` is the same
+ *  list WITH its ranks - a shared place is two entries holding one rank (`[1, 2, 3, 3]`) - and `title` (bracket stages
+ *  only) says what the final crowned. The engine's own event carries `FinalPlace[]` since 5.0.0. */
 export type WireDivisionEvent =
   | Exclude<DivisionEvent, { type: "stage_completed" }>
-  | { type: "stage_completed"; stageId: string; finalRanks: string[] };
+  | { type: "stage_completed"; stageId: string; finalRanks: string[]; places: { entrantId: string; rank: number }[]; title?: WireTitle };
 
-export function toWireEvent(ev: DivisionEvent): WireDivisionEvent {
-  return ev.type === "stage_completed" ? { ...ev, finalRanks: ev.finalRanks.map((p) => p.entrantId) } : ev;
+export function toWireEvent(ev: DivisionEvent, title?: WireTitle): WireDivisionEvent {
+  return ev.type === "stage_completed"
+    ? {
+        type: "stage_completed",
+        stageId: ev.stageId,
+        finalRanks: ev.finalRanks.map((p) => p.entrantId),
+        places: ev.finalRanks.map((p) => ({ entrantId: p.entrantId, rank: p.rank })),
+        ...(title !== undefined ? { title } : {}),
+      }
+    : ev;
+}
+
+/** The wire title of a completed bracket. A vacant title names the two sides of the final both walked over: the latest-round
+ *  settled final with `walkedOver: "both"` (the one `decidingFinal` reads), never the engine's shape (C7). */
+function wireTitleOf(title: { kind: "champion"; champion: string } | { kind: "joint"; winners: readonly [string, string] } | { kind: "vacant" }, fixtures: readonly BracketFixture[]): WireTitle {
+  if (title.kind === "champion") return { kind: "champion", champion: title.champion };
+  if (title.kind === "joint") return { kind: "joint", winners: [title.winners[0], title.winners[1]] };
+  const finals = fixtures.filter((f) => f.isFinal === true && f.walkedOver === "both").sort((a, b) => b.round - a.round);
+  const final = finals[0];
+  return { kind: "vacant", finalists: final === undefined ? [] : [final.home, final.away].filter((id): id is string => id !== undefined) };
 }
 
 export interface CompleteResult {
@@ -900,22 +942,64 @@ export interface CompleteResult {
   events: WireDivisionEvent[];
 }
 
-/** engine 5.0.0 (`BracketStage.entrants`): the entrants the stage DREW, so the ranks cover exactly them (each once; a
- *  finalist who left is ranked 2nd, so she has to be on it).
+/** engine 5.0.0 (`BracketStage.entrants`, `seeds`): the entrants the stage DREW, in the order it was drawn, so the ranks
+ *  cover exactly them (each once; a finalist who left is ranked 2nd, so she has to be on it) - W4 app PR B (C1/C12).
  *
  *  A stage drawn from a previous stage's cut stored its draw order as `config.qualified` (departed qualifiers included -
- *  `generate-tx.ts`); that IS the roster, in draw order, and anyone seated but not on it (a lucky loser) follows. Without it
- *  the roster is the stage's seat-holders (`inputs.entrants`, in fixture order): a departed entrant who held a seat is
- *  there, because the fixtures name her, and one who never held a seat in THIS stage (withdrew before the draw, or never
- *  qualified from a group or league stage) is NOT - declaring her would rank her last in a stage she never played in.
- *  The withdrawal planners (generators.ts, withdrawal.ts) declare the same seated set; app B's T2' replaces all three with
- *  the roster stored at the draw, in `knockoutDrawOrder`. */
-function bracketRoster(inputs: StageInputs): string[] {
+ *  `generate-tx.ts`); that IS the roster. A root stage has no stored list: its draw is rebuilt with the generator's own
+ *  `knockoutDrawOrder` over everyone seated. Either way the seat-holders are in (a departed entrant who held a seat is
+ *  named by the fixtures), and an entrant parked on this stage by a late arrival (`knockout_waiting_stage_id`) is NOT. One who
+ *  never held a seat and is not on the drawn list (withdrew before the draw, or never qualified from a group or league) is
+ *  not declared either: she would rank last in a stage she never played in.
+ *
+ *  `seeds` are the DRAW seeds (position in that order, 1-based) - never a registration seed the draw did not use: a fed
+ *  stage's registration seeds are unrelated to its qualification order, and X-SP-4 reads a stepladder rung from them. */
+/** The field the stage's newest seed-proposal confirm drew, in seed order, or null: no confirm (a root stage, or an
+ *  `on_complete` one, whose draw is `config.qualified`).
+ *
+ *  Authority: `seed_confirmed.payload.entrants` (stages/seed-proposal.ts) - the FINAL slots, i.e. the computed slate with the
+ *  organiser's edits and tie picks applied, which the request carried and no row stores. A confirm written before PR B has no
+ *  `entrants`; its `proposal_id` still names the proposal row, whose persisted `computed.qualifiers` (rank = seed) is the slate
+ *  before edits - the best lossless record there is (an edited slot reads as the computed entrant, not the edit). */
+async function confirmedDraw(tx: Tx, divisionId: string, stageId: string): Promise<string[] | null> {
+  const [row] = await tx<{ entrants: unknown; proposal_id: string | null }[]>`
+    select payload->'entrants' as entrants, payload->>'proposal_id' as proposal_id from division_events
+     where division_id = ${divisionId} and type = 'seed_confirmed' and payload->>'stage_id' = ${stageId}
+     order by seq desc limit 1`;
+  if (row === undefined) return null;
+  if (Array.isArray(row.entrants)) return row.entrants as string[];
+  if (row.proposal_id === null) return null;
+  const [proposal] = await tx<{ qualifiers: unknown }[]>`
+    select computed->'qualifiers' as qualifiers from stage_seed_proposals where id = ${row.proposal_id} and stage_id = ${stageId}`;
+  if (!Array.isArray(proposal?.qualifiers)) return null;
+  const qs = proposal!.qualifiers as { rank: number; entrantId: string }[];
+  return [...new Map([...qs].sort((x, y) => x.rank - y.rank).map((q) => [q.entrantId, q.rank] as const)).keys()];
+}
+
+async function bracketRosterAndSeeds(tx: Tx, inputs: StageInputs, stageId: string): Promise<{ entrants: string[]; seeds: Map<string, number> }> {
   const seated = inputs.entrants;
   const stored = (inputs.stage.config as { qualified?: unknown } | null)?.qualified;
-  if (!Array.isArray(stored)) return seated;
-  const listed = new Set(stored as string[]);
-  return [...(stored as string[]), ...seated.filter((id) => !listed.has(id))];
+  const waiting = new Set(
+    (await tx<{ id: string }[]>`select id from entrants where knockout_waiting_stage_id = ${stageId}`).map((r) => r.id),
+  );
+  let drawn: string[];
+  const confirmed = Array.isArray(stored) ? null : await confirmedDraw(tx, inputs.stage.division_id, stageId);
+  if (Array.isArray(stored)) {
+    drawn = stored as string[];
+  } else if (confirmed !== null) {
+    // A setup-timed fed stage (stepladder, page playoff, a knockout cut from a table): its draw was published at the seed
+    // proposal's confirm, which recorded who it drew. Needed because a seat emptied by a later withdrawal holds no entrant.
+    drawn = confirmed;
+  } else if (seated.length === 0) {
+    drawn = [];
+  } else {
+    const rows = await tx<{ id: string; seed: number | null }[]>`
+      select id, seed from entrants where id in ${tx(seated)} order by seed nulls last, created_at, id`;
+    const active = rows.map((r) => ({ id: r.id, seed: r.seed, swiss_first_round: null }));
+    drawn = rootBracketOrder(inputs.kind, stageId, active, (inputs.stage.config ?? {}) as Record<string, unknown>);
+  }
+  const entrants = bracketRosterOf({ drawn, seated, waiting });
+  return { entrants, seeds: drawSeedsOf(entrants) };
 }
 
 /** A bracket stage's engine shape, read for Complete and for a correction after it (`refreshCompletedBracketPlacement`).
@@ -929,47 +1013,54 @@ async function readBracketStage(
   inputs: StageInputs,
   stageId: string,
 ): Promise<{ bracketStage: BracketStage; bracketFixtures: BracketFixture[] }> {
+  const roster = await bracketRosterAndSeeds(tx, inputs, stageId);
   const bracketStage: BracketStage = {
     id: stageId,
     kind: inputs.kind as BracketStage["kind"],
-    entrants: bracketRoster(inputs),
-    ...(inputs.seeds.size > 0 ? { seeds: inputs.seeds } : {}),
+    entrants: roster.entrants,
+    ...(roster.seeds.size > 0 ? { seeds: roster.seeds } : {}),
   };
   const seats = new Map(inputs.fixtures.map((f) => [f.id, [f.home_entrant_id, f.away_entrant_id] as const]));
-  const bracketFixtures: BracketFixture[] = inputs.fixtures.map((f) => toBracketFixture(f, inputs.kind, (id) => seats.get(id) ?? null));
+  const laneDepth = laneDepthOf(inputs.fixtures.map((f) => ({ lane: parseExtKey(f.ext_key).bracket, roundNo: f.round_no })));
+  const bracketFixtures: BracketFixture[] = inputs.fixtures.map((f) => toBracketFixture(f, inputs.kind, (id) => seats.get(id) ?? null, laneDepth));
   // Refine: only fixtures with no onward winner feed are finals (a
   // fixture whose winner feeds nowhere is the bracket's deciding game).
   const feeders = await tx<{ id: string }[]>`
     select id from fixtures where stage_id = ${stageId} and winner_to_fixture is not null
   `;
   const feederIds = new Set(feeders.map((r) => r.id));
-  for (const bf of bracketFixtures) if (feederIds.has(bf.id)) bf.isFinal = false;
+  const rowOf = new Map(inputs.fixtures.map((f) => [f.id, f]));
+  // C2/C17 (double elimination): the grand final feeds the bracket reset, but it is a FINAL all the same - the winners'
+  // champion's win there decides the title and the reset is then never played (spec 05 §2.4). Keyed on the grand final's own
+  // ext_key, never on `winner_to_fixture`, which is exactly what made it a feeder.
+  for (const bf of bracketFixtures) if (feederIds.has(bf.id) && rowOf.get(bf.id)!.ext_key !== GRAND_FINAL_KEY) bf.isFinal = false;
   // engine 5.0.0 (`resolveDeadSeats`): which fixture's winner or loser fills each seat. Without it a seat emptied by a
   // withdrawal cannot be attributed, so the walkover over it names no loser and the departed entrant ranks nowhere.
   const feedEdges = await tx<
     { id: string; winner_to_fixture: string | null; winner_to_slot: number | null; loser_to_fixture: string | null; loser_to_slot: number | null }[]
   >`select id, winner_to_fixture, winner_to_slot, loser_to_fixture, loser_to_slot from fixtures where stage_id = ${stageId}`;
   const byFixture = new Map(bracketFixtures.map((bf) => [bf.id, bf]));
-  for (const e of feedEdges) {
-    for (const [to, slot, side] of [
-      [e.winner_to_fixture, e.winner_to_slot, "winner"],
-      [e.loser_to_fixture, e.loser_to_slot, "loser"],
-    ] as const) {
-      const target = to === null ? undefined : byFixture.get(to);
-      if (target === undefined || (slot !== 1 && slot !== 2)) continue;
-      target[slot === 1 ? "homeFrom" : "awayFrom"] = { fixtureId: e.id, side };
-    }
-  }
+  attachFeedRefs(byFixture, feedEdges);
   // R-1: a THIRD-PLACE line that holds nobody and whose every feeder is already settled can never be
   // filled or played - and the app owes no result for it (`undecidedBracketFixtures`: a bye line). Engine 5.0.0 holds
   // completion for every unsettled fixture (X-CH-7), so it is read as the void it is, or the stage would wait on it
   // forever. A voided third place shares 3rd (never a seed split).
-  const rowOf = new Map(inputs.fixtures.map((f) => [f.id, f]));
   for (const bf of bracketFixtures) {
     const row = rowOf.get(bf.id)!;
     if (bf.thirdPlace !== true || bf.status !== "scheduled" || row.outcome !== null || row.home_entrant_id !== null || row.away_entrant_id !== null) continue;
     const feeders = [bf.homeFrom, bf.awayFrom].filter((r): r is NonNullable<typeof r> => r !== undefined);
     if (feeders.length > 0 && feeders.every((r) => SETTLED_FIXTURE_STATUSES.has(byFixture.get(r.fixtureId)!.status))) bf.status = "void";
+  }
+  // C2/C17: a bracket reset the grand final did not trigger can never be played - the winners' champion (the grand final's
+  // HOME entrant, as `undecidedBracketFixtures` reads it) won, so the title is decided. It reads as the void it is, keyed on
+  // the reset's ext_key (a row written before the `conditional` flag holds conditional=false). Owed - the other side won the
+  // grand final - or not yet knowable (the grand final still open): it stays what it is, and holds completion.
+  const grandFinal = bracketFixtures.find((bf) => rowOf.get(bf.id)!.ext_key === GRAND_FINAL_KEY);
+  if (grandFinal !== undefined && SETTLED_FIXTURE_STATUSES.has(grandFinal.status) && grandFinal.winner !== undefined && grandFinal.winner === rowOf.get(grandFinal.id)!.home_entrant_id) {
+    for (const bf of bracketFixtures) {
+      const row = rowOf.get(bf.id)!;
+      if (row.ext_key === BRACKET_RESET_KEY && row.outcome === null && bf.status === "scheduled") bf.status = "void";
+    }
   }
   return { bracketStage, bracketFixtures };
 }
@@ -985,6 +1076,8 @@ function unbeatenWithNoTitle(inputs: StageInputs, bracketFixtures: readonly Brac
     // PF-5 (X-DW-2): both entrants of a double walkover are out, beaten by absence.
     if (bf.walkedOver === "both") for (const id of [bf.home, bf.away]) if (id !== undefined) lost.add(id);
     if (bf.isFinal === true && bf.winner !== undefined) finalWinners.add(bf.winner);
+    // W4 T12 (X-CH-4): a final ruled joint crowns BOTH seats - otherwise the unbeaten pair would read as "decided nobody".
+    if (bf.isFinal === true && bf.jointWinners === true) for (const id of [bf.home, bf.away]) if (id !== undefined) finalWinners.add(id);
   }
   return inputs.entrants.filter((id) => inputs.field.has(id) && !lost.has(id) && !finalWinners.has(id));
 }
@@ -1013,20 +1106,28 @@ export async function bracketStageIsDecided(tx: Tx, stageId: string): Promise<bo
  */
 export async function refreshCompletedBracketPlacement(orgId: string, stageId: string): Promise<boolean> {
   return withTenant(orgId, async (tx) => {
-    const inputs = await loadStageInputs(tx, stageId);
-    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + inputs.stage.division_id}))`;
-    if (inputs.stage.status !== "complete" || inputs.kind !== "knockout") return false;
-    const { bracketStage, bracketFixtures } = await readBracketStage(tx, inputs, stageId);
-    if (!isBracketStageComplete(bracketStage, bracketFixtures)) return false;
-    if (unbeatenWithNoTitle(inputs, bracketFixtures).length > 0) return false;
-    const rows = placementTable(completeBracketStage(bracketStage, bracketFixtures).finalRanks).rows;
-    const [stored] = await tx<{ rows: readonly StandingsRow[] }[]>`
-      select rows from standings_snapshots where stage_id = ${stageId} and pool_id is null`;
-    const ranksOf = (list: readonly StandingsRow[]) => JSON.stringify(list.map((r) => [r.entrantId, r.rank]));
-    if (stored !== undefined && ranksOf(stored.rows) === ranksOf(rows)) return false;
-    await writeSnapshot(tx, stageId, null, rows, inputs.division.seq);
-    return true;
+    const [stage] = await tx<{ division_id: string }[]>`select division_id from stages where id = ${stageId}`;
+    if (!stage) throw new EngineError("STAGE_NOT_READY", `stage ${stageId} not found`, { stageId });
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+    return refreshCompletedBracketPlacementTx(tx, stageId);
   });
+}
+
+/** `refreshCompletedBracketPlacement` inside a caller's transaction, which already holds the division's advisory lock
+ *  (B5a T11: a Reinstate that reverses a vacant title rewrites the snapshot in the SAME transaction as the reversal). */
+export async function refreshCompletedBracketPlacementTx(tx: Tx, stageId: string): Promise<boolean> {
+  const inputs = await loadStageInputs(tx, stageId);
+  if (inputs.stage.status !== "complete" || inputs.kind !== "knockout") return false;
+  const { bracketStage, bracketFixtures } = await readBracketStage(tx, inputs, stageId);
+  if (!isBracketStageComplete(bracketStage, bracketFixtures)) return false;
+  if (unbeatenWithNoTitle(inputs, bracketFixtures).length > 0) return false;
+  const rows = placementTable(completeBracketStage(bracketStage, bracketFixtures).finalRanks).rows;
+  const [stored] = await tx<{ rows: readonly StandingsRow[] }[]>`
+    select rows from standings_snapshots where stage_id = ${stageId} and pool_id is null`;
+  const ranksOf = (list: readonly StandingsRow[]) => JSON.stringify(list.map((r) => [r.entrantId, r.rank]));
+  if (stored !== undefined && ranksOf(stored.rows) === ranksOf(rows)) return false;
+  await writeSnapshot(tx, stageId, null, rows, inputs.division.seq);
+  return true;
 }
 
 /**
@@ -1091,7 +1192,7 @@ export async function completeStageIfReady(
       }
       // X-TB-4: rank_lock carries the STORED order and drawn_at (PS-5b) — the second, stored pass's events.
       const completed = await rankWithStoredLots(tx, inputs);
-      events = completed.events.map(toWireEvent);
+      events = completed.events.map((e) => toWireEvent(e));
       for (const pool of completed.tables.pools) {
         await writeSnapshot(tx, stageId, pool.pool || null, pool.rows, inputs.division.seq);
       }
@@ -1123,7 +1224,9 @@ export async function completeStageIfReady(
           { stageId },
         );
       }
-      events = [{ type: "stage_completed", stageId, finalRanks: [...finalRanks] }];
+      events = [
+        { type: "stage_completed", stageId, finalRanks: [...finalRanks], places: finalRanks.map((entrantId, i) => ({ entrantId, rank: i + 1 })) },
+      ];
       await writeSnapshot(tx, stageId, null, placementTable(finalRanks).rows, inputs.division.seq);
     } else if (isBracketKind(inputs.kind)) {
       const { bracketStage, bracketFixtures } = await readBracketStage(tx, inputs, stageId);
@@ -1188,7 +1291,8 @@ export async function completeStageIfReady(
       // losers, third-place, DE-reset and page-playoff with no algorithm
       // change, per the pass-1 regression tests) + the stage_completed event.
       const completed = completeBracketStage(bracketStage, bracketFixtures);
-      events = completed.events.map(toWireEvent);
+      const wireTitle = wireTitleOf(completed.title, bracketFixtures);
+      events = completed.events.map((e) => toWireEvent(e, wireTitle));
       await writeSnapshot(
         tx,
         stageId,

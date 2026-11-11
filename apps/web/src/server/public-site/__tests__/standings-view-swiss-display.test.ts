@@ -71,7 +71,7 @@ const input = (doc: typeof halfDoc, m: AnySportModule, rows: StandingsRow[], ove
   entrantNames: { A: "Ash", B: "Birch", C: "Cedar", D: "Dogwood", E: "Elm" },
   entrantLogos: {},
   entrantColours: {},
-  championId: null,
+  championIds: [],
   updatedAt: "2026-11-03T10:00:00Z",
   msg: enMsg,
   rules: doc,

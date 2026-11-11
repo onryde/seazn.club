@@ -23,10 +23,10 @@ import { Evidence, type EvidenceFs } from "../lib/browser/evidence.ts";
 import { navBudget, type DivisionWhere, type PageCtx } from "../lib/browser/pages/ctx.ts";
 import type { StageOut } from "../lib/browser/pages/division-builder.ts";
 import type { EntrantIn } from "../lib/browser/pages/entrants.ts";
-import { API_ONLY_UI_WAVE, RefusedApiOnlyRow } from "../lib/api-only-ui.ts";
-import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS, refusedCell, stagesForRow, type RowKey } from "../lib/catalogue.ts";
+import { API_ONLY_UI_WAVE, NotApiOnlyRow, RefusedApiOnlyRow, apiOnlyUiRoute } from "../lib/api-only-ui.ts";
+import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS, isKnobRow, refusedCell, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import {
-  BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, FORFEIT_DIALOG_ROUTE, NEITHER_WITHHELD_ROUTE, NeitherWithheldButAccepted, NoOrganiserRoute, ORGANISER_TABLE_KINDS, FINISH_SWISS_ROUTE, OVERRIDE_ROUTE, OrganiserWriteUnproven, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
+  BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, FORFEIT_DIALOG_ROUTE, NEITHER_WITHHELD_ROUTE, NeitherWithheldButAccepted, NoOrganiserRoute, ORGANISER_TABLE_KINDS, isLosersFedOnly, FINISH_SWISS_ROUTE, OVERRIDE_ROUTE, OrganiserWriteUnproven, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
   compareTables, publicFreshnessMs, type BrowserPages, type Clock, type HttpSide, type PadRegistry, type Replay,
 } from "../lib/driver/browser-driver.ts";
 import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, type FixtureRow, type FixtureStateOut, type FromTemplateAnswer, type GenerateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
@@ -626,7 +626,17 @@ describe("BrowserDriver — API-only rows (D7)", () => {
     let checked = 0;
     let refused = 0;
     let refusedRows = 0;
+    let knobRows = 0;
     for (const row of API_ONLY_ROWS) {
+      // W4 T15: a knob row (knockout_third_place) is a BUILDER path now - the template card plus the Third place control - so it has no API-only
+      // route and the driver never creates it over http (browser-driver.ts isApiOnly; the L1 grid drives it).
+      if (isKnobRow(row)) {
+        expect(API_ONLY_UI_WAVE[row], row).toBeUndefined();
+        expect(() => apiOnlyUiRoute(row), row).toThrow(NotApiOnlyRow);
+        knobRows += SPORT_KEYS.length;
+        checked += SPORT_KEYS.length;
+        continue;
+      }
       // W4 T16 (ruling 269): a row the product refuses on every sport (the standalone stepladder and page playoff) has no wave
       // that owes it a control (api-only-ui.ts) and no layer plans it; the driver, handed one, refuses it by name and builds nothing.
       if (SPORT_KEYS.every((s) => refusedCell(row, s) !== null)) {
@@ -682,7 +692,8 @@ describe("BrowserDriver — API-only rows (D7)", () => {
     expect(checked).toBeGreaterThan(0);
     expect(refused).toBe(Object.keys(cells).length);
     expect(refusedRows).toBe(2 * SPORT_KEYS.length); // stepladder_only and page_playoff_only, every sport (22 cells)
-    expect(Object.keys(API_ONLY_UI_WAVE).length + 2).toBe(API_ONLY_ROWS.length); // the other API-only rows each keep a route
+    expect(knobRows).toBe(SPORT_KEYS.length); // knockout_third_place alone, every sport
+    expect(Object.keys(API_ONLY_UI_WAVE).length + 2 + 1).toBe(API_ONLY_ROWS.length); // the other API-only rows each keep a route
   });
 
   it("the §8 lookup has teeth: W4's scope names the knockout family's shapes and not the group's", () => {
@@ -972,6 +983,54 @@ describe("BrowserDriver — the public view (ruling C)", () => {
     const b2 = await built(early.driver, spec("knockout"));
     await early.driver.publicStandings(ref(b2));
     expect(only(early.driver, "ui-champion-shown")).toMatchObject({ verdict: "abstain", checked: 0 });
+  });
+
+  // RB4-C1 (rulebook-W4-knockout.md): the champion is the winner of the decided FINAL; RB4-P1..P6: a plate is a first-loss
+  // consolation, never the title. The expected names below come from the rulebook's rows, not from the driver.
+  const twoStage = (second: { kind: string; progression: unknown }) => stubHttp({
+    listStages: async () => [stageRef("s1", 1, "knockout"), { ...stageRef("s2", 2, second.kind), progression: second.progression }],
+    listEntrants: async () => ENTRANTS,
+    publicStandings: async () => ({ division_id: "d1", standings: [] }),
+  });
+  const finishedBoth = (banner: string, http: ReturnType<typeof stubHttp>) => {
+    const clock = fakeClock();
+    return make({ http, spec: spec("knockout"), clock, pages: {
+      // main draw: Bob (e2) wins; the second stage's own winner is Ann (e1)
+      completeStageUi: async (_c, _w, stageId) => ({ completed: true, events: [{ type: "stage_completed", finalRanks: stageId === "s1" ? ["e2", "e1"] : ["e1", "e2"] }] }),
+      readPublicUi: async () => ({ tables: [], champion: banner }),
+    } });
+  };
+
+  it("the champion (RB4-C1/P1): a ko_plate division crowns the MAIN-draw winner, not the later firstLosses plate's winner", async () => {
+    const plate = twoStage({ kind: "knockout", progression: { sources: [{ stage: "previous", take: [{ kind: "firstLosses" }] }] } });
+    const { driver } = finishedBoth("Bob", plate);
+    const b = await built(driver, spec("knockout"));
+    await driver.listStages(b.divId);
+    await driver.completeStage("s1");
+    await driver.completeStage("s2");
+    await driver.publicStandings(ref(b));
+    expect(only(driver, "ui-champion-shown")).toMatchObject({ verdict: "pass", checked: 1 });
+  });
+
+  it("the champion: a second stage fed from the WINNERS' side (a groups-then-knockout shape) is still the decisive one", async () => {
+    const ko = twoStage({ kind: "knockout", progression: { sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }] } });
+    const { driver } = finishedBoth("Ann", ko);
+    const b = await built(driver, spec("knockout"));
+    await driver.listStages(b.divId);
+    await driver.completeStage("s1");
+    await driver.completeStage("s2");
+    await driver.publicStandings(ref(b));
+    expect(only(driver, "ui-champion-shown")).toMatchObject({ verdict: "pass", checked: 1 });
+  });
+
+  it("the champion: the loser-fed test is exact — roundLosers counts, a mixed take or no sources does not", () => {
+    const f = (progression: unknown) => isLosersFedOnly({ ...stageRef("x", 2, "knockout"), progression });
+    expect(f({ sources: [{ stage: "previous", take: [{ kind: "roundLosers" }] }] })).toBe(true);
+    expect(f({ sources: [{ stage: "previous", take: [{ kind: "roundLosers" }, { kind: "topNPerGroup", n: 1 }] }] })).toBe(false);
+    expect(f({ sources: [{ stage: "previous", take: [{ kind: "firstLosses" }] }, { stage: "previous", take: [{ kind: "topNPerGroup", n: 1 }] }] })).toBe(false);
+    expect(f({ sources: [] })).toBe(false);
+    expect(f(null)).toBe(false);
+    expect(f(undefined)).toBe(false);
   });
 
   it("the champion: a banner still wrong after the window is a FAIL verdict naming both, and the case keeps its other checks; a completion with no finalRanks fails by name; a table stage abstains", async () => {

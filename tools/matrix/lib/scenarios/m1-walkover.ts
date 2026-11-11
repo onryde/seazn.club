@@ -12,7 +12,7 @@
 // and the walkover is recorded for that pair.
 import type { FixtureRow } from "../driver/types.ts";
 import { fieldSizeFor } from "../field-size.ts";
-import { winnerOf } from "../observed.ts";
+import { crownOf, winnerOf } from "../observed.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
 import { assertion, bracketDeciderExercised, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, stageCompleted, withCanary } from "./assertions.ts";
 import { Recorder, decideFixture, playDivision, setUpDivision, snapshot, type DivisionSetup } from "./common.ts";
@@ -89,7 +89,10 @@ export const m1Walkover: Scenario = {
     const fx = t === null ? undefined : observed.stages[0].fixtures.find((f) => f.id === t.id);
     const s0 = observed.stages[0];
     const finalWalkover = fx?.extKey != null && (s0.terminalFinals ?? []).includes(fx.extKey);
-    const rankOne = s0.complete?.finalRanks?.[0];
+    const crown = crownOf(s0.complete);
+    // A joint title crowns BOTH finalists, a vacant one nobody: finalRanks[0] is only the fallback for a completion that served no title.
+    const crownedSeed1 = crown.kind === "unread" ? s0.complete?.finalRanks?.[0] === seed1 : (crown.ids as readonly string[]).includes(seed1);
+    const crownNote = crown.kind === "unread" ? `finalRanks[0] is ${s0.complete?.finalRanks?.[0] ?? "(none: no finalRanks)"}` : `the title is ${crown.kind} (${crown.ids.join(", ") || "nobody"})`;
     return {
       observed,
       events: rec.events,
@@ -105,7 +108,7 @@ export const m1Walkover: Scenario = {
         ], [{ ok: winnerOf(fx.outcome) === t.absent, note: `winner ${winnerOf(fx.outcome)}, expected ${t.absent}` }], ctx.spec.canary)),
         assertion("m1-winner-progresses",
           [finalWalkover
-            ? { ok: rankOne === seed1, note: `the walkover was the terminal final, but finalRanks[0] is ${rankOne ?? "(none: no finalRanks)"}, not seed 1 (${seed1})` }
+            ? { ok: crownedSeed1, note: `the walkover was the terminal final, but ${crownNote}, not seed 1 (${seed1})` }
             : { ok: t !== null && s0.fixtures.some((f) => (f.roundNo ?? 0) > t.round && (f.home === seed1 || f.away === seed1)), note: "seed 1 absent from every later round" }],
           BRACKETS.has(setup.stage.kind) ? null : "not a bracket stage"),
         // W2a (M-6): a bracket stage in this run owes a decider; the walkover took the first bracket fixture, the policy's

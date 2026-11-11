@@ -20,7 +20,8 @@ import "server-only";
 // otherwise play the wrong seeding (a flipped final). Who a correction moved after it starts is people alone: the same four are
 // the same four, nobody is named, the Swiss reading.
 import type postgres from "postgres";
-import { resolveProgression, type ProgressionSpec } from "@seazn/engine/competition";
+import { type ProgressionSpec } from "@seazn/engine/competition";
+import { resolveStoredProgression } from "./stored-progression";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -30,6 +31,7 @@ import { log } from "@/server/logger";
 import { stageHasStarted } from "./fixture-started-sql";
 import { resolveProgressionSource, sourcesToTables } from "./stage-seeding";
 import { departedEntrantIds, setupDependentsOf } from "./stages";
+import { isFirstLossProgression, reseedPlateQualifiers } from "./plate-field";
 
 export type { KnockoutCutDrift };
 
@@ -59,10 +61,19 @@ const onSource = (slate: Slate, sourceStageId: string) =>
 /** Today's cut for `dependent`, in seed order, less anyone departed. As it stands, what a re-proposal would offer;
  *  `withoutLuckyLoser`, what the results alone make it. */
 async function cutToday(tx: Tx, dependent: BracketDependent, opts: { withoutLuckyLoser?: boolean } = {}): Promise<string[]> {
-  const { shapes, tables } = await sourcesToTables(tx, dependent, dependent.progression.sources, opts);
-  const { qualifiers } = resolveProgression(dependent.progression, shapes, tables, dependent.kind as never);
+  const { shapes, tables, resolved } = await sourcesToTables(tx, dependent, dependent.progression.sources, opts);
+  const resolvedToday = resolveStoredProgression(dependent.progression, shapes, tables, dependent.kind as never, resolved.map((r) => r.kind));
+  // W4 T8 (X-SD-11): a plate's seed order is the draw's (main-draw seeds on the fold), as its proposal stored it.
+  const qualifiers = isFirstLossProgression(dependent.progression)
+    ? await reseedPlateQualifiers(tx, { id: dependent.id, config: await configOf(tx, dependent.id) }, resolvedToday.qualifiers)
+    : resolvedToday.qualifiers;
   const departed = await departedEntrantIds(tx, dependent.division_id);
   return [...qualifiers].sort((a, b) => a.seed - b.seed).map((q) => q.entrantId).filter((id) => !departed.has(id));
+}
+
+async function configOf(tx: Tx, stageId: string): Promise<Record<string, unknown>> {
+  const [row] = await tx<{ config: Record<string, unknown> | null }[]>`select config from stages where id = ${stageId}`;
+  return row?.config ?? {};
 }
 
 interface BracketLine {
@@ -76,7 +87,7 @@ interface BracketLine {
 
 /** Who `take` is proven to name while the source is undecided, with the lines of its rank cuts' round (where a lucky loser's
  *  vacancy would be), or null when it cannot tell (see the header). */
-function provenBy(
+export function provenBy(
   lines: readonly BracketLine[],
   take: readonly { kind: string; from?: unknown; to?: unknown; round?: unknown }[],
 ): { proven: Set<string>; cutLines: BracketLine[] } | null {
@@ -105,6 +116,11 @@ function provenBy(
         add(l.home_entrant_id);
         add(l.away_entrant_id);
       }
+    } else if (t.kind === "firstLosses") {
+      // X-PL-6: a first loss is the loser of an entrant's FIRST real match, so whether a decided line is one depends on byes
+      // and forfeits across the whole draw (RB4-P1/P2) — not on this line's round alone, and a bye holder's first match is
+      // in round two. Nobody is PROVEN while the source is undecided: the slate stands until it is decided again.
+      return null;
     } else {
       return null;
     }

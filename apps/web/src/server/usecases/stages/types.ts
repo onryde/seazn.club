@@ -46,7 +46,7 @@ export const FIXTURE_COLS = [
   "home_entrant_id", "away_entrant_id", "home_slot_label", "away_slot_label",
   "scheduled_at", "venue", "court_label", "court_id", "venue_id",
   "officials", "status", "outcome", "schedule_source", "schedule_locked", "created_at",
-  "ext_key", "lane", "is_final", "third_place", "conditional",
+  "ext_key", "lane", "is_final", "third_place", "conditional", "joint_winners_at",
 ] as const;
 
 /** F1 follow-up (2026-08-17, payload-budget regression — board-v3.spec.ts
@@ -163,6 +163,9 @@ export interface FixtureRow {
   is_final?: boolean;
   third_place?: boolean;
   conditional?: boolean;
+  /** W4 B5b (V499): when the final was ruled joint winners (an ISO instant), else null. Optional for the reason the four
+   *  above are: hand-built rows predate it. Selected by `getFixture`, `patchFixture` and `listDivisionFixtures`. */
+  joint_winners_at?: string | null;
   /** The bracket FEED edges (V214__fixtures.sql): the fixture this one's winner/loser
    *  advances INTO, and which seat there (1 = home, 2 = away). Written by
    *  `wireCrossFeeds` and by both generators' feed pass; read by
@@ -376,6 +379,10 @@ export interface GenerateOptions {
    *  place, and a redraw is refused (KO_START_NEEDS_UPDATE_DRAW) instead of run. Never sent by a client: `startDivision`
    *  sets it. */
   inPlaceOnly?: boolean;
+  /** W4 app B, Task 20 (C27): Start on a FROZEN board. A newcomer (an active entrant in no first-round seat) is not placed -
+   *  placing is a schedule write the freeze binds - but MARKED WAITING (`entrants.knockout_waiting_stage_id`), as the late-entry
+   *  path marks an arrival; a departed entrant is reconciled as on any board. Only with `inPlaceOnly`; never sent by a client. */
+  waitNewcomers?: boolean;
   /** W4 B2 fix round 2 (item 5): the stage's setup in SEALED tables (streams, YouTube broadcasts), read on a privileged
    *  connection by `generateStageFixturesWrite`'s prelude — a knockout redraw refuses over it as over the rest. Never sent
    *  by a client. */

@@ -1053,7 +1053,7 @@ describe("RR-1: a knockout take-back whose next match has started is refused BY 
     expect(NEXT_MATCH_LOCK.code).toBe(next.code);
     expect(NEXT_MATCH_LOCK.notStarted).toBe(next.notStarted);
     expect(NEXT_MATCH_LOCK.cascade, "isCascadeWalkover: the walkover the system awarded is reset, never refused").toEqual(next.cascade);
-    expect(next.resetExempt, "planRelease refuses only `!reset && hasStarted(t)`").toBe(true);
+    expect(next.resetExempt, "planRelease refuses only `!reset && hasStarted(t)`; reset = the cascade walkover, or (B5a n-2) a departure double walkover that feeds nothing").toBe(true);
     expect(next.everyAppend, "append-event.ts runs releaseFedSeats on every append, a void included").toBe(true);
     expect(isNamedRefusal(next.status, next.code), "a named refusal: the model can tell it apart").toBe(true);
     expect([...NEXT_MATCH_LOCK.kinds].sort()).toEqual([...BRACKET_STAGE_KINDS].sort());

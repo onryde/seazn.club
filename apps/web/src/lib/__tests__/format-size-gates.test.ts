@@ -88,6 +88,21 @@ describe("stageGraphSizeRefusal", () => {
     expect(stageGraphSizeRefusal(previous, 4)).toBeNull();
   });
 
+  it("X-PL-6 a firstLosses plate is gated exactly as a roundLosers one: it needs the plate's minimum field, from a root knockout", () => {
+    const plate = [root, { kind: "knockout", progression: take({ kind: "firstLosses" }) }];
+    let checked = 0;
+    for (const n of [0, 1, 2, 3]) {
+      expect(stageGraphSizeRefusal(plate, n), `n=${n}`).toBe("KO_PLATE_TOO_FEW");
+      checked++;
+    }
+    for (const n of [4, 5, 13, 64]) {
+      expect(stageGraphSizeRefusal(plate, n), `n=${n}`).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(8);
+    expect(stageGraphSizeGate(plate, 3)).toEqual({ code: "KO_PLATE_TOO_FEW", min: 4 });
+  });
+
   it("only a ROOT knockout: a fed knockout's own losers are sized by its feed, a league's cut by its own rules", () => {
     const fedKnockout = [root, { kind: "knockout", progression: take({ kind: "rankRange", from: 1, to: 2 }) }, { kind: "knockout", progression: take({ kind: "roundLosers", round: 1, count: 2 }) }];
     expect(stageGraphSizeRefusal(fedKnockout, 3), "the third stage's source is fed; the second's cut needs only 2").toBeNull();
@@ -158,7 +173,7 @@ describe("stageGraphSizeRefusal", () => {
 describe("X-QM-1 qualifying_main is two knockout stages joined by rankRange", () => {
   it("the template, at the q the builder sends whatever the box says", () => {
     for (const qualified of [4, 99, 0]) {
-      const drafts = formatStagesFor("qualifying_main", { ...KNOBS, qualified, standingsCarry: "none" });
+      const drafts = formatStagesFor("qualifying_main", { ...KNOBS, qualified, standingsCarry: "none", thirdPlace: "shared" });
       expect(drafts.map((d) => d.kind)).toEqual(["knockout", "knockout"]);
       expect(drafts[0]!.progression).toBeNull();
       expect(drafts[1]!.progression?.sources).toEqual([{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: QUALIFYING_MAIN_MIN }] }]);

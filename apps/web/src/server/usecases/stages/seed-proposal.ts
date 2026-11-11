@@ -4,7 +4,8 @@ import "server-only";
 
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { resolveProgression, type ProgressionSpec } from "@seazn/engine/competition";
+import { type ProgressionSpec } from "@seazn/engine/competition";
+import { resolveStoredProgression } from "../stored-progression";
 import { BYE_SLOT_LABEL } from "@/lib/bye-line";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
@@ -13,6 +14,9 @@ import { departedLoseBestNth, descriptorKey, destinationSlotsBySeed, sourcesToTa
 import { STAGE_COLS, type StageRow, type FixtureRow } from "./types";
 import { fireStageRevalidate, refoldStageTable, departedEntrantIds } from "./helpers";
 import { fillSlot, resolveBracketSeats } from "./bracket-seats";
+import { knockoutRefusal } from "../knockout-refusal";
+import { writeProgressionSetupFixtures } from "./setup-fixtures";
+import { isFirstLossProgression, reseedPlateQualifiers } from "../plate-field";
 import {
   nonRealCarrySource,
   carrySourceRefusal,
@@ -43,6 +47,8 @@ export interface SeedProposalOut {
     }[];
     ties: { slots: string[]; entrantIds: string[]; reason: string }[];
     standingsHash: string;
+    /** W4 T8 (RB4-E5/T4): a plate configured with a third-place match whose field gave under two real semi-finals - drawn without it. */
+    thirdPlaceDropped?: true;
   };
 }
 
@@ -134,12 +140,22 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // real targetKind ruling 13's snake/bracket-target guard needs to fire
     // on this resolution path too, not just at createStages' save-time
     // validateStageProgression call.
-    const { qualifiers, ties, newLotsDraws } = resolveProgression(
+    const resolvedProgression = resolveStoredProgression(
       progression,
       shapes,
       departedLoseBestNth(tables, resolved, await departedEntrantIds(tx, stage.division_id)),
       stage.kind,
+      resolved.map((r) => r.kind),
     );
+    const { ties, newLotsDraws } = resolvedProgression;
+    // W4 T8 (X-PL-5, X-SD-11): a plate has no lines until its field is known; this is where they are drawn, at the field's size
+    // (`sourcesToTables` above has already refused a field still open). Then its seeds are the main draw's, on the fold.
+    const firstLossPlate = isFirstLossProgression(progression);
+    // X-PL-2: under two first-match losers there is no bracket to draw; `maybeProposePlate` completes the plate by name instead,
+    // and a direct propose is refused by name rather than writing an empty draw.
+    if (firstLossPlate && resolvedProgression.qualifiers.length < 2) throw knockoutRefusal("PLATE_FIELD_TOO_SMALL");
+    if (firstLossPlate) await writeProgressionSetupFixtures(tx, stageId, { checkSeats: true });
+    const qualifiers = firstLossPlate ? await reseedPlateQualifiers(tx, stage, resolvedProgression.qualifiers) : resolvedProgression.qualifiers;
     // W2d T12 (spec §5.9): stored under the division lock held above, so a re-proposal seats the same draw.
     await persistCrossGroupDraws(tx, resolved, newLotsDraws);
 
@@ -258,6 +274,8 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
       qualifiers: computedQualifiers,
       ties: computedTies,
       standingsHash: standingsHash(poolTableRowsAcrossSources(tables)),
+      // RB4-E5/T4: the plate asked for a third-place match and its field gave under two real semi-finals, so it was drawn without.
+      ...(firstLossPlate && stage.config.thirdPlace === true && resolvedProgression.qualifiers.length < 4 ? { thirdPlaceDropped: true as const } : {}),
     };
 
     await tx`update stage_seed_proposals set status = 'stale' where stage_id = ${stageId} and status = 'draft'`;
@@ -645,7 +663,18 @@ export async function confirmSeedProposal(
       tx,
       stage.division_id,
       "seed_confirmed",
-      { stage_id: stageId, proposal_id: proposal.id, source: "organiser" },
+      {
+        stage_id: stageId,
+        proposal_id: proposal.id,
+        source: "organiser",
+        // W4 app PR B (C1/C12): the field this confirm DREW, in seed order - the bracket's drawn roster. A seat a later
+        // withdrawal empties and stamps dead keeps no entrant id on the fixture, so completion reads who was drawn from here
+        // (`bracketRosterAndSeeds`): a withdrawn stepladder seed is ranked at the rung she was due to enter (X-SP-4) instead of
+        // vanishing from the ranks.
+        entrants: [...new Map(finalSlots.map(([slot, entrantId]) => [entrantId, seedByWireSlot.get(slot) ?? Number.MAX_SAFE_INTEGER] as const)).entries()]
+          .sort((a, b) => a[1] - b[1])
+          .map(([entrantId]) => entrantId),
+      },
       auth.userId,
     );
 

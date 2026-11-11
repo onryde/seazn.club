@@ -102,15 +102,18 @@ import {
 import { readEveryPublicDivision } from "../read-every-division";
 import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
 import { seedLoadersScene, type LoadersScene } from "./_public-loaders-scene";
+import { stageFeedsOf, type StageProgressionRow } from "../champion";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
 // ── Frozen pre-T4 bodies (e5848d2f3). The differential oracle; never call ──
 // ── these from product code.                                              ──
 
-const normalizeFixtureBefore = <T extends { scheduled_at: unknown }>(f: T): T => ({
+const normalizeFixtureBefore = <T extends { scheduled_at: unknown; joint_winners_at?: unknown }>(f: T): T => ({
   ...f,
   scheduled_at: isoDateTime(f.scheduled_at),
+  // W4 B5a T12 (V499): the one additive field this oracle follows - a timestamptz read as an ISO string, null when unruled.
+  ...("joint_winners_at" in f ? { joint_winners_at: f.joint_winners_at == null ? null : isoDateTime(f.joint_winners_at) } : {}),
 });
 const normalizeStandingsBefore = (s: PublicStandings): PublicStandings => ({
   ...s,
@@ -120,15 +123,23 @@ const normalizeStandingsBefore = (s: PublicStandings): PublicStandings => ({
 async function readPublicDivisionDetailBefore(division: PublicDivision) {
   // `rules`: main's per-stage match rules (bb6523248), which landed on this read after the freeze; carried here so the
   // diff is still T4's alone. (W2d's `table_points_rule` came and went the same way: T9 review m3.)
-  const stages = await sql<PublicStage[]>`
+  const stages = await sql<(PublicStage & StageProgressionRow)[]>`
     select id, division_id, seq, kind, name, status,
            qualify_count, qualify_per_group, next_stage_name, swiss_rounds, points_rule,
            has_rank_overrides,
-           (select x.config->'rules' from stages x where x.id = public_stages_v.id) as rules
+           (select x.config->'rules' from stages x where x.id = public_stages_v.id) as rules,
+           (select x.progression from stages x where x.id = public_stages_v.id) as progression
     from public_stages_v where division_id = ${division.id} order by seq`;
   // `table_rules`: W2d Task 9's one table-rules loader, which landed on this read after the freeze; carried likewise.
   const tableRules = await stageTableRulesDocs(sql, stages.map((st) => st.id));
   for (const st of stages) st.table_rules = tableRules[st.id] ?? null;
+  // `feeds_from`: W4 B2a's progression graph (C16), which landed on this read after the freeze; carried likewise.
+  const feeds = stageFeedsOf(stages);
+  for (const st of stages) {
+    const f = feeds.get(st.id);
+    if (f) st.feeds_from = f;
+    delete (st as { progression?: unknown }).progression;
+  }
   const pools = await sql<{ id: string; stage_id: string; key: string; name: string }[]>`
     select p.id, p.stage_id, p.key, p.name
     from public_pools_v p
@@ -139,7 +150,7 @@ async function readPublicDivisionDetailBefore(division: PublicDivision) {
            home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
            scheduled_at, venue, court_label,
            status, outcome, summary, last_seq,
-           lane, is_final, third_place, conditional,
+           lane, is_final, third_place, conditional, joint_winners_at,
            (select x.ext_key from fixtures x where x.id = public_fixtures_v.id) as ext_key,
            (select x.winner_to_fixture from fixtures x where x.id = public_fixtures_v.id) as winner_to_fixture,
            (select x.winner_to_slot    from fixtures x where x.id = public_fixtures_v.id) as winner_to_slot,

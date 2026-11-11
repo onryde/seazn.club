@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { API_ONLY_ROWS, cellId, type ApiOnlyRowKey } from "../lib/catalogue.ts";
+import { API_ONLY_ROWS, cellId, isKnobRow, type ApiOnlyRowKey } from "../lib/catalogue.ts";
 import {
   API_ONLY_BROWSER_SET, L1_WIDTH, LAYER_GRID_PLANNERS, LAYER_PLANNERS, L2BoundRun, NoLayerForWidth, L2TakesNoScenario, TemplateReachable, UnknownL2Atom, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, apiOnlyNoPath, identityOf, l1Planner, l2Planner,
   layerCaseId, layerOfWidth, planL1, planL2, planW1DrivingL1, w1DrivingL1Planner, widthSweepPlanner, type LayerCase,
@@ -28,8 +28,8 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const RAW = JSON.parse(readFileSync(join(REPO, "tools/matrix/catalogue/l2-pairs.json"), "utf8")) as { runs: L2Run[] };
 /** The slice's cells, from its declared rows × sports (never a typed list). */
 const SLICE_CELLS: ReadonlySet<string> = new Set(SLICE_ROWS.flatMap((r) => SLICE_SPORTS.map((s) => cellId(r, s))));
-/** The slice's committed L2 runs, in file order — 68 today (65 swiss|badminton,
- *  2 swiss|generic, 1 knockout|badminton). Only this filter's own length is
+/** The slice's committed L2 runs, in file order — 70 today (65 swiss|badminton,
+ *  2 swiss|generic, 1 knockout|generic, 2 knockout|badminton). Only this filter's own length is
  *  asserted, so a regenerated catalogue moves the test, not the plan. */
 const SLICE_RUNS = RAW.runs.filter((r) => SLICE_CELLS.has(cellId(r.row, r.sport)));
 const ATOM = new Map(ATOMIC.map((a) => [a.id, a]));
@@ -105,7 +105,7 @@ describe("planL2 — the committed rotation, filtered, never re-planned", () => 
     expect(SLICE_RUNS.some((r) => r.width !== L2_WIDTHS[(r.n - 1) % L2_WIDTHS.length])).toBe(true);
   });
 
-  it("slice L2 = 68 runs: 3 executed, and the rest carry 🚫 or ░ with a reason", () => {
+  it("slice L2 = 70 runs: 3 executed, and the rest carry 🚫 or ░ with a reason", () => {
     const cases = planL2(committed, SLICE_CELLS);
     expect(cases).toHaveLength(SLICE_RUNS.length);
     // The expected split, from the catalogue's own declarations.
@@ -376,15 +376,19 @@ describe("the layered sets", () => {
 
   it("api-only browser set: one case per API_ONLY row, in catalogue order — each planned 🚫 naming its owning wave (D7 as ruled), never driven", () => {
     // Design §8 via plan D7, restated here rather than read from the harness.
-    const WAVE: Readonly<Record<string, string>> = { knockout_third_place: "W4", group_only: "W5", group_group_ko: "W5" };
+    const WAVE: Readonly<Record<string, string>> = { group_only: "W5", group_group_ko: "W5" };
     // W4 T16 (ruling 269): the standalone stepladder and page playoff are refused, so no wave owes them a control and the set holds no case for them.
     const REFUSED_ROWS = [...new Set(STANDALONE_REFUSED_CELLS.map((c) => c.split("|")[0]!))];
     expect(REFUSED_ROWS.sort()).toEqual(["page_playoff_only", "stepladder_only"]);
     const p = apiOnlyBrowserPlanner({ set: API_ONLY_BROWSER_SET });
     const cases = p.layered(v);
     console.info(`layers: api-only browser set ${cases.length} cases`);
-    const owed = API_ONLY_ROWS.filter((r) => !REFUSED_ROWS.includes(r));
-    expect(owed.length).toBe(API_ONLY_ROWS.length - 2);
+    // W4 T15: knockout_third_place is a builder knob row now (the Third place control), so no wave owes it and the set holds no case for it.
+    const KNOB = API_ONLY_ROWS.filter((r) => isKnobRow(r));
+    expect(KNOB).toEqual(["knockout_third_place"]);
+    const owed = API_ONLY_ROWS.filter((r) => !REFUSED_ROWS.includes(r) && !isKnobRow(r));
+    expect(owed.length).toBe(API_ONLY_ROWS.length - 2 - 1);
+    expect(owed).toEqual(["group_only", "group_group_ko"]);
     expect(cases.map((c) => identityOf(c).row)).toEqual([...owed]);
     let checked = 0;
     for (const c of cases) {
@@ -418,8 +422,12 @@ describe("the layered sets", () => {
     expect([...refusedRows].sort()).toEqual(["page_playoff_only", "stepladder_only"]);
     let refused = 0;
     let routed = 0;
+    let knob = 0;
     for (const row of API_ONLY_ROWS) {
-      if (refusedRows.has(row)) {
+      if (isKnobRow(row)) {
+        expect(() => apiOnlyUiRoute(row), row).toThrow(NotApiOnlyRow);
+        knob++;
+      } else if (refusedRows.has(row)) {
         expect(() => apiOnlyUiRoute(row), row).toThrow(RefusedApiOnlyRow);
         expect(() => apiOnlyUiPath(row, "generic"), row).toThrow(RefusedApiOnlyRow);
         refused++;
@@ -428,7 +436,7 @@ describe("the layered sets", () => {
         routed++;
       }
     }
-    expect([refused, routed]).toEqual([refusedRows.size, API_ONLY_ROWS.length - refusedRows.size]);
+    expect([refused, routed, knob]).toEqual([refusedRows.size, API_ONLY_ROWS.length - refusedRows.size - 1, 1]);
     expect(routed).toBeGreaterThan(0);
     // The refused one is never mistaken for a builder row, nor a builder row for a refused one.
     expect(() => apiOnlyUiRoute("league" as ApiOnlyRowKey)).toThrow(NotApiOnlyRow);

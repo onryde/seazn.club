@@ -435,25 +435,25 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     expect(await activeTypes(final.id)).toEqual(["core.start", "badminton.game.summary"]);
   });
 
-  it("X-WD-4: both finalists withdraw — the final stays open (W4 handover)", async () => {
-    // single-sport: badminton. Two entrants: the draw is the final alone. A final has no next match, so it cannot be a
-    // double walkover (D19, X-DW-3); with both finalists gone the vacant title is W4's (spec §2.2), and nothing is
-    // written here.
+  it("X-WD-4 amended by X-CH-3 (W4 B5a T11): both finalists withdraw — the title is vacant automatically, never sent to settle", async () => {
+    // single-sport: badminton (the sport sweep lives in vacant-title.test.ts). Two entrants: the draw is the final alone. A
+    // final has no next match, so a RECORDED double walkover is still refused (D19, X-DW-3), but the DEPARTURE of both
+    // finalists writes the vacant title itself (X-CH-3, rulings 267 and 274): a no-event double walkover, both seats kept.
     const s = await seedBracket({ ...badminton, stageKind: "knockout", entrants: 2 });
     const final = await fixtureRow(s.fixtureIds[0]!);
     expect([final.winner_to_fixture, final.loser_to_fixture], "rig: the line feeds nothing").toEqual([null, null]);
     await withdrawBeforeStart(s.auth, s.divisionId, final.home_entrant_id!);
     const out = await withdrawEntrantCascade(s.auth, final.away_entrant_id!);
-    expect(out).toMatchObject({ walkovers: 0, voided: 0, left_to_organiser: [] });
+    expect(out).toMatchObject({ walkovers: 1, voided: 0, left_to_organiser: [] });
     const after = await fixtureRow(final.id);
     expect([after.status, after.outcome, after.home_entrant_id, after.away_entrant_id]).toEqual([
-      "scheduled",
-      null,
+      "forfeited",
+      { kind: "double_walkover" },
       final.home_entrant_id,
       final.away_entrant_id,
     ]);
     expect(await activeTypes(final.id)).toEqual([]);
-    expect((await completeStage(s.auth, s.stageId)).completed, "the stage is not finished").toBe(false);
+    expect((await completeStage(s.auth, s.stageId)).completed, "no settle is asked: the stage completes").toBe(true);
   });
 
   it("X-WD-4 (dead seats): a seat its withdrawn entrant left beside a DEPARTURE double walkover (both of that feeder's sides withdrew) makes the line a double walkover, and its fed opponent walks over", async () => {
@@ -517,7 +517,7 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
   it("X-WD-4: every finalist-to-be withdraws — both semis are double walkovers and the final stays open, never a double walkover (D19, X-DW-3)", async () => {
     // single-sport: badminton. Four entrants; each semi loses one side before Start and the other after it, so both
     // are departure double walkovers and both of the final's seats die through departure. A final has no next match:
-    // it is never written a double walkover (the vacant title is W4's).
+    // it is never written a double walkover: X-CH-3's vacant title needs two SEATED finalists (the engine refuses a vacant final with an empty side).
     const s = await seedBracket({ ...badminton, stageKind: "knockout", entrants: 4 });
     const semis = (await rowsOf(s.stageId)).filter((r) => r.home_entrant_id && r.away_entrant_id);
     expect(semis, "rig: two seated semis").toHaveLength(2);
@@ -701,9 +701,9 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
       await sql`update entrants set status = ${departed} where id = ${a.away_entrant_id}`;
       await playBadminton(s.auth, a.id, true);
       const voided = await fixtureRow(thirdId);
-      expect([voided.status, voided.outcome, voided.home_entrant_id, voided.away_entrant_id], `${departed}: rig — both loser feeds dead: the third-place line is void`).toEqual([
-        "abandoned",
-        null,
+      expect([voided.status, voided.outcome, voided.home_entrant_id, voided.away_entrant_id], `${departed}: rig — both loser feeds dead through departure: the third-place line is a departure double walkover (B4 M-1, X-TP-7), not a void`).toEqual([
+        "forfeited",
+        { kind: "double_walkover" },
         null,
         null,
       ]);
@@ -733,10 +733,11 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     expect(checked).toBe(DEPARTED_STATUSES.size);
   }, 120_000);
 
-  it("R-1 consequence: BOTH semis lost by departed entrants — both third-place seats are departure-dead, a line that feeds nothing stays open (X-WD-4/D19, as a final does), and the stage still completes on its final", async () => {
+  it("R-1 consequence: BOTH semis lost by departed entrants — both third-place seats are departure-dead, so the third-place line is a departure double walkover (B4 M-1, X-TP-7: 3rd vacant; a FINAL feeds nothing and stays open for W4's vacant title, a third-place line does not), and the stage still completes on its final", async () => {
     // single-sport: badminton. Before R-1 a departed loser's seat was dead but unstamped, so this line was VOIDED; the
-    // stamp makes both seats departures, which is X-WD-4's "every side withdrew" — and D19 writes no double walkover on
-    // a line with no next match. Bracket completion ranks an unplayed third-place line by the fallback (bracketRanks).
+    // stamp makes both seats departures, which is X-WD-4's "every side withdrew". D19's no-double-walkover rule is for a
+    // FINAL (it feeds nothing, and stays open for W4's vacant title); a third-place line is not one, so it IS written.
+    // Bracket completion ranks an unplayed third-place line by the fallback (bracketRanks).
     // The departed losers are the LEGACY shape (R-1's note above): a disqualification written without the cascade.
     const s = await seedBracket({ ...badminton, stageKind: "knockout", entrants: 4, stageConfig: { thirdPlace: true } });
     const [a, b] = (await rowsOf(s.stageId)).filter((r) => r.home_entrant_id && r.away_entrant_id);
@@ -746,9 +747,9 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
       await playBadminton(s.auth, sf.id, true);
     }
     const third = await fixtureRow(a.loser_to_fixture);
-    expect([third.status, third.outcome, labelOf(third, 1), labelOf(third, 2)], "both seats stamped dead; nothing written on the line").toEqual([
-      "scheduled",
-      null,
+    expect([third.status, third.outcome, labelOf(third, 1), labelOf(third, 2)], "both seats stamped dead; the line is a double walkover, written as a bye is").toEqual([
+      "forfeited",
+      { kind: "double_walkover" },
       BYE_KEY,
       BYE_KEY,
     ]);
@@ -1486,12 +1487,13 @@ describe.skipIf(!HAS_DB)("D-G3 corner 3: a stepladder qualifier departed before 
     const after = await fixtureRow(final.id);
     expect([after.status, after.outcome], "the climber walks over the departed seed's seat").toEqual(["forfeited", seatWalkover(e2!)]);
     expect(await activeTypes(final.id), "no organiser step").toEqual([]);
-    // Where the departed seed ranks — absent (she holds no seat) or last — is not ruled; never above a field entrant.
+    // X-SP-4 (RB4-S4; W4 app PR B, C1/C12): a withdrawn stepladder seed is ranked as the loser of the rung she was due to
+    // enter - seed 1 enters at the FINAL, so she is its loser: 2nd, below the climber who walked it over and above every
+    // other rung's loser. (Before PR B she held no seat, was not declared, and ranked nowhere.)
     const done = await completeStage(r.auth, r.stageId);
     const ev = done.events.find((e) => e.type === "stage_completed");
     const ranks = ev?.type === "stage_completed" ? ev.finalRanks : [];
-    expect([done.completed, ranks.filter((id) => id !== e1)]).toEqual([true, [e2, e3, e4]]);
-    expect([-1, 3], "the departed seed is unranked or last").toContain(ranks.indexOf(e1!));
+    expect([done.completed, ranks]).toEqual([true, [e2, e1, e3, e4]]);
   });
 
   it("D-G3 corner 3: a seat that cannot resolve is refused STAGE_SEAT_DEPARTED naming the entrant and the fixture", async () => {
@@ -1772,7 +1774,7 @@ describe.skipIf(!HAS_DB)("rule 10: withdrawals in any order", () => {
             const seated = [r.home_entrant_id, r.away_entrant_id].filter((x): x is string => x !== null && gone.has(x));
             if (seated.length === 0 || PLAYED10.has(r.status) || reopened.has(r.id)) return [];
             const isFinal = r.winner_to_fixture === null && r.loser_to_fixture === null;
-            if (isFinal && seated.length === 2) return []; // X-WD-4: both finalists departed — W4's vacant title
+            if (isFinal && seated.length === 2) return []; // X-WD-4 / X-CH-3: both finalists departed — a bare-flip final the cascade did not reach stays open
             return [`${r.ext_key ?? r.id} ${r.status} seats ${seated.length} withdrawn`];
           });
           expect(offenders, `${where}: a withdrawn entrant seated on an undecided fixture`).toEqual([]);

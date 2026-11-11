@@ -324,6 +324,16 @@ export const KnockoutRound = z.object({
   fixtureIds: z.array(z.string()).min(1),
 });
 
+/** W4 (Q4, X-CH-1): what a bracket's deciding final crowned — the engine's `BracketTitle`, entrant ids only (the names
+ *  and badges come from the deciding final's two sides, which are `matches` rows). `champion` is one entrant, `joint`
+ *  both finalists, `vacant` nobody (both departed, X-CH-3). */
+export const DivisionTitleWire = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("champion"), champion: z.string() }),
+  z.object({ kind: z.literal("joint"), winners: z.tuple([z.string(), z.string()]) }),
+  z.object({ kind: z.literal("vacant") }),
+]);
+export type DivisionTitleWireT = z.infer<typeof DivisionTitleWire>;
+
 export const KnockoutView = z.object({
   /** `${divisionSlug}-${stageId}`. */
   id: z.string(),
@@ -342,11 +352,14 @@ export const KnockoutView = z.object({
    *  fixtures the engine's `twoSidedBracket` — the repo's one authority on a
    *  regular single-elimination shape — lays out. */
   drawable: z.boolean(),
-  /** The fixture that crowns the stage, from `bracketChampion` (`./champion.ts`)
-   *  — the same rule `divisionChampion` crowns with: the latest-round final
-   *  that is settled (decided, finalized or forfeited) with a winner, withheld
-   *  while an owed grand-final reset is unplayed. Null until then. */
+  /** The fixture that titles the stage, from `bracketTitleOf` (`./champion.ts`)
+   *  — the same rule `divisionTitle` crowns with: the latest-round final
+   *  that is settled (decided, finalized or forfeited) and decided something,
+   *  withheld while an owed grand-final reset is unplayed. Null until then.
+   *  Set for a joint or vacant title too (W4): `title` says which. */
   championFixtureId: z.string().nullable(),
+  /** W4: what that final crowned. Null exactly when `championFixtureId` is. */
+  title: DivisionTitleWire.nullable(),
 });
 
 export const LeaderRow = z.object({
@@ -540,6 +553,29 @@ export const CompetitionHubDoc = z.object({
         });
       }
     });
+    if ((view.championFixtureId === null) !== (view.title === null)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["knockouts", i, "title"],
+        message: `title and championFixtureId must be both set or both null (got title ${view.title === null ? "null" : view.title.kind}, fixture ${view.championFixtureId})`,
+      });
+    }
+    // A joint title's winners are exactly the deciding final's two sides (two authorities otherwise: the banner names
+    // the final's sides, the wire names the winners).
+    if (view.title?.kind === "joint" && view.championFixtureId !== null) {
+      const final = doc.matches.find((m) => m.fixtureId === view.championFixtureId);
+      if (final !== undefined) {
+        const sides = final.header.sides.map((s) => s.entrantId).sort();
+        const winners = [...view.title.winners].sort();
+        if (sides.length !== 2 || sides[0] !== winners[0] || sides[1] !== winners[1]) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["knockouts", i, "title", "winners"],
+            message: `a joint title's winners [${winners.join(", ")}] are not the final's sides [${sides.join(", ")}]`,
+          });
+        }
+      }
+    }
     if (view.championFixtureId !== null && !matchIds.has(view.championFixtureId)) {
       ctx.addIssue({
         code: "custom",

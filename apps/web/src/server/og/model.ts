@@ -8,6 +8,7 @@ import { resolvePublicTheme, publicBrandColor } from "@/lib/public-theme";
 import { msg } from "@/lib/messages";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
 import { isLevelTable, LEVEL_RANK, pointsText, rankText } from "@seazn/engine/competition";
+import type { DivisionTitle } from "@/server/public-site/champion";
 import { tableLayoutFor, type TableRulesLike } from "@/server/public-site/standings-view";
 
 export interface OgTheme {
@@ -83,6 +84,8 @@ export interface ChampionCardName {
   name: string;
   /** The name's font size in px (`championNameSize`): as large as the mock's 104 where it fits, smaller for a long one. */
   size: number;
+  /** W4: a JOINT title — `name` holds both winners, and the card's label reads "Joint winners", not "Champion". */
+  joint?: boolean;
 }
 
 export type StandingsFallbackKey = "og.standings.youth" | "og.standings.empty";
@@ -116,8 +119,25 @@ interface StandingsInput {
   names: Record<string, string>;
   /** W2d T17: the stage's loaded rules (`PublicStage.table_rules`) — how its points print. Null: none (whole points). */
   rules: TableRulesLike | null;
-  /** ST-G26: the crowned champion's entrant id when the division is only a bracket (`divisionChampion`); else null. */
-  championId?: string | null;
+  /** ST-G26 / W4: what the division's deciding bracket crowned (`divisionTitle`); null = nothing to name. A vacant
+   *  title names nobody, so it falls through to the table (or its fallback line) exactly like no title. */
+  title?: DivisionTitle | null;
+  /** The joint pair as one line, in the org's locale (`title.jointNames`). Absent: "A & B". */
+  joinNames?: (a: string, b: string) => string;
+}
+
+/** The name the card prints for a title: the champion's, or BOTH joint winners on one line. A vacant title, or an
+ *  entrant the public list does not carry (never a crown over a blank), names nobody. */
+function crownedName(input: StandingsInput): { name: string; joint: boolean } | undefined {
+  const title = input.title;
+  if (!title || title.kind === "vacant") return undefined;
+  if (title.kind === "champion") {
+    const name = input.names[title.champion];
+    return name === undefined ? undefined : { name, joint: false };
+  }
+  const [a, b] = [input.names[title.winners[0]], input.names[title.winners[1]]];
+  if (a === undefined || b === undefined) return undefined;
+  return { name: (input.joinNames ?? ((x, y) => `${x} & ${y}`))(a, b), joint: true };
 }
 
 export function standingsCardModel(input: StandingsInput): StandingsCardModel {
@@ -137,9 +157,14 @@ export function standingsCardModel(input: StandingsInput): StandingsCardModel {
   }
   // ST-G26: a crowned bracket-only division names its champion. An id the public entrant list does not carry falls
   // through to the table (or its fallback line) rather than printing a crown over a blank name.
-  const championName = input.championId ? input.names[input.championId] : undefined;
-  if (championName !== undefined) {
-    return { ...base, rows: [], fallbackKey: null, champion: { name: championName, size: championNameSize(championName) } };
+  const crowned = crownedName(input);
+  if (crowned !== undefined) {
+    return {
+      ...base,
+      rows: [],
+      fallbackKey: null,
+      champion: { name: crowned.name, size: championNameSize(crowned.name), ...(crowned.joint ? { joint: true } : {}) },
+    };
   }
   // W2d T17 (RB2B-17, X-TB-6): the public table's own helpers — its unit, its level test, its rank text.
   const unit = tableLayoutFor(input.rules).unit;

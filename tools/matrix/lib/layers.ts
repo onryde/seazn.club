@@ -45,7 +45,7 @@
 // run.ts value-imports this module, so its static closure must stay clear of
 // lib/browser and lib/pads (boundary.test.ts): the D7 wave table comes from
 // the leaf api-only-ui.ts, never from browser-driver.ts.
-import { API_ONLY_ROWS, ROW_KEYS, SPORT_KEYS, cellId, noOrganiserPathCell, refusedCell, type ApiOnlyRowKey, type RowKey } from "./catalogue.ts";
+import { API_ONLY_ROWS, ROW_KEYS, SPORT_KEYS, cellId, isKnobRow, noOrganiserPathCell, refusedCell, type ApiOnlyRowKey, type KnobRowKey, type RowKey } from "./catalogue.ts";
 import { apiOnlyUiPath } from "./api-only-ui.ts";
 import { onTemplate, templateField, templateRow } from "./templates.ts";
 import { loadL2Pairs, type L2Run } from "./pairs.ts";
@@ -230,7 +230,8 @@ export type LayerScope = "slice" | "grid";
 
 /** Every catalogue cell (ruling 64's full grid), in ROW_KEYS × SPORT_KEYS order. */
 export const ALL_CELLS: ReadonlySet<string> = new Set(ROW_KEYS.flatMap((r) => SPORT_KEYS.map((s) => cellId(r, s))));
-const isApiOnly = (row: RowKey): row is ApiOnlyRowKey => (API_ONLY_ROWS as readonly string[]).includes(row);
+/** An API-only row the builder has NO control for: a knob row (catalogue.ts KNOB_ROWS) is built through the builder, so it is not one. */
+const isApiOnly = (row: RowKey): row is Exclude<ApiOnlyRowKey, KnobRowKey> => (API_ONLY_ROWS as readonly string[]).includes(row) && !isKnobRow(row);
 
 /** A full-grid planner was handed a filter: the grid is the whole grid, so a
  *  filter would be silently ignored. Named for the planner, not for `--set`
@@ -352,7 +353,7 @@ export const apiOnlyBrowserPlanner: PlanLayers = (cli: PlannerCli) => {
       const variant = variantFor(sport);
       // A row the product refuses (catalogue.ts refusedCell: the standalone stepladder and page playoff, W4 T16) owes no
       // organiser path, so it is not planned 🚫 either.
-      return API_ONLY_ROWS.filter((row) => refusedCell(row, sport) === null).map((row): PlannedLayerCase => ({
+      return API_ONLY_ROWS.filter((row) => !isKnobRow(row) && refusedCell(row, sport) === null).map((row): PlannedLayerCase => ({
         spec: null, identity: { caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE },
         layer: "L1", width: L1_WIDTH, noPath: apiOnlyNoPath(row, sport), notRun: null, run: null,
       }));

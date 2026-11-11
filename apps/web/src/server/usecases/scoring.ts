@@ -42,6 +42,7 @@ import { isOrganiserOnlyEvent } from "@/lib/organiser-only-events";
 import { DEPARTED_STATUSES } from "./entrants";
 import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { fillSlot, markDependentSeedProposalsStale, resolveBracketSeats, stampDepartedSeat } from "./stages";
+import { maybeProposePlate } from "./plate-field";
 import { detectSuspensions } from "./discipline";
 import { draftPostsForDecidedFixture } from "./org-posts";
 import {
@@ -1179,6 +1180,16 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
       log.error({ err, stageId: context.stage_id }, "scoring: a corrected knockout's proposals did not update (score write unaffected)");
     }
   }
+  // W4 T8 (X-PL-5, X-PL-7): a decided or corrected main-draw result may complete the plate's field (every first match played, round
+  // two for the bye holders) or move it: the plate is proposed after round two, never waiting for the final. After the commit, like
+  // the stale call above, and best-effort the same way: the score is already written.
+  if (context?.kind === "knockout") {
+    try {
+      await maybeProposePlate(auth, context.stage_id);
+    } catch (err) {
+      log.error({ err, stageId: context.stage_id }, "scoring: the plate's proposal did not update (score write unaffected)");
+    }
+  }
   // Auto-advance (Jul3/08 §5, 16 Sep): when the flag is on and the stage just
   // finished, progression fires without a button.
   if (context && (context.outcome as { kind?: string } | null)?.kind !== undefined) {
@@ -1204,7 +1215,15 @@ async function maybeAutoAdvance(auth: AuthCtx, stageId: string, divisionId: stri
     // owed on it. A plain recorded abandon still holds (W2a: it is not a dead feeder, and it awaits the organiser).
     const [{ open }] = await tx<{ open: number }[]>`
       select count(*) filter (where status not in ('decided', 'forfeited', 'finalized', 'cancelled')
-                                and not ${hasActiveAbandonSql(tx, "fixtures", { expunge: true })})::int as open
+                                and not ${hasActiveAbandonSql(tx, "fixtures", { expunge: true })}
+                                -- C2/C17: a double-elimination bracket reset the grand final did not trigger is never played
+                                -- (the winners' champion - the grand final's HOME entrant - won it): not owed, as the
+                                -- completion read (readBracketStage) and undecidedBracketFixtures both read it.
+                                and not (fixtures.ext_key = 'gf-reset' and exists (
+                                  select 1 from fixtures gf
+                                   where gf.stage_id = fixtures.stage_id and gf.ext_key = 'gf'
+                                     and gf.status in ('decided', 'forfeited', 'finalized')
+                                     and gf.outcome->>'winner' = gf.home_entrant_id::text)))::int as open
       from fixtures where stage_id = ${stageId}`;
     return open === 0;
   });

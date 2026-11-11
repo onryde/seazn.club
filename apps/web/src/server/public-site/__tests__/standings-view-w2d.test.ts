@@ -139,7 +139,7 @@ function input(doc: Doc | null, m: AnySportModule, rows: StandingsRow[], over: P
     entrantNames: NAMES,
     entrantLogos: {},
     entrantColours: {},
-    championId: null,
+    championIds: [],
     updatedAt: "2026-10-27T10:00:00Z",
     msg: enMsg,
     rules: doc,
@@ -284,7 +284,7 @@ describe("W2d T17 — the public table (SPEC §5.7, §9)", () => {
         ["A", "B", "C"].map((id) => [id, { status: "open", label: "Open", headline: "Open", ifYouLose: null, whatIf: null, whatIfAssumption: null, ariaLabel: `Rank, ${id}` }]),
       ) as unknown as QualificationView["rows"],
     };
-    const view = buildTableView(input(doc, fb, empty, { qualification, championId: "A" }));
+    const view = buildTableView(input(doc, fb, empty, { qualification, championIds: ["A"] }));
     expect(view.rows.map((r) => r.rank)).toEqual([null, null, null]);
     expect(view.rows.map((r) => r.qual)).toEqual([null, null, null]);
     // no tie note: the rows still carry the ranking pass's trace, which would explain a place the table does not print

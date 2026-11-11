@@ -17,7 +17,7 @@ import { fieldSizeFor } from "../lib/field-size.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { toObservedOutcome, winnerOf, type CompleteObs, type ObservedRun, type ObservedStage } from "../lib/observed.ts";
 import { decideState, type CheckResult } from "../lib/results.ts";
-import { SEEDING_TIE_CODE, SourcePoolsDisagree, UnknownTakeKind, advanceSeededAsDeclared, confirmAdvance, declaredTake, sourcePoolCount, takesOf, withdrawnQualifiers, type AdvanceObs } from "../lib/scenarios/advance.ts";
+import { PlateFieldUnknown, SEEDING_TIE_CODE, SourcePoolsDisagree, UnknownTakeKind, takesFirstLosses, advanceSeededAsDeclared, confirmAdvance, declaredTake, firstLossersOf, plateFieldOf, sourcePoolCount, takesOf, withdrawnQualifiers, type AdvanceObs } from "../lib/scenarios/advance.ts";
 import { Recorder, drawsDeclaredOnReached, ensureLineups, finishStage, playDivision, playStage, recordGenerate, setUpDivision, snapshot, type DivisionSetup, type StagePlay } from "../lib/scenarios/common.ts";
 import { lineupsPut } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
@@ -80,7 +80,7 @@ describe("Step 0 — the product's multi-stage shape, pinned", () => {
       const bodies = stagesForRow(row);
       for (const b of bodies.slice(1)) {
         expect(b.progression?.timing, `${row} seq ${b.seq}`).toBe("setup");
-        expect(declaredTake(b, 2), `${row} seq ${b.seq}`).toBeGreaterThan(0);
+        expect(declaredTake(b, 2, 4), `${row} seq ${b.seq}`).toBeGreaterThan(0); // 4: a firstLosses plate's played field (X-PL-6)
         checked++;
       }
     }
@@ -147,6 +147,44 @@ describe("declaredTake — the take vocabulary", () => {
     expect(declaredTake(body([{ kind: "topNPerGroup", n: 2 }, { kind: "bestNth", nth: 3, count: 2 }]), 2)).toBe(6);
     expect(declaredTake(body([{ kind: "roundLosers", round: 1, count: 4 }]), 1)).toBe(4);
   });
+  it("X-PL-6 firstLosses offers the source's played first losses: its seats are the field handed in, never a count; with none handed in it is refused by name", () => {
+    expect(declaredTake(body([{ kind: "firstLosses" }]), 1, 4)).toBe(4);
+    expect(declaredTake(body([{ kind: "firstLosses" }]), 1, 0), "empty field: no seats").toBe(0);
+    expect(() => declaredTake(body([{ kind: "firstLosses" }]), 1)).toThrow(PlateFieldUnknown);
+  });
+  it("X-PL-6 firstLossersOf reads the first losses off the rows: a bye is no match, a forfeit is no first loss, a second loss is no first loss (n = 5 played out, 3 byes)", () => {
+    const win = (winner: string) => ({ kind: "win", winner });
+    const award = (winner: string) => ({ kind: "award", winner, loser: null, reason: "forfeit" });
+    const rows = [
+      { roundNo: 1, home: "e1", away: null, outcome: award("e1") }, // bye
+      { roundNo: 1, home: "e5", away: "e4", outcome: win("e4") }, // e5's first loss
+      { roundNo: 1, home: "e3", away: null, outcome: award("e3") }, // bye
+      { roundNo: 1, home: "e2", away: null, outcome: award("e2") }, // bye
+      { roundNo: 2, home: "e1", away: "e4", outcome: win("e1") }, // e4's SECOND match: not a first loss
+      { roundNo: 2, home: "e2", away: "e3", outcome: win("e2") }, // e3's first match: a first loss
+      { roundNo: 3, home: "e1", away: "e2", outcome: win("e1") }, // e2's second match
+    ];
+    expect(firstLossersOf(rows).sort()).toEqual(["e3", "e5"]);
+    // a forfeited first match (an award) and an undecided one are no first loss; a third-place match is nobody's first
+    expect(firstLossersOf([{ roundNo: 1, home: "a", away: "b", outcome: award("a") }])).toEqual([]);
+    expect(firstLossersOf([{ roundNo: 1, home: "a", away: "b", outcome: null }])).toEqual([]);
+    expect(firstLossersOf([{ roundNo: 3, home: "a", away: "b", outcome: win("a"), thirdPlace: true }])).toEqual([]);
+    expect(firstLossersOf([])).toEqual([]);
+  });
+  it("X-PL-6 plateFieldOf reads the source rows only for a body that takes firstLosses (the seam playDivision feeds confirmAdvance)", () => {
+    const rows = [{ roundNo: 1, home: "a", away: "b", outcome: { kind: "win", winner: "a" } }, { roundNo: 1, home: "c", away: "d", outcome: { kind: "win", winner: "d" } }];
+    expect(plateFieldOf(body([{ kind: "firstLosses" }]), rows)).toBe(2);
+    expect(plateFieldOf(body([{ kind: "roundLosers", round: 1, count: 4 }]), rows)).toBeUndefined();
+    expect(plateFieldOf(body([{ kind: "rankRange", from: 1, to: 2 }]), rows)).toBeUndefined();
+    expect(plateFieldOf(body([{ kind: "firstLosses" }]), []), "empty source: an empty field, not unknown").toBe(0);
+  });
+  it("X-PL-6 FP-2's bound reads a firstLosses take as the source's first losers", () => {
+    const fixtures = [
+      { roundNo: 1, home: "a", away: "b", outcome: { kind: "win", winner: "a" } },
+      { roundNo: 2, home: "a", away: "c", outcome: { kind: "win", winner: "c" } },
+    ] as never;
+    expect(withdrawnQualifiers([{ kind: "firstLosses" }], { standings: [], fixtures }, new Set(["b", "a"]))).toEqual(["b"]);
+  });
   it("declaredTake: bestNth adds its count ONCE, never per pool — the right answer differs from a naive per-pool count (plan review 1, m-7)", () => {
     // 3 pools: top 2 per group = 6, plus the best 2 of the 3 thirds = 2 → 8. A per-pool bestNth reading gives 6 + 2×3 = 12.
     const take = [{ kind: "topNPerGroup", n: 2 }, { kind: "bestNth", nth: 3, count: 2 }] as const;
@@ -158,9 +196,10 @@ describe("declaredTake — the take vocabulary", () => {
     const text = read("apps/web/src/lib/format-templates.ts");
     const kinds = new Set([...text.matchAll(/take(?::\s*\[|\.push\()\s*\{\s*kind:\s*"([A-Za-z]+)"/g)].map((m) => m[1]!));
     expect(kinds.size, "take kinds read from the templates").toBeGreaterThan(0);
-    expect([...kinds].sort()).toEqual(["bestNth", "rankRange", "roundLosers", "topNPerGroup"]);
-    const one: Record<string, unknown> = { rankRange: { from: 1, to: 2 }, topNPerGroup: { n: 1 }, bestNth: { nth: 2, count: 1 }, roundLosers: { round: 1, count: 1 } };
-    for (const k of kinds) expect(declaredTake(body([{ kind: k, ...(one[k] as object) }]), 2), k).toBeGreaterThan(0);
+    expect([...kinds].sort()).toEqual(["bestNth", "firstLosses", "rankRange", "topNPerGroup"]);
+    const one: Record<string, unknown> = { rankRange: { from: 1, to: 2 }, topNPerGroup: { n: 1 }, bestNth: { nth: 2, count: 1 }, roundLosers: { round: 1, count: 1 }, firstLosses: {} };
+    // firstLosses has no count of its own: its seats are the source's played field, handed in (here 3)
+    for (const k of kinds) expect(declaredTake(body([{ kind: k, ...(one[k] as object) }]), 2, 3), k).toBeGreaterThan(0);
     expect(() => declaredTake(body([{ kind: "picks", picks: [] }]), 1)).toThrow(/take kind 'picks'/);
   });
 });
@@ -1092,5 +1131,56 @@ describe("W2a: a scenario's bracketPick reaches a bracket stage after stage 1 (p
       if (i % 3 !== 0) expect(d.asked, `match ${i}`).toEqual({ kind: "win", winner: better });
       else expect(d.asked.kind, `match ${i} is the hard path`).not.toBe("win");
     });
+  });
+});
+
+// W4 B3 (X-PL-2, owner ruling G2, msample): a firstLosses plate has no day-one lines and its source's /complete carries no proposal for it
+// (maybeProposePlate drew it after round two). playDivision drove the OLD model - Generate on the plate at Start (an empty list: I4/I8
+// "empty generate (R13)") and a proposal read off the source's /complete (none: "no proposal", the run exits not_reached) - which
+// reddened every ko_plate LIFECYCLE/M1/R4 case, 34 of them, none a product defect.
+describe("W4 B3: playDivision drives a firstLosses plate the way the product draws it", () => {
+  /** A fake whose stage-1 /complete carries no proposal (the plate was already proposed), with the stage-2 body a plate's. */
+  class PlateFake extends FakeMultiStageDriver {
+    readonly order: string[] = [];
+    override generate(stageId?: string) { this.order.push(`generate:${stageId === undefined ? "?" : this.stages.find((s) => s.id === stageId)?.seq}`); return super.generate(stageId); }
+    override async completeStage(stageId?: string) {
+      const out = await super.completeStage(stageId);
+      this.order.push(`complete:${this.stages.find((s) => s.id === stageId)?.seq}`);
+      const { seed_proposal: _dropped, ...rest } = out;
+      return rest;
+    }
+    override recomputeSeedProposal(stageId: string) { this.order.push(`propose:${this.stages.find((s) => s.id === stageId)?.seq}`); return super.recomputeSeedProposal(stageId); }
+  }
+  it("the plate is not generated at Start, and once its source completed it is generated and its draft proposal is read off the plate and confirmed", async () => {
+    const driver = new PlateFake();
+    const ctx = ctxFor(driver, "LIFECYCLE", { row: "league_ko" });
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, fieldSizeFor("league_ko", "LIFECYCLE"));
+    // The HARNESS's posted body names the plate; the fake keeps the stored body it was posted (it cannot resolve firstLosses), so a
+    // clone is swapped in rather than the shared object mutated.
+    const posted = setup.built.posted.stages as unknown as { seq: number; progression: unknown }[];
+    const idx = posted.findIndex((b) => b.seq === 2);
+    const orig = posted[idx]!;
+    const clone = { ...orig, progression: { ...(orig.progression as object), sources: [{ ...(orig.progression as { sources: object[] }).sources[0], take: [{ kind: "firstLosses" }] }] } };
+    posted[idx] = clone;
+    const plate = clone as never;
+    expect(takesFirstLosses(plate), "the premise: stage 2 is a plate").toBe(true);
+    const plays = await playDivision(ctx, rec, setup, {});
+    const at = (e: string) => driver.order.indexOf(e);
+    expect(at("generate:2"), "stage 2 was generated").toBeGreaterThan(-1);
+    expect(at("generate:2"), "not at Start: only after stage 1 completed").toBeGreaterThan(at("complete:1"));
+    expect(at("propose:2"), "its proposal is the plate's own draft").toBeGreaterThan(at("generate:2"));
+    expect(plays[1]!.advance, "the draft was confirmed: stage 2 was reached").not.toBeNull();
+    expect(rec.track(setup.stages[1]!.id).exit).not.toBe("not_reached");
+  });
+  it("a body that takes no firstLosses keeps its day-one Generate (the other rows are untouched)", async () => {
+    const driver = new PlateFake();
+    const ctx = ctxFor(driver, "LIFECYCLE", { row: "league_ko" });
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, fieldSizeFor("league_ko", "LIFECYCLE"));
+    expect(takesFirstLosses(setup.built.posted.stages.find((b) => b.seq === 2)!)).toBe(false);
+    await playDivision(ctx, rec, setup, {});
+    expect(driver.order.indexOf("generate:2"), "generated before stage 1 completed").toBeLessThan(driver.order.indexOf("complete:1"));
+    expect(driver.order.indexOf("generate:2")).toBeGreaterThan(-1);
   });
 });

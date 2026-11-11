@@ -603,5 +603,5 @@ describe("reference:boundary CLI (spawned — its exit code is the CI verdict)",
       expect(again.status, again.stderr).toBe(0);
       expect(again.stderr).toBe("");
     } finally { rmSync(root, { recursive: true, force: true }); }
-  });
+  }, 60_000); // three sequential CLI spawns, each bounded at 20 s: an explicit budget, so a bare local run and CI agree (review m3)
 });

@@ -16,6 +16,7 @@ import {
   type StandingsCarry,
 } from "@/lib/format-templates";
 import type { MessageKey } from "@/lib/messages";
+import { thirdPlaceFlagOf, thirdPlaceModeOf, thirdPlaceOffered, type ThirdPlaceMode } from "@/lib/third-place";
 import { estimateMinutes, estimateStages, type FormatEstimate } from "./format-estimate";
 import { collapsedPicks, formatPickerOrder, keepSizeGatedInView, openingKnobs, rankTemplates, SUGGESTED_COUNT, type PlanInput, type RankedTemplate } from "./model";
 
@@ -26,19 +27,24 @@ export interface FormatKnobValues {
   poolCount: number;
   legs: number;
   standingsCarry: StandingsCarry;
+  /** B4 T10 (X-TP-2): Third place, Shared or Play-off match - one choice for every knockout stage the format builds. */
+  thirdPlace: ThirdPlaceMode;
 }
 
 /** Which knobs a format shows. The picker renders exactly these, and `formatBoundIssue` / `formatStagesFor` read the same
  *  answer, so a knob is judged — and sent — exactly when it is on screen. */
 export interface FormatKnobsShown {
-  /** The Top N box: templates whose second stage is sized by `qualified`. ko_plate and qualifying_main read `qualified` too,
-   *  at their own default of 4 (sent that, never the box); group_playoffs is a fixed four. */
+  /** The Top N box: templates whose second stage is sized by `qualified`. qualifying_main reads `qualified` too,
+   *  at its own default of 4 (sent that, never the box); ko_plate sends none at all (X-PL-6: its plate takes every first loss); group_playoffs is a fixed four. */
   secondStage: boolean;
   pools: boolean;
   rounds: boolean;
   legs: boolean;
   /** The standings carry select: templates whose stages progress. */
   carry: boolean;
+  /** B4 T10 (X-TP-2): the Third place control - every template with a knockout stage. Below four entrants it is on screen but
+   *  its Play-off segment is disabled (owner pick 1A, superseding the plan's "hidden"): `thirdPlaceOffer` says which. */
+  thirdPlace: boolean;
 }
 
 export function formatKnobsShown(template: string): FormatKnobsShown {
@@ -48,7 +54,42 @@ export function formatKnobsShown(template: string): FormatKnobsShown {
     rounds: template === "swiss" || template === "swiss_playoff" || template === "swiss_knockout",
     legs: template === "league" || template === "league_ko" || template === "groups_ko" || template === "group_stepladder",
     carry: templateHasProgression(template),
+    thirdPlace: hasKnockoutStage(template),
   };
+}
+
+/** Whether a template draws a knockout stage (the kind a third-place match belongs to), read off its own drafts. */
+function hasKnockoutStage(template: string): boolean {
+  return buildTemplateStages(template, { qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 }).some((d) => d.kind === "knockout");
+}
+
+/** The field one knockout draft is drawn over, or null when it is not known up front. A root stage plays the whole plan; a fed one
+ *  plays what its rank cuts take (capped at the plan); a take that sizes itself later (a plate's first losses) is unknown. */
+function draftField(drafts: readonly StageDraft[], at: number, entrants: number): number | null {
+  const sources = drafts[at]!.progression?.sources;
+  if (sources === undefined || sources.length === 0) return entrants;
+  let total = 0;
+  for (const source of sources) {
+    for (const rule of source.take) {
+      if (rule.kind !== "rankRange") return null;
+      total += rule.to - rule.from + 1;
+    }
+  }
+  return Math.min(total, entrants);
+}
+
+/** X-TP-1 for the picker: whether the Play-off match is offered for this format at this plan, and the smallest field that says no.
+ *  EMPTY CASE FIRST: a format with no knockout stage offers nothing to refuse (offered, no field). Every knockout stage whose
+ *  field is known up front must reach `thirdPlaceOffered` - the ONE predicate the server's PATCH reads. */
+export function thirdPlaceOffer(template: string, knobs: Pick<FormatKnobValues, "qualified">, entrants: number): { offered: boolean; entrants: number | null } {
+  const drafts = buildTemplateStages(template, { qualified: clampKnob(knobs.qualified, FORMAT_BOUNDS.qualify.min, FORMAT_BOUNDS.qualify.max), swissRounds: 3, poolCount: 2, legs: 1 });
+  let smallest: number | null = null;
+  drafts.forEach((d, at) => {
+    if (d.kind !== "knockout") return;
+    const field = draftField(drafts, at, entrants);
+    if (field !== null && (smallest === null || field < smallest)) smallest = field;
+  });
+  return { offered: smallest === null || thirdPlaceOffered(smallest), entrants: smallest };
 }
 
 /** The first VISIBLE number knob outside FORMAT_BOUNDS (pools, rounds, then Top N), with the label the picker shows it
@@ -71,9 +112,9 @@ export function formatBoundIssue(
 /** The stage drafts a format sends. A cleared knob reads as Number("") === 0, so every number knob goes through the one
  *  clampKnob over FORMAT_BOUNDS; the Top N is read only where it is on screen, and a template that does not show it gets
  *  the templates' default 4. */
-export function formatStagesFor(template: string, knobs: FormatKnobValues): StageDraft[] {
+export function formatStagesFor(template: string, knobs: FormatKnobValues, entrants?: number): StageDraft[] {
   const shown = formatKnobsShown(template);
-  return applyStandingsCarry(
+  const drafts = applyStandingsCarry(
     buildTemplateStages(template, {
       qualified: shown.secondStage ? clampKnob(knobs.qualified, FORMAT_BOUNDS.qualify.min, FORMAT_BOUNDS.qualify.max) : 4,
       swissRounds: knobs.swissRounds,
@@ -82,6 +123,10 @@ export function formatStagesFor(template: string, knobs: FormatKnobValues): Stag
     }),
     knobs.standingsCarry,
   );
+  // B4 T10 (X-TP-2): the choice rides on EVERY knockout stage, written explicitly (Shared is `false`, never an absent key). A
+  // play-off the plan cannot play (`thirdPlaceOffer`: X-TP-1) is sent as Shared, never as a stage the server would refuse.
+  const mode = entrants !== undefined && !thirdPlaceOffer(template, knobs, entrants).offered ? "shared" : knobs.thirdPlace;
+  return drafts.map((d) => (d.kind === "knockout" ? { ...d, config: { ...d.config, thirdPlace: thirdPlaceFlagOf(mode) } } : d));
 }
 
 /** What the picker shows for a plan: the cards in order, which are folded, each card's counts, and the picked format's. */
@@ -153,7 +198,7 @@ export interface SavedStage {
  *
  *  F2 (unified progression field): reads the FIRST stage's `.progression`, matching whichever TakeRule kind
  *  format-templates.ts's real specs emit — rankRange -> to-from+1 (league_ko/group_stepladder/group_playoffs/
- *  qualifying_main), roundLosers -> count (ko_plate), picks -> picks.length (a hand-built custom graph only).
+ *  qualifying_main), roundLosers -> count (a stored pre-X-PL-6 plate), firstLosses -> no count, so it falls to 4 (ko_plate: nothing to knob), picks -> picks.length (a hand-built custom graph only).
  *
  *  A3 (round-4 review): groups_ko emits topNPerGroup (+ a bestNth remainder), never picks. topNPerGroup -> n × the group
  *  stage's pool count (config.pools.count on the group stage the progression sources: the nearest earlier one — F3
@@ -215,6 +260,7 @@ export function formatChoiceFromStages(stages: SavedStage[]): {
   swissRounds: number | null;
   legs: number;
   standingsCarry: StandingsCarry;
+  thirdPlace: ThirdPlaceMode;
 } {
   const configOf = (kinds: readonly string[]) => stages.find((st) => kinds.includes(st.kind))?.config ?? null;
   const rounds = (configOf(["swiss"]) as { rounds?: unknown } | null)?.rounds;
@@ -227,5 +273,7 @@ export function formatChoiceFromStages(stages: SavedStage[]): {
     swissRounds: typeof rounds === "number" ? rounds : null,
     legs: typeof legs === "number" ? legs : 1,
     standingsCarry: currentStandingsCarryFromStages(stages),
+    // One choice for the format: Play-off when any knockout stage stores it.
+    thirdPlace: stages.some((st) => st.kind === "knockout" && thirdPlaceModeOf(st.config) === "playoff") ? "playoff" : "shared",
   };
 }

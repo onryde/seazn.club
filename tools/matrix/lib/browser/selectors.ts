@@ -35,7 +35,6 @@ function table<T extends Record<string, object>>(t: T): Readonly<T> {
 const V2 = "apps/web/src/components/v2";
 const STANDINGS_TABLE = "apps/web/src/components/public-site/standings-table.tsx";
 const ORG_DIVISION_PAGE = "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx";
-const PUBLIC_DIVISION_PAGE = "apps/web/src/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx";
 /** confirm-dialog.tsx derives both buttons from its `testId` prop. */
 const CONFIRM_DIALOG: Pin = Object.freeze({ file: `${V2}/confirm-dialog.tsx`, needle: "`${testId}-confirm`" });
 
@@ -90,6 +89,8 @@ export const TESTID = testids({
   // FMT5: the format picker is shared with the Format dialog (format-picker.tsx), its testids unchanged.
   builderShowAll: { id: "division-builder-show-all", file: `${V2}/format-picker.tsx`, needle: 'data-testid="division-builder-show-all"' },
   // C9 R2: Sport is a radio tile per sport, five shown and the rest under this Show more tile.
+  // W4 T15: the builder's Third place control (B4 T10) - ONE two-segment fieldset (Shared | Play-off match), its testid the component's default.
+  thirdPlaceChoice: { id: "third-place-choice", file: `${V2}/third-place-choice.tsx`, needle: 'testId = "third-place-choice"' },
   builderSportMore: { id: "division-builder-sport-more", file: `${V2}/division-builder.tsx`, needle: 'data-testid="division-builder-sport-more"' },
   launchStart: { id: "launch-start-division", file: `${V2}/launch-actions.tsx`, needle: 'data-testid="launch-start-division"' },
   startConfirm: { id: "start-confirm-confirm", file: `${V2}/start-confirm-dialog.tsx`, needle: 'testId="start-confirm"', via: CONFIRM_DIALOG },
@@ -184,7 +185,8 @@ export const NAME = names({
   // Its Ends on is decorated exactly as the blank wizard's.
   templateName: dictionary("comp.wizard.name.label", `${V2}/template-gallery.tsx`),
   templateEndsOn: decorated("comp.wizard.endsOn", `${V2}/template-gallery.tsx`, "`${msg(\"comp.wizard.endsOn\")} *`"),
-  championLabel: dictionary("table.champion", PUBLIC_DIVISION_PAGE, "public"),
+  // W4 T15: the champion banner moved into the title banner component (B5a: it also shows a joint title).
+  championLabel: dictionary("table.champion", "apps/web/src/components/public-site/division-title-banner.tsx", "public"),
   // W1d Task 14 (item 15e): the console's "Void last entry" has no testid; its accessible name is the dictionary's
   // value (fixture-console.tsx renders msg("score.voidLast") inside the button, which also carries a title naming
   // the entry it would void, score.voidLastTitle).
@@ -204,6 +206,8 @@ export const DATA = data({
   fixtureRow: { selector: "li[data-fixture-no]", file: `${V2}/desk/run-sheet-row.tsx`, needle: "<li data-fixture-no={" },
   // Task 5.
   templateRadio: { selector: '[name="template"]', file: `${V2}/format-picker.tsx`, needle: 'name="template"' },
+  // W4 T15: a Third place segment, the <label> around its sr-only radio; `data-third-place-option` is the mode (shared | playoff).
+  thirdPlaceOption: { selector: "[data-third-place-option]", file: `${V2}/third-place-choice.tsx`, needle: "data-third-place-option={mode}" },
   // C9 R2: a sport's tile, the <label> around its sr-only radio.
   sportTile: { selector: "[data-sport]", file: `${V2}/division-builder.tsx`, needle: "data-sport={key}" },
   entrantKind: { selector: "[data-kind]", file: `${V2}/entrants-panel.tsx`, needle: "data-kind={k}" },

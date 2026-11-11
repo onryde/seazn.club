@@ -9847,6 +9847,16 @@
                           },
                           "conditional": {
                             "type": "boolean"
+                          },
+                          "joint_winners_at": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -23202,6 +23212,19 @@
                                               "count"
                                             ],
                                             "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "const": "firstLosses"
+                                              }
+                                            },
+                                            "required": [
+                                              "kind"
+                                            ],
+                                            "additionalProperties": false
                                           }
                                         ]
                                       }
@@ -23632,6 +23655,19 @@
                                                 "kind",
                                                 "round",
                                                 "count"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "firstLosses"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind"
                                               ],
                                               "additionalProperties": false
                                             }
@@ -24602,6 +24638,19 @@
                                               "count"
                                             ],
                                             "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "const": "firstLosses"
+                                              }
+                                            },
+                                            "required": [
+                                              "kind"
+                                            ],
+                                            "additionalProperties": false
                                           }
                                         ]
                                       }
@@ -25032,6 +25081,19 @@
                                                 "kind",
                                                 "round",
                                                 "count"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "firstLosses"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind"
                                               ],
                                               "additionalProperties": false
                                             }
@@ -25952,6 +26014,16 @@
                               },
                               "conditional": {
                                 "type": "boolean"
+                              },
+                              "joint_winners_at": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -28432,6 +28504,16 @@
                               },
                               "conditional": {
                                 "type": "boolean"
+                              },
+                              "joint_winners_at": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -29306,7 +29388,7 @@
     },
     "/api/v1/stages/{id}/complete": {
       "post": {
-        "summary": "Guarded stage completion / progression. A bracket stage whose final is settled but which still owes another line — a third-place match, or a bracket reset the losers' champion earned — that is scheduled, in play, or abandoned and held for its settle is refused 409 STAGE_HAS_UNDECIDED_FIXTURES with `fixture_ids` (W4 T6, AN-2) and nothing is written; a bye line, a cancelled line and a reset nobody owes are never owed. A bracket whose final is not yet settled answers `{completed: false}` as before",
+        "summary": "Guarded stage completion / progression. A bracket stage whose final is settled but which still owes another line — a third-place match, or a bracket reset the losers' champion earned — that is scheduled, in play, or abandoned and held for its settle is refused 409 STAGE_HAS_UNDECIDED_FIXTURES with `fixture_ids` (W4 T6, AN-2) and nothing is written; a bye line, a cancelled line and a reset nobody owes are never owed. A bracket whose final is not yet settled answers `{completed: false}` as before. A completed stage's `stage_completed` event carries `finalRanks` (entrant ids in rank order), `places` (`{entrantId, rank}`; level entrants share a rank, e.g. 1, 2, 3, 3 for a knockout without a third-place match) and, for a bracket, `title` (`champion`, `joint` or `vacant`, with the finalists of a vacant title)",
         "tags": [
           "stages"
         ],
@@ -30775,7 +30857,7 @@
         ]
       },
       "patch": {
-        "summary": "W3 T12 (SW-M10, #838; X-SW-17, BG-SW-1) — a Swiss stage's round count (`rounds`) and chess colours (`chess`), editable until the stage's FIRST START (a result or any recorded data, an online game, a decided board other than the bye; a bye alone and a device link are not a start). At least one key; unknown keys 400, and `requestedByes` (a requested half-point or zero-point bye, deferred — RB3-7(c)) is 400 SWISS_REQUESTED_BYES_DEFERRED with the way out: record a walkover on the player's board. Before that start: rounds above the new count lose their shells (`shells.removed`, and `slots_freed` of them held a laid-out slot), rounds added are minted for each round's own field once the stage holds shells (`shells.added`), and a moved count appends `swiss_rounds_changed` (an undo barrier: Undo across it is 422 SWISS_ROUNDS_CHANGE_NOT_UNDOABLE); the same count again writes nothing. `swiss_rounds` judges the count against the field its next Pair seats (verdict ok or warn above the safe maximum ⌊n/2⌋; null when `rounds` is not sent or there is no pairable field). Refused, nothing written: 422 STAGE_NOT_SWISS; 422 SCHEDULE_LOCKED (frozen timetable); 422 SWISS_CHESS_ALWAYS_ON for `chess: false` on a chess (boardgame) division, before or after the first start (a chess Swiss always balances colours: a stage stored off earlier still pairs in colour until its round 1 is paired, keeps what round 1 was paired with after that, and `chess: true` still switches it on); 409 SWISS_ROUNDS_LOCKED `{canFinish, canAddRound}` after the first start when `rounds` is sent (Finish the Swiss, or `POST /stages/{id}/swiss/add-round`), and 422 SWISS_OVER `{canFinish: false, canAddRound: false}` instead once the stage is complete or a later stage is under way; 422 SWISS_CHESS_LOCKED after the first start for a body that sends `chess` alone (the colours never move once play starts); 422 SWISS_ROUNDS_ABOVE_MAX `{rounds, field, hardMax, canFinish: false}` above the field's hard maximum (n − 1 even, n odd); 409 SWISS_ROUNDS_BELOW_SEATED below a paired round (Unpair it first); 409 FIXTURE_HAS_OWN_FORMAT for a removed shell carrying its own format",
+        "summary": "W4 B4 T9 (X-TP-1/2/6/7): `{ thirdPlace: \"shared\" | \"playoff\" }` sets a KNOCKOUT stage's third place (Shared: the two semi-final losers share 3rd; Play-off match: they play a third-place match). Editable until the stage STARTS (a result, a decided line, a Match Day call; a division Start alone is not one); a stage already holding lines is drawn again (a root bracket) or has its third-place line added or removed in place (a fed stage whose lines are seated keeps its draw) (`regenerated`), the same field twice writes nothing. Refused: 422 STAGE_NOT_KNOCKOUT (a Swiss body on a knockout is 422 STAGE_NOT_SWISS); 409 THIRD_PLACE_LOCKED once play in the stage has started; 422 KO_THIRD_PLACE_TOO_FEW `{entrants, stageId?}` for a play-off on a field under 4 (use Shared); 422 KO_CUT_NOT_WHOLE_ROUND when a later stage's rank cut from this one would stop being a whole round; 409 KO_REDRAW_WOULD_CLEAR_SETUP when redrawing for a play-off would clear match setup (Shared never refuses over setup: before play starts it removes the third-place line in place, freeing its slot, and keeps every other line). The Swiss edit: W3 T12 (SW-M10, #838; X-SW-17, BG-SW-1) — a Swiss stage's round count (`rounds`) and chess colours (`chess`), editable until the stage's FIRST START (a result or any recorded data, an online game, a decided board other than the bye; a bye alone and a device link are not a start). At least one key; unknown keys 400, and `requestedByes` (a requested half-point or zero-point bye, deferred — RB3-7(c)) is 400 SWISS_REQUESTED_BYES_DEFERRED with the way out: record a walkover on the player's board. Before that start: rounds above the new count lose their shells (`shells.removed`, and `slots_freed` of them held a laid-out slot), rounds added are minted for each round's own field once the stage holds shells (`shells.added`), and a moved count appends `swiss_rounds_changed` (an undo barrier: Undo across it is 422 SWISS_ROUNDS_CHANGE_NOT_UNDOABLE); the same count again writes nothing. `swiss_rounds` judges the count against the field its next Pair seats (verdict ok or warn above the safe maximum ⌊n/2⌋; null when `rounds` is not sent or there is no pairable field). Refused, nothing written: 422 STAGE_NOT_SWISS; 422 SCHEDULE_LOCKED (frozen timetable); 422 SWISS_CHESS_ALWAYS_ON for `chess: false` on a chess (boardgame) division, before or after the first start (a chess Swiss always balances colours: a stage stored off earlier still pairs in colour until its round 1 is paired, keeps what round 1 was paired with after that, and `chess: true` still switches it on); 409 SWISS_ROUNDS_LOCKED `{canFinish, canAddRound}` after the first start when `rounds` is sent (Finish the Swiss, or `POST /stages/{id}/swiss/add-round`), and 422 SWISS_OVER `{canFinish: false, canAddRound: false}` instead once the stage is complete or a later stage is under way; 422 SWISS_CHESS_LOCKED after the first start for a body that sends `chess` alone (the colours never move once play starts); 422 SWISS_ROUNDS_ABOVE_MAX `{rounds, field, hardMax, canFinish: false}` above the field's hard maximum (n − 1 even, n odd); 409 SWISS_ROUNDS_BELOW_SEATED below a paired round (Unpair it first); 409 FIXTURE_HAS_OWN_FORMAT for a removed shell carrying its own format",
         "tags": [
           "stages"
         ],
@@ -30796,21 +30878,41 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "properties": {
-                  "rounds": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 9007199254740991
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "rounds": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      "chess": {
+                        "type": "boolean"
+                      },
+                      "requestedByes": {
+                        "not": {}
+                      }
+                    },
+                    "additionalProperties": false
                   },
-                  "chess": {
-                    "type": "boolean"
-                  },
-                  "requestedByes": {
-                    "not": {}
+                  {
+                    "type": "object",
+                    "properties": {
+                      "thirdPlace": {
+                        "type": "string",
+                        "enum": [
+                          "shared",
+                          "playoff"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "thirdPlace"
+                    ],
+                    "additionalProperties": false
                   }
-                },
-                "additionalProperties": false
+                ]
               },
               "example": {
                 "rounds": 1,
@@ -30836,91 +30938,119 @@
                       "const": true
                     },
                     "data": {
-                      "type": "object",
-                      "properties": {
-                        "rounds": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
-                        },
-                        "chess": {
-                          "type": "boolean"
-                        },
-                        "swiss_rounds": {
-                          "anyOf": [
-                            {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "rounds": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "chess": {
+                              "type": "boolean"
+                            },
+                            "swiss_rounds": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "verdict": {
+                                      "type": "string",
+                                      "enum": [
+                                        "ok",
+                                        "warn"
+                                      ]
+                                    },
+                                    "recommended": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "safeMax": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "hardMax": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "verdict",
+                                    "recommended",
+                                    "safeMax",
+                                    "hardMax"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "shells": {
                               "type": "object",
                               "properties": {
-                                "verdict": {
-                                  "type": "string",
-                                  "enum": [
-                                    "ok",
-                                    "warn"
-                                  ]
-                                },
-                                "recommended": {
+                                "added": {
                                   "type": "integer",
                                   "minimum": -9007199254740991,
                                   "maximum": 9007199254740991
                                 },
-                                "safeMax": {
+                                "removed": {
                                   "type": "integer",
                                   "minimum": -9007199254740991,
                                   "maximum": 9007199254740991
                                 },
-                                "hardMax": {
+                                "slots_freed": {
                                   "type": "integer",
                                   "minimum": -9007199254740991,
                                   "maximum": 9007199254740991
                                 }
                               },
                               "required": [
-                                "verdict",
-                                "recommended",
-                                "safeMax",
-                                "hardMax"
+                                "added",
+                                "removed",
+                                "slots_freed"
                               ],
                               "additionalProperties": false
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "shells": {
-                          "type": "object",
-                          "properties": {
-                            "added": {
-                              "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
-                            },
-                            "removed": {
-                              "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
-                            },
-                            "slots_freed": {
-                              "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
                             }
                           },
                           "required": [
-                            "added",
-                            "removed",
-                            "slots_freed"
+                            "rounds",
+                            "chess",
+                            "swiss_rounds",
+                            "shells"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "stage_id": {
+                              "type": "string"
+                            },
+                            "thirdPlace": {
+                              "type": "string",
+                              "enum": [
+                                "shared",
+                                "playoff"
+                              ]
+                            },
+                            "regenerated": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "stage_id",
+                            "thirdPlace",
+                            "regenerated"
                           ],
                           "additionalProperties": false
                         }
-                      },
-                      "required": [
-                        "rounds",
-                        "chess",
-                        "swiss_rounds",
-                        "shells"
-                      ],
-                      "additionalProperties": false
+                      ]
                     },
                     "requestId": {
                       "type": "string",
@@ -33215,6 +33345,10 @@
                             },
                             "standingsHash": {
                               "type": "string"
+                            },
+                            "thirdPlaceDropped": {
+                              "type": "boolean",
+                              "const": true
                             }
                           },
                           "required": [
@@ -33269,7 +33403,8 @@
                           "reason": "example"
                         }
                       ],
-                      "standingsHash": "example"
+                      "standingsHash": "example",
+                      "thirdPlaceDropped": true
                     }
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -33900,6 +34035,16 @@
                               },
                               "conditional": {
                                 "type": "boolean"
+                              },
+                              "joint_winners_at": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -44979,6 +45124,16 @@
                         },
                         "conditional": {
                           "type": "boolean"
+                        },
+                        "joint_winners_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -45553,6 +45708,16 @@
                         "conditional": {
                           "type": "boolean"
                         },
+                        "joint_winners_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "conflicts": {
                           "type": "array",
                           "items": {
@@ -46046,6 +46211,560 @@
           },
           "422": {
             "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/fixtures/{id}/joint-winners": {
+      "post": {
+        "summary": "W4 T12 (X-CH-4, X-CH-6; Q4) — declare JOINT WINNERS on an unplayed final: both finalists rank 1st, nobody 2nd, and the bracket reads 'Joint winners'. No body. Offered on a deciding final (not a third-place match, not a double-elimination bracket) with both finalists seated and no result: scheduled, in play, abandoned awaiting its settle, or held level (`needs_decision`, a cricket final held under CK-KO-1 included); the settle stays available beside it. The final is stored decided with no outcome (`joint_winners_at`), the state it held is kept for the Undo, and the stage completes with it when every other line is settled (`stage_completed`). Organiser-only (a `manage` key). 422 JOINT_WINNERS_NOT_A_FINAL (a semi-final, a third-place match, a final with a seat still to be decided, a double-elimination bracket); 409 JOINT_WINNERS_FINAL_DECIDED (it already has a result or a declaration)",
+        "tags": [
+          "fixtures"
+        ],
+        "x-required-scope": "manage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "fixture_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "stage_completed": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "fixture_id",
+                        "stage_completed"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "fixture_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "stage_completed": true
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      },
+      "delete": {
+        "summary": "W4 T12 (X-CH-4) — undo 'Declare joint winners': the final returns to the status and outcome it held, the stage it completed re-opens (its placement snapshot is removed) and the title is vacated again. 409 JOINT_WINNERS_NOT_DECLARED when there is none; 409 VACANT_TITLE_ALREADY_SEEDED when that stage's completion already filled another stage's draw. Organiser-only (a `manage` key)",
+        "tags": [
+          "fixtures"
+        ],
+        "x-required-scope": "manage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "fixture_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "status": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "fixture_id",
+                        "status"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "fixture_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "status": "example"
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -88963,6 +89682,72 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "title": {
+                                "anyOf": [
+                                  {
+                                    "oneOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "const": "champion"
+                                          },
+                                          "champion": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "champion"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "const": "joint"
+                                          },
+                                          "winners": {
+                                            "type": "array",
+                                            "prefixItems": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "string"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "winners"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "const": "vacant"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -88975,7 +89760,8 @@
                               "kind",
                               "rounds",
                               "drawable",
-                              "championFixtureId"
+                              "championFixtureId",
+                              "title"
                             ],
                             "additionalProperties": false
                           }
@@ -89514,7 +90300,11 @@
                           }
                         ],
                         "drawable": true,
-                        "championFixtureId": "example"
+                        "championFixtureId": "example",
+                        "title": {
+                          "kind": "champion",
+                          "champion": "example"
+                        }
                       }
                     ],
                     "leaders": [
@@ -90901,6 +91691,16 @@
                               "type": "integer",
                               "minimum": -9007199254740991,
                               "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "joint_winners_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
                             },
                             {
                               "type": "null"

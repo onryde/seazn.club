@@ -21,6 +21,7 @@ import { seedNextStage, type SeededStage } from "./carry-over";
 import { generateStageFixturesUnpublished } from "./generate";
 import { computeSeedProposal } from "./seed-proposal";
 import { markDependentSeedProposalsStale } from "./seed-stale";
+import { isFirstLossProgression, maybeProposePlate } from "../plate-field";
 
 /**
  * W4 T6 (AN-2; the app half of engine row X-CH-7): the lines of a BRACKET stage still owed a result, in bracket order
@@ -32,7 +33,7 @@ import { markDependentSeedProposalsStale } from "./seed-stale";
  *  - a bye line (`isByeLine`) — a seat padded out or left dead by a departure, e.g. a third-place line whose BOTH semi
  *    losers have left (withdrawal-w2b's R-1 consequence: the stage completes on its final);
  *  - a double-elimination reset (`conditional`) that the grand final did not trigger: owed only when the grand final's
- *    winner is not its home entrant, the winners' champion (champion.ts `bracketChampion`, the engine harness's rule).
+ *    winner is not its home entrant, the winners' champion (champion.ts `bracketTitleOf`, the engine harness's rule).
  *    Until that grand final has a winner it is not owed either; the grand final itself is.
  * App PR B aliases the engine's same-named export against this one (controller ruling R15).
  */
@@ -179,7 +180,22 @@ async function progressCompletedStage(
 
   await fireStageRevalidate(auth.orgId, stageId);
 
-  if (nextProgression?.timing === "setup") {
+  // W4 T8 (X-PL-5): a plate is proposed after round two, so by the time its source completes it has been proposed (or has completed
+  // by name, X-PL-2). Asked again here and nothing more: a `computeSeedProposal` over a confirmed plate would 409 the completion
+  // (`SEEDING_ALREADY_CONFIRMED`), and the stage's own completion is the last chance for a field that only became known now.
+  // Then on to the division's completion below: a plate already complete leaves nothing open.
+  const plateNext = nextProgression?.timing === "setup" && isFirstLossProgression(nextProgression);
+  if (plateNext) {
+    // The completion above has ALREADY committed: a failure of the plate's trigger is said aloud, never reported as a failed
+    // completion (the sibling branch's F3 finding-4 rule). The plate is proposed again by the next result or withdrawal.
+    try {
+      await maybeProposePlate(auth, stageId);
+    } catch (err) {
+      log.warn({ event: "plate_trigger_failed_at_completion", stageId, nextStageId: next!.id, err: String(err) }, "plate_trigger_failed_at_completion");
+    }
+  }
+
+  if (nextProgression?.timing === "setup" && !plateNext) {
     // Best-effort, same spirit as the on_complete path's generation step
     // below: completion stands even if the proposal compute trips (e.g. the
     // source stage this points at isn't THIS one and isn't ready yet).

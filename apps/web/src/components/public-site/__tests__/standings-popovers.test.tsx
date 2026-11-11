@@ -189,7 +189,7 @@ describe("the hub's Table tab (StandingsTableView)", () => {
     entrantNames: NAMES,
     entrantLogos: {},
     entrantColours: {},
-    championId: null,
+    championIds: [],
     updatedAt: "2026-09-22T00:00:00.000Z",
     msg,
   });

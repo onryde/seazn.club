@@ -16,7 +16,7 @@ import { errorOf, is2xx, unwrapEnvelope } from "./envelope.ts";
 import {
   DESK_PHASES, DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VOID_EVENT, VisibilityDegraded, idempotencyKey, inSquadOrder, requireVoidTarget, retryKey,
   type AmericanoViewOut, type ChallengeOut, type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
-  type FinishSwissOut, type FixtureStateOut, type FromTemplateAnswer, type FromTemplateOut, type GenerateOut, type LateEntryWire, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  type FinishSwissOut, type FixtureStateOut, type FromTemplateAnswer, type FromTemplateOut, type GenerateOut, type JointWinnersOut, type JointWinnersUndoOut, type LateEntryWire, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type ReinstateOut, type ScheduledOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type VoidedOut, type WithdrawOut,
 } from "./types.ts";
 
@@ -318,6 +318,15 @@ export class HttpDriver implements OrganiserDriver {
 
   async placeLateEntrant(stageId: string, entrantId: string): Promise<LateEntryWire> {
     return this.#call<LateEntryWire>(`/api/v1/stages/${stageId}/late-entrants/${entrantId}/place`, "POST", {});
+  }
+
+  /** W4 T15 (Q4a): the organiser's "Declare joint winners" on an unplayed final (route fixtures/[id]/joint-winners, no body) and its Undo. */
+  async declareJointWinners(fixtureId: string): Promise<JointWinnersOut> {
+    return this.#call<JointWinnersOut>(`/api/v1/fixtures/${fixtureId}/joint-winners`, "POST");
+  }
+
+  async undoJointWinners(fixtureId: string): Promise<JointWinnersUndoOut> {
+    return this.#call<JointWinnersUndoOut>(`/api/v1/fixtures/${fixtureId}/joint-winners`, "DELETE");
   }
 
   /** W1d Task 14 (item 15c): dates the fixture at this instant — which is today in every venue time zone, so the

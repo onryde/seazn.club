@@ -33,6 +33,8 @@ export const SeedProposalComputed = z.object({
   qualifiers: z.array(QualifierOutS),
   ties: z.array(TieOutS),
   standingsHash: z.string(),
+  /** A plate asked for a third-place match and its field gave under two real semi-finals: it was drawn without (RB4-E5/T4). */
+  thirdPlaceDropped: z.literal(true).optional(),
 });
 export type SeedProposalComputed = z.infer<typeof SeedProposalComputed>;
 

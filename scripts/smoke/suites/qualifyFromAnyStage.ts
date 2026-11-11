@@ -4,7 +4,8 @@ import { type Session, check, tag, v1, v1data } from "../harness.ts";
 /**
  * L3/#414 pass 3 / F3 review item 5 — a multi-stage format built end to end
  * over real HTTP: knockout main draw -> plate, seeded from round-1 losers
- * (roundLosers). Proves the whole chain the ko_plate TEMPLATE actually
+ * (roundLosers — the legacy shape a stored plate keeps; the ko_plate template now writes `firstLosses`, X-PL-6, whose
+ * day-one plate and generation are the later knockout tasks' to smoke). Proves the whole chain the ko_plate TEMPLATE actually
  * exercises today: `timing: "setup"` (F3 flipped every picker template to
  * day-one fixtures) means the plate's TBD bracket exists before Main is even
  * generated, and completing Main computes a DRAFT seed proposal rather than

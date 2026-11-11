@@ -14,7 +14,7 @@ import { declaredPoints, envelopes, foldStream, lineupsFor, unplayedBoard } from
 import { redact } from "../redact.ts";
 import { routeTo } from "../routing.ts";
 import {
-  DEPARTED_STATUSES, isNamedRefusal, isTerminal, snap, toObservedOutcome,
+  DEPARTED_STATUSES, isNamedRefusal, isTerminal, placesAndTitle, snap, toObservedOutcome,
   type CaseFact, type CompleteObs, type ConfigEditObs, type FinishObs, type GenerateObs, type LoopExit, type ObservedDeclared, type ObservedFixture,
   type ObservedOutcome, type ObservedRun, type ObservedStage, type PairRoundObs, type WithdrawalObs,
 } from "../observed.ts";
@@ -22,7 +22,7 @@ import { decidersOffRulesFor, drawsAllowed, entrantKindFor, sportModule, stageCf
 import { STREAM_GENERATORS, forfeitPosting, generateStream, levelReachable, matchesRequest, type RequestMatch } from "../streams/index.ts";
 import { outcomeLabel, type ForfeitReason, type ProductFold, type RequestedOutcome, type Side, type StreamEvent, type StreamLineups } from "../streams/types.ts";
 import { forfeitPlayOf, levelKindOf, loserSeatOf, nextLineOf, type BracketDrive } from "../reference-bracket.ts";
-import { confirmAdvance, sourcePoolCount, type AdvanceObs } from "./advance.ts";
+import { confirmAdvance, plateFieldOf, sourcePoolCount, takesFirstLosses, type AdvanceObs } from "./advance.ts";
 import { playAmericano, playMexicano } from "./americano-loop.ts";
 import { playLadder } from "./ladder-loop.ts";
 import { lineupWarningLine, postedTeamSides, putOwedLineups, type LineupSink } from "./lineup-plan.ts";
@@ -180,6 +180,9 @@ export class Recorder {
   /** Entrants a recorded withdrawal took out: their fixtures may be finished
    *  by the product's cascade, not the harness (R4 sets it). */
   readonly withdrawn = new Set<string>();
+  /** W4 T15: fixtures a scenario watched the PRODUCT finish by an organiser act it performed itself (a withdrawal's cascade for an entrant the single
+   *  `withdrawal` observation cannot name, a declared joint-winners final): fixture id -> the act. life-results-as-posted reads it as an explanation. */
+  readonly productActs = new Map<string, string>();
   /** W1c Task 7: fixtures whose stream is the ledger's stored rows (the pad
    *  path), not the events the harness meant to send. PADPROOF requires every
    *  fixture it decides to be one. */
@@ -827,7 +830,7 @@ async function finishSwiss(ctx: ScenarioContext, rec: Recorder, stageId: string,
     // A 2xx that did not complete the stage committed no completion (the driver would let /complete be asked), so it is not kept.
     if (!f.completed) return false;
     const done = f.events.find((e) => e.type === "stage_completed");
-    track.finishCompleted = { status: 200, code: null, completed: true, finalRanks: done?.finalRanks ?? null, seedProposal: f.seed_proposal ?? null };
+    track.finishCompleted = { status: 200, code: null, completed: true, finalRanks: done?.finalRanks ?? null, ...placesAndTitle(done), seedProposal: f.seed_proposal ?? null };
     return true;
   } catch (e) {
     if (!(e instanceof RefusedCall)) throw e;
@@ -933,14 +936,33 @@ export async function playDivision(
   ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup,
   hooks: RoundHooks & { beforeComplete?: (stage: StageRef) => Promise<void> } = {},
 ): Promise<StagePlay[]> {
-  for (const s of setup.stages.slice(1)) await recordGenerate(ctx, rec, s.id);
+  // W4 B3 (X-PL-2, owner ruling G2): a firstLosses plate has NO day-one lines - its field is open until every first match is decided, so a
+  // Generate before then answers an empty list by design. It is generated (and proposed) where the product draws it, below.
+  for (const s of setup.stages.slice(1)) {
+    const posted = setup.built.posted.stages.find((b) => b.seq === s.seq);
+    if (posted !== undefined && takesFirstLosses(posted)) continue;
+    await recordGenerate(ctx, rec, s.id);
+  }
   const plays: StagePlay[] = [];
   for (const [i, stage] of setup.stages.entries()) {
     let advance: AdvanceObs | null = null;
     let field: readonly string[] | null = i === 0 ? setup.entrants.map((e) => e.id) : null;
     if (i > 0) {
       const prev = plays[i - 1];
-      const proposal = prev.complete?.seedProposal ?? null;
+      let proposal = prev.complete?.seedProposal ?? null;
+      // A plate was proposed after round two (maybeProposePlate), so the source's /complete carries no proposal for it: the draft is read
+      // off the plate itself, the way q5-plate.ts draws it. The field is complete by now (the source is), so its lines exist.
+      const plateBody = setup.built.posted.stages.find((b) => b.seq === stage.seq);
+      if (proposal === null && prev.complete?.completed === true && plateBody !== undefined && takesFirstLosses(plateBody)) {
+        await recordGenerate(ctx, rec, stage.id);
+        try {
+          const fresh = await ctx.driver.recomputeSeedProposal(stage.id);
+          proposal = { id: fresh.id, status: fresh.status };
+        } catch (e) {
+          if (!(e instanceof RefusedCall)) throw e;
+          rec.notes.push(`stage ${stage.seq}: the plate's seed proposal was refused ${e.status} ${e.code ?? "(no code)"}`);
+        }
+      }
       if (prev.complete?.completed !== true || proposal === null) {
         rec.track(stage.id).exit = "not_reached";
         const why = prev.complete === null ? "never completed" : `completed=${prev.complete.completed}, proposal ${proposal === null ? "none" : proposal.id}`;
@@ -957,9 +979,12 @@ export async function playDivision(
       if (prevBody === undefined) throw new Error(`scenario: stage ${prev.stage.seq} has no posted body — ${setup.built.posted.stages.length} posted, ${setup.stages.length} built`);
       const sourceField = i === 1 ? setup.entrants.length : prev.advance?.filled;
       if (sourceField === undefined) throw new Error(`scenario: stage ${prev.stage.seq} was reached with no advance to size its field`);
-      const named = new Set((await ctx.driver.listFixtures(setup.division.id)).filter((f) => f.stage_id === prev.stage.id && f.pool_id !== null).map((f) => f.pool_id!));
+      const listed = (await ctx.driver.listFixtures(setup.division.id)).filter((f) => f.stage_id === prev.stage.id);
+      const named = new Set(listed.filter((f) => f.pool_id !== null).map((f) => f.pool_id!));
       const pools = sourcePoolCount(prevBody, sourceField, named);
-      advance = await confirmAdvance(ctx, rec, stage, proposal, body, pools);
+      // X-PL-6: a plate's seats are the source's played first losses; read off its own rows, only when the body asks.
+      const plateField = plateFieldOf(body, listed.map((f) => ({ roundNo: f.round_no, home: f.home_entrant_id, away: f.away_entrant_id, outcome: f.outcome, thirdPlace: f.third_place })));
+      advance = await confirmAdvance(ctx, rec, stage, proposal, body, pools, plateField);
       field = advance.seeded;
       if (advance.status !== 200) {
         rec.track(stage.id).exit = "not_reached";
@@ -1053,7 +1078,7 @@ export async function finishStage(ctx: ScenarioContext, rec: Recorder, stageId: 
   try {
     const c = await ctx.driver.completeStage(stageId);
     const done = c.events.find((e) => e.type === "stage_completed");
-    return { status: 200, code: null, completed: c.completed, finalRanks: done?.finalRanks ?? null, seedProposal: c.seed_proposal ?? null };
+    return { status: 200, code: null, completed: c.completed, finalRanks: done?.finalRanks ?? null, ...placesAndTitle(done), seedProposal: c.seed_proposal ?? null };
   } catch (e) {
     if (!(e instanceof RefusedCall)) throw e;
     if (e.code === SEEDING_FAILED_AFTER_COMMIT) {

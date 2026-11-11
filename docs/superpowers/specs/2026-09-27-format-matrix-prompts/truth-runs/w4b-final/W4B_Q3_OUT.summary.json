@@ -1,0 +1,137 @@
+{
+  "scenario": "W4B_Q3_OUT",
+  "cases": [
+    {
+      "caseId": "knockout_third_place|football|11-a-side|W4B_Q3_OUT",
+      "state": "works",
+      "reason": "9 checks, 60 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q3-third-place-both-out",
+          "verdict": "pass",
+          "checked": 25
+        }
+      ]
+    },
+    {
+      "caseId": "knockout_third_place|cricket|t20|W4B_Q3_OUT",
+      "state": "works",
+      "reason": "9 checks, 60 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q3-third-place-both-out",
+          "verdict": "pass",
+          "checked": 25
+        }
+      ]
+    },
+    {
+      "caseId": "knockout_third_place|boardgame|blitz|W4B_Q3_OUT",
+      "state": "works",
+      "reason": "8 checks, 58 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q3-third-place-both-out",
+          "verdict": "pass",
+          "checked": 25
+        }
+      ]
+    },
+    {
+      "caseId": "knockout_third_place|carrom|club-29|W4B_Q3_OUT",
+      "state": "works",
+      "reason": "8 checks, 58 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q3-third-place-both-out",
+          "verdict": "pass",
+          "checked": 25
+        }
+      ]
+    },
+    {
+      "caseId": "knockout_third_place|generic|score|W4B_Q3_OUT",
+      "state": "works",
+      "reason": "8 checks, 58 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q3-third-place-both-out",
+          "verdict": "pass",
+          "checked": 25
+        }
+      ]
+    },
+    {
+      "caseId": "knockout_third_place|volleyball|beach|W4B_Q3_OUT",
+      "state": "works",
+      "reason": "9 checks, 60 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q3-third-place-both-out",
+          "verdict": "pass",
+          "checked": 25
+        }
+      ]
+    },
+    {
+      "caseId": "knockout_third_place|badminton|bwf-3x15|W4B_Q3_OUT",
+      "state": "works",
+      "reason": "8 checks, 58 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q3-third-place-both-out",
+          "verdict": "pass",
+          "checked": 25
+        }
+      ]
+    },
+    {
+      "caseId": "knockout_third_place|tabletennis|bo5|W4B_Q3_OUT",
+      "state": "works",
+      "reason": "8 checks, 58 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q3-third-place-both-out",
+          "verdict": "pass",
+          "checked": 25
+        }
+      ]
+    },
+    {
+      "caseId": "knockout_third_place|tennis|tour|W4B_Q3_OUT",
+      "state": "works",
+      "reason": "8 checks, 58 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q3-third-place-both-out",
+          "verdict": "pass",
+          "checked": 25
+        }
+      ]
+    },
+    {
+      "caseId": "knockout_third_place|icehockey|iihf|W4B_Q3_OUT",
+      "state": "works",
+      "reason": "9 checks, 60 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q3-third-place-both-out",
+          "verdict": "pass",
+          "checked": 25
+        }
+      ]
+    },
+    {
+      "caseId": "knockout_third_place|hockey|fih-outdoor|W4B_Q3_OUT",
+      "state": "works",
+      "reason": "9 checks, 60 items",
+      "scriptChecks": [
+        {
+          "id": "w4b-q3-third-place-both-out",
+          "verdict": "pass",
+          "checked": 25
+        }
+      ]
+    }
+  ]
+}

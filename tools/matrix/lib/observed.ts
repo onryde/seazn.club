@@ -60,7 +60,44 @@ export interface FinishObs { status: number; code: string | null; finishedAfter:
  *  /complete minted (usecases/stages/completion.ts progressCompletedStage) — null when
  *  none was (the last stage, a refusal, a seeding failure). Optional so the
  *  model's and the tests' literals that predate it still type. */
-export interface CompleteObs { status: number; code: string | null; completed: boolean; finalRanks: string[] | null; seedProposal?: { id: string; status: string } | null }
+/** W4 T3 (X-CH-1, X-FR-4): one place of a completed stage as the wire serves it - level entrants hold ONE rank (`1, 2, 3, 3`). */
+export interface ObservedPlace { readonly entrantId: string; readonly rank: number }
+/** What a bracket's deciding final crowned, as the completion serves it (competition.ts WireTitle): a vacant title names the
+ *  two sides of the final both walked over. */
+export type ObservedTitle =
+  | { readonly kind: "champion"; readonly champion: string }
+  | { readonly kind: "joint"; readonly winners: readonly [string, string] }
+  | { readonly kind: "vacant"; readonly finalists: readonly string[] };
+/** `places` / `title` (W4 T3; T15): the completion's own ranks and crown. Optional and nullable: a table stage serves no title, a
+ *  completion that committed and failed to seed serves neither, and the fakes and the model's literals that predate them omit both
+ *  (which reads as "not observed" - see `crownOf`). `finalRanks` stays the entrant ids in rank order. */
+export interface CompleteObs {
+  status: number; code: string | null; completed: boolean; finalRanks: string[] | null;
+  seedProposal?: { id: string; status: string } | null;
+  places?: readonly ObservedPlace[] | null;
+  title?: ObservedTitle | null;
+}
+
+/** The completion's `places` and `title` as the wire event carries them (one authority for the three sites that read an event). */
+export function placesAndTitle(ev: { places?: readonly ObservedPlace[]; title?: ObservedTitle } | undefined): { places: readonly ObservedPlace[] | null; title: ObservedTitle | null } {
+  return { places: ev?.places ?? null, title: ev?.title ?? null };
+}
+
+/** Who a completed stage CROWNED, read from the completion alone (W4 T15: a joint title has TWO, a vacant one NONE, so `finalRanks[0]`
+ *  is no longer the champion). `unread`: the completion carried no title (a table stage, a fake, a seeding failure) - the caller
+ *  decides what that means, never this function. */
+export type Crown =
+  | { readonly kind: "champion"; readonly ids: readonly [string] }
+  | { readonly kind: "joint"; readonly ids: readonly [string, string] }
+  | { readonly kind: "vacant"; readonly ids: readonly [] }
+  | { readonly kind: "unread"; readonly ids: readonly [] };
+export function crownOf(c: Pick<CompleteObs, "title"> | null | undefined): Crown {
+  const t = c?.title;
+  if (t === undefined || t === null) return { kind: "unread", ids: [] };
+  if (t.kind === "champion") return { kind: "champion", ids: [t.champion] };
+  if (t.kind === "joint") return { kind: "joint", ids: [t.winners[0], t.winners[1]] };
+  return { kind: "vacant", ids: [] };
+}
 
 /** Why a stage's play loop stopped (I-1). Only "drained" — generate answered
  *  and no seated fixture was left open, or the swiss budget was paired

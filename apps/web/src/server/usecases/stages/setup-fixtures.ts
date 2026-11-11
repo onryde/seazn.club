@@ -10,6 +10,7 @@ import { pinStageTableRules } from "@/server/engine-db/table-rules";
 import { BYE_SLOT_LABEL } from "@/lib/bye-line";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { courtNamesById } from "../schedule";
+import { stageHasStarted } from "../fixture-started-sql";
 import { descriptorLabel, expandSources, placeDescriptors, resolveProgressionSource, sourceShapeOf, type SlotDescriptor, type SlotLabel } from "../stage-seeding";
 import {
   STAGE_COLS,
@@ -20,7 +21,7 @@ import {
   type ActiveEntrant,
   type GenerateWrite,
 } from "./types";
-import { POOL_KEYS, poolCount, generate } from "./generators";
+import { POOL_KEYS, poolCount, generateForStage } from "./generators";
 
 // ---------------------------------------------------------------------------
 // D4a (P5) / F2 — TBD-shape generation for a `timing: "setup"` progression.
@@ -61,7 +62,14 @@ export async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: s
 
 /** The body of a `timing: "setup"` Generate, in the caller's transaction. Idempotent over the rows it finds (keyed by
  *  `ext_key`), so an un-fill runs it to put a line's labels back (fed-seats.ts `unfillProposalSeats`, W4 T14). */
-export async function writeProgressionSetupFixtures(tx: Tx, stageId: string): Promise<GenerateWrite> {
+export async function writeProgressionSetupFixtures(
+  tx: Tx,
+  stageId: string,
+  /** `checkSeats`: judge a plate's laid-out lines by their seats as well as their keys (the proposal's own call, whose plate holds
+   *  every label). The un-fill's call (fed-seats.ts) leaves it off: it runs while seats and labels are mid-restore, so a seat count
+   *  read then would be wrong, and it re-reads the source's CURRENT shape - a size change is the next proposal's to redraw. */
+  opts: { checkSeats?: boolean } = {},
+): Promise<GenerateWrite> {
   const [stage] = await tx<StageRow[]>`
     select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
   if (!stage) throw new HttpError(404, "stage not found");
@@ -74,8 +82,14 @@ export async function writeProgressionSetupFixtures(tx: Tx, stageId: string): Pr
   const shapes: SourceShape[] = [];
   for (const s of progression.sources) {
     const source = await resolveProgressionSource(tx, stage, s.stage);
-    shapes.push(await sourceShapeOf(tx, source));
+    // W4 T8 (X-PL-5): a `firstLosses` take's size is the source's first-loss field, known only once round two is played.
+    shapes.push(await sourceShapeOf(tx, source, s.take));
   }
+  // The plate has NO day-one fixtures (owner ruling G2 exempts it from "Start creates placeholders for every stage"): while its
+  // field is open the take expands to no slot, and the stage stays as it is (pending, no lines) - the organiser reads "Plate draws
+  // after round 2", never a refusal. It is drawn at its field's size by `maybeProposePlate` (plate-field.ts), which asks again.
+  const firstLossShape = progression.sources.some((s, i) => s.take.some((t) => t.kind === "firstLosses") && shapes[i]!.firstLossCount === undefined);
+  if (firstLossShape) return emptyGenerate(tx, stage);
   const pots = expandSources(progression.sources, (i) => shapes[i]!);
   // F3 round-3 review, Task 1 — `stage.kind` is THIS stage's own kind (the
   // progression's target), threaded through so placeDescriptors can refuse
@@ -125,14 +139,44 @@ export async function writeProgressionSetupFixtures(tx: Tx, stageId: string): Pr
     }
   }
 
-  const existing = await tx<{ id: string; ext_key: string | null }[]>`
+  let existing: { id: string; ext_key: string | null }[] = await tx<{ id: string; ext_key: string | null }[]>`
     select id, ext_key from fixtures where stage_id = ${stageId}`;
 
   // A `timing: "setup"` progression generates off SYNTHETIC entrants —
   // score-dependent formats (swiss/americano/ladder) have no seed-order
   // shape to draw before results exist, same restriction the plain path
   // has; `generate()` covers every bracket/table kind that DOES have one.
-  const gen: SeededGenFixture[] = generate(stage.kind, stage.config, entrants, poolIds);
+  // RB4-E5 / RB4-T4: a third-place match needs two real semi-finals. A plate's field is unknown up front, so a plate that asks for one
+  // and draws under four is drawn WITHOUT it (never refused: RB4-P6); `computeSeedProposal` records the drop in the proposal.
+  const isFirstLossPlate = progression.sources.some((s) => s.take.some((t) => t.kind === "firstLosses"));
+  const config = isFirstLossPlate && stage.config.thirdPlace === true && placed.length < 4 ? { ...stage.config, thirdPlace: false } : stage.config;
+  const gen: SeededGenFixture[] = generateForStage(stageId, stage.kind, config, entrants, poolIds);
+
+  // W4 T8 (X-PL-7): a plate's lines are sized by its field, and the field can change size before the plate starts (a corrected
+  // round-two result, a withdrawal). Lines laid out for another size are not this bracket: they go, and the right ones are
+  // written below. Never over a started line (`stageHasStarted`: a plate that has begun stands as it is drawn). Keyed on the
+  // lines' own keys (every call) and, on the proposal's call, their round-one seats (`opts.checkSeats`), so a re-run at the SAME
+  // size - the un-fill putting labels back, or a second proposal on an unchanged field - keeps every row and its time and court.
+  if (isFirstLossPlate && existing.length > 0) {
+    const wanted = new Set(gen.map((g) => g.extKey));
+    let stale = existing.some((e) => e.ext_key === null || !wanted.has(e.ext_key)) || gen.some((g) => !existing.some((e) => e.ext_key === g.extKey));
+    // The keys alone cannot see every change of size: a bracket of 3 and a bracket of 4 lay out the SAME three lines and differ
+    // only in where the bye is (RB4-L4), so a field that moved 3 -> 4 (a match abandoned when the plate was drawn, ruled later)
+    // kept lines with no seat for its fourth qualifier: 422 SEEDING_RULES_MISSING on every re-proposal, advice that could not
+    // work. The seats the lines were laid out for - every round-one side that is not a bye - must be the field's size too.
+    if (!stale && opts.checkSeats === true) {
+      const sides = await tx<{ h: { key?: string } | null; a: { key?: string } | null; he: string | null; ae: string | null }[]>`
+        select home_slot_label as h, away_slot_label as a, home_entrant_id as he, away_entrant_id as ae
+          from fixtures where stage_id = ${stageId} and round_no = 1`;
+      const isSeat = (label: { key?: string } | null, entrant: string | null) => entrant !== null || (label !== null && label.key !== BYE_SLOT_LABEL.key);
+      const seats = sides.reduce((n, r) => n + (isSeat(r.h, r.he) ? 1 : 0) + (isSeat(r.a, r.ae) ? 1 : 0), 0);
+      stale = seats !== entrants.length;
+    }
+    if (stale && !(await stageHasStarted(tx, stageId))) {
+      await tx`delete from fixtures where stage_id = ${stageId}`;
+      existing = [];
+    }
+  }
 
   // F2a (P7 follow-up, 2026-08-14): the plain path's `group_too_few_entrants`
   // guard (:990-999) only fires when `gen.length === 0` — but a
@@ -412,6 +456,18 @@ export async function writeProgressionSetupFixtures(tx: Tx, stageId: string): Pr
     select competition_id from divisions where id = ${stage.division_id}`;
   return {
     outcome: { created, existing: gen.length - created, fixtures },
+    divisionId: stage.division_id,
+    competitionId: division!.competition_id,
+    kind: stage.kind,
+  };
+}
+
+/** A Generate that wrote nothing: the stage has no lines yet and says so. Its `outcome` is the shape every Generate returns, with
+ *  no `created` and no fixtures, so a caller that publishes on `created > 0` publishes nothing. */
+async function emptyGenerate(tx: Tx, stage: StageRow): Promise<GenerateWrite> {
+  const [division] = await tx<{ competition_id: string }[]>`select competition_id from divisions where id = ${stage.division_id}`;
+  return {
+    outcome: { created: 0, existing: 0, fixtures: [] },
     divisionId: stage.division_id,
     competitionId: division!.competition_id,
     kind: stage.kind,

@@ -23,7 +23,7 @@ import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { RefusedCall, type FixtureRow, type StageRef, type StandingsRowWire, type WithdrawOut } from "../driver/types.ts";
 import { fieldSizeFor } from "../field-size.ts";
 import { foldStream, tableContribution } from "../fold.ts";
-import { isTerminal, toObservedOutcome, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../observed.ts";
+import { crownOf, isTerminal, toObservedOutcome, type CompleteObs, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../observed.ts";
 import type { CreditCase } from "@seazn/reference";
 import type { CheckResult } from "../results.ts";
 import { sportModule } from "../sport-cfg.ts";
@@ -449,7 +449,8 @@ export function tbdSeatWalksOver(r: WdRecord, fixtures: readonly ObservedFixture
  *  - The final, in the crowned half (wdCascFinalHalf): a2 walked over SF1 beside w1's dead seat and waits there; the
  *    seat SF2's void feeds is dead, so a2 walks over by bye and holds the title. The vacant half's final is
  *    finalVacant's. */
-export function bothSeatsDead(r: WdRecord, fixtures: readonly ObservedFixture[], finalRanks: readonly string[] | null): CheckResult {
+export function bothSeatsDead(r: WdRecord, fixtures: readonly ObservedFixture[], finalRanks: readonly string[] | null, complete: Pick<CompleteObs, "title"> | null = null): CheckResult {
+  const crown = crownOf(complete);
   if (r.lines === null || r.a2 === null) return assertion("w2b-withdrawal-both-seats-dead", [{ ok: false, note: "the choreography never reached the second line" }]);
   const sf = byExt(fixtures, r.lines.b.sf);
   const fin = byExt(fixtures, r.lines.final);
@@ -460,13 +461,15 @@ export function bothSeatsDead(r: WdRecord, fixtures: readonly ObservedFixture[],
     { ok: r.dw !== null && r.dw.refusal === null, note: r.dw === null ? "the quarter-final double walkover was never posted" : `${r.dw.fixtureId}: the double walkover was refused ${r.dw.refusal?.status ?? ""} ${r.dw.refusal?.code ?? ""}` },
     { ok: sf?.status === "abandoned" && sf.outcome == null && sfSeats.length === 0, note: `${r.lines.b.sf}: ${sf?.status ?? "(missing)"} ${text(sf?.outcome)}, seats ${sfSeats.join(" v ") || "nobody"} — wanted abandoned with no outcome, seats nobody (a departed seat beside a recorded double walkover is a void)` },
   ];
-  // The vacant half pins no finalRanks: the product ranks a first-round loser 1st while its banner names nobody — a W4
-  // defect (VACANT_TITLE_ROUTE) a pin would freeze (class 4). finalVacant keeps the void and the no-champion items.
+  // The vacant half reads the TITLE, never finalRanks (W4 T15): both finalists withdrew, so the completion's title is vacant
+  // and crowns nobody. finalRanks is not read there - a first-round loser may still head it.
   if (r.half === "crowned") {
     items.push(
       { ok: fin?.status === "forfeited" && fa !== null && fa.winner === r.a2 && fa.loser === null && fa.reason === "bye", note: `${r.lines.final}: ${fin?.status ?? "(missing)"} ${text(fin?.outcome)} — wanted forfeited bye award to ${r.a2} (the seat SF2's void feeds is dead, X-DW-2)` },
-      { ok: finalRanks?.[0] === r.a2, note: `the stage crowned ${finalRanks?.[0] ?? "(none)"} (finalRanks of ${finalRanks?.length ?? 0}), wanted ${r.a2}` },
+      { ok: (crown.kind === "unread" ? finalRanks?.[0] : crown.kind === "champion" ? crown.ids[0] : undefined) === r.a2, note: `the stage crowned ${crown.kind === "unread" ? (finalRanks?.[0] ?? "(none)") : crown.kind === "champion" ? crown.ids[0] : `${crown.kind} (${crown.ids.join(", ") || "nobody"})`} (finalRanks of ${finalRanks?.length ?? 0}), wanted ${r.a2}` },
     );
+  } else {
+    items.push({ ok: crown.kind === "vacant", note: `the completion's title is ${crown.kind === "unread" ? "(not served)" : `${crown.kind} (${crown.ids.join(", ") || "nobody"})`}, wanted vacant: both finalists withdrew` });
   }
   return assertion("w2b-withdrawal-both-seats-dead", items);
 }
@@ -751,7 +754,7 @@ const wdCasc = scenario("WD-CASC", async (ctx, rec, setup) => {
   // The cascades wrote several fixtures no single recorded withdrawal explains: this scenario's own checks judge each.
   return finish(ctx, rec, setup, plays, (observed) => {
     const fixtures = observed.stages[0].fixtures;
-    const own = [withdrawalsWalkOver(r, fixtures), tbdSeatWalksOver(r, fixtures), bothSeatsDead(r, fixtures, observed.stages[0].complete?.finalRanks ?? null)];
+    const own = [withdrawalsWalkOver(r, fixtures), tbdSeatWalksOver(r, fixtures), bothSeatsDead(r, fixtures, observed.stages[0].complete?.finalRanks ?? null, observed.stages[0].complete ?? null)];
     return Promise.resolve(r.half === "vacant" ? [...own, finalVacant(r, fixtures)] : own);
   }, { resultsAsPosted: false });
 });
