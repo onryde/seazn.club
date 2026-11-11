@@ -220,12 +220,18 @@ const DEAL_ROUTE: Record<DealAction, string> = {
   end_now: "end",
 };
 
-/** Is a delete certain to be refused? Money history (paid or refunded) on any of a sponsor's deals is a 409
- *  `sponsor_has_deal_history` (server/usecases/sponsors.ts `dealHoldsHistory`). What the row can see of it is its paid order
- *  and the deal it shows; a pre-deals order or a history on an older deal is only known to the server, whose refusal is shown
- *  the same way. So this only decides whether to ASK first - it refuses nothing. */
+/** Is a delete certain to be refused? History on any of a sponsor's deals - money paid or refunded, or an invoice number (every
+ *  online and offline deal gets one when it is made, paid or not: sponsor invoices, Task 20) - is a 409 `sponsor_has_deal_history`
+ *  (server/usecases/sponsors.ts `dealHoldsHistory`). What the row can see of it is its paid order and the deal it shows; a pre-deals
+ *  order or a history on an older deal is only known to the server, whose refusal is shown the same way. So this only decides
+ *  whether to ASK first - it refuses nothing. */
 function deleteIsRefusedForHistory(s: SponsorItem): boolean {
-  return Boolean(s.paid_order_id) || s.deal?.payment_status === "paid" || s.deal?.payment_status === "refunded";
+  return (
+    Boolean(s.paid_order_id) ||
+    s.deal?.payment_status === "paid" ||
+    s.deal?.payment_status === "refunded" ||
+    s.deal?.invoice_number != null
+  );
 }
 
 /** The dictionary key for a refused logo upload grant, from the route's STATUS (batch H review m6): the picker offers PNG, JPG and WebP,
@@ -701,11 +707,11 @@ export function OrgSponsors({
 
   function remove(s: SponsorItem) {
     void (async () => {
-      // The server's rule (sponsors.ts `deleteSponsor`, sponsor deals F3): a sponsor's deals go WITH it, unless one holds payment
-      // history (paid or refunded, or a pre-deals order) or an open payment link nobody could close - then the delete is a 409 and
-      // the sponsor stays. So a sponsor with deals asks first, in words that match; one already known to hold payment history
-      // is not asked to confirm a delete that cannot happen (its 409 reads `sponsors.error.hasDealHistory`). The server stays
-      // the rule's one owner: this only skips a question, it refuses nothing.
+      // The server's rule (sponsors.ts `deleteSponsor`, sponsor deals F3 and F10): a sponsor's deals go WITH it, unless one holds
+      // history (money paid or refunded, an invoice number, or a pre-deals order) or an open payment link nobody could close - then
+      // the delete is a 409 and the sponsor stays. So a sponsor with deals asks first, in words that match; one already known to hold
+      // history is not asked to confirm a delete that cannot happen (its 409 reads `sponsors.error.hasDealHistory`). The server
+      // stays the rule's one owner: this only skips a question, it refuses nothing.
       if (s.deal && !deleteIsRefusedForHistory(s)) {
         const ok = await confirm({
           title: msg("sponsors.deleteDeal.title"),

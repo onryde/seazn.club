@@ -25,6 +25,7 @@
 //   K3  delete ask   drop the `s.deal` arm of the confirm guard                            -> "a sponsor with a deal asks first"
 //   K4  mapped       `msg(sponsorSaveErrorKey(err))` -> `err.message`                      -> "a refusal reads the dictionary's words"
 //   K5  show again   offer "Show on site again" on every row                                -> "offered exactly where the server accepts it"
+//   K6  numbered     drop the `invoice_number` arm of `deleteIsRefusedForHistory`          -> "a sponsor whose shown deal is NUMBERED"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
@@ -588,6 +589,42 @@ describe("Delete: the confirm says what the server will really do, and a refusal
     expect(confirmMock).toHaveBeenCalledTimes(1);
   });
 
+  it("a sponsor whose shown deal is NUMBERED but unpaid (an invoice: sponsor invoices F10) is not asked to confirm either; the 409 reads the dictionary's words, and its unnumbered twin still asks (both checked)", async () => {
+    // The server's rule (server/usecases/sponsors.ts `dealHoldsHistory`, Task 20): a numbered deal is history, paid or not, so the
+    // delete is a 409 `sponsor_has_deal_history`. An online and an offline deal, each numbered and awaiting payment - no money.
+    const SERVER = "this sponsor has deal history (money paid or refunded, a numbered invoice, or a pre-deals order) — end its deals instead";
+    const NUMBERED: [string, SponsorDeal][] = [
+      ["offline", dealOf("d1", "pending", { deal_status: "awaiting_payment", payment_method: "offline", invoice_number: 3 })],
+      ["online", dealOf("d1", "pending", { deal_status: "awaiting_payment", payment_method: "online", invoice_number: 1 })],
+    ];
+    let checked = 0;
+    for (const [label, deal] of NUMBERED) {
+      confirmMock.mockClear();
+      calls.length = 0;
+      answer = (_url, method) =>
+        method === "DELETE"
+          ? { status: 409, body: { ok: false, error: { code: "sponsor_has_deal_history", message: SERVER } } }
+          : { status: 200, body: { data: [] } };
+      const m = mount([row({ id: "a", name: LONG_NAME, deal })]);
+      m.remove(LONG_NAME);
+      await flush();
+      expect(confirmMock, `${label}: no confirm for a delete that cannot happen`).not.toHaveBeenCalled();
+      expect(calls.filter((c) => c.method === "DELETE"), `${label}: the delete is still sent - the server owns the rule`).toHaveLength(1);
+      expect(m.text(), label).toContain(msg("sponsors.error.hasDealHistory"));
+      expect(m.text(), label).not.toContain(SERVER);
+      expect(m.hasRow(LONG_NAME), `${label}: the row stays`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(NUMBERED.length);
+    // The twin: the same unpaid deal with no number (complimentary, or made before invoices were numbered) still asks first.
+    confirmMock.mockClear();
+    answer = () => ({ status: 200, body: { data: null } });
+    mount([row({ id: "b", name: "Ridge Cycles", deal: dealOf("d2", "pending", { deal_status: "awaiting_payment", payment_method: "offline", invoice_number: null }) })])
+      .remove("Ridge Cycles");
+    await flush();
+    expect(confirmMock, "an unnumbered unpaid deal asks").toHaveBeenCalledTimes(1);
+  });
+
   it("each delete refusal reads its own words: history, and an open payment link that could not be closed (both checked)", async () => {
     const CASES: [string, MessageKey][] = [
       ["sponsor_has_deal_history", "sponsors.error.hasDealHistory"],
@@ -613,6 +650,26 @@ describe("the copy that replaces the paid-placement promise", () => {
   it("states the real rule: deals go with the sponsor, history blocks the delete (and says so)", () => {
     expect(msg("sponsors.deleteDeal.body", { name: "X" })).toMatch(/deal/i);
     expect(msg("sponsors.error.hasDealHistory")).toMatch(/can.t be deleted/i);
+  });
+
+  it("the history refusal is true for a NUMBERED unpaid deal in every locale: it names invoices, and claims no payment history (4 checked)", () => {
+    // A numbered deal that took no money is refused as history (Task 20, F10), so "payment history" alone would be false for it. Each
+    // locale's own word for an invoice, as its `sponsors.deal.action.sendInvoice` button uses it.
+    const CASES: [string, Dict, RegExp, RegExp][] = [
+      ["en", uiEn as unknown as Dict, /\binvoices?\b/i, /payment history/i],
+      ["es", uiEs as unknown as Dict, /\bfacturas?\b/i, /historial de pagos/i],
+      ["fr", uiFr as unknown as Dict, /\bfactures?\b/i, /historique de paiements/i],
+      ["nl", uiNl as unknown as Dict, /\bfacturen\b|\bfactuur\b/i, /betaalgeschiedenis/i],
+    ];
+    let checked = 0;
+    for (const [locale, dict, invoiceWord, paymentHistory] of CASES) {
+      const text = t(dict, "sponsors.error.hasDealHistory");
+      expect(text, `${locale}: the key resolves`).not.toBe("sponsors.error.hasDealHistory");
+      expect(text, `${locale}: names invoices`).toMatch(invoiceWord);
+      expect(text, `${locale}: no "payment history" claim`).not.toMatch(paymentHistory);
+      checked++;
+    }
+    expect(checked).toBe(4);
     expect(msg("sponsors.error.hasOpenCheckout")).toMatch(/payment link/i);
   });
 });

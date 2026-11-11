@@ -732,7 +732,7 @@
   "sponsors.error.planRequired": "Je abonnement bevat dit niet. Kijk bij Facturatie om te upgraden.",
   "sponsors.error.lockedByDeal": "Een lopende deal bepaalt het niveau, de competitie en de uitzending van deze sponsor, dus ze kunnen hier niet worden gewijzigd.",
   "sponsors.error.hasOpenDeal": "Deze sponsor heeft een deal die nog live moet gaan, dus de status kan nog niet worden gewijzigd.",
-  "sponsors.error.hasDealHistory": "Deze sponsor heeft een betaalgeschiedenis (betaald of terugbetaald geld, of een verkoop van vóór de deals), dus hij kan niet worden verwijderd.",
+  "sponsors.error.hasDealHistory": "Deze sponsor heeft geregistreerde facturen of betalingen, dus hij kan niet worden verwijderd. Beëindig in plaats daarvan zijn deals.",
   "sponsors.error.hasOpenCheckout": "Deze sponsor heeft een betaallink die niet kon worden gesloten, of die net is betaald. Probeer het zo meteen opnieuw.",
   "sponsors.error.dealChanged": "Deze deal is gewijzigd terwijl je eraan werkte. Laad de pagina opnieuw en probeer het nog eens.",
   "sponsors.error.dealPaidOnline": "De sponsor heeft deze deal al online betaald, dus hij kan niet handmatig als betaald worden gemarkeerd. De betaling wordt verwerkt; laad de pagina zo meteen opnieuw.",

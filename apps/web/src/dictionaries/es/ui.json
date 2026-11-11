@@ -732,7 +732,7 @@
   "sponsors.error.planRequired": "Tu plan no incluye esto. Consulta Facturación para mejorarlo.",
   "sponsors.error.lockedByDeal": "Un acuerdo activo define el nivel, la competición y la emisión de este patrocinador, así que no se pueden cambiar aquí.",
   "sponsors.error.hasOpenDeal": "Este patrocinador tiene un acuerdo pendiente de activarse, así que su estado no se puede cambiar todavía.",
-  "sponsors.error.hasDealHistory": "Este patrocinador tiene historial de pagos (dinero cobrado o reembolsado, o una venta anterior a los acuerdos), así que no se puede eliminar.",
+  "sponsors.error.hasDealHistory": "Este patrocinador tiene facturas o pagos registrados, así que no se puede eliminar. Termina sus acuerdos en su lugar.",
   "sponsors.error.hasOpenCheckout": "Este patrocinador tiene un enlace de pago que no se pudo cerrar, o que acaba de pagarse. Inténtalo de nuevo en un momento.",
   "sponsors.error.dealChanged": "Este acuerdo cambió mientras trabajabas en él. Recarga la página e inténtalo de nuevo.",
   "sponsors.error.dealPaidOnline": "El patrocinador ya pagó este acuerdo en línea, así que no se puede marcar como pagado a mano. El pago se está registrando; recarga en un momento.",

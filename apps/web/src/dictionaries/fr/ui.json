@@ -732,7 +732,7 @@
   "sponsors.error.planRequired": "Votre offre n'inclut pas cette option. Consultez la facturation pour passer à une offre supérieure.",
   "sponsors.error.lockedByDeal": "Un accord en cours définit le niveau, la compétition et la diffusion de ce sponsor : ils ne peuvent pas être modifiés ici.",
   "sponsors.error.hasOpenDeal": "Ce sponsor a un accord en attente d'activation : son statut ne peut pas encore être modifié.",
-  "sponsors.error.hasDealHistory": "Ce sponsor a un historique de paiements (argent encaissé ou remboursé, ou une vente antérieure aux accords) : il ne peut pas être supprimé.",
+  "sponsors.error.hasDealHistory": "Ce sponsor a des factures ou des paiements enregistrés : il ne peut pas être supprimé. Terminez plutôt ses accords.",
   "sponsors.error.hasOpenCheckout": "Ce sponsor a un lien de paiement qui n'a pas pu être fermé, ou qui vient d'être réglé. Réessayez dans un instant.",
   "sponsors.error.dealChanged": "Cet accord a changé pendant que vous le modifiiez. Rechargez la page et réessayez.",
   "sponsors.error.dealPaidOnline": "Le sponsor a déjà payé cet accord en ligne : il ne peut pas être marqué comme payé manuellement. Le paiement est en cours d'enregistrement ; rechargez dans un instant.",

@@ -732,7 +732,7 @@
   "sponsors.error.planRequired": "Your plan doesn't include this. Check Billing to upgrade.",
   "sponsors.error.lockedByDeal": "A live deal sets this sponsor's tier, competition and stream, so they can't be changed here.",
   "sponsors.error.hasOpenDeal": "This sponsor has a deal waiting to go live, so its status can't be changed yet.",
-  "sponsors.error.hasDealHistory": "This sponsor has payment history (money paid or refunded, or a sale from before deals existed), so it can't be deleted.",
+  "sponsors.error.hasDealHistory": "This sponsor has invoices or payments on record, so it can't be deleted. End its deals instead.",
   "sponsors.error.hasOpenCheckout": "This sponsor has a payment link that could not be closed, or was just paid. Try again in a moment.",
   "sponsors.error.dealChanged": "This deal changed while you were working on it. Reload the page and try again.",
   "sponsors.error.dealPaidOnline": "The sponsor has already paid this deal online, so it can't be marked as paid by hand. The payment is being recorded; reload in a moment.",
