@@ -21,7 +21,16 @@ import nl from "@/dictionaries/nl/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import type { ResolvedSponsor } from "@/server/usecases/sponsors";
 import { parseClickTag, type BoardClickTag } from "@/lib/sponsor-clicks";
-import { SponsorsBoard, SponsorsHeroTitle, sponsorHref } from "../sponsors-board";
+import {
+  SponsorsBoard,
+  SponsorsHeroTitle,
+  TitleSponsorBand,
+  TitleSponsorPanel,
+  hasTitleSponsor,
+  showcaseLabels,
+  sponsorHref,
+  titleSlides,
+} from "../sponsors-board";
 
 const DICTS: Record<string, Dict> = { en: en as Dict, es: es as Dict, fr: fr as Dict, nl: nl as Dict };
 
@@ -338,8 +347,10 @@ describe("SponsorsBoard — the free strip", () => {
   // the table was reached only from the logo. A free org would have shown an
   // oversized mark on a strip whose every other mark is 20px.
   //
-  // Since the split the differential half lives in the HERO rather than on the
-  // board, which is a sharper pair than the old one: the same sponsor row, the
+  // The differential half used to be the HERO's 40px logo. The hero no longer
+  // draws a logo (the poster panel and the phone band carry the sponsor's
+  // image), so the half moved to the other 40px site: the MATCH page's board,
+  // which has no hero and still leads with the title logo. The same row, the
   // same logo, sized by which PLACEMENT drew it.
   it("sizes a title-tier sponsor's logo like a partner's on a free org's strip", () => {
     const titleWithLogo = s({ name: "Northbank Bank", tier: "title", logo: "/uploads/nb.png" });
@@ -349,11 +360,11 @@ describe("SponsorsBoard — the free strip", () => {
     expect(flat).toContain("width=\"20\"");
     expect(flat).not.toContain("h-10 w-10");
 
-    // Differential half — the same sponsor, tiered, gets the hero's size.
-    const hero = renderHero({ sponsors: [titleWithLogo] });
-    expect(hero).toContain("h-10 w-10");
-    expect(hero).toContain("width=\"40\"");
-    expect(hero).not.toContain("h-5 w-5");
+    // Differential half — the same sponsor, tiered, on the match board, gets the title size.
+    const matchBoard = render({ sponsors: [titleWithLogo], clickTag: MATCH, includeTitle: true });
+    expect(matchBoard).toContain("h-10 w-10");
+    expect(matchBoard).toContain("width=\"40\"");
+    expect(matchBoard).not.toContain("h-5 w-5");
   });
 });
 
@@ -448,4 +459,206 @@ describe("SponsorsBoard — four locales", () => {
       }
     });
   }
+});
+
+// ── THE TITLE SPONSOR'S POSTER (spec 2026-11-11-title-sponsor-hero-poster §7.1, §7.2, §7.4, D10, D17) ──────────────────────────
+// The hero's "Presented by" sentence loses its logo (the poster panel from md and the band below md carry the sponsor's image),
+// and three NEW exports decide what the page draws: `titleSlides` (the slides, finished: every string resolved on the server),
+// `TitleSponsorPanel` and `TitleSponsorBand`. They share ONE predicate with the hero sentence and the page's layout switch
+// (`hasTitleSponsor`), so a free org that holds a leftover title row gets none of them.
+//
+// Expected strings are read from the dictionary JSON and the `{sponsor}` placeholder replaced HERE: the function under test
+// is never called to produce its own expected value.
+describe("the title sponsor's poster: slides, panel and band", () => {
+  const POSTER_URL = "https://cdn.example/storage/nb-poster.png";
+  const KESTREL_LOGO = "https://cdn.example/storage/kestrel-logo.png";
+  /** A title row with a poster and a link. */
+  const T_POSTER = s({ name: "Northbank Bank", tier: "title", id: "sp-title", url: "https://northbank.example", poster: POSTER_URL });
+  /** A title row with a logo, no poster and NO link. */
+  const T_LOGO = s({ name: "Kestrel Kit", tier: "title", id: "sp-kestrel", url: null, logo: KESTREL_LOGO });
+  const LOCALES = ["en", "es", "fr", "nl"] as const;
+
+  const panelOf = (over: Over = {}) =>
+    renderToStaticMarkup(
+      <TitleSponsorPanel
+        sponsors={over.sponsors ?? [T_POSTER, T_LOGO, GOLD, PARTNER]}
+        tiered={over.tiered ?? true}
+        dict={DICTS[over.locale ?? "en"]!}
+        clickTag={over.clickTag ?? SITE}
+      />,
+    );
+  const bandOf = (over: Over = {}) =>
+    renderToStaticMarkup(
+      <TitleSponsorBand
+        sponsors={over.sponsors ?? [T_POSTER, T_LOGO, GOLD, PARTNER]}
+        tiered={over.tiered ?? true}
+        dict={DICTS[over.locale ?? "en"]!}
+        clickTag={over.clickTag ?? SITE}
+      />,
+    );
+  /** The class TOKENS of the element carrying a test id. Tokens, not a substring: `md:hidden` is a substring of `max-md:hidden`,
+   *  so a regex written that way passes on its own inversion. */
+  const classTokens = (markup: string, testid: string): string[] => {
+    const open = new RegExp(`<[a-z0-9]+\\b[^>]*\\bdata-testid="${testid}"[^>]*>`).exec(markup)?.[0];
+    expect(open, `an element with data-testid="${testid}"`).toBeDefined();
+    const cls = /\sclass="([^"]*)"/.exec(open!)?.[1];
+    expect(cls, `${testid} carries a class`).toBeDefined();
+    return cls!.split(/\s+/);
+  };
+
+  it("titleSlides and hasTitleSponsor — EMPTY FIRST: nothing for no sponsors, no title row, or an un-tiered org holding a title row (count 3)", () => {
+    let checked = 0;
+    for (const [label, sponsors, tiered] of [
+      ["no sponsors at all", [], true],
+      ["no title row (gold, silver, partner)", [GOLD, SILVER, PARTNER], true],
+      ["an un-tiered org that still holds a title row", [T_POSTER], false],
+    ] as const) {
+      expect(titleSlides(sponsors, tiered, en as Dict, SITE), label).toEqual([]);
+      expect(hasTitleSponsor(sponsors, tiered), label).toBe(false);
+      checked += 1;
+    }
+    expect(checked, "empty cases checked").toBe(3);
+    // The twin, so the three above are not "the function always answers empty".
+    expect(hasTitleSponsor([T_POSTER], true)).toBe(true);
+    expect(titleSlides([T_POSTER], true, en as Dict, SITE)).toHaveLength(1);
+  });
+
+  it("one slide per title row, in input order; gold, silver and partner never; the href is the tracked redirect, or null with no url", () => {
+    const slides = titleSlides([T_LOGO, GOLD, T_POSTER, PARTNER, SILVER], true, en as Dict, SITE);
+    expect(slides.map((x) => x.id)).toEqual(["sp-kestrel", "sp-title"]);
+    expect(slides.map((x) => x.name)).toEqual(["Kestrel Kit", "Northbank Bank"]);
+    expect(slides.map((x) => x.href)).toEqual([null, "/s/sp-title?src=site"]);
+    // The poster and the logo are the row's own, whichever of them it has.
+    expect(slides.map((x) => x.poster)).toEqual([null, POSTER_URL]);
+    expect(slides.map((x) => x.logo)).toEqual([KESTREL_LOGO, null]);
+    // The page's tag rides the link: a match page would say so.
+    expect(titleSlides([T_POSTER], true, en as Dict, MATCH)[0]!.href).toBe("/s/sp-title?f=fx-42&src=match");
+  });
+
+  it("each locale: sentence is landing.presentedBy with the name, posterAlt is titleSponsor.posterAlt, dotLabel is titleSponsor.show (4 locales x 2 slides = 8)", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const dict = DICTS[locale] as Record<string, string>;
+      const slides = titleSlides([T_POSTER, T_LOGO], true, DICTS[locale]!, SITE);
+      expect(slides, locale).toHaveLength(2);
+      for (const [i, row] of [T_POSTER, T_LOGO].entries()) {
+        expect(slides[i]!.sentence, `${locale} sentence`).toBe(dict["landing.presentedBy"]!.replace("{sponsor}", row.name));
+        expect(slides[i]!.posterAlt, `${locale} posterAlt`).toBe(dict["titleSponsor.posterAlt"]!.replace("{sponsor}", row.name));
+        expect(slides[i]!.dotLabel, `${locale} dotLabel`).toBe(dict["titleSponsor.show"]!.replace("{sponsor}", row.name));
+        expect(`${slides[i]!.sentence}${slides[i]!.posterAlt}${slides[i]!.dotLabel}`, `${locale}: no raw placeholder`).not.toContain("{");
+        checked += 1;
+      }
+    }
+    expect(checked, "slides checked").toBe(8);
+  });
+
+  it("the five titleSponsor.* keys exist in every locale, and a translated locale does not carry the English (count 20)", () => {
+    const keys = ["kicker", "group", "show", "posterAlt", "visit"].map((k) => `titleSponsor.${k}`);
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const dict = DICTS[locale] as Record<string, string>;
+      for (const key of keys) {
+        expect(typeof dict[key], `${locale} ${key}`).toBe("string");
+        expect(dict[key]!.length, `${locale} ${key}`).toBeGreaterThan(0);
+        if (locale !== "en") expect(dict[key], `${locale} ${key} is translated`).not.toBe((en as Record<string, string>)[key]);
+        checked += 1;
+      }
+    }
+    expect(checked, "keys checked").toBe(20);
+  });
+
+  it("showcaseLabels reads titleSponsor.kicker / group / visit in each locale (count 4)", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const dict = DICTS[locale] as Record<string, string>;
+      expect(showcaseLabels(DICTS[locale]!), locale).toEqual({
+        kicker: dict["titleSponsor.kicker"],
+        group: dict["titleSponsor.group"],
+        visit: dict["titleSponsor.visit"],
+      });
+      checked += 1;
+    }
+    expect(checked, "locales checked").toBe(4);
+  });
+
+  it("TitleSponsorPanel is max-md:hidden, 220px at md and 300px at lg; TitleSponsorBand is md:hidden; both are empty without a title sponsor", () => {
+    const panel = classTokens(panelOf(), "mh-hero-poster");
+    expect(panel).toContain("max-md:hidden");
+    expect(panel).not.toContain("md:hidden");
+    expect(panel).toContain("md:w-[220px]");
+    expect(panel).toContain("lg:w-[300px]");
+    expect(panelOf()).toMatch(/^<aside\b/);
+
+    const band = classTokens(bandOf(), "mh-title-band");
+    expect(band).toContain("md:hidden");
+    expect(band).not.toContain("max-md:hidden");
+    expect(band).toContain("mb-6");
+
+    // EMPTY: the same three cases as the slides, for both components.
+    let checked = 0;
+    for (const sponsors of [[], [GOLD, SILVER, PARTNER]]) {
+      expect(panelOf({ sponsors }), "panel").toBe("");
+      expect(bandOf({ sponsors }), "band").toBe("");
+      checked += 2;
+    }
+    expect(panelOf({ tiered: false }), "panel, un-tiered org with a title row").toBe("");
+    expect(bandOf({ tiered: false }), "band, un-tiered org with a title row").toBe("");
+    expect(checked + 2, "empty renders checked").toBe(6);
+  });
+
+  it("the panel and the band hand the showcase the rows' own slides: the poster url, the tracked link, the sentence, Visit only with a link", () => {
+    const panel = panelOf();
+    expect(panel).toContain(`data-variant="panel"`);
+    expect(panel).toContain(`/_next/image?url=${encodeURIComponent(POSTER_URL)}`);
+    expect(panel).toContain(`href="/s/sp-title?src=site"`);
+    // The second slide has no poster: it draws the logo card instead.
+    expect(panel).toContain(`/_next/image?url=${encodeURIComponent(KESTREL_LOGO)}`);
+    // Gold and partner are not in the panel; each is the other's negative pair.
+    for (const name of ["Halston Tyres", "Vale Physio"]) expect(panel, name).not.toContain(name);
+
+    const band = bandOf();
+    expect(band).toContain(`data-variant="band"`);
+    expect(band).toContain("Presented by Northbank Bank");
+    expect(band).toContain("Presented by Kestrel Kit");
+    expect(band.match(/data-testid="title-band-visit"/g), "Visit only on the linked sponsor").toHaveLength(1);
+    for (const name of ["Halston Tyres", "Vale Physio"]) expect(band, name).not.toContain(name);
+  });
+
+  it("one title sponsor draws no dots; two draw dots labelled from the dictionary", () => {
+    expect(panelOf({ sponsors: [T_POSTER] })).not.toContain(`data-testid="title-showcase-dots"`);
+    expect(bandOf({ sponsors: [T_POSTER] })).not.toContain(`data-testid="title-showcase-dots"`);
+    for (const locale of LOCALES) {
+      const dict = DICTS[locale] as Record<string, string>;
+      for (const h of [panelOf({ locale }), bandOf({ locale })]) {
+        expect(h, locale).toContain(`aria-label="${dict["titleSponsor.show"]!.replace("{sponsor}", "Kestrel Kit")}"`);
+        expect(h, locale).toContain(`aria-label="${dict["titleSponsor.group"]}"`);
+      }
+      expect(panelOf({ locale }), locale).toContain(dict["titleSponsor.kicker"]!);
+      expect(bandOf({ locale }), locale).toContain(dict["titleSponsor.visit"]!);
+    }
+  });
+
+  it("SponsorsHeroTitle draws the sentence WHOLE with NO logo even when the row has one, and is max-md:hidden", () => {
+    const withLogo = s({ name: "Northbank Bank", tier: "title", id: "sp-title", url: "https://northbank.example", logo: "/uploads/nb.png" });
+    const h = renderHero({ sponsors: [withLogo] });
+    expect(h).toContain("Presented by Northbank Bank");
+    expect(h, "no logo chip").not.toContain("<img");
+    expect(h).not.toContain("h-10 w-10");
+    // The sentence is still the link (the placement's own click), tagged site.
+    expect(h).toContain(`href="/s/sp-title?src=site"`);
+    const tokens = classTokens(h, "mh-hero-sponsor");
+    expect(tokens).toContain("max-md:hidden");
+    expect(tokens).not.toContain("md:hidden");
+    // The twin: the same row on the match page's board keeps its logo (the next case pins the size).
+    expect(render({ sponsors: [withLogo], clickTag: MATCH, includeTitle: true })).toContain("<img");
+  });
+
+  it("REGRESSION: the match board (includeTitle) still draws the title logo at 40px (h-10 w-10, width=\"40\")", () => {
+    const withLogo = s({ name: "Northbank Bank", tier: "title", id: "sp-title", logo: "/uploads/nb.png" });
+    const board = render({ sponsors: [withLogo], clickTag: MATCH, includeTitle: true });
+    const line = board.slice(board.indexOf(`data-testid="mh-sponsors-title"`));
+    expect(line).toContain("h-10 w-10");
+    expect(line).toContain('width="40"');
+    expect(line).toContain("Presented by Northbank Bank");
+  });
 });

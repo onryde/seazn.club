@@ -20,6 +20,12 @@
 //    sponsorship is the one tier sold on PROMINENCE rather than presence, and
 //    the hero is the only part of this page every spectator sees before they
 //    choose anything. `SponsorsHeroTitle` draws it.
+//    Since 2026-11-11 the sponsor's IMAGE is a 4:5 poster as well (spec
+//    2026-11-11-title-sponsor-hero-poster): `TitleSponsorPanel` beside the hero
+//    from `md`, `TitleSponsorBand` under it below `md`. The hero's sentence
+//    keeps its link but loses its logo, and is hidden below `md`, where the
+//    band says the same sentence. All three read ONE predicate,
+//    `hasTitleSponsor`, so a free org's leftover title row draws none of them.
 //  • Everyone else sits on the perimeter board BELOW the tab panel, on the
 //    page rather than inside a tab, so it is present whichever tab is open.
 //    `SponsorsBoard` draws it.
@@ -59,6 +65,7 @@ import type { ResolvedSponsor, SponsorTier } from "@/server/usecases/sponsors";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { sponsorClickPath, type BoardClickTag } from "@/lib/sponsor-clicks";
+import { TitleSponsorShowcase, type ShowcaseLabels, type TitleSlide } from "./title-sponsor-showcase";
 
 /** Panel sizing per tier — the physical encoding of rank on the board. `title`
  *  is absent because the title tier is not drawn here any more; see the header. */
@@ -128,18 +135,90 @@ export interface SponsorsProps {
   clickTag: BoardClickTag;
 }
 
-/** The title sponsor's line: logo and the whole "Presented by {sponsor}" sentence, light type for a dark slab. The
- *  hero and the match board draw this ONE node, so the two placements cannot word or size the title differently. */
-function titleLine(s: ResolvedSponsor, dict: PublicDict, tag: BoardClickTag) {
+/** The title sponsor's line: the whole "Presented by {sponsor}" sentence, light type for a dark slab, with the sponsor's logo
+ *  beside it when `withLogo`. The hero and the match board draw this ONE node, so the two placements cannot word the title
+ *  differently; they differ only in the logo: the hero's image is the poster beside or under it now, the match page has none. */
+function titleLine(s: ResolvedSponsor, dict: PublicDict, tag: BoardClickTag, withLogo: boolean) {
   return linked(
     s,
     tag,
     <span className="flex min-w-0 items-center gap-2.5">
-      {logoChip(s, 40, "h-10 w-10")}
+      {withLogo ? logoChip(s, 40, "h-10 w-10") : null}
       <span className="min-w-0 font-display text-lg font-semibold uppercase tracking-tight text-court-ink sm:text-xl">
         {t(dict, "landing.presentedBy", { sponsor: s.name })}
       </span>
     </span>,
+  );
+}
+
+/** The ONE question the hero's sentence, the poster panel, the phone band and the page's layout switch all ask: does this page
+ *  have a Title sponsor to show? Only a tiered org does (a free org's leftover `title` row is a flat chip, never a placement),
+ *  and only a `title` row counts. Exported for the page's grid switch and for the tests. */
+export function hasTitleSponsor(sponsors: readonly ResolvedSponsor[], tiered: boolean): boolean {
+  return tiered && sponsors.some((s) => s.tier === "title");
+}
+
+/**
+ * One finished slide per Title row, in resolver order (competition-scoped rows first, then the org-wide ones), or `[]` when
+ * `hasTitleSponsor` is false. EVERY string is resolved here, on the server, into the slide: the showcase is a client component
+ * and `titleSponsor.*` is deliberately NOT in the hub's dictionary slice (D17), so no dictionary has to cross into the bundle.
+ * `landing.presentedBy` is a sentence with the name inside it and is passed WHOLE (word order is the locale's).
+ */
+export function titleSlides(
+  sponsors: readonly ResolvedSponsor[],
+  tiered: boolean,
+  dict: PublicDict,
+  tag: BoardClickTag,
+): TitleSlide[] {
+  if (!hasTitleSponsor(sponsors, tiered)) return [];
+  return sponsors
+    .filter((s) => s.tier === "title")
+    .map((s) => ({
+      id: s.id,
+      name: s.name,
+      href: sponsorHref(s, tag),
+      poster: s.poster,
+      logo: s.logo,
+      sentence: t(dict, "landing.presentedBy", { sponsor: s.name }),
+      posterAlt: t(dict, "titleSponsor.posterAlt", { sponsor: s.name }),
+      dotLabel: t(dict, "titleSponsor.show", { sponsor: s.name }),
+    }));
+}
+
+/** The showcase's three fixed strings, resolved on the server like the slides. */
+export function showcaseLabels(dict: PublicDict): ShowcaseLabels {
+  return {
+    kicker: t(dict, "titleSponsor.kicker"),
+    group: t(dict, "titleSponsor.group"),
+    visit: t(dict, "titleSponsor.visit"),
+  };
+}
+
+/**
+ * The Title sponsor's poster beside the hero, from `md` up (220px at `md`, 300px at `lg`): the right column of the hero's grid
+ * (the page switches that grid on with the same `hasTitleSponsor`). Hidden below `md`, where `TitleSponsorBand` carries the
+ * sponsor instead. Renders `null` when there is no Title sponsor, so the page needs no predicate to mount it.
+ */
+export function TitleSponsorPanel({ sponsors, tiered, dict, clickTag }: SponsorsProps) {
+  if (!hasTitleSponsor(sponsors, tiered)) return null;
+  return (
+    <aside data-testid="mh-hero-poster" className="min-w-0 max-md:hidden md:w-[220px] lg:w-[300px]">
+      <TitleSponsorShowcase slides={titleSlides(sponsors, tiered, dict, clickTag)} labels={showcaseLabels(dict)} variant="panel" />
+    </aside>
+  );
+}
+
+/**
+ * The same sponsor below `md`: a strip right under the hero (the page drops the hero's bottom margin to make it read as part
+ * of it), with a thumbnail, the whole sentence and a Visit button. Hidden from `md` up, where the panel carries the sponsor.
+ * `null` when there is no Title sponsor.
+ */
+export function TitleSponsorBand({ sponsors, tiered, dict, clickTag }: SponsorsProps) {
+  if (!hasTitleSponsor(sponsors, tiered)) return null;
+  return (
+    <div data-testid="mh-title-band" className="mb-6 min-w-0 rounded-2xl bg-court p-3 text-court-ink shadow md:hidden">
+      <TitleSponsorShowcase slides={titleSlides(sponsors, tiered, dict, clickTag)} labels={showcaseLabels(dict)} variant="band" />
+    </div>
   );
 }
 
@@ -155,8 +234,8 @@ export function SponsorsHeroTitle({ sponsors, tiered, dict, clickTag }: Sponsors
   // Un-tiered orgs have no hierarchy to draw, so this is empty BY CONSTRUCTION
   // rather than by the data happening to be flat — a free org whose rows carry
   // a `title` tier (bought, then downgraded) gets no hero placement back.
-  const titleRow = tiered ? sponsors.filter((s) => s.tier === "title") : [];
-  if (titleRow.length === 0) return null;
+  if (!hasTitleSponsor(sponsors, tiered)) return null;
+  const titleRow = sponsors.filter((s) => s.tier === "title");
   return (
     // `min-w-0` on every rung of this chain: a 43-character sponsor name inside
     // a flex child that cannot shrink is the exact shape that put 106px of
@@ -165,11 +244,13 @@ export function SponsorsHeroTitle({ sponsors, tiered, dict, clickTag }: Sponsors
     // name is the thing they paid for, so it is never cut off.
     <p
       data-testid="mh-hero-sponsor"
-      className="mt-3 flex min-w-0 flex-wrap items-center gap-x-6 gap-y-2"
+      // `max-md:hidden`: below `md` the band right under the hero says this same
+      // sentence, so it is on the page at every width exactly once (D10).
+      className="mt-3 flex min-w-0 flex-wrap items-center gap-x-6 gap-y-2 max-md:hidden"
     >
       {titleRow.map((s) => (
         <span key={s.name} className="min-w-0">
-          {titleLine(s, dict, clickTag)}
+          {titleLine(s, dict, clickTag, false)}
         </span>
       ))}
     </p>
@@ -227,7 +308,7 @@ export function SponsorsBoard({ sponsors, tiered, dict, clickTag, includeTitle =
             >
               {titleRows.map((s) => (
                 <span key={s.name} className="min-w-0">
-                  {titleLine(s, dict, clickTag)}
+                  {titleLine(s, dict, clickTag, true)}
                 </span>
               ))}
             </p>

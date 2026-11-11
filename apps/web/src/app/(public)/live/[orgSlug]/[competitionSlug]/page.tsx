@@ -60,7 +60,13 @@ import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, plural, t } from "@/lib/i18n";
 import { hubDict } from "@/lib/hub-dict";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
-import { SponsorsBoard, SponsorsHeroTitle } from "@/components/public-site/sponsors-board";
+import {
+  SponsorsBoard,
+  SponsorsHeroTitle,
+  TitleSponsorBand,
+  TitleSponsorPanel,
+  hasTitleSponsor,
+} from "@/components/public-site/sponsors-board";
 import type { BoardClickTag } from "@/lib/sponsor-clicks";
 import { CompetitionLanding } from "@/components/public-site/matches-hub/competition-landing";
 // ONE producer for the competition's date line, shared with the Info tab that
@@ -224,6 +230,128 @@ export default async function CompetitionHomePage({ params }: Props) {
   // including the org-hub landing above, so a fix moves a red test.
   const sharePath = routes.publicHub(org.slug, competition.slug);
 
+  // One predicate for everything the Title sponsor changes on this page: the hero's grid, its bottom margin, the panel, the band
+  // under it and the sentence's logo. The same `hasTitleSponsor` that `SponsorsHeroTitle`, the panel and the band read, so a free
+  // org holding a leftover `title` row gets none of them (it is a flat chip on the board instead).
+  const showcase = hasTitleSponsor(sponsors, tiered);
+
+  // The hero's two rows (logo, title block and Register; then the counters). A const so the same nodes sit either directly in
+  // the hero's single column (no title sponsor: exactly as before) or in the left column of its two-column grid (with one).
+  const heroRows = (
+    <>
+      <div className="flex flex-wrap items-start gap-4">
+        {branding.logo ? (
+          // competition branding.logo — same unconstrained jsonb / no-upload-UI
+          // situation as branding.banner above; skipped-ambiguous-source.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={branding.logo}
+            alt=""
+            className="h-14 w-14 rounded-xl bg-white/95 object-contain p-1 shadow"
+          />
+        ) : null}
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-court-muted">
+            {org.name}
+          </p>
+          <h1 className="mt-1 font-display text-4xl font-bold uppercase leading-none tracking-tight sm:text-5xl">
+            {hub.name}
+          </h1>
+          {/* `hub.info`'s startsOn/endsOn are CALENDAR dates (pg `date`), so
+              this formats in UTC. The line this replaced was
+              `new Date(d).toLocaleDateString("en-GB", …)` with no zone at
+              all, which formats in whatever zone the Node process runs in:
+              right in production only because fly.toml sets no TZ and the
+              machine is UTC. Under TZ=America/New_York it rendered
+              "4 September 2026" for a competition starting on the 5th.
+              `competitionDateLine` fixes the zone internally so no caller
+              can choose it — see its own header for the full reasoning. */}
+          {competitionDateLine(hub.info, locale) ? (
+            <p data-testid="mh-hero-dates" className="mt-2 text-sm text-court-muted">
+              {competitionDateLine(hub.info, locale)}
+            </p>
+          ) : null}
+          {/* The title sponsor, under the competition name (owner ruling
+              2026-09-12, Option B). It renders `null` when there is no
+              title tier — including for every free org, which has none by
+              construction — so no predicate is needed here and an absent
+              sponsor costs no space. The rest of the board is below the
+              tabs; `sponsors-board.tsx`'s header carries the reasoning. */}
+          <SponsorsHeroTitle sponsors={sponsors} tiered={tiered} dict={dict} clickTag={SITE_CLICK_TAG} />
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <ShareBar path={sharePath} title={hub.name} labels={shareBarLabels} />
+            {/* v13 (PROMPT-64): kiosk mode — cast this URL to any screen.
+                The `▸` stays OUT of the dictionary string: a decorative
+                glyph inside translated copy is what gets mangled per
+                locale (Task 6 ruling 24).
+
+                `max-md:hidden` — and this is a PRODUCT call, not a layout
+                one. Present casts the competition to a big screen at a
+                ground; it is not something anyone does from the phone they
+                are holding, and on a phone it was the fourth control in a
+                hero row that already wrapped onto two lines.
+
+                It is HIDDEN, not removed: the Info tab renders the same
+                link (`mh-info-present`) at every width, so the kiosk is
+                still reachable on a phone, one tab away — which is what
+                makes this a fold rather than a feature a phone loses. */}
+            <Link
+              data-testid="mh-hero-present"
+              href={hub.info.presentHref}
+              className="inline-flex min-h-11 items-center rounded-full bg-white/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-court-muted ring-1 ring-inset ring-white/15 transition hover:bg-white/20 hover:text-court-ink max-md:hidden"
+            >
+              {t(dict, "landing.present")} ▸
+            </Link>
+          </div>
+        </div>
+        {/* Gated on the DOCUMENT's flag, which is the same
+            `publicRegistrationInfo` read the Overview and Info tabs show
+            their own register links from. The page no longer calls that
+            usecase itself — a second read is a second answer. */}
+        {hub.info.registrationOpen ? (
+          <Link
+            data-testid="mh-hero-register"
+            href={hub.info.registerHref}
+            className="inline-flex min-h-11 shrink-0 items-center rounded-lg bg-surface px-4 py-2 text-sm font-semibold text-accent-strong shadow transition hover:bg-accent-soft"
+          >
+            {t(dict, "landing.register")}
+          </Link>
+        ) : null}
+      </div>
+      <div className="flex flex-wrap gap-2 text-xs font-medium">
+        {divisionCount === 0 ? (
+          // A hero with no counters reads as a page that failed to load.
+          // This says the true thing instead — and it is the sentence the
+          // dictionary already carries for it.
+          <span data-testid="mh-hero-no-divisions" className={CHIP}>
+            {t(dict, "landing.noDivisions")}
+          </span>
+        ) : (
+          <>
+            <span data-testid="mh-hero-divisions" className={CHIP}>
+              {plural(dict, "landing.divisions", divisionCount, locale)}
+            </span>
+            {/* No entrants chip without divisions: `entrantCount` is a sum
+                OVER the divisions, so with none it is not "0 entrants", it
+                is a number about nothing. */}
+            <span data-testid="mh-hero-entrants" className={CHIP}>
+              {plural(dict, "landing.entrants", entrantCount, locale)}
+            </span>
+          </>
+        )}
+        {liveCount > 0 ? (
+          <span
+            data-testid="mh-hero-live"
+            className="flex items-center gap-1.5 rounded-full bg-emerald-400/20 px-3 py-1 text-emerald-200 backdrop-blur"
+          >
+            <span className="animate-live-pulse h-1.5 w-1.5 rounded-full bg-emerald-300" />
+            {plural(dict, "landing.liveCount", liveCount, locale)}
+          </span>
+        ) : null}
+      </div>
+    </>
+  );
+
   return (
     // Pro orgs with branding.colors.primary re-theme this whole subtree —
     // the contrast guard in publicThemeStyle falls back to violet.
@@ -237,7 +365,9 @@ export default async function CompetitionHomePage({ params }: Props) {
       {/* Hero — court slab; banner photo (Pro) sits under a slab-tinted wash */}
       <section
         data-testid="mh-hero"
-        className="relative mb-6 overflow-hidden rounded-2xl bg-court text-court-ink shadow-lg"
+        // With a Title sponsor the phone band follows the hero directly, so below `md` the hero's bottom margin shrinks and the
+        // two read as one block; from `md` up, and with no sponsor, it is the `mb-6` it always was.
+        className={`relative ${showcase ? "max-md:mb-2.5 md:mb-6" : "mb-6"} overflow-hidden rounded-2xl bg-court text-court-ink shadow-lg`}
       >
         {branding.banner ? (
           <>
@@ -263,120 +393,30 @@ export default async function CompetitionHomePage({ params }: Props) {
             }}
           />
         )}
-        <div className="relative flex flex-col gap-5 p-6 sm:p-8">
-          <div className="flex flex-wrap items-start gap-4">
-            {branding.logo ? (
-              // competition branding.logo — same unconstrained jsonb / no-upload-UI
-              // situation as branding.banner above; skipped-ambiguous-source.
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={branding.logo}
-                alt=""
-                className="h-14 w-14 rounded-xl bg-white/95 object-contain p-1 shadow"
-              />
-            ) : null}
-            <div className="min-w-0 flex-1">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-court-muted">
-                {org.name}
-              </p>
-              <h1 className="mt-1 font-display text-4xl font-bold uppercase leading-none tracking-tight sm:text-5xl">
-                {hub.name}
-              </h1>
-              {/* `hub.info`'s startsOn/endsOn are CALENDAR dates (pg `date`), so
-                  this formats in UTC. The line this replaced was
-                  `new Date(d).toLocaleDateString("en-GB", …)` with no zone at
-                  all, which formats in whatever zone the Node process runs in:
-                  right in production only because fly.toml sets no TZ and the
-                  machine is UTC. Under TZ=America/New_York it rendered
-                  "4 September 2026" for a competition starting on the 5th.
-                  `competitionDateLine` fixes the zone internally so no caller
-                  can choose it — see its own header for the full reasoning. */}
-              {competitionDateLine(hub.info, locale) ? (
-                <p data-testid="mh-hero-dates" className="mt-2 text-sm text-court-muted">
-                  {competitionDateLine(hub.info, locale)}
-                </p>
-              ) : null}
-              {/* The title sponsor, under the competition name (owner ruling
-                  2026-09-12, Option B). It renders `null` when there is no
-                  title tier — including for every free org, which has none by
-                  construction — so no predicate is needed here and an absent
-                  sponsor costs no space. The rest of the board is below the
-                  tabs; `sponsors-board.tsx`'s header carries the reasoning. */}
-              <SponsorsHeroTitle sponsors={sponsors} tiered={tiered} dict={dict} clickTag={SITE_CLICK_TAG} />
-              <div className="mt-4 flex flex-wrap items-center gap-3">
-                <ShareBar path={sharePath} title={hub.name} labels={shareBarLabels} />
-                {/* v13 (PROMPT-64): kiosk mode — cast this URL to any screen.
-                    The `▸` stays OUT of the dictionary string: a decorative
-                    glyph inside translated copy is what gets mangled per
-                    locale (Task 6 ruling 24).
-
-                    `max-md:hidden` — and this is a PRODUCT call, not a layout
-                    one. Present casts the competition to a big screen at a
-                    ground; it is not something anyone does from the phone they
-                    are holding, and on a phone it was the fourth control in a
-                    hero row that already wrapped onto two lines.
-
-                    It is HIDDEN, not removed: the Info tab renders the same
-                    link (`mh-info-present`) at every width, so the kiosk is
-                    still reachable on a phone, one tab away — which is what
-                    makes this a fold rather than a feature a phone loses. */}
-                <Link
-                  data-testid="mh-hero-present"
-                  href={hub.info.presentHref}
-                  className="inline-flex min-h-11 items-center rounded-full bg-white/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-court-muted ring-1 ring-inset ring-white/15 transition hover:bg-white/20 hover:text-court-ink max-md:hidden"
-                >
-                  {t(dict, "landing.present")} ▸
-                </Link>
-              </div>
-            </div>
-            {/* Gated on the DOCUMENT's flag, which is the same
-                `publicRegistrationInfo` read the Overview and Info tabs show
-                their own register links from. The page no longer calls that
-                usecase itself — a second read is a second answer. */}
-            {hub.info.registrationOpen ? (
-              <Link
-                data-testid="mh-hero-register"
-                href={hub.info.registerHref}
-                className="inline-flex min-h-11 shrink-0 items-center rounded-lg bg-surface px-4 py-2 text-sm font-semibold text-accent-strong shadow transition hover:bg-accent-soft"
-              >
-                {t(dict, "landing.register")}
-              </Link>
-            ) : null}
-          </div>
-          <div className="flex flex-wrap gap-2 text-xs font-medium">
-            {divisionCount === 0 ? (
-              // A hero with no counters reads as a page that failed to load.
-              // This says the true thing instead — and it is the sentence the
-              // dictionary already carries for it.
-              <span data-testid="mh-hero-no-divisions" className={CHIP}>
-                {t(dict, "landing.noDivisions")}
-              </span>
-            ) : (
-              <>
-                <span data-testid="mh-hero-divisions" className={CHIP}>
-                  {plural(dict, "landing.divisions", divisionCount, locale)}
-                </span>
-                {/* No entrants chip without divisions: `entrantCount` is a sum
-                    OVER the divisions, so with none it is not "0 entrants", it
-                    is a number about nothing. */}
-                <span data-testid="mh-hero-entrants" className={CHIP}>
-                  {plural(dict, "landing.entrants", entrantCount, locale)}
-                </span>
-              </>
-            )}
-            {liveCount > 0 ? (
-              <span
-                data-testid="mh-hero-live"
-                className="flex items-center gap-1.5 rounded-full bg-emerald-400/20 px-3 py-1 text-emerald-200 backdrop-blur"
-              >
-                <span className="animate-live-pulse h-1.5 w-1.5 rounded-full bg-emerald-300" />
-                {plural(dict, "landing.liveCount", liveCount, locale)}
-              </span>
-            ) : null}
-          </div>
+        <div
+          className={
+            showcase
+              ? "relative flex flex-col gap-5 p-6 sm:p-8 md:grid md:grid-cols-[minmax(0,1fr)_auto] md:items-start md:gap-x-6 lg:gap-x-8"
+              : "relative flex flex-col gap-5 p-6 sm:p-8"
+          }
+        >
+          {showcase ? (
+            <>
+              <div className="flex min-w-0 flex-col gap-5">{heroRows}</div>
+              {/* The Title sponsor's poster, the grid's right column from md (hidden below it, where the band under the hero
+                  carries the sponsor). Register stays in the left column's first row: the right column is the poster's alone. */}
+              <TitleSponsorPanel sponsors={sponsors} tiered={tiered} dict={dict} clickTag={SITE_CLICK_TAG} />
+            </>
+          ) : (
+            heroRows
+          )}
         </div>
         <div aria-hidden className="h-1 bg-accent" />
       </section>
+
+      {/* The same Title sponsor below `md`: a strip right under the hero (md:hidden; the panel in the hero is its twin from md).
+          Null with no Title sponsor. */}
+      <TitleSponsorBand sponsors={sponsors} tiered={tiered} dict={dict} clickTag={SITE_CLICK_TAG} />
 
       {/* THE MOUNT. Everything that was below the hero on this page — the
           live-now rail, the competition's prose, the divisions grid — is now a

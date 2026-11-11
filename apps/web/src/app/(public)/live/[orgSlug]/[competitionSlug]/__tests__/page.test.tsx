@@ -152,9 +152,23 @@ const doc = (over: { locale?: string } = {}): CompetitionHubDocT =>
     info: info({ startsOn: STARTS_ON, endsOn: ENDS_ON, registrationOpen: true }),
   });
 
-const TITLE_SPONSOR = { id: "sp1", name: "Northbank Bank", url: "https://nb.example", logo: null, tier: "title" as const };
-const PARTNER_SPONSOR = { id: "sp2", name: "Vale Physio", url: null, logo: null, tier: "partner" as const };
-const GOLD_SPONSOR = { id: "sp3", name: "Harbour Motors", url: null, logo: null, tier: "gold" as const };
+const TITLE_SPONSOR = { id: "sp1", name: "Northbank Bank", url: "https://nb.example", logo: null, poster: null, tier: "title" as const };
+const PARTNER_SPONSOR = { id: "sp2", name: "Vale Physio", url: null, logo: null, poster: null, tier: "partner" as const };
+const GOLD_SPONSOR = { id: "sp3", name: "Harbour Motors", url: null, logo: null, poster: null, tier: "gold" as const };
+/** The Title sponsor with a poster, as `resolveSponsors` returns it: the poster is the public CDN url the editor stored. */
+const POSTER_URL = "https://cdn.example/storage/v1/object/public/assets/orgs/o/content/northbank.png";
+const TITLE_WITH_POSTER = { ...TITLE_SPONSOR, poster: POSTER_URL };
+/** A second Title row: a logo, no poster and no link, so the rotation mixes a linked and an unlinked sponsor. */
+const TITLE_UNLINKED = { id: "sp4", name: "Kestrel Kit", url: null, logo: "https://cdn.example/storage/kestrel.png", poster: null, tier: "title" as const };
+
+/** The class TOKENS of the element carrying a test id (a substring check would pass on `max-md:hidden` for `md:hidden`). */
+const classTokens = (markup: string, testid: string): string[] => {
+  const open = new RegExp(`<[a-z0-9]+\\b[^>]*\\bdata-testid="${testid}"[^>]*>`).exec(markup)?.[0];
+  expect(open, `an element with data-testid="${testid}"`).toBeDefined();
+  const cls = /\sclass="([^"]*)"/.exec(open!)?.[1];
+  expect(cls, `${testid} carries a class`).toBeDefined();
+  return cls!.split(/\s+/);
+};
 
 const render = async (): Promise<string> =>
   renderToStaticMarkup(
@@ -483,10 +497,24 @@ describe("the competition page mounts the landing", () => {
 
     const h = await render();
     const hrefs = [...h.matchAll(/href="(\/s\/[^"]*)"/g)].map((m) => m[1]!);
-    expect(hrefs.sort()).toEqual(["/s/sp1?src=site", "/s/sp2?src=site", "/s/sp3?src=site"]);
-    // The title lockup is in the HERO here (the board leaves it there), and it is tagged too.
+    // The title sponsor is linked from THREE placements now (the hero's sentence, the poster panel, the phone band: two of
+    // them are on screen at any one width), each once, and each tagged site. Gold and the partner once each, on the board.
+    expect(hrefs.sort()).toEqual([
+      "/s/sp1?src=site",
+      "/s/sp1?src=site",
+      "/s/sp1?src=site",
+      "/s/sp2?src=site",
+      "/s/sp3?src=site",
+    ]);
     const hero = h.slice(h.indexOf(`data-testid="mh-hero"`), h.indexOf(`data-testid="mh-root"`));
-    expect(hero).toContain(`href="/s/sp1?src=site"`);
+    for (const placement of ["mh-hero-sponsor", "mh-hero-poster", "mh-title-band"]) {
+      const from = hero.indexOf(`data-testid="${placement}"`);
+      expect(from, `${placement} is in the hero block`).toBeGreaterThan(-1);
+      // Each placement's own slice (to the next placement or the end of the block) holds exactly one sp1 link.
+      const rest = [...["mh-hero-sponsor", "mh-hero-poster", "mh-title-band"].filter((x) => x !== placement).map((x) => hero.indexOf(`data-testid="${x}"`)).filter((i) => i > from), hero.length];
+      const own = hero.slice(from, Math.min(...rest));
+      expect(own.match(/href="\/s\/sp1\?src=site"/g), placement).toHaveLength(1);
+    }
     expect(h).not.toContain("src=match");
   });
 
@@ -500,6 +528,118 @@ describe("the competition page mounts the landing", () => {
     const h = await render();
     expect(h).toContain(`data-testid="mh-hero-sponsor"`);
     expect(h).not.toContain(`data-testid="mh-sponsors"`);
+  });
+
+  // ── THE TITLE SPONSOR'S POSTER (spec 2026-11-11-title-sponsor-hero-poster §7.2, §7.4, §9) ─────────────────────────────────────
+  // The hero's grid, its bottom margin, the panel and the band all switch on `hasTitleSponsor(sponsors, tiered)`: one predicate,
+  // read in four places. The rows come from `resolveSponsors` (mocked here at the usecase boundary, with the poster the real
+  // resolver returns); the DB-backed twin that drives the REAL resolver is `server/usecases/__tests__/title-sponsor-hero-seam.test.tsx`.
+  const WRAPPER_GRID = "md:grid-cols-[minmax(0,1fr)_auto]";
+
+  it("a title sponsor: the poster panel is in the hero's grid, and the band sits after the hero and before the landing", async () => {
+    stub.hasFeature.mockResolvedValue(true);
+    stub.resolveSponsors.mockResolvedValue([TITLE_WITH_POSTER, TITLE_UNLINKED, GOLD_SPONSOR]);
+
+    const h = await render();
+    const hero = h.indexOf(`data-testid="mh-hero"`);
+    const panel = h.indexOf(`data-testid="mh-hero-poster"`);
+    const band = h.indexOf(`data-testid="mh-title-band"`);
+    const root = h.indexOf(`data-testid="mh-root"`);
+    expect(hero, "hero").toBeGreaterThan(-1);
+    expect(panel, "the panel is inside the hero").toBeGreaterThan(hero);
+    expect(band, "the band follows the panel").toBeGreaterThan(panel);
+    expect(root, "and precedes the landing").toBeGreaterThan(band);
+    // IMMEDIATELY after the hero's closing tag, not somewhere in the middle of the page.
+    expect(h.slice(h.lastIndexOf("</section>", band), h.lastIndexOf("<div ", band))).toBe("</section>");
+
+    // The hero's wrapper carries the two-column grid, and the grid precedes the panel it holds.
+    const gridAt = h.indexOf(WRAPPER_GRID);
+    expect(gridAt, "the grid class is on the page").toBeGreaterThan(hero);
+    expect(gridAt, "on a wrapper that opens before the panel").toBeLessThan(panel);
+    expect(h.match(new RegExp(WRAPPER_GRID.replace(/[[\]()]/g, "\\$&"), "g")), "exactly one wrapper carries it").toHaveLength(1);
+
+    // The panel is fed by the resolver's rows: the poster url is in it, encoded into the optimiser route, and each row's link.
+    const panelHtml = h.slice(panel, h.indexOf("</aside>", panel));
+    expect(panelHtml).toContain(`/_next/image?url=${encodeURIComponent(POSTER_URL)}`);
+    expect(panelHtml).toContain(`href="/s/sp1?src=site"`);
+    expect(panelHtml, "the unlinked second row is a slide with no link").toContain(`data-sponsor-id="sp4"`);
+    // Register stays in the LEFT column, before the panel and never inside it.
+    expect(h.indexOf(`data-testid="mh-hero-register"`), "register is in the first column").toBeLessThan(panel);
+    expect(panelHtml).not.toContain("mh-hero-register");
+
+    // Per width: the panel and the hero's sentence leave below md; the band is the one that stays.
+    expect(classTokens(h, "mh-hero-poster")).toContain("max-md:hidden");
+    expect(classTokens(h, "mh-hero-sponsor")).toContain("max-md:hidden");
+    expect(classTokens(h, "mh-title-band")).toContain("md:hidden");
+    expect(classTokens(h, "mh-title-band")).not.toContain("max-md:hidden");
+  });
+
+  it("EMPTY: with no title sponsor there is no panel, no band, no grid class, and the hero keeps its mb-6", async () => {
+    stub.hasFeature.mockResolvedValue(true);
+    let checked = 0;
+    for (const rows of [[], [GOLD_SPONSOR, PARTNER_SPONSOR]]) {
+      stub.resolveSponsors.mockResolvedValue(rows);
+      const h = await render();
+      expect(h).toContain(`data-testid="mh-hero"`);
+      expect(h).not.toContain(`data-testid="mh-hero-poster"`);
+      expect(h).not.toContain(`data-testid="mh-title-band"`);
+      expect(h).not.toContain(WRAPPER_GRID);
+      expect(h).not.toContain("md:grid ");
+      const hero = classTokens(h, "mh-hero");
+      expect(hero).toContain("mb-6");
+      expect(hero).not.toContain("max-md:mb-2.5");
+      // The single column is the one the page had: the wrapper's whole class, unchanged.
+      expect(h).toContain(`class="relative flex flex-col gap-5 p-6 sm:p-8"`);
+      checked += 1;
+    }
+    expect(checked, "empty cases checked").toBe(2);
+  });
+
+  it("DENIED: a free org holding a title row gets no panel, no band and no grid; the name is on the flat strip", async () => {
+    stub.hasFeature.mockResolvedValue(false);
+    stub.resolveSponsors.mockResolvedValue([TITLE_WITH_POSTER]);
+
+    const h = await render();
+    expect(h).not.toContain(`data-testid="mh-hero-poster"`);
+    expect(h).not.toContain(`data-testid="mh-title-band"`);
+    expect(h).not.toContain(WRAPPER_GRID);
+    expect(h).not.toContain("title-showcase");
+    expect(h, "the poster is never even requested").not.toContain(encodeURIComponent(POSTER_URL));
+    expect(h).not.toContain(`data-testid="mh-hero-sponsor"`);
+    const flat = h.slice(h.indexOf(`data-testid="mh-sponsors-flat"`));
+    expect(flat).toContain("Northbank Bank");
+    // The twin: the same row with the entitlement is a placement (the first case above), so this is the gate and not a dead fixture.
+    stub.hasFeature.mockResolvedValue(true);
+    expect(await render()).toContain(`data-testid="mh-hero-poster"`);
+  });
+
+  it("the hero drops to max-md:mb-2.5 only when a band follows it", async () => {
+    stub.hasFeature.mockResolvedValue(true);
+    stub.resolveSponsors.mockResolvedValue([TITLE_WITH_POSTER]);
+    const withBand = classTokens(await render(), "mh-hero");
+    expect(withBand).toContain("max-md:mb-2.5");
+    expect(withBand).toContain("md:mb-6");
+    expect(withBand, "no bare mb-6 left to fight the phone margin").not.toContain("mb-6");
+
+    stub.resolveSponsors.mockResolvedValue([GOLD_SPONSOR]);
+    const without = classTokens(await render(), "mh-hero");
+    expect(without).toContain("mb-6");
+    expect(without).not.toContain("max-md:mb-2.5");
+  });
+
+  it("the board still excludes the title sponsor, and gold is not in the panel or the band", async () => {
+    stub.hasFeature.mockResolvedValue(true);
+    stub.resolveSponsors.mockResolvedValue([TITLE_WITH_POSTER, GOLD_SPONSOR]);
+    const h = await render();
+    const panel = h.slice(h.indexOf(`data-testid="mh-hero-poster"`), h.indexOf("</aside>"));
+    const band = h.slice(h.indexOf(`data-testid="mh-title-band"`), h.indexOf(`data-testid="mh-root"`));
+    for (const [where, markup] of [["panel", panel], ["band", band]] as const) {
+      expect(markup, `${where} holds the title sponsor`).toContain("Northbank Bank");
+      expect(markup, `${where} does not hold gold`).not.toContain("Harbour Motors");
+    }
+    const board = h.slice(h.indexOf(`data-testid="mh-sponsors"`));
+    expect(board).toContain("Harbour Motors");
+    expect(board).not.toContain("Northbank Bank");
   });
 
   it("draws nothing when the org has no sponsors", async () => {
