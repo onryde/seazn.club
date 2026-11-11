@@ -20,11 +20,13 @@
 //        and one `site` click is on record
 //   W4   visitor, 320: the band, Visit is a 44px target, tapped: a second `site` click
 //   W5   the poster fails to load (storage answers 404): the logo card takes its place and no broken picture is drawn
-//   W5b  a poster on a host the optimiser does not allow, against the REAL optimiser in the production build: the same card
+//   W5b  a poster on a host the optimiser does not allow, against the REAL optimiser in the production build: the same card (SKIPS, loudly
+//        and by name, unless E2E_PROD_TARGET is set: a dev server throws on an unconfigured host while rendering)
 //   W6   a second Title sponsor (a logo, no link): the showcase turns every 6 s (the page's clock driven), B has no link, a hovering
 //        mouse pauses it, a dot tap stops it for the page view, reduced motion never starts it
 //   W7   organiser: Remove poster, Save - the row reads null, and the visitor's page shows the logo card
-//   W8   both sponsors downgraded to partner over the API: no panel, no band, no hero sentence, and the hero's grid is the plain one
+//   W8   both sponsors downgraded to partner over the API: no panel, no band, no hero sentence, the hero's grid is the plain one, and
+//        the poster is still on the row (a downgrade takes the placement away, never the picture)
 //
 // NOT DRIVEN, named plainly: the storage bucket's own refusal of an oversize object (413, a stand-in answers 200), and the browser's
 // paint of the crossfade (it is a CSS transition; the data-current attribute is what is asserted).
@@ -32,7 +34,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Browser, type BrowserContext, type Locator, type Page, type TestInfo } from "@playwright/test";
-import { apiJson, expectNoHorizontalScroll, withDb } from "../helpers";
+import { PROD_TARGET, apiJson, expectNoHorizontalScroll, withDb } from "../helpers";
 import {
   releaseSettingsOrg,
   seedCompetition,
@@ -163,6 +165,25 @@ async function shot(testInfo: TestInfo, name: string, region: Locator): Promise<
 const hydrated = (el: Locator, why: string) =>
   expect.poll(() => el.evaluate((node) => Object.keys(node).some((k) => k.startsWith("__reactProps$"))), { message: why, timeout: NAV_MS }).toBe(true);
 
+/** React schedules a render, and then the passive effects that arm a timer, through MessageChannel tasks (the scheduler's own channel, which the
+ *  page clock does not fake). A page-side round trip through a channel of our own queues behind whatever React already posted, so awaiting
+ *  it is "the work React had pending has run". One hop per stage - the render, the effects, and the render an effect's own state change
+ *  asks for - so the count is the number of stages, not a time. */
+const REACT_STAGES = 3;
+const drainReactQueue = (page: Page): Promise<void> =>
+  page.evaluate(async (stages) => {
+    for (let i = 0; i < stages; i++) {
+      await new Promise<void>((resolve) => {
+        const channel = new MessageChannel();
+        channel.port1.onmessage = () => {
+          channel.port1.close();
+          resolve();
+        };
+        channel.port2.postMessage(null);
+      });
+    }
+  }, REACT_STAGES);
+
 /** Choose `buffer` in the Poster field the way a person does: tap the tile, answer the file chooser it opens. */
 async function pickPoster(page: Page, field: Locator, name: string, buffer: Buffer): Promise<void> {
   const [chooser] = await Promise.all([page.waitForEvent("filechooser"), field.getByTestId("sponsor-poster-tile").click()]);
@@ -226,7 +247,13 @@ test("W1b organiser: the Poster field with a stored poster at 1280, 768 and 320 
     await expect(field, `${width}: the editor is open with its Poster field`).toBeVisible();
     const remove = field.getByTestId("sponsor-poster-remove");
     await expect(remove, `${width}: a stored poster is on the tile, so Remove is offered`).toBeVisible();
-    await expect(field.getByTestId("sponsor-poster-tile").locator("img"), `${width}: the tile shows the stored poster`).toHaveAttribute("src", storedPoster);
+    const tileImg = field.getByTestId("sponsor-poster-tile").locator("img");
+    await expect(tileImg, `${width}: the tile shows the stored poster`).toHaveAttribute("src", storedPoster);
+    // The capture is of the picture, not of an empty tile still waiting for its bytes: a shot taken before it decoded would differ by width
+    // anyway (the layout moves) and pass the all-differ check on the wrong evidence.
+    await expect
+      .poll(() => tileImg.evaluate((img) => (img as HTMLImageElement).naturalWidth), { message: `${width}: the tile's picture arrived`, timeout: NAV_MS })
+      .toBeGreaterThan(0);
     await remove.scrollIntoViewIfNeeded();
     const reach = await remove.evaluate((el) => {
       const r = el.getBoundingClientRect();
@@ -343,7 +370,14 @@ test("W5 the poster fails to load: the logo card takes its place and no broken p
   await shot(testInfo, "visitor-panel-fallback-1280", panel);
 });
 
+// A skip is only honest if someone SEES it (the idiom of settings-sponsor-monetize.spec.ts): the summary prints "1 skipped" with no reason,
+// and nothing else in the suite sends a poster to the real optimiser, so say what was not exercised, once, at collection time.
+const W5B_SKIP = "needs the production build's real /_next/image: a dev server throws on a host outside images.remotePatterns while it renders the page, and its optimiser is not the one that ships. Set E2E_PROD_TARGET=1 and run against `next start`.";
+if (!PROD_TARGET) {
+  console.warn(`\n  ⚠ title-sponsor-poster W5b SKIPPED - the real optimiser's refusal of an unconfigured poster host was NOT exercised.\n    ${W5B_SKIP}\n`);
+}
 test("W5b a poster on a host the optimiser does not allow falls back to the same card, against the real optimiser", async ({ browser, request }) => {
+  test.skip(!PROD_TARGET, `W5b ${W5B_SKIP}`);
   test.setTimeout(6 * NAV_MS + 10 * ACT_MS);
   // No stand-in here at all: the production build's own `/_next/image` refuses a host outside `images.remotePatterns` (a 400), and
   // the sponsor API accepts any http(s) poster, so this is the page's one defence for a poster that can never load (spec D14).
@@ -366,7 +400,8 @@ test("W5b a poster on a host the optimiser does not allow falls back to the same
 
 test("W6 two Title sponsors rotate: a turn every period, none for a sponsor with no link, a hover pauses, a dot tap stops it, reduced motion never starts it", async ({ browser, request }) => {
   test.setTimeout(8 * NAV_MS + 25 * ACT_MS);
-  // B: a logo and no link. The org-wide-first resolver order puts A (made first) in front.
+  // B: a logo and no link. The resolver orders competition-scoped rows first, then by tier, display_order and created_at: A and B are both
+  // scoped to this competition at the same tier, and A was created first (display_order is max + 1), so A is in front.
   B.logo = storagePublicUrl(`assets/orgs/${org.orgId}/content/logo-ridge-${Date.now().toString(36)}.png`);
   const made = await apiJson<{ id: string }>(request, `/api/v1/orgs/${org.orgId}/sponsors`, "POST", {
     name: B.name,
@@ -428,8 +463,8 @@ test("W6 two Title sponsors rotate: a turn every period, none for a sponsor with
   await expect(live, "stopped, not merely paused: no hover, and the box announces its changes").toHaveAttribute("aria-live", "polite");
   // "Polite" reads the same before and after the pointer-leave is handled (hovered and stopped both give it), so no DOM signal says React
   // has taken the leave in. A rotation that was only PAUSED re-arms its timer on that render, and a runFor that beat the render would pass
-  // for the wrong reason. A real quarter second (Node's timer, not the page's) is the sync; the page's clock is paused and moves nothing.
-  await v.page.waitForTimeout(250);
+  // for the wrong reason: the page's own task queue is drained instead (no wall-clock wait, and nothing the paused page clock fakes).
+  await drainReactQueue(v.page);
   await v.page.clock.runFor(5 * ROTATE_MS);
   await expect(current, "five periods after a dot tap, B is still up").toHaveAttribute("data-sponsor-id", B.id);
 
@@ -487,13 +522,20 @@ test("W7 organiser: Remove poster, Save - the row reads null and the visitor's p
   await expect(slideOf(panel, B.id), "B is untouched: still a slide").toHaveCount(1);
 });
 
-test("W8 both sponsors downgraded to partner: no panel, no band, no hero sentence, and the hero's grid is the plain one", async ({ browser, request }) => {
-  test.setTimeout(5 * NAV_MS + 10 * ACT_MS);
-  // The positive half first: with both at Title the page has the whole placement.
+test("W8 both sponsors downgraded to partner: no panel, no band, no hero sentence, the plain hero grid, and the poster still on the row", async ({ browser, request }) => {
+  test.setTimeout(5 * NAV_MS + 12 * ACT_MS);
+  // W7 removed A's poster, so a "the poster survives" check would compare null with null. Put one back (setup, over the API) so the row
+  // holds a value the downgrade could destroy.
+  const restored = await apiJson<{ poster_path: string | null }>(request, `/api/v1/orgs/${org.orgId}/sponsors/${A.id}`, "PATCH", { poster_path: storedPoster });
+  expect(restored.status, JSON.stringify(restored.error)).toBe(200);
+  expect(await posterOf(A.id), "premise: A holds a poster again before the downgrade").toBe(storedPoster);
+  // The positive half first: with both at Title the page has the whole placement, and A's poster in it.
   const before = await visitor(browser, { width: 1280, reducedMotion: true });
   await routePosterArt(before.ctx, B.logo, { svg: posterSvg(B.name, "#1d4ed8") });
+  await routePosterArt(before.ctx, storedPoster, { svg: posterSvg(A.name, POSTER_FILL) });
   await before.page.goto(publicUrl, { waitUntil: "load" });
   await expect(panelOf(before.page), "premise: the panel is drawn while they are Title sponsors").toBeVisible({ timeout: READ_MS });
+  await expect(slideOf(panelOf(before.page), A.id).getByTestId("title-slide-poster"), "premise: A's poster is in it").toHaveCount(1);
   await expect(before.page.getByTestId("mh-title-band")).toHaveCount(1);
   await expect(before.page.getByTestId("mh-hero-sponsor")).toHaveCount(1);
   await expect(heroGrid(before.page)).toHaveCount(1);
@@ -516,5 +558,9 @@ test("W8 both sponsors downgraded to partner: no panel, no band, no hero sentenc
   await expect(v.page.getByTestId("mh-title-band"), "no band").toHaveCount(0);
   await expect(v.page.getByTestId("mh-hero-sponsor"), "no hero sentence").toHaveCount(0);
   await expect(heroGrid(v.page), "the hero is the plain one-column hero again").toHaveCount(0);
+  await expect(v.page.getByTestId("title-showcase"), "no showcase anywhere on the page, panel or band").toHaveCount(0);
+  expect(await v.page.content(), "and no poster is asked of the optimiser").not.toContain(encodeURIComponent(storedPoster));
+  // The downgrade took the PLACEMENT away, not the picture: the row still holds the poster, so a plan that comes back has it to show.
+  expect(await posterOf(A.id), "A's poster survived the downgrade").toBe(storedPoster);
   await expectNoHorizontalScroll(v.page);
 });

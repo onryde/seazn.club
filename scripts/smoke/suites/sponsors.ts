@@ -192,7 +192,7 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
   );
   check("sp public logo links via tracked redirect", shared.body.includes(`/s/${goldId}`));
 
-  // --- Title sponsor poster (spec 2026-11-11, V503): the sponsor API stores a poster url and refuses one that is not http(s); the public page
+  // --- Title sponsor poster (spec 2026-11-11): the sponsor API stores a poster url and refuses one that is not http(s); the public page
   // draws the panel and the band with it, and with it cleared draws the card a sponsor without a poster gets. The competition page is
   // cached, but an organiser's sponsor write expires it inside the request (`expirePublicSponsors`), so each read below is a fresh one.
   const scopedId = v1data<{ id: string }>(scoped).id;

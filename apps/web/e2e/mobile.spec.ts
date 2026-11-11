@@ -1800,8 +1800,15 @@ test("public surfaces: no horizontal scroll (v3/11 gap 12)", async ({ browser })
 //   - an unlinked sponsor's slide has no anchor and no Visit, and a linked one has exactly one (the positive pair of each negative);
 //   - the page does not scroll sideways and axe finds nothing serious.
 // Reduced motion is on, so nothing rotates under the measuring; the dots still work (the visitor is then the one moving it).
-// The org is the test's OWN (a fresh user, as the P6 blocks above): a Title sponsor that no scope on the shared Pro org owns would add a
-// third slide to this page, and orgs are capped per person, so seven width projects cannot each seed one from the shared account.
+// The org is the test's OWN (a fresh user, as the P6 blocks above): a Title sponsor that some other spec left on the shared Pro org would
+// add a slide to this page (and change the dot count asserted below), and orgs are capped per person, so seven width projects cannot each
+// seed one from the shared account.
+// THREE Title sponsors, not two: the dots' capsule is `w-fit` and centred inside the panel (220px wide at md, `max-w-[calc(100%-1rem)]`), and
+// two 44px dots (88px) fit one row whatever the capsule's width rule is, so "one row" could not fail. Three (132px) is the count that does
+// not fit if the capsule is ever pinned to `left-1/2` again (a box pinned there may only be as wide as the half that remains: 110px in a
+// 220px panel, so the third dot wraps). Four is the most a competition's hero is meant to carry.
+const THIRD_TITLE_SPONSOR = "Fenwick Print";
+const TITLE_SPONSOR_COUNT = 3;
 const LONG_TITLE_SPONSOR = "Harbourside Building Supplies and Timber Co";
 test("title sponsor showcase: band below 768, panel from 768, no scroll, 44px dots, a 43-character name in two lines", async ({
   page,
@@ -1811,10 +1818,10 @@ test("title sponsor showcase: band below 768, panel from 768, no scroll, 44px do
   expect(vp, "this project declares a viewport").not.toBeNull();
   const phone = vp!.width < 768;
   expect(LONG_TITLE_SPONSOR.length, "premise: the realistic 43 characters").toBe(43);
-  // Login, the plan flip, a competition, two sponsors, one navigation and the scans; never below the file's floor (AGENTS.md class 20).
+  // Login, the plan flip, a competition, three sponsors, one navigation and the scans; never below the file's floor (AGENTS.md class 20).
   const LOGIN_MS = 30_000;
   const API_MS = 5_000;
-  test.setTimeout(Math.max(FLOOR_MS, LOGIN_MS + 8 * API_MS + 12 * ROUTE_CHECK_MS));
+  test.setTimeout(Math.max(FLOOR_MS, LOGIN_MS + 9 * API_MS + 12 * ROUTE_CHECK_MS));
 
   await loginUi(page, `delivered+tp-showcase-${TAG}-${projectTag()}@resend.dev`);
   const org = await activeOrg(page);
@@ -1849,9 +1856,12 @@ test("title sponsor showcase: band below 768, panel from 768, no scroll, 44px do
       sponsorIds.push(res.data!.id);
       return res.data!.id;
     };
-    // A: linked, with a poster. B: the long name, no link, no logo (its card is a monogram) - the slide that must never clip.
+    // A: linked, with a poster. B: the long name, no link, no logo (its card is a monogram) - the slide that must never clip. C: a third,
+    // plain one, so the capsule has three dots to lay out (see THIRD_TITLE_SPONSOR above).
     const aId = await made({ name: "Pandyas", url: "https://pandyas.example/", poster_path: POSTER });
     const bId = await made({ name: LONG_TITLE_SPONSOR });
+    const cId = await made({ name: THIRD_TITLE_SPONSOR });
+    expect(new Set([aId, bId, cId]).size, "premise: three distinct Title sponsors").toBe(TITLE_SPONSOR_COUNT);
     await routePosterArt(anonCtx, POSTER, { svg: posterSvg("Pandyas", "#0f766e") });
 
     const anon = await anonCtx.newPage();
@@ -1873,11 +1883,11 @@ test("title sponsor showcase: band below 768, panel from 768, no scroll, 44px do
       await expect(sentence, "and the hero keeps its sentence").toBeVisible();
     }
 
-    // The dots: two sponsors, two dots in the VISIBLE showcase (the hidden twin has its own two), each a 44px target that a tap would
+    // The dots: three sponsors, three dots in the VISIBLE showcase (the hidden twin has its own three), each a 44px target that a tap would
     // reach, side by side on one row.
     const showcase = phone ? band : panel;
     const dots = showcase.getByTestId("title-showcase-dot");
-    await expect(dots, "one dot per Title sponsor in the visible showcase").toHaveCount(2);
+    await expect(dots, "one dot per Title sponsor in the visible showcase").toHaveCount(TITLE_SPONSOR_COUNT);
     await dots.first().scrollIntoViewIfNeeded();
     const probes = await dots.evaluateAll((els) =>
       els.map((el) => {
@@ -1886,13 +1896,13 @@ test("title sponsor showcase: band below 768, panel from 768, no scroll, 44px do
         return { width: r.width, height: r.height, top: r.top, hit: at !== null && (at === el || el.contains(at)) };
       }),
     );
-    expect(probes.length, "dots measured").toBe(2);
+    expect(probes.length, "dots measured").toBe(TITLE_SPONSOR_COUNT);
     for (const [i, p] of probes.entries()) {
       expect(p.width, `dot ${i} is ${HIT_TARGET_FLOOR_PX}px wide at ${vp!.width}px`).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
       expect(p.height, `dot ${i} is ${HIT_TARGET_FLOOR_PX}px tall at ${vp!.width}px`).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
     }
-    expect(probes.filter((p) => p.hit).length, "a tap at each dot's centre lands on that dot, not on what is drawn over it").toBe(2);
-    expect(Math.abs(probes[0]!.top - probes[1]!.top), "the capsule is one row").toBeLessThanOrEqual(1);
+    expect(probes.filter((p) => p.hit).length, "a tap at each dot's centre lands on that dot, not on what is drawn over it").toBe(TITLE_SPONSOR_COUNT);
+    for (const [i, p] of probes.entries()) expect(Math.abs(p.top - probes[0]!.top), `dot ${i} is on the first dot's row: the capsule is one row`).toBeLessThanOrEqual(1);
 
     // Tap B's dot (retried until React has attached: a tap before hydration is lost, not queued).
     const slideB = showcase.locator(`[data-testid="title-slide"][data-sponsor-id="${bId}"]`);
