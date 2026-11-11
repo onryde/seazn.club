@@ -27,6 +27,7 @@ import "server-only";
 //   mail                 registration mail: cart confirmation (submit, resend) and the payment reminder message
 //   settings             organiser settings (defaults, get / put) and the public register-panel info
 //   checkout             minting and resuming a Stripe checkout for a registration or a cart
+//   pay-token            the player payment page's token: mint, record, issue a link, resolve a token to its entry
 //   checkout-completion  payment completion: the checkout webhooks, confirmPaidRegistration, reconcile-on-return
 //   refunds              refund money and policy: stripeRefund, receipts, the failure alert, the resolved policy
 //   disputes             chargeback handling and the dispute evidence pack
@@ -95,6 +96,7 @@ export {
 export { getRegistrationSettings, putRegistrationSettings, publicRegistrationInfo } from "./settings";
 export type { OrgPaymentDefaults, PublicDivisionInfo, PublicRegistrationInfoResult } from "./settings";
 export { mintGroupCheckout, resumeRegistrationCheckout } from "./checkout";
+export { mintPayToken, recordPayToken, issuePayLink, registrationIdByPayToken } from "./pay-token";
 export {
   handleRegistrationCheckoutCompleted,
   handleRegistrationCheckoutAsyncPaymentFailed,
