@@ -60,3 +60,7 @@ overrides:
   "baseline-browser-mapping@<2.11.0": "^2.11.26"
   "fflate@>=0.4.5 <0.4.9": "^0.4.9"
   "@ai-sdk/provider-utils@>=4.0.0-beta.10 <4.0.33": "^4.0.54"
+  # Engine 7.0.0 PREVIEW (onryde/seazn.club.engine#41's snapshot: football `extraTimeSubs`, `subWindowsCap(cfg, phase)`). The six
+  # manifests stay on `npm:@onryde/seazn-engine@^6.0.3`; this ONE entry, keyed on the `@seazn/engine` alias, is the only place the
+  # snapshot is named. The controller removes it and re-pins the six manifests to ^7.0.0 once 7.0.0 is released.
+  "@seazn/engine": "npm:@onryde/seazn-engine@0.0.0-pr41.08fbe8b61808d5bb3a706848fadb55c60696f4ff"
