@@ -95,11 +95,14 @@ function NavLink({
   orgSlug,
   active,
   dict,
+  compact = false,
 }: {
   item: Item;
   orgSlug: string;
   active: SettingsNavKey;
   dict: Dict;
+  /** The strip at every width: a touch tighter from `md`, so all ten tabs fit the 1120px content width at 1280. */
+  compact?: boolean;
 }) {
   const isActive = active === item.key;
   const Icon = item.icon;
@@ -108,6 +111,8 @@ function NavLink({
       href={item.href(orgSlug)}
       aria-current={isActive ? "page" : undefined}
       className={`flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition ${
+        compact ? "md:gap-2 md:px-2.5" : ""
+      } ${
         isActive
           ? "bg-purple-100 font-medium text-purple-800"
           : "text-slate-600 hover:bg-purple-50 hover:text-purple-700"
@@ -237,9 +242,12 @@ export function SettingsNav({
           Desktop: the wrappers become blocks again and the headers appear. */}
       <ScrollActiveTabIntoView className="contents">
         <nav
+          // A scrolling region (it scrolls when the labels outgrow the width: 768, 834, longer languages) owes a stop and a
+          // name (AGENTS rule 23); `tabindex` cannot vary by media query, so it is unconditional on the strip.
+          {...(compact ? { tabIndex: 0, "aria-label": t(dict, "settings.nav.title") } : {})}
           className={
             compact
-              ? "scroll-x scroll-x-fade sticky top-[var(--app-header-h)] z-30 -mx-4 flex gap-1 whitespace-nowrap bg-[var(--background)]/90 px-4 py-2 backdrop-blur"
+              ? "scroll-x scroll-x-fade sticky top-[var(--app-header-h)] z-30 -mx-4 flex gap-1 whitespace-nowrap bg-[var(--background)]/90 px-4 py-2 backdrop-blur md:mx-0 md:gap-0.5 md:pl-0 md:pr-6"
               : "scroll-x scroll-x-fade sticky top-[var(--app-header-h)] z-30 -mx-4 flex gap-1 whitespace-nowrap bg-[var(--background)]/90 px-4 py-2 backdrop-blur md:static md:z-auto md:mx-0 md:block md:bg-transparent md:p-0 md:backdrop-blur-none"
           }
         >
@@ -252,7 +260,7 @@ export function SettingsNav({
               )}
               <div className={compact ? "contents" : "contents md:block md:space-y-0.5"}>
                 {ITEMS.filter((i) => i.group === group).map((item) => (
-                  <NavLink key={item.key} item={item} orgSlug={orgSlug} active={active} dict={dict} />
+                  <NavLink key={item.key} item={item} orgSlug={orgSlug} active={active} dict={dict} compact={compact} />
                 ))}
               </div>
             </div>
