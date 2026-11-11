@@ -51,6 +51,10 @@ export const HUB_DICT_PREFIXES = [
   "info.",
   "division.",
   "format.",
+  // The title banner's words (`title.joint`, `title.jointNames`, `title.vacant`, `title.vacantReason`): the Knockout
+  // tab's champion banner and the Table tab's champion strip read them client-side. Missing, a joint final printed the
+  // raw keys "title.joint" / "title.jointNames" on the public knockout view.
+  "title.",
 ] as const;
 
 /**
@@ -77,6 +81,9 @@ export const HUB_DICT_KEYS = [
   "matchCentre.status.walkover",
   "matchCentre.status.needs_decision",
   "matchCentre.status.other",
+  // `MatchCard` swaps an abandoned-with-a-result fixture's tag for this client-side (match-card.tsx). One key, never
+  // the `forfeit.` family: the rest of it arrives server-built in `m.forfeit`.
+  "forfeit.tag.abandoned",
 ] as const;
 
 /**
