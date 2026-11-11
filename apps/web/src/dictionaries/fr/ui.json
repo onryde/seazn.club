@@ -8163,7 +8163,7 @@
   "sponsors.pkg.onlineNote": "Les factures en ligne sont payées sur votre compte Stripe, avec la même commission de plateforme que les frais d'inscription.",
   "sponsors.pkg.onlineLocked": "L'envoi de factures en ligne nécessite une offre payante. Un Event Pass ne couvre que sa propre compétition.",
   "sponsors.pkg.legend.heading": "Ce que donne chaque niveau",
-  "sponsors.pkg.legend.tier.title": "Cité sous le nom de la compétition sur vos pages publiques.",
+  "sponsors.pkg.legend.tier.title": "Cité sous le nom de la compétition sur vos pages publiques. Une affiche 4:5 figure aussi en haut de la page de la compétition, si vous en ajoutez une.",
   "sponsors.pkg.legend.tier.gold": "Un grand cadre avec son logo sur le tableau des sponsors.",
   "sponsors.pkg.legend.tier.silver": "Un cadre plus petit avec son logo sur le tableau des sponsors.",
   "sponsors.pkg.legend.tier.partner": "Listé par son nom dans la ligne Partenaires.",

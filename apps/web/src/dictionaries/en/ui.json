@@ -8163,7 +8163,7 @@
   "sponsors.pkg.onlineNote": "Online invoices are paid to your Stripe account, with the same platform fee as entry fees.",
   "sponsors.pkg.onlineLocked": "Sending online invoices needs a paid plan. An Event Pass covers only its own competition.",
   "sponsors.pkg.legend.heading": "What each tier gets",
-  "sponsors.pkg.legend.tier.title": "Named under the competition name on your public pages.",
+  "sponsors.pkg.legend.tier.title": "Named under the competition name on your public pages. Also shows a 4:5 poster at the top of the competition page, when you add one.",
   "sponsors.pkg.legend.tier.gold": "A large logo panel on the sponsor board.",
   "sponsors.pkg.legend.tier.silver": "A smaller logo panel on the sponsor board.",
   "sponsors.pkg.legend.tier.partner": "Listed by name in the Partners line.",
