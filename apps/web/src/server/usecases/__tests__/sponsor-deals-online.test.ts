@@ -173,8 +173,14 @@ const invoiceKeys = async (id: string): Promise<string[]> =>
   (await sql<{ dedupe_key: string }[]>`
     select dedupe_key from email_outbox where kind = 'sponsor_invoice' and ref_id = ${id} order by created_at, id`).map((r) => r.dedupe_key);
 /** F10 (Task 20): a deal made before invoices were numbered — its number cleared, as such a row has none. Only such an online
- *  deal still reaches the delete's session rule; a numbered one is refused as history before any link is read. */
-const unnumber = (id: string) => sql`update sponsor_orders set invoice_number = null where id = ${id}`;
+ *  deal still reaches the delete's session rule; a numbered one is refused as history before any link is read. A number is fixed
+ *  once set (the invoices delta's trigger `sponsor_orders_invoice_number_fixed`), so this transaction turns triggers off for
+ *  itself (`session_replication_role = replica`, superuser; local and CI `postgres` both are) to stand in for a pre-delta row. */
+const unnumber = (id: string) =>
+  sql.begin(async (tx) => {
+    await tx`set local session_replication_role = replica`;
+    await tx`update sponsor_orders set invoice_number = null where id = ${id}`;
+  });
 /** Move the stored session's expiry to `minutes` from now (a session nearing its end). */
 const expiresIn = (id: string, minutes: number) =>
   sql`update sponsor_orders set checkout_expires_at = now() + make_interval(mins => ${minutes}) where id = ${id}`;

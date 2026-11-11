@@ -11,7 +11,8 @@
 --     org_id is RESTRICT, as V299 made the orders themselves: no app surface hard-deletes an org, and a script that does must
 --     drop this row consciously, after the deals it numbered.
 --   * sponsor_orders.invoice_number: the deal's number, shown as SP-0001 (lib/sponsor-deals.ts formatInvoiceNumber). An online
---     or offline deal gets one when it is created; a complimentary deal has no invoice and never does. Unique per org.
+--     or offline deal gets one when it is created; a complimentary deal has no invoice and never does. Unique per org. Fixed once
+--     set (trigger sponsor_orders_invoice_number_fixed): null may become a number, a number never changes or clears.
 --   * sponsor_orders.invoice_token_hash: sha256 of the token in the invoice page's link (Task 22 mints it, Task 23 rotates it),
 --     stored as a hash only, like sponsor_report_links.token_hash. Unique across every org: a token names one invoice.
 --   * organizations.sponsor_invoice_address and sponsor_invoice_bank_details: printed on every sponsor invoice; the bank
@@ -51,6 +52,20 @@ alter table sponsor_orders
   add column invoice_token_hash bytea null,
   add constraint sponsor_orders_org_invoice_number_key unique (org_id, invoice_number),
   add constraint sponsor_orders_invoice_token_hash_key unique (invoice_token_hash);
+
+-- A number, once set, is fixed. app_user may UPDATE its own deals (V300's sponsor_orders_write), and a number cleared back to null
+-- would reopen the prune fence below for that row; a changed one would break "never reused". Setting it from null stays allowed
+-- (createDeal sets it in its insert; nothing else writes it). The trigger fires only when the column is written and its value
+-- moves, for every role: a privileged script that must rewrite a number turns triggers off for its own transaction, consciously.
+create function sponsor_orders_invoice_number_fixed() returns trigger language plpgsql as $$
+begin
+  raise exception 'sponsor_orders.invoice_number is fixed once set: deal % is number %', old.id, old.invoice_number
+    using errcode = '23001', constraint = 'sponsor_orders_invoice_number_fixed';
+end $$;
+create trigger sponsor_orders_invoice_number_fixed
+  before update of invoice_number on sponsor_orders
+  for each row when (old.invoice_number is not null and new.invoice_number is distinct from old.invoice_number)
+  execute function sponsor_orders_invoice_number_fixed();
 
 alter table organizations
   add column sponsor_invoice_address      text null,

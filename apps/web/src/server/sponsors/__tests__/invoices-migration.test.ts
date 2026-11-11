@@ -185,6 +185,41 @@ describe.skipIf(!HAS_DB)("sponsor invoices schema — the constraints are real",
     await expect(insertDeal(w, { invoice_token_hash: null }), "a second null hash").resolves.toBeTruthy();
   });
 
+  it("sponsor_orders_invoice_number_fixed: a deal's number is fixed once set - null → n is accepted (the twin), as are a same-value write and another column's update; n → m and n → null are refused by name (23001), under the tenant and on the privileged client alike (count reported)", async () => {
+    // Why: app_user may UPDATE its own deals (V300's sponsor_orders_write), and a number cleared back to null would reopen the
+    // prune fence for that row; a changed one would break "never reused". The app never rewrites a number (createDeal sets it once).
+    const w = await world();
+    const id = await insertDeal(w);
+    const numberOf = async (): Promise<number | null> =>
+      (await sql<{ n: number | null }[]>`select invoice_number as n from sponsor_orders where id = ${id}`)[0]!.n;
+    expect(await numberOf(), "the deal starts unnumbered").toBeNull();
+    const asTenant = (q: (tx: Parameters<Parameters<typeof withTenant>[1]>[0]) => Promise<unknown>) => withTenant(w.orgId, q);
+
+    // The accepted twins.
+    await expect(asTenant((tx) => tx`update sponsor_orders set invoice_number = 4 where id = ${id} returning id`), "null → 4")
+      .resolves.toHaveLength(1);
+    expect(await numberOf()).toBe(4);
+    await expect(asTenant((tx) => tx`update sponsor_orders set invoice_number = 4 where id = ${id} returning id`), "4 → 4 (no change)")
+      .resolves.toHaveLength(1);
+    await expect(asTenant((tx) => tx`update sponsor_orders set sponsor_email = 'billing@acme.test' where id = ${id} returning id`),
+      "another column of a numbered deal").resolves.toHaveLength(1);
+
+    // The refusals: each by the trigger's name, and the number stays 4.
+    const REFUSED: [string, () => Promise<unknown>][] = [
+      ["tenant 4 → 5", () => asTenant((tx) => tx`update sponsor_orders set invoice_number = 5 where id = ${id}`)],
+      ["tenant 4 → null", () => asTenant((tx) => tx`update sponsor_orders set invoice_number = null where id = ${id}`)],
+      ["privileged 4 → 6", () => sql`update sponsor_orders set invoice_number = 6 where id = ${id}`],
+      ["privileged 4 → null", () => sql`update sponsor_orders set invoice_number = null where id = ${id}`],
+    ];
+    let checked = 0;
+    for (const [label, attempt] of REFUSED) {
+      await expect(attempt(), label).rejects.toMatchObject(refusedBy("23001", "sponsor_orders_invoice_number_fixed"));
+      expect(await numberOf(), `${label}: the number stays`).toBe(4);
+      checked++;
+    }
+    expect(checked, "refusals checked").toBe(REFUSED.length);
+  });
+
   it("RLS on the counter: enabled and FORCED; under org A's tenant, A reads its own counter and never org B's, cannot write B's, and app_user holds select, insert and update but no delete (count reported)", async () => {
     const [rls] = await sql<{ enabled: boolean; forced: boolean }[]>`
       select relrowsecurity as enabled, relforcerowsecurity as forced from pg_class where oid = 'sponsor_invoice_counters'::regclass`;
