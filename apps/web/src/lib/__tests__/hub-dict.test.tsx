@@ -151,6 +151,50 @@ const knockouts = hubDoc({
   ],
 });
 
+/** The deciding final that ends in JOINT winners, and one that ends VACANT (W4 X-CH-1), plus a standings table with two
+ *  champions: the three places the hub prints `title.*` copy. None of the documents above reached them, so the slice
+ *  shipped without `title.` and a joint final printed the raw keys "title.joint" / "title.jointNames" on the public
+ *  knockout view with this whole suite green. */
+const titled = hubDoc({
+  matches: [
+    koMatch("j-f", "completed", "Final", ["W4 Team B", "W4 Team C"], null, "premier"),
+    koMatch("v-f", "completed", "Final", ["Gil", "Hal"], null, "sunday-league"),
+  ],
+  knockouts: [
+    knockoutView("joint", "premier", [koRound("main-1", "Final", ["j-f"])], {
+      championFixtureId: "j-f",
+      title: { kind: "joint", winners: ["w4-team-b", "w4-team-c"] },
+      drawable: false,
+    }),
+    knockoutView("vacant", "sunday-league", [koRound("main-1", "Final", ["v-f"])], {
+      championFixtureId: "v-f",
+      title: { kind: "vacant" },
+      drawable: false,
+    }),
+  ],
+});
+/** An abandoned fixture WITH a result line: `MatchCard` swaps the tag for `forfeit.tag.abandoned` client-side. */
+const abandoned = hubDoc({
+  matches: [
+    m("ab-1", "completed", "2026-09-05T10:00:00.000Z", "premier", {
+      roundLabel: "Final",
+      resultLine: "Ana won by 12 runs (DLS)",
+      winnerIndex: 0,
+      forfeit: { kind: "abandoned_dls", tag: "Aband. · DLS", sentence: "Abandoned (rain) - Ana won by 12 runs (DLS)" },
+      header: { sides: [koSide("Ana"), koSide("Ben")] },
+    }),
+  ],
+  knockouts: [knockoutView("ab", "premier", [koRound("main-1", "Final", ["ab-1"])], { drawable: false })],
+});
+const jointTable = hubDoc({
+  divisions: [division("premier")],
+  tables: [
+    tableView("tj", "premier", {
+      rows: [tableRow("e1", 1, { champion: true }), tableRow("e2", 1, { champion: true })],
+    }),
+  ],
+});
+
 /**
  * Every status sentence a hub card can print, one fixture each (Knockout fix
  * round, P2).
@@ -199,20 +243,24 @@ const TABS: [string, (d: Dict) => string][] = [
     (d) =>
       renderToStaticMarkup(<MatchesTab doc={doc} dict={d} locale="en" now={NOW} />) +
       renderToStaticMarkup(<MatchesTab doc={bare} dict={d} locale="en" now={NOW} />) +
-      renderToStaticMarkup(<MatchesTab doc={calledOff} dict={d} locale="en" now={NOW} />),
+      renderToStaticMarkup(<MatchesTab doc={calledOff} dict={d} locale="en" now={NOW} />) +
+      renderToStaticMarkup(<MatchesTab doc={abandoned} dict={d} locale="en" now={NOW} />),
   ],
   [
     "Table",
     (d) =>
       renderToStaticMarkup(<TableTab doc={doc} dict={d} />) +
-      renderToStaticMarkup(<TableTab doc={bare} dict={d} />),
+      renderToStaticMarkup(<TableTab doc={bare} dict={d} />) +
+      renderToStaticMarkup(<TableTab doc={jointTable} dict={d} />),
   ],
   [
     "Knockout",
     (d) =>
       renderToStaticMarkup(<KnockoutTab doc={knockouts} dict={d} locale="en" now={NOW} />) +
       renderToStaticMarkup(<KnockoutTab doc={bare} dict={d} locale="en" now={NOW} />) +
-      renderToStaticMarkup(<KnockoutTab doc={calledOff} dict={d} locale="en" now={NOW} />),
+      renderToStaticMarkup(<KnockoutTab doc={calledOff} dict={d} locale="en" now={NOW} />) +
+      renderToStaticMarkup(<KnockoutTab doc={titled} dict={d} locale="en" now={NOW} />) +
+      renderToStaticMarkup(<KnockoutTab doc={abandoned} dict={d} locale="en" now={NOW} />),
   ],
   [
     "Stats",
@@ -293,12 +341,29 @@ describe("hubDict", () => {
     expect(h).not.toContain("matchCentre.");
   });
 
+  it("a joint final and a joint table print the words, never the raw title.* keys (anti-vacuity for the renders above)", () => {
+    const k = renderToStaticMarkup(<KnockoutTab doc={titled} dict={slice} locale="en" now={NOW} />);
+    const t = renderToStaticMarkup(<TableTab doc={jointTable} dict={slice} />);
+    expect(k).toContain(`>${(full as Record<string, string>)["title.joint"]}<`);
+    expect(k).toContain(">W4 Team B and W4 Team C<");
+    expect(k).toContain(`>${(full as Record<string, string>)["title.vacant"]}<`);
+    expect(t).toContain(`>${(full as Record<string, string>)["title.joint"]}<`);
+    for (const h of [k, t]) expect(h).not.toMatch(/title\.(joint|vacant)/);
+    // An abandoned fixture with a result line swaps its tag for `forfeit.tag.abandoned`, client-side.
+    const a = renderToStaticMarkup(<MatchesTab doc={abandoned} dict={slice} locale="en" now={NOW} />);
+    expect(a).toContain(`>${(full as Record<string, string>)["forfeit.tag.abandoned"]}<`);
+    expect(a).not.toContain("forfeit.tag.");
+  });
+
   it("carries EXACTLY the status keys the builder can emit — not the whole `matchCentre.` family", () => {
     // The slice exists to keep the page small; `matchCentre.` is the match
     // centre's whole vocabulary. What crosses is derived from the same set
     // `hubHeader` keys its status line off, plus its catch-all.
     const emitted = CALLED_OFF.map((status) => `matchCentre.status.${status}`).sort();
-    expect([...HUB_DICT_KEYS].sort()).toEqual(emitted);
+    expect(HUB_DICT_KEYS.filter((k) => k.startsWith("matchCentre.")).sort()).toEqual(emitted);
+    expect(HUB_DICT_KEYS.filter((k) => !k.startsWith("matchCentre.")), "the one non-status exact key").toEqual([
+      "forfeit.tag.abandoned",
+    ]);
     expect(Object.keys(slice).filter((k) => k.startsWith("matchCentre.")).sort()).toEqual(emitted);
   });
 

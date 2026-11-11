@@ -155,10 +155,12 @@ describe("Lineup is hidden when BOTH sides are one-person entrants (read from th
     expect(barOf(withKinds("football", "team", "team"))).toContain("lineup");
   });
 
-  it("the roster/availability block takes over where the Lineup panel is hidden for singles", () => {
+  it("singles hide both the Lineup panel and the roster/availability block", () => {
     const html = withKinds("tennis", "individual", "individual");
     expect(html).not.toContain('data-testid="lineup-toggle"');
-    expect(html).toContain("availability");
+    expect(html).not.toContain("availability");
+    // positive pair: the same sport with a two-person side still renders the block
+    expect(withKinds("tennis", "pair", "pair")).toContain("availability");
   });
 });
 

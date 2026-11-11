@@ -156,6 +156,48 @@ test.describe("public poster.pdf — the draw", () => {
   });
 });
 
+test.describe("public poster.pdf — freshness after a write", () => {
+  // The poster is cached (route `revalidate = 300` over `unstable_cache`
+  // entries tagged by division). A read BEFORE the draw exists primes that
+  // cache; the organiser then generates the stage and prints the poster. If
+  // the write only marks the entry stale-while-revalidate, that first read
+  // after the write still serves the one-page render with no draw.
+  test("a poster read before the draw is generated shows the draw on the first read after", async ({
+    request,
+  }) => {
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `Poster Fresh ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
+      visibility: "public",
+    });
+    expect(comp.status, "create competition").toBeLessThan(300);
+    const compId = comp.data!.id;
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${compId}/divisions`, "POST", {
+      name: "Cup",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    expect(div.status, "create division").toBeLessThan(300);
+    const added = await addEntrantsViaApi(request, div.data!.id, ["Fresh1", "Fresh2", "Fresh3", "Fresh4"]);
+    expect(added.status, "add entrants").toBeLessThan(300);
+
+    const url = await posterUrl(request, compId);
+    const before = await request.get(url);
+    expect(before.status()).toBe(200);
+    expect(decodePdfPageCount(Buffer.from(await before.body())), "no stage yet: the plain one-page poster").toBe(1);
+
+    const { fixtureIds } = await createStageAndGenerate(request, div.data!.id, { kind: "knockout", name: "Cup" });
+    expect(fixtureIds.length, "4-entrant knockout: 2 semis + 1 final").toBe(3);
+
+    const after = await request.get(url);
+    expect(after.status()).toBe(200);
+    const buf = Buffer.from(await after.body());
+    expect(decodePdfPageCount(buf), "the FIRST read after generate carries the draw page").toBeGreaterThan(1);
+    expect(decodePdfText(buf)).toContain("Fresh1");
+  });
+});
+
 // Isolated login (own empty storageState — the credits-tab-shots/
 // f5-export-locale-spec idiom) because this test mutates the org's own
 // default_locale; doing that on the shared default session's org would leak
@@ -197,8 +239,17 @@ test.describe("public poster.pdf — locale", () => {
       },
     );
     expect(div.status, "create division").toBeLessThan(300);
-    await addEntrantsViaApi(page.request, div.data!.id, ["Un", "Deux", "Trois", "Quatre"]);
-    await createStageAndGenerate(page.request, div.data!.id, { kind: "knockout", name: "Coupe" });
+    const added = await addEntrantsViaApi(page.request, div.data!.id, ["Un", "Deux", "Trois", "Quatre"]);
+    expect(added.status, "add entrants").toBeLessThan(300);
+    expect(added.ids.length, "4 entrants created").toBe(4);
+    const { fixtureIds } = await createStageAndGenerate(page.request, div.data!.id, {
+      kind: "knockout",
+      name: "Coupe",
+    });
+    // A failed generate returns no fixtures, so this is also the generate
+    // response's success check: without it a broken setup fetches a plain
+    // one-page poster and the locale assertions below fail on the wrong thing.
+    expect(fixtureIds.length, "4-entrant knockout: 2 semis + 1 final").toBe(3);
 
     const orgs = await apiJson<OrgInfo[]>(page.request, "/api/orgs");
     const orgSlug = orgs.data!.find((o) => o.id === orgId)?.slug;

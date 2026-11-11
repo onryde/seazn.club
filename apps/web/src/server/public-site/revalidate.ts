@@ -19,20 +19,27 @@ import { routes } from "@/lib/routes";
 
 export { DISCOVERY_TAG };
 
+/** Any write that changes what a division's public pages show (a draw
+ *  generated or rebuilt, a fixture moved or edited, a stream link, a
+ *  registration landing). The division tag EXPIRES (`{ expire: 0 }`) rather
+ *  than serving stale-while-revalidate ('max'): the organiser's very next
+ *  read - the poster PDF, the public draw - must show the write. With 'max'
+ *  a poster read before a stage was generated stayed one page after it
+ *  (the first read after the write got the old render). The competition tag
+ *  keeps SWR: nothing is baked under it alone.
+ *
+ *  ORDER IS LOAD-BEARING, for the reason `fireScoreRevalidate` gives:
+ *  competition 'max' first, division expiry second, so a later 'max' for the
+ *  same division in one request cannot overwrite the expiry. */
 export function fireDivisionRevalidate(divisionId: string, competitionId?: string): void {
-  const tags = [divisionTag(divisionId), ...(competitionId ? [competitionTag(competitionId)] : [])];
   try {
-    // Next 16 signature: second arg = stale-while-revalidate window ('max' =
-    // serve the previous render while fresh regenerates — right for spectator
-    // pages). How long that lasts was MEASURED once, for the pages a consent
-    // OFF touches (`firePersonRevalidate`); these division and competition
-    // pages use the same SWR mechanism but were not measured.
-    revalidateTag(tags[0], "max");
     if (competitionId) revalidateTag(competitionTag(competitionId), "max");
+    revalidateTag(divisionTag(divisionId), { expire: 0 });
   } catch {
     // outside a Next request scope (tests, scripts) — nothing to invalidate
   }
-  void broadcastRevalidate(tags, "swr");
+  void broadcastRevalidate([divisionTag(divisionId)], "expire");
+  if (competitionId) void broadcastRevalidate([competitionTag(competitionId)], "swr");
   void purgeCdn();
 }
 

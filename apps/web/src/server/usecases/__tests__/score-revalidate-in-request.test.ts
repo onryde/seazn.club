@@ -315,7 +315,8 @@ describe("harness control — this is Next's real per-request flush", () => {
       return 201;
     });
     expect(inside.calls).toEqual([
-      { tags: [divisionTag("div-in"), competitionTag("comp-in")], durations: { expire: MAX_EXPIRE } },
+      { tags: [competitionTag("comp-in")], durations: { expire: MAX_EXPIRE } },
+      { tags: [divisionTag("div-in")], durations: { expire: 0 } },
     ]);
 
     let landed: Promise<void> = Promise.resolve();

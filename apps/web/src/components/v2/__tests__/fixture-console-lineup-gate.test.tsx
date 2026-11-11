@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { builtinModules } from "@seazn/engine/sports";
+import { entrantKindCap } from "@seazn/engine/sport";
 import { FixtureConsole, type SideInfo } from "@/components/v2/fixture-console";
 import { draftFromSavedLineup, lineupEditorApplies } from "@/components/v2/lineup-editor";
 import { lineupMenuItems } from "@/components/v2/lineup-actions";
@@ -316,5 +317,64 @@ describe("phone Home/Away switch for the lineup cards", () => {
 
   it("a sport with no lineup editor gets no switch", () => {
     for (const key of HIDDEN) expect(consoleHtml(key), key).not.toContain('data-testid="lineup-team-switch"');
+  });
+});
+
+// Owner 2026-11-11: for singles the per-side roster/availability block (both collapsible cards, headers included) is
+// absent; teams and pairs keep it. Kinds come from the engine's own entrant-model declarations, never a typed table.
+describe("the roster/availability block is absent for singles and present otherwise", () => {
+  const KINDS = [...new Set(builtinModules.flatMap((m) => m.entrantModel?.kinds ?? []))];
+  const withKind = (id: string, name: string, kind: string): SideInfo => ({ ...side(id, name), kind });
+  const render = (hk: string, ak: string): string => {
+    const mod = builtinModules.find((m) => m.key === "generic")!;
+    const catalog = lineupCatalogFor(mod, {});
+    return renderToStaticMarkup(
+      <FixtureConsole
+        fixture={{ id: "f1", status: "scheduled", scheduled_at: null, venue_name: null, court_name: null, round_no: 1 }}
+        sport={{
+          key: mod.key,
+          config: {},
+          scorerLabel: mod.officialLabel.scorer,
+          positionGroups: catalog.groups,
+          roles: catalog.roles ?? [],
+          lineupSize: catalog.lineup.size,
+          benchMax: catalog.lineup.benchMax ?? 0,
+        }}
+        home={withKind("e1", "Home", hk)}
+        away={withKind("e2", "Away", ak)}
+        initialState={{ status: "scheduled", last_seq: 0, summary: null, state: {}, outcome: null }}
+        initialEvents={[]}
+        canEdit={true}
+        canOrganise={true}
+        stageKind={null}
+        viewerPlan="community"
+      />,
+    );
+  };
+
+  it("sweeps every kind pair the engine declares", () => {
+    expect(KINDS).toEqual(expect.arrayContaining(["individual", "pair", "team"]));
+    let checked = 0;
+    let singles = 0;
+    for (const hk of KINDS) {
+      for (const ak of KINDS) {
+        const html = render(hk, ak);
+        const bothSingle = entrantKindCap(hk) === 1 && entrantKindCap(ak) === 1;
+        const toggles = html.split('data-role="phone-disclosure-toggle"').length - 1;
+        const rosters = html.split('data-testid="availability-roster"').length - 1;
+        if (bothSingle) {
+          singles++;
+          expect(toggles, `${hk} v ${ak}: no side fold`).toBe(0);
+          expect(rosters, `${hk} v ${ak}: no roster`).toBe(0);
+        } else {
+          expect(toggles, `${hk} v ${ak}: a fold per side`).toBe(2);
+          expect(rosters, `${hk} v ${ak}: a roster per side`).toBe(2);
+        }
+        checked++;
+      }
+    }
+    expect(checked).toBe(KINDS.length ** 2);
+    expect(singles).toBeGreaterThan(0);
+    expect(checked - singles).toBeGreaterThan(0);
   });
 });

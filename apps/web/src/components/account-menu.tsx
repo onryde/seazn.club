@@ -54,8 +54,8 @@ export interface AccountMenuProps {
  *  centred in a `max-w-6xl` row, so the trigger's distance from the viewport edge depends on the width. */
 type Position = { top: number; right: number };
 
-const ITEM = "flex w-full min-h-12 items-center gap-2.5 rounded-lg px-2.5 text-left text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream disabled:cursor-default md:min-h-10";
-const ICON = "h-4 w-4 shrink-0 text-cream/55";
+const ITEM = "group flex w-full min-h-12 items-center gap-2.5 rounded-lg px-2.5 text-left text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream disabled:cursor-default md:min-h-10";
+const ICON = "h-4 w-4 shrink-0 text-cream/55 transition-colors group-hover:text-lime-400 group-focus-visible:text-lime-400";
 
 function Avatar({ initials, size }: { initials: string; size: "sm" | "lg" }) {
   return (
@@ -79,7 +79,7 @@ function OrgMark({ org }: { org: AccountMenuModel["orgs"][number] }) {
     <span
       aria-hidden="true"
       className={`grid h-6 w-6 shrink-0 place-items-center rounded-md text-[10px] font-bold ${
-        org.current ? "bg-lime-400/15 text-lime-300" : "bg-cream/10 text-cream/70"
+        org.current ? "bg-lime-400/15 text-lime-300" : "bg-cream/10 text-cream/70 transition-colors group-hover:text-lime-400 group-focus-visible:text-lime-400"
       }`}
     >
       {org.initials}
