@@ -13,20 +13,21 @@ import "server-only";
 // who wants to pay by card opens the link the club sent.
 import PDFDocument from "pdfkit";
 import { getDictionary, t } from "@/lib/i18n";
-import { INVOICE_STATE_KEY, INVOICE_STATE_NOTE_KEY, invoiceMoney, type InvoiceState } from "@/lib/sponsor-invoice";
+import { INVOICE_STATE_KEY, invoiceMoney, invoiceNoteKey, type InvoiceState } from "@/lib/sponsor-invoice";
 import { fmtIsoDay } from "@/lib/sponsor-report";
 import { TIER_MSG } from "@/components/sponsors/tier-labels";
 import { MARGIN, resolveLogo } from "@/server/doc-render";
 import { FONT, PALETTE, registerFonts } from "@/server/doc-theme";
 import type { SponsorInvoiceDoc } from "./invoice-doc";
 
-/** The stamp's ink: paid reads settled (a deep green, not the brand lime, which vanishes on white), unpaid reads due (the
- *  brand's red ball), a refund or a cancellation reads closed (greys). */
+/** The stamp's ink, the house print palette and the page's twin (components/sponsors/invoice-view.tsx STAMP_CLASS): unpaid
+ *  reads due (the brand's red ball), paid reads settled (night), a refund, a cancellation or an ended deal reads closed (greys). */
 const STAMP_INK: Record<InvoiceState, string> = {
-  paid: "#15803d",
+  paid: PALETTE.night,
   unpaid: PALETTE.ball,
   refunded: PALETTE.slate,
   void: PALETTE.mute,
+  ended: PALETTE.mute,
 };
 
 const LOGO_BOX: [number, number] = [132, 44];
@@ -123,9 +124,10 @@ export async function invoicePdf(doc: SponsorInvoiceDoc): Promise<Buffer> {
   pdf.font(FONT.bodyMed).fontSize(20).fillColor(PALETTE.night)
     .text(money(doc.line.amountCents), right - AMOUNT_W - 60, y, { width: AMOUNT_W + 60, align: "right" });
   y = pdf.y + 4;
-  if (doc.state !== "unpaid") {
+  const note = invoiceNoteKey(doc.state, doc.dealEnded);
+  if (note !== null) {
     pdf.font(FONT.body).fontSize(9).fillColor(PALETTE.slate)
-      .text(t(ui, INVOICE_STATE_NOTE_KEY[doc.state]), MARGIN, y, { width });
+      .text(t(ui, note, { club: doc.org.name }), MARGIN, y, { width });
     y = pdf.y;
   }
 

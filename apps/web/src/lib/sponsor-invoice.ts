@@ -5,23 +5,37 @@
 // No I/O, no server import: Task 23's email builds the same link from here.
 import type { MessageKey } from "@/lib/messages";
 
-/** What an invoice says about its money. `void`: the deal ended while still unpaid - the invoice is not due. */
-export const INVOICE_STATES = ["paid", "unpaid", "refunded", "void"] as const;
+/** What an invoice says about its money (review I3: every way a deal ends unpaid, said truthfully):
+ *  - `paid`, `refunded`: by the money;
+ *  - `unpaid`: still due - including an OFFLINE deal that went live and then ended unpaid (its term ran out, or its competition
+ *    finished): the sponsor had the placement, so the money is still owed and the invoice keeps its bank details;
+ *  - `void`: the club ended the deal (End now) before it was paid - nothing is due;
+ *  - `ended`: any other deal that ended unpaid (it never went live, or it was paid by card) - no claim either way: contact the
+ *    club. */
+export const INVOICE_STATES = ["paid", "unpaid", "refunded", "void", "ended"] as const;
 export type InvoiceState = (typeof INVOICE_STATES)[number];
 
-/** Each state's stamp, and the line under it (an unpaid invoice needs none: the page says how to pay). Typed key maps - the
- *  i18n house rule bans dynamic keys. */
+/** Each state's stamp, and the line under it. Typed key maps - the i18n house rule bans dynamic keys. */
 export const INVOICE_STATE_KEY: Record<InvoiceState, MessageKey> = {
   paid: "sponsors.invoice.state.paid",
   unpaid: "sponsors.invoice.state.unpaid",
   refunded: "sponsors.invoice.state.refunded",
   void: "sponsors.invoice.state.void",
+  ended: "sponsors.invoice.state.ended",
 };
 export const INVOICE_STATE_NOTE_KEY: Record<Exclude<InvoiceState, "unpaid">, MessageKey> = {
   paid: "sponsors.invoice.stateNote.paid",
   refunded: "sponsors.invoice.stateNote.refunded",
   void: "sponsors.invoice.stateNote.void",
+  ended: "sponsors.invoice.stateNote.ended",
 };
+
+/** The line under the stamp, page and PDF alike (its `{club}` is the org's name): none on an invoice still due while its deal
+ *  runs (the page says how to pay); "ended, and still due" on one whose deal has ended; else the state's own line. */
+export function invoiceNoteKey(state: InvoiceState, dealEnded: boolean): MessageKey | null {
+  if (state === "unpaid") return dealEnded ? "sponsors.invoice.stateNote.endedDue" : null;
+  return INVOICE_STATE_NOTE_KEY[state];
+}
 
 /** The sponsor's invoice page: `/r/sponsor/invoice/<token>`, root-relative. The token is a bearer credential (32 random bytes);
  *  the scrubbers drop it (`/r/sponsor/invoice/` in lib/scrub-score-url.ts, matched BEFORE `/r/sponsor/`). */

@@ -412,6 +412,13 @@ const notCardPayable = () =>
  * the deal held when it was read (`deal_changed` otherwise), and it moves `invoice_send_count` on by one: that count numbers
  * the deal's Stripe keys (`sponsor-deal-<id>-<count + 1>`), so a later mint - a send's or another pay's - takes a fresh key
  * rather than replaying this session. Nothing else moves: paying is not a send (no email, no `invoice_sent_at`).
+ *
+ * Under the lock, in this order (review I1, I2):
+ *  1. the deal must still be card-payable: the club may have marked it paid or ended it while Stripe minted (its session rule
+ *     found nothing to retire) - storing the new session then would send the sponsor to pay a paid or ended deal;
+ *  2. a deal that already holds THIS session is answered with it, not refused: a second click (or a send) minted with the same
+ *     key, so Stripe gave both the same session, and the other request stored it first;
+ *  3. anything else stored since the read is `deal_changed`: the new session would replace one this request never retired.
  */
 export async function payInvoice(token: string, origin: string): Promise<string> {
   return atBoundary(async () => {
@@ -431,6 +438,7 @@ export async function payInvoice(token: string, origin: string): Promise<string>
       const current = locked?.deals.find((d) => d.id === pre.id);
       if (!locked || !current) throw new HttpError(404, "invoice not found");
       if (!cardPayable(current)) throw notCardPayable();
+      if (current.checkout_session_id === session.id) return;
       if (current.checkout_session_id !== null || current.invoice_send_count !== pre.invoice_send_count) throw dealChanged();
       await tx`
         update sponsor_orders

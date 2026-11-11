@@ -5,8 +5,12 @@
 // the one guard case that needs an unnumbered row holding a token MOVES a real one there, and says so.
 //
 // Where each expected value comes from:
-//   - the state (brief, Acceptance): `paid` when money is paid, `refunded`, `void` when the deal ended unpaid, else `unpaid` -
-//     each state reached by its real producer (the payment webhook, Mark as paid, refund, End now);
+//   - the state (brief, Acceptance; review I3 and its fix-round ruling): `paid` when money is paid, `refunded`; an unpaid deal
+//     still running is `unpaid`; one that ENDED unpaid says how: the club's End now is `void` (cancelled, nothing due), an
+//     OFFLINE deal that went live and whose term ran out (or whose competition finished) is still `unpaid` (the money is owed:
+//     bank details stay), and any other ended deal is `ended` (no claim: contact the club) - each reached by its real producer
+//     (the payment webhook, Mark as paid, refund, End now, the hourly sweep);
+//   - card payability (review m2): the deal's (`cardPayable`) AND the club's (Connect taking charges, `sponsors.monetize`);
 //   - payable (brief): online, unpaid, not ended - and not a draft (a payment cannot move a draft: `statusAfterPaid` throws and
 //     the webhook only alerts, so the pay button must not exist for one; deviation recorded in task-22-report.md);
 //   - bank details: printed on an OFFLINE invoice only (T21 review carry: the settings card sets them "for offline invoices";
@@ -44,12 +48,14 @@ vi.mock("@/server/sponsors/invoice-doc", async (importOriginal) => {
 });
 
 import { sql, withTenant } from "@/lib/db";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { HttpError } from "@/lib/errors";
 import { getDictionary, t } from "@/lib/i18n";
-import { allowedActions, type SponsorDeal } from "@/lib/sponsor-deals";
+import { allowedActions } from "@/lib/sponsor-deals";
 import { stubOutboxEnv } from "@/server/usecases/__tests__/_invite-mail";
 import { handleSponsorPaymentSucceeded } from "@/server/usecases/sponsors";
-import { createDeal, endDealNow, markDealPaid, refundDeal, sendDealInvoice } from "@/server/usecases/sponsor-deals";
+import { createDeal, endDealNow, markDealPaid, payInvoice, refundDeal, sendDealInvoice, sweepSponsorDeals } from "@/server/usecases/sponsor-deals";
 import { hashReportToken } from "../report-token";
 import {
   cardPayable,
@@ -97,6 +103,23 @@ async function madeOn(o: RigOrg, over: Parameters<typeof dealInput>[1] = {}) {
   return { o, p, s, deal: out.deal, id: out.deal.id };
 }
 
+const stripeCalls = () => stripe.create.mock.calls.length + stripe.retrieve.mock.calls.length + stripe.expire.mock.calls.length;
+function clearStripe(): void {
+  stripe.create.mockClear();
+  stripe.retrieve.mockClear();
+  stripe.expire.mockClear();
+}
+
+/** The pay route's answer for a token, as an HttpError's status (it never resolves for these cases). */
+async function payStatus(token: string): Promise<number> {
+  const err = await payInvoice(token, ORIGIN).then(
+    () => null,
+    (e: unknown) => e,
+  );
+  expect(err, "payInvoice refused").toBeInstanceOf(HttpError);
+  return (err as HttpError).status;
+}
+
 const paidByWebhook = (o: RigOrg, dealId: string) =>
   handleSponsorPaymentSucceeded({
     id: `pi_invoice_${uniq()}`,
@@ -104,26 +127,41 @@ const paidByWebhook = (o: RigOrg, dealId: string) =>
   } as unknown as Stripe.PaymentIntent);
 
 describe("invoiceState and cardPayable: the rules, total over every deal shape (pure)", () => {
-  it("state: paid / refunded by the money; void when ended unpaid; else unpaid - and a complimentary deal has no invoice (counted)", () => {
-    const cases: [Pick<SponsorDeal, "payment_status" | "deal_status">, string][] = [
-      [{ payment_status: "paid", deal_status: "live" }, "paid"],
-      [{ payment_status: "paid", deal_status: "ended" }, "paid"],
-      [{ payment_status: "refunded", deal_status: "ended" }, "refunded"],
-      [{ payment_status: "pending", deal_status: "ended" }, "void"],
-      [{ payment_status: "failed", deal_status: "ended" }, "void"],
-      [{ payment_status: "pending", deal_status: "awaiting_payment" }, "unpaid"],
-      [{ payment_status: "failed", deal_status: "awaiting_payment" }, "unpaid"],
-      [{ payment_status: "pending", deal_status: "live" }, "unpaid"],
-      [{ payment_status: "pending", deal_status: "draft" }, "unpaid"],
+  it("state: paid / refunded by the money; unpaid while it runs; ended unpaid by HOW it ended - and a complimentary deal has no invoice (counted)", () => {
+    type S = Parameters<typeof invoiceState>[0];
+    const LIVE_AT = "2026-06-01T10:00:00.000Z";
+    const run = { ended_reason: null, payment_method: "online", live_at: null } as const;
+    const cases: [S, string][] = [
+      [{ ...run, payment_status: "paid", deal_status: "live", live_at: LIVE_AT }, "paid"],
+      [{ ...run, payment_status: "paid", deal_status: "ended", ended_reason: "expired", live_at: LIVE_AT }, "paid"],
+      [{ ...run, payment_status: "refunded", deal_status: "ended", ended_reason: "refunded" }, "refunded"],
+      [{ ...run, payment_status: "pending", deal_status: "awaiting_payment" }, "unpaid"],
+      [{ ...run, payment_status: "failed", deal_status: "awaiting_payment" }, "unpaid"],
+      [{ ...run, payment_status: "pending", deal_status: "live", payment_method: "offline", live_at: LIVE_AT }, "unpaid"],
+      [{ ...run, payment_status: "pending", deal_status: "draft" }, "unpaid"],
+      // The club ended it (End now): cancelled, nothing due - live or not, online or offline.
+      [{ ...run, payment_status: "pending", deal_status: "ended", ended_reason: "ended_now", payment_method: "offline", live_at: LIVE_AT }, "void"],
+      [{ ...run, payment_status: "failed", deal_status: "ended", ended_reason: "ended_now" }, "void"],
+      // An offline deal that ran live and whose term ran out unpaid: the money is still owed.
+      [{ ...run, payment_status: "pending", deal_status: "ended", ended_reason: "expired", payment_method: "offline", live_at: LIVE_AT }, "unpaid"],
+      [{ ...run, payment_status: "pending", deal_status: "ended", ended_reason: "competition_finished", payment_method: "offline", live_at: LIVE_AT }, "unpaid"],
+      // Every other unpaid end claims nothing: never live; online (live or not); a pre-deals row.
+      [{ ...run, payment_status: "pending", deal_status: "ended", ended_reason: "expired", payment_method: "offline" }, "ended"],
+      [{ ...run, payment_status: "pending", deal_status: "ended", ended_reason: "competition_finished", payment_method: "offline" }, "ended"],
+      [{ ...run, payment_status: "pending", deal_status: "ended", ended_reason: "expired", live_at: LIVE_AT }, "ended"],
+      [{ ...run, payment_status: "failed", deal_status: "ended", ended_reason: "competition_finished" }, "ended"],
+      [{ ...run, payment_status: "pending", deal_status: "ended", ended_reason: "legacy", payment_method: "offline", live_at: LIVE_AT }, "ended"],
     ];
     let checked = 0;
     for (const [deal, state] of cases) {
       expect(invoiceState(deal), JSON.stringify(deal)).toBe(state);
       checked++;
     }
-    expect(checked).toBe(9);
+    expect(checked).toBe(16);
+    // Every state is reached by some row (the sweep is total over the five).
+    expect(new Set(cases.map(([, st]) => st))).toEqual(new Set(["paid", "refunded", "unpaid", "void", "ended"]));
     // "Cannot happen" is a refusal: a complimentary deal is never numbered, so it is never asked for a state.
-    expect(() => invoiceState({ payment_status: "none", deal_status: "live" })).toThrow(/complimentary/);
+    expect(() => invoiceState({ ...run, payment_status: "none", deal_status: "live" })).toThrow(/complimentary/);
   });
 
   it("payable: online AND a payment would move the deal (unpaid; awaiting payment, live or scheduled) - never offline, a draft, or ended (counted)", () => {
@@ -178,9 +216,11 @@ describe.skipIf(!HAS_DB)("the invoice document, from the real token (DB, F9)", (
       line: { description: t(fr, "sponsors.invoice.line", { package: p.name, scope: t(fr, "sponsors.scopeAll") }), amountCents: 25_000, currency: "gbp" },
       included: { tier: "partner", scope: t(fr, "sponsors.scopeAll"), onStream: false },
       state: "unpaid",
+      dealEnded: false,
       method: "offline",
       bankDetails: BANK,
       payable: false,
+      cardUnavailable: false,
       locale: "fr",
     });
   });
@@ -234,15 +274,67 @@ describe.skipIf(!HAS_DB)("the invoice document, from the real token (DB, F9)", (
       expect(await invoiceDocByToken(token)).toMatchObject({ state: "refunded", payable: false, bankDetails: null });
       seen.push("refunded");
     }
-    // Ended unpaid: void, offline and online alike.
+    // The club ended it unpaid (End now): void - cancelled, nothing due - offline and online alike.
     for (const method of ["offline", "online"] as const) {
       const { o, id } = await made({ payment_method: method }, { bank: BANK });
       const token = tokenOf(id);
       await endDealNow(o.auth, id);
-      expect(await invoiceDocByToken(token), method).toMatchObject({ state: "void", payable: false, bankDetails: null, method });
+      expect(await invoiceDocByToken(token), method).toMatchObject({ state: "void", dealEnded: true, payable: false, bankDetails: null, method });
       seen.push(`void-${method}`);
     }
     expect(seen).toEqual(["paid", "refunded", "void-offline", "void-online"]);
+  });
+
+  it("ended by the SWEEP (its end date passed): an offline deal that ran live is still due, bank details and all; one that never went live, and an online one, claim nothing (3 counted)", async () => {
+    const today = new Date().toISOString().slice(0, 10); // the rig org has no timezone: UTC
+    const later = new Date(Date.now() + 3 * 86_400_000);
+    const rows: [string, Parameters<typeof dealInput>[1], boolean, Partial<SponsorInvoiceDoc>][] = [
+      ["offline, went live", { payment_method: "offline", go_live: "immediate", ends_on: today }, true, { state: "unpaid", dealEnded: true, bankDetails: BANK, payable: false }],
+      ["offline, never live", { payment_method: "offline", go_live: "on_payment", ends_on: today }, false, { state: "ended", dealEnded: true, bankDetails: null, payable: false }],
+      ["online", { payment_method: "online", ends_on: today }, false, { state: "ended", dealEnded: true, bankDetails: null, payable: false, cardUnavailable: false }],
+    ];
+    let checked = 0;
+    for (const [label, over, wentLive, want] of rows) {
+      const { o, id } = await made(over, { bank: BANK });
+      const token = tokenOf(id);
+      await sweepSponsorDeals(later, { orgIds: [o.orgId] });
+      const [row] = await sql<{ deal_status: string; ended_reason: string | null; live_at: Date | null }[]>`
+        select deal_status, ended_reason, live_at from sponsor_orders where id = ${id}`;
+      expect(row, `premise (${label}): the sweep ended it, expired`).toMatchObject({ deal_status: "ended", ended_reason: "expired" });
+      expect(row!.live_at !== null, `premise (${label}): went live`).toBe(wentLive);
+      expect(await invoiceDocByToken(token), label).toMatchObject(want);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("card payability is the CLUB's too: a plan without sponsors.monetize, or Connect not taking charges, makes a due online invoice cardUnavailable, and pay refuses it before Stripe (2 counted)", async () => {
+    const cuts: [string, (o: RigOrg) => Promise<void>][] = [
+      ["the plan lost sponsors.monetize", async (o) => {
+        await setOrgPlan(o.orgId, "community");
+        await invalidateOrgEntitlements(o.orgId);
+      }],
+      ["Connect stopped taking charges", async (o) => {
+        await sql`update organizations set stripe_charges_enabled = false where id = ${o.orgId}`;
+      }],
+    ];
+    let checked = 0;
+    for (const [label, cut] of cuts) {
+      const { o, id } = await made({ payment_method: "online" });
+      const token = tokenOf(id);
+      expect(await invoiceDocByToken(token), `premise (${label}): payable before`).toMatchObject({ payable: true, cardUnavailable: false });
+      await cut(o);
+      expect(await invoiceDocByToken(token), label).toMatchObject({ state: "unpaid", payable: false, cardUnavailable: true, bankDetails: null });
+      clearStripe();
+      expect([402, 409], label).toContain(await payStatus(token));
+      expect(stripeCalls(), label).toBe(0);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // An offline invoice is never card-payable, so the club's card gate never marks it unavailable.
+    const off = await made({ payment_method: "offline" });
+    await sql`update organizations set stripe_charges_enabled = false where id = ${off.o.orgId}`;
+    expect(await invoiceDocByToken(tokenOf(off.id))).toMatchObject({ payable: false, cardUnavailable: false });
   });
 
   it("an online deal still a DRAFT (Stripe failed at create: 502, the deal committed) has its token but is not payable - a payment could not move it", async () => {
@@ -294,12 +386,16 @@ describe.skipIf(!HAS_DB)("the invoice document, from the real token (DB, F9)", (
     expect((await invoiceDocByToken(tokenOf(b.id)))!.number).toBe("SP-0002");
   });
 
-  it("a soft-deleted org's invoice is null (its token opens nothing)", async () => {
-    const { o, id } = await made({ payment_method: "offline" });
+  it("a soft-deleted org's invoice is null (its token opens nothing), and paying it is the same 404, touching nothing at Stripe", async () => {
+    const { o, id } = await made({ payment_method: "online" });
     const token = tokenOf(id);
-    expect(await invoiceDocByToken(token), "premise: opens while the org is live").not.toBeNull();
+    expect(await invoiceDocByToken(token), "premise: opens, payable, while the org is live").toMatchObject({ payable: true });
     await sql`update organizations set deleted_at = now() where id = ${o.orgId}`;
     expect(await invoiceDocByToken(token)).toBeNull();
+    // The pay path's OWN guard (review m1): payInvoice reads only invoiceDealByToken, so this is its witness.
+    clearStripe();
+    expect(await payStatus(token)).toBe(404);
+    expect(stripeCalls()).toBe(0);
   });
 });
 
@@ -373,6 +469,10 @@ describe.skipIf(!HAS_DB)("guards: no invoice without a number", () => {
     await sql`update sponsor_orders set invoice_token_hash = null where id = ${real.id}`;
     await sql`update sponsor_orders set invoice_token_hash = ${hash} where id = ${old!.id}`;
     expect(await invoiceDocByToken(token)).toBeNull();
+    // The pay path's OWN guard (review m1): the row is online and awaiting payment, so only the number refuses it.
+    clearStripe();
+    expect(await payStatus(token)).toBe(404);
+    expect(stripeCalls()).toBe(0);
     await sql`update sponsor_orders set invoice_token_hash = null where id = ${old!.id}`;
     await sql`update sponsor_orders set invoice_token_hash = ${hash} where id = ${real.id}`;
     expect(await invoiceDocByToken(token), "the positive pair").not.toBeNull();

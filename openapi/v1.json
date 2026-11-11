@@ -80977,7 +80977,7 @@
     },
     "/api/v1/orgs/{id}/sponsor-deals/{dealId}/invoice.pdf": {
       "get": {
-        "summary": "A deal's numbered invoice as the PDF its sponsor gets (an `application/pdf` attachment named after the invoice number), in the organisation's language: the number, the club and the sponsor, the line and total, its state (paid, unpaid, refunded or cancelled), what the sponsorship includes and, while it is due, the club's bank details. 404 when the deal has no invoice (complimentary, or made before invoices were numbered) or is not this organisation's. Any member who can see the deal; never key-accessible",
+        "summary": "A deal's numbered invoice as the PDF its sponsor gets (an `application/pdf` attachment named after the invoice number), in the organisation's language: the number, the club and the sponsor, the line and total, its state (paid, unpaid, refunded, cancelled or ended), what the sponsorship includes and, on an OFFLINE invoice that is still unpaid, the club's bank details. 404 when the deal has no invoice (complimentary, or made before invoices were numbered) or is not this organisation's. Any member who can see the deal; never key-accessible",
         "tags": [
           "sponsors"
         ],

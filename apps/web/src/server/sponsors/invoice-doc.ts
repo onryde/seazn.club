@@ -16,6 +16,7 @@ import "server-only";
 // THE DOCUMENT is in the ORG's language (`default_locale`): the club issues it, whoever opens it.
 import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { hasFeature } from "@/lib/entitlements";
 import { getDictionary, t } from "@/lib/i18n";
 import { toLocale, type Locale } from "@/lib/i18n-constants";
 import { allowedActions, formatInvoiceNumber, type PaymentMethod, type SponsorDeal } from "@/lib/sponsor-deals";
@@ -44,31 +45,48 @@ export interface SponsorInvoiceDoc {
    *  (§8a), so that line needs no field. */
   included: { tier: SponsorTier; scope: string; onStream: boolean };
   state: InvoiceState;
+  /** The deal has ended. With `unpaid` it is an offline deal that ran live and ended unpaid: "ended, and still due". */
+  dealEnded: boolean;
   method: PaymentMethod;
-  /** How to pay by transfer: the club's bank details, on an OFFLINE invoice while it is still due (`unpaid`). Null on an online
-   *  invoice (the settings card sets them "for offline invoices"; an online one is paid by card: T21 review carry), once it is
-   *  paid, refunded or void (a settled invoice does not invite a second transfer), or when the club has set none (null, "" and
-   *  whitespace-only alike: `filled`). */
+  /** How to pay by transfer: the club's bank details, on an OFFLINE invoice while it is still due (`unpaid`, including one whose
+   *  deal ran live and then ended unpaid). Null on an online invoice (the settings card sets them "for offline invoices"; an
+   *  online one is paid by card: T21 review carry), once it is paid, refunded, cancelled or ended with nothing claimed (a
+   *  settled invoice does not invite a second transfer), or when the club has set none (null, "" and whitespace-only alike:
+   *  `filled`). */
   bankDetails: string | null;
-  /** The sponsor can pay this invoice by card now (`cardPayable`). */
+  /** The sponsor can pay this invoice by card now: `cardPayable`, AND the club can take cards (`clubTakesCards`) - the page
+   *  never offers what the pay route would refuse (review m2). */
   payable: boolean;
+  /** `cardPayable`, but the club cannot take cards now (its plan lost `sponsors.monetize`, or Connect stopped taking charges):
+   *  the page says so and names the club to contact, instead of a button that cannot work. */
+  cardUnavailable: boolean;
   locale: Locale;
 }
 
 /**
- * The invoice's state, from the deal's money first: `paid`, `refunded`, else `void` when the deal ended unpaid (the invoice is
- * no longer due), else `unpaid`. A complimentary deal (`none`) is never numbered, so it never has an invoice to ask about: a
- * refusal, not a guess.
+ * The invoice's state (lib/sponsor-invoice.ts INVOICE_STATES), from the deal's money first: `paid`, `refunded`; an unpaid deal
+ * still running is `unpaid`. An unpaid deal that ENDED says what is true of how it ended (review I3), read from `ended_reason`:
+ *  - `ended_now`: the club cancelled it - `void`, nothing is due;
+ *  - `expired` / `competition_finished` (the sweep) on an OFFLINE deal that went live (`live_at`): the sponsor had the placement
+ *    and has not paid - still `unpaid`, with its bank details (product-owner recommendation, task-22-report.md fix round 1);
+ *  - anything else (it never went live, an online deal, a pre-deals row): `ended`, which claims nothing - contact the club.
+ * A complimentary deal (`none`) is never numbered, so it never has an invoice to ask about: a refusal, not a guess.
  */
-export function invoiceState(d: Pick<SponsorDeal, "payment_status" | "deal_status">): InvoiceState {
+export function invoiceState(
+  d: Pick<SponsorDeal, "payment_status" | "deal_status" | "ended_reason" | "payment_method" | "live_at">,
+): InvoiceState {
   switch (d.payment_status) {
     case "paid":
       return "paid";
     case "refunded":
       return "refunded";
     case "pending":
-    case "failed":
-      return d.deal_status === "ended" ? "void" : "unpaid";
+    case "failed": {
+      if (d.deal_status !== "ended") return "unpaid";
+      if (d.ended_reason === "ended_now") return "void";
+      const termRanOut = d.ended_reason === "expired" || d.ended_reason === "competition_finished";
+      return termRanOut && d.payment_method === "offline" && d.live_at !== null ? "unpaid" : "ended";
+    }
     case "none":
       throw new Error("sponsor invoices: a complimentary deal has no invoice (it is never numbered)");
   }
@@ -108,6 +126,19 @@ export async function needsInvoiceToken(tx: Tx, dealId: string): Promise<boolean
   return row?.needs ?? false;
 }
 
+/**
+ * Can the club take a card payment for a deal on this scope now: Connect takes charges and the plan has `sponsors.monetize` on
+ * the deal's competition. The same two gates payInvoice asks before Stripe (`assertOnlineAllowed`: 402; `checkoutOrg`: 409
+ * `connect_required`), asked here so the page never offers a button the route would refuse (review m2). Privileged (`sql`):
+ * outside the doc's tenant transaction, so it never holds a second connection inside one.
+ */
+export async function clubTakesCards(orgId: string, competitionId: string | null): Promise<boolean> {
+  const [org] = await sql<{ stripe_account_id: string | null; stripe_charges_enabled: boolean }[]>`
+    select stripe_account_id, stripe_charges_enabled from organizations where id = ${orgId}`;
+  if (!org?.stripe_account_id || !org.stripe_charges_enabled) return false;
+  return hasFeature(orgId, "sponsors.monetize", competitionId ?? undefined);
+}
+
 /** The numbered deal a token names, and its org - or null for a token that names none (unknown, rotated, malformed, an
  *  unnumbered row, a soft-deleted org: one answer). Privileged: a visitor has no org yet, the token is what names one. */
 export async function invoiceDealByToken(token: string): Promise<{ orgId: string; dealId: string } | null> {
@@ -123,20 +154,35 @@ export async function invoiceDealByToken(token: string): Promise<{ orgId: string
 export async function invoiceDocByToken(token: string): Promise<SponsorInvoiceDoc | null> {
   const found = await invoiceDealByToken(token);
   if (!found) return null;
-  return withTenant(found.orgId, async (tx) => {
+  const built = await withTenant(found.orgId, async (tx) => {
     const deal = await readDeal(tx, found.dealId);
     return deal ? buildDoc(tx, found.orgId, deal) : null;
   });
+  return built && withCardGate(found.orgId, built);
 }
 
 /** The console's copy of a deal's invoice (the PDF download): this org's deal, numbered - else 404. */
 export async function invoiceDocForDeal(auth: AuthCtx, dealId: string): Promise<SponsorInvoiceDoc> {
-  const doc = await withTenant(auth.orgId, async (tx) => {
+  const built = await withTenant(auth.orgId, async (tx) => {
     const deal = await readDeal(tx, dealId);
     return deal && deal.invoice_number !== null ? buildDoc(tx, auth.orgId, deal) : null;
   });
-  if (!doc) throw new HttpError(404, "this deal has no invoice");
-  return doc;
+  if (!built) throw new HttpError(404, "this deal has no invoice");
+  return withCardGate(auth.orgId, built);
+}
+
+/** A doc as `buildDoc` drew it (card payability by the deal alone), with the deal's scope for the club's card gate. */
+interface BuiltDoc {
+  doc: SponsorInvoiceDoc;
+  competitionId: string | null;
+}
+
+/** Fold the club's card gate into a built doc: a deal a card could pay is `payable` only while the club can take cards, else
+ *  `cardUnavailable`. Asked only for a deal a card could pay (one query and one entitlement read; none otherwise). */
+async function withCardGate(orgId: string, { doc, competitionId }: BuiltDoc): Promise<SponsorInvoiceDoc> {
+  if (!doc.payable) return doc;
+  const takes = await clubTakesCards(orgId, competitionId);
+  return { ...doc, payable: takes, cardUnavailable: !takes };
 }
 
 interface OrgRow {
@@ -153,8 +199,9 @@ interface OrgRow {
  *  and a row written before it may still hold ""). */
 const filled = (s: string | null): string | null => (s !== null && s.trim() !== "" ? s.trim() : null);
 
-/** Build the document for a numbered deal, on `tx` (its org's tenant). Null when the org is soft-deleted. */
-async function buildDoc(tx: Tx, orgId: string, deal: ServerDeal): Promise<SponsorInvoiceDoc | null> {
+/** Build the document for a numbered deal, on `tx` (its org's tenant). Null when the org is soft-deleted. Card payability here is
+ *  the deal's alone (`cardPayable`); `withCardGate` adds the club's, outside the transaction. */
+async function buildDoc(tx: Tx, orgId: string, deal: ServerDeal): Promise<BuiltDoc | null> {
   if (deal.invoice_number === null) return null;
   // The logo as the public site shows it: only on a plan with `branding` (server/public-site/data.ts getPublicOrg). The issue
   // day is the deal's creation in the org's timezone (V305; NULL is UTC), the same zone createDeal reads `ends_on` in.
@@ -176,7 +223,7 @@ async function buildDoc(tx: Tx, orgId: string, deal: ServerDeal): Promise<Sponso
     scope = c.name;
   }
   const state = invoiceState(deal);
-  return {
+  const doc: SponsorInvoiceDoc = {
     number: formatInvoiceNumber(deal.invoice_number),
     issuedOn: org.issued_on,
     org: { name: org.name, address: filled(org.sponsor_invoice_address), logoPath: resolveLogoUrl(org.logo_storage_path, org.logo_url) },
@@ -188,9 +235,12 @@ async function buildDoc(tx: Tx, orgId: string, deal: ServerDeal): Promise<Sponso
     },
     included: { tier: deal.tier, scope, onStream: deal.includes_on_stream },
     state,
+    dealEnded: deal.deal_status === "ended",
     method: deal.payment_method,
     bankDetails: state === "unpaid" && deal.payment_method === "offline" ? filled(org.sponsor_invoice_bank_details) : null,
     payable: cardPayable(deal),
+    cardUnavailable: false,
     locale,
   };
+  return { doc, competitionId: deal.competition_id };
 }

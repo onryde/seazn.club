@@ -37,9 +37,11 @@ function invoice(over: Partial<SponsorInvoiceDoc> = {}): SponsorInvoiceDoc {
     line: { description: "Gold board sponsorship — All competitions", amountCents: 25_000, currency: "gbp" },
     included: { tier: "gold", scope: "All competitions", onStream: true },
     state: "unpaid",
+    dealEnded: false,
     method: "offline",
     bankDetails: "Riverside Shuttlers\nSort code 12-34-56\nAccount 12345678",
     payable: false,
+    cardUnavailable: false,
     locale: "en",
     ...over,
   };
@@ -88,27 +90,40 @@ describe("invoicePdf", () => {
     expect([...LOCALES]).toEqual(["en", "fr", "es", "nl"]);
   });
   for (const locale of LOCALES) {
-    it(`stamps each state in ${locale}'s word, with the line that says where it stands (4 states)`, async () => {
+    it(`stamps each state in ${locale}'s word, with the line that says where it stands (5 states)`, async () => {
       const ui = await getDictionary(locale, "ui");
+      const club = { club: "Riverside Shuttlers" };
       let checked = 0;
       for (const state of INVOICE_STATES) {
-        const { all, runs } = await textOf(invoice({ locale, state, bankDetails: state === "unpaid" ? "Sort code 12-34-56" : null }));
+        const { all, runs } = await textOf(invoice({ locale, state, dealEnded: state !== "unpaid" && state !== "paid", bankDetails: state === "unpaid" ? "Sort code 12-34-56" : null }));
         expect(all, `${locale} ${state}`).toContain(t(ui, INVOICE_STATE_KEY[state]));
         for (const other of INVOICE_STATES.filter((s) => s !== state)) {
           expect(runs.map((r) => r.text), `${locale} ${state} prints no ${other} stamp`).not.toContain(t(ui, INVOICE_STATE_KEY[other]));
         }
         if (state === "unpaid") {
-          for (const note of Object.values(INVOICE_STATE_NOTE_KEY)) expect(all).not.toContain(t(ui, note));
+          for (const note of Object.values(INVOICE_STATE_NOTE_KEY)) expect(all.replace(/\n/g, " ")).not.toContain(t(ui, note, club));
+          expect(all.replace(/\n/g, " ")).not.toContain(t(ui, "sponsors.invoice.stateNote.endedDue"));
         } else {
-          expect(all.replace(/\n/g, " "), `${locale} ${state}`).toContain(t(ui, INVOICE_STATE_NOTE_KEY[state]));
+          expect(all.replace(/\n/g, " "), `${locale} ${state}`).toContain(t(ui, INVOICE_STATE_NOTE_KEY[state], club));
         }
         // Barlow draws the stamp and the heads: a word with a glyph it lacks prints a hole.
         expect(runs.filter((r) => r.text.includes("\u0000")), `${locale} ${state}`).toEqual([]);
         checked += 1;
       }
-      expect(checked).toBe(4);
+      expect(checked).toBe(5);
     }, INVOICE_STATES.length * RENDER_BUDGET_MS);
   }
+
+  it("an offline invoice whose deal ENDED unpaid after running live is still due: Unpaid, the line that says it ended, and the bank details (review I3)", async () => {
+    const { all } = await textOf(invoice({ state: "unpaid", dealEnded: true }));
+    const flat = all.replace(/\n/g, " ");
+    expect(flat).toContain(t(en, "sponsors.invoice.state.unpaid"));
+    expect(flat).toContain(t(en, "sponsors.invoice.stateNote.endedDue"));
+    expect(flat).toContain("Sort code 12-34-56");
+    // The ended-with-nothing-claimed line names the club to contact.
+    const ended = await textOf(invoice({ state: "ended", dealEnded: true, bankDetails: null }));
+    expect(ended.all.replace(/\n/g, " ")).toContain(t(en, "sponsors.invoice.stateNote.ended", { club: "Riverside Shuttlers" }));
+  });
 
   it("prints what the sponsorship includes: tier, scope, the public pages, and the stream yes or no", async () => {
     const on = await textOf(invoice());
@@ -168,7 +183,7 @@ describe("invoicePdf", () => {
     const fetchMock = vi.fn(async () => new Response(new Uint8Array(png), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const branded = await invoicePdf(invoice({ org: { name: "Riverside Shuttlers", address: null, logoPath: "https://cdn.test/logo.png" } }));
-    expect(fetchMock).toHaveBeenCalledWith("https://cdn.test/logo.png");
+    expect(fetchMock).toHaveBeenCalledWith("https://cdn.test/logo.png", expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(pdfImages(branded)).toHaveLength(1);
     vi.stubGlobal("fetch", vi.fn(async () => new Response("gone", { status: 404 })));
     const broken = await textOf(invoice({ org: { name: "Riverside Shuttlers", address: null, logoPath: "https://cdn.test/logo.png" } }));

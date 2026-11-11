@@ -26,17 +26,46 @@ const BALL_R = 4; // the brand's red ball, resting on the lime rule at the right
 
 import { publicStorageUrl } from "@/lib/supabase-storage";
 
+/** How long a logo fetch may take and how big the logo may be. A club can type any logo URL, and the sponsor invoice's PDF
+ *  (a public, token-gated route) fetches it on every download (T22 review m9): a slow or huge one must cost a bounded wait and
+ *  a bounded buffer, then the document prints without it. */
+export const LOGO_LIMITS = { timeoutMs: 5_000, maxBytes: 2 * 1024 * 1024 } as const;
+
 /** Resolve a logo storage path (or an already-absolute URL) to bytes. Logos
  *  live in the PUBLIC Supabase bucket — there is no server-side byte reader,
- *  so fetch the public URL. Missing/broken → null, never throws (a broken
- *  export is worse than an unbranded one). */
-export async function resolveLogo(logoPath: string | undefined): Promise<Buffer | null> {
+ *  so fetch the public URL. Missing/broken/too slow/too big → null, never
+ *  throws (a broken export is worse than an unbranded one). */
+export async function resolveLogo(
+  logoPath: string | undefined,
+  limits: { timeoutMs: number; maxBytes: number } = LOGO_LIMITS,
+): Promise<Buffer | null> {
   if (!logoPath) return null;
   try {
     const url = /^https?:\/\//.test(logoPath) ? logoPath : publicStorageUrl(logoPath);
-    const res = await fetch(url);
+    // The signal bounds the whole read, the body included.
+    const res = await fetch(url, { signal: AbortSignal.timeout(limits.timeoutMs) });
     if (!res.ok) return null;
-    return Buffer.from(await res.arrayBuffer());
+    const declared = res.headers.get("content-length");
+    if (declared !== null && Number(declared) > limits.maxBytes) {
+      await res.body?.cancel();
+      return null;
+    }
+    if (!res.body) return null;
+    // A body with no (or a lying) length is counted as it arrives and dropped past the cap, never buffered whole first.
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    const reader = res.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > limits.maxBytes) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+    return Buffer.concat(chunks);
   } catch {
     return null;
   }

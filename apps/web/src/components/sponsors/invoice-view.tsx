@@ -8,7 +8,15 @@
 // the state stamp beside the bill-to block, tilted like a rubber stamp in the state's colour, so a sponsor sees at a glance
 // whether anything is due. Everything else is the house public theme at rest.
 //
-// One DOM for every width: the header stacks on a phone and splits from `sm`; the amount column never wraps and the
+// The stamp's ink is the house's, never a palette of its own (review m6, frontend-design pass in task-22-report.md fix round
+// 1): due wears the house red (`--mk-live`, the same #ef4444 the PDF stamps with as PALETTE.ball; 3.8:1 on white, past AA for
+// text this large and bold), settled wears night (`--color-night`, the PDF's PALETTE.night), and every closed state wears the
+// theme's muted ink. The status-chip vocabulary was the other candidate and was not taken: it has no due/settled pair, and the
+// deal chip's own mapping (awaiting payment = lime-900, paid = purple) would print a GREEN "Unpaid" on a money document.
+//
+// One DOM for every width: the header stacks on a phone and splits from `sm`; so does the bill-to block and its stamp (review
+// I5: beside each other at 320, es "Pendiente de pago" left the sponsor's name ~37px), the stamp under the name on a phone and
+// beside it from `sm`; the amount column never wraps and the
 // description takes what is left, so a long package or competition name wraps instead of pushing the page sideways (`min-w-0`
 // down every box, `break-words` on everything a person typed, `break-all` on the email). Print: the card chrome, the pay form
 // and the buttons go; the sheet is the invoice.
@@ -18,7 +26,7 @@
 import type { CSSProperties } from "react";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
-import { INVOICE_STATE_KEY, INVOICE_STATE_NOTE_KEY, invoiceMoney, type InvoiceState } from "@/lib/sponsor-invoice";
+import { INVOICE_STATE_KEY, invoiceMoney, invoiceNoteKey, type InvoiceState } from "@/lib/sponsor-invoice";
 import { fmtIsoDay } from "@/lib/sponsor-report";
 import { PrintButton } from "@/components/print-button";
 import { TIER_MSG } from "@/components/sponsors/tier-labels";
@@ -27,13 +35,18 @@ import type { SponsorInvoiceDoc } from "@/server/sponsors/invoice-doc";
 /** The root layout mounts Barlow Condensed as `--font-barlow`; the public theme's `font-display` reads `--ps-font-display`. */
 const DISPLAY_FACE = { "--ps-font-display": "var(--font-barlow)" } as CSSProperties;
 
-/** The stamp's ink, as the PDF's: settled green, due red, closed greys. Print keeps the outline in the same colour. */
-const STAMP_CLASS: Record<InvoiceState, string> = {
-  paid: "border-emerald-700 text-emerald-700",
-  unpaid: "border-red-600 text-red-600",
-  refunded: "border-slate-600 text-slate-600",
-  void: "border-slate-500 text-slate-500",
+/** The stamp's ink, in house tokens (see the header): due red, settled night, closed muted. Print keeps the outline in the same
+ *  colour. Exported for the page test, which holds it to tokens. */
+export const STAMP_CLASS: Record<InvoiceState, string> = {
+  paid: "border-night text-night",
+  unpaid: "border-[var(--mk-live)] text-[var(--mk-live)]",
+  refunded: "border-ink-muted text-ink-muted",
+  void: "border-ink-muted text-ink-muted",
+  ended: "border-ink-muted text-ink-muted",
 };
+
+/** The bill-to block and its stamp: stacked on a phone, side by side from `sm` (review I5). Exported for the page test. */
+export const BILLED_ROW_CLASS = "flex min-w-0 flex-col items-start gap-3 px-5 pt-6 sm:flex-row sm:justify-between sm:gap-4 sm:px-10 sm:pt-8";
 
 export function SponsorInvoiceView({
   doc,
@@ -49,6 +62,7 @@ export function SponsorInvoiceView({
   payAction: string;
 }) {
   const amount = invoiceMoney(doc.locale, doc.line.amountCents, doc.line.currency);
+  const note = invoiceNoteKey(doc.state, doc.dealEnded);
   const included: [string, string][] = [
     [t(ui, "sponsors.invoice.included.tier"), t(ui, TIER_MSG[doc.included.tier])],
     [t(ui, "sponsors.invoice.included.scope"), doc.included.scope],
@@ -86,8 +100,8 @@ export function SponsorInvoiceView({
           </div>
         </header>
 
-        <section className="flex min-w-0 items-start justify-between gap-4 px-5 pt-6 sm:px-10 sm:pt-8">
-          <div className="min-w-0">
+        <section className={BILLED_ROW_CLASS}>
+          <div className="min-w-0 max-w-full">
             <h2 className="text-xs text-ink-muted">{t(ui, "sponsors.invoice.billedTo")}</h2>
             <p data-testid="invoice-billed-to" className="mt-0.5 text-base font-semibold break-words text-ink">{doc.billedTo.name}</p>
             {doc.billedTo.email !== null ? <p className="text-sm break-all text-ink-muted">{doc.billedTo.email}</p> : null}
@@ -95,7 +109,7 @@ export function SponsorInvoiceView({
           <p
             data-testid="invoice-state"
             data-state={doc.state}
-            className={`mt-1 shrink-0 -rotate-6 rounded-md border-[3px] px-3 py-1 font-display text-2xl leading-none font-bold tracking-wide sm:mr-2 sm:text-3xl ${STAMP_CLASS[doc.state]}`}
+            className={`ml-1 max-w-full shrink-0 -rotate-6 rounded-md border-[3px] px-3 py-1 font-display text-2xl leading-none font-bold tracking-wide break-words sm:mt-1 sm:mr-2 sm:ml-0 sm:text-3xl ${STAMP_CLASS[doc.state]}`}
           >
             {t(ui, INVOICE_STATE_KEY[doc.state])}
           </p>
@@ -122,18 +136,23 @@ export function SponsorInvoiceView({
               </tr>
             </tfoot>
           </table>
-          {doc.state !== "unpaid" ? (
-            <p data-testid="invoice-state-note" className="mt-3 max-w-prose text-sm text-ink-muted">{t(ui, INVOICE_STATE_NOTE_KEY[doc.state])}</p>
+          {note !== null ? (
+            <p data-testid="invoice-state-note" className="mt-3 max-w-prose text-sm text-ink-muted">{t(ui, note, { club: doc.org.name })}</p>
           ) : null}
         </section>
 
-        {doc.payable || doc.bankDetails !== null ? (
+        {doc.payable || doc.cardUnavailable || doc.bankDetails !== null ? (
           <section className="grid min-w-0 gap-5 border-t border-accent-line bg-accent-soft/40 px-5 py-6 sm:grid-cols-2 sm:gap-8 sm:px-10 sm:py-7 print:bg-transparent">
             {doc.payable ? (
               <form method="post" action={payAction} data-testid="invoice-pay" className="ph-no-capture min-w-0 print:hidden">
                 <button type="submit" className="btn btn-primary w-full sm:w-auto">{t(ui, "sponsors.invoice.payByCard")}</button>
                 <p className="mt-2 text-xs text-ink-muted">{t(ui, "sponsors.invoice.payNote", { amount })}</p>
               </form>
+            ) : null}
+            {doc.cardUnavailable ? (
+              <p data-testid="invoice-card-unavailable" className="min-w-0 text-sm font-medium break-words text-ink">
+                {t(ui, "sponsors.invoice.cardUnavailable", { club: doc.org.name })}
+              </p>
             ) : null}
             {doc.bankDetails !== null ? (
               <div data-testid="invoice-bank" className="min-w-0">

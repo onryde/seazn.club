@@ -267,11 +267,13 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
       pdfBytes.subarray(0, 5).toString("latin1") === "%PDF-",
   );
 
-  // Pay refuses a paid invoice. The raw token leaves the app only in the invoice email (Task 23), so this row plants a KNOWN
-  // token's hash on the deal it just marked paid (the same sha256 as server/sponsors/report-token.ts hashReportToken); the
-  // smoke row that opens a REAL emailed token is Task 23's (F9).
+  // Pay on a settled OFFLINE invoice sends the sponsor back to the invoice (303), which reads Paid with no pay form. An offline
+  // invoice is refused whether or not it is paid, so this row does NOT witness "pay refuses because it is paid" - that killer is
+  // routes.test.ts (an ONLINE deal paid by the webhook). The raw token leaves the app only in the invoice email (Task 23), so
+  // this row plants a KNOWN token's hash on the deal it just marked paid (the same sha256 as server/sponsors/report-token.ts
+  // hashReportToken); the smoke row that opens a REAL emailed token is Task 23's (F9).
   if (!process.env.DATABASE_URL) {
-    check("sd pay refuses a paid invoice (409): skipped (no DATABASE_URL to plant a known token) - routes.test.ts covers it", true);
+    check("sd pay on a settled offline invoice: skipped (no DATABASE_URL to plant a known token) - routes.test.ts covers it", true);
   } else {
     const markedPaid = invoiceDealId ? await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-deals/${invoiceDealId}/mark-paid`, "POST") : null;
     const knownToken = randomBytes(32).toString("base64url");
@@ -285,10 +287,10 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
     const payRes = await fetch(`${BASE}/r/sponsor/invoice/${knownToken}/pay`, { method: "POST", redirect: "manual" });
     const invoicePage = await html(newSession(), `/r/sponsor/invoice/${knownToken}`);
     check(
-      "sd pay refuses a paid invoice (409)",
+      "sd pay on a settled offline invoice: 303 back to the invoice, stamped paid, no pay form",
       markedPaid?.status === 200 && v1data<Deal>(markedPaid).payment_status === "paid" &&
-        payRes.status === 409 && !payRes.headers.get("location") &&
-        // The positive pair: the same token opens the invoice, stamped paid, with no pay form.
+        payRes.status === 303 && (payRes.headers.get("location") ?? "").endsWith(`/r/sponsor/invoice/${knownToken}`) &&
+        // The page it lands on: the same token opens the invoice, stamped paid, with no pay form.
         invoicePage.status === 200 && invoicePage.body.includes('data-testid="sponsor-invoice"') &&
         invoicePage.body.includes('data-state="paid"') && !invoicePage.body.includes('data-testid="invoice-pay"'),
     );

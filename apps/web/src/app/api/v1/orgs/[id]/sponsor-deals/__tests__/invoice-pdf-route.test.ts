@@ -93,15 +93,19 @@ describe.skipIf(!HAS_DB)("the console invoice PDF", () => {
     expect(pdfTextRuns(body).map((r) => r.text)).toContain("SP-0001");
   });
 
-  it("404 for what is not this org's invoice: a complimentary deal, another org's deal, an id that names nothing (3 counted)", async () => {
+  it("404 for what is not this org's invoice: another org's NUMBERED deal, an id that names nothing, a complimentary deal (3 counted)", async () => {
     const comp = await orgWithDeal("complimentary");
-    const [row] = await sql<{ invoice_number: number | null }[]>`select invoice_number from sponsor_orders where id = ${comp.dealId}`;
-    expect(row!.invoice_number, "premise: a complimentary deal is never numbered").toBeNull();
+    const numberOf = async (dealId: string) =>
+      (await sql<{ invoice_number: number | null }[]>`select invoice_number from sponsor_orders where id = ${dealId}`)[0]!.invoice_number;
+    expect(await numberOf(comp.dealId), "premise: a complimentary deal is never numbered").toBeNull();
     const other = await orgWithDeal("offline");
-    // Signed in as `other`'s owner, asking `other`'s org for comp's deal, then for nothing; then comp's owner for its own deal.
+    const third = await orgWithDeal("offline");
+    // Review m5: the cross-org row asks for a deal that HAS an invoice, so only the org boundary can refuse it.
+    expect(await numberOf(third.dealId), "premise: the other org's deal is numbered").not.toBeNull();
+    // Signed in as `other`'s owner, asking `other`'s org for third's deal, then for nothing; then comp's owner for its own deal.
     let checked = 0;
     for (const [as, orgId, dealId] of [
-      [other.ownerId, other.orgId, comp.dealId],
+      [other.ownerId, other.orgId, third.dealId],
       [other.ownerId, other.orgId, randomUUID()],
       [comp.ownerId, comp.orgId, comp.dealId],
     ] as const) {
@@ -112,9 +116,11 @@ describe.skipIf(!HAS_DB)("the console invoice PDF", () => {
       checked++;
     }
     expect(checked).toBe(3);
-    // The positive pair: `other`'s own deal downloads.
+    // The positive pairs: `other`'s own deal downloads, and so does third's, asked by its own owner of its own org.
     authState.userId = other.ownerId;
     expect((await get(other.orgId, other.dealId)).status).toBe(200);
+    authState.userId = third.ownerId;
+    expect((await get(third.orgId, third.dealId)).status).toBe(200);
   });
 
   it("an API key is refused (F8), even a manage-scoped one on an org with API access", async () => {
