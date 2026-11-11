@@ -51,11 +51,18 @@ export interface ReachCap {
 export function CompetitionReach({
   visibility,
   discoverable,
+  status = NEW_COMPETITION_STATUS,
   cap = null,
   billingHref,
 }: {
   visibility: string;
   discoverable: boolean;
+  /**
+   * The competition's status. The New competition form leaves it at the status a competition is BORN with; competition
+   * settings passes the one its Status chip holds, so a published competition's list says "yes" where a draft's says
+   * "once you publish".
+   */
+  status?: string;
   /** Set when this create will come back private because no public slot is left. */
   cap?: ReachCap | null;
   /** Where "Upgrade your plan" goes; only read when `cap.canUpgrade`. */
@@ -66,8 +73,8 @@ export function CompetitionReach({
   // visibility nor the showcase switch can change.
   const reach = competitionReach(
     cap
-      ? { visibility: "private", status: NEW_COMPETITION_STATUS, discoverable: false }
-      : { visibility, status: NEW_COMPETITION_STATUS, discoverable },
+      ? { visibility: "private", status, discoverable: false }
+      : { visibility, status, discoverable },
   );
   return (
     <section aria-labelledby="comp-reach-title" data-testid="competition-reach">
