@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { API_ONLY_ROWS, BUILDER_PREFERRED_VARIANT, ROW_KEYS, RowBuildDeferred, SPORT_KEYS, builderDefaultVariant, stagesForRow } from "../lib/catalogue.ts";
+import { API_ONLY_ROWS, BUILDER_PREFERRED_VARIANT, isKnobRow, ROW_KEYS, RowBuildDeferred, SPORT_KEYS, builderDefaultVariant, stagesForRow } from "../lib/catalogue.ts";
 import { NoOrganiserPath, OrgMismatch, RefusedCall } from "../lib/driver/types.ts";
 import { openBrowserRun, type OpenBrowserRun } from "../lib/browser/browser-run.ts";
 import type { PageCtx } from "../lib/browser/pages/ctx.ts";
@@ -2085,11 +2085,14 @@ describe("runSlice — --layer and the layered sets (W1c Task 12, ruling 39)", (
 
   it("--set api-only-browser --driver browser: one 🚫 per API-only row, in catalogue order, naming W4/W5 (D7 as ruled) — no browser, no org; exit 0; never vacuous, never an error red", async () => {
     const io = capture();
-    const WAVE: Readonly<Record<string, string>> = { knockout_third_place: "W4", group_only: "W5", group_group_ko: "W5" };
+    const WAVE: Readonly<Record<string, string>> = { group_only: "W5", group_group_ko: "W5" };
     // W4 T16 (ruling 269): the refused standalone rows are in no layer, so the set holds one 🚫 per OFFERED API-only row.
     const refusedRows = [...new Set(STANDALONE_REFUSED_CELLS.map((c) => c.split("|")[0]!))];
-    const owed = API_ONLY_ROWS.filter((r) => !refusedRows.includes(r));
-    expect(owed.length).toBe(API_ONLY_ROWS.length - 2);
+    // W4 app PR B T15: knockout_third_place is a builder knob row (the Third place control builds it), so it is no 🚫 row either.
+    const owed = API_ONLY_ROWS.filter((r) => !refusedRows.includes(r) && !isKnobRow(r));
+    expect([...owed], "the rows still owed a control: the two group formats, W5's").toEqual(["group_only", "group_group_ko"]);
+    expect(isKnobRow("knockout_third_place"), "the third-place row is the one that left").toBe(true);
+    expect(API_ONLY_ROWS.length - refusedRows.length - owed.length, "API-only rows offered and built by the builder").toBe(1);
     const dir = dirFor();
     let opened = 0;
     const d = deps({ openBrowserRun: async () => { opened++; return fakeBrowserRun().run; } });
@@ -2365,7 +2368,7 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(checked).toBe(rows.length);
   });
 
-  it("--layer L1 --scope grid, through the real planner and runner: the 207 offered cells (231 less chess americano/mexicano and the 22 refused standalone cells) at 1280, the 52 with no organiser path (31 API-only, 21 the builder does not offer: C9 review I5's ten and the retired Triple round robin's eleven) recorded 🚫 and never driven, every sport's variant order read once", async () => {
+  it("--layer L1 --scope grid, through the real planner and runner: the 207 offered cells (231 less chess americano/mexicano and the 22 refused standalone cells) at 1280, the 41 with no organiser path (20 API-only, 21 the builder does not offer: C9 review I5's ten and the retired Triple round robin's eleven) recorded 🚫 and never driven, every sport's variant order read once", async () => {
     capture();
     const dir = dirFor();
     const { d, reads, opened } = gridDeps();
@@ -2378,9 +2381,9 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(new Set(r.cases.map((c) => c.caseId)).size).toBe(OFFERED);
     expect(r.cases.map((c) => `${c.row}|${c.sport}`)).toEqual(offeredCells(ROW_KEYS, SPORT_KEYS));
     const planned = r.cases.filter((c) => c.planned === true);
-    // 31 API-only cells no builder control builds (53 less the 22 the product refuses, W4 T16), plus the cells the builder does not
+    // 20 API-only cells no builder control builds (53 less the 22 the product refuses, W4 T16, less knockout_third_place's 11 — the builder's Third place control builds it, W4 app PR B T15), plus the cells the builder does not
     // offer (C9 review I5, option 2; the retired Triple round robin on every sport, owner ruling 2026-11-01).
-    const noPathPlanned = 31 + NO_ORGANISER_PATH_CELLS.length;
+    const noPathPlanned = 20 + NO_ORGANISER_PATH_CELLS.length;
     expect(planned).toHaveLength(noPathPlanned);
     expect(planned.every((c) => c.state === "no_path" && ((API_ONLY_ROWS as readonly string[]).includes(c.row) || isNoOrganiserPathCell(`${c.row}|${c.sport}`)))).toBe(true);
     expect(planned.filter((c) => isNoOrganiserPathCell(`${c.row}|${c.sport}`)).map((c) => `${c.row}|${c.sport}`)).toEqual([...NO_ORGANISER_PATH_CELLS]);
@@ -2392,7 +2395,7 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(opened()).toBe(1);
   }, 120_000);
 
-  it("--layer L2 --scope grid, through the real planner and runner: 1,589 runs at their own widths — 48 driven, 294 🚫, 1,204 ░, 27 ⛔, 16 ⏳ — each recording the pair-run it is", async () => {
+  it("--layer L2 --scope grid, through the real planner and runner: 1,589 runs at their own widths — 48 driven, 282 🚫, 1,216 ░, 27 ⛔, 16 ⏳ — each recording the pair-run it is", async () => {
     capture();
     const dir = dirFor();
     const { d, reads } = gridDeps();
@@ -2409,12 +2412,14 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     // ░ 1,394 -> 1,271) and the settled atoms Q4b, D4b (⛔ 11 + 17) and D4a (⏳ 17) leave 🚫 - recorded as planned, never driven.
     // Both together: triple_rr's 77 runs go 🚫 on top of W4's figures, 2 of them W4's settled D4a/D4b on triple_rr|cricket
     // (a no-organiser-path cell keeps them 🚫): driven 48, 🚫 294, ░ 1,204, ⛔ 27 (11 + 16), ⏳ 16 (layers-grid.test.ts).
+    // W4 app PR B, Task 15: knockout_third_place is a builder knob row, no longer API-only, so Q4a's 12 runs on its cells (an atom
+    // with an organiser path and no HARNESS_SCENARIO script) leave 🚫 for ░: 🚫 294 -> 282, ░ 1,204 -> 1,216; driven stays 48.
     expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(48);
-    expect(r.cases.filter((c) => c.state === "no_path")).toHaveLength(294);
-    expect(r.cases.filter((c) => c.state === "not_run")).toHaveLength(1204);
+    expect(r.cases.filter((c) => c.state === "no_path")).toHaveLength(282);
+    expect(r.cases.filter((c) => c.state === "not_run")).toHaveLength(1216);
     expect(r.cases.filter((c) => c.state === "refused" && c.planned === true)).toHaveLength(27);
     expect(r.cases.filter((c) => c.state === "later" && c.planned === true)).toHaveLength(16);
-    expect(r.cases.filter((c) => c.planned === true)).toHaveLength(294 + 1204 + 27 + 16);
+    expect(r.cases.filter((c) => c.planned === true)).toHaveLength(282 + 1216 + 27 + 16);
     expect(r.cases.filter((c) => c.state === "refused").every((c) => ["Q4b", "D4b"].includes(c.scenario))).toBe(true);
     expect(r.cases.filter((c) => c.state === "later").every((c) => c.scenario === "D4a")).toBe(true);
     expect(r.cases.filter((c) => isNoOrganiserPathCell(`${c.row}|${c.sport}`)).every((c) => c.state === "no_path")).toBe(true);
@@ -3010,7 +3015,8 @@ describe("runSlice — --workers N (W1-driving T11, ruling 46, D10)", () => {
     expect(files.length, "files read").toBeGreaterThan(100);
     expect(files.filter((f) => readFileSync(f, "utf8").includes(needle)).map((f) => f.slice(root.length + 1))).toEqual([]);
     // The positive pair: the reader sees a route to a wave in the shape it searches for.
-    expect(readFileSync(join(root, "lib/api-only-ui.ts"), "utf8")).toContain(`${"routeTo"}("${"W4"}"`);
+    // (W4 T15 removed the last W4 route there — the third place became drivable — so the shape is read on W5's.)
+    expect(readFileSync(join(root, "lib/api-only-ui.ts"), "utf8")).toContain(`${"routeTo"}("${"W5"}"`);
   });
 });
 

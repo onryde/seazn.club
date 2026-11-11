@@ -261,7 +261,7 @@ describe.skipIf(!HAS_DB)("W2d T9: the pin at activation (X-TB-2, OC2)", () => {
     expect((await seatedFixtures(stageId)).length, "no fixture was written").toBe(0);
   }, 120_000);
 
-  it("started-status census (fix I1): every `update stages set status = 'active' | 'complete'` in non-test W/server pins in its block — after an activation's write, before a completion's (source scan; counts writers found, expects 2 active + 1 complete; 0 fails)", () => {
+  it("started-status census (fix I1): every `update stages set status = 'active' | 'complete'` in non-test W/server pins in its block — after an activation's write, before a completion's (source scan; counts writers found, expects 2 active + 2 complete — engine-db completeStageIfReady and the plate's X-PL-2 too-small completion; 0 fails)", () => {
     const SERVER = resolve(import.meta.dirname, "../..");
     const files: string[] = [];
     const walk = (dir: string) => {
@@ -275,7 +275,8 @@ describe.skipIf(!HAS_DB)("W2d T9: the pin at activation (X-TB-2, OC2)", () => {
     walk(SERVER);
     expect(files.length, "anti-vacuity: server files scanned").toBeGreaterThan(200);
     const WRITE = /update\s+stages\s+set\s+status\s*=\s*'(active|complete)'/gi;
-    const PIN = /\bpinStageTableRules\(\s*tx\s*,\s*stageId\s*\)/;
+    // the stage's id is `stageId` in the engine-db writers and `plate.id` in the plate's X-PL-2 completion (plate-field.ts, B3)
+    const PIN = /\bpinStageTableRules\(\s*tx\s*,\s*(?:stageId|plate\.id)\s*\)/;
     const writers: { at: string; status: string; pinned: boolean }[] = [];
     // A REOPEN (`... set status = 'active' where ... and status = 'complete'`, B5a T11/T12) starts nothing: the stage was
     // started, and pinned, once already, and the pin is kept. It is counted on its own so a new one cannot slip in.
@@ -312,7 +313,7 @@ describe.skipIf(!HAS_DB)("W2d T9: the pin at activation (X-TB-2, OC2)", () => {
     const found = writers.map((w) => `${w.status}@${w.at}`).join(", ");
     expect(writers.filter((w) => w.status === "active").length, `activation writers found: ${found}`).toBe(2);
     expect(reopens.length, `reopen writers found: ${reopens.join(", ")}`).toBe(1);
-    expect(writers.filter((w) => w.status === "complete").length, `completion writers found: ${found}`).toBe(1);
+    expect(writers.filter((w) => w.status === "complete").length, `completion writers found: ${found}`).toBe(2);
     expect(writers.filter((w) => !w.pinned).map((w) => w.at), "every writer into a started status pins in its block").toEqual([]);
   });
 
