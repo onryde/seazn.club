@@ -35,14 +35,15 @@ vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMo
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {}, refresh: () => {}, replace: () => {} }) }));
 
 import {
-  OrgSponsors, PosterField, SPONSOR_TIERS, SponsorForm, posterDraftOf, sponsorEditPatch, type PosterDraft, type SponsorItem, type SponsorsHubData,
+  OrgSponsors, PosterField, PosterFold, SPONSOR_TIERS, SponsorForm, posterDraftOf, sponsorEditPatch, type PosterDraft, type SponsorItem,
+  type SponsorsHubData,
 } from "@/components/org-sponsors";
 import { TIER_MSG } from "@/components/sponsors/tier-labels";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { expandSponsorTree } from "@/components/sponsors/__tests__/_sponsor-tree";
 import { findAll } from "@/components/sponsors/__tests__/_markup";
-import type { PaymentStatus, SponsorDeal } from "@/lib/sponsor-deals";
+import { DEAL_STATUSES, type DealStatus, type PaymentStatus, type SponsorDeal } from "@/lib/sponsor-deals";
 import { POSTER_HEIGHT, POSTER_WIDTH } from "@/lib/sponsor-poster";
 import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
@@ -146,6 +147,8 @@ describe("the form: a name, a link and a logo - no tier or competition control (
 //   G7  the locale      format the list with a fixed "en"                                            -> "the list is in the page's language"
 const LOGO_TYPE_NAME: Record<string, string> = { "image/png": "PNG", "image/jpeg": "JPG", "image/webp": "WebP" };
 const LOGO_HINT_EN = "PNG, JPG or WebP, up to 2 MB. A square logo on a transparent background works best.";
+/** Where the logo shows, said first in the same hint (owner, 2026-11-11, option B), as the poster's hint says where IT shows first. */
+const LOGO_WHERE_EN = "Shows everywhere this sponsor appears.";
 /** Visible text of a markup string: tags gone, the two entities React writes for ' and & read back. */
 const stripTags = (h: string) => h.replace(/<[^>]*>/g, "").replace(/&#x27;/g, "'").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
 /** The picker's tile: the one button in the form that carries the logo label. */
@@ -175,7 +178,7 @@ describe("the logo tile: an icon with an accessible name, and one hint that says
     let checked = 0;
     for (const html of [formMarkup(), formMarkup({ compact: true })]) {
       expect(flat(stripTags(html)), "the hint").toContain(LOGO_HINT_EN);
-      const hints = [...html.matchAll(/<p\b[^>]*>([^<]*)<\/p>/g)].filter((m) => flat(m[1]!) === LOGO_HINT_EN);
+      const hints = [...html.matchAll(/<p\b[^>]*>([^<]*)<\/p>/g)].filter((m) => flat(m[1]!) === `${LOGO_WHERE_EN} ${LOGO_HINT_EN}`);
       expect(hints.length, "exactly one hint").toBe(1);
       const id = attr(hints[0]![0], "id");
       expect(id, "the hint has an id").toBeTruthy();
@@ -185,9 +188,9 @@ describe("the logo tile: an icon with an accessible name, and one hint that says
     }
     expect(checked).toBe(2);
     // two forms on one page (add + edit) must not share an id
-    const a = attr(/<p\b[^>]*>PNG/.exec(formMarkup())![0], "id");
+    const a = attr(/<p\b[^>]*>Shows everywhere/.exec(formMarkup())![0], "id");
     const both = renderToStaticMarkup(<>{formMarkupEl()}{formMarkupEl()}</>);
-    const ids = [...both.matchAll(/<p\b([^>]*)>PNG/g)].map((m) => attr(`<p${m[1]}>`, "id"));
+    const ids = [...both.matchAll(/<p\b([^>]*)>Shows everywhere/g)].map((m) => attr(`<p${m[1]}>`, "id"));
     expect(a).toBeTruthy();
     expect(ids.length).toBe(2);
     expect(new Set(ids).size, "each form's hint has its own id").toBe(2);
@@ -226,11 +229,11 @@ describe("the logo tile: an icon with an accessible name, and one hint that says
   });
 
   it("the hint is in the page's language, with the list written the way that language writes it (en / es / fr / nl)", () => {
-    const WANT: Record<string, { dict: Dict; locale: "en" | "es" | "fr" | "nl"; list: string; sentence: string }> = {
-      en: { dict: uiEn as unknown as Dict, locale: "en", list: "PNG, JPG or WebP", sentence: LOGO_HINT_EN },
-      es: { dict: uiEs as unknown as Dict, locale: "es", list: "PNG, JPG o WebP", sentence: "PNG, JPG o WebP, hasta 2 MB. Un logotipo cuadrado con fondo transparente funciona mejor." },
-      fr: { dict: uiFr as unknown as Dict, locale: "fr", list: "PNG, JPG ou WebP", sentence: "PNG, JPG ou WebP, jusqu'à 2 Mo. Un logo carré sur fond transparent donne le meilleur résultat." },
-      nl: { dict: uiNl as unknown as Dict, locale: "nl", list: "PNG, JPG of WebP", sentence: "PNG, JPG of WebP, tot 2 MB. Een vierkant logo met een transparante achtergrond werkt het best." },
+    const WANT: Record<string, { dict: Dict; locale: "en" | "es" | "fr" | "nl"; list: string; sentence: string; where: string }> = {
+      en: { dict: uiEn as unknown as Dict, locale: "en", list: "PNG, JPG or WebP", sentence: LOGO_HINT_EN, where: LOGO_WHERE_EN },
+      es: { dict: uiEs as unknown as Dict, locale: "es", list: "PNG, JPG o WebP", sentence: "PNG, JPG o WebP, hasta 2 MB. Un logotipo cuadrado con fondo transparente funciona mejor.", where: "Se muestra en todos los lugares donde aparece este patrocinador." },
+      fr: { dict: uiFr as unknown as Dict, locale: "fr", list: "PNG, JPG ou WebP", sentence: "PNG, JPG ou WebP, jusqu'à 2 Mo. Un logo carré sur fond transparent donne le meilleur résultat.", where: "S'affiche partout où ce sponsor apparaît." },
+      nl: { dict: uiNl as unknown as Dict, locale: "nl", list: "PNG, JPG of WebP", sentence: "PNG, JPG of WebP, tot 2 MB. Een vierkant logo met een transparante achtergrond werkt het best.", where: "Staat overal waar deze sponsor verschijnt." },
     };
     let checked = 0;
     for (const [locale, w] of Object.entries(WANT)) {
@@ -240,6 +243,7 @@ describe("the logo tile: an icon with an accessible name, and one hint that says
         </DictProvider>,
       );
       expect(flat(stripTags(html)), locale).toContain(w.sentence);
+      expect(flat(stripTags(html)), `${locale}: where it shows, then what it takes`).toContain(`${w.where} ${w.sentence}`);
       expect(flat(stripTags(html)), `${locale}: the list`).toContain(w.list);
       checked++;
     }
@@ -294,7 +298,7 @@ const HUB: SponsorsHubData = {
   reportDefaults: null,
 };
 
-function mount(rows: SponsorItem[], opts: { canEdit?: boolean; sponsorId?: string; hasTiers?: boolean } = {}) {
+function mount(rows: SponsorItem[], opts: { canEdit?: boolean; sponsorId?: string; hasTiers?: boolean; deals?: SponsorDeal[] } = {}) {
   const props: Parameters<typeof OrgSponsors>[0] = {
     orgId: ORG,
     initialSponsors: rows,
@@ -302,7 +306,7 @@ function mount(rows: SponsorItem[], opts: { canEdit?: boolean; sponsorId?: strin
     hasTiers: opts.hasTiers ?? true,
     billingHref: "/billing",
     canEdit: opts.canEdit ?? true,
-    hub: opts.sponsorId === undefined ? HUB : { ...HUB, sponsorId: opts.sponsorId },
+    hub: { ...HUB, ...(opts.sponsorId === undefined ? {} : { sponsorId: opts.sponsorId }), ...(opts.deals === undefined ? {} : { deals: opts.deals }) },
   };
   const island = renderIsland(OrgSponsors, props, expandSponsorTree);
   const byLabel = (key: MessageKey, name: string): ReactElement => {
@@ -368,11 +372,12 @@ describe("Edit opens a form that is a name, a link and a logo, whatever the plan
         m.edit("Quay Chandlers");
         const html = renderToStaticMarkup(m.form());
         expect(html, `${label}, tiers=${hasTiers}: a select`).not.toContain("<select");
-        // The Poster field (a plan with tiers only) says where a poster shows - "while this sponsor is a Title sponsor" - so it names the Title
-        // tier. That is a sentence about the poster, not a control that places the sponsor, so the field is taken out of the word sweep and
-        // the sweep reads everything else; the field itself is counted (it is there on a plan with tiers and only there).
-        const field = findAll(html, "sponsor-poster-field");
-        expect(field, `${label}, tiers=${hasTiers}: the poster field is on a plan with tiers only`).toHaveLength(hasTiers ? 1 : 0);
+        // The Title poster (a plan with tiers only) says where a poster shows - "while this sponsor is a Title sponsor" - so it names the Title
+        // tier, and so does its fold ("For when this sponsor is your Title sponsor"). Those are sentences about the poster, not a control that
+        // places the sponsor, so the poster's area - the field, or the toggle it is folded behind - is taken out of the word sweep and the
+        // sweep reads everything else; the area itself is counted (it is there on a plan with tiers and only there).
+        const field = [...findAll(html, "sponsor-poster-field"), ...findAll(html, "sponsor-poster-toggle")];
+        expect(field, `${label}, tiers=${hasTiers}: the poster field (or its fold) is on a plan with tiers only`).toHaveLength(hasTiers ? 1 : 0);
         const rest = field.length > 0 ? html.replace(field[0]!.outer, "") : html;
         expect(rest.length, `${label}, tiers=${hasTiers}: the sweep still reads the rest of the editor`).toBeGreaterThan(500);
         for (const w of PLACEMENT_WORDS()) expect(flat(rest), `${label}, tiers=${hasTiers}: says "${w}"`).not.toContain(w);
@@ -708,7 +713,10 @@ describe("Show on site again (now on the sponsor's page, Task 15): a hidden spon
 const POSTER_NONE: PosterDraft = { file: null, preview: null, removed: false, crop: null };
 const POSTER_STORED = "https://cdn.example/posters/old.png";
 const POSTER_NEW = "https://cdn.example/posters/new.png";
-const posterProp = (value: PosterDraft = POSTER_NONE, over: Record<string, unknown> = {}) => ({ value, onPick: () => {}, onRemove: () => {}, ...over });
+/** The poster prop of a Title sponsor's editor, so the field is drawn OPEN whatever the draft holds: the tests of the field itself read it.
+ *  The fold in front of it (`titlePlacement: false`, nothing stored or picked) has its own tests, below. */
+const posterProp = (value: PosterDraft = POSTER_NONE, over: Record<string, unknown> = {}) =>
+  ({ value, onPick: () => {}, onRemove: () => {}, titlePlacement: true, ...over });
 const posterTiles = (html: string) => [...html.matchAll(/<button\b[^>]*data-testid="sponsor-poster-tile"[^>]*>([\s\S]*?)<\/button>/g)];
 const posterHints = (html: string) => [...html.matchAll(/<p\b[^>]*data-testid="sponsor-poster-hint"[^>]*>([\s\S]*?)<\/p>/g)];
 const posterCrops = (html: string) => [...html.matchAll(/<p\b[^>]*data-testid="sponsor-poster-crop"[^>]*>([\s\S]*?)<\/p>/g)];
@@ -720,7 +728,7 @@ type Bitmap = { width: number; height: number; close: () => void };
 /** `createImageBitmap` of a picture `w` x `h`: what the browser answers for a measured file. */
 const bitmapOf = (w: number, h: number) => async (): Promise<Bitmap> => ({ width: w, height: h, close: closeMock });
 const pngFile = (size = 1, name = "poster.png") => new File([new Uint8Array(size)], name, { type: "image/png" });
-type PosterWire = { value: PosterDraft; onPick: (f: File) => void | Promise<void>; onRemove: () => void };
+type PosterWire = { value: PosterDraft; onPick: (f: File) => void | Promise<void>; onRemove: () => void; titlePlacement: boolean };
 const posterOf = (m: ReturnType<typeof mount>) => propsOf(m.form()).poster as PosterWire | undefined;
 
 afterEach(() => {
@@ -752,7 +760,7 @@ describe("the poster field: its presence (the Add form never has it; a plan with
       expect(hints, "exactly one hint").toHaveLength(1);
       const tag = /<button\b[^>]*data-testid="sponsor-poster-tile"[^>]*>/.exec(html)![0];
       expect(attr(tag, "aria-label"), "the tile keeps its accessible name").toBe(msg("sponsors.sheet.poster"));
-      expect(msg("sponsors.sheet.poster"), "premise: that name is the word Poster").toBe("Poster");
+      expect(msg("sponsors.sheet.poster"), "premise: that name is the Title poster, the words of the field's own label").toBe("Title poster");
       expect(stripTags(tiles[0]![1]!), "no visible word inside the dashed box").toBe("");
       const hintId = attr(/<p\b[^>]*data-testid="sponsor-poster-hint"[^>]*>/.exec(html)![0], "id");
       expect(hintId, "the hint has an id").toBeTruthy();
@@ -786,15 +794,235 @@ describe("the poster field: its presence (the Add form never has it; a plan with
       if (hasTiers) {
         expect(poster, `tiers, stored=${stored}: GRANTED`).toBeDefined();
         expect(poster!.value, `tiers, stored=${stored}: it opens at what is stored`).toEqual({ file: null, preview: stored, removed: false, crop: null });
-        expect(posterTiles(html), `tiers, stored=${stored}: one tile`).toHaveLength(1);
+        expect(poster!.titlePlacement, `tiers, stored=${stored}: a Gold sponsor with no deal is not in the Title placement`).toBe(false);
+        // Not a Title sponsor: a stored poster opens the field; with none it is folded behind its toggle (one or the other, never both).
+        expect(posterTiles(html), `tiers, stored=${stored}: ${stored ? "one tile" : "no tile (folded)"}`).toHaveLength(stored ? 1 : 0);
+        expect(findAll(html, "sponsor-poster-toggle"), `tiers, stored=${stored}: ${stored ? "no toggle" : "one toggle"}`).toHaveLength(stored ? 0 : 1);
       } else {
         expect(poster, `no tiers, stored=${stored}: DENIED`).toBeUndefined();
         expect(posterTiles(html), `no tiers, stored=${stored}: no tile`).toHaveLength(0);
+        expect(findAll(html, "sponsor-poster-toggle"), `no tiers, stored=${stored}: no toggle either`).toHaveLength(0);
         expect(html, `no tiers, stored=${stored}: a stored poster is not drawn in the editor`).not.toContain(POSTER_STORED);
       }
       checked++;
     }
     expect(checked, "both plans x stored and not stored").toBe(4);
+  });
+});
+
+// --- the two uploaders, told apart (owner, 2026-11-11, stg: "what two image upload?"; option B) ------------------------------------------
+// The editor drew two dashed picture tiles and named only the second, and every sponsor saw the poster's tile though most will never be a
+// Title sponsor. Now the logo has its own label - a real <label> for its file input - and its hint says where it shows first, as the
+// poster's does; the poster is the "Title poster", and it folds behind "+ Add a title poster" for a sponsor with no poster that is not in
+// (or on its way to) the Title placement. Expected words are the owner's, typed here; "Title" is found through the tier list and the
+// dictionary's own name for it, never typed as a tier.
+//
+// Killers (one at a time, restore from a cp backup):
+//   L1  label     draw the logo's label as a <span> (no `htmlFor`)                          -> "a real <label> for the logo's own file input"
+//   L2  where     drop the "Shows everywhere" sentence from the logo's hint                  -> "where it shows, then what it takes" (+ the hint pins)
+//   F1  title     drop `titlePlacement` from the fold's open predicate                      -> "open from the start" + "every tier x every status"
+//   F2  stored    drop the stored/picked `preview` arm from the open predicate              -> "open from the start"
+//   F3  focus     hand the revealed field `focusOnMount={false}` after a tap                -> "a tap opens it"
+//   F4  deals     read only the stored tier (ignore the sponsor's deals) in inTitlePlacement -> "every tier x every status"
+//   F5  ended     count an ended Title deal as placing the sponsor                          -> "every tier x every status"
+const labelsFor = (html: string) =>
+  [...html.matchAll(/<label\b[^>]*\sfor="([^"]+)"[^>]*>([\s\S]*?)<\/label>/g)].map((m) => ({ for: m[1]!, text: stripTags(m[2]!) }));
+const fileInputs = (html: string) => [...html.matchAll(/<input\b[^>]*type="file"[^>]*>/g)].map((m) => m[0]);
+const isPosterInput = (tag: string) => /data-testid="sponsor-poster-input"/.test(tag);
+/** The tier the dictionary calls "Title": read through the tier list, so no tier name is typed into a test. */
+const TITLE_TIER = () => {
+  const found = SPONSOR_TIERS.filter((t) => msg(TIER_MSG[t]) === "Title");
+  expect(found, "premise: exactly one tier is called Title").toHaveLength(1);
+  return found[0]!;
+};
+
+describe("the logo has its own label: a real <label> for its file input, and a hint that says where it shows first", () => {
+  it("one label, the word Logo, `for` the logo's own file input (never the poster's) - form, compact form, and beside an open poster (3 checked)", () => {
+    let checked = 0;
+    for (const html of [formMarkup(), formMarkup({ compact: true }), formMarkup({ poster: posterProp(), compact: true })]) {
+      const logoInputs = fileInputs(html).filter((tag) => !isPosterInput(tag));
+      expect(logoInputs, "one logo file input").toHaveLength(1);
+      const inputId = attr(logoInputs[0]!, "id");
+      expect(inputId, "the logo's file input has an id").toBeTruthy();
+      const labels = labelsFor(html);
+      expect(labels.filter((l) => l.for === inputId), "exactly one label points at it").toHaveLength(1);
+      const label = labels.find((l) => l.for === inputId)!;
+      expect(label.text, "and it says Logo").toBe(msg("sponsors.logoLabel"));
+      expect(msg("sponsors.logoLabel"), "premise: the owner's word").toBe("Logo");
+      const posterInput = fileInputs(html).find(isPosterInput);
+      if (posterInput !== undefined) expect(attr(posterInput, "id"), "the poster's input is not the one the Logo label names").not.toBe(inputId);
+      // The tile is the control a person meets; its accessible name is the label's word (WCAG 2.5.3: the name holds what a person reads).
+      const tile = /<button\b[^>]*\baria-label="Logo"[^>]*>/.exec(html)![0];
+      expect(attr(tile, "aria-label"), "the tile is named by the label's word").toBe(label.text);
+      // The label heads the logo, above the sponsor's name: it is not a label for the fields under it.
+      expect(html.indexOf(`for="${inputId}"`), "the label comes before the Name field").toBeLessThan(html.indexOf(msg("settings.org.sponsors.name")));
+      checked++;
+    }
+    expect(checked, "form, compact form, and beside an open poster").toBe(3);
+    // Two forms on one page (the Add form and an editor) never share the id a label points at.
+    const both = renderToStaticMarkup(<>{formMarkupEl()}{formMarkupEl()}</>);
+    const ids = labelsFor(both).map((l) => l.for);
+    expect(ids, "a label per form").toHaveLength(2);
+    expect(new Set(ids).size, "each its own id").toBe(2);
+    for (const id of ids) expect(fileInputs(both).filter((tag) => attr(tag, "id") === id), `${id}: names exactly one input`).toHaveLength(1);
+  });
+
+  it("the hint under it says where the logo shows, then what the picker takes, and the tile is described by it", () => {
+    const html = formMarkup();
+    const tile = /<button\b[^>]*\baria-label="Logo"[^>]*>/.exec(html)![0];
+    const described = attr(tile, "aria-describedby")!;
+    const hint = new RegExp(`<p\\b[^>]*\\sid="${described}"[^>]*>([^<]*)</p>`).exec(html);
+    expect(hint, "the tile's description is one paragraph").not.toBeNull();
+    expect(flat(hint![1]!), "where it shows first, then what it takes").toBe(`${LOGO_WHERE_EN} ${LOGO_HINT_EN}`);
+    expect(msg("sponsors.logoWhere"), "premise: the owner's sentence").toBe(LOGO_WHERE_EN);
+  });
+});
+
+describe("the Title poster: named for the Title sponsor, and folded away for a sponsor that is not one and has none (owner, 2026-11-11)", () => {
+  const toggles = (html: string) => findAll(html, "sponsor-poster-toggle");
+  const fields = (html: string) => findAll(html, "sponsor-poster-field");
+
+  it("the field's heading is the Title poster, in the owner's words", () => {
+    expect(msg("sponsors.poster.label"), "the owner's heading").toBe("Title poster (optional)");
+    const html = formMarkup({ poster: posterProp() });
+    const field = fields(html);
+    expect(field, "premise: the field is open").toHaveLength(1);
+    const labelId = attr(field[0]!.open, "aria-labelledby")!;
+    const heading = new RegExp(`<span\\b[^>]*\\sid="${labelId}"[^>]*>([^<]*)</span>`).exec(field[0]!.inner);
+    expect(heading, "the field is labelled by its heading").not.toBeNull();
+    expect(flat(heading![1]!), "which says Title poster (optional)").toBe("Title poster (optional)");
+  });
+
+  it("empty case first: nothing stored, nothing picked, not in the Title placement - one toggle, and no field, tile or file input (form and compact form)", () => {
+    expect(msg("sponsors.poster.add"), "the owner's words").toBe("+ Add a title poster");
+    expect(msg("sponsors.poster.addHint"), "the owner's sub-line").toBe("For when this sponsor is your Title sponsor");
+    let checked = 0;
+    for (const compact of [false, true]) {
+      const html = formMarkup({ poster: posterProp(POSTER_NONE, { titlePlacement: false }), compact });
+      const found = toggles(html);
+      expect(found, `compact=${compact}: one toggle`).toHaveLength(1);
+      expect(fields(html), `compact=${compact}: no field`).toHaveLength(0);
+      expect(posterTiles(html), `compact=${compact}: no tile`).toHaveLength(0);
+      expect(fileInputs(html).filter(isPosterInput), `compact=${compact}: no poster file input`).toHaveLength(0);
+      expect(fileInputs(html), `compact=${compact}: the logo's input is still there (the positive pair)`).toHaveLength(1);
+      const open = found[0]!.open;
+      expect(open.startsWith("<button"), "a button").toBe(true);
+      expect(attr(open, "type"), "that submits nothing").toBe("button");
+      expect(attr(open, "aria-expanded"), "and says it is collapsed").toBe("false");
+      // Its name is the action; the sub-line is its description.
+      const name = new RegExp(`<span\\b[^>]*\\sid="${attr(open, "aria-labelledby")}"[^>]*>([^<]*)</span>`).exec(found[0]!.inner);
+      const sub = new RegExp(`<span\\b[^>]*\\sid="${attr(open, "aria-describedby")}"[^>]*>([^<]*)</span>`).exec(found[0]!.inner);
+      expect(flat(name?.[1] ?? ""), "named by the action").toBe(msg("sponsors.poster.add"));
+      expect(flat(sub?.[1] ?? ""), "described by the sub-line").toBe(msg("sponsors.poster.addHint"));
+      // One DOM for every width (house rule: no second phone tree), and a thumb-sized target: at least 44px tall at every width.
+      const cls = classTokens(attr(open, "class") ?? "");
+      expect(cls, "44px tall").toContain("min-h-11");
+      for (const token of cls) expect(token, "nothing hides it at a width").not.toMatch(/(^|:)hidden$/);
+      checked++;
+    }
+    expect(checked, "form and compact form").toBe(2);
+  });
+
+  it("open from the start, with no toggle: a stored poster, a picked file, a removal in progress, a sponsor in the Title placement (each alone; 4 checked)", () => {
+    const CASES: [string, PosterDraft, boolean][] = [
+      ["a stored poster", { ...POSTER_NONE, preview: POSTER_STORED }, false],
+      ["a picked file", { ...POSTER_NONE, file: pngFile(), preview: "blob:picked" }, false],
+      ["a stored poster being removed", { ...POSTER_NONE, removed: true }, false],
+      ["the Title placement, nothing stored", POSTER_NONE, true],
+    ];
+    let checked = 0;
+    for (const [label, value, titlePlacement] of CASES) {
+      const html = formMarkup({ poster: posterProp(value, { titlePlacement }), compact: true });
+      expect(fields(html), `${label}: the field`).toHaveLength(1);
+      expect(posterTiles(html), `${label}: its tile`).toHaveLength(1);
+      expect(toggles(html), `${label}: no toggle`).toHaveLength(0);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("a tap opens it and hands focus to the tile; it stays open through a pick, a Remove and an emptied draft; a field open from the start never takes focus", () => {
+    const base = { onPick: () => {}, onRemove: () => {} };
+    const island = renderIsland(PosterFold, { ...base, value: POSTER_NONE, titlePlacement: false });
+    const fieldsIn = () => island.tree().filter((e) => e.type === PosterField);
+    const toggleIn = () => island.tree().filter((e) => propsOf(e)["data-testid"] === "sponsor-poster-toggle");
+    expect(fieldsIn(), "folded: no field").toHaveLength(0);
+    expect(toggleIn(), "folded: the toggle").toHaveLength(1);
+    (propsOf(toggleIn()[0]!).onClick as () => void)();
+    expect(toggleIn(), "tapped: the toggle is gone").toHaveLength(0);
+    expect(fieldsIn(), "tapped: the field is drawn").toHaveLength(1);
+    expect(propsOf(fieldsIn()[0]!).focusOnMount, "and focus moves to it").toBe(true);
+    // The sequence after the tap: a pick, Remove, and back to an empty draft - never folded back on the person.
+    const STEPS: [string, PosterDraft][] = [
+      ["a pick", { ...POSTER_NONE, file: pngFile(), preview: "blob:picked" }],
+      ["Remove", { ...POSTER_NONE, removed: true }],
+      ["an emptied draft", POSTER_NONE],
+    ];
+    for (const [label, value] of STEPS) {
+      island.rerender({ ...base, value, titlePlacement: false });
+      expect(fieldsIn(), `after ${label}: still open`).toHaveLength(1);
+      expect(toggleIn(), `after ${label}: no toggle`).toHaveLength(0);
+    }
+    expect(STEPS.length).toBe(3);
+    // Open from the start (a stored poster; a Title sponsor): the page loads with the field, and focus stays where the person is.
+    for (const [label, value, titlePlacement] of [["stored", { ...POSTER_NONE, preview: POSTER_STORED }, false], ["Title", POSTER_NONE, true]] as const) {
+      const auto = renderIsland(PosterFold, { ...base, value, titlePlacement });
+      const field = auto.tree().filter((e) => e.type === PosterField);
+      expect(field, `${label}: open from the start`).toHaveLength(1);
+      expect(propsOf(field[0]!).focusOnMount, `${label}: and it does not take focus`).toBe(false);
+    }
+    // The field itself: focus is the tile's autoFocus, set only when it is asked for.
+    const tileOf = (focusOnMount: boolean) =>
+      renderIsland(PosterField, { value: POSTER_NONE, onPick: () => {}, onRemove: () => {}, focusOnMount }).tree().find((e) => propsOf(e)["data-testid"] === "sponsor-poster-tile")!;
+    expect(propsOf(tileOf(true)).autoFocus, "asked: the tile takes focus as it mounts").toBe(true);
+    expect(propsOf(tileOf(false)).autoFocus, "not asked: it does not").toBe(false);
+  });
+
+  it("whether the sponsor is in (or on its way to) the Title placement comes from its deals and its stored tier: every tier x every deal status, through the island (24 + 4 + 1 checked)", () => {
+    const TITLE = TITLE_TIER();
+    const STORED_NOT_TITLE = SPONSOR_TIERS.find((t) => t !== TITLE)!;
+    // An ended deal places nobody; every other status is live or waiting to go live (the rulebook, typed here: a status added to the
+    // engine without a line here is a type error).
+    const PLACES: Record<DealStatus, boolean> = { draft: true, awaiting_payment: true, awaiting_approval: true, scheduled: true, live: true, ended: false };
+    expect(Object.keys(PLACES).sort(), "premise: every deal status has a line").toEqual([...DEAL_STATUSES].sort());
+    let checked = 0;
+    let open = 0;
+    for (const tier of SPONSOR_TIERS) {
+      for (const status of DEAL_STATUSES) {
+        const deal = dealOf("d1", "none", {
+          tier,
+          deal_status: status,
+          ...(status === "ended" ? { ended_at: "2026-09-01T10:00:00.000Z", ended_reason: "expired" as const } : {}),
+        });
+        const m = mount([row({ id: "a", name: "Quay Chandlers", tier: STORED_NOT_TITLE })], { deals: [deal] });
+        m.edit("Quay Chandlers");
+        const want = tier === TITLE && PLACES[status];
+        expect(posterOf(m)!.titlePlacement, `${tier} deal, ${status}`).toBe(want);
+        const html = renderToStaticMarkup(m.form());
+        expect(posterTiles(html), `${tier} deal, ${status}: ${want ? "open" : "folded"}`).toHaveLength(want ? 1 : 0);
+        expect(toggles(html), `${tier} deal, ${status}: ${want ? "no toggle" : "the toggle"}`).toHaveLength(want ? 0 : 1);
+        checked++;
+        if (want) open++;
+      }
+    }
+    expect(checked, "four tiers x six statuses").toBe(SPONSOR_TIERS.length * DEAL_STATUSES.length);
+    expect(open, "a Title deal that is live or waiting to go live: five statuses").toBe(5);
+    // No deal at all: the stored tier decides (a live deal sets it, D9; a sponsor placed before deals keeps it).
+    let stored = 0;
+    for (const tier of SPONSOR_TIERS) {
+      const m = mount([row({ id: "a", name: "Quay Chandlers", tier })]);
+      m.edit("Quay Chandlers");
+      expect(posterOf(m)!.titlePlacement, `stored ${tier}, no deal`).toBe(tier === TITLE);
+      stored++;
+    }
+    expect(stored, "every stored tier").toBe(SPONSOR_TIERS.length);
+    // Another sponsor's Title deal is not this sponsor's.
+    const other = mount(
+      [row({ id: "a", name: "Quay Chandlers", tier: STORED_NOT_TITLE }), row({ id: "b", name: "Ridge Cycles", tier: STORED_NOT_TITLE })],
+      { deals: [dealOf("d2", "none", { sponsor_id: "b", tier: TITLE })] },
+    );
+    other.edit("Quay Chandlers");
+    expect(posterOf(other)!.titlePlacement, "B's live Title deal does not open A's poster").toBe(false);
   });
 });
 
@@ -927,25 +1155,25 @@ describe("the poster field is in the page's language (en / es / fr / nl)", () =>
   // The owner-approved sentences, spec §10, typed here; the format list is written the way each language writes a list.
   const WANT = {
     en: {
-      dict: uiEn, label: "Poster (optional)", remove: "Remove poster", tooBig: "Posters can be up to 2 MB.",
+      dict: uiEn, label: "Title poster (optional)", remove: "Remove poster", tooBig: "Posters can be up to 2 MB.",
       hint: POSTER_HINT_EN,
       cropWidth: `This picture is wider than 4:5, so 55% of its width will be cut off. ${POSTER_WIDTH} × ${POSTER_HEIGHT} fits exactly.`,
       cropHeight: `This picture is taller than 4:5, so 30% of its height will be cut off. ${POSTER_WIDTH} × ${POSTER_HEIGHT} fits exactly.`,
     },
     es: {
-      dict: uiEs, label: "Cartel (opcional)", remove: "Quitar cartel", tooBig: "Los carteles pueden pesar hasta 2 MB.",
+      dict: uiEs, label: "Cartel Principal (opcional)", remove: "Quitar cartel", tooBig: "Los carteles pueden pesar hasta 2 MB.",
       hint: `Se muestra junto al nombre de la competición mientras este patrocinador sea Principal. PNG, JPG o WebP, hasta 2 MB. Ideal a ${POSTER_WIDTH} × ${POSTER_HEIGHT} (4:5, retrato de Instagram).`,
       cropWidth: `Esta imagen es más ancha que 4:5, así que se recortará el 55% de su ancho. ${POSTER_WIDTH} × ${POSTER_HEIGHT} encaja exactamente.`,
       cropHeight: `Esta imagen es más alta que 4:5, así que se recortará el 30% de su alto. ${POSTER_WIDTH} × ${POSTER_HEIGHT} encaja exactamente.`,
     },
     fr: {
-      dict: uiFr, label: "Affiche (facultatif)", remove: "Retirer l'affiche", tooBig: "Les affiches peuvent atteindre 2 Mo.",
+      dict: uiFr, label: "Affiche Titre (facultatif)", remove: "Retirer l'affiche", tooBig: "Les affiches peuvent atteindre 2 Mo.",
       hint: `S'affiche à côté du nom de la compétition tant que ce sponsor est Titre. PNG, JPG ou WebP, jusqu'à 2 Mo. Idéal en ${POSTER_WIDTH} × ${POSTER_HEIGHT} (4:5, portrait Instagram).`,
       cropWidth: `Cette image est plus large que 4:5 : 55 % de sa largeur sera coupé. ${POSTER_WIDTH} × ${POSTER_HEIGHT} s'ajuste exactement.`,
       cropHeight: `Cette image est plus haute que 4:5 : 30 % de sa hauteur sera coupé. ${POSTER_WIDTH} × ${POSTER_HEIGHT} s'ajuste exactement.`,
     },
     nl: {
-      dict: uiNl, label: "Poster (optioneel)", remove: "Poster verwijderen", tooBig: "Posters mogen maximaal 2 MB zijn.",
+      dict: uiNl, label: "Titelposter (optioneel)", remove: "Poster verwijderen", tooBig: "Posters mogen maximaal 2 MB zijn.",
       hint: `Staat naast de naam van de competitie zolang deze sponsor Titel is. PNG, JPG of WebP, tot 2 MB. Het best op ${POSTER_WIDTH} × ${POSTER_HEIGHT} (4:5, Instagram staand).`,
       cropWidth: `Deze afbeelding is breder dan 4:5, dus 55% van de breedte valt weg. ${POSTER_WIDTH} × ${POSTER_HEIGHT} past precies.`,
       cropHeight: `Deze afbeelding is hoger dan 4:5, dus 30% van de hoogte valt weg. ${POSTER_WIDTH} × ${POSTER_HEIGHT} past precies.`,

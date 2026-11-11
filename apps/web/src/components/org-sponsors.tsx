@@ -9,8 +9,9 @@
 // name, a logo and a link only - the tier and where a sponsor shows come from its
 // deal (owner, 2026-11-11: "why showing tier in sponsor edit?"), and the sponsor's
 // page shows them read-only. The API still takes both on a PATCH. The sponsor
-// page's editor (never the Add form) also has the optional Poster the public hero
-// shows for a Title sponsor, where the plan can place one (`PosterField`). Tiers above
+// page's editor (never the Add form) also has the optional Title poster the public hero
+// shows for a Title sponsor, where the plan can place one (`PosterField`), folded behind
+// "+ Add a title poster" unless the sponsor has one or is a Title sponsor (`PosterFold`). Tiers above
 // partner and per-competition scoping are Pro (`sponsors.tiers`); without it the
 // manager is the free un-tiered strip with an upsell note.
 import { useEffect, useId, useRef, useState } from "react";
@@ -22,7 +23,7 @@ import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { SponsorList, dealPrice, groupTierOf, sameOrderBand, type DealWrite } from "@/components/sponsors/sponsor-list";
 import { AddDealSheet, type CreateDealBody } from "@/components/sponsors/add-deal-sheet";
-import { SMALL_BTN, SponsorSheet, SponsorSheetBody } from "@/components/sponsors/sponsor-sheet";
+import { SMALL_BTN, SponsorSheet, SponsorSheetBody, sponsorDealGroups } from "@/components/sponsors/sponsor-sheet";
 import { DealPageBody } from "@/components/sponsors/deal-page";
 import { PayLinkBanner } from "@/components/sponsors/pay-link-banner";
 import {
@@ -174,6 +175,23 @@ export function posterDraftOf(s: Pick<SponsorItem, "poster_path"> | undefined): 
   return { file: null, preview: s?.poster_path ?? null, removed: false, crop: null };
 }
 
+/** Is the sponsor in the Title placement, or on its way to it - the one place its poster shows? Its stored tier is where it shows now (a
+ *  live deal sets it, D9; a sponsor placed before deals keeps it), and a Title deal that is live or still waiting to go live (the sponsor
+ *  page's `current` deals) puts it there or will. An ended deal places nobody, and another sponsor's deal is not this one's. Read from what
+ *  the page already holds - the sponsor row and the org's deals - never a fetch of its own. */
+export function inTitlePlacement(s: Pick<SponsorItem, "id" | "tier">, deals: readonly SponsorDeal[]): boolean {
+  return s.tier === "title" || sponsorDealGroups(deals, s.id).current.some((d) => d.tier === "title");
+}
+
+/** What the sponsor page's editor hands its Title poster: the draft, the two writes, and whether the sponsor is in the Title placement
+ *  (`inTitlePlacement`), which opens the field from the start. */
+export interface PosterFieldWire {
+  value: PosterDraft;
+  onPick: (file: File) => void | Promise<void>;
+  onRemove: () => void;
+  titlePlacement: boolean;
+}
+
 /** The PATCH body of a save from the sponsor page's editor: only what changed, never the tier or the scope (a deal sets those). `uploaded`
  *  holds the public URL of each picture the save has just uploaded. A poster is removed only when there is one stored to remove (`removed`
  *  with nothing stored sends nothing), and a stored poster that was not touched is not re-sent. Pure: the island does the uploads. */
@@ -279,23 +297,28 @@ export function SponsorForm({
   submitLabel: string;
   busy: boolean;
   onPickLogo: (file: File, set: (fn: (prev: Draft) => Draft) => void) => void;
-  /** The optional Poster field (Title-sponsor hero poster): given only to the sponsor page's editor, and only when the plan can place a Title
-   *  sponsor. The Add form never has it (a poster belongs to a sponsor that exists), so it is a prop and not a mode of the form. */
-  poster?: { value: PosterDraft; onPick: (file: File) => void | Promise<void>; onRemove: () => void };
-  /** One column of fields under the logo, whatever the viewport: for the sponsor page's side panel, where `sm:` (a VIEWPORT query)
-   *  would put two fields side by side in a 360px panel. The add box leaves it off. */
+  /** The optional Title poster (Title-sponsor hero poster): given only to the sponsor page's editor, and only when the plan can place a
+   *  Title sponsor. The Add form never has it (a poster belongs to a sponsor that exists), so it is a prop and not a mode of the form. */
+  poster?: PosterFieldWire;
+  /** Name and link one above the other, whatever the viewport: for the sponsor page's side panel, where `sm:` (a VIEWPORT query) would put
+   *  the two side by side in a 360px panel. The add box leaves it off. */
   compact?: boolean;
 }) {
   const msg = useMsg();
   const locale = useLocaleOrDefault();
   // House uploader pattern (org-logo, prose-editor): a real button clicks a
-  // ref'd hidden input — label-wrapped file inputs misfire in some browsers.
+  // ref'd hidden input — label-wrapped file inputs misfire in some browsers, so
+  // the Logo label names the input with `htmlFor` and never wraps it.
   const fileRef = useRef<HTMLInputElement>(null);
   const hintId = useId();
+  const inputId = useId();
   const formats = acceptedFormats(locale);
   const urlInvalid = value.url.trim() !== "" && !isValidSponsorUrl(value.url);
   return (
-      <div className="flex flex-wrap items-start gap-4">
+    <div className="grid min-w-0 gap-3">
+      {/* The logo, named (owner, 2026-11-11, option B: "what two image upload?"): its own label - a real <label> for its file input -
+          and one hint that says where it shows, then what the picker takes, the way the Title poster's hint does. */}
+      <div className="flex min-w-0 items-start gap-4">
         <button
           type="button"
           onClick={() => fileRef.current?.click()}
@@ -314,6 +337,7 @@ export function SponsorForm({
         </button>
         <input
           ref={fileRef}
+          id={inputId}
           type="file"
           accept={LOGO_ACCEPT}
           className="hidden"
@@ -323,57 +347,93 @@ export function SponsorForm({
             e.target.value = "";
           }}
         />
-        <div className={compact ? "w-full min-w-0" : "min-w-0 flex-1"}>
-          {/* What the tile takes, beside it - never typed twice: the formats are the input's `accept`, the size is the cap `pickLogo` refuses at. */}
-          <p id={hintId} className="mb-3 text-xs text-slate-500">
-            {msg("sponsors.logoHint", { formats, mb: LOGO_MAX_MB })}
+        <div className="min-w-0 flex-1 pt-0.5">
+          <label htmlFor={inputId} className="label">
+            {msg("sponsors.logoLabel")}
+          </label>
+          {/* Where it shows, then what the tile takes - never typed twice: the formats are the input's `accept`, the size is the cap
+              `pickLogo` refuses at. One text node, so the tile's description is one paragraph. */}
+          <p id={hintId} className="text-xs text-slate-500">
+            {`${msg("sponsors.logoWhere")} ${msg("sponsors.logoHint", { formats, mb: LOGO_MAX_MB })}`}
           </p>
-          {/* Name and link side by side from sm; a single stack on mobile (and always, when compact). */}
-          <div className={`grid gap-3 ${compact ? "" : "sm:grid-cols-2"}`}>
-            <label className="block">
-              <span className="label">{msg("settings.org.sponsors.name")}</span>
-              <input
-                value={value.name}
-                onChange={(e) => onChange((prev) => ({ ...prev, name: e.target.value }))}
-                maxLength={80}
-                className="input w-full"
-              />
-            </label>
-            <label className="block">
-              <span className="label">{msg("settings.org.sponsors.link")}</span>
-              <input
-                value={value.url}
-                onChange={(e) => onChange((prev) => ({ ...prev, url: e.target.value }))}
-                placeholder="https://…"
-                aria-invalid={urlInvalid || undefined}
-                className={`input w-full ${urlInvalid ? "border-red-400" : ""}`}
-              />
-              {urlInvalid ? (
-                <span className="mt-1 block text-xs text-red-500">
-                  {msg("sponsors.urlInvalid")}
-                </span>
-              ) : null}
-            </label>
-          </div>
-          {poster ? <PosterField value={poster.value} onPick={poster.onPick} onRemove={poster.onRemove} /> : null}
-          <div className="mt-3 flex items-center gap-2">
-            <button
-              type="button"
-              disabled={busy || !value.name.trim() || urlInvalid}
-              onClick={onSubmit}
-              className="btn btn-primary"
-            >
-              {busy ? "…" : submitLabel}
-            </button>
-            {onCancel ? (
-              <button type="button" disabled={busy} onClick={onCancel} className="btn">
-                {msg("confirm.cancel")}
-              </button>
-            ) : null}
-          </div>
         </div>
       </div>
-    );
+      {/* Name and link side by side from sm; a single stack on mobile (and always, when compact). */}
+      <div className={`grid gap-3 ${compact ? "" : "sm:grid-cols-2"}`}>
+        <label className="block">
+          <span className="label">{msg("settings.org.sponsors.name")}</span>
+          <input
+            value={value.name}
+            onChange={(e) => onChange((prev) => ({ ...prev, name: e.target.value }))}
+            maxLength={80}
+            className="input w-full"
+          />
+        </label>
+        <label className="block">
+          <span className="label">{msg("settings.org.sponsors.link")}</span>
+          <input
+            value={value.url}
+            onChange={(e) => onChange((prev) => ({ ...prev, url: e.target.value }))}
+            placeholder="https://…"
+            aria-invalid={urlInvalid || undefined}
+            className={`input w-full ${urlInvalid ? "border-red-400" : ""}`}
+          />
+          {urlInvalid ? (
+            <span className="mt-1 block text-xs text-red-500">
+              {msg("sponsors.urlInvalid")}
+            </span>
+          ) : null}
+        </label>
+      </div>
+      {poster ? <PosterFold {...poster} /> : null}
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          disabled={busy || !value.name.trim() || urlInvalid}
+          onClick={onSubmit}
+          className="btn btn-primary"
+        >
+          {busy ? "…" : submitLabel}
+        </button>
+        {onCancel ? (
+          <button type="button" disabled={busy} onClick={onCancel} className="btn">
+            {msg("confirm.cancel")}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** The Title poster, folded away until it is wanted (owner, 2026-11-11, option B): most sponsors are never a Title sponsor, so the field
+ *  waits behind "+ Add a title poster" unless there is a reason to show it - a poster stored or picked (or one being removed), or the sponsor
+ *  is in, or on its way to, the Title placement. A tap opens it and hands focus to its tile; once open it stays open for this editor (no
+ *  fold-back: after Remove the empty tile is there to pick again). One DOM at every width; the toggle is 44px tall at every width. */
+export function PosterFold({ value, onPick, onRemove, titlePlacement }: PosterFieldWire) {
+  const msg = useMsg();
+  const nameId = useId();
+  const subId = useId();
+  const [opened, setOpened] = useState(false);
+  const startsOpen = value.preview !== null || value.file !== null || value.removed || titlePlacement;
+  if (opened || startsOpen) return <PosterField value={value} onPick={onPick} onRemove={onRemove} focusOnMount={opened} />;
+  return (
+    <button
+      type="button"
+      data-testid="sponsor-poster-toggle"
+      aria-expanded="false"
+      aria-labelledby={nameId}
+      aria-describedby={subId}
+      onClick={() => setOpened(true)}
+      className="group grid min-h-11 min-w-0 cursor-pointer content-center justify-items-start gap-0.5 rounded-lg py-1 text-left"
+    >
+      <span id={nameId} className="text-sm font-medium text-purple-700 underline-offset-2 group-hover:underline">
+        {msg("sponsors.poster.add")}
+      </span>
+      <span id={subId} className="text-xs text-slate-500">
+        {msg("sponsors.poster.addHint")}
+      </span>
+    </button>
+  );
 }
 
 /** The optional Poster field of the sponsor page's editor (spec §8): a dashed 4:5 tile that IS the crop (the public panel draws the same
@@ -386,10 +446,13 @@ export function PosterField({
   value,
   onPick,
   onRemove,
+  focusOnMount = false,
 }: {
   value: PosterDraft;
   onPick: (file: File) => void | Promise<void>;
   onRemove: () => void;
+  /** The field was just unfolded by a tap (`PosterFold`): its tile takes focus as it mounts. Never on a field open from the start. */
+  focusOnMount?: boolean;
 }) {
   const msg = useMsg();
   const locale = useLocaleOrDefault();
@@ -399,7 +462,7 @@ export function PosterField({
   const crop = value.crop;
   const sizes = { width: POSTER_WIDTH, height: POSTER_HEIGHT };
   return (
-    <div data-testid="sponsor-poster-field" role="group" aria-labelledby={labelId} className="mt-3 min-w-0">
+    <div data-testid="sponsor-poster-field" role="group" aria-labelledby={labelId} className="min-w-0">
       <span id={labelId} className="label">
         {msg("sponsors.poster.label")}
       </span>
@@ -407,6 +470,8 @@ export function PosterField({
         <button
           type="button"
           data-testid="sponsor-poster-tile"
+          // Mount-only (React focuses an autoFocus element when it is inserted, never on a re-render), so it cannot pull focus back later.
+          autoFocus={focusOnMount}
           onClick={() => fileRef.current?.click()}
           className="group grid aspect-[4/5] w-24 shrink-0 cursor-pointer place-items-center overflow-hidden rounded-xl border border-dashed border-slate-300 bg-white text-slate-400 hover:border-purple-400 hover:text-purple-600"
           aria-label={msg("sponsors.sheet.poster")}
@@ -954,7 +1019,11 @@ export function OrgSponsors({
                 submitLabel={msg("sponsors.save")}
                 busy={busy}
                 onPickLogo={pickLogo}
-                poster={hasTiers ? { value: poster, onPick: pickPoster, onRemove: removePoster } : undefined}
+                poster={
+                  hasTiers
+                    ? { value: poster, onPick: pickPoster, onRemove: removePoster, titlePlacement: inTitlePlacement(selected, deals) }
+                    : undefined
+                }
                 compact
               />
             )}

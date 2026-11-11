@@ -293,9 +293,10 @@ describe("Details: a LIVE deal owns the tier, scope and stream; an OPEN deal cha
     expect(findAll(markup, "sponsor-sheet-stream")).toHaveLength(1);
   });
 
-  it("the read-only Poster row: a 4:5 thumbnail when stored, 'None, the logo shows instead' when not, after Link and before the tier; no row without tiers (3 checked)", () => {
+  it("the read-only Title poster row: a 4:5 thumbnail when stored, after Link and before the tier; no row at all when none is stored, or without tiers (4 checked)", () => {
     // Spec §8: shown only when the plan can place a Title sponsor (`hasTiers`), between the link and the tier rows. Stored: a 48 x 60 thumbnail (4:5),
-    // cropped as the public panel crops it; not stored: the words that say the logo shows instead.
+    // cropped as the public panel crops it. Not stored: no row (owner, 2026-11-11, option B: most sponsors are never a Title sponsor, so a
+    // "no poster" row on every sponsor's page is the same noise as the always-open field it replaced).
     const POSTER = "https://cdn.example/posters/ridge.png";
     const stored = bodyHtml({ sponsor: sponsor({ poster_path: POSTER }) });
     const dd = findOne(stored, "sponsor-sheet-detail-poster");
@@ -311,17 +312,24 @@ describe("Details: a LIVE deal owns the tier, scope and stream; an OPEN deal cha
     const at = (id: string) => stored.indexOf(`data-testid="${id}"`);
     expect(at("sponsor-sheet-detail-link"), "after Link").toBeLessThan(at("sponsor-sheet-detail-poster"));
     expect(at("sponsor-sheet-detail-poster"), "before the tier").toBeLessThan(at("sponsor-sheet-detail-tier"));
-    // not stored: the words, no picture
+    expect(msg("sponsors.sheet.poster"), "premise: the row is named for the Title poster, as the editor's field is").toBe("Title poster");
+    let checked = 1;
+    // not stored: no row - neither its label nor its value - while the rows around it are still drawn (the positive pair)
     const none = bodyHtml({ sponsor: sponsor({ poster_path: null }) });
-    expect(textOfMarkup(findOne(none, "sponsor-sheet-detail-poster").outer), "none: the logo shows instead").toBe(msg("sponsors.sheet.noPoster"));
-    expect(msg("sponsors.sheet.noPoster"), "premise: the owner-approved words").toBe("None, the logo shows instead");
+    expect(findAll(none, "sponsor-sheet-detail-poster"), "none: no row").toHaveLength(0);
     expect(findAll(none, "sponsor-sheet-poster-thumb"), "none: no thumbnail").toHaveLength(0);
+    expect(textOfMarkup(none), "none: and no label for a row that is not there").not.toContain(msg("sponsors.sheet.poster"));
+    expect(findAll(none, "sponsor-sheet-detail-link"), "the Link row is still drawn").toHaveLength(1);
+    expect(findAll(none, "sponsor-sheet-detail-tier"), "and the tier row").toHaveLength(1);
+    checked++;
     // no tiers: no row at all, stored or not (the plan cannot place a Title sponsor)
     for (const poster_path of [POSTER, null]) {
       const free = bodyHtml({ hasTiers: false, sponsor: sponsor({ poster_path }) });
       expect(findAll(free, "sponsor-sheet-detail-poster"), `no tiers, stored=${poster_path}: no row`).toHaveLength(0);
       expect(findAll(free, "sponsor-sheet-poster-thumb"), `no tiers, stored=${poster_path}: no thumbnail`).toHaveLength(0);
+      checked++;
     }
+    expect(checked, "stored, none, and both without tiers").toBe(4);
   });
 
   it("a viewer sees the poster row too (it is read-only for everyone), and an open editor replaces the read-only rows, poster row included", () => {
