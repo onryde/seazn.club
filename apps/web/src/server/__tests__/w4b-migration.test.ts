@@ -127,7 +127,8 @@ describe.runIf(HAS_DB)("W4 delta V496: finished knockouts re-rank to a shared 3r
     expect(ranksOf(v.after)).toEqual(want);
     // nothing but the rank: row order, every other key, previous_rows, the watermark and updated_at
     expect(v.after.rows.map((r) => r.entrantId)).toEqual(v.before.rows.map((r) => r.entrantId));
-    expect(v.after.rows.map(({ rank: _r, ...rest }) => rest)).toEqual(v.before.rows.map(({ rank: _r, ...rest }) => rest));
+    const sansRank = (rows: readonly object[]) => rows.map((r) => { const c: Record<string, unknown> = { ...r }; delete c.rank; return c; });
+    expect(sansRank(v.after.rows)).toEqual(sansRank(v.before.rows));
     expect(v.after.previous_rows).toEqual(v.before.previous_rows);
     expect(v.after.computed_through_seq).toBe(v.before.computed_through_seq);
     expect(v.after.updated_at).toEqual(v.before.updated_at);
