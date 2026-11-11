@@ -580,6 +580,7 @@
   "sponsors.sheet.off": "No",
   "sponsors.sheet.tierNow": "Nivel actual: {now}. {next} cuando el acuerdo se active.",
   "sponsors.sheet.scopeNow": "Alcance actual: {now}. {next} cuando el acuerdo se active.",
+  "sponsors.sheet.placementNote": "Un acuerdo define el nivel y dónde aparece este patrocinador.",
   "sponsors.sheet.deals": "Acuerdos",
   "sponsors.sheet.current": "Actuales",
   "sponsors.sheet.past": "Anteriores",

@@ -440,6 +440,7 @@ test("sponsor page: a live deal's tier and stream are read-only; name and link s
   await expect(dialog).toBeVisible();
   await expect(dialog.getByTestId("sponsor-sheet-detail-tier"), "the deal's tier").toContainText(ui("sponsors.tier.gold"));
   await expect(dialog.getByTestId("sponsor-sheet-locked-note")).toHaveText(ui("sponsors.deal.lockedNote"));
+  await expect(dialog.getByTestId("sponsor-sheet-placement-note"), "the lock note already says a deal owns them: one note, not two").toHaveCount(0);
   await expect(dialog.getByTestId("sponsor-sheet-tier-now"), "a live deal changes nothing later: no 'Tier now' line").toHaveCount(0);
   await expect(dialog.getByTestId("sponsor-sheet-stream"), "a live deal owns the stream").toBeDisabled();
   const edit = dialog.getByTestId("sponsor-sheet-edit");
@@ -465,14 +466,20 @@ test("sponsor page: a live deal's tier and stream are read-only; name and link s
     name: NEW_NAME, url: "https://ridge-gold.example.com", tier: "gold",
   });
 
-  // --- The pair: a sponsor with NO deal keeps its tier and competition controls, and its stream box works.
+  // --- The pair: a sponsor with NO deal is a plain Partner for the whole organisation, read-only, with the note that a deal sets it
+  // (owner, 2026-11-11: "A"); its stream box works; and its editor has no tier or competition control either - there is no screen
+  // that edits them by hand now.
   await page.goto(`${sponsorsUrl(org.slug, "sponsors")}&sponsor=${freeId}`);
   await expect(dialog).toBeVisible();
   await expect(dialog.getByTestId("sponsor-sheet-locked-note"), "no deal, no lock").toHaveCount(0);
+  await expect(dialog.getByTestId("sponsor-sheet-detail-tier"), "no deal: a plain Partner").toContainText(ui("sponsors.tier.partner"));
+  await expect(dialog.getByTestId("sponsor-sheet-detail-scope"), "for the whole organisation").toHaveText(ui("sponsors.scopeAll"));
+  await expect(dialog.getByTestId("sponsor-sheet-placement-note"), "and says a deal sets them").toHaveText(ui("sponsors.sheet.placementNote"));
   const stream = dialog.getByTestId("sponsor-sheet-stream");
   await expect(stream).toBeEnabled();
   await tapUntil(dialog.getByTestId("sponsor-sheet-edit"), dialog.getByTestId("sponsor-sheet-editor"), "Edit opens the editor");
-  await expect(dialog.getByTestId("sponsor-sheet-editor").locator("select"), "tier and competition are the club's to set").toHaveCount(2);
+  await expect(dialog.getByTestId("sponsor-sheet-editor").getByRole("textbox"), "the editor holds the name and the link").toHaveCount(2);
+  await expect(dialog.getByTestId("sponsor-sheet-editor").locator("select"), "no tier or competition control: a deal sets them").toHaveCount(0);
   await dialog.getByTestId("sponsor-sheet-editor").getByRole("button", { name: ui("confirm.cancel"), exact: true }).click();
   await expect(dialog.getByTestId("sponsor-sheet-editor")).toHaveCount(0);
   const [toggled] = await Promise.all([

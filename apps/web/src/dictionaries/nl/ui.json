@@ -580,6 +580,7 @@
   "sponsors.sheet.off": "Uit",
   "sponsors.sheet.tierNow": "Niveau nu: {now}. {next} zodra de deal live gaat.",
   "sponsors.sheet.scopeNow": "Bereik nu: {now}. {next} zodra de deal live gaat.",
+  "sponsors.sheet.placementNote": "Een deal bepaalt het niveau en waar deze sponsor te zien is.",
   "sponsors.sheet.deals": "Deals",
   "sponsors.sheet.current": "Lopend",
   "sponsors.sheet.past": "Afgelopen",

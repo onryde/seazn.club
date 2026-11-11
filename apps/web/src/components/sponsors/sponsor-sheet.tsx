@@ -175,8 +175,9 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
     competitionId ? (competitions.find((c) => c.id === competitionId)?.name ?? msg("sponsors.dealSheet.scopeUnknown")) : msg("sponsors.scopeAll");
 
   // D9 / F28: a LIVE deal owns the sponsor's tier, competition and stream, so they are shown as the deal's, read-only, with the
-  // reason. A deal still waiting to go live changes none of them yet: they stay the club's to set, and the line says what the
-  // deal will change when it goes live. No deal, or every deal ended: nothing owns them and nothing is said.
+  // reason. A deal still waiting to go live changes none of them yet, and the line says what the deal will change when it goes live.
+  // No deal, or every deal ended: the sponsor shows as it is stored (a plain Partner for the whole organisation unless it was
+  // placed another way) - read-only too: no screen edits the tier or the scope, a deal sets them (owner, 2026-11-11).
   const locked = sponsor.locked_by_deal;
   const liveDeal = locked ? (current.find(isLiveDeal) ?? null) : null;
   const shownTier = liveDeal?.tier ?? sponsor.tier;
@@ -377,6 +378,12 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
             {locked ? (
               <p id={lockNoteId} data-testid="sponsor-sheet-locked-note" className="mt-3 text-xs text-slate-500">
                 {msg("sponsors.deal.lockedNote")}
+              </p>
+            ) : hasTiers ? (
+              // The tier and the scope are read-only here and in the editor alike: a deal sets them (owner, 2026-11-11). While a live deal
+              // holds them the note above already says so; otherwise this one says what to do to change them.
+              <p data-testid="sponsor-sheet-placement-note" className="mt-3 text-xs text-slate-500">
+                {msg("sponsors.sheet.placementNote")}
               </p>
             ) : null}
             {canEdit && canShowAgain(sponsor) ? (

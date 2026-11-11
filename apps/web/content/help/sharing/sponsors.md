@@ -8,15 +8,15 @@ Sponsor logos appear on your public competition pages, the registration page and
 
 ## Add sponsors
 
-Open **Sponsors** in the top bar or on your Dashboard, then the **Sponsors** tab. The hub's other tabs, including sponsors on your streams and the reports you can send a sponsor, are covered in [The Sponsors hub](/help/sharing/sponsors-hub). Add a name, an optional link and a logo (PNG/JPG/WebP up to 2 MB). Use the arrows to set the display order — that order is what the public sees.
+Open **Sponsors** in the top bar or on your Dashboard, then the **Sponsors** tab. The hub's other tabs, including sponsors on your streams and the reports you can send a sponsor, are covered in [The Sponsors hub](/help/sharing/sponsors-hub). Add a name, an optional link and a logo (PNG/JPG/WebP up to 2 MB). Use the arrows to set the display order — that order is what the public sees. The sponsor's name, link and logo are all you edit on the sponsor itself: its tier and where it shows come from its deals (see Deals below), and its page shows them read-only.
 
 ## Tiers (Pro or Event Pass)
 
-Pro orgs — and any competition holding an Event Pass — group sponsors into **Title, Gold, Silver and Partner** tiers. On public pages the title sponsor renders largest, then each tier in descending prominence. On the free plan every sponsor sits in one flat strip.
+Pro orgs — and any competition holding an Event Pass — group sponsors into **Title, Gold, Silver and Partner** tiers. A sponsor's tier comes from its deal's package — there is no tier box on the sponsor. On public pages the title sponsor renders largest, then each tier in descending prominence. On the free plan every sponsor sits in one flat strip.
 
 ## Per-competition sponsors (Pro or Event Pass)
 
-By default a sponsor is org-wide — it shows on every competition. Pick a competition in the manager to scope a sponsor to that event only; competition-scoped sponsors lead the strip on their event's pages.
+By default a sponsor is org-wide — it shows on every competition. To scope a sponsor to one event, give it a deal for that competition: the deal's scope is where the sponsor shows. Competition-scoped sponsors lead the strip on their event's pages.
 
 ## Click tracking
 
@@ -30,7 +30,7 @@ Each package shows how many sponsors hold a deal on it. **Retire** stops new dea
 
 ## Deals: putting a sponsor on a package
 
-A **deal** is one sponsor on one package. Open a sponsor on the **Sponsors** tab and choose **Add deal**, then pick the package, how it is paid and when the sponsor goes live. While a deal is live it sets the sponsor's tier and where it shows, so those two fields are locked on the sponsor.
+A **deal** is one sponsor on one package. Open a sponsor on the **Sponsors** tab and choose **Add deal**, then pick the package, how it is paid and when the sponsor goes live. A sponsor's tier and where it shows come only from its deals, never from the sponsor's own editor. A new sponsor with no deal shows as a Partner for the whole organisation (sponsors you added before keep the tier they hold), and one you want to show higher for free gets a **Complimentary** deal on the package you choose. While a deal is live it also sets the sponsor's On stream setting, so that is locked on the sponsor too.
 
 **How it is paid**
 

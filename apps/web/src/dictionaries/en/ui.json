@@ -580,6 +580,7 @@
   "sponsors.sheet.off": "Off",
   "sponsors.sheet.tierNow": "Tier now {now}. {next} when the deal goes live.",
   "sponsors.sheet.scopeNow": "Scope now {now}. {next} when the deal goes live.",
+  "sponsors.sheet.placementNote": "A deal sets the tier and where this sponsor shows.",
   "sponsors.sheet.deals": "Deals",
   "sponsors.sheet.current": "Current",
   "sponsors.sheet.past": "Past",

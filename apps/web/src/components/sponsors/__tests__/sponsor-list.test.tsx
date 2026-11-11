@@ -882,7 +882,7 @@ describe("Move reorders within the GROUP the row is drawn in (the deal's tier), 
   });
 });
 
-describe("Add a sponsor asks for a name, a logo and a link - and nothing else (spec §6.1)", () => {
+describe("Add and Edit ask for a name, a logo and a link - and nothing else (spec §6.1; owner, 2026-11-11)", () => {
   it("the add form shows no tier and no competition select, on a plan WITH tiers, and says why (the hint)", () => {
     const m = mount([], { hasTiers: true });
     const add = m.island.tree().find((e) => e.type === SponsorForm && propsOf(e).onCancel === undefined);
@@ -908,15 +908,18 @@ describe("Add a sponsor asks for a name, a logo and a link - and nothing else (s
     expect(post?.body).toEqual({ name: "New Sponsor", url: "https://new.example", tier: "partner" });
   });
 
-  it("the EDIT form still offers the tier and competition (where a sponsor with no deal is placed by hand) - the pair", () => {
-    const markup = renderToStaticMarkup(
-      <SponsorForm
-        value={{ name: "N", url: "", tier: "gold", competition_id: "", file: null, preview: null }}
-        onChange={noop} onSubmit={noop} onCancel={noop} submitLabel="Save" busy={false} hasTiers showPlacement lockedByDeal={false}
-        competitions={COMPS} onPickLogo={noop}
-      />,
-    );
-    expect(markup.match(/<select\b/g)).toHaveLength(2);
+  it("the EDIT form asks for the same three things and no tier or competition either (owner, 2026-11-11), on a plan WITH tiers", () => {
+    const m = mount(ROWS, { hasTiers: true });
+    m.click(msg("sponsors.edit", { name: "Ridge Gold Physiotherapy" }));
+    const form = m.island.tree().find((e) => e.type === SponsorForm && propsOf(e).onCancel !== undefined);
+    expect(form, "premise: the row's editor is open").toBeDefined();
+    const markup = renderToStaticMarkup(form!);
+    expect(markup, "no tier or competition select").not.toContain("<select");
+    expect(markup).toContain(msg("settings.org.sponsors.name"));
+    expect(markup).toContain(msg("settings.org.sponsors.link"));
+    expect(markup).toContain(msg("sponsors.logoLabel"));
+    // the pair: the editor is the form (a Cancel), not the add box
+    expect(propsOf(form!).onCancel).toBeDefined();
   });
 });
 

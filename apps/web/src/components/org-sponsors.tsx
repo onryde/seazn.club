@@ -4,18 +4,18 @@
 // first-class `sponsors` table entries; the list (components/sponsors/sponsor-list.tsx)
 // groups them by their deal's tier and gives each its deal's chip and one next
 // action (sponsor deals PR 2, Task 14). This island owns the state and every
-// write; the list is stateless. "Add a sponsor" asks for a name, a logo and a
-// link only - the tier and where a sponsor shows come from its deal - while the
-// EDIT form still places a sponsor with no deal by hand. Tiers above partner and
-// per-competition scoping are Pro (`sponsors.tiers`); without it the manager is
-// the free un-tiered strip with an upsell note.
-import { useId, useRef, useState } from "react";
+// write; the list is stateless. "Add a sponsor" and the EDIT form both ask for a
+// name, a logo and a link only - the tier and where a sponsor shows come from its
+// deal (owner, 2026-11-11: "why showing tier in sponsor edit?"), and the sponsor's
+// page shows them read-only. The API still takes both on a PATCH. Tiers above
+// partner and per-competition scoping are Pro (`sponsors.tiers`); without it the
+// manager is the free un-tiered strip with an upsell note.
+import { useRef, useState } from "react";
 import Link from "@/components/ui/console-link";
 import { ImagePlus } from "lucide-react";
 import { useViewerTz } from "@/components/client-time";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
-import { TIER_MSG } from "@/components/sponsors/tier-labels";
 import { SponsorList, dealPrice, groupTierOf, sameOrderBand, type DealWrite } from "@/components/sponsors/sponsor-list";
 import { AddDealSheet, type CreateDealBody } from "@/components/sponsors/add-deal-sheet";
 import { SponsorSheet, SponsorSheetBody } from "@/components/sponsors/sponsor-sheet";
@@ -61,7 +61,7 @@ export interface SponsorItem {
   /** The deal the row shows (sponsor deals D8: `pickRowDeal` over the sponsor's deals), or null when the sponsor has none - the
    *  WHOLE deal, as the list reads send it: the chip, the sub-line and the row's one action all read it. */
   deal: SponsorDeal | null;
-  /** A live deal owns this sponsor's tier, competition, stream and status (D9): the form offers none of them. */
+  /** A live deal owns this sponsor's tier, competition, stream and status (D9): the stream box is locked, and the page says why. */
   locked_by_deal: boolean;
   /** A deal waits to go live (draft, awaiting payment or approval, scheduled): it holds the sponsor's status (D9). */
   has_open_deal: boolean;
@@ -119,16 +119,12 @@ export interface SponsorsHubData {
 interface Draft {
   name: string;
   url: string;
-  tier: SponsorTier;
-  competition_id: string;
   /** Picked in the form, uploaded on submit. */
   file: File | null;
   /** Object URL preview for the picked file, else the stored logo. */
   preview: string | null;
 }
-const EMPTY_DRAFT: Draft = {
-  name: "", url: "", tier: "partner", competition_id: "", file: null, preview: null,
-};
+const EMPTY_DRAFT: Draft = { name: "", url: "", file: null, preview: null };
 
 /** The route each deal write POSTs. Send and Resend invoice are one route: the server sends a draft's first invoice and re-sends an
  *  open one's the same way (ensureDealCheckout). */
@@ -178,7 +174,8 @@ function isValidSponsorUrl(raw: string): boolean {
   }
 }
 
-/** The one sponsor form — add and edit share it; logo travels with it.
+/** The one sponsor form — add and edit share it; logo travels with it. A sponsor is a name, a link and a logo here: its tier and
+ *  where it shows come from its deals (spec §6.1; owner, 2026-11-11), so the form has no control for either, on any plan.
  *  Hoisted out of OrgSponsors: a nested component definition would remount
  *  (and drop focus) on every parent render. */
 export function SponsorForm({
@@ -188,10 +185,6 @@ export function SponsorForm({
   onCancel,
   submitLabel,
   busy,
-  hasTiers,
-  showPlacement,
-  lockedByDeal,
-  competitions,
   onPickLogo,
   compact = false,
 }: {
@@ -201,15 +194,6 @@ export function SponsorForm({
   onCancel?: () => void;
   submitLabel: string;
   busy: boolean;
-  hasTiers: boolean;
-  /** Offer the tier and competition at all (only on a plan with tiers). Off on the ADD form: a new sponsor is a name, a logo and a
-   *  link, and its tier and where it shows come from its first deal (spec §6.1). On when EDITING, where a sponsor with no deal is
-   *  placed by hand. */
-  showPlacement: boolean;
-  /** A live deal sets the tier and the competition (D9): both selects are disabled and the form says why. Name, link and logo
-   *  stay editable. Always false on the add form. */
-  lockedByDeal: boolean;
-  competitions: { id: string; name: string }[];
   onPickLogo: (file: File, set: (fn: (prev: Draft) => Draft) => void) => void;
   /** One column of fields under the logo, whatever the viewport: for the sponsor page's side panel, where `sm:` (a VIEWPORT query)
    *  would put two fields side by side in a 360px panel. The list's inline editor and the add box leave it off. */
@@ -219,8 +203,6 @@ export function SponsorForm({
   // House uploader pattern (org-logo, prose-editor): a real button clicks a
   // ref'd hidden input — label-wrapped file inputs misfire in some browsers.
   const fileRef = useRef<HTMLInputElement>(null);
-  // The deal-lock note's id: the disabled selects point at it so the reason is announced with them, not only shown.
-  const lockNoteId = useId();
   const urlInvalid = value.url.trim() !== "" && !isValidSponsorUrl(value.url);
   return (
       <div className="flex flex-wrap items-start gap-4">
@@ -253,7 +235,7 @@ export function SponsorForm({
           }}
         />
         <div className={compact ? "w-full min-w-0" : "min-w-0 flex-1"}>
-          {/* 2-col rows: name+link, then tier+competition; single stack on mobile (and always, when compact). */}
+          {/* Name and link side by side from sm; a single stack on mobile (and always, when compact). */}
           <div className={`grid gap-3 ${compact ? "" : "sm:grid-cols-2"}`}>
             <label className="block">
               <span className="label">{msg("settings.org.sponsors.name")}</span>
@@ -279,52 +261,6 @@ export function SponsorForm({
                 </span>
               ) : null}
             </label>
-            {showPlacement && hasTiers ? (
-              <label className="block">
-                <span className="label">{msg("sponsors.tierLabel")}</span>
-                <select
-                  value={value.tier}
-                  disabled={busy || lockedByDeal}
-                  aria-describedby={lockedByDeal ? lockNoteId : undefined}
-                  onChange={(e) =>
-                    onChange((prev) => ({ ...prev, tier: e.target.value as SponsorTier }))
-                  }
-                  className="input w-full"
-                >
-                  {SPONSOR_TIERS.map((t) => (
-                    <option key={t} value={t}>
-                      {msg(TIER_MSG[t])}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-            {showPlacement && hasTiers ? (
-              <label className="block">
-                <span className="label">{msg("sponsors.scopeLabel")}</span>
-                <select
-                  value={value.competition_id}
-                  disabled={busy || lockedByDeal}
-                  aria-describedby={lockedByDeal ? lockNoteId : undefined}
-                  onChange={(e) =>
-                    onChange((prev) => ({ ...prev, competition_id: e.target.value }))
-                  }
-                  className="input w-full"
-                >
-                  <option value="">{msg("sponsors.scopeAll")}</option>
-                  {competitions.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-            {showPlacement && hasTiers && lockedByDeal ? (
-              <p id={lockNoteId} className={`text-xs text-slate-500 ${compact ? "" : "sm:col-span-2"}`} data-testid="sponsor-locked-note">
-                {msg("sponsors.deal.lockedNote")}
-              </p>
-            ) : null}
           </div>
           <div className="mt-3 flex items-center gap-2">
             <button
@@ -515,8 +451,6 @@ export function OrgSponsors({
     setEdit({
       name: s.name,
       url: s.url ?? "",
-      tier: s.tier,
-      competition_id: s.competition_id ?? "",
       file: null,
       preview: s.logo_path,
     });
@@ -524,16 +458,12 @@ export function OrgSponsors({
 
   function saveEdit(s: SponsorItem) {
     void run(async () => {
-      // Send only what changed — promoting tier / scoping is the Pro line, and
-      // a no-op field must not trip the gate on a downgraded org's legacy row.
+      // Send only what changed. The editor is a name, a link and a logo: the sponsor's tier and scope are its deals' to set (the API
+      // still takes them, for callers that are not this screen), so a save from here never carries either.
       const patch: Record<string, unknown> = {};
       if (edit.name.trim() && edit.name.trim() !== s.name) patch.name = edit.name.trim();
       const url = normalizeUrl(edit.url) || null;
       if (url !== s.url) patch.url = url;
-      if (edit.tier !== s.tier) patch.tier = edit.tier;
-      if ((edit.competition_id || null) !== s.competition_id) {
-        patch.competition_id = edit.competition_id || null;
-      }
       if (edit.file) patch.logo_path = await uploadLogo(edit.file);
       if (Object.keys(patch).length > 0) {
         await api(`/${s.id}`, { method: "PATCH", body: JSON.stringify(patch) });
@@ -795,11 +725,6 @@ export function OrgSponsors({
                 onCancel={() => setEditingId(null)}
                 submitLabel={msg("sponsors.save")}
                 busy={busy}
-                hasTiers={hasTiers}
-                // A live deal owns the tier and the competition (D9, F28): the page shows them as the deal's and offers no control.
-                showPlacement={!selected.locked_by_deal}
-                lockedByDeal={false}
-                competitions={competitions}
                 onPickLogo={pickLogo}
                 compact
               />
@@ -841,10 +766,6 @@ export function OrgSponsors({
               onSubmit={create}
               submitLabel={msg("settings.org.sponsors.add")}
               busy={busy}
-              hasTiers={hasTiers}
-              showPlacement={false}
-              lockedByDeal={false}
-              competitions={competitions}
               onPickLogo={pickLogo}
             />
             {!hasTiers ? (
@@ -875,10 +796,6 @@ export function OrgSponsors({
               onCancel={() => setEditingId(null)}
               submitLabel={msg("sponsors.save")}
               busy={busy}
-              hasTiers={hasTiers}
-              showPlacement
-              lockedByDeal={s.locked_by_deal}
-              competitions={competitions}
               onPickLogo={pickLogo}
             />
           )}

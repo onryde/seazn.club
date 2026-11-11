@@ -580,6 +580,7 @@
   "sponsors.sheet.off": "Non",
   "sponsors.sheet.tierNow": "Niveau actuel : {now}. {next} quand l'accord sera en ligne.",
   "sponsors.sheet.scopeNow": "Périmètre actuel : {now}. {next} quand l'accord sera en ligne.",
+  "sponsors.sheet.placementNote": "Un accord définit le niveau et l'endroit où ce sponsor apparaît.",
   "sponsors.sheet.deals": "Accords",
   "sponsors.sheet.current": "En cours",
   "sponsors.sheet.past": "Passés",

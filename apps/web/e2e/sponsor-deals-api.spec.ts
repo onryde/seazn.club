@@ -298,17 +298,20 @@ test("a sponsor under a live deal: On stream tick, tier and competition are lock
     await expect(page.getByTestId(`on-stream-locked-${freeId}`), `${width}: and carries no note`).toHaveCount(0);
     await expectNoHorizontalScroll(page);
 
-    // Sponsors tab: the edit form's tier and competition are locked, with the same note.
+    // Sponsors tab: the edit form is a name, a link and a logo - no tier or competition control at all, so no lock note either
+    // (owner, 2026-11-11: "why showing tier in sponsor edit?"; a deal sets those two, the sponsor's page shows them read-only). It
+    // used to draw both as selects, disabled for this sponsor with a note.
     await page.goto(sponsorsUrl(org.slug, "sponsors"));
     // Below md the row's Edit sits behind its ⋯ (sponsor deals Task 14); the helper opens the fold only where the ⋯ is on screen.
     await openSponsorRowTools(page, LONG);
     await page.getByRole("button", { name: ui("sponsors.edit", { name: LONG }) }).click();
-    const note = page.getByTestId("sponsor-locked-note");
-    await expect(note, `${width}: the locked edit form says why`).toHaveText(ui("sponsors.deal.lockedNote"));
-    const fields = note.locator("xpath=..");
-    await expect(fields.getByLabel(ui("sponsors.tierLabel")), `${width}: tier is the deal's`).toBeDisabled();
-    await expect(fields.getByLabel(ui("sponsors.scopeLabel")), `${width}: scope is the deal's`).toBeDisabled();
-    await expect(fields.getByLabel(ui("settings.org.sponsors.name")), `${width}: the name stays editable`).toBeEnabled();
+    // The row being edited is the one that holds a Cancel: counted, so the negatives below are never asserted on nothing.
+    const editRow = page.getByTestId("sponsor-row").filter({ has: page.getByRole("button", { name: ui("confirm.cancel"), exact: true }) });
+    await expect(editRow, `${width}: exactly one row is open for editing`).toHaveCount(1);
+    await expect(editRow.getByLabel(ui("settings.org.sponsors.name")), `${width}: the name is editable`).toBeEnabled();
+    await expect(editRow.getByLabel(ui("settings.org.sponsors.link")), `${width}: the link is editable`).toBeEnabled();
+    await expect(editRow.locator("select"), `${width}: no tier or competition select, even for a sponsor a live deal owns`).toHaveCount(0);
+    await expect(editRow.getByTestId("sponsor-locked-note"), `${width}: and no note about locked fields that are not there`).toHaveCount(0);
     await expectNoHorizontalScroll(page);
 
     // Packages tab (the price list since Task 18): the package is a card, and counts this sponsor - the one with the long name - as

@@ -1,8 +1,9 @@
 // Sponsor deals, Task 12 - the Sponsors tab's manager (components/org-sponsors.tsx) on the deal API.
 //
 // Three things changed for a person using it, each pinned here from the side a person meets it on:
-//   1. A sponsor under a LIVE deal has its tier and competition controls disabled, with the deal's reason beside them
-//      (`locked_by_deal`, D9): the deal owns those fields, and a PATCH of either answers 409 `sponsor_locked_by_deal`.
+//   1. The EDIT form has no tier or competition control at all (owner, 2026-11-11: "why showing tier in sponsor edit?"): a sponsor's
+//      tier and scope are its deals' to set, so the editor is a name, a link and a logo, on every plan and under every deal state. (A
+//      LIVE deal still owns the stream box and a PATCH of the tier or scope still answers 409 `sponsor_locked_by_deal`, D9.)
 //   2. Deleting a sponsor that has a deal asks first - in words that match the server's rule (deals go with the sponsor) - and a
 //      refusal (409 `sponsor_has_deal_history`, `sponsor_has_open_checkout`) reads the DICTIONARY's words, never the server's.
 //   3. The retired "Delete a paid placement?" promise (the server now refuses that delete) is gone.
@@ -19,8 +20,8 @@
 // Every sweep reports how many it checked (TEST-STRATEGY: zero is a failure).
 //
 // Killers (one at a time, restore from a cp backup):
-//   K1  lock         drop `|| lockedByDeal` from the tier / competition selects' `disabled` -> "the selects are disabled"
-//   K2  wiring       `lockedByDeal={s.locked_by_deal}` -> `lockedByDeal={false}`           -> "edit passes the row's lock to the form"
+//   K1  selects      draw a tier <select> in SponsorForm again                              -> "no tier or competition control"
+//   K2  draft        `startEdit` puts `tier` back into the edit draft                        -> "the edit draft is a name, a link and a logo"
 //   K3  delete ask   drop the `s.deal` arm of the confirm guard                            -> "a sponsor with a deal asks first"
 //   K4  mapped       `msg(sponsorSaveErrorKey(err))` -> `err.message`                      -> "a refusal reads the dictionary's words"
 //   K5  show again   offer "Show on site again" on every row                                -> "offered exactly where the server accepts it"
@@ -31,7 +32,8 @@ import type { ReactElement } from "react";
 const confirmMock = vi.hoisted(() => vi.fn<(opts?: unknown) => Promise<boolean>>(async () => true));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMock }));
 
-import { OrgSponsors, SponsorForm, type SponsorItem, type SponsorsHubData } from "@/components/org-sponsors";
+import { OrgSponsors, SPONSOR_TIERS, SponsorForm, type SponsorItem, type SponsorsHubData } from "@/components/org-sponsors";
+import { TIER_MSG } from "@/components/sponsors/tier-labels";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { expandSponsorTree } from "@/components/sponsors/__tests__/_sponsor-tree";
 import type { PaymentStatus, SponsorDeal } from "@/lib/sponsor-deals";
@@ -76,77 +78,42 @@ const dealOf = (id: string, payment_status: PaymentStatus, over: Partial<Sponsor
 });
 const DEAL = dealOf("d1", "none");
 
-const DRAFT = { name: "Name", url: "", tier: "gold" as const, competition_id: "", file: null, preview: null };
+const DRAFT = { name: "Name", url: "", file: null, preview: null };
 
 function formMarkup(over: Record<string, unknown> = {}): string {
   return renderToStaticMarkup(
-    <SponsorForm
-      value={DRAFT}
-      onChange={() => {}}
-      onSubmit={() => {}}
-      submitLabel="Save"
-      busy={false}
-      hasTiers
-      showPlacement
-      lockedByDeal={false}
-      competitions={COMPETITIONS}
-      onPickLogo={() => {}}
-      {...over}
-    />,
+    <SponsorForm value={DRAFT} onChange={() => {}} onSubmit={() => {}} submitLabel="Save" busy={false} onPickLogo={() => {}} {...over} />,
   );
 }
-/** The opening tag of the `<select>` whose option list holds `needle`. */
-const selectTagHolding = (html: string, needle: string): string => {
-  const m = [...html.matchAll(/<select\b[^>]*>[\s\S]*?<\/select>/g)].find((x) => x[0].includes(needle));
-  if (!m) throw new Error(`no <select> holds ${needle}`);
-  return /^<select\b[^>]*>/.exec(m[0])![0];
-};
 const isDisabled = (tag: string) => /\sdisabled(=|\s|>)/.test(tag);
 
-describe("the form: a live deal owns the tier and the competition (sponsor deals D9)", () => {
-  it("locked: both selects are disabled and the deal's reason is on the form; the name and link stay editable", () => {
-    const html = formMarkup({ lockedByDeal: true });
-    expect(isDisabled(selectTagHolding(html, msg("sponsors.tier.gold"))), "tier").toBe(true);
-    expect(isDisabled(selectTagHolding(html, "Spring Cup")), "competition").toBe(true);
-    expect(flat(html)).toContain(msg("sponsors.deal.lockedNote"));
-    expect(msg("sponsors.deal.lockedNote"), "the brief's words").toBe("Set by the live deal");
-    // The pair: the fields a deal does NOT own are still typeable, and the save button is not disabled by the lock.
+/** Every word the old tier / competition controls drew: the two labels, the "all competitions" option, each tier's name and the
+ *  deal-lock note. Typed from the dictionary keys, never from the form. */
+const PLACEMENT_WORDS = (): string[] => [
+  msg("sponsors.tierLabel"),
+  msg("sponsors.scopeLabel"),
+  msg("sponsors.scopeAll"),
+  msg("sponsors.deal.lockedNote"),
+  ...SPONSOR_TIERS.map((tier) => msg(TIER_MSG[tier])),
+  ...COMPETITIONS.map((c) => c.name),
+];
+
+describe("the form: a name, a link and a logo - no tier or competition control (owner, 2026-11-11)", () => {
+  it("drawn on its own it is the name and link boxes, the logo button and Save, and nothing that places the sponsor (the positive pair of the sweeps below)", () => {
+    const html = formMarkup();
+    expect(html, "no select of any kind").not.toContain("<select");
+    expect(html, "no lock note").not.toContain("sponsor-locked-note");
+    const words = PLACEMENT_WORDS();
+    expect(words.length, "premise: the sweep names the two labels, the option, the note, four tiers and a competition").toBe(4 + SPONSOR_TIERS.length + COMPETITIONS.length);
+    for (const w of words) expect(flat(html), `the form says "${w}"`).not.toContain(w);
+    // The positive pair: what the form IS.
+    expect(flat(html)).toContain(msg("settings.org.sponsors.name"));
+    expect(flat(html)).toContain(msg("settings.org.sponsors.link"));
+    expect(flat(html)).toContain(msg("sponsors.logoLabel"));
     const inputs = [...html.matchAll(/<input\b[^>]*>/g)].map((m) => m[0]).filter((tag) => !/type="file"/.test(tag));
-    expect(inputs.length, "premise: the form has its text inputs").toBeGreaterThanOrEqual(2);
+    expect(inputs, "name and link").toHaveLength(2);
     for (const tag of inputs) expect(isDisabled(tag), tag).toBe(false);
     expect(isDisabled(/<button\b[^>]*>(?:(?!<\/button>)[\s\S])*Save<\/button>/.exec(html)![0].match(/^<button\b[^>]*>/)![0])).toBe(false);
-  });
-
-  it("locked: the reason is the selects' accessible description - both selects point at the one note that exists (fix round 1, m1)", () => {
-    const html = formMarkup({ lockedByDeal: true });
-    const noteTag = /<p\b[^>]*data-testid="sponsor-locked-note"[^>]*>/.exec(html)?.[0];
-    expect(noteTag, "premise: the locked form carries the note").toBeDefined();
-    const noteId = /\sid="([^"]+)"/.exec(noteTag!)?.[1];
-    expect(noteId, "the note has an id to be pointed at").toBeTruthy();
-    expect(html.split(`id="${noteId}"`).length - 1, "and exactly one element carries it").toBe(1);
-    const describedBy = (tag: string) => /\saria-describedby="([^"]+)"/.exec(tag)?.[1];
-    expect(describedBy(selectTagHolding(html, msg("sponsors.tier.gold"))), "tier").toBe(noteId);
-    expect(describedBy(selectTagHolding(html, "Spring Cup")), "competition").toBe(noteId);
-  });
-
-  it("unlocked: no note, and the selects describe nothing (a dangling aria-describedby would name an element that is not there)", () => {
-    const html = formMarkup({ lockedByDeal: false });
-    expect(html).not.toContain("sponsor-locked-note");
-    expect(selectTagHolding(html, msg("sponsors.tier.gold"))).not.toContain("aria-describedby");
-    expect(selectTagHolding(html, "Spring Cup")).not.toContain("aria-describedby");
-  });
-
-  it("unlocked: the selects are enabled and no reason is shown (the pair)", () => {
-    const html = formMarkup({ lockedByDeal: false });
-    expect(isDisabled(selectTagHolding(html, msg("sponsors.tier.gold")))).toBe(false);
-    expect(isDisabled(selectTagHolding(html, "Spring Cup"))).toBe(false);
-    expect(flat(html)).not.toContain(msg("sponsors.deal.lockedNote"));
-  });
-
-  it("a plan without tiers shows no selects, so no reason either - even for a locked sponsor", () => {
-    const html = formMarkup({ lockedByDeal: true, hasTiers: false });
-    expect(html).not.toContain("<select");
-    expect(flat(html)).not.toContain(msg("sponsors.deal.lockedNote"));
   });
 });
 
@@ -196,12 +163,12 @@ const HUB: SponsorsHubData = {
   reportDefaults: null,
 };
 
-function mount(rows: SponsorItem[], opts: { canEdit?: boolean; sponsorId?: string } = {}) {
+function mount(rows: SponsorItem[], opts: { canEdit?: boolean; sponsorId?: string; hasTiers?: boolean } = {}) {
   const props: Parameters<typeof OrgSponsors>[0] = {
     orgId: ORG,
     initialSponsors: rows,
     competitions: COMPETITIONS,
-    hasTiers: true,
+    hasTiers: opts.hasTiers ?? true,
     billingHref: "/billing",
     canEdit: opts.canEdit ?? true,
     hub: opts.sponsorId === undefined ? HUB : { ...HUB, sponsorId: opts.sponsorId },
@@ -214,7 +181,7 @@ function mount(rows: SponsorItem[], opts: { canEdit?: boolean; sponsorId?: strin
     return el;
   };
   const form = (): ReactElement => {
-    const el = island.tree().find((e) => "lockedByDeal" in propsOf(e) && "submitLabel" in propsOf(e) && propsOf(e).onCancel !== undefined);
+    const el = island.tree().find((e) => e.type === SponsorForm && propsOf(e).onCancel !== undefined);
     if (!el) throw new Error("no edit form is open");
     return el;
   };
@@ -245,21 +212,59 @@ function mount(rows: SponsorItem[], opts: { canEdit?: boolean; sponsorId?: strin
   };
 }
 
-describe("Edit hands the form the ROW's lock (the join between the list and the form)", () => {
-  it("a locked sponsor opens its form locked; an unlocked one opens it free (both checked)", () => {
-    const locked = mount([row({ id: "a", name: LONG_NAME, deal: DEAL, locked_by_deal: true })]);
-    locked.edit(LONG_NAME);
-    expect(propsOf(locked.form()).lockedByDeal).toBe(true);
-    const free = mount([row({ id: "b", name: "Quay Chandlers" })]);
-    free.edit("Quay Chandlers");
-    expect(propsOf(free.form()).lockedByDeal).toBe(false);
+describe("Edit opens a form that is a name, a link and a logo, whatever the plan or the sponsor's deals (the join between the list and the form)", () => {
+  const LIVE = dealOf("dl", "paid");
+  const OPEN = dealOf("do", "pending", { deal_status: "awaiting_payment" });
+  const ENDED = dealOf("de", "paid", { deal_status: "ended", ended_at: "2026-09-01T10:00:00.000Z", ended_reason: "expired" });
+  const ROWS: [string, Partial<SponsorItem>][] = [
+    ["a live deal", { deal: LIVE, locked_by_deal: true }],
+    ["an open deal", { deal: OPEN, has_open_deal: true, status: "inactive" }],
+    ["every deal ended", { deal: ENDED, status: "inactive" }],
+    ["no deal", {}],
+  ];
+
+  it("the open editor draws no select and no placement words: both plans x four deal states (8 checked)", () => {
+    let checked = 0;
+    for (const hasTiers of [true, false]) {
+      for (const [label, over] of ROWS) {
+        const m = mount([row({ id: "a", name: "Quay Chandlers", tier: "gold", competition_id: "c1", ...over })], { hasTiers });
+        m.edit("Quay Chandlers");
+        const html = renderToStaticMarkup(m.form());
+        expect(html, `${label}, tiers=${hasTiers}: a select`).not.toContain("<select");
+        for (const w of PLACEMENT_WORDS()) expect(flat(html), `${label}, tiers=${hasTiers}: says "${w}"`).not.toContain(w);
+        checked++;
+      }
+    }
+    expect(checked).toBe(8);
   });
 
-  it("the ADD form is never locked (a new sponsor has no deal)", () => {
+  it("the draft it is handed holds exactly a name, a link and a logo - the stored tier and scope are not in it", () => {
+    const m = mount([row({ id: "a", name: "Quay Chandlers", tier: "gold", competition_id: "c1", url: "https://quay.example" })]);
+    m.edit("Quay Chandlers");
+    const value = propsOf(m.form()).value as Record<string, unknown>;
+    expect(Object.keys(value).sort()).toEqual(["file", "name", "preview", "url"]);
+    expect(value.name).toBe("Quay Chandlers");
+    expect(value.url).toBe("https://quay.example");
+  });
+
+  it("the ADD form is the same form (a new sponsor has no deal): no placement either, and no Cancel", () => {
     const m = mount([]);
-    const add = m.island.tree().find((e) => "lockedByDeal" in propsOf(e) && "submitLabel" in propsOf(e));
+    const add = m.island.tree().find((e) => e.type === SponsorForm);
     expect(add, "premise: the add form is on the page").toBeDefined();
-    expect(propsOf(add!).lockedByDeal).toBe(false);
+    expect(propsOf(add!).onCancel, "the add form has no Cancel").toBeUndefined();
+    expect(renderToStaticMarkup(add!)).not.toContain("<select");
+  });
+
+  it("saving a sponsor that holds a stored tier and scope PATCHes the changed name and link ALONE - neither rides along", async () => {
+    answer = (url, method) => (method === "GET" ? { status: 200, body: { data: [] } } : { status: 200, body: { data: {} } });
+    const m = mount([row({ id: "b", name: "Old name", tier: "silver", competition_id: "c1" })]);
+    m.edit("Old name");
+    (propsOf(m.form()).onChange as (fn: (p: typeof DRAFT) => typeof DRAFT) => void)((p) => ({ ...p, name: "New name", url: "new.example.com" }));
+    (propsOf(m.form()).onSubmit as () => void)();
+    await flush();
+    const patches = calls.filter((c) => c.method === "PATCH");
+    expect(patches.map((c) => c.url)).toEqual([`/api/v1/orgs/${ORG}/sponsors/b`]);
+    expect(patches[0]!.body).toEqual({ name: "New name", url: "https://new.example.com" });
   });
 
   it("saving a locked sponsor's name sends the name ALONE - the disabled tier and scope never ride the PATCH", async () => {

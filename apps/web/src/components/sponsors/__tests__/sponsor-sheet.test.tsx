@@ -10,7 +10,8 @@
 // Every sweep reports how many it checked (TEST-STRATEGY: zero is a failure).
 //
 // Killers (one at a time, restore from a cp backup):
-//   S1  F28 live        render the tier <select> (the editor's showPlacement) while locked        -> "a live deal: no tier or scope control"
+//   S1  editor          render a tier <select> in the sponsor page's editor                       -> "the editor has no tier or competition control"
+//   S1b placement note  drop the placement note (hasTiers, not locked)                              -> "a deal sets the tier: the note"
 //   S2  F28 live        show the 'Tier now' line for a live deal                                  -> "a live deal: no 'Tier now' line"
 //   S3  F28 open        drop the 'Tier now' line for an open deal                                 -> "an open deal: the line"
 //   S4  actions         draw every action on every deal (ignore allowedActions)                   -> "buttons are allowedActions"
@@ -178,11 +179,11 @@ describe("Details: a LIVE deal owns the tier, scope and stream; an OPEN deal cha
 
   // The sponsor's STORED tier differs from the deal's in every case that has one, so a component that read the wrong source
   // (the stored tier for a live deal, the deal's for a closed one) shows the wrong word.
-  const CASES: { label: string; s: SponsorItem; deals: SponsorDeal[]; shownTier: string; shownScope: string; note: boolean; tierNow: boolean; editorPlacement: boolean; stream: "locked" | "free" }[] = [
-    { label: "a live deal", s: sponsor({ tier: "partner", locked_by_deal: true, deal: LIVE_DEAL }), deals: [LIVE_DEAL], shownTier: "Gold", shownScope: "Season 2026/27", note: true, tierNow: false, editorPlacement: false, stream: "locked" },
-    { label: "an open deal", s: sponsor({ tier: "partner", has_open_deal: true, status: "inactive", deal: OPEN_DEAL }), deals: [OPEN_DEAL], shownTier: "Partner", shownScope: "All competitions", note: false, tierNow: true, editorPlacement: true, stream: "free" },
-    { label: "no deal", s: sponsor({ tier: "silver", deal: null }), deals: [], shownTier: "Silver", shownScope: "All competitions", note: false, tierNow: false, editorPlacement: true, stream: "free" },
-    { label: "every deal ended", s: sponsor({ tier: "silver", status: "inactive", deal: ENDED_DEAL }), deals: [ENDED_DEAL], shownTier: "Silver", shownScope: "All competitions", note: false, tierNow: false, editorPlacement: true, stream: "free" },
+  const CASES: { label: string; s: SponsorItem; deals: SponsorDeal[]; shownTier: string; shownScope: string; note: boolean; tierNow: boolean; stream: "locked" | "free" }[] = [
+    { label: "a live deal", s: sponsor({ tier: "partner", locked_by_deal: true, deal: LIVE_DEAL }), deals: [LIVE_DEAL], shownTier: "Gold", shownScope: "Season 2026/27", note: true, tierNow: false, stream: "locked" },
+    { label: "an open deal", s: sponsor({ tier: "partner", has_open_deal: true, status: "inactive", deal: OPEN_DEAL }), deals: [OPEN_DEAL], shownTier: "Partner", shownScope: "All competitions", note: false, tierNow: true, stream: "free" },
+    { label: "no deal", s: sponsor({ tier: "silver", deal: null }), deals: [], shownTier: "Silver", shownScope: "All competitions", note: false, tierNow: false, stream: "free" },
+    { label: "every deal ended", s: sponsor({ tier: "silver", status: "inactive", deal: ENDED_DEAL }), deals: [ENDED_DEAL], shownTier: "Silver", shownScope: "All competitions", note: false, tierNow: false, stream: "free" },
   ];
 
   it("the four cases show the right source, the lock note only for a live deal, and 'Tier now X. Y when the deal goes live' only for an open one (4 checked)", () => {
@@ -193,6 +194,10 @@ describe("Details: a LIVE deal owns the tier, scope and stream; an OPEN deal cha
       expect(textOfMarkup(findOne(markup, "sponsor-sheet-detail-scope").outer), `${c.label}: scope`).toBe(c.shownScope);
       expect(findAll(markup, "sponsor-sheet-locked-note").length, `${c.label}: lock note`).toBe(c.note ? 1 : 0);
       if (c.note) expect(textOfMarkup(findOne(markup, "sponsor-sheet-locked-note").outer)).toBe(msg("sponsors.deal.lockedNote"));
+      // Owner, 2026-11-11: the tier and scope are read-only, and a deal sets them. The lock note says so for a live deal; every other
+      // case (hasTiers) carries the placement note instead - never both, never neither. Typed from the brief, not read from the page.
+      expect(findAll(markup, "sponsor-sheet-placement-note").length, `${c.label}: placement note`).toBe(c.note ? 0 : 1);
+      if (!c.note) expect(textOfMarkup(findOne(markup, "sponsor-sheet-placement-note").outer), `${c.label}: its words`).toBe("A deal sets the tier and where this sponsor shows.");
       expect(findAll(markup, "sponsor-sheet-tier-now").length, `${c.label}: Tier now`).toBe(c.tierNow ? 1 : 0);
       if (c.tierNow) {
         expect(textOfMarkup(findOne(markup, "sponsor-sheet-tier-now").outer), "the brief's line, typed").toBe("Tier now Partner. Gold when the deal goes live.");
@@ -281,6 +286,7 @@ describe("Details: a LIVE deal owns the tier, scope and stream; an OPEN deal cha
     const markup = bodyHtml({ hasTiers: false });
     expect(findAll(markup, "sponsor-sheet-detail-tier")).toHaveLength(0);
     expect(findAll(markup, "sponsor-sheet-detail-scope")).toHaveLength(0);
+    expect(findAll(markup, "sponsor-sheet-placement-note"), "nothing to explain: the tier is not drawn").toHaveLength(0);
     expect(findAll(markup, "sponsor-sheet-detail-name")).toHaveLength(1);
     expect(findAll(markup, "sponsor-sheet-detail-link")).toHaveLength(1);
     expect(findAll(markup, "sponsor-sheet-stream")).toHaveLength(1);
@@ -671,24 +677,34 @@ describe("OrgSponsors opens the sponsor's page for hub.sponsorId and hides the l
     expect(propsOf(editors[0]!).compact, "in the panel it is one column").toBe(true);
   });
 
-  it("F28 in the editor: a live deal -> NO tier/competition control (showPlacement off); an open deal or none -> present and enabled", () => {
+  it("the editor has NO tier or competition control, whatever the sponsor's deals or the plan (owner, 2026-11-11): 3 deal states x 2 plans checked", () => {
     const LIVE = deal({ id: "dl", deal_status: "live", tier: "gold" });
-    const CASES: [string, SponsorItem, SponsorDeal[], boolean][] = [
-      ["a live deal", sponsor({ locked_by_deal: true, deal: LIVE }), [LIVE], false],
-      ["an open deal", sponsor({ has_open_deal: true, deal: deal({ id: "do", deal_status: "draft", payment_status: "pending" }) }), [], true],
-      ["no deal", sponsor(), [], true],
+    const CASES: [string, SponsorItem, SponsorDeal[]][] = [
+      ["a live deal", sponsor({ locked_by_deal: true, deal: LIVE }), [LIVE]],
+      ["an open deal", sponsor({ has_open_deal: true, deal: deal({ id: "do", deal_status: "draft", payment_status: "pending" }) }), []],
+      ["no deal", sponsor(), []],
     ];
     let checked = 0;
-    for (const [label, s, deals, controls] of CASES) {
-      const m = mount([s], hubOf({ deals }));
-      m.tap("sponsor-sheet-edit");
-      const form = m.island.tree().find((e) => e.type === SponsorForm && propsOf(e).onCancel !== undefined)!;
-      const html = renderToStaticMarkup(form);
-      expect(/<select\b/.test(html), `${label}: tier/competition selects`).toBe(controls);
-      if (controls) expect(/<select\b[^>]*\sdisabled/.test(html), `${label}: enabled`).toBe(false);
-      checked++;
+    for (const hasTiers of [true, false]) {
+      for (const [label, s, deals] of CASES) {
+        const m = mount([s], hubOf({ deals }), { hasTiers });
+        m.tap("sponsor-sheet-edit");
+        const form = m.island.tree().find((e) => e.type === SponsorForm && propsOf(e).onCancel !== undefined)!;
+        const html = renderToStaticMarkup(form);
+        expect(/<select\b/.test(html), `${label}, tiers=${hasTiers}: a select`).toBe(false);
+        expect(html, `${label}, tiers=${hasTiers}: a lock note`).not.toContain("sponsor-locked-note");
+        checked++;
+      }
     }
-    expect(checked).toBe(3);
+    expect(checked).toBe(6);
+  });
+
+  it("while the editor is open the Details card holds the editor and not the read-only tier and competition rows (nothing to confuse with a control)", () => {
+    const m = mount([sponsor({ tier: "silver" })], hubOf());
+    m.tap("sponsor-sheet-edit");
+    expect(m.has("sponsor-sheet-editor")).toBe(true);
+    expect(m.has("sponsor-sheet-detail-tier"), "no tier row beside the editor").toBe(false);
+    expect(m.has("sponsor-sheet-placement-note")).toBe(false);
   });
 
   it("saving name and link PATCHes only what changed and closes the editor (the existing saveEdit, now from the page)", async () => {

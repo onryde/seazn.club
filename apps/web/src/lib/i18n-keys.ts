@@ -8081,6 +8081,7 @@ export type DictionaryKey =
   | "sponsors.sheet.onStream"
   | "sponsors.sheet.onStreamShow"
   | "sponsors.sheet.past"
+  | "sponsors.sheet.placementNote"
   | "sponsors.sheet.report"
   | "sponsors.sheet.reportHint"
   | "sponsors.sheet.reportLinks"
