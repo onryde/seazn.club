@@ -17,9 +17,24 @@ export function offeredPanels(offer: Record<PanelKey, boolean>): PanelKey[] {
 /** Remote scoring closes itself after this long with no interaction inside it (owner 2026-11-11). */
 export const REMOTE_SCORING_IDLE_MS = 20_000;
 
+/** The runtime override an e2e flow sets (`page.addInitScript`) to hold Remote scoring open past `REMOTE_SCORING_IDLE_MS`. */
+export const REMOTE_SCORING_IDLE_OVERRIDE_KEY = "__seaznRemoteScoringIdleMs";
+
+/** The idle delay in force: a positive finite override (window global, then NEXT_PUBLIC env) else the 20 s default. */
+export function remoteScoringIdleMs(
+  override: unknown = typeof window === "undefined" ? undefined : (window as unknown as Record<string, unknown>)[REMOTE_SCORING_IDLE_OVERRIDE_KEY],
+  env: unknown = process.env.NEXT_PUBLIC_REMOTE_SCORING_IDLE_MS,
+): number {
+  for (const raw of [override, env]) {
+    const n = typeof raw === "string" && raw.trim() !== "" ? Number(raw) : raw;
+    if (typeof n === "number" && Number.isFinite(n) && n > 0) return n;
+  }
+  return REMOTE_SCORING_IDLE_MS;
+}
+
 /** The idle auto-close of a panel, in ms; null = never closes by itself. Only Remote scoring does. */
 export function autoCloseMsFor(panel: PanelKey): number | null {
-  return panel === "handover" ? REMOTE_SCORING_IDLE_MS : null;
+  return panel === "handover" ? remoteScoringIdleMs() : null;
 }
 
 export interface IdleTimer {

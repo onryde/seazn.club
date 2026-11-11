@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import {
   applyLineupAction,
+  groupKeyOf,
   groupSlots,
   lineupMenuItems,
   primaryControlFor,
@@ -606,7 +607,8 @@ export function LineupEditor({
   } | null>(null);
 
   const inLineup = new Set(slots.map((s) => s.person_id));
-  const startingCount = slots.filter((s) => s.slot === "starting").length;
+  // Players only: a coach or staff row never counts toward "N/M starting" (the expected total is a count of players).
+  const startingCount = slots.filter((s) => groupKeyOf(s) === "starting").length;
   const unmet = unmetPositionMinimums(positionGroups, slots);
   const groups = groupSlots(slots);
   const primary = primaryControlFor({ positionGroupCount: positionGroups.length, pairShaped });

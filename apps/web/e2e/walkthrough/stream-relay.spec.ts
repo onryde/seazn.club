@@ -61,6 +61,7 @@ import {
   fakeRecoveringKey,
 } from "../../src/server/relay/fakes";
 import { FREE_RESTARTS_PER_WINDOW } from "../../src/server/relay/config";
+import { holdRemoteScoringOpen } from "../helpers/console-panels";
 import {
   FAKE_CONNECT_MS,
   POLL_WAIT_MS,
@@ -1617,6 +1618,7 @@ test("A9: the Phone tab offers the SAME controls — membership, order and repea
   const NAVS = 1; // openPhoneTab
   test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 60_000 + NAVS * NAV_MS);
   await page.setViewportSize({ width: 1280, height: 900 });
+  await holdRemoteScoringOpen(page);
   const rig = await seedRelayRig(page);
   await addTargetApi(page, rig.orgId, { label: "A9 destination" });
   const f = rig.fixtures[0]!;

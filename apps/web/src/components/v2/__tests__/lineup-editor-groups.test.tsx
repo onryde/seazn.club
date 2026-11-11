@@ -162,6 +162,18 @@ describe("grouping by slot", () => {
     expect(items.map((i) => i.id)).toEqual(["role", "up", "down", "remove"]);
   });
 
+  it("the header 'N/M starting' counts players only: a staff row slotted 'starting' is not counted", () => {
+    const players = [slot(1, "starting"), slot(2, "starting")];
+    const staffRow = slot(4, "starting", { role: "staff" });
+    expect(editor({ side: sideOf(players) })).toContain("2/2 starting");
+    // adding a staff row must NOT move the count (would read 3/2 if staff counted)
+    const withStaff = editor({ side: sideOf([...players, staffRow]) });
+    expect(withStaff).toContain("2/2 starting");
+    expect(withStaff).not.toContain("3/2 starting");
+    // a coach in place of a player: 1 player starting reads 1/2
+    expect(editor({ side: sideOf([slot(1, "starting"), slot(3, "starting", { role: "coach" })]) })).toContain("1/2 starting");
+  });
+
   it("phone overflow chain: the card, its header and a 43-char name row all carry min-w-0 + truncate (browser proof: mobile.spec.ts hit-test)", () => {
     const long = "Bartholomew Maximilian Featherstonehaugh-Smythe";
     const html = editor({ side: sideOf([slot(1, "starting", { full_name: long })]) });

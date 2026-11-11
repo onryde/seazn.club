@@ -37,3 +37,14 @@ export async function openConsolePanel(page: Page, panel: ConsolePanel, opts: { 
   await consolePanel(page, panel).waitFor({ state: "visible", timeout: 20_000 });
   return true;
 }
+
+/**
+ * Remote scoring closes itself after 20 s idle (owner 2026-11-11). A flow that opens it and then waits (QR render, a print,
+ * a screenshot) holds it open for the whole test: call BEFORE the page's first goto (init script, runs on every navigation).
+ * The default itself is pinned by the unit test, never lowered or removed here.
+ */
+export async function holdRemoteScoringOpen(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    (window as unknown as Record<string, unknown>)["__seaznRemoteScoringIdleMs"] = 3_600_000;
+  });
+}

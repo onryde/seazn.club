@@ -175,6 +175,11 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
       box!.y + box!.height,
       `primary tap target bottom edge (${Math.round(box!.y + box!.height)}px) must sit inside the ${vp.height}px first screen`,
     ).toBeLessThanOrEqual(vp.height);
+    // Chrome down (design 2026-09-02): the panel bar sits BELOW the pad on a phone, so it never pushes the pad off the first screen.
+    if ((await bar.count()) > 0) {
+      const barTop = (await bar.boundingBox())!.y;
+      expect(barTop, `the panel bar (top ${Math.round(barTop)}px) sits below the pad's primary tap (bottom ${Math.round(box!.y + box!.height)}px)`).toBeGreaterThanOrEqual(box!.y + box!.height);
+    }
     // Nothing overlays it at its centre — a 44px box under a sheet is still a miss.
     expect(
       await target.evaluate((el) => {
