@@ -47,15 +47,20 @@ export async function routePosterArt(
   );
 }
 
-/** A PNG of exactly `width` x `height`, flat `fill`: a screenshot of a bare page in a viewport of that size, so the editor's own
- *  `createImageBitmap` measures the real dimensions (a 1920 x 1080 picture must read as wider than 4:5). Flat colour keeps it far under
- *  the 2 MB cap. Its own context: nothing of the caller's session or routes touches it. */
-export async function posterPng(browser: Browser, width: number, height: number, fill: string): Promise<Buffer> {
+/** A PNG of exactly `width` x `height`, flat `fill` (and one line of text, `label`, when given - so a sign-off picture of the editor shows a
+ *  picture and not a blank tile): a screenshot of a bare page in a viewport of that size, so the editor's own `createImageBitmap` measures
+ *  the real dimensions (a 1920 x 1080 picture must read as wider than 4:5). Flat colour keeps it far under the 2 MB cap. Its own context:
+ *  nothing of the caller's session or routes touches it. */
+export async function posterPng(browser: Browser, width: number, height: number, fill: string, label?: string): Promise<Buffer> {
   const ctx = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1 });
   try {
     const page = await ctx.newPage();
     await page.setContent(
-      `<!doctype html><html><body style="margin:0;background:${escapeXml(fill)}"><svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="${width}" height="${height}" fill="${escapeXml(fill)}"/></svg></body></html>`,
+      `<!doctype html><html><body style="margin:0;background:${escapeXml(fill)}"><svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="${width}" height="${height}" fill="${escapeXml(fill)}"/>${
+        label === undefined
+          ? ""
+          : `<text x="${width / 2}" y="${height / 2}" text-anchor="middle" dominant-baseline="middle" font-family="sans-serif" font-size="${Math.round(Math.min(width, height) / 8)}" fill="#ffffff">${escapeXml(label)}</text>`
+      }</svg></body></html>`,
     );
     return await page.screenshot({ type: "png", clip: { x: 0, y: 0, width, height } });
   } finally {

@@ -134,6 +134,16 @@ on:
         required: false
         type: boolean
         default: false
+      # Title sponsor poster (Task 10): OFF unless asked for. On, the same `walkthrough rest 2/2` leg also runs
+      # e2e/walkthrough/title-sponsor-poster-captures.spec.ts with TITLE_POSTER_CAPTURE_DIR set (without it every test there skips)
+      # and uploads the PNGs as the `title-poster-captures` artifact - the owner's sign-off pictures of the competition hero's Title
+      # sponsor poster and the sponsor editor at 320/768/1280 (and one at a phone's real size), never committed. Off (and on every
+      # `push`), both steps are skipped by their `if:`.
+      title_poster_captures:
+        description: "Also capture the Title sponsor poster screens (walkthrough rest 2/2 leg) and upload them as an artifact"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: e2e-${{ inputs.pr || github.ref }}
@@ -1413,6 +1423,42 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sponsor-deals-captures-report
+          path: apps/web/playwright-report
+          retention-days: 7
+
+      # Title sponsor poster (Task 10), the same shape as the sponsor deals captures above: opt-in (`title_poster_captures`), the same
+      # leg, its own artifact name. The spec's own last test refuses a missing, non-PNG or byte-identical capture (AGENTS.md class 10);
+      # the count below refuses an empty directory.
+      - name: Title sponsor poster captures (opt-in)
+        id: title_poster_captures
+        if: ${{ !cancelled() && inputs.title_poster_captures && matrix.slug == 'walkthrough-rest-2' }}
+        timeout-minutes: 10
+        run: |
+          mkdir -p "$TITLE_POSTER_CAPTURE_DIR"
+          npx playwright test --project=walkthrough e2e/walkthrough/title-sponsor-poster-captures.spec.ts
+          shots=$(find "$TITLE_POSTER_CAPTURE_DIR" -name '*.png' | wc -l | tr -d ' ')
+          echo "title poster captures: $shots"
+          if [ "$shots" -eq 0 ]; then echo "::error::the title poster capture step wrote no screenshots"; exit 1; fi
+        working-directory: apps/web
+        env:
+          PLAYWRIGHT_BASE: http://localhost:3000
+          TITLE_POSTER_CAPTURE_DIR: ${{ github.workspace }}/title-poster-captures
+
+      - name: Upload title sponsor poster captures (opt-in)
+        if: ${{ !cancelled() && inputs.title_poster_captures && matrix.slug == 'walkthrough-rest-2' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: title-poster-captures
+          path: title-poster-captures
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
+      - name: Upload title sponsor poster capture report (on failure)
+        if: ${{ !cancelled() && steps.title_poster_captures.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: title-poster-captures-report
           path: apps/web/playwright-report
           retention-days: 7
 
