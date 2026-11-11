@@ -276,7 +276,7 @@ describe.skipIf(!HAS_DB)("(g) placement provenance: the D8 reset undoes only wha
     });
   });
 
-  it("(c2) a hand PATCH of tier, competition_id or on_stream (the On-stream tick) takes the placement over from the swapped-out deal, so the open deal's end keeps it; a name-only patch does not (all four)", async () => {
+  it("(c2) a hand PATCH of tier, competition_id or on_stream (the On-stream tick) takes the placement over from the swapped-out deal, so the open deal's end keeps it; a name-only or poster patch does not (all five)", async () => {
     // A's snapshot is Gold / whole org / on the stream; each patch changes ONE field, and the expected row is the patch over A's
     // snapshot, inactive. The name-only patch leaves the provenance with A, so the end resets (the pair).
     const o = await org();
@@ -286,6 +286,8 @@ describe.skipIf(!HAS_DB)("(g) placement provenance: the D8 reset undoes only wha
       ["competition_id", { competition_id: o.compId }, { ...A, competition_id: o.compId }],
       ["on_stream (the On-stream tick)", { on_stream: false }, { ...A, on_stream: false }],
       ["name only", { name: `Renamed ${uniq()}` }, null],
+      // Spec §6.2: the poster is no placement field, so swapping it during a live deal leaves the deal's provenance on the row.
+      ["poster (a swap during a live deal)", { poster_path: "https://cdn.example/p.png" }, null],
     ];
     let checked = 0;
     for (const [label, patch, kept] of CASES) {

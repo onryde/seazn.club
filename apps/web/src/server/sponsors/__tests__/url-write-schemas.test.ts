@@ -5,6 +5,10 @@
 // with the route's own refusal behind them, keep a non-http(s) url off every public page. zod 4's `.url()` alone accepts
 // `javascript:` and `data:`.
 //
+// Title sponsor poster (Task 2): `poster_path` is the second URL a sponsor stores and the first one a browser's <img> loads, so it
+// is held to the same http(s) rule and to the same 500-character cap as the DB's `sponsors_poster_path_check` (V501). Sponsor
+// placement is sport-agnostic: no sport sweep here.
+//
 // Expected values come from the rule (http and https only), never from `redirectTarget`, the predicate under test.
 import { describe, expect, it } from "vitest";
 import { CreateSponsor, PatchSponsor } from "@/server/api-v1/schemas";
@@ -54,6 +58,50 @@ describe("sponsor url writes: http(s) only (m1)", () => {
   });
 });
 
+/** Spec §6.1/§6.2: an absolute http(s) URL of at most 500 characters. The url list above, plus the two shapes a poster can
+ *  be that a link cannot (a bare storage path, a rooted path: next/image throws on both), a 501-character URL, and the three
+ *  shapes WHATWG `new URL()` is lenient about: it repairs a missing or wrong slash, so `.url()` accepts them while the DB's
+ *  `^https?://` CHECK does not, and the API would answer 500 instead of 400 (review M1). */
+const POSTER_STEM = "https://a.example/";
+const POSTER_MAX = 500;
+const LENIENT_SHAPES = ["https:/a.example/p.png", "https:a.example/p.png", "https:\\\\a.example\\p.png"];
+const POSTER_REFUSED = [
+  ...REFUSED, "logos/a.png", "/relative.png", POSTER_STEM + "x".repeat(POSTER_MAX + 1 - POSTER_STEM.length), ...LENIENT_SHAPES,
+];
+const POSTER_BOUNDARY = POSTER_STEM + "x".repeat(POSTER_MAX - POSTER_STEM.length); // exactly 500: accepted
+
+describe("poster_path: an absolute http(s) url of at most 500 characters, at every write (count reported)", () => {
+  it("every write schema refuses each, on the poster_path field", () => {
+    let checked = 0;
+    for (const [name, schema] of SCHEMAS) {
+      for (const poster_path of POSTER_REFUSED) {
+        const res = schema.safeParse({ name: "Acme", poster_path });
+        expect(res.success, `${name}: ${poster_path.slice(0, 40)}`).toBe(false);
+        expect(res.error!.issues.map((i) => i.path.join(".")), `${name}: ${poster_path.slice(0, 40)}`).toContain("poster_path");
+        checked++;
+      }
+    }
+    expect(LENIENT_SHAPES[2]!.split("\\").length - 1, "premise: the third shape holds three real backslashes").toBe(3);
+    expect(POSTER_REFUSED.length).toBe(REFUSED.length + 3 + LENIENT_SHAPES.length);
+    expect(checked).toBe(SCHEMAS.length * POSTER_REFUSED.length);
+    expect(checked).toBe(4 * 13);
+  });
+
+  it("positive pair: http, https, the 500-character boundary, null and absent are accepted, and the value is kept", () => {
+    let checked = 0;
+    for (const [name, schema] of SCHEMAS) {
+      for (const poster_path of [...ACCEPTED, POSTER_BOUNDARY, null, undefined]) {
+        const res = schema.safeParse({ name: "Acme", poster_path });
+        expect(res.success, `${name}: ${String(poster_path).slice(0, 40)}`).toBe(true);
+        expect(res.data!.poster_path, `${name}: kept as given`).toBe(poster_path);
+        checked++;
+      }
+    }
+    expect(POSTER_BOUNDARY.length).toBe(POSTER_MAX);
+    expect(checked).toBe(SCHEMAS.length * (ACCEPTED.length + 3));
+  });
+});
+
 // Final review 2, m5: each PATCH is its create's `patchOf` twin (lib/zod-patch.ts) plus the PATCH-only `on_stream` - one field
 // list per file, never a second hand-rolled one beside it. The expected key list is the CREATE schema's own (its declaration
 // is the authority), and every field is probed both ways: omitted stays omitted on the patch (the default is the create's
@@ -68,6 +116,7 @@ describe("m5: each sponsor PATCH is its create's patchOf twin, plus on_stream", 
     name: { ok: "Acme", bad: "" },
     url: { ok: "https://sponsor.example/", bad: "javascript:alert(1)" },
     logo_path: { ok: "logos/acme.png", bad: "x".repeat(501) },
+    poster_path: { ok: "https://cdn.example/p.png", bad: "javascript:alert(1)" },
     tier: { ok: "gold", bad: "platinum" },
     competition_id: { ok: "6f1c2b9e-1d2a-4c3b-9e8f-7a6b5c4d3e2f", bad: "not-a-uuid" },
     status: { ok: "pending", bad: "archived" },

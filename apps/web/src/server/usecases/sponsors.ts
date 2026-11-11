@@ -13,7 +13,7 @@ import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { sponsorRefusal } from "@/lib/sponsor-refusals";
 import { requireFeature } from "@/lib/entitlements";
-import { isRedirectableUrl, SPONSOR_URL_HTTP_ONLY } from "@/lib/sponsor-clicks";
+import { isPosterUrl, isRedirectableUrl, SPONSOR_URL_HTTP_ONLY } from "@/lib/sponsor-clicks";
 import { patchOf } from "@/lib/zod-patch";
 import { getStripe } from "@/lib/stripe";
 import {
@@ -71,6 +71,9 @@ export interface SponsorRow extends SponsorDealSummary {
   name: string;
   url: string | null;
   logo_path: string | null;
+  /** The optional 4:5 poster a Title sponsor shows in the public competition hero (V501). Holds the public CDN URL, as
+   *  `logo_path` does; null means the hero draws the logo card instead. */
+  poster_path: string | null;
   tier: SponsorTier;
   display_order: number;
   status: "active" | "pending" | "inactive";
@@ -94,7 +97,7 @@ export interface SponsorRow extends SponsorDealSummary {
 }
 
 const COLS = [
-  "id", "competition_id", "name", "url", "logo_path",
+  "id", "competition_id", "name", "url", "logo_path", "poster_path",
   "tier", "display_order", "status", "click_count", "created_at", "on_stream",
 ] as const;
 
@@ -106,6 +109,10 @@ export const CreateSponsorInput = z.object({
   // redirect target (`/s/[key]`) and a board's href.
   url: z.string().url().max(500).refine(isRedirectableUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
   logo_path: z.string().max(500).nullish(),
+  // Title sponsor poster (V501): an absolute http(s) URL of at most 500 characters, the DB's `sponsors_poster_path_check` is the
+  // second guard. next/image throws on a src that is neither absolute nor `/`-rooted, so unlike `logo_path` this is never a bare
+  // storage path; and a `javascript:` or `data:` value is refused here for the same reason `url` is.
+  poster_path: z.string().url().max(500).refine(isPosterUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
   tier: z.enum(SPONSOR_TIERS).default("partner"),
   competition_id: z.string().uuid().nullish(),
   status: z.enum(["active", "pending", "inactive"]).default("active"),
@@ -234,10 +241,10 @@ export async function createSponsor(
       if (!comp) throw new HttpError(404, "competition not found");
     }
     const [row] = await tx<SponsorRow[]>`
-      insert into sponsors (org_id, competition_id, name, url, logo_path,
+      insert into sponsors (org_id, competition_id, name, url, logo_path, poster_path,
                             tier, display_order, status)
       values (${auth.orgId}, ${input.competition_id ?? null}, ${input.name},
-              ${input.url ?? null}, ${input.logo_path ?? null}, ${input.tier},
+              ${input.url ?? null}, ${input.logo_path ?? null}, ${input.poster_path ?? null}, ${input.tier},
               (select coalesce(max(display_order), -1) + 1 from sponsors
                where competition_id is not distinct from ${input.competition_id ?? null}
                  and tier = ${input.tier}),
@@ -438,6 +445,9 @@ export interface ResolvedSponsor {
   name: string;
   url: string | null;
   logo: string | null;
+  /** The sponsor's 4:5 poster (V501), or null. Only the competition hero's Title placement draws it; every other surface
+   *  carries the field and ignores it. */
+  poster: string | null;
   tier: SponsorTier;
 }
 
@@ -462,9 +472,9 @@ export async function resolveSponsors(
 ): Promise<ResolvedSponsor[]> {
   const onStream = opts.onStream === true;
   const rows = await sql<
-    (Pick<SponsorRow, "id" | "name" | "url" | "tier"> & { logo_path: string | null })[]
+    (Pick<SponsorRow, "id" | "name" | "url" | "tier"> & { logo_path: string | null; poster_path: string | null })[]
   >`
-    select id, name, url, logo_path, tier from sponsors
+    select id, name, url, logo_path, poster_path, tier from sponsors
     where org_id = ${orgId} and status = 'active'
       and (competition_id is null or competition_id = ${competitionId ?? null})
       ${onStream ? sql`and on_stream` : sql``}
@@ -477,6 +487,7 @@ export async function resolveSponsors(
     name: r.name,
     url: r.url,
     logo: r.logo_path,
+    poster: r.poster_path,
     tier: r.tier,
   }));
 

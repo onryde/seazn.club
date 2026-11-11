@@ -71151,6 +71151,16 @@
                               }
                             ]
                           },
+                          "poster_path": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "tier": {
                             "type": "string",
                             "enum": [
@@ -71525,6 +71535,7 @@
                           "name",
                           "url",
                           "logo_path",
+                          "poster_path",
                           "tier",
                           "display_order",
                           "status",
@@ -71554,6 +71565,7 @@
                       "name": "example",
                       "url": "example",
                       "logo_path": "example",
+                      "poster_path": "example",
                       "tier": "title",
                       "display_order": -9007199254740991,
                       "status": "active",
@@ -71797,6 +71809,18 @@
                       }
                     ]
                   },
+                  "poster_path": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 500,
+                        "format": "uri"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "tier": {
                     "default": "partner",
                     "type": "string",
@@ -71840,6 +71864,7 @@
                 "name": "example",
                 "url": "https://example.com/example",
                 "logo_path": "example",
+                "poster_path": "https://example.com/example",
                 "tier": "title",
                 "status": "active"
               }
@@ -71892,6 +71917,16 @@
                           ]
                         },
                         "logo_path": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "poster_path": {
                           "anyOf": [
                             {
                               "type": "string"
@@ -72275,6 +72310,7 @@
                         "name",
                         "url",
                         "logo_path",
+                        "poster_path",
                         "tier",
                         "display_order",
                         "status",
@@ -72302,6 +72338,7 @@
                     "name": "example",
                     "url": "example",
                     "logo_path": "example",
+                    "poster_path": "example",
                     "tier": "title",
                     "display_order": -9007199254740991,
                     "status": "active",
@@ -72599,6 +72636,18 @@
                       }
                     ]
                   },
+                  "poster_path": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 500,
+                        "format": "uri"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "tier": {
                     "type": "string",
                     "enum": [
@@ -72638,7 +72687,7 @@
                 "name": "example",
                 "url": "https://example.com/example",
                 "logo_path": "example",
-                "tier": "title"
+                "poster_path": "https://example.com/example"
               }
             }
           }
@@ -72689,6 +72738,16 @@
                           ]
                         },
                         "logo_path": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "poster_path": {
                           "anyOf": [
                             {
                               "type": "string"
@@ -73072,6 +73131,7 @@
                         "name",
                         "url",
                         "logo_path",
+                        "poster_path",
                         "tier",
                         "display_order",
                         "status",
@@ -73099,6 +73159,7 @@
                     "name": "example",
                     "url": "example",
                     "logo_path": "example",
+                    "poster_path": "example",
                     "tier": "title",
                     "display_order": -9007199254740991,
                     "status": "active",

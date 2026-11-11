@@ -51,10 +51,20 @@ const CASES: Case[] = [
     // a parameter rather than a per-call tier lookup. That is a STRONGER lock
     // than the pair it replaced, not a weaker one: width and height are the
     // same identifier, so they cannot drift apart at all — the CLS failure this
-    // contract exists for. What the callers pass (40 in the hero, 32/24/20 per
-    // board tier) is pinned by `sponsors-board.test.tsx`, which can see values.
+    // contract exists for. What the callers pass (40 for the match board's title
+    // line, 32/24/20 per board tier) is pinned by `sponsors-board.test.tsx`, which can see values.
     width: "px",
     height: "px",
+  },
+  {
+    // The Title sponsor's poster (spec 2026-11-11-title-sponsor-hero-poster §7.5). The contract reads the FIRST `<Image` in the
+    // file, so the poster must stay the first one there (the logo card's image comes after it). Width and height are the poster
+    // constants' own names, so the 4:5 pair the optimiser is asked for cannot drift apart or away from `lib/sponsor-poster.ts`.
+    name: "title-sponsor-showcase.tsx sponsor poster",
+    file: join(SRC_ROOT, "components/public-site/title-sponsor-showcase.tsx"),
+    srcExpr: "slide.poster",
+    width: "POSTER_WIDTH",
+    height: "POSTER_HEIGHT",
   },
   {
     name: "[orgSlug]/layout.tsx org logo",

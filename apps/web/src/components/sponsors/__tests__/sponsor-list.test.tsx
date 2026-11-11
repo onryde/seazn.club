@@ -93,7 +93,7 @@ const DEAL: SponsorDeal = {
 const deal = (over: Partial<SponsorDeal>): SponsorDeal => ({ ...DEAL, ...over });
 
 const sponsor = (over: Partial<SponsorItem> & { id: string; name: string }): SponsorItem => ({
-  competition_id: null, url: null, logo_path: null, tier: "partner", display_order: 0, status: "active", click_count: 0,
+  competition_id: null, url: null, logo_path: null, poster_path: null, tier: "partner", display_order: 0, status: "active", click_count: 0,
   on_stream: false, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false, last_billing_email: null, ...over,
 });
 

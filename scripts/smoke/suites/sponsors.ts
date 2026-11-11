@@ -192,6 +192,54 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
   );
   check("sp public logo links via tracked redirect", shared.body.includes(`/s/${goldId}`));
 
+  // --- Title sponsor poster (spec 2026-11-11): the sponsor API stores a poster url and refuses one that is not http(s); the public page
+  // draws the panel and the band with it, and with it cleared draws the card a sponsor without a poster gets. The competition page is
+  // cached, but an organiser's sponsor write expires it inside the request (`expirePublicSponsors`), so each read below is a fresh one.
+  const scopedId = v1data<{ id: string }>(scoped).id;
+  const sponsorUrl = `/api/v1/orgs/${proOrgId}/sponsors/${scopedId}`;
+  const storedPosterOf = async (): Promise<string | null | undefined> =>
+    v1data<{ id: string; poster_path: string | null }[]>(await v1(admin, `/api/v1/orgs/${proOrgId}/sponsors`)).find((s) => s.id === scopedId)
+      ?.poster_path;
+  const POSTER = `https://smoke.supabase.co/storage/v1/object/public/assets/orgs/${proOrgId}/content/poster-${tag}.png`;
+  const posterSet = await v1(admin, sponsorUrl, "PATCH", { poster_path: POSTER });
+  check(
+    "sp poster: PATCH sets poster_path",
+    posterSet.status === 200 && v1data<{ poster_path: string | null }>(posterSet).poster_path === POSTER && (await storedPosterOf()) === POSTER,
+  );
+  const posterBad = await v1(admin, sponsorUrl, "PATCH", { poster_path: "javascript:alert(1)" });
+  check(
+    "sp poster: a non-http(s) poster is refused (400) and the stored poster is unchanged",
+    posterBad.status === 400 && (await storedPosterOf()) === POSTER,
+  );
+  const withPoster = await html(newSession(), `/live/${proOrgSlug}/${comp.slug}`);
+  check(
+    "sp poster: the public page draws the panel and the band, with the poster (and not the card)",
+    withPoster.status === 200 &&
+      withPoster.body.includes('data-testid="mh-hero-poster"') &&
+      withPoster.body.includes('data-testid="mh-title-band"') &&
+      withPoster.body.includes('data-testid="title-slide-poster"') &&
+      withPoster.body.includes(encodeURIComponent(POSTER)) &&
+      !withPoster.body.includes('data-testid="title-slide-fallback"'),
+  );
+  // The Title sponsor was created without a url, so it has no link; the gold sponsor's anchor on the same page is the positive pair.
+  check(
+    "sp poster: an unlinked Title sponsor gets no anchor",
+    withPoster.body.includes(`href="/s/${goldId}`) && !withPoster.body.includes(`href="/s/${scopedId}`),
+  );
+  const posterCleared = await v1(admin, sponsorUrl, "PATCH", { poster_path: null });
+  check(
+    "sp poster: PATCH null clears it",
+    posterCleared.status === 200 && v1data<{ poster_path: string | null }>(posterCleared).poster_path === null && (await storedPosterOf()) === null,
+  );
+  const withoutPoster = await html(newSession(), `/live/${proOrgSlug}/${comp.slug}`);
+  check(
+    "sp poster: removed, the page draws the logo card and no poster",
+    withoutPoster.status === 200 &&
+      withoutPoster.body.includes('data-testid="title-slide-fallback"') &&
+      !withoutPoster.body.includes('data-testid="title-slide-poster"') &&
+      !withoutPoster.body.includes(encodeURIComponent(POSTER)),
+  );
+
   const click = await pageRedirect(newSession(), `/s/${goldId}`);
   // Response.redirect normalizes the URL (adds the trailing slash).
   check(
@@ -458,12 +506,38 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
     tier: "gold",
   });
   check("sp free tiering gated (402)", freeGold.status === 402);
-  const freeShared = await html(newSession(), `/live/${freeOrg.slug}/${freeComp.slug}`);
+  // A lapsed Title sponsor: bought on Pro, then the plan went back to free, so the row survives with its poster. The free page must not give
+  // it the hero placement back. The API cannot make one here (tiering is the 402 above), so the row is written straight to its table, BEFORE
+  // the first read of this page: it is cached (revalidate 30) and a SQL write expires nothing, so a read made first would make every row
+  // below it vacuous. Removed again once read.
+  const lapsedName = `Lapsed Title ${tag}`;
+  const lapsedPoster = `https://smoke.supabase.co/storage/v1/object/public/assets/orgs/${freeOrg.id}/content/poster-${tag}.png`;
+  const freeShared = await (async () => {
+    const db = smokeDb();
+    try {
+      await db`
+        insert into sponsors (org_id, competition_id, name, tier, status, poster_path)
+        values (${freeOrg.id}, ${freeComp.id}, ${lapsedName}, 'title', 'active', ${lapsedPoster})`;
+      return await html(newSession(), `/live/${freeOrg.slug}/${freeComp.slug}`);
+    } finally {
+      await db`delete from sponsors where org_id = ${freeOrg.id} and name = ${lapsedName}`;
+      await db.end();
+    }
+  })();
   check(
     "sp free strip renders publicly, un-tiered",
     freeShared.status === 200 &&
       freeShared.body.includes(`Corner Shop ${tag}`) &&
       !freeShared.body.includes("Presented by"),
+  );
+  // The lapsed row is ON the page (the witness: the page saw a Title row), as a flat chip, and none of the placement is drawn.
+  check(
+    "sp free: a lapsed Title row is a flat chip, with no poster panel, band or poster (denied)",
+    freeShared.status === 200 &&
+      freeShared.body.includes(lapsedName) &&
+      !freeShared.body.includes('data-testid="mh-hero-poster"') &&
+      !freeShared.body.includes('data-testid="mh-title-band"') &&
+      !freeShared.body.includes(encodeURIComponent(lapsedPoster)),
   );
   // Sponsor deals Task 4 (spec §8, D17): packages are on every plan — a DELIBERATE flip of the old "sp free packages
   // gated (402)" row. A partner package for any competition is a free placement; a gold one is tiered, so it is refused

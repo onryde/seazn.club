@@ -2,7 +2,7 @@
 // One module of the schemas/ folder; ./index.ts is the map and the public surface. Pure zod (loads bare under
 // `node --experimental-strip-types`): relative imports carry an explicit `.ts`, types come in through `import type`.
 import { z } from "zod";
-import { isRedirectableUrl, SPONSOR_URL_HTTP_ONLY } from "../../../lib/sponsor-clicks.ts";
+import { isPosterUrl, isRedirectableUrl, SPONSOR_URL_HTTP_ONLY } from "../../../lib/sponsor-clicks.ts";
 import { SPONSOR_FREQUENCIES } from "../../../lib/sponsor-frequencies.ts";
 // The sponsor deal domain's value sets (strip-types-safe: its only import is `import type`).
 import { DEAL_STATUSES, END_REASONS, GO_LIVE_RULES, PAYMENT_METHODS, PAYMENT_STATUSES } from "../../../lib/sponsor-deals.ts";
@@ -93,6 +93,9 @@ export const Sponsor = z.object({
   name: z.string(),
   url: z.string().nullable(),
   logo_path: z.string().nullable(),
+  /** The optional 4:5 poster a Title sponsor shows in the public competition hero: a public CDN URL, or null (the hero then
+   *  draws the logo card). */
+  poster_path: z.string().nullable(),
   tier: SponsorTier,
   display_order: z.number().int(),
   status: SponsorStatus,
@@ -128,6 +131,9 @@ export const CreateSponsor = z.object({
   // http(s) only (R4 S10 fix round 1, m1): zod's `.url()` alone accepts `javascript:` and `data:`.
   url: z.string().url().max(500).refine(isRedirectableUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
   logo_path: z.string().max(500).nullish(),
+  // The same http(s)-only rule as `url` and the same 500-character cap as the DB's `sponsors_poster_path_check` (V501): next/image
+  // throws on a relative src, so a poster is never a bare storage path.
+  poster_path: z.string().url().max(500).refine(isPosterUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
   tier: SponsorTier.default("partner"),
   competition_id: Uuid.nullish(),
   status: SponsorStatus.default("active"),

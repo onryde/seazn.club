@@ -295,10 +295,19 @@ const WALKTHROUGH_SPECS: string[] = [
   // the Add deal sheet in es/fr/nl at 1280. SKIPS unless SPONSOR_DEALS_CAPTURE_DIR is set, which only e2e.yml's opt-in
   // `sponsor_deals_captures` dispatch does (its step and upload sit beside the sponsor captures').
   "sponsor-deals-captures.spec.ts",
+  // Title sponsor poster (Task 10): the owner's visual sign-off capture - the competition hero's poster panel and phone band in every state
+  // (three posters, one, the logo card, the monogram card with a 43-character name, es / nl, Register open, no Title sponsor) and the
+  // sponsor editor and page, at 320/768/1280, plus the band on a 320 x 568 screen. SKIPS unless TITLE_POSTER_CAPTURE_DIR is set, which only
+  // e2e.yml's opt-in `title_poster_captures` dispatch does (its step and upload sit beside the sponsor deals captures').
+  "title-sponsor-poster-captures.spec.ts",
   // R4 sponsors on stream: the sponsor journey end to end — added through the form, ticked onto the stream, aired by a real
   // composed session's overlay page (the compositor stood in for at its HTTP boundary), the short link followed, the report
   // shared, read in French and revoked; a viewer refused. Holds the stream-slot pool (its own PoolHolder).
   "sponsors-journey.spec.ts",
+  // Title sponsor poster: an organiser picks and saves a poster (the crop warning, the stored url), a visitor sees it in the hero panel
+  // and, at 320, the band, taps it and is counted, a second Title sponsor rotates in on the page's driven clock, Remove falls back to the
+  // logo card, and a downgrade takes the placement away. Storage is stood in for at the browser's boundary (helpers/poster-art.ts).
+  "title-sponsor-poster.spec.ts",
 
   // Settings W5 — competition settings (`/o/{org}/c/{comp}/settings`), the
   // surface the suite never navigated to before this wave: general/branding

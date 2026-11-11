@@ -33,6 +33,7 @@ import {
   openBracket,
   seedCompletedLeague,
   stageCardOf,
+  setOrgPlanBySql,
 } from "./helpers";
 import { longName, roundGameSql, seedOnlineRound, uiEn } from "./match-room-kit";
 import { ARMAGEDDON_RESULTS } from "@seazn/engine/sports/boardgame";
@@ -59,6 +60,7 @@ import { withDb } from "./rs007-money-kit";
 import { STORAGE_KEY as GAME_2048_STORAGE_KEY, type GameState as Game2048State } from "../src/games/2048/state";
 import { openMatchActions } from "./helpers/match-actions";
 import { consolePanel, openConsolePanel } from "./helpers/console-panels";
+import { posterSvg, routePosterArt, storagePublicUrl } from "./helpers/poster-art";
 
 // v3/02 §4 viewport gate — runs ONLY in the mobile-se / mobile-14 projects
 // (375×667, 390×844). Every audited route must render with zero page-level
@@ -1784,6 +1786,184 @@ test("public surfaces: no horizontal scroll (v3/11 gap 12)", async ({ browser })
     await expect(anon.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
   } finally {
     await anonCtx.close();
+  }
+});
+
+// Title sponsor hero poster (spec 2026-11-11, T7): the public competition page's Title sponsor, at every width project. Below 768 a band
+// under the hero carries it and the hero's own sentence steps aside; from 768 a 4:5 panel sits in the hero's right column and the band
+// steps aside. Both are in the server's markup (CSS picks one), so each assertion below is made on the one that is VISIBLE at this width,
+// and the other is asserted hidden. What it pins, each of which a unit suite on the markup cannot see (AGENTS.md classes 2 and 22):
+//   - the dots are 44px each (a bounding box measures paint, so the centre is also HIT-TESTED: `elementFromPoint` must land on the dot,
+//     not on the poster or the capsule) and the capsule is one row;
+//   - a realistic 43-character sponsor name never clips: it wraps to at most two lines, then ends in a line-clamp, with its full text in
+//     `title` and in the DOM (class 23: a clamp is a signalled truncation, a clipped box is a defect, and `overflowingIn` tells them apart);
+//   - an unlinked sponsor's slide has no anchor and no Visit, and a linked one has exactly one (the positive pair of each negative);
+//   - the page does not scroll sideways and axe finds nothing serious.
+// Reduced motion is on, so nothing rotates under the measuring; the dots still work (the visitor is then the one moving it).
+// The org is the test's OWN (a fresh user, as the P6 blocks above): a Title sponsor that some other spec left on the shared Pro org would
+// add a slide to this page (and change the dot count asserted below), and orgs are capped per person, so seven width projects cannot each
+// seed one from the shared account.
+// THREE Title sponsors, not two: the dots' capsule is `w-fit` and centred inside the panel (220px wide at md, `max-w-[calc(100%-1rem)]`), and
+// two 44px dots (88px) fit one row whatever the capsule's width rule is, so "one row" could not fail. Three (132px) is the count that does
+// not fit if the capsule is ever pinned to `left-1/2` again (a box pinned there may only be as wide as the half that remains: 110px in a
+// 220px panel, so the third dot wraps). Four is the most a competition's hero is meant to carry.
+const THIRD_TITLE_SPONSOR = "Fenwick Print";
+const TITLE_SPONSOR_COUNT = 3;
+const LONG_TITLE_SPONSOR = "Harbourside Building Supplies and Timber Co";
+test("title sponsor showcase: band below 768, panel from 768, no scroll, 44px dots, a 43-character name in two lines", async ({
+  page,
+  browser,
+}) => {
+  const vp = projectViewport();
+  expect(vp, "this project declares a viewport").not.toBeNull();
+  const phone = vp!.width < 768;
+  expect(LONG_TITLE_SPONSOR.length, "premise: the realistic 43 characters").toBe(43);
+  // Login, the plan flip, a competition, three sponsors, one navigation and the scans; never below the file's floor (AGENTS.md class 20).
+  const LOGIN_MS = 30_000;
+  const API_MS = 5_000;
+  test.setTimeout(Math.max(FLOOR_MS, LOGIN_MS + 9 * API_MS + 12 * ROUTE_CHECK_MS));
+
+  await loginUi(page, `delivered+tp-showcase-${TAG}-${projectTag()}@resend.dev`);
+  const org = await activeOrg(page);
+  // A fresh org is on the community plan, which has no Title tier: Pro first, so the competition's public visibility is not degraded
+  // either (`createCompetition` quietly turns a public request private over the plan's cap).
+  await setOrgPlanBySql({ orgId: org.id }, "pro");
+  const comp = await apiJson<{ id: string; slug: string; visibility: string }>(page.request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Showcase ${TAG}`,
+    visibility: "public",
+  });
+  expect(comp.status, JSON.stringify(comp.error)).toBeLessThan(300);
+  expect(comp.data!.visibility, "premise: the public-dashboard cap did not degrade the competition").toBe("public");
+  const published = await apiJson<{ status: string }>(page.request, `/api/v1/competitions/${comp.data!.id}`, "PATCH", { status: "published" });
+  expect(published.data?.status, JSON.stringify(published.error)).toBe("published");
+
+  const POSTER = storagePublicUrl(`assets/orgs/${org.id}/content/poster-${TAG}.png`);
+  const sponsorIds: string[] = [];
+  const anonCtx = await browser.newContext({
+    viewport: vp ?? undefined,
+    storageState: await consentedAnonymousState(),
+    reducedMotion: "reduce",
+  });
+  try {
+    const made = async (body: Record<string, unknown>): Promise<string> => {
+      const res = await apiJson<{ id: string }>(page.request, `/api/v1/orgs/${org.id}/sponsors`, "POST", {
+        tier: "title",
+        competition_id: comp.data!.id,
+        ...body,
+      });
+      expect(res.status, `${String(body.name)}: ${JSON.stringify(res.error)}`).toBe(201);
+      sponsorIds.push(res.data!.id);
+      return res.data!.id;
+    };
+    // A: linked, with a poster. B: the long name, no link, no logo (its card is a monogram) - the slide that must never clip. C: a third,
+    // plain one, so the capsule has three dots to lay out (see THIRD_TITLE_SPONSOR above).
+    const aId = await made({ name: "Pandyas", url: "https://pandyas.example/", poster_path: POSTER });
+    const bId = await made({ name: LONG_TITLE_SPONSOR });
+    const cId = await made({ name: THIRD_TITLE_SPONSOR });
+    expect(new Set([aId, bId, cId]).size, "premise: three distinct Title sponsors").toBe(TITLE_SPONSOR_COUNT);
+    await routePosterArt(anonCtx, POSTER, { svg: posterSvg("Pandyas", "#0f766e") });
+
+    const anon = await anonCtx.newPage();
+    await anon.goto(`/live/${org.slug}/${comp.data!.slug}`, { waitUntil: "load" });
+    // The premise of every assertion below: this org is tiered, so the hero carries the Title sponsor's sentence (hidden below 768, but
+    // in the markup). Without it the page has no showcase and "hidden on a phone" would pass for the wrong reason.
+    await expect(anon.getByTestId("mh-hero-sponsor"), "premise: the org is tiered and the page has a Title sponsor").toBeAttached();
+
+    const band = anon.getByTestId("mh-title-band");
+    const panel = anon.getByTestId("mh-hero-poster");
+    const sentence = anon.getByTestId("mh-hero-sponsor");
+    if (phone) {
+      await expect(band, "below 768 the band carries the sponsor").toBeVisible();
+      await expect(panel, "and the panel is not drawn").toBeHidden();
+      await expect(sentence, "and the hero's own sentence steps aside").toBeHidden();
+    } else {
+      await expect(panel, "from 768 the panel carries the sponsor").toBeVisible();
+      await expect(band, "and the band is not drawn").toBeHidden();
+      await expect(sentence, "and the hero keeps its sentence").toBeVisible();
+    }
+
+    // The dots: three sponsors, three dots in the VISIBLE showcase (the hidden twin has its own three), each a 44px target that a tap would
+    // reach, side by side on one row.
+    const showcase = phone ? band : panel;
+    const dots = showcase.getByTestId("title-showcase-dot");
+    await expect(dots, "one dot per Title sponsor in the visible showcase").toHaveCount(TITLE_SPONSOR_COUNT);
+    await dots.first().scrollIntoViewIfNeeded();
+    const probes = await dots.evaluateAll((els) =>
+      els.map((el) => {
+        const r = el.getBoundingClientRect();
+        const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return { width: r.width, height: r.height, top: r.top, hit: at !== null && (at === el || el.contains(at)) };
+      }),
+    );
+    expect(probes.length, "dots measured").toBe(TITLE_SPONSOR_COUNT);
+    for (const [i, p] of probes.entries()) {
+      expect(p.width, `dot ${i} is ${HIT_TARGET_FLOOR_PX}px wide at ${vp!.width}px`).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+      expect(p.height, `dot ${i} is ${HIT_TARGET_FLOOR_PX}px tall at ${vp!.width}px`).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+    }
+    expect(probes.filter((p) => p.hit).length, "a tap at each dot's centre lands on that dot, not on what is drawn over it").toBe(TITLE_SPONSOR_COUNT);
+    for (const [i, p] of probes.entries()) expect(Math.abs(p.top - probes[0]!.top), `dot ${i} is on the first dot's row: the capsule is one row`).toBeLessThanOrEqual(1);
+
+    // Tap B's dot (retried until React has attached: a tap before hydration is lost, not queued).
+    const slideB = showcase.locator(`[data-testid="title-slide"][data-sponsor-id="${bId}"]`);
+    const slideA = showcase.locator(`[data-testid="title-slide"][data-sponsor-id="${aId}"]`);
+    await expect(async () => {
+      await dots.nth(1).click({ timeout: 2_000 });
+      await expect(slideB, "B's dot shows B").toHaveAttribute("data-current", "true", { timeout: 2_000 });
+    }).toPass({ timeout: 20_000 });
+    await expect(slideA, "and A is no longer the current one").toHaveAttribute("data-current", "false");
+
+    // The name on show: the band's sentence, or the panel's caption. At most two lines, ended by a clamp and never cut, with its whole
+    // text in `title` and in the DOM.
+    const nameEl = phone ? slideB.getByTestId("title-band-sentence") : showcase.getByTestId("title-slide-caption");
+    await expect(nameEl).toBeVisible();
+    const name = await nameEl.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return {
+        scrollWidth: el.scrollWidth,
+        clientWidth: el.clientWidth,
+        height: el.getBoundingClientRect().height,
+        lineHeight: parseFloat(cs.lineHeight),
+        clamp: cs.webkitLineClamp,
+        title: el.getAttribute("title"),
+        text: (el.textContent ?? "").trim(),
+      };
+    });
+    expect(Number.isFinite(name.lineHeight), "the name has a computed line height in px").toBe(true);
+    // `scrollWidth` and `clientWidth` are integers, the helper's own tolerance is a pixel (`overflowingIn`).
+    expect(name.scrollWidth, "no part of the name is cut sideways").toBeLessThanOrEqual(name.clientWidth + 1);
+    const lines = Math.round(name.height / name.lineHeight);
+    expect(lines, `the 43-character name is drawn in ${lines} line(s)`).toBeGreaterThanOrEqual(1);
+    expect(lines, "at most two lines").toBeLessThanOrEqual(2);
+    expect(name.clamp, "ended by a two-line clamp, the signalled kind of truncation").toBe("2");
+    expect(name.title, "the full text is in its title").toContain(LONG_TITLE_SPONSOR);
+    expect(name.text, "and in the DOM").toBe(name.title);
+
+    // Links: B (no url) has no anchor and no Visit; A (a url) has exactly one anchor, and the band's one Visit is A's.
+    await expect(slideB.locator("a"), "an unlinked sponsor's slide has no anchor").toHaveCount(0);
+    await expect(slideB.getByTestId("title-band-visit"), "and no Visit").toHaveCount(0);
+    await expect(slideA.locator("a"), "a linked sponsor's slide has exactly one anchor").toHaveCount(1);
+    await expect(band.getByTestId("title-band-visit"), "the band's only Visit is the linked sponsor's").toHaveCount(1);
+
+    await expectNoHorizontalScroll(anon);
+    // Hero and band: every scrolling box is a reachable rail (the showcase has none), and nothing is clipped. A scan that found nothing
+    // to scan would pass anything, so it must have had boxes.
+    for (const root of ['[data-testid="mh-hero"]', '[data-testid="mh-title-band"]']) {
+      expect(await anon.locator(root).locator("div,span,p,a,h1,button").count(), `${root}: the scan had boxes to scan`).toBeGreaterThan(0);
+      const { clipped, scrollable } = await overflowingIn(anon, root, "div,span,p,a,h1,button", `${root} was not in the DOM`);
+      expect(clipped, `${root} is clipped at ${vp!.width}px`).toEqual([]);
+      for (const box of scrollable) expect(box, `${root}: a scrolling box is not keyboard-reachable`).toMatch(/tabindex=0$/);
+    }
+
+    const axe = await new AxeBuilder({ page: anon }).withTags(["wcag2a", "wcag2aa"]).analyze();
+    expect(
+      axe.violations.filter((v) => v.impact === "serious" || v.impact === "critical").map((v) => `${v.id} - ${v.nodes[0]?.html}`),
+      "axe serious/critical on the public competition page with a showcase",
+    ).toEqual([]);
+  } finally {
+    await anonCtx.close();
+    for (const id of sponsorIds) await apiJson(page.request, `/api/v1/orgs/${org.id}/sponsors/${id}`, "DELETE").catch(() => undefined);
+    await apiJson(page.request, `/api/v1/competitions/${comp.data!.id}`, "DELETE").catch(() => undefined);
   }
 });
 

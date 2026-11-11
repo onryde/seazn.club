@@ -142,6 +142,19 @@ describe("the legend: What each tier gets (owner, 2026-11-11)", () => {
     expect(rows[3]!.what, "...and says nothing of a panel or a logo").not.toMatch(/panel|logo/i);
   });
 
+  it("Title also says it gets the 4:5 poster at the top of the competition page, when you add one - and no other tier does (the poster is the Title's alone)", () => {
+    // Batch B draws the poster (`TitleSponsorShowcase`) only for the Title sponsor where `hasTitleSponsor(sponsors, tiered)` holds, so the claim sits on the
+    // Title row only. The plan line under the rows (a plan without tiers) says a Title needs a paid plan or an Event Pass, so the poster stays true there.
+    const rows = rowsOf(legend(false));
+    expect(rows[0]!.tier, "premise: the first row is the Title").toBe("title");
+    expect(rows[0]!.what, "the Title row says it").toMatch(/4:5 poster/);
+    expect(rows[0]!.what, "at the top of the competition page").toMatch(/top of the competition page/);
+    expect(rows[0]!.what, "when you add one").toMatch(/when you add one/);
+    expect(rows[0]!.what, "and still says where it is named").toMatch(/under the competition name/);
+    for (const r of rows.slice(1)) expect(r.what, `${r.tier}: no poster`).not.toMatch(/poster/i);
+    expect(rows.length, "anti-vacuity: four rows read").toBe(4);
+  });
+
   it("every row's stream turns follow SPONSOR_TIER_WEIGHTS at render: the real constant, then four distinct stand-ins (4 + 4 checked)", () => {
     let checked = 0;
     weights.override = null;
@@ -231,7 +244,7 @@ describe("I1: on a plan without tiers the legend says what its pages and its str
   });
 
   it("premise (the claim is what the product does): on a plan without tiers the board draws ONE flat strip of every sponsor, and the stream draws every card as a partner (4 + 4 checked)", () => {
-    const spons = (tier: SponsorTier): ResolvedSponsor => ({ id: `sp-${tier}`, name: `Sponsor ${tier}`, tier, url: null, logo: null });
+    const spons = (tier: SponsorTier): ResolvedSponsor => ({ id: `sp-${tier}`, name: `Sponsor ${tier}`, tier, url: null, logo: null, poster: null });
     const html = renderToStaticMarkup(
       <SponsorsBoard sponsors={SPONSOR_TIERS.map(spons)} tiered={false} dict={publicEn as unknown as Dict} clickTag={{ source: "site" }} includeTitle />,
     );
@@ -368,6 +381,22 @@ describe("the new copy exists in all four locales, with its placeholders intact"
       }
     }
     expect(checked).toBe(LOCALES.length * KEYS.length);
+  });
+
+  it("the Title sentence names the 4:5 poster in every locale, in the words the batch-C ruling asked for (4 checked)", () => {
+    // Typed from the ruling (2026-11-11): Title also shows a 4:5 poster at the top of the competition page, when you add one. Whole sentences.
+    const WANT: Record<string, string> = {
+      en: "Named under the competition name on your public pages. Also shows a 4:5 poster at the top of the competition page, when you add one.",
+      es: "Aparece bajo el nombre de la competición en tus páginas públicas. También muestra un cartel 4:5 en la parte superior de la página de la competición, cuando añades uno.",
+      fr: "Cité sous le nom de la compétition sur vos pages publiques. Une affiche 4:5 figure aussi en haut de la page de la compétition, si vous en ajoutez une.",
+      nl: "Genoemd onder de naam van de competitie op je openbare pagina's. Toont ook een poster van 4:5 bovenaan de competitiepagina, als je er een toevoegt.",
+    };
+    let checked = 0;
+    for (const [locale, dict] of LOCALES) {
+      expect((dict as unknown as Record<string, string>)["sponsors.pkg.legend.tier.title"], locale).toBe(WANT[locale]);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 
   it("the four tier sentences differ within each locale (a copy-pasted row would show)", () => {

@@ -87,7 +87,7 @@ const DEAL: SponsorDeal = {
 const deal = (over: Partial<SponsorDeal>): SponsorDeal => ({ ...DEAL, sponsor_id: "a", ...over });
 
 const sponsor = (over: Partial<SponsorItem> = {}): SponsorItem => ({
-  id: "a", name: "Ridge Gold Physiotherapy", competition_id: null, url: "https://ridgegoldphysio.co.uk/", logo_path: null,
+  id: "a", name: "Ridge Gold Physiotherapy", competition_id: null, url: "https://ridgegoldphysio.co.uk/", logo_path: null, poster_path: null,
   tier: "partner", display_order: 0, status: "active", click_count: 12, on_stream: false, paid_order_id: null, deal: null,
   locked_by_deal: false, has_open_deal: false, last_billing_email: null, ...over,
 });
@@ -291,6 +291,43 @@ describe("Details: a LIVE deal owns the tier, scope and stream; an OPEN deal cha
     expect(findAll(markup, "sponsor-sheet-detail-name")).toHaveLength(1);
     expect(findAll(markup, "sponsor-sheet-detail-link")).toHaveLength(1);
     expect(findAll(markup, "sponsor-sheet-stream")).toHaveLength(1);
+  });
+
+  it("the read-only Poster row: a 4:5 thumbnail when stored, 'None, the logo shows instead' when not, after Link and before the tier; no row without tiers (3 checked)", () => {
+    // Spec §8: shown only when the plan can place a Title sponsor (`hasTiers`), between the link and the tier rows. Stored: a 48 x 60 thumbnail (4:5),
+    // cropped as the public panel crops it; not stored: the words that say the logo shows instead.
+    const POSTER = "https://cdn.example/posters/ridge.png";
+    const stored = bodyHtml({ sponsor: sponsor({ poster_path: POSTER }) });
+    const dd = findOne(stored, "sponsor-sheet-detail-poster");
+    const thumb = findOne(stored, "sponsor-sheet-poster-thumb");
+    expect(attrOf(thumb.open, "src"), "the thumbnail is the stored poster").toBe(POSTER);
+    const thumbClasses = classTokens(thumb.open);
+    expect(thumbClasses, "cropped like the panel").toContain("object-cover");
+    expect(thumbClasses, "48 wide").toContain("w-12");
+    expect(thumbClasses, "60 tall: 4:5").toContain("h-15");
+    expect(textOfMarkup(dd.outer), "a thumbnail carries no words").toBe("");
+    // the row's label is the dictionary's, and it sits after Link, before the tier
+    expect(textOfMarkup(stored)).toContain(msg("sponsors.sheet.poster"));
+    const at = (id: string) => stored.indexOf(`data-testid="${id}"`);
+    expect(at("sponsor-sheet-detail-link"), "after Link").toBeLessThan(at("sponsor-sheet-detail-poster"));
+    expect(at("sponsor-sheet-detail-poster"), "before the tier").toBeLessThan(at("sponsor-sheet-detail-tier"));
+    // not stored: the words, no picture
+    const none = bodyHtml({ sponsor: sponsor({ poster_path: null }) });
+    expect(textOfMarkup(findOne(none, "sponsor-sheet-detail-poster").outer), "none: the logo shows instead").toBe(msg("sponsors.sheet.noPoster"));
+    expect(msg("sponsors.sheet.noPoster"), "premise: the owner-approved words").toBe("None, the logo shows instead");
+    expect(findAll(none, "sponsor-sheet-poster-thumb"), "none: no thumbnail").toHaveLength(0);
+    // no tiers: no row at all, stored or not (the plan cannot place a Title sponsor)
+    for (const poster_path of [POSTER, null]) {
+      const free = bodyHtml({ hasTiers: false, sponsor: sponsor({ poster_path }) });
+      expect(findAll(free, "sponsor-sheet-detail-poster"), `no tiers, stored=${poster_path}: no row`).toHaveLength(0);
+      expect(findAll(free, "sponsor-sheet-poster-thumb"), `no tiers, stored=${poster_path}: no thumbnail`).toHaveLength(0);
+    }
+  });
+
+  it("a viewer sees the poster row too (it is read-only for everyone), and an open editor replaces the read-only rows, poster row included", () => {
+    expect(findAll(bodyHtml({ canEdit: false, sponsor: sponsor({ poster_path: "https://cdn.example/p.png" }) }), "sponsor-sheet-poster-thumb")).toHaveLength(1);
+    const editing = bodyHtml({ editing: true, sponsor: sponsor({ poster_path: "https://cdn.example/p.png" }) });
+    expect(findAll(editing, "sponsor-sheet-detail-poster"), "the editor is the poster's field now").toHaveLength(0);
   });
 
   it("the name, link and a no-link sponsor read as the brief says; the link is the sponsor's host and opens in a new tab", () => {

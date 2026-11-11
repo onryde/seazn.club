@@ -180,7 +180,7 @@ describe.skipIf(!HAS_DB)("sponsors usecase", () => {
       status: "active",
     });
     expect(await resolveSponsors(auth.orgId)).toEqual([
-      { id: row.id, name: "New Row", url: null, logo: null, tier: "partner" },
+      { id: row.id, name: "New Row", url: null, logo: null, poster: null, tier: "partner" },
     ]);
   });
 
