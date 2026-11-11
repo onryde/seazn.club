@@ -70,7 +70,9 @@ export interface SponsorDeal {
    *  console's refund words key on it too. On a paid deal it means a card payment at Stripe paid it; Mark as paid clears it.
    *  The intent id itself never leaves the server. */
   has_payment_intent: boolean;
-  /** Always null until PR 3 numbers invoices (D11). */
+  /** The deal's invoice number (D11), per org from 1 (`formatInvoiceNumber` shows it): allocated when an online or offline deal is
+   *  created, kept when it ends, never reused. Null on a complimentary deal (no invoice), a legacy order, and a deal made before
+   *  invoices were numbered. */
   invoice_number: number | null;
 }
 
@@ -488,4 +490,11 @@ export function dealTimeline(
   if (withCompetition && ctx.competitionFinished) detail.competitionFinished = "yes";
   steps.push({ key: "ends", at: d.ends_at, state: "not_yet", ...(Object.keys(detail).length > 0 ? { detail } : {}) });
   return steps;
+}
+
+/** D11: how an invoice number reads — "SP-" and at least four digits (1 → SP-0001, 12345 → SP-12345: padded, never cut). Only
+ *  what the per-org allocator hands out (an integer from 1) is a number; anything else is a RangeError, never a printed SP-0000. */
+export function formatInvoiceNumber(n: number): string {
+  if (!Number.isSafeInteger(n) || n < 1) throw new RangeError(`not an invoice number: ${n}`);
+  return `SP-${String(n).padStart(4, "0")}`;
 }

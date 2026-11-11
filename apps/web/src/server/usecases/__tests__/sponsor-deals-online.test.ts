@@ -11,7 +11,8 @@
 //   - F11: createDeal online answers { deal, checkout_url } with the minted url, and the deal itself carries no url;
 //   - a Stripe failure after the deal committed leaves the deal as committed (a draft; or an immediate deal live with its
 //     payment pending, Resend invoice offered) and answers 502;
-//   - Mark as paid, End now and delete apply the session rule; an online refund with a charge goes through Stripe, one
+//   - Mark as paid, End now and delete apply the session rule (a delete only on a deal made before invoices were numbered: a
+//     numbered one is refused as history first, F10 / Task 20); an online refund with a charge goes through Stripe, one
 //     hand-marked paid (no charge) is recorded only (T2-I1);
 //   - every refusal beside its accepted twin.
 // "Another sport" is not applicable (sponsors read no sport key); online selling is one plan's (Pro, `sponsors.monetize`), and
@@ -85,6 +86,7 @@ afterAll(async () => {
   if (made.orgIds.length > 0) {
     await sql`delete from email_outbox where org_id = any(${made.orgIds}::uuid[])`;
     await sql`delete from sponsor_orders where org_id = any(${made.orgIds}::uuid[])`;
+    await sql`delete from sponsor_invoice_counters where org_id = any(${made.orgIds}::uuid[])`;
     await sql`delete from organizations where id = any(${made.orgIds}::uuid[])`;
   }
   if (made.userIds.length > 0) {
@@ -170,6 +172,9 @@ const dealBytes = async (id: string): Promise<string | null> =>
 const invoiceKeys = async (id: string): Promise<string[]> =>
   (await sql<{ dedupe_key: string }[]>`
     select dedupe_key from email_outbox where kind = 'sponsor_invoice' and ref_id = ${id} order by created_at, id`).map((r) => r.dedupe_key);
+/** F10 (Task 20): a deal made before invoices were numbered — its number cleared, as such a row has none. Only such an online
+ *  deal still reaches the delete's session rule; a numbered one is refused as history before any link is read. */
+const unnumber = (id: string) => sql`update sponsor_orders set invoice_number = null where id = ${id}`;
 /** Move the stored session's expiry to `minutes` from now (a session nearing its end). */
 const expiresIn = (id: string, minutes: number) =>
   sql`update sponsor_orders set checkout_expires_at = now() + make_interval(mins => ${minutes}) where id = ${id}`;
@@ -528,6 +533,7 @@ describe.skipIf(!HAS_DB)("Mark as paid, End now, refund and delete apply the ses
       ];
       for (const [what, act, want] of actions) {
         const d = await onlineDeal();
+        if (what === "delete") await unnumber(d.id);
         stripe.retrieve.mockImplementation(retrieve);
         stripe.create.mockClear();
         stripe.expire.mockClear();
@@ -760,8 +766,29 @@ describe.skipIf(!HAS_DB)("Mark as paid, End now, refund and delete apply the ses
     expect(await refusal(() => refundSponsorOrder(d.o.auth, d.id))).toEqual({ http: true, status: 409, code: "deal_not_refundable" });
   });
 
+  it("F10 (Task 20): a NUMBERED online deal's delete is 409 sponsor_has_deal_history before Stripe is asked anything — whether its link is open or paid at Stripe — and the link stays stored, payable (count reported)", async () => {
+    let checked = 0;
+    for (const atStripe of ["open", "complete"] as const) {
+      const d = await onlineDeal();
+      const sid = (await stored(d.id)).checkout_session_id!;
+      expect(sid, "premise: an open link is stored").not.toBeNull();
+      expect((await getDeal(d.o.auth, d.id)).invoice_number, "premise: the deal is numbered").toBe(1);
+      stripe.retrieve.mockReset().mockImplementation(async (id: string) => ({ id, status: atStripe }));
+      stripe.expire.mockClear();
+      const before = await dealBytes(d.id);
+      expect(await refusal(() => deleteSponsor(d.o.auth, d.sponsorId)), atStripe).toEqual({ http: true, status: 409, code: "sponsor_has_deal_history" });
+      expect(stripe.retrieve, `${atStripe}: Stripe was not asked`).not.toHaveBeenCalled();
+      expect(stripe.expire, `${atStripe}: no link closed`).not.toHaveBeenCalled();
+      expect(await dealBytes(d.id), `${atStripe}: the deal byte-equal, its link still stored`).toBe(before);
+      expect(await sql`select 1 from sponsors where id = ${d.sponsorId}`, `${atStripe}: the sponsor stays`).toHaveLength(1);
+      checked++;
+    }
+    expect(checked, "Stripe states checked").toBe(2);
+  });
+
   it("delete (F3): the open session is expired, then the sponsor and its deal go; an unexpirable or completed session is 409 sponsor_has_open_checkout, nothing deleted", async () => {
     const gone = await onlineDeal();
+    await unnumber(gone.id);
     const sid = (await stored(gone.id)).checkout_session_id!;
     await deleteSponsor(gone.o.auth, gone.sponsorId);
     expect(stripe.expire.mock.calls.map((c) => c[0])).toEqual([sid]);
@@ -774,6 +801,7 @@ describe.skipIf(!HAS_DB)("Mark as paid, End now, refund and delete apply the ses
       ["completed", () => stripe.retrieve.mockImplementation(async (id: string) => ({ id, status: "complete" }))],
     ] as const) {
       const kept = await onlineDeal();
+      await unnumber(kept.id);
       arm();
       const before = await dealBytes(kept.id);
       expect(await refusal(() => deleteSponsor(kept.o.auth, kept.sponsorId)), label).toEqual({ http: true, status: 409, code: "sponsor_has_open_checkout" });
@@ -788,6 +816,7 @@ describe.skipIf(!HAS_DB)("Mark as paid, End now, refund and delete apply the ses
 
   it("delete: a link a racing send stored while the delete closed the old one is still payable — 409 sponsor_has_open_checkout under the lock, nothing deleted", async () => {
     const d = await onlineDeal();
+    await unnumber(d.id);
     const old = (await stored(d.id)).checkout_session_id!;
     const racing = `cs_race_${randomUUID().slice(0, 8)}`;
     // A concurrent Send invoice stores its new session between the delete's read and its locked re-check: here, as the delete
@@ -816,6 +845,8 @@ describe.skipIf(!HAS_DB)("Mark as paid, End now, refund and delete apply the ses
       const sp = await sponsor(o);
       const a = (await createDeal(o.auth, sp, online(p), ORIGIN)).deal.id;
       const b = (await createDeal(o.auth, sp, online(p), ORIGIN)).deal.id;
+      await unnumber(a);
+      await unnumber(b);
       const sa = (await stored(a)).checkout_session_id!;
       const sb = (await stored(b)).checkout_session_id!;
       const paidAtStripe = completeIsFirstMade ? sa : sb;
@@ -837,6 +868,8 @@ describe.skipIf(!HAS_DB)("Mark as paid, End now, refund and delete apply the ses
     const sp = await sponsor(o);
     const a = (await createDeal(o.auth, sp, online(p), ORIGIN)).deal.id;
     const b = (await createDeal(o.auth, sp, online(p), ORIGIN)).deal.id;
+    await unnumber(a);
+    await unnumber(b);
     const byId = { [(await stored(a)).checkout_session_id!]: a, [(await stored(b)).checkout_session_id!]: b };
     stripe.expire.mockImplementation(async (sid: string) => {
       if (stripe.expire.mock.calls.length > 1) throw new Error("stripe: try again later");

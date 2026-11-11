@@ -46,6 +46,7 @@ import {
   type ServerDeal,
 } from "@/server/sponsors/deal-apply";
 import { assertOnlineAllowed, assertPlacementAllowed } from "@/server/sponsors/deal-gates";
+import { allocateInvoiceNumber } from "@/server/sponsors/invoice-number";
 import { assertOutboxCanQueue, dispatchNow } from "@/server/email-outbox";
 import { log } from "@/server/logger";
 import { fireOrgRevalidate } from "@/server/public-site/revalidate";
@@ -213,7 +214,8 @@ interface PackageRow {
  * `sponsors.monetize` plus Connect for online), the billing email for online (422), the rule (complimentary cannot go live
  * on payment, 422), the end date (today or later in the org's timezone, 422). Then ONE transaction: lock the sponsor and its
  * deals, end the live one when `end_current` asks, insert the deal with the package's snapshot (D4) in its first status
- * (queued as `scheduled` behind a live deal, §8a), and apply. An online deal is created as a draft: its invoice is Task 7's.
+ * (queued as `scheduled` behind a live deal, §8a) and, online or offline, the org's next invoice number (D11), and apply. An
+ * online deal is created as a draft: its invoice is Task 7's.
  */
 export async function createDeal(
   auth: AuthCtx,
@@ -306,16 +308,21 @@ export async function createDeal(
       const status: DealStatus = initialStatus(method, rule, live !== null && endedDealId === null);
       const [sponsor] = await tx<{ name: string }[]>`select name from sponsors where id = ${sponsorId}`;
       if (!sponsor) throw new Error(`sponsor ${sponsorId} vanished while this transaction held its lock`);
+      // D11 (spec §7): an online or offline deal has an invoice, so it takes the org's next number HERE, in this transaction —
+      // a create that rolls back hands it back. A complimentary deal has no invoice and takes none. Last, after the sponsor and
+      // its deals are locked (the lock order: sponsor, deals, then the org's counter row, which this transaction now holds
+      // until it commits).
+      const invoiceNumber = method === "complimentary" ? null : await allocateInvoiceNumber(tx, auth.orgId);
       const [row] = await tx<{ id: string }[]>`
         insert into sponsor_orders (
           org_id, package_id, sponsor_id, sponsor_name, sponsor_email, amount_cents, currency, status,
           deal_status, payment_method, go_live, tier, includes_on_stream, package_name, competition_id, ends_at,
-          created_by, live_at)
+          created_by, live_at, invoice_number)
         values (
           ${auth.orgId}, ${pkg.id}, ${sponsorId}, ${sponsor.name}, ${input.sponsor_email ?? null}, ${pkg.price_cents},
           ${pkg.currency}, ${initialPaymentStatus(method)},
           ${status}, ${method}, ${rule}, ${pkg.tier}, ${pkg.includes_on_stream}, ${pkg.name}, ${scope}, ${endsAt},
-          ${auth.userId}, ${status === "live" ? now : null})
+          ${auth.userId}, ${status === "live" ? now : null}, ${invoiceNumber})
         returning id`;
       if (!row) throw new Error("insert into sponsor_orders returned no row");
       await applyDealsToSponsor(tx, sponsorId, auth.userId, { now, endedDealId });

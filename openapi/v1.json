@@ -73439,7 +73439,7 @@
         ]
       },
       "delete": {
-        "summary": "Delete a sponsor, with its deals. A sponsor holding a deal with money or document history (money paid or refunded, a pre-deals order) is 409 `sponsor_has_deal_history`. Every deal's Checkout link is read at Stripe before any is closed: while one has been paid there, or cannot be read, the delete is 409 `sponsor_has_open_checkout` and no link is closed. Then each open link is closed; when one cannot be, the delete is 409 `sponsor_has_open_checkout`, the sponsor and its deals stay, and the links already closed stay closed (none is left stored)",
+        "summary": "Delete a sponsor, with its deals. A sponsor holding a deal with money or document history (money paid or refunded, a numbered invoice, a pre-deals order) is 409 `sponsor_has_deal_history`. Every deal's Checkout link is read at Stripe before any is closed: while one has been paid there, or cannot be read, the delete is 409 `sponsor_has_open_checkout` and no link is closed. Then each open link is closed; when one cannot be, the delete is 409 `sponsor_has_open_checkout`, the sponsor and its deals stay, and the links already closed stay closed (none is left stored)",
         "tags": [
           "sponsors"
         ],

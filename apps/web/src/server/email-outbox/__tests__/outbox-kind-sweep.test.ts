@@ -433,6 +433,8 @@ async function cleanUp(): Promise<void> {
   // (cascading their fixtures) go, then the courts, before the organisation's cascade reaches its venues (venues.test.ts's order).
   if (made.orgIds.length > 0) await sql`delete from competitions where org_id = any(${made.orgIds}::uuid[])`;
   if (made.orgIds.length > 0) await sql`delete from courts where org_id = any(${made.orgIds}::uuid[])`;
+  // A numbered sponsor deal's org counter RESTRICTs its org too (the sponsor-invoices delta).
+  if (made.orgIds.length > 0) await sql`delete from sponsor_invoice_counters where org_id = any(${made.orgIds}::uuid[])`;
   if (made.orgIds.length > 0) await sql`delete from organizations where id = any(${made.orgIds}::uuid[])`;
   // The seeded owner is referenced without a cascade by the plan it was given and by the round's audit trail.
   await sql`delete from subscriptions where owner_user_id = any(${made.userIds}::uuid[])`;

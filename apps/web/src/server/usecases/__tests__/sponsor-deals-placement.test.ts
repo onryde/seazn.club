@@ -76,6 +76,7 @@ afterAll(async () => {
   if (made.orgIds.length > 0) {
     await sql`delete from email_outbox where org_id = any(${made.orgIds}::uuid[])`;
     await sql`delete from sponsor_orders where org_id = any(${made.orgIds}::uuid[])`;
+    await sql`delete from sponsor_invoice_counters where org_id = any(${made.orgIds}::uuid[])`;
     await sql`delete from organizations where id = any(${made.orgIds}::uuid[])`;
   }
   if (made.userIds.length > 0) {

@@ -24,7 +24,9 @@
 //     `sponsors.monetize`), and the plan matrix (Pro both org-wide; community neither; an Event Pass both on ITS competition
 //     only), typed as `needsTiers` / `planGrants`;
 //   - the Stripe session rule (D14, F3, F37): an open session is expired before any end, re-mint or delete; a completed one is
-//     money in flight (Mark as paid and Send refuse 409 `deal_paid_online`; End now carries on; delete refuses);
+//     money in flight (Mark as paid and Send refuse 409 `deal_paid_online`; End now carries on; delete refuses). A delete
+//     refuses any numbered deal FIRST (F10, Task 20: every online and offline deal has a number, SPEC_NUMBERED), so here a
+//     delete never reaches a session;
 //   - a deal's snapshot (F36): the model records the package's tier and On-stream flag at the moment of `createDeal`, from the
 //     packages this test declared (PACKAGES), so I8 compares the deal against a value the code under test did not produce.
 //
@@ -219,6 +221,7 @@ afterAll(async () => {
   if (made.orgIds.length > 0) {
     await sql`delete from email_outbox where org_id = any(${made.orgIds}::uuid[])`;
     await sql`delete from sponsor_orders where org_id = any(${made.orgIds}::uuid[])`;
+    await sql`delete from sponsor_invoice_counters where org_id = any(${made.orgIds}::uuid[])`;
     await sql`delete from organizations where id = any(${made.orgIds}::uuid[])`;
   }
   if (made.userIds.length > 0) {
@@ -254,6 +257,10 @@ const SPEC_RULES: Readonly<Record<PaymentMethod, readonly GoLiveRule[]>> = {
   offline: ["on_payment", "immediate", "on_approval"],
   complimentary: ["immediate", "on_approval"],
 };
+
+/** Spec §7 and plan D11 (Task 20): an online or offline deal has an invoice, numbered per org in sequence from 1 when it is
+ *  created; a complimentary deal has none. */
+const SPEC_NUMBERED: Readonly<Record<PaymentMethod, boolean>> = { online: true, offline: true, complimentary: false };
 
 /** Spec §10 Q1 (owner, 2026-11-07) and the plan's premise 2: a tier other than partner, or a competition scope, needs
  *  `sponsors.tiers`. */
@@ -457,6 +464,9 @@ interface MDeal {
   /** The sponsor completed Checkout at Stripe; the payment webhook is still on its way. */
   pendingIntent: string | null;
   duplicate: boolean;
+  /** D11 (Task 20): the invoice number createDeal gave it (SPEC_NUMBERED), kept for good; null on a complimentary deal and on a
+   *  duplicate payment's row (the webhook records money, not an invoice). */
+  number: number | null;
 }
 interface Model {
   plan: Plan;
@@ -469,6 +479,8 @@ interface Model {
   /** The model's view of this world's Checkout sessions. */
   sessions: Map<string, SessionStatus>;
   seq: number;
+  /** D11: the last invoice number the org handed out (0: none yet). */
+  lastNumber: number;
   deletes: number;
   /** The org-wide sponsor_stream_settings row exists (R12: the first on-stream tick or deal turns the rotation on). */
   streamRow: boolean;
@@ -721,6 +733,7 @@ async function buildWorld(spec: WorldSpec): Promise<{ w: World; m: Model }> {
     deals: [],
     sessions: new Map(),
     seq: 0,
+    lastNumber: 0,
     deletes: 0,
     streamRow: false,
     alerts: [],
@@ -751,6 +764,7 @@ interface DealDb {
   ends_at: Date | null;
   amount_cents: number;
   currency: string;
+  invoice_number: number | null;
 }
 interface SponsorDb extends SponsorFields {
   id: string;
@@ -769,7 +783,7 @@ async function snapshot(orgId: string): Promise<Snap> {
   const deals = await sql<DealDb[]>`
     select id, sponsor_id, deal_status, status, payment_method, go_live, tier, includes_on_stream, competition_id, ended_reason,
            parked_at is not null as parked, disputed_at is not null as disputed, approved_at is not null as approved,
-           payment_intent_id, checkout_session_id, ends_at, amount_cents, currency
+           payment_intent_id, checkout_session_id, ends_at, amount_cents, currency, invoice_number
       from sponsor_orders where org_id = ${orgId} order by created_at, id`;
   const sponsors = await sql<SponsorDb[]>`
     select id, status, tier, competition_id, on_stream, placement_from_deal_id, to_jsonb(s)::text as bytes
@@ -970,6 +984,8 @@ async function exec(w: World, m: Model, c: Prim, label: string): Promise<Step> {
         dispute: null,
         pendingIntent: null,
         duplicate: false,
+        // Taken only by an ACCEPTED create (the code allocates inside its transaction, after every refusal).
+        number: SPEC_NUMBERED[c.m] ? ++m.lastNumber : null,
       };
       m.deals.push(d);
       modelApply(m, c.s, now, ended);
@@ -1159,6 +1175,7 @@ async function exec(w: World, m: Model, c: Prim, label: string): Promise<Step> {
             dispute: null,
             pendingIntent: null,
             duplicate: true,
+            number: null,
           });
           m.alerts.push({ reason: "duplicate_payment", dealId: d.id });
           cover.duplicatePayment++;
@@ -1306,11 +1323,14 @@ async function exec(w: World, m: Model, c: Prim, label: string): Promise<Step> {
     case "delete": {
       const sp = m.sponsors[c.s]!;
       const deals = dealsOf(m, c.s);
-      // Money history (paid or refunded) refuses FIRST; then a completed session (money in flight) refuses; else every open
-      // session is expired and the sponsor goes with its deals.
+      // Money or document history refuses FIRST — money paid or refunded, or an invoice number (F10, Task 20: every online and
+      // offline deal has one) — before any link is read or closed; then a completed session (money in flight) refuses; else
+      // every open session is expired and the sponsor goes with its deals.
       const refusals: Refusal[] = [];
       if (!sp.alive) refusals.push({ status: 404 });
-      if (deals.some((d) => d.payment === "paid" || d.payment === "refunded")) refusals.push({ status: 409, code: "sponsor_has_deal_history" });
+      if (deals.some((d) => d.payment === "paid" || d.payment === "refunded" || d.number !== null)) {
+        refusals.push({ status: 409, code: "sponsor_has_deal_history" });
+      }
       if (deals.some((d) => sessionComplete(m, d))) refusals.push({ status: 409, code: "sponsor_has_open_checkout" });
       const res = await attempt(() => deleteSponsor(w.auth, sp.id));
       if (verdict(label, res, refusals)) return { ...step, refused: true };
@@ -1405,6 +1425,7 @@ function check(label: string, m: Model, before: Snap, after: Snap, step: Step | 
       ends_at: md.endsAt,
       amount_cents: md.amount,
       currency: md.currency,
+      invoice_number: md.number,
     };
     const got = { ...d, ends_at: d.ends_at === null ? null : new Date(d.ends_at).getTime() };
     for (const key of Object.keys(want) as (keyof typeof want)[]) {
@@ -1856,17 +1877,21 @@ describe.skipIf(!HAS_DB)("sponsor deals, model-based: named scenarios (DB)", () 
     );
   }, 120_000);
 
-  it("delete: a completed Checkout refuses (money in flight), money history refuses, a sponsor with an open link goes and the link is closed", async () => {
+  // F10 (Task 20): every online and offline deal is numbered, so its sponsor's delete is refused as history BEFORE the session
+  // rule. The delete's session rule (an open link expired, a completed one refusing) is reached only by a deal made before
+  // invoices were numbered: sponsor-deals-online.test.ts drives it on such rows.
+  it("delete (F10): a numbered invoice refuses first, and its link is neither closed while open nor read once paid at Stripe; money history refuses; a sponsor whose only deal is complimentary goes", async () => {
     await scenario(
       { plan: "pro", finished: false },
       [
-        C({ m: "online" }),
+        C({ m: "online" }), // SP-0001, awaiting payment, an open link
+        { k: "delete", s: 0 }, // 409 sponsor_has_deal_history (numbered); the link stays open (M5)
         { k: "checkout", d: 0 },
-        { k: "delete", s: 0 }, // 409 sponsor_has_open_checkout
+        { k: "delete", s: 0 }, // 409 sponsor_has_deal_history, before the completed session is read
         { k: "paid", d: 0, again: false }, // live
-        { k: "delete", s: 0 }, // 409 sponsor_has_deal_history
-        C({ s: 1, m: "online", r: "immediate" }), // live, awaiting payment, an open link
-        { k: "delete", s: 1 }, // goes; its open session is expired
+        { k: "delete", s: 0 }, // 409 sponsor_has_deal_history (money and number)
+        C({ s: 1, m: "complimentary", r: "immediate" }), // live, no number
+        { k: "delete", s: 1 }, // goes with its deal
         { k: "sweep", days: 9 },
       ],
       ["refused409"],

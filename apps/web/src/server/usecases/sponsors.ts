@@ -340,22 +340,21 @@ export async function patchSponsor(
 /** Money a deal holds as history: once paid (and so once refundable or refunded), its record is the audit trail. */
 const MONEY_HISTORY: ReadonlySet<PaymentStatus> = new Set<PaymentStatus>(["paid", "refunded"]);
 
-/** A deal that holds its sponsor (product ruling 2026-11-09, sponsor deals Task 5): it carries money history — money paid or
- *  refunded — or it is a pre-deals legacy order (F16: the RESTRICT key covers it). Every other deal (a draft, an unpaid or
- *  failed one, a complimentary one, live or ended) goes with its sponsor. A stored Checkout session no longer holds it
- *  (Task 7, F3): `deleteSponsor` retires the session first, and refuses only when it cannot. The tenant's prune policy (V300's
- *  fence, widened by the sponsor-deals delta) admits exactly the others once their session is cleared, so each refusal here is
- *  a 409, never a 23503. */
+/** A deal that holds its sponsor (product ruling 2026-11-09, sponsor deals Task 5): it carries money or document history —
+ *  money paid or refunded, an invoice number (Task 20, F10: a numbered invoice is a document, and its number is never reused,
+ *  spec §7) — or it is a pre-deals legacy order (F16: the RESTRICT key covers it). Every other deal (a draft, an unpaid or
+ *  failed one, a complimentary one, live or ended, with no number) goes with its sponsor. A stored Checkout session no longer
+ *  holds it (Task 7, F3): `deleteSponsor` retires the session first, and refuses only when it cannot. The tenant's prune policy
+ *  (V300's fence, widened by the sponsor-deals delta and narrowed again by the invoices delta's `invoice_number is null`) admits
+ *  exactly the others once their session is cleared, so each refusal here is a 409, never a 23503. */
 function dealHoldsHistory(d: ServerDeal): boolean {
-  // TODO(Task 20, F10): `|| d.invoice_number !== null` once deals are numbered (a numbered invoice is a document); the
-  // prune policy gains `and invoice_number is null` in the same task.
-  return MONEY_HISTORY.has(d.payment_status) || isLegacyDeal(d);
+  return MONEY_HISTORY.has(d.payment_status) || d.invoice_number !== null || isLegacyDeal(d);
 }
 
 const holdsHistory = () =>
   sponsorRefusal(
     409,
-    "this sponsor has deal history (money paid or refunded, or a pre-deals order) — end its deals instead",
+    "this sponsor has deal history (money paid or refunded, a numbered invoice, or a pre-deals order) — end its deals instead",
     "sponsor_has_deal_history",
   );
 const holdsOpenCheckout = () =>
@@ -366,7 +365,8 @@ const holdsOpenCheckout = () =>
   );
 
 /**
- * Delete a sponsor with its deals. Refused (409 `sponsor_has_deal_history`) while a deal holds money history — read FIRST, so a
+ * Delete a sponsor with its deals. Refused (409 `sponsor_has_deal_history`) while a deal holds money or document history
+ * (`dealHoldsHistory`: a numbered invoice too, F10) — read FIRST, so a
  * delete that will be refused never closes a payment link. Then the session rule (F3), outside any transaction: every stored
  * Checkout session is retired; a completed one (money in flight) or an open one that cannot be expired refuses the delete (409
  * `sponsor_has_open_checkout`), because a later payment on a deleted deal would take money and record nothing. Each retired

@@ -234,6 +234,7 @@ describe.skipIf(!HAS_DB)("a console deal action expires the public pages before 
     for (const id of [dealOrgId, sendOrgId].filter(Boolean)) {
       await sql`delete from email_outbox where org_id = ${id}`;
       await sql`delete from sponsor_orders where org_id = ${id}`;
+      await sql`delete from sponsor_invoice_counters where org_id = ${id}`;
       await sql`delete from organizations where id = ${id}`;
     }
   });

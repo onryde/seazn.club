@@ -5,8 +5,9 @@
 // patchSponsor's own unconditional sponsor row lock (F16), so a deal going live in another transaction is seen.
 //
 // And the delete guard (product ruling 2026-11-09): a sponsor holding a deal with money or document history (money paid or
-// refunded, a legacy order) answers 409 `sponsor_has_deal_history`, never a 23503. Every other deal (draft, complimentary,
-// failed, unpaid, live or ended) is deleted with it, in the same transaction. A deal holding a stored Checkout session is
+// refunded, an invoice number (Task 20, F10), a legacy order) answers 409 `sponsor_has_deal_history`, never a 23503. Every
+// other deal (draft, complimentary, failed, unpaid, live or ended, with no number) is deleted with it, in the same
+// transaction. A deal holding a stored Checkout session is
 // deleted once Task 7's session rule has retired the session (409 `sponsor_has_open_checkout` while it cannot): Stripe is
 // mocked for that, so it is pinned in sponsor-deals-online.test.ts, not here.
 //
@@ -274,10 +275,10 @@ describe.skipIf(!HAS_DB)("the console row carries its deal summary (pickRowDeal,
 });
 
 /** Product ruling (controller, 2026-11-09, on Task 5's concern 2): a deal holds its sponsor ONLY when it carries money or
- *  document history — money paid or refunded, an invoice number (Task 20, F10: no deal has one yet), a stored Checkout
+ *  document history — money paid or refunded, an invoice number (Task 20, F10: the F10 case below), a stored Checkout
  *  session (F3: still a payable link until Task 7 expires it), or a pre-deals legacy order (F16: the RESTRICT key covers
  *  it). Every other deal goes with its sponsor, in the same transaction. Typed here from the ruling, never read from the
- *  code under test. */
+ *  code under test. Every row below is unnumbered: an online or offline one stands for a deal made before Task 20. */
 const COMPLIMENTARY: Deal = { payment_method: "complimentary", status: "none", go_live: "immediate" };
 const DELETABLE: [string, Deal][] = [
   ["a draft", { deal_status: "draft" }],
@@ -363,6 +364,37 @@ describe.skipIf(!HAS_DB)("deleting a sponsor: money or document history holds it
     await insertDeal(deal(o, id, LIVE));
     expect(await refusal(() => deleteSponsor(o.auth, id))).toEqual({ status: 409, code: "sponsor_has_deal_history" });
     expect(await dealCount(id)).toBe(3);
+  });
+
+  // F10 (Task 20; spec §7 "never reused"): a numbered deal is an invoice document. The prune fence keeps it from app_user, so
+  // without this refusal the delete would remove 0 of its rows and then die on the sponsor's RESTRICT key: a 23503, a 500. A
+  // numbered draft is a real state: an online create whose first send fails at Stripe (502) commits its numbered draft.
+  it("F10: a sponsor whose only deal is NUMBERED answers 409 sponsor_has_deal_history, never a 500, and keeps the sponsor and the deal — whatever the deal's state (count reported); its twin, an unnumbered open deal, is deleted with it (MUTATE: drop the invoice_number arm)", async () => {
+    const o = await org();
+    const NUMBERED: [string, Deal][] = [
+      ["a numbered draft (online, its invoice never sent)", { deal_status: "draft", invoice_number: 1 }],
+      ["a numbered offline deal awaiting payment", { payment_method: "offline", invoice_number: 2 }],
+      ["a numbered deal that ended unpaid", { ...ENDED, payment_method: "offline", invoice_number: 3 }],
+    ];
+    let checked = 0;
+    for (const [label, over] of NUMBERED) {
+      const id = await sponsor(o, "inactive");
+      const dealId = await insertDeal(deal(o, id, over));
+      expect(await refusal(() => deleteSponsor(o.auth, id)), label).toEqual({ status: 409, code: "sponsor_has_deal_history" });
+      expect(await rowBytes(id), `${label}: the sponsor stays`).not.toBeNull();
+      expect((await sql`select invoice_number from sponsor_orders where id = ${dealId}`)[0], `${label}: and its deal, numbered`)
+        .toEqual({ invoice_number: over.invoice_number });
+      checked++;
+    }
+    expect(checked, "numbered deals checked").toBe(NUMBERED.length);
+    expect(checked).toBe(3);
+
+    // The twin: an open deal with no number (complimentary, after approval: awaiting approval, and never numbered).
+    const twin = await sponsor(o, "inactive");
+    await insertDeal(deal(o, twin, { ...COMPLIMENTARY, go_live: "on_approval", deal_status: "awaiting_approval" }));
+    expect(await refusal(() => deleteSponsor(o.auth, twin)), "the unnumbered twin").toEqual({ status: undefined, code: "no_refusal" });
+    expect(await rowBytes(twin), "the twin's sponsor is gone").toBeNull();
+    expect(await dealCount(twin), "and its deal with it").toBe(0);
   });
 
   it("another org's sponsor (RLS) and a missing one are 404", async () => {

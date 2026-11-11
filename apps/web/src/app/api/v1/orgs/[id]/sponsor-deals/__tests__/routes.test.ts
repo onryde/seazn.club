@@ -53,6 +53,7 @@ afterAll(async () => {
   if (!HAS_DB) return;
   if (made.length > 0) {
     await sql`delete from sponsor_orders where org_id = any(${made}::uuid[])`;
+    await sql`delete from sponsor_invoice_counters where org_id = any(${made}::uuid[])`;
     await sql`delete from organizations where id = any(${made}::uuid[])`;
   }
   const g = globalThis as { _sql?: { end(): Promise<void> } };
