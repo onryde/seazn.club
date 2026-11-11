@@ -683,6 +683,7 @@ export function OrgSponsors({
             deal={selectedDeal}
             sponsorName={selected.name}
             orgId={orgId}
+            hasTiers={hasTiers}
             canEdit={canEdit}
             busy={busy}
             tz={tz}

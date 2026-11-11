@@ -461,6 +461,7 @@
   "sponsors.logoLabel": "Logo",
   "sponsors.empty": "Nog geen sponsors. Ze verschijnen op je openbare pagina's zodra je er een toevoegt.",
   "sponsors.edit": "{name} bewerken",
+  "sponsors.row.tierWhenLive": "{tier} zodra live",
   "sponsors.save": "Opslaan",
   "sponsors.clicks": "{count} klikken",
   "sponsors.urlInvalid": "Voer een geldige link in — example.com of https://example.com.",

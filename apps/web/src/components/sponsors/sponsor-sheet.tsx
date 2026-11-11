@@ -25,7 +25,7 @@ import { DealChip } from "@/components/sponsors/deal-chip";
 import { PayLinkBanner } from "@/components/sponsors/pay-link-banner";
 import { ShareReport } from "@/components/sponsors/share-report";
 import { TIER_MSG } from "@/components/sponsors/tier-labels";
-import { canShowAgain, dealPrice } from "@/components/sponsors/sponsor-list";
+import { canShowAgain, comingDeal, dealPrice, dealTierWord } from "@/components/sponsors/sponsor-list";
 import type { SponsorItem } from "@/components/org-sponsors";
 import { fmtPublicDate } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
@@ -182,7 +182,7 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
   const liveDeal = locked ? (current.find(isLiveDeal) ?? null) : null;
   const shownTier = liveDeal?.tier ?? sponsor.tier;
   const shownScope = liveDeal ? liveDeal.competition_id : sponsor.competition_id;
-  const coming = !locked && sponsor.has_open_deal && sponsor.deal !== null && isOpenDeal(sponsor.deal) ? sponsor.deal : null;
+  const coming = comingDeal(sponsor);
   const tierNow = coming !== null && coming.tier !== sponsor.tier ? coming : null;
   // The same for the scope: a deal that differs from the sponsor's own placement ONLY in scope (the same tier, another competition) still
   // changes what the sponsor shows on when it goes live, and the page says so, whichever of the two moved.
@@ -217,7 +217,7 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
           </span>
         </div>
         <p data-testid="sponsor-sheet-deal-what" className="min-w-0 break-words text-sm text-slate-700">
-          {d.package_name} · {scopeName(d.competition_id)}
+          {[d.package_name, dealTierWord(d, hasTiers, msg), scopeName(d.competition_id)].filter((part) => part !== null).join(" · ")}
         </p>
         {state !== null ? (
           <p data-testid="sponsor-sheet-deal-state" className="min-w-0 break-words text-xs text-slate-500">

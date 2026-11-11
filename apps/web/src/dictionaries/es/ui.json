@@ -461,6 +461,7 @@
   "sponsors.logoLabel": "Logo",
   "sponsors.empty": "Aún no hay patrocinadores. Aparecerán en tus páginas públicas en cuanto añadas uno.",
   "sponsors.edit": "Editar {name}",
+  "sponsors.row.tierWhenLive": "{tier} al activarse",
   "sponsors.save": "Guardar",
   "sponsors.clicks": "{count} clics",
   "sponsors.urlInvalid": "Introduce un enlace válido — example.com o https://example.com.",

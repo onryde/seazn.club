@@ -109,7 +109,7 @@ const OLD_ANCHOR = deal({
 const noop = () => {};
 function props(over: Partial<DealPageBodyProps> = {}): DealPageBodyProps {
   return {
-    deal: QUAY, sponsorName: "Quay Fisheries", orgId: ORG, canEdit: true, busy: false, tz: "UTC", orgTz: "UTC", competitions: COMPS,
+    deal: QUAY, sponsorName: "Quay Fisheries", orgId: ORG, hasTiers: true, canEdit: true, busy: false, tz: "UTC", orgTz: "UTC", competitions: COMPS,
     createdBy: "Sam Patel", competitionFinished: false, payLink: null, error: null, notice: null, onAction: noop, ...over,
   };
 }
@@ -129,10 +129,33 @@ beforeEach(() => {
 
 // --- the header: the package, the price, the sponsor and the chip -----------------------------------------------------------------
 
+describe("the header's tier word follows the sponsor page's rule (hasTiers, or a deal that carries a higher tier)", () => {
+  const name = (over: Partial<DealPageBodyProps>) => textOfMarkup(findOne(html(over), "deal-page-name").outer);
+  const CLUB = (tier: SponsorDeal["tier"]) => deal({ package_name: "Club Package", tier });
+
+  it("with tiers every tier says its word, between the package and the price (4 checked)", () => {
+    let checked = 0;
+    for (const [tier, word] of [["title", "Title"], ["gold", "Gold"], ["silver", "Silver"], ["partner", "Partner"]] as const) {
+      expect(name({ deal: CLUB(tier), hasTiers: true }), tier).toBe(`Club Package · ${word} · £300`);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("without tiers a Partner deal says none, and a deal carrying a higher tier still does (the pair)", () => {
+    expect(name({ deal: CLUB("partner"), hasTiers: false })).toBe("Club Package · £300");
+    expect(name({ deal: CLUB("title"), hasTiers: false })).toBe("Club Package · Title · £300");
+  });
+
+  it("a package named for its own tier does not say it twice", () => {
+    expect(name({ deal: deal({ package_name: "Partner", tier: "partner" }), hasTiers: true })).toBe("Partner · £300");
+  });
+});
+
 describe("the header (acceptance: the package, the price, the sponsor and the chip)", () => {
-  it("reads 'Silver Season · £300', the sponsor, and the deal's chip (screen 5, Quay Fisheries)", () => {
+  it("reads 'Silver Season · Silver · £300', the sponsor, and the deal's chip (screen 5, Quay Fisheries; the tier word is the owner's, 2026-11-11)", () => {
     const markup = html();
-    expect(textOfMarkup(findOne(markup, "deal-page-name").outer)).toBe("Silver Season · £300");
+    expect(textOfMarkup(findOne(markup, "deal-page-name").outer)).toBe("Silver Season · Silver · £300");
     expect(textOfMarkup(findOne(markup, "deal-page-sponsor").outer)).toBe("Quay Fisheries");
     const chip = findOne(markup, "deal-chip");
     expect(attrOf(chip.open, "data-chip-kind")).toBe("awaiting_approval");
@@ -346,7 +369,7 @@ describe("a legacy (pre-deals) deal opened by id (the empty case)", () => {
     expect(findAll(markup, "deal-page-action")).toHaveLength(0);
     expect(findAll(markup, "deal-page-actions"), "not even an empty row").toHaveLength(0);
     expect(findAll(markup, "deal-page-evidence")).toHaveLength(0);
-    expect(textOfMarkup(findOne(markup, "deal-page-name").outer)).toBe("Gold package · £300");
+    expect(textOfMarkup(findOne(markup, "deal-page-name").outer)).toBe("Gold package · Gold · £300");
     expect(attrOf(findOne(markup, "deal-chip").open, "data-chip-kind")).toBe("ended");
     expect(stepWords(markup, "ended")).toEqual(["Ended", "1 Oct 2026 · From before deals existed"]);
     expect(findAll(markup, "deal-page-going-live"), "an ended deal switches nothing on").toHaveLength(0);

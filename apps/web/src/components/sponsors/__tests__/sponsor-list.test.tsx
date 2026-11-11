@@ -12,7 +12,7 @@
 // Killers (one at a time, restore from a cp backup):
 //   L1  one action     render `allowedActions(deal)[1]` beside the row's action                       -> "one action at most"
 //   L2  precedence     `rowNextAction(deal)` -> a draft row offers Send invoice                       -> "the eight mockup rows"
-//   L3  group key      group by `s.tier` instead of `s.deal?.tier ?? s.tier`                         -> "a pending gold deal"
+//   L3  group key      group by `s.deal?.tier ?? s.tier` (the OLD key: the waiting deal's tier)        -> "a waiting gold deal"
 //   L4  fold           drop `max-md:hidden` from the tray                                              -> "the tray is hidden below md"
 //   L5  fold twice     render the controls a second time (a phone copy)                                -> "each control exists once"
 //   L6  viewer         drop the `canEdit &&` guard on the action                                      -> "a viewer"
@@ -35,13 +35,13 @@ vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMo
 
 import { OrgSponsors, SponsorForm, type SponsorItem, type SponsorsHubData } from "@/components/org-sponsors";
 import { AddDealSheet, type CreateDealBody } from "@/components/sponsors/add-deal-sheet";
-import { canShowAgain, SponsorList, type SponsorListProps } from "@/components/sponsors/sponsor-list";
+import { canShowAgain, groupTierOf, SponsorList, tierComing, type SponsorListProps } from "@/components/sponsors/sponsor-list";
 import { SponsorRowMore } from "@/components/sponsors/sponsor-row-more";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { expandSponsorTree } from "./_sponsor-tree";
 import { attrOf, classTokens, findAll, findOne, textOfMarkup } from "./_markup";
 import { ApiV1Error } from "@/lib/client-v1";
-import { SPONSOR_TIERS } from "@/lib/sponsor-tiers";
+import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
 import type { SponsorPackageRow } from "@/server/usecases/sponsors";
 import type { SponsorDeal } from "@/lib/sponsor-deals";
 import { t } from "@/lib/i18n-runtime";
@@ -81,12 +81,16 @@ const sponsor = (over: Partial<SponsorItem> & { id: string; name: string }): Spo
   on_stream: false, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false, last_billing_email: null, ...over,
 });
 
-/** The mockup's eight rows (screen 1), in the mockup's group order. `chip` / `sub` / `action` are the words in the picture. */
+/** The mockup's eight rows (screen 1), in the mockup's order. `chip` / `action` are the words in the picture. Two things are the OWNER'S
+ *  since the mockup (2026-11-11), typed here from his words and not from the component: a row is grouped under the tier its sponsor
+ *  shows at NOW (`group`; the mockup grouped a waiting deal under its own tier), and the sub-line names the deal's tier beside the
+ *  package ("Testing001 Gold · Title · £20 · Bank transfer"; `sub`). `hint` is the row's "<Tier> when live" chip, or null. */
 interface MockupRow {
   s: SponsorItem;
   group: (typeof SPONSOR_TIERS)[number];
   chip: string;
   sub: string;
+  hint: string | null;
   /** The `RowAction` and its button words, or null: no button. */
   action: [string, string] | null;
 }
@@ -96,53 +100,53 @@ const MOCKUP: MockupRow[] = [
       id: "s1", name: LONG_NAME, tier: "title", click_count: 41, locked_by_deal: true, url: "https://harbourside.example/",
       deal: deal({ id: "d1", sponsor_id: "s1", deal_status: "live", payment_status: "paid", package_name: "Title Season", tier: "title", amount_cents: 150_000, competition_id: "c-season" }),
     }),
-    group: "title", chip: "Live", sub: "Title Season · £1,500 · Season 2026/27", action: null,
+    group: "title", chip: "Live", sub: "Title Season · Title · £1,500 · Season 2026/27", hint: null, action: null,
   },
   {
     s: sponsor({
       id: "s2", name: "Ridge Gold Physiotherapy", tier: "partner", click_count: 12, status: "inactive", has_open_deal: true,
       deal: deal({ id: "d2", sponsor_id: "s2", deal_status: "awaiting_payment", payment_status: "pending", payment_method: "online", package_name: "Gold Season", tier: "gold", amount_cents: 60_000, invoice_sent_at: "2026-10-28T10:00:00.000Z" }),
     }),
-    group: "gold", chip: "Awaiting payment", sub: "Gold Season · £600 · Online invoice sent 28 Oct", action: ["resend_invoice", "Resend invoice"],
+    group: "partner", chip: "Awaiting payment", sub: "Gold Season · Gold · £600 · Online invoice sent 28 Oct", hint: "Gold when live", action: ["resend_invoice", "Resend invoice"],
   },
   {
     s: sponsor({
       id: "s3", name: "Quay Fisheries", tier: "partner", click_count: 7, status: "inactive", has_open_deal: true,
       deal: deal({ id: "d3", sponsor_id: "s3", deal_status: "awaiting_approval", payment_status: "paid", payment_method: "online", go_live: "on_approval", package_name: "Silver Season", tier: "silver", amount_cents: 30_000, paid_at: "2026-10-16T12:00:00.000Z" }),
     }),
-    group: "silver", chip: "Awaiting approval", sub: "Silver Season · £300 · Paid 16 Oct", action: ["approve", "Approve"],
+    group: "partner", chip: "Awaiting approval", sub: "Silver Season · Silver · £300 · Paid 16 Oct", hint: "Silver when live", action: ["approve", "Approve"],
   },
   {
     s: sponsor({
       id: "s4", name: "Marlow & Daughters Bakery", tier: "partner", click_count: 3, status: "inactive", has_open_deal: true,
       deal: deal({ id: "d4", sponsor_id: "s4", deal_status: "awaiting_payment", payment_status: "pending", payment_method: "offline", package_name: "Silver Season", tier: "silver", amount_cents: 30_000 }),
     }),
-    group: "silver", chip: "Awaiting payment", sub: "Silver Season · £300 · Bank transfer", action: ["mark_paid", "Mark as paid"],
+    group: "partner", chip: "Awaiting payment", sub: "Silver Season · Silver · £300 · Bank transfer", hint: "Silver when live", action: ["mark_paid", "Mark as paid"],
   },
   {
     s: sponsor({
       id: "s5", name: "Old Anchor Café", tier: "partner", click_count: 9, locked_by_deal: true,
       deal: deal({ id: "d5", sponsor_id: "s5", deal_status: "live", payment_status: "none", payment_method: "complimentary", go_live: "immediate", package_name: "Partner", tier: "partner", amount_cents: 0, competition_id: "c-winter" }),
     }),
-    group: "partner", chip: "Live", sub: "Partner · Complimentary · Winter League 2026/27", action: null,
+    group: "partner", chip: "Live", sub: "Partner · Complimentary · Winter League 2026/27", hint: null, action: null,
   },
   {
     s: sponsor({
       id: "s6", name: "Kestrel Taxis", tier: "partner", click_count: 0, status: "inactive", has_open_deal: true,
       deal: deal({ id: "d6", sponsor_id: "s6", deal_status: "draft", payment_status: "pending", payment_method: "online", package_name: "Partner", tier: "partner", amount_cents: 12_000 }),
     }),
-    group: "partner", chip: "Draft", sub: "Partner · £120 · Not sent yet", action: ["open_deal", "Open deal"],
+    group: "partner", chip: "Draft", sub: "Partner · £120 · Not sent yet", hint: null, action: ["open_deal", "Open deal"],
   },
   {
     s: sponsor({ id: "s7", name: "Northbank Print", tier: "partner", click_count: 2, status: "inactive", url: "https://northbank-print.co.uk/", deal: null }),
-    group: "partner", chip: "No deal", sub: "No deal · northbank-print.co.uk", action: ["add_deal", "Add deal"],
+    group: "partner", chip: "No deal", sub: "No deal · northbank-print.co.uk", hint: null, action: ["add_deal", "Add deal"],
   },
   {
     s: sponsor({
       id: "s8", name: "Tidewell Garage", tier: "partner", click_count: 18, status: "inactive",
       deal: deal({ id: "d8", sponsor_id: "s8", deal_status: "ended", payment_status: "paid", package_name: "Partner", tier: "partner", amount_cents: 12_000, ended_at: "2026-08-31T12:00:00.000Z", ended_reason: "expired" }),
     }),
-    group: "partner", chip: "Ended", sub: "Partner · £120 · Ended 31 Aug", action: ["add_deal", "Add deal"],
+    group: "partner", chip: "Ended", sub: "Partner · £120 · Ended 31 Aug", hint: null, action: ["add_deal", "Add deal"],
   },
 ];
 const ROWS = MOCKUP.map((m) => m.s);
@@ -173,10 +177,11 @@ beforeEach(() => vi.clearAllMocks());
 // --- the list --------------------------------------------------------------------------------------------------------------------
 
 describe("the eight mockup rows: each chip, sub-line and ONE next action (mockup screen 1)", () => {
-  it("the fixture IS the mockup: eight rows, groups 1 / 1 / 2 / 4", () => {
+  it("the fixture IS the mockup's eight rows, grouped by the tier each sponsor shows at now: Title 1, Partner 7 (three of them waiting on a higher-tier deal)", () => {
     expect(MOCKUP).toHaveLength(8);
     const counts = SPONSOR_TIERS.map((tier) => MOCKUP.filter((m) => m.group === tier).length);
-    expect(counts).toEqual([1, 1, 2, 4]);
+    expect(counts).toEqual([1, 0, 0, 7]);
+    expect(MOCKUP.filter((m) => m.hint !== null).map((m) => m.s.id), "premise: the three rows whose deal is a higher tier than the sponsor").toEqual(["s2", "s3", "s4"]);
   });
 
   it("each row shows the chip its deal state names, the sub-line, and the action rowNextAction picks (8 checked)", () => {
@@ -187,6 +192,8 @@ describe("the eight mockup rows: each chip, sub-line and ONE next action (mockup
       const row = rowOf(markup, m.s.id);
       expect(textOfMarkup(findOne(row, "deal-chip").outer), `${m.s.name}: chip`).toBe(m.chip);
       expect(textOfMarkup(findOne(row, "sponsor-row-sub").outer), `${m.s.name}: sub-line`).toBe(m.sub);
+      const hint = findAll(row, "sponsor-row-tier-hint");
+      expect(hint.map((h) => textOfMarkup(h.outer)), `${m.s.name}: the tier hint`).toEqual(m.hint === null ? [] : [m.hint]);
       expect(textOfMarkup(findOne(row, "sponsor-row-clicks").outer), `${m.s.name}: clicks`).toBe(String(MOCKUP_CLICKS[m.s.id]));
       const actions = findAll(row, "sponsor-row-action");
       if (m.action === null) {
@@ -272,12 +279,12 @@ describe("the empty case, and the plan without tiers", () => {
   });
 });
 
-describe("rows group by the deal's tier, in SPONSOR_TIERS order (spec §6.1, mockup screen 1)", () => {
-  it("the mockup's groups: Title 1, Gold 1, Silver 2, Partner 4, each row under its own deal's tier (8 checked)", () => {
+describe("rows group by the tier the sponsor shows at NOW, in SPONSOR_TIERS order (owner, 2026-11-11; spec §6.1)", () => {
+  it("the mockup's rows: Title 1, Partner 7, each row under its sponsor's tier; gold and silver are not drawn - nobody shows at them yet (8 checked)", () => {
     const markup = listHtml(ROWS);
     const groups = findAll(markup, "sponsor-group");
-    expect(groups.map((g) => attrOf(g.open, "data-tier"))).toEqual([...SPONSOR_TIERS]);
-    expect(groups.map((g) => textOfMarkup(findOne(g.outer, "sponsor-group-header").outer))).toEqual(["Title 1", "Gold 1", "Silver 2", "Partner 4"]);
+    expect(groups.map((g) => attrOf(g.open, "data-tier"))).toEqual(["title", "partner"]);
+    expect(groups.map((g) => textOfMarkup(findOne(g.outer, "sponsor-group-header").outer))).toEqual(["Title 1", "Partner 7"]);
     let checked = 0;
     for (const g of groups) {
       const tier = attrOf(g.open, "data-tier");
@@ -288,17 +295,130 @@ describe("rows group by the deal's tier, in SPONSOR_TIERS order (spec §6.1, moc
     expect(checked).toBe(8);
   });
 
-  it("a pending gold deal on a partner sponsor sits in Gold - the sponsor's own tier is not the group", () => {
-    const ridge = ROWS.find((r) => r.id === "s2")!;
-    expect(ridge.tier, "premise: the sponsor row itself says partner").toBe("partner");
-    const gold = findAll(listHtml(ROWS), "sponsor-group").find((g) => attrOf(g.open, "data-tier") === "gold")!;
-    expect(findAll(gold.outer, "sponsor-row").map((r) => attrOf(r.open, "data-sponsor-id"))).toEqual(["s2"]);
+  // The owner's own screen (stg): package "Testing001 Gold" has tier Title; sponsor Testoo2 has an offline deal of it awaiting payment
+  // while the sponsor itself is still a Partner. It was listed under TITLE.
+  const WAITING = sponsor({
+    id: "t2", name: "Testoo2", tier: "partner", status: "inactive", has_open_deal: true,
+    deal: deal({ id: "dt2", sponsor_id: "t2", deal_status: "awaiting_payment", payment_status: "pending", payment_method: "offline", package_name: "Testing001 Gold", tier: "title", amount_cents: 2_000 }),
+  });
+  const groupOf = (markup: string, id: string) =>
+    findAll(markup, "sponsor-group").find((g) => findAll(g.outer, "sponsor-row").some((r) => attrOf(r.open, "data-sponsor-id") === id));
+  const hintOf = (markup: string, id: string) => findAll(rowOf(markup, id), "sponsor-row-tier-hint").map((h) => textOfMarkup(h.outer));
+
+  it("a waiting title deal on a partner sponsor sits in PARTNER with the hint 'Title when live' - the deal's tier is not the group (the Testoo2 case)", () => {
+    expect(WAITING.tier, "premise: the sponsor itself is a partner").toBe("partner");
+    expect(WAITING.deal?.tier, "premise: its deal is a title deal").toBe("title");
+    const markup = listHtml([WAITING]);
+    expect(attrOf(groupOf(markup, "t2")!.open, "data-tier")).toBe("partner");
+    expect(hintOf(markup, "t2")).toEqual(["Title when live"]);
+    expect(textOfMarkup(findOne(rowOf(markup, "t2"), "sponsor-row-sub").outer), "and the sub-line names the package's tier").toBe(
+      "Testing001 Gold · Title · £20 · Bank transfer",
+    );
+  });
+
+  it("a LIVE title deal sits in Title with no hint; a sponsor with no deal and one whose deal ended sit under their own tier with none (the other three cases)", () => {
+    const live = sponsor({
+      id: "l1", name: "Live Title", tier: "title", locked_by_deal: true,
+      deal: deal({ id: "dl1", sponsor_id: "l1", deal_status: "live", package_name: "Title Season", tier: "title" }),
+    });
+    const none = sponsor({ id: "n1", name: "No Deal Silver", tier: "silver", deal: null });
+    const ended = sponsor({
+      id: "e1", name: "Ended Gold", tier: "gold", status: "inactive",
+      deal: deal({ id: "de1", sponsor_id: "e1", deal_status: "ended", payment_status: "paid", package_name: "Gold Season", tier: "gold", ended_at: "2026-08-31T12:00:00.000Z", ended_reason: "expired" }),
+    });
+    // An ENDED deal of another tier than the sponsor's stored one: nothing is coming, so there is no hint and the stored tier groups it.
+    const endedElsewhere = sponsor({
+      id: "e2", name: "Ended Elsewhere", tier: "silver", status: "inactive",
+      deal: deal({ id: "de2", sponsor_id: "e2", deal_status: "ended", payment_status: "paid", package_name: "Title Season", tier: "title", ended_at: "2026-08-31T12:00:00.000Z", ended_reason: "expired" }),
+    });
+    const rows = [live, none, ended, endedElsewhere];
+    const markup = listHtml(rows);
+    const expected: [string, string][] = [["l1", "title"], ["n1", "silver"], ["e1", "gold"], ["e2", "silver"]];
+    let checked = 0;
+    for (const [id, tier] of expected) {
+      expect(attrOf(groupOf(markup, id)!.open, "data-tier"), id).toBe(tier);
+      expect(hintOf(markup, id), `${id}: no hint`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("a waiting deal of the SAME tier as its sponsor has no hint (nothing changes when it goes live), and a waiting deal beside a LIVE one is the live one's row", () => {
+    const same = sponsor({
+      id: "w1", name: "Waiting Gold", tier: "gold", status: "inactive", has_open_deal: true,
+      deal: deal({ id: "dw1", sponsor_id: "w1", deal_status: "awaiting_payment", payment_status: "pending", package_name: "Gold Season", tier: "gold" }),
+    });
+    // The row shows the LIVE deal when there is one (`pickRowDeal`), and the sponsor is locked by it: whatever else waits changes
+    // nothing until it ends, so no hint is drawn even if the row's own deal were another tier.
+    const held = sponsor({
+      id: "w2", name: "Held By Live", tier: "gold", locked_by_deal: true, has_open_deal: true,
+      deal: deal({ id: "dw2", sponsor_id: "w2", deal_status: "live", package_name: "Gold Season", tier: "gold" }),
+    });
+    const markup = listHtml([same, held]);
+    expect(hintOf(markup, "w1")).toEqual([]);
+    expect(hintOf(markup, "w2")).toEqual([]);
+  });
+
+  it("a waiting deal drawn without tiers (the flat list) has no hint: there are no groups for it to move between", () => {
+    const markup = listHtml([WAITING], { hasTiers: false });
+    expect(findAll(markup, "sponsor-group")).toHaveLength(0);
+    expect(findAll(markup, "sponsor-row-tier-hint")).toHaveLength(0);
   });
 
   it("a sponsor with no deal sits under its own tier; a group nobody is in is not drawn (the empty case of a group)", () => {
     const only = sponsor({ id: "s10", name: "Plain Sponsor", tier: "silver", deal: null });
     const groups = findAll(listHtml([only]), "sponsor-group");
     expect(groups.map((g) => attrOf(g.open, "data-tier"))).toEqual(["silver"]);
+  });
+
+  it("the helpers the rows and the sponsor page share: groupTierOf is the stored tier, tierComing names the waiting deal's tier only when it differs (8 checked)", () => {
+    const cases: [string, SponsorItem, SponsorTier, SponsorTier | null][] = [
+      ["waiting title deal on a partner", WAITING, "partner", "title"],
+      ["no deal", sponsor({ id: "h1", name: "h1", tier: "gold" }), "gold", null],
+      ["same tier", sponsor({ id: "h2", name: "h2", tier: "gold", has_open_deal: true, deal: deal({ id: "dh2", tier: "gold", deal_status: "scheduled" }) }), "gold", null],
+      ["live deal", sponsor({ id: "h3", name: "h3", tier: "title", locked_by_deal: true, deal: deal({ id: "dh3", tier: "title" }) }), "title", null],
+      ["draft deal", sponsor({ id: "h4", name: "h4", tier: "partner", has_open_deal: true, deal: deal({ id: "dh4", tier: "silver", deal_status: "draft" }) }), "partner", "silver"],
+      ["ended deal", sponsor({ id: "h5", name: "h5", tier: "partner", deal: deal({ id: "dh5", tier: "gold", deal_status: "ended" }) }), "partner", null],
+      // A live deal holds the sponsor's tier (D9): whatever waits beside it changes nothing until that one ends.
+      ["held by a live deal, a gold one waits", sponsor({ id: "h7", name: "h7", tier: "partner", locked_by_deal: true, has_open_deal: true, deal: deal({ id: "dh7", tier: "gold", deal_status: "awaiting_payment" }) }), "partner", null],
+      // Defensive: the flag says a deal waits but the row's own deal is the ended one - an ended deal changes nothing when "it goes live".
+      ["open flag, ended row deal", sponsor({ id: "h6", name: "h6", tier: "partner", has_open_deal: true, deal: deal({ id: "dh6", tier: "gold", deal_status: "ended" }) }), "partner", null],
+    ];
+    let checked = 0;
+    for (const [name, row, group, coming] of cases) {
+      expect(groupTierOf(row), `${name}: group`).toBe(group);
+      expect(tierComing(row), `${name}: coming`).toBe(coming);
+      checked++;
+    }
+    expect(checked).toBe(8);
+  });
+});
+
+describe("the tier word beside a deal's package: 'Testing001 Gold · Title · £20 · Bank transfer' (owner, 2026-11-11)", () => {
+  const say = (d: Partial<SponsorDeal>, hasTiers: boolean) => {
+    const row = sponsor({ id: "tw", name: "Tier Word", has_open_deal: true, deal: deal({ id: "dtw", sponsor_id: "tw", ...d }) });
+    return textOfMarkup(findOne(rowOf(listHtml([row], { hasTiers }), "tw"), "sponsor-row-sub").outer);
+  };
+  const OFFLINE = { deal_status: "awaiting_payment", payment_status: "pending", payment_method: "offline", amount_cents: 2_000 } as const;
+
+  it("on a plan with tiers every tier says its word, between the package and the price (4 tiers checked)", () => {
+    let checked = 0;
+    for (const [tier, word] of [["title", "Title"], ["gold", "Gold"], ["silver", "Silver"], ["partner", "Partner"]] as const) {
+      expect(say({ ...OFFLINE, package_name: "Testing001 Gold", tier }, true), tier).toBe(`Testing001 Gold · ${word} · £20 · Bank transfer`);
+      checked++;
+    }
+    expect(checked).toBe(SPONSOR_TIERS.length);
+  });
+
+  it("on a plan without tiers a Partner deal says no tier word, but a deal carrying a higher tier still says it (the pair)", () => {
+    expect(say({ ...OFFLINE, package_name: "Club Package", tier: "partner" }, false)).toBe("Club Package · £20 · Bank transfer");
+    expect(say({ ...OFFLINE, package_name: "Club Package", tier: "gold" }, false)).toBe("Club Package · Gold · £20 · Bank transfer");
+  });
+
+  it("a package named for its own tier does not say it twice ('Partner · Partner'); a longer name that contains it does (the pair)", () => {
+    expect(say({ ...OFFLINE, package_name: "Partner", tier: "partner" }, true)).toBe("Partner · £20 · Bank transfer");
+    expect(say({ ...OFFLINE, package_name: "gold", tier: "gold" }, true), "case does not matter").toBe("gold · £20 · Bank transfer");
+    expect(say({ ...OFFLINE, package_name: "Gold Season", tier: "gold" }, true)).toBe("Gold Season · Gold · £20 · Bank transfer");
   });
 });
 
@@ -311,8 +431,8 @@ describe("what a row says about itself", () => {
     const sub = (tz: string) => textOfMarkup(findOne(rowOf(listHtml([late], { tz }), "s11"), "sponsor-row-sub").outer);
     // 23:30 UTC on 28 Aug is 00:30 on the 29th in London (BST, UTC+1, until 25 Oct). August, not September: ICU spells en-GB's
     // September "Sept", and what is asserted here is the day, not that spelling.
-    expect(sub("UTC")).toBe("Gold Season · £600 · Online invoice sent 28 Aug");
-    expect(sub("Europe/London")).toBe("Gold Season · £600 · Online invoice sent 29 Aug");
+    expect(sub("UTC")).toBe("Gold Season · Gold · £600 · Online invoice sent 28 Aug");
+    expect(sub("Europe/London")).toBe("Gold Season · Gold · £600 · Online invoice sent 29 Aug");
   });
 
   it("a price with pence keeps them; a whole amount does not (both checked)", () => {
@@ -535,23 +655,28 @@ describe("Edit swaps the row for the editor the parent builds", () => {
 });
 
 describe("Move: the first and last row of a GROUP cannot move further", () => {
-  it("up is disabled on the first row of a group and down on the last (Silver: Quay is first, Marlow last)", () => {
+  it("up is disabled on the first row of a group and down on the last (Partner: Ridge is first, Tidewell last; Title: Harbourside is alone) - 8 checked", () => {
     const markup = listHtml(ROWS);
     const dis = (id: string, key: "moveUp" | "moveDown", name: string) => {
       const label = msg(`settings.org.sponsors.${key}`, { name });
       const tag = [...rowOf(markup, id).matchAll(/<button\b[^>]*>/g)].map((m) => m[0]).find((b) => attrOf(b, "aria-label") === label)!;
       return attrOf(tag, "disabled") !== undefined;
     };
-    expect(dis("s3", "moveUp", "Quay Fisheries")).toBe(true);
-    expect(dis("s3", "moveDown", "Quay Fisheries")).toBe(false);
-    expect(dis("s4", "moveUp", "Marlow & Daughters Bakery")).toBe(false);
-    expect(dis("s4", "moveDown", "Marlow & Daughters Bakery")).toBe(true);
+    expect(dis("s2", "moveUp", "Ridge Gold Physiotherapy"), "Ridge up: first in Partner").toBe(true);
+    expect(dis("s2", "moveDown", "Ridge Gold Physiotherapy"), "Ridge down: Quay follows").toBe(false);
+    expect(dis("s8", "moveUp", "Tidewell Garage"), "Tidewell up: Northbank precedes").toBe(false);
+    expect(dis("s8", "moveDown", "Tidewell Garage"), "Tidewell down: last in Partner").toBe(true);
+    expect(dis("s4", "moveUp", "Marlow & Daughters Bakery"), "Marlow up: mid group").toBe(false);
+    expect(dis("s4", "moveDown", "Marlow & Daughters Bakery"), "Marlow down: mid group").toBe(false);
+    expect(dis("s1", "moveUp", LONG_NAME), "Harbourside up: alone in Title").toBe(true);
+    expect(dis("s1", "moveDown", LONG_NAME), "Harbourside down: alone in Title").toBe(true);
   });
 });
 
-describe("Move: neighbours in one group swap only when they share a STORED tier (the server orders by it - review I1)", () => {
-  // Server order is stored tier, then display_order: a native gold sponsor sorts before a PARTNER sponsor whose pending deal is gold,
-  // though both are drawn in Gold. G1 and G2 are native gold; P is the partner with the gold deal.
+describe("Move: neighbours swap only when they share a STORED tier (the server orders by it - review I1)", () => {
+  // Server order is stored tier, then display_order. G1 and G2 are native gold; P is a PARTNER whose waiting deal is gold. With tiers
+  // the groups are stored-tier bands (owner, 2026-11-11), so P is drawn in Partner and the pair G1 / G2 is the whole Gold group; the
+  // plan WITHOUT tiers draws one flat list, where the stored-tier boundary between G2 and P is real and the arrows must respect it.
   const G1 = sponsor({ id: "g1", name: "Native Gold One", tier: "gold", display_order: 0 });
   const G2 = sponsor({ id: "g2", name: "Native Gold Two", tier: "gold", display_order: 1 });
   const P = sponsor({
@@ -566,22 +691,33 @@ describe("Move: neighbours in one group swap only when they share a STORED tier 
     return attrOf(tag, "disabled") !== undefined;
   };
 
-  it("premise: all three are drawn in ONE group (Gold), in the server's order", () => {
+  it("premise: with tiers the partner with a gold deal is drawn in PARTNER, not Gold; Gold holds the two native golds", () => {
     const groups = findAll(listHtml(MIXED), "sponsor-group");
-    expect(groups.map((g) => attrOf(g.open, "data-tier"))).toEqual(["gold"]);
-    expect(findAll(groups[0]!.outer, "sponsor-row").map((r) => attrOf(r.open, "data-sponsor-id"))).toEqual(["g1", "g2", "p1"]);
+    expect(groups.map((g) => attrOf(g.open, "data-tier"))).toEqual(["gold", "partner"]);
+    expect(findAll(groups[0]!.outer, "sponsor-row").map((r) => attrOf(r.open, "data-sponsor-id"))).toEqual(["g1", "g2"]);
+    expect(findAll(groups[1]!.outer, "sponsor-row").map((r) => attrOf(r.open, "data-sponsor-id"))).toEqual(["p1"]);
   });
 
-  it("the arrows between a native gold and the partner with a gold deal are disabled; the arrows between two native golds are not (4 checked)", () => {
+  it("with tiers: the two golds swap with each other and stop at the group's edges; P is alone in Partner (6 checked)", () => {
     const markup = listHtml(MIXED);
+    expect(disabled(markup, "g1", "moveUp", G1.name), "G1 up: first in Gold").toBe(true);
+    expect(disabled(markup, "g1", "moveDown", G1.name), "G1 down: its neighbour G2 shares the stored tier").toBe(false);
+    expect(disabled(markup, "g2", "moveUp", G2.name), "G2 up: its neighbour G1 shares the stored tier").toBe(false);
+    expect(disabled(markup, "g2", "moveDown", G2.name), "G2 down: last in Gold").toBe(true);
+    expect(disabled(markup, "p1", "moveUp", P.name), "P up: alone in Partner").toBe(true);
+    expect(disabled(markup, "p1", "moveDown", P.name), "P down: alone in Partner").toBe(true);
+  });
+
+  it("without tiers (one flat list, the server's order) the arrows between a native gold and the partner are disabled; the arrows between two native golds are not (4 checked)", () => {
+    const markup = listHtml(MIXED, { hasTiers: false });
     expect(disabled(markup, "g1", "moveDown", G1.name), "G1 down: its neighbour G2 shares the stored tier").toBe(false);
     expect(disabled(markup, "g2", "moveUp", G2.name), "G2 up: its neighbour G1 shares the stored tier").toBe(false);
     expect(disabled(markup, "g2", "moveDown", G2.name), "G2 down: its neighbour P is stored partner").toBe(true);
     expect(disabled(markup, "p1", "moveUp", P.name), "P up: its neighbour G2 is stored gold").toBe(true);
   });
 
-  it("a call that gets past the disabled arrow still sends no reorder; the legal swap beside it does send one", async () => {
-    const m = mount(MIXED);
+  it("a call that gets past the disabled arrow still sends no reorder across stored tiers (the flat list); the legal swap beside it does send one", async () => {
+    const m = mount(MIXED, { hasTiers: false });
     m.click(msg("settings.org.sponsors.moveDown", { name: G2.name }));
     m.click(msg("settings.org.sponsors.moveUp", { name: P.name }));
     await flush();
@@ -594,18 +730,22 @@ describe("Move: neighbours in one group swap only when they share a STORED tier 
     expect(reorder[0]!.body).toEqual({ ids: ["g2", "g1", "p1"] });
   });
 
-  it("without tiers (one flat list) the same rule holds: a stored-tier boundary is not crossed", async () => {
-    const m = mount(MIXED, { hasTiers: false });
+  it("with tiers the same two clicks send nothing too (the edges of the group), and the golds' swap sends one", async () => {
+    const m = mount(MIXED);
     m.click(msg("settings.org.sponsors.moveDown", { name: G2.name }));
+    m.click(msg("settings.org.sponsors.moveUp", { name: P.name }));
     await flush();
     expect(calls.filter((c) => c.url.endsWith("/sponsors/reorder"))).toHaveLength(0);
+    m.click(msg("settings.org.sponsors.moveDown", { name: G1.name }));
+    await flush();
+    expect(calls.filter((c) => c.url.endsWith("/sponsors/reorder")).map((c) => c.body)).toEqual([{ ids: ["g2", "g1", "p1"] }]);
   });
 });
 
-describe("Move: two rows drawn side by side in a group may sit APART in the stored order (the display_order gap; T14 re-review)", () => {
-  // All three are STORED gold, in the server's order X (0), B (5), Z (9). B has a SILVER deal, so it is drawn in Silver, and the Gold
-  // group is [X, Z]: neighbours on screen with B between them in the stored list. They share a stored tier, so they CAN swap - the swap
-  // exchanges their two positions in the whole list and leaves B where it is.
+describe("Move: a row whose waiting deal is another tier keeps its place in its own stored group (owner, 2026-11-11)", () => {
+  // X, B and Z are all STORED gold, in the server's order X (0), B (5), Z (9). B has a SILVER deal waiting. It used to be drawn in Silver
+  // (its deal's tier), leaving X and Z side by side in Gold with B between them in the stored list; now the group is the stored tier,
+  // so B stays between them and says "Silver when live".
   const X = sponsor({ id: "x", name: "Gold X", tier: "gold", display_order: 0 });
   const B = sponsor({
     id: "b", name: "Gold B With Silver Deal", tier: "gold", display_order: 5, status: "inactive", has_open_deal: true,
@@ -621,39 +761,30 @@ describe("Move: two rows drawn side by side in a group may sit APART in the stor
     return attrOf(tag, "disabled") === undefined;
   };
 
-  it("premise: X and Z are drawn together in Gold while B sits alone in Silver, and the stored order has a gap between X and Z", () => {
+  it("premise: all three are drawn in Gold, in the stored order, and B carries the 'Silver when live' hint", () => {
     const groups = findAll(listHtml(GAP), "sponsor-group");
-    expect(groups.map((g) => attrOf(g.open, "data-tier"))).toEqual(["gold", "silver"]);
-    expect(findAll(groups[0]!.outer, "sponsor-row").map((r) => attrOf(r.open, "data-sponsor-id"))).toEqual(["x", "z"]);
-    expect(findAll(groups[1]!.outer, "sponsor-row").map((r) => attrOf(r.open, "data-sponsor-id"))).toEqual(["b"]);
-    expect(GAP.map((s) => s.display_order), "the stored order: X, then B, then Z").toEqual([0, 5, 9]);
+    expect(groups.map((g) => attrOf(g.open, "data-tier"))).toEqual(["gold"]);
+    expect(findAll(groups[0]!.outer, "sponsor-row").map((r) => attrOf(r.open, "data-sponsor-id"))).toEqual(["x", "b", "z"]);
+    expect(findAll(rowOf(listHtml(GAP), "b"), "sponsor-row-tier-hint").map((h) => textOfMarkup(h.outer))).toEqual(["Silver when live"]);
   });
 
-  it("X can move down and Z can move up; every other arrow is disabled - B's both included (6 checked)", () => {
+  it("X can move down, Z up, B both ways; X up and Z down are the group's edges (6 checked)", () => {
     const markup = listHtml(GAP);
-    expect(enabled(markup, "x", "moveDown", X.name), "X down: its drawn neighbour Z shares the stored tier").toBe(true);
-    expect(enabled(markup, "z", "moveUp", Z.name), "Z up: its drawn neighbour X shares the stored tier").toBe(true);
     expect(enabled(markup, "x", "moveUp", X.name), "X is first in Gold").toBe(false);
+    expect(enabled(markup, "x", "moveDown", X.name), "X down: B shares the stored tier").toBe(true);
+    expect(enabled(markup, "b", "moveUp", B.name), "B up: X shares the stored tier").toBe(true);
+    expect(enabled(markup, "b", "moveDown", B.name), "B down: Z shares the stored tier").toBe(true);
+    expect(enabled(markup, "z", "moveUp", Z.name), "Z up: B shares the stored tier").toBe(true);
     expect(enabled(markup, "z", "moveDown", Z.name), "Z is last in Gold").toBe(false);
-    expect(enabled(markup, "b", "moveUp", B.name), "B up: alone in Silver").toBe(false);
-    expect(enabled(markup, "b", "moveDown", B.name), "B down: alone in Silver").toBe(false);
   });
 
-  it("X down posts the whole order with X and Z exchanged and B left in the middle: ids [z, b, x]", async () => {
+  it("X down posts the whole order with X and B exchanged: ids [b, x, z]", async () => {
     const m = mount(GAP);
     m.click(msg("settings.org.sponsors.moveDown", { name: X.name }));
     await flush();
     const reorder = calls.filter((c) => c.url.endsWith("/sponsors/reorder"));
     expect(reorder).toHaveLength(1);
-    expect(reorder[0]!.body).toEqual({ ids: ["z", "b", "x"] });
-  });
-
-  it("B's arrows send nothing even when called past the disabled button (it has no neighbour to swap with)", async () => {
-    const m = mount(GAP);
-    m.click(msg("settings.org.sponsors.moveUp", { name: B.name }));
-    m.click(msg("settings.org.sponsors.moveDown", { name: B.name }));
-    await flush();
-    expect(calls.filter((c) => c.url.endsWith("/sponsors/reorder"))).toHaveLength(0);
+    expect(reorder[0]!.body).toEqual({ ids: ["b", "x", "z"] });
   });
 });
 
@@ -864,8 +995,8 @@ describe("Edit does not leave the row's ⋯ tray open behind it (review m3)", ()
   });
 });
 
-describe("Move reorders within the GROUP the row is drawn in (the deal's tier), and persists the global order", () => {
-  it("moving Marlow up swaps it with Quay (both in Silver) and POSTs the whole order with them swapped", async () => {
+describe("Move reorders within the GROUP the row is drawn in (the sponsor's own tier), and persists the global order", () => {
+  it("moving Marlow up swaps it with Quay (both in Partner) and POSTs the whole order with them swapped", async () => {
     const m = mount(ROWS);
     m.click(msg("settings.org.sponsors.moveUp", { name: "Marlow & Daughters Bakery" }));
     await flush();
@@ -873,12 +1004,16 @@ describe("Move reorders within the GROUP the row is drawn in (the deal's tier), 
     expect(reorder?.body).toEqual({ ids: ["s1", "s2", "s4", "s3", "s5", "s6", "s7", "s8"] });
   });
 
-  it("a partner sponsor with a pending gold deal is alone in Gold: it cannot move, and no other row is swapped with it", async () => {
+  it("a partner sponsor with a waiting gold deal moves with the PARTNER group: first in it, so Up is disabled and Down swaps it with Quay", async () => {
     const m = mount(ROWS);
     const up = m.byLabel(msg("settings.org.sponsors.moveUp", { name: "Ridge Gold Physiotherapy" }));
-    expect(propsOf(up).disabled, "first and last of its group").toBe(true);
+    expect(propsOf(up).disabled, "first in Partner").toBe(true);
     const down = m.byLabel(msg("settings.org.sponsors.moveDown", { name: "Ridge Gold Physiotherapy" }));
-    expect(propsOf(down).disabled).toBe(true);
+    expect(propsOf(down).disabled, "Quay follows it in Partner").toBe(false);
+    m.click(msg("settings.org.sponsors.moveDown", { name: "Ridge Gold Physiotherapy" }));
+    await flush();
+    const reorder = calls.find((c) => c.url === `/api/v1/orgs/${ORG}/sponsors/reorder`);
+    expect(reorder?.body).toEqual({ ids: ["s1", "s3", "s2", "s4", "s5", "s6", "s7", "s8"] });
   });
 });
 

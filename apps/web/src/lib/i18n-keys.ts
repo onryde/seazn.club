@@ -8053,6 +8053,7 @@ export type DictionaryKey =
   | "sponsors.pkg.tiersHint"
   | "sponsors.pkg.usedBy.one"
   | "sponsors.pkg.usedBy.other"
+  | "sponsors.row.tierWhenLive"
   | "sponsors.save"
   | "sponsors.scopeAll"
   | "sponsors.scopeLabel"

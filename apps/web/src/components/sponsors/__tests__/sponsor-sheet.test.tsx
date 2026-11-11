@@ -371,18 +371,18 @@ describe("Deals: this sponsor's deals, the current ones then the past ones, newe
 
   it("each deal: its chip, its price, 'package · scope', and where the money stands", () => {
     const rows = [
-      deal({ id: "r1", deal_status: "live", payment_status: "paid", package_name: "Gold Season", amount_cents: 60_000, competition_id: "c-season", paid_at: "2026-10-16T12:00:00.000Z" }),
-      deal({ id: "r2", deal_status: "awaiting_payment", payment_status: "pending", payment_method: "online", package_name: "Silver Season", amount_cents: 30_000, invoice_sent_at: "2026-10-28T10:00:00.000Z" }),
-      deal({ id: "r3", deal_status: "awaiting_payment", payment_status: "pending", payment_method: "offline", package_name: "Silver Season", amount_cents: 30_000 }),
+      deal({ id: "r1", deal_status: "live", payment_status: "paid", package_name: "Gold Season", tier: "gold", amount_cents: 60_000, competition_id: "c-season", paid_at: "2026-10-16T12:00:00.000Z" }),
+      deal({ id: "r2", deal_status: "awaiting_payment", payment_status: "pending", payment_method: "online", package_name: "Silver Season", tier: "silver", amount_cents: 30_000, invoice_sent_at: "2026-10-28T10:00:00.000Z" }),
+      deal({ id: "r3", deal_status: "awaiting_payment", payment_status: "pending", payment_method: "offline", package_name: "Silver Season", tier: "silver", amount_cents: 30_000 }),
       deal({ id: "r4", deal_status: "live", payment_status: "none", payment_method: "complimentary", go_live: "immediate", package_name: "Partner", amount_cents: 0, competition_id: "c-winter" }),
       deal({ id: "r5", deal_status: "draft", payment_status: "pending", payment_method: "online", package_name: "Partner", amount_cents: 12_050 }),
       deal({ id: "r6", deal_status: "ended", payment_status: "paid", package_name: "Partner", amount_cents: 12_000, ended_at: "2026-08-31T12:00:00.000Z", ended_reason: "expired" }),
     ];
     const markup = bodyHtml({ deals: rows });
     const WANT: Record<string, { chip: string; price: string; what: string; state: string | null }> = {
-      r1: { chip: "Live", price: "£600", what: "Gold Season · Season 2026/27", state: "Paid 16 Oct" },
-      r2: { chip: "Awaiting payment", price: "£300", what: "Silver Season · All competitions", state: "Online invoice sent 28 Oct" },
-      r3: { chip: "Awaiting payment", price: "£300", what: "Silver Season · All competitions", state: "Bank transfer" },
+      r1: { chip: "Live", price: "£600", what: "Gold Season · Gold · Season 2026/27", state: "Paid 16 Oct" },
+      r2: { chip: "Awaiting payment", price: "£300", what: "Silver Season · Silver · All competitions", state: "Online invoice sent 28 Oct" },
+      r3: { chip: "Awaiting payment", price: "£300", what: "Silver Season · Silver · All competitions", state: "Bank transfer" },
       r4: { chip: "Live", price: "Complimentary", what: "Partner · Winter League 2026/27", state: null },
       r5: { chip: "Draft", price: "£120.50", what: "Partner · All competitions", state: "Not sent yet" },
       r6: { chip: "Ended", price: "£120", what: "Partner · All competitions", state: "Ended 31 Aug" },
@@ -402,6 +402,31 @@ describe("Deals: this sponsor's deals, the current ones then the past ones, newe
   });
 });
 
+describe("a deal's tier word sits between its package and its scope, by the same rule as the list (hasTiers, or a higher tier on the deal)", () => {
+  const whatOf = (markup: string, id: string) => {
+    const d = dealsIn(markup).find((x) => attrOf(x.open, "data-deal-id") === id)!;
+    return textOfMarkup(findOne(d.outer, "sponsor-sheet-deal-what").outer);
+  };
+  const rows = [
+    deal({ id: "tp", package_name: "Club Package", tier: "partner", competition_id: "c-season" }),
+    deal({ id: "tt", package_name: "Testing001 Gold", tier: "title", competition_id: "c-season" }),
+    deal({ id: "te", package_name: "Partner", tier: "partner", competition_id: "c-season" }),
+  ];
+
+  it("with tiers: Partner and Title both say their word; a package named for its tier does not repeat it (3 checked)", () => {
+    const markup = bodyHtml({ deals: rows, hasTiers: true });
+    expect(whatOf(markup, "tp")).toBe("Club Package · Partner · Season 2026/27");
+    expect(whatOf(markup, "tt")).toBe("Testing001 Gold · Title · Season 2026/27");
+    expect(whatOf(markup, "te")).toBe("Partner · Season 2026/27");
+  });
+
+  it("without tiers: a Partner deal says none, the Title deal still does (the pair)", () => {
+    const markup = bodyHtml({ deals: rows, hasTiers: false });
+    expect(whatOf(markup, "tp")).toBe("Club Package · Season 2026/27");
+    expect(whatOf(markup, "tt")).toBe("Testing001 Gold · Title · Season 2026/27");
+  });
+});
+
 describe("a deal for a competition the page does not hold says so in words, never a bare ellipsis", () => {
   it("'package · This package's competition' - and a competition the page holds keeps its own name (the pair); the fallback is translated", () => {
     const rows = [
@@ -413,9 +438,9 @@ describe("a deal for a competition the page does not hold says so in words, neve
       const d = dealsIn(markup).find((x) => attrOf(x.open, "data-deal-id") === id)!;
       return textOfMarkup(findOne(d.outer, "sponsor-sheet-deal-what").outer);
     };
-    expect(whatOf("gone"), "an unknown competition").toBe(`Cup Partner · ${msg("sponsors.dealSheet.scopeUnknown")}`);
+    expect(whatOf("gone"), "an unknown competition").toBe(`Cup Partner · Partner · ${msg("sponsors.dealSheet.scopeUnknown")}`);
     expect(whatOf("gone"), "never the bare glyph").not.toContain("…");
-    expect(whatOf("known")).toBe("Cup Partner · Season 2026/27");
+    expect(whatOf("known")).toBe("Cup Partner · Partner · Season 2026/27");
     // The key exists, in words of its own, in every other locale: a locale cannot be left on English.
     let checked = 0;
     for (const [locale, dict] of [["es", uiEs], ["fr", uiFr], ["nl", uiNl]] as const) {

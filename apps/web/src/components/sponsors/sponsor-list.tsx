@@ -24,7 +24,7 @@ import { TIER_BADGE, TIER_MSG } from "@/components/sponsors/tier-labels";
 import type { SponsorItem } from "@/components/org-sponsors";
 import { fmtPublicDate } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
-import { rowNextAction, type RowAction, type SponsorDeal } from "@/lib/sponsor-deals";
+import { isOpenDeal, rowNextAction, type RowAction, type SponsorDeal } from "@/lib/sponsor-deals";
 import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
 import { dealHref, sponsorHref } from "@/lib/sponsors-hub";
 
@@ -40,18 +40,47 @@ export function canShowAgain(s: SponsorItem): boolean {
   return s.status === "inactive" && !s.locked_by_deal && !s.has_open_deal;
 }
 
-/** The group a sponsor's row is drawn in: its deal's tier (even before the deal is live - the chip says whether it is), else the
- *  sponsor's own. The move buttons swap within the same group, so they read this too. */
+/** The group a sponsor's row is drawn in: the tier it shows at NOW - the sponsor's own, which is what the public board draws (a live
+ *  deal sets it, D9, so a live deal's row is where its deal's tier puts it). A deal still waiting to go live changes nothing yet, so
+ *  its sponsor stays where it is and the row says what is coming (`tierComing`) - owner, 2026-11-11: a title package that is not paid
+ *  must not list the sponsor under Title while the page and the board show a Partner. The move buttons swap within the same group,
+ *  so they read this too. */
 export function groupTierOf(s: SponsorItem): SponsorTier {
-  return s.deal?.tier ?? s.tier;
+  return s.tier;
 }
 
-/** Can two NEIGHBOURS in a drawn group swap places? The server reads the list ordered by the sponsor's STORED tier, then
+/** The deal that will change this sponsor's placement when it goes live: it waits to go live (no live deal holds the sponsor). The
+ *  list's hint and the sponsor's page both read it, so the two cannot disagree about which deal is "coming". */
+export function comingDeal(s: SponsorItem): SponsorDeal | null {
+  return !s.locked_by_deal && s.has_open_deal && s.deal !== null && isOpenDeal(s.deal) ? s.deal : null;
+}
+
+/** The tier this sponsor moves to when its waiting deal goes live, or null when nothing is coming or the deal's tier is the one it
+ *  already shows at. */
+export function tierComing(s: SponsorItem): SponsorTier | null {
+  const next = comingDeal(s);
+  return next !== null && next.tier !== s.tier ? next.tier : null;
+}
+
+/** Can two NEIGHBOURS in a drawn list swap places? The server reads the list ordered by the sponsor's STORED tier, then
  *  display_order (server/usecases/sponsors.ts list), so two rows have an order between them only when that stored tier is the
- *  same. A native-gold sponsor and a partner with a gold deal share the Gold group but not an order: a swap between them would be
- *  drawn, persisted, and snap back on the next read. The arrows and `move()` both ask this. */
+ *  same. With tiers the groups ARE stored-tier bands, so this is true inside one; it still decides for the plan WITHOUT tiers, whose
+ *  one flat list can hold sponsors stored at different tiers (an organisation that came down from a paid plan): a swap between
+ *  those would be drawn, persisted, and snap back on the next read. The arrows and `move()` both ask this. */
 export function sameOrderBand(a: SponsorItem, b: SponsorItem): boolean {
   return a.tier === b.tier;
+}
+
+type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
+
+/** The tier word that rides beside a deal's package name ("Testing001 Gold · Title · £20"), or null when there is none to say. A plan
+ *  without tiers has none to show for a Partner deal - the sponsor page's own Tier row is not drawn there either - but a deal that
+ *  carries a higher tier (one placed while the plan had tiers, or on an Event Pass competition) still says so. And a package named
+ *  for its own tier ("Partner") would read "Partner · Partner", so the word is left off then. */
+export function dealTierWord(d: Pick<SponsorDeal, "tier" | "package_name">, hasTiers: boolean, msg: Msg): string | null {
+  if (!hasTiers && d.tier === "partner") return null;
+  const word = msg(TIER_MSG[d.tier]);
+  return d.package_name.trim().toLowerCase() === word.toLowerCase() ? null : word;
 }
 
 export interface SponsorListProps {
@@ -87,8 +116,6 @@ const ACTION_MSG: Record<RowAction, MessageKey> = {
   approve: "sponsors.deal.action.approve",
 };
 
-type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
-
 /** "northbank-print.co.uk" from a sponsor's link; the link itself when it will not parse. */
 function hostOf(url: string): string {
   try {
@@ -103,10 +130,14 @@ export function dealPrice(d: SponsorDeal, locale: string): string {
   return priceLabel(locale, d.amount_cents, d.currency);
 }
 
-/** The sub-line (mockup screen 1): `package · price · scope` for a live deal, and for every other state the third part says where
- *  the deal stands (invoice sent, paid, bank transfer, not sent yet, ended); a sponsor with no deal reads `No deal · host`. */
-function subline(s: SponsorItem, ctx: { msg: Msg; locale: string; tz: string; competitions: { id: string; name: string }[] }): string {
-  const { msg, locale, tz, competitions } = ctx;
+/** The sub-line (mockup screen 1): `package · tier · price · scope` for a live deal, and for every other state the last part says where
+ *  the deal stands (invoice sent, paid, bank transfer, not sent yet, ended); a sponsor with no deal reads `No deal · host`. The tier
+ *  word is the DEAL's (`dealTierWord`), so a waiting title deal reads "Title" here while the row sits under the tier it shows at now. */
+function subline(
+  s: SponsorItem,
+  ctx: { msg: Msg; locale: string; tz: string; competitions: { id: string; name: string }[]; hasTiers: boolean },
+): string {
+  const { msg, locale, tz, competitions, hasTiers } = ctx;
   const d = s.deal;
   if (d === null) {
     const none = msg("sponsors.deal.chip.none");
@@ -129,7 +160,7 @@ function subline(s: SponsorItem, ctx: { msg: Msg; locale: string; tz: string; co
   } else {
     tail = msg("sponsors.deal.subline.bankTransfer");
   }
-  return [d.package_name, paidFor, tail].join(" · ");
+  return [d.package_name, dealTierWord(d, hasTiers, msg), paidFor, tail].filter((part) => part !== null).join(" · ");
 }
 
 const ICON_BUTTON =
@@ -200,6 +231,22 @@ export function SponsorList(props: SponsorListProps) {
     return null;
   }
 
+  /** "Title when live": the sponsor's waiting deal will move it to another tier than the group it is drawn in. Only where groups are
+   *  drawn (a plan with tiers), and never for a live deal (it already is where it says) or an ended one. */
+  function tierHint(s: SponsorItem): ReactNode {
+    const next = hasTiers ? tierComing(s) : null;
+    if (next === null) return null;
+    return (
+      <span
+        data-testid="sponsor-row-tier-hint"
+        data-tier={next}
+        className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${TIER_BADGE[next]}`}
+      >
+        {msg("sponsors.row.tierWhenLive", { tier: msg(TIER_MSG[next]) })}
+      </span>
+    );
+  }
+
   function row(s: SponsorItem, group: SponsorItem[], index: number): ReactNode {
     const open = moreOpenId === s.id;
     const trayId = `sponsor-tools-${s.id}`;
@@ -240,9 +287,10 @@ export function SponsorList(props: SponsorListProps) {
                   </span>
                 </Link>
                 {badge(s)}
+                {tierHint(s)}
               </p>
               <p data-testid="sponsor-row-sub" className="truncate text-xs text-slate-500">
-                {subline(s, { msg, locale, tz, competitions })}
+                {subline(s, { msg, locale, tz, competitions, hasTiers })}
               </p>
             </div>
             {canEdit ? <SponsorRowMore name={s.name} open={open} controlsId={trayId} onToggle={() => onToggleMore(s.id)} /> : null}
