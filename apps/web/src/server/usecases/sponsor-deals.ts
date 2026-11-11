@@ -612,7 +612,7 @@ export async function endDealNow(auth: AuthCtx, dealId: string): Promise<Sponsor
  *  (`endedStillDue`), so the invoice stops asking ("Nothing due — written off by <club>"). The reason moves, and the waiver is
  *  stamped: `ended_reason` becomes `written_off` (the house precedent: a money event rewrites an ended deal's reason, as a refund
  *  writes `refunded`), with `written_off_at` and `written_off_by` saying when and who (final review m3: a waiver of money owed is
- *  a decision the club is asked about later; V503's sponsor_orders_written_off_stamped requires the time). The money stays unpaid
+ *  a decision the club is asked about later; V504's sponsor_orders_written_off_stamped requires the time). The money stays unpaid
  *  (`pending`: nothing was paid), and `ended_at` keeps the day the deal ended. The deal was already ended, so its sponsor does not
  *  move. No email (D13). Offered on nothing else: 409 (`deal_nothing_due`, `deal_already_paid`). */
 export async function writeOffDeal(auth: AuthCtx, dealId: string): Promise<SponsorDeal> {

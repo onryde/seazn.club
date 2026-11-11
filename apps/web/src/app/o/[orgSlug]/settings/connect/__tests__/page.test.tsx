@@ -1,6 +1,6 @@
 // Settings -> Connect page (sponsor deals Task 21): the "Sponsor invoices" card under the offline-instructions card.
 //
-// The page reads the org's two V501 columns and hands them to the island, with `canEdit` from the page's own auth. The island's
+// The page reads the org's two V502 columns and hands them to the island, with `canEdit` from the page's own auth. The island's
 // behaviour is org-sponsor-invoice-details.test.tsx's; this is the JOIN a person meets: the stored values on first paint, where
 // the card sits, who may edit, and that no plan gates it. The columns' real names are the smoke row's (a real server and DB).
 //

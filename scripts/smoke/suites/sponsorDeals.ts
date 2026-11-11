@@ -217,7 +217,7 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
 
   // --- PR 3 Task 21: Settings -> Connect carries the "Sponsor invoices" card on EVERY plan. The community owner above saves both
   // fields the way the card does (two single-key PATCHes, F30), and the real server's page answers 200 with the card OPEN AT those
-  // values (the page's own read of the two V501 columns); the Pro org's page carries the card too, with nothing stored yet.
+  // values (the page's own read of the two V502 columns); the Pro org's page carries the card too, with nothing stored yet.
   const invoiceAddress = `Smoke Club ${tag}, 12 Mill Lane`;
   const invoiceBank = `Sort 12-34-56 Acc 12345678 ${tag}`;
   const savedAddress = await raw(free, `/api/orgs/${org.id}`, "PATCH", { sponsor_invoice_address: invoiceAddress });
@@ -354,7 +354,7 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
   // that offers Mark as paid and Write off (lib/sponsor-deals.ts `endedStillDue`), and the sponsor list's row names it instead of
   // saying a bare "Ended" with an Add deal. Made as a club makes it - a sponsor, an immediate offline deal with a billing email -
   // and then the term ends: no route ends a deal that way (the hourly sweep does), so that one step is SQL, under the CHECKs
-  // `ended_shape` (V495) and `written_off_unpaid_offline` (V503: a written-off deal is offline, unpaid and went live).
+  // `ended_shape` (V495) and `written_off_unpaid_offline` (V504: a written-off deal is offline, unpaid and went live).
   if (!process.env.DATABASE_URL) {
     check("sd ended-unpaid deal rows: skipped (no DATABASE_URL to end a deal) - sponsor-deals.test.ts and sponsor-list.test.tsx cover them", true);
   } else {

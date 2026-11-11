@@ -69,7 +69,7 @@ export default async function ConnectSettingsPage({
         />
       </section>
 
-      {/* Sponsor invoices (V501): on every plan - a club that records a sponsor's cash payment still prints an invoice. Its own
+      {/* Sponsor invoices (V502): on every plan - a club that records a sponsor's cash payment still prints an invoice. Its own
           card, not a row of the one above: the registrants' offline instructions are written for players and never print here. */}
       <section className="card mt-4 p-6">
         <OrgSponsorInvoiceDetails

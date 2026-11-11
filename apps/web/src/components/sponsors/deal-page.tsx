@@ -44,7 +44,7 @@ const ACTION_MSG: Record<DealAction, MessageKey> = {
 };
 
 /** Why a deal ended, in words. A Record, so a reason the engine grows without words does not compile. A written-off deal says who wrote
- *  it off and when instead (`writtenOffLine`); its entry here is the words for a row with no stamp, which V503's CHECK refuses. */
+ *  it off and when instead (`writtenOffLine`); its entry here is the words for a row with no stamp, which V504's CHECK refuses. */
 const REASON_MSG: Record<EndReason, MessageKey> = {
   refunded: "sponsors.deal.timeline.reason.refunded",
   dispute_lost: "sponsors.deal.timeline.reason.disputeLost",

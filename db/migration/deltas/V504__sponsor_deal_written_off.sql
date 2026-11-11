@@ -1,4 +1,4 @@
--- V503 — a sponsor deal's unpaid invoice can be WRITTEN OFF (plan docs/superpowers/plans/2026-11-07-sponsor-deals.md, Task 23,
+-- V504 — a sponsor deal's unpaid invoice can be WRITTEN OFF (plan docs/superpowers/plans/2026-11-07-sponsor-deals.md, Task 23,
 -- controller carry 4 from the Task 22 re-review).
 --
 -- The case. An OFFLINE deal that went live and then ended unpaid because its term ran out (`expired`) or its competition finished
