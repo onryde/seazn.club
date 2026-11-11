@@ -57,7 +57,7 @@
 //    midnight; checkin-token.ts): it is the proof of presence at the venue, so it is a credential, not a public address.
 //  - the sponsor report link `/r/sponsor/<token>` (32 random bytes, base64url; until the club revokes it; R4 S14): whoever
 //    holds it reads that sponsor's figures and frames, with no login - a bearer credential, though it sits under `/r/`.
-// Left alone: `/refer/<code>` (a referral link is shared in public on purpose) and the registration reference `/r/<ref>` (a
+// Left alone: the registration reference `/r/<ref>` (a
 // lookup, not auth; the emailed `token` is what authorises a withdrawal) - a reference literally `sponsor` included, since
 // only a segment AFTER `/r/sponsor/` is a credential.
 //
@@ -161,7 +161,7 @@ const ENCODED_ROOM_TOKEN = new RegExp(`(%(?:25)*(?:3[Ff]|26)t%(?:25)*3[Dd])${JWT
  * Every one is a ROUTE ROOT, and is matched there only (`ROUTE_ROOT`): a club or competition slug is free text, so
  * `/o/x/c/join/d/claim` is an address and not a secret. They are spelled in full, not by their shortest tail, for the same
  * reason: `/invites/` alone would match any segment named `invites` anywhere.
- * Not here, on purpose: `/refer/<code>` (a referral link is shared in public) and the registration reference `/r/<ref>` (a
+ * Not here, on purpose: the registration reference `/r/<ref>` (a
  * lookup, not auth; `/r/sponsor/` above is the one credential under `/r/`, and a reference that reads `sponsor` has nothing
  * after it).
  */

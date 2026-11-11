@@ -255,8 +255,8 @@ export function matrixSqlOver(db: ReturnType<typeof postgres>, expectedDataDir: 
           returning id`;
         if (sub === undefined) throw new Error("seed-org: subscriptions insert returned no row");
         const [org] = await tx<{ id: string; slug: string }[]>`
-          insert into organizations (name, slug, created_by, subscription_id, referred_by_org_id)
-          values (${name}, ${slug}, ${userId}, ${sub.id}, ${null})
+          insert into organizations (name, slug, created_by, subscription_id)
+          values (${name}, ${slug}, ${userId}, ${sub.id})
           returning id, slug`;
         if (org === undefined) throw new Error("seed-org: organizations insert returned no row");
         await tx`

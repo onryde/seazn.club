@@ -8,8 +8,7 @@
 //  - the fixture check-in code, `/checkin/<token>` and `/api/checkin/<token>`. An HS256 JWT valid until the fixture's local
 //    midnight, the proof that a scanner stood at the venue. The printed QR is for the people in the room; the URL in a
 //    telemetry vendor's store is not. A credential: scrubbed.
-//  - NOT credentials, so left alone and said so: `/refer/<code>` (a referral link is shared in public on purpose; it
-//    only drops an attribution cookie) and `/r/<ref>`, with `/api/v1/public/registrations/by-ref/<ref>` (a registration
+//  - NOT credentials, so left alone and said so: `/r/<ref>`, with `/api/v1/public/registrations/by-ref/<ref>` (a registration
 //    reference is "a lookup, not auth"; the emailed `token` authorises a withdrawal, and that rides the body).
 //
 // The tokens are minted by the REAL minters (`createInvite`, `mintCheckinToken`; only the Postgres round trip is a
@@ -185,8 +184,7 @@ describe("every /<path>/${token} template is scrubbed, or is knowingly public", 
   const builders = pathBuilders();
 
   it("the scan found the builders (anti-vacuity)", () => {
-    // No `/refer/${code}` builder any more either: the Invite & earn card that built it is gone from Settings -> Credits
-    // (2026-11-11). The /refer ROUTE still exists and is still public (VERDICTS above); only the template is gone.
+    // No `/refer/${code}` builder or route any more: the referral programme is removed (2026-11-11).
     // No `/api/orgs/[id]/invites/${token}/revoke` builder any more: since 2026-11-07 the Team panel revokes by the
     // invite's ID (an email-bound invite's token never reaches it). The route still takes a link's token, so its PATH
     // stays a credential route (VERDICTS, swept above); there is just no template building it from a token.

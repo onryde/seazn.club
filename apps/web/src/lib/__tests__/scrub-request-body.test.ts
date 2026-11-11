@@ -429,12 +429,13 @@ describe("the same body on any other route is kept (the positive pair)", () => {
     expect(checked).toBe(innocentReaders.length * 2);
   });
 
-  it("every public secret route (a referral, a registration lookup) keeps its body", () => {
+  it("every public secret route (a registration lookup) keeps its body", () => {
     const publicHandlers = secretRoutes()
       .filter((r) => typeof VERDICTS[r.key] === "string")
       .flatMap((r) => r.handlers)
       .filter((h) => BODY_VERDICTS[h.key] !== true);
-    expect(publicHandlers.length).toBeGreaterThanOrEqual(2);
+    // Anti-vacuity floor: the registration by-ref handler (the /refer handler left with the referral programme).
+    expect(publicHandlers.length).toBeGreaterThanOrEqual(1);
     for (const handler of publicHandlers) {
       expect(requestOf(scrubSentryEvent(keep(`${ORIGIN}${handler.url("AB12CD34")}`))).data, handler.key).toEqual(body);
     }

@@ -84,8 +84,7 @@ const NEXT_COOKIE = "seazn_lichess_oauth_next";
 
 /** redirectLocal() emits a RELATIVE Location header on purpose (lib/http.ts —
  *  no origin to get wrong behind a proxy), so it needs a base to parse; the
- *  house pattern for this is `new URL(loc, "http://t")` — see
- *  app/refer/[code]/__tests__/route.test.ts. */
+ *  house pattern for this is `new URL(loc, "http://t")`. */
 const path = (location: string) => new URL(location, "http://t");
 
 beforeEach(() => {

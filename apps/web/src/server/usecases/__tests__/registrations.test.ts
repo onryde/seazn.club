@@ -79,22 +79,6 @@ vi.mock("@/lib/sentry", async (importOriginal) => {
 const transport = vi.hoisted(() => ({ deliver: vi.fn() }));
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: transport.deliver }));
 
-// #267 T3 (SPEC-5 §2): a targeted, org-id-scoped walletIdFor failure, so the
-// referral best-effort test can force the referrer grant to throw without
-// touching any other org's credit resolution (everything else passes through
-// to the real implementation).
-const creditsMock = vi.hoisted(() => ({ failWalletFor: new Set<string>() }));
-vi.mock("@/lib/credits", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/credits")>();
-  return {
-    ...actual,
-    walletIdFor: async (orgId: string) => {
-      if (creditsMock.failWalletFor.has(orgId)) throw new Error("forced test failure");
-      return actual.walletIdFor(orgId);
-    },
-  };
-});
-
 import { sql, withTenant } from "@/lib/db";
 import { disputeLostEmail, registrationRefundFailedAlertEmail } from "@/lib/email";
 import { captureError } from "@/lib/sentry";
@@ -189,7 +173,7 @@ import {
   stripeRig,
   currencyRig,
 } from "./_registration-fixtures";
-import { FIRST_PAID_EARN, LIFETIME_EARN_CAP, REFERRAL_EARN, balance, walletIdFor } from "@/lib/credits";
+import { FIRST_PAID_EARN, balance, walletIdFor } from "@/lib/credits";
 import { staffAlertDrops, staffRows } from "./_money-fixtures";
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -444,10 +428,6 @@ beforeEach(() => {
   transport.deliver.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_rs_${randomUUID()}` }));
 });
 
-afterEach(() => {
-  creditsMock.failWalletFor.clear();
-});
-
 afterAll(async () => {
   if (!HAS_DB) return;
   const globalForDb = globalThis as { _sql?: { end(): Promise<void> } };
@@ -643,54 +623,7 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
     expect(await balance(walletId)).toBe(before + FIRST_PAID_EARN);
   });
 
-  it("#267 T3: a referred org's first confirmed paid registration grants the REFERRER +20, once per referred org", async () => {
-    const { orgId: referrerOrgId } = await seedOrg("pro");
-    const referrerWallet = await walletIdFor(referrerOrgId);
-    // seedOrg("pro") gives the referrer its own group-of-one subscription, so
-    // the grant lands in that group's wallet, not the bare org id.
-    expect(referrerWallet).not.toBe(referrerOrgId);
-    const referrerBefore = await balance(referrerWallet);
-
-    const { orgId, ownerId } = await seedOrg("pro");
-    await sql`update organizations set referred_by_org_id = ${referrerOrgId} where id = ${orgId}`;
-    const owner = asOwner(orgId, ownerId);
-
-    const { competition, division } = await rig(owner);
-    const settings = await putRegistrationSettings(owner, division.id, {
-      enabled: true,
-      entrant_kind: "individual",
-      fee_cents: 2000,
-      form_fields: [],
-      opens_at: null,
-      closes_at: null,
-      capacity: null,
-      refund_lock_at: null,
-    });
-    const first = await seedRegistration(competition.id, division.id, settings);
-    await handleRegistrationCheckoutCompleted(fakeSession(first.registration.id, 2000));
-    expect(await balance(referrerWallet)).toBe(referrerBefore + REFERRAL_EARN);
-
-    // A SECOND paid competition for the SAME referred org: keyed on the
-    // referred org (earn:referral:${orgId}), so it no-ops — no extra grant.
-    const { competition: comp2, division: div2 } = await rig(owner);
-    const settings2 = await putRegistrationSettings(owner, div2.id, {
-      enabled: true,
-      entrant_kind: "individual",
-      fee_cents: 2000,
-      form_fields: [],
-      opens_at: null,
-      closes_at: null,
-      capacity: null,
-      refund_lock_at: null,
-    });
-    const second = await seedRegistration(comp2.id, div2.id, settings2, {
-      contactEmail: "second@test.local",
-    });
-    await handleRegistrationCheckoutCompleted(fakeSession(second.registration.id, 2000));
-    expect(await balance(referrerWallet)).toBe(referrerBefore + REFERRAL_EARN);
-  });
-
-  it("#267 T3: a non-referred org's first paid registration grants no referral credit to anyone", async () => {
+  it("a first paid registration writes only the org's own first_paid earn — no referral row (programme removed)", async () => {
     const { orgId, ownerId } = await seedOrg("pro");
     const owner = asOwner(orgId, ownerId);
     const walletId = await walletIdFor(orgId);
@@ -715,65 +648,6 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
        where idempotency_key = ${`earn:referral:${orgId}`}`;
     expect(n).toBe(0);
     expect(await balance(walletId)).toBe(FIRST_PAID_EARN);
-  });
-
-  it("#267 T3: the referrer's lifetime cap floors the +20, never overshoots", async () => {
-    const { orgId: referrerOrgId } = await seedOrg("pro");
-    const referrerWallet = await walletIdFor(referrerOrgId);
-    // Put the referrer 5 credits below the cap via a raw seed row (same
-    // recipe as credits-earn.test.ts's seedEarned helper).
-    await sql`
-      insert into ai_credit_ledger (wallet_id, delta, source, bucket, balance_after, idempotency_key)
-      values (${referrerWallet}, ${LIFETIME_EARN_CAP - 5}, 'earn_grant', 'pack', ${LIFETIME_EARN_CAP - 5}, ${`seed-${randomUUID()}`})`;
-
-    const { orgId, ownerId } = await seedOrg("pro");
-    await sql`update organizations set referred_by_org_id = ${referrerOrgId} where id = ${orgId}`;
-    const owner = asOwner(orgId, ownerId);
-
-    const { competition, division } = await rig(owner);
-    const settings = await putRegistrationSettings(owner, division.id, {
-      enabled: true,
-      entrant_kind: "individual",
-      fee_cents: 2000,
-      form_fields: [],
-      opens_at: null,
-      closes_at: null,
-      capacity: null,
-      refund_lock_at: null,
-    });
-    const res = await seedRegistration(competition.id, division.id, settings);
-    await handleRegistrationCheckoutCompleted(fakeSession(res.registration.id, 2000));
-
-    // Only the remaining 5 of headroom granted — capped, never over.
-    expect(await balance(referrerWallet)).toBe(LIFETIME_EARN_CAP);
-  });
-
-  it("#267 T3: best-effort — a referrer wallet-resolution failure never blocks the webhook confirmation", async () => {
-    const { orgId: referrerOrgId } = await seedOrg("pro");
-    const { orgId, ownerId } = await seedOrg("pro");
-    await sql`update organizations set referred_by_org_id = ${referrerOrgId} where id = ${orgId}`;
-    const owner = asOwner(orgId, ownerId);
-    creditsMock.failWalletFor.add(referrerOrgId);
-    const spy = vi.spyOn(log, "error").mockImplementation(() => {});
-
-    const { competition, division } = await rig(owner);
-    const settings = await putRegistrationSettings(owner, division.id, {
-      enabled: true,
-      entrant_kind: "individual",
-      fee_cents: 2000,
-      form_fields: [],
-      opens_at: null,
-      closes_at: null,
-      capacity: null,
-      refund_lock_at: null,
-    });
-    const res = await seedRegistration(competition.id, division.id, settings);
-    await handleRegistrationCheckoutCompleted(fakeSession(res.registration.id, 2000));
-
-    const row = await loadWithGroup(res.registration.id);
-    expect(row.status).toBe("confirmed"); // webhook still confirmed despite the grant failure
-    expect(spy).toHaveBeenCalled();
-    spy.mockRestore();
   });
 
   it("capacity: withdrawal auto-promotes the oldest waitlisted; auto-refund pre-lock", async () => {
