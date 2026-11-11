@@ -12,8 +12,8 @@
 //   match-board       the public match page's sponsor board (S10) — `mh-sponsors`
 //   hub-overview      Sponsors hub › Overview (S13): a 43-character name, a DELETED sponsor's row, the figures
 //   hub-sponsors      Sponsors hub › Sponsors (S11)
-//   hub-on-stream     Sponsors hub › On stream (S12): the switch on, the dial
 //   hub-packages      Sponsors hub › Packages (S11)
+//   hub-on-stream     Sponsors hub › On stream (S12): the switch on, the dial
 //   share-open        Overview › Share report, opened, a link created and its url shown (S13)
 //   report            the public report /r/sponsor/<token> (S14), anonymous, the 43-character name
 // Each shot is the state's own region. The org TOP BAR has its own shots (the nav sign-off, coordinator 2026-11-08):
@@ -42,7 +42,7 @@ import { releaseStandInOrg, seedStandInOrg, type StandInOrg } from "../helpers/s
 
 const DIR = process.env.SPONSOR_CAPTURE_DIR;
 const WIDTHS = [320, 768, 1280] as const;
-const STATES = ["match-board", "hub-overview", "hub-sponsors", "hub-on-stream", "hub-packages", "share-open", "report"] as const;
+const STATES = ["match-board", "hub-overview", "hub-sponsors", "hub-packages", "hub-on-stream", "share-open", "report"] as const;
 type State = (typeof STATES)[number];
 /** Review Focus 5's realistic names: 43 characters each. */
 const LONG_SPONSOR = "Harbourside Building Supplies and Timber Co";
@@ -184,16 +184,16 @@ for (const width of WIDTHS) {
       await expect(sponsors.getByText(LONG_SPONSOR).first(), "witness: the sponsor list").toBeVisible();
       await capture(page, "hub-sponsors", width, sponsors);
 
+      await page.goto(sponsorsUrl(org.slug, "packages"));
+      const packages = page.getByTestId("sponsors-tab-packages");
+      await expect(packages.getByText("Gold Season Package").first(), "witness: the seeded package").toBeVisible();
+      await capture(page, "hub-packages", width, packages);
+
       await page.goto(sponsorsUrl(org.slug, "on_stream"));
       const onStream = page.getByTestId("sponsors-tab-on_stream");
       await expect(page.getByTestId("on-stream-switch"), "witness: the rotation is on").toHaveAttribute("aria-checked", "true");
       await expect(page.getByTestId("on-stream-dial-normal"), "witness: the dial reads Normal").toHaveAttribute("aria-checked", "true");
       await capture(page, "hub-on-stream", width, onStream);
-
-      await page.goto(sponsorsUrl(org.slug, "packages"));
-      const packages = page.getByTestId("sponsors-tab-packages");
-      await expect(packages.getByText("Gold Season Package").first(), "witness: the seeded package").toBeVisible();
-      await capture(page, "hub-packages", width, packages);
     });
 
     test("Overview › Share report, opened, with its url (S13) — and that url opens the report for a stranger", async ({ page, browser }) => {

@@ -2,7 +2,7 @@
 
 - **Status:** design, 2026-11-01. The owner approved the direction ("yes"), the mockups ("perfect mockup") and option B ("B").
 - **Mockups (layout only; the build uses the house theme):** `~/seazn-artifacts/2026-11-01_sponsor-deals-mockups_6472cb56/index.html` (served locally at http://127.0.0.1:8765/2026-11-01_sponsor-deals-mockups_6472cb56/index.html; the claude.ai artifact link is dead)
-- **Depends on:** R4 PR A (`feat/r4-sponsors`). It provides the Sponsors hub at `/o/:slug/sponsors` (tabs Overview, Sponsors, On stream, Packages), `sponsors.on_stream`, `lib/sponsor-tiers.ts` and the sponsor report links. Build this programme only after PR A has merged.
+- **Depends on:** R4 PR A (`feat/r4-sponsors`). It provides the Sponsors hub at `/o/:slug/sponsors` (tabs Overview, Sponsors, Packages, On stream - the order the owner set on 2026-11-11), `sponsors.on_stream`, `lib/sponsor-tiers.ts` and the sponsor report links. Build this programme only after PR A has merged.
 
 ## 1. Why
 

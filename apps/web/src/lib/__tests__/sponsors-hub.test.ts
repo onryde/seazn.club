@@ -22,8 +22,15 @@ import {
 import { routes } from "@/lib/routes";
 
 describe("SPONSORS_TABS", () => {
-  it("is the four tabs the spec names, Overview first (the default), in the order they are laid out", () => {
-    expect(SPONSORS_TABS).toEqual(["overview", "sponsors", "on_stream", "packages"]);
+  // Owner, 2026-11-11: "move the package tab next to sponsors then stream" - Packages (the price list a deal is made from) sits right
+  // after Sponsors, and On stream is last. Typed from that ruling, not read back from the declaration.
+  it("is the four tabs in the owner's order: Overview (the default), Sponsors, Packages, On stream", () => {
+    expect(SPONSORS_TABS).toEqual(["overview", "sponsors", "packages", "on_stream"]);
+  });
+
+  it("Packages is the tab right after Sponsors, and On stream is last (the order itself, not just the set)", () => {
+    expect(SPONSORS_TABS.indexOf("packages")).toBe(SPONSORS_TABS.indexOf("sponsors") + 1);
+    expect(SPONSORS_TABS.at(-1)).toBe("on_stream");
   });
 
   it("the editor-only set is a strict, non-empty subset of the declared tabs (nothing invented, nothing vacuous)", () => {

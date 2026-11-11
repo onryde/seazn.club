@@ -366,6 +366,13 @@ describe("the Sponsors hub - the tab bar", () => {
     for (const l of links) expect(l.href, l.tab).toBe(sponsorsHref(ORG.slug, l.tab as SponsorsTab));
   });
 
+  it("the bar the page draws reads Overview, Sponsors, Packages, On stream (owner, 2026-11-11), whatever order the declaration is read in", async () => {
+    const links = tabLinks(await render());
+    expect(links.map((l) => l.tab), "the editor's bar, left to right").toEqual(["overview", "sponsors", "packages", "on_stream"]);
+    asMember("viewer", false);
+    expect(tabLinks(await render()).map((l) => l.tab), "a viewer's bar keeps the same relative order").toEqual(["overview", "sponsors"]);
+  });
+
   it("a non-editor is offered every tab EXCEPT the editor-only ones (the read-only view)", async () => {
     asMember("viewer", false);
     const links = tabLinks(await render());

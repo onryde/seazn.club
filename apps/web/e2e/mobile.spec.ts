@@ -734,7 +734,7 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
     // The Sponsors hub (R4 sponsors-on-stream S11): Settings -> Sponsors moved to its own top-level route, and Settings' own
     // `?tab=sponsors` now redirects there. EVERY tab of the hub, derived from the declaration (SPONSORS_TABS), so a tab added later
     // is swept by name instead of silently missing from the seven width projects. The profile here is the org's owner, so the
-    // editor-only tabs (On stream, Packages) render their bodies rather than falling back to Overview.
+    // editor-only tabs (Packages, On stream) render their bodies rather than falling back to Overview.
     ...SPONSORS_TABS.map((tab) => ({ path: sponsorsHref(orgSlug, tab) })),
     // The sponsor's own page and the deal's own page (sponsor deals PR 2): a page below 768, a side panel from it. Each must show the
     // surface the route is for (`requireTestId`), or the list rendering in its place would pass.
