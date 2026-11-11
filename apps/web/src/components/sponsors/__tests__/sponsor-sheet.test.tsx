@@ -28,7 +28,7 @@ import type { ReactElement } from "react";
 
 const confirmMock = vi.hoisted(() => vi.fn<(opts?: unknown) => Promise<boolean>>(async () => true));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMock }));
-const nav = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
+const nav = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn(), replace: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => nav }));
 const mdUp = vi.hoisted(() => ({ value: null as boolean | null }));
 vi.mock("@/components/ui/use-md-up", () => ({ useMdUp: () => mdUp.value }));
@@ -768,6 +768,89 @@ describe("OrgSponsors opens the sponsor's page for hub.sponsorId and hides the l
     expect(listProps().moreOpenId, "premise: the ⋯ is open").toBe("b");
     goTo(m, hubOf({ sponsorId: "b", editSponsor: true }));
     expect(listProps().moreOpenId, "the pencil took the reader off the list").toBeNull();
+  });
+
+  // `?edit=1` is the pencil's flag, not a state worth keeping: once the editor is done (Saved or Cancelled) the URL goes back to the plain
+  // sponsor page, so Back, a reload or a copied link is the read-only page and a second pencil is a fresh arrival.
+  describe("after Save or Cancel the pencil's ?edit=1 is cleared from the URL (router.replace to the plain sponsor page)", () => {
+    const PLAIN = (id: string) => `/o/${SLUG}/sponsors?tab=sponsors&sponsor=${id}`;
+    const okPatch = () => {
+      answer = (url, method) => (method === "PATCH" ? { status: 200, body: { data: sponsor() } } : method === "GET" && url.endsWith("/sponsors") ? { status: 200, body: { data: [sponsor({ name: "New name" })] } } : defaultAnswer(url, method));
+    };
+    const change = (m: ReturnType<typeof mount>, over: Record<string, unknown>) =>
+      (propsOf(editorsIn(m)[0]!).onChange as (fn: (p: Record<string, unknown>) => Record<string, unknown>) => void)((p) => ({ ...p, ...over }));
+
+    it("Cancel on an editor the pencil opened replaces the URL with the plain sponsor page, once, and closes the editor", () => {
+      const m = mount(BOTH, hubOf({ sponsorId: "b", editSponsor: true }));
+      expect(nav.replace, "premise: arriving by the pencil replaces nothing").not.toHaveBeenCalled();
+      (propsOf(editorsIn(m)[0]!).onCancel as () => void)();
+      expect(nav.replace).toHaveBeenCalledTimes(1);
+      expect(nav.replace).toHaveBeenCalledWith(PLAIN("b"));
+      expect(nav.replace.mock.calls[0]![0], "no edit flag left in it").not.toContain("edit=");
+      expect(m.has("sponsor-sheet-editor"), "and the editor is closed").toBe(false);
+    });
+
+    it("Save on an editor the pencil opened PATCHes, then replaces the URL with the plain sponsor page - after the write, not before it", async () => {
+      okPatch();
+      const m = mount(BOTH, hubOf({ sponsorId: "b", editSponsor: true }));
+      change(m, { name: "New name" });
+      (propsOf(editorsIn(m)[0]!).onSubmit as () => void)();
+      expect(nav.replace, "not before the save has answered").not.toHaveBeenCalled();
+      await flush();
+      expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(1);
+      expect(nav.replace).toHaveBeenCalledTimes(1);
+      expect(nav.replace).toHaveBeenCalledWith(PLAIN("b"));
+      expect(m.has("sponsor-sheet-editor"), "closed after saving").toBe(false);
+    });
+
+    it("Save with nothing changed still closes the editor and still clears the URL (no PATCH is sent)", async () => {
+      const m = mount(BOTH, hubOf({ sponsorId: "b", editSponsor: true }));
+      (propsOf(editorsIn(m)[0]!).onSubmit as () => void)();
+      await flush();
+      expect(calls.filter((c) => c.method === "PATCH"), "nothing to send").toHaveLength(0);
+      expect(nav.replace).toHaveBeenCalledWith(PLAIN("b"));
+      expect(m.has("sponsor-sheet-editor")).toBe(false);
+    });
+
+    it("a REFUSED save leaves the editor open and the URL alone (the sequence: the failed save, then a good one)", async () => {
+      answer = (url, method) => (method === "PATCH" ? { status: 409, body: { ok: false, error: "x" } } : defaultAnswer(url, method));
+      const m = mount(BOTH, hubOf({ sponsorId: "b", editSponsor: true }));
+      change(m, { name: "New name" });
+      (propsOf(editorsIn(m)[0]!).onSubmit as () => void)();
+      await flush();
+      expect(calls.filter((c) => c.method === "PATCH"), "premise: the save was attempted").toHaveLength(1);
+      expect(m.has("sponsor-sheet-editor"), "still open").toBe(true);
+      expect(nav.replace, "and the URL is not touched").not.toHaveBeenCalled();
+      okPatch();
+      (propsOf(editorsIn(m)[0]!).onSubmit as () => void)();
+      await flush();
+      expect(nav.replace).toHaveBeenCalledTimes(1);
+      expect(nav.replace).toHaveBeenCalledWith(PLAIN("b"));
+    });
+
+    it("an editor opened by the page's OWN Edit button (no flag in the URL) has nothing to clear: Cancel and Save replace nothing", async () => {
+      okPatch();
+      const m = mount(BOTH, hubOf({ sponsorId: "b", editSponsor: false }));
+      m.tap("sponsor-sheet-edit");
+      expect(editorsIn(m)).toHaveLength(1);
+      (propsOf(editorsIn(m)[0]!).onCancel as () => void)();
+      expect(m.has("sponsor-sheet-editor")).toBe(false);
+      m.tap("sponsor-sheet-edit");
+      change(m, { name: "New name" });
+      (propsOf(editorsIn(m)[0]!).onSubmit as () => void)();
+      await flush();
+      expect(m.has("sponsor-sheet-editor"), "saved and closed").toBe(false);
+      expect(nav.replace, "no flag, no replace").not.toHaveBeenCalled();
+    });
+
+    it("the cleared URL is what reaches the island next: the editor stays closed on the plain URL, and a second pencil opens it again (a fresh arrival)", () => {
+      const m = mount(BOTH, hubOf({ sponsorId: "b", editSponsor: true }));
+      (propsOf(editorsIn(m)[0]!).onCancel as () => void)();
+      goTo(m, hubOf({ sponsorId: "b", editSponsor: false }));
+      expect(m.has("sponsor-sheet-editor")).toBe(false);
+      goTo(m, hubOf({ sponsorId: "b", editSponsor: true }));
+      expect(m.has("sponsor-sheet-editor"), "the same sponsor's pencil again").toBe(true);
+    });
   });
 
   it("the editor has NO tier or competition control, whatever the sponsor's deals or the plan (owner, 2026-11-11): 3 deal states x 2 plans checked", () => {

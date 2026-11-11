@@ -14,6 +14,8 @@ Open **Sponsors** in the top bar or on your Dashboard, then the **Sponsors** tab
 
 Pro orgs — and any competition holding an Event Pass — group sponsors into **Title, Gold, Silver and Partner** tiers. A sponsor's tier comes from its deal's package — there is no tier box on the sponsor. On public pages the title sponsor renders largest, then each tier in descending prominence. On the free plan every sponsor sits in one flat strip.
 
+On the **Sponsors** tab each row names its deal's tier beside the package (on the free plan, only a tier above Partner), and a sponsor whose waiting deal will move it to another tier carries a note such as **Gold when live**: it stays in its current group until that deal goes live.
+
 ## Per-competition sponsors (Pro or Event Pass)
 
 By default a sponsor is org-wide — it shows on every competition. To scope a sponsor to one event, give it a deal for that competition: the deal's scope is where the sponsor shows. Competition-scoped sponsors lead the strip on their event's pages.

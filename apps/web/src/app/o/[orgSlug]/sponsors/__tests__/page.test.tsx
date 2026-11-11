@@ -77,7 +77,7 @@ vi.mock("@/components/ui/scroll-active-tab-into-view", () => ({
 // What the REAL island reaches for when it renders the sponsor page: the confirm dialog and the router (neither is mounted by a
 // prerender of the page alone).
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => async () => true }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {}, refresh: () => {} }) }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {}, refresh: () => {}, replace: () => {} }) }));
 
 // The islands, as markers carrying exactly what the page handed them - except OrgSponsors while `real.on` (see above).
 vi.mock("@/components/org-sponsors", async (importActual) => {

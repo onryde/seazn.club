@@ -31,6 +31,8 @@ import type { ReactElement } from "react";
 
 const confirmMock = vi.hoisted(() => vi.fn<(opts?: unknown) => Promise<boolean>>(async () => true));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMock }));
+// The island reads a router (to clear the pencil's ?edit=1 once its editor is done); nothing in this file navigates.
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {}, refresh: () => {}, replace: () => {} }) }));
 
 import { OrgSponsors, SPONSOR_TIERS, SponsorForm, type SponsorItem, type SponsorsHubData } from "@/components/org-sponsors";
 import { TIER_MSG } from "@/components/sponsors/tier-labels";

@@ -2,7 +2,8 @@
 
 // Sponsors tab manager (v10 PROMPT-56, replaces the blob editor). Rows are
 // first-class `sponsors` table entries; the list (components/sponsors/sponsor-list.tsx)
-// groups them by their deal's tier and gives each its deal's chip and one next
+// groups them by the tier each shows at now (its own - a deal still waiting to go
+// live changes nothing until it does) and gives each its deal's chip and one next
 // action (sponsor deals PR 2, Task 14). This island owns the state and every
 // write; the list is stateless. "Add a sponsor" and the EDIT form both ask for a
 // name, a logo and a link only - the tier and where a sponsor shows come from its
@@ -11,6 +12,7 @@
 // partner and per-competition scoping are Pro (`sponsors.tiers`); without it the
 // manager is the free un-tiered strip with an upsell note.
 import { useId, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "@/components/ui/console-link";
 import { ImagePlus } from "lucide-react";
 import { useViewerTz } from "@/components/client-time";
@@ -212,7 +214,7 @@ export function SponsorForm({
   busy: boolean;
   onPickLogo: (file: File, set: (fn: (prev: Draft) => Draft) => void) => void;
   /** One column of fields under the logo, whatever the viewport: for the sponsor page's side panel, where `sm:` (a VIEWPORT query)
-   *  would put two fields side by side in a 360px panel. The list's inline editor and the add box leave it off. */
+   *  would put two fields side by side in a 360px panel. The add box leaves it off. */
   compact?: boolean;
 }) {
   const msg = useMsg();
@@ -329,6 +331,7 @@ export function OrgSponsors({
   const msg = useMsg();
   const confirm = useConfirm();
   const locale = useLocaleOrDefault();
+  const router = useRouter();
   const tz = useViewerTz();
   const [sponsors, setSponsors] = useState<SponsorItem[]>(initialSponsors);
   // The org's deals, for the sponsor page and the confirms that name what a deal's end does to the others. The server's list is the
@@ -482,6 +485,13 @@ export function OrgSponsors({
     });
   }
 
+  /** The editor is done (saved or cancelled): the pencil's `?edit=1` has served its purpose, so the URL goes back to the plain sponsor
+   *  page - a reload, Back or a copied link is the read-only page, and the next pencil is a fresh arrival. Only when the flag is in the
+   *  URL: an editor the page's own Edit button opened has nothing to clear, and a replace to the same URL is a needless round trip. */
+  function leaveEditUrl() {
+    if (editParamId !== null) router.replace(sponsorHref(hub.orgSlug, editParamId));
+  }
+
   /** The sponsor page's own Edit button (the list's pencil is a link: it arrives here through `?edit=1`). */
   function startEdit(s: SponsorItem) {
     setEditingId(s.id);
@@ -502,6 +512,7 @@ export function OrgSponsors({
         await refresh();
       }
       setEditingId(null);
+      leaveEditUrl();
     });
   }
 
@@ -659,7 +670,7 @@ export function OrgSponsors({
     });
   }
 
-  /** Swap within the rendered group (the deal's tier, as the list draws it), persist the global order. */
+  /** Swap within the rendered group (the tier each sponsor shows at now, `groupTierOf`, as the list draws it), persist the global order. */
   function move(id: string, delta: -1 | 1) {
     const row = sponsors.find((s) => s.id === id);
     if (!row) return;
@@ -753,7 +764,10 @@ export function OrgSponsors({
                 value={edit}
                 onChange={(fn) => setEdit(fn)}
                 onSubmit={() => saveEdit(selected)}
-                onCancel={() => setEditingId(null)}
+                onCancel={() => {
+                  setEditingId(null);
+                  leaveEditUrl();
+                }}
                 submitLabel={msg("sponsors.save")}
                 busy={busy}
                 onPickLogo={pickLogo}

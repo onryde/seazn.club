@@ -24,7 +24,7 @@ import type { ReactElement } from "react";
 
 const confirmMock = vi.hoisted(() => vi.fn<(opts?: unknown) => Promise<boolean>>(async () => true));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMock }));
-const nav = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
+const nav = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn(), replace: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => nav }));
 const mdUp = vi.hoisted(() => ({ value: null as boolean | null }));
 vi.mock("@/components/ui/use-md-up", () => ({ useMdUp: () => mdUp.value }));
@@ -795,9 +795,9 @@ function hubOf(over: Partial<SponsorsHubData> = {}): SponsorsHubData {
     reportDefaults: { from: "2026-01-01", to: "2026-11-09", competitionId: null }, ...over,
   };
 }
-function mount(rows: SponsorItem[], hub: SponsorsHubData, opts: { canEdit?: boolean } = {}) {
+function mount(rows: SponsorItem[], hub: SponsorsHubData, opts: { canEdit?: boolean; hasTiers?: boolean } = {}) {
   const p: Parameters<typeof OrgSponsors>[0] = {
-    orgId: ORG, initialSponsors: rows, competitions: COMPS, hasTiers: true, billingHref: "/billing", canEdit: opts.canEdit ?? true, hub,
+    orgId: ORG, initialSponsors: rows, competitions: COMPS, hasTiers: opts.hasTiers ?? true, billingHref: "/billing", canEdit: opts.canEdit ?? true, hub,
   };
   served.rows = rows;
   served.deals = hub.deals;
@@ -824,6 +824,22 @@ describe("D4 hub.dealId opens the deal page on top of its sponsor (the seam, thr
     expect(m.has("sponsor-sheet")).toBe(false);
     expect(propsOf(m.all("deal-page")[0]!)["data-deal-id"]).toBe("dq");
     expect(String(propsOf(m.all("sponsors-list-view")[0]!).className).split(/\s+/)).toContain("max-md:hidden");
+  });
+
+  it("the plan's tiers reach the deal page THROUGH THE ISLAND: a plan without tiers hands it hasTiers=false (a Partner deal's header says no tier word), a plan with tiers hands it true (the pair)", () => {
+    // The unit tests above hand `hasTiers` to DealPageBody directly; this is the wire between the two (a `hasTiers={true}` written in
+    // the island would leave every one of them green).
+    const partner = deal({ id: "dp", sponsor_id: "a", package_name: "Club Package", tier: "partner", amount_cents: 30_000 });
+    let checked = 0;
+    for (const [hasTiers, header] of [[false, "Club Package · £300"], [true, "Club Package · Partner · £300"]] as const) {
+      const m = mount([SUBJECT], hubOf({ deals: [partner], dealId: "dp" }), { hasTiers });
+      const body = m.island.tree().find((e) => e.type === DealPageBody);
+      expect(body, `premise: the deal page is open (hasTiers=${hasTiers})`).toBeDefined();
+      expect(propsOf(body!).hasTiers, `the island hands DealPageBody the plan's hasTiers (${hasTiers})`).toBe(hasTiers);
+      expect(m.words("deal-page-name"), `the header it draws (hasTiers=${hasTiers})`).toEqual([header]);
+      checked++;
+    }
+    expect(checked, "both plans").toBe(2);
   });
 
   it("closing and going back lead to the SPONSOR's page, not the list (the wrapper's close target)", () => {
