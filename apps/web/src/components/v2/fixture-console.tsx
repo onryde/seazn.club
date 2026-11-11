@@ -1401,7 +1401,7 @@ export function FixtureConsole({
   const flaggedSuspensions = activeSuspensions.filter((s) => referencedPersons.has(s.personId));
 
   const root = (
-    <div className="space-y-6 max-md:space-y-3">
+    <div className="flex flex-col gap-6 max-md:gap-3">
       {/* Scoreline header — on phones this IS the match strip (spec §3.1):
           names on one truncated line, status, a compact score, hand-over as
           an icon, and the round/venue/time line behind a details toggle. */}
@@ -1590,6 +1590,10 @@ export function FixtureConsole({
         </section>
       )}
 
+      {/* PHONE ORDER (design of record 2026-09-02, "score strip up, chrome down"): the root is a flex column and the
+          panel group is `max-md:order-2` — below the Scoring card (order-1, the pad) and above everything after it
+          (order-3). From `md` the group is `contents`, so the bar sits where it always did, under the header. */}
+      <div data-role="console-panels" className="flex flex-col gap-3 empty:hidden max-md:order-2 md:contents">
       {/* THE PANEL BAR (owner 2026-11-11). Stream · Remote scoring · Lineup · Match rules · Match actions, in that order for
           every sport; ONE panel open at a time. A phone shows a 2-column grid of equal buttons (Stream on its own full
           row), from `md` a wrapping row — one DOM, no overflow menu. */}
@@ -1767,6 +1771,7 @@ export function FixtureConsole({
           {matchActionsPanel}
         </ConsolePanel>
       )}
+      </div>
 
       {/* SCORING (R7/C2 + C3). The pad, and beside its heading the two
           controls that belong to scoring rather than to authority: `Start
@@ -1781,7 +1786,7 @@ export function FixtureConsole({
           that question wrong. */}
       {scoring && home && away && (
         <section
-          className={`card p-5 max-md:p-3${consoleScoringEmpty ? " hidden" : consoleScoringEmptyOnPhone ? " max-md:hidden" : ""}`}
+          className={`card p-5 max-md:order-1 max-md:p-3${consoleScoringEmpty ? " hidden" : consoleScoringEmptyOnPhone ? " max-md:hidden" : ""}`}
           data-role="console-scoring"
         >
           <div className={`mb-3 flex flex-wrap items-center justify-between gap-2${started ? " max-md:hidden" : ""}`}>
@@ -1844,6 +1849,7 @@ export function FixtureConsole({
           )}
         </section>
       )}
+      <div data-role="console-after-pad" className="flex flex-col gap-6 empty:hidden max-md:order-3 max-md:gap-3">
       {/* Fix round 1 (M7): an official scorer on a held fixture gets no block (the settle is organiser-only) — but one
           line saying what happens next, rather than a status word and silence. Fix round 2: the line follows the cause
           (N2 — a chess tie-break is the scorer's to record, so it never says "wait for the organiser"), and it sits
@@ -2002,6 +2008,7 @@ export function FixtureConsole({
           {forfeitRefusal}
         </p>
       )}
+      </div>
       {forfeitOpen !== null && home && away && (
         <ForfeitDialog
           msg={msg}

@@ -7,6 +7,7 @@ import {
   PANEL_ORDER,
   REMOTE_SCORING_IDLE_MS,
   autoCloseMsFor,
+  remoteScoringIdleMs,
   createIdleTimer,
   idleActivityHandlers,
   offeredPanels,
@@ -66,6 +67,8 @@ describe("Remote scoring idle auto-close", () => {
 
   it("only Remote scoring closes itself, after 20 s", () => {
     expect(REMOTE_SCORING_IDLE_MS).toBe(20_000);
+    // The DEFAULT is pinned (rule 20), not the live value: no override, no env => 20 s.
+    expect(remoteScoringIdleMs(undefined, undefined)).toBe(20_000);
     expect(ALL.map((k) => [k, autoCloseMsFor(k)])).toEqual([
       ["stream", null],
       ["handover", 20_000],
@@ -132,5 +135,16 @@ describe("leaving the Lineup panel with unsaved edits asks first", () => {
       expect(requestPanel(current, "lineup", true)).toEqual({ next: "lineup", confirm: false });
     }
     expect(requestPanel("rules", "close", true)).toEqual({ next: null, confirm: false });
+  });
+});
+
+describe("Remote scoring idle delay is tunable for e2e", () => {
+  it("a positive override wins (window first, then env); anything else falls back to the 20 s default", () => {
+    expect(remoteScoringIdleMs(3_600_000, undefined)).toBe(3_600_000);
+    expect(remoteScoringIdleMs(undefined, "5000")).toBe(5000);
+    expect(remoteScoringIdleMs(111, "5000")).toBe(111);
+    const bad: unknown[] = [0, -1, NaN, Infinity, "", "abc", null, {}];
+    for (const v of bad) expect(remoteScoringIdleMs(v, v), `bad override ${String(v)}`).toBe(REMOTE_SCORING_IDLE_MS);
+    expect(bad.length).toBeGreaterThan(0);
   });
 });

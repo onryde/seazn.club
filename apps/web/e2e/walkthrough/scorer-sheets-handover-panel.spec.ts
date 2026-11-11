@@ -38,6 +38,7 @@ import { test, expect, type APIRequestContext, type Locator, type Page, type Tes
 import { activeOrg, apiJson, expectNoHorizontalScroll, fixturePath, seedRosteredFixture, TAG } from "../helpers";
 import { waitForHydration } from "../directory-kit";
 import { closeQrEnlarged, expectQrEnlargedOpen, expectQrEnlarges, expectWholeModuleScale, installWakeLockStub, shotQr, wakeLockCounts } from "../helpers/qr-enlarge";
+import { holdRemoteScoringOpen } from "../helpers/console-panels";
 
 const dict = (locale: "en" | "fr") =>
   JSON.parse(
@@ -67,6 +68,7 @@ const budgetFor = (navs: number, acts: number, captures: number): number =>
 
 async function openPanel(page: Page, path: string, { decided = false } = {}): Promise<Locator> {
   await page.setViewportSize({ width: 1280, height: 900 });
+  await holdRemoteScoringOpen(page);
   await page.goto(path);
   // A decided match unmounts the pad but keeps the hand-over control.
   const anchor = page.locator(decided ? '[data-role="device-handover"]' : '[data-testid="score-pad"]');

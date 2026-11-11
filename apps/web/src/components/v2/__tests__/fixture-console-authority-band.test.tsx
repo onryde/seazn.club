@@ -718,10 +718,10 @@ describe("phone composition — the match strip (spec §3.1)", () => {
     // Decided football: the pad unmounts (no post-phase panel), so the Scoring card has nothing left in it…
     const decided = { outcome: { kind: "win", winner: "e-home" } };
     const scoringClass = (html: string) => /<section class="([^"]*)" data-role="console-scoring">/.exec(html)?.[1];
-    expect(scoringClass(consoleHtml({ ...decided, stream: { mode: "stop-only" } }))).toBe("card p-5 max-md:p-3 hidden");
+    expect(scoringClass(consoleHtml({ ...decided, stream: { mode: "stop-only" } }))).toBe("card p-5 max-md:order-1 max-md:p-3 hidden");
     // …and an open stream panel does not change that: it lives above the card, in its own.
     const open = consoleHtml({ ...decided, stream: { mode: "stop-only" }, streamReturn: true });
-    expect(scoringClass(open)).toBe("card p-5 max-md:p-3 hidden");
+    expect(scoringClass(open)).toBe("card p-5 max-md:order-1 max-md:p-3 hidden");
     expect(open.indexOf('data-panel="stream"')).toBeGreaterThan(-1);
     expect(open.indexOf('data-panel="stream"')).toBeLessThan(open.indexOf('data-role="console-scoring"'));
   });

@@ -94,6 +94,41 @@ describe("the panel bar, swept over every shipped sport module", () => {
   }
 });
 
+describe("phone placement: the bar sits BELOW the pad, in one DOM (design of record 2026-09-02, chrome down)", () => {
+  /** The `max-md:order-N` of the element carrying `marker` (attribute text), read from its own class list. */
+  const phoneOrder = (html: string, marker: string): number => {
+    const at = html.indexOf(marker);
+    expect(at, `${marker} rendered`).toBeGreaterThan(-1);
+    const open = html.lastIndexOf("<", at);
+    const tag = html.slice(open, html.indexOf(">", at));
+    const m = tag.match(/max-md:order-(\d+)/);
+    expect(m, `${marker} carries an explicit phone order`).not.toBeNull();
+    return Number(m![1]);
+  };
+
+  it("pad (scoring card) < panel group < everything after the pad; from md the group is `contents` (header position unchanged)", () => {
+    let swept = 0;
+    for (const sport of ["football", "badminton", "boardgame"]) {
+      const html = renderToStaticMarkup(<FixtureConsole {...consoleProps(sport, { initialPanel: "rules" })} />);
+      const pad = phoneOrder(html, 'data-role="console-scoring"');
+      const panels = phoneOrder(html, 'data-role="console-panels"');
+      const after = phoneOrder(html, 'data-role="console-after-pad"');
+      expect([pad, panels, after], `${sport}: phone order pad, panels, after-pad`).toEqual([1, 2, 3]);
+      expect(html).toMatch(/data-role="console-panels"[^>]*class="[^"]*\bmd:contents\b/);
+      // the opened panel renders INSIDE the same group as the bar: next to it, not elsewhere on the page
+      const groupStart = html.indexOf('data-role="console-panels"');
+      const barAt = html.indexOf('data-role="console-panel-bar"');
+      const panelAt = html.indexOf('data-panel="rules"');
+      const padAt = html.indexOf('data-role="console-scoring"');
+      expect(groupStart).toBeLessThan(barAt);
+      expect(barAt).toBeLessThan(panelAt);
+      expect(panelAt).toBeLessThan(padAt);
+      swept++;
+    }
+    expect(swept).toBe(3);
+  });
+});
+
 describe("what hides each button", () => {
   const html = (over: Partial<ConsoleProps>, sport = "football") => renderToStaticMarkup(<FixtureConsole {...consoleProps(sport, over)} />);
 
