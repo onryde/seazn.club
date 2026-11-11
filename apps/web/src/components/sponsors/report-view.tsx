@@ -217,10 +217,12 @@ export function SponsorReportView({ report, ui, locale }: { report: SponsorRepor
   );
 }
 
-/** The two answers that are not a report: the opaque 404 (not-found.tsx) and the throttled screen. Same quiet sheet. */
+/** The two answers that are not a report: the opaque 404 (not-found.tsx) and the throttled screen. Same quiet sheet, on the
+ *  same ground as the report and the invoice (min-h-screen bg-canvas): a shorter box left the body's own colour showing below
+ *  it, a second tone under the card. Shared by the report's and the invoice's 404 and throttled screens. */
 export function SponsorReportNotice({ testId, title, body }: { testId: string; title: string; body: string }) {
   return (
-    <main data-testid={testId} style={DISPLAY_FACE} className="grid min-h-[70vh] place-items-center bg-canvas px-4 py-12 text-ink">
+    <main data-testid={testId} style={DISPLAY_FACE} className="grid min-h-screen place-items-center bg-canvas px-4 py-12 text-ink">
       <div className="w-full max-w-md rounded-2xl border border-accent-line bg-surface px-6 py-8 text-center">
         <h1 className="font-display text-2xl font-bold text-ink">{title}</h1>
         <p className="mt-2 text-sm text-ink-muted">{body}</p>

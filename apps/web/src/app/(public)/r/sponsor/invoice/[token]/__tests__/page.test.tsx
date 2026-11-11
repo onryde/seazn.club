@@ -74,6 +74,7 @@ import { BILLED_ROW_CLASS, STAMP_CLASS, SponsorInvoiceView } from "@/components/
 import { ORIGIN, cleanUp, dealInput, idempotentCreate, rigOrg, rigPackage, rigSponsor, uniq } from "@/server/sponsors/__tests__/_invoice-rig";
 import SponsorInvoicePage, { generateMetadata } from "../page";
 import SponsorInvoiceNotFound, { generateMetadata as notFoundMetadata } from "../not-found";
+import SponsorReportNotFound from "../../../[token]/not-found";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const en = await getDictionary("en", "ui");
@@ -138,6 +139,29 @@ const renderView = (doc: SponsorInvoiceDoc, ui = es, paymentRecording = false) =
 const classTokens = (cls: string) => new Set(cls.split(/\s+/).filter(Boolean));
 
 describe("the view: layout, ink and what it says (no database)", () => {
+  it("a notice (404, throttled) fills the screen in the page's own ground - one tone, never a 70vh card over a second colour (3 counted)", async () => {
+    // The ground a notice stands in for is the invoice's own root: the whole screen, in canvas. Read from the view, so a notice
+    // that drifts from it (the 70vh box a real browser showed over the body's other colour) reds here.
+    const rootClass = (html: string, testId: string) => classTokens(openTag(html, testId).match(/class="([^"]*)"/)?.[1] ?? "");
+    const ground = rootClass(renderView(viewDoc()), "sponsor-invoice");
+    expect(["min-h-screen", "bg-canvas"].every((c) => ground.has(c)), "the invoice's own ground").toBe(true);
+    overLimit = true;
+    const notices: [string, string][] = [
+      ["sponsor-invoice-not-found", renderToStaticMarkup(await SponsorInvoiceNotFound())],
+      ["sponsor-report-not-found", renderToStaticMarkup(await SponsorReportNotFound())],
+      ["sponsor-invoice-throttled", await render(randomBytes(32).toString("base64url"))],
+    ];
+    let checked = 0;
+    for (const [testId, html] of notices) {
+      const cls = rootClass(html, testId);
+      expect(cls.size, `${testId} rendered`).toBeGreaterThan(0);
+      for (const want of ["min-h-screen", "bg-canvas"]) expect(cls.has(want), `${testId} ${want}`).toBe(true);
+      expect([...cls].filter((c) => /^min-h-\[/.test(c)), `${testId}: no partial-height box`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
   it("the date reads day-month-year in every language: en '11 Nov 2026' (never the US 'Nov 11, 2026'), es, fr and nl as before (4 counted)", async () => {
     // Typed from each language's own way of writing a date, never from the view.
     const WANT: [string, string][] = [["en", "11 Nov 2026"], ["es", "11 nov 2026"], ["fr", "11 nov. 2026"], ["nl", "11 nov 2026"]];
