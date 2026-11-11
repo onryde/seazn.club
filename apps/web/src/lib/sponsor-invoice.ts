@@ -43,6 +43,18 @@ export function invoicePath(token: string): string {
   return `/r/sponsor/invoice/${token}`;
 }
 
+/** The invoice page's one notice flag (`?notice=recording`): the pay route sends the sponsor back with it when Stripe says
+ *  their card payment is complete and the payment webhook has not landed yet (409 `deal_paid_online`; T22 re-review M1). The
+ *  page shows "your card payment is being recorded" instead of the pay button. A display hint only: the page reads nothing
+ *  else from it, and a settled invoice ignores it. */
+export const INVOICE_NOTICE_PARAM = "notice";
+export const PAYMENT_RECORDING_NOTICE = "recording";
+
+/** The invoice page with the "payment being recorded" notice. */
+export function invoiceRecordingPath(token: string): string {
+  return `${invoicePath(token)}?${INVOICE_NOTICE_PARAM}=${PAYMENT_RECORDING_NOTICE}`;
+}
+
 /** What every answer from the invoice's two routes (`/pdf`, `/pay`) carries: per request, never indexed, never a Referer - a
  *  redirect's own Referrer-Policy is what the browser follows to Stripe with, so the token stays out of Stripe's logs. */
 export const INVOICE_PRIVATE_HEADERS = {

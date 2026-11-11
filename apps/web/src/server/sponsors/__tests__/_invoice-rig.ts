@@ -109,6 +109,7 @@ export async function cleanUp(): Promise<void> {
     await sql`delete from email_outbox where org_id = any(${made.orgIds}::uuid[])`;
     await sql`delete from sponsor_orders where org_id = any(${made.orgIds}::uuid[])`;
     await sql`delete from sponsor_invoice_counters where org_id = any(${made.orgIds}::uuid[])`;
+    await sql`delete from competition_passes where org_id = any(${made.orgIds}::uuid[])`;
     await sql`delete from sponsors where org_id = any(${made.orgIds}::uuid[])`;
     await sql`delete from sponsor_packages where org_id = any(${made.orgIds}::uuid[])`;
     await sql`delete from org_members where org_id = any(${made.orgIds}::uuid[])`;

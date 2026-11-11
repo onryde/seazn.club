@@ -56,6 +56,7 @@ import { allowedActions } from "@/lib/sponsor-deals";
 import { stubOutboxEnv } from "@/server/usecases/__tests__/_invite-mail";
 import { handleSponsorPaymentSucceeded } from "@/server/usecases/sponsors";
 import { createDeal, endDealNow, markDealPaid, payInvoice, refundDeal, sendDealInvoice, sweepSponsorDeals } from "@/server/usecases/sponsor-deals";
+import { assertOnlineAllowed } from "../deal-gates";
 import { hashReportToken } from "../report-token";
 import {
   cardPayable,
@@ -335,6 +336,25 @@ describe.skipIf(!HAS_DB)("the invoice document, from the real token (DB, F9)", (
     const off = await made({ payment_method: "offline" });
     await sql`update organizations set stripe_charges_enabled = false where id = ${off.o.orgId}`;
     expect(await invoiceDocByToken(tokenOf(off.id))).toMatchObject({ payable: false, cardUnavailable: false });
+  });
+
+  it("the card gate reads the DEAL's scope: a community org with an Event Pass on the deal's competition takes cards for it - payable, and pay reaches Stripe (T22 re-review M3)", async () => {
+    const o = await rigOrg({ plan: "community" });
+    const [comp] = await sql<{ id: string }[]>`
+      insert into competitions (org_id, name, slug) values (${o.orgId}, ${`Pass Cup ${uniq()}`}, ${`pass-${uniq()}`}) returning id`;
+    await sql`insert into competition_passes (competition_id, org_id) values (${comp!.id}, ${o.orgId})`;
+    await invalidateOrgEntitlements(o.orgId);
+    // Premise: the org-wide answer is community's - only the pass on THIS competition sells online.
+    await expect(assertOnlineAllowed(o.orgId, null), "premise: no sponsors.monetize org-wide").rejects.toMatchObject({ status: 402 });
+    await expect(assertOnlineAllowed(o.orgId, comp!.id), "premise: the pass lifts it on its competition").resolves.toBeUndefined();
+    const p = await rigPackage(o);
+    const s = await rigSponsor(o);
+    const out = await createDeal(o.auth, s.id, dealInput(p.id, { payment_method: "online", competition_id: comp!.id }), ORIGIN);
+    const token = tokenOf(out.deal.id);
+    expect(await invoiceDocByToken(token)).toMatchObject({ state: "unpaid", payable: true, cardUnavailable: false });
+    clearStripe();
+    expect(await payInvoice(token, ORIGIN), "pay answers the deal's Checkout link").toBe(out.checkout_url);
+    expect(stripeCalls(), "pay reached Stripe (the stored session's retrieve)").toBeGreaterThan(0);
   });
 
   it("an online deal still a DRAFT (Stripe failed at create: 502, the deal committed) has its token but is not payable - a payment could not move it", async () => {

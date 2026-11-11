@@ -13,7 +13,7 @@ import { HttpError } from "@/lib/errors";
 import { getDictionary, t } from "@/lib/i18n";
 import { baseUrl } from "@/lib/oauth";
 import { resolveLocale } from "@/lib/resolve-locale";
-import { INVOICE_PRIVATE_HEADERS, invoicePath } from "@/lib/sponsor-invoice";
+import { INVOICE_PRIVATE_HEADERS, invoicePath, invoiceRecordingPath } from "@/lib/sponsor-invoice";
 import { publicRateLimit } from "@/server/usecases/public";
 import { payInvoice } from "@/server/usecases/sponsor-deals";
 
@@ -34,7 +34,10 @@ export async function POST(req: Request, { params }: Ctx) {
       const ui = await getDictionary(await resolveLocale(), "ui");
       return new Response(t(ui, key), { status: err.status, headers: { ...INVOICE_PRIVATE_HEADERS, "Content-Type": "text/plain; charset=utf-8" } });
     }
+    // Stripe says this invoice's card payment is complete and the webhook has not recorded it yet (409 `deal_paid_online`):
+    // back to the invoice WITH its notice, so the sponsor reads "being recorded" rather than a Pay button that refuses again.
     // Every other refusal (409 not payable now or changed meanwhile, 402 the plan): back to the invoice, as it stands now.
-    return new Response(null, { status: 303, headers: { ...INVOICE_PRIVATE_HEADERS, Location: invoicePath(token) } });
+    const location = err.code === "deal_paid_online" ? invoiceRecordingPath(token) : invoicePath(token);
+    return new Response(null, { status: 303, headers: { ...INVOICE_PRIVATE_HEADERS, Location: location } });
   }
 }

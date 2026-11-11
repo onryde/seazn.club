@@ -107,7 +107,8 @@ afterAll(async () => {
 });
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
-const render = async (token: string) => renderToStaticMarkup(await SponsorInvoicePage({ params: Promise.resolve({ token }) }));
+const render = async (token: string, search: Record<string, string> = {}) =>
+  renderToStaticMarkup(await SponsorInvoicePage({ params: Promise.resolve({ token }), searchParams: Promise.resolve(search) }));
 /** The element with this test id, as markup (its open tag through its own close). */
 const openTag = (html: string, testId: string) => html.match(new RegExp(`<[a-z]+[^>]*data-testid="${testId}"[^>]*>`))?.[0] ?? "";
 
@@ -130,8 +131,10 @@ function viewDoc(over: Partial<SponsorInvoiceDoc> = {}): SponsorInvoiceDoc {
     ...over,
   };
 }
-const renderView = (doc: SponsorInvoiceDoc, ui = es) =>
-  renderToStaticMarkup(<SponsorInvoiceView doc={doc} ui={ui} pdfHref="/r/sponsor/invoice/T/pdf" payAction="/r/sponsor/invoice/T/pay" />);
+const renderView = (doc: SponsorInvoiceDoc, ui = es, paymentRecording = false) =>
+  renderToStaticMarkup(
+    <SponsorInvoiceView doc={doc} ui={ui} pdfHref="/r/sponsor/invoice/T/pdf" payAction="/r/sponsor/invoice/T/pay" paymentRecording={paymentRecording} />,
+  );
 const classTokens = (cls: string) => new Set(cls.split(/\s+/).filter(Boolean));
 
 describe("the view: layout, ink and what it says (no database)", () => {
@@ -187,6 +190,23 @@ describe("the view: layout, ink and what it says (no database)", () => {
     expect(t(es, "sponsors.invoice.stateNote.ended", { club }), "the club is named").toContain(club);
     // The positive pair: an invoice due while its deal runs carries no note (the page says how to pay).
     expect(renderView(viewDoc())).not.toContain('data-testid="invoice-state-note"');
+  });
+
+  it("the 'being recorded' notice (the pay route's flag): shown instead of the pay button on an online invoice still unpaid; silent once paid, and on an offline invoice (T22 re-review M1)", () => {
+    const html = renderView(viewDoc(), es, true);
+    expect(html).toMatch(new RegExp(`data-testid="invoice-recording"[^>]*>${esc(t(es, "sponsors.invoice.payRecording"))}<`));
+    expect(openTag(html, "invoice-recording")).toContain('role="status"');
+    expect(html, "no second payment offered while the first is recorded").not.toContain('data-testid="invoice-pay"');
+    let checked = 0;
+    for (const over of [{ state: "paid", payable: false }, { method: "offline", payable: false }] as Partial<SponsorInvoiceDoc>[]) {
+      expect(renderView(viewDoc(over), es, true), JSON.stringify(over)).not.toContain('data-testid="invoice-recording"');
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The positive pair: no flag, the button and no notice.
+    const plain = renderView(viewDoc());
+    expect(plain).toContain('data-testid="invoice-pay"');
+    expect(plain).not.toContain('data-testid="invoice-recording"');
   });
 
   it("a card-payable invoice the club cannot take cards for says so and names the club - no button that cannot work (review m2)", () => {
@@ -314,6 +334,26 @@ describe.skipIf(!HAS_DB)("the seam: the real createDeal's token, the real page",
     expect(html).toContain(esc(t(en, "sponsors.invoice.included.no")));
     // Every element that carries the token is ph-no-capture: two of them.
     expect(html.split(token).length - 1).toBe(2);
+  });
+
+  it("the real page reads ?notice=recording (and only that value): the notice in the ORG's language, no pay form", async () => {
+    const org = await rigOrg({ locale: "fr" });
+    const pkg = await rigPackage(org);
+    const sponsor = await rigSponsor(org);
+    await createDeal(org.auth, sponsor.id, dealInput(pkg.id, { payment_method: "online" }), ORIGIN);
+    const token = minted.at(-1)!.token;
+    const flagged = await render(token, { notice: "recording" });
+    expect(flagged).toContain(esc(t(fr, "sponsors.invoice.payRecording")));
+    expect(flagged).not.toContain('data-testid="invoice-pay"');
+    let checked = 0;
+    const unflagged: Record<string, string>[] = [{}, { notice: "other" }, { recording: "1" }];
+    for (const search of unflagged) {
+      const html = await render(token, search);
+      expect(html, JSON.stringify(search)).toContain('data-testid="invoice-pay"');
+      expect(html, JSON.stringify(search)).not.toContain('data-testid="invoice-recording"');
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 
   it("Connect stopped taking charges: the real page drops the pay form and names the club to contact; the token is painted once, behind ph-no-capture", async () => {

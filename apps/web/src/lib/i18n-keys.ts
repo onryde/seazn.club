@@ -8004,6 +8004,7 @@ export type DictionaryKey =
   | "sponsors.invoice.payByCard"
   | "sponsors.invoice.payFailed"
   | "sponsors.invoice.payNote"
+  | "sponsors.invoice.payRecording"
   | "sponsors.invoice.print"
   | "sponsors.invoice.state.ended"
   | "sponsors.invoice.state.paid"

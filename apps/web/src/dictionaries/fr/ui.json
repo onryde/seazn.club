@@ -480,6 +480,7 @@
   "sponsors.invoice.payByCard": "Payer par carte",
   "sponsors.invoice.payNote": "Vous payez {amount} sur la page de paiement sécurisée de Stripe.",
   "sponsors.invoice.cardUnavailable": "Le paiement par carte n’est pas disponible. Contactez {club}.",
+  "sponsors.invoice.payRecording": "Votre paiement par carte est en cours d’enregistrement. Actualisez cette page dans un instant.",
   "sponsors.invoice.bankDetails": "Coordonnées bancaires",
   "sponsors.invoice.bankReference": "Indiquez {number} comme référence du paiement.",
   "sponsors.invoice.included.title": "Ce qui est inclus",

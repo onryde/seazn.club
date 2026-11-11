@@ -53,6 +53,7 @@ export function SponsorInvoiceView({
   ui,
   pdfHref,
   payAction,
+  paymentRecording = false,
 }: {
   doc: SponsorInvoiceDoc;
   ui: Dict;
@@ -60,9 +61,15 @@ export function SponsorInvoiceView({
   pdfHref: string;
   /** `/r/sponsor/invoice/<token>/pay`: carries the token. */
   payAction: string;
+  /** The pay route sent the sponsor back because Stripe already has their card payment (`?notice=recording`). */
+  paymentRecording?: boolean;
 }) {
   const amount = invoiceMoney(doc.locale, doc.line.amountCents, doc.line.currency);
   const note = invoiceNoteKey(doc.state, doc.dealEnded);
+  // The webhook has not recorded a card payment Stripe already took: say so, and do not offer to pay again. Only while the
+  // invoice still reads unpaid online - once it is recorded (paid), the flag left in the URL says nothing.
+  const recording = paymentRecording && doc.state === "unpaid" && doc.method === "online";
+  const showPay = doc.payable && !recording;
   const included: [string, string][] = [
     [t(ui, "sponsors.invoice.included.tier"), t(ui, TIER_MSG[doc.included.tier])],
     [t(ui, "sponsors.invoice.included.scope"), doc.included.scope],
@@ -141,9 +148,14 @@ export function SponsorInvoiceView({
           ) : null}
         </section>
 
-        {doc.payable || doc.cardUnavailable || doc.bankDetails !== null ? (
+        {showPay || recording || doc.cardUnavailable || doc.bankDetails !== null ? (
           <section className="grid min-w-0 gap-5 border-t border-accent-line bg-accent-soft/40 px-5 py-6 sm:grid-cols-2 sm:gap-8 sm:px-10 sm:py-7 print:bg-transparent">
-            {doc.payable ? (
+            {recording ? (
+              <p data-testid="invoice-recording" role="status" className="min-w-0 text-sm font-medium break-words text-ink">
+                {t(ui, "sponsors.invoice.payRecording")}
+              </p>
+            ) : null}
+            {showPay ? (
               <form method="post" action={payAction} data-testid="invoice-pay" className="ph-no-capture min-w-0 print:hidden">
                 <button type="submit" className="btn btn-primary w-full sm:w-auto">{t(ui, "sponsors.invoice.payByCard")}</button>
                 <p className="mt-2 text-xs text-ink-muted">{t(ui, "sponsors.invoice.payNote", { amount })}</p>

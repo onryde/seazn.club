@@ -18,7 +18,7 @@ import { notFound } from "next/navigation";
 import { HttpError } from "@/lib/errors";
 import { getDictionary, t } from "@/lib/i18n";
 import { resolveLocale } from "@/lib/resolve-locale";
-import { invoicePath } from "@/lib/sponsor-invoice";
+import { INVOICE_NOTICE_PARAM, PAYMENT_RECORDING_NOTICE, invoicePath } from "@/lib/sponsor-invoice";
 import { SponsorInvoiceView } from "@/components/sponsors/invoice-view";
 import { SponsorReportNotice } from "@/components/sponsors/report-view";
 import { invoiceDocByToken } from "@/server/sponsors/invoice-doc";
@@ -45,7 +45,14 @@ async function throttled(): Promise<boolean> {
   }
 }
 
-export default async function SponsorInvoicePage({ params }: { params: Promise<{ token: string }> }) {
+export default async function SponsorInvoicePage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ token: string }>;
+  /** Every query param, untyped on purpose: only `notice` is read (the pay route's "being recorded" flag). */
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const { token } = await params;
   if (await throttled()) {
     const ui = await getDictionary(await resolveLocale(), "ui");
@@ -61,5 +68,6 @@ export default async function SponsorInvoicePage({ params }: { params: Promise<{
   if (doc === null) notFound();
   const ui = await getDictionary(doc.locale, "ui");
   const base = invoicePath(token);
-  return <SponsorInvoiceView doc={doc} ui={ui} pdfHref={`${base}/pdf`} payAction={`${base}/pay`} />;
+  const recording = (await searchParams)[INVOICE_NOTICE_PARAM] === PAYMENT_RECORDING_NOTICE;
+  return <SponsorInvoiceView doc={doc} ui={ui} pdfHref={`${base}/pdf`} payAction={`${base}/pay`} paymentRecording={recording} />;
 }

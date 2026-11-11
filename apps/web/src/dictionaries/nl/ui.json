@@ -480,6 +480,7 @@
   "sponsors.invoice.payByCard": "Betalen met kaart",
   "sponsors.invoice.payNote": "Je betaalt {amount} op de beveiligde betaalpagina van Stripe.",
   "sponsors.invoice.cardUnavailable": "Betalen met een kaart is niet mogelijk. Neem contact op met {club}.",
+  "sponsors.invoice.payRecording": "Je kaartbetaling wordt verwerkt. Vernieuw deze pagina zo meteen.",
   "sponsors.invoice.bankDetails": "Bankgegevens",
   "sponsors.invoice.bankReference": "Vermeld {number} als betalingskenmerk.",
   "sponsors.invoice.included.title": "Wat is inbegrepen",

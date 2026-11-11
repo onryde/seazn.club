@@ -251,6 +251,31 @@ describe.skipIf(!HAS_DB)("the pay handler (money)", () => {
   });
 });
 
+describe.skipIf(!HAS_DB)("the pay handler: Stripe already has the card payment, the webhook has not landed (T22 re-review M1)", () => {
+  it("the stored session is COMPLETE at Stripe: 303 back WITH the 'being recorded' notice, nothing minted, expired or stored - fresh and near-expiry alike (2 counted)", async () => {
+    let checked = 0;
+    for (const nearExpiry of [false, true]) {
+      const o = await rigOrg();
+      const { id, token } = await deal(o, "online");
+      if (nearExpiry) await sql`update sponsor_orders set checkout_expires_at = now() + interval '5 minutes' where id = ${id}`;
+      const before = await stored(id);
+      clearStripe();
+      stripe.retrieve.mockImplementation(async (sid: string) => ({ id: sid, status: "complete" }));
+      const res = await pay(token);
+      expect(res.status, String(nearExpiry)).toBe(303);
+      // The flag the page reads (re-review M1): typed here, not built by the code under test.
+      expect(res.headers.get("location"), String(nearExpiry)).toBe(`/r/sponsor/invoice/${token}?notice=recording`);
+      expectPrivate(res);
+      expect(stripe.retrieve, "premise: Stripe was asked").toHaveBeenCalledTimes(1);
+      expect(stripe.create).not.toHaveBeenCalled();
+      expect(stripe.expire).not.toHaveBeenCalled();
+      expect(await stored(id), String(nearExpiry)).toEqual(before);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
 describe.skipIf(!HAS_DB)("the pay handler: the club cannot take cards (review m2, m3)", () => {
   it("the plan lost sponsors.monetize (402) and Connect stopped taking charges (409 connect_required): each 303 back, nothing at Stripe (2 counted)", async () => {
     const cuts: [string, (o: RigOrg) => Promise<void>][] = [
@@ -346,6 +371,33 @@ describe.skipIf(!HAS_DB)("the pay handler: what the lock re-checks while Stripe 
     const sendsLast = await create(null, { idempotencyKey: keys[2]! });
     expect(after.checkout_session_id, "the second send's session").toBe(sendsLast.id);
     expect(after.checkout_session_id, "never the retired one").not.toBe(paysOwn.id);
+  });
+
+  it("the COUNT half of the lock's compare: a send stored a session, then a retire and a FAILED mint left the deal with none - the count moved, so refused (303 back) and the pay's stale session is never stored (T22 re-review M2)", async () => {
+    const o = await rigOrg();
+    const { id, token } = await minting(o);
+    const create = idempotentCreate();
+    let calls = 0;
+    stripe.create.mockImplementation(async (params: unknown, opts: { idempotencyKey: string }) => {
+      const n = ++calls; // this call's own number: the nested sends move `calls` on while it waits
+      if (n === 1) {
+        // A send takes this pay's key (count + 1: the SAME session), stores it and counts itself. That session then nears expiry,
+        // and the next send retires it (forgotten, committed) before its own mint fails.
+        await sendDealInvoice(o.auth, id, ORIGIN);
+        await sql`update sponsor_orders set checkout_expires_at = now() + interval '5 minutes' where id = ${id}`;
+        await expect(sendDealInvoice(o.auth, id, ORIGIN)).rejects.toMatchObject({ status: 502 });
+      }
+      if (n === 3) throw new Error("stripe down");
+      return create(params, opts);
+    });
+    const before = await stored(id);
+    const res = await pay(token);
+    const after = await stored(id);
+    expect(calls, "premise: the pay, the first send and the failed send each reached create").toBe(3);
+    expect(after.invoice_send_count, "premise: the first send counted, the failed one did not").toBe(before.invoice_send_count + 1);
+    // Only the count tells this deal moved: it holds no session, exactly as when the pay read it.
+    expect(after.checkout_session_id, "no session stored: never the pay's, which the retire already expired").toBeNull();
+    expectBackToInvoice(res, token);
   });
 
   it("two clicks that mint at once: both are sent to the ONE session (one key), stored once, counted once", async () => {
