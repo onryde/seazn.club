@@ -324,7 +324,6 @@ export function PackageList({ orgId, initialPackages, competitions, tiersOrgWide
   const [listError, setListError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const url = `/api/v1/orgs/${orgId}/sponsor-packages`;
   const priceCents = parsePriceCents(draft.price);
   // The same placement answer the server enforces: a plan without tiers cannot save a package that needs them, however the draft got there.
   const draftScope = draft.competition_id === "" ? null : draft.competition_id;
@@ -333,7 +332,7 @@ export function PackageList({ orgId, initialPackages, competitions, tiersOrgWide
 
   /** Re-read the list from the server: its order, and each package's `used_by`. A failed re-read keeps what the write already showed. */
   async function reload() {
-    setPackages(await apiV1<SponsorPackageRow[]>(url));
+    setPackages(await apiV1<SponsorPackageRow[]>(`/api/v1/orgs/${orgId}/sponsor-packages`));
   }
 
   function openSheet() {
@@ -355,7 +354,7 @@ export function PackageList({ orgId, initialPackages, competitions, tiersOrgWide
     setBusy(true);
     setSheetError(null);
     try {
-      const created = await apiV1<SponsorPackageRow>(url, {
+      const created = await apiV1<SponsorPackageRow>(`/api/v1/orgs/${orgId}/sponsor-packages`, {
         method: "POST",
         json: {
           name: draft.name.trim(),
@@ -389,7 +388,7 @@ export function PackageList({ orgId, initialPackages, competitions, tiersOrgWide
       setListError(null);
       setNotice(null);
       try {
-        const retired = await apiV1<SponsorPackageRow>(`${url}/${pkg.id}`, { method: "DELETE" });
+        const retired = await apiV1<SponsorPackageRow>(`/api/v1/orgs/${orgId}/sponsor-packages/${pkg.id}`, { method: "DELETE" });
         setPackages((prev) => prev.map((p) => (p.id === pkg.id ? { ...p, ...retired, active: false } : p)));
         setNotice(msg("sponsors.pkg.retiredDone", { name: pkg.name }));
         await reload().catch(() => {});
