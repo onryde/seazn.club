@@ -192,6 +192,9 @@ describe("grouping by slot", () => {
     expect(rows[0]).toMatch(/data-testid="lineup-position-select"/);
     expect(rows[0]).toMatch(/class="select[^"]*max-md:col-span-3[^"]*max-md:w-full/);
     expect(rows[1]).not.toContain("lineup-position-select");
+    // with a select the name spans cols 3-4 of line 1 (the menu is on line 2); without one it stops at col 3
+    expect(rows[0]).toMatch(/max-md:col-start-3 max-md:col-span-2/);
+    expect(rows[1]).toMatch(/max-md:col-start-3"/);
     // wide row stays one flex line
     expect(rows[0]).toMatch(/class="flex min-w-0 items-center gap-2 text-xs max-md:grid/);
   });

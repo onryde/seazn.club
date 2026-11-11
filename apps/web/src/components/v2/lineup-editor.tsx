@@ -468,6 +468,9 @@ function LineupRow({
 }) {
   const msg = useMsg();
   const flagged = roles.filter((r) => s.roles.includes(r.key));
+  // A row with a select drops it (and the ⋯) to line 2 below md, so its name may use line 1's whole width (cols 3-4); a row
+  // without one keeps ⋯ in col 4 of line 1 and the name stops at col 3.
+  const hasSelect = (primary === "position" && s.role === "player") || primary === "pairOrder";
   return (
     <li
       data-testid="lineup-row"
@@ -476,7 +479,7 @@ function LineupRow({
     >
       <span className="w-6 shrink-0 text-right font-mono text-slate-400 max-md:col-start-1">{`${number}.`}</span>
       <AvailabilityChip personName={s.full_name} info={availability} />
-      <span className="flex min-w-0 flex-1 items-center gap-1.5 max-md:col-start-3">
+      <span className={`flex min-w-0 flex-1 items-center gap-1.5 max-md:col-start-3${hasSelect ? " max-md:col-span-2" : ""}`}>
         <span className="min-w-[2.5rem] truncate font-medium text-slate-700">{s.full_name}</span>
         {flagged.map((r) =>
           r.key === "captain" ? (
