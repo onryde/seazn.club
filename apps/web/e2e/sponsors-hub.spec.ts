@@ -199,6 +199,28 @@ test("on stream: the first tick turns the rotation on at Normal, the dial and a 
     await page.goto(sponsorsUrl(seeded.slug, "on_stream"));
     await expect(page.getByTestId("sponsors-tab-on_stream")).toBeVisible();
     await expect(page.getByTestId("on-stream-switch"), "no row: off").toHaveAttribute("aria-checked", "false");
+    // "why has big fat button?" (owner, stg): the switch is a slim track drawn inside a 44px tap target, not a 44px-tall pill. Measured and
+    // hit-tested the way a finger meets it (a painted box says nothing about what a tap reaches; a rounded target loses its corners).
+    const probe = await page.getByTestId("on-stream-switch").evaluate((el) => {
+      el.scrollIntoView({ block: "center", inline: "nearest" });
+      const r = el.getBoundingClientRect();
+      const track = el.querySelector('[data-testid="on-stream-switch-track"]')?.getBoundingClientRect() ?? null;
+      const hits = (x: number, y: number): boolean => {
+        const at = document.elementFromPoint(x, y);
+        return at !== null && (at === el || el.contains(at));
+      };
+      return {
+        width: r.width,
+        height: r.height,
+        trackHeight: track?.height ?? null,
+        corners: [hits(r.left + 3, r.top + 3), hits(r.right - 3, r.top + 3), hits(r.left + 3, r.bottom - 3), hits(r.right - 3, r.bottom - 3), hits(r.left + r.width / 2, r.top + r.height / 2)],
+      };
+    });
+    expect(probe.width, "the switch's tap target is at least 44px wide").toBeGreaterThanOrEqual(44);
+    expect(probe.height, "the switch's tap target is at least 44px tall").toBeGreaterThanOrEqual(44);
+    expect(probe.corners, "a tap at each corner and the centre of the target lands on the switch").toEqual([true, true, true, true, true]);
+    expect(probe.trackHeight, "the track is drawn (a slim one inside the target)").not.toBeNull();
+    expect(probe.trackHeight!, "the drawn track is slim, not a 44px pill").toBeLessThanOrEqual(32);
     await expect(page.getByTestId("on-stream-dial-normal"), "no row: the dial opens at Normal").toHaveAttribute("aria-checked", "true");
     await expect(page.getByTestId(`on-stream-tick-${harbour}`)).not.toBeChecked();
     await expect(page.getByTestId(`on-stream-tick-${ridge}`)).not.toBeChecked();
