@@ -58,7 +58,7 @@ import { routes } from "../../src/lib/routes";
  *     link beside the deal (F11), so the link is read from the create's own answer (online) or the Resend's (offline).
  *  3. "Checkout -> a signed webhook" cannot rest on Stripe's own forwarder alone: a local run has none. The signed delivery is what
  *     makes the leg deterministic; CI's forwarder is a second, idempotent delivery of the same intent.
- *  4. Task 21's `test.fixme` is replaced by the journey in leg 1 (zero fixmes remain in this file).
+ *  4. Task 21's counted placeholder for the second half is replaced by the journey in leg 1 (nothing is left pending in this file).
  * Leg 2 shares the ONE Connect fixture account with registration-connect, the rs007 specs and settings-sponsor-monetize, so it claims
  * it behind the kit's advisory lock and hands it back (the afterAll's assertion), exactly like the monetize spec.
  *
