@@ -92,6 +92,8 @@ export function OrgSponsorInvoiceDetails({
             ? "notAllowed"
             : "saveFailed",
       );
+      // Half saved: the address is on file, so the page's props must not restore the old one on back/forward.
+      if (savedBeforeFailure > 0) router.refresh();
     } finally {
       inFlight.current = false;
       setBusy(false);

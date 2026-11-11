@@ -482,7 +482,7 @@ describe("a half-saved pair says what saved (fix round 1, M1)", () => {
     expect(m.status()).toBe(msg("settings.sponsorInvoices.partialSaved"));
     expect(m.status()).not.toBe(msg("settings.sponsorInvoices.saveFailed"));
     expect(m.status()).not.toBe(msg("settings.sponsorInvoices.saved"));
-    // The English the owner approved: the address is the one that saved, the bank details the one to try again.
+    // The wording from the fix brief: the address is the one that saved, the bank details the one to try again.
     expect(msg("settings.sponsorInvoices.partialSaved")).toBe("Address saved. The bank details couldn't be saved. Try again.");
     expect(propsOf(m.find("sponsor-invoices-status")).className as string, "an error, not a success").toContain("text-red-600");
   });
@@ -618,7 +618,7 @@ describe("a successful save refreshes the route (fix round 1, M6)", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
-  it("nothing saved, or the pair only half saved: no refresh (first PATCH refused, second refused, nothing changed)", async () => {
+  it("nothing saved: no refresh (first PATCH refused, nothing changed); half saved: one refresh, since the address is on file", async () => {
     // first PATCH refused
     answer = () => ({ status: 500, body: { ok: false } });
     const a = mount();
@@ -636,7 +636,8 @@ describe("a successful save refreshes the route (fix round 1, M6)", () => {
     await b.save();
     await flush();
     expect(calls.length, "both were sent").toBe(2);
-    expect(refresh, "half saved").not.toHaveBeenCalled();
+    expect(refresh, "half saved: the address is on file, so the page refreshes once").toHaveBeenCalledTimes(1);
+    refresh.mockClear();
     // nothing changed: Save sends and refreshes nothing
     const c = mount({ initialAddress: "x" });
     await c.save();
