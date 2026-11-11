@@ -4,18 +4,21 @@
 // its logo, name, a sub-line about its deal, the deal's chip and at most ONE action - the one `rowNextAction` (lib/sponsor-deals.ts,
 // F15) says the deal needs next. Everything else a deal can do lives on the deal (Tasks 15-17).
 //
-// STATELESS on purpose: its only hooks are the copy and locale reads. Every bit of state (which row is being edited, which ⋯ is open,
-// the list itself, the network) is OrgSponsors', which hands it down with the handlers; that keeps the list drivable by the tests'
-// `expandWithHooks` and keeps one owner for the writes. The sub-components here are plain functions called inline, never elements,
-// for the same reason: an unexpanded child is a control a test cannot reach.
+// STATELESS on purpose: its only hooks are the copy and locale reads. Every bit of state (which ⋯ is open, the list itself, the
+// network) is OrgSponsors', which hands it down with the handlers; that keeps the list drivable by the tests' `expandWithHooks` and
+// keeps one owner for the writes. The sub-components here are plain functions called inline, never elements, for the same reason: an
+// unexpanded child is a control a test cannot reach.
 //
-// The name is a link to the sponsor's own page (`sponsorHref`, Task 15), and Show on site again lives there now (spec §10.3).
+// ONE way into a sponsor from the row, and it is the pencil (owner, 2026-11-11: "keep the pencil and remove the name link? most of
+// the time, customer doesn't know where to click"): a link to the sponsor's own page with its editor open (`sponsorEditHref`, Task 15);
+// a viewer's is the same button opening the page read-only (`sponsorHref`). The name is plain text. The row has no editor of its own -
+// the sponsor's page owns it - and Show on site again lives there too (spec §10.3).
 //
 // One DOM. Below md (768) the clicks and the edit / move / delete controls fold into a tray that is `max-md:hidden` until the ⋯
 // (SponsorRowMore) opens it; from md up they sit inline. The controls exist once.
 import type { ReactNode } from "react";
 import Link from "@/components/ui/console-link";
-import { ArrowDown, ArrowUp, MousePointerClick, Pencil, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronRight, MousePointerClick, Pencil, Trash2 } from "lucide-react";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { DealChip } from "@/components/sponsors/deal-chip";
 import { priceLabel } from "@/components/sponsors/deal-copy";
@@ -26,7 +29,7 @@ import { fmtPublicDate } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
 import { isOpenDeal, rowNextAction, type RowAction, type SponsorDeal } from "@/lib/sponsor-deals";
 import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
-import { dealHref, sponsorHref } from "@/lib/sponsors-hub";
+import { dealHref, sponsorEditHref, sponsorHref } from "@/lib/sponsors-hub";
 
 /** The row actions that WRITE (the other two: Add deal opens the Add deal sheet, Open deal navigates to the deal). */
 export type DealWrite = Extract<RowAction, "resend_invoice" | "mark_paid" | "approve">;
@@ -94,13 +97,9 @@ export interface SponsorListProps {
   /** The zone dates are read in (the viewer's). */
   tz: string;
   competitions: { id: string; name: string }[];
-  /** The row being edited, drawn as `renderEditor(row)` in place of its content. */
-  editingId: string | null;
-  renderEditor: (s: SponsorItem) => ReactNode;
   /** The row whose ⋯ is open (below md its tray shows). */
   moreOpenId: string | null;
   onToggleMore: (id: string) => void;
-  onEdit: (s: SponsorItem) => void;
   onMove: (id: string, delta: -1 | 1) => void;
   onRemove: (s: SponsorItem) => void;
   onAction: (s: SponsorItem, action: DealWrite) => void;
@@ -168,8 +167,7 @@ const ICON_BUTTON =
 
 export function SponsorList(props: SponsorListProps) {
   const {
-    sponsors, hasTiers, canEdit, busy, orgSlug, tz, competitions, editingId, renderEditor, moreOpenId, onToggleMore, onEdit, onMove,
-    onRemove, onAction, onAddDeal,
+    sponsors, hasTiers, canEdit, busy, orgSlug, tz, competitions, moreOpenId, onToggleMore, onMove, onRemove, onAction, onAddDeal,
   } = props;
   const msg = useMsg();
   const locale = useLocaleOrDefault();
@@ -255,103 +253,98 @@ export function SponsorList(props: SponsorListProps) {
     const clicks = msg("sponsors.clicks", { count: s.click_count });
     return (
       <li key={s.id} data-testid="sponsor-row" data-sponsor-id={s.id} className="px-3 py-2.5">
-        {editingId === s.id ? (
-          renderEditor(s)
-        ) : (
-          <div
-            data-testid="sponsor-row-grid"
-            className="grid grid-cols-[2.25rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 md:grid-cols-[2.25rem_minmax(0,1fr)_auto_auto]"
-          >
-            {s.logo_path ? (
-              // Stored via content-upload - an absolute CDN URL.
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={s.logo_path} alt="" className="h-9 w-9 rounded object-contain ring-1 ring-slate-200" />
-            ) : (
-              <span className="grid h-9 w-9 place-items-center rounded bg-slate-100 text-xs font-semibold text-slate-500">
-                {s.name.charAt(0).toUpperCase()}
+        <div
+          data-testid="sponsor-row-grid"
+          className="grid grid-cols-[2.25rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 md:grid-cols-[2.25rem_minmax(0,1fr)_auto_auto]"
+        >
+          {s.logo_path ? (
+            // Stored via content-upload - an absolute CDN URL.
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={s.logo_path} alt="" className="h-9 w-9 rounded object-contain ring-1 ring-slate-200" />
+          ) : (
+            <span className="grid h-9 w-9 place-items-center rounded bg-slate-100 text-xs font-semibold text-slate-500">
+              {s.name.charAt(0).toUpperCase()}
+            </span>
+          )}
+          <div data-testid="sponsor-row-main" className="min-w-0">
+            {/* A badge (Disputed - parked, Paid ...) wraps under the name instead of squeezing it to "O..." in a 160px column. */}
+            <p data-testid="sponsor-row-name" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-sm font-medium text-slate-800">
+              {/* Plain text: the pencil is the one way into the sponsor (a name that looked like a link was the thing people did not find). */}
+              <span data-testid="sponsor-row-name-text" className="block min-w-0 max-w-full truncate">
+                {s.name}
               </span>
-            )}
-            <div data-testid="sponsor-row-main" className="min-w-0">
-              {/* A badge (Disputed - parked, Paid ...) wraps under the name instead of squeezing it to "O..." in a 160px column. */}
-              <p data-testid="sponsor-row-name" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-sm font-medium text-slate-800">
-                {/* The name opens the sponsor's own page (Task 15). On a phone the link's tap area grows to 44px with padding that a
-                    negative margin takes back, so the row does not get taller; `relative z-[1]` keeps that padding on top of the
-                    sub-line it overlaps, or the lower half of the tap area would hit the sub-line instead of the link. */}
-                <Link
-                  href={sponsorHref(orgSlug, s.id)}
-                  data-testid="sponsor-row-name-link"
-                  className="relative z-[1] block min-w-0 max-w-full hover:text-purple-700 hover:underline max-md:-my-3 max-md:py-3"
-                >
-                  <span data-testid="sponsor-row-name-text" className="block min-w-0 max-w-full truncate">
-                    {s.name}
-                  </span>
-                </Link>
-                {badge(s)}
-                {tierHint(s)}
-              </p>
-              <p data-testid="sponsor-row-sub" className="truncate text-xs text-slate-500">
-                {subline(s, { msg, locale, tz, competitions, hasTiers })}
-              </p>
-            </div>
-            {canEdit ? <SponsorRowMore name={s.name} open={open} controlsId={trayId} onToggle={() => onToggleMore(s.id)} /> : null}
-            <div
-              data-testid="sponsor-row-deal"
-              className="col-span-2 col-start-2 flex min-w-0 flex-wrap items-center justify-between gap-2 md:col-span-1 md:col-start-auto md:w-72"
-            >
-              <DealChip deal={s.deal} />
-              {action(s)}
-            </div>
-            <div
-              id={trayId}
-              data-testid="sponsor-row-tools"
-              className={`col-span-2 col-start-2 flex min-w-0 flex-wrap items-center gap-1 md:col-span-1 md:col-start-auto md:shrink-0 md:flex-nowrap md:justify-end ${folded ? "max-md:hidden" : ""}`}
-            >
-              <span
-                data-testid="sponsor-row-clicks"
-                className="flex shrink-0 items-center gap-1 pr-2 text-xs tabular-nums text-slate-500"
-                title={clicks}
-                aria-label={clicks}
-              >
-                <MousePointerClick className="h-3.5 w-3.5" strokeWidth={1.75} />
-                {s.click_count}
-              </span>
-              {canEdit ? (
-                <>
-                  <button type="button" aria-label={msg("sponsors.edit", { name: s.name })} disabled={busy} onClick={() => onEdit(s)} className={ICON_BUTTON}>
-                    <Pencil className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={msg("settings.org.sponsors.moveUp", { name: s.name })}
-                    disabled={busy || index === 0 || !sameOrderBand(group[index - 1]!, s)}
-                    onClick={() => onMove(s.id, -1)}
-                    className={ICON_BUTTON}
-                  >
-                    <ArrowUp className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={msg("settings.org.sponsors.moveDown", { name: s.name })}
-                    disabled={busy || index === group.length - 1 || !sameOrderBand(group[index + 1]!, s)}
-                    onClick={() => onMove(s.id, 1)}
-                    className={ICON_BUTTON}
-                  >
-                    <ArrowDown className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={msg("settings.org.sponsors.remove", { name: s.name })}
-                    disabled={busy}
-                    onClick={() => onRemove(s)}
-                    className="grid h-7 w-7 place-items-center rounded text-red-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-30 max-md:h-11 max-md:w-11"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </>
-              ) : null}
-            </div>
+              {badge(s)}
+              {tierHint(s)}
+            </p>
+            <p data-testid="sponsor-row-sub" className="truncate text-xs text-slate-500">
+              {subline(s, { msg, locale, tz, competitions, hasTiers })}
+            </p>
           </div>
-        )}
+          {canEdit ? <SponsorRowMore name={s.name} open={open} controlsId={trayId} onToggle={() => onToggleMore(s.id)} /> : null}
+          <div
+            data-testid="sponsor-row-deal"
+            className="col-span-2 col-start-2 flex min-w-0 flex-wrap items-center justify-between gap-2 md:col-span-1 md:col-start-auto md:w-72"
+          >
+            <DealChip deal={s.deal} />
+            {action(s)}
+          </div>
+          <div
+            id={trayId}
+            data-testid="sponsor-row-tools"
+            className={`col-span-2 col-start-2 flex min-w-0 flex-wrap items-center gap-1 md:col-span-1 md:col-start-auto md:shrink-0 md:flex-nowrap md:justify-end ${folded ? "max-md:hidden" : ""}`}
+          >
+            <span
+              data-testid="sponsor-row-clicks"
+              className="flex shrink-0 items-center gap-1 pr-2 text-xs tabular-nums text-slate-500"
+              title={clicks}
+              aria-label={clicks}
+            >
+              <MousePointerClick className="h-3.5 w-3.5" strokeWidth={1.75} />
+              {s.click_count}
+            </span>
+            {/* The one way in: an editor's pencil opens the sponsor's page with its editor open, a viewer's button opens it read-only. */}
+            {canEdit ? (
+              <Link href={sponsorEditHref(orgSlug, s.id)} data-testid="sponsor-row-edit" aria-label={msg("sponsors.edit", { name: s.name })} className={ICON_BUTTON}>
+                <Pencil className="h-3.5 w-3.5" />
+              </Link>
+            ) : (
+              <Link href={sponsorHref(orgSlug, s.id)} data-testid="sponsor-row-open" aria-label={msg("sponsors.open", { name: s.name })} className={ICON_BUTTON}>
+                <ChevronRight className="h-4 w-4" />
+              </Link>
+            )}
+            {canEdit ? (
+              <>
+                <button
+                  type="button"
+                  aria-label={msg("settings.org.sponsors.moveUp", { name: s.name })}
+                  disabled={busy || index === 0 || !sameOrderBand(group[index - 1]!, s)}
+                  onClick={() => onMove(s.id, -1)}
+                  className={ICON_BUTTON}
+                >
+                  <ArrowUp className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  aria-label={msg("settings.org.sponsors.moveDown", { name: s.name })}
+                  disabled={busy || index === group.length - 1 || !sameOrderBand(group[index + 1]!, s)}
+                  onClick={() => onMove(s.id, 1)}
+                  className={ICON_BUTTON}
+                >
+                  <ArrowDown className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  aria-label={msg("settings.org.sponsors.remove", { name: s.name })}
+                  disabled={busy}
+                  onClick={() => onRemove(s)}
+                  className="grid h-7 w-7 place-items-center rounded text-red-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-30 max-md:h-11 max-md:w-11"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </>
+            ) : null}
+          </div>
+        </div>
       </li>
     );
   }

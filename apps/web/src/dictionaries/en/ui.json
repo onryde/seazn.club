@@ -461,6 +461,7 @@
   "sponsors.logoLabel": "Logo",
   "sponsors.empty": "No sponsors yet. They'll appear on your public pages as soon as you add one.",
   "sponsors.edit": "Edit {name}",
+  "sponsors.open": "Open {name}",
   "sponsors.row.tierWhenLive": "{tier} when live",
   "sponsors.save": "Save",
   "sponsors.clicks": "{count} clicks",

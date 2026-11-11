@@ -105,6 +105,7 @@ function Marker(p: {
       finishedCompetitionIds: readonly string[];
       chargesEnabled: boolean;
       sponsorId: string | null;
+      editSponsor: boolean;
       dealId: string | null;
       dealCreatedByName: string | null;
       dealCompetitionFinished: boolean;
@@ -134,6 +135,7 @@ function Marker(p: {
       data-hub-finished={p.hub.finishedCompetitionIds.join("|")}
       data-hub-charges={String(p.hub.chargesEnabled)}
       data-hub-sponsor={p.hub.sponsorId ?? "-"}
+      data-hub-edit={String(p.hub.editSponsor)}
       data-hub-deal={p.hub.dealId ?? "-"}
       data-hub-deal-by={p.hub.dealCreatedByName ?? "-"}
       data-hub-deal-finished={String(p.hub.dealCompetitionFinished)}
@@ -241,7 +243,7 @@ async function render(
   tab?: string,
   scope?: string | string[],
   period?: string | string[],
-  pick: { sponsor?: string | string[]; deal?: string | string[] } = {},
+  pick: { sponsor?: string | string[]; deal?: string | string[]; edit?: string | string[] } = {},
 ): Promise<string> {
   const element = await SponsorsHubPage({
     params: Promise.resolve({ orgSlug: ORG.slug }),
@@ -251,6 +253,7 @@ async function render(
       ...(period === undefined ? {} : { period }),
       ...(pick.sponsor === undefined ? {} : { sponsor: pick.sponsor }),
       ...(pick.deal === undefined ? {} : { deal: pick.deal }),
+      ...(pick.edit === undefined ? {} : { edit: pick.edit }),
     }),
   });
   const { prelude } = await prerender(element);
@@ -1038,12 +1041,59 @@ describe("?sponsor=<own> draws the sponsor's own page (Task 15 - F23, moved here
     }
   });
 
+  it("?edit=1 (the list's pencil) opens the sponsor page with its Details editor open; the same URL without it is read-only until Edit is pressed (the pair)", async () => {
+    const opened = await render("sponsors", undefined, undefined, { sponsor: "s1", edit: "1" });
+    expect(sheetsIn(opened)).toHaveLength(1);
+    expect(opened, "the editor is the page's").toContain('data-testid="sponsor-sheet-editor"');
+    expect(opened, "and the read-only rows it replaces are gone").not.toContain('data-testid="sponsor-sheet-detail-name"');
+    const plain = await render("sponsors", undefined, undefined, { sponsor: "s1" });
+    expect(plain).not.toContain('data-testid="sponsor-sheet-editor"');
+    expect(plain, "the plain page shows the read-only rows").toContain('data-testid="sponsor-sheet-detail-name"');
+    // the second sponsor's own pencil: not the first row's editor
+    const second = await render("sponsors", undefined, undefined, { sponsor: "s2", edit: "1" });
+    expect(sheetsIn(second)[0]).toContain('data-sponsor-id="s2"');
+    expect(second).toContain('data-testid="sponsor-sheet-editor"');
+  });
+
+  it("only edit=1 opens it: another value, an empty one and a repeated one leave the page read-only (5 checked)", async () => {
+    let checked = 0;
+    for (const raw of ["0", "", "true", "yes", ["1", "1"]]) {
+      const html = await render("sponsors", undefined, undefined, { sponsor: "s1", edit: raw });
+      expect(sheetsIn(html), JSON.stringify(raw)).toHaveLength(1);
+      expect(html, JSON.stringify(raw)).not.toContain('data-testid="sponsor-sheet-editor"');
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+
+  it("?edit=1 with no sponsor, or a foreign one, opens nothing - the list (the empty case)", async () => {
+    for (const pick of [{ edit: "1" }, { sponsor: "other-orgs-sponsor", edit: "1" }]) {
+      const html = await render("sponsors", undefined, undefined, pick);
+      expect(sheetsIn(html), JSON.stringify(pick)).toHaveLength(0);
+      expect(html, JSON.stringify(pick)).not.toContain('data-testid="sponsor-sheet-editor"');
+    }
+  });
+
+  it("a viewer who follows an edit link gets the read-only page: no editor, no Edit button", async () => {
+    asMember("viewer", false);
+    const html = await render("sponsors", undefined, undefined, { sponsor: "s1", edit: "1" });
+    expect(sheetsIn(html)).toHaveLength(1);
+    expect(html).not.toContain('data-testid="sponsor-sheet-editor"');
+    expect(html).not.toContain('data-testid="sponsor-sheet-edit"');
+    expect(html, "the read-only rows are shown").toContain('data-testid="sponsor-sheet-detail-name"');
+  });
+
   it("the marker case still reports the dates the page passed (null without a sponsor, this year's with one)", async () => {
     real.on = false;
     expect(attr(await render("sponsors"), "org-sponsors", "data-hub-defaults")).toBe("-");
     expect(attr(await render("sponsors", undefined, undefined, { sponsor: "s1" }), "org-sponsors", "data-hub-defaults")).toBe("2026-01-01..2026-12-31");
+    const edit = async (pick: { sponsor?: string; edit?: string }) => attr(await render("sponsors", undefined, undefined, pick), "org-sponsors", "data-hub-edit");
+    expect(await edit({ sponsor: "s1", edit: "1" }), "an editor with a sponsor and ?edit=1").toBe("true");
+    expect(await edit({ sponsor: "s1" }), "no ?edit=").toBe("false");
+    expect(await edit({ edit: "1" }), "no sponsor").toBe("false");
     asMember("viewer", false);
     expect(attr(await render("sponsors", undefined, undefined, { sponsor: "s1" }), "org-sponsors", "data-hub-defaults")).toBe("-");
+    expect(await edit({ sponsor: "s1", edit: "1" }), "a viewer is never handed the editor").toBe("false");
   });
 });
 

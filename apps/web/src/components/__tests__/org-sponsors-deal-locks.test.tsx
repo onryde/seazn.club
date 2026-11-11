@@ -21,7 +21,7 @@
 //
 // Killers (one at a time, restore from a cp backup):
 //   K1  selects      draw a tier <select> in SponsorForm again                              -> "no tier or competition control"
-//   K2  draft        `startEdit` puts `tier` back into the edit draft                        -> "the edit draft is a name, a link and a logo"
+//   K2  draft        `draftOf` puts `tier` back into the edit draft                          -> "the edit draft is a name, a link and a logo"
 //   K3  delete ask   drop the `s.deal` arm of the confirm guard                            -> "a sponsor with a deal asks first"
 //   K4  mapped       `msg(sponsorSaveErrorKey(err))` -> `err.message`                      -> "a refusal reads the dictionary's words"
 //   K5  show again   offer "Show on site again" on every row                                -> "offered exactly where the server accepts it"
@@ -156,6 +156,7 @@ const HUB: SponsorsHubData = {
   finishedCompetitionIds: [],
   chargesEnabled: true,
   sponsorId: null,
+  editSponsor: false,
   dealId: null,
   dealCreatedByName: null,
   dealCompetitionFinished: false,
@@ -187,7 +188,13 @@ function mount(rows: SponsorItem[], opts: { canEdit?: boolean; sponsorId?: strin
   };
   return {
     island,
-    edit: (name: string) => (propsOf(byLabel("sponsors.edit", name)).onClick as () => void)(),
+    // The list's pencil is a LINK to `?sponsor=<id>&edit=1`: following it is a prop change on the same mounted island (the page re-reads
+    // the URL), so the editor is opened the way a browser opens it - by the URL's answer - not by clicking a handler that is not there.
+    edit: (name: string) => {
+      const s = rows.find((r) => r.name === name);
+      if (!s) throw new Error(`no row named "${name}"`);
+      island.rerender({ ...props, hub: { ...props.hub, sponsorId: s.id, editSponsor: true } });
+    },
     remove: (name: string) => (propsOf(byLabel("settings.org.sponsors.remove", name)).onClick as () => void)(),
     form,
     hasRow: (name: string) => island.tree().some((e) => e.type === "li" && textOf(e).includes(name)),

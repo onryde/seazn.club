@@ -564,14 +564,13 @@ test("Sponsors hub, Sponsors tab: add three, reorder, edit name and link (the fo
   // from its deals, so the form has no select for either (owner, 2026-11-11: "why showing tier in sponsor edit?").
   const before = mine(await listSponsors(page.request)).find((s) => s.name === B);
   expect(before, "premise: the sponsor about to be edited is on the server").toBeDefined();
+  // The row's pencil is a link to the sponsor's own page with its editor open (a side panel at this width; owner, 2026-11-11).
   await page
-    .getByRole("button", { name: ui("sponsors.edit", { name: B }), exact: true })
+    .getByRole("link", { name: ui("sponsors.edit", { name: B }), exact: true })
     .click();
-  // Exactly one <li> holds a sponsor-name field at a time: the row being edited.
-  const editRow = page
-    .locator("li")
-    .filter({ has: page.locator("label").filter({ hasText: L.sponsorName }) });
-  await expect(editRow, "one row is open for editing").toHaveCount(1);
+  // Exactly one editor is open at a time: the sponsor page's Details editor.
+  const editRow = page.getByRole("dialog").getByTestId("sponsor-sheet-editor");
+  await expect(editRow, "one editor is open").toHaveCount(1);
   await field(editRow, L.sponsorName).fill(B2);
   await field(editRow, L.sponsorLink).fill("bravo-bakery.example.org");
   await expect(editRow.locator("select"), "the edit form has no tier or scope select").toHaveCount(0);
@@ -607,6 +606,15 @@ test("Sponsors hub, Sponsors tab: add three, reorder, edit name and link (the fo
       tier: before!.tier,
       competition_id: before!.competition_id,
     });
+
+  // The panel is modal over the list: close it before the list's own controls are used again (Escape until it has closed: the first press
+  // can land before the panel's focus trap is up).
+  const panel = page.getByRole("dialog");
+  await expect(async () => {
+    if ((await panel.count()) === 0) return;
+    await page.keyboard.press("Escape");
+    await expect(panel).toHaveCount(0, { timeout: 2_000 });
+  }).toPass({ timeout: 15_000 });
 
   // The API still takes both on a PATCH (this screen no longer sends them): a tier and a scope set through it persist and read back.
   const viaApi = await apiJson(page.request, `/api/v1/orgs/${org.orgId}/sponsors/${before!.id}`, "PATCH", {

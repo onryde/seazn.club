@@ -14,7 +14,7 @@ import {
 import type { SettingsTab } from "../src/app/o/[orgSlug]/settings/_components/settings-nav";
 // The hub's URL builder is dependency-free (it imports only the console route builders), so unlike settings-nav it IS
 // importable as a value from this process.
-import { dealHref, sponsorHref, sponsorsHref, type SponsorsTab } from "../src/lib/sponsors-hub";
+import { dealHref, sponsorEditHref, sponsorHref, sponsorsHref, type SponsorsTab } from "../src/lib/sponsors-hub";
 
 /**
  * Support for the W2 settings walkthrough specs.
@@ -55,6 +55,14 @@ export function sponsorsUrl(slug: string, tab: SponsorsTab): string {
  */
 export function sponsorUrl(slug: string, sponsorId: string): string {
   return sponsorHref(slug, sponsorId);
+}
+
+/**
+ * `/o/{slug}/sponsors?tab=sponsors&sponsor={id}&edit=1` - a sponsor's own page with its Details editor already open: where a row's pencil
+ * goes (owner, 2026-11-11: the pencil is the one way in from the list; the name is plain text).
+ */
+export function sponsorEditUrl(slug: string, sponsorId: string): string {
+  return sponsorEditHref(slug, sponsorId);
 }
 
 /** `/o/{slug}/sponsors?tab=sponsors&sponsor={id}&deal={id}` - one deal's own page, on top of its sponsor (sponsor deals PR 2, Task 17). */

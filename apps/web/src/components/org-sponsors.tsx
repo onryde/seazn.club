@@ -104,6 +104,8 @@ export interface SponsorsHubData {
   finishedCompetitionIds: string[];
   /** `?sponsor=` after the page checked it is one of this org's sponsors; null shows the list. */
   sponsorId: string | null;
+  /** `?edit=1` (the list's pencil) on an editor's page with a sponsor selected: the sponsor's page opens with its Details editor open. */
+  editSponsor: boolean;
   /** `?deal=` after the page checked it is one of the selected sponsor's deals; null shows the sponsor's page. */
   dealId: string | null;
   /** The selected deal's creator, by display name (a removed member or a deleted user reads null); null with no deal selected. */
@@ -125,6 +127,11 @@ interface Draft {
   preview: string | null;
 }
 const EMPTY_DRAFT: Draft = { name: "", url: "", file: null, preview: null };
+
+/** What the editor opens with: the sponsor's own name, link and logo (an empty form for no sponsor). */
+function draftOf(s: SponsorItem | undefined): Draft {
+  return s === undefined ? EMPTY_DRAFT : { name: s.name, url: s.url ?? "", file: null, preview: s.logo_path };
+}
 
 /** The route each deal write POSTs. Send and Resend invoice are one route: the server sends a draft's first invoice and re-sends an
  *  open one's the same way (ensureDealCheckout). */
@@ -316,10 +323,22 @@ export function OrgSponsors({
   }
   const [addDealFor, setAddDealFor] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [edit, setEdit] = useState<Draft>(EMPTY_DRAFT);
+  // The sponsor page opens with its editor open when the URL says so (`?edit=1`: the list's pencil, the one way in from the list). The
+  // island stays mounted across that client navigation, so the URL's answer is compared by identity in render (never an effect, and
+  // not just as the initial state, which would miss every pencil after the first).
+  const editParamId = hub.editSponsor ? hub.sponsorId : null;
+  const [editingId, setEditingId] = useState<string | null>(editParamId);
+  const [edit, setEdit] = useState<Draft>(draftOf(initialSponsors.find((s) => s.id === editParamId)));
+  const [seenEditParamId, setSeenEditParamId] = useState(editParamId);
   /** The row whose ⋯ is open below md (one at a time). */
   const [moreOpenId, setMoreOpenId] = useState<string | null>(null);
+  if (seenEditParamId !== editParamId) {
+    setSeenEditParamId(editParamId);
+    setEditingId(editParamId);
+    setEdit(draftOf(sponsors.find((s) => s.id === editParamId)));
+    // The row's tray belongs to the list; the pencil took the reader off it, and a tray left open would still be open on the way back.
+    setMoreOpenId(null);
+  }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** What a write that changes nothing on screen says it did (Resend invoice: the chip stays "Awaiting payment"). */
@@ -444,16 +463,10 @@ export function OrgSponsors({
     });
   }
 
+  /** The sponsor page's own Edit button (the list's pencil is a link: it arrives here through `?edit=1`). */
   function startEdit(s: SponsorItem) {
-    // The ⋯ tray belongs to the row's controls; the editor replaces them, and a tray left open would still be open on Cancel.
-    setMoreOpenId(null);
     setEditingId(s.id);
-    setEdit({
-      name: s.name,
-      url: s.url ?? "",
-      file: null,
-      preview: s.logo_path,
-    });
+    setEdit(draftOf(s));
   }
 
   function saveEdit(s: SponsorItem) {
@@ -664,8 +677,6 @@ export function OrgSponsors({
   // The sponsor the Add deal sheet is open for - from either the list's row or the sponsor's page. A sponsor the list no longer holds
   // (deleted since) opens nothing.
   const addDealSponsor = addDealFor === null ? undefined : sponsors.find((s) => s.id === addDealFor);
-  // The sponsor's editor is the page's while its page is open; the list behind a side panel must not draw a second one.
-  const listEditingId = selected !== undefined && editingId === selected.id ? null : editingId;
 
   return (
     <div className="space-y-5">
@@ -788,21 +799,8 @@ export function OrgSponsors({
           orgSlug={hub.orgSlug}
           tz={tz}
           competitions={competitions}
-          editingId={listEditingId}
-          renderEditor={(s) => (
-            <SponsorForm
-              value={edit}
-              onChange={(fn) => setEdit(fn)}
-              onSubmit={() => saveEdit(s)}
-              onCancel={() => setEditingId(null)}
-              submitLabel={msg("sponsors.save")}
-              busy={busy}
-              onPickLogo={pickLogo}
-            />
-          )}
           moreOpenId={moreOpenId}
           onToggleMore={(id) => setMoreOpenId((open) => (open === id ? null : id))}
-          onEdit={startEdit}
           onMove={move}
           onRemove={remove}
           onAction={dealAction}

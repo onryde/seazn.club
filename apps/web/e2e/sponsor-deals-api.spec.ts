@@ -302,12 +302,15 @@ test("a sponsor under a live deal: On stream tick, tier and competition are lock
     // (owner, 2026-11-11: "why showing tier in sponsor edit?"; a deal sets those two, the sponsor's page shows them read-only). It
     // used to draw both as selects, disabled for this sponsor with a note.
     await page.goto(sponsorsUrl(org.slug, "sponsors"));
-    // Below md the row's Edit sits behind its ⋯ (sponsor deals Task 14); the helper opens the fold only where the ⋯ is on screen.
+    // Below md the row's pencil sits behind its ⋯ (sponsor deals Task 14); the helper opens the fold only where the ⋯ is on screen.
     await openSponsorRowTools(page, LONG);
-    await page.getByRole("button", { name: ui("sponsors.edit", { name: LONG }) }).click();
-    // The row being edited is the one that holds a Cancel: counted, so the negatives below are never asserted on nothing.
-    const editRow = page.getByTestId("sponsor-row").filter({ has: page.getByRole("button", { name: ui("confirm.cancel"), exact: true }) });
-    await expect(editRow, `${width}: exactly one row is open for editing`).toHaveCount(1);
+    // The pencil is a link to the sponsor's own page with its editor open - a side panel from 768, a page below it (owner, 2026-11-11).
+    await page.getByRole("link", { name: ui("sponsors.edit", { name: LONG }) }).click();
+    const panel = width >= 768 ? page.getByRole("dialog") : page;
+    // The editor is the one holding a Cancel, inside the sponsor's page: counted, so the negatives below are never asserted on nothing.
+    const editRow = panel.getByTestId("sponsor-sheet-editor");
+    await expect(editRow, `${width}: exactly one editor is open`).toHaveCount(1);
+    await expect(editRow.getByRole("button", { name: ui("confirm.cancel"), exact: true }), `${width}: and it is the editor (it has a Cancel)`).toHaveCount(1);
     await expect(editRow.getByLabel(ui("settings.org.sponsors.name")), `${width}: the name is editable`).toBeEnabled();
     await expect(editRow.getByLabel(ui("settings.org.sponsors.link")), `${width}: the link is editable`).toBeEnabled();
     await expect(editRow.locator("select"), `${width}: no tier or competition select, even for a sponsor a live deal owns`).toHaveCount(0);

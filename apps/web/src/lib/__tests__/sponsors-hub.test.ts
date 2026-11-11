@@ -12,9 +12,11 @@ import {
   legacySettingsSponsorsTarget,
   onStreamHref,
   resolveDealParam,
+  resolveEditParam,
   resolveOnStreamScope,
   resolveSponsorParam,
   resolveSponsorsTab,
+  sponsorEditHref,
   sponsorHref,
   sponsorsHref,
   sponsorsTabsFor,
@@ -252,5 +254,33 @@ describe("sponsorHref / dealHref (the sponsor's page and a deal on it are ?spons
     expect(resolveSponsorsTab(url.searchParams.get("tab") ?? undefined, true)).toBe("sponsors");
     expect(resolveSponsorParam(url.searchParams.get("sponsor") ?? undefined, [{ id: SPONSOR_A }])).toBe(SPONSOR_A);
     expect(resolveDealParam(url.searchParams.get("deal") ?? undefined, [{ id: SPONSOR_B }])).toBe(SPONSOR_B);
+  });
+});
+
+describe("sponsorEditHref / resolveEditParam (the list's pencil: the sponsor's page with its editor open)", () => {
+  it("the pencil's URL is the sponsor's own URL plus &edit=1, and the page reads back exactly that (the round trip)", () => {
+    expect(sponsorEditHref("acme", SPONSOR_A)).toBe(`${sponsorHref("acme", SPONSOR_A)}&edit=1`);
+    const url = new URL(sponsorEditHref("acme", SPONSOR_A), "https://x.test");
+    expect(url.searchParams.get("sponsor")).toBe(SPONSOR_A);
+    expect(resolveEditParam(url.searchParams.get("edit") ?? undefined)).toBe(true);
+    // the viewer's link is the plain one, which opens nothing
+    expect(resolveEditParam(new URL(sponsorHref("acme", SPONSOR_A), "https://x.test").searchParams.get("edit") ?? undefined)).toBe(false);
+  });
+
+  it("only the exact value 1 opens the editor: absent, empty, 0, true, yes, a repeated value and an inherited key do not (7 checked)", () => {
+    const cases: [string | string[] | undefined, boolean][] = [
+      ["1", true], [undefined, false], ["", false], ["0", false], ["true", false], ["yes", false], [["1", "1"], false],
+    ];
+    let checked = 0;
+    for (const [raw, want] of cases) {
+      expect(resolveEditParam(raw), JSON.stringify(raw)).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(7);
+  });
+
+  it("an id with & or = is encoded before the edit flag, so it cannot smuggle ?edit= (the pair with the encoding test above)", () => {
+    expect(sponsorEditHref("acme", "a&edit=1")).toBe("/o/acme/sponsors?tab=sponsors&sponsor=a%26edit%3D1&edit=1");
+    expect(new URL(sponsorHref("acme", "a&edit=1"), "https://x.test").searchParams.get("edit")).toBeNull();
   });
 });

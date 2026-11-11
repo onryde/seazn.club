@@ -7991,6 +7991,7 @@ export type DictionaryKey =
   | "sponsors.onStream.tickLabel"
   | "sponsors.onStream.whereBody"
   | "sponsors.onStream.whereLabel"
+  | "sponsors.open"
   | "sponsors.overview.airingsFootnote"
   | "sponsors.overview.airingsTerm"
   | "sponsors.overview.clicksFootnote"

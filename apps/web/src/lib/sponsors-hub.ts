@@ -78,6 +78,18 @@ export function sponsorHref(orgSlug: string, sponsorId: string): string {
   return `${sponsorsHref(orgSlug, "sponsors")}&sponsor=${encodeURIComponent(sponsorId)}`;
 }
 
+/** `/o/<slug>/sponsors?tab=sponsors&sponsor=<id>&edit=1`: a sponsor's own page with its Details editor already open - where the list's
+ *  pencil goes (owner, 2026-11-11: one way in, the pencil; the name is plain text). */
+export function sponsorEditHref(orgSlug: string, sponsorId: string): string {
+  return `${sponsorHref(orgSlug, sponsorId)}&edit=1`;
+}
+
+/** A raw `?edit=`: only the one value the pencil writes opens the editor. Anything else (absent, empty, repeated, `0`, `true`) is the
+ *  page as it is - read-only until its own Edit button is pressed. */
+export function resolveEditParam(raw: string | string[] | undefined): boolean {
+  return raw === "1";
+}
+
 /** `/o/<slug>/sponsors?tab=sponsors&sponsor=<id>&deal=<id>`: one deal, on its sponsor's page. */
 export function dealHref(orgSlug: string, sponsorId: string, dealId: string): string {
   return `${sponsorHref(orgSlug, sponsorId)}&deal=${encodeURIComponent(dealId)}`;

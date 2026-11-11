@@ -16,7 +16,8 @@ import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Locator, type Page, type Response } from "@playwright/test";
 import { apiJson, expectNoHorizontalScroll, setBoolEntitlementOverrideSql, setOrgConnectSql, withDb } from "./helpers";
 import {
-  dealUrl, openSponsorRowTools, releaseSettingsOrg, seedCompetition, seedMemberIdentity, seedSettingsOrg, sponsorsUrl, sponsorUrl, tapUntil, type SeededOrg,
+  dealUrl, openSponsorRowTools, releaseSettingsOrg, seedCompetition, seedMemberIdentity, seedSettingsOrg, sponsorEditUrl, sponsorsUrl, sponsorUrl, tapUntil,
+  type SeededOrg,
 } from "./settings-support";
 
 const UI: Record<string, string> = JSON.parse(
@@ -226,7 +227,7 @@ test("list at 320: the ⋯ fold holds clicks, edit, move and delete; no sideways
     const long = rowOf(page, longId);
     await expect(long, `${width}: the long-named sponsor is listed`).toBeVisible();
 
-    // The group a row sits under is its deal's tier: the live gold deal puts this partner-added sponsor in Gold; the other stays Partner.
+    // The group a row sits under is the tier its sponsor shows at NOW: the live gold deal made this partner-added sponsor a Gold; the other stays Partner.
     await expect(page.locator('[data-testid="sponsor-group"][data-tier="gold"]').getByTestId("sponsor-row"), `${width}: the gold deal's sponsor is under Gold`).toHaveCount(1);
     await expect(page.locator('[data-testid="sponsor-group"][data-tier="gold"]').locator(`[data-sponsor-id="${longId}"]`)).toHaveCount(1);
     await expect(page.locator('[data-testid="sponsor-group"][data-tier="partner"]').locator(`[data-sponsor-id="${shortId}"]`), `${width}: the other stays under Partner`).toHaveCount(1);
@@ -234,7 +235,8 @@ test("list at 320: the ⋯ fold holds clicks, edit, move and delete; no sideways
     const more = long.getByTestId("sponsor-row-more");
     const tools = long.getByTestId("sponsor-row-tools");
     const controls = [
-      long.getByRole("button", { name: ui("sponsors.edit", { name: LONG }), exact: true }),
+      // The pencil is a LINK (to the sponsor's page with its editor open); the other three are buttons.
+      long.getByRole("link", { name: ui("sponsors.edit", { name: LONG }), exact: true }),
       long.getByRole("button", { name: ui("settings.org.sponsors.moveUp", { name: LONG }), exact: true }),
       long.getByRole("button", { name: ui("settings.org.sponsors.moveDown", { name: LONG }), exact: true }),
       long.getByRole("button", { name: ui("settings.org.sponsors.remove", { name: LONG }), exact: true }),
@@ -272,11 +274,14 @@ test("list at 320: the ⋯ fold holds clicks, edit, move and delete; no sideways
       await expect(tools, `${width}: the tools are inline`).toBeVisible();
       await expect(clicks).toBeVisible();
       for (const c of controls) await expect(c, `${width}: every control is inline`).toBeVisible();
-      await expect(long.getByRole("button", { name: ui("sponsors.edit", { name: LONG }) }), `${width}: one Edit, not two`).toHaveCount(1);
+      await expect(long.getByRole("link", { name: ui("sponsors.edit", { name: LONG }) }), `${width}: one Edit, not two`).toHaveCount(1);
     }
 
     // The 43-character name is cut with an ellipsis and stays inside the screen; it is clipped only where the row is that narrow.
     const name = long.getByTestId("sponsor-row-name-text");
+    // The name is plain text, not a link (owner, 2026-11-11: the pencil is the one way in).
+    await expect(long.getByTestId("sponsor-row-name-link"), `${width}: the name is not a link`).toHaveCount(0);
+    expect(await name.evaluate((el) => el.closest("a") === null), `${width}: and no anchor wraps it`).toBe(true);
     const box = await name.evaluate((el) => {
       const cs = getComputedStyle(el);
       return { overflow: cs.overflowX, ellipsis: cs.textOverflow, clipped: el.scrollWidth > el.clientWidth, right: el.getBoundingClientRect().right };
@@ -310,8 +315,15 @@ test("a viewer sees the sponsors and their chips - and no action, no ⋯, no edi
     await expect(rowOf(page, noneId).getByTestId("deal-chip")).toHaveText(ui("sponsors.deal.chip.none"));
     await expect(page.getByTestId("sponsor-row-action"), "a viewer is offered no next action").toHaveCount(0);
     await expect(page.getByTestId("sponsor-row-more"), "nor a ⋯ - there is nothing behind it").toHaveCount(0);
-    await expect(page.getByRole("button", { name: ui("sponsors.edit", { name: "Quay Fisheries" }) }), "nor Edit").toHaveCount(0);
+    await expect(page.getByRole("link", { name: ui("sponsors.edit", { name: "Quay Fisheries" }) }), "nor the Edit pencil").toHaveCount(0);
     await expect(page.getByRole("button", { name: ui("settings.org.sponsors.remove", { name: "Quay Fisheries" }) }), "nor Remove").toHaveCount(0);
+    // The pair: what a viewer DOES get in that place is Open - the same button, to the page read-only (no edit flag), a 44px target.
+    const openBtn = page.getByRole("link", { name: ui("sponsors.open", { name: "Quay Fisheries" }), exact: true });
+    await expect(openBtn, "a viewer's row has its Open button").toHaveCount(1);
+    expect(await openBtn.getAttribute("href"), "it opens the plain sponsor page").toBe(sponsorUrl(org.slug, unpaidId));
+    const openBox = (await openBtn.boundingBox())!;
+    expect(openBox.width, "Open: a 44px target").toBeGreaterThanOrEqual(44);
+    expect(openBox.height, "Open: a 44px target").toBeGreaterThanOrEqual(44);
     // With no controls to fold, the clicks count stays on the row at 320.
     await expect(rowOf(page, unpaidId).getByTestId("sponsor-row-clicks"), "the clicks count is not folded away for a viewer").toBeVisible();
     await expectNoHorizontalScroll(page);
@@ -347,10 +359,11 @@ test("sponsor page: phones get their own page with back; desktop a side sheet ov
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(listUrl);
   await expect(page.getByTestId("sponsor-row")).toHaveCount(2);
-  const nameLink = rowOf(page, sponsorId).getByTestId("sponsor-row-name-link");
-  await nameLink.click();
-  await expect(page).toHaveURL(new RegExp(`sponsor=${sponsorId}`));
+  await expect(rowOf(page, sponsorId).getByTestId("sponsor-row-name-link"), "the name is plain text, not a link").toHaveCount(0);
+  await followPencil(page, sponsorId);
+  await expect(page).toHaveURL(urlIs(sponsorEditUrl(org.slug, sponsorId)));
   await expect(dialog, "from 768 the sponsor's page is a panel").toBeVisible();
+  await expect(dialog.getByTestId("sponsor-sheet-editor"), "the pencil opens it with the Details editor already open").toBeVisible();
   await expect(sheet, "one body, inside the panel").toHaveCount(1);
   await expect(dialog.getByTestId("sponsor-sheet")).toHaveCount(1);
   await expect(listView, "the list is still there behind the panel").toBeVisible();
@@ -409,16 +422,24 @@ test("sponsor page: phones get their own page with back; desktop a side sheet ov
   await expect(listView).toBeVisible();
   await expect(rowOf(page, other)).toBeVisible();
 
-  // --- The name's tap area on a phone is a 44px target that the row does not pay for: hit-test it, do not just measure paint.
-  const link = rowOf(page, sponsorId).getByTestId("sponsor-row-name-link");
-  const hit = await link.evaluate((el) => {
+  // --- The pencil's tap area on a phone: a 44px target inside the row's ⋯ tray. Hit-test it, do not just measure paint.
+  await openSponsorRowTools(page, NAME);
+  const pencil = rowOf(page, sponsorId).getByTestId("sponsor-row-edit");
+  await expect(pencil, "open, the pencil is on the row").toBeVisible();
+  const hit = await pencil.evaluate((el) => {
     const r = el.getBoundingClientRect();
     const top = document.elementFromPoint(r.left + r.width / 2, r.top + 2);
     const bottom = document.elementFromPoint(r.left + r.width / 2, r.bottom - 2);
-    return { height: r.height, top: top === el || el.contains(top), bottom: bottom === el || el.contains(bottom) };
+    return { width: r.width, height: r.height, top: top === el || el.contains(top), bottom: bottom === el || el.contains(bottom) };
   });
-  expect(hit.height, "the name link's box is 44px tall on a phone").toBeGreaterThanOrEqual(44);
-  expect(hit.top && hit.bottom, "and both ends of it hit the link").toBe(true);
+  expect(hit.height, "the pencil's box is 44px tall on a phone").toBeGreaterThanOrEqual(44);
+  expect(hit.width, "and 44px wide").toBeGreaterThanOrEqual(44);
+  expect(hit.top && hit.bottom, "and both ends of it hit the pencil").toBe(true);
+  await expectNoHorizontalScroll(page);
+  await pencil.click();
+  await expect(page).toHaveURL(urlIs(sponsorEditUrl(org.slug, sponsorId)));
+  await expect(pageBody, "on a phone the pencil opens the sponsor's page, not a dialog").toBeVisible();
+  await expect(page.getByTestId("sponsor-sheet-editor"), "with the editor open").toBeVisible();
   await expectNoHorizontalScroll(page);
 });
 
@@ -1060,6 +1081,22 @@ async function controlSet(page: Page, sponsorId: string): Promise<string[]> {
 
 const urlIs = (expected: string) => (u: URL): boolean => u.pathname + u.search === expected;
 
+/** Follows a row's pencil - the ONE way into a sponsor from the list (owner, 2026-11-11: the name is plain text) - to the sponsor's own
+ *  page with its editor open. Below 768 the pencil sits in the row's ⋯ tray, so the fold is opened first, and only where the ⋯ is on
+ *  screen (gated on the toggle, never on a width literal). A click before the island hydrates is a plain anchor navigation, which is
+ *  exactly what the pencil is, so it needs no retry. */
+async function followPencil(page: Page, sponsorId: string): Promise<void> {
+  const row = rowOf(page, sponsorId);
+  const more = row.getByTestId("sponsor-row-more");
+  if (await more.isVisible()) {
+    await expect(async () => {
+      if ((await more.getAttribute("aria-expanded")) !== "true") await more.click();
+      await expect(more).toHaveAttribute("aria-expanded", "true", { timeout: 1_000 });
+    }).toPass({ timeout: 15_000 });
+  }
+  await row.getByTestId("sponsor-row-edit").click();
+}
+
 test("T19 golden path (community, UI only): a package, a sponsor, an offline deal paid on payment, Mark as paid, on the public page, End now, off it", async ({ page, request }) => {
   // Five page loads, a package, a sponsor, a deal, two confirms and four polls of the cached public page.
   test.setTimeout(360_000);
@@ -1138,8 +1175,8 @@ test("T19 golden path (community, UI only): a package, a sponsor, an offline dea
   expect(await dealStatus(request, org.orgId, made.id), "the server agrees").toBe("live");
   await expectPublic(request, shown, true, "live: on the public page");
 
-  // --- 5. End now, from the deal's own page, reached by the taps a person makes: the name, then the deal's Open.
-  await rowOf(page, sponsorId).getByTestId("sponsor-row-name-link").click();
+  // --- 5. End now, from the deal's own page, reached by the taps a person makes: the row's pencil, then the deal's Open.
+  await followPencil(page, sponsorId);
   const open = page.getByTestId("sponsor-sheet-deal-open");
   await expect(open, "the sponsor's page lists its one deal").toHaveCount(1);
   await open.click();
@@ -1239,6 +1276,9 @@ test("T19 break: Back from a deal lands on its sponsor, and from the sponsor on 
   const dealId = await newDeal(request, s.org.orgId, s.sponsorId, { package_id: s.pkg });
   const listUrl = sponsorsUrl(s.org.slug, "sponsors");
   const sponsorPage = sponsorUrl(s.org.slug, s.sponsorId);
+  // The way in from the list is the pencil, which arrives at the sponsor's page with its editor open (`&edit=1`); Back from a deal leads
+  // to the PLAIN sponsor page. Two URLs of one page, and the history holds whichever way it was reached.
+  const sponsorEditPage = sponsorEditUrl(s.org.slug, s.sponsorId);
   const dealPage = dealUrl(s.org.slug, s.sponsorId, dealId);
   const sheet = page.getByTestId("sponsor-sheet");
   const deal = page.getByTestId("deal-page");
@@ -1248,8 +1288,8 @@ test("T19 break: Back from a deal lands on its sponsor, and from the sponsor on 
   // --- A phone, by the page's own Back link.
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(listUrl);
-  await rowOf(page, s.sponsorId).getByTestId("sponsor-row-name-link").click();
-  await expect(page).toHaveURL(urlIs(sponsorPage));
+  await followPencil(page, s.sponsorId);
+  await expect(page).toHaveURL(urlIs(sponsorEditPage));
   await expect(sheet, "the sponsor's page").toBeVisible();
   await page.getByTestId("sponsor-sheet-deal-open").click();
   await expect(page).toHaveURL(urlIs(dealPage));
@@ -1266,14 +1306,14 @@ test("T19 break: Back from a deal lands on its sponsor, and from the sponsor on 
   await expect(sheet, "Back from the sponsor: no sponsor page").toHaveCount(0);
   await expect(listView, "the list").toBeVisible();
 
-  // --- The same way in, by the browser's own back button: each step undoes exactly one.
-  await rowOf(page, s.sponsorId).getByTestId("sponsor-row-name-link").click();
-  await expect(page).toHaveURL(urlIs(sponsorPage));
+  // --- The same way in, by the browser's own back button: each step undoes exactly one (the history holds the pencil's URL).
+  await followPencil(page, s.sponsorId);
+  await expect(page).toHaveURL(urlIs(sponsorEditPage));
   await page.getByTestId("sponsor-sheet-deal-open").click();
   await expect(page).toHaveURL(urlIs(dealPage));
   await expect(deal).toBeVisible();
   await page.goBack();
-  await expect(page).toHaveURL(urlIs(sponsorPage));
+  await expect(page).toHaveURL(urlIs(sponsorEditPage));
   await expect(sheet, "the browser's Back from the deal: its sponsor").toBeVisible();
   await expect(deal).toHaveCount(0);
   await page.goBack();
@@ -1281,7 +1321,7 @@ test("T19 break: Back from a deal lands on its sponsor, and from the sponsor on 
   await expect(listView, "and again: the list").toBeVisible();
   await expect(sheet).toHaveCount(0);
   await page.goForward();
-  await expect(page).toHaveURL(urlIs(sponsorPage));
+  await expect(page).toHaveURL(urlIs(sponsorEditPage));
   await expect(sheet, "Forward returns to the sponsor, not past it").toBeVisible();
 
   // --- A desktop: the deal is a panel, and Escape closes it to the sponsor's panel, and that to the list.

@@ -44,7 +44,8 @@ import {
   sponsorDealGroups,
   type SponsorSheetBodyProps,
 } from "@/components/sponsors/sponsor-sheet";
-import { canShowAgain } from "@/components/sponsors/sponsor-list";
+import { canShowAgain, SponsorList } from "@/components/sponsors/sponsor-list";
+import { SponsorRowMore } from "@/components/sponsors/sponsor-row-more";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { expandSponsorTree } from "./_sponsor-tree";
 import { attrOf, classTokens, findAll, findOne, textOfMarkup } from "./_markup";
@@ -633,7 +634,7 @@ const refuseWith = (status: number, code: string) => ({ status, body: { ok: fals
 function hubOf(over: Partial<SponsorsHubData> = {}): SponsorsHubData {
   return {
     orgSlug: SLUG, orgTimezone: null, deals: [], packages: [], tiersOrgWide: true, tiersCompetitionIds: [], hasMonetize: true, monetizeOrgWide: true, monetizeCompetitionIds: [], finishedCompetitionIds: [],
-    chargesEnabled: true, sponsorId: "a", dealId: null, dealCreatedByName: null, dealCompetitionFinished: false, reportLinks: [LINK],
+    chargesEnabled: true, sponsorId: "a", editSponsor: false, dealId: null, dealCreatedByName: null, dealCompetitionFinished: false, reportLinks: [LINK],
     reportDefaults: DEFAULTS, ...over,
   };
 }
@@ -690,7 +691,7 @@ describe("OrgSponsors opens the sponsor's page for hub.sponsorId and hides the l
     }
   });
 
-  it("the sheet shows the SELECTED sponsor (not the first row), and the list behind it draws no second editor for it", () => {
+  it("the sheet shows the SELECTED sponsor (not the first row), and its editor is the ONLY one: the list rows draw none", () => {
     const m = mount([S, OTHER], hubOf({ sponsorId: "b" }));
     const sheet = m.all("sponsor-sheet");
     expect(propsOf(sheet[0]!)["data-sponsor-id"]).toBe("b");
@@ -698,8 +699,75 @@ describe("OrgSponsors opens the sponsor's page for hub.sponsorId and hides the l
     expect(m.has("sponsor-sheet-editor"), "the sheet draws the editor").toBe(true);
     // The "Add a sponsor" form is also a SponsorForm; an EDITOR is the one with a Cancel.
     const editors = m.island.tree().filter((e) => e.type === SponsorForm && propsOf(e).onCancel !== undefined);
-    expect(editors, "ONE editor open - the list's inline one is suppressed for the sponsor whose page is open").toHaveLength(1);
+    expect(editors, "ONE editor open - a list row has no editor of its own any more").toHaveLength(1);
     expect(propsOf(editors[0]!).compact, "in the panel it is one column").toBe(true);
+  });
+
+  // The list's pencil is a link to `?sponsor=<id>&edit=1`; the island stays mounted across that client navigation, so the arrival is a
+  // PROP change (`hub.editSponsor` / `hub.sponsorId`), not a mount. `rerender` is that navigation.
+  const editorsIn = (m: ReturnType<typeof mount>) => m.island.tree().filter((e) => e.type === SponsorForm && propsOf(e).onCancel !== undefined);
+  const goTo = (m: ReturnType<typeof mount>, hub: SponsorsHubData) => m.island.rerender({ ...m.props, hub });
+  const BOTH = [sponsor({ id: "a", url: "https://a.example/" }), sponsor({ id: "b", name: "Quay Fisheries", url: "https://quay.example/" })];
+
+  it("arriving by the pencil (?edit=1) opens the editor on THAT sponsor with its own name and link; the plain URL opens none (the pair)", () => {
+    const opened = mount(BOTH, hubOf({ sponsorId: "b", editSponsor: true }));
+    expect(opened.has("sponsor-sheet-editor"), "the Details editor is open").toBe(true);
+    expect(editorsIn(opened)).toHaveLength(1);
+    expect(propsOf(editorsIn(opened)[0]!).value).toMatchObject({ name: "Quay Fisheries", url: "https://quay.example/", file: null });
+    const plain = mount(BOTH, hubOf({ sponsorId: "b", editSponsor: false }));
+    expect(plain.has("sponsor-sheet-editor")).toBe(false);
+    expect(editorsIn(plain)).toHaveLength(0);
+    expect(plain.has("sponsor-sheet-edit"), "the read-only page offers its own Edit button").toBe(true);
+  });
+
+  it("the pencil clicked from the list (a client navigation: the same island, new props) opens the editor - and a SECOND pencil does too (4 arrivals checked)", () => {
+    const m = mount(BOTH, hubOf({ sponsorId: null }));
+    expect(m.has("sponsor-sheet")).toBe(false);
+    let checked = 0;
+    for (const id of ["b", "a", "b"]) {
+      goTo(m, hubOf({ sponsorId: id, editSponsor: true }));
+      expect(m.has("sponsor-sheet-editor"), `pencil for ${id}`).toBe(true);
+      expect(propsOf(editorsIn(m)[0]!).value, `pencil for ${id}: its own name`).toMatchObject({ name: BOTH.find((r) => r.id === id)!.name });
+      checked++;
+      // Cancel, and back to the list: the next pencil is a fresh arrival.
+      (propsOf(editorsIn(m)[0]!).onCancel as () => void)();
+      expect(m.has("sponsor-sheet-editor"), `after Cancel (${id})`).toBe(false);
+      goTo(m, hubOf({ sponsorId: null }));
+    }
+    // The sponsor's other pencil without passing through the list: a → b straight.
+    goTo(m, hubOf({ sponsorId: "a", editSponsor: true }));
+    goTo(m, hubOf({ sponsorId: "b", editSponsor: true }));
+    expect(propsOf(editorsIn(m)[0]!).value, "a then b: b's draft, not a's").toMatchObject({ name: "Quay Fisheries" });
+    checked++;
+    expect(checked).toBe(4);
+  });
+
+  it("leaving the edit URL (the Back link to the plain page) closes the editor, and the page's own Edit button still opens it", () => {
+    const m = mount(BOTH, hubOf({ sponsorId: "b", editSponsor: true }));
+    expect(m.has("sponsor-sheet-editor")).toBe(true);
+    goTo(m, hubOf({ sponsorId: "b", editSponsor: false }));
+    expect(m.has("sponsor-sheet-editor"), "the plain URL is the read-only page").toBe(false);
+    m.tap("sponsor-sheet-edit");
+    expect(m.has("sponsor-sheet-editor"), "its own Edit button opens it, as before").toBe(true);
+    expect(propsOf(editorsIn(m)[0]!).value).toMatchObject({ name: "Quay Fisheries" });
+  });
+
+  it("a write or re-read that does not change the URL leaves an open editor open (the same ?edit=1 is not a new arrival)", () => {
+    const m = mount(BOTH, hubOf({ sponsorId: "b", editSponsor: true }));
+    const typed = propsOf(editorsIn(m)[0]!).onChange as (fn: (p: Record<string, unknown>) => Record<string, unknown>) => void;
+    typed((p) => ({ ...p, name: "Typed but not saved" }));
+    goTo(m, hubOf({ sponsorId: "b", editSponsor: true, deals: [] }));
+    expect(propsOf(editorsIn(m)[0]!).value, "the draft survives a re-render with the same URL").toMatchObject({ name: "Typed but not saved" });
+  });
+
+  it("the pencil's arrival closes the ⋯ tray the reader had open on the row (the tray belongs to the list; it would still be open on the way back)", () => {
+    const m = mount(BOTH, hubOf({ sponsorId: null }));
+    const listProps = () => propsOf(m.island.tree().find((e) => e.type === SponsorList)!);
+    const more = m.island.tree().find((e) => e.type === SponsorRowMore && propsOf(e).name === "Quay Fisheries")!;
+    (propsOf(more).onToggle as () => void)();
+    expect(listProps().moreOpenId, "premise: the ⋯ is open").toBe("b");
+    goTo(m, hubOf({ sponsorId: "b", editSponsor: true }));
+    expect(listProps().moreOpenId, "the pencil took the reader off the list").toBeNull();
   });
 
   it("the editor has NO tier or competition control, whatever the sponsor's deals or the plan (owner, 2026-11-11): 3 deal states x 2 plans checked", () => {

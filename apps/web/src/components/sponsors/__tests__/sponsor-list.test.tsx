@@ -24,7 +24,10 @@
 //   L12 arrows         the up/down `disabled` drops `sameOrderBand`                                   -> "the arrows between a native gold"
 //   L13 confirm        Mark as paid skips the confirm                                                  -> "Mark as paid asks first"
 //   L14 cancel         Mark as paid ignores a "no" and POSTs anyway                                   -> "cancelled: no POST"
-//   L15 edit           `startEdit` stops clearing `moreOpenId`                                         -> "Edit does not leave the row's tray open"
+//   L15 pencil tray    the pencil's arrival stops clearing `moreOpenId`                               -> "the pencil does not leave the row's tray open" (sponsor-sheet.test.tsx)
+//   L17 name           the name is a link again (`sponsor-row-name-link`)                              -> "the name is plain text"
+//   L18 pencil         the pencil links to the plain sponsor URL (no `edit=1`)                         -> "the pencil is a link to the sponsor's page with its editor open"
+//   L19 viewer         the viewer gets the pencil (edit link) instead of Open                          -> "a viewer's row opens the page read-only"
 //   L16 live region    the notice renders only while it has text                                      -> "always mounted"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -36,12 +39,12 @@ vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMo
 import { OrgSponsors, SponsorForm, type SponsorItem, type SponsorsHubData } from "@/components/org-sponsors";
 import { AddDealSheet, type CreateDealBody } from "@/components/sponsors/add-deal-sheet";
 import { canShowAgain, groupTierOf, SponsorList, tierComing, type SponsorListProps } from "@/components/sponsors/sponsor-list";
-import { SponsorRowMore } from "@/components/sponsors/sponsor-row-more";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { expandSponsorTree } from "./_sponsor-tree";
 import { attrOf, classTokens, findAll, findOne, textOfMarkup } from "./_markup";
 import { ApiV1Error } from "@/lib/client-v1";
 import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
+import { sponsorEditHref, sponsorHref } from "@/lib/sponsors-hub";
 import type { SponsorPackageRow } from "@/server/usecases/sponsors";
 import type { SponsorDeal } from "@/lib/sponsor-deals";
 import { t } from "@/lib/i18n-runtime";
@@ -157,9 +160,8 @@ const MOCKUP_CLICKS: Record<string, number> = { s1: 41, s2: 12, s3: 7, s4: 3, s5
 const noop = () => {};
 function listProps(sponsors: SponsorItem[], over: Partial<SponsorListProps> = {}): SponsorListProps {
   return {
-    sponsors, hasTiers: true, canEdit: true, busy: false, orgSlug: SLUG, tz: "UTC", competitions: COMPS, editingId: null,
-    renderEditor: () => null, moreOpenId: null, onToggleMore: noop, onEdit: noop, onMove: noop, onRemove: noop,
-    onAction: noop, onAddDeal: noop, ...over,
+    sponsors, hasTiers: true, canEdit: true, busy: false, orgSlug: SLUG, tz: "UTC", competitions: COMPS, moreOpenId: null,
+    onToggleMore: noop, onMove: noop, onRemove: noop, onAction: noop, onAddDeal: noop, ...over,
   };
 }
 const listHtml = (sponsors: SponsorItem[], over: Partial<SponsorListProps> = {}) =>
@@ -554,11 +556,14 @@ describe("below md the clicks and the edit, move and delete controls fold behind
     expect(toggled).toEqual(["s1"]);
   });
 
-  it("the tray's controls are 44px targets below md (the icon buttons grow on a phone)", () => {
+  it("the tray's controls are 44px targets below md (the icon buttons and the pencil grow on a phone)", () => {
     const tray = findOne(rowOf(listHtml(ROWS, { moreOpenId: "s1" }), "s1"), "sponsor-row-tools");
     const buttons = [...tray.outer.matchAll(/<button\b[^>]*>/g)].map((m) => m[0]);
-    expect(buttons.length, "edit, up, down, delete").toBe(4);
-    for (const b of buttons) {
+    expect(buttons.length, "up, down, delete").toBe(3);
+    // The pencil is a link now, and it is held to the same 44px.
+    const links = [...tray.outer.matchAll(/<a\b[^>]*>/g)].map((m) => m[0]);
+    expect(links.length, "the pencil").toBe(1);
+    for (const b of [...buttons, ...links]) {
       const tokens = classTokens(b);
       expect(tokens, b).toContain("max-md:h-11");
       expect(tokens, b).toContain("max-md:w-11");
@@ -580,6 +585,7 @@ describe("a viewer reads the list and changes nothing (R19: 'a viewer gets the r
       expect(findAll(row, "sponsor-row-action"), `${m.s.name}: no action`).toHaveLength(0);
       expect(findAll(row, "sponsor-row-more"), `${m.s.name}: no ⋯`).toHaveLength(0);
       expect(row, m.s.name).not.toContain("<button");
+      expect(findAll(row, "sponsor-row-edit"), `${m.s.name}: no pencil`).toHaveLength(0);
       expect(textOfMarkup(findOne(row, "deal-chip").outer), `${m.s.name}: the chip is still read`).toBe(m.chip);
       expect(textOfMarkup(findOne(row, "sponsor-row-sub").outer)).toBe(m.sub);
       expect(findAll(row, "sponsor-row-clicks"), `${m.s.name}: the clicks are still read`).toHaveLength(1);
@@ -600,15 +606,15 @@ describe("a viewer reads the list and changes nothing (R19: 'a viewer gets the r
 describe("Show on site again is NOT on the list any more: it moved to the sponsor's page (Task 15, spec §10.3)", () => {
   // One home, never two copies that can disagree. The pair that proves it was not simply deleted is in sponsor-sheet.test.tsx: the
   // page offers it for the SAME rows, by the same predicate (`canShowAgain`).
-  it("the rows that qualify (Northbank, Tidewell) carry no Show control on the list; their name links to the page that does", () => {
+  it("the rows that qualify (Northbank, Tidewell) carry no Show control on the list; their pencil opens the page that does", () => {
     const off = ROWS.filter((r) => canShowAgain(r));
     expect(off.map((r) => r.id), "premise: Northbank and Tidewell are the hidden rows nothing holds").toEqual(["s7", "s8"]);
     const markup = listHtml(ROWS);
     let checked = 0;
     for (const r of off) {
       expect(findAll(markup, `sponsor-show-${r.id}`), `${r.id}: no Show on site again on the list`).toHaveLength(0);
-      expect(attrOf(findOne(rowOf(markup, r.id), "sponsor-row-name-link").open, "href"), `${r.id}: the name opens the page`).toBe(
-        `/o/${SLUG}/sponsors?tab=sponsors&sponsor=${r.id}`,
+      expect(attrOf(findOne(rowOf(markup, r.id), "sponsor-row-edit").open, "href"), `${r.id}: the pencil opens the page`).toBe(
+        `/o/${SLUG}/sponsors?tab=sponsors&sponsor=${r.id}&edit=1`,
       );
       checked++;
     }
@@ -616,41 +622,68 @@ describe("Show on site again is NOT on the list any more: it moved to the sponso
   });
 });
 
-describe("the row's name opens the sponsor's own page (Task 15)", () => {
-  it("every row's name is ONE link to its sponsor's page, the text still truncates, and a phone's tap area is 44px (8 rows checked)", () => {
+describe("the row's name is plain text; the pencil is the one way in (owner, 2026-11-11: 'keep the pencil and remove the name link')", () => {
+  it("no row's name is a link: the name text is a bare span, still truncating, and no anchor wraps it (8 rows checked)", () => {
     const markup = listHtml(ROWS);
     let checked = 0;
     for (const r of ROWS) {
       const row = rowOf(markup, r.id);
-      const links = findAll(row, "sponsor-row-name-link");
-      expect(links, `${r.id}: exactly one name link`).toHaveLength(1);
-      expect(attrOf(links[0]!.open, "href"), r.id).toBe(`/o/${SLUG}/sponsors?tab=sponsors&sponsor=${r.id}`);
-      expect(textOfMarkup(links[0]!.outer), `${r.id}: the link's words are the name, nothing else`).toBe(r.name);
-      const link = classTokens(links[0]!.open);
-      expect(link, `${r.id}: the link can shrink`).toEqual(expect.arrayContaining(["min-w-0", "max-w-full"]));
-      // A 20px line of text is not a 44px target: the padding grows the tap area below md and the negative margin takes the space back.
-      expect(link, `${r.id}: phone tap area`).toEqual(expect.arrayContaining(["max-md:py-3", "max-md:-my-3"]));
-      // The padding overlaps the sub-line below it; a later sibling paints (and hit-tests) on top unless the link is lifted.
-      expect(link, `${r.id}: lifted above the sub-line its padding overlaps`).toEqual(expect.arrayContaining(["relative", "z-[1]"]));
-      expect(classTokens(findOne(links[0]!.outer, "sponsor-row-name-text").open), `${r.id}: the text truncates`).toContain("truncate");
+      expect(findAll(row, "sponsor-row-name-link"), `${r.id}: no name link`).toHaveLength(0);
+      const name = findOne(row, "sponsor-row-name");
+      expect(name.outer, `${r.id}: nothing in the name line is an anchor`).not.toContain("<a ");
+      const text = findOne(name.outer, "sponsor-row-name-text");
+      expect(text.open.startsWith("<span"), `${r.id}: a span`).toBe(true);
+      expect(textOfMarkup(text.outer), `${r.id}: the words are the name, nothing else`).toBe(r.name);
+      expect(classTokens(text.open), `${r.id}: the text truncates`).toEqual(expect.arrayContaining(["min-w-0", "max-w-full", "truncate"]));
+      // The phone tap-padding hack belonged to the link; nothing in the name line carries it now.
+      expect(name.outer, `${r.id}: no phone tap padding`).not.toContain("max-md:py-3");
       checked++;
     }
     expect(checked).toBe(8);
   });
 
-  it("a viewer's name is a link too (the page is read-only for them)", () => {
-    expect(findAll(listHtml(ROWS, { canEdit: false }), "sponsor-row-name-link")).toHaveLength(8);
+  it("an editor's pencil is ONE link per row to the sponsor's page with its editor open - the sponsor's own URL plus edit=1 (8 rows checked)", () => {
+    const markup = listHtml(ROWS);
+    let checked = 0;
+    for (const r of ROWS) {
+      const row = rowOf(markup, r.id);
+      const pencils = findAll(row, "sponsor-row-edit");
+      expect(pencils, `${r.id}: exactly one pencil`).toHaveLength(1);
+      expect(pencils[0]!.open.startsWith("<a "), `${r.id}: a link, not a button`).toBe(true);
+      expect(attrOf(pencils[0]!.open, "href"), r.id).toBe(sponsorEditHref(SLUG, r.id));
+      expect(attrOf(pencils[0]!.open, "href"), `${r.id}: the shape`).toBe(`/o/${SLUG}/sponsors?tab=sponsors&sponsor=${r.id}&edit=1`);
+      expect(attrOf(pencils[0]!.open, "aria-label"), `${r.id}: it still says whom it edits`).toBe(`Edit ${r.name}`);
+      expect(findAll(row, "sponsor-row-open"), `${r.id}: an editor has no Open button`).toHaveLength(0);
+      checked++;
+    }
+    expect(checked).toBe(8);
   });
-});
 
-describe("Edit swaps the row for the editor the parent builds", () => {
-  it("the editing row renders what renderEditor returns, in place of its content; the others stay rows", () => {
-    const markup = renderToStaticMarkup(
-      <SponsorList {...listProps(ROWS, { editingId: "s7", renderEditor: (s) => <p data-testid="editor-stub">{`editing ${s.name}`}</p> })} />,
-    );
-    expect(textOfMarkup(findOne(rowOf(markup, "s7"), "editor-stub").outer)).toBe("editing Northbank Print");
-    expect(findAll(rowOf(markup, "s7"), "deal-chip"), "the chip is replaced with the row").toHaveLength(0);
-    expect(findAll(markup, "deal-chip")).toHaveLength(7);
+  it("a viewer's row has the same button position but it OPENS the page read-only: Open <name>, the plain sponsor URL, no edit flag (8 rows checked)", () => {
+    const markup = listHtml(ROWS, { canEdit: false });
+    let checked = 0;
+    for (const r of ROWS) {
+      const row = rowOf(markup, r.id);
+      const open = findAll(row, "sponsor-row-open");
+      expect(open, `${r.id}: exactly one Open button`).toHaveLength(1);
+      expect(open[0]!.open.startsWith("<a "), `${r.id}: a link`).toBe(true);
+      expect(attrOf(open[0]!.open, "href"), r.id).toBe(sponsorHref(SLUG, r.id));
+      expect(attrOf(open[0]!.open, "href"), `${r.id}: no edit flag for a viewer`).not.toContain("edit=");
+      expect(attrOf(open[0]!.open, "aria-label"), r.id).toBe(`Open ${r.name}`);
+      // 44px on a phone, like every other control in the tray.
+      expect(classTokens(open[0]!.open), `${r.id}: phone tap area`).toEqual(expect.arrayContaining(["max-md:h-11", "max-md:w-11"]));
+      expect(findAll(row, "sponsor-row-edit"), `${r.id}: no pencil for a viewer`).toHaveLength(0);
+      checked++;
+    }
+    expect(checked).toBe(8);
+  });
+
+  it("the row never draws an editor of its own any more: the row is the same markup whoever is being edited (the pair: the sponsor's page owns it)", () => {
+    const markup = listHtml(ROWS);
+    expect(findAll(markup, "sponsor-row")).toHaveLength(8);
+    expect(findAll(markup, "deal-chip"), "every row keeps its chip").toHaveLength(8);
+    expect("editingId" in listProps(ROWS), "SponsorList takes no editor state").toBe(false);
+    expect("renderEditor" in listProps(ROWS)).toBe(false);
   });
 });
 
@@ -792,7 +825,7 @@ describe("Move: a row whose waiting deal is another tier keeps its place in its 
 
 const HUB: SponsorsHubData = {
   orgSlug: SLUG, orgTimezone: null, deals: [], packages: [], tiersOrgWide: true, tiersCompetitionIds: [], hasMonetize: true, monetizeOrgWide: true, monetizeCompetitionIds: [], finishedCompetitionIds: [],
-  chargesEnabled: true, sponsorId: null, dealId: null, dealCreatedByName: null, dealCompetitionFinished: false, reportLinks: [], reportDefaults: null,
+  chargesEnabled: true, sponsorId: null, editSponsor: false, dealId: null, dealCreatedByName: null, dealCompetitionFinished: false, reportLinks: [], reportDefaults: null,
 };
 
 const fetchMock = vi.fn();
@@ -974,27 +1007,6 @@ describe("the status line is one live region that is always mounted, so only its
   });
 });
 
-describe("Edit does not leave the row's ⋯ tray open behind it (review m3)", () => {
-  it("open ⋯, Edit, Cancel: the editor is gone and the tray is closed again", () => {
-    const m = mount(ROWS);
-    const list = () => propsOf(m.island.tree().find((e) => e.type === SponsorList)!);
-    const trayOf = (id: string) => m.island.tree().find((e) => propsOf(e).id === `sponsor-tools-${id}`);
-    const more = m.island.tree().find((e) => e.type === SponsorRowMore && propsOf(e).name === "Ridge Gold Physiotherapy")!;
-    (propsOf(more).onToggle as () => void)();
-    expect(list().moreOpenId, "premise: the ⋯ is open").toBe("s2");
-    expect(classTokens(`<div class="${propsOf(trayOf("s2")!).className as string}">`), "premise: the tray shows").not.toContain("max-md:hidden");
-
-    m.click(msg("sponsors.edit", { name: "Ridge Gold Physiotherapy" }));
-    expect(list().editingId, "premise: the row is being edited").toBe("s2");
-    expect(list().moreOpenId, "the open state does not ride along into the editor").toBeNull();
-
-    const form = m.island.tree().find((e) => e.type === SponsorForm && propsOf(e).onCancel !== undefined)!;
-    (propsOf(form).onCancel as () => void)();
-    expect(list().editingId).toBeNull();
-    expect(classTokens(`<div class="${propsOf(trayOf("s2")!).className as string}">`), "after Cancel the tray is folded again").toContain("max-md:hidden");
-  });
-});
-
 describe("Move reorders within the GROUP the row is drawn in (the sponsor's own tier), and persists the global order", () => {
   it("moving Marlow up swaps it with Quay (both in Partner) and POSTs the whole order with them swapped", async () => {
     const m = mount(ROWS);
@@ -1043,11 +1055,11 @@ describe("Add and Edit ask for a name, a logo and a link - and nothing else (spe
     expect(post?.body).toEqual({ name: "New Sponsor", url: "https://new.example", tier: "partner" });
   });
 
-  it("the EDIT form asks for the same three things and no tier or competition either (owner, 2026-11-11), on a plan WITH tiers", () => {
-    const m = mount(ROWS, { hasTiers: true });
-    m.click(msg("sponsors.edit", { name: "Ridge Gold Physiotherapy" }));
+  it("the EDIT form, opened by the pencil's URL, asks for the same three things and no tier or competition either (owner, 2026-11-11), on a plan WITH tiers", () => {
+    const m = mount(ROWS, { hasTiers: true, hub: { ...HUB, sponsorId: "s2", editSponsor: true } });
     const form = m.island.tree().find((e) => e.type === SponsorForm && propsOf(e).onCancel !== undefined);
-    expect(form, "premise: the row's editor is open").toBeDefined();
+    expect(form, "premise: the sponsor page's editor is open on arrival").toBeDefined();
+    expect(propsOf(form!).value, "and it opens on THIS sponsor's name").toMatchObject({ name: "Ridge Gold Physiotherapy" });
     const markup = renderToStaticMarkup(form!);
     expect(markup, "no tier or competition select").not.toContain("<select");
     expect(markup).toContain(msg("settings.org.sponsors.name"));
