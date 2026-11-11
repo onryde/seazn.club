@@ -8,7 +8,7 @@ order: 5
 
 AI features — **AI scheduling** and **AI officials** — spend **credits**, on every plan. What a run costs depends on how big the job is: credits buy the model a **thinking budget** (1 credit → up to 32K tokens, 2 → 64K, 3 → 128K), the console shows the price before anything is spent, and you can adjust it. Scheduling several divisions in one run gets a batch discount of one credit. [AI Schedule](/help/scheduling/ai-scheduling) explains the sizing in full.
 
-The **Credits** page in your organisation's **Settings** is the home for your wallet. It has two sides, switched at the top — **AI** and **Streaming**. This article starts with the AI side; [match credits](#match-credits-streaming) are further down.
+The **Credits** page in your organisation's **Settings** is the home for your wallet. It has two sides, switched at the top — **Streaming** and **AI**. It opens on **Streaming**; switch to **AI** for the AI wallet. The **Streaming credits** figure under your plan name at the top of the Settings menu is your match-credit balance, and links to the Streaming side. This article starts with the AI side; [match credits](#match-credits-streaming) are further down.
 
 ## Your monthly grant
 
@@ -46,20 +46,11 @@ The run history lists each grant, purchase and AI run, newest first, with the cr
 
 Automatic top-ups — buying a pack automatically when your balance runs low — are **coming soon**. For now the Credits tab shows auto-topup as off; you can top up manually with a credit pack any time.
 
-## Invite & earn credits
-
-The Credits tab also has your **Invite & earn** card, with your own shareable link. Share it with another organiser:
-
-- **They** earn **10 credits** once they **publish their first competition** (with at least one division) — a welcome credit for running something real, not just for signing up.
-- When that organisation goes on to run its **first paid competition**, **you earn 20 credits**.
-
-Both grants land straight in the credit wallet, on top of whatever the plan already grants. Referral earnings are bounded by a lifetime cap shared with other earned-credit rewards, so a very active referrer eventually tops out — the card always shows how many organisations you've referred and how many credits you've earned so far.
-
 ## Match credits (Streaming)
 
 Streaming a match from a phone spends a different currency: **match credits**. One credit streams one match, for up to 5 hours. They are not AI credits — the two balances, the two histories and the two sets of packs are separate, and a credit of one kind can't pay for the other.
 
-Open **Settings → Credits** and switch to **Streaming**. You'll see:
+Open **Settings → Credits** — it opens on the **Streaming** side. You'll see:
 
 - **Balance** — how many match credits the organisation holds right now.
 - **Free this month** — if your plan includes free match credits, how many of this month's you have used. They are spent **first**, and **unused ones expire at the end of the month**.

@@ -17,6 +17,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { routes } from "@/lib/routes";
 import { creditsKindOf } from "@/components/credits-kind-switch";
+import { helpArticleBySlug } from "./_help-copy";
 
 const SRC = path.join(process.cwd(), "src");
 
@@ -99,5 +100,18 @@ describe("Settings → Credits: which side each link opens", () => {
     const link = text.slice(open, at);
     expect(link).toContain("routes.creditsAi(orgSlug)");
     expect(link).not.toMatch(/routes\.credits\(/);
+  });
+
+  it("the help article tells the page's story: it opens on Streaming, listed first, and has no Invite & earn card (H1)", () => {
+    const article = helpArticleBySlug("billing/credits");
+    // The side the page opens on, from the page's own parser, is the side the article says it opens on.
+    const opens = creditsKindOf(undefined) === "stream" ? "Streaming" : "AI";
+    expect(article).toContain(`It opens on **${opens}**`);
+    expect(article).toContain("two sides, switched at the top — **Streaming** and **AI**");
+    expect(article, "no step tells the reader to switch to the side the page already opens on").not.toContain("switch to **Streaming**");
+    // The card is hidden (owner, 2026-11-11); the article must not send a reader looking for it.
+    expect(article).not.toMatch(/Invite (&|&amp;|and) earn/i);
+    // positive pair: the article is the right one, and still describes the referral-free AI wallet
+    expect(article).toContain("## Match credits (Streaming)");
   });
 });
