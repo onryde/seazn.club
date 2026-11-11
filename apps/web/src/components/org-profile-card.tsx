@@ -6,7 +6,7 @@
 // changed (`/api/orgs/{id}`'s `{name?, about?, branding?}` arm).
 //
 // Two things keep their own controls, and say so by where they sit: the logo uploads the moment a file is picked (an
-// upload is not a field), and the defaults (timezone, public language, entry-fee currency) each keep their own Save —
+// upload is not a field), and the defaults (timezone, public language, entry-fee currency) live in their own card below it, each with its own Save —
 // they write different columns behind different rules (the currency is locked by a connected Stripe account), and
 // folding them in would put a refusal for one into the save of all.
 import { useState, type ReactNode } from "react";
@@ -68,7 +68,6 @@ export function OrgProfileCard({
   canEdit,
   brandGate,
   logo,
-  defaults,
 }: {
   orgId: string;
   orgSlug: string;
@@ -80,8 +79,6 @@ export function OrgProfileCard({
   brandGate: OrgBrandGate;
   /** The logo control (uploads on pick), or the line saying it is switched off. Editors only. */
   logo?: ReactNode;
-  /** The organisation defaults, each with its own Save. Editors only. */
-  defaults?: ReactNode;
 }) {
   const msg = useMsg();
   const locale = useLocaleOrDefault();
@@ -210,13 +207,6 @@ export function OrgProfileCard({
                   </div>
                 )}
               </div>
-            </div>
-          )}
-
-          {canEdit && defaults && (
-            <div className="space-y-5 border-t border-purple-100 pt-5" data-testid="org-defaults">
-              <p className="text-sm font-semibold text-slate-800">{msg("settings.prefs.org")}</p>
-              {defaults}
             </div>
           )}
         </>
