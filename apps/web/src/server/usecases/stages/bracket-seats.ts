@@ -260,15 +260,16 @@ function seatFeederIsDead(e: FeederEdge | undefined): boolean {
  *  cascade's dead-seat stamp, X-WD-3 / plan D17 — `bye`), or one whose winner feed is a DEPARTURE double walkover
  *  (both its sides withdrew: written with no event, by `writeDepartedSeat` or by this resolver — `departed_walkover`).
  *  A line whose two seats are both dead this way had every side withdraw, which is a double walkover (X-WD-4), not a
- *  void. Any other dead feeder — a void, a cancelled line, a forfeit loser, and a RECORDED double walkover (its
+ *  void. Any other dead feeder — a void, a cancelled line, a forfeit loser (but a third-place line's: ruling A, below), and a RECORDED double walkover (its
  *  `core.forfeit{by:"both"}` behind it: nobody withdrew, the plan's Review Focus 1 voids that line) — keeps the void. */
 function seatDeparted(bye: boolean, e: FeederEdge | undefined, thirdPlace = false): boolean {
   if (bye || (e !== undefined && e.via === "winner" && e.row.departed_walkover)) return true;
   // B4 M-1 (X-TP-7): a third-place line's seat is fed by a semi-final's LOSER. When that loser withdrew (the semi was a walkover
   // for her opponent), the seat is dead through departure too - the line is a double walkover, not a void.
-  // The cascade writes the walkover BEFORE the entrant's status flip is visible to this read, so the award's own `withdrew`
-  // reason counts as the departure too.
-  return thirdPlace && e !== undefined && e.via === "loser" && (e.row.loser_withdrawn || (e.row.outcome?.kind === "award" && e.row.outcome.reason === "withdrew"));
+  // Owner ruling A (2026-11-11): a semi-final loser by an organiser-RECORDED walkover is out for the third-place line exactly like
+  // a withdrawal - the loser of an award is out of the tournament (X-DE-1), so any killed loser edge is a departure here (the
+  // award's own reason no longer matters). Only the third-place line reads it: the main draw and the plate keep their meaning.
+  return thirdPlace && e !== undefined && e.via === "loser" && (e.row.loser_withdrawn || killsLoserEdge(e.row.outcome));
 }
 
 interface SeatRow {

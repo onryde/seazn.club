@@ -11,7 +11,7 @@ import { engineBracketRows } from "@/lib/__tests__/engine-bracket-rows";
 import { KNOCKOUT_REFUSALS } from "@/lib/knockout-refusals";
 import { CreateStage } from "@/server/api-v1/schemas";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
-import { fixtureRow, playBadminton, rowsOf } from "@/server/engine-db/__tests__/helpers/w2b-rig";
+import { fixtureRow, playBadminton, post, rowsOf } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 import type { AuthCtx } from "@/server/api-v1/auth";
 // m1: spy (pass-through) on the schedule write's invalidation, to see what a Shared switch tells the caches.
 const afterWriteSpy = vi.hoisted(() => vi.fn());
@@ -504,4 +504,132 @@ describe.skipIf(!HAS_DB)("M-3 Shared before the first match never redraws and ne
     expect([err.status, err.code]).toEqual([409, "THIRD_PLACE_LOCKED"]);
     expect(await bronzeOf(r.stageId), "the -3p line stays").toHaveLength(1);
   }, 180_000);
+});
+
+// Owner ruling A (2026-11-11): a semi-final loser by an organiser-RECORDED walkover is OUT for the third-place play-off, exactly
+// like a withdrawal (X-TP-7). Expected values are the ruling's: one walkover semi + one played = the present loser is walked
+// over into 3rd and the walkover loser is 4th; both walkover = 3rd vacant, ranks 1, 2, 4, 4.
+describe.skipIf(!HAS_DB)("ruling A: semi-final walkovers (recorded, not withdrawn) take the loser out of the third-place line", () => {
+  const sportsSwept = SPORTS.map((x) => x.key);
+  /** A semi-final played to a home win, in the sport's own vocabulary. */
+  async function playHomeWin(auth: AuthCtx, sport: (typeof SPORTS)[number], id: string): Promise<void> {
+    if (sport.key === "badminton") {
+      await playBadminton(auth, id, true);
+      return;
+    }
+    await post(auth, id, "core.start");
+    await post(auth, id, "boardgame.result", { winner: (await fixtureRow(id)).home_entrant_id, method: "checkmate" });
+    expect((await fixtureRow(id)).status, "rig: the chess semi decided").toBe("decided");
+  }
+  const walkover = (auth: AuthCtx, row: { id: string; away_entrant_id: string | null }) => post(auth, row.id, "core.forfeit", { by: row.away_entrant_id, reason: "walkover" });
+  async function semisRig(sport: (typeof SPORTS)[number]) {
+    const s = await seedBracket({ sport: sport.key, variant: sport.variant, stageKind: "knockout", entrants: 4, stageConfig: { thirdPlace: true } });
+    const rows = await rowsOf(s.stageId);
+    const [a, b, ...more] = rows.filter((r) => r.home_entrant_id && r.away_entrant_id);
+    if (!a || !b || more.length > 0 || a.loser_to_fixture === null || a.loser_to_fixture !== b.loser_to_fixture) throw new Error("rig: two semis into one third-place line");
+    const final = rows.find((r) => r.id === a.winner_to_fixture)!;
+    return { s, a, b, thirdId: a.loser_to_fixture, final };
+  }
+  const voidLatest = async (auth: AuthCtx, fixtureId: string) => {
+    const evs = await sql<{ id: string; type: string }[]>`
+      select e.id, e.type from score_events e where e.fixture_id = ${fixtureId} and e.type <> 'core.void'
+         and not exists (select 1 from score_events v where v.voids_event_id = e.id) order by e.seq`;
+    const last = evs.at(-1);
+    if (!last) throw new Error("rig: no live event to void");
+    return post(auth, fixtureId, "core.void", { event_id: last.id });
+  };
+
+  it("one semi walked over, the other played: the -3p walks the present loser over; ranks 1, 2, 3, 4 with the present loser 3rd", async () => {
+    let checked = 0;
+    for (const sport of SPORTS) {
+      const { s, a, b, thirdId, final } = await semisRig(sport);
+      await walkover(s.auth, a); // a.away is out by a recorded walkover
+      await playHomeWin(s.auth, sport, b.id); // b.away is the present loser
+      const third = await fixtureRow(thirdId);
+      expect([third.status, third.outcome], `${sport.key}: the present loser is walked over`).toMatchObject(["forfeited", { kind: "award", winner: b.away_entrant_id }]);
+      await playHomeWin(s.auth, sport, final.id);
+      expect((await completeStage(s.auth, s.stageId)).completed, `${sport.key}: the stage completes`).toBe(true);
+      const ranks = await ranksOf(s.auth, s.stageId);
+      const fin = (await fixtureRow(final.id)).outcome as { winner: string; loser: string };
+      expect([ranks.get(fin.winner), ranks.get(fin.loser), ranks.get(b.away_entrant_id!), ranks.get(a.away_entrant_id!)], `${sport.key}: 1, 2, present loser 3rd, walkover loser 4th`).toEqual([1, 2, 3, 4]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every sport swept").toBe(sportsSwept.length);
+  }, 240_000);
+
+  it("both semis walked over: the -3p is a departure double walkover (3rd vacant), the title is intact, ranks 1, 2, 4, 4", async () => {
+    let checked = 0;
+    for (const sport of SPORTS) {
+      const { s, a, b, thirdId, final } = await semisRig(sport);
+      await walkover(s.auth, a);
+      await walkover(s.auth, b);
+      const third = await fixtureRow(thirdId);
+      expect([third.status, third.outcome], `${sport.key}: not a void (abandoned), a double walkover`).toEqual(["forfeited", { kind: "double_walkover" }]);
+      const f = await fixtureRow(final.id);
+      expect(f.home_entrant_id && f.away_entrant_id, `${sport.key}: the two walkover winners meet in the final`).toBeTruthy();
+      await playHomeWin(s.auth, sport, final.id);
+      expect((await completeStage(s.auth, s.stageId)).completed, `${sport.key}: the stage completes`).toBe(true);
+      const ranks = await ranksOf(s.auth, s.stageId);
+      const fin = (await fixtureRow(final.id)).outcome as { winner: string; loser: string };
+      expect([ranks.get(fin.winner), ranks.get(fin.loser), ranks.get(a.away_entrant_id!), ranks.get(b.away_entrant_id!)], `${sport.key}: title intact, both walkover losers 4th`).toEqual([1, 2, 4, 4]);
+      expect([...ranks.values()].sort(), `${sport.key}: 1, 2, 4, 4`).toEqual([1, 2, 4, 4]);
+      checked++;
+    }
+    expect(checked).toBe(sportsSwept.length);
+  }, 240_000);
+
+  it("taking back one semi's walkover and playing it refills the -3p: it waits, then both seats are in and the match is playable (1, 2, 3, 4)", async () => {
+    let checked = 0;
+    for (const sport of SPORTS) {
+      const { s, a, b, thirdId, final } = await semisRig(sport);
+      await walkover(s.auth, a);
+      await playHomeWin(s.auth, sport, b.id);
+      expect((await fixtureRow(thirdId)).status, `${sport.key}: rig - the -3p was walked over`).toBe("forfeited");
+      await voidLatest(s.auth, a.id);
+      const waiting = await fixtureRow(thirdId);
+      expect([waiting.status, waiting.outcome], `${sport.key}: the -3p waits for semi A again`).toEqual(["scheduled", null]);
+      await playHomeWin(s.auth, sport, a.id);
+      const live = await fixtureRow(thirdId);
+      expect([live.status, live.home_entrant_id !== null && live.away_entrant_id !== null], `${sport.key}: both seats filled, a real match`).toEqual(["scheduled", true]);
+      await playHomeWin(s.auth, sport, thirdId);
+      await playHomeWin(s.auth, sport, final.id);
+      expect((await completeStage(s.auth, s.stageId)).completed).toBe(true);
+      const ranks = await ranksOf(s.auth, s.stageId);
+      expect([...ranks.values()].sort(), `${sport.key}: four distinct places`).toEqual([1, 2, 3, 4]);
+      checked++;
+    }
+    expect(checked).toBe(sportsSwept.length);
+  }, 300_000);
+
+  it("both walkover, then one taken back and played: the -3p is walked over for the present loser, not left voided", async () => {
+    let checked = 0;
+    for (const sport of SPORTS) {
+      const { s, a, b, thirdId } = await semisRig(sport);
+      await walkover(s.auth, a);
+      await walkover(s.auth, b);
+      expect((await fixtureRow(thirdId)).outcome, `${sport.key}: rig - double walkover`).toEqual({ kind: "double_walkover" });
+      await voidLatest(s.auth, a.id);
+      expect((await fixtureRow(thirdId)).status, `${sport.key}: the -3p waits again`).toBe("scheduled");
+      await playHomeWin(s.auth, sport, a.id);
+      const third = await fixtureRow(thirdId);
+      expect([third.status, third.outcome], `${sport.key}: the present loser is walked over`).toMatchObject(["forfeited", { kind: "award", winner: a.away_entrant_id }]);
+      checked++;
+    }
+    expect(checked).toBe(sportsSwept.length);
+  }, 240_000);
+
+  it("control (M-1, unchanged): both semis lost to a WITHDRAWAL still give a double walkover and ranks 1, 2, 4, 4", async () => {
+    let checked = 0;
+    for (const sport of SPORTS) {
+      const { s, a, b, thirdId, final } = await semisRig(sport);
+      await withdrawEntrantCascade(s.auth, a.away_entrant_id!);
+      await withdrawEntrantCascade(s.auth, b.away_entrant_id!);
+      expect((await fixtureRow(thirdId)).outcome, `${sport.key}: departure double walkover`).toEqual({ kind: "double_walkover" });
+      await playHomeWin(s.auth, sport, final.id);
+      expect((await completeStage(s.auth, s.stageId)).completed).toBe(true);
+      expect([...(await ranksOf(s.auth, s.stageId)).values()].sort(), sport.key).toEqual([1, 2, 4, 4]);
+      checked++;
+    }
+    expect(checked).toBe(sportsSwept.length);
+  }, 240_000);
 });

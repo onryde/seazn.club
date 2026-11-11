@@ -762,7 +762,7 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
   }, 120_000);
 
   // ---- loop-F tidy 2: taking back an AWARD releases the loser edge it left dead (X-DE-1) ----
-  it("tidy-2: taking back a recorded WALKOVER releases its dead loser edge — the third-place line it settled (a cascade void when both semis walked over, a bye award when one did) waits for that semi again, and the replayed semi's loser is seated in a LIVE line", async () => {
+  it("tidy-2: taking back a recorded WALKOVER releases its dead loser edge — the third-place line it settled (a departure double walkover when both semis walked over - owner ruling A 2026-11-11, it was a cascade void before - a bye award when one did) waits for that semi again, and the replayed semi's loser is seated in a LIVE line", async () => {
     // single-sport: badminton; the un-fill reads the outcome kind and the feed graph, not the sport. No departure
     // anywhere: an award's loser edge is dead by X-DE-1 alone.
     const SHAPES = ["both semis walk over", "one semi walks over"] as const;
@@ -785,7 +785,7 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
       else await playBadminton(s.auth, b.id, true);
       const settled = await fixtureRow(thirdId);
       expect([settled.status, settled.outcome], `${shape}: rig — the third-place line was settled on semi A's dead loser edge`).toEqual(
-        both ? ["abandoned", null] : ["forfeited", seatWalkover(b.away_entrant_id!)],
+        both ? ["forfeited", { kind: "double_walkover" }] : ["forfeited", seatWalkover(b.away_entrant_id!)],
       );
       // Take back semi A's walkover: the line is open again, and so is the seat its loser drops into.
       await voidLatest(s.auth, a.id);
@@ -939,7 +939,7 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     ).toEqual(["forfeited", seatWalkover(m0.away_entrant_id!), m0.away_entrant_id]);
   }, 120_000);
 
-  it("tidy-2 (X-WD-5, legacy): a departed loser's dead seat that carries NO stamp — a line decided before R-1 stamped it — is released too: the third-place void it helped make waits for that semi again", async () => {
+  it("tidy-2 (X-WD-5, legacy): a departed loser's dead seat that carries NO stamp — a line decided before R-1 stamped it — is released too: the third-place double walkover it helped make (a void before owner ruling A, 2026-11-11) waits for that semi again", async () => {
     // single-sport: badminton. Before R-1 a departed loser's seat was dead but unstamped (`loserFeederIsDead` reads
     // her departure); the rig writes that legacy shape by clearing the stamp R-1 now writes, back to the drawn label.
     const s = await seedBracket({ ...badminton, stageKind: "knockout", entrants: 4, stageConfig: { thirdPlace: true } });
@@ -956,10 +956,12 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     expect(labelOf(await fixtureRow(thirdId), a.loser_to_slot), "rig: the legacy shape — her dead seat carries no stamp").not.toBe(BYE_KEY);
     await post(s.auth, b.id, "core.forfeit", { by: b.away_entrant_id, reason: "walkover" });
     const voided = await fixtureRow(thirdId);
-    expect([voided.status, voided.outcome, voided.home_entrant_id, voided.away_entrant_id], "X-DW-2 (loser-edge-seat-not-dead killer): both loser feeds dead — the line is void").toEqual(["abandoned", null, null, null]);
+    // Owner ruling A (2026-11-11): a recorded walkover's loser is out for the third-place line like a departure, so a departed
+    // loser + a walkover loser is a departure double walkover (it was a void before); the take-back release is unchanged.
+    expect([voided.status, voided.outcome, voided.home_entrant_id, voided.away_entrant_id], "X-DW-2 (loser-edge-seat-not-dead killer): both loser feeds dead - a departure double walkover (ruling A), no longer a void").toEqual(["forfeited", { kind: "double_walkover" }, null, null]);
     await voidLatest(s.auth, a.id);
     const revived = await fixtureRow(thirdId);
-    expect([revived.status, revived.outcome, seatOf(revived, a.loser_to_slot), slotLabel(revived, a.loser_to_slot)], "the void waits for semi A again").toEqual([
+    expect([revived.status, revived.outcome, seatOf(revived, a.loser_to_slot), slotLabel(revived, a.loser_to_slot)], "the line waits for semi A again").toEqual([
       "scheduled",
       null,
       null,
