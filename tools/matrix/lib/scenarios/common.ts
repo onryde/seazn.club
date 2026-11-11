@@ -22,7 +22,7 @@ import { decidersOffRulesFor, drawsAllowed, entrantKindFor, sportModule, stageCf
 import { STREAM_GENERATORS, forfeitPosting, generateStream, levelReachable, matchesRequest, type RequestMatch } from "../streams/index.ts";
 import { outcomeLabel, type ForfeitReason, type ProductFold, type RequestedOutcome, type Side, type StreamEvent, type StreamLineups } from "../streams/types.ts";
 import { forfeitPlayOf, levelKindOf, loserSeatOf, nextLineOf, type BracketDrive } from "../reference-bracket.ts";
-import { confirmAdvance, plateFieldOf, sourcePoolCount, type AdvanceObs } from "./advance.ts";
+import { confirmAdvance, plateFieldOf, sourcePoolCount, takesFirstLosses, type AdvanceObs } from "./advance.ts";
 import { playAmericano, playMexicano } from "./americano-loop.ts";
 import { playLadder } from "./ladder-loop.ts";
 import { lineupWarningLine, postedTeamSides, putOwedLineups, type LineupSink } from "./lineup-plan.ts";
@@ -936,14 +936,33 @@ export async function playDivision(
   ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup,
   hooks: RoundHooks & { beforeComplete?: (stage: StageRef) => Promise<void> } = {},
 ): Promise<StagePlay[]> {
-  for (const s of setup.stages.slice(1)) await recordGenerate(ctx, rec, s.id);
+  // W4 B3 (X-PL-2, owner ruling G2): a firstLosses plate has NO day-one lines - its field is open until every first match is decided, so a
+  // Generate before then answers an empty list by design. It is generated (and proposed) where the product draws it, below.
+  for (const s of setup.stages.slice(1)) {
+    const posted = setup.built.posted.stages.find((b) => b.seq === s.seq);
+    if (posted !== undefined && takesFirstLosses(posted)) continue;
+    await recordGenerate(ctx, rec, s.id);
+  }
   const plays: StagePlay[] = [];
   for (const [i, stage] of setup.stages.entries()) {
     let advance: AdvanceObs | null = null;
     let field: readonly string[] | null = i === 0 ? setup.entrants.map((e) => e.id) : null;
     if (i > 0) {
       const prev = plays[i - 1];
-      const proposal = prev.complete?.seedProposal ?? null;
+      let proposal = prev.complete?.seedProposal ?? null;
+      // A plate was proposed after round two (maybeProposePlate), so the source's /complete carries no proposal for it: the draft is read
+      // off the plate itself, the way q5-plate.ts draws it. The field is complete by now (the source is), so its lines exist.
+      const plateBody = setup.built.posted.stages.find((b) => b.seq === stage.seq);
+      if (proposal === null && prev.complete?.completed === true && plateBody !== undefined && takesFirstLosses(plateBody)) {
+        await recordGenerate(ctx, rec, stage.id);
+        try {
+          const fresh = await ctx.driver.recomputeSeedProposal(stage.id);
+          proposal = { id: fresh.id, status: fresh.status };
+        } catch (e) {
+          if (!(e instanceof RefusedCall)) throw e;
+          rec.notes.push(`stage ${stage.seq}: the plate's seed proposal was refused ${e.status} ${e.code ?? "(no code)"}`);
+        }
+      }
       if (prev.complete?.completed !== true || proposal === null) {
         rec.track(stage.id).exit = "not_reached";
         const why = prev.complete === null ? "never completed" : `completed=${prev.complete.completed}, proposal ${proposal === null ? "none" : proposal.id}`;

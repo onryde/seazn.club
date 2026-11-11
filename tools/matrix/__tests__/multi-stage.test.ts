@@ -17,7 +17,7 @@ import { fieldSizeFor } from "../lib/field-size.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { toObservedOutcome, winnerOf, type CompleteObs, type ObservedRun, type ObservedStage } from "../lib/observed.ts";
 import { decideState, type CheckResult } from "../lib/results.ts";
-import { PlateFieldUnknown, SEEDING_TIE_CODE, SourcePoolsDisagree, UnknownTakeKind, advanceSeededAsDeclared, confirmAdvance, declaredTake, firstLossersOf, plateFieldOf, sourcePoolCount, takesOf, withdrawnQualifiers, type AdvanceObs } from "../lib/scenarios/advance.ts";
+import { PlateFieldUnknown, SEEDING_TIE_CODE, SourcePoolsDisagree, UnknownTakeKind, takesFirstLosses, advanceSeededAsDeclared, confirmAdvance, declaredTake, firstLossersOf, plateFieldOf, sourcePoolCount, takesOf, withdrawnQualifiers, type AdvanceObs } from "../lib/scenarios/advance.ts";
 import { Recorder, drawsDeclaredOnReached, ensureLineups, finishStage, playDivision, playStage, recordGenerate, setUpDivision, snapshot, type DivisionSetup, type StagePlay } from "../lib/scenarios/common.ts";
 import { lineupsPut } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
@@ -1131,5 +1131,56 @@ describe("W2a: a scenario's bracketPick reaches a bracket stage after stage 1 (p
       if (i % 3 !== 0) expect(d.asked, `match ${i}`).toEqual({ kind: "win", winner: better });
       else expect(d.asked.kind, `match ${i} is the hard path`).not.toBe("win");
     });
+  });
+});
+
+// W4 B3 (X-PL-2, owner ruling G2, msample): a firstLosses plate has no day-one lines and its source's /complete carries no proposal for it
+// (maybeProposePlate drew it after round two). playDivision drove the OLD model - Generate on the plate at Start (an empty list: I4/I8
+// "empty generate (R13)") and a proposal read off the source's /complete (none: "no proposal", the run exits not_reached) - which
+// reddened every ko_plate LIFECYCLE/M1/R4 case, 34 of them, none a product defect.
+describe("W4 B3: playDivision drives a firstLosses plate the way the product draws it", () => {
+  /** A fake whose stage-1 /complete carries no proposal (the plate was already proposed), with the stage-2 body a plate's. */
+  class PlateFake extends FakeMultiStageDriver {
+    readonly order: string[] = [];
+    override generate(stageId?: string) { this.order.push(`generate:${stageId === undefined ? "?" : this.stages.find((s) => s.id === stageId)?.seq}`); return super.generate(stageId); }
+    override async completeStage(stageId?: string) {
+      const out = await super.completeStage(stageId);
+      this.order.push(`complete:${this.stages.find((s) => s.id === stageId)?.seq}`);
+      const { seed_proposal: _dropped, ...rest } = out;
+      return rest;
+    }
+    override recomputeSeedProposal(stageId: string) { this.order.push(`propose:${this.stages.find((s) => s.id === stageId)?.seq}`); return super.recomputeSeedProposal(stageId); }
+  }
+  it("the plate is not generated at Start, and once its source completed it is generated and its draft proposal is read off the plate and confirmed", async () => {
+    const driver = new PlateFake();
+    const ctx = ctxFor(driver, "LIFECYCLE", { row: "league_ko" });
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, fieldSizeFor("league_ko", "LIFECYCLE"));
+    // The HARNESS's posted body names the plate; the fake keeps the stored body it was posted (it cannot resolve firstLosses), so a
+    // clone is swapped in rather than the shared object mutated.
+    const posted = setup.built.posted.stages as unknown as { seq: number; progression: unknown }[];
+    const idx = posted.findIndex((b) => b.seq === 2);
+    const orig = posted[idx]!;
+    const clone = { ...orig, progression: { ...(orig.progression as object), sources: [{ ...(orig.progression as { sources: object[] }).sources[0], take: [{ kind: "firstLosses" }] }] } };
+    posted[idx] = clone;
+    const plate = clone as never;
+    expect(takesFirstLosses(plate), "the premise: stage 2 is a plate").toBe(true);
+    const plays = await playDivision(ctx, rec, setup, {});
+    const at = (e: string) => driver.order.indexOf(e);
+    expect(at("generate:2"), "stage 2 was generated").toBeGreaterThan(-1);
+    expect(at("generate:2"), "not at Start: only after stage 1 completed").toBeGreaterThan(at("complete:1"));
+    expect(at("propose:2"), "its proposal is the plate's own draft").toBeGreaterThan(at("generate:2"));
+    expect(plays[1]!.advance, "the draft was confirmed: stage 2 was reached").not.toBeNull();
+    expect(rec.track(setup.stages[1]!.id).exit).not.toBe("not_reached");
+  });
+  it("a body that takes no firstLosses keeps its day-one Generate (the other rows are untouched)", async () => {
+    const driver = new PlateFake();
+    const ctx = ctxFor(driver, "LIFECYCLE", { row: "league_ko" });
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, fieldSizeFor("league_ko", "LIFECYCLE"));
+    expect(takesFirstLosses(setup.built.posted.stages.find((b) => b.seq === 2)!)).toBe(false);
+    await playDivision(ctx, rec, setup, {});
+    expect(driver.order.indexOf("generate:2"), "generated before stage 1 completed").toBeLessThan(driver.order.indexOf("complete:1"));
+    expect(driver.order.indexOf("generate:2")).toBeGreaterThan(-1);
   });
 });

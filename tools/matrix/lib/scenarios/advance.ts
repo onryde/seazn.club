@@ -77,8 +77,13 @@ export function firstLossersOf(lines: readonly { roundNo: number | null; home: s
 
 /** The plate field a `firstLosses` body offers, read off the source stage's rows; undefined when the body takes no `firstLosses` (the
  *  rows are not read at all for any other take). */
+/** Whether the body is a plate: it takes `firstLosses`, so it has no lines until its source's first matches are decided. */
+export function takesFirstLosses(body: StagePostBody): boolean {
+  return takesOf(body).some((t) => t.kind === "firstLosses");
+}
+
 export function plateFieldOf(body: StagePostBody, sourceRows: Parameters<typeof firstLossersOf>[0]): number | undefined {
-  return takesOf(body).some((t) => t.kind === "firstLosses") ? firstLossersOf(sourceRows).length : undefined;
+  return takesFirstLosses(body) ? firstLossersOf(sourceRows).length : undefined;
 }
 
 /** The seats `firstLosses` offers are the source's played field, so a caller that does not know it names the gap. */
