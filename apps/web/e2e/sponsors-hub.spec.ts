@@ -53,15 +53,15 @@ test.afterAll(async ({ request }) => {
   await releaseSettingsOrg(request, org);
 });
 
-/** Open the Packages tab's tier legend when its fold's toggle is visible (below md) - and wait on the rows being attached, never visible:
- *  visibility is exactly what the fold denies until it is opened. No visible toggle (md and up) means nothing to open. */
+/** Open the Packages tab's tier legend (it folds at EVERY width: owner, 2026-11-11) - and wait on the rows being attached, never visible:
+ *  visibility is exactly what the fold denies until it is opened. The tap is gated on the toggle's own state, never on a width literal. */
 async function openLegendFold(page: Page): Promise<void> {
   await expect(page.getByTestId("tier-legend-row").first(), "the legend's rows are in the one DOM").toBeAttached();
   const toggle = page.getByTestId("tier-legend-fold").locator('[data-role="phone-disclosure-toggle"]');
   await expect(toggle, "the fold's toggle is in the DOM at every width").toBeAttached();
   if (!(await toggle.isVisible())) return;
-  // An empty price list opens itself after hydration and a tap before hydration does nothing, so tap a closed one and re-check until it
-  // reads open (a tap that landed after the seed would fold it; the next pass opens it again).
+  // An empty price list starts open and a list with packages starts folded; a tap before hydration does nothing. So tap only a closed one and
+  // re-check until it reads open (a tap that landed after hydration on an open one would fold it; the next pass opens it again).
   await expect(async () => {
     if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
     await expect(toggle, "the legend opens").toHaveAttribute("aria-expanded", "true", { timeout: 1_500 });
@@ -104,8 +104,8 @@ test("tabs: the hub opens on Overview and each tab opens its own panel, in the d
   await expect(page.getByTestId("sponsor-package-list"), "Packages is the price list").toBeVisible();
   await expect(page.getByTestId("sponsors-tab-packages"), "headed with the tab's own name").toContainText(UI["sponsors.hub.tab.packages"] ?? "");
   // The legend under the price list (owner, 2026-11-11): its heading, and the four tiers highest first, each with its own chip words.
-  // It folds below md (one DOM: the rows are attached either way, a phone only sees them once the toggle is opened), so this reads the
-  // rows as ATTACHED and opens the fold when - and only when - its toggle is on the screen (a width literal would rot with the breakpoint).
+  // It folds at every width (one DOM: the rows are attached either way, and seen only once the toggle is opened), so this reads the rows as
+  // ATTACHED and opens the fold when - and only when - its toggle reads closed (a width literal would rot with the breakpoint).
   const legend = page.getByTestId("tier-legend");
   await expect(legend, "the tier legend is under the price list").toBeAttached();
   await openLegendFold(page);
@@ -218,48 +218,68 @@ test("the Competitions home's Sponsors entry opens the hub at 320, where the top
   await expect(page.getByTestId("account-menu")).toHaveCount(0);
 });
 
-test("packages at 320: the tier legend is open on an empty list, folds once there is a package, and a tap opens it; the note sits higher while it is folded", async ({ page, request }) => {
+test("packages at 320, 768 and 1280: the tier legend is open on an empty list, folds once there is a package, and a tap opens and hides it; the note sits higher while it is folded", async ({ page, request }) => {
+  // Three widths, each with a page load or two and a few taps.
+  test.setTimeout(120_000);
   // Its own org: a package written here must not leak into the shared one's other tests (an empty list is what opens the legend).
   const seeded = await seedSettingsOrg(request, { plan: "pro", label: "sponsors-legend-fold" });
+  const WIDTHS = [320, 768, 1280];
   try {
-    await page.setViewportSize({ width: 320, height: 700 });
     const toggle = page.getByTestId("tier-legend-fold").locator('[data-role="phone-disclosure-toggle"]');
     const rows = page.getByTestId("tier-legend-row");
     const note = page.getByTestId("package-online-note");
 
-    // Empty list: it opens itself once the page has hydrated.
-    await page.goto(sponsorsUrl(seeded.slug, "packages"));
-    await expect(page.getByTestId("package-empty"), "premise: no packages yet").toBeVisible();
-    await expect(toggle, "a phone sees the fold's toggle").toBeVisible();
-    await expect(toggle, "an empty price list opens its legend").toHaveAttribute("aria-expanded", "true");
-    await expect(rows.first(), "its rows are shown").toBeVisible();
-    await expect(page.getByTestId("tier-legend-upgrade"), "an editor on a plan with tiers sees no upgrade link").toHaveCount(0);
+    // Empty list: it starts open, at every width (a desktop folds it too now, so its toggle is on the screen there as well).
+    let checkedOpen = 0;
+    for (const width of WIDTHS) {
+      await page.setViewportSize({ width, height: 700 });
+      await page.goto(sponsorsUrl(seeded.slug, "packages"));
+      await expect(page.getByTestId("package-empty"), `${width}: premise: no packages yet`).toBeVisible();
+      await expect(toggle, `${width}: the fold's toggle is on the screen`).toBeVisible();
+      await expect(toggle, `${width}: an empty price list opens its legend`).toHaveAttribute("aria-expanded", "true");
+      await expect(rows.first(), `${width}: its rows are shown`).toBeVisible();
+      await expect(page.getByTestId("tier-legend-upgrade"), `${width}: an editor on a plan with tiers sees no upgrade link`).toHaveCount(0);
+      await expectNoHorizontalScroll(page);
+      checkedOpen++;
+    }
+    expect(checkedOpen, "every width was looked at with an empty list").toBe(WIDTHS.length);
 
     // One package: the legend now starts folded, its rows still in the DOM and not on the screen, and the online note rises by its height.
     const made = await apiJson<{ id: string }>(request, `/api/v1/orgs/${seeded.orgId}/sponsor-packages`, "POST", { name: "Fold probe", price_cents: 12_000, currency: "gbp", tier: "partner" });
     expect(made.status, JSON.stringify(made.error)).toBe(201);
-    await page.reload();
-    await expect(page.getByTestId("package-card"), "premise: the package is listed").toHaveCount(1);
-    await expect(toggle).toBeVisible();
-    await expect(toggle, "with a package the legend starts folded").toHaveAttribute("aria-expanded", "false");
-    await expect(rows.first(), "folded: attached, not shown").toBeAttached();
-    await expect(rows.first()).toBeHidden();
-    await expect(note).toBeVisible();
-    // Page coordinates (a tap can scroll the viewport, and a viewport-relative y would then move for the wrong reason).
-    const pageY = () => note.evaluate((el) => el.getBoundingClientRect().top + window.scrollY);
-    const folded = await pageY();
+    let checkedFolded = 0;
+    for (const width of WIDTHS) {
+      await page.setViewportSize({ width, height: 700 });
+      await page.goto(sponsorsUrl(seeded.slug, "packages"));
+      await expect(page.getByTestId("package-card"), `${width}: premise: the package is listed`).toHaveCount(1);
+      await expect(toggle, `${width}: the fold's toggle is on the screen`).toBeVisible();
+      await expect(toggle, `${width}: with a package the legend starts folded`).toHaveAttribute("aria-expanded", "false");
+      await expect(rows.first(), `${width}: folded: attached, not shown`).toBeAttached();
+      await expect(rows.first()).toBeHidden();
+      await expect(note).toBeVisible();
+      // Page coordinates (a tap can scroll the viewport, and a viewport-relative y would then move for the wrong reason).
+      const pageY = () => note.evaluate((el) => el.getBoundingClientRect().top + window.scrollY);
+      const folded = await pageY();
 
-    await expect(async () => {
-      if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
-      await expect(toggle).toHaveAttribute("aria-expanded", "true", { timeout: 1_500 });
-    }).toPass({ timeout: 15_000 });
-    await expect(rows, "a tap opens all four").toHaveCount(4);
-    await expect(rows.first()).toBeVisible();
-    await expect(rows.last()).toBeVisible();
-    const open = await pageY();
-    expect(folded, "the note sits higher while the legend is folded").toBeLessThan(open);
-    expect(open - folded, "by about the legend's height (four wrapped rows are well over 150px)").toBeGreaterThan(150);
-    await expectNoHorizontalScroll(page);
+      await expect(async () => {
+        if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+        await expect(toggle).toHaveAttribute("aria-expanded", "true", { timeout: 1_500 });
+      }).toPass({ timeout: 15_000 });
+      await expect(rows, `${width}: a tap opens all four`).toHaveCount(4);
+      await expect(rows.first()).toBeVisible();
+      await expect(rows.last()).toBeVisible();
+      const open = await pageY();
+      expect(folded, `${width}: the note sits higher while the legend is folded`).toBeLessThan(open);
+      expect(open - folded, `${width}: by about the legend's height (four rows are well over 150px)`).toBeGreaterThan(150);
+      await expectNoHorizontalScroll(page);
+
+      // And a tap hides it again (the hide label): the second half of "open / hide".
+      await toggle.click();
+      await expect(toggle, `${width}: a second tap hides it`).toHaveAttribute("aria-expanded", "false");
+      await expect(rows.first()).toBeHidden();
+      checkedFolded++;
+    }
+    expect(checkedFolded, "every width was looked at with a package").toBe(WIDTHS.length);
   } finally {
     await releaseSettingsOrg(request, seeded);
   }

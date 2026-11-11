@@ -18,9 +18,11 @@
 // must not read promises its pages do not keep), and what needs a paid plan or an Event Pass (`placementNeedsTiers`: Partner for the
 // whole organisation is the one placement every plan has). An editor gets the way out (the billing link, the online note's own).
 //
-// Below `md` the legend folds (`PhoneDisclosure`, one DOM, the toggle `md:hidden`): its summary IS the heading, so the section's own h3
-// is `max-md:hidden` and reads at `md` and up exactly as before. It starts open on a phone when the list has no packages yet
-// (`startOpen` -> `phoneStartOpen`): an empty tab needs it most; with packages the price list is the page and this folds out of the way.
+// The legend folds at EVERY width (`PhoneDisclosure` in its `allWidths` mode, one DOM; owner, 2026-11-11: it folded only below `md`, and
+// he wanted the same open / hide row on a desktop): its summary IS the heading - there is no h3 of its own, and the section's
+// `aria-labelledby` points at the summary's text. It starts open when the list has no packages yet (`startOpen` -> `phoneStartOpen`):
+// an empty tab needs it most; with packages the price list is the page and this starts folded out of the way. A reader's own tap is
+// theirs: creating the first package does not fold a legend they have open.
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { TIER_BADGE, TIER_LEGEND_MSG, TIER_MSG } from "@/components/sponsors/tier-labels";
 import Link from "@/components/ui/console-link";
@@ -37,7 +39,7 @@ export interface TierLegendProps {
   /** Where "Upgrade your plan" goes (the billing page). Drawn on the plan line for an editor only, and only when there is a plan line. */
   billingHref: string;
   canEdit: boolean;
-  /** The phone fold starts open (an empty price list). With packages it starts folded. */
+  /** The fold starts open (an empty price list), at every width. With packages it starts folded. */
   startOpen: boolean;
 }
 
@@ -47,16 +49,14 @@ export function TierLegend({ tiersOrgWide, billingHref, canEdit, startOpen }: Ti
   return (
     <div data-testid="tier-legend-fold" className="min-w-0">
       <PhoneDisclosure
-        summary={msg("sponsors.pkg.legend.heading")}
+        allWidths
+        summary={<span id="tier-legend-heading">{msg("sponsors.pkg.legend.heading")}</span>}
         showLabel={msg("sponsors.pkg.legend.show")}
         hideLabel={msg("sponsors.pkg.legend.hide")}
         phoneStartOpen={startOpen}
       >
-        <section data-testid="tier-legend" aria-labelledby="tier-legend-heading" className="min-w-0 rounded-xl bg-slate-50 p-4 max-md:mt-2">
-          <h3 id="tier-legend-heading" className="text-sm font-semibold text-slate-800 max-md:hidden">
-            {msg("sponsors.pkg.legend.heading")}
-          </h3>
-          <ul className="mt-3 divide-y divide-slate-200/70 max-md:mt-0">
+        <section data-testid="tier-legend" aria-labelledby="tier-legend-heading" className="mt-2 min-w-0 rounded-xl bg-slate-50 p-4">
+          <ul className="divide-y divide-slate-200/70">
             {SPONSOR_TIERS.map((tier) => (
               <li
                 key={tier}

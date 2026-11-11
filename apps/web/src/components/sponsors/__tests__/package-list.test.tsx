@@ -220,15 +220,15 @@ describe("the tier legend sits under the price list, on every plan, with or with
     expect(checked).toBe(4);
   });
 
-  it("the legend is folded below md, and the online note sits right after the fold: on a phone with packages the note rises by the legend's whole height (the closed body is max-md:hidden)", () => {
+  it("the legend is folded at every width, and the online note sits right after the fold: with packages the note rises by the legend's whole height (the closed body is `hidden`, not max-md:hidden)", () => {
     const html = listHtml({ hasMonetize: false });
     const fold = at(html, "tier-legend-fold");
     expect(fold, "premise: the fold is drawn").toBeGreaterThan(-1);
     const toggle = /<button\b[^>]*data-role="phone-disclosure-toggle"[^>]*>/.exec(html.slice(fold))?.[0] ?? "";
-    expect(toggle, "the legend's toggle is phone-only").toMatch(/class="[^"]*\smd:hidden"/);
+    expect(toggle, "the legend's toggle is on the screen at md and up too (anchored: max-md:hidden cannot satisfy it)").not.toMatch(/class="[^"]*\smd:hidden(?:\s|")/);
     expect(toggle, "folded on first paint (a list with packages)").toContain('aria-expanded="false"');
     const controls = /aria-controls="([^"]+)"/.exec(toggle)?.[1];
-    expect(html.slice(fold), "its body is hidden below md and nothing else is").toMatch(new RegExp(`<div class="grid min-w-0 flex-1 grid-cols-\\[minmax\\(0,1fr\\)\\] max-md:hidden" id="${controls}">`));
+    expect(html.slice(fold), "its body is hidden at every width while folded").toMatch(new RegExp(`<div class="grid min-w-0 flex-1 grid-cols-\\[minmax\\(0,1fr\\)\\] hidden" id="${controls}">`));
     expect(at(html, "tier-legend-fold"), "the fold sits before the note").toBeLessThan(at(html, "package-online-note"));
     // Nothing between the fold's end and the note takes height on a phone: only closing wrappers lie between them.
     const afterLegend = html.slice(html.indexOf("</section>", fold) + "</section>".length, at(html, "package-online-note"));
