@@ -2,7 +2,6 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { balance, packBalance, utcMonthStart, walletIdFor } from "@/lib/credits";
 import { orgPlanKey } from "@/lib/entitlements";
-import { getOrCreateReferralCode } from "@/lib/referral";
 
 /**
  * The AI-credit wallet home (SPEC-6 §A3): everything the org billing page's
@@ -10,6 +9,13 @@ import { getOrCreateReferralCode } from "@/lib/referral";
  * packs, and the run history. A READ-ONLY view over `lib/credits.ts`'s wallet
  * (whose spend/grant functions this must not touch) plus the plan's monthly
  * grant cap and the shared-pool org count.
+ *
+ * No referral reads (owner, 2026-11-11: the "Invite & earn" card is hidden).
+ * The view used to mint the org's referral code on first read
+ * (`getOrCreateReferralCode`) — a WRITE on a GET, for a card nobody sees — and
+ * count referred orgs and referral earnings. The /refer route, the attribution
+ * cookie and the referral grants are untouched; a card that comes back brings
+ * its own reads.
  *
  * All numbers are derived from the append-only ledger + the plan matrix — there
  * is no `spent_this_period` counter to drift (see `credits.ts` for why the
@@ -64,16 +70,6 @@ export interface CreditsTabView {
    *  when > 1 (SPEC-2 §11.1). */
   sharedOrgCount: number;
   history: CreditHistoryRow[];
-  /** This org's shareable `/refer/<code>` code (SPEC-5 §2), minted on first
-   *  read via `getOrCreateReferralCode` — never regenerated once set. */
-  referralCode: string;
-  /** How many orgs were created with this org as `referred_by_org_id`. */
-  referredCount: number;
-  /** Credits this wallet has earned AS A REFERRER (the +20 grants stamped
-   *  `earn:referral:*` on a referred org's first paid competition) — excludes
-   *  the +10 "welcome" grant a REFERRED org earns on its own wallet, which is
-   *  keyed `earn:referral_welcome:*` and never sums into this org's own total. */
-  referralEarned: number;
 }
 
 const HISTORY_LIMIT = 50;
@@ -212,7 +208,7 @@ export async function getCreditsTab(orgId: string): Promise<CreditsTabView> {
   const now = new Date();
   const periodStart = utcMonthStart(now);
 
-  const [bal, packBal, spent, history, shared, referralCode, referred, referralEarned] =
+  const [bal, packBal, spent, history, shared] =
     await Promise.all([
       balance(walletId),
       packBalance(walletId),
@@ -250,17 +246,6 @@ export async function getCreditsTab(orgId: string): Promise<CreditsTabView> {
       select count(*)::int as n from organizations
        where coalesce(subscription_id, id)::text = ${walletId}
          and deleted_at is null`,
-      // #267 (SPEC-5 §2): mint-on-first-read, never overwritten once set.
-      getOrCreateReferralCode(orgId),
-      sql<{ n: number }[]>`
-      select count(*)::int as n from organizations where referred_by_org_id = ${orgId}`,
-      // Credits earned AS A REFERRER only (`earn:referral:*`) — the referred
-      // org's own +10 welcome grant is keyed `earn:referral_welcome:*` and
-      // never matches this `like` pattern (see the field's doc comment).
-      sql<{ n: string | null }[]>`
-      select coalesce(sum(delta), 0)::text as n from ai_credit_ledger
-       where wallet_id = ${walletId} and source = 'earn_grant'
-         and idempotency_key like 'earn:referral:%'`,
     ]);
 
   const sharedOrgCount = Math.max(1, shared[0]?.n ?? 1);
@@ -288,8 +273,5 @@ export async function getCreditsTab(orgId: string): Promise<CreditsTabView> {
     packBalance: packBal,
     sharedOrgCount,
     history,
-    referralCode,
-    referredCount: referred[0]?.n ?? 0,
-    referralEarned: Number(referralEarned[0]?.n ?? 0),
   };
 }

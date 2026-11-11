@@ -26,11 +26,16 @@ export const routes = {
   orgSponsors: (org: Slug, tab?: string) =>
     tab ? `/o/${org}/sponsors?tab=${tab}` : `/o/${org}/sponsors`,
   billing: (org: Slug) => `/o/${org}/settings/billing`,
-  /** AI-credit wallet home — its own Settings tab (moved off the billing page). */
+  /** Settings → Credits, its own Settings tab (moved off the billing page). The bare URL opens the STREAMING
+   *  (match-credit) side — the default since 2026-11-11 (owner: streaming credits come first). A link whose context
+   *  is AI credits names that side with `creditsAi` instead (lib/__tests__/credits-route-sides.test.ts classifies
+   *  every caller). */
   credits: (org: Slug) => `/o/${org}/settings/credits`,
-  /** The same tab on its Streaming (match-credit) side. The default side (AI) keeps the bare `credits` URL, so
-   *  every existing link to the tab still lands where it did. Query keys beyond `kind` (checkout return,
-   *  history cursor) are appended with `&` by their owners. */
+  /** The same tab on its AI-credit side. */
+  creditsAi: (org: Slug) => `/o/${org}/settings/credits?kind=ai`,
+  /** The Streaming side named explicitly — the same page the bare `credits` URL opens. For the owners that append
+   *  further query keys with `&` (the match-credit checkout return, the history cursor), and the shape every link
+   *  made while AI was the default carries, so those still open Streaming. */
   creditsStream: (org: Slug) => `/o/${org}/settings/credits?kind=stream`,
   /** The Streaming side's history as CSV (the AI side's lives under /settings/billing/credits.csv). */
   creditsStreamCsv: (org: Slug) => `/o/${org}/settings/credits/stream.csv`,

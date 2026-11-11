@@ -106,17 +106,21 @@ test.describe("settings shell", () => {
       .click();
   });
 
-  test("the rail carries the plan and credit balance from any Settings page", async ({ page }) => {
+  test("the rail carries the plan and streaming credit balance from any Settings page", async ({ page }) => {
     // Previously visible only from Billing and Credits — the two pages an
-    // owner is not on when they run out of credits mid-schedule.
+    // owner is not on when they run out of credits mid-schedule. Streaming
+    // credits, not AI (owner, 2026-11-11).
     await page.goto("/settings/billing");
-    // Scoped to the rail's own landmark, and matched EXACTLY. Two other links
-    // to the same route are in play — the billing page's own "Manage AI
-    // credits" and the rail's own "Credits" nav item — and Playwright's
-    // `name` is a substring match, so anything looser resolves to several.
+    // Scoped to the rail's own landmark, and matched EXACTLY. Another link to
+    // the same route is in play — the rail's own "Credits" nav item — and
+    // Playwright's `name` is a substring match, so anything looser resolves to
+    // several.
     const rail = page.getByRole("complementary");
     // Anchored, because the balance is whatever this environment's org has.
-    await expect(rail.getByRole("link", { name: /^\d+ AI credits$/ })).toBeVisible();
+    const balance = rail.getByRole("link", { name: /^Streaming credits: \d+$/ });
+    await expect(balance).toBeVisible();
+    // The Credits tab's bare URL: its Streaming side.
+    await expect(balance).toHaveAttribute("href", /\/o\/[^/]+\/settings\/credits$/);
     await expect(rail).toContainText("Pro");
   });
 

@@ -564,9 +564,10 @@ export default async function BillingPage({
         </section>
 
         {/* AI credits moved to their own Settings tab (/settings/credits). A
-            payer lands on billing, so leave a pointer to the wallet here. */}
+            payer lands on billing, so leave a pointer to the wallet here. It
+            names the AI side: the tab's default side is Streaming. */}
         <Link
-          href={routes.credits(orgSlug)}
+          href={routes.creditsAi(orgSlug)}
           className="card mb-6 flex items-center justify-between gap-3 p-5 transition hover:border-purple-200 hover:bg-purple-50/40"
         >
           <span className="text-sm font-medium text-slate-700">

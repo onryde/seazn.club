@@ -4,22 +4,23 @@ import { routes } from "@/lib/routes";
 
 export type CreditsKind = "ai" | "stream";
 
-/** `?kind=` → the side of the Credits tab to show. Anything but `stream` is the default side (AI), so every link made
- *  before the tab had two sides — and any URL with an unknown or repeated value — still lands where it always did. */
+/** `?kind=` → the side of the Credits tab to show. Only `ai`, exactly, is the AI side; anything else is the default side
+ *  (Streaming, owner 2026-11-11) — the bare URL, `?kind=stream` (what every link made while AI was the default carries),
+ *  and any unknown or repeated value. */
 export function creditsKindOf(raw: string | string[] | undefined): CreditsKind {
-  return raw === "stream" ? "stream" : "ai";
+  return raw === "ai" ? "ai" : "stream";
 }
 
 /**
- * The AI | Streaming switch at the top of Settings → Credits. Two links, not state: each side is its own URL
- * (`/settings/credits`, `/settings/credits?kind=stream`), so the choice survives a reload, a shared link and the back
- * button, and the server renders only the side that was asked for. The current side is `aria-current`. Each target is
- * 44px tall, with the two sharing one row down to 320.
+ * The Streaming | AI switch at the top of Settings → Credits. Two links, not state: each side is its own URL
+ * (`/settings/credits`, `/settings/credits?kind=ai`), so the choice survives a reload, a shared link and the back button,
+ * and the server renders only the side that was asked for. Streaming comes first: it is the default side. The current
+ * side is `aria-current`. Each target is 44px tall, with the two sharing one row down to 320.
  */
 export function CreditsKindSwitch({ orgSlug, active, dict }: { orgSlug: string; active: CreditsKind; dict: Dict }) {
   const items: { kind: CreditsKind; href: string; label: string }[] = [
-    { kind: "ai", href: routes.credits(orgSlug), label: t(dict, "settings.credits.kind.ai") },
-    { kind: "stream", href: routes.creditsStream(orgSlug), label: t(dict, "settings.credits.kind.stream") },
+    { kind: "stream", href: routes.credits(orgSlug), label: t(dict, "settings.credits.kind.stream") },
+    { kind: "ai", href: routes.creditsAi(orgSlug), label: t(dict, "settings.credits.kind.ai") },
   ];
   return (
     <nav
