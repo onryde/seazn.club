@@ -92,6 +92,13 @@ export const SPONSOR_URL_HTTP_ONLY = "url must be an http:// or https:// address
 /** For a write schema's `.refine`: a url a visitor may be sent to. */
 export const isRedirectableUrl = (url: string): boolean => redirectTarget(url) !== null;
 
+/** For the poster's write schemas: `isRedirectableUrl` AND written with the `://` the DB's `sponsors_poster_path_check` (V503)
+ *  requires, case-insensitively. WHATWG `new URL()` repairs a missing or wrong slash, so `https:/a.example/p.png`,
+ *  `https:a.example/p.png` and `https:\\a.example\p.png` all pass `redirectTarget` (and zod's `.url()`) and would then be refused by
+ *  the CHECK alone, as a 500 instead of the 400 the spec promises (§6.3, D13). The stored value is the poster's own text, never the
+ *  parser's normalisation, so the text itself has to be what the CHECK accepts. */
+export const isPosterUrl = (url: string): boolean => /^https?:\/\//i.test(url) && isRedirectableUrl(url);
+
 /** A sponsor url as something a visitor may be SENT to — the redirect's target, a board's direct link: an absolute
  *  http(s) url, normalised by the URL parser, or null. Refused: every other scheme (`javascript:`, `data:` — zod's
  *  `.url()` accepts both), and relative or protocol-relative urls (the target must name its own host). The write

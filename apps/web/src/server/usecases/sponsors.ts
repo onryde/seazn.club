@@ -13,7 +13,7 @@ import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { sponsorRefusal } from "@/lib/sponsor-refusals";
 import { requireFeature } from "@/lib/entitlements";
-import { isRedirectableUrl, SPONSOR_URL_HTTP_ONLY } from "@/lib/sponsor-clicks";
+import { isPosterUrl, isRedirectableUrl, SPONSOR_URL_HTTP_ONLY } from "@/lib/sponsor-clicks";
 import { patchOf } from "@/lib/zod-patch";
 import { getStripe } from "@/lib/stripe";
 import {
@@ -112,7 +112,7 @@ export const CreateSponsorInput = z.object({
   // Title sponsor poster (V503): an absolute http(s) URL of at most 500 characters, the DB's `sponsors_poster_path_check` is the
   // second guard. next/image throws on a src that is neither absolute nor `/`-rooted, so unlike `logo_path` this is never a bare
   // storage path; and a `javascript:` or `data:` value is refused here for the same reason `url` is.
-  poster_path: z.string().url().max(500).refine(isRedirectableUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
+  poster_path: z.string().url().max(500).refine(isPosterUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
   tier: z.enum(SPONSOR_TIERS).default("partner"),
   competition_id: z.string().uuid().nullish(),
   status: z.enum(["active", "pending", "inactive"]).default("active"),

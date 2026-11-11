@@ -59,10 +59,15 @@ describe("sponsor url writes: http(s) only (m1)", () => {
 });
 
 /** Spec §6.1/§6.2: an absolute http(s) URL of at most 500 characters. The url list above, plus the two shapes a poster can
- *  be that a link cannot (a bare storage path, a rooted path: next/image throws on both) and a 501-character URL. */
+ *  be that a link cannot (a bare storage path, a rooted path: next/image throws on both), a 501-character URL, and the three
+ *  shapes WHATWG `new URL()` is lenient about: it repairs a missing or wrong slash, so `.url()` accepts them while the DB's
+ *  `^https?://` CHECK does not, and the API would answer 500 instead of 400 (review M1). */
 const POSTER_STEM = "https://a.example/";
 const POSTER_MAX = 500;
-const POSTER_REFUSED = [...REFUSED, "logos/a.png", "/relative.png", POSTER_STEM + "x".repeat(POSTER_MAX + 1 - POSTER_STEM.length)];
+const LENIENT_SHAPES = ["https:/a.example/p.png", "https:a.example/p.png", "https:\\\\a.example\\p.png"];
+const POSTER_REFUSED = [
+  ...REFUSED, "logos/a.png", "/relative.png", POSTER_STEM + "x".repeat(POSTER_MAX + 1 - POSTER_STEM.length), ...LENIENT_SHAPES,
+];
 const POSTER_BOUNDARY = POSTER_STEM + "x".repeat(POSTER_MAX - POSTER_STEM.length); // exactly 500: accepted
 
 describe("poster_path: an absolute http(s) url of at most 500 characters, at every write (count reported)", () => {
@@ -76,9 +81,10 @@ describe("poster_path: an absolute http(s) url of at most 500 characters, at eve
         checked++;
       }
     }
-    expect(POSTER_REFUSED.length).toBe(REFUSED.length + 3);
+    expect(LENIENT_SHAPES[2]!.split("\\").length - 1, "premise: the third shape holds three real backslashes").toBe(3);
+    expect(POSTER_REFUSED.length).toBe(REFUSED.length + 3 + LENIENT_SHAPES.length);
     expect(checked).toBe(SCHEMAS.length * POSTER_REFUSED.length);
-    expect(checked).toBe(4 * 10);
+    expect(checked).toBe(4 * 13);
   });
 
   it("positive pair: http, https, the 500-character boundary, null and absent are accepted, and the value is kept", () => {

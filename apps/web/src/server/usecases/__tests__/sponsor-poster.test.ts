@@ -49,8 +49,13 @@ const POSTER_B = "https://cdn.example/storage/v1/object/public/assets/orgs/o/con
 const POSTER_C = "https://cdn.example/storage/v1/object/public/assets/orgs/o/content/c.jpg";
 const POSTER_D = "https://cdn.example/storage/v1/object/public/assets/orgs/o/content/d.png";
 
-/** Spec §6.3's refused bodies: a non-http(s) scheme, a bare storage path and a 501-character URL. */
-const REFUSED = ["javascript:alert(1)", "logos/x.png", "https://a.example/" + "x".repeat(483)];
+/** Spec §6.3's refused bodies: a non-http(s) scheme, a bare storage path, a 501-character URL, and the three shapes `new URL()`
+ *  repairs (a missing or wrong slash: zod's `.url()` lets them through and only the DB CHECK refused them, as a 500; review M1).
+ *  Each must answer 400 through the real route. */
+const REFUSED = [
+  "javascript:alert(1)", "logos/x.png", "https://a.example/" + "x".repeat(483),
+  "https:/a.example/p.png", "https:a.example/p.png", "https:\\\\a.example\\p.png",
+];
 
 type Envelope = { ok: boolean; data?: { id: string; poster_path: string | null }; error?: { code: string; message: string } };
 const base = (orgId: string) => `http://localhost/api/v1/orgs/${orgId}/sponsors`;
@@ -195,7 +200,7 @@ describe.skipIf(!HAS_DB)("sponsor poster_path: the write sequence, the list and 
     expect(orgWide.map((s) => s.poster), "another competition: the org-wide title row only").toEqual([POSTER_B]);
   });
 
-  it("an inactive or pending title sponsor resolves to nothing - its poster with it - and comes back with it (the void / dispute-park case)", async () => {
+  it("an inactive or pending title sponsor resolves to nothing - its poster with it - and comes back with it (the status is set by a hand PATCH; this does not drive the deal-void or dispute-park writers)", async () => {
     const { auth } = await seedOrg("pro");
     authState.userId = auth.userId!;
     const title = await createSponsor(auth, { name: "Parked Title", tier: "title", status: "active", poster_path: POSTER_A });
