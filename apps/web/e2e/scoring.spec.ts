@@ -257,7 +257,7 @@ test("Lineup is offered for tennis doubles and not for tennis singles; the other
   await expect(page.locator('[data-role="console-panel-bar"]')).toBeVisible({ timeout: 20_000 });
   const singlesPanels = await bar(page).evaluateAll((els) => els.map((e) => e.getAttribute("aria-controls")!.replace("console-panel-", "")));
   expect(singlesPanels, "singles: no Lineup, the other panels stay").not.toContain("lineup");
-  expect(singlesPanels, "singles: Stream, Remote scoring, Match rules and Match actions remain").toEqual(
+  expect(singlesPanels, "singles: Remote scoring, Match rules and Match actions remain (Stream's offer is plan-gated, pinned by the panel-bar unit sweep)").toEqual(
     expect.arrayContaining(["handover", "rules", "actions"]),
   );
   await expect(page.getByTestId("lineup-toggle")).toHaveCount(0);

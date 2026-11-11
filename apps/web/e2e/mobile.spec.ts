@@ -5767,8 +5767,8 @@ for (const sport of RETIREMENT_SPORTS) {
     await assertTapFloor(padTile(page, "retire-away"), `${sport.sportKey}: away Injured tile, folds as left`);
 
     // 2. Every fold opened (EVERY instance): still on the board, still over the floor, page still not scrolling sideways.
-    const folds = await openEveryPhoneFold(page);
-    expect(folds, "at least one fold instance existed to open (a console with none would make this step vacuous)").toBeGreaterThan(0);
+    // Non-vacuous by construction: openEveryPhoneFold hard-expects the Lineup panel to open (a count >0 would be a tautology).
+    await openEveryPhoneFold(page);
     await assertTapFloor(padTile(page, "retire-home"), `${sport.sportKey}: home Injured tile, every fold open`);
     await expectNoHorizontalScroll(page);
 
@@ -5817,8 +5817,8 @@ test("volleyball v3 pad: the field-six question and both answers hold the 44px f
   await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
   await dismissCookieBanner(page);
   await assertV3PadHoldsAtThisWidth(page, "volleyball pad at rest", 4);
-  const folds = await openEveryPhoneFold(page);
-  expect(folds, "at least one fold instance existed to open (a console with none would make this step vacuous)").toBeGreaterThan(0);
+  // Non-vacuous by construction: openEveryPhoneFold hard-expects the Lineup panel to open (a count >0 would be a tautology).
+  await openEveryPhoneFold(page);
 
   await assertTapFloor(padTile(page, "sanction-home"), "volleyball: home sanction tile, every fold open");
   await padTile(page, "sanction-home").click();

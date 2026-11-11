@@ -187,7 +187,7 @@ test.describe("player accounts (PROMPT-53)", () => {
 
     // `generic` declares no lineup, so the console offers no Lineup panel and the roster block carries the chips; a sport that
     // does offer it would hold them in the panel.
-    await openConsolePanel(page, "lineup", { optional: true });
+    expect(await openConsolePanel(page, "lineup", { optional: true }), "generic declares no lineup: no Lineup panel is offered").toBe(false);
     // Ada RSVP'd out → ✗ with the note as tooltip; Ben never claimed → "—".
     const adaChip = page.getByLabel(`${ada.full_name}: unavailable — away that weekend`);
     await expect(adaChip.first()).toBeVisible({ timeout: 20_000 });
