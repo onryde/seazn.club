@@ -212,20 +212,21 @@ describe("CompetitionSettings C8 — city and country are gone, and stay stored"
     for (const k of dead) expect(Object.hasOwn(uiEn, k), k).toBe(false);
   });
 
-  it("the hero field is a text input (a stored storage path must not block Save), and a relative path saves", async () => {
+  it("no hero image input is drawn, and a save omits hero_image_path so a stored value survives", async () => {
     const island = mount({
       discoveryBranding: true,
       discovery: { tagline: "t", hero_image_path: "heroes/o1/abc.png" },
     });
-    const brandingTab = tabNamed(island.tree(), "compset.tab.branding")!;
-    (propsOf(brandingTab).onClick as () => void)();
-    const hero = island.tree().find((el) => el.type === "input" && propsOf(el).placeholder === "https://")!;
-    expect(hero, "the hero input is drawn on the Branding tab").toBeDefined();
-    expect(propsOf(hero).type).toBe("text");
-    expect(propsOf(hero).value).toBe("heroes/o1/abc.png");
+    (propsOf(tabNamed(island.tree(), "compset.tab.branding")!).onClick as () => void)();
+    const tree = island.tree();
+    const inputs = tree.filter((el) => el.type === "input");
+    expect(inputs.length, "anti-vacuity: the Branding tab draws inputs (tagline at least)").toBeGreaterThan(0);
+    expect(inputs.some((el) => propsOf(el).placeholder === "https://" || propsOf(el).type === "url")).toBe(false);
+    expect(Object.hasOwn(uiEn, "compset.heroUrl")).toBe(false);
     await submit(island);
     expect(api).toHaveBeenCalledTimes(1);
-    expect((sent().discovery as { hero_image_path: string }).hero_image_path).toBe("heroes/o1/abc.png");
+    expect(sent().discovery).toEqual({ tagline: "t" });
+    expect(Object.hasOwn(sent().discovery as object, "hero_image_path")).toBe(false);
   });
 
   it("a blank name (General's required input is unmounted on Branding) is refused with the missing-name message, nothing sent", async () => {
@@ -247,8 +248,8 @@ describe("CompetitionSettings C8 — city and country are gone, and stay stored"
   it("an entitled org sends exactly the keys the form edits — never city or country", async () => {
     const island = mount({ discoveryBranding: true });
     await submit(island);
-    expect(Object.keys(sent().discovery as object).sort()).toEqual(["hero_image_path", "tagline"]);
-    expect(sent().discovery).toEqual({ tagline: "By the harbour", hero_image_path: null });
+    expect(Object.keys(sent().discovery as object).sort()).toEqual(["tagline"]);
+    expect(sent().discovery).toEqual({ tagline: "By the harbour" });
   });
 });
 

@@ -1548,7 +1548,6 @@ export type DictionaryKey =
   | "compset.failed"
   | "compset.failedStatus"
   | "compset.heading"
-  | "compset.heroUrl"
   | "compset.name"
   | "compset.openStages.body"
   | "compset.openStages.completeFailed"

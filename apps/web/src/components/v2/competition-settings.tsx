@@ -82,7 +82,6 @@ interface FormState {
   status: string;
   discoverable: boolean;
   tagline: string;
-  hero_image_path: string;
   brand_primary: string | null;
 }
 
@@ -97,7 +96,6 @@ const FIELD_LABEL: [keyof FormState, MessageKey][] = [
   ["description", "compset.description"],
   ["brand_primary", "compset.brandColor"],
   ["tagline", "compset.tagline"],
-  ["hero_image_path", "compset.heroUrl"],
 ];
 
 /** Localized status label; unknown values fall back to the raw token. */
@@ -123,12 +121,6 @@ export function unsavedFields(form: FormState, baseline: FormState): (keyof Form
   const a = sent(form);
   const b = sent(baseline);
   return FIELD_LABEL.map(([key]) => key).filter((key) => a[key] !== b[key]);
-}
-
-/** A hero image the preview may load: an absolute http(s) URL, nothing else. */
-function previewImage(raw: string): string | null {
-  const v = raw.trim();
-  return /^https?:\/\/\S+$/i.test(v) ? v : null;
 }
 
 /** "14–16 Nov 2026" in the reader's language; the dates are calendar days, so formatted in UTC. */
@@ -203,7 +195,6 @@ export function CompetitionSettings({
     status: competition.status,
     discoverable: competition.discoverable,
     tagline: competition.discovery.tagline ?? "",
-    hero_image_path: competition.discovery.hero_image_path ?? "",
     brand_primary: publicBrandColor(competition.branding),
   }));
   const [form, setFormState] = useState<FormState>(baseline);
@@ -318,13 +309,12 @@ export function CompetitionSettings({
           // always sends discoverable=false so the intent is unambiguous.
           discoverable: form.visibility === "public" ? form.discoverable : false,
           // Only the keys this form edits, and only for an entitled org (the server 402s them otherwise — doc 10 §2:
-          // never UI-only). The server merges key by key, so city and country, which this form no longer shows, keep
-          // their stored values.
+          // never UI-only). The server merges key by key, so city, country and hero_image_path, which this form no
+          // longer shows, keep their stored values.
           ...(discoveryBranding
             ? {
                 discovery: {
                   tagline: form.tagline.trim() || null,
-                  hero_image_path: form.hero_image_path.trim() || null,
                 },
               }
             : {}),
@@ -368,7 +358,6 @@ export function CompetitionSettings({
   const activeTab: SettingsTab = tabs.some((t) => t.key === tab) ? tab : "general";
 
   const brandHex = themeBranding ? (form.brand_primary ?? publicBrandColor(orgBranding) ?? DEFAULT_BRAND) : DEFAULT_BRAND;
-  const heroUrl = discoveryBranding ? previewImage(form.hero_image_path) : null;
   const tagline = discoveryBranding ? form.tagline.trim() : "";
   const dates = previewDates(locale, form.starts_on, form.ends_on);
 
@@ -642,41 +631,21 @@ export function CompetitionSettings({
                   {msg("compset.taglineHint")}
                 </span>
               </label>
-              <label className="block">
-                <span className="label">
-                  {msg("compset.heroUrl")}{" "}
-                  {!discoveryBranding && <span className="text-purple-700">{msg("compset.pro")}</span>}
-                </span>
-                <input
-                  type="text"
-                  inputMode="url"
-                  disabled={readOnly || !discoveryBranding}
-                  value={form.hero_image_path}
-                  onChange={(e) => setForm({ ...form, hero_image_path: e.target.value })}
-                  placeholder="https://"
-                  className="input min-h-11"
-                />
-              </label>
             </>
           }
           right={
             // What the three choices on the left produce, seen rather than imagined: the card with the colour, the
-            // tagline and the hero applied. Only what this org's plan really shows is drawn.
+            // tagline applied. Only what this org's plan really shows is drawn.
             <>
               <span className="label">{msg("compset.preview")}</span>
               <div
                 data-testid="compset-brand-preview"
                 className="overflow-hidden rounded-xl border border-purple-100 bg-white lg:flex-1"
               >
-                {heroUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element -- an organiser's own URL, any host
-                  <img src={heroUrl} alt="" className="h-32 w-full object-cover sm:h-40" />
-                ) : (
-                  <div
-                    className="h-32 sm:h-40"
-                    style={{ background: `linear-gradient(135deg, ${brandHex}, color-mix(in srgb, ${brandHex} 55%, #0f172a))` }}
-                  />
-                )}
+                <div
+                  className="h-32 sm:h-40"
+                  style={{ background: `linear-gradient(135deg, ${brandHex}, color-mix(in srgb, ${brandHex} 55%, #0f172a))` }}
+                />
                 <div className="space-y-1 p-4">
                   <p className="break-words text-base font-semibold text-slate-900">{form.name || competition.name}</p>
                   {tagline && (

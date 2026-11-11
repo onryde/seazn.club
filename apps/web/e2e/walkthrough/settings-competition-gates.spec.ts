@@ -48,7 +48,7 @@ import { routes } from "../../src/lib/routes";
  * EVERY refusal here is asserted on the API as well as (or instead of) the UI,
  * and that is not belt-and-braces. `competition-settings.tsx` pre-clears the
  * gated fields before the request leaves the browser (`...(discoveryBranding ?
- * { discovery: { tagline, hero_image_path } } : {})`), exactly the shape Task 1's case
+ * { discovery: { tagline } } : {})`), exactly the shape Task 1's case
  * #10 found on `discoverable`: delete the server's guard and the whole UI path
  * stays green. The scripted PATCH is the only witness the server guard has, and
  * the pinned request BODY below is the evidence that it is not redundant.
@@ -77,7 +77,6 @@ const L = {
   name: ui("compset.name"),
   ends: ui("compset.ends"),
   tagline: ui("compset.tagline"),
-  hero: ui("compset.heroUrl"),
   pro: ui("compset.pro"),
   save: ui("compset.save"),
   saved: ui("compset.saved"),
@@ -459,7 +458,7 @@ test("case #4: over quota freezes the OLDER competition — the form says read-o
   }
 });
 
-test("discovery.branding: the tagline and hero go disabled, the client then stops sending them, and a scripted PATCH that does send one is 402ed", async ({
+test("discovery.branding: the tagline goes disabled, the client then stops sending them, and a scripted PATCH that does send one is 402ed", async ({
   page,
   request,
 }) => {
@@ -469,11 +468,12 @@ test("discovery.branding: the tagline and hero go disabled, the client then stop
     await setFlag(request, org.orgId, "discovery.branding", false);
 
     await page.goto(routes.competitionSettings(org.slug, comp.slug));
-    // Settings C8 (owner 2026-11-11): the tagline and hero live on the Branding
+    // Settings C8 (owner 2026-11-11): the tagline lives on the Branding
     // tab, always mounted — no showcase precondition any more.
     await page.getByRole("tab", { name: L.tabBranding, exact: true }).click();
     await expect(field(page, L.tagline)).toBeDisabled({ timeout: READ_MS });
-    await expect(field(page, L.hero)).toBeDisabled();
+    // The hero image field is gone from the form (owner 2026-11-11): the stored value is never edited or sent here.
+    await expect(page.getByTestId("compset-branding").locator('input[type="url"]')).toHaveCount(0);
     // The organiser is told WHY, in the label rather than only by the greyed
     // control. Scoped to the tagline's own <label> because "(Pro)" appears
     // more than once on this page.
@@ -483,7 +483,7 @@ test("discovery.branding: the tagline and hero go disabled, the client then stop
 
     // WHY THE SCRIPTED PATCH BELOW IS NOT REDUNDANT, pinned rather than
     // asserted about. `save()` sends `discovery` only as
-    // `...(discoveryBranding ? { discovery: { tagline, hero_image_path } } : {})`,
+    // `...(discoveryBranding ? { discovery: { tagline } } : {})`,
     // so with the key off the browser never mentions either field — delete
     // `requireFeature("discovery.branding")` from `patchCompetition` and every
     // UI assertion above still passes. This is Task 1's case #10 shape on a
