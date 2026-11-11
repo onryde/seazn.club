@@ -39,15 +39,16 @@ export async function playerAccountsSuite(admin: Session, orgId: string): Promis
   });
   const personId = v1data<{ id: string }>(pa).id;
   const unclaimedId = v1data<{ id: string }>(pb).id;
+  // Team-kind entrants of one person each: singles (individual vs individual) deliberately show no roster block.
   await v1(admin, `/api/v1/divisions/${divData.id}/entrants`, "POST", [
     {
-      kind: "individual",
+      kind: "team",
       display_name: "Pat",
       seed: 1,
       members: [{ person_id: personId }],
     },
     {
-      kind: "individual",
+      kind: "team",
       display_name: "Uma",
       seed: 2,
       members: [{ person_id: unclaimedId }],

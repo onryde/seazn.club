@@ -168,7 +168,7 @@ const titled = hubDoc({
     }),
     knockoutView("vacant", "sunday-league", [koRound("main-1", "Final", ["v-f"])], {
       championFixtureId: "v-f",
-      title: { kind: "vacant", finalists: ["gil", "hal"] },
+      title: { kind: "vacant" },
       drawable: false,
     }),
   ],
