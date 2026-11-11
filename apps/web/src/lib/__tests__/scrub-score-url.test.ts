@@ -548,3 +548,34 @@ describe("a Sentry log (beforeSendLog)", () => {
     expect(out.attributes["sentry.origin"]).toBe("auto.console.logging");
   });
 });
+
+// C43: a match-room JWT is random base64url, and one that happens to contain `dl_` + 32 more url-safe characters inside a
+// segment was half-eaten by the device-link rule (`dl_[token]`) BEFORE the room-token rule ran; the `[` then broke the JWT
+// shape, so the rest of the token reached telemetry. A real leak, ~1 token in 1,500. The shape is pinned here, not drawn at random.
+describe("a match-room token that contains a device-link-shaped run is still scrubbed whole (C43)", () => {
+  const RUN = `dl_${"A1b2C3d4".repeat(5)}`; // dl_ + 40 url-safe characters: BARE_TOKEN's shape
+  const HEADER = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
+  const SIGNATURE = "x".repeat(20) + "SigPart-_9".repeat(2) + "abc";
+  const placements: Record<string, string> = {
+    "run in the payload": `${HEADER}.PayloadStart${RUN}End1234.${SIGNATURE}`,
+    "run in the signature": `${HEADER}.PayloadSegmentLongEnough.${RUN}Z9`,
+    "run in the header": `${HEADER}${RUN}.PayloadSegmentLongEnough.${SIGNATURE}`,
+  };
+  it("sweeps every placement at depth 0, 1 and 2, either hex case, and each case checks something", () => {
+    let checked = 0;
+    for (const [name, token] of Object.entries(placements)) {
+      expect(token, `premise (${name}): the token carries a device-link-shaped run`).toMatch(/dl_[A-Za-z0-9_-]{32,}/);
+      const depth0 = `https://seazn.club/live/o/c/d/fixtures/f/play?t=${token}`;
+      const depth1 = `/api/auth/lichess?org=o&next=${encodeURIComponent("/live/o/c/d/fixtures/f/play?t=" + token)}`;
+      const depth2 = `/login?next=${encodeURIComponent(depth1)}`;
+      for (const url of [depth0, depth1, depth2, depth1.replace(/%3F/g, "%3f").replace(/%3D/g, "%3d")]) {
+        const out = scrubScoreUrl(url);
+        expect(out, `${name}: no part of the token survives`).not.toContain(RUN);
+        expect(out, `${name}: no token segment survives`).not.toContain("PayloadSegmentLongEnough");
+        expect(out, `${name}: the token is replaced whole`).toMatch(/t(?:=|%3[Dd]|%253[Dd])\[token\]/);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: the sweep ran every placement at every depth").toBe(Object.keys(placements).length * 4);
+  });
+});
