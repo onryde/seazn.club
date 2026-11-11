@@ -841,9 +841,11 @@ export async function streamMonthlyRateByPlan(planKeys: readonly string[]): Prom
  *  'pro' — so a pass key here is a corrupt subscription row. It grants nothing monthly and is REPORTED, rather than
  *  refused: this read sits on the go-live path (usecases/stream-sessions/apply.ts `apply`), and going live must never hinge on the
  *  month's bookkeeping (M6). */
-export async function streamMonthlyRate(orgId: string): Promise<number> {
+export async function streamMonthlyRate(orgId: string, opts: { quiet?: boolean } = {}): Promise<number> {
   const plan = await orgPlanKey(orgId);
   if (isPassKey(plan)) {
+    // `quiet`: the Settings rail's display projection asks too, on every render; the writer paths report, it must not.
+    if (opts.quiet) return 0;
     log.error({ orgId, plan }, "stream credits: the org's subscription resolves to an Event Pass key; no monthly grant");
     captureError(new Error(`subscription plan_key is the pass key ${plan}`), { orgId, route: "relay.credits.monthly_rate_pass_plan" });
     return 0;
@@ -964,10 +966,10 @@ export function planMonthlyRoll(so: { hasBase: boolean; granted: number }, split
 
 /** READ-ONLY: the signed change to an org's TOTAL the rollover would make now (a new period: grant − expired leftover;
  *  a top-up: +topUp; nothing owed: 0). Writes nothing and takes no lock — a display figure for the Settings rail. */
-export async function projectMonthlyRollDelta(exec: Executor, orgId: string, rate: number, now: Date = new Date()): Promise<number> {
+export async function projectMonthlyRollDelta(exec: Executor, orgId: string, rate: number, split: StreamCreditBreakdown, now: Date = new Date()): Promise<number> {
   assertMonthlyRate(rate);
   const so = await monthlyGrantedThisPeriod(exec, orgId, streamMonthlyPeriod(now));
-  const plan = planMonthlyRoll(so, await creditBreakdown(exec, orgId), rate);
+  const plan = planMonthlyRoll(so, split, rate);
   if (plan.kind === "none") return 0;
   if (plan.kind === "topUp") return plan.topUp;
   return plan.grant - plan.expire;

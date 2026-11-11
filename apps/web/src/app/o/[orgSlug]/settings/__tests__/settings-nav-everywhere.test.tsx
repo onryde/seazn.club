@@ -264,7 +264,7 @@ describe("route-owning Settings pages mount the sidebar", () => {
 
 describe("navContext", () => {
   it("returns the plan label and the Streaming tab's projected balance — never the AI wallet's", async () => {
-    expect(37, "differential: the AI wallet's 37 is not the streaming balance").not.toBe(12);
+    expect(await balance(), "differential: the AI wallet's balance is not the streaming balance").not.toBe(12);
     expect(await navContext("org-1")).toEqual({ plan: "Pro", streamCredits: 12 });
     expect(projectedStreamCreditsTotal).toHaveBeenCalledWith("org-1");
     // a second call over a number that moved answers the new number (no memo)

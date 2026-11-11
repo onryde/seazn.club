@@ -189,7 +189,7 @@ describe("Settings → Credits: which side", () => {
 });
 
 describe("Settings → Credits: the rail's streaming balance", () => {
-  it("the rail's streaming balance is the number the Streaming side shows — on a month's first visit, whichever read runs first (P9)", async () => {
+  it("the rail renders the projection stub's number (ledger + pending grant), which is the total the stubbed Streaming tab then reports — on a month's first visit (P9)", async () => {
     // A month's first visit: the ledger holds 9 bought credits and none of this month's free ones until the Streaming
     // side's read grants them. The rail projects that grant WITHOUT writing it, so it equals the tab either way.
     ledger.monthly = 0;

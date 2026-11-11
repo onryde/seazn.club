@@ -60,9 +60,15 @@ export function streamCreditsOffer(f: { entitled: boolean; relayEntitled: boolea
  *  tab's on the first visit of a month. Offer not "on" ⇒ the tab never grants ⇒ no projection. Throws like its reads;
  *  the caller is best-effort. */
 export async function projectedStreamCreditsTotal(orgId: string, now: Date = new Date()): Promise<number> {
-  const { total } = await creditBreakdown(sql, orgId);
-  if (streamCreditsOffer(await relayOffer(orgId)) !== "on") return total;
-  return total + (await projectMonthlyRollDelta(sql, orgId, await streamMonthlyRate(orgId), now));
+  const split = await creditBreakdown(sql, orgId);
+  if (streamCreditsOffer(await relayOffer(orgId)) !== "on") return split.total;
+  // As `relayCredits` does when its grant fails (a corrupt ledger's `ledger_negative`, a lock or plan read): answer the
+  // ungranted total rather than lose the rail. The projection is display-only, so it is not reported either.
+  try {
+    return split.total + (await projectMonthlyRollDelta(sql, orgId, await streamMonthlyRate(orgId, { quiet: true }), split, now));
+  } catch {
+    return split.total;
+  }
 }
 
 export async function getStreamCreditsTab(

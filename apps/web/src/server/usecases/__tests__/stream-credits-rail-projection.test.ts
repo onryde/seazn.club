@@ -4,12 +4,14 @@
 //
 // Mutant table:
 //   P1 offer guard   drop the `!== "on"` early return in projectedStreamCreditsTotal   → "a plan that does not stream"
+//   P3 top-up        project `rate` instead of `rate - granted` (planMonthlyRoll topUp)  → "a mid-month upgrade"
 //   P2 expiry        project `plan.grant` instead of `grant - expire`                  → "last month's unused free credits expire"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { streamRig } from "@/server/relay/__tests__/_session-rig";
-import { streamMonthlyGrantKey, streamMonthlyPeriod } from "@/server/usecases/stream-credits";
+import { streamMonthlyGrantKey, streamMonthlyPeriod, streamMonthlyRate } from "@/server/usecases/stream-credits";
 
 const { relayOfferMock } = vi.hoisted(() => ({
   relayOfferMock: vi.fn<(orgId: string) => Promise<{ entitled: boolean; relayEntitled: boolean; relayDisabled: boolean; composedAvailable: boolean }>>(),
@@ -75,5 +77,31 @@ describe.skipIf(!HAS_DB)("rail projection equals the Streaming tab", () => {
     expect(projected).toBe(tab.total);
     expect(tab.total, "the leftover really expired: the total is this month's grant alone").toBe(tab.freeAllowance);
     expect(projected).not.toBe(tab.freeAllowance + leftover);
+  });
+
+  it("(f) a mid-month upgrade: the base grant is below the plan's rate, the projection is the top-up (rate - granted), equal to the tab after", async () => {
+    const r = await streamRig();
+    await setOrgPlan(r.orgId, "pro");   // the upgrade: community's rate is 1, so a base grant below it cannot exist
+    const rate = await streamMonthlyRate(r.orgId);
+    expect(rate, "a top-up needs a rate of at least 2 (a base grant below it)").toBeGreaterThanOrEqual(2);
+    const granted = rate - 1;
+    await sql`
+      insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, idempotency_key)
+      values (${r.orgId}, ${granted}, 'grant', 'monthly', ${granted}, ${streamMonthlyGrantKey(r.orgId, streamMonthlyPeriod(new Date()))})`;
+    const before = await ledgerRows(r.orgId);
+    const projected = await projectedStreamCreditsTotal(r.orgId);
+    expect(await ledgerRows(r.orgId)).toBe(before);
+    expect(projected, "the top-up is owed, so the projection is above the bare ledger").toBe(granted + 1);
+    const tab = await getStreamCreditsTab(auth(r.orgId), r.orgId);
+    expect(projected).toBe(tab.total);
+    expect(tab.total).toBe(rate);
+  });
+
+  it("(g) a negative ledger: the rail answers the plain total instead of throwing", async () => {
+    const r = await streamRig();
+    await sql`
+      insert into org_stream_credits (org_id, delta, reason, bucket, balance_after)
+      values (${r.orgId}, -1, 'consume', 'monthly', 0)`;
+    expect(await projectedStreamCreditsTotal(r.orgId)).toBe(-1);
   });
 });
