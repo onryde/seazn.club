@@ -10,9 +10,9 @@
 // than branching on a status the picker does not have, and names only what
 // publishing a public competition does: the org page (`listOrgHomeCompetitions`)
 // and search engines (`linkOnlyRobots`). Read from the REAL catalogs.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { renderIsland } from "@/components/__tests__/_hook-harness";
-import { VisibilityPicker } from "../visibility-picker";
+import { VisibilitySegmented } from "../visibility-segmented";
 import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import uiEn from "@/dictionaries/en/ui.json";
@@ -20,14 +20,12 @@ import uiEs from "@/dictionaries/es/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
 import uiNl from "@/dictionaries/nl/ui.json";
 
-vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => async () => true }));
-
 const KEY = "visibility.public.consequence";
 const OLD_EN = "Anyone can find it — Google, and the Seazn discover page.";
 const copy = (d: unknown) => t(d as Dict, KEY);
 const EN = copy(uiEn);
 
-describe("VisibilityPicker — the Public card tells the truth for a draft and a published competition", () => {
+describe("Visibility — the Public consequence tells the truth for a draft and a published competition", () => {
   it("premise: the key resolves in English (t() returns the key on a miss)", () => {
     expect(EN).not.toBe(KEY);
   });
@@ -56,15 +54,13 @@ describe("VisibilityPicker — the Public card tells the truth for a draft and a
     }
   });
 
-  it("is the sentence the picker renders under Public", () => {
-    // The share-link effect reads `window.location.origin`; vitest runs in node.
-    vi.stubGlobal("window", { location: { origin: "https://seazn.test" } });
-    try {
-      const island = renderIsland(VisibilityPicker, { value: "public", onChange: () => {} });
-      expect(island.text()).toContain(EN);
-    } finally {
-      vi.unstubAllGlobals();
-    }
+  it("is the sentence the segmented control renders under Public", () => {
+    // Settings C8 (owner 2026-11-11): the radio-card picker was retired; competition settings and the New competition
+    // form both render the segmented control, which prints the selected option's consequence under it.
+    const island = renderIsland(VisibilitySegmented, { value: "public", onChange: () => {}, capped: false });
+    expect(island.text()).toContain(EN);
+    // The positive pair: another option prints its own sentence, not this one.
+    expect(renderIsland(VisibilitySegmented, { value: "unlisted", onChange: () => {}, capped: false }).text()).not.toContain(EN);
   });
 });
 
