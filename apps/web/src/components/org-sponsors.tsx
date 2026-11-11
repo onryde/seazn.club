@@ -497,11 +497,14 @@ export function OrgSponsors({
   const [editingId, setEditingId] = useState<string | null>(editParamId);
   const [edit, setEdit] = useState<Draft>(draftOf(initialSponsors.find((s) => s.id === editParamId)));
   // The poster has its own draft (the logo's stays a name, a link and a logo). `posterSeq` numbers the picks: a measuring that finishes
-  // after a newer pick, after Remove, or after the editor moved to another sponsor is stale and is dropped (`pickPoster`).
+  // after a newer pick or after Remove is stale and is dropped (`pickPoster`). `posterOwner` is the sponsor the editor is open for (the
+  // URL's `?edit=` answer): a pick that was started for one sponsor never lands in another's draft. It is a ref read AFTER the measuring,
+  // set by an effect, so a pick made the moment the page hydrates is not mistaken for a stale one (a counter bumped on mount ate it).
   const [poster, setPoster] = useState<PosterDraft>(posterDraftOf(initialSponsors.find((s) => s.id === editParamId)));
   const posterSeq = useRef(0);
+  const posterOwner = useRef(editParamId);
   useEffect(() => {
-    posterSeq.current += 1;
+    posterOwner.current = editParamId;
   }, [editParamId]);
   const [seenEditParamId, setSeenEditParamId] = useState(editParamId);
   /** The row whose ⋯ is open below md (one at a time). */
@@ -628,8 +631,9 @@ export function OrgSponsors({
     }
     setError(null);
     const seq = ++posterSeq.current;
+    const owner = posterOwner.current;
     const crop = await measurePoster(file);
-    if (seq !== posterSeq.current) return;
+    if (seq !== posterSeq.current || owner !== posterOwner.current) return;
     setPoster({ file, preview: URL.createObjectURL(file), removed: false, crop });
   }
 

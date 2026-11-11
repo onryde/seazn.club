@@ -697,7 +697,8 @@ describe("Show on site again (now on the sponsor's page, Task 15): a hidden spon
 //   P2  gate     pass `poster` to the editor whatever `hasTiers` says                                         -> "DENIED and GRANTED"
 //   P3  size     drop the `file.size > MAX_LOGO_BYTES` check in `pickPoster`                                  -> "one more is refused"
 //   P4  stale    drop the pick-sequence check after the measuring `await`                                     -> "a slow pick that lands after"
-//   P4b stale    drop the effect that numbers the pick again when the editor moves to another sponsor         -> "a slow pick that lands after"
+//   P4b owner    drop the effect that follows the sponsor the editor is open for                              -> "a slow pick that lands after"
+//   P4d owner    drop the owner comparison after the measuring `await`                                        -> "a slow pick that lands after"
 //   P5  crop     draw the crop warning whatever `crop.warn` says                                              -> "crop: warn true shows"
 //   P6  reset    `startEdit` keeps the poster draft of the last editor                                        -> "an abandoned pick is not carried"
 const POSTER_NONE: PosterDraft = { file: null, preview: null, removed: false, crop: null };
