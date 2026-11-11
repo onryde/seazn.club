@@ -131,6 +131,30 @@ async function mintOrTranslate(
   }
 }
 
+/** One Checkout line item per entry. Its narrow return type is assignable to Stripe's `LineItem` (checked by `satisfies` below) and
+ *  promises what Stripe's own type leaves optional - a quantity, a unit amount and a name on every line - so a reader that shows
+ *  what Checkout will charge (the player payment page, `./pay-page.ts`) reads the SAME lines without an "absent" branch. */
+export interface RegistrationLineItem {
+  quantity: number;
+  price_data: { currency: string; unit_amount: number; product_data: { name: string } };
+}
+
+/** The line items `createRegistrationCheckout` sends Stripe for `entries`: the single source of what a registration's Checkout
+ *  charges. Pure; the player payment page renders its amount from this, never from `amount_cents` read separately. */
+export function registrationLineItems(
+  entries: Pick<RegistrationWithGroupRow, "amount_cents" | "currency" | "display_name">[],
+  compName: string,
+): RegistrationLineItem[] {
+  return entries.map((reg) => ({
+    quantity: 1,
+    price_data: {
+      currency: reg.currency,
+      unit_amount: reg.amount_cents,
+      product_data: { name: `${compName} — entry fee (${reg.display_name})` },
+    },
+  })) satisfies Stripe.Checkout.SessionCreateParams.LineItem[];
+}
+
 /**
  * ONE Stripe checkout session for a SET of a cart's entries (RS003 W3a,
  * owner ruling 1) — not necessarily the whole cart: a waitlist promotion
@@ -257,14 +281,7 @@ export async function createRegistrationCheckout(
       fee_percent: String(feePercent),
       destination_account: destination,
     },
-    line_items: entries.map((reg) => ({
-      quantity: 1,
-      price_data: {
-        currency: reg.currency,
-        unit_amount: reg.amount_cents,
-        product_data: { name: `${ctx.comp_name} — entry fee (${reg.display_name})` },
-      },
-    })),
+    line_items: registrationLineItems(entries, ctx.comp_name),
     payment_intent_data: {
       application_fee_amount: applicationFeeCents(subtotal, feePercent),
       transfer_data: { destination },
