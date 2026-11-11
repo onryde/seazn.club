@@ -110,7 +110,18 @@ test("tabs: the hub opens on Overview and each tab opens its own panel, in the d
   await expect(legend, "the tier legend is under the price list").toBeAttached();
   await openLegendFold(page);
   await expect(legend, "the tier legend is under the price list").toBeVisible();
-  await expect(legend, "headed 'What each tier gets'").toContainText(UI["sponsors.pkg.legend.heading"] ?? "");
+  // The heading lives in the fold's own toggle row now (it is the summary: the section has no heading of its own), and the section is
+  // NAMED by it: `aria-labelledby` must point at an element whose text is the heading. Read from the dictionary, never typed: a missing
+  // key is a loud failure here, not an empty string that every `toContainText` accepts.
+  const heading = UI["sponsors.pkg.legend.heading"];
+  if (heading === undefined || heading === "") throw new Error("en/ui.json has no sponsors.pkg.legend.heading");
+  await expect(
+    page.getByTestId("tier-legend-fold").locator('[data-role="phone-disclosure-toggle"]'),
+    "headed 'What each tier gets': the fold's toggle carries the heading",
+  ).toContainText(heading);
+  const labelledBy = await legend.getAttribute("aria-labelledby");
+  expect(labelledBy, "the legend section is named by an element").toBeTruthy();
+  await expect(page.locator(`[id="${labelledBy}"]`), "...and that element's text is the heading").toHaveText(heading);
   const legendRows = page.getByTestId("tier-legend-row");
   await expect(legendRows, "one row per tier").toHaveCount(4);
   expect(await legendRows.evaluateAll((els) => els.map((el) => el.getAttribute("data-tier"))), "highest tier first").toEqual(["title", "gold", "silver", "partner"]);
