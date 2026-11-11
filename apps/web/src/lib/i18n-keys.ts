@@ -7941,6 +7941,7 @@ export type DictionaryKey =
   | "sponsors.hub.tabsLabel"
   | "sponsors.line"
   | "sponsors.list.more"
+  | "sponsors.logoHint"
   | "sponsors.logoLabel"
   | "sponsors.lostBadge"
   | "sponsors.onStream.break.after_goal"

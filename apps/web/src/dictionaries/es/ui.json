@@ -459,6 +459,7 @@
   "sponsors.form.title": "Añadir un patrocinador",
   "sponsors.form.hint": "Nombre, logo y enlace. Añade un acuerdo después para fijar su nivel y dónde aparece.",
   "sponsors.logoLabel": "Logo",
+  "sponsors.logoHint": "{formats}, hasta {mb} MB. Un logotipo cuadrado con fondo transparente funciona mejor.",
   "sponsors.empty": "Aún no hay patrocinadores. Aparecerán en tus páginas públicas en cuanto añadas uno.",
   "sponsors.edit": "Editar {name}",
   "sponsors.open": "Abrir {name}",

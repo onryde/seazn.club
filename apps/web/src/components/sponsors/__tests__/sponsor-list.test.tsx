@@ -1091,10 +1091,11 @@ describe("the new copy exists in all four locales, with its placeholders intact"
     ["sponsors.deal.markPaid.body", []],
     ["sponsors.list.more", ["name"]],
     ["sponsors.form.hint", []],
+    ["sponsors.logoHint", ["formats", "mb"]],
   ];
   const DICTS: Record<string, Record<string, string>> = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl };
 
-  it("every key is a non-empty string in en / es / fr / nl and names the same {placeholders} in each (17 keys x 4 locales)", () => {
+  it("every key is a non-empty string in en / es / fr / nl and names the same {placeholders} in each (18 keys x 4 locales)", () => {
     expect(LOCALES.length, "premise: four locales").toBe(4);
     let checked = 0;
     for (const [key, vars] of KEYS) {
@@ -1106,7 +1107,7 @@ describe("the new copy exists in all four locales, with its placeholders intact"
         checked++;
       }
     }
-    expect(checked).toBe(68);
+    expect(checked).toBe(72);
   });
 
   it("'deal' is the word in English: no 'order' sneaks into the new strings", () => {

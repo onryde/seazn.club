@@ -459,6 +459,7 @@
   "sponsors.form.title": "Sponsor toevoegen",
   "sponsors.form.hint": "Naam, logo en link. Voeg daarna een deal toe om hun niveau en waar ze getoond worden vast te leggen.",
   "sponsors.logoLabel": "Logo",
+  "sponsors.logoHint": "{formats}, tot {mb} MB. Een vierkant logo met een transparante achtergrond werkt het best.",
   "sponsors.empty": "Nog geen sponsors. Ze verschijnen op je openbare pagina's zodra je er een toevoegt.",
   "sponsors.edit": "{name} bewerken",
   "sponsors.open": "{name} openen",

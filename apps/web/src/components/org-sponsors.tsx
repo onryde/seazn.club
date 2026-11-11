@@ -10,7 +10,7 @@
 // page shows them read-only. The API still takes both on a PATCH. Tiers above
 // partner and per-competition scoping are Pro (`sponsors.tiers`); without it the
 // manager is the free un-tiered strip with an upsell note.
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import Link from "@/components/ui/console-link";
 import { ImagePlus } from "lucide-react";
 import { useViewerTz } from "@/components/client-time";
@@ -27,6 +27,7 @@ import {
 import { createDealWrite, sponsorSaveErrorKey } from "@/components/sponsors/save-error";
 import type { SponsorWrite } from "@/components/sponsors/save-error";
 import { ApiV1Error } from "@/lib/client-v1";
+import { intlLocaleFor } from "@/lib/public-date-locale";
 import type { DealAction, SponsorDeal } from "@/lib/sponsor-deals";
 import type { ReportLinkDefaults, ReportLinkSummary } from "@/lib/sponsor-report";
 import { sponsorHref, sponsorsHref } from "@/lib/sponsors-hub";
@@ -34,6 +35,14 @@ import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
 import type { SponsorPackageRow } from "@/server/usecases/sponsors";
 
 const MAX_LOGO_BYTES = 2 * 1024 * 1024;
+/** What the logo picker takes: the file input's `accept` and the hint under the tile are both read from this one list, so the hint
+ *  cannot name a format the picker does not offer (owner, 2026-11-11: "are there will be any particular format of image to be?"). */
+const LOGO_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
+const LOGO_ACCEPT = LOGO_TYPES.join(",");
+/** Each accepted type as people say it. A `Record` over the list: a type added to it without a name is a type error. */
+const LOGO_FORMAT_NAME: Record<(typeof LOGO_TYPES)[number], string> = { "image/png": "PNG", "image/jpeg": "JPG", "image/webp": "WebP" };
+/** The cap in the unit the hint says. The same constant `pickLogo` enforces, so the number in the hint is the number that refuses. */
+const LOGO_MAX_MB = MAX_LOGO_BYTES / (1024 * 1024);
 
 /** The tier list's one authority is lib/sponsor-tiers.ts; re-exported for the console's own importers. */
 export { SPONSOR_TIERS, type SponsorTier };
@@ -207,9 +216,16 @@ export function SponsorForm({
   compact?: boolean;
 }) {
   const msg = useMsg();
+  const locale = useLocaleOrDefault();
   // House uploader pattern (org-logo, prose-editor): a real button clicks a
   // ref'd hidden input — label-wrapped file inputs misfire in some browsers.
   const fileRef = useRef<HTMLInputElement>(null);
+  const hintId = useId();
+  // The formats are written the way the page's language writes a list ("PNG, JPG or WebP" / "PNG, JPG ou WebP"): `intlLocaleFor` keeps
+  // English on en-GB, whose list has no serial comma (the owner's sentence), where bare "en" would add one.
+  const formats = new Intl.ListFormat(intlLocaleFor(locale), { style: "long", type: "disjunction" }).format(
+    LOGO_ACCEPT.split(",").map((type) => LOGO_FORMAT_NAME[type as (typeof LOGO_TYPES)[number]]),
+  );
   const urlInvalid = value.url.trim() !== "" && !isValidSponsorUrl(value.url);
   return (
       <div className="flex flex-wrap items-start gap-4">
@@ -218,22 +234,21 @@ export function SponsorForm({
           onClick={() => fileRef.current?.click()}
           className="group grid h-20 w-20 shrink-0 cursor-pointer place-items-center overflow-hidden rounded-xl border border-dashed border-slate-300 bg-white text-slate-400 hover:border-purple-400 hover:text-purple-600"
           aria-label={msg("sponsors.logoLabel")}
+          aria-describedby={hintId}
         >
           {value.preview ? (
             // Preview is an object URL for a picked file or the stored CDN URL.
             // eslint-disable-next-line @next/next/no-img-element
             <img src={value.preview} alt="" className="h-full w-full object-contain p-1.5" />
           ) : (
-            <span className="grid place-items-center gap-1 text-center">
-              <ImagePlus className="mx-auto h-5 w-5" strokeWidth={1.75} />
-              <span className="px-1 text-[10px] leading-tight">{msg("sponsors.logoLabel")}</span>
-            </span>
+            // An icon, no word: the button's name is its aria-label, and what it takes is the hint beside it (owner, 2026-11-11).
+            <ImagePlus className="h-6 w-6" strokeWidth={1.75} aria-hidden="true" />
           )}
         </button>
         <input
           ref={fileRef}
           type="file"
-          accept="image/png,image/jpeg,image/webp"
+          accept={LOGO_ACCEPT}
           className="hidden"
           onChange={(e) => {
             const f = e.target.files?.[0];
@@ -242,6 +257,10 @@ export function SponsorForm({
           }}
         />
         <div className={compact ? "w-full min-w-0" : "min-w-0 flex-1"}>
+          {/* What the tile takes, beside it - never typed twice: the formats are the input's `accept`, the size is the cap `pickLogo` refuses at. */}
+          <p id={hintId} className="mb-3 text-xs text-slate-500">
+            {msg("sponsors.logoHint", { formats, mb: LOGO_MAX_MB })}
+          </p>
           {/* Name and link side by side from sm; a single stack on mobile (and always, when compact). */}
           <div className={`grid gap-3 ${compact ? "" : "sm:grid-cols-2"}`}>
             <label className="block">

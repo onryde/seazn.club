@@ -459,6 +459,7 @@
   "sponsors.form.title": "Ajouter un sponsor",
   "sponsors.form.hint": "Nom, logo et lien. Ajoutez ensuite un accord pour définir son niveau et où il apparaît.",
   "sponsors.logoLabel": "Logo",
+  "sponsors.logoHint": "{formats}, jusqu'à {mb} Mo. Un logo carré sur fond transparent donne le meilleur résultat.",
   "sponsors.empty": "Aucun sponsor pour l'instant. Ils apparaîtront sur vos pages publiques dès que vous en ajouterez un.",
   "sponsors.edit": "Modifier {name}",
   "sponsors.open": "Ouvrir {name}",

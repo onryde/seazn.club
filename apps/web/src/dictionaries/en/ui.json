@@ -459,6 +459,7 @@
   "sponsors.form.title": "Add a sponsor",
   "sponsors.form.hint": "Name, logo and link. Add a deal afterwards to set their tier and where they show.",
   "sponsors.logoLabel": "Logo",
+  "sponsors.logoHint": "{formats}, up to {mb} MB. A square logo on a transparent background works best.",
   "sponsors.empty": "No sponsors yet. They'll appear on your public pages as soon as you add one.",
   "sponsors.edit": "Edit {name}",
   "sponsors.open": "Open {name}",

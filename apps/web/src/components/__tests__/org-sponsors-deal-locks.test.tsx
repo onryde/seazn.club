@@ -34,6 +34,7 @@ vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMo
 
 import { OrgSponsors, SPONSOR_TIERS, SponsorForm, type SponsorItem, type SponsorsHubData } from "@/components/org-sponsors";
 import { TIER_MSG } from "@/components/sponsors/tier-labels";
+import { DictProvider } from "@/components/i18n/dict-provider";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { expandSponsorTree } from "@/components/sponsors/__tests__/_sponsor-tree";
 import type { PaymentStatus, SponsorDeal } from "@/lib/sponsor-deals";
@@ -41,6 +42,9 @@ import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
 import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
 
 const en = uiEn as unknown as Dict;
 const msg = (key: MessageKey, vars?: Record<string, string | number>) => t(en, key, vars);
@@ -85,6 +89,9 @@ function formMarkup(over: Record<string, unknown> = {}): string {
     <SponsorForm value={DRAFT} onChange={() => {}} onSubmit={() => {}} submitLabel="Save" busy={false} onPickLogo={() => {}} {...over} />,
   );
 }
+const formMarkupEl = () => (
+  <SponsorForm value={DRAFT} onChange={() => {}} onSubmit={() => {}} submitLabel="Save" busy={false} onPickLogo={() => {}} />
+);
 const isDisabled = (tag: string) => /\sdisabled(=|\s|>)/.test(tag);
 
 /** Every word the old tier / competition controls drew: the two labels, the "all competitions" option, each tier's name and the
@@ -114,6 +121,121 @@ describe("the form: a name, a link and a logo - no tier or competition control (
     expect(inputs, "name and link").toHaveLength(2);
     for (const tag of inputs) expect(isDisabled(tag), tag).toBe(false);
     expect(isDisabled(/<button\b[^>]*>(?:(?!<\/button>)[\s\S])*Save<\/button>/.exec(html)![0].match(/^<button\b[^>]*>/)![0])).toBe(false);
+  });
+});
+
+// --- the logo tile (owner, 2026-11-11, stg: "are there will be any particular format of image to be ? remove logo word in that imge upload?") ---
+// The tile is an icon: no "Logo" word inside the dashed box (its accessible name stays), and ONE hint beside it says what it takes. The
+// words are the owner-approved sentence; the format list and the size are the picker's own (the `accept` it offers, the cap `pickLogo`
+// enforces), so the hint cannot say something the picker does not do.
+//
+// Killers (one at a time, restore from a cp backup):
+//   G1  the word        draw `msg("sponsors.logoLabel")` inside the tile again                       -> "no visible Logo word"
+//   G2  the name        drop the tile's `aria-label`                                                 -> "the tile keeps its accessible name"
+//   G3  the link        drop `aria-describedby` from the tile                                        -> "the tile is described by the hint"
+//   G4  the formats     type the format list into the hint ("PNG or JPG")                            -> "the hint names every format the picker accepts"
+//   G5  the size        type "2" into the hint instead of the cap                                    -> "the cap the hint names is the cap the picker enforces"
+//   G6  the cap         MAX_LOGO_BYTES = 5 * 1024 * 1024                                              -> "the cap the hint names ..." and the 2 MB sentence
+//   G7  the locale      format the list with a fixed "en"                                            -> "the list is in the page's language"
+const LOGO_TYPE_NAME: Record<string, string> = { "image/png": "PNG", "image/jpeg": "JPG", "image/webp": "WebP" };
+const LOGO_HINT_EN = "PNG, JPG or WebP, up to 2 MB. A square logo on a transparent background works best.";
+/** Visible text of a markup string: tags gone, the two entities React writes for ' and & read back. */
+const stripTags = (h: string) => h.replace(/<[^>]*>/g, "").replace(/&#x27;/g, "'").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
+/** The picker's tile: the one button in the form that carries the logo label. */
+const tileIn = (html: string) => [...html.matchAll(/<button\b[^>]*\baria-label="Logo"[^>]*>([\s\S]*?)<\/button>/g)];
+const attr = (tag: string, name: string) => new RegExp(`\\s${name}="([^"]*)"`).exec(tag)?.[1] ?? null;
+
+describe("the logo tile: an icon with an accessible name, and one hint that says what it takes (owner, 2026-11-11)", () => {
+  it("the tile shows no visible Logo word - an icon only - and keeps its accessible name (empty and with a picked preview)", () => {
+    let checked = 0;
+    for (const html of [formMarkup(), formMarkup({ compact: true }), formMarkup({ value: { ...DRAFT, preview: "blob:picked" } })]) {
+      const tiles = tileIn(html);
+      expect(tiles.length, "exactly one tile").toBe(1);
+      const tag = /<button\b[^>]*\baria-label="Logo"[^>]*>/.exec(html)![0];
+      expect(attr(tag, "aria-label"), "the tile keeps its accessible name").toBe(msg("sponsors.logoLabel"));
+      expect(msg("sponsors.logoLabel"), "premise: that name is the word the owner asked to see go").toBe("Logo");
+      expect(stripTags(tiles[0]![1]!), "no visible word inside the dashed box").toBe("");
+      checked++;
+    }
+    expect(checked, "empty, compact and previewed").toBe(3);
+    // the pair: the empty tile draws the icon, a previewed one draws the picture
+    expect(tileIn(formMarkup())[0]![1]).toContain("<svg");
+    expect(tileIn(formMarkup({ value: { ...DRAFT, preview: "blob:picked" } }))[0]![1]).toContain("<img");
+  });
+
+  it("one hint says what the picker takes, in the owner's words, and the tile is described by it", () => {
+    let checked = 0;
+    for (const html of [formMarkup(), formMarkup({ compact: true })]) {
+      expect(flat(stripTags(html)), "the hint").toContain(LOGO_HINT_EN);
+      const hints = [...html.matchAll(/<p\b[^>]*>([^<]*)<\/p>/g)].filter((m) => flat(m[1]!) === LOGO_HINT_EN);
+      expect(hints.length, "exactly one hint").toBe(1);
+      const id = attr(hints[0]![0], "id");
+      expect(id, "the hint has an id").toBeTruthy();
+      const tag = /<button\b[^>]*\baria-label="Logo"[^>]*>/.exec(html)![0];
+      expect(attr(tag, "aria-describedby"), "the tile is described by the hint").toBe(id);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // two forms on one page (add + edit) must not share an id
+    const a = attr(/<p\b[^>]*>PNG/.exec(formMarkup())![0], "id");
+    const both = renderToStaticMarkup(<>{formMarkupEl()}{formMarkupEl()}</>);
+    const ids = [...both.matchAll(/<p\b([^>]*)>PNG/g)].map((m) => attr(`<p${m[1]}>`, "id"));
+    expect(a).toBeTruthy();
+    expect(ids.length).toBe(2);
+    expect(new Set(ids).size, "each form's hint has its own id").toBe(2);
+  });
+
+  it("the hint names every format the picker accepts - the file input's own `accept` - and no other", () => {
+    const html = formMarkup();
+    const input = /<input\b[^>]*type="file"[^>]*>/.exec(html)![0];
+    const accepted = (attr(input, "accept") ?? "").split(",");
+    expect(accepted, "the picker still takes PNG, JPG and WebP").toEqual(["image/png", "image/jpeg", "image/webp"]);
+    const names = accepted.map((type) => LOGO_TYPE_NAME[type]);
+    expect(names.every((n) => typeof n === "string"), "premise: every accepted type has a name here").toBe(true);
+    const list = new Intl.ListFormat("en-GB", { style: "long", type: "disjunction" }).format(names as string[]);
+    expect(flat(stripTags(html)), "the hint lists exactly those").toContain(`${list}, up to`);
+  });
+
+  it("the cap the hint names is the cap the picker enforces: that many bytes are taken, one more is refused with the size words", () => {
+    const html = formMarkup();
+    const mb = Number(/up to (\d+) MB/.exec(flat(stripTags(html)))?.[1]);
+    expect(Number.isInteger(mb) && mb > 0, "premise: the hint carries a whole number of MB").toBe(true);
+    const cap = mb * 1024 * 1024;
+    const m = mount([row({ id: "a", name: "Quay Chandlers" })]);
+    m.edit("Quay Chandlers");
+    const pick = (size: number) => {
+      const file = new File([new Uint8Array(size)], "logo.png", { type: "image/png" });
+      const form = m.form();
+      (propsOf(form).onPickLogo as (f: File, set: unknown) => void)(file, propsOf(form).onChange);
+      return file;
+    };
+    const atCap = pick(cap);
+    expect((propsOf(m.form()).value as { file: File | null }).file, "a file of exactly the cap is taken").toBe(atCap);
+    expect(m.text(), "and says nothing about size").not.toContain(msg("settings.org.sponsors.tooBig"));
+    const over = pick(cap + 1);
+    expect((propsOf(m.form()).value as { file: File | null }).file, "one byte more is not taken").not.toBe(over);
+    expect(m.text(), "it says the size limit").toContain(msg("settings.org.sponsors.tooBig"));
+  });
+
+  it("the hint is in the page's language, with the list written the way that language writes it (en / es / fr / nl)", () => {
+    const WANT: Record<string, { dict: Dict; locale: "en" | "es" | "fr" | "nl"; list: string; sentence: string }> = {
+      en: { dict: uiEn as unknown as Dict, locale: "en", list: "PNG, JPG or WebP", sentence: LOGO_HINT_EN },
+      es: { dict: uiEs as unknown as Dict, locale: "es", list: "PNG, JPG o WebP", sentence: "PNG, JPG o WebP, hasta 2 MB. Un logotipo cuadrado con fondo transparente funciona mejor." },
+      fr: { dict: uiFr as unknown as Dict, locale: "fr", list: "PNG, JPG ou WebP", sentence: "PNG, JPG ou WebP, jusqu'à 2 Mo. Un logo carré sur fond transparent donne le meilleur résultat." },
+      nl: { dict: uiNl as unknown as Dict, locale: "nl", list: "PNG, JPG of WebP", sentence: "PNG, JPG of WebP, tot 2 MB. Een vierkant logo met een transparante achtergrond werkt het best." },
+    };
+    let checked = 0;
+    for (const [locale, w] of Object.entries(WANT)) {
+      const html = renderToStaticMarkup(
+        <DictProvider dict={w.dict} locale={w.locale}>
+          <SponsorForm value={DRAFT} onChange={() => {}} onSubmit={() => {}} submitLabel="Save" busy={false} onPickLogo={() => {}} />
+        </DictProvider>,
+      );
+      expect(flat(stripTags(html)), locale).toContain(w.sentence);
+      expect(flat(stripTags(html)), `${locale}: the list`).toContain(w.list);
+      checked++;
+    }
+    expect(checked, "four locales").toBe(4);
   });
 });
 
