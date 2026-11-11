@@ -108,6 +108,7 @@ function Marker(p: {
       editSponsor: boolean;
       dealId: string | null;
       dealCreatedByName: string | null;
+      dealWrittenOffByName: string | null;
       dealCompetitionFinished: boolean;
       reportLinks: { id: string }[];
       reportDefaults: { from: string; to: string } | null;
@@ -138,6 +139,7 @@ function Marker(p: {
       data-hub-edit={String(p.hub.editSponsor)}
       data-hub-deal={p.hub.dealId ?? "-"}
       data-hub-deal-by={p.hub.dealCreatedByName ?? "-"}
+      data-hub-deal-written-off-by={p.hub.dealWrittenOffByName ?? "-"}
       data-hub-deal-finished={String(p.hub.dealCompetitionFinished)}
       data-hub-links={p.hub.reportLinks.map((l) => l.id).join("|")}
       data-hub-defaults={p.hub.reportDefaults === null ? "-" : `${p.hub.reportDefaults.from}..${p.hub.reportDefaults.to}`}
@@ -1108,10 +1110,12 @@ describe("?deal=<own> draws the deal's own page (Task 17), and the timeline's tw
     currency: "gbp", sponsor_name: "Harbour Print", sponsor_email: null, ends_at: null, created_at: "2026-10-01T09:00:00.000Z", created_by: "u-creator",
     invoice_sent_at: null, paid_at: null, marked_paid_by: null, approved_at: null, approved_by: null, live_at: null, ended_at: null,
     ended_reason: null, parked_at: null, disputed_at: null, dispute_id: null, has_payment_intent: false, invoice_number: null,
+    written_off_at: null, written_off_by: null,
   };
   const OTHER = { ...DEAL, id: "d9", sponsor_id: "s2", package_name: "Silver Season" };
   const sel = (html: string) => ({
     by: attr(html, "org-sponsors", "data-hub-deal-by"),
+    writtenOffBy: attr(html, "org-sponsors", "data-hub-deal-written-off-by"),
     finished: attr(html, "org-sponsors", "data-hub-deal-finished"),
   });
 
@@ -1126,9 +1130,27 @@ describe("?deal=<own> draws the deal's own page (Task 17), and the timeline's tw
     expect(h.dealCreatorName).toHaveBeenCalledTimes(1);
     expect(h.dealCreatorName).toHaveBeenCalledWith(ORG.id, "u-creator");
     expect(sel(html).by).toBe("Sam Patel");
+    expect(sel(html).writtenOffBy, "a deal not written off hands over no writer, and reads none").toBe("-");
     // the pair: the name the read returned is what is handed over, not a constant
     h.dealCreatorName.mockResolvedValue(null);
     expect(sel(await render("sponsors", undefined, undefined, { sponsor: "s1", deal: "d1" })).by).toBe("-");
+  });
+
+  it("a written-off deal: the writer's name is read for THIS org and the deal's writer, beside the creator's, and handed over (final review m3)", async () => {
+    h.listDeals.mockResolvedValue([
+      { ...DEAL, deal_status: "ended", ended_reason: "written_off", ended_at: "2026-11-05T10:00:00.000Z",
+        written_off_at: "2026-11-05T10:00:00.000Z", written_off_by: "u-writer" },
+      OTHER,
+    ]);
+    h.dealCreatorName.mockImplementation(async (_org: string, id: string | null) => (id === "u-writer" ? "Ana Ruiz" : id === "u-creator" ? "Sam Patel" : null));
+    const html = await render("sponsors", undefined, undefined, { sponsor: "s1", deal: "d1" });
+    expect(h.dealCreatorName).toHaveBeenCalledTimes(2);
+    expect(h.dealCreatorName).toHaveBeenCalledWith(ORG.id, "u-creator");
+    expect(h.dealCreatorName).toHaveBeenCalledWith(ORG.id, "u-writer");
+    expect(sel(html)).toMatchObject({ by: "Sam Patel", writtenOffBy: "Ana Ruiz" });
+    // the pair: a writer whose account is gone (ON DELETE SET NULL) reads as no name, and the page still renders
+    h.dealCreatorName.mockImplementation(async (_org: string, id: string | null) => (id === "u-creator" ? "Sam Patel" : null));
+    expect(sel(await render("sponsors", undefined, undefined, { sponsor: "s1", deal: "d1" })).writtenOffBy).toBe("-");
   });
 
   it("an open deal that ends with its competition asks the desk about THAT competition, and hands the answer over", async () => {

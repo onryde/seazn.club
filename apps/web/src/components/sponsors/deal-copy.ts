@@ -5,7 +5,7 @@
 // there is one home. Pure: no hooks.
 import { fmtNumber } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
-import { isLiveDeal, isOpenDeal, isUnpaid, type SponsorDeal } from "@/lib/sponsor-deals";
+import { endedStillDue, isLiveDeal, isOpenDeal, isUnpaid, type SponsorDeal } from "@/lib/sponsor-deals";
 
 /** Does this sponsor already have an OPEN deal on this package - one that has not gone live yet (draft, awaiting payment or
  *  approval, scheduled)? A live deal is running and an ended one is over; neither is a second invoice for the same thing.
@@ -75,12 +75,27 @@ export function refundPlacementKey(deals: readonly SponsorDeal[], deal: SponsorD
   return "sponsors.deal.confirm.refund.placementHidden";
 }
 
-/** Can the pay link the console last showed still be paid (batch G New-1)? Only while its deal has not ended and still owes money:
- *  End now kills the link, and a paid or refunded deal has nothing left to pay. The deal is the list's copy when the list has it -
- *  every action re-reads it - else the one the send answered (the re-read has not landed yet). */
+/** Can the pay link the console last showed still be paid (batch G New-1)? While its deal has not ended and still owes money, or has
+ *  ended with its invoice still due (`endedStillDue`: an offline deal that went live and ran out unpaid, which is offered Resend
+ *  invoice - final review m2; the link opens the invoice and its bank details). End now kills the link, and a paid, refunded or
+ *  written-off deal has nothing left to pay. The deal is the list's copy when the list has it - every action re-reads it - else the
+ *  one the send answered (the re-read has not landed yet). */
 export function payLinkStillOpen(deals: readonly SponsorDeal[], sent: SponsorDeal): boolean {
   const current = deals.find((d) => d.id === sent.id) ?? sent;
-  return current.deal_status !== "ended" && isUnpaid(current.payment_status);
+  return (current.deal_status !== "ended" && isUnpaid(current.payment_status)) || endedStillDue(current);
+}
+
+/** The words on a deal action's button (final review m1): the surface's own word for the action, except that Resend invoice on a
+ *  deal whose invoice has never gone out reads "Send invoice". Read off `invoice_sent_at`, not the action's name: an OFFLINE deal's
+ *  first send is offered as `resend_invoice` (it has no draft to send from), and so is an online deal that went live before its
+ *  first send was made. Only the words change - the action, its route and its answer are the same (`invoiceNoticeKey` words what
+ *  it did). */
+export function dealActionKey<A extends string>(
+  words: Readonly<Record<A, MessageKey>>,
+  action: A,
+  deal: Pick<SponsorDeal, "invoice_sent_at">,
+): MessageKey {
+  return action === "resend_invoice" && deal.invoice_sent_at === null ? "sponsors.deal.action.sendInvoice" : words[action];
 }
 
 /** What a send says it did (T23 review m3), read off the deal as it was BEFORE the send: a deal whose invoice never went out says

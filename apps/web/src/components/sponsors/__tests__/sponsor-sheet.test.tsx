@@ -82,7 +82,7 @@ const DEAL: SponsorDeal = {
   amount_cents: 12_000, currency: "gbp", sponsor_name: "x", sponsor_email: "accounts@example.com", ends_at: null,
   created_at: "2026-10-01T09:00:00.000Z", created_by: null, invoice_sent_at: null, paid_at: null, marked_paid_by: null,
   approved_at: null, approved_by: null, live_at: null, ended_at: null, ended_reason: null, parked_at: null, disputed_at: null,
-  dispute_id: null, has_payment_intent: false, invoice_number: null,
+  dispute_id: null, has_payment_intent: false, invoice_number: null, written_off_at: null, written_off_by: null,
 };
 /** D11: an online or offline deal is numbered when it is made, a complimentary one never. */
 const deal = (over: Partial<SponsorDeal>): SponsorDeal => ({
@@ -503,11 +503,14 @@ describe("the buttons ARE allowedActions (the engine's answer), never a client c
   };
 
   it("hand-typed rows from the spec's table (§5.2): what each state offers", () => {
-    const T: [string, Partial<SponsorDeal>, string[]][] = [
+    // Final review m1: Resend invoice on a deal whose invoice never went out reads "Send invoice"; the offline rows here were never sent.
+    const NEVER_SENT = { resend_invoice: "Send invoice" };
+    const SENT = "2026-10-28T10:00:00.000Z";
+    const T: [string, Partial<SponsorDeal>, string[], Record<string, string>?][] = [
       ["online draft, unpaid", { deal_status: "draft", payment_status: "pending", payment_method: "online" }, ["send_invoice", "end_now"]],
-      ["online, awaiting payment", { deal_status: "awaiting_payment", payment_status: "pending", payment_method: "online" }, ["resend_invoice", "mark_paid", "end_now"]],
+      ["online, awaiting payment", { deal_status: "awaiting_payment", payment_status: "pending", payment_method: "online", invoice_sent_at: SENT }, ["resend_invoice", "mark_paid", "end_now"]],
       // Task 23 (F13): an offline invoice is emailed when the deal has a billing email to send it to.
-      ["offline, awaiting payment, billing email", { deal_status: "awaiting_payment", payment_status: "pending", payment_method: "offline" }, ["resend_invoice", "mark_paid", "end_now"]],
+      ["offline, awaiting payment, billing email", { deal_status: "awaiting_payment", payment_status: "pending", payment_method: "offline" }, ["resend_invoice", "mark_paid", "end_now"], NEVER_SENT],
       ["offline, awaiting payment, no billing email", { deal_status: "awaiting_payment", payment_status: "pending", payment_method: "offline", sponsor_email: null }, ["mark_paid", "end_now"]],
       ["paid, awaiting approval", { deal_status: "awaiting_approval", payment_status: "paid", go_live: "on_approval" }, ["approve", "end_now"]],
       ["live and paid", { deal_status: "live", payment_status: "paid" }, ["end_now"]],
@@ -516,17 +519,18 @@ describe("the buttons ARE allowedActions (the engine's answer), never a client c
       ["ended", { deal_status: "ended", payment_status: "paid", ended_reason: "expired" }, []],
       // T24 m8: an offline deal that went live and ended unpaid (its term ran out) is still owed - Mark as paid and Write off are on the
       // sponsor's page, beside Resend invoice. The twin that never went live owes nothing and offers none of them (the pair).
-      ["ended, offline, still due, billing email", { deal_status: "ended", payment_status: "pending", payment_method: "offline", ended_reason: "expired", live_at: "2026-10-02T09:00:00.000Z" }, ["resend_invoice", "mark_paid", "write_off"]],
+      ["ended, offline, still due, billing email", { deal_status: "ended", payment_status: "pending", payment_method: "offline", ended_reason: "expired", live_at: "2026-10-02T09:00:00.000Z" }, ["resend_invoice", "mark_paid", "write_off"], NEVER_SENT],
       ["ended, offline, still due, no billing email", { deal_status: "ended", payment_status: "pending", payment_method: "offline", ended_reason: "competition_finished", live_at: "2026-10-02T09:00:00.000Z", sponsor_email: null }, ["mark_paid", "write_off"]],
       ["ended, offline, expired but never live", { deal_status: "ended", payment_status: "pending", payment_method: "offline", ended_reason: "expired", live_at: null }, []],
     ];
     let checked = 0;
-    for (const [label, over, want] of T) {
+    for (const [label, over, want, words] of T) {
       const markup = bodyHtml({ deals: [deal({ id: "t", ...over })] });
       const drawn = findAll(markup, "sponsor-sheet-deal-action").map((b) => attrOf(b.open, "data-action"));
       expect(drawn, label).toEqual(want);
       for (const b of findAll(markup, "sponsor-sheet-deal-action")) {
-        expect(textOfMarkup(b.outer), `${label}: words`).toBe(WORDS[attrOf(b.open, "data-action")!]);
+        const a = attrOf(b.open, "data-action")!;
+        expect(textOfMarkup(b.outer), `${label}: words`).toBe(words?.[a] ?? WORDS[a]);
       }
       expect(findAll(markup, "sponsor-sheet-deal-open"), `${label}: Open deal`).toHaveLength(1);
       checked++;
@@ -571,7 +575,7 @@ describe("the buttons ARE allowedActions (the engine's answer), never a client c
   });
 
   it("a button is named for its deal's package (label in name), Open deal links to the deal, and a write in flight disables the buttons", () => {
-    const d = deal({ id: "t1", deal_status: "awaiting_payment", payment_status: "pending", package_name: "Gold Season" });
+    const d = deal({ id: "t1", deal_status: "awaiting_payment", payment_status: "pending", package_name: "Gold Season", invoice_sent_at: "2026-10-28T10:00:00.000Z" });
     const markup = bodyHtml({ deals: [d] });
     const resend = findAll(markup, "sponsor-sheet-deal-action").find((b) => attrOf(b.open, "data-action") === "resend_invoice")!;
     expect(attrOf(resend.open, "aria-label")).toBe("Resend invoice: Gold Season");
@@ -585,9 +589,68 @@ describe("the buttons ARE allowedActions (the engine's answer), never a client c
   it("every action is a 44px target below md", () => {
     const d = deal({ id: "t1", deal_status: "awaiting_payment", payment_status: "pending" });
     const markup = bodyHtml({ deals: [d] });
-    const targets = [...findAll(markup, "sponsor-sheet-deal-action"), ...findAll(markup, "sponsor-sheet-deal-open"), ...findAll(markup, "sponsor-sheet-add-deal"), ...findAll(markup, "sponsor-sheet-edit"), ...findAll(markup, "sponsor-sheet-share")];
-    expect(targets.length).toBeGreaterThanOrEqual(6);
+    const targets = [...findAll(markup, "sponsor-sheet-deal-action"), ...findAll(markup, "sponsor-sheet-deal-open"), ...findAll(markup, "sponsor-sheet-deal-invoice-pdf"), ...findAll(markup, "sponsor-sheet-add-deal"), ...findAll(markup, "sponsor-sheet-edit"), ...findAll(markup, "sponsor-sheet-share")];
+    expect(findAll(markup, "sponsor-sheet-deal-invoice-pdf"), "premise: the numbered deal's PDF link is among them").toHaveLength(1);
+    expect(targets.length).toBeGreaterThanOrEqual(7);
     for (const x of targets) expect(classTokens(x.open), attrOf(x.open, "data-testid")).toContain("max-md:min-h-11");
+  });
+});
+
+describe("final review I1: a numbered deal on the sponsor's page shows 'Invoice SP-0007' and the club's own PDF; one with no invoice shows neither", () => {
+  const PDF = (dealId: string) => `/api/v1/orgs/${ORG}/sponsor-deals/${dealId}/invoice.pdf`;
+  const item = (markup: string, id: string) => dealsIn(markup).find((x) => attrOf(x.open, "data-deal-id") === id)!;
+
+  it("an online and an offline deal: the number line and a download of the console PDF route, named for the package - for a viewer too (2 counted)", () => {
+    let checked = 0;
+    for (const d of [
+      deal({ id: "on", deal_status: "awaiting_payment", payment_status: "pending", payment_method: "online", invoice_number: 7, package_name: "Gold Season" }),
+      deal({ id: "off", deal_status: "awaiting_payment", payment_status: "pending", payment_method: "offline", invoice_number: 7, package_name: "Gold Season" }),
+    ]) {
+      for (const canEdit of [true, false]) {
+        const row = item(bodyHtml({ deals: [d], canEdit }), d.id);
+        expect(textOfMarkup(findOne(row.outer, "sponsor-sheet-deal-invoice").outer), `${d.payment_method}`).toBe("Invoice SP-0007");
+        const link = findOne(row.outer, "sponsor-sheet-deal-invoice-pdf");
+        expect(attrOf(link.open, "href")).toBe(PDF(d.id));
+        expect(/\sdownload(=|\s|>)/.test(link.open), "a download").toBe(true);
+        expect(textOfMarkup(link.outer)).toBe("Download invoice (PDF)");
+        expect(attrOf(link.open, "aria-label")).toBe("Download invoice (PDF): Gold Season");
+        // A viewer gets the download and nothing to change: no action and no Open deal.
+        if (!canEdit) expect(findAll(row.outer, "sponsor-sheet-deal-action").length + findAll(row.outer, "sponsor-sheet-deal-open").length).toBe(0);
+      }
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the negative pair: a complimentary deal and an unnumbered one show no number and no link, and a viewer's row for them has no controls at all (2 counted)", () => {
+    let checked = 0;
+    for (const d of [
+      deal({ id: "comp", deal_status: "live", payment_status: "none", payment_method: "complimentary", go_live: "immediate" }),
+      deal({ id: "old", deal_status: "awaiting_payment", payment_status: "pending", payment_method: "online", invoice_number: null }),
+    ]) {
+      expect(d.invoice_number, "premise: no invoice number").toBeNull();
+      for (const canEdit of [true, false]) {
+        const row = item(bodyHtml({ deals: [d], canEdit }), d.id);
+        expect(findAll(row.outer, "sponsor-sheet-deal-invoice"), `${d.id}: no number`).toHaveLength(0);
+        expect(findAll(row.outer, "sponsor-sheet-deal-invoice-pdf"), `${d.id}: no link`).toHaveLength(0);
+        expect(textOfMarkup(row.outer)).not.toMatch(/SP-\d/);
+      }
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("final review m1: an offline deal never sent offers 'Send invoice', and once sent 'Resend invoice' (the pair)", () => {
+    const base = { deal_status: "awaiting_payment", payment_status: "pending", payment_method: "offline", package_name: "Gold Season" } as const;
+    let checked = 0;
+    for (const [sent, words] of [[null, "Send invoice"], ["2026-10-21T09:00:00.000Z", "Resend invoice"]] as const) {
+      const markup = bodyHtml({ deals: [deal({ id: "t", ...base, invoice_sent_at: sent })] });
+      const b = findAll(markup, "sponsor-sheet-deal-action").find((x) => attrOf(x.open, "data-action") === "resend_invoice")!;
+      expect(textOfMarkup(b.outer)).toBe(words);
+      expect(attrOf(b.open, "aria-label")).toBe(`${words}: Gold Season`);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });
 
@@ -690,7 +753,7 @@ const refuseWith = (status: number, code: string) => ({ status, body: { ok: fals
 function hubOf(over: Partial<SponsorsHubData> = {}): SponsorsHubData {
   return {
     orgSlug: SLUG, orgTimezone: null, deals: [], packages: [], tiersOrgWide: true, tiersCompetitionIds: [], hasMonetize: true, monetizeOrgWide: true, monetizeCompetitionIds: [], finishedCompetitionIds: [],
-    chargesEnabled: true, sponsorId: "a", editSponsor: false, dealId: null, dealCreatedByName: null, dealCompetitionFinished: false, reportLinks: [LINK],
+    chargesEnabled: true, sponsorId: "a", editSponsor: false, dealId: null, dealCreatedByName: null, dealWrittenOffByName: null, dealCompetitionFinished: false, reportLinks: [LINK],
     reportDefaults: DEFAULTS, ...over,
   };
 }

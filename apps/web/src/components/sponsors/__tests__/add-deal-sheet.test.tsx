@@ -89,7 +89,7 @@ const OPEN_DEAL: SponsorDeal = {
   currency: "gbp", sponsor_name: "Ridge Gold Physiotherapy", sponsor_email: "accounts@ridgegoldphysio.co.uk", ends_at: null,
   created_at: "2026-10-01T09:00:00.000Z", created_by: null, invoice_sent_at: "2026-10-28T09:00:00.000Z", paid_at: null, marked_paid_by: null,
   approved_at: null, approved_by: null, live_at: null, ended_at: null, ended_reason: null, parked_at: null, disputed_at: null,
-  dispute_id: null, has_payment_intent: false, invoice_number: null,
+  dispute_id: null, has_payment_intent: false, invoice_number: null, written_off_at: null, written_off_by: null,
 };
 
 const created: CreateDealBody[] = [];

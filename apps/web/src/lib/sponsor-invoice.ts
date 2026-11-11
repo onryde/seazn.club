@@ -46,6 +46,13 @@ export function invoicePath(token: string): string {
   return `/r/sponsor/invoice/${token}`;
 }
 
+/** The club's own copy of a deal's invoice, as the PDF its sponsor gets: the console route
+ *  `GET /api/v1/orgs/{id}/sponsor-deals/{dealId}/invoice.pdf` (session auth, any member who can see the deal). Unlike the sponsor's
+ *  link it carries no token: opening it rotates nothing and sends nothing (final review I1). */
+export function consoleInvoicePdfPath(orgId: string, dealId: string): string {
+  return `/api/v1/orgs/${orgId}/sponsor-deals/${dealId}/invoice.pdf`;
+}
+
 /** The invoice page's one notice flag (`?notice=recording`): the pay route sends the sponsor back with it when Stripe says
  *  their card payment is complete and the payment webhook has not landed yet (409 `deal_paid_online`; T22 re-review M1). The
  *  page shows "your card payment is being recorded" instead of the pay button. A display hint only: the page reads nothing

@@ -75,6 +75,10 @@ export interface SponsorDeal {
    *  created, kept when it ends, never reused. Null on a complimentary deal (no invoice), a legacy order, and a deal made before
    *  invoices were numbered. */
   invoice_number: number | null;
+  /** When the club wrote off this deal's invoice, and who did (V503; final review m3): both set by Write off and only on a
+   *  `written_off` deal. `written_off_by` is a user id, nulled when that user is deleted; the deal page names them. */
+  written_off_at: string | null;
+  written_off_by: string | null;
 }
 
 export type DealRuleCode = "on_payment_needs_payment" | "illegal_transition";

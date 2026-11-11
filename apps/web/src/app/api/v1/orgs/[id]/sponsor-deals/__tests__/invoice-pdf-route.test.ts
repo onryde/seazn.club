@@ -27,6 +27,7 @@ vi.mock("next/headers", () => ({
 import { sql } from "@/lib/db";
 import { NEVER_KEY_ROUTES } from "@/server/api-v1/key-scopes";
 import { createApiKey } from "@/server/usecases/api-keys";
+import { emailsQueuedWithin } from "@/server/email-outbox";
 import { createDeal } from "@/server/usecases/sponsor-deals";
 import { makeUser, seedOrg } from "@/server/usecases/__tests__/_seed";
 import { pdfTextRuns } from "../../../../../../../../e2e/pdf-uris";
@@ -54,7 +55,7 @@ const get = (orgId: string, dealId: string, headers: HeadersInit = {}) =>
   });
 
 /** A fresh org (its owner signed in), a sponsor, a package, and a deal by the REAL createDeal. */
-async function orgWithDeal(method: "offline" | "complimentary") {
+async function orgWithDeal(method: "offline" | "complimentary", sponsorEmail: string | null = null) {
   const { auth } = await seedOrg("community");
   made.push(auth.orgId);
   authState.userId = auth.userId!;
@@ -66,7 +67,7 @@ async function orgWithDeal(method: "offline" | "complimentary") {
     competition_id: null,
     payment_method: method,
     go_live: method === "complimentary" ? "immediate" : "on_payment",
-    sponsor_email: null,
+    sponsor_email: sponsorEmail,
     ends_on: null,
     end_current: false,
   }, "http://localhost");
@@ -121,6 +122,26 @@ describe.skipIf(!HAS_DB)("the console invoice PDF", () => {
     expect((await get(other.orgId, other.dealId)).status).toBe(200);
     authState.userId = third.ownerId;
     expect((await get(third.orgId, third.dealId)).status).toBe(200);
+  });
+
+  it("final review I1: the club's download rotates nothing and sends nothing - the sponsor's token, the send count and the org's email outbox (what the 50-a-day cap counts) are unchanged by two downloads", async () => {
+    const o = await orgWithDeal("offline", "pay@harbour.test");
+    const state = async () => {
+      const [d] = await sql<{ hash: Buffer | null; sends: number; sent_at: Date | null }[]>`
+        select invoice_token_hash as hash, invoice_send_count as sends, invoice_sent_at as sent_at from sponsor_orders where id = ${o.dealId}`;
+      const [mail] = await sql<{ n: number }[]>`select count(*)::int as n from email_outbox where org_id = ${o.orgId}`;
+      return { hash: d!.hash?.toString("hex") ?? null, sends: d!.sends, sentAt: d!.sent_at?.toISOString() ?? null, outbox: mail!.n };
+    };
+    const before = await state();
+    expect(before.hash, "premise: createDeal minted the sponsor's token, so a rotation would show").not.toBeNull();
+    let downloads = 0;
+    for (let i = 0; i < 2; i++) {
+      expect((await get(o.orgId, o.dealId)).status).toBe(200);
+      downloads++;
+    }
+    expect(downloads).toBe(2);
+    expect(await state(), "the sponsor's link, the sends and the outbox are as they were").toEqual(before);
+    expect(await emailsQueuedWithin(o.orgId, "sponsor_invoice", 24), "the daily cap's own count").toBe(0);
   });
 
   it("an API key is refused (F8), even a manage-scoped one on an org with API access", async () => {

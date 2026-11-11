@@ -81,6 +81,8 @@ const FK_ACTIONS: Readonly<Record<string, [string, "r" | "n"]>> = {
   created_by: ["users", "n"],
   marked_paid_by: ["users", "n"],
   approved_by: ["users", "n"],
+  // The written-off delta's actor (final review m3), the same house rule.
+  written_off_by: ["users", "n"],
 };
 /** FKs whose parent the app deletes: each delete walks the FK, so each has an index led by its column. */
 const WALKED_FKS = ["sponsor_id", "competition_id"];
@@ -138,6 +140,11 @@ function deal(w: World, sponsorId: string | null, over: Deal = {}): Deal {
 const LIVE: Deal = { deal_status: "live", status: "paid", live_at: new Date() };
 const ended = (reason: string): Deal => ({ deal_status: "ended", ended_at: new Date(), ended_reason: reason });
 const COMPLIMENTARY: Deal = { payment_method: "complimentary", status: "none", go_live: "immediate" };
+/** A written-off deal as Write off leaves it: ended `written_off` on an unpaid offline deal that went live, stamped with when (and,
+ *  with `by`, who). sponsor_orders_written_off_stamped requires the time on every written-off row. */
+const writtenOff = (by: string | null = null): Deal => ({
+  ...ended("written_off"), payment_method: "offline", live_at: new Date(), written_off_at: new Date(), written_off_by: by,
+});
 
 async function insertDeal(row: Deal): Promise<string> {
   const [r] = await sql<{ id: string }[]>`insert into sponsor_orders ${sql(row as Record<string, never>)} returning id`;
@@ -312,7 +319,7 @@ describe.skipIf(!HAS_DB)("sponsor deals schema — the constraints are real", ()
     let accepted = 0;
     for (const r of ENDED_REASONS) {
       // A write-off is of an unpaid OFFLINE deal that went live (sponsor_orders_written_off_unpaid_offline, tested below).
-      const shape = r === "written_off" ? { ...ended(r), payment_method: "offline", live_at: new Date() } : ended(r);
+      const shape = r === "written_off" ? writtenOff() : ended(r);
       await expect(insertDeal(deal(w, await sponsor(w), shape)), r).resolves.toBeTruthy();
       accepted++;
     }
@@ -342,17 +349,62 @@ describe.skipIf(!HAS_DB)("sponsor deals schema — the constraints are real", ()
     ];
     let checked = 0;
     for (const [label, shape] of ACCEPTED) {
-      await expect(insertDeal(deal(w, await sponsor(w), { ...ended("written_off"), ...shape })), label).resolves.toBeTruthy();
+      await expect(insertDeal(deal(w, await sponsor(w), { ...writtenOff(), ...shape })), label).resolves.toBeTruthy();
       checked++;
     }
     for (const [label, shape] of REFUSED) {
-      await expect(insertDeal(deal(w, await sponsor(w), { ...ended("written_off"), ...shape })), label)
+      await expect(insertDeal(deal(w, await sponsor(w), { ...writtenOff(), ...shape })), label)
         .rejects.toMatchObject(refusedBy("23514", "sponsor_orders_written_off_unpaid_offline"));
       checked++;
     }
     expect(checked, "rows checked").toBe(9);
     // The other reasons are untouched by it: an online deal ended unpaid by the sweep is still accepted.
     await expect(insertDeal(deal(w, await sponsor(w), { ...ended("expired"), payment_method: "online", status: "pending" }))).resolves.toBeTruthy();
+  });
+
+  it("written_off_stamped: a deal has written_off_at exactly when it is written off, and written_off_by only then; the actor is optional on a written-off row (count reported)", async () => {
+    const w = await world();
+    const cols = await sql<{ column_name: string; data_type: string; is_nullable: string; column_default: string | null }[]>`
+      select column_name, data_type, is_nullable, column_default from information_schema.columns
+       where table_schema = current_schema() and table_name = 'sponsor_orders' and column_name in ('written_off_at', 'written_off_by')
+       order by column_name`;
+    expect(cols, "the two stamp columns: nullable, no default").toEqual([
+      { column_name: "written_off_at", data_type: "timestamp with time zone", is_nullable: "YES", column_default: null },
+      { column_name: "written_off_by", data_type: "uuid", is_nullable: "YES", column_default: null },
+    ]);
+    const actor = await user();
+    const ACCEPTED: [string, Deal][] = [
+      ["written off, with when and who (as Write off stamps it)", writtenOff(actor)],
+      ["written off, with when and no who (its user was deleted: the FK set it null)", writtenOff(null)],
+      ["ended expired, unstamped (still due: nothing waived)", { ...ended("expired"), payment_method: "offline", live_at: new Date() }],
+      ["open, unstamped", {}],
+    ];
+    const REFUSED: [string, Deal][] = [
+      ["written off with no time, but a who", { ...writtenOff(actor), written_off_at: null }],
+      ["written off with neither", { ...writtenOff(null), written_off_at: null }],
+      ["ended expired, carrying a write-off time", { ...ended("expired"), written_off_at: new Date() }],
+      ["ended expired, carrying a write-off actor only", { ...ended("expired"), written_off_by: actor }],
+      ["open (ended_reason NULL), carrying a write-off time", { written_off_at: new Date() }],
+      ["open (ended_reason NULL), carrying a write-off actor only", { written_off_by: actor }],
+    ];
+    let checked = 0;
+    for (const [label, shape] of ACCEPTED) {
+      await expect(insertDeal(deal(w, await sponsor(w), shape)), label).resolves.toBeTruthy();
+      checked++;
+    }
+    for (const [label, shape] of REFUSED) {
+      await expect(insertDeal(deal(w, await sponsor(w), shape)), label)
+        .rejects.toMatchObject(refusedBy("23514", "sponsor_orders_written_off_stamped"));
+      checked++;
+    }
+    expect(checked, "rows checked").toBe(10);
+    // The actor is set null when its user is deleted, and the CHECK lets that delete through: the time stays.
+    const gone = await user();
+    const id = await insertDeal(deal(w, await sponsor(w), writtenOff(gone)));
+    await expect(sql`delete from users where id = ${gone} returning id`, "deleting the actor is never blocked").resolves.toHaveLength(1);
+    const [row] = await sql<{ by: string | null; at: Date | null; ended_reason: string }[]>`
+      select written_off_by as by, written_off_at as at, ended_reason from sponsor_orders where id = ${id}`;
+    expect([row!.by, row!.at !== null, row!.ended_reason]).toEqual([null, true, "written_off"]);
   });
 
   it("comp_needs_no_payment: a complimentary deal goes live immediately or on approval, never on payment", async () => {
@@ -471,7 +523,7 @@ describe.skipIf(!HAS_DB)("sponsor deals schema — the constraints are real", ()
        where c.conrelid = 'sponsor_orders'::regclass and c.contype = 'f'`;
     const got = Object.fromEntries(fks.map((k) => [k.col, [k.parent, k.action]]));
     expect(got).toEqual(FK_ACTIONS);
-    expect(fks.length, "foreign keys checked").toBe(7);
+    expect(fks.length, "foreign keys checked").toBe(8);
   });
 
   it("deleting a sponsor that has a deal is refused by name (23503); deleting one with no deal is accepted", async () => {
@@ -656,9 +708,10 @@ describe.skipIf(!HAS_DB)("sponsor deals schema — the constraints are real", ()
         throw ROLLBACK;
       })).rejects.toBe(ROLLBACK);
       expect(touched, "rows the legacy block touched").toBe(1);
-      // The brief's ten named CHECKs plus the money status one, plus Task 23's written_off_unpaid_offline (the
-      // `__sponsor_deal_written_off.sql` delta); zero would mean nothing was validated.
-      expect(reimposed, "CHECKs re-imposed on the rewritten row").toBe(12);
+      // The brief's ten named CHECKs plus the money status one, plus Task 23's written_off_unpaid_offline and the final review's
+      // written_off_stamped (the `__sponsor_deal_written_off.sql` delta) and invoice_number_check (`__sponsor_invoices.sql`, m6);
+      // zero would mean nothing was validated.
+      expect(reimposed, "CHECKs re-imposed on the rewritten row").toBe(14);
       expect(got).toEqual({
         deal_status: "ended",
         ended_reason: "legacy",

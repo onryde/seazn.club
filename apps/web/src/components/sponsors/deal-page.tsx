@@ -16,9 +16,10 @@
 // Layout: ONE column in both wrappers. The mockup's two-column desktop (timeline beside the facts) is a VIEWPORT query, and the same
 // body also sits in a 360px side panel at 1280, so the columns would be squeezed exactly where there is least room.
 import type { ReactNode } from "react";
-import { Check, X } from "lucide-react";
+import { Check, FileDown, X } from "lucide-react";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { DealChip } from "@/components/sponsors/deal-chip";
+import { dealActionKey } from "@/components/sponsors/deal-copy";
 import { PayLinkBanner } from "@/components/sponsors/pay-link-banner";
 import { CARD, SECTION_TITLE, SMALL_BTN } from "@/components/sponsors/sponsor-sheet";
 import { dealPrice, dealTierWord } from "@/components/sponsors/sponsor-list";
@@ -27,9 +28,10 @@ import { CHIP_BASE } from "@/components/ui/status-chip-style";
 import { fmtPublicDate } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
 import {
-  allowedActions, DEAL_ACTIONS, dealTimeline, endsOnOf, type DealAction, type EndReason, type GoLiveRule, type PaymentMethod, type SponsorDeal,
-  type TimelineStep,
+  allowedActions, DEAL_ACTIONS, dealTimeline, endsOnOf, formatInvoiceNumber, type DealAction, type EndReason, type GoLiveRule, type PaymentMethod,
+  type SponsorDeal, type TimelineStep,
 } from "@/lib/sponsor-deals";
+import { consoleInvoicePdfPath } from "@/lib/sponsor-invoice";
 
 const ACTION_MSG: Record<DealAction, MessageKey> = {
   send_invoice: "sponsors.deal.action.sendInvoice",
@@ -41,7 +43,8 @@ const ACTION_MSG: Record<DealAction, MessageKey> = {
   end_now: "sponsors.deal.action.endNow",
 };
 
-/** Why a deal ended, in words. A Record, so a reason the engine grows without words does not compile. */
+/** Why a deal ended, in words. A Record, so a reason the engine grows without words does not compile. A written-off deal says who wrote
+ *  it off and when instead (`writtenOffLine`); its entry here is the words for a row with no stamp, which V503's CHECK refuses. */
 const REASON_MSG: Record<EndReason, MessageKey> = {
   refunded: "sponsors.deal.timeline.reason.refunded",
   dispute_lost: "sponsors.deal.timeline.reason.disputeLost",
@@ -95,6 +98,9 @@ export interface DealPageBodyProps {
   competitions: { id: string; name: string; ends_on?: string | null }[];
   /** The creator's display name, or null when it could not be resolved (a removed member, a deleted user). */
   createdBy: string | null;
+  /** Who wrote off the deal's invoice, by display name (`written_off_by`), or null when it could not be resolved (a removed member, a
+   *  deleted user) or the deal is not written off. The ended step names them beside the date (final review m3). */
+  writtenOffBy: string | null;
   /** The desk's answer (the competition's derived phase), never the date: this deal's competition has finished. */
   competitionFinished: boolean;
   /** The pay link the console last made for THIS deal, while it can still be paid; null shows none. */
@@ -106,7 +112,10 @@ export interface DealPageBodyProps {
 }
 
 export function DealPageBody(props: DealPageBodyProps) {
-  const { deal, sponsorName, orgId, hasTiers, canEdit, busy, tz, orgTz, competitions, createdBy, competitionFinished, payLink, error, notice, onAction } = props;
+  const {
+    deal, sponsorName, orgId, hasTiers, canEdit, busy, tz, orgTz, competitions, createdBy, writtenOffBy, competitionFinished, payLink, error, notice,
+    onAction,
+  } = props;
   const msg = useMsg();
   const locale = useLocaleOrDefault();
 
@@ -230,8 +239,20 @@ export function DealPageBody(props: DealPageBodyProps) {
         };
       }
       case "ended":
-        return { title: msg("sponsors.deal.timeline.ended"), line: join(at, deal.ended_reason ? msg(REASON_MSG[deal.ended_reason]) : null) };
+        return { title: msg("sponsors.deal.timeline.ended"), line: join(at, endedWords()) };
     }
+  }
+
+  /** Why the deal ended. A write-off is a decision about money owed, so it says who made it and when (`written_off_at`, the day the
+   *  invoice was waived - not `ended_at`, the day the deal ran out); a member who can no longer be named is left out, not guessed. */
+  function endedWords(): string | null {
+    if (deal.ended_reason === "written_off" && deal.written_off_at !== null) {
+      const on = day(deal.written_off_at)!;
+      return writtenOffBy
+        ? msg("sponsors.deal.timeline.line.writtenOffBy", { name: writtenOffBy, date: on })
+        : msg("sponsors.deal.timeline.line.writtenOffOn", { date: on });
+    }
+    return deal.ended_reason ? msg(REASON_MSG[deal.ended_reason]) : null;
   }
 
   const competition = deal.competition_id === null ? undefined : competitions.find((c) => c.id === deal.competition_id);
@@ -273,6 +294,34 @@ export function DealPageBody(props: DealPageBodyProps) {
     },
     { key: "scope", label: msg("sponsors.scopeLabel"), value: scopeName(deal.competition_id) },
     { key: "payment", label: msg("sponsors.dealSheet.payment"), value: msg(PAYMENT_MSG[deal.payment_method]) },
+    // The number is the reference an offline sponsor puts on their transfer, so it is how the club finds the deal to Mark as paid; the
+    // download is the club's own copy of the invoice the sponsor got (final review I1). Only a NUMBERED deal has an invoice: a
+    // complimentary deal, a legacy order and one made before invoices were numbered show neither. Anyone who can read the deal may
+    // download it (the route is "read" auth), so a viewer's page has it too. Opening it rotates nothing and sends nothing.
+    ...(deal.invoice_number !== null
+      ? [
+          {
+            key: "invoice",
+            label: msg("sponsors.deal.facts.invoice"),
+            value: (
+              <span className="flex min-w-0 flex-col items-start gap-1.5">
+                <span data-testid="deal-page-invoice-number" className="font-medium tabular-nums text-slate-900">
+                  {formatInvoiceNumber(deal.invoice_number)}
+                </span>
+                <a
+                  data-testid="deal-page-invoice-pdf"
+                  href={consoleInvoicePdfPath(orgId, deal.id)}
+                  download
+                  className={`${SMALL_BTN} inline-flex items-center gap-1.5 font-medium`}
+                >
+                  <FileDown aria-hidden className="h-3.5 w-3.5 shrink-0" />
+                  {msg("sponsors.deal.downloadInvoice")}
+                </a>
+              </span>
+            ),
+          },
+        ]
+      : []),
     ...(deal.sponsor_email ? [{ key: "invoice_to", label: msg("sponsors.deal.facts.invoiceTo"), value: deal.sponsor_email }] : []),
     { key: "goes_live", label: msg("sponsors.dealSheet.goLive"), value: msg(GO_LIVE_MSG[deal.go_live]) },
   ];
@@ -323,11 +372,11 @@ export function DealPageBody(props: DealPageBodyProps) {
               data-testid="deal-page-action"
               data-action={a}
               disabled={busy}
-              aria-label={msg("sponsors.sheet.dealActionFor", { action: msg(ACTION_MSG[a]), package: deal.package_name })}
+              aria-label={msg("sponsors.sheet.dealActionFor", { action: msg(dealActionKey(ACTION_MSG, a, deal)), package: deal.package_name })}
               onClick={() => onAction(deal, a)}
               className={`btn ${a === "approve" ? "btn-primary" : "btn-ghost"} px-3 py-1.5 text-xs max-md:min-h-11 ${a === "end_now" || a === "refund" || a === "write_off" ? "text-red-600" : ""}`}
             >
-              {msg(ACTION_MSG[a])}
+              {msg(dealActionKey(ACTION_MSG, a, deal))}
             </button>
           ))}
           {showEvidence ? (

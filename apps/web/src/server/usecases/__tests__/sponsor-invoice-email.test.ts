@@ -159,8 +159,9 @@ async function refusal(fn: () => Promise<unknown>): Promise<{ status: number; co
   }
 }
 const dealRow = async (id: string) =>
-  (await sql<{ status: string; deal_status: string; ended_reason: string | null; invoice_send_count: number; invoice_sent_at: Date | null; paid_at: Date | null; invoice_token_hash: Buffer | null }[]>`
-    select status, deal_status, ended_reason, invoice_send_count, invoice_sent_at, paid_at, invoice_token_hash from sponsor_orders where id = ${id}`)[0]!;
+  (await sql<{ status: string; deal_status: string; ended_reason: string | null; invoice_send_count: number; invoice_sent_at: Date | null; paid_at: Date | null; invoice_token_hash: Buffer | null; written_off_at: Date | null; written_off_by: string | null }[]>`
+    select status, deal_status, ended_reason, invoice_send_count, invoice_sent_at, paid_at, invoice_token_hash, written_off_at, written_off_by
+      from sponsor_orders where id = ${id}`)[0]!;
 
 /** Arm the gap hook: `hook` runs once, just before the `at`-th `withTenant` call from here on. */
 function arm(at: number, hook: () => Promise<unknown>): void {
@@ -648,8 +649,18 @@ describe.skipIf(!HAS_DB)("an offline invoice still due after its deal ended: lat
   it("Write off: the invoice reads 'written off' with no bank details, the deal stays ended and unpaid, nothing is mailed; then neither Mark as paid, Resend nor a second write-off is offered", async () => {
     const due = await endedDue({ sponsor_email: "pay@harbour.test" }, { bank: BANK });
     const token = minted.filter((m) => m.dealId === due.id).at(-1)!.token;
+    expect([(await dealRow(due.id)).written_off_at, (await dealRow(due.id)).written_off_by], "premise: nothing is stamped before").toEqual([null, null]);
+    const t0 = Date.now();
     const after = await writeOffDeal(due.o.auth, due.id);
+    const t1 = Date.now();
     expect([after.deal_status, after.payment_status, after.ended_reason]).toEqual(["ended", "pending", "written_off"]);
+    // Final review m3: a write-off records WHO waived the money and WHEN, on the row and on the deal the console reads.
+    const stamped = await dealRow(due.id);
+    expect(stamped.written_off_by, "who: the signed-in member").toBe(due.o.auth.userId);
+    expect(stamped.written_off_at, "when").not.toBeNull();
+    expect(stamped.written_off_at!.getTime()).toBeGreaterThanOrEqual(t0 - 1000);
+    expect(stamped.written_off_at!.getTime()).toBeLessThanOrEqual(t1 + 1000);
+    expect([after.written_off_by, after.written_off_at], "the answer carries both").toEqual([due.o.auth.userId, stamped.written_off_at!.toISOString()]);
     const doc = await invoiceDocByToken(token);
     expect(doc?.state).toBe("written_off");
     expect(doc?.bankDetails, "nothing to transfer").toBeNull();
@@ -658,6 +669,8 @@ describe.skipIf(!HAS_DB)("an offline invoice still due after its deal ended: lat
     expect(await refusal(() => markDealPaid(due.o.auth, due.id)), "Mark as paid").toEqual({ status: 409, code: "deal_ended" });
     expect(await refusal(() => sendDealInvoice(due.o.auth, due.id, ORIGIN)), "Resend").toEqual({ status: 409, code: "deal_not_invoiceable" });
     expect(await refusal(() => writeOffDeal(due.o.auth, due.id)), "the second write-off").toEqual({ status: 409, code: "deal_nothing_due" });
+    const again = await dealRow(due.id);
+    expect([again.written_off_at?.getTime(), again.written_off_by], "the refused second write-off moves neither stamp").toEqual([stamped.written_off_at!.getTime(), due.o.auth.userId]);
   });
 
   it("Write off is refused where nothing is due: a running offline deal, a paid one (late Mark as paid), the club's End now, an online deal ended unpaid, a complimentary deal (5 counted, each unchanged)", async () => {
@@ -684,6 +697,7 @@ describe.skipIf(!HAS_DB)("an offline invoice still due after its deal ended: lat
       expect(await refusal(() => writeOffDeal(auth, id)), label).toEqual({ status: 409, code });
       const now = await dealRow(id);
       expect([now.status, now.deal_status, now.ended_reason], `${label}: unchanged`).toEqual([before.status, before.deal_status, before.ended_reason]);
+      expect([now.written_off_at, now.written_off_by], `${label}: nothing stamped`).toEqual([null, null]);
       checked++;
     }
     expect(checked).toBe(5);

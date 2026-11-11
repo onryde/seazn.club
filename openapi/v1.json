@@ -71471,6 +71471,26 @@
                                         "type": "null"
                                       }
                                     ]
+                                  },
+                                  "written_off_at": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "written_off_by": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
                                   }
                                 },
                                 "required": [
@@ -71504,7 +71524,9 @@
                                   "disputed_at",
                                   "dispute_id",
                                   "has_payment_intent",
-                                  "invoice_number"
+                                  "invoice_number",
+                                  "written_off_at",
+                                  "written_off_by"
                                 ],
                                 "additionalProperties": false
                               },
@@ -71604,7 +71626,9 @@
                         "disputed_at": "example",
                         "dispute_id": "example",
                         "has_payment_intent": true,
-                        "invoice_number": -9007199254740991
+                        "invoice_number": -9007199254740991,
+                        "written_off_at": "example",
+                        "written_off_by": "example"
                       },
                       "locked_by_deal": true,
                       "has_open_deal": true,
@@ -72247,6 +72271,26 @@
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "written_off_at": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "written_off_by": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 }
                               },
                               "required": [
@@ -72280,7 +72324,9 @@
                                 "disputed_at",
                                 "dispute_id",
                                 "has_payment_intent",
-                                "invoice_number"
+                                "invoice_number",
+                                "written_off_at",
+                                "written_off_by"
                               ],
                               "additionalProperties": false
                             },
@@ -72378,7 +72424,9 @@
                       "disputed_at": "example",
                       "dispute_id": "example",
                       "has_payment_intent": true,
-                      "invoice_number": -9007199254740991
+                      "invoice_number": -9007199254740991,
+                      "written_off_at": "example",
+                      "written_off_by": "example"
                     },
                     "locked_by_deal": true,
                     "has_open_deal": true,
@@ -73069,6 +73117,26 @@
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "written_off_at": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "written_off_by": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 }
                               },
                               "required": [
@@ -73102,7 +73170,9 @@
                                 "disputed_at",
                                 "dispute_id",
                                 "has_payment_intent",
-                                "invoice_number"
+                                "invoice_number",
+                                "written_off_at",
+                                "written_off_by"
                               ],
                               "additionalProperties": false
                             },
@@ -73200,7 +73270,9 @@
                       "disputed_at": "example",
                       "dispute_id": "example",
                       "has_payment_intent": true,
-                      "invoice_number": -9007199254740991
+                      "invoice_number": -9007199254740991,
+                      "written_off_at": "example",
+                      "written_off_by": "example"
                     },
                     "locked_by_deal": true,
                     "has_open_deal": true,
@@ -76206,6 +76278,26 @@
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "written_off_at": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "written_off_by": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -76239,7 +76331,9 @@
                             "disputed_at",
                             "dispute_id",
                             "has_payment_intent",
-                            "invoice_number"
+                            "invoice_number",
+                            "written_off_at",
+                            "written_off_by"
                           ],
                           "additionalProperties": false
                         },
@@ -76300,7 +76394,9 @@
                       "disputed_at": "example",
                       "dispute_id": "example",
                       "has_payment_intent": true,
-                      "invoice_number": -9007199254740991
+                      "invoice_number": -9007199254740991,
+                      "written_off_at": "example",
+                      "written_off_by": "example"
                     },
                     "invoice_url": "example"
                   },
@@ -76976,6 +77072,26 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "written_off_at": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "written_off_by": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -77009,7 +77125,9 @@
                           "disputed_at",
                           "dispute_id",
                           "has_payment_intent",
-                          "invoice_number"
+                          "invoice_number",
+                          "written_off_at",
+                          "written_off_by"
                         ],
                         "additionalProperties": false
                       }
@@ -77054,7 +77172,9 @@
                       "disputed_at": "example",
                       "dispute_id": "example",
                       "has_payment_intent": true,
-                      "invoice_number": -9007199254740991
+                      "invoice_number": -9007199254740991,
+                      "written_off_at": "example",
+                      "written_off_by": "example"
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -77507,6 +77627,26 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "written_off_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "written_off_by": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -77540,7 +77680,9 @@
                         "disputed_at",
                         "dispute_id",
                         "has_payment_intent",
-                        "invoice_number"
+                        "invoice_number",
+                        "written_off_at",
+                        "written_off_by"
                       ],
                       "additionalProperties": false
                     },
@@ -77583,7 +77725,9 @@
                     "disputed_at": "example",
                     "dispute_id": "example",
                     "has_payment_intent": true,
-                    "invoice_number": -9007199254740991
+                    "invoice_number": -9007199254740991,
+                    "written_off_at": "example",
+                    "written_off_by": "example"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -78035,6 +78179,26 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "written_off_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "written_off_by": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -78068,7 +78232,9 @@
                         "disputed_at",
                         "dispute_id",
                         "has_payment_intent",
-                        "invoice_number"
+                        "invoice_number",
+                        "written_off_at",
+                        "written_off_by"
                       ],
                       "additionalProperties": false
                     },
@@ -78111,7 +78277,9 @@
                     "disputed_at": "example",
                     "dispute_id": "example",
                     "has_payment_intent": true,
-                    "invoice_number": -9007199254740991
+                    "invoice_number": -9007199254740991,
+                    "written_off_at": "example",
+                    "written_off_by": "example"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -78351,7 +78519,7 @@
     },
     "/api/v1/orgs/{id}/sponsor-deals/{dealId}/write-off": {
       "post": {
-        "summary": "Write off an offline invoice still due after its deal ended (the deal went live, then its end date passed or its competition finished, unpaid): the deal's end reason becomes `written_off`, its money stays unpaid, and its invoice reads \"Nothing due\". No email. 409 `deal_nothing_due` when the deal has nothing still due, `deal_already_paid` when it is paid. Editors only; never key-accessible",
+        "summary": "Write off an offline invoice still due after its deal ended (the deal went live, then its end date passed or its competition finished, unpaid): the deal's end reason becomes `written_off`, it records when and by whom (`written_off_at`, `written_off_by`), its money stays unpaid, and its invoice reads \"Nothing due\". No email. 409 `deal_nothing_due` when the deal has nothing still due, `deal_already_paid` when it is paid. Editors only; never key-accessible",
         "tags": [
           "sponsors"
         ],
@@ -78651,6 +78819,26 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "written_off_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "written_off_by": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -78684,7 +78872,9 @@
                         "disputed_at",
                         "dispute_id",
                         "has_payment_intent",
-                        "invoice_number"
+                        "invoice_number",
+                        "written_off_at",
+                        "written_off_by"
                       ],
                       "additionalProperties": false
                     },
@@ -78727,7 +78917,9 @@
                     "disputed_at": "example",
                     "dispute_id": "example",
                     "has_payment_intent": true,
-                    "invoice_number": -9007199254740991
+                    "invoice_number": -9007199254740991,
+                    "written_off_at": "example",
+                    "written_off_by": "example"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -79223,6 +79415,26 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "written_off_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "written_off_by": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -79256,7 +79468,9 @@
                         "disputed_at",
                         "dispute_id",
                         "has_payment_intent",
-                        "invoice_number"
+                        "invoice_number",
+                        "written_off_at",
+                        "written_off_by"
                       ],
                       "additionalProperties": false
                     },
@@ -79299,7 +79513,9 @@
                     "disputed_at": "example",
                     "dispute_id": "example",
                     "has_payment_intent": true,
-                    "invoice_number": -9007199254740991
+                    "invoice_number": -9007199254740991,
+                    "written_off_at": "example",
+                    "written_off_by": "example"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -79795,6 +80011,26 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "written_off_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "written_off_by": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -79828,7 +80064,9 @@
                         "disputed_at",
                         "dispute_id",
                         "has_payment_intent",
-                        "invoice_number"
+                        "invoice_number",
+                        "written_off_at",
+                        "written_off_by"
                       ],
                       "additionalProperties": false
                     },
@@ -79871,7 +80109,9 @@
                     "disputed_at": "example",
                     "dispute_id": "example",
                     "has_payment_intent": true,
-                    "invoice_number": -9007199254740991
+                    "invoice_number": -9007199254740991,
+                    "written_off_at": "example",
+                    "written_off_by": "example"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -80411,6 +80651,26 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "written_off_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "written_off_by": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -80444,7 +80704,9 @@
                         "disputed_at",
                         "dispute_id",
                         "has_payment_intent",
-                        "invoice_number"
+                        "invoice_number",
+                        "written_off_at",
+                        "written_off_by"
                       ],
                       "additionalProperties": false
                     },
@@ -80487,7 +80749,9 @@
                     "disputed_at": "example",
                     "dispute_id": "example",
                     "has_payment_intent": true,
-                    "invoice_number": -9007199254740991
+                    "invoice_number": -9007199254740991,
+                    "written_off_at": "example",
+                    "written_off_by": "example"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -81030,6 +81294,26 @@
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "written_off_at": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "written_off_by": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -81063,7 +81347,9 @@
                             "disputed_at",
                             "dispute_id",
                             "has_payment_intent",
-                            "invoice_number"
+                            "invoice_number",
+                            "written_off_at",
+                            "written_off_by"
                           ],
                           "additionalProperties": false
                         },
@@ -81117,7 +81403,9 @@
                       "disputed_at": "example",
                       "dispute_id": "example",
                       "has_payment_intent": true,
-                      "invoice_number": -9007199254740991
+                      "invoice_number": -9007199254740991,
+                      "written_off_at": "example",
+                      "written_off_by": "example"
                     },
                     "invoice_url": "example"
                   },
@@ -81692,7 +81980,7 @@
     },
     "/api/v1/orgs/{id}/sponsor-deals/{dealId}/invoice.pdf": {
       "get": {
-        "summary": "A deal's numbered invoice as the PDF its sponsor gets (an `application/pdf` attachment named after the invoice number), in the organisation's language: the number, the club and the sponsor, the line and total, its state (paid, unpaid, refunded, cancelled or ended), what the sponsorship includes and, on an OFFLINE invoice that is still unpaid, the club's bank details. 404 when the deal has no invoice (complimentary, or made before invoices were numbered) or is not this organisation's. Any member who can see the deal; never key-accessible",
+        "summary": "A deal's numbered invoice as the PDF its sponsor gets (an `application/pdf` attachment named after the invoice number), in the organisation's language: the number, the club and the sponsor, the line and total, its state (paid, unpaid, refunded, cancelled, written off or ended), what the sponsorship includes and, on an OFFLINE invoice that is still unpaid, the club's bank details. 404 when the deal has no invoice (complimentary, or made before invoices were numbered) or is not this organisation's. Any member who can see the deal; never key-accessible",
         "tags": [
           "sponsors"
         ],

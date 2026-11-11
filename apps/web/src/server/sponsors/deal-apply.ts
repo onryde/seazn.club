@@ -54,7 +54,7 @@ const DEAL_ROW_COLS = [
   "includes_on_stream", "competition_id", "amount_cents", "currency", "sponsor_name", "sponsor_email", "ends_at",
   "created_at", "created_by", "invoice_sent_at", "paid_at", "marked_paid_by", "approved_at", "approved_by", "live_at",
   "ended_at", "ended_reason", "parked_at", "disputed_at", "dispute_id", "payment_intent_id", "checkout_session_id",
-  "checkout_url", "checkout_expires_at", "invoice_send_count", "invoice_number",
+  "checkout_url", "checkout_expires_at", "invoice_send_count", "invoice_number", "written_off_at", "written_off_by",
 ] as const;
 
 type Stamp = Date | string | null;
@@ -63,7 +63,7 @@ type DealRow = Omit<ServerDeal, "payment_status" | "has_payment_intent" | TimeKe
 } & Record<TimeKey, Stamp>;
 type TimeKey =
   | "ends_at" | "created_at" | "invoice_sent_at" | "paid_at" | "approved_at" | "live_at" | "ended_at" | "parked_at"
-  | "disputed_at" | "checkout_expires_at";
+  | "disputed_at" | "checkout_expires_at" | "written_off_at";
 
 const iso = (t: Stamp): string | null => (t === null ? null : new Date(t).toISOString());
 
@@ -102,6 +102,8 @@ function toServerDeal(r: DealRow): ServerDeal {
     has_payment_intent: r.payment_intent_id !== null,
     // D11: the number createDeal allocated (an online or offline deal); null on complimentary, legacy and pre-numbering deals.
     invoice_number: r.invoice_number,
+    written_off_at: iso(r.written_off_at),
+    written_off_by: r.written_off_by,
     payment_intent_id: r.payment_intent_id,
     checkout_session_id: r.checkout_session_id,
     checkout_url: r.checkout_url,

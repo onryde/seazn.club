@@ -99,8 +99,8 @@ export interface SponsorItem {
  *  sheet (Task 16: `packages` are its cards, `tiersOrgWide` and `tiersCompetitionIds` decide which scopes place them, `hasMonetize`,
  *  `monetizeOrgWide`, `monetizeCompetitionIds` and `chargesEnabled` decide
  *  whether Online is open FOR THE SCOPE picked, `finishedCompetitionIds` lock the packages that are no longer sold, `deals` feed its
- *  "already has one of these" confirm) and the deal page (Task 17: `dealId` picks it; `dealCreatedByName` and `dealCompetitionFinished`
- *  are the two reads its timeline needs from the server). */
+ *  "already has one of these" confirm) and the deal page (Task 17: `dealId` picks it; `dealCreatedByName`, `dealWrittenOffByName` and
+ *  `dealCompetitionFinished` are the reads its timeline needs from the server). */
 export interface SponsorsHubData {
   orgSlug: string;
   /** The org's timezone (V305; null = UTC): the zone a deal's "Ends on" day was typed in (`createDeal` stores the start of the next day
@@ -134,6 +134,9 @@ export interface SponsorsHubData {
   dealId: string | null;
   /** The selected deal's creator, by display name (a removed member or a deleted user reads null); null with no deal selected. */
   dealCreatedByName: string | null;
+  /** Who wrote off the selected deal's invoice, by display name, by the same rule (final review m3); null with no deal selected, on a
+   *  deal not written off, and for a member who can no longer be named. */
+  dealWrittenOffByName: string | null;
   /** The selected deal's competition has finished, by the desk's derived phase (never a date); false with no deal selected. */
   dealCompetitionFinished: boolean;
   /** The selected sponsor's live report links (an editor's page only; empty otherwise). */
@@ -938,6 +941,7 @@ export function OrgSponsors({
             orgTz={hub.orgTimezone ?? "UTC"}
             competitions={competitions}
             createdBy={hub.dealCreatedByName}
+            writtenOffBy={hub.dealWrittenOffByName}
             competitionFinished={hub.dealCompetitionFinished}
             payLink={openPayLink?.deal.id === selectedDeal.id ? openPayLink.url : null}
             error={error}

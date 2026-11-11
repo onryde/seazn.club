@@ -88,7 +88,7 @@ const DEAL: SponsorDeal = {
   amount_cents: 12_000, currency: "gbp", sponsor_name: "x", sponsor_email: "accounts@example.com", ends_at: null,
   created_at: "2026-10-01T09:00:00.000Z", created_by: null, invoice_sent_at: null, paid_at: null, marked_paid_by: null,
   approved_at: null, approved_by: null, live_at: null, ended_at: null, ended_reason: null, parked_at: null, disputed_at: null,
-  dispute_id: null, has_payment_intent: false, invoice_number: null,
+  dispute_id: null, has_payment_intent: false, invoice_number: null, written_off_at: null, written_off_by: null,
 };
 /** D11: an online or offline deal is numbered when it is made, a complimentary one never. A row offers Resend invoice only for a numbered
  *  deal (T24 m5: an unnumbered one has no invoice page to link), so a fixture that stood in for a real deal without a number would
@@ -269,6 +269,22 @@ describe("the eight mockup rows: each chip, sub-line and ONE next action (mockup
     expect(attrOf(resend.open, "aria-label")).toBe("Resend invoice: Ridge Gold Physiotherapy");
     const approve = findOne(rowOf(markup, "s3"), "sponsor-row-action");
     expect(attrOf(approve.open, "aria-label")).toBe("Approve: Quay Fisheries");
+  });
+
+  it("final review m1: a row's Resend invoice on an online deal whose invoice never went out (it went live before its first send) reads 'Send invoice'; once sent, 'Resend invoice' (the pair)", () => {
+    let checked = 0;
+    for (const [sent, words] of [[null, "Send invoice"], ["2026-10-28T10:00:00.000Z", "Resend invoice"]] as const) {
+      const row = sponsor({
+        id: "sx", name: "Kestrel Taxis", has_open_deal: false, locked_by_deal: true,
+        deal: deal({ id: "dx", sponsor_id: "sx", deal_status: "live", payment_status: "pending", payment_method: "online", go_live: "immediate", live_at: "2026-10-28T09:00:00.000Z", invoice_sent_at: sent }),
+      });
+      const button = findOne(rowOf(listHtml([row]), "sx"), "sponsor-row-action");
+      expect(attrOf(button.open, "data-action"), "premise: the row offers Resend invoice").toBe("resend_invoice");
+      expect(textOfMarkup(button.outer)).toBe(words);
+      expect(attrOf(button.open, "aria-label")).toBe(`${words}: Kestrel Taxis`);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("every action is disabled while a write is in flight (busy), links excepted", () => {
@@ -1012,7 +1028,7 @@ describe("Move: a row whose waiting deal is another tier keeps its place in its 
 
 const HUB: SponsorsHubData = {
   orgSlug: SLUG, orgTimezone: null, deals: [], packages: [], tiersOrgWide: true, tiersCompetitionIds: [], hasMonetize: true, monetizeOrgWide: true, monetizeCompetitionIds: [], finishedCompetitionIds: [],
-  chargesEnabled: true, sponsorId: null, editSponsor: false, dealId: null, dealCreatedByName: null, dealCompetitionFinished: false, reportLinks: [], reportDefaults: null,
+  chargesEnabled: true, sponsorId: null, editSponsor: false, dealId: null, dealCreatedByName: null, dealWrittenOffByName: null, dealCompetitionFinished: false, reportLinks: [], reportDefaults: null,
 };
 
 const fetchMock = vi.fn();

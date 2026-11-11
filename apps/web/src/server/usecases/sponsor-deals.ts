@@ -609,13 +609,18 @@ export async function endDealNow(auth: AuthCtx, dealId: string): Promise<Sponsor
 }
 
 /** Write off (Task 23 carry 4, from the T22 re-review): the club waives an offline invoice still due after its deal ended
- *  (`endedStillDue`), so the invoice stops asking ("Nothing due — written off by <club>"). Only the reason moves: the money stays
- *  unpaid (`pending`: nothing was paid), `ended_reason` becomes `written_off` (the house precedent: a money event rewrites an
- *  ended deal's reason, as a refund writes `refunded`), and `ended_at` keeps the day the deal ended. The deal was already ended,
- *  so its sponsor does not move. No email (D13). Offered on nothing else: 409 (`deal_nothing_due`, `deal_already_paid`). */
+ *  (`endedStillDue`), so the invoice stops asking ("Nothing due — written off by <club>"). The reason moves, and the waiver is
+ *  stamped: `ended_reason` becomes `written_off` (the house precedent: a money event rewrites an ended deal's reason, as a refund
+ *  writes `refunded`), with `written_off_at` and `written_off_by` saying when and who (final review m3: a waiver of money owed is
+ *  a decision the club is asked about later; V503's sponsor_orders_written_off_stamped requires the time). The money stays unpaid
+ *  (`pending`: nothing was paid), and `ended_at` keeps the day the deal ended. The deal was already ended, so its sponsor does not
+ *  move. No email (D13). Offered on nothing else: 409 (`deal_nothing_due`, `deal_already_paid`). */
 export async function writeOffDeal(auth: AuthCtx, dealId: string): Promise<SponsorDeal> {
-  return runAction(auth, dealId, "write_off", "sponsor.deal.write_off", async (tx, { deal }) => {
-    await tx`update sponsor_orders set ended_reason = 'written_off' where id = ${deal.id}`;
+  return runAction(auth, dealId, "write_off", "sponsor.deal.write_off", async (tx, { deal }, now) => {
+    await tx`
+      update sponsor_orders
+         set ended_reason = 'written_off', written_off_at = ${now}, written_off_by = ${auth.userId}
+       where id = ${deal.id}`;
     return null;
   });
 }
@@ -804,7 +809,7 @@ export async function isDealCompetitionFinished(orgId: string, competitionId: st
  * The name the deal page puts beside "Created": the creator's display name, or null when it cannot honestly be named. A deal's
  * `created_by` is a user id; it is resolved only while that user is STILL a member of this org (a removed member's name is not
  * for the org's other members to read, and a deleted user has none), and a blank name is no name. The page then draws "Created"
- * with a date and no author rather than guess.
+ * with a date and no author rather than guess. The page names the deal's other actor it shows, `written_off_by`, by this same rule.
  */
 export async function dealCreatorName(orgId: string, userId: string | null): Promise<string | null> {
   if (userId === null) return null;

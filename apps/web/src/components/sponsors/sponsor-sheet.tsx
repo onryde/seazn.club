@@ -16,12 +16,13 @@
 // can run; there is no client copy of the rules it reads.
 import { useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Eye, Pencil } from "lucide-react";
+import { ArrowLeft, Eye, FileDown, Pencil } from "lucide-react";
 import Link from "@/components/ui/console-link";
 import { Modal } from "@/components/modal";
 import { useMdUp } from "@/components/ui/use-md-up";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { DealChip } from "@/components/sponsors/deal-chip";
+import { dealActionKey } from "@/components/sponsors/deal-copy";
 import { PayLinkBanner } from "@/components/sponsors/pay-link-banner";
 import { ShareReport } from "@/components/sponsors/share-report";
 import { TIER_MSG } from "@/components/sponsors/tier-labels";
@@ -29,7 +30,8 @@ import { canShowAgain, comingDeal, dealPrice, dealTierWord } from "@/components/
 import type { SponsorItem } from "@/components/org-sponsors";
 import { fmtPublicDate } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
-import { allowedActions, DEAL_ACTIONS, isLiveDeal, isOpenDeal, type DealAction, type SponsorDeal } from "@/lib/sponsor-deals";
+import { allowedActions, DEAL_ACTIONS, formatInvoiceNumber, isLiveDeal, isOpenDeal, type DealAction, type SponsorDeal } from "@/lib/sponsor-deals";
+import { consoleInvoicePdfPath } from "@/lib/sponsor-invoice";
 import type { ReportLinkDefaults, ReportLinkSummary } from "@/lib/sponsor-report";
 import { dealHref } from "@/lib/sponsors-hub";
 
@@ -212,6 +214,9 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
     const buttons = canEdit ? SHEET_ACTIONS.filter((a) => offered.includes(a)) : [];
     const state = stateLine(d);
     const price = d.payment_method === "complimentary" ? msg("sponsors.deal.subline.complimentary") : dealPrice(d, locale);
+    // The deal's invoice number and the club's own copy of it (final review I1), for a NUMBERED deal only: a complimentary deal, a
+    // legacy order and one made before invoices were numbered have no invoice. A viewer may download it too (the route is "read").
+    const invoiceNumber = d.invoice_number === null ? null : formatInvoiceNumber(d.invoice_number);
     return (
       <li key={d.id} data-testid="sponsor-sheet-deal" data-deal-id={d.id} data-deal-status={d.deal_status} className="grid min-w-0 gap-1.5 py-3">
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
@@ -228,7 +233,12 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
             {state}
           </p>
         ) : null}
-        {canEdit ? (
+        {invoiceNumber !== null ? (
+          <p data-testid="sponsor-sheet-deal-invoice" className="min-w-0 break-words text-xs tabular-nums text-slate-500">
+            {msg("sponsors.deal.invoiceNumber", { number: invoiceNumber })}
+          </p>
+        ) : null}
+        {canEdit || invoiceNumber !== null ? (
           <div className="mt-1 flex min-w-0 flex-wrap gap-2">
             {buttons.map((a) => (
               <button
@@ -238,21 +248,36 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
                 data-action={a}
                 data-deal-id={d.id}
                 disabled={busy}
-                aria-label={msg("sponsors.sheet.dealActionFor", { action: msg(ACTION_MSG[a]), package: d.package_name })}
+                aria-label={msg("sponsors.sheet.dealActionFor", { action: msg(dealActionKey(ACTION_MSG, a, d)), package: d.package_name })}
                 onClick={() => onDealAction(d, a)}
                 className={`btn ${a === "approve" ? "btn-primary" : "btn-ghost"} px-3 py-1.5 text-xs max-md:min-h-11 ${a === "end_now" || a === "write_off" ? "text-red-600" : ""}`}
               >
-                {msg(ACTION_MSG[a])}
+                {msg(dealActionKey(ACTION_MSG, a, d))}
               </button>
             ))}
-            <Link
-              href={dealHref(orgSlug, sponsor.id, d.id)}
-              data-testid="sponsor-sheet-deal-open"
-              aria-label={msg("sponsors.sheet.dealActionFor", { action: msg("sponsors.deal.action.openDeal"), package: d.package_name })}
-              className={`${SMALL_BTN} inline-flex items-center`}
-            >
-              {msg("sponsors.deal.action.openDeal")}
-            </Link>
+            {canEdit ? (
+              <Link
+                href={dealHref(orgSlug, sponsor.id, d.id)}
+                data-testid="sponsor-sheet-deal-open"
+                aria-label={msg("sponsors.sheet.dealActionFor", { action: msg("sponsors.deal.action.openDeal"), package: d.package_name })}
+                className={`${SMALL_BTN} inline-flex items-center`}
+              >
+                {msg("sponsors.deal.action.openDeal")}
+              </Link>
+            ) : null}
+            {invoiceNumber !== null ? (
+              <a
+                data-testid="sponsor-sheet-deal-invoice-pdf"
+                data-deal-id={d.id}
+                href={consoleInvoicePdfPath(orgId, d.id)}
+                download
+                aria-label={msg("sponsors.sheet.dealActionFor", { action: msg("sponsors.deal.downloadInvoice"), package: d.package_name })}
+                className={`${SMALL_BTN} inline-flex items-center gap-1.5`}
+              >
+                <FileDown aria-hidden className="h-3.5 w-3.5 shrink-0" />
+                {msg("sponsors.deal.downloadInvoice")}
+              </a>
+            ) : null}
           </div>
         ) : null}
       </li>

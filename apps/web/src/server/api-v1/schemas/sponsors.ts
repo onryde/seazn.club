@@ -56,6 +56,10 @@ export const SponsorDeal = z.object({
   has_payment_intent: z.boolean(),
   /** The deal's invoice number, allocated when an online or offline deal is created; null for a complimentary or legacy deal. */
   invoice_number: z.number().int().nullable(),
+  /** When the club wrote off the deal's unpaid invoice, and the member who did; both null unless `ended_reason` is `written_off`
+   *  (the member is null there too once that user is deleted). */
+  written_off_at: z.string().nullable(),
+  written_off_by: z.string().nullable(),
 });
 
 /** Sponsor deals, Task 6 (plan 2026-11-07-sponsor-deals D16; spec §5.1, §5.2): the Add deal body. STRICT — an unknown key

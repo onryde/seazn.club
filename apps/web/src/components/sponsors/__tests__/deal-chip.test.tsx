@@ -48,7 +48,7 @@ const DEAL: SponsorDeal = {
   amount_cents: 60_000, currency: "gbp", sponsor_name: "Ridge Gold Physiotherapy", sponsor_email: null, ends_at: null,
   created_at: "2026-10-28T09:00:00.000Z", created_by: null, invoice_sent_at: null, paid_at: null, marked_paid_by: null,
   approved_at: null, approved_by: null, live_at: null, ended_at: null, ended_reason: null, parked_at: null, disputed_at: null,
-  dispute_id: null, has_payment_intent: false, invoice_number: null,
+  dispute_id: null, has_payment_intent: false, invoice_number: null, written_off_at: null, written_off_by: null,
 };
 const deal = (over: Partial<SponsorDeal> = {}): SponsorDeal => ({ ...DEAL, ...over });
 const html = (d: SponsorDeal | null) => renderToStaticMarkup(<DealChip deal={d} />);
