@@ -92,6 +92,12 @@ vi.mock("@/lib/db", async (orig) => {
       async (tx) => {
         if (!plan.armed) return fn(tx);
         await tx`set local enable_seqscan = off`;
+        // postgres.js prepares statements, and earlier cases run the save's UPDATE more than five times on the same pooled
+        // connection, so Postgres caches a GENERIC plan for it, built with sequential scans ON. On a table never analyzed (every
+        // fresh DB, every CI Postgres) that plan is a Seq Scan, and `enable_seqscan = off` does not invalidate a cached plan: the
+        // probed save re-ran the Seq Scan and read 0 index scans (final review B I1). Forcing a custom plan re-plans the statement
+        // on this execution, under the setting above. Read per execution, so `set local` is enough.
+        await tx`set local plan_cache_mode = force_custom_plan`;
         // The save's own use of the index (null when there is no such index), as DELTAS around it. The counters
         // (pg_stat_get_xact_numscans / _tuples_returned) are this backend's PENDING stats, which Postgres 15+ flushes on a timer,
         // not at each commit: on a pooled connection they still hold earlier transactions' scans (measured: 2 at the start of
