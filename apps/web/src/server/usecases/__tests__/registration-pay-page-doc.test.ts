@@ -316,6 +316,17 @@ describe.skipIf(!HAS_DB)("payPageDocByToken (player payment page, Task 2)", () =
     expect((await docOf(solo))!.members).toEqual([]);
   });
 
+  // Gap wave G6 (ledger: "members ordered by created_at, not captain-first"). The roster an entry becomes lists its captain first
+  // (`materialise.ts`, `order by is_captain desc, created_at`); the page follows it. The captain here is the LAST one entered, so
+  // a created_at-only order answers differently.
+  it("team entry lists its captain first, then the rest in the order they were entered", async () => {
+    const { reg } = await cardEntry({ players: [{ name: "Ada First" }, { name: "Bea Second" }, { name: "Cy Third" }] });
+    expect((await docOf(reg))!.members, "premise: no captain → entry order").toEqual(["Ada First", "Bea Second", "Cy Third"]);
+    const marked = await sql`update registration_players set is_captain = true where registration_id = ${reg.id} and full_name = 'Cy Third'`;
+    expect(marked.count, "premise: one captain marked").toBe(1);
+    expect((await docOf(reg))!.members).toEqual(["Cy Third", "Ada First", "Bea Second"]);
+  });
+
   it("a status no rule covers is refused by name, not mapped to a default state", () => {
     const bogus = { status: "archived" as never, refundedCents: 0, deadline: null, method: "stripe" as const };
     expect(() => payPageState(bogus, new Date())).toThrow(/no rule covers registration status "archived"/);

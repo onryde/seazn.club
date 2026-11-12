@@ -123,8 +123,9 @@ export async function payPageDocByToken(token: string, now: Date): Promise<PayPa
     label: li.price_data.product_data.name,
     amountCents: li.price_data.unit_amount * li.quantity,
   }));
+  // Captain first, then entry order: the roster this entry becomes (materialise.ts) and the organiser's export list it so (gap wave G6).
   const members = await sql<{ full_name: string }[]>`
-    select full_name from registration_players where registration_id = ${reg.id} order by created_at, id`;
+    select full_name from registration_players where registration_id = ${reg.id} order by is_captain desc, created_at, id`;
 
   let paidAt: Date | null = null;
   if (state === "paid" || state === "refunded") {
