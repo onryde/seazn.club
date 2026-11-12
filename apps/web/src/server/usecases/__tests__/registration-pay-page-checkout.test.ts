@@ -34,6 +34,8 @@ interface FakeSession {
    *  `requires_payment_method` on failure). Read through `paymentIntents.retrieve`, the way `payFromPayPage` reads it. */
   pi_status?: string;
   url: string | null;
+  /** Where Stripe sends the player back - the mint's own `success_url`, so a reuse rule can tell whose page a session returns to. */
+  success_url: string | null;
   expires_at: number;
   metadata: Record<string, string>;
 }
@@ -121,6 +123,7 @@ import {
   PAY_SESSION_REUSE_MARGIN_MS,
 } from "../registrations";
 import { createRegistrationCheckout } from "../registrations/checkout";
+import { returnsToPayPage } from "../registrations/pay-page-checkout";
 import { divisionCtx } from "../registrations/lookups";
 import {
   stripeRig,
@@ -149,6 +152,7 @@ beforeEach(() => {
       payment_status: "unpaid",
       payment_intent: null,
       url: `https://checkout.stripe.test/${id}`,
+      success_url: params.success_url ?? null,
       expires_at: Math.floor(Date.now() / 1000) + 24 * 3600,
       metadata: { ...(params.metadata as Record<string, string>) },
     };
@@ -1385,7 +1389,8 @@ describe.skipIf(!HAS_DB)("each Pay button also refuses while the OTHER button's 
       await resumeRegistrationCheckout(reg.id, accessToken, ORIGIN);
       const cs = (await cartPointer(reg.id))!;
       const token = await linkFor(reg);
-      expect(await payPointer(reg.id), "premise: the page has no session of its own").toBeNull();
+      // Polish wave P5 (carry a): the status page's per-entry session is recorded on the entry's own pointer too.
+      expect(await payPointer(reg.id), "premise: the status page's session sits on the entry's pointer").toBe(cs);
       return { reg, cs, token };
     }
 
@@ -1675,5 +1680,115 @@ describe.skipIf(!HAS_DB)("the status page's Pay hands an open session out again 
     expect(createdParams(1).success_url).not.toContain("token=");
     expect(stripeMock.store.get(s0)!.status, "never two payable sessions").toBe("expired");
     expect(payableFor(reg.id)).toEqual([own]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Polish wave P5, P1-review carry (a): the cart holds ONE session pointer. A's status-page Pay minted SA, sibling B's Pay moved the
+// cart pointer to SB, and A's next Pay saw neither SA (not on the cart any more, not on A's own pointer) and minted SA2: two payable
+// sessions for A. Rule under test (owner-approved rec): the status page's per-entry session is recorded on the ENTRY's pointer
+// (`registrations.pay_session_id`, the one the payment page uses), so A's next Pay finds it - handed out again while reusable,
+// expired before any mint otherwise. And the payment page never hands that session out (its return carries the cart's access
+// token, P1 Ruling 1): it expires it and mints its own.
+// ---------------------------------------------------------------------------------------------------------------------------------
+describe("returnsToPayPage: whose page a stored session returns to (P5 carry a)", () => {
+  it("only a session returning to /r/pay/<token> is the payment page's; the status page's, a missing or unreadable URL are not (counted)", () => {
+    const cases: [string | null, boolean][] = [
+      [`${ORIGIN}/r/pay/tok_abc?src=pay&checkout=success&session_id={CHECKOUT_SESSION_ID}`, true],
+      [`${ORIGIN}/live/org/comp/register/status?rid=g1&token=reg_secret&checkout=success`, false],
+      [`${ORIGIN}/r/ABC123?src=email&checkout=success`, false],
+      [null, false],
+      ["not a url", false],
+    ];
+    let checked = 0;
+    for (const [url, want] of cases) {
+      expect(returnsToPayPage({ success_url: url }), String(url)).toBe(want);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(cases.length);
+  });
+});
+
+describe.skipIf(!HAS_DB)("A → sibling B → A on the status page: one payable session per entry (P5 carry a)", () => {
+  async function cartPointer(regId: string): Promise<string | null> {
+    return (await loadWithGroup(regId)).checkout_session_id;
+  }
+  /** A card cart [A, B]; A presses Pay on the status page, then B does. */
+  async function aThenB() {
+    const { rig, reg: a, accessToken } = await cardEntry({ displayName: "Entry A" });
+    const b = await seedSecondEntry(a.group_id, rig.division.id, 1500, "Entry B");
+    const first = await resumeRegistrationCheckout(a.id, accessToken, ORIGIN);
+    const sa = (await cartPointer(a.id))!;
+    await resumeRegistrationCheckout(b.id, accessToken, ORIGIN);
+    const sb = (await cartPointer(a.id))!;
+    expect(sb, "premise: B's Pay moved the cart pointer off A's session").not.toBe(sa);
+    expect(stripeMock.store.get(sa)!.status, "premise: B's mint does not expire A's session (disjoint)").toBe("open");
+    return { a, b, accessToken, sa, sb, firstUrl: first.checkout_url };
+  }
+
+  it("empty case: A's first Pay records its session on A's own pointer", async () => {
+    const { reg: a, accessToken } = await cardEntry();
+    expect(await payPointer(a.id), "premise: nothing recorded yet").toBeNull();
+    await resumeRegistrationCheckout(a.id, accessToken, ORIGIN);
+    expect(await payPointer(a.id)).toBe(await cartPointer(a.id));
+  });
+
+  it("A → B → A: A's second Pay hands out SA again - no create, one payable session for each entry", async () => {
+    const { a, b, accessToken, sa, sb, firstUrl } = await aThenB();
+    const creates = stripeMock.checkoutCreate.mock.calls.length;
+
+    const again = await resumeRegistrationCheckout(a.id, accessToken, ORIGIN);
+
+    expect(again.checkout_url).toBe(firstUrl);
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(creates);
+    expect(payableFor(a.id)).toEqual([sa]);
+    expect(payableFor(b.id)).toEqual([sb]);
+  });
+
+  it("A → B → A with SA inside the margin: SA is expired BEFORE the mint, so A still holds exactly one payable session", async () => {
+    const { a, accessToken, sa } = await aThenB();
+    const now = new Date();
+    stripeMock.store.get(sa)!.expires_at = Math.floor(now.getTime() / 1000) + 5 * 60;
+    const creates = stripeMock.checkoutCreate.mock.calls.length;
+
+    await resumeRegistrationCheckout(a.id, accessToken, ORIGIN, now);
+
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(creates + 1);
+    const expireOrder = stripeMock.checkoutExpire.mock.invocationCallOrder.at(-1)!;
+    expect(expireOrder).toBeLessThan(stripeMock.checkoutCreate.mock.invocationCallOrder.at(-1)!);
+    const fresh = (await payPointer(a.id))!;
+    expect(fresh).not.toBe(sa);
+    expect(payableFor(a.id)).toEqual([fresh]);
+  });
+
+  it("A → B → A → B → A (sequence): every press of each entry lands on that entry's one session", async () => {
+    const { a, b, accessToken, sa, sb } = await aThenB();
+    for (let i = 0; i < 2; i++) {
+      await resumeRegistrationCheckout(a.id, accessToken, ORIGIN);
+      await resumeRegistrationCheckout(b.id, accessToken, ORIGIN);
+    }
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(2);
+    expect(payableFor(a.id)).toEqual([sa]);
+    expect(payableFor(b.id)).toEqual([sb]);
+  });
+
+  it("the payment page never hands out the status page's session (it returns with the cart's token): expired, then its own mint", async () => {
+    const { reg: a, accessToken } = await cardEntry();
+    await resumeRegistrationCheckout(a.id, accessToken, ORIGIN);
+    const sa = (await payPointer(a.id))!;
+    expect(stripeMock.store.get(sa)!.success_url, "premise: the status page's session returns with the access token").toContain("token=");
+    const token = await linkFor(a);
+
+    const url = await payFromPayPage(token, ORIGIN);
+
+    const own = (await payPointer(a.id))!;
+    expect(own).not.toBe(sa);
+    expect(url).toBe(stripeMock.store.get(own)!.url);
+    expect(stripeMock.store.get(own)!.success_url).not.toContain("token=");
+    expect(stripeMock.store.get(sa)!.status, "never two payable sessions").toBe("expired");
+    expect(payableFor(a.id)).toEqual([own]);
+    // ...and the page's own session is then handed out again on its next press (the reuse rule still holds for its own).
+    expect(await payFromPayPage(token, ORIGIN)).toBe(url);
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(2);
   });
 });

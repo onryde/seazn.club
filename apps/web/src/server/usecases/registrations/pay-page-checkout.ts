@@ -1,4 +1,5 @@
 import "server-only";
+import type Stripe from "stripe";
 // Pay from the player payment page (plan 2026-11-11-player-payment-page, Task 3; see ./index.ts): reuse-or-expire on the
 // entry's own session pointer (`registrations.pay_session_id`, V505), mint for this entry alone, return to the page.
 import { sql } from "@/lib/db";
@@ -17,6 +18,18 @@ import { payPageDocByToken } from "./pay-page";
 
 // The margin and the reuse rule live beside the cart status page's Pay (`./checkout`), which applies the same rule (polish wave W5).
 export { PAY_SESSION_REUSE_MARGIN_MS } from "./checkout";
+
+/** Whether a stored session sends the player back to a payment page (`/r/pay/<token>`), i.e. was minted by this page. The status
+ *  page's per-entry session returns to the cart status page carrying the cart's access token, so it is never handed out here.
+ *  An unreadable return URL is not this page's (fail closed: expire and mint). */
+export function returnsToPayPage(stored: Pick<Stripe.Checkout.Session, "success_url">): boolean {
+  if (!stored.success_url) return false;
+  try {
+    return new URL(stored.success_url).pathname.startsWith(registrationPayPath(""));
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The Pay button: a Checkout URL for this entry alone. Outside any transaction (the Stripe calls are network round-trips), the
@@ -64,7 +77,9 @@ export async function payFromPayPage(token: string, origin: string, now: Date = 
   if (read) {
     let stored = await readStoredSession(read, doc.registrationId);
     if (stored.status === "open") {
-      const reuse = reusableSessionUrl(stored, doc.registrationId, now);
+      // Polish wave P5 (carry a): the entry's pointer can hold the STATUS page's session too; that one is never handed out here
+      // (same reason as the cart's above) - it is expired below and this page mints its own.
+      const reuse = returnsToPayPage(stored) ? reusableSessionUrl(stored, doc.registrationId, now) : null;
       if (reuse) return reuse;
       stored = await expireStoredSession(read, doc.registrationId);
     }

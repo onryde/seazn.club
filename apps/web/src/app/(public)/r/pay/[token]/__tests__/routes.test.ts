@@ -29,6 +29,8 @@ interface FakeSession {
   payment_status: "unpaid" | "paid";
   payment_intent: string | null;
   url: string | null;
+  /** Stripe returns the mint's `success_url`; the payment page reuses only a session returning to it (polish wave P5, carry a). */
+  success_url: string | null;
   expires_at: number;
   metadata: Record<string, string>;
 }
@@ -72,6 +74,7 @@ beforeEach(() => {
       payment_status: "unpaid",
       payment_intent: null,
       url: `https://checkout.stripe.test/${id}`,
+      success_url: params.success_url ?? null,
       expires_at: Math.floor(Date.now() / 1000) + 24 * 3600,
       metadata: { ...(params.metadata as Record<string, string>) },
     };
@@ -189,6 +192,7 @@ describe.skipIf(!HAS_DB)("POST /r/pay/[token]/pay", () => {
         payment_status: "unpaid",
         payment_intent: null,
         url: `https://checkout.stripe.test/${id}`,
+        success_url: params.success_url ?? null,
         expires_at: Math.floor(Date.now() / 1000) + 24 * 3600,
         metadata: { ...(params.metadata as Record<string, string>) },
       };

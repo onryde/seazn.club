@@ -685,6 +685,12 @@ export async function resumeRegistrationCheckout(
       throw new HttpError(409, "A payment for this entry is already on its way", "REGISTRATION_PAID_ONLINE");
     }
   }
-  const url = await createRegistrationCheckout(reg.group_id, [reg.id], ctx, origin, token);
-  return { checkout_url: url };
+  // Polish wave P5 (P1-review carry a): the session is recorded on the ENTRY's own pointer as well as the cart's. The cart holds one
+  // pointer for every entry, so a sibling's Pay moved it off this entry's session (A, then B, then A minted a second payable
+  // session for A); the entry's pointer keeps it findable by the reuse and expire-before-mint steps above. Claimed on the value read
+  // above, in the cart stamp's transaction (`mintRegistrationCheckout`).
+  const minted = await mintRegistrationCheckout(reg.group_id, [reg.id], ctx, origin, token, {
+    entryPointer: { registrationId: reg.id, read: own?.pay_session_id ?? null },
+  });
+  return { checkout_url: minted.url };
 }
