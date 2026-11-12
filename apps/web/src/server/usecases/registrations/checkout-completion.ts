@@ -173,8 +173,21 @@ export async function handleRegistrationCheckoutCompleted(
   // replay, but silently swallowing one entry's failure here would land the
   // event as "processed" while that one entry stays paid-for and unconfirmed
   // forever, with nothing left to retry it.
+  let late = false;
   for (const regId of regIds) {
-    await confirmPaidRegistration(regId, paymentIntent, chargedFeePercent, session.id);
+    await confirmPaidRegistration(regId, paymentIntent, chargedFeePercent, session.id, () => {
+      late = true;
+    });
+  }
+  // Fix round 1 (F1) + round 2: a late entry's session stays `complete` + `paid` at Stripe, and the status page's Pay reads it on
+  // the cart pointer as "a payment on its way" (409), so a re-promoted entry could never pay from there again. The pointer is
+  // cleared only HERE, after every entry the session names was handled: the same session can name a still-pending sibling, and
+  // that sibling's reconcile-on-return and Pay guard read this pointer - cleared before a confirm that then throws, the session
+  // would be off the pointer until Stripe's retry, and the sibling's Pay could mint a second session. Compare-and-clear, so a
+  // later session the status page already moved to is never touched.
+  if (late) {
+    await sql`update registration_groups set checkout_session_id = null, updated_at = now()
+              where checkout_session_id = ${session.id}`;
   }
 }
 
@@ -246,6 +259,8 @@ async function confirmPaidRegistration(
   paymentIntentId: string | null,
   chargedFeePercent: number | null,
   sessionId: string,
+  /** Called when this entry takes the late branch; the caller clears the cart pointer once every named entry is handled. */
+  onLate: () => void,
 ): Promise<void> {
   const outcome = (await sql.begin(async (tx) => {
     const [reg] = await tx<RegistrationWithGroupRow[]>`
@@ -389,12 +404,12 @@ async function confirmPaidRegistration(
                where id = ${reg.group_id}`;
       // Fix round 1 (F1): the late session stays `complete` + `paid` at Stripe forever, and both Pay buttons read a stored complete
       // session that still pays as "a payment already on its way" (409). Left on either pointer, a re-promoted entry could never be
-      // paid again. Each pointer is cleared only while it still names THIS session (the async-failed handler's compare-and-clear),
-      // so a later session a button already moved to is never touched.
+      // paid again. The entry's own pointer is cleared here, only while it still names THIS session (the async-failed handler's
+      // compare-and-clear), so a later session the page already moved to is never touched. The CART pointer is shared with any
+      // sibling the session also names, so the caller clears it after the whole session is handled (fix round 2).
       await tx`update registrations set pay_session_id = null, updated_at = now()
                where id = ${regId} and pay_session_id = ${sessionId}`;
-      await tx`update registration_groups set checkout_session_id = null, updated_at = now()
-               where id = ${reg.group_id} and checkout_session_id = ${sessionId}`;
+      onLate();
       if (!paymentIntentId && !reg.payment_intent_id) return null;
       // Fix round 1 (F3): the money to send back is THIS payment's. The cart's column is first-writer-wins: it can hold a
       // sibling's payment, or this entry's EARLIER late payment (already refunded) after a re-promotion - refunding that one again

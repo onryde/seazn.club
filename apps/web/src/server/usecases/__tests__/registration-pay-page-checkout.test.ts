@@ -66,6 +66,20 @@ vi.mock("@/lib/stripe", () => ({
   }),
 }));
 
+// Fix round 2 seam: `materialise` throws for ONE named entry (its confirm transaction rolls back, the entry stays pending), so a
+// multi-entry completion can fail partway through. Inert (`null`) for every other case.
+const materialiseFault = vi.hoisted(() => ({ regId: null as string | null }));
+vi.mock("@/server/usecases/registrations/materialise", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/usecases/registrations/materialise")>();
+  return {
+    ...actual,
+    materialise: async (...args: Parameters<typeof actual.materialise>) => {
+      if (materialiseFault.regId && args[1].id === materialiseFault.regId) throw new Error("injected: the sibling's confirm failed");
+      return actual.materialise(...args);
+    },
+  };
+});
+
 // One seam for the stale-read race: the next `payPageDocByToken` call answers a document read EARLIER (a second press whose
 // read happened before the first press stamped). Inert (`null`) for every other case.
 const docOverride = vi.hoisted(() => ({ next: null as unknown }));
@@ -1211,6 +1225,59 @@ describe.skipIf(!HAS_DB)("a late payment refunded after a lapse leaves both Pay 
     await handleRegistrationCheckoutCompleted(payInStripe(late));
     expect(stripeMock.refundCreate, "premise: the late branch ran").toHaveBeenCalledTimes(1);
     expect(await pointersOf(w.reg.id)).toEqual({ pay: "cs_test_newer_f1", cart: "cs_test_newer_f1" });
+  });
+
+  // Fix round 2 (re-review of F1): a cart session can name a late entry AND a still-pending sibling. The cart pointer is what the
+  // status page's reconcile-on-return and its Pay guard read for the sibling, so it may only be cleared once every entry the
+  // session names has been handled - never while the sibling's confirm can still fail and leave it pending.
+  /** A promoted entry A and a pending sibling B in one cart, one cart session naming [A, B] (A first), then A's promotion lapses. */
+  async function lateAndPendingSibling() {
+    const w = await promotedEntry();
+    const b = await seedSecondEntry(w.reg.group_id, w.rig.division.id, 1500, "Entry B");
+    await mintGroupCheckout(w.reg.group_id, w.rig.division.id, ORIGIN, w.accessToken);
+    const cs = (await pointersOf(w.reg.id)).cart!;
+    const named = stripeMock.store.get(cs)!.metadata.registration_ids.split(",");
+    expect([...named].sort(), "premise: one session names both entries").toEqual([w.reg.id, b.id].sort());
+    stripeMock.store.get(cs)!.metadata.registration_ids = `${w.reg.id},${b.id}`; // the late entry is handled first
+    await lapse(w.reg.id);
+    return { ...w, b, cs };
+  }
+
+  it("the sibling's confirm fails after the late entry: the cart pointer still names the session, so its Pay refuses; Stripe's retry confirms it and clears the pointer", async () => {
+    const w = await lateAndPendingSibling();
+    const paid = payInStripe(w.cs);
+    materialiseFault.regId = w.b.id;
+    try {
+      await expect(handleRegistrationCheckoutCompleted(paid)).rejects.toThrow("injected");
+    } finally {
+      materialiseFault.regId = null;
+    }
+    expect((await loadWithGroup(w.reg.id)).status, "premise: the late entry was handled").toBe("waitlisted");
+    expect(stripeMock.refundCreate, "premise: the late payment was refunded").toHaveBeenCalledTimes(1);
+    expect((await loadWithGroup(w.b.id)).status, "premise: the sibling's confirm rolled back").toBe("pending");
+    expect((await pointersOf(w.b.id)).cart, "the cart pointer still names the paid session").toBe(w.cs);
+
+    // The sibling's status-page Pay: its payment is on its way, so no second session.
+    const creates = stripeMock.checkoutCreate.mock.calls.length;
+    const err = await rejection(resumeRegistrationCheckout(w.b.id, w.accessToken, ORIGIN));
+    expect(err.status).toBe(409);
+    expect(err.code).toBe("REGISTRATION_PAID_ONLINE");
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(creates);
+
+    // Stripe's retry of the same event: the sibling is confirmed, the late refund is not repeated, and only now is the pointer cleared.
+    await handleRegistrationCheckoutCompleted(paid);
+    expect((await loadWithGroup(w.b.id)).status).toBe("confirmed");
+    expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
+    expect((await pointersOf(w.b.id)).cart).toBeNull();
+  });
+
+  it("positive pair: the same session with the sibling confirming cleanly clears the cart pointer in one pass", async () => {
+    const w = await lateAndPendingSibling();
+    await handleRegistrationCheckoutCompleted(payInStripe(w.cs));
+    expect((await loadWithGroup(w.reg.id)).status).toBe("waitlisted");
+    expect((await loadWithGroup(w.b.id)).status).toBe("confirmed");
+    expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
+    expect((await pointersOf(w.b.id)).cart).toBeNull();
   });
 });
 
