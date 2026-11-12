@@ -526,7 +526,10 @@ export async function submitRegistrationGroup(
       throw new HttpError(422, "Solo sign-ups are not accepted for this division");
     }
 
-    const rawPlayers = entry.players ?? [];
+    // Polish wave P5 (H-1): a solo sign-up carries ONE player row - the person an organiser later places on a team (Assign has
+    // nothing to place without it). The form sends it; an entry sent without one (an older cart, an API caller) gets it from the
+    // contact - the name the panel already shows for it (`entryDisplayName`).
+    const rawPlayers = entry.free_agent && (entry.players ?? []).length === 0 ? [{ full_name: input.contact.name }] : (entry.players ?? []);
     if (!entry.free_agent) {
       if (entry.entrant_kind === "individual" && rawPlayers.length !== 1) {
         throw new HttpError(422, "An individual entry needs exactly one player");
@@ -539,7 +542,12 @@ export async function submitRegistrationGroup(
     }
 
     let selfIndex: number | null = null;
-    if (entry.registering_self) {
+    if (entry.free_agent) {
+      // A solo sign-up is the registrant looking for a team: its one row is their OWN (consent given at this submit, the contact's
+      // dob/gender/email as fallbacks, a minor needs a guardian) - `assignSoloSignUp` carries that consent onto the team's roster.
+      selfIndex = 0;
+      registeringSelfAnywhere = true;
+    } else if (entry.registering_self) {
       const idx =
         entry.self_player_index ??
         (entry.entrant_kind === "individual" && rawPlayers.length === 1 ? 0 : undefined);
@@ -576,7 +584,8 @@ export async function submitRegistrationGroup(
       },
       players.map((p) => ({ full_name: p.full_name, dob: p.dob, gender: p.gender })),
       seasonYear,
-    );
+      // H-1: a solo sign-up is ONE person - their own eligibility applies; a roster's composition (a mixed team) is the team's.
+    ).filter((issue) => !entry.free_agent || issue.playerIndex != null);
     if (issues.length > 0) throw eligibilityError(issues);
 
     // T20: the Lichess link is demanded only while the club is offered online chess (the PostHog flag

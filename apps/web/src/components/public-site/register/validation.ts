@@ -334,7 +334,9 @@ export function entryDetailsComplete(
   entry: CartEntry,
   division: Pick<DivisionLike, "form_fields">,
 ): boolean {
-  if (entry.free_agent) return true;
+  // Polish wave P5 (H-1): a solo sign-up's one row is the player an organiser places, so it must be named. A solo with no row (a
+  // cart saved before the form collected it) stays complete: the server makes the row from the contact.
+  if (entry.free_agent) return entry.players.every((p) => p.full_name.trim().length > 0);
 
   const required = requiredPlayerCount(entry.entrant_kind);
   if (required !== null && entry.players.length !== required) return false;
@@ -411,9 +413,16 @@ export function validateDetails(
   const byId = new Map(divisions.map((d) => [d.division_id, d]));
 
   for (const entry of cart.entries) {
-    if (entry.free_agent) continue;
     const division = byId.get(entry.division_id);
     if (!division) continue;
+    if (entry.free_agent) {
+      // P5 H-1: the solo player's OWN eligibility (with the contact's dob/gender as fallbacks, the server's self-row rule); a roster's
+      // composition is the team's - those issues carry no player index.
+      if (!entryDetailsComplete(entry, division)) return { valid: false, error: "incomplete" };
+      const solo = rosterEligibilityForDivision(division, effectiveSelfPlayers(entry, contact), seasonStartYear);
+      if (solo.issues.some((issue) => issue.playerIndex != null)) return { valid: false, error: "incomplete" };
+      continue;
+    }
 
     if (!entryDetailsComplete(entry, division)) return { valid: false, error: "incomplete" };
 

@@ -5,7 +5,7 @@
 // filled while its name is empty, so whatever the registrant typed over a seed (or a name they chose to clear and retype) is never
 // replaced when they step back and forward again, and a second call is a no-op that returns the SAME reference.
 import { resolveSelfPlayerIndex } from "./roster";
-import type { CartEntry, CartState, ContactState, DivisionLike, RosterPlayerState } from "./types";
+import { EMPTY_ROSTER_PLAYER, type CartEntry, type CartState, type ContactState, type DivisionLike, type RosterPlayerState } from "./types";
 
 type SeedDivision = Pick<DivisionLike, "division_id" | "requires_dob" | "requires_gender">;
 
@@ -22,9 +22,17 @@ function selfRow(row: RosterPlayerState, contact: ContactState, division: SeedDi
 }
 
 function seedEntry(entry: CartEntry, contact: ContactState, division: SeedDivision | undefined): CartEntry {
+  // Polish wave P5 (H-1): a solo sign-up is the registrant looking for a team - its ONE row is theirs, seeded like any self row
+  // (blank-only). A solo saved before the form collected its player has no row: it gets one here.
+  if (entry.free_agent) {
+    const row = entry.players[0] ?? { ...EMPTY_ROSTER_PLAYER };
+    const seeded = selfRow(row, contact, division);
+    const same = entry.players.length === 1 && seeded.full_name === row.full_name && seeded.dob === row.dob && seeded.gender === row.gender;
+    return same ? entry : { ...entry, players: [seeded] };
+  }
   // A TEAM roster starts EMPTY by design (cart.ts's blankPlayers) and the captain builds it with "+ Add player"; seeding a row there
   // would leave a trailing blank row for every captain who then adds their own (a blank row blocks Next). A solo (free agent) sign-up is
-  // a team-kind entry with no roster at all (design §4 step 3: "nothing extra"), so this one guard covers both.
+  // a team-kind entry handled above (P5 H-1: it carries its one row).
   if (entry.entrant_kind === "team") return entry;
   const name = contact.name.trim();
   const partner = entry.partner_name?.trim() ?? "";

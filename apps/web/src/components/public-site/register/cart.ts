@@ -157,7 +157,14 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
       }
       return {
         ...state,
-        entries: state.entries.map((e) => (e.id === action.id ? { ...e, ...patch } : e)),
+        entries: state.entries.map((e) => {
+          if (e.id !== action.id) return e;
+          // Polish wave P5 (H-1): a solo sign-up carries ONE player row - the solo player, whom an organiser later places on a
+          // team (Assign has nobody to place without it). It starts blank (details-seed fills it from the contact); an entry that is
+          // already a solo keeps the row it has.
+          const becomingSolo = patch.free_agent === true && !e.free_agent;
+          return { ...e, ...patch, ...(becomingSolo ? { players: [{ ...EMPTY_ROSTER_PLAYER }] } : {}) };
+        }),
       };
     }
 
@@ -444,7 +451,8 @@ export function toGroupEntry(entry: CartEntry): {
  *  decide both whether to SHOW the guardian block and whether to REQUIRE it
  *  before "Next" — see validation.ts's `guardianRequired`. */
 export function registeringSelfAnywhere(cart: CartState): boolean {
-  return cart.entries.some((e) => e.registering_self);
+  // Polish wave P5 (H-1): a solo sign-up's one row is the registrant's own (the server treats it as their self row), so it counts.
+  return cart.entries.some((e) => e.registering_self || e.free_agent);
 }
 
 /** Design §4 step 4: "Notice that captain-entered players will be asked to

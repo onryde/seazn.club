@@ -64,7 +64,8 @@ export function RosterTable({
   onImportPlayers: (players: RosterPlayerState[]) => void;
 }) {
   const t = useT();
-  const isTeam = entry.entrant_kind === "team";
+  // A solo sign-up is a team-kind entry with ONE row - the solo player (P5 H-1): none of a roster's add/remove/squad/paste.
+  const isTeam = entry.entrant_kind === "team" && !entry.free_agent;
   const parsedCount = parseRoster(importText).length;
 
   return (

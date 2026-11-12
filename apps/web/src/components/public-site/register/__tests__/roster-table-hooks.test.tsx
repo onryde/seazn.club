@@ -115,3 +115,36 @@ describe("RosterTable — bench hooks are addressable per player row", () => {
     expect(hooked(island, "reg-roster-gender")).toHaveLength(0);
   });
 });
+
+// Polish wave P5 (H-1): a solo sign-up's card shows ONE row - the solo player - with none of a team roster's controls (add, remove,
+// squad number, paste). Its kind is "team" (the division's), so the table reads `free_agent`, not the kind.
+describe("RosterTable — a solo sign-up's one row carries no team-roster controls", () => {
+  function mountSolo(freeAgent: boolean) {
+    return renderIsland(RosterTable, {
+      entry: { ...entryWithPlayers(1), free_agent: freeAgent },
+      requiresDob: true,
+      requiresGender: true,
+      issuesByRow: new Map(),
+      importText: "",
+      onImportTextChange: () => {},
+      onAddPlayer: () => {},
+      onRemovePlayer: () => {},
+      onUpdatePlayer: () => {},
+      onImportPlayers: () => {},
+    });
+  }
+  const text = (island: ReturnType<typeof mountSolo>) => JSON.stringify(island.tree().map((e) => propsOf(e).children ?? null));
+
+  it("the solo row has its name, dob and gender fields and no add / remove / squad / paste", () => {
+    const solo = mountSolo(true);
+    for (const testid of ["reg-roster-name", "reg-roster-dob", "reg-roster-gender"]) expect(hooked(solo, testid), testid).toHaveLength(1);
+    expect(hooked(solo, "reg-roster-squad")).toHaveLength(0);
+    for (const key of ["register.details.roster.addPlayer", "register.entries.cart.remove", "register.details.roster.import.summary"]) {
+      expect(text(solo).includes(tRuntime(EN_UI, key)), key).toBe(false);
+    }
+    // The positive pair: the same one-row TEAM roster shows them.
+    const team = mountSolo(false);
+    expect(hooked(team, "reg-roster-squad")).toHaveLength(1);
+    expect(text(team).includes(tRuntime(EN_UI, "register.details.roster.addPlayer"))).toBe(true);
+  });
+});

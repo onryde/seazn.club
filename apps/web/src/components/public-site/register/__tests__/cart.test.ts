@@ -259,6 +259,30 @@ describe("cartReducer — UPDATE_ENTRY", () => {
     expect(next.entries[0]!.free_agent).toBe(true);
     expect(next.entries[0]!.team_name).toBeNull();
   });
+
+  // Polish wave P5 (H-1): a solo sign-up's Details step collects the player (Assign has nobody to place without a player row) -
+  // ONE row, the solo player's own, starting blank (details-seed fills it from the contact).
+  it("becoming a solo sign-up gives the entry ONE blank player row, whatever roster it had", () => {
+    const withRows: CartState = {
+      ...EMPTY_CART,
+      entries: [{ ...one.entries[0]!, players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Cap" }, { ...EMPTY_ROSTER_PLAYER }] }],
+    };
+    for (const cart of [one, withRows]) {
+      const next = cartReducer(cart, { type: "UPDATE_ENTRY", id: "e1", patch: { free_agent: true } });
+      expect(next.entries[0]!.players).toEqual([EMPTY_ROSTER_PLAYER]);
+    }
+    // Sequence: a second identical patch keeps the one row (no growth).
+    const twice = cartReducer(cartReducer(one, { type: "UPDATE_ENTRY", id: "e1", patch: { free_agent: true } }), {
+      type: "UPDATE_ENTRY",
+      id: "e1",
+      patch: { free_agent: true },
+    });
+    expect(twice.entries[0]!.players).toHaveLength(1);
+    // ...and a repeat never wipes a name the registrant already typed on the solo row.
+    const named = cartReducer(twice, { type: "UPDATE_PLAYER", id: "e1", index: 0, patch: { full_name: "Priya Raman" } });
+    const repeated = cartReducer(named, { type: "UPDATE_ENTRY", id: "e1", patch: { free_agent: true } });
+    expect(repeated.entries[0]!.players.map((p) => p.full_name)).toEqual(["Priya Raman"]);
+  });
 });
 
 // RS006 follow-up. Self-linking across divisions is free (the describe below

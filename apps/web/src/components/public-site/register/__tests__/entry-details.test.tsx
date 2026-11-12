@@ -30,6 +30,7 @@ import { propsOf, walk } from "@/components/__tests__/_hook-harness";
 import { cartReducer, type CartAction } from "../cart";
 import { EntryDetails } from "../entry-details";
 import { FormFields } from "../form-fields";
+import { RosterTable } from "../roster-table";
 import { EMPTY_CONTACT, EMPTY_ROSTER_PLAYER, type CartEntry, type CartState, type DivisionLike } from "../types";
 
 vi.mock("@/components/i18n/dict-provider", () => ({
@@ -184,5 +185,50 @@ describe("EntryDetails — the self-row picker says when it is the thing blockin
     expect(propsOf(picker(tree)!)["aria-invalid"]).toBeUndefined();
     expect(propsOf(picker(tree)!)["aria-describedby"]).toBeUndefined();
     expect(error(tree)).toBeUndefined();
+  });
+});
+
+// Polish wave P5 (H-1): the solo sign-up's card collected nothing ("nothing extra"), so the submit wrote no player and Assign could
+// never place the person. The card now carries the solo player's one row - the same roster row a self-registration fills (name;
+// dob/gender when the division asks) - and an edit there lands on that row through the real reducer.
+describe("EntryDetails — a solo sign-up's card collects the player", () => {
+  function renderSolo(division: DivisionLike, dispatch: (a: CartAction) => void = () => {}) {
+    const entry = makeEntry({ free_agent: true, players: [{ ...EMPTY_ROSTER_PLAYER }] });
+    const tree = walk(
+      EntryDetails({
+        entry,
+        division,
+        contact: EMPTY_CONTACT,
+        isSelfEntry: false,
+        selfPlayerIndex: null,
+        seasonStartYear: 2026,
+        dispatch,
+        importText: "",
+        onImportTextChange: () => {},
+      }),
+    );
+    return { entry, tree, roster: tree.find((el) => el.type === RosterTable) };
+  }
+
+  it("renders the one-row roster with the division's dob/gender asks, beside the solo note", () => {
+    const table: [boolean, boolean][] = [
+      [false, false],
+      [true, true],
+    ];
+    for (const [requires_dob, requires_gender] of table) {
+      const { tree, roster } = renderSolo({ ...DIVISION, requires_dob, requires_gender });
+      expect(roster, "the solo card renders the player's row").toBeTruthy();
+      expect(propsOf(roster!)).toMatchObject({ requiresDob: requires_dob, requiresGender: requires_gender });
+      expect(tree.some((el) => propsOf(el).children === "register.details.freeAgent.note"), "the solo note stays").toBe(true);
+    }
+    expect(table.length, "both division shapes checked").toBe(2);
+  });
+
+  it("typing the player's name lands on the solo's one row (folded through the real reducer)", () => {
+    const actions: CartAction[] = [];
+    const { entry, roster } = renderSolo(DIVISION, (a) => actions.push(a));
+    (propsOf(roster!).onUpdatePlayer as (i: number, patch: object) => void)(0, { full_name: "Priya Raman" });
+    const state = actions.reduce<CartState>((st, a) => cartReducer(st, a), { entries: [entry] });
+    expect(state.entries[0]!.players).toEqual([{ ...EMPTY_ROSTER_PLAYER, full_name: "Priya Raman" }]);
   });
 });

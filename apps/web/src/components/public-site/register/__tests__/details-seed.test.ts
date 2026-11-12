@@ -167,8 +167,28 @@ describe("seedDetailsRows: the empty and the exempt cases", () => {
     expect(seedDetailsRows(EMPTY_CART, contact(), [DIV])).toBe(EMPTY_CART);
   });
 
-  it("a solo (free agent) entry has no roster to seed, self-linked or not", () => {
-    const cart = cartOf(entry("team", { free_agent: true, registering_self: true }));
+  // Polish wave P5 (H-1): a solo sign-up is the registrant looking for a team, and its Details step now collects that player (Assign
+  // places this row). It starts from the contact like any self row: name always, dob/gender when the division asks.
+  it("a solo (free agent) entry's one row starts from the contact; a solo with no row yet (an older cart) gets one", () => {
+    const division = { ...DIV, division_id: "div-1", requires_dob: true, requires_gender: true };
+    const who = contact({ dob: "1994-02-03", gender: "f" });
+    const seededRow = { ...EMPTY_ROSTER_PLAYER, full_name: "Mia Cole", dob: "1994-02-03", gender: "f" as const };
+    const cases = [
+      entry("team", { free_agent: true, players: [{ ...EMPTY_ROSTER_PLAYER }] }),
+      entry("team", { free_agent: true, players: [] }),
+    ];
+    for (const solo of cases) {
+      const next = seedDetailsRows(cartOf(solo), who, [division]);
+      expect(next.entries[0]!.players).toEqual([seededRow]);
+      // Second call: nothing left to seed, the same reference.
+      expect(seedDetailsRows(next, who, [division])).toBe(next);
+    }
+    expect(cases.length, "both solo shapes checked").toBe(2);
+  });
+
+  it("a solo row the registrant already filled is never overwritten (blank-only)", () => {
+    const typed = { ...EMPTY_ROSTER_PLAYER, full_name: "Kid Cole" };
+    const cart = cartOf(entry("team", { free_agent: true, players: [typed] }));
     expect(seedDetailsRows(cart, contact(), [DIV])).toBe(cart);
   });
 

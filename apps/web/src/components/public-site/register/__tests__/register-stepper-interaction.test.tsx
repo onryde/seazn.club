@@ -2446,6 +2446,45 @@ describe("P4 — the Details step is seeded from the contact (W1) and the pair p
 });
 
 // ---------------------------------------------------------------------------
+// Polish wave P5 (H-1) — a solo sign-up's Details step collects the player Assign later places. Driven through the REAL stepper:
+// ENTRIES "sign up solo" -> DETAILS shows the solo's one row, started from the contact; Next goes on only once it is named.
+// ---------------------------------------------------------------------------
+
+describe("P5 H-1 — the solo sign-up's Details step carries the player", () => {
+  const DIV_TEAM_SOLO: DivisionLike = { ...DIV_OPEN, division_id: "div-team-solo", name: "Team Cup", entrant_kind: "team", allow_free_agents: true };
+  const rosterNames = (island: ReturnType<typeof mount>["island"]) =>
+    island
+      .tree()
+      .filter((e) => propsOf(e)["data-testid"] === "reg-roster-name")
+      .map((e) => propsOf(e).value as string);
+
+  function soloOnDetails() {
+    const m = mount([DIV_TEAM_SOLO]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Jordan Lee", email: "jordan@example.com" });
+    m.clickByText("Next"); // -> ENTRIES
+    m.island.batch(() => (propsOf(m.divisionCard("div-team-solo")).onAddSoloSignup as () => void)());
+    m.clickByText("Next"); // -> DETAILS
+    return m;
+  }
+
+  it("the solo's one row is on the Details step, started from the contact, and Next reaches consent", () => {
+    const m = soloOnDetails();
+    expect(rosterNames(m.island), "one row, the contact's name").toEqual(["Jordan Lee"]);
+    m.clickByText("Next"); // -> CONSENT
+    expect(m.pageText(), "reached the consent step").toContain("Privacy");
+  });
+
+  it("a cleared name blocks Next on the Details step (the row is the player Assign places)", () => {
+    const m = soloOnDetails();
+    const row = m.island.tree().find((e) => propsOf(e)["data-testid"] === "reg-roster-name");
+    (propsOf(row!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "" } });
+    m.clickByText("Next");
+    expect(m.pageText(), "still on Details").not.toContain("Privacy");
+    expect(rosterNames(m.island)).toEqual([""]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Polish wave P4 (walkthrough W9) — the mixed card + offline cart is refused on the ENTRIES step, the moment the second division is added,
 // with the specific reason; it used to be refused only at submit under "check your details". Validation rules: validation.test.ts.
 // ---------------------------------------------------------------------------

@@ -378,9 +378,18 @@ describe("validateEntries", () => {
 });
 
 describe("entryDetailsComplete", () => {
-  it("a free-agent entry is always complete — 'nothing extra' (design §4 step 3)", () => {
-    const freeAgent = entry({ id: "e1", division_id: "d1", entrant_kind: "team", free_agent: true });
-    expect(entryDetailsComplete(freeAgent, BASE_DIVISION)).toBe(true);
+  // Polish wave P5 (H-1): a solo sign-up's Details step collects its player (Assign places that row), so its one row must be named.
+  // A solo with no row at all (a cart saved before this) stays complete: the server makes the row from the contact.
+  it("a free-agent entry is complete when its one row is named, or when it has no row (an older cart); a blank row is not", () => {
+    const solo = (players: CartEntry["players"]) => entry({ id: "e1", division_id: "d1", entrant_kind: "team", free_agent: true, players });
+    const table: [CartEntry["players"], boolean][] = [
+      [[], true],
+      [[{ ...EMPTY_ROSTER_PLAYER }], false],
+      [[{ ...EMPTY_ROSTER_PLAYER, full_name: "   " }], false],
+      [[{ ...EMPTY_ROSTER_PLAYER, full_name: "Priya Raman" }], true],
+    ];
+    for (const [players, want] of table) expect(entryDetailsComplete(solo(players), BASE_DIVISION), JSON.stringify(players)).toBe(want);
+    expect(table.length, "four solo shapes checked").toBe(4);
   });
 
   describe("individual — exactly 1 named row required", () => {
@@ -559,6 +568,24 @@ describe("validateDetails — step 3's Next gate", () => {
       entries: [entry({ id: "e1", division_id: "d-mixed", entrant_kind: "team", free_agent: true })],
     };
     expect(validateDetails(cart, [MIXED_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).valid).toBe(true);
+  });
+
+  // H-1: the solo's ONE row is held to the person's own eligibility (the server's rule), never to a team's composition.
+  it("a solo's named row in a mixed division passes (one player is never a mixed roster); its own age band still blocks", () => {
+    const solo = (division_id: string, dob: string | null) =>
+      entry({
+        id: "e1",
+        division_id,
+        entrant_kind: "team",
+        free_agent: true,
+        players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Mia Solo", gender: "f", dob }],
+      });
+    expect(validateDetails({ ...EMPTY_CART, entries: [solo("d-mixed", null)] }, [MIXED_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).valid).toBe(true);
+    const under12: DivisionLike = { ...BASE_DIVISION, division_id: "d-u12", entrant_kind: "team", age_max: 11, requires_dob: true };
+    expect(validateDetails({ ...EMPTY_CART, entries: [solo("d-u12", "1990-01-01")] }, [under12], EMPTY_CONTACT, SEASON_START_YEAR).valid).toBe(false);
+    expect(
+      validateDetails({ ...EMPTY_CART, entries: [{ ...solo("d-mixed", null), players: [{ ...EMPTY_ROSTER_PLAYER }] }] }, [MIXED_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR),
+    ).toEqual({ valid: false, error: "incomplete" });
   });
 
   it("uses the CONTACT's dob/gender as a fallback for the self row — does not false-positive block on a blank self row (design: 'collected once')", () => {
@@ -786,6 +813,24 @@ describe("guardianRequired", () => {
       ],
     };
     expect(guardianRequired(cart, { dob: "2015-01-01" }, NOW)).toBe(false);
+  });
+
+  // H-1: a solo sign-up's row is the registrant's own (the server treats it as their self row), so a minor there needs a guardian -
+  // from the row's own dob, falling back to the contact's, exactly as a self-linked row.
+  it("a solo sign-up counts as registering yourself: its row's dob (else the contact's) decides", () => {
+    const solo = (dob: string | null) => ({
+      entries: [entry({ id: "e1", division_id: "d1", entrant_kind: "team", free_agent: true, players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Kid", dob }] })],
+    });
+    const table: [string | null, string | null, boolean][] = [
+      ["2015-01-01", "1990-01-01", true],
+      ["1990-01-01", "2015-01-01", false],
+      [null, "2015-01-01", true],
+      [null, null, false],
+    ];
+    for (const [rowDob, contactDob, want] of table) {
+      expect(guardianRequired(solo(rowDob), { dob: contactDob }, NOW), `${rowDob} / ${contactDob}`).toBe(want);
+    }
+    expect(table.length, "four solo dob shapes checked").toBe(4);
   });
 });
 

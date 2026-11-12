@@ -66,10 +66,27 @@ export function EntryDetails({
   if (!division) return null;
 
   if (entry.free_agent) {
+    // Polish wave P5 (H-1): the solo player's own row (name; dob/gender when the division asks) - the person an organiser places on a
+    // team. Only their own eligibility applies: a roster's composition (mixed) is the team's, and carries no row to show it beside.
+    const soloVerdict = rosterEligibilityForDivision(division, effectiveSelfPlayers(entry, contact), seasonStartYear);
     return (
       <div className="min-w-0 rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm sm:p-6">
         <h3 className="font-display text-lg font-semibold text-ink">{division.name}</h3>
         <p className="mt-2 text-sm text-ink-muted">{t("register.details.freeAgent.note")}</p>
+        <div className="mt-3">
+          <RosterTable
+            entry={entry}
+            requiresDob={division.requires_dob}
+            requiresGender={division.requires_gender}
+            issuesByRow={issuesByPlayerIndex(soloVerdict.issues)}
+            importText={importText}
+            onImportTextChange={onImportTextChange}
+            onAddPlayer={() => dispatch({ type: "ADD_PLAYER", id: entry.id })}
+            onRemovePlayer={(index) => dispatch({ type: "REMOVE_PLAYER", id: entry.id, index })}
+            onUpdatePlayer={(index, patch) => dispatch({ type: "UPDATE_PLAYER", id: entry.id, index, patch })}
+            onImportPlayers={(players) => dispatch({ type: "IMPORT_PLAYERS", id: entry.id, players })}
+          />
+        </div>
       </div>
     );
   }
