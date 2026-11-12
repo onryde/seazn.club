@@ -38,7 +38,7 @@ import { runTossThenStart } from "@/lib/start-with-toss";
 import { rulesVersionOf, type FixtureRulesResult } from "@/components/v2/scorepad/transport";
 import { resolveModuleClient } from "@/components/v2/scorepad/module-client";
 import { entrantDisplayName } from "@/lib/entrant-name";
-import { deadLinkKey, decidedKey, viewOnlyKey, type ViewOnlyReason } from "@/lib/scan-screen";
+import { askFreshLinkKey, deadLinkKey, decidedKey, viewOnlyKey, type ViewOnlyReason } from "@/lib/scan-screen";
 import { officialLabelKey } from "@/lib/official-label";
 import { useTabReturn } from "@/components/v2/use-tab-return";
 import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
@@ -106,7 +106,8 @@ interface Props {
    *  they are refused, never applied under rules the scorer did not see. Absent: sent as nothing (never checked). */
   rulesVersion?: number;
   /** Quick match (branch-fix A review Q1/Q2, controller ruling 2026-11-12): a guest's pad, in the system org. Branches
-   *  the COPY only (`decidedKey`, `viewOnlyKey`): a guest has no organiser to ask. Absent: an ordinary pad. */
+   *  the COPY only (`decidedKey`, `viewOnlyKey`, `askFreshLinkKey`): a guest has no organiser to ask. Absent: an
+   *  ordinary pad. */
   quickMatch?: boolean;
 }
 
@@ -512,7 +513,7 @@ export function DeviceScorePad({
       <div data-testid="scan-dead-link" className="flex min-h-[60vh] flex-col items-center justify-center text-center">
         <p className="text-4xl">⏱️</p>
         <h1 className="mt-3 text-lg font-semibold text-slate-100">{msg(deadLinkKey(dead))}</h1>
-        <p className="mt-2 text-sm text-slate-400">{msg("device.askFreshLink")}</p>
+        <p className="mt-2 text-sm text-slate-400">{msg(askFreshLinkKey(quickMatch))}</p>
       </div>
     );
   }

@@ -5,7 +5,7 @@ import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { deadLinkKey, decidedKey, fixtureTimeLabel, scanScreen, VIEW_ONLY_COPY, viewOnlyKey, type ViewOnlyReason } from "../scan-screen";
+import { askFreshLinkKey, deadLinkKey, decidedKey, fixtureTimeLabel, scanScreen, VIEW_ONLY_COPY, viewOnlyKey, type ViewOnlyReason } from "../scan-screen";
 import { divisionScoringClosed } from "../division-phase";
 
 const ddl = readFileSync(
@@ -218,8 +218,9 @@ describe("the carried-forward View-only copy (owner ruling 2026-09-24)", () => {
   });
 });
 
-// Quick match (branch-fix A review Q1/Q2, controller ruling 2026-11-12): a guest's pad has no organiser, so the two lines
-// that send a scorer to one say what a guest can do instead. Copy only: the screen each reason opens is the shared table's.
+// Quick match (branch-fix A review Q1/Q2, controller rulings 2026-11-12): a guest's pad has no organiser, so no line it
+// shows sends the guest to one; each says what a guest can do instead. Copy only: the screen each reason opens is the
+// shared table's.
 describe("the quick match's pad copy: no organiser to ask (review Q1/Q2)", () => {
   const load = (locale: string) =>
     JSON.parse(readFileSync(resolve(import.meta.dirname, `../../dictionaries/${locale}/ui.json`), "utf8")) as Record<
@@ -230,12 +231,15 @@ describe("the quick match's pad copy: no organiser to ask (review Q1/Q2)", () =>
   /** The organiser, in each language's own word (the strings the ordinary copy uses). */
   const ORGANISER: Record<string, RegExp> = { en: /organi[sz]er/i, es: /organizador/i, fr: /organisateur/i, nl: /organisator/i };
 
-  it("the ruling's English, verbatim", () => {
-    expect(load("en")["device.quickMatch.resultSaved"]).toBe("Result saved. To correct it, undo the last point and play it again.");
-    expect(load("en")["device.quickMatch.resultLocked"]).toBe("This result can't change: the next round has already started.");
+  it("the rulings' English, verbatim", () => {
+    const en = load("en");
+    expect(en["device.quickMatch.resultSaved"]).toBe("Result saved. To correct it, undo the last point and play it again.");
+    expect(en["device.quickMatch.resultLocked"]).toBe("This result can't change: the next round has already started.");
+    expect(en["device.quickMatch.finished"]).toBe("This match is finished.");
+    expect(en["device.quickMatch.askFreshLink"]).toBe("Go back to the quick match and tap Score again.");
   });
 
-  it("an ordinary pad keeps every reason's own copy and the organiser's decided line (the negative pair)", () => {
+  it("an ordinary pad keeps every reason's own copy, the organiser's decided line and its fresh-link hint (the negative pair)", () => {
     let checked = 0;
     for (const reason of REASONS) {
       expect(viewOnlyKey(reason, false), reason).toBe(VIEW_ONLY_COPY[reason]);
@@ -243,24 +247,41 @@ describe("the quick match's pad copy: no organiser to ask (review Q1/Q2)", () =>
     }
     expect(checked, "anti-vacuity: every View-only reason").toBe(4);
     expect(decidedKey(false)).toBe("device.resultRecorded");
+    expect(askFreshLinkKey(false)).toBe("device.askFreshLink");
   });
 
-  it("a quick match's pad: carried forward reads as locked, and decided as saved; every other reason is unchanged", () => {
+  it("a quick match's pad: carried forward reads as locked, finalized as finished, decided as saved, a dead link as go back; the other two reasons are unchanged", () => {
     expect(viewOnlyKey("carried_forward", true)).toBe("device.quickMatch.resultLocked");
+    expect(viewOnlyKey("finalized", true)).toBe("device.quickMatch.finished");
     expect(decidedKey(true)).toBe("device.quickMatch.resultSaved");
-    const others = REASONS.filter((r) => r !== "carried_forward");
-    expect(others, "premise: three other reasons").toHaveLength(3);
+    expect(askFreshLinkKey(true)).toBe("device.quickMatch.askFreshLink");
+    const others = REASONS.filter((r) => r !== "carried_forward" && r !== "finalized");
+    expect(others, "premise: the two reasons that never named an organiser").toEqual(["cancelled", "no_opponent"]);
     for (const reason of others) expect(viewOnlyKey(reason, true), reason).toBe(VIEW_ONLY_COPY[reason]);
   });
 
-  it.each(["en", "es", "fr", "nl"])("%s: the quick match's lines name no organiser, where the ordinary ones do", (locale) => {
+  /** Every line these helpers give a quick match's pad: each View-only reason, the decided line, and the dead-link
+   *  screen's headlines (each resolver code, an unknown one, a deleted match) with its hint. */
+  const quickMatchKeys = (): string[] => [
+    ...REASONS.map((r) => viewOnlyKey(r, true)),
+    decidedKey(true),
+    ...["LINK_REVOKED", "LINK_EXPIRED", null].map((code) => deadLinkKey(code)),
+    "device.dead.gone",
+    askFreshLinkKey(true),
+  ];
+
+  it.each(["en", "es", "fr", "nl"])("%s: no line a quick match's pad shows names an organiser, where the ordinary ones do", (locale) => {
     const d = load(locale);
-    for (const key of ["device.quickMatch.resultSaved", "device.quickMatch.resultLocked"]) {
+    let checked = 0;
+    for (const key of quickMatchKeys()) {
       expect(d[key], `${locale} ${key}`).toBeTruthy();
       expect(d[key], `${locale} ${key}`).not.toMatch(ORGANISER[locale]!);
+      checked++;
     }
+    expect(checked, "anti-vacuity: four reasons, the decided line, four dead-link headlines, its hint").toBe(10);
     // The positive pair: the word the check looks for IS in each language's ordinary copy, so the check can fail.
-    expect(d["device.resultRecorded"]).toMatch(ORGANISER[locale]!);
-    expect(d["device.scan.viewOnly.carried"]).toMatch(ORGANISER[locale]!);
+    for (const key of [VIEW_ONLY_COPY.carried_forward, VIEW_ONLY_COPY.finalized, "device.resultRecorded", "device.askFreshLink"]) {
+      expect(d[key], `${locale} ${key}`).toMatch(ORGANISER[locale]!);
+    }
   });
 });

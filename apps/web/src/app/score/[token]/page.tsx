@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 // render the shell; every scoring call from the client re-presents it as
 // `Authorization: Bearer dl_…`. The token lives in this tab only — never
 // localStorage.
-import { resolveDeviceLinkToken } from "@/server/usecases/device-links";
+import { deviceLinkOrgId, resolveDeviceLinkToken } from "@/server/usecases/device-links";
 import {
   getFixtureState,
   getLineup,
@@ -31,7 +31,7 @@ import { hasFeature } from "@/lib/entitlements";
 import { resolveScorePadBootstrap } from "@/server/usecases/fidelity";
 import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
 import { ScanWaiting } from "@/components/v2/scan-waiting";
-import { deadLinkKey, fixtureTimeLabel, scanScreen } from "@/lib/scan-screen";
+import { askFreshLinkKey, deadLinkKey, fixtureTimeLabel, scanScreen } from "@/lib/scan-screen";
 import { resultCarriedForward } from "@/server/usecases/carried-forward";
 import { scanMatchNames } from "@/server/usecases/scan-match-names";
 import { resolveVenueTz } from "@/lib/tz";
@@ -66,9 +66,12 @@ export default async function ScorePadPage({
   try {
     link = await resolveDeviceLinkToken(token);
   } catch (err) {
-    // Expired / revoked / unknown → the doc 13 §7 dead-end screen, by CODE.
+    // Expired / revoked / unknown → the doc 13 §7 dead-end screen, by CODE. Its hint is a quick match's own when the dead
+    // link was a guest's (controller ruling 2026-11-12: no organiser to ask). Looked up only for a refusal the resolver
+    // coded: anything else (the database itself failing) keeps the screen it always had, never a second query's throw.
     const code = err instanceof HttpError ? (err.code ?? null) : null;
-    return <DeadLink message={t(deadLinkKey(code))} hint={t("device.askFreshLink")} />;
+    const quickMatch = code !== null && (await deviceLinkOrgId(token)) === QUICK_MATCH_SYSTEM_ORG_ID;
+    return <DeadLink message={t(deadLinkKey(code))} hint={t(askFreshLinkKey(quickMatch))} />;
   }
 
   // Server-trusted read context: this page IS the device-link surface, so it
@@ -84,7 +87,9 @@ export default async function ScorePadPage({
   };
 
   const fixture = await readScanFixture(link.org_id, link.fixture_id);
-  if (!fixture) return <DeadLink message={t("device.dead.gone")} hint={t("device.askFreshLink")} />;
+  if (!fixture) {
+    return <DeadLink message={t("device.dead.gone")} hint={t(askFreshLinkKey(link.org_id === QUICK_MATCH_SYSTEM_ORG_ID))} />;
+  }
 
   // Same brand chain as the public pages / noticeboard (Pro entitlements
   // resolved inside orgBoardChrome): the volunteer's pad wears club colors.

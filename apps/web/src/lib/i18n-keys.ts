@@ -1840,6 +1840,8 @@ export type DictionaryKey =
   | "device.dead.revoked"
   | "device.failed"
   | "device.live"
+  | "device.quickMatch.askFreshLink"
+  | "device.quickMatch.finished"
   | "device.quickMatch.resultLocked"
   | "device.quickMatch.resultSaved"
   | "device.resultRecorded"

@@ -864,9 +864,15 @@ describe("DeviceScorePad — a quick match's pad names no organiser (review Q1/Q
     expect(byTestId(island.tree(), "device-void-mine"), "View-only offers no undo").toBeUndefined();
   });
 
-  it("opened on View-only by the page: carried forward reads as locked; another reason keeps its own words", () => {
+  it("opened on View-only by the page: carried forward reads as locked, finalized as finished; cancelled keeps its own words", () => {
     const carried = renderIsland(DeviceScorePad, { ...quick("decided", { kind: "win" }), initialViewOnly: "carried_forward" as const });
     expect(textOf(byTestId(carried.tree(), "scan-view-only"))).toBe(dict["device.quickMatch.resultLocked"]);
+    const finalized = renderIsland(DeviceScorePad, { ...quick("finalized", { kind: "win" }), initialViewOnly: "finalized" as const });
+    expect(textOf(byTestId(finalized.tree(), "scan-view-only"))).toBe(dict["device.quickMatch.finished"]);
+    expect(textOfTree(finalized.tree())).not.toMatch(ORGANISER);
+    // The negative pair, same state, no prop: the ordinary pad keeps the organiser's finalised line.
+    const ordinary = renderIsland(DeviceScorePad, { ...props("finalized", { kind: "win" }), initialViewOnly: "finalized" as const });
+    expect(textOf(byTestId(ordinary.tree(), "scan-view-only"))).toBe(dict["device.scan.viewOnly.finalized"]);
     const cancelled = renderIsland(DeviceScorePad, { ...quick("cancelled", null), initialViewOnly: "cancelled" as const });
     expect(textOf(byTestId(cancelled.tree(), "scan-view-only"))).toBe(dict["device.scan.viewOnly.cancelled"]);
   });

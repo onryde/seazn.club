@@ -507,3 +507,14 @@ export async function resolveDeviceLinkToken(token: string): Promise<ResolvedDev
   }
   return { id: link.id, org_id: link.org_id, fixture_id: link.fixture_id, issued_by: link.issued_by };
 }
+
+/**
+ * The org a dl_ token was issued in, whatever its state now (revoked, expired), or null for a token no link holds. For
+ * the dead-link screen's COPY only (a quick match's guest has no organiser to ask, controller ruling 2026-11-12): it
+ * authorises nothing, and a dead link stays dead.
+ */
+export async function deviceLinkOrgId(token: string): Promise<string | null> {
+  const [link] = await sql<{ org_id: string }[]>`
+    select org_id from device_links where token_hash = ${hashDeviceLinkToken(token)} limit 1`;
+  return link?.org_id ?? null;
+}

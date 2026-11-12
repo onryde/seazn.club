@@ -15,17 +15,30 @@ export const VIEW_ONLY_COPY: Readonly<Record<ViewOnlyReason, MessageKey>> = {
   no_opponent: "device.scan.viewOnly.noOpponent",
 };
 
-/** Quick match (branch-fix A review Q1/Q2, controller ruling 2026-11-12): a guest's pad has no organiser to ask, so the
- *  carried-forward line says the result is locked instead of sending the guest to one. Copy only: which screen a reason
- *  opens, and every control on it, stays the shared pad's. */
+/** A quick match's own line for each View-only reason whose ordinary copy sends the scorer to an organiser; the reasons
+ *  absent here (cancelled, no opponent) never named one and keep their words. */
+const QUICK_MATCH_VIEW_ONLY: Readonly<Partial<Record<ViewOnlyReason, MessageKey>>> = {
+  carried_forward: "device.quickMatch.resultLocked",
+  finalized: "device.quickMatch.finished",
+};
+
+/** Quick match (branch-fix A review Q1/Q2, controller rulings 2026-11-12): a guest's pad has no organiser to ask, so no
+ *  View-only line sends the guest to one: carried forward says the result is locked, finalized that the match is finished.
+ *  Copy only: which screen a reason opens, and every control on it, stays the shared pad's. */
 export function viewOnlyKey(reason: ViewOnlyReason, quickMatch: boolean): MessageKey {
-  return quickMatch && reason === "carried_forward" ? "device.quickMatch.resultLocked" : VIEW_ONLY_COPY[reason];
+  return (quickMatch ? QUICK_MATCH_VIEW_ONLY[reason] : undefined) ?? VIEW_ONLY_COPY[reason];
 }
 
 /** The decided match's line under the pad: an organiser finalizes an ordinary match; a quick match has none, so its guest
  *  reads how to correct the result themselves (the same ruling). */
 export function decidedKey(quickMatch: boolean): MessageKey {
   return quickMatch ? "device.quickMatch.resultSaved" : "device.resultRecorded";
+}
+
+/** The dead-link screen's hint: an ordinary scorer asks the organiser for a fresh link; a quick match's guest has none to
+ *  ask, and mints a fresh link themselves by tapping Score on the quick match's home (the same rulings). */
+export function askFreshLinkKey(quickMatch: boolean): MessageKey {
+  return quickMatch ? "device.quickMatch.askFreshLink" : "device.askFreshLink";
 }
 
 export type ScanScreen =
