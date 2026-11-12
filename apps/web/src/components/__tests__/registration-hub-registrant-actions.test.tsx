@@ -489,9 +489,17 @@ describe("RegistrationHubRegistrantActions — mark paid (RS005 R1 finding 1)", 
     expect(findAction(island, "approve")).toBeUndefined();
   });
 
-  it("hides mark paid once a payment_intent_id already exists", () => {
-    const island = mount({ status: "pending", approval: "manual", amountCents: 1500, divisionFeeCents: 1500, paymentIntentId: "pi_123" });
+  it("hides mark paid once the entry's OWN payment intent exists", () => {
+    const island = mount({ status: "pending", approval: "manual", amountCents: 1500, divisionFeeCents: 1500, paymentIntentId: "pi_123", entryPaymentIntentId: "pi_123" });
     expect(findAction(island, "mark-paid")).toBeUndefined();
+  });
+
+  // Polish wave P5 (P1 carry): a card cart where only a SIBLING paid carries the sibling's intent on the cart; this entry paid
+  // nothing, so Mark paid is its way forward and Approve stays hidden (the server refuses it as awaiting payment).
+  it("a sibling's payment on the cart neither hides mark paid nor offers approve on the unpaid entry", () => {
+    const island = mount({ status: "pending", approval: "manual", amountCents: 1000, divisionFeeCents: 1000, paymentIntentId: "pi_sibling", entryPaymentIntentId: null });
+    expect(findAction(island, "mark-paid")).toBeTruthy();
+    expect(findAction(island, "approve")).toBeUndefined();
   });
 
   it("hides mark paid on a free entry (amountCents 0)", () => {

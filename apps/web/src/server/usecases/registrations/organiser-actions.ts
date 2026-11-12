@@ -43,7 +43,8 @@ export async function confirmRegistration(auth: AuthCtx, regId: string): Promise
     }
     if (reg.status === "withdrawn") throw new HttpError(422, "registration is withdrawn");
     const settings = await loadSettings(tx, reg.division_id);
-    if ((settings?.fee_cents ?? 0) > 0 && reg.status !== "paid" && reg.payment_intent_id === null) {
+    // Polish wave P5 (P1 carry): THIS entry's own payment (V387), never the cart's (a sibling's payment sets the cart's intent).
+    if ((settings?.fee_cents ?? 0) > 0 && reg.status !== "paid" && reg.entry_payment_intent_id === null) {
       throw new HttpError(
         422,
         "Awaiting payment — use Mark paid once the fee arrives, or Confirm without payment to waive it",
@@ -99,7 +100,9 @@ export async function markRegistrationPaidOffline(
     if (reg.status !== "pending") {
       throw new HttpError(422, `Only pending registrations can be marked paid (this one is ${reg.status})`);
     }
-    if (reg.payment_intent_id) {
+    // Polish wave P5 (P1 carry): paid by card means THIS entry's own payment, not the cart's - on a cart where only a sibling paid,
+    // the cart's intent is the sibling's and the unpaid entry was refused here although it had paid nothing.
+    if (reg.entry_payment_intent_id) {
       throw new HttpError(422, "This registration was paid by card — refund it on the payments trail instead");
     }
     const settings = await loadSettings(tx, reg.division_id);

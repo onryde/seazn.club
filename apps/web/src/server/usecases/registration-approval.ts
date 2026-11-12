@@ -137,7 +137,9 @@ export async function approveRegistration(
     if (settings?.approval !== "manual") {
       throw new HttpError(422, "This division uses automatic approval — there is nothing to approve manually");
     }
-    if ((settings.fee_cents ?? 0) > 0 && reg.status !== "paid" && reg.payment_intent_id === null) {
+    // Polish wave P5 (P1 carry): THIS entry's own payment (V387), never the cart's - a sibling's payment sets the cart's intent, and
+    // reading it let an entry that paid nothing through this gate.
+    if ((settings.fee_cents ?? 0) > 0 && reg.status !== "paid" && reg.entry_payment_intent_id === null) {
       throw new HttpError(
         422,
         "Awaiting payment — mark it paid first, or approve once payment arrives",

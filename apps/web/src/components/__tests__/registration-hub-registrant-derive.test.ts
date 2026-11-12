@@ -367,7 +367,7 @@ describe("deriveRegistrantActionFlags", () => {
       ).toBe(false);
     });
 
-    it("approve is PRESENT once that same entry is paid (payment_intent_id set)", () => {
+    it("approve is PRESENT once that same entry's OWN payment is recorded (entry_payment_intent_id set)", () => {
       expect(
         deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
           status: "pending",
@@ -375,8 +375,24 @@ describe("deriveRegistrantActionFlags", () => {
           amount_cents: 1500, refunded_cents: 0,
           division_fee_cents: 1500,
           payment_intent_id: "pi_123",
+          entry_payment_intent_id: "pi_123",
         }).canApprove,
       ).toBe(true);
+    });
+
+    // Polish wave P5 (P1 carry): the cart's intent is set by whichever entry paid; on a cart where only a SIBLING paid it is the
+    // sibling's, and this entry still owes its fee - approveRegistration refuses it (awaiting payment), so the control is hidden.
+    it("approve is ABSENT when only a SIBLING's payment sits on the cart (cart intent set, entry intent null)", () => {
+      expect(
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
+          status: "pending",
+          approval: "manual",
+          amount_cents: 1000, refunded_cents: 0,
+          division_fee_cents: 1000,
+          payment_intent_id: "pi_sibling",
+          entry_payment_intent_id: null,
+        }).canApprove,
+      ).toBe(false);
     });
 
     it("approve is PRESENT once the entry's OWN status has already moved to paid, even with no payment_intent_id — approveRegistration's own check (registration-approval.ts:128) only bites while status is still pending", () => {
@@ -438,7 +454,7 @@ describe("deriveRegistrantActionFlags", () => {
       }
     });
 
-    it("is ABSENT once a payment_intent_id already exists — a card payment refunds on the payments trail instead", () => {
+    it("is ABSENT once the entry's OWN payment intent exists — a card payment refunds on the payments trail instead", () => {
       expect(
         deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
           status: "pending",
@@ -446,8 +462,24 @@ describe("deriveRegistrantActionFlags", () => {
           amount_cents: 1500, refunded_cents: 0,
           division_fee_cents: 1500,
           payment_intent_id: "pi_123",
+          entry_payment_intent_id: "pi_123",
         }).canMarkPaid,
       ).toBe(false);
+    });
+
+    // Polish wave P5 (P1 carry): markRegistrationPaidOffline refuses only THIS entry's own card payment; a sibling's intent on
+    // the cart left the unpaid entry with no way forward (no Approve, no Mark paid).
+    it("is PRESENT when only a SIBLING's payment sits on the cart (cart intent set, entry intent null)", () => {
+      expect(
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
+          status: "pending",
+          approval: "manual",
+          amount_cents: 1000, refunded_cents: 0,
+          division_fee_cents: 1000,
+          payment_intent_id: "pi_sibling",
+          entry_payment_intent_id: null,
+        }).canMarkPaid,
+      ).toBe(true);
     });
 
     it("is ABSENT on a free entry (amount_cents 0) — 'This division has no entry fee'", () => {
@@ -477,6 +509,7 @@ describe("deriveRegistrantActionFlags", () => {
     });
 
     it("is mutually exclusive with canApprove by construction — never both true for the same row", () => {
+      let checked = 0;
       for (const status of RegistrationStatus.options) {
         for (const approval of ["auto", "manual"] as const) {
           for (const amount_cents of [0, 1500]) {
@@ -486,6 +519,8 @@ describe("deriveRegistrantActionFlags", () => {
             // edit produces.
             for (const division_fee_cents of [0, 1500]) {
             for (const payment_intent_id of [null, "pi_123"] as const) {
+            // Polish wave P5 (P1 carry): the ENTRY's own intent is the gate's input now; the cart's stays swept beside it.
+            for (const entry_payment_intent_id of [null, "pi_123"] as const) {
               const flags = deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
                 status,
                 approval,
@@ -493,13 +528,17 @@ describe("deriveRegistrantActionFlags", () => {
                 refunded_cents: 0,
                 division_fee_cents,
                 payment_intent_id,
+                entry_payment_intent_id,
               });
               expect(flags.canApprove && flags.canMarkPaid).toBe(false);
+              checked++;
+            }
             }
             }
           }
         }
       }
+      expect(checked, "anti-vacuity").toBe(RegistrationStatus.options.length * 32);
     });
   });
 

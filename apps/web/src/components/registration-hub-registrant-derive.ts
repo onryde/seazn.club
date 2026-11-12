@@ -284,8 +284,10 @@ export interface RegistrantActionFlags {
  * instead; that only corrected itself after a failed click, coupled the UI
  * to error prose no test pins, and made two unrelated fixtures reword
  * themselves to avoid colliding with the match.
- * `row.payment_intent_id` is exact, not a proxy: it is the SAME cart-level
- * column `reg.payment_intent_id` resolves to server-side. Deliberately does
+ * `row.entry_payment_intent_id` is exact, not a proxy: it is the SAME per-entry
+ * column (`registrations.payment_intent_id`, V387) the server gate reads since
+ * polish wave P5 (the cart's intent is a sibling's on a cart where only the
+ * sibling paid, and let an unpaid entry through). Deliberately does
  * NOT also exclude an already-refunded 'paid' row the way `approveRegistration`
  * itself additionally does: the dispatch's own legality rule stops at
  * "pending, or paid on a manual division" (plus this wave's awaiting-payment
@@ -304,7 +306,8 @@ export interface RegistrantActionFlags {
  * canMarkPaid: `markRegistrationPaidOffline`'s own rule (usecases/registrations/organiser-actions.ts,
  * its checks) — status must still be `pending` ("Only pending
  * registrations can be marked paid" refuses every other status, including
- * `paid`), no `payment_intent_id` on file (a card payment refunds on the
+ * `paid`), no `entry_payment_intent_id` on file (THIS entry's own card
+ * payment refunds on the
  * payments trail instead), and a real fee owed (same `amount_cents` proxy
  * as approve's gate, same reasoning above). Identical to
  * `awaitingOfflineFee` below BY CONSTRUCTION, not coincidence: whenever an
@@ -389,7 +392,8 @@ export function deriveRegistrantActionFlags(
   // reworded because their text collided with the match. Reading the same
   // value the server reads is correct on the FIRST render and cannot drift.
   const feeOwed = row.division_fee_cents > 0;
-  const awaitingOfflineFee = row.status === "pending" && feeOwed && row.payment_intent_id === null;
+  // THIS entry's own payment (V387), never the cart's `payment_intent_id` (a sibling's payment sets it): polish wave P5, P1 carry.
+  const awaitingOfflineFee = row.status === "pending" && feeOwed && row.entry_payment_intent_id === null;
   const nonTerminal = !isTerminalRegistrationStatus(row.status);
   return {
     canApprove: awaitingManualDecision && !awaitingOfflineFee,
