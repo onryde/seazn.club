@@ -765,6 +765,10 @@ export async function submitRegistrationGroup(
     // committed — see the `void inviteUnclaimedMembers(...)` call below.
     const autoConfirmedEntrantIds: string[] = [];
 
+    // Polish wave J: each entry is stamped `created_at = clock_timestamp()` at its own insert (below), not the column's `now()`
+    // default, which is the TRANSACTION's start and so the same for every entry of this cart. The status page and the cart mail
+    // read entries `order by r.created_at, r.id`; with one shared moment the tie fell to the random row id and a cart read back in
+    // an order the person never chose. Inserted in `prepared` order (the cart's own), the moments now carry that order.
     for (const p of prepared) {
       // LIVE settings (fetched under the lock above), never the pre-lock
       // `p.settings` snapshot — review MAJOR 3.
@@ -848,11 +852,11 @@ export async function submitRegistrationGroup(
               const [r] = await sp<RegistrationRow[]>`
                 insert into registrations
                   (group_id, division_id, display_name, status, answers,
-                   amount_cents, join_code, free_agent)
+                   amount_cents, join_code, free_agent, created_at)
                 values (
                   ${groupId}, ${p.input.division_id}, ${p.displayName}, ${status},
                   ${sp.json(p.answers as never)}, ${feeCents}, ${candidate},
-                  ${p.input.free_agent ?? false}
+                  ${p.input.free_agent ?? false}, clock_timestamp()
                 )
                 returning *`;
               return r;
@@ -867,10 +871,10 @@ export async function submitRegistrationGroup(
       } else {
         const [r] = await tx<RegistrationRow[]>`
           insert into registrations
-            (group_id, division_id, display_name, status, answers, amount_cents, free_agent)
+            (group_id, division_id, display_name, status, answers, amount_cents, free_agent, created_at)
           values (
             ${groupId}, ${p.input.division_id}, ${p.displayName}, ${status},
-            ${tx.json(p.answers as never)}, ${feeCents}, ${p.input.free_agent ?? false}
+            ${tx.json(p.answers as never)}, ${feeCents}, ${p.input.free_agent ?? false}, clock_timestamp()
           )
           returning *`;
         regRow = r!;
