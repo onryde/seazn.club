@@ -26,6 +26,7 @@ import {
   TAG,
   type RosteredFixture,
 } from "../helpers";
+import { answerStartToss } from "../helpers/start-toss";
 import { HUMAN_FASTEST_REPEAT_MS } from "../../src/components/v2/scorepad/use-pad-pipeline";
 import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
 import { PER_TAP_SLACK_MS, BUDGET_FLOOR_MS } from "../gallery-budget";
@@ -229,6 +230,8 @@ test("R4 — tennis: tap a match through the deciding-set MATCH TIE-BREAK to a d
   await page.goto(await fixturePath(page.request, fx.fixtureId));
   await expect(pad(page)).toBeVisible({ timeout: 20_000 });
   await page.getByRole("button", { name: "Start match", exact: true }).click();
+  // S2-7: a tennis Start asks "Who serves first?"; home keeps the serve order this walkthrough was written against.
+  await answerStartToss(page);
   await expect
     .poll(async () => (await ledger(page.request, fx.fixtureId)).map((e) => e.type), { timeout: 20_000 })
     .toContain("core.start");

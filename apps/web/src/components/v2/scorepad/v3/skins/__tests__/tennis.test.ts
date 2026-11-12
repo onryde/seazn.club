@@ -787,6 +787,8 @@ describe("buildTiles — band + phase gating, per the engine's fidelity map", ()
       "tennis.interruption": 1,
       "tennis.point": 3,
       "tennis.game.award": 3,
+      // S2-7 (TN-TS-1, engine 8.0.0): the toss sits at the points' band.
+      "tennis.toss": 3,
     });
   });
 });

@@ -1,6 +1,7 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
 import { HOLD_MS } from "../src/components/v2/scorepad/queue";
 import { apiJson, expectNoHorizontalScroll, fixturePath, pickCricketPeople, seedRosteredFixture, TAG, tapCricketExtra } from "./helpers";
+import { answerStartToss } from "./helpers/start-toss";
 
 /**
  * Soft-commit inventory — browser proof of `usesSoftCommit` (HOLD iff dock
@@ -94,10 +95,12 @@ async function ledger(request: APIRequestContext, fixtureId: string): Promise<Le
   return res.data ?? [];
 }
 
-async function openLive(page: Page, fixtureId: string): Promise<void> {
+async function openLive(page: Page, fixtureId: string, opts: { tennis?: boolean } = {}): Promise<void> {
   await page.goto(await fixturePath(page.request, fixtureId));
   await expect(pad(page)).toBeVisible({ timeout: 20_000 });
   await page.getByRole("button", { name: "Start match", exact: true }).click();
+  // S2-7: a tennis Start asks "Who serves first?" first; home keeps the serve order the tennis inventory was written against.
+  if (opts.tennis === true) await answerStartToss(page);
   await expect
     .poll(async () => (await ledger(page.request, fixtureId)).map((e) => e.type), { timeout: 20_000 })
     .toContain("core.start");
@@ -377,7 +380,7 @@ test("inventory: tennis point holds", async ({ page }) => {
     home: [{ fullName: `SCI TN Home ${TAG}` }],
     away: [{ fullName: `SCI TN Away ${TAG}` }],
   });
-  await openLive(page, fx.fixtureId);
+  await openLive(page, fx.fixtureId, { tennis: true });
   const before = (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "tennis.point").length;
   await half(page, "home").click();
   await expectHeldThenFlush(page, page.request, fx.fixtureId, "tennis.point", before, "13-tennis-point-hold");

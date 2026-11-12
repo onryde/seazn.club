@@ -105,6 +105,7 @@
   "timeline.tennis.set_summary": "Set finished {home}–{away}",
   "timeline.tennis.sanction": "Code violation ({level}) — {side} {detail}",
   "timeline.tennis.interruption": "Interruption ({kind}) — {side} {detail}",
+  "timeline.tennis.toss": "Toss — {side} serves first",
   "timeline.setbased.rally": "Point — {side}",
   "timeline.setbased.set.summary": "Set finished {home}–{away}",
   "timeline.setbased.game.summary": "Game finished {home}–{away}",

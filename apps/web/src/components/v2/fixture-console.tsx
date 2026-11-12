@@ -90,6 +90,8 @@ import { jointWinnersOffered } from "@/lib/joint-winners";
 import { HeldNote, NeedsDecisionBlock, finalizeVisible, heldCause, inTableStage, needsDecision, type SettleResult } from "@/components/v2/needs-decision";
 import { ForfeitDialog, forfeitBaseState, forfeitDialogModel, forfeitPlayRecorded, type ForfeitDialogModel, type ForfeitResult } from "@/components/v2/forfeit-dialog";
 import { lineupPairFrom } from "@/components/v2/scorepad/registry";
+import { StartTossQuestion, useStartWithToss } from "@/components/v2/scorepad/v3/start-match-control";
+import { runTossThenStart } from "@/lib/start-with-toss";
 import type { AnySportModule } from "@seazn/engine/sport";
 import type { WriterForfeitReason } from "@/lib/forfeit-phase-refusal";
 
@@ -843,6 +845,30 @@ export function FixtureConsole({
     },
     [post],
   );
+
+  // S2-7 (TN-TS-1): the toss, then the Start, at consecutive seqs (`runTossThenStart`); one refresh at the end, like
+  // "Void back to here" below. The first refusal stops it and paints its own line.
+  const tossThenStart = useCallback(
+    async (toss: { type: string; payload: Record<string, unknown> }) => {
+      try {
+        await runTossThenStart(live.last_seq, toss, async (type, payload, expectedSeq) => {
+          const r = await post(type, payload, { expectedSeq });
+          if (!r.ok && r.message !== null) setError(r.message);
+          return r.ok;
+        });
+      } finally {
+        await resync().catch(() => undefined);
+        router.refresh();
+      }
+    },
+    [live.last_seq, post, resync, router],
+  );
+  const start = useStartWithToss({
+    sportKey: sport.key,
+    state: live.state,
+    onStart: () => void send("core.start", {}),
+    onTossThenStart: tossThenStart,
+  });
 
   // 2026-11-10 — "Void back to here" on an older cricket wicket (docs/specs/2026-11-10-cricket-wicket-void-latest-only.md).
   // Each void is the ordinary `core.void` of the then-latest entry, newest first, so the server's wicket rule never blocks
@@ -1794,12 +1820,12 @@ export function FixtureConsole({
           <div className={`mb-3 flex flex-wrap items-center justify-between gap-2${started ? " max-md:hidden" : ""}`}>
             <h2 className="text-sm font-semibold text-slate-700 max-md:hidden">{msg("score.scoring")}</h2>
             <div className="flex flex-wrap items-center gap-2">
-              {!started && (
+              {!started && !start.asking && (
                 <button
                   type="button"
                   data-testid="score-start-match"
                   disabled={busy || padSyncing}
-                  onClick={() => send("core.start", {})}
+                  onClick={start.press}
                   className="btn btn-primary min-h-11"
                 >
                   {msg("score.startMatch")}
@@ -1807,6 +1833,17 @@ export function FixtureConsole({
               )}
             </div>
           </div>
+          {/* S2-7 (TN-TS-1): a tennis Start asks "Who serves first?" in place of the button, then sends the toss first. */}
+          {!started && start.asking && (
+            <div className="mb-3">
+              <StartTossQuestion
+                home={{ id: home.id, name: entrantDisplayName(home) }}
+                away={{ id: away.id, name: entrantDisplayName(away) }}
+                msg={msg}
+                start={start}
+              />
+            </div>
+          )}
 
           {/* Sport pad — S13/#422: the v2 registry, unconditionally (the flag
               and the eight v1 pads it used to choose between are gone).
