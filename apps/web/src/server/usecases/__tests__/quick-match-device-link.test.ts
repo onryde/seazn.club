@@ -22,11 +22,14 @@ import { builtinModules } from "@seazn/engine/sports";
 import { forEachSportAsync } from "@seazn/engine/testkit";
 
 import { POST } from "@/app/api/v1/fixtures/[id]/events/route";
+import { GET as GET_STATE } from "@/app/api/v1/fixtures/[id]/state/route";
+import { startNeedsToss, startTossQuestion, tossEventFor } from "@/components/v2/scorepad/v3/skins/tennis";
 import { isChessSport } from "@/lib/chess-individual-only-rule";
 import { sql } from "@/lib/db";
 import offerJson from "@/lib/quick-match-offer.generated.json";
 import { QUICK_MATCH_ERRORS, QUICK_MATCH_SYSTEM_ORG_ID, QUICK_MATCH_SYSTEM_USER_ID } from "@/lib/quick-match-constants";
 import { DEVICE_LINK_MINT_LIMIT, __setRateLimitCounterForTests } from "@/lib/rate-limit";
+import { runTossThenStart, type SeqStep } from "@/lib/start-with-toss";
 import { requireFixtureActor, type AuthCtx } from "@/server/api-v1/auth";
 import type { AppendEventRequest, CreateQuickMatch } from "@/server/api-v1/schemas";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
@@ -40,7 +43,7 @@ import { findQuickMatchByCompetition, resolveQuickMatchToken, type QuickMatchRow
 import { listQuickMatchSports } from "../quick-match-sports";
 import { hashVisitorKey, mintVisitorKey } from "../quick-match-tokens";
 import { scoreEvent } from "../scoring";
-import { firstRallyFor, playToDecided } from "./_quick-match-probe";
+import { firstRallyFor, nextPlayFor, playToDecided } from "./_quick-match-probe";
 import { makeUser } from "./_seed";
 
 vi.stubEnv("DEVICE_LINK_KEK", kekBytes(32).toString("hex"));   // A15: every create and every mint seals a secret
@@ -515,4 +518,72 @@ describe.skipIf(!HAS_DB)("a score through the guest link (real producer and cons
     expect(rallies).toBeGreaterThan(0);   // zero checked is a failure
     expect(rallies + chessGames).toBe(offered.size);   // every offered sport, once
   }, SWEEP_TIMEOUT_MS);
+
+  // Engine 8.0.0 (main #1195, TN-TS-1): the remote pad's Start on a tennis fixture asks "Who serves first?" and writes
+  // `tennis.toss`, then `core.start`, at consecutive seqs (`runTossThenStart`). The sweep above starts tennis with a bare
+  // `core.start` (no toss: home serves first, as before), so it never takes the path a guest's pad now takes. One sport by
+  // design: tennis is the only module whose Start writes an event before `core.start` (`startNeedsToss` is false for every
+  // other key).
+  it("tennis on engine 8: the pad's Start (the toss for the away side, then core.start) and a point land through the guest link", async () => {
+    const tennis = (await listQuickMatchSports()).find((s) => s.sport_key === "tennis");
+    expect(tennis, "premise: tennis is offered (lib/quick-match-offer.generated.json)").toBeDefined();
+    const { row, out } = await create(league({
+      sport_key: "tennis",
+      variant_key: tennis!.variants[0]!.variant_key,
+      kind: tennis!.kinds.at(-1)!,
+      sides: ["Side A", "Side B"],
+    }));
+    const [f0] = await fixturesOf(out.competitionId);
+    const link = await ensureGuestDeviceLink(row, f0!.id);
+    /** What the pad reads before it draws Start: `/state`, through the same link. */
+    const readState = async (): Promise<{ state: unknown; last_seq: number }> => {
+      const res = await GET_STATE(
+        new Request(`http://test.local/api/v1/fixtures/${f0!.id}/state`, { headers: { authorization: `Bearer ${link.secret}` } }),
+        { params: Promise.resolve({ id: f0!.id }) },
+      );
+      expect(res.status, await res.clone().text()).toBe(200);
+      const { data } = (await res.json()) as { data: { state: unknown; last_seq: number } };
+      // `startNeedsToss` answers yes for an ABSENT state, so a misread body would pass for "unstarted": pin the shape.
+      expect(typeof data.last_seq, "premise: /state's body carries last_seq").toBe("number");
+      expect("state" in data, "premise: /state's body carries the fold").toBe(true);
+      return data;
+    };
+    const before = await readState();
+    expect(before.last_seq, "premise: an empty ledger").toBe(0);
+    expect(startNeedsToss("tennis", before.state), "an unstarted tennis match asks who serves first").toBe(true);
+
+    // The pad's own producers: the question's away chip, the toss event it answers, and the toss-then-Start walk, each
+    // write posted to the events route with the link's bearer exactly as the pad's `send` posts it.
+    const question = startTossQuestion(
+      { id: f0!.home_entrant_id!, name: "Side A" },
+      { id: f0!.away_entrant_id!, name: "Side B" },
+      (key) => key,
+    );
+    const awayChip = question.chips.find((c) => c.id === "away");
+    expect(awayChip, "premise: the question offers the away side").toBeDefined();
+    const answers: { type: string; status: number; body: string }[] = [];
+    const step: SeqStep = async (type, payload, expectedSeq) => {
+      const res = await post(link.secret, f0!.id, { expected_seq: expectedSeq, type, payload });
+      answers.push({ type, status: res.status, body: await res.clone().text() });
+      return res.status === 201;
+    };
+    const outcome = await runTossThenStart(before.last_seq, tossEventFor(awayChip!), step);
+    expect(answers.map((a) => [a.type, a.status]), JSON.stringify(answers)).toEqual([["tennis.toss", 201], ["core.start", 201]]);
+    expect(outcome).toBe("started");
+    expect(startNeedsToss("tennis", (await readState()).state), "a held toss is not asked again").toBe(false);
+
+    const ledger = await sql<{ type: string; payload: Record<string, unknown> }[]>`
+      select type, payload from score_events where fixture_id = ${f0!.id} order by seq`;
+    expect(ledger.map((e) => e.type)).toEqual(["tennis.toss", "core.start"]);
+    expect(ledger[0]!.payload, "the toss names the away entrant as the first server").toMatchObject({ serving: f0!.away_entrant_id });
+
+    // A point, drawn by the engine from the match as the pad left it (toss held, started).
+    const point = await nextPlayFor(f0!.id, ledger);
+    expect(point.type.startsWith("core.") || point.type === "tennis.toss", `a play event, not ${point.type}`).toBe(false);
+    const res = await post(link.secret, f0!.id, point);
+    expect(res.status, await res.clone().text()).toBe(201);
+    const events = await eventsOn(f0!.id);
+    expect(events.map((e) => e.type)).toEqual(["tennis.toss", "core.start", point.type]);
+    for (const e of events) expect(e).toMatchObject({ device_link_id: link.row.id, recorded_by: QUICK_MATCH_SYSTEM_USER_ID });
+  });
 });
