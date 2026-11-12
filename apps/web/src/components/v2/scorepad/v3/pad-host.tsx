@@ -73,6 +73,7 @@ import { Scorebug } from "./scorebug";
 import { TileGrid } from "./tile-grid";
 import { ChoiceDock, DetailDock, makeDockStore, type DockStore } from "./detail-dock";
 import { ContextStrip, type PoolView, type TFn } from "./context-strip";
+import { withSideWords, type SideWords } from "./side-words";
 import { SwapSheet, refusalMessage, type PolicyVerdict, type SwapSheetSpec } from "./swap-sheet";
 import { GuidedSheet } from "./guided-sheet";
 import { BANDS, RecordingChip } from "./recording-chip";
@@ -1837,6 +1838,10 @@ export interface PadHostV3Props {
   canOrganise: boolean;
   /** W2a fix round 1 (I2) — copied into `PadHostView.entrantNames`; see its doc (types.ts). */
   entrantNames: PadHostView["entrantNames"];
+  /** Sign-off 2026-11-12 — the name each member-less side is called by where the pad says the side word, built by
+   *  `ScorePad` (registry.tsx) from the two sides' rosters (side-words.ts). Wraps this host's own `t`, as it wraps the
+   *  skin factory's. Required: a forgotten producer is a tsc error, never a pad back on Home/Away. */
+  sideWords: SideWords;
   fixtureId: string;
   lineups: LineupPair;
   identity: OwnIdentity;
@@ -1993,7 +1998,9 @@ export function PadHostV3(props: PadHostV3Props) {
   // plain strings, not literal MessageKeys) — MsgFn's narrower parameter
   // is not itself assignable where the wider TFn is expected, so this is a
   // real (and safe) widening, not a formality.
-  const t: TFn = useCallback((key: string, vars?: Record<string, string | number>) => msg(key as MessageKey, vars), [msg]);
+  const msgT: TFn = useCallback((key: string, vars?: Record<string, string | number>) => msg(key as MessageKey, vars), [msg]);
+  // A member-less side's name in place of its side word (side-words.ts), the same words the skin factory's `t` carries.
+  const t: TFn = useMemo(() => withSideWords(msgT, props.sideWords), [msgT, props.sideWords]);
   // Plural selection needs a count AND the locale, neither of which `t` or a
   // skin factory carries — see `ActivityDetailContext.plural`'s own doc.
   // Resolved HERE, from the same provider `useMsg` reads, so a skin never

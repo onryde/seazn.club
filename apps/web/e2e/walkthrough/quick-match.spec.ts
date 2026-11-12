@@ -430,12 +430,12 @@ async function playHeroMatch(
   await expect(pad(p), "Start opens the pad").toBeVisible({ timeout: STEP_MS });
   await expect(tapTarget(p, "home"), "a live match renders tappable halves").toBeVisible({ timeout: STEP_MS });
   await expect(tapTarget(p, "away")).toBeVisible();
-  // What the halves call the sides, recorded for the run's reader (a read of the skin suggests a side with no members
-  // falls back to "Home"/"Away"; this run says what a guest actually sees).
-  test.info().annotations.push({
-    type: "pad halves",
-    description: `${await tapTarget(p, "home").getAttribute("aria-label")} | ${await tapTarget(p, "away").getAttribute("aria-label")}`,
-  });
+  // What the halves call the sides (sign-off 2026-11-12): a quick match's sides have no members, and a member-less side is
+  // called by its NAME where the pad says the side word, never Home/Away. The half's accessible name opens on it.
+  // Followed by the hint, or ", Serving" on the serving side (whoNames).
+  const opensWith = (name: string) => new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:,|\\s)`);
+  await expect(tapTarget(p, "home"), "the home half names the home side").toHaveAttribute("aria-label", opensWith(home));
+  await expect(tapTarget(p, "away"), "the away half names the away side").toHaveAttribute("aria-label", opensWith(away));
 
   // ---- Every rally, tapped ----
   const rallies = new Rallies(p);
