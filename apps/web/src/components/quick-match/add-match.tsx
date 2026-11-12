@@ -5,6 +5,7 @@
 // only keeps a second tap from posting twice while the page is leaving.
 //
 //   - Collapsed behind "+ Add a match", a native `<details>`: it opens with no script, and the list above it stays the page.
+//     A refused add comes back OPEN (`open`), at the guest's own picks, so the flash's fix is one tap away (review m4).
 //   - No script: still a real `<form method="post">` that posts. Unlike Score, an add is NOT idempotent (each post adds a
 //     match), so an unguarded double tap adds two; the cap bounds that, and with the script the lock below stops it.
 //   - With the script: the first submit is the browser's own; every later one is cancelled until the page comes back from
@@ -27,13 +28,15 @@ export interface QuickMatchAddMatchProps {
   away: string;
   /** In the viewer's language: the disclosure's "+ Add a match", the two selects' labels and the button. */
   labels: { open: string; home: string; away: string; submit: string };
+  /** Open on first paint: the page came back from a refused add. */
+  open?: boolean;
 }
 
 const FOCUS = "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cream";
 const SELECT = `min-h-11 w-full min-w-0 max-w-full truncate rounded-lg border border-[#3b2a6e] bg-night px-3 py-2 text-base text-cream [color-scheme:dark] ${FOCUS}`;
 const LABEL = "flex min-w-0 flex-col gap-1.5 text-xs font-semibold tracking-[0.04em] text-[#b7aede]";
 
-export function QuickMatchAddMatch({ action, sides, home, away, labels }: QuickMatchAddMatchProps) {
+export function QuickMatchAddMatch({ action, sides, home, away, labels, open = false }: QuickMatchAddMatchProps) {
   const locked = useRef(false);
   const [busy, setBusy] = useState(false);
 
@@ -66,7 +69,7 @@ export function QuickMatchAddMatch({ action, sides, home, away, labels }: QuickM
     ));
 
   return (
-    <details data-testid="qm-add-match" className="min-w-0">
+    <details data-testid="qm-add-match" open={open || undefined} className="min-w-0">
       <summary
         data-testid="qm-add-match-open"
         className={`app-display inline-flex min-h-11 max-w-full cursor-pointer list-none items-center rounded-lg text-sm font-semibold tracking-[0.04em] text-[color:var(--mk-lime)] [overflow-wrap:anywhere] [&::-webkit-details-marker]:hidden ${FOCUS}`}

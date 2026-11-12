@@ -16,7 +16,7 @@ const ORIGIN = "https://seazn.test";
 const HOME = "/q/qm_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_abcde";
 
 /** Mount the island on a page at `path`; answer every URL it wrote. */
-function mountAt(path: string) {
+function mountAt(path: string, props: { alsoSpent?: readonly string[] } = {}) {
   const writes: string[] = [];
   const location = { href: `${ORIGIN}${path}` };
   vi.stubGlobal("window", {
@@ -28,7 +28,7 @@ function mountAt(path: string) {
       },
     },
   });
-  const island = renderIsland(ClearFlashParam, {});
+  const island = renderIsland(ClearFlashParam, props);
   return { island, writes, now: () => location.href.slice(ORIGIN.length) };
 }
 
@@ -77,5 +77,40 @@ describe("ClearFlashParam: the spent ?e= leaves the URL, and nothing else does",
     island.rerender({});
     island.rerender({});
     expect(writes).toHaveLength(1);
+  });
+});
+
+// T8 review m4: the home's refused add hands the guest's two picks back beside `e` (`?e=…&home=<id>&away=<id>`). They are
+// spent with it: named in `alsoSpent`, they leave with `e`, and only with `e`.
+describe("ClearFlashParam alsoSpent: the names a refusal carries beside e go with it, and only with it", () => {
+  const PICKS = ["home", "away"] as const;
+  const A = "11111111-2222-4333-8444-555555555555";
+
+  it("takes e and each named parameter out, keeping every other parameter and the fragment", () => {
+    const cases: [string, string][] = [
+      [`${HOME}?e=QUICK_MATCH_SAME_SIDE&home=${A}&away=${A}`, HOME],
+      [`${HOME}?e=QUICK_MATCH_NOT_FOUND&home=${A}`, HOME],   // one pick handed back: that one goes
+      [`${HOME}?from=share&e=QUICK_MATCH_ADHOC_LIMIT&away=${A}#up-next`, `${HOME}?from=share#up-next`],
+      [`${HOME}?e=QUICK_MATCH_SIDES_UNKNOWN`, HOME],   // no picks: e alone, as before
+    ];
+    let checked = 0;
+    for (const [from, to] of cases) {
+      const { now } = mountAt(from, { alsoSpent: PICKS });
+      expect(now(), from).toBe(to);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  it("with no e, the named parameters stay (they belong to no refusal), and nothing is written", () => {
+    const path = `${HOME}?home=${A}&away=${A}`;
+    const { writes, now } = mountAt(path, { alsoSpent: PICKS });
+    expect(writes).toEqual([]);
+    expect(now()).toBe(path);
+  });
+
+  it("without alsoSpent (the setup page), a picks-shaped parameter is left alone: the default is e only", () => {
+    const { now } = mountAt(`${HOME}?e=QUICK_MATCH_SAME_SIDE&home=${A}`);
+    expect(now()).toBe(`${HOME}?home=${A}`);
   });
 });

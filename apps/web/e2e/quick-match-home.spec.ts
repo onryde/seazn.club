@@ -397,18 +397,26 @@ test("Add a match (Task 8): a league of 4 at 320, 768 and 1280: closed on first 
   await expectNoHorizontalScroll(page);
 });
 
-test("Add a match (Task 8): the same side twice lands back on the home with 'Pick two different sides.', nothing added, at 320, 768 and 1280", async ({ guest: page }) => {
+test("Add a match (Task 8): the same side twice lands back on the home with 'Pick two different sides.', the form open at the picks, nothing added, at 320, 768 and 1280", async ({ guest: page }) => {
   await createThroughSetup(page, ["Ravi & Sam", "Priya & Tom", "Lee & Ana"], "League");
   const home = new URL(page.url()).pathname;
   await page.getByTestId("qm-add-match-open").click();
   const addForm = page.getByTestId("qm-add-match-form");
   await addForm.locator('select[name="home"]').selectOption({ label: "Lee & Ana" });
   await addForm.locator('select[name="away"]').selectOption({ label: "Lee & Ana" });
-  // The refusal is caught as the redirected GET: the URL holds `?e=` only until the home's ClearFlashParam takes it out.
-  const refusal = `${home}?e=QUICK_MATCH_SAME_SIDE`;
-  const landed = page.waitForRequest((r) => r.method() === "GET" && r.url().endsWith(refusal));
+  const picked = await addForm.locator('select[name="home"]').inputValue();
+  // The refusal is caught as the redirected GET: `?e=` and the guest's picks handed back (review m4) stay in the URL only
+  // until the home's ClearFlashParam takes them out.
+  const isRefusal = (raw: string) => {
+    const url = new URL(raw);
+    return url.pathname === home && url.searchParams.get("e") === "QUICK_MATCH_SAME_SIDE";
+  };
+  const landed = page.waitForRequest((r) => r.method() === "GET" && isRefusal(r.url()));
   await addForm.getByTestId("qm-add-match-submit").click();
-  expect((await landed).redirectedFrom()?.method(), "the post's 303 landed on the refusal").toBe("POST");
+  const refused = await landed;
+  expect(refused.redirectedFrom()?.method(), "the post's 303 landed on the refusal").toBe("POST");
+  const back = new URL(refused.url()).searchParams;
+  expect([back.get("home"), back.get("away")], "the picks are handed back").toEqual([picked, picked]);
   await expect(page).toHaveURL(new RegExp(`${home}$`));
   await atEachWidth(
     page,
@@ -419,6 +427,10 @@ test("Add a match (Task 8): the same side twice lands back on the home with 'Pic
       await expect(flash, `${width}: in view at the top`).toBeInViewport();
       // Nothing added: a round robin of 3 still plays 3.
       await expect(page.getByTestId("qm-match"), `${width}`).toHaveCount(3);
+      // The form came back open at the guest's own picks: the fix is one select away (review m4).
+      await expect(page.getByTestId("qm-add-match"), `${width}`).toHaveAttribute("open", "");
+      await expect(addForm.locator('select[name="home"] option:checked'), `${width}`).toHaveText("Lee & Ana");
+      await expect(addForm.locator('select[name="away"] option:checked'), `${width}`).toHaveText("Lee & Ana");
     },
     { reload: false },
   );
@@ -430,8 +442,11 @@ test("Add a match (Task 8): a knockout has no '+ Add a match'; a stale or crafte
   await expect(page.getByTestId("qm-draw")).toBeVisible();
   await expect(page.getByTestId("qm-add-match"), "a knockout has a winner by construction (C5)").toHaveCount(0);
   // What a league's form posts, two side ids: the league check answers before the sides are even looked at.
-  const refusal = `${home}?e=QUICK_MATCH_LEAGUE_ONLY`;
-  const landed = page.waitForRequest((r) => r.method() === "GET" && r.url().endsWith(refusal));
+  const landed = page.waitForRequest((r) => {
+    if (r.method() !== "GET") return false;
+    const url = new URL(r.url());
+    return url.pathname === home && url.searchParams.get("e") === "QUICK_MATCH_LEAGUE_ONLY";
+  });
   await page.evaluate((action) => {
     const form = document.createElement("form");
     form.method = "post";

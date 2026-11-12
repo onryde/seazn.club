@@ -7,7 +7,8 @@
 //   - an add that works lands back on the bare home, `routes.quickMatch(token)`, where the new match is then listed and,
 //     when nothing else is left to play, up next;
 //   - a refusal lands on the home with `?e=<code>` (QUICK_MATCH_ERRORS), printed as the viewer's `quickMatch.flash.*` line
-//     (home.tsx `homeFlash`);
+//     (home.tsx `homeFlash`), and the guest's two picks beside it (`&home=<id>&away=<id>`, each only when shaped like an id:
+//     `refusedAddSearch`), so the home reopens "Add a match" at them (review m4);
 //   - an unknown, changed or expired token, or a quick match gone since its token was read, lands on its own `/q/<token>`
 //     with nothing added: the home's one dead screen, which never says which (D16).
 //
@@ -30,7 +31,7 @@ import { handler, HttpError, redirectLocal } from "@/lib/http";
 import { QUICK_MATCH_ERRORS } from "@/lib/quick-match-constants";
 import { routes } from "@/lib/routes";
 import { log } from "@/server/logger";
-import { addQuickMatchDecider, type AddMatchPick } from "@/server/usecases/quick-match-add";
+import { addQuickMatchDecider, refusedAddSearch, type AddMatchPick } from "@/server/usecases/quick-match-add";
 import { touchQuickMatchActivity } from "@/server/usecases/quick-match-activity";
 import { resolveQuickMatchToken } from "@/server/usecases/quick-match-home";
 
@@ -71,6 +72,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
   return handler(async () => {
     // Until the token is read, a failure has no home to land on: the site's root.
     let home = "/";
+    // Until the form is read, nothing was picked.
+    let picked: AddMatchPick = { home: null, away: null };
     try {
       const { token: raw } = await params;
       // Trimmed as the home page trims it (Review Focus 3). Encoded for the Location only: a token-shaped one is unchanged,
@@ -79,7 +82,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
       home = routes.quickMatch(encodeURIComponent(token));
       const qm = await resolveQuickMatchToken(token);
       if (!qm) return redirectLocal(home, 303);
-      await addQuickMatchDecider(qm, await pickOf(req));
+      picked = await pickOf(req);
+      await addQuickMatchDecider(qm, picked);
       await touchQuickMatchActivity(qm.id).catch((err: unknown) => {
         log.error({ err, quickMatch: qm.id }, "quick match add: activity touch failed (the match stands)");
       });
@@ -91,7 +95,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
         Sentry.captureException(err);
         log.error({ err }, "quick match add: failed");
       }
-      return redirectLocal(`${home}?e=${refused ?? QUICK_MATCH_ERRORS.ACTION_FAILED}`, 303);
+      return redirectLocal(`${home}?${refusedAddSearch(refused ?? QUICK_MATCH_ERRORS.ACTION_FAILED, picked)}`, 303);
     }
   });
 }

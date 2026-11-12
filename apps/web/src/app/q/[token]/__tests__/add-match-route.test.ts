@@ -47,6 +47,7 @@ import { hardDeleteQuickMatchCompetition } from "@/server/usecases/quick-match-d
 import { readQuickMatchHome } from "@/server/usecases/quick-match-home";
 import { offerFor } from "@/server/usecases/quick-match-sports";
 import { hashVisitorKey, mintVisitorKey } from "@/server/usecases/quick-match-tokens";
+import { scoreEvent } from "@/server/usecases/scoring";
 import { playToDecided } from "@/server/usecases/__tests__/_quick-match-probe";
 import QuickMatchHomePage from "../page";
 import { POST } from "../add-match/route";
@@ -175,21 +176,31 @@ async function landed(res: Response): Promise<string> {
 async function addedOn(res: Response, token: string): Promise<void> {
   expect(await landed(res)).toBe(`/q/${token}`);
 }
-/** A refusal: back on THIS home, the code in `?e=`, nothing else in the query. */
+/** A refusal: back on THIS home, the code in `?e=` first; beside it only the guest's picks handed back (review m4). */
 async function refusedWith(res: Response, token: string): Promise<string> {
   const location = await landed(res);
   const url = new URL(location, "http://localhost");
   expect(url.pathname, location).toBe(`/q/${token}`);
-  expect([...url.searchParams.keys()], location).toEqual(["e"]);
+  const keys = [...url.searchParams.keys()];
+  expect(keys[0], location).toBe("e");
+  expect(keys.filter((k) => k !== "e" && k !== "home" && k !== "away"), location).toEqual([]);
+  expect(new Set(keys).size, `${location}: no parameter twice`).toBe(keys.length);
   return url.searchParams.get("e")!;
 }
+/** The picks a refusal handed back, as the Location carries them (null for one left out). */
+const pickedBack = (location: string) => {
+  const url = new URL(location, "http://localhost");
+  return { home: url.searchParams.get("home"), away: url.searchParams.get("away") };
+};
 
 /** The REAL home the Location names, rendered as Next renders it (its params and its query from that Location). */
 async function homeAt(location: string): Promise<string> {
   const url = new URL(location, "http://localhost");
   const token = decodeURIComponent(url.pathname.slice("/q/".length));
-  const e = url.searchParams.get("e");
-  const tree = await QuickMatchHomePage({ params: Promise.resolve({ token }), searchParams: Promise.resolve(e === null ? {} : { e }) });
+  const tree = await QuickMatchHomePage({
+    params: Promise.resolve({ token }),
+    searchParams: Promise.resolve(Object.fromEntries(url.searchParams)),
+  });
   return renderToStaticMarkup(tree as ReactElement);
 }
 const unescape = (s: string) => s.replace(/&#x27;/g, "'").replace(/&amp;/g, "&").replace(/&quot;/g, '"');
@@ -202,10 +213,15 @@ const textOfTestId = (html: string, id: string): string | null => {
   return m ? unescape(m[1]!.replace(/<[^>]+>/g, "")).trim() : null;
 };
 
-/** The Add-a-match form the home draws: its action, and each select's name with its options and the one it opens at. */
-function addForm(html: string): { action: string; selects: Record<string, { options: string[]; selected: string | null }> } | null {
+/** The Add-a-match form the home draws: whether its disclosure is open on first paint, its action, and each select's name
+ *  with its options and the one it opens at. */
+function addForm(
+  html: string,
+): { open: boolean; action: string; selects: Record<string, { options: string[]; selected: string | null }> } | null {
   const m = /<form[^>]*data-testid="qm-add-match-form"[^>]*>([\s\S]*?)<\/form>/.exec(html);
   if (!m) return null;
+  const details = /<details[^>]*data-testid="qm-add-match"[^>]*>/.exec(html)?.[0] ?? "";
+  expect(details, "the form sits in its disclosure").not.toBe("");
   const action = /\baction="([^"]+)"/.exec(m[0])?.[1] ?? "";
   const selects: Record<string, { options: string[]; selected: string | null }> = {};
   for (const s of m[1]!.matchAll(/<select[^>]*\bname="([^"]+)"[^>]*>([\s\S]*?)<\/select>/g)) {
@@ -213,7 +229,7 @@ function addForm(html: string): { action: string; selects: Record<string, { opti
     const selected = /<option[^>]*\bvalue="([^"]+)"[^>]*\bselected=""/.exec(s[2]!)?.[1] ?? null;
     selects[s[1]!] = { options, selected };
   }
-  return { action, selects };
+  return { open: /\sopen=""/.test(details), action, selects };
 }
 
 beforeAll(async () => {
@@ -447,6 +463,8 @@ describe.skipIf(!HAS_DB)("a refused add lands back on the home with ?e=, which p
     });
     const res = await add(out.token, pick(a!.id, b!.id));
     expect(await refusedWith(res, out.token)).toBe(QUICK_MATCH_ERRORS.ACTION_FAILED);
+    // The limiter answers FIRST: the home is never read for a post over the limit (review m1). Before `homeAt`, which reads it.
+    expect(readSpy, "the post limit answers before the home is read").not.toHaveBeenCalled();
     expect(flashOf(await homeAt(res.headers.get("location")!))).toBe(FLASH.generic);
     expect(keys).toContain(`rl:qm-add:${out.id}`);
     expect(await adhocOf(out.competitionId)).toEqual([]);
@@ -455,6 +473,144 @@ describe.skipIf(!HAS_DB)("a refused add lands back on the home with ?e=, which p
     __setRateLimitCounterForTests(null);
     await addedOn(await add(out.token, pick(a!.id, b!.id)), out.token);
     expect(await adhocOf(out.competitionId)).toHaveLength(1);
+  });
+});
+
+// ── a played decider, voided (review m3) ─────────────────────────────────────────────────────────────────────────────
+
+describe.skipIf(!HAS_DB)("an added match played and then voided reopens like any other match; the cap does not move (review m3)", () => {
+  it("added, played to decided, its deciding event voided: the hero is on it again, no winner card, still one extra match", async () => {
+    const out = await create();
+    const [only] = await fixturesOf(out.competitionId);
+    const [a, b] = await sidesOf(out.competitionId);
+    expect(await playToDecided(systemAuth(), only!.id)).toMatchObject({ kind: "decided" });
+    await addedOn(await add(out.token, pick(a!.id, b!.id)), out.token);
+    const [decider] = await adhocOf(out.competitionId);
+    expect(decider, "premise: the add made one extra match").toBeDefined();
+    const played = await playToDecided(systemAuth(), decider!.id);
+    if (played.kind !== "decided") throw new Error(`precondition: the decider decided, got ${JSON.stringify(played)}`);
+    let html = await homeAt(`/q/${out.token}`);
+    expect(html, "premise: both played, the winner card is up").toContain('data-testid="qm-winner"');
+
+    // The void use case, as Edit result's pad posts it: core.void of the deciding event, expected_seq = the tip.
+    await scoreEvent(systemAuth(), decider!.id, {
+      expected_seq: played.lastSeq,
+      type: "core.void",
+      payload: { event_id: played.lastEventId },
+    });
+    const [after] = (await fixturesOf(out.competitionId)).filter((f) => f.id === decider!.id);
+    expect(after!.status, "no longer decided").not.toBe("decided");
+    html = await homeAt(`/q/${out.token}`);
+    expect(html, "no winner once the result is undone").not.toContain('data-testid="qm-winner"');
+    // The hero is on the decider again: the next row is its row, and the kicker numbers it 2 of 2. Its other rallies stand,
+    // so the engine reads it in play: the live kicker.
+    const next = /<li[^>]*data-testid="qm-match"[^>]*data-fixture-id="([^"]+)"[^>]*data-next="true"/.exec(html)?.[1];
+    expect(next, "the row marked next is the voided decider").toBe(decider!.id);
+    // The kicker is a <p> holding the live dot's span and the words' span: read the whole <p>, tags stripped.
+    const kicker = /data-testid="qm-hero-kicker"[^>]*>([\s\S]*?)<\/p>/.exec(html)?.[1] ?? "";
+    expect(unescape(kicker.replace(/<[^>]+>/g, "")).trim()).toBe(interpolate(en["quickMatch.home.liveMatch"], { n: 2, total: 2 }));
+    expect(textOfTestId(html, "qm-hero-home")).toBe(a!.name);
+    expect(textOfTestId(html, "qm-hero-away")).toBe(b!.name);
+    expect(textOfTestId(html, "qm-played")).toBe(
+      plural(en, "quickMatch.home.played", 2, "en", { played: 1, days: SPEC_EXPIRY_DAYS }),
+    );
+    // The cap's count: a void neither removes the extra match nor adds one.
+    expect((await adhocOf(out.competitionId)).map((f) => f.id), "still exactly the one extra match").toEqual([decider!.id]);
+  });
+});
+
+// ── a refused add comes back open, at the guest's picks (review m4) ───────────────────────────────────────────────────
+
+describe.skipIf(!HAS_DB)("a refused add hands the guest's picks back: the home opens 'Add a match' at them (review m4)", () => {
+  it("the same side twice: the Location carries both picks; the home prints the flash with the disclosure open at them", async () => {
+    const out = await create(league({ sides: SIDES.slice(0, 3) }));
+    const [, , c] = await sidesOf(out.competitionId);
+    const res = await add(out.token, pick(c!.id, c!.id));
+    expect(await refusedWith(res, out.token)).toBe(QUICK_MATCH_ERRORS.SAME_SIDE);
+    const location = res.headers.get("location")!;
+    expect(pickedBack(location)).toEqual({ home: c!.id, away: c!.id });
+    const html = await homeAt(location);
+    expect(flashOf(html)).toBe(FLASH.sameSide);
+    const form = addForm(html)!;
+    expect(form.open, "open on first paint").toBe(true);
+    expect([form.selects.home!.selected, form.selects.away!.selected], "at the guest's picks, not the table's").toEqual([c!.id, c!.id]);
+    // The negative pair: the same home with no refusal opens closed, at its own pick (the table's top two, neither c).
+    const plain = addForm(await homeAt(`/q/${out.token}`))!;
+    expect(plain.open).toBe(false);
+    expect([plain.selects.home!.selected, plain.selects.away!.selected]).not.toContain(c!.id);
+  });
+
+  it("each refusal hands back the picks shaped like an id, and the home keeps only this match's own sides", async () => {
+    const out = await create(league({ sides: SIDES.slice(0, 3) }));
+    const other = await create();
+    const [a, b] = await sidesOf(out.competitionId);
+    const [x] = await sidesOf(other.competitionId);
+    const defaults = addForm(await homeAt(`/q/${out.token}`))!;
+    const [dHome, dAway] = [defaults.selects.home!.selected!, defaults.selects.away!.selected!];
+    // [what is posted, the code, the picks handed back, the selects the home opens at]
+    const cases: [Record<string, string>, string, { home: string | null; away: string | null }, [string, string]][] = [
+      // A side and a non-id: only the id comes back; the other select keeps the home's own pick.
+      [pick(b!.id, "not-a-side"), QUICK_MATCH_ERRORS.NOT_FOUND, { home: b!.id, away: null }, [b!.id, dAway]],
+      // Another quick match's side: handed back (it is id-shaped), never kept (not one of this match's sides).
+      [pick(x!.id, a!.id), QUICK_MATCH_ERRORS.NOT_FOUND, { home: x!.id, away: a!.id }, [dHome, a!.id]],
+    ];
+    let checked = 0;
+    for (const [body, code, back, opensAt] of cases) {
+      const res = await add(out.token, body);
+      expect(await refusedWith(res, out.token), JSON.stringify(body)).toBe(code);
+      const location = res.headers.get("location")!;
+      expect(pickedBack(location), JSON.stringify(body)).toEqual(back);
+      const form = addForm(await homeAt(location))!;
+      expect(form.open, JSON.stringify(body)).toBe(true);
+      expect([form.selects.home!.selected, form.selects.away!.selected], JSON.stringify(body)).toEqual(opensAt);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+    // Nothing posted that is an id: no picks, and so the disclosure stays closed (no refused add to come back to).
+    const res = await add(out.token, {});
+    expect(await refusedWith(res, out.token)).toBe(QUICK_MATCH_ERRORS.NOT_FOUND);
+    expect(pickedBack(res.headers.get("location")!)).toEqual({ home: null, away: null });
+    expect(addForm(await homeAt(res.headers.get("location")!))!.open).toBe(false);
+  });
+
+  it("the post limit and a fault hand the picks back too (the guest's retry is one tap); the dead link never does", async () => {
+    const out = await create(league({ sides: SIDES.slice(0, 3) }));
+    const [a, b, c] = await sidesOf(out.competitionId);
+    __setRateLimitCounterForTests(async (key) => (key === `rl:qm-add:${out.id}` ? { count: MUTATION_LIMIT.max + 1, ttlMs: 30_000 } : null));
+    let res = await add(out.token, pick(c!.id, b!.id));
+    expect(await refusedWith(res, out.token)).toBe(QUICK_MATCH_ERRORS.ACTION_FAILED);
+    expect(pickedBack(res.headers.get("location")!)).toEqual({ home: c!.id, away: b!.id });
+    __setRateLimitCounterForTests(null);
+    addSpy.mockRejectedValueOnce(new Error("connection reset"));
+    res = await add(out.token, pick(b!.id, a!.id));
+    expect(await refusedWith(res, out.token)).toBe(QUICK_MATCH_ERRORS.ACTION_FAILED);
+    expect(pickedBack(res.headers.get("location")!)).toEqual({ home: b!.id, away: a!.id });
+    const form = addForm(await homeAt(res.headers.get("location")!))!;
+    expect([form.open, form.selects.home!.selected, form.selects.away!.selected]).toEqual([true, b!.id, a!.id]);
+    // The dead link: the bare home, nothing handed back (D16: it says nothing).
+    const changed = out.token.slice(0, -1) + (out.token.endsWith("A") ? "B" : "A");
+    expect(await landed(await add(changed, pick(a!.id, b!.id)))).toBe(`/q/${changed}`);
+  });
+
+  it("picks with no flash (a reload, a crafted link) or a Score refusal with none: the disclosure stays closed at the home's own pick", async () => {
+    const out = await create(league({ sides: SIDES.slice(0, 3) }));
+    const [, , c] = await sidesOf(out.competitionId);
+    const own = addForm(await homeAt(`/q/${out.token}`))!;
+    const cases = [
+      `/q/${out.token}?home=${c!.id}&away=${c!.id}`,
+      `/q/${out.token}?e=${QUICK_MATCH_ERRORS.SIDES_UNKNOWN}`,
+    ];
+    let checked = 0;
+    for (const location of cases) {
+      const form = addForm(await homeAt(location))!;
+      expect(form.open, location).toBe(false);
+      expect([form.selects.home!.selected, form.selects.away!.selected], location).toEqual([
+        own.selects.home!.selected,
+        own.selects.away!.selected,
+      ]);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });
 

@@ -78,6 +78,20 @@ describe("QuickMatchAddMatch", () => {
     expect(inside).toBeGreaterThan(i.tree().indexOf(summary));
   });
 
+  it("a refused add comes back open on first paint (review m4); closed is the default, and `open={false}` is closed too", () => {
+    const cases: [Partial<QuickMatchAddMatchProps>, boolean | undefined][] = [
+      [{}, undefined],
+      [{ open: false }, undefined],
+      [{ open: true }, true],
+    ];
+    let checked = 0;
+    for (const [over, open] of cases) {
+      expect(propsOf(only(mount(over), "details")).open, JSON.stringify(over)).toBe(open);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
   it("is a real form post to its action, blocked from session replay, with two selects named home and away and one submit", () => {
     const i = mount();
     const form = only(i, "form");

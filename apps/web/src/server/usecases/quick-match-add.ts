@@ -33,6 +33,23 @@ export interface AddMatchPick {
   away: string | null;
 }
 
+/** A refused add hands the guest's two picks back to the home in these query parameters, beside `?e=` (T8 review m4): the
+ *  home then opens "Add a match" at them instead of at its own pick, with or without a script. Only the add's refusals carry
+ *  them, so their presence beside a flash is what says "a refused add". Spent with `?e=` (ClearFlashParam). */
+export const ADD_PICK_PARAMS = ["home", "away"] as const;
+/** An entrant id's shape: a pick that is no uuid is never handed back (it is no side, and it would only lengthen the URL). */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The query a refused add lands on: the code, then each pick that is shaped like a side's id. */
+export function refusedAddSearch(code: string, pick: AddMatchPick): string {
+  const query = new URLSearchParams({ e: code });
+  for (const name of ADD_PICK_PARAMS) {
+    const value = pick[name];
+    if (value !== null && UUID.test(value)) query.set(name, value);
+  }
+  return query.toString();
+}
+
 /** The extra matches already on the stage: spec C5 names each `adhoc-<n>`. */
 async function adhocCount(stageId: string): Promise<number> {
   const [row] = await withTenant(QUICK_MATCH_SYSTEM_ORG_ID, (tx) => tx<{ n: number }[]>`
