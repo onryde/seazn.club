@@ -27,6 +27,14 @@ const shell = (dict: Dict, ns: string, base: Pick<LifecycleBase, "orgName" | "co
   footerNote: t(dict, `${ns}.footer`, { competitionName: base.competitionName, orgName: base.orgName }),
 });
 
+/** Polish wave sign-off V8: the entry IS the recipient (an individual registering themself) when its name is theirs - compared trimmed,
+ *  spaces collapsed, case-folded, the way one person's name is typed twice. Such a mail calls it "your entry" and names it by its
+ *  division instead of naming the person back to themselves. An empty name is nobody's: it never matches. */
+const normName = (name: string): string => name.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+const isOwnEntry = (displayName: string, recipientName: string): boolean => normName(displayName) !== "" && normName(displayName) === normName(recipientName);
+/** The key's "your entry" twin (`<key>Own`), for the recipient's own entry. */
+const ownKey = (key: string, own: boolean): string => (own ? `${key}Own` : key);
+
 const referenceHtml = (dict: Dict, ns: string, refCode: string | null | undefined): string =>
   refCode ? paragraph(t(dict, `${ns}.reference`, { refCode: escapeHtml(refCode) })) : "";
 
@@ -77,8 +85,9 @@ export function registrationPaidTemplate(
   const panelKey = confirmedCount === opts.entries.length ? "cartAllConfirmed" : confirmedCount === 0 ? "cartAllApproval" : "cartMixed";
   const panelTitle = t(dict, `${ns}.${panelKey}Title`);
   const panelBody = t(dict, `${ns}.${panelKey}Body`);
+  // V8: a line for the contact's own entry names it by its division alone.
   const line = (e: RegistrationPaidEntry, esc: (v: string) => string): string =>
-    t(dict, `${ns}.cartLine`, {
+    t(dict, ownKey(`${ns}.cartLine`, isOwnEntry(e.displayName, opts.contactName)), {
       displayName: esc(e.displayName),
       divisionName: esc(e.divisionName),
       amount: money(e.amountCents, opts.currency, locale),
@@ -122,6 +131,7 @@ function singlePaidTemplate(opts: RegistrationPaidArgs, entry: RegistrationPaidE
   const amount = money(entry.amountCents, opts.currency, locale);
   const stateTitle = t(dict, entry.confirmed ? `${ns}.confirmedTitle` : `${ns}.approvalTitle`);
   const stateBody = t(dict, entry.confirmed ? `${ns}.confirmedBody` : `${ns}.approvalBody`);
+  const own = isOwnEntry(entry.displayName, opts.contactName);
   return {
     subject,
     html: renderEmail({
@@ -131,7 +141,7 @@ function singlePaidTemplate(opts: RegistrationPaidArgs, entry: RegistrationPaidE
       title: t(dict, `${ns}.title`),
       contentHtml:
         paragraph(
-          t(dict, `${ns}.intro`, {
+          t(dict, ownKey(`${ns}.intro`, own), {
             contactName: escapeHtml(opts.contactName),
             amount,
             displayName: escapeHtml(entry.displayName),
@@ -146,7 +156,7 @@ function singlePaidTemplate(opts: RegistrationPaidArgs, entry: RegistrationPaidE
     text:
       t(dict, `${ns}.text`, { competitionName: opts.competitionName, orgName: opts.orgName }) +
       "\n" +
-      t(dict, `${ns}.textAmount`, { amount, displayName: entry.displayName, divisionName: entry.divisionName }) +
+      t(dict, ownKey(`${ns}.textAmount`, own), { amount, displayName: entry.displayName, divisionName: entry.divisionName }) +
       "\n\n" +
       stateTitle +
       "\n" +
@@ -175,16 +185,17 @@ export function registrationApprovedTemplate(opts: RegistrationApprovedArgs, dic
   const due = opts.paymentDue ?? null;
   const subject = t(dict, due ? `${ns}.subjectPaymentDue` : `${ns}.subject`, { competitionName: opts.competitionName });
   const names = { displayName: opts.displayName, divisionName: opts.divisionName };
+  const own = isOwnEntry(opts.displayName, opts.recipientName);
   return {
     subject,
     html: renderEmail({
       subject,
-      preheader: t(dict, `${ns}.preheader`, { displayName: opts.displayName, competitionName: opts.competitionName }),
+      preheader: t(dict, ownKey(`${ns}.preheader`, own), { displayName: opts.displayName, competitionName: opts.competitionName }),
       ...shell(dict, ns, opts),
       title: t(dict, `${ns}.title`),
       contentHtml:
         paragraph(
-          t(dict, due ? `${ns}.introPaymentDue` : `${ns}.intro`, {
+          t(dict, ownKey(due ? `${ns}.introPaymentDue` : `${ns}.intro`, own), {
             recipientName: escapeHtml(opts.recipientName),
             displayName: escapeHtml(names.displayName),
             divisionName: escapeHtml(names.divisionName),
@@ -198,7 +209,7 @@ export function registrationApprovedTemplate(opts: RegistrationApprovedArgs, dic
     text:
       t(dict, `${ns}.text`, { competitionName: opts.competitionName, orgName: opts.orgName }) +
       "\n" +
-      t(dict, due ? `${ns}.textBodyPaymentDue` : `${ns}.textBody`, { ...names, amount: due ?? "" }) +
+      t(dict, ownKey(due ? `${ns}.textBodyPaymentDue` : `${ns}.textBody`, own), { ...names, amount: due ?? "" }) +
       (opts.competitionUrl ? "\n\n" + opts.competitionUrl : "") +
       referenceText(dict, ns, opts.refCode),
   };
@@ -218,6 +229,7 @@ export function registrationExpiredTemplate(opts: RegistrationExpiredArgs, dict:
   const ns = "registrationExpired";
   const subject = t(dict, `${ns}.subject`, { competitionName: opts.competitionName });
   const names = { displayName: opts.displayName, divisionName: opts.divisionName };
+  const own = isOwnEntry(opts.displayName, opts.contactName);
   return {
     subject,
     html: renderEmail({
@@ -227,7 +239,7 @@ export function registrationExpiredTemplate(opts: RegistrationExpiredArgs, dict:
       title: t(dict, `${ns}.title`),
       contentHtml:
         paragraph(
-          t(dict, `${ns}.intro`, {
+          t(dict, ownKey(`${ns}.intro`, own), {
             contactName: escapeHtml(opts.contactName),
             displayName: escapeHtml(names.displayName),
             divisionName: escapeHtml(names.divisionName),
@@ -241,7 +253,7 @@ export function registrationExpiredTemplate(opts: RegistrationExpiredArgs, dict:
     text:
       t(dict, `${ns}.text`, { competitionName: opts.competitionName, orgName: opts.orgName }) +
       "\n" +
-      t(dict, `${ns}.textBody`, names) +
+      t(dict, ownKey(`${ns}.textBody`, own), names) +
       (opts.registerUrl ? "\n\n" + t(dict, `${ns}.textRegisterAgain`) + "\n" + opts.registerUrl : "") +
       referenceText(dict, ns, opts.refCode),
   };
@@ -259,16 +271,17 @@ export function registrationWithdrawnTemplate(opts: RegistrationWithdrawnArgs, d
   const ns = "registrationWithdrawn";
   const subject = t(dict, `${ns}.subject`, { competitionName: opts.competitionName });
   const names = { displayName: opts.displayName, divisionName: opts.divisionName };
+  const own = isOwnEntry(opts.displayName, opts.contactName);
   return {
     subject,
     html: renderEmail({
       subject,
-      preheader: t(dict, `${ns}.preheader`, { displayName: opts.displayName, competitionName: opts.competitionName }),
+      preheader: t(dict, ownKey(`${ns}.preheader`, own), { displayName: opts.displayName, competitionName: opts.competitionName }),
       ...shell(dict, ns, opts),
       title: t(dict, `${ns}.title`),
       contentHtml:
         paragraph(
-          t(dict, `${ns}.intro`, {
+          t(dict, ownKey(`${ns}.intro`, own), {
             contactName: escapeHtml(opts.contactName),
             displayName: escapeHtml(names.displayName),
             divisionName: escapeHtml(names.divisionName),
@@ -281,7 +294,7 @@ export function registrationWithdrawnTemplate(opts: RegistrationWithdrawnArgs, d
     text:
       t(dict, `${ns}.text`, { competitionName: opts.competitionName, orgName: opts.orgName }) +
       "\n" +
-      t(dict, `${ns}.textBody`, names) +
+      t(dict, ownKey(`${ns}.textBody`, own), names) +
       referenceText(dict, ns, opts.refCode),
   };
 }
@@ -301,16 +314,17 @@ export function registrationRejectedTemplate(opts: RegistrationRejectedArgs, dic
   const ns = "registrationRejected";
   const subject = t(dict, `${ns}.subject`, { competitionName: opts.competitionName });
   const names = { displayName: opts.displayName, divisionName: opts.divisionName };
+  const own = isOwnEntry(opts.displayName, opts.contactName);
   return {
     subject,
     html: renderEmail({
       subject,
-      preheader: t(dict, `${ns}.preheader`, { displayName: opts.displayName, competitionName: opts.competitionName }),
+      preheader: t(dict, ownKey(`${ns}.preheader`, own), { displayName: opts.displayName, competitionName: opts.competitionName }),
       ...shell(dict, ns, opts),
       title: t(dict, `${ns}.title`),
       contentHtml:
         paragraph(
-          t(dict, `${ns}.intro`, {
+          t(dict, ownKey(`${ns}.intro`, own), {
             contactName: escapeHtml(opts.contactName),
             displayName: escapeHtml(names.displayName),
             divisionName: escapeHtml(names.divisionName),
@@ -324,7 +338,7 @@ export function registrationRejectedTemplate(opts: RegistrationRejectedArgs, dic
     text:
       t(dict, `${ns}.text`, { competitionName: opts.competitionName, orgName: opts.orgName }) +
       "\n" +
-      t(dict, `${ns}.textBody`, names) +
+      t(dict, ownKey(`${ns}.textBody`, own), names) +
       (opts.refundAmount ? "\n\n" + t(dict, `${ns}.textRefund`, { amount: opts.refundAmount }) : "") +
       referenceText(dict, ns, opts.refCode),
   };
@@ -344,16 +358,17 @@ export function registrationPromotionLapsedTemplate(opts: RegistrationPromotionL
   const ns = "registrationPromotionLapsed";
   const subject = t(dict, `${ns}.subject`, { competitionName: opts.competitionName });
   const names = { displayName: opts.displayName, divisionName: opts.divisionName };
+  const own = isOwnEntry(opts.displayName, opts.contactName);
   return {
     subject,
     html: renderEmail({
       subject,
-      preheader: t(dict, `${ns}.preheader`, { displayName: opts.displayName, competitionName: opts.competitionName }),
+      preheader: t(dict, ownKey(`${ns}.preheader`, own), { displayName: opts.displayName, competitionName: opts.competitionName }),
       ...shell(dict, ns, opts),
       title: t(dict, `${ns}.title`),
       contentHtml:
         paragraph(
-          t(dict, `${ns}.intro`, {
+          t(dict, ownKey(`${ns}.intro`, own), {
             contactName: escapeHtml(opts.contactName),
             displayName: escapeHtml(names.displayName),
             divisionName: escapeHtml(names.divisionName),
@@ -367,7 +382,7 @@ export function registrationPromotionLapsedTemplate(opts: RegistrationPromotionL
     text:
       t(dict, `${ns}.text`, { competitionName: opts.competitionName, orgName: opts.orgName }) +
       "\n" +
-      t(dict, `${ns}.textBody`, names) +
+      t(dict, ownKey(`${ns}.textBody`, own), names) +
       (opts.competitionUrl ? "\n\n" + t(dict, `${ns}.textViewCompetition`) + "\n" + opts.competitionUrl : "") +
       referenceText(dict, ns, opts.refCode),
   };

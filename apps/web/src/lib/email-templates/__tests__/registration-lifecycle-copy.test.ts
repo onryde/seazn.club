@@ -302,3 +302,86 @@ describe("the paid cart mail's entry list wears the mail's own type (V4)", () =>
     expect(checked).toBe(2);
   });
 });
+
+// Polish wave sign-off V8: an individual registering themself got "Hi Mia Cole - the organiser has approved Mia Cole in Open Singles":
+// the mail named the recipient back to them as the entry. When the entry's name IS the recipient's (compared trimmed, spaces collapsed,
+// case-folded), every part of the mail calls it "your entry" and names it by its division ("Open Singles"); the greeting is then the
+// only place the person's name appears. Any other entry (a team, a pair, someone the registrant entered for) is still named. The
+// expected sentences below are written out, not read back from the template.
+describe("a mail about the recipient's own entry calls it 'your entry', never their own name back (V8)", () => {
+  const SELF = "Mia Cole";
+  const SINGLES = "Open Singles";
+  const MASTERS = "Masters Singles";
+  const ownBase = { orgName: ORG, competitionName: COMP, divisionName: SINGLES, displayName: SELF, refCode: REF };
+  const count = (hay: string, needle: string) => hay.split(needle).length - 1;
+
+  async function renderOwn(locale: (typeof LOCALES)[number], recipient: string) {
+    const dict = await dictOf(locale);
+    const own = (amountCents: number, divisionName: string, confirmed: boolean) => ({ displayName: SELF, divisionName, amountCents, confirmed });
+    const paid = { ...paidBase, contactName: recipient };
+    return {
+      paid: registrationPaidTemplate({ ...paid, entries: [own(1500, SINGLES, true)], statusUrl: LINK }, dict),
+      paidCart: registrationPaidTemplate({ ...paid, entries: [own(1500, SINGLES, true), own(900, MASTERS, false)], statusUrl: LINK }, dict),
+      approved: registrationApprovedTemplate({ ...ownBase, recipientName: recipient, competitionUrl: LINK }, dict),
+      approvedPaymentDue: registrationApprovedTemplate({ ...ownBase, recipientName: recipient, competitionUrl: LINK, paymentDue: DUE }, dict),
+      expired: registrationExpiredTemplate({ ...ownBase, contactName: recipient, registerUrl: LINK }, dict),
+      withdrawn: registrationWithdrawnTemplate({ ...ownBase, contactName: recipient }, dict),
+      rejected: registrationRejectedTemplate({ ...ownBase, contactName: recipient, refundAmount: DUE }, dict),
+      promotionLapsed: registrationPromotionLapsedTemplate({ ...ownBase, contactName: recipient, competitionUrl: LINK }, dict),
+    } as Record<string, { subject: string; html: string; text: string }>;
+  }
+
+  it.each(LOCALES)("%s: the recipient's own entry - their name only in the greeting, the division named, no token or placeholder", async (locale) => {
+    let checked = 0;
+    // The same person, as the producer may spell them twice: exact, and with different case and stray spaces.
+    for (const recipient of [SELF, "  mia   COLE "]) {
+      for (const [name, out] of Object.entries(await renderOwn(locale, recipient))) {
+        const visible = words(out.html);
+        expect(count(visible.toLowerCase(), "mia cole") + count(visible.toLowerCase(), "mia   cole"), `${locale} ${name}: the greeting only`).toBe(1);
+        expect(out.text.toLowerCase(), `${locale} ${name}: the text never names them as the entry`).not.toContain("mia cole");
+        expect(out.subject.toLowerCase(), `${locale} ${name}: nor the subject`).not.toContain("mia cole");
+        expect(visible, `${locale} ${name}: html names the division`).toContain(SINGLES);
+        expect(out.text, `${locale} ${name}: text names the division`).toContain(SINGLES);
+        for (const part of [out.subject, out.html, out.text]) {
+          expect(part, `${locale} ${name}: no raw dictionary token`).not.toMatch(/\b(registrationPaid|registrationApproved|registrationExpired|registrationWithdrawn|registrationRejected|registrationPromotionLapsed)\.[a-zA-Z]+\b/);
+          expect(part, `${locale} ${name}: no unfilled placeholder`).not.toMatch(/\{\w+\}/);
+        }
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: 8 renders x 2 spellings").toBe(16);
+  });
+
+  it("en, written out: the intro and the text say 'your entry' and the division", async () => {
+    const outs = await renderOwn("en", SELF);
+    expect(words(outs.approved!.html)).toContain("Hi Mia Cole — the organiser has approved your entry in Open Singles at Spring Open. Your place is confirmed.");
+    expect(outs.approved!.text).toContain("The organiser has approved your entry in Open Singles. Your place is confirmed.");
+    expect(outs.expired!.text).toContain("Your entry in Open Singles was not paid by its deadline, so the place has been released.");
+    expect(words(outs.paid!.html)).toContain("for your entry in Open Singles at Spring Open.");
+    // The cart lists each own entry by its division: no line opens with a lower-case "your entry".
+    expect(outs.paidCart!.text).toContain("Open Singles — £15.00 — ");
+    expect(outs.paidCart!.text).toContain("Masters Singles — £9.00 — ");
+  });
+
+  it.each(LOCALES)("%s: the pair - someone else's entry (the registrant entered another person) is still named, in every mail", async (locale) => {
+    let checked = 0;
+    for (const [name, out] of Object.entries(await renderOwn(locale, "Alex Parent"))) {
+      expect(words(out.html), `${locale} ${name}: the entry is named`).toContain(SELF);
+      expect(out.text, `${locale} ${name}: in the text too`).toContain(SELF);
+      checked += 1;
+    }
+    expect(checked).toBe(8);
+  });
+
+  it.each(LOCALES)("%s: a cart mixing the recipient's own entry with a team names the team and not the recipient", async (locale) => {
+    const dict = await dictOf(locale);
+    const out = registrationPaidTemplate(
+      { ...paidBase, contactName: SELF, entries: [{ displayName: SELF, divisionName: SINGLES, amountCents: 1500, confirmed: true }, entry1(true)], statusUrl: LINK },
+      dict,
+    );
+    expect(count(words(out.html), SELF), "the greeting only").toBe(1);
+    expect(out.text).not.toContain(SELF);
+    expect(out.text).toContain(ENTRY);
+    expect(out.text).toContain(SINGLES);
+  });
+});

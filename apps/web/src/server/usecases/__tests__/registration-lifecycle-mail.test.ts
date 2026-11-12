@@ -573,6 +573,29 @@ describe.skipIf(!HAS_DB)("approved: the organiser approves (real approveRegistra
     expect(await approvedRows(reg.registration.id)).toHaveLength(1);
   });
 
+  // Polish wave sign-off V8, through the real producer: the contact who entered themself is greeted by name and told about "your entry"
+  // in its division - never their own name back as the entry. The pair: an entry for someone else, from the same contact, names it.
+  it("the contact's own entry is 'your entry' in its division; an entry for someone else is named (V8)", async () => {
+    const w = await offlineWorld(0, "manual");
+    const contact = address("appr-own");
+    const own = await seedRegistration(w.competition.id, w.division.id, w.settings, { displayName: CONTACT, contactEmail: contact, locale: "en" });
+    const other = await seedRegistration(w.competition.id, w.division.id, w.settings, { displayName: "Sam Other", contactEmail: contact, locale: "en" });
+    await sql`update registration_groups set contact_name = ${CONTACT} where id = any(${[own.registration.group_id, other.registration.group_id]}::uuid[])`;
+
+    await approveRegistration(w.owner, own.registration.id);
+    await approveRegistration(w.owner, other.registration.id);
+
+    const mine = await body("registration_approved", "registration", own.registration.id, contact);
+    expect(words(mine.html).split(CONTACT).length - 1, "the greeting is the only place the contact's name appears").toBe(1);
+    expect(words(mine.html)).toContain(`Hi ${CONTACT} — the organiser has approved your entry in ${w.division.name}`);
+    expect(mine.text).not.toContain(CONTACT);
+    expect(mine.text).toContain(`The organiser has approved your entry in ${w.division.name}.`);
+
+    const theirs = await body("registration_approved", "registration", other.registration.id, contact);
+    expect(words(theirs.html)).toContain(`the organiser has approved Sam Other in ${w.division.name}`);
+    expect(theirs.text).toContain("Sam Other");
+  });
+
   it("every teammate who has JOINED and left an address is told too, in the club's language, greeted by their own name - the contact once, the unconsented and the address-less not at all", async () => {
     const w = await offlineWorld(0, "manual");
     await sql`update organizations set default_locale = 'nl' where id = ${w.orgId}`;
