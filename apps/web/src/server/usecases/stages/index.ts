@@ -13,7 +13,7 @@ import "server-only";
 //   swiss-reconcile.ts Swiss reshape counters and the round-shell reconcile
 //   swiss-gen.ts       Swiss pairing: rounds judgement, refusals, history fold, `swissGen`
 //   swiss-boards.ts    Swiss board seat locks, clearing, unseating, and un-pairing a round
-//   preview.ts         the builder's example preview (`generate()` over synthetic entrants)
+//   preview.ts         the builder's example preview (`generate()` over synthetic entrants), and the draw as structure (previewStageDraw)
 //   roster-drift.ts    roster drift, sealed-setup and attachment counts
 //   bracket-seats.ts   bracket seat writes: fillSlot, departed seats, seeded byes, resolveBracketSeats
 //   setup-fixtures.ts  TBD-shape fixtures for a `timing: "setup"` progression
@@ -88,8 +88,15 @@ export {
 } from "./swiss-boards";
 export { patchKnockoutStage } from "./third-place";
 export type { PatchKnockoutStageResult } from "./third-place";
-export { previewDivisionFixtures } from "./preview";
-export type { PreviewMatch, PreviewSection, PreviewPhase, PreviewStageInput } from "./preview";
+export { previewDivisionFixtures, previewStageDraw } from "./preview";
+export type {
+  PreviewMatch,
+  PreviewSection,
+  PreviewPhase,
+  PreviewStageInput,
+  PreviewDrawFeed,
+  PreviewDrawFixture,
+} from "./preview";
 export {
   getStageRosterDrift,
   sealedStageSetupCounts,
