@@ -37,9 +37,11 @@ import { generateRefCode } from "@/lib/ref-code";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { openBody } from "@/server/email-outbox/seal";
 import { formatDeadline } from "@/lib/email-templates/registration";
+import { entryWaitingOn } from "@/lib/registration-status";
 import {
   confirmRegistration,
   confirmRegistrationWaived,
+  groupById,
   handleRegistrationCheckoutCompleted,
   markRegistrationPaidOffline,
   notifyPromoted,
@@ -64,7 +66,7 @@ import {
 } from "../registrations/lifecycle-mail";
 import { joinTeamEntry } from "../registration-submit";
 import type { RegistrationRow } from "../registrations";
-import { approveRegistration } from "../registration-approval";
+import { approveRegistration, rejectRegistration } from "../registration-approval";
 import { createDivision } from "../divisions";
 import { stubOutboxEnv } from "./_invite-mail";
 import { SETTINGS_BASE, asOwner, fakeSession, loadWithGroup, makeUser, rig, seedOrg, seedRegistration, seedSecondEntry, stripeRig } from "./_registration-fixtures";
@@ -634,10 +636,12 @@ describe.skipIf(!HAS_DB)("approved: the other two organiser doors (real confirmR
     expect(await approvedRows(reg.registration.id), "a second waive is a no-op").toHaveLength(1);
   });
 
-  it("an Approve that is refused (the entry is rejected, or never paid) mails nothing", async () => {
+  it("an Approve that is refused (the entry was rejected) mails nothing", async () => {
+    // W12 (polish wave P5): an unpaid entry is no longer refused - it is approved with its fee still due (the W12 block below).
     const w = await offlineWorld(1500, "manual");
     const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("refused") });
-    await expect(approveRegistration(w.owner, reg.registration.id), "an unpaid entry cannot be approved").rejects.toThrow(/Awaiting payment/);
+    await rejectRegistration(w.owner, reg.registration.id);
+    await expect(approveRegistration(w.owner, reg.registration.id), "a rejected entry cannot be approved").rejects.toThrow(/rejected/);
     expect(await approvedRows(reg.registration.id)).toHaveLength(0);
   });
 
@@ -658,6 +662,122 @@ describe.skipIf(!HAS_DB)("queueRegistrationApprovedMails' own guard", () => {
     const ids = await sql.begin((tx) => queueRegistrationApprovedMails(tx, { reg: reg.registration }));
     expect(ids).toEqual([]);
     expect(await approvedRows(reg.registration.id)).toHaveLength(0);
+  });
+
+  it("the empty case of W12's payment-due mail: a PENDING entry nobody approved is told nothing (approved_at is null)", async () => {
+    const w = await offlineWorld(1500, "manual");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("pending-unapproved") });
+    expect(reg.registration.approved_at, "premise: never approved").toBeNull();
+    const ids = await sql.begin((tx) => queueRegistrationApprovedMails(tx, { reg: reg.registration }));
+    expect(ids).toEqual([]);
+    expect(await approvedRows(reg.registration.id)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// W12 (polish wave P5): Approve and the payment are two decisions on a manual-approval division
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Before: Approve on an unpaid entry was refused ("mark it paid first") and Mark paid confirmed the entry outright, so on a manual
+// division the money WAS the approval. Now: Approve on an unpaid entry approves it (`approved_at`, V511) and leaves it pending with the
+// fee due; Mark paid records the money and, on a manual division, leaves an unapproved entry `paid` awaiting approval. Whichever comes
+// second confirms the entry. Every step runs through its real producer (approveRegistration, markRegistrationPaidOffline, the card
+// webhook core); the expected copy is read from the dictionaries' own words and the amount from the money formatter, never from the code.
+
+const entrantOf = async (regId: string): Promise<string | null> =>
+  (await sql<{ entrant_id: string | null }[]>`select entrant_id from registrations where id = ${regId}`)[0]!.entrant_id;
+
+describe.skipIf(!HAS_DB)("W12: Approve before payment, then the payment confirms (offline, manual)", () => {
+  it("Approve leaves the unpaid entry pending and approved, seats nobody and mails 'approved - payment still due' with the amount, once; Mark paid then confirms it", async () => {
+    const w = await offlineWorld(1500, "manual");
+    const contact = address("w12-appr");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { displayName: TEAM, contactEmail: contact, locale: "fr" });
+    await sql`update registration_groups set contact_name = ${CONTACT} where id = ${reg.registration.group_id}`;
+
+    const approved = await approveRegistration(w.owner, reg.registration.id);
+    expect(approved.status, "the fee is still due: approved, not confirmed").toBe("pending");
+    expect(approved.approved_at, "the approval is recorded").not.toBeNull();
+    expect(await entrantOf(reg.registration.id), "nobody is seated before the money").toBeNull();
+
+    const rows = await approvedRows(reg.registration.id);
+    expect(rows.map((r) => r.recipient.toLowerCase())).toEqual([contact]);
+    const b = await body("registration_approved", "registration", reg.registration.id, contact);
+    expect(b.subject, "the fr payment-due subject").toContain("paiement en attente");
+    expect(b.subject, "never the plain 'your place is confirmed' subject").not.toContain("Votre place est confirmée");
+    expect(b.text, "the amount owed, in the recipient's language").toContain(formatMoneyExact(1500, w.settings.currency, "fr"));
+    expect(words(b.html)).toContain(`Bonjour ${CONTACT}`);
+
+    // The status page reads the approval: the entry waits on its payment alone.
+    const view = await groupById(reg.registration.group_id, reg.access_token);
+    const entry = view.entries[0]!;
+    expect(entry.approved).toBe(true);
+    expect(entryWaitingOn(entry.status, entry.amount_cents, entry.approval, entry.approved)).toBe("payment");
+
+    // Sequence: a second Approve is the same approval - no second mail, no new stamp.
+    const again = await approveRegistration(w.owner, reg.registration.id);
+    expect(again.status).toBe("pending");
+    expect(again.approved_at?.toISOString()).toBe(approved.approved_at?.toISOString());
+    expect(await approvedRows(reg.registration.id)).toHaveLength(1);
+
+    // The money arrives: Mark paid confirms the approved entry and seats it; the paid mail says confirmed.
+    const marked = await markRegistrationPaidOffline(w.owner, reg.registration.id);
+    expect(marked.status).toBe("confirmed");
+    expect(await entrantOf(reg.registration.id), "seated by the payment").not.toBeNull();
+    const paid = await body("registration_paid", "registration", reg.registration.id, contact);
+    expect(paid.text).toContain("Votre place est confirmée");
+    expect(paid.text).not.toContain("En attente de l'approbation");
+    expect(await approvedRows(reg.registration.id), "the payment sends the paid mail, not a second approved mail").toHaveLength(1);
+  });
+
+  it("Mark paid FIRST on an unapproved entry records the money and leaves it paid, awaiting approval (the paid mail says so); Approve then confirms it", async () => {
+    const w = await offlineWorld(1500, "manual");
+    const contact = address("w12-paid-first");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: contact });
+
+    const marked = await markRegistrationPaidOffline(w.owner, reg.registration.id);
+    expect(marked.status, "the payment is not the approval").toBe("paid");
+    expect(await entrantOf(reg.registration.id), "nobody is seated before the organiser's yes").toBeNull();
+    const paid = await body("registration_paid", "registration", reg.registration.id, contact);
+    expect(paid.text).toContain("Awaiting organiser approval");
+    expect(paid.text).not.toContain("You're confirmed");
+
+    const approved = await approveRegistration(w.owner, reg.registration.id);
+    expect(approved.status).toBe("confirmed");
+    expect(await entrantOf(reg.registration.id)).not.toBeNull();
+    const b = await body("registration_approved", "registration", reg.registration.id, contact);
+    expect(b.subject, "the plain approval: the place is confirmed").not.toMatch(/payment still due/);
+    expect(b.text).not.toContain(formatMoneyExact(1500, w.settings.currency, "en"));
+  });
+
+  it("the other approval mode: on an AUTO division Mark paid still confirms at once (nothing to approve)", async () => {
+    const w = await offlineWorld(1500, "auto");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("w12-auto") });
+    const marked = await markRegistrationPaidOffline(w.owner, reg.registration.id);
+    expect(marked.status).toBe("confirmed");
+    expect(marked.approved_at, "auto approval never stamps approved_at").toBeNull();
+  });
+});
+
+describe.skipIf(!HAS_DB)("W12: Approve before payment, then the CARD payment confirms (stripe, manual)", () => {
+  it("an entry approved while unpaid is confirmed by its card payment - no second Approve - and the paid mail says confirmed", async () => {
+    const w = await manualStripeWorld(1500);
+    const contact = address("w12-card");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: contact });
+    const approved = await approveRegistration(w.owner, reg.registration.id);
+    expect(approved.status).toBe("pending");
+
+    await handleRegistrationCheckoutCompleted(fakeSession(reg.registration.id, 1500));
+    expect((await loadWithGroup(reg.registration.id)).status, "the approval was given; the payment confirms").toBe("confirmed");
+    expect(await entrantOf(reg.registration.id)).not.toBeNull();
+    const paid = await body("registration_paid", "registration", reg.registration.id, contact);
+    expect(paid.text).toContain("You're confirmed");
+  });
+
+  it("the positive pair: an entry NOT approved before its card payment still waits for the organiser (paid)", async () => {
+    const w = await manualStripeWorld(1500);
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("w12-card-unappr") });
+    await handleRegistrationCheckoutCompleted(fakeSession(reg.registration.id, 1500));
+    expect((await loadWithGroup(reg.registration.id)).status).toBe("paid");
+    expect(await entrantOf(reg.registration.id)).toBeNull();
   });
 });
 
@@ -1242,5 +1362,40 @@ describe.skipIf(!HAS_DB)("queueRegistrationJoinedMail's own guards", () => {
     const id = await sql.begin((tx) => queueRegistrationJoinedMail(tx, { registrationId: e.reg.id, playerId: e.slots[0]!.id, playerName: JOINER, to: address("ended"), userId: null }));
     expect(id).toBeNull();
     expect(await joinedRows(e.reg.id)).toHaveLength(0);
+  });
+});
+
+describe.skipIf(!HAS_DB)("W12: a joiner of an entry approved ahead of its payment (real joinTeamEntry)", () => {
+  it("the join response and the joiner's mail both say 'awaiting payment' - not 'payment and approval' - once the organiser approved", async () => {
+    // The rig's roster holds one player, so the joiner claims the captain-entered slot. The unapproved row (payment_and_approval) is
+    // pinned by registration-join-entry-state.test.ts's table.
+    const e = await teamEntry({ fee: 1500, approval: "manual", status: "pending", players: ["Slot A"] });
+    const approved = await approveRegistration(e.owner, e.reg.id);
+    expect(approved.status, "premise: approved with the fee due").toBe("pending");
+
+    const to = address("w12-join");
+    const result = await join(e.joinCode, to, { player_id: e.slots[0]!.id });
+    expect(result.entry_state).toBe("payment");
+    const dict = await getDictionary("en", "emails");
+    const b = await body("registration_joined", "registration", e.reg.id, to);
+    expect(b.text).toContain(String(dict["registrationJoined.statePaymentTitle"]));
+    expect(b.text).not.toContain(String(dict["registrationJoined.statePaymentApprovalTitle"]));
+  });
+});
+
+describe.skipIf(!HAS_DB)("W12: the cart confirmation rebuilt after an approval (real notifySubmitted)", () => {
+  it("an entry approved ahead of its payment reads 'awaiting payment' while its unapproved sibling still reads 'payment and approval'", async () => {
+    const w = await offlineWorld(1500, "manual");
+    const first = await seedRegistration(w.competition.id, w.division.id, w.settings, { displayName: "Maya Cole", contactEmail: address("w12-cart") });
+    const sibling = await seedSecondEntry(first.registration.group_id, w.division.id, 1500, "Sam Cole", "pending");
+    await approveRegistration(w.owner, first.registration.id);
+
+    await notifySubmitted(first.registration.group_id, ORIGIN, first.access_token);
+    const b = await body("registration_confirmation", "registration_group", first.registration.group_id);
+    const dict = await getDictionary("en", "emails");
+    const lineOf = (name: string) => b.text.split("\n").find((l) => l.includes(name))!;
+    expect(lineOf("Maya Cole")).toContain(String(dict["registration.entryStatusAwaitingPayment"]));
+    expect(lineOf("Maya Cole")).not.toContain(String(dict["registration.entryStatusAwaitingPaymentApproval"]));
+    expect(lineOf("Sam Cole"), `premise: the unapproved sibling (${sibling.id})`).toContain(String(dict["registration.entryStatusAwaitingPaymentApproval"]));
   });
 });

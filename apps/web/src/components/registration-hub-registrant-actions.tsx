@@ -141,6 +141,9 @@ export interface RegistrationHubRegistrantActionsProps {
   /** ISO time of the organiser's last "Send payment reminder" press for this entry; null if never. Within an hour of it, the next
    *  press asks first. */
   lastRemindedAt: string | null;
+  /** Polish wave P5 (W12): when the organiser approved this entry while its fee was still due (`approved_at`, V511), ISO; null if
+   *  never approved that way. Approve is then done and the payment confirms the entry. */
+  approvedAt: string | null;
 }
 
 function errorText(err: unknown): string {
@@ -157,12 +160,16 @@ export function RegistrationHubRegistrantActions({
   entryPaymentIntentId,
   refundedCents,
   lastRemindedAt,
+  approvedAt,
 }: RegistrationHubRegistrantActionsProps) {
   const msg = useMsg();
   const router = useRouter();
   const confirmDialog = useConfirm();
   const [optimisticStatus, setOptimisticStatus] = useState<Status>(status);
   const [promotedOptimistically, setPromotedOptimistically] = useState(false);
+  // W12: an approval that left the fee due changes no status, so the row's Approve is hidden by this until the refresh brings approvedAt.
+  const [approvedOptimistically, setApprovedOptimistically] = useState(false);
+  const approved = approvedAt !== null || approvedOptimistically;
   const [busy, setBusy] = useState<ActionKey | null>(null);
   const [feedback, setFeedback] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   // RS005 F2 finding 3 — set once approve or mark-paid 422s with the
@@ -215,6 +222,7 @@ export function RegistrationHubRegistrantActions({
       division_fee_cents: divisionFeeCents,
       payment_intent_id: paymentIntentId,
       entry_payment_intent_id: entryPaymentIntentId,
+      approved_at: approved ? new Date(approvedAt ?? 0) : null,
       // RS009's two flags are computed by the same shared function so that
       // `hasAnyAction` counts them, but this component does not render either
       // control — the assign sheet is its own component, mounted beside this
@@ -246,7 +254,7 @@ export function RegistrationHubRegistrantActions({
     path: string,
     nextStatus: Status,
     successText: string,
-  ) {
+  ): Promise<boolean> {
     setBusy(action);
     setFeedback(null);
     setOptimisticStatus(nextStatus);
@@ -260,6 +268,7 @@ export function RegistrationHubRegistrantActions({
       latestStatusRef.current = nextStatus;
       setFeedback({ tone: "success", text: successText });
       router.refresh();
+      return true;
     } catch (err) {
       // Latest known server truth, never the click-time snapshot — finding 2.
       setOptimisticStatus(latestStatusRef.current);
@@ -276,13 +285,22 @@ export function RegistrationHubRegistrantActions({
       // unrelated approve/mark-paid 4xx (wrong division state, already
       // refunded, ...) must never flip this.
       setFeedback({ tone: "error", text });
+      return false;
     } finally {
       setBusy(null);
     }
   }
 
   async function approve() {
-    await runStatusAction("approve", "approve", "confirmed", msg("reg.hub.registrants.detail.actions.approved"));
+    // W12: an entry whose fee is still due is approved and stays pending - the payment confirms it (registration-approval.ts).
+    const paymentDue = flags.canMarkPaid;
+    const ok = await runStatusAction(
+      "approve",
+      "approve",
+      paymentDue ? "pending" : "confirmed",
+      msg(paymentDue ? "reg.hub.registrants.detail.actions.approvedPaymentDue" : "reg.hub.registrants.detail.actions.approved"),
+    );
+    if (ok && paymentDue) setApprovedOptimistically(true);
   }
 
   async function reject() {
@@ -314,17 +332,20 @@ export function RegistrationHubRegistrantActions({
   // fee outside the app... and confirms the entry. This is logged.") is
   // identical regardless of which surface triggers markRegistrationPaidOffline.
   async function markPaid() {
+    // W12: on a manual-approval division the payment is not the approval - an entry not yet approved stays `paid` (awaiting
+    // approval) and the dialog does not promise "confirms the entry" (organiser-actions.ts).
+    const awaitingApproval = approval === "manual" && !approved;
     const ok = await confirmDialog({
       title: msg("confirm.markPaidRegistration.title"),
-      body: msg("confirm.markPaidRegistration.body"),
-      confirmLabel: msg("confirm.markPaidRegistration.label"),
+      body: msg(awaitingApproval ? "confirm.markPaidRegistration.bodyAwaitingApproval" : "confirm.markPaidRegistration.body"),
+      confirmLabel: msg(awaitingApproval ? "confirm.markPaidRegistration.labelAwaitingApproval" : "confirm.markPaidRegistration.label"),
       tone: "default",
     });
     if (!ok) return;
     await runStatusAction(
       "mark-paid",
       "mark-paid",
-      "confirmed",
+      awaitingApproval ? "paid" : "confirmed",
       msg("reg.hub.registrants.detail.actions.markedPaid"),
     );
   }
@@ -476,6 +497,11 @@ export function RegistrationHubRegistrantActions({
               ? msg("reg.hub.registrants.detail.actions.markingPaid")
               : msg("reg.hub.registrants.detail.actions.markPaid")}
           </button>
+        )}
+        {approved && optimisticStatus === "pending" && (
+          <span data-registration-hub-registrant-approved-awaiting-payment className="self-center text-xs text-ink-muted">
+            {msg("reg.hub.registrants.detail.actions.approvedPaymentDue")}
+          </span>
         )}
         {flags.canApprove && (
           <button

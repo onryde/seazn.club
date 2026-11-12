@@ -77,6 +77,7 @@ const BASE_ENTRY = {
   payment_method: "stripe" as const,
   // Polish wave P3: this entry's own division's review mode, and the fee a promotion off the waitlist would set (waitlisted only).
   approval: "auto" as "auto" | "manual",
+  approved: false,
   fee_if_promoted_cents: null as number | null,
   // RS008: this entry's own division youth/player_name_display policy —
   // threaded onto GroupEntryView (buildGroupStatusView, usecases/registrations/group-status.ts).

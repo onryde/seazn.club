@@ -477,7 +477,9 @@ async function confirmPaidRegistration(
     // registration-approval.ts's ApprovalSettingsRow.
     const [approvalRow] = await tx<{ approval: "auto" | "manual" }[]>`
       select approval from registration_settings where division_id = ${reg.division_id}`;
-    if (approvalRow?.approval === "manual") {
+    // Polish wave P5 (W12): an entry the organiser already approved while its fee was due (`approved_at`, V511) is confirmed by this
+    // payment - the approval was given; only the money was outstanding.
+    if (approvalRow?.approval === "manual" && reg.approved_at === null) {
       await audit(tx, div.competition_id, reg.org_id, "registration.paid_awaiting_approval", {
         registration_id: regId,
         amount_cents: reg.amount_cents,

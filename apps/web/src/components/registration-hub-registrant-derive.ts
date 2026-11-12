@@ -372,6 +372,7 @@ export function deriveRegistrantActionFlags(
     | "refunded_cents"
     | "payment_intent_id"
     | "entry_payment_intent_id"
+    | "approved_at"
     | "division_fee_cents"
     | "free_agent"
     | "assigned_team_id"
@@ -398,7 +399,9 @@ export function deriveRegistrantActionFlags(
   const awaitingOfflineFee = row.status === "pending" && feeOwed && row.entry_payment_intent_id === null;
   const nonTerminal = !isTerminalRegistrationStatus(row.status);
   return {
-    canApprove: awaitingManualDecision && !awaitingOfflineFee,
+    // Polish wave P5 (W12): Approve is its own decision - offered while the fee is still due (the entry then stays pending until the
+    // payment confirms it) and gone once given (`approved_at`, V511). It used to wait for Mark paid, which was itself the approval.
+    canApprove: awaitingManualDecision && row.approved_at === null,
     canReject: awaitingManualDecision,
     canWithdraw: nonTerminal,
     canPromote: row.status === "waitlisted",

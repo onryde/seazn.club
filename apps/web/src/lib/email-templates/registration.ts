@@ -22,6 +22,9 @@ export interface RegistrationEmailEntry {
   status: string;
   feeCents: number;
   approval: "auto" | "manual";
+  /** The organiser approved this entry while its fee was owed (V511, polish wave P5 W12): it waits on payment alone. Absent = not
+   *  approved, which is every entry at submit; the cart mail's rebuild (resend, dispute evidence) reads the live column. */
+  approved?: boolean;
 }
 
 /** RS005 W4 — cart-shaped (owner ruling 2026-08-25): one email per cart,
@@ -87,7 +90,7 @@ const WAITING_KEYS = {
 } as const;
 
 function entryStatusLabel(dict: Dict, e: RegistrationEmailEntry): string {
-  const waiting = entryWaitingOn(e.status, e.feeCents, e.approval);
+  const waiting = entryWaitingOn(e.status, e.feeCents, e.approval, e.approved ?? false);
   if (waiting) {
     return t(dict, e.status === "paid" && waiting === "approval" ? "registration.entryStatusPaidAwaitingApproval" : WAITING_KEYS[waiting]);
   }

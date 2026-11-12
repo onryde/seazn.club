@@ -102,6 +102,7 @@ const PROPS: ActionProps = {
   entryPaymentIntentId: null,
   refundedCents: 0,
   lastRemindedAt: null,
+  approvedAt: null,
 };
 
 function mount(overrides: Partial<ActionProps> = {}) {
@@ -483,10 +484,10 @@ describe("RegistrationHubRegistrantActions — data hook", () => {
 // these assert the CONTROL renders/wires exactly where that pure function
 // says it should, and that its confirm/success/revert plumbing is correct.
 describe("RegistrationHubRegistrantActions — mark paid (RS005 R1 finding 1)", () => {
-  it("shows mark paid on a pending, fee-bearing, unpaid entry — and hides approve there, the dead end this wave closes", () => {
+  it("shows mark paid on a pending, fee-bearing, unpaid entry — and (polish wave P5, W12) approve beside it: two decisions", () => {
     const island = mount({ status: "pending", approval: "manual", amountCents: 1500, divisionFeeCents: 1500, paymentIntentId: null });
     expect(findAction(island, "mark-paid")).toBeTruthy();
-    expect(findAction(island, "approve")).toBeUndefined();
+    expect(findAction(island, "approve")).toBeTruthy();
   });
 
   it("hides mark paid once the entry's OWN payment intent exists", () => {
@@ -495,11 +496,11 @@ describe("RegistrationHubRegistrantActions — mark paid (RS005 R1 finding 1)", 
   });
 
   // Polish wave P5 (P1 carry): a card cart where only a SIBLING paid carries the sibling's intent on the cart; this entry paid
-  // nothing, so Mark paid is its way forward and Approve stays hidden (the server refuses it as awaiting payment).
-  it("a sibling's payment on the cart neither hides mark paid nor offers approve on the unpaid entry", () => {
+  // nothing, so Mark paid is its way forward; W12: Approve is offered too (it approves with the fee due and seats nobody).
+  it("a sibling's payment on the cart does not hide mark paid on the unpaid entry", () => {
     const island = mount({ status: "pending", approval: "manual", amountCents: 1000, divisionFeeCents: 1000, paymentIntentId: "pi_sibling", entryPaymentIntentId: null });
     expect(findAction(island, "mark-paid")).toBeTruthy();
-    expect(findAction(island, "approve")).toBeUndefined();
+    expect(findAction(island, "approve")).toBeTruthy();
   });
 
   it("hides mark paid on a free entry (amountCents 0)", () => {
@@ -517,8 +518,8 @@ describe("RegistrationHubRegistrantActions — mark paid (RS005 R1 finding 1)", 
     expect(findAction(island, "mark-paid")).toBeTruthy();
   });
 
-  it("confirms before marking paid, reusing the pre-existing confirm.markPaidRegistration copy", async () => {
-    const island = mount({ status: "pending", approval: "manual", amountCents: 1500, divisionFeeCents: 1500, paymentIntentId: null });
+  it("confirms before marking paid, reusing the pre-existing confirm.markPaidRegistration copy (auto division: it confirms the entry)", async () => {
+    const island = mount({ status: "pending", approval: "auto", amountCents: 1500, divisionFeeCents: 1500, paymentIntentId: null });
     await (propsOf(findAction(island, "mark-paid")!).onClick as () => Promise<void>)();
     expect(confirmMock.fn).toHaveBeenCalledTimes(1);
     expect(confirmMock.fn.mock.calls[0]![0]).toMatchObject({
@@ -540,10 +541,10 @@ describe("RegistrationHubRegistrantActions — mark paid (RS005 R1 finding 1)", 
     expect(findAction(island, "mark-paid")).toBeTruthy();
   });
 
-  it("hides itself the instant mark-paid is confirmed (optimistic flip straight to confirmed — the real, single-step server behaviour), then reverts on a 4xx with the server's own message", async () => {
+  it("hides itself the instant mark-paid is confirmed (auto division: optimistic flip straight to confirmed — the real, single-step server behaviour), then reverts on a 4xx with the server's own message", async () => {
     const d = deferred<unknown>();
     net.next.set("mark-paid", d.promise);
-    const island = mount({ status: "pending", approval: "manual", amountCents: 1500, divisionFeeCents: 1500, paymentIntentId: null });
+    const island = mount({ status: "pending", approval: "auto", amountCents: 1500, divisionFeeCents: 1500, paymentIntentId: null });
 
     const click = (propsOf(findAction(island, "mark-paid")!).onClick as () => Promise<void>)();
     await vi.waitFor(() => expect(findAction(island, "mark-paid")).toBeUndefined());
@@ -561,12 +562,68 @@ describe("RegistrationHubRegistrantActions — mark paid (RS005 R1 finding 1)", 
   });
 
   it("keeps the optimistic flip and refreshes on a successful mark-paid, showing the dedicated 'marked as paid' message", async () => {
-    const island = mount({ status: "pending", approval: "manual", amountCents: 1500, divisionFeeCents: 1500, paymentIntentId: null });
+    const island = mount({ status: "pending", approval: "auto", amountCents: 1500, divisionFeeCents: 1500, paymentIntentId: null });
     await (propsOf(findAction(island, "mark-paid")!).onClick as () => Promise<void>)();
     expect(findAction(island, "mark-paid")).toBeUndefined();
     expect(findAction(island, "approve")).toBeUndefined();
     expect(nav.refresh).toHaveBeenCalledTimes(1);
     expect(island.text()).toContain(t(uiEn, "reg.hub.registrants.detail.actions.markedPaid"));
+  });
+});
+
+// Polish wave P5 (W12): Approve and Mark paid are two decisions on a manual division. The server rules under the controls
+// (registration-approval.ts, organiser-actions.ts): Approve on an unpaid entry approves it and leaves it pending (fee due); Mark paid on
+// an entry not yet approved records the money and leaves it `paid`, awaiting approval; whichever comes second confirms.
+describe("RegistrationHubRegistrantActions — Approve and Mark paid split (W12)", () => {
+  const UNPAID_MANUAL = { status: "pending", approval: "manual", amountCents: 1500, divisionFeeCents: 1500, paymentIntentId: null } as const;
+  const approvedCaption = (island: ReturnType<typeof mount>) =>
+    island.tree().find((e) => propsOf(e)["data-registration-hub-registrant-approved-awaiting-payment"] !== undefined);
+
+  it("Approve on an unpaid entry: it stays pending - Approve goes, Mark paid stays, the row says 'approved, payment due'", async () => {
+    const island = mount(UNPAID_MANUAL);
+    expect(approvedCaption(island), "the empty case: nothing approved yet, no caption").toBeUndefined();
+    await (propsOf(findAction(island, "approve")!).onClick as () => Promise<void>)();
+    expect(net.calls.some((c) => c.url === "/api/v1/registrations/reg-1/approve" && c.method === "POST")).toBe(true);
+    expect(findAction(island, "approve"), "approved once: nothing more to approve").toBeUndefined();
+    expect(findAction(island, "mark-paid"), "the fee is still due").toBeTruthy();
+    expect(approvedCaption(island)).toBeTruthy();
+    expect(island.text()).toContain(t(uiEn, "reg.hub.registrants.detail.actions.approvedPaymentDue"));
+    expect(nav.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("a refused Approve on an unpaid entry leaves Approve in place and claims no approval", async () => {
+    net.next.set("approve", Promise.reject(new ApiV1Error("This registration was already refunded and cannot be approved", 422, "ERROR")));
+    const island = mount(UNPAID_MANUAL);
+    await (propsOf(findAction(island, "approve")!).onClick as () => Promise<void>)();
+    expect(findAction(island, "approve")).toBeTruthy();
+    expect(approvedCaption(island)).toBeUndefined();
+  });
+
+  it("an entry already approved ahead of payment (approvedAt from the server): no Approve, the caption, and Mark paid promises to confirm", async () => {
+    const island = mount({ ...UNPAID_MANUAL, approvedAt: "2026-11-12T10:00:00.000Z" });
+    expect(findAction(island, "approve")).toBeUndefined();
+    expect(approvedCaption(island)).toBeTruthy();
+    await (propsOf(findAction(island, "mark-paid")!).onClick as () => Promise<void>)();
+    expect(confirmMock.fn.mock.calls[0]![0]).toMatchObject({
+      body: t(uiEn, "confirm.markPaidRegistration.body"),
+      confirmLabel: t(uiEn, "confirm.markPaidRegistration.label"),
+    });
+    // The payment confirms the approved entry: everything pending-only goes.
+    expect(findAction(island, "mark-paid")).toBeUndefined();
+    expect(approvedCaption(island), "confirmed: no longer awaiting payment").toBeUndefined();
+  });
+
+  it("Mark paid on an entry NOT yet approved: the dialog says it stays awaiting approval, and the row lands on paid with Approve offered", async () => {
+    const island = mount(UNPAID_MANUAL);
+    await (propsOf(findAction(island, "mark-paid")!).onClick as () => Promise<void>)();
+    expect(confirmMock.fn.mock.calls[0]![0]).toMatchObject({
+      body: t(uiEn, "confirm.markPaidRegistration.bodyAwaitingApproval"),
+      confirmLabel: t(uiEn, "confirm.markPaidRegistration.labelAwaitingApproval"),
+    });
+    expect(t(uiEn, "confirm.markPaidRegistration.bodyAwaitingApproval"), "two different promises").not.toBe(t(uiEn, "confirm.markPaidRegistration.body"));
+    expect(findAction(island, "mark-paid")).toBeUndefined();
+    expect(findAction(island, "approve"), "paid, awaiting the organiser's yes").toBeTruthy();
+    expect(approvedCaption(island)).toBeUndefined();
   });
 });
 
@@ -605,6 +662,7 @@ describe("RegistrationHubRegistrantActions — finding 2: a failure never resurr
       entryPaymentIntentId: null,
   refundedCents: 0,
       lastRemindedAt: null,
+      approvedAt: null,
     });
     // The existing render-time prop-sync already reconciles to it —
     // withdraw (legal on "confirmed") reappears.
@@ -696,7 +754,7 @@ describe("RegistrationHubRegistrantActions — a fee edited after the entry exis
   // from the server's 4xx TEXT: that needed a failed click before it could be
   // right, and coupled these buttons to error prose no test pins — two
   // unrelated fixtures had to be reworded to stop colliding with the match.
-  it("fee raised 0 -> 20.00 under a pending entry: offers mark paid, not approve", () => {
+  it("fee raised 0 -> 20.00 under a pending entry: offers mark paid (and, W12, approve with the fee due)", () => {
     const island = mount({
       status: "pending",
       approval: "manual",
@@ -706,7 +764,7 @@ describe("RegistrationHubRegistrantActions — a fee edited after the entry exis
   refundedCents: 0,
     });
     expect(findAction(island, "mark-paid"), "the control the server accepts").toBeTruthy();
-    expect(findAction(island, "approve"), "approve would 422 'mark it paid first'").toBeUndefined();
+    expect(findAction(island, "approve"), "W12: approve approves it with the fee due").toBeTruthy();
   });
 
   it("fee dropped 20.00 -> 0 under a pending entry: offers approve, not mark paid", () => {

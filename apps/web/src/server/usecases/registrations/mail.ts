@@ -96,10 +96,11 @@ export async function buildCartMail(
       amount_cents: number;
       division_name: string;
       approval: "auto" | "manual";
+      approved: boolean;
     }[]
   >`
     select r.id, r.division_id, r.display_name, r.status, r.amount_cents,
-           d.name as division_name, coalesce(rs.approval, 'auto') as approval
+           d.name as division_name, coalesce(rs.approval, 'auto') as approval, r.approved_at is not null as approved
     from registrations r
     join divisions d on d.id = r.division_id
     left join registration_settings rs on rs.division_id = r.division_id
@@ -171,6 +172,7 @@ export async function buildCartMail(
         status: e.status,
         feeCents: e.amount_cents,
         approval: e.approval,
+        approved: e.approved,
       })),
       totalCents,
       currency: group.currency,

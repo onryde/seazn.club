@@ -84,6 +84,9 @@ export interface RegistrationRow {
    *  the entry had lapsed, expired or been withdrawn) - never the entry's current payment. `ownPaymentRefundedCents` subtracts it, so
    *  a re-promoted entry that paid again can still be refunded. */
   late_refunded_cents: number;
+  /** V511 (polish wave P5, W12): when the organiser approved this entry while its fee was still due (manual approval). The entry stays
+   *  `pending` until the payment lands, which then confirms it; null when never approved that way. */
+  approved_at: Date | null;
   entrant_id: string | null;
   promoted_at: Date | null;
   /** V378/RS007: THIS entry's own pay-by deadline, set only when a

@@ -76,8 +76,12 @@ export async function confirmRegistration(auth: AuthCtx, regId: string): Promise
 }
 
 /** Organiser: record an offline (cash/bank) payment — confirms in the same tx
- *  (payment = approval, spec §2). Card-paid rows are refused: their money
- *  trail lives on Stripe and must stay refundable there. */
+ *  on an auto-approval division (payment = approval, spec §2). Polish wave P5
+ *  (W12): on a MANUAL division the payment is no longer the approval: an entry
+ *  the organiser has not approved stays `paid` (awaiting approval) and Approve
+ *  confirms it; one already approved ahead of its payment (`approved_at`) is
+ *  confirmed here. Card-paid rows are refused: their money trail lives on
+ *  Stripe and must stay refundable there. */
 export async function markRegistrationPaidOffline(
   auth: AuthCtx,
   regId: string,
@@ -121,14 +125,19 @@ export async function markRegistrationPaidOffline(
       update registration_groups
       set offline_marked_paid_at = now(), offline_marked_paid_by = ${auth.userId}, updated_at = now()
       where id = ${reg.group_id}`;
-    await materialise(tx, { ...reg, status: "paid" }, settings?.entrant_kind ?? "individual", seatGate);
+    // Polish wave P5 (W12): on a manual-approval division the payment is not the approval. An entry the organiser has not approved
+    // stays `paid` (awaiting approval) - Approve then confirms it - as a card payment does (`confirmPaidRegistration`, ruling B); one
+    // already approved (`approved_at`, V511) is confirmed by its payment.
+    const awaitingApproval = settings?.approval === "manual" && reg.approved_at === null;
+    if (!awaitingApproval) await materialise(tx, { ...reg, status: "paid" }, settings?.entrant_kind ?? "individual", seatGate);
     await audit(tx, div.competition_id, auth.orgId, "registration.offline_paid", {
       registration_id: regId,
       amount_cents: reg.amount_cents,
+      ...(awaitingApproval ? { awaiting_approval: true } : {}),
     }, auth.userId);
     const after = await orgRegAfter(tx, regId);
     // Polish wave P2 (W1, W3): "payment received" in the transaction that records it. The wording is what the entry IS after the write
-    // (today a mark-paid materialises, so confirmed; the day it stops, the same read says "awaiting approval"). One mail per mark: the
+    // (confirmed, or - W12 - paid and awaiting the organiser's approval on a manual division). One mail per mark: the
     // mark's own timestamp is the payment ref, so a re-promoted entry marked paid again is a new mail. THIS entry only: an offline payment
     // is marked entry by entry, so its mail names that entry's own amount, never the cart's.
     const [mark] = await tx<{ at: Date }[]>`select offline_marked_paid_at as at from registration_groups where id = ${reg.group_id}`;

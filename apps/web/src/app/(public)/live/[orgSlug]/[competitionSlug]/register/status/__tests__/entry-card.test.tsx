@@ -54,6 +54,7 @@ function baseProps(): EntryCardProps {
       promotion_expires_at: null,
       payment_method: "offline",
       approval: "auto",
+      approved: false,
       fee_if_promoted_cents: null,
       division_youth: false,
       division_player_name_display: null,

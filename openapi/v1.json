@@ -102349,6 +102349,16 @@
                               }
                             ]
                           },
+                          "approved_at": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "disputed_at": {
                             "anyOf": [
                               {
@@ -102523,6 +102533,7 @@
                           "refunded_at",
                           "expires_at",
                           "offline_marked_paid_at",
+                          "approved_at",
                           "disputed_at",
                           "entrant_id",
                           "promoted_at",
@@ -102573,6 +102584,7 @@
                       "refunded_at": "example",
                       "expires_at": "example",
                       "offline_marked_paid_at": "example",
+                      "approved_at": "example",
                       "disputed_at": "example",
                       "entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                       "promoted_at": "example",
@@ -103218,6 +103230,16 @@
                               }
                             ]
                           },
+                          "approved_at": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "disputed_at": {
                             "anyOf": [
                               {
@@ -103392,6 +103414,7 @@
                           "refunded_at",
                           "expires_at",
                           "offline_marked_paid_at",
+                          "approved_at",
                           "disputed_at",
                           "entrant_id",
                           "promoted_at",
@@ -103442,6 +103465,7 @@
                       "refunded_at": "example",
                       "expires_at": "example",
                       "offline_marked_paid_at": "example",
+                      "approved_at": "example",
                       "disputed_at": "example",
                       "entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                       "promoted_at": "example",
@@ -104085,6 +104109,16 @@
                             }
                           ]
                         },
+                        "approved_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "disputed_at": {
                           "anyOf": [
                             {
@@ -104166,6 +104200,7 @@
                         "refunded_at",
                         "expires_at",
                         "offline_marked_paid_at",
+                        "approved_at",
                         "disputed_at",
                         "entrant_id",
                         "promoted_at",
@@ -104202,6 +104237,7 @@
                     "refunded_at": "example",
                     "expires_at": "example",
                     "offline_marked_paid_at": "example",
+                    "approved_at": "example",
                     "disputed_at": "example",
                     "entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                     "promoted_at": "example",
@@ -104405,7 +104441,7 @@
     },
     "/api/v1/registrations/{id}/mark-paid": {
       "post": {
-        "summary": "Record an offline (cash/bank) payment — confirms the entry",
+        "summary": "Record an offline (cash/bank) payment — confirms the entry; on a manual-approval division an entry not yet approved stays paid, awaiting approval",
         "tags": [
           "registration"
         ],
@@ -104558,6 +104594,16 @@
                             }
                           ]
                         },
+                        "approved_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "disputed_at": {
                           "anyOf": [
                             {
@@ -104639,6 +104685,7 @@
                         "refunded_at",
                         "expires_at",
                         "offline_marked_paid_at",
+                        "approved_at",
                         "disputed_at",
                         "entrant_id",
                         "promoted_at",
@@ -104675,6 +104722,7 @@
                     "refunded_at": "example",
                     "expires_at": "example",
                     "offline_marked_paid_at": "example",
+                    "approved_at": "example",
                     "disputed_at": "example",
                     "entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                     "promoted_at": "example",
@@ -105031,6 +105079,16 @@
                             }
                           ]
                         },
+                        "approved_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "disputed_at": {
                           "anyOf": [
                             {
@@ -105112,6 +105170,7 @@
                         "refunded_at",
                         "expires_at",
                         "offline_marked_paid_at",
+                        "approved_at",
                         "disputed_at",
                         "entrant_id",
                         "promoted_at",
@@ -105148,6 +105207,7 @@
                     "refunded_at": "example",
                     "expires_at": "example",
                     "offline_marked_paid_at": "example",
+                    "approved_at": "example",
                     "disputed_at": "example",
                     "entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                     "promoted_at": "example",
@@ -105351,7 +105411,7 @@
     },
     "/api/v1/registrations/{id}/approve": {
       "post": {
-        "summary": "Manual-approval review: pending|paid → confirmed, materialises the entrant (idempotent); refused on an auto-approval division, an already-rejected row, or one already refunded",
+        "summary": "Manual-approval review: paid (or a fee-free pending) → confirmed, materialises the entrant (idempotent); an unpaid entry is approved but stays pending (approved_at set) until its payment confirms it; refused on an auto-approval division, an already-rejected row, or one already refunded",
         "tags": [
           "registration"
         ],
@@ -105504,6 +105564,16 @@
                             }
                           ]
                         },
+                        "approved_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "disputed_at": {
                           "anyOf": [
                             {
@@ -105585,6 +105655,7 @@
                         "refunded_at",
                         "expires_at",
                         "offline_marked_paid_at",
+                        "approved_at",
                         "disputed_at",
                         "entrant_id",
                         "promoted_at",
@@ -105621,6 +105692,7 @@
                     "refunded_at": "example",
                     "expires_at": "example",
                     "offline_marked_paid_at": "example",
+                    "approved_at": "example",
                     "disputed_at": "example",
                     "entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                     "promoted_at": "example",
@@ -105977,6 +106049,16 @@
                             }
                           ]
                         },
+                        "approved_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "disputed_at": {
                           "anyOf": [
                             {
@@ -106058,6 +106140,7 @@
                         "refunded_at",
                         "expires_at",
                         "offline_marked_paid_at",
+                        "approved_at",
                         "disputed_at",
                         "entrant_id",
                         "promoted_at",
@@ -106094,6 +106177,7 @@
                     "refunded_at": "example",
                     "expires_at": "example",
                     "offline_marked_paid_at": "example",
+                    "approved_at": "example",
                     "disputed_at": "example",
                     "entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                     "promoted_at": "example",
@@ -106450,6 +106534,16 @@
                             }
                           ]
                         },
+                        "approved_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "disputed_at": {
                           "anyOf": [
                             {
@@ -106531,6 +106625,7 @@
                         "refunded_at",
                         "expires_at",
                         "offline_marked_paid_at",
+                        "approved_at",
                         "disputed_at",
                         "entrant_id",
                         "promoted_at",
@@ -106567,6 +106662,7 @@
                     "refunded_at": "example",
                     "expires_at": "example",
                     "offline_marked_paid_at": "example",
+                    "approved_at": "example",
                     "disputed_at": "example",
                     "entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                     "promoted_at": "example",
@@ -106946,6 +107042,16 @@
                                 }
                               ]
                             },
+                            "approved_at": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "disputed_at": {
                               "anyOf": [
                                 {
@@ -107027,6 +107133,7 @@
                             "refunded_at",
                             "expires_at",
                             "offline_marked_paid_at",
+                            "approved_at",
                             "disputed_at",
                             "entrant_id",
                             "promoted_at",
@@ -107068,6 +107175,7 @@
                     "refunded_at": "example",
                     "expires_at": "example",
                     "offline_marked_paid_at": "example",
+                    "approved_at": "example",
                     "disputed_at": "example",
                     "entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                     "promoted_at": "example",
@@ -107424,6 +107532,16 @@
                             }
                           ]
                         },
+                        "approved_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "disputed_at": {
                           "anyOf": [
                             {
@@ -107505,6 +107623,7 @@
                         "refunded_at",
                         "expires_at",
                         "offline_marked_paid_at",
+                        "approved_at",
                         "disputed_at",
                         "entrant_id",
                         "promoted_at",
@@ -107541,6 +107660,7 @@
                     "refunded_at": "example",
                     "expires_at": "example",
                     "offline_marked_paid_at": "example",
+                    "approved_at": "example",
                     "disputed_at": "example",
                     "entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                     "promoted_at": "example",
@@ -107874,6 +107994,16 @@
                             }
                           ]
                         },
+                        "approved_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "disputed_at": {
                           "anyOf": [
                             {
@@ -107955,6 +108085,7 @@
                         "refunded_at",
                         "expires_at",
                         "offline_marked_paid_at",
+                        "approved_at",
                         "disputed_at",
                         "entrant_id",
                         "promoted_at",
@@ -107991,6 +108122,7 @@
                     "refunded_at": "example",
                     "expires_at": "example",
                     "offline_marked_paid_at": "example",
+                    "approved_at": "example",
                     "disputed_at": "example",
                     "entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                     "promoted_at": "example",

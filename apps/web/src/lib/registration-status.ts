@@ -52,12 +52,21 @@ export function ownPaymentRefundedCents(row: { refunded_cents: number; late_refu
  *  division never rests in), so the caller falls back to the status word.
  *
  *  A fee is owed only while the entry is `pending`; a `paid` entry has paid, so it waits on approval alone, and only when the
- *  division reviews entries by hand. `feeCents` is the entry's OWN fee (`registrations.amount_cents`), never the cart's. */
+ *  division reviews entries by hand. `feeCents` is the entry's OWN fee (`registrations.amount_cents`), never the cart's.
+ *
+ *  `approved` (polish wave P5, W12): the organiser already said yes to this entry (`registrations.approved_at`, V511) while its fee was
+ *  still owed - the entry stays `pending` and waits on its payment alone, which then confirms it. Every caller passes it: an entry the
+ *  organiser approved never reads "awaiting approval" again. */
 export type EntryWaitingOn = "payment" | "approval" | "payment_and_approval";
-export function entryWaitingOn(status: string, feeCents: number, approval: "auto" | "manual"): EntryWaitingOn | null {
+export function entryWaitingOn(
+  status: string,
+  feeCents: number,
+  approval: "auto" | "manual",
+  approved: boolean,
+): EntryWaitingOn | null {
   if (status !== "pending" && status !== "paid") return null;
   const payment = status === "pending" && feeCents > 0;
-  const review = approval === "manual";
+  const review = approval === "manual" && !approved;
   if (payment && review) return "payment_and_approval";
   if (payment) return "payment";
   if (review) return "approval";
@@ -73,8 +82,13 @@ export function entryWaitingOn(status: string, feeCents: number, approval: "auto
  *  vs "waiting for approval" cannot be told apart without it. The ONE definition: the joiner mail (`lifecycle-mail.ts`) and the join
  *  response (`joinTeamEntry`) both call this, so the mail and the page can never disagree about the same entry. */
 export type EntryStanding = "confirmed" | "waitlisted" | EntryWaitingOn;
-export function entryStanding(status: string, feeCents: number, approval: "auto" | "manual" | null): EntryStanding | null {
+export function entryStanding(
+  status: string,
+  feeCents: number,
+  approval: "auto" | "manual" | null,
+  approved: boolean,
+): EntryStanding | null {
   if (status === "confirmed") return "confirmed";
   if (status === "waitlisted") return "waitlisted";
-  return approval === null ? null : entryWaitingOn(status, feeCents, approval);
+  return approval === null ? null : entryWaitingOn(status, feeCents, approval, approved);
 }

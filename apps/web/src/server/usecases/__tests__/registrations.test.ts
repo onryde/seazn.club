@@ -141,6 +141,7 @@ import {
 // exports"), needed here only to prove an already-placed solo sign-up is
 // excluded from the pool-deadline sweep.
 import { assignSoloSignUp } from "../registration-assign";
+import { approveRegistration } from "../registration-approval";
 // RS005 F1: "assert the rendered text, not just that it sent". The confirmation is now queued on the email outbox, so the text is
 // what the transport double was handed for the cart's row, read back through these.
 import { stubOutboxEnv } from "./_invite-mail";
@@ -4241,7 +4242,7 @@ describe.skipIf(!HAS_DB)("RS002 W5 review: RULING B — manual mode blocks the m
     expect(row!.entrant_id).not.toBeNull();
   });
 
-  it("markRegistrationPaidOffline and confirmRegistrationWaived still confirm on a MANUAL division — an organiser's explicit action IS the approval", async () => {
+  it("on a MANUAL division markRegistrationPaidOffline records the money and waits for Approve (W12); confirmRegistrationWaived still confirms", async () => {
     const { orgId, ownerId } = await seedOrg("pro");
     const owner = asOwner(orgId, ownerId);
     const { competition, division } = await rig(owner);
@@ -4260,16 +4261,17 @@ describe.skipIf(!HAS_DB)("RS002 W5 review: RULING B — manual mode blocks the m
       status: "pending",
     });
 
-    // markRegistrationPaidOffline confirms in the SAME call (payment =
-    // approval, its own doc comment) — an organiser marking an offline fee
-    // paid on a manual division IS the human decision ruling B carves out,
-    // so this materialises straight to 'confirmed', same as on an auto
-    // division. Only the AUTOMATIC Stripe-webhook path
-    // (confirmPaidRegistration) stops short at 'paid' on manual — see the
-    // sibling describe block above.
+    // Polish wave P5 (W12, owner ruling): Approve and the payment are two
+    // decisions. markRegistrationPaidOffline on a manual division used to
+    // confirm in the same call (payment = approval); now it stops at 'paid'
+    // exactly as the Stripe-webhook path (confirmPaidRegistration) does, and
+    // the organiser's Approve confirms it.
     const paid = await markRegistrationPaidOffline(owner, offlineReg.id);
-    expect(paid.status).toBe("confirmed");
-    expect(paid.entrant_id).not.toBeNull();
+    expect(paid.status).toBe("paid");
+    expect(paid.entrant_id, "not seated before the organiser's yes").toBeNull();
+    const approved = await approveRegistration(owner, offlineReg.id);
+    expect(approved.status).toBe("confirmed");
+    expect(approved.entrant_id).not.toBeNull();
 
     const waivedSettings = await putRegistrationSettings(owner, division.id, {
       enabled: true,

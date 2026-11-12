@@ -39,6 +39,7 @@ function props(over: Partial<EntryCardProps["entry"]> = {}, cart: Partial<EntryC
       promotion_expires_at: null,
       payment_method: "stripe",
       approval: "auto",
+      approved: false,
       fee_if_promoted_cents: null,
       division_youth: false,
       division_player_name_display: null,
@@ -94,6 +95,16 @@ describe("a pending entry says what it is waiting on (W2, W12)", () => {
     }
     expect(checked).toBe(MATRIX.length);
     expect(seen.size, "the three reasons are three different sentences").toBe(3);
+  });
+
+  // Polish wave P5 (W12): the organiser approved the entry while its fee was owed (`approved`, V511). The card then names the
+  // payment alone - the same reason an unpaid auto-approval entry gives (the MATRIX's first row), never "payment and approval".
+  it("an entry approved ahead of its payment waits on payment alone; unapproved, on both (the pair)", () => {
+    const approvedMarkup = render(props({ status: "pending", amount_cents: 1500, approval: "manual", approved: true }));
+    const unapprovedMarkup = render(props({ status: "pending", amount_cents: 1500, approval: "manual", approved: false }));
+    expect(waitingOn(approvedMarkup)).toBe("payment");
+    expect(approvedMarkup).toContain((uiEn as Record<string, string>)["register.status.waiting.payment"]!);
+    expect(waitingOn(unapprovedMarkup)).toBe("payment_and_approval");
   });
 
   it("an offline entry waiting on payment AND approval says both (W12: the page showed only how to pay)", () => {

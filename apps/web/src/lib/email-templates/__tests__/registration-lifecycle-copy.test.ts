@@ -15,6 +15,8 @@ import {
 } from "@/lib/email-templates";
 
 const PERSON = "Dana Captain";
+/** The amount owed, as the producer hands it over (already spelled by `money()` in the recipient's language). */
+const DUE = "£15.00";
 const ENTRY = "Riverside Rovers";
 const DIVISION = "Open Doubles";
 const COMP = "Spring Open";
@@ -43,6 +45,8 @@ async function renderAll(locale: (typeof LOCALES)[number]) {
     paidCartApproval: registrationPaidTemplate({ ...paidBase, entries: [entry1(false), entry2(false)], statusUrl: LINK }, dict),
     paidCartMixed: registrationPaidTemplate({ ...paidBase, entries: [entry1(true), entry2(false)], statusUrl: LINK }, dict),
     approved: registrationApprovedTemplate({ ...base, recipientName: PERSON, competitionUrl: LINK }, dict),
+    // Polish wave P5 (W12): approved while the fee is still due.
+    approvedPaymentDue: registrationApprovedTemplate({ ...base, recipientName: PERSON, competitionUrl: LINK, paymentDue: DUE }, dict),
     expired: registrationExpiredTemplate({ ...base, contactName: PERSON, registerUrl: LINK }, dict),
     withdrawn: registrationWithdrawnTemplate({ ...base, contactName: PERSON }, dict),
     ...Object.fromEntries(
@@ -71,7 +75,7 @@ describe("every lifecycle mail, in every locale", () => {
       expect(out.subject, `${locale} ${name}: the subject is non-empty`).not.toBe("");
       checked += 1;
     }
-    expect(checked, "anti-vacuity: 5 kinds, joined in 5 states, paid in 5 (2 single + 3 cart) = 13 renders").toBe(13);
+    expect(checked, "anti-vacuity: 5 kinds, joined in 5 states, paid in 5 (2 single + 3 cart), approved in 2 = 14 renders").toBe(14);
   });
 
   it("the subjects differ between locales (an untranslated key would repeat the English one)", async () => {
@@ -84,7 +88,7 @@ describe("every lifecycle mail, in every locale", () => {
         checked += 1;
       }
     }
-    expect(checked, "anti-vacuity: every render of every non-English locale").toBe(39);
+    expect(checked, "anti-vacuity: every render of every non-English locale").toBe(42);
   });
 });
 
@@ -98,6 +102,23 @@ describe("the state each mail states", () => {
     expect(approval.text, "the approval-pending mail does not claim a confirmation").not.toContain(dict["registrationPaid.confirmedTitle"]);
     expect(confirmed.text, "and the confirmed one does not say it is waiting").not.toContain(dict["registrationPaid.approvalTitle"]);
     expect(confirmed.text).not.toBe(approval.text);
+  });
+
+  it.each(LOCALES)("%s: approved with the fee still due (W12) is a different mail: its own subject and body, the amount, and never the plain 'confirmed' copy", async (locale) => {
+    const dict = await dictOf(locale);
+    const outs = await renderAll(locale);
+    const plain = outs.approved!;
+    const due = outs.approvedPaymentDue!;
+    const fill = (key: string, vars: Record<string, string>) =>
+      Object.entries(vars).reduce((s, [k, v]) => s.split(`{${k}}`).join(v), String(dict[`registrationApproved.${key}`]));
+    expect(due.subject).toBe(fill("subjectPaymentDue", { competitionName: COMP }));
+    expect(plain.subject).toBe(fill("subject", { competitionName: COMP }));
+    expect(due.subject, "two different subjects").not.toBe(plain.subject);
+    expect(due.text).toContain(fill("textBodyPaymentDue", { displayName: ENTRY, divisionName: DIVISION, amount: DUE }));
+    expect(due.text, "the plain body is not sent alongside").not.toContain(fill("textBody", { displayName: ENTRY, divisionName: DIVISION }));
+    expect(words(due.html)).toContain(DUE);
+    expect(plain.text, "the plain approval names no amount").not.toContain(DUE);
+    expect(words(plain.html)).not.toContain(DUE);
   });
 
   it.each(LOCALES)("%s: the paid mail quotes THIS entry's amount, with two decimals", async (locale) => {

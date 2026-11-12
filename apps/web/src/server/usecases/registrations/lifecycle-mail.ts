@@ -11,6 +11,7 @@ import { routes } from "@/lib/routes";
 import { registrationApprovedEmail, registrationExpiredEmail, registrationJoinedEmail, registrationPaidEmail, registrationWithdrawnEmail } from "@/lib/email";
 import { entryStanding, isTerminalRegistrationStatus } from "@/lib/registration-status";
 import { enqueueEmailOnce, expiryWithin, recipientLocale } from "@/server/email-outbox";
+import { money } from "@/lib/email-templates/shared";
 import { log } from "@/server/logger";
 import type { Tx, RegistrationWithGroupRow, DivisionCtx } from "./types";
 import { divisionCtx, fallbackOrigin, loadSettings, regGroupCols } from "./lookups";
@@ -197,9 +198,10 @@ async function fanOut(
  * To the registration's contact AND to every teammate who has joined the entry and has an address (W2, W13); one mail per address (a
  * teammate whose address is the contact's own is not mailed twice). Each in their own language: the contact's pick or account, a teammate's account or the club's.
  *
- * `reg` is the row AFTER the write. Only an entry that is `confirmed` there is told it is: an approval that left the entry anywhere else
- * (the day Approve and Mark paid are split, an approved entry whose fee is still due) queues nothing here and says so in the log, because
- * "you're confirmed" is a claim about the row, not about what the organiser pressed. That wording is the next wave's to write.
+ * `reg` is the row AFTER the write. Only an entry that is `confirmed` there is told it is. Polish wave P5 (W12): an entry approved while
+ * its fee is still due (`pending` with `approved_at`, V511) is told it is approved and that its place is confirmed once the fee is paid,
+ * with the amount. Any other state (a `paid` entry nobody approved) queues nothing here and says so in the log, because the mail is a
+ * claim about the row, not about what the organiser pressed.
  *
  * Once per recipient per approval: the keys carry the row's `updated_at`, which the approving statement stamps, so a second Approve of an
  * already-confirmed entry (it returns early, before this is reached) and a retried transaction queue nothing, while an entry withdrawn,
@@ -207,7 +209,9 @@ async function fanOut(
  */
 export async function queueRegistrationApprovedMails(tx: Tx, a: { reg: RegistrationWithGroupRow; origin?: string }): Promise<string[]> {
   const { reg } = a;
-  if (reg.status !== "confirmed") {
+  // Polish wave P5 (W12): approved while the fee is still due - the entry stays pending and the mail says the payment confirms it.
+  const paymentDue = reg.status === "pending" && reg.approved_at !== null;
+  if (reg.status !== "confirmed" && !paymentDue) {
     log.info({ registrationId: reg.id, status: reg.status }, "registration: approval did not confirm the entry; no approved email queued");
     return [];
   }
@@ -232,7 +236,11 @@ export async function queueRegistrationApprovedMails(tx: Tx, a: { reg: Registrat
     reg,
     defaultLocale: prep.ctx.default_locale,
     audience: prep.audience,
-    render: (r, locale) => registrationApprovedEmail({ ...base, recipientName: r.name, refCode: r.refCode }, locale),
+    render: (r, locale) =>
+      registrationApprovedEmail(
+        { ...base, recipientName: r.name, refCode: r.refCode, paymentDue: paymentDue ? money(reg.amount_cents, reg.currency, locale) : null },
+        locale,
+      ),
     keyOf: (r) => `${reg.id}:${r.to.toLowerCase()}:${stamp}`,
   });
 }
@@ -330,8 +338,11 @@ export async function queueRegistrationJoinedMail(
   const to = a.to?.trim() ?? "";
   if (to === "") return null;
   return contained(tx, "registration_joined", a.registrationId, async (sp) => {
-    const [reg] = await sp<{ display_name: string; status: string; amount_cents: number; division_id: string; org_id: string }[]>`
-      select display_name, status, amount_cents, division_id, org_id from registrations where id = ${a.registrationId}`;
+    const [reg] = await sp<
+      { display_name: string; status: string; amount_cents: number; division_id: string; org_id: string; approved: boolean }[]
+    >`
+      select display_name, status, amount_cents, division_id, org_id, approved_at is not null as approved
+        from registrations where id = ${a.registrationId}`;
     if (!reg) throw new Error(`lifecycle mail: registration ${a.registrationId} not found`);
     if (isTerminalRegistrationStatus(reg.status)) return null;
     const origin = a.origin ?? fallbackOrigin();
@@ -347,7 +358,7 @@ export async function queueRegistrationJoinedMail(
         refCode: null,
         playerName: a.playerName,
         // The ONE standing definition (lib/registration-status.ts), shared with the join response so the mail and the page agree.
-        state: entryStanding(reg.status, reg.amount_cents, settings?.approval ?? null),
+        state: entryStanding(reg.status, reg.amount_cents, settings?.approval ?? null, reg.approved),
         competitionUrl: competitionUrlOf(origin, ctx),
       },
       locale,

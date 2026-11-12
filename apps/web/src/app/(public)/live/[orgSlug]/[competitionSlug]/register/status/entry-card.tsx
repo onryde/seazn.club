@@ -97,6 +97,9 @@ export interface EntryCardProps {
      *  organiser's approval as well as (or instead of) payment. REQUIRED for the same reason `assigned_team_name` is: an
      *  omitted value would silently read as "no review" and the card would name only the payment. */
     approval: "auto" | "manual";
+    /** Polish wave P5 (W12): the organiser approved this entry while its fee was still owed (V511), so it waits on payment alone.
+     *  REQUIRED for the reason `approval` is: an omitted value would read "awaiting approval" about an entry already approved. */
+    approved: boolean;
     /** Polish wave P3 (W6): the fee a promotion off the waitlist WOULD set (the division's own fee), null on every other status.
      *  The card itself does not print it; the page's Subtotal does (`cartSubtotal`). Carried on the entry so one shape
      *  travels from the read model to both. */
@@ -161,7 +164,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
   // Polish wave P3 (W2, W12): WHY a pending entry is not confirmed. Suppressed once the payment window has closed: the
   // window-closed message below is the true and more actionable statement, and "waiting for payment" beside it would read as
   // an invitation to pay a window that no longer accepts payment.
-  const waitingOn = money.kind === "window_closed" ? null : entryWaitingOn(entry.status, entry.amount_cents, entry.approval);
+  const waitingOn = money.kind === "window_closed" ? null : entryWaitingOn(entry.status, entry.amount_cents, entry.approval, entry.approved);
   const unclaimed = entry.players.filter((p) => p.consent_status === "pending");
   // RS008: every roster row's name, masked by division youth policy OR the
   // linked person's own consent opt-out. Resolved ONCE, by id, so the

@@ -107,6 +107,12 @@ async function divisionCompetitionId(tx: Tx, divisionId: string): Promise<string
  * change `status`, so a `paid` row an organiser refunded through the normal
  * refund flow was otherwise still approvable, materialising a free entrant
  * for money that had already gone back.
+ *
+ * Polish wave P5 (W12): an entry whose fee is still owed is APPROVED, not
+ * refused: it stays `pending` with `approved_at` stamped (V511), nobody is
+ * seated, and the registrant is mailed "approved - payment still due". Its
+ * payment (the card webhook or Mark paid) then confirms it. A second Approve
+ * of such an entry is a no-op (one stamp, one mail).
  */
 export async function approveRegistration(
   auth: AuthCtx,
@@ -141,14 +147,22 @@ export async function approveRegistration(
     }
     // Polish wave P5 (P1 carry): THIS entry's own payment (V387), never the cart's - a sibling's payment sets the cart's intent, and
     // reading it let an entry that paid nothing through this gate.
-    if ((settings.fee_cents ?? 0) > 0 && reg.status !== "paid" && reg.entry_payment_intent_id === null) {
-      throw new HttpError(
-        422,
-        "Awaiting payment — mark it paid first, or approve once payment arrives",
-      );
-    }
     const competitionId = await divisionCompetitionId(tx, reg.division_id);
     assertNotFrozen(frozen, competitionId);
+    // Polish wave P5 (W12): Approve and the payment are two decisions. An entry whose fee is still due is APPROVED and stays pending
+    // (payment due); the payment - the card webhook or Mark paid - then confirms it (`approved_at`, V511). It used to be refused
+    // ("mark it paid first"), so Approve could not be given before the money and Mark paid was the approval.
+    if ((settings.fee_cents ?? 0) > 0 && reg.status !== "paid" && reg.entry_payment_intent_id === null) {
+      if (reg.approved_at !== null) return { row: reg, mailIds: [] as string[] }; // idempotent: approved once, mailed once
+      await tx`update registrations set approved_at = now(), updated_at = now() where id = ${regId}`;
+      await audit(tx, competitionId, auth.orgId, "registration.approved", {
+        registration_id: regId,
+        paid: false,
+        payment_due: true,
+      }, auth.userId);
+      const approved = await orgRegAfter(tx, regId);
+      return { row: approved, mailIds: await queueRegistrationApprovedMails(tx, { reg: approved }) };
+    }
     await materialise(tx, reg, settings.entrant_kind, seatGate);
     await audit(tx, competitionId, auth.orgId, "registration.approved", {
       registration_id: regId,

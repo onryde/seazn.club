@@ -5,6 +5,9 @@
 // - Mark paid on the unpaid entry was refused "paid by card", although it had paid nothing.
 // The rule under test: those gates read THIS entry's own payment (`registrations.payment_intent_id`, V387, read as
 // `entry_payment_intent_id`), the one P1's refund fix (133d9ce0d7) moved the refund onto.
+// Polish wave P5 (W12): Approve on an entry whose own fee is still due no longer refuses - it APPROVES (stays pending, `approved_at`)
+// and seats nobody. The money gate is the same one: what it decides is whether Approve seats the entry, so the assertions below pin
+// "not seated, still pending" rather than a 422.
 //
 // Every payment lands through the REAL webhook core (`handleRegistrationCheckoutCompleted`) with a session naming exactly the
 // entry it paid, so the premise (the cart carries the sibling's intent) is the producer's own output, not a hand-seeded column.
@@ -70,17 +73,20 @@ async function entrantOf(regId: string): Promise<string | null> {
 }
 
 describe.skipIf(!HAS_DB)("Approve / Confirm / Mark paid read the entry's own payment, never the cart's (P1 carry)", () => {
-  it("empty case: nobody in the cart has paid - Approve and Confirm refuse the unpaid entry, Mark paid records it", async () => {
+  it("empty case: nobody in the cart has paid - Approve seats nothing (W12: approved, fee due), Confirm refuses, Mark paid records it", async () => {
     const manual = await twoEntryCart("manual");
     expect((await loadWithGroup(manual.masters.id)).payment_intent_id, "premise: no intent anywhere").toBeNull();
-    expect((await rejection(approveRegistration(manual.rig.owner, manual.masters.id))).status).toBe(422);
+    const approvedDue = await approveRegistration(manual.rig.owner, manual.masters.id);
+    expect(approvedDue.status, "approved with its fee due: still pending").toBe("pending");
+    expect(approvedDue.approved_at).not.toBeNull();
+    expect(await entrantOf(manual.masters.id), "nobody seated without the money").toBeNull();
     const auto = await twoEntryCart("auto");
     expect((await rejection(confirmRegistration(auto.rig.owner, auto.masters.id))).status).toBe(422);
     const marked = await markRegistrationPaidOffline(auto.rig.owner, auto.masters.id);
     expect(marked.status).toBe("confirmed");
   });
 
-  it("only the sibling paid (manual): Approve on the UNPAID entry refuses 422 and seats nobody; the paid sibling approves", async () => {
+  it("only the sibling paid (manual): Approve on the UNPAID entry seats nobody (W12: approved, fee due); the paid sibling approves and is seated", async () => {
     const { rig, open, masters } = await twoEntryCart("manual");
     const paid = paidSession([open.id], 1500, "appr");
     await handleRegistrationCheckoutCompleted(paid);
@@ -89,15 +95,15 @@ describe.skipIf(!HAS_DB)("Approve / Confirm / Mark paid read the entry's own pay
     expect(before.entry_payment_intent_id, "premise: the unpaid entry has no payment of its own").toBeNull();
     expect(before.status).toBe("pending");
 
-    const err = await rejection(approveRegistration(rig.owner, masters.id));
-    expect(err.status).toBe(422);
-    expect(err.message).toMatch(/Awaiting payment/);
-    expect((await loadWithGroup(masters.id)).status, "the unpaid entry is not confirmed").toBe("pending");
+    const due = await approveRegistration(rig.owner, masters.id);
+    expect(due.approved_at, "the approval is recorded").not.toBeNull();
+    expect((await loadWithGroup(masters.id)).status, "the unpaid entry is not confirmed (the sibling's payment is not its own)").toBe("pending");
     expect(await entrantOf(masters.id), "and no entrant was seated for it").toBeNull();
 
-    // The positive pair: the entry that DID pay approves.
+    // The positive pair: the entry that DID pay approves and is seated.
     const approved = await approveRegistration(rig.owner, open.id);
     expect(approved.status).toBe("confirmed");
+    expect(await entrantOf(open.id)).not.toBeNull();
   });
 
   it("only the sibling paid (auto): Confirm on the UNPAID entry refuses 422; Mark paid is NOT refused as 'paid by card' and confirms it", async () => {

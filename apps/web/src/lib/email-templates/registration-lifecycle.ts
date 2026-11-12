@@ -162,12 +162,16 @@ export interface RegistrationApprovedArgs extends LifecycleBase {
   recipientName: string;
   /** The public competition page. A teammate has no status token, so this is never the status page. */
   competitionUrl?: string | null;
+  /** Polish wave P5 (W12): approved while the fee is still due - the amount owed, already spelled in the mail's language. The place
+   *  is then confirmed by the payment, and the mail says so instead of "your place is confirmed". */
+  paymentDue?: string | null;
 }
 
-/** The organiser approved the entry: the place is confirmed. */
+/** The organiser approved the entry: the place is confirmed (or, with `paymentDue`, confirmed once the fee is paid). */
 export function registrationApprovedTemplate(opts: RegistrationApprovedArgs, dict: Dict): Content {
   const ns = "registrationApproved";
-  const subject = t(dict, `${ns}.subject`, { competitionName: opts.competitionName });
+  const due = opts.paymentDue ?? null;
+  const subject = t(dict, due ? `${ns}.subjectPaymentDue` : `${ns}.subject`, { competitionName: opts.competitionName });
   const names = { displayName: opts.displayName, divisionName: opts.divisionName };
   return {
     subject,
@@ -178,11 +182,12 @@ export function registrationApprovedTemplate(opts: RegistrationApprovedArgs, dic
       title: t(dict, `${ns}.title`),
       contentHtml:
         paragraph(
-          t(dict, `${ns}.intro`, {
+          t(dict, due ? `${ns}.introPaymentDue` : `${ns}.intro`, {
             recipientName: escapeHtml(opts.recipientName),
             displayName: escapeHtml(names.displayName),
             divisionName: escapeHtml(names.divisionName),
             competitionName: escapeHtml(opts.competitionName),
+            amount: due ?? "",
           }),
         ) +
         (opts.competitionUrl ? button(t(dict, `${ns}.viewCompetition`), opts.competitionUrl) + linkFallback(opts.competitionUrl) : "") +
@@ -191,7 +196,7 @@ export function registrationApprovedTemplate(opts: RegistrationApprovedArgs, dic
     text:
       t(dict, `${ns}.text`, { competitionName: opts.competitionName, orgName: opts.orgName }) +
       "\n" +
-      t(dict, `${ns}.textBody`, names) +
+      t(dict, due ? `${ns}.textBodyPaymentDue` : `${ns}.textBody`, { ...names, amount: due ?? "" }) +
       (opts.competitionUrl ? "\n\n" + opts.competitionUrl : "") +
       referenceText(dict, ns, opts.refCode),
   };

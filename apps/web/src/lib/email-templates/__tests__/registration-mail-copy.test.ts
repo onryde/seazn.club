@@ -112,6 +112,20 @@ describe("the cart confirmation's entry lines", () => {
     for (const line of out.text.split("\n")) expect(line, `${locale}: no raw key`).not.toMatch(/registration\.entryStatus/);
   });
 
+  // Polish wave P5 (W12): the organiser approved the manual, unpaid "Ladies Singles" entry ahead of its payment (`approved`, V511, as the
+  // cart mail's rebuild reads it). It now waits on payment alone - the SAME word as "Open Singles" (auto, unpaid) - never "payment and
+  // approval". The expected word is another line of the same mail, not this function's output for the approved line.
+  it.each(LOCALES)("%s: an entry approved ahead of its payment waits on payment alone - the same word as an unpaid auto entry", async (locale) => {
+    const status = (text: string, division: string): string =>
+      text.split("\n").find((l) => l.includes(division))!.replace(division, "").replace(/Maya/g, "").replace(/[£€$]\s?[\d.,]+/g, "").replace(/[()·—:\-\s]+/g, " ").trim();
+    const approvedEntries = entries.map((e) => (e.divisionName === "Ladies Singles" ? { ...e, approved: true } : e));
+    const args = { orgName: "Riverside Club", competitionName: "Spring Open", contactName: CONTACT, totalCents: 3700, currency: "gbp", paymentInstructions: null, statusUrl: "https://seazn.club/s" };
+    const before = registrationTemplate({ ...args, entries }, await dictOf(locale)).text;
+    const after = registrationTemplate({ ...args, entries: approvedEntries }, await dictOf(locale)).text;
+    expect(status(before, "Ladies Singles"), "premise: unapproved, it waits on both").not.toBe(status(before, "Open Singles"));
+    expect(status(after, "Ladies Singles")).toBe(status(after, "Open Singles"));
+  });
+
   it("English wording of the waiting states (typed from the product's own labels, so a dictionary drift is seen)", async () => {
     const out = await render("en");
     const line = (d: string) => out.text.split("\n").find((l) => l.includes(d))!;

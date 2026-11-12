@@ -1347,16 +1347,21 @@ export async function joinTeamEntry(
   // transaction either assigns them or throws before the result is built.
   let lockedStatus = "";
   let lockedFeeCents = 0;
+  let lockedApproved = false;
 
   const playerId = await sql.begin(async (tx) => {
-    const [locked] = await tx<{ status: string; amount_cents: number; free_agent: boolean; entrant_id: string | null }[]>`
-      select status, amount_cents, free_agent, entrant_id from registrations where id = ${reg.id} for update`;
+    const [locked] = await tx<
+      { status: string; amount_cents: number; free_agent: boolean; entrant_id: string | null; approved: boolean }[]
+    >`
+      select status, amount_cents, free_agent, entrant_id, approved_at is not null as approved
+        from registrations where id = ${reg.id} for update`;
     if (!locked) throw new HttpError(404, "This join link is not valid");
     materialisedEntrantId = locked.entrant_id;
     // Polish wave P3: the entry's standing as the row lock sees it (a join never changes status or fee), reported back so the page never
     // says "confirmed" about an entry still awaiting payment or approval.
     lockedStatus = locked.status;
     lockedFeeCents = locked.amount_cents;
+    lockedApproved = locked.approved;
     if (locked.free_agent) throw new HttpError(422, "This entry has no roster to join yet");
     if (["withdrawn", "rejected", "expired"].includes(locked.status)) {
       throw new HttpError(422, "This entry is no longer accepting players");
@@ -1539,7 +1544,7 @@ export async function joinTeamEntry(
   // The review mode is read live; unreadable (no settings row cannot happen past the join's own inner join, but it is a guard, not a
   // comment) it names nothing rather than guess.
   const settings = await loadSubmitSettings(reg.division_id);
-  const entryState = entryStanding(lockedStatus, lockedFeeCents, settings?.approval ?? null);
+  const entryState = entryStanding(lockedStatus, lockedFeeCents, settings?.approval ?? null, lockedApproved);
 
   return { registration_id: reg.id, player_id: playerId, consent_status: consentStatus, entry_state: entryState };
 }

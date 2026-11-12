@@ -68,6 +68,9 @@ export interface GroupEntryView {
    *  fee it says what a not-yet-confirmed entry is WAITING ON (`entryWaitingOn`): the status page names it instead of a bare
    *  "pending". A division with no settings row reviews nothing by hand, the same default the submit path uses. */
   approval: "auto" | "manual";
+  /** Polish wave P5 (W12): the organiser approved this entry while its fee was still owed (`approved_at`, V511), so it waits on payment
+   *  alone - with `approval` it keeps the page from saying "awaiting approval" about an entry the organiser already said yes to. */
+  approved: boolean;
   /** Polish wave P3 (W6): for a WAITLISTED entry, the fee a promotion would set (the division's own `fee_cents`, what
    *  `promoteWaitlistedRow` writes); `null` for every other entry (their own `amount_cents` is the figure). A waitlisted entry's stored
    *  fee is 0 by construction, so the Subtotal could only say "Free": this is what lets it say what is not yet due. */
@@ -253,7 +256,7 @@ async function buildGroupStatusView(
   >`
     select r.id, r.division_id, d.name as division_name, r.display_name, r.status,
            r.amount_cents, r.refunded_cents, r.late_refunded_cents, r.free_agent, r.join_code, r.promotion_expires_at,
-           r.payment_intent_id as entry_payment_intent_id,
+           r.payment_intent_id as entry_payment_intent_id, r.approved_at is not null as approved,
            d.youth as division_youth, d.player_name_display as division_player_name_display,
            -- RS009: the team an organiser placed this solo sign-up on, or
            -- null while they are still in the pool. free_agent records how
