@@ -1,5 +1,6 @@
 // Archive a sponsor, Task 4 (spec docs/superpowers/specs/2026-11-11-sponsor-archive-design.md D27, §11): ONE visibility rule in
-// SQL, `status = 'active' and archived_at is null`. This static sweep reads every server source file (no database) and finds each
+// SQL, `status = 'active' and archived_at is null`. This static sweep reads every source file under src/server and src/app, .ts
+// and .tsx (review M3: a route handler or a server component could hold SQL too; no database), and finds each
 // SQL template that touches the `sponsors` table (`from` / `join` / `update sponsors`, pre-flight P1: `recordClick` UPDATEs) and
 // filters `status = 'active'`. Each of those decides what the public, the stream or the redirect sees, so each must also carry
 // `archived_at is null`. A new reader that copies the old filter goes red here until it adds the archive one.
@@ -15,7 +16,10 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 
 const SRC = resolve(import.meta.dirname, "../../.."); // apps/web/src
-const SERVER = join(SRC, "server");
+/** Where SQL can live: the server modules and the app tree (route handlers, server components, server actions). */
+const ROOTS = [join(SRC, "server"), join(SRC, "app")];
+const SOURCE = /\.tsx?$/;
+const NOT_SOURCE = /\.(test|spec)\.tsx?$|\.d\.ts$/;
 const rel = (abs: string): string => relative(SRC, abs).split("\\").join("/");
 
 function walk(dir: string, out: string[] = []): string[] {
@@ -23,7 +27,7 @@ function walk(dir: string, out: string[] = []): string[] {
     if (name === "__tests__" || name === "node_modules") continue;
     const full = join(dir, name);
     if (statSync(full).isDirectory()) walk(full, out);
-    else if (/\.ts$/.test(name) && !/\.(test|spec)\.ts$/.test(name) && !/\.d\.ts$/.test(name)) out.push(full);
+    else if (SOURCE.test(name) && !NOT_SOURCE.test(name)) out.push(full);
   }
   return out;
 }
@@ -99,8 +103,15 @@ interface Found {
   hidesArchived: boolean;
 }
 
-function sweep(): { scanned: number; found: Found[] } {
-  const files = walk(SERVER).sort();
+function sweep(): { scanned: number; perRoot: Record<string, number>; tsx: number; found: Found[] } {
+  const perRoot: Record<string, number> = {};
+  const files: string[] = [];
+  for (const root of ROOTS) {
+    const mine = walk(root);
+    perRoot[rel(root)] = mine.length;
+    files.push(...mine);
+  }
+  files.sort();
   const found: Found[] = [];
   for (const abs of files) {
     const src = readFileSync(abs, "utf8");
@@ -109,7 +120,7 @@ function sweep(): { scanned: number; found: Found[] } {
       found.push({ where: `${rel(abs)}:${lineOf(src, t.at)}`, file: rel(abs), hidesArchived: hidesArchived(t.text) });
     }
   }
-  return { scanned: files.length, found };
+  return { scanned: files.length, perRoot, tsx: files.filter((f) => f.endsWith(".tsx")).length, found };
 }
 
 describe("the matcher and the lexer, on planted sources", () => {
@@ -146,14 +157,35 @@ describe("the matcher and the lexer, on planted sources", () => {
     expect([isVisibilityRead(ts[0]!.text), hidesArchived(ts[0]!.text)]).toEqual([true, true]);
     expect(lineOf(src, ts[0]!.at)).toBe(4);
   });
+
+  it("a .tsx source (review M3): JSX text with an apostrophe does not swallow the SQL template after it", () => {
+    const src = [
+      "export default async function Page() {",
+      "  const rows = await sql`select id from sponsors where org_id = ${orgId} and status = 'active'`;",
+      "  return <p className=\"note\">Don't miss {rows.length} sponsors</p>;",
+      "}",
+      "const more = await sql`select 1 from sponsors where status = 'active' and archived_at is null`;",
+    ].join("\n");
+    const ts = templatesOf(src);
+    expect(ts.map((t) => [lineOf(src, t.at), isVisibilityRead(t.text), hidesArchived(t.text)])).toEqual([
+      [2, true, false],
+      [5, true, true],
+    ]);
+  });
 });
 
-describe("D27: every sponsors visibility read in apps/web/src/server also hides the archived", () => {
+describe("D27: every sponsors visibility read in apps/web/src/server and src/app also hides the archived", () => {
   it("finds spec §11's five, and each carries `archived_at is null`", () => {
-    const { scanned, found } = sweep();
+    const { scanned, perRoot, tsx, found } = sweep();
     // Reported, so a reviewer sees the inventory, not just a count.
-    console.info(`archive-reader-sweep: scanned ${scanned} files, found ${found.length}:\n  ${found.map((f) => `${f.where}${f.hidesArchived ? "" : "  MISSING archived_at is null"}`).join("\n  ")}`);
+    console.info(
+      `archive-reader-sweep: scanned ${scanned} files (${JSON.stringify(perRoot)}, ${tsx} .tsx), found ${found.length}:\n  ` +
+        found.map((f) => `${f.where}${f.hidesArchived ? "" : "  MISSING archived_at is null"}`).join("\n  "),
+    );
     expect(scanned, "files scanned").toBeGreaterThan(0);
+    // Named, not read off ROOTS: dropping a root from the walk must fail here.
+    for (const root of ["server", "app"]) expect(perRoot[root] ?? 0, `files scanned under src/${root}`).toBeGreaterThan(0);
+    expect(tsx, ".tsx files scanned").toBeGreaterThan(0);
     expect(found.length, "zero found is a failure").toBeGreaterThan(0);
     const perFile: Record<string, number> = {};
     for (const f of found) perFile[f.file] = (perFile[f.file] ?? 0) + 1;
