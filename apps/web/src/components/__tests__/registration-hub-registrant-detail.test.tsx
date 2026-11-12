@@ -159,6 +159,12 @@ describe("RegistrationHubRegistrantDetail — contact and entry fields", () => {
     expect(text).toContain(t(dict, "reg.settings.cardPayment"));
   });
 
+  it("a whole amount keeps its pence (owner ruling 2026-11-12: '£15.00', never '£15')", () => {
+    const text = textOf(RegistrationHubRegistrantDetail(baseProps({ row: row({ amount_cents: 1500, currency: "gbp" }) })));
+    expect(text).toContain("£15.00");
+    expect(text).not.toMatch(/£15(?![.\d])/);
+  });
+
   it("renders the offline payment method label", () => {
     const text = textOf(RegistrationHubRegistrantDetail(baseProps({ row: row({ payment_method: "offline" }) })));
     expect(text).toContain(t(dict, "reg.settings.payOrganiser"));

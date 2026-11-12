@@ -173,6 +173,12 @@ describe("RegistrationHubDivisionRow — fee", () => {
     expect(text).toContain("19.99");
   });
 
+  it("a whole-pound fee keeps its pence (owner ruling 2026-11-12: '£15.00', never '£15')", () => {
+    const text = textOf(RegistrationHubDivisionRow({ row: { ...BASE_ROW, fee_cents: 1500 }, context: { ...BASE_CONTEXT, currency: "gbp" } }));
+    expect(text).toContain("£15.00");
+    expect(text).not.toMatch(/£15(?![.\d])/);
+  });
+
   it("always carries the registration.paid feature seam on the fee cell, ungated", () => {
     const tree = walk(RegistrationHubDivisionRow({ row: BASE_ROW, context: BASE_CONTEXT }));
     expect(tree.some((e) => propsOf(e)["data-feature"] === "registration.paid")).toBe(true);

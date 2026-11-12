@@ -24,7 +24,7 @@ import { CopyLink } from "@/components/copy-link";
 // is how it got this far. `t` and the `Dict` type have server-free homes.
 import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
-import { formatMinor, type Currency } from "@/lib/currency";
+import { formatMoneyExact, type Currency } from "@/lib/currency";
 import { divisionTakesKind } from "@/lib/division-entrant-kinds";
 import { deriveRegistrationStatus, type RegistrationHubStatus } from "@/components/registration-hub-status";
 import {
@@ -165,7 +165,8 @@ export function RegistrationHubDivisionRow({
       ? t(dict, "reg.hub.row.capacity.limited", { count: capacity.count, capacity: capacity.capacity })
       : t(dict, "reg.hub.row.capacity.unlimited", { count: capacity.count });
 
-  const feeText = row.fee_cents === 0 ? t(dict, "reg.hub.row.fee.free") : formatMinor(row.fee_cents, context.currency);
+  // Owner ruling 2026-11-12: the panel spells money as the player's pages and mails do (formatMoneyExact): "£15.00", never "£15".
+  const feeText = row.fee_cents === 0 ? t(dict, "reg.hub.row.fee.free") : formatMoneyExact(row.fee_cents, context.currency);
 
   // Finding 2: resolveDivisionCategory maps null -> "open" so OTHER
   // derivations never have to special-case "no restriction set" — but that

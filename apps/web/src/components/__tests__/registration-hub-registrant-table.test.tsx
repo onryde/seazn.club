@@ -494,3 +494,23 @@ describe("RegistrationHubRegistrantTable — ≥sm header row (W2c task 2)", () 
     expect(propsOf(gridSpan).className as string).toContain(REGISTRANT_GRID_COLS);
   });
 });
+
+// Owner ruling 2026-11-12 (final fix round, sign-off V9): the organiser's panel spells money the way the player's pages and mails do
+// (`formatMoneyExact`, P3) - "£15.00", never "£15". Expected strings are written out; a whole amount is the case that differs.
+describe("renderRegistrantPaymentCell spells money with two decimals (owner ruling 2026-11-12)", () => {
+  it("a whole amount and a whole refund keep their pence, in pounds and dollars (counted)", () => {
+    const cases: [string, string, string][] = [
+      ["gbp", "£15.00", "Refunded £10.00"],
+      ["usd", "$15.00", "Refunded $10.00"],
+    ];
+    let checked = 0;
+    for (const [currency, amount, refunded] of cases) {
+      const text = textOf(renderRegistrantPaymentCell(row({ amount_cents: 1500, currency, refunded_cents: 1000 }), dict));
+      expect(text, currency).toContain(amount);
+      expect(text, currency).toContain(refunded);
+      expect(text, `${currency}: no bare whole figure`).not.toMatch(/[£$]1[05](?![.\d])/);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+});

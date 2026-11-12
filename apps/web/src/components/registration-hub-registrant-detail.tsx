@@ -21,7 +21,7 @@
 import type { ReactNode } from "react";
 import { t } from "@/lib/i18n";
 import type { Dict } from "@/lib/i18n-constants";
-import { formatMinor, asCurrency } from "@/lib/currency";
+import { formatMoneyExact, asCurrency } from "@/lib/currency";
 import { fmtDateTime } from "@/lib/format";
 import { isTerminalRegistrationStatus, ownPaymentRefundedCents } from "@/lib/registration-status";
 import type { RegistrationFormField } from "@/server/api-v1/schemas";
@@ -119,7 +119,7 @@ export function RegistrationHubRegistrantDetail({
       ? t(dict, "reg.hub.registrants.detail.paymentState.waitlisted")
       : row.amount_cents === 0
         ? t(dict, "reg.hub.row.fee.free")
-        : formatMinor(row.amount_cents, asCurrency(row.currency));
+        : formatMoneyExact(row.amount_cents, asCurrency(row.currency)); // owner ruling 2026-11-12: "£15.00", never "£15"
   const paymentMethodText = row.payment_method
     ? t(dict, row.payment_method === "stripe" ? "reg.settings.cardPayment" : "reg.settings.payOrganiser")
     : "—";
