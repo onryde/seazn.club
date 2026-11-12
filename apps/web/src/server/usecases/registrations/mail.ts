@@ -469,7 +469,9 @@ export async function paymentReminderMessage(
         payPageUrl: o.payPageUrl,
         payDeadline: o.payDeadline,
         timeZone: resolveVenueTz(null, ctx.org_timezone),
-        refCode: o.refCode,
+        // Final fix round F: every reminder prints the reference, so it falls back to the cart's own when the caller passed none (the
+        // sweep's card reminders).
+        refCode: o.refCode ?? reg.ref_code,
       },
       locale,
     )),

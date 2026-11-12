@@ -190,6 +190,8 @@
   "paymentReminder.textAlreadyPaid": "Als je al hebt betaald, kun je dit negeren.",
   "paymentReminder.viewDetails": "Bekijk je inschrijving en betaalgegevens",
   "paymentReminder.textViewDetails": "Je inschrijving en betaalgegevens:",
+  "paymentReminder.reference": "Je referentie: <strong>{refCode}</strong>",
+  "paymentReminder.textReference": "Je referentie: {refCode}",
   "registrationPromoted.subject": "Er is een plek vrijgekomen — {competitionName}",
   "registrationPromoted.preheaderPay": "Je staat niet meer op de wachtlijst voor {competitionName} — betaal vóór {deadline}.",
   "registrationPromoted.preheader": "Je staat niet meer op de wachtlijst voor {competitionName}.",

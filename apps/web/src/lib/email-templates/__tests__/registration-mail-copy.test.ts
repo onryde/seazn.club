@@ -243,6 +243,44 @@ describe("the payment reminder names the entry's division (V5)", () => {
   });
 });
 
+// Final fix round F (sign-off finding, MED): the offline reminder printed the organiser's "Use your reference." with no reference anywhere
+// in the mail - the instructions only fill a {{reference}} placeholder the organiser may not have written. Every reminder now prints the
+// registrant's reference (the cart's ref code; a per-entry suffix is a later wave) in its own line, html and text, card and offline, and
+// in each locale's own words (the expected sentence is the dictionary's, filled with the code; never read back from the mail). The empty
+// case first: no ref code (a row made before refs existed) prints no reference line and no empty "Your reference:".
+describe("the payment reminder prints the registrant's reference (F)", () => {
+  const REF = "SZ-4F7K-2Q9D";
+  const base = { orgName: "Riverside Club", competitionName: "Spring Open", displayName: "Maya", divisionName: "Masters Singles", contactName: CONTACT, feeCents: 1500, currency: "gbp", paymentInstructions: "Bank transfer to Riverside Club. Use your reference.", payPageUrl: PAY_PAGE };
+
+  it.each(LOCALES)("%s: no ref code -> no reference line (the empty case)", async (locale) => {
+    const dict = (await dictOf(locale)) as Record<string, string>;
+    const label = dict["paymentReminder.textReference"]!.split("{refCode}")[0]!.trim();
+    expect(label.length, "premise: the label exists").toBeGreaterThan(0);
+    let checked = 0;
+    for (const method of ["card", "offline"] as const) {
+      const out = paymentReminderTemplate({ ...base, method, refCode: null }, dict, locale);
+      expect(out.text, `${locale} ${method}`).not.toContain(label);
+      expect(words(out.html), `${locale} ${method}`).not.toContain(label);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it.each(LOCALES)("%s: card and offline, html and text, each print the reference in the locale's words (counted)", async (locale) => {
+    const dict = (await dictOf(locale)) as Record<string, string>;
+    const textLine = dict["paymentReminder.textReference"]!.replace("{refCode}", REF);
+    let checked = 0;
+    for (const method of ["card", "offline"] as const) {
+      const out = paymentReminderTemplate({ ...base, method, refCode: REF }, dict, locale);
+      expect(out.text.split("\n"), `${locale} ${method} text: its own line`).toContain(textLine);
+      expect(words(out.html), `${locale} ${method} html`).toContain(REF);
+      expect(out.html, `${locale} ${method} html: no unfilled placeholder`).not.toMatch(/\{[a-zA-Z]+\}/);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
 // Polish wave sign-off V8 (the confirmation, reminder, promotion and refund mails; the lifecycle mails are in
 // registration-lifecycle-copy.test.ts): "Thanks Dana Captain - your registration for Spring Open (Dana Captain, Open Doubles)". When the
 // entry's name IS the contact's, the mail names the entry by its division and never repeats the person's name: the differential is the

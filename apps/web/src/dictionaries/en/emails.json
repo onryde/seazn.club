@@ -190,6 +190,8 @@
   "paymentReminder.textAlreadyPaid": "If you've already paid, please ignore this.",
   "paymentReminder.viewDetails": "View your entry and payment details",
   "paymentReminder.textViewDetails": "Your entry and payment details:",
+  "paymentReminder.reference": "Your reference: <strong>{refCode}</strong>",
+  "paymentReminder.textReference": "Your reference: {refCode}",
   "registrationPromoted.subject": "A spot opened up — {competitionName}",
   "registrationPromoted.preheaderPay": "You're off the waitlist for {competitionName} — pay by {deadline}.",
   "registrationPromoted.preheader": "You're off the waitlist for {competitionName}.",

@@ -190,6 +190,8 @@
   "paymentReminder.textAlreadyPaid": "Si ya has pagado, ignora este mensaje.",
   "paymentReminder.viewDetails": "Ver tu inscripción y los datos de pago",
   "paymentReminder.textViewDetails": "Tu inscripción y los datos de pago:",
+  "paymentReminder.reference": "Tu referencia: <strong>{refCode}</strong>",
+  "paymentReminder.textReference": "Tu referencia: {refCode}",
   "registrationPromoted.subject": "Se ha liberado una plaza — {competitionName}",
   "registrationPromoted.preheaderPay": "Has salido de la lista de espera de {competitionName} — paga antes del {deadline}.",
   "registrationPromoted.preheader": "Has salido de la lista de espera de {competitionName}.",

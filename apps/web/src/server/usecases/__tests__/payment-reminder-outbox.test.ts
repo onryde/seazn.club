@@ -262,6 +262,28 @@ describe.skipIf(!HAS_DB)("the sweep's payment reminders ride the outbox (DB)", (
     await assertNothingMoreToSend(KIND, [row!.id]);
   });
 
+  // Final fix round F: the sweep passes no reference of its own, so its reminder used to print none; the message now falls back to the
+  // cart's ref code. Expected line: the recipient locale's own dictionary sentence filled with the cart's code, read from the database.
+  it("the sweep's reminder prints the cart's reference in the registrant's language (F)", async () => {
+    const w = await stripeWorld();
+    const email = address("fref");
+    const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email, locale: "fr" });
+    let [{ ref_code: ref }] = await sql<{ ref_code: string | null }[]>`select ref_code from registration_groups where id = ${registration.group_id}`;
+    if (!ref) {
+      ref = `SZ-F${registration.id.slice(0, 3).toUpperCase()}-TEST`;
+      await sql`update registration_groups set ref_code = ${ref} where id = ${registration.group_id}`;
+    }
+    await dueSoon(registration.group_id);
+    await sweepRegistrations(ORIGIN);
+    const [row] = await rowsTo(email);
+    deliverMock.mockReset().mockImplementation(ok);
+    await bornAgo([row!.id]);
+    await tickNow([row!.id]);
+    const sent = callsFor(row!.id)[0]!;
+    expect(sent.text.split("\n"), "the text part prints it on its own line").toContain(dictionarySubject("fr", "paymentReminder.textReference", { refCode: ref }));
+    expect(sent.html, "and the html part").toContain(ref);
+  });
+
   it("a promoted entry's reminder is queued by pass 1b under its own once-key, and a re-promoted entry gets its second-cycle reminder", async () => {
     // Review Focus 2: the once-key embeds the promotion's own `promoted_at`, so a second promotion of the same entry is a new key
     // (the right answer is not the first cycle's constant).

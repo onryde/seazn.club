@@ -45,6 +45,10 @@ export function paymentReminderTemplate(
     ? paymentInstructionsText(fillPaymentInstructions(opts.paymentInstructions, opts.refCode))
     : null;
   const card = opts.method === "card";
+  // Final fix round F: the registrant's reference, printed on its own line whenever there is one (the cart's ref code; a per-entry suffix
+  // is a later wave). Organisers' instructions say "use your reference" without always writing the {{reference}} placeholder.
+  const refHtml = opts.refCode ? paragraph(t(dict, "paymentReminder.reference", { refCode: escapeHtml(opts.refCode) })) : "";
+  const refText = opts.refCode ? "\n" + t(dict, "paymentReminder.textReference", { refCode: opts.refCode }) : "";
   const how = card
     ? panel(
         t(dict, "paymentReminder.completePanelTitle"),
@@ -78,7 +82,9 @@ export function paymentReminderTemplate(
             competitionName: escapeHtml(opts.competitionName),
             amount,
           }),
-        ) + how,
+        ) +
+        refHtml +
+        how,
       footerNote: t(dict, "paymentReminder.footer"),
     }),
     text:
@@ -90,6 +96,7 @@ export function paymentReminderTemplate(
       t(dict, ownKey("paymentReminder.textEntry", isOwnEntry(opts.displayName, opts.contactName)), { displayName: opts.displayName, divisionName: opts.divisionName }) +
       "\n" +
       t(dict, "paymentReminder.textFee", { amount }) +
+      refText +
       (card
         ? "\n" +
           (deadline
