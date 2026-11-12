@@ -5,7 +5,7 @@
 // filled while its name is empty, so whatever the registrant typed over a seed (or a name they chose to clear and retype) is never
 // replaced when they step back and forward again, and a second call is a no-op that returns the SAME reference.
 import { resolveSelfPlayerIndex } from "./roster";
-import { EMPTY_ROSTER_PLAYER, type CartEntry, type CartState, type ContactState, type DivisionLike, type RosterPlayerState } from "./types";
+import type { CartEntry, CartState, ContactState, DivisionLike, RosterPlayerState } from "./types";
 
 type SeedDivision = Pick<DivisionLike, "division_id" | "requires_dob" | "requires_gender">;
 
@@ -22,34 +22,28 @@ function selfRow(row: RosterPlayerState, contact: ContactState, division: SeedDi
 }
 
 function seedEntry(entry: CartEntry, contact: ContactState, division: SeedDivision | undefined): CartEntry {
-  // A solo (free agent) entry has no roster at all (design §4 step 3: "nothing extra").
-  if (entry.free_agent) return entry;
+  // A TEAM roster starts EMPTY by design (cart.ts's blankPlayers) and the captain builds it with "+ Add player"; seeding a row there
+  // would leave a trailing blank row for every captain who then adds their own (a blank row blocks Next). A solo (free agent) sign-up is
+  // a team-kind entry with no roster at all (design §4 step 3: "nothing extra"), so this one guard covers both.
+  if (entry.entrant_kind === "team") return entry;
   const name = contact.name.trim();
   const partner = entry.partner_name?.trim() ?? "";
   let players = entry.players;
   let selfIndex = entry.self_player_index;
 
   // Which row is the contact, when the contact is on this entry. Individual implies row 0 (cart.ts's toGroupEntry); a pair defaults to
-  // Player 1 (the partner field is Player 2 — roster-table.tsx's rowLabel); a team has no default: an unpicked roster the captain
-  // already built is theirs to pick from, and an EMPTY one starts with the captain's own row.
+  // Player 1 (the partner field is Player 2 - roster-table.tsx's rowLabel).
   if (entry.registering_self && name) {
-    if (entry.entrant_kind === "team" && selfIndex === null) {
-      if (players.length === 0) {
-        players = [selfRow({ ...EMPTY_ROSTER_PLAYER }, contact, division)];
-        selfIndex = 0;
+    const index = entry.entrant_kind === "pair" ? (selfIndex ?? 0) : resolveSelfPlayerIndex(entry);
+    const row = index === null ? undefined : players[index];
+    if (index !== null && row) {
+      const seeded = selfRow(row, contact, division);
+      if (seeded.full_name !== row.full_name || seeded.dob !== row.dob || seeded.gender !== row.gender) {
+        players = players.map((p, i) => (i === index ? seeded : p));
       }
-    } else {
-      const index = entry.entrant_kind === "pair" ? (selfIndex ?? 0) : resolveSelfPlayerIndex(entry);
-      const row = index === null ? undefined : players[index];
-      if (index !== null && row) {
-        const seeded = selfRow(row, contact, division);
-        if (seeded.full_name !== row.full_name || seeded.dob !== row.dob || seeded.gender !== row.gender) {
-          players = players.map((p, i) => (i === index ? seeded : p));
-        }
-        // The pick is only claimed for a row that now IS the contact: a name the registrant typed there themselves, and then left
-        // unpicked, is somebody else's and stays unpicked.
-        if (entry.entrant_kind === "pair" && seeded.full_name.trim() === name) selfIndex = index;
-      }
+      // The pick is only claimed for a row that now IS the contact: a name the registrant typed there themselves, and then left
+      // unpicked, is somebody else's and stays unpicked.
+      if (entry.entrant_kind === "pair" && seeded.full_name.trim() === name) selfIndex = index;
     }
   }
 

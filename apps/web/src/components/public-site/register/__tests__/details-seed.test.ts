@@ -149,28 +149,15 @@ describe("seedDetailsRows: a pair", () => {
   });
 });
 
-describe("seedDetailsRows: a team", () => {
-  it("a captain who plays starts with one row, their own name, picked as themselves", () => {
-    const out = seedDetailsRows(cartOf(entry("team", { registering_self: true, team_name: "Riverside" })), contact(), [DIV]);
-    expect(names(out.entries[0]!)).toEqual(["Mia Cole"]);
-    expect(out.entries[0]!.self_player_index).toBe(0);
-  });
-
-  it("a roster the captain already built is left alone when no row is picked yet (the picker is theirs to use)", () => {
-    const built = entry("team", { registering_self: true, team_name: "Riverside" });
-    built.players = [{ ...EMPTY_ROSTER_PLAYER, full_name: "Jo" }, { ...EMPTY_ROSTER_PLAYER, full_name: "Kit" }];
+describe("seedDetailsRows: a team is never seeded", () => {
+  // A team roster starts empty by design and the captain adds rows with "+ Add player": a seeded row would leave a trailing blank row
+  // (which blocks Next) for every captain who then adds their own, which is every captain.
+  it("a captain who plays still starts with an empty roster, picked or not", () => {
+    const empty = cartOf(entry("team", { registering_self: true, team_name: "Riverside" }));
+    expect(seedDetailsRows(empty, contact(), [DIV])).toBe(empty);
+    const built = entry("team", { registering_self: true, self_player_index: 1, team_name: "Riverside" });
+    built.players = [{ ...EMPTY_ROSTER_PLAYER, full_name: "Jo" }, { ...EMPTY_ROSTER_PLAYER }];
     const cart = cartOf(built);
-    expect(seedDetailsRows(cart, contact(), [DIV])).toBe(cart);
-  });
-
-  it("a picked but blank row takes the contact's name", () => {
-    const picked = entry("team", { registering_self: true, self_player_index: 1, team_name: "Riverside" });
-    picked.players = [{ ...EMPTY_ROSTER_PLAYER, full_name: "Jo" }, { ...EMPTY_ROSTER_PLAYER }];
-    expect(names(seedDetailsRows(cartOf(picked), contact(), [DIV]).entries[0]!)).toEqual(["Jo", "Mia Cole"]);
-  });
-
-  it("a team the contact is NOT on is not touched", () => {
-    const cart = cartOf(entry("team", { team_name: "Riverside" }));
     expect(seedDetailsRows(cart, contact(), [DIV])).toBe(cart);
   });
 });
@@ -193,8 +180,8 @@ describe("seedDetailsRows: the empty and the exempt cases", () => {
     );
     const out = seedDetailsRows(cart, contact(), [DIV]);
     const seeded = out.entries.map(names);
-    expect(seeded).toEqual([["Mia Cole"], ["", "Sam Reid"], ["Mia Cole"]]);
-    expect(seeded.flat().filter(Boolean).length, "premise: three names were written (the contact twice, the partner once)").toBe(3);
+    expect(seeded).toEqual([["Mia Cole"], ["", "Sam Reid"], []]);
+    expect(seeded.flat().filter(Boolean).length, "premise: two names were written (the contact once, the partner once)").toBe(2);
   });
 
   it("the input cart is never mutated", () => {
