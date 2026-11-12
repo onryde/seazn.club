@@ -41,9 +41,28 @@ vi.mock("@/server/usecases/audit", async (importOriginal) => {
   };
 });
 
+// The organiser press's FIRST enqueue can be held (armed by one test), so two presses can be interleaved at the one point that matters:
+// after the first has counted its reminders and before it has recorded its own. Unarmed it is the real enqueue.
+const enqueueGate = vi.hoisted(() => ({ armed: false, entered: null as null | (() => void), release: null as null | Promise<void> }));
+vi.mock("@/server/email-outbox", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/email-outbox")>();
+  return {
+    ...actual,
+    enqueueEmail: async (...args: Parameters<typeof actual.enqueueEmail>) => {
+      if (enqueueGate.armed) {
+        enqueueGate.armed = false;
+        enqueueGate.entered?.();
+        await enqueueGate.release;
+      }
+      return actual.enqueueEmail(...args);
+    },
+  };
+});
+
 import { sql } from "@/lib/db";
 import type { Locale } from "@/lib/i18n-constants";
 import { HttpError } from "@/lib/errors";
+import { money } from "@/lib/email-templates/shared";
 import {
   promoteWaitlistedRow,
   putRegistrationSettings,
@@ -409,5 +428,132 @@ describe.skipIf(!HAS_DB)("the organiser's manual payment reminder rides the outb
       checked += 1;
     }
     expect(checked, "anti-vacuity: both cases were driven").toBe(cases.length);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// 3. The organiser's limit (5 presses per entry per 24 h) and the figure the mail quotes (Task 6)
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("the organiser's reminder is capped per entry, and quotes the amount charged (DB)", () => {
+  /** Seed `n` audit rows of `type` for an entry, each `ageMin` minutes old (the ledger the cap counts). */
+  async function seedAudit(w: Awaited<ReturnType<typeof offlineWorld>>, regId: string, n: number, ageMin: number, type = "registration.payment_reminded") {
+    for (let i = 0; i < n; i++) {
+      await sql`
+        insert into competition_events (competition_id, org_id, type, payload, actor_id, created_at)
+        values (${w.competition.id}, ${w.orgId}, ${type}, ${sql.json({ registration_id: regId })}, ${w.owner.userId}, now() - (${ageMin} * interval '1 minute'))`;
+    }
+  }
+  const refusal = async (p: Promise<unknown>) => {
+    const err = await p.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    return err as HttpError;
+  };
+
+  it("empty case: an entry never reminded is sent", async () => {
+    const w = await offlineWorld();
+    const email = address("cap0");
+    const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email });
+    expect(await sendPaymentReminder(w.owner, registration.id, ORIGIN)).toEqual({ sent: true });
+    expect(await rowsTo(email)).toHaveLength(1);
+  });
+
+  it("five reminders inside 24 h: the sixth is a 429 PAYMENT_REMINDER_LIMIT, with no outbox row, no token and no audit row", async () => {
+    const w = await offlineWorld();
+    const email = address("cap5");
+    const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email });
+    await seedAudit(w, registration.id, 5, 30);
+    const audits = async () => (await sql`select 1 from competition_events where type = 'registration.payment_reminded' and payload->>'registration_id' = ${registration.id}`).length;
+    expect(await audits(), "premise: five seeded").toBe(5);
+
+    const err = await refusal(sendPaymentReminder(w.owner, registration.id, ORIGIN));
+    expect(err.status).toBe(429);
+    expect(err.code).toBe("PAYMENT_REMINDER_LIMIT");
+    expect(await anyRowTo(email)).toHaveLength(0);
+    expect(callsTo(email)).toHaveLength(0);
+    expect(await tokensFor(registration.id)).toBe(0);
+    expect(await audits(), "no sixth audit row").toBe(5);
+
+    // The positive pair: the same press at four is sent.
+    await sql`delete from competition_events where id = (select id from competition_events where type = 'registration.payment_reminded' and payload->>'registration_id' = ${registration.id} limit 1)`;
+    expect(await sendPaymentReminder(w.owner, registration.id, ORIGIN)).toEqual({ sent: true });
+  });
+
+  it("boundary: of five reminders one is 24 h + 1 min old, so the sixth press is sent; at 24 h - 1 min it is refused", async () => {
+    const w = await offlineWorld();
+    const old = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("capold") });
+    await seedAudit(w, old.registration.id, 4, 30);
+    await seedAudit(w, old.registration.id, 1, 24 * 60 + 1);
+    expect(await sendPaymentReminder(w.owner, old.registration.id, ORIGIN)).toEqual({ sent: true });
+
+    const young = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("capyoung") });
+    await seedAudit(w, young.registration.id, 4, 30);
+    await seedAudit(w, young.registration.id, 1, 24 * 60 - 1);
+    expect((await refusal(sendPaymentReminder(w.owner, young.registration.id, ORIGIN))).status).toBe(429);
+  });
+
+  it("the sweep's mails, other audit types and another entry's presses do not count", async () => {
+    const w = await offlineWorld();
+    const email = address("capkind");
+    const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email });
+    const other = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("capother") });
+    // Five sweep-style reminders for this entry (the sweep stamps the entry, it writes no organiser audit row), five other-type audit
+    // rows naming it, and five organiser reminders for ANOTHER entry.
+    await sql`update registrations set submit_reminded_at = now() - interval '1 hour', promotion_reminded_at = now() - interval '1 hour' where id = ${registration.id}`;
+    await seedAudit(w, registration.id, 5, 30, "registration.waitlisted");
+    await seedAudit(w, other.registration.id, 5, 30);
+    expect(await sendPaymentReminder(w.owner, registration.id, ORIGIN)).toEqual({ sent: true });
+    expect(await rowsTo(email)).toHaveLength(1);
+  });
+
+  it("two presses at four, interleaved after the first has counted: exactly one is sent, the other is the 429", async () => {
+    // Deterministic: press 1 is held after it counted four and before it recorded its own audit row. Press 2 is then started. With
+    // the entry's row locked by press 1, press 2 cannot read it until press 1 commits (and then counts five); without the lock it
+    // counts four as well and both go out.
+    const w = await offlineWorld();
+    const email = address("capconc");
+    const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email });
+    await seedAudit(w, registration.id, 4, 30);
+    let release!: () => void;
+    let entered!: () => void;
+    enqueueGate.release = new Promise<void>((r) => (release = r));
+    const inFlight = new Promise<void>((r) => (entered = r));
+    enqueueGate.entered = entered;
+    enqueueGate.armed = true;
+    const first = sendPaymentReminder(w.owner, registration.id, ORIGIN);
+    await inFlight;
+    const second = sendPaymentReminder(w.owner, registration.id, ORIGIN);
+    await new Promise((r) => setTimeout(r, 1500));
+    release();
+    const results = await Promise.allSettled([first, second]);
+    const ok = results.filter((r) => r.status === "fulfilled");
+    const refused = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    expect(ok, "exactly one press went through").toHaveLength(1);
+    expect(refused).toHaveLength(1);
+    expect((refused[0]!.reason as HttpError).status).toBe(429);
+    expect(await tokensFor(registration.id)).toBe(1);
+    expect(await rowsTo(email)).toHaveLength(1);
+  });
+
+  it("a pending entry in a free division is still the 422", async () => {
+    const w = await offlineWorld(0);
+    const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("capfree") });
+    expect((await refusal(sendPaymentReminder(w.owner, registration.id, ORIGIN))).status).toBe(422);
+  });
+
+  it("the mail quotes the amount the entry was charged, not the division's live fee (differential: fee edited after sign-up)", async () => {
+    const w = await offlineWorld(1500);
+    const email = address("capfee");
+    const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email });
+    expect(registration.amount_cents, "premise: charged at sign-up").toBe(1500);
+    await putRegistrationSettings(w.owner, w.division.id, { ...SETTINGS_BASE, fee_cents: 2500, payment_method: "offline", payment_instructions: "Pay at the desk" });
+    const [live] = await sql<{ fee_cents: number }[]>`select fee_cents from registration_settings where division_id = ${w.division.id}`;
+    expect(live!.fee_cents, "premise: the live fee moved").toBe(2500);
+    expect(live!.fee_cents).not.toBe(registration.amount_cents);
+
+    expect(await sendPaymentReminder(w.owner, registration.id, ORIGIN)).toEqual({ sent: true });
+    const [sent] = callsTo(email);
+    expect(sent!.html + sent!.text).toContain(money(1500, "gbp"));
+    expect(sent!.html + sent!.text).not.toContain(money(2500, "gbp"));
   });
 });

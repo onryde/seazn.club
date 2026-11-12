@@ -27,7 +27,7 @@ const WIDTHS = [320, 768, 1280] as const;
 const FEE = 1500;
 const INSTRUCTIONS = "Bank transfer to Riverside CC, quoting your reference";
 
-type Rig = { orgId: string; owner: Page; competitionId: string; divisionId: string; compName: string; divName: string };
+type Rig = { orgId: string; orgSlug: string; compSlug: string; owner: Page; competitionId: string; divisionId: string; compName: string; divName: string };
 
 /** A fresh Pro org with Connect on (a test account id: the sweep's reminder needs charges enabled, nothing here calls Stripe), its
  *  owner signed in on a page of its own, and one card-paid division. */
@@ -50,7 +50,7 @@ async function seedRig(browser: Browser): Promise<Rig> {
   await signInAs(owner, email);
   const compName = `Pay Page Cup ${tag}`;
   const divName = `Open ${tag.slice(-4)}`;
-  const comp = await apiJson<{ id: string }>(owner.request, "/api/v1/competitions", "POST", {
+  const comp = await apiJson<{ id: string; slug: string }>(owner.request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
     name: compName,
     visibility: "public",
@@ -64,7 +64,7 @@ async function seedRig(browser: Browser): Promise<Rig> {
   });
   expect(div.status, JSON.stringify(div.error)).toBeLessThan(300);
   await putSettings(owner, div.data!.id, "stripe");
-  return { orgId, owner, competitionId: comp.data!.id, divisionId: div.data!.id, compName, divName };
+  return { orgId, orgSlug: `paypage-${tag}`, compSlug: comp.data!.slug, owner, competitionId: comp.data!.id, divisionId: div.data!.id, compName, divName };
 }
 
 /** The organiser's own settings write (the real API): the page reads the division's method at view time. */
@@ -120,6 +120,8 @@ async function sweepAndOpenLink(page: Page, regId: string): Promise<string> {
   return new URL(link).pathname;
 }
 
+const escapeRe = (x: string): string => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 const tokensFor = (regId: string) =>
   withDb(async (sql) => Number((await sql<{ n: string }[]>`select count(*)::text as n from registration_pay_tokens where registration_id = ${regId}`)[0]!.n));
 
@@ -170,6 +172,89 @@ test.describe("player payment page", () => {
     await visitor.setViewportSize({ width: 1280, height: 900 });
     await visitor.goto(path);
     await expect(visitor.getByTestId("pay-offline")).toBeVisible();
+  });
+
+  // Task 6: the organiser's button on the registrant panel. The panel's own states are asserted (a mail provider is not configured
+  // here, so whether the first attempt was accepted - "sent" or "may arrive late" - depends on the environment; either is a
+  // truthful answer and both are pinned by the unit tests). The audit ledger is the arbiter of how many presses went through.
+  test("organiser reminds from the panel", async ({ browser }) => {
+    test.setTimeout(180_000);
+    const rig = await seedRig(browser);
+    const entry = await seedDueEntry(rig, `Panel Entrant ${TAG}`);
+    const pressed = () =>
+      withDb(async (sql) => Number((await sql<{ n: string }[]>`
+        select count(*)::text as n from competition_events
+         where type = 'registration.payment_reminded' and payload->>'registration_id' = ${entry.regId}`)[0]!.n));
+    const sentCopy = enUi["reg.remind.sent"]!;
+    const notSentCopy = enUi["reg.remind.notSent"]!;
+    const limitCopy = enUi["reg.remind.limit"]!;
+    const page = rig.owner;
+    const url = `/o/${rig.orgSlug}/c/${rig.compSlug}/registration?tab=registrants`;
+    const open = async () => {
+      await page.goto(url, { waitUntil: "load" });
+      const row = page.locator(`[data-registration-hub-registrant-row][data-registration-id="${entry.regId}"]`);
+      await expect(row).toBeVisible({ timeout: 20_000 });
+      if (!(await row.evaluate((el) => (el as HTMLDetailsElement).open))) await row.locator("summary").click();
+      await expect(row.locator("[data-registration-hub-registrant-detail]")).toBeVisible();
+      return row;
+    };
+    const feedback = (row: ReturnType<Page["locator"]>) => row.locator("[data-registration-hub-registrant-actions-feedback]");
+    const lastReminded = (row: ReturnType<Page["locator"]>) => row.locator("[data-registration-hub-registrant-last-reminded]");
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    let row = await open();
+    const button = row.locator('[data-registration-hub-registrant-action="remind"]');
+    await expect(button, "the button is offered on a pending entry in a division with a fee").toBeVisible();
+    await expect(button).toHaveText(enUi["reg.action.remind"]!);
+    await expect(lastReminded(row), "never reminded: no line").toHaveCount(0);
+    const order = await row.locator("[data-registration-hub-registrant-action]").evaluateAll((els) => els.map((e) => e.getAttribute("data-registration-hub-registrant-action")));
+    expect(order.indexOf("remind"), "after Resend confirmation email").toBe(order.indexOf("resend") + 1);
+
+    // First press: no confirm; the panel says what happened and then shows when.
+    await button.click();
+    await expect(page.getByRole("alertdialog"), "no confirm on a first press").toHaveCount(0);
+    await expect(feedback(row)).toHaveText(new RegExp(`^(${escapeRe(sentCopy)}|${escapeRe(notSentCopy)})$`), { timeout: 20_000 });
+    expect(await pressed()).toBe(1);
+    await expect(lastReminded(row), "Last reminded appears after the refresh").toContainText(enUi["reg.remind.lastReminded"]!.split("{when}")[0]!.trim(), { timeout: 20_000 });
+
+    // Second press inside the hour: asks first; cancelling sends nothing, confirming sends.
+    await button.click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText(enUi["reg.remind.confirmRecent.title"]!);
+    await dialog.getByRole("button").first().click();
+    await expect(dialog).toHaveCount(0);
+    expect(await pressed(), "cancelled: nothing went out").toBe(1);
+    await button.click();
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button").last().click();
+    await expect.poll(pressed, { timeout: 20_000 }).toBe(2);
+
+    // The cap, through the real route: three more audit rows make five; the sixth press is refused in the panel's own words.
+    await withDb(async (sql) => {
+      const [c] = await sql<{ competition_id: string }[]>`select d.competition_id from divisions d where d.id = ${rig.divisionId}`;
+      for (let i = 0; i < 3; i++) {
+        await sql`insert into competition_events (competition_id, org_id, type, payload)
+                  values (${c!.competition_id}, ${rig.orgId}, 'registration.payment_reminded', ${sql.json({ registration_id: entry.regId })})`;
+      }
+    });
+    row = await open();
+    await row.locator('[data-registration-hub-registrant-action="remind"]').click();
+    await page.getByRole("alertdialog").getByRole("button").last().click();
+    await expect(feedback(row)).toHaveText(limitCopy, { timeout: 20_000 });
+    expect(await pressed(), "the sixth press queued nothing").toBe(5);
+
+    // The panel at the other widths: the button and the line are reachable, with no horizontal page scroll.
+    let checked = 0;
+    for (const width of [320, 768, 1280] as const) {
+      await page.setViewportSize({ width, height: 900 });
+      row = await open();
+      await expect(row.locator('[data-registration-hub-registrant-action="remind"]'), `${width}: the button`).toBeVisible();
+      await expect(lastReminded(row), `${width}: last reminded`).toBeVisible();
+      await noHorizontalScroll(page, `panel @${width}`);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
   });
 
   test("unknown token is the opaque 404", async ({ browser }) => {

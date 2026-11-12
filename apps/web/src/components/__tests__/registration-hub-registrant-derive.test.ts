@@ -513,6 +513,7 @@ describe("deriveRegistrantActionFlags", () => {
     canPromote: true,
     canMarkPaid: true,
     canResend: true,
+    canRemind: true,
     canRefund: true,
     canAssign: true,
     canUnassign: true,
@@ -563,6 +564,8 @@ describe("deriveRegistrantActionFlags", () => {
             // FUTURE divergence between the two is a deliberate code change,
             // not a silent drift the sweep never notices.
             expect(flags.canResend).toBe(flags.canWithdraw);
+            // Player payment page: Send payment reminder is for a pending entry in a division that charges (the usecase's own two 422s).
+            expect(flags.canRemind).toBe(status === "pending" && division_fee_cents > 0);
             // RS007 #16 — canRefund must mirror refundRegistration's own two
             // refusals ("No payment to refund" / "Already fully refunded")
             // for EVERY combination, so an organiser is never shown a button
@@ -574,6 +577,22 @@ describe("deriveRegistrantActionFlags", () => {
         }
       }
     }
+  });
+
+  describe("canRemind (player payment page)", () => {
+    const rowOf = (status: (typeof RegistrationStatus.options)[number], division_fee_cents: number) =>
+      deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP, status, approval: "auto", amount_cents: 1500, refunded_cents: 0, division_fee_cents, payment_intent_id: null });
+
+    it("is true only for a pending entry in a division with a fee; every other status, and a free division, is false", () => {
+      let checked = 0;
+      for (const status of RegistrationStatus.options) {
+        expect(rowOf(status, 1500).canRemind, `${status} with a fee`).toBe(status === "pending");
+        expect(rowOf(status, 0).canRemind, `${status} in a free division`).toBe(false);
+        checked += 2;
+      }
+      expect(checked, "anti-vacuity").toBe(RegistrationStatus.options.length * 2);
+      expect(rowOf("pending", 1500).canRemind, "the positive").toBe(true);
+    });
   });
 
   // RS007 finding #16. The refund endpoint and its confirm copy had existed

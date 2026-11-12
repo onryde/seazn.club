@@ -56600,6 +56600,16 @@
                           },
                           "division_started": {
                             "type": "boolean"
+                          },
+                          "last_reminded_at": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -56637,7 +56647,8 @@
                           "assigned_team_id",
                           "assigned_team_name",
                           "player_gender",
-                          "division_started"
+                          "division_started",
+                          "last_reminded_at"
                         ],
                         "additionalProperties": false
                       }
@@ -56686,7 +56697,8 @@
                       "assigned_team_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                       "assigned_team_name": "example",
                       "player_gender": "example",
-                      "division_started": true
+                      "division_started": true,
+                      "last_reminded_at": "example"
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -57457,6 +57469,16 @@
                           },
                           "division_started": {
                             "type": "boolean"
+                          },
+                          "last_reminded_at": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -57494,7 +57516,8 @@
                           "assigned_team_id",
                           "assigned_team_name",
                           "player_gender",
-                          "division_started"
+                          "division_started",
+                          "last_reminded_at"
                         ],
                         "additionalProperties": false
                       }
@@ -57543,7 +57566,8 @@
                       "assigned_team_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                       "assigned_team_name": "example",
                       "player_gender": "example",
-                      "division_started": true
+                      "division_started": true,
+                      "last_reminded_at": "example"
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -61782,7 +61806,7 @@
     },
     "/api/v1/registrations/{id}/remind": {
       "post": {
-        "summary": "Email an unpaid registrant a payment reminder (offline pay)",
+        "summary": "Email an unpaid registrant a payment reminder linking their payment page (card and offline alike); at most 5 per entry per 24 hours",
         "tags": [
           "registration"
         ],
@@ -61976,6 +62000,50 @@
           },
           "422": {
             "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
             "content": {
               "application/json": {
                 "schema": {

@@ -195,6 +195,9 @@ export interface RegistrationListRow extends Omit<RegistrationWithGroupRow, "acc
    * than no control).
    */
   division_started: boolean;
+  /** When the organiser last pressed "Send payment reminder" for THIS entry: the newest `registration.payment_reminded` audit row naming
+   *  it, null if never. The sweep's own reminders are not audit rows and do not count. */
+  last_reminded_at: Date | null;
 }
 
 /** Raw wire shape — `RegistrationListRow` plus the hash the query still
@@ -316,6 +319,10 @@ export async function listRegistrations(
           order by rp.created_at, rp.id limit 1) as player_gender,
         (exists (select 1 from fixtures f where f.division_id = r.division_id)
           or (c.starts_on is not null and c.starts_on <= current_date)) as division_started,
+        (select max(ev.created_at) from competition_events ev
+          where ev.competition_id = c.id
+            and ev.type = 'registration.payment_reminded'
+            and ev.payload->>'registration_id' = r.id::text) as last_reminded_at,
         case when r.status = 'waitlisted' then (
           (select count(*)::int from registrations w
             where w.division_id = r.division_id and w.status = 'waitlisted'

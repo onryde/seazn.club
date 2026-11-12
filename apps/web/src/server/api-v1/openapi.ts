@@ -371,7 +371,7 @@ export const ROUTES: RouteSpec[] = [
   { path: "/registrations/{id}/promote", method: "post", summary: "Promote from the waitlist: oldest-first in id's division by default, or an explicit registration_id override", tag: "registration", request: S.PromoteRegistration, response: S.Registration.nullable(), errors: [404, 422] },
   { path: "/registrations/{id}/withdraw", method: "post", summary: "Withdraw: frees the spot, auto-promotes, auto-refunds pre-lock", tag: "registration", response: S.Registration },
   { path: "/registrations/{id}/refund", method: "post", summary: "Manual refund (post-lock discretion; partial allowed; audited)", tag: "registration", request: S.RefundRegistration, response: S.Registration, errors: [422] },
-  { path: "/registrations/{id}/remind", method: "post", summary: "Email an unpaid registrant a payment reminder (offline pay)", tag: "registration", response: z.object({ sent: z.boolean() }), errors: [422] },
+  { path: "/registrations/{id}/remind", method: "post", summary: "Email an unpaid registrant a payment reminder linking their payment page (card and offline alike); at most 5 per entry per 24 hours", tag: "registration", response: z.object({ sent: z.boolean() }), errors: [422, 429] },
   // RS005 W4 — the confirmation mailer had zero callers before this wave; this
   // is the organiser-facing resend of the cart-shaped confirmation the
   // public register route now queues at submit. Each resend writes a

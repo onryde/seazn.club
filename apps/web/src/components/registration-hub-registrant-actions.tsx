@@ -101,11 +101,12 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import { lichessRegistrantRefusalText } from "@/components/v2/entrants-lichess-refusal";
 import { registrantKindRefusalText } from "@/lib/entrant-kind-refusal";
 import { deriveRegistrantActionFlags } from "@/components/registration-hub-registrant-derive";
+import { REMINDER_CONFIRM_WITHIN_MS, REMINDER_LIMIT_CODE } from "@/lib/registration-reminder";
 import type { MessageKey } from "@/lib/messages";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
 
 type Status = RegistrationListRow["status"];
-type ActionKey = "approve" | "reject" | "withdraw" | "promote" | "resend" | "mark-paid" | "refund";
+type ActionKey = "approve" | "reject" | "withdraw" | "promote" | "resend" | "remind" | "mark-paid" | "refund";
 
 export interface RegistrationHubRegistrantActionsProps {
   registrationId: string;
@@ -133,6 +134,9 @@ export interface RegistrationHubRegistrantActionsProps {
    *  is left to refund, mirroring `refundRegistration`'s own
    *  "Already fully refunded" refusal. */
   refundedCents: number;
+  /** ISO time of the organiser's last "Send payment reminder" press for this entry; null if never. Within an hour of it, the next
+   *  press asks first. */
+  lastRemindedAt: string | null;
 }
 
 function errorText(err: unknown): string {
@@ -147,6 +151,7 @@ export function RegistrationHubRegistrantActions({
   divisionFeeCents,
   paymentIntentId,
   refundedCents,
+  lastRemindedAt,
 }: RegistrationHubRegistrantActionsProps) {
   const msg = useMsg();
   const router = useRouter();
@@ -408,6 +413,38 @@ export function RegistrationHubRegistrantActions({
     }
   }
 
+  // Send payment reminder. A press within the hour of the last one asks first (a double click is rarely meant); the server caps it at
+  // five a day regardless, and its refusal is said here in the organiser's language off its code, not in the server's English.
+  async function remind() {
+    if (lastRemindedAt !== null && Date.now() - Date.parse(lastRemindedAt) < REMINDER_CONFIRM_WITHIN_MS) {
+      const ok = await confirmDialog({
+        title: msg("reg.remind.confirmRecent.title"),
+        body: msg("reg.remind.confirmRecent.body"),
+        confirmLabel: msg("reg.action.remind"),
+        tone: "default",
+      });
+      if (!ok) return;
+    }
+    setBusy("remind");
+    setFeedback(null);
+    try {
+      const result = await apiV1<{ sent: boolean }>(`/api/v1/registrations/${registrationId}/remind`, { method: "POST" });
+      setFeedback(
+        result.sent
+          ? { tone: "success", text: msg("reg.remind.sent") }
+          : { tone: "error", text: msg("reg.remind.notSent") },
+      );
+      router.refresh();
+    } catch (err) {
+      setFeedback({
+        tone: "error",
+        text: err instanceof ApiV1Error && err.code === REMINDER_LIMIT_CODE ? msg("reg.remind.limit") : failureText(err),
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
     // `contents` on both wrappers, so these buttons become direct children of
     // the ONE flex-wrap row the detail panel provides. Each component used to
@@ -505,6 +542,18 @@ export function RegistrationHubRegistrantActions({
             {busy === "resend"
               ? msg("reg.hub.registrants.detail.actions.resending")
               : msg("reg.hub.registrants.detail.actions.resend")}
+          </button>
+        )}
+        {flags.canRemind && (
+          <button
+            type="button"
+            data-registration-hub-registrant-action="remind"
+            disabled={busy !== null}
+            onClick={remind}
+            title={msg("reg.action.remindTitle")}
+            className="btn btn-ghost text-xs"
+          >
+            {msg("reg.action.remind")}
           </button>
         )}
       </div>

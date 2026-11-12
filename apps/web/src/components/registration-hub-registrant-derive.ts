@@ -234,6 +234,8 @@ export interface RegistrantActionFlags {
   canMarkPaid: boolean;
   /** RS005 R1 second wave finding — see the block comment below. */
   canResend: boolean;
+  /** Send payment reminder: a pending entry in a division that still charges; mirrors `sendPaymentReminder`'s own two 422s. */
+  canRemind: boolean;
   /** RS007 finding #16 — see the block comment below. */
   canRefund: boolean;
   /** RS009 — a solo sign-up still in the pool can be placed on a team. */
@@ -392,6 +394,7 @@ export function deriveRegistrantActionFlags(
     canPromote: row.status === "waitlisted",
     canMarkPaid: awaitingOfflineFee,
     canResend: nonTerminal,
+    canRemind: row.status === "pending" && feeOwed,
     canRefund: row.payment_intent_id !== null && row.amount_cents - row.refunded_cents > 0,
     // A solo sign-up (an entry with no roster of its own) is the only kind of
     // row that can be placed on a team. `assigned_team_id` is derived from

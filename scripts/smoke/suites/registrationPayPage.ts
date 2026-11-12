@@ -105,6 +105,23 @@ async function chaseMailsLinkThePage(): Promise<void> {
     const open = await html(newSession(), path);
     check("pay page smoke: the mailed link opens the page with Pay", open.status === 200 && open.body.includes('data-testid="pay-form"'));
 
+    // Task 6: the organiser's reminder is capped at five per entry per 24 h. One went out above; four more are accepted and the
+    // sixth answers 429 with its own code, queueing nothing.
+    let accepted = 1;
+    for (let i = 0; i < 4; i++) accepted += (await v1(owner, `/api/v1/registrations/${regId}/remind`, "POST")).status === 200 ? 1 : 0;
+    check(`pay page smoke: five organiser reminders are accepted (got ${accepted})`, accepted === 5);
+    const mailsBefore = await db<{ n: string }[]>`
+      select count(*)::text as n from email_outbox where kind = 'payment_reminder' and ref_type = 'registration' and ref_id = ${regId}`;
+    const sixth = await v1(owner, `/api/v1/registrations/${regId}/remind`, "POST");
+    check(`pay page smoke: the sixth reminder answers 429 (got ${sixth.status})`, sixth.status === 429);
+    check(
+      "pay page smoke: the sixth reminder carries PAYMENT_REMINDER_LIMIT",
+      (sixth.json as { error?: { code?: string } }).error?.code === "PAYMENT_REMINDER_LIMIT",
+    );
+    const mailsAfter = await db<{ n: string }[]>`
+      select count(*)::text as n from email_outbox where kind = 'payment_reminder' and ref_type = 'registration' and ref_id = ${regId}`;
+    check("pay page smoke: the refused sixth queued no mail", mailsAfter[0].n === mailsBefore[0].n);
+
     // Marked paid by the organiser, then Pay: 409, and the cart's Checkout pointer is untouched.
     const paid = await v1(owner, `/api/v1/registrations/${regId}/mark-paid`, "POST");
     check("pay page smoke: the organiser marked the entry paid", paid.status === 200);

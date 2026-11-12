@@ -279,7 +279,15 @@ export function RegistrationHubRegistrantDetail({
             divisionFeeCents={row.division_fee_cents}
             paymentIntentId={row.payment_intent_id}
             refundedCents={row.refunded_cents}
+            lastRemindedAt={row.last_reminded_at ? new Date(row.last_reminded_at).toISOString() : null}
           />
+          {/* The organiser's own last payment-reminder press, in the org's timezone like "Submitted". A full-width line under the
+              buttons rather than a button label, so it reads at 320 without squeezing the row. */}
+          {row.last_reminded_at && (
+            <p data-registration-hub-registrant-last-reminded className="w-full text-xs text-slate-500">
+              {t(dict, "reg.remind.lastReminded", { when: fmtDateTime(orgTz, row.last_reminded_at) })}
+            </p>
+          )}
           {/* RS009 — placing a solo sign-up on a team. Its own component
               because it opens a sheet and owns a fetch, while the controls
               above are one-shot POSTs; folding it in would have given that

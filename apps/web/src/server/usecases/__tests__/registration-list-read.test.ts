@@ -782,3 +782,38 @@ describe.skipIf(!HAS_DB)("RS005 F1 finding 5: `id` restored alongside `registrat
     }
   });
 });
+
+describe.skipIf(!HAS_DB)("player payment page: the row carries when the organiser last pressed Send payment reminder", () => {
+  const seedEvent = (compId: string, orgId: string, type: string, regId: string, ageMin: number) =>
+    sql`insert into competition_events (competition_id, org_id, type, payload, created_at)
+        values (${compId}, ${orgId}, ${type}, ${sql.json({ registration_id: regId })}, now() - (${ageMin} * interval '1 minute'))`;
+
+  it("is null with no reminder, and equals the newest reminder's created_at among three; another entry's and another type's rows never leak", async () => {
+    const { orgId, owner, competition, division, settings } = await baseRig({ fee_cents: 1500, payment_method: "offline" });
+    const { registration: a } = await seedRegistration(competition.id, division.id, settings, { displayName: "Reminded" });
+    const { registration: b } = await seedRegistration(competition.id, division.id, settings, { displayName: "Never reminded" });
+
+    // Empty case first: nothing yet.
+    let rows = await listRegistrations(owner, division.id, null);
+    expect(rows).toHaveLength(2);
+    expect(rows.find((r) => r.id === a.id)!.last_reminded_at).toBeNull();
+
+    for (const age of [300, 120, 45]) await seedEvent(competition.id, orgId, "registration.payment_reminded", a.id, age);
+    // Noise the filter must refuse: a NEWER row of another type for the same entry, and a newer reminder for a different entry.
+    await seedEvent(competition.id, orgId, "registration.waitlisted", a.id, 1);
+    await seedEvent(competition.id, orgId, "registration.payment_reminded", b.id, 2);
+    const [newest] = await sql<{ created_at: Date }[]>`
+      select max(created_at) as created_at from competition_events
+       where type = 'registration.payment_reminded' and payload->>'registration_id' = ${a.id}`;
+    expect(
+      await sql`select 1 from competition_events where type = 'registration.payment_reminded' and payload->>'registration_id' = ${a.id}`,
+      "anti-vacuity: three reminder rows for the entry",
+    ).toHaveLength(3);
+
+    rows = await listRegistrations(owner, division.id, null);
+    expect(rows.find((r) => r.id === a.id)!.last_reminded_at?.getTime()).toBe(newest!.created_at.getTime());
+    const bRow = rows.find((r) => r.id === b.id)!;
+    expect(bRow.last_reminded_at, "b's own reminder is its own").not.toBeNull();
+    expect(bRow.last_reminded_at!.getTime()).toBeGreaterThan(rows.find((r) => r.id === a.id)!.last_reminded_at!.getTime());
+  });
+});

@@ -18,6 +18,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { t } from "@/lib/i18n-runtime";
 import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
+import { REMINDER_CONFIRM_WITHIN_MS } from "@/lib/registration-reminder";
 
 const nav = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({
@@ -96,6 +100,7 @@ const PROPS: ActionProps = {
   divisionFeeCents: 0,
   paymentIntentId: null,
   refundedCents: 0,
+  lastRemindedAt: null,
 };
 
 function mount(overrides: Partial<ActionProps> = {}) {
@@ -576,6 +581,7 @@ describe("RegistrationHubRegistrantActions — finding 2: a failure never resurr
       divisionFeeCents: 0,
       paymentIntentId: null,
   refundedCents: 0,
+      lastRemindedAt: null,
     });
     // The existing render-time prop-sync already reconciles to it —
     // withdraw (legal on "confirmed") reappears.
@@ -691,5 +697,93 @@ describe("RegistrationHubRegistrantActions — a fee edited after the entry exis
     });
     expect(findAction(island, "approve"), "nothing is owed, so approve is live").toBeTruthy();
     expect(findAction(island, "mark-paid"), "mark paid would 422 'no entry fee'").toBeUndefined();
+  });
+});
+
+// Player payment page, Task 6: the organiser's "Send payment reminder".
+describe("RegistrationHubRegistrantActions — send payment reminder", () => {
+  const owed = { status: "pending", approval: "auto", divisionFeeCents: 1500, amountCents: 1500 } as const;
+  const feedbackOf = (island: ReturnType<typeof mount>) =>
+    propsOf(island.tree().find((e) => propsOf(e)["data-registration-hub-registrant-actions-feedback"] !== undefined)!);
+  const press = (island: ReturnType<typeof mount>) => (propsOf(findAction(island, "remind")!).onClick as () => Promise<void>)();
+  const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+
+  it("renders iff the entry is pending in a division with a fee, labelled from the dictionary, after resend", () => {
+    let checked = 0;
+    for (const status of ["pending", "paid", "confirmed", "waitlisted", "withdrawn", "rejected", "expired"] as const) {
+      for (const divisionFeeCents of [0, 1500]) {
+        const island = mount({ ...owed, status, divisionFeeCents });
+        expect(!!findAction(island, "remind"), `${status} / fee ${divisionFeeCents}`).toBe(status === "pending" && divisionFeeCents > 0);
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(14);
+    const island = mount(owed);
+    const labelOf = propsOf(findAction(island, "remind")!).children;
+    expect(String(labelOf)).toBe(t(uiEn, "reg.action.remind"));
+    expect(t(uiEn, "reg.action.remind")).toBe("Send payment reminder");
+    const keys = island.tree().map((e) => propsOf(e)["data-registration-hub-registrant-action"]).filter(Boolean);
+    expect(keys.indexOf("remind"), "after Resend confirmation email").toBe(keys.indexOf("resend") + 1);
+  });
+
+  it("the rename landed in every locale: each differs from its previous value", () => {
+    const before = { en: "Send reminder", es: "Enviar recordatorio", fr: "Envoyer un rappel", nl: "Herinnering sturen" };
+    const now = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl };
+    for (const loc of ["en", "es", "fr", "nl"] as const) {
+      expect((now[loc] as Record<string, string>)["reg.action.remind"], loc).not.toBe(before[loc]);
+    }
+  });
+
+  it("sends with no confirm when never reminded, or last reminded over an hour ago; success says 'Payment reminder sent.'", async () => {
+    for (const lastRemindedAt of [null, ago(REMINDER_CONFIRM_WITHIN_MS + 60_000)]) {
+      confirmMock.fn.mockClear();
+      net.calls.length = 0;
+      net.next.set("remind", Promise.resolve({ sent: true }));
+      const island = mount({ ...owed, lastRemindedAt });
+      await press(island);
+      expect(confirmMock.fn, String(lastRemindedAt)).not.toHaveBeenCalled();
+      expect(net.calls.map((c) => c.url)).toEqual(["/api/v1/registrations/reg-1/remind"]);
+      expect(island.text()).toContain("Payment reminder sent.");
+      expect(island.text()).toContain(t(uiEn, "reg.remind.sent"));
+      expect(nav.refresh).toHaveBeenCalled();
+    }
+  });
+
+  it("asks first when last reminded under an hour ago; cancelling sends nothing, confirming sends", async () => {
+    const lastRemindedAt = ago(REMINDER_CONFIRM_WITHIN_MS - 60_000);
+    confirmMock.fn.mockImplementationOnce(async () => false);
+    const island = mount({ ...owed, lastRemindedAt });
+    await press(island);
+    expect(confirmMock.fn).toHaveBeenCalledTimes(1);
+    expect(confirmMock.fn.mock.calls[0]![0]).toMatchObject({
+      title: t(uiEn, "reg.remind.confirmRecent.title"),
+      body: t(uiEn, "reg.remind.confirmRecent.body"),
+    });
+    expect(net.calls, "cancelled: no request").toHaveLength(0);
+
+    net.next.set("remind", Promise.resolve({ sent: true }));
+    await press(island);
+    expect(confirmMock.fn).toHaveBeenCalledTimes(2);
+    expect(net.calls).toHaveLength(1);
+  });
+
+  it("{ sent: false } says it may arrive late; the 429 says the limit in the organiser's own copy, not the server's English", async () => {
+    net.next.set("remind", Promise.resolve({ sent: false }));
+    const late = mount(owed);
+    await press(late);
+    expect(late.text()).toContain(t(uiEn, "reg.remind.notSent"));
+    expect(propsOf(findAction(late, "remind")!)).toBeTruthy();
+
+    net.next.set("remind", Promise.reject(new ApiV1Error("SERVER ENGLISH WORDS", 429, "PAYMENT_REMINDER_LIMIT")));
+    const capped = mount(owed);
+    await press(capped);
+    expect(feedbackOf(capped)["data-tone"]).toBe("error");
+    expect(capped.text()).toContain(t(uiEn, "reg.remind.limit"));
+    expect(capped.text()).not.toContain("SERVER ENGLISH WORDS");
+
+    net.next.set("remind", Promise.reject(new ApiV1Error("Some other refusal", 422, "ERROR")));
+    const other = mount(owed);
+    await press(other);
+    expect(other.text()).toContain("Some other refusal");
   });
 });

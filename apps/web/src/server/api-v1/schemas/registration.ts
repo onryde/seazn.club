@@ -212,6 +212,9 @@ export const RegistrationListEntry = Registration.extend({
    *  `unassignSoloSignUp`'s own refusal so the hub never renders a Remove
    *  button the server will refuse. */
   division_started: z.boolean(),
+  /** When the organiser last pressed "Send payment reminder" for this entry (the newest `registration.payment_reminded` audit row);
+   *  null if never. */
+  last_reminded_at: z.string().nullable(),
 });
 
 /** `POST /registrations/{id}/promote` body. `id` in the URL resolves which

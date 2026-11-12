@@ -17,6 +17,7 @@ import { paymentReminderMessage } from "./mail";
 import { issuePayLink, recordPayToken } from "./pay-token";
 import { stripeRefund, queueRefundReceipt } from "./refunds";
 import { withdrawCore } from "./withdraw";
+import { REMINDER_CAP_PER_DAY, REMINDER_LIMIT_CODE } from "@/lib/registration-reminder";
 
 /** Organiser approve (free regs and waitlist overrides). Paid-division regs
  *  must be paid first — confirming an unpaid one would gift the spot. */
@@ -185,7 +186,9 @@ export async function sendPaymentReminder(
   const method = (settings?.payment_method ?? reg.payment_method) === "stripe" ? "card" : "offline";
   const link = issuePayLink(origin);
   const message = await paymentReminderMessage(reg, ctx, {
-    feeCents: fee,
+    // The amount THIS entry was charged (the figure the payment page and Checkout use), never the division's live fee: an organiser
+    // may have edited the fee since sign-up, and the mail must not quote a price the entry will not be asked for.
+    feeCents: reg.amount_cents,
     // Division override first, org-wide fallback — same resolution as the
     // confirmation email; refCode personalises {{reference}}.
     paymentInstructions: settings?.payment_instructions ?? ctx.payment_instructions,
@@ -197,6 +200,17 @@ export async function sendPaymentReminder(
   // a mail the outbox refuses leaves no "reminded" entry behind. The token's org is the entry's own (the tenant this tx runs as). The mail is then attempted at once; `sent` is whether THAT attempt was accepted. A provider that is down
   // answers `{ sent: false }` and the row stays queued for the retry worker. No once-key: a press is a deliberate mail.
   const id = await withTenant(auth.orgId, async (tx) => {
+    // The cap: lock the entry, THEN count, so two concurrent presses at four serialise and exactly one gets the fifth.
+    await tx`select 1 from registrations where id = ${reg.id} for update`;
+    const [{ n }] = await tx<{ n: number }[]>`
+      select count(*)::int as n from competition_events
+       where competition_id = ${ctx.competition_id}
+         and type = 'registration.payment_reminded'
+         and payload->>'registration_id' = ${reg.id}
+         and created_at > now() - interval '24 hours'`;
+    if (n >= REMINDER_CAP_PER_DAY) {
+      throw new HttpError(429, `This entry has had ${REMINDER_CAP_PER_DAY} reminders in the last 24 hours. Try again later.`, REMINDER_LIMIT_CODE);
+    }
     const queued = await enqueueEmail(tx, message);
     await recordPayToken(tx, { tokenHash: link.tokenHash, registrationId: reg.id, orgId: reg.org_id });
     await audit(tx, ctx.competition_id, auth.orgId, "registration.payment_reminded", { registration_id: regId }, auth.userId);
