@@ -104,6 +104,8 @@ function baseProps(over: Partial<RegistrationHubRegistrantDetailProps> = {}): Re
     siblings: [],
     formFields: [],
     baseHref: "/o/riverside/c/summer-league/registration?tab=registrants",
+    orgSlug: "riverside",
+    compSlug: "summer-league",
     ...over,
   };
 }
@@ -220,7 +222,24 @@ describe("RegistrationHubRegistrantDetail — join code (viewer/editor gating)",
     const tree = walk(RegistrationHubRegistrantDetail(baseProps({ row: row({ join_code: "TEAM-XYZ" }), canEdit: true })));
     const control = tree.find((e) => e.type === RegistrationHubRegistrantJoinCode);
     expect(control).toBeTruthy();
-    expect(propsOf(control!).code).toBe("TEAM-XYZ");
+    // Polish wave P6: the control is handed the competition's public join LINK, not the bare code. Typed from the route's own shape
+    // (`/live/<org>/<competition>/register/join?join_code=`), not built by the code under test.
+    expect(propsOf(control!).joinPath).toBe("/live/riverside/summer-league/register/join?join_code=TEAM-XYZ");
+    expect(propsOf(control!)).not.toHaveProperty("code");
+  });
+
+  it("the link follows the competition's slugs and the entry's own code (two competitions, two links)", () => {
+    const paths = [
+      { orgSlug: "riverside", compSlug: "summer-league", code: "TEAM-AAA" },
+      { orgSlug: "harbour", compSlug: "winter-cup", code: "TEAM-BBB" },
+    ].map(({ orgSlug, compSlug, code }) => {
+      const tree = walk(RegistrationHubRegistrantDetail(baseProps({ row: row({ join_code: code }), canEdit: true, orgSlug, compSlug })));
+      return propsOf(tree.find((e) => e.type === RegistrationHubRegistrantJoinCode)!).joinPath;
+    });
+    expect(paths).toEqual([
+      "/live/riverside/summer-league/register/join?join_code=TEAM-AAA",
+      "/live/harbour/winter-cup/register/join?join_code=TEAM-BBB",
+    ]);
   });
 
   it("is ABSENT from the markup for a viewer, even though the entry has a join_code (assert on rendered output, not the prop)", () => {

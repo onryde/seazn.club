@@ -400,7 +400,7 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string }> = {
   },
   "app/(public)/live/[orgSlug]/[competitionSlug]/register/status/invite-teammates.tsx": { verdict: true },
   "components/registration-hub-registrant-detail.tsx": {
-    verdict: "passes the team's join code to RegistrationHubRegistrantJoinCode as a prop and paints nothing itself",
+    verdict: "passes the team's join link (built by joinLinkPath) to RegistrationHubRegistrantJoinCode as a prop and paints nothing itself",
     handoff: "components/registration-hub-registrant-join-code.tsx",
   },
   // The Lichess refusal's link: its `href` carries the return path, which carries the join code (`?join_code=`), a capability token.

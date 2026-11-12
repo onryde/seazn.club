@@ -69,6 +69,8 @@ const BASE_PROPS = {
   emptyCtaHref: "/o/riverside/c/summer-league/registration?tab=settings",
   details: EMPTY_DETAILS,
   poolSummary: [] as PoolSummaryPanelRow[],
+  orgSlug: "riverside",
+  compSlug: "summer-league",
 };
 
 function render(rows: RegistrationListRow[], filters: RegistrantsFilters) {
@@ -138,6 +140,9 @@ describe("rows present", () => {
       orgTz: "UTC",
       canEdit: BASE_PROPS.canEdit,
       baseHref: BASE_PROPS.clearHref,
+      // Polish wave P6: the row detail builds the join link from the console route's own slugs.
+      orgSlug: BASE_PROPS.orgSlug,
+      compSlug: BASE_PROPS.compSlug,
     });
     expect(propsOf(table).details).toBe(EMPTY_DETAILS);
     expect(tree.find((e) => e.type === RegistrationHubRegistrantEmpty)).toBeUndefined();

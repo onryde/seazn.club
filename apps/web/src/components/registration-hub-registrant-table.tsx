@@ -175,6 +175,9 @@ export interface RegistrationHubRegistrantTableContext {
    *  current (possibly filtered) URL, or a sibling excluded by the active
    *  filter would link nowhere. Same value as the panel's own `clearHref`. */
   baseHref: string;
+  /** The console route's own slugs: the row detail builds the competition's public join link from them (polish wave P6). */
+  orgSlug: string;
+  compSlug: string;
 }
 
 /**
@@ -261,7 +264,7 @@ export function RegistrationHubRegistrantRow({
   siblings: RegistrantCartSibling[];
   formFields: RegistrationFormField[];
 }) {
-  const { dict, orgTz, canEdit, baseHref } = context;
+  const { dict, orgTz, canEdit, baseHref, orgSlug, compSlug } = context;
 
   return (
     <details
@@ -327,6 +330,8 @@ export function RegistrationHubRegistrantRow({
           siblings={siblings}
           formFields={formFields}
           baseHref={baseHref}
+          orgSlug={orgSlug}
+          compSlug={compSlug}
         />
       </div>
     </details>

@@ -40,6 +40,8 @@ const CONTEXT: RegistrationHubRegistrantTableContext = {
   orgTz: ORG_TZ,
   canEdit: true,
   baseHref: "/o/riverside/c/summer-league/registration?tab=registrants",
+  orgSlug: "riverside",
+  compSlug: "summer-league",
 };
 
 const EMPTY_DETAILS: RegistrantDetails = {
@@ -367,6 +369,9 @@ describe("RegistrationHubRegistrantRow — the detail body", () => {
     expect(props.orgTz).toBe(CONTEXT.orgTz);
     expect(props.canEdit).toBe(CONTEXT.canEdit);
     expect(props.baseHref).toBe(CONTEXT.baseHref);
+    // Polish wave P6: the join link is built from the console route's slugs, which the row's own columns do not carry.
+    expect(props.orgSlug).toBe("riverside");
+    expect(props.compSlug).toBe("summer-league");
     expect(props.roster).toBe(roster);
     expect(props.siblings).toBe(siblings);
     expect(props.formFields).toBe(formFields);

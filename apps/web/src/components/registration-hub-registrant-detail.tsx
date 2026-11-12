@@ -36,6 +36,7 @@ import {
   registrantKindLabel,
 } from "@/components/registration-hub-registrant-derive";
 import { RegistrationHubRegistrantJoinCode } from "@/components/registration-hub-registrant-join-code";
+import { joinLinkPath } from "@/lib/join-link";
 import { deriveRegistrantActionFlags } from "@/components/registration-hub-registrant-derive";
 import { RegistrationHubRegistrantActions } from "@/components/registration-hub-registrant-actions";
 import { RegistrationHubAssignPicker } from "@/components/registration-hub-assign-picker";
@@ -68,6 +69,10 @@ export interface RegistrationHubRegistrantDetailProps {
    *  (registrantRowAnchor) to land on the right row once the page reloads
    *  unfiltered. Same value as the panel's own `clearHref`. */
   baseHref: string;
+  /** The competition's own slugs (the console route's params): the join link a teammate opens is a public page of THIS competition,
+   *  `/live/<orgSlug>/<compSlug>/register/join` - the row carries no slug of its own. */
+  orgSlug: string;
+  compSlug: string;
 }
 
 function detailField(label: string, value: ReactNode): ReactNode {
@@ -90,6 +95,8 @@ export function RegistrationHubRegistrantDetail({
   siblings,
   formFields,
   baseHref,
+  orgSlug,
+  compSlug,
 }: RegistrationHubRegistrantDetailProps) {
   const paymentState = deriveRegistrantPaymentState(row);
   // ONE source with the buttons themselves — the actions component calls the
@@ -161,7 +168,7 @@ export function RegistrationHubRegistrantDetail({
         {showJoinCode && (
           <div className="mt-3">
             <RegistrationHubRegistrantJoinCode
-              code={row.join_code!}
+              joinPath={joinLinkPath(orgSlug, compSlug, row.join_code!)}
               label={t(dict, "reg.hub.registrants.detail.joinCode.label")}
               hint={t(dict, "reg.hub.registrants.detail.joinCode.hint")}
               copyLabel={t(dict, "reg.hub.registrants.detail.joinCode.copy")}

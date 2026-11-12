@@ -210,6 +210,8 @@ export default async function RegistrationHubPage({
         emptyCtaHref={routes.competitionRegistration(orgSlug, compSlug, "settings")}
         details={details}
         poolSummary={poolSummary}
+        orgSlug={orgSlug}
+        compSlug={compSlug}
       />
     );
   }
