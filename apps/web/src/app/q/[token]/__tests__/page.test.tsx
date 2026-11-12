@@ -896,6 +896,33 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
     await hardDeleteQuickMatchCompetition(out.competitionId);
   });
 
+  it("co-leaders with the SAME name (side names are not unique): the Level card names both, each under its own React key (final review A m-2)", async () => {
+    // Server rendering never checks keys (React warns about a duplicate only when the client reconciles), so the keys are read
+    // off the expanded tree. Same producer path as the level football case below, with the two sides typed alike.
+    locale.value = "en";
+    const out = await create(league({ sport_key: "football", variant_key: FOOTBALL.variant, kind: FOOTBALL.kind, sides: ["Sam", "Sam"] }));
+    const only = (await homeOf(out)).next!;
+    for (const [seq, req] of [
+      { type: "core.start", payload: {} },
+      { type: "football.period", payload: { phase: "HT" } },
+      { type: "football.period", payload: { phase: "FT" } },
+    ].entries()) {
+      await scoreEvent(systemAuth(), only.id, { expected_seq: seq, ...req });
+    }
+    const h = await homeOf(out);
+    expect(h.allPlayed, "precondition: the one match is played").toBe(true);
+    expect(h.fixtures[0]!.winnerEntrantId, "precondition: level, no winner").toBeNull();
+
+    const { tree } = await renderPage(out.token);
+    const card = oneByTestId(tree, "qm-winner");
+    expect(words(oneByTestId(card, "qm-winner-kicker"))).toBe(en_("quickMatch.home.level"));
+    const names = byTestId(card, "qm-winner-name");
+    expect(names.map(words), "both co-leaders named, though their names are the same").toEqual(["Sam", "Sam"]);
+    expect(names.every((n) => n.key !== null), "each name carries a key").toBe(true);
+    expect(new Set(names.map((n) => n.key)).size, "and no two share one").toBe(names.length);
+    await hardDeleteQuickMatchCompetition(out.competitionId);
+  });
+
   it("football: a level league match reads 'drew', the table shows the draw, and a level top reads Level naming both (B5d)", async () => {
     locale.value = "en";
     const input = league({ sport_key: "football", variant_key: FOOTBALL.variant, kind: FOOTBALL.kind, sides: ["Blue team", "Red team"] });

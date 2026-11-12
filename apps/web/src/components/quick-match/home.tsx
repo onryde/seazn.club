@@ -588,9 +588,11 @@ function winnerCard(winner: NonNullable<Built["winner"]>): ReactNode {
         {winner.kicker}
       </p>
       <ul className="mt-2 flex min-w-0 flex-col gap-1">
-        {winner.names.map((name) => (
+        {/* Keyed by place, never by name: side names are not unique, so two co-leaders can share one (final review A m-2).
+            The list is rendered once per request and never reorders. */}
+        {winner.names.map((name, i) => (
           <li
-            key={name}
+            key={i}
             data-testid="qm-winner-name"
             className="app-display text-[1.75rem] font-bold leading-[1.1] text-cream [overflow-wrap:anywhere]"
           >
