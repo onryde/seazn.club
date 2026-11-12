@@ -9,6 +9,7 @@
 //   confirm          confirmRegistration     the organiser's confirm (waitlist override, free entry)
 //   waive            confirmRegistrationWaived
 //   mark-paid        markRegistrationPaidOffline
+//   approve-then-mark-paid   markRegistrationPaidOffline on an entry approved while its fee was due (manual division, W12)
 //   promote          promoteFromWaitlist     the organiser's explicit promote (a free, auto-approval division seats at once)
 //   import           commitImport            the CSV import
 //
@@ -193,6 +194,8 @@ const registrationDoor = (
     approval: "auto" | "manual";
     fee: number;
     status: "pending" | "waitlisted";
+    /** The organiser's earlier decision on the entry, made before the door under test is opened (never re-run by a retry). */
+    before?: (auth: AuthCtx, regId: string) => Promise<unknown>;
     call: (auth: AuthCtx, regId: string, divisionId: string) => Promise<unknown>;
   },
 ): Door => ({
@@ -205,6 +208,7 @@ const registrationDoor = (
       divisionId: division.id,
       async prepare(target) {
         const regId = await seedEntry(division.competitionId, division.id, target, cfg.status, cfg.fee);
+        if (cfg.before) await cfg.before(auth, regId);
         return () => cfg.call(auth, regId, division.id);
       },
     };
@@ -253,6 +257,21 @@ const DOORS: Door[] = [
   registrationDoor("confirm", { approval: "auto", fee: 0, status: "pending", call: (a, id) => confirmRegistration(a, id) }),
   registrationDoor("waive", { approval: "auto", fee: 0, status: "pending", call: (a, id) => confirmRegistrationWaived(a, id) }),
   registrationDoor("mark-paid", { approval: "auto", fee: 500, status: "pending", call: (a, id) => markRegistrationPaidOffline(a, id) }),
+  // Polish wave P5 (W12) made Approve and Mark paid two decisions on a manual division with a fee: Approve while the fee is due seats
+  // nobody (the entry stays pending, `approved_at` set), and the payment that follows is what seats - so Mark paid on an APPROVED
+  // entry is a seat door of its own (final fix m9). Approve runs first, outside the retried call.
+  registrationDoor("approve-then-mark-paid", {
+    approval: "manual",
+    fee: 500,
+    status: "pending",
+    before: async (a, id) => {
+      await approveRegistration(a, id);
+      const [row] = await sql<{ status: string; approved_at: Date | null }[]>`select status, approved_at from registrations where id = ${id}`;
+      expect(row, "premise: Approve with the fee due leaves the entry pending and approved").toMatchObject({ status: "pending" });
+      expect(row!.approved_at, "premise: approved_at stamped").not.toBeNull();
+    },
+    call: (a, id) => markRegistrationPaidOffline(a, id),
+  }),
   registrationDoor("promote", {
     approval: "auto",
     fee: 0,
@@ -305,7 +324,7 @@ const refusalOf = async (promise: Promise<unknown>): Promise<{ status?: number; 
   return { status: e!.status, code: e!.code, ids: e!.extra?.person_ids };
 };
 
-const DOOR_COUNT = 8;
+const DOOR_COUNT = 9;
 const ran = { scenarios: 0, doors: new Set<string>() };
 
 const CHESS_DOORS = DOORS.filter((d) => d.onChess !== false);
@@ -444,7 +463,17 @@ describe.skipIf(!HAS_DB)("every door that seats a player on an online division h
   }
 
   it("anti-vacuity: every door ran every scenario it owes", () => {
-    expect(DOORS.map((d) => d.name).sort()).toEqual(["approve", "confirm", "import", "mark-paid", "patch", "promote", "sync", "waive"]);
+    expect(DOORS.map((d) => d.name).sort()).toEqual([
+      "approve",
+      "approve-then-mark-paid",
+      "confirm",
+      "import",
+      "mark-paid",
+      "patch",
+      "promote",
+      "sync",
+      "waive",
+    ]);
     expect(DOORS).toHaveLength(DOOR_COUNT);
     expect(CHESS_DOORS.map((d) => d.name).sort(), "the import is the one door a chess division can no longer be reached through").toEqual(
       DOORS.map((d) => d.name).filter((n) => n !== "import").sort(),
