@@ -128,6 +128,70 @@ export async function queueRegistrationPaidMail(
   return queued;
 }
 
+/** Who an entry's news reaches: the contact first, then every teammate who has JOINED (consented) and left an address. */
+interface Audience {
+  to: string;
+  /** Greeted by this name (the contact's, or the teammate's own); never the entry's. */
+  name: string;
+  /** The quotable reference: the contact's, never a teammate's. */
+  refCode: string | null;
+  pick: string | null;
+  userId: string | null;
+}
+
+const audienceOf = async (sp: Tx, reg: RegistrationWithGroupRow): Promise<Audience[]> => {
+  const mates = await sp<{ full_name: string; email: string; user_id: string | null }[]>`
+    select full_name, btrim(email) as email, user_id
+    from registration_players
+    where registration_id = ${reg.id}
+      and email is not null and btrim(email) <> ''
+      and consent_status in ('granted', 'guardian')
+    order by created_at, id`;
+  return [
+    { to: reg.contact_email, name: reg.contact_name, refCode: reg.ref_code, pick: reg.locale, userId: reg.user_id },
+    ...mates.map((m) => ({ to: m.email, name: m.full_name, refCode: null, pick: null, userId: m.user_id })),
+  ];
+};
+
+/**
+ * One mail per recipient, each at its own savepoint (one teammate's bad address must not cost the contact their mail, and none of it may
+ * cost the fact it reports), each in their own language: the contact's pick or account, a teammate's account or the club's. `keyOf` is the
+ * once-key: one mail per ADDRESS (lowercased), whatever the case or how many rows carry it, so a teammate who typed the contact's own
+ * address, or two rows for one person, queue nothing a second time.
+ */
+async function fanOut(
+  tx: Tx,
+  a: {
+    kind: "registration_approved" | "registration_withdrawn" | "registration_expired";
+    reg: RegistrationWithGroupRow;
+    defaultLocale: string | null;
+    audience: Audience[];
+    render: (r: Audience, locale: Awaited<ReturnType<typeof recipientLocale>>) => Promise<{ subject: string; html: string; text: string }>;
+    keyOf: (r: Audience) => string;
+  },
+): Promise<string[]> {
+  const queued: string[] = [];
+  for (const r of a.audience) {
+    const id = await contained(tx, a.kind, a.reg.id, async (sp) => {
+      const locale = await recipientLocale(sp, { pick: r.pick, userId: r.userId, orgDefault: a.defaultLocale });
+      const content = await a.render(r, locale);
+      return enqueueEmailOnce(sp, {
+        kind: a.kind,
+        refType: "registration",
+        refId: a.reg.id,
+        orgId: a.reg.org_id,
+        to: r.to,
+        ...content,
+        transactional: false,
+        expiresAt: expiryWithin(null),
+        dedupeKey: a.keyOf(r),
+      });
+    });
+    if (id) queued.push(id);
+  }
+  return queued;
+}
+
 /**
  * `registration_approved`: the organiser approved the entry (Approve, Confirm, or Confirm-and-waive-the-fee), so its place is confirmed.
  * To the registration's contact AND to every teammate who has joined the entry and has an address (W2, W13); one mail per address (a
@@ -148,17 +212,11 @@ export async function queueRegistrationApprovedMails(tx: Tx, a: { reg: Registrat
     return [];
   }
   // Each step at its own savepoint: one teammate's bad address must not cost the contact their mail, and none of it may cost the approval.
-  const prep = await contained(tx, "registration_approved", reg.id, async (sp) => {
-    const ctx = await divisionCtx(sp, reg.division_id);
-    const mates = await sp<{ full_name: string; email: string; user_id: string | null }[]>`
-      select full_name, btrim(email) as email, user_id
-      from registration_players
-      where registration_id = ${reg.id}
-        and email is not null and btrim(email) <> ''
-        and consent_status in ('granted', 'guardian')
-      order by created_at, id`;
-    return { ctx, divisionName: await divisionNameOf(sp, reg.division_id), mates: [...mates] };
-  });
+  const prep = await contained(tx, "registration_approved", reg.id, async (sp) => ({
+    ctx: await divisionCtx(sp, reg.division_id),
+    divisionName: await divisionNameOf(sp, reg.division_id),
+    audience: await audienceOf(sp, reg),
+  }));
   if (!prep) return [];
   const origin = a.origin ?? fallbackOrigin();
   const stamp = reg.updated_at.toISOString();
@@ -169,115 +227,86 @@ export async function queueRegistrationApprovedMails(tx: Tx, a: { reg: Registrat
     displayName: reg.display_name,
     competitionUrl: competitionUrlOf(origin, prep.ctx),
   };
-  // The contact first, then every teammate who has joined (consented) and left an address. One mail per ADDRESS, whatever the case or how
-  // many rows carry it: the once-key below is that rule (a teammate who typed the contact's own address, or two rows for one person, queue
-  // nothing a second time).
-  const recipients = [
-    { to: reg.contact_email, name: reg.contact_name, refCode: reg.ref_code, pick: reg.locale, userId: reg.user_id },
-    ...prep.mates.map((m) => ({ to: m.email, name: m.full_name, refCode: null, pick: null, userId: m.user_id })),
-  ];
-  const queued: string[] = [];
-  for (const r of recipients) {
-    const id = await contained(tx, "registration_approved", reg.id, async (sp) => {
-      const locale = await recipientLocale(sp, { pick: r.pick, userId: r.userId, orgDefault: prep.ctx.default_locale });
-      const content = await registrationApprovedEmail({ ...base, recipientName: r.name, refCode: r.refCode }, locale);
-      return enqueueEmailOnce(sp, {
-        kind: "registration_approved",
-        refType: "registration",
-        refId: reg.id,
-        orgId: reg.org_id,
-        to: r.to,
-        ...content,
-        transactional: false,
-        expiresAt: expiryWithin(null),
-        dedupeKey: `${reg.id}:${r.to.toLowerCase()}:${stamp}`,
-      });
-    });
-    if (id) queued.push(id);
-  }
-  return queued;
-}
-
-/**
- * `registration_expired`: the hourly sweep released an unpaid place (W10). To the contact, in their language: which entry, that its place
- * was released, and how to register again. In the sweep's own transaction, where the entry is written `expired`; the sweep has no
- * response to defer behind, so the retry worker makes the first attempt.
- *
- * One mail per ENTRY (a cart whose two entries both lapse tells the contact twice, once for each division: the mails differ by the division
- * they name). `reg` is the row as the sweep locked it, before it was written `expired`. Once per entry: `expired` is terminal, so the
- * entry's id is the key; a second sweep finds nothing overdue, and a direct second call queues nothing.
- */
-export async function queueRegistrationExpiredMail(tx: Tx, a: { reg: RegistrationWithGroupRow; origin: string }): Promise<string | null> {
-  const { reg } = a;
-  return contained(tx, "registration_expired", reg.id, async (sp) => {
-    const ctx = await divisionCtx(sp, reg.division_id);
-    const locale = await recipientLocale(sp, { pick: reg.locale, userId: reg.user_id, orgDefault: ctx.default_locale });
-    const content = await registrationExpiredEmail(
-      {
-        orgName: ctx.org_name,
-        competitionName: ctx.comp_name,
-        divisionName: await divisionNameOf(sp, reg.division_id),
-        displayName: reg.display_name,
-        contactName: reg.contact_name,
-        refCode: reg.ref_code,
-        registerUrl: registerUrlOf(a.origin, ctx),
-      },
-      locale,
-    );
-    return enqueueEmailOnce(sp, {
-      kind: "registration_expired",
-      refType: "registration",
-      refId: reg.id,
-      orgId: reg.org_id,
-      to: reg.contact_email,
-      ...content,
-      transactional: false,
-      expiresAt: expiryWithin(null),
-      dedupeKey: `${reg.id}:expired`,
-    });
+  return fanOut(tx, {
+    kind: "registration_approved",
+    reg,
+    defaultLocale: prep.ctx.default_locale,
+    audience: prep.audience,
+    render: (r, locale) => registrationApprovedEmail({ ...base, recipientName: r.name, refCode: r.refCode }, locale),
+    keyOf: (r) => `${reg.id}:${r.to.toLowerCase()}:${stamp}`,
   });
 }
 
 /**
- * `registration_withdrawn`: the ORGANISER withdrew the entry (W11). To the registration's contact, in their language: which entry, which
- * division, that it is withdrawn, and where to ask. A registrant's own withdrawal is never mailed (they know; their refund has its own
- * receipt): the caller decides who withdrew, this decides whether the person is still OWED the news.
+ * `registration_expired`: the hourly sweep released an unpaid place (W10). To the registration's contact AND to every teammate who has
+ * joined the entry and has an address (the audience of the approval: a place released is news to the whole team), each in their own
+ * language: which entry, that its place was released, and how to register again. In the sweep's own transaction, where the entry is
+ * written `expired`; the sweep has no response to defer behind, so the retry worker makes the first attempt.
+ *
+ * One mail per ENTRY per address (a cart whose two entries both lapse tells the contact twice, once for each division: the mails differ by
+ * the division they name). `reg` is the row as the sweep locked it, before it was written `expired`. Once per entry and address: `expired`
+ * is terminal, so the entry's id and the address are the key; a second sweep finds nothing overdue, and a direct second call queues nothing.
+ */
+export async function queueRegistrationExpiredMails(tx: Tx, a: { reg: RegistrationWithGroupRow; origin: string }): Promise<string[]> {
+  const { reg } = a;
+  const prep = await contained(tx, "registration_expired", reg.id, async (sp) => ({
+    ctx: await divisionCtx(sp, reg.division_id),
+    divisionName: await divisionNameOf(sp, reg.division_id),
+    audience: await audienceOf(sp, reg),
+  }));
+  if (!prep) return [];
+  const base = {
+    orgName: prep.ctx.org_name,
+    competitionName: prep.ctx.comp_name,
+    divisionName: prep.divisionName,
+    displayName: reg.display_name,
+    registerUrl: registerUrlOf(a.origin, prep.ctx),
+  };
+  return fanOut(tx, {
+    kind: "registration_expired",
+    reg,
+    defaultLocale: prep.ctx.default_locale,
+    audience: prep.audience,
+    render: (r, locale) => registrationExpiredEmail({ ...base, contactName: r.name, refCode: r.refCode }, locale),
+    keyOf: (r) => `${reg.id}:expired:${r.to.toLowerCase()}`,
+  });
+}
+
+/**
+ * `registration_withdrawn`: the ORGANISER withdrew the entry (W11). To the registration's contact AND to every teammate who has joined the
+ * entry and has an address (the audience of the approval), each in their own language: which entry, which division, that it is withdrawn,
+ * and where to ask. A registrant's own withdrawal is never mailed (they know; their refund has its own receipt): the caller decides who
+ * withdrew, this decides whether the people are still OWED the news.
  *
  * `reg` is the row as the withdrawal locked it, BEFORE it was written `withdrawn`. An entry already in a terminal status (`expired` - the
  * sweep told them their place was released; `rejected` and `withdrawn` cannot reach a withdrawal at all) is not told again: a second,
  * contradictory mail helps nobody. In the withdrawal's own transaction, so the mail and the fact commit together; a request path, so the
  * caller makes the first attempt after the response.
  *
- * Once per entry: `withdrawn` is terminal, so the entry's id is the key.
+ * Once per entry and address: `withdrawn` is terminal, so the entry's id and the address are the key.
  */
-export async function queueRegistrationWithdrawnMail(tx: Tx, a: { reg: RegistrationWithGroupRow }): Promise<string | null> {
+export async function queueRegistrationWithdrawnMails(tx: Tx, a: { reg: RegistrationWithGroupRow }): Promise<string[]> {
   const { reg } = a;
-  if (isTerminalRegistrationStatus(reg.status)) return null;
-  return contained(tx, "registration_withdrawn", reg.id, async (sp) => {
-    const ctx = await divisionCtx(sp, reg.division_id);
-    const locale = await recipientLocale(sp, { pick: reg.locale, userId: reg.user_id, orgDefault: ctx.default_locale });
-    const content = await registrationWithdrawnEmail(
-      {
-        orgName: ctx.org_name,
-        competitionName: ctx.comp_name,
-        divisionName: await divisionNameOf(sp, reg.division_id),
-        displayName: reg.display_name,
-        contactName: reg.contact_name,
-        refCode: reg.ref_code,
-      },
-      locale,
-    );
-    return enqueueEmailOnce(sp, {
-      kind: "registration_withdrawn",
-      refType: "registration",
-      refId: reg.id,
-      orgId: reg.org_id,
-      to: reg.contact_email,
-      ...content,
-      transactional: false,
-      expiresAt: expiryWithin(null),
-      dedupeKey: `${reg.id}:withdrawn`,
-    });
+  if (isTerminalRegistrationStatus(reg.status)) return [];
+  const prep = await contained(tx, "registration_withdrawn", reg.id, async (sp) => ({
+    ctx: await divisionCtx(sp, reg.division_id),
+    divisionName: await divisionNameOf(sp, reg.division_id),
+    audience: await audienceOf(sp, reg),
+  }));
+  if (!prep) return [];
+  const base = {
+    orgName: prep.ctx.org_name,
+    competitionName: prep.ctx.comp_name,
+    divisionName: prep.divisionName,
+    displayName: reg.display_name,
+  };
+  return fanOut(tx, {
+    kind: "registration_withdrawn",
+    reg,
+    defaultLocale: prep.ctx.default_locale,
+    audience: prep.audience,
+    render: (r, locale) => registrationWithdrawnEmail({ ...base, contactName: r.name, refCode: r.refCode }, locale),
+    keyOf: (r) => `${reg.id}:withdrawn:${r.to.toLowerCase()}`,
   });
 }
 
