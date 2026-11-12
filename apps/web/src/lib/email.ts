@@ -27,6 +27,16 @@ import {
   type SoloSignUpAssignedArgs,
   refundIssuedTemplate,
   type RefundIssuedArgs,
+  registrationPaidTemplate,
+  registrationApprovedTemplate,
+  registrationExpiredTemplate,
+  registrationWithdrawnTemplate,
+  registrationJoinedTemplate,
+  type RegistrationPaidArgs,
+  type RegistrationApprovedArgs,
+  type RegistrationExpiredArgs,
+  type RegistrationWithdrawnArgs,
+  type RegistrationJoinedArgs,
   disputeAlertTemplate,
   type DisputeAlertArgs,
   disputeLostTemplate,
@@ -549,6 +559,30 @@ export async function soloSignUpAssignedEmail(args: SoloSignUpAssignedArgs, loca
 export async function refundIssuedEmail(args: RefundIssuedArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
   return refundIssuedTemplate(args, dict);
+}
+
+/** Polish wave P2: the registrant's lifecycle mails, RENDERED and not sent. Each is queued on the email outbox by a producer in
+ *  `server/usecases/registrations/lifecycle-mail.ts` (kinds `registration_paid`, `registration_approved`, `registration_expired`,
+ *  `registration_withdrawn`, `registration_joined`); nothing sends them directly. `locale` is the language the mail is written in: the
+ *  producer resolves it (`recipientLocale`). */
+export async function registrationPaidEmail(args: RegistrationPaidArgs, locale: Locale): Promise<EmailContent> {
+  return registrationPaidTemplate(args, await getDictionary(locale, "emails"));
+}
+
+export async function registrationApprovedEmail(args: RegistrationApprovedArgs, locale: Locale): Promise<EmailContent> {
+  return registrationApprovedTemplate(args, await getDictionary(locale, "emails"));
+}
+
+export async function registrationExpiredEmail(args: RegistrationExpiredArgs, locale: Locale): Promise<EmailContent> {
+  return registrationExpiredTemplate(args, await getDictionary(locale, "emails"));
+}
+
+export async function registrationWithdrawnEmail(args: RegistrationWithdrawnArgs, locale: Locale): Promise<EmailContent> {
+  return registrationWithdrawnTemplate(args, await getDictionary(locale, "emails"));
+}
+
+export async function registrationJoinedEmail(args: RegistrationJoinedArgs, locale: Locale): Promise<EmailContent> {
+  return registrationJoinedTemplate(args, await getDictionary(locale, "emails"));
 }
 
 /** Organiser alert: an entry-fee payment was disputed (spec issue #5), in the owner's language. It is queued on the email outbox by

@@ -21,6 +21,20 @@ export {
   type SoloSignUpAssignedArgs,
 } from "./solo-signup-assigned";
 export { refundIssuedTemplate, type RefundIssuedArgs } from "./refund-issued";
+export {
+  registrationPaidTemplate,
+  registrationApprovedTemplate,
+  registrationExpiredTemplate,
+  registrationWithdrawnTemplate,
+  registrationJoinedTemplate,
+  type LifecycleBase,
+  type RegistrationPaidArgs,
+  type RegistrationApprovedArgs,
+  type RegistrationExpiredArgs,
+  type RegistrationWithdrawnArgs,
+  type RegistrationJoinedArgs,
+  type JoinedState,
+} from "./registration-lifecycle";
 export { disputeAlertTemplate, type DisputeAlertArgs } from "./dispute-alert";
 export { disputeLostTemplate, type DisputeLostArgs } from "./dispute-lost";
 export { funnelClaimTemplate, funnelReminderTemplate, type FunnelEmailArgs } from "./funnel";
