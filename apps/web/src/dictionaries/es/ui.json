@@ -8158,6 +8158,7 @@
   "matchDay.code.scope.venue": "Una sede",
   "matchDay.code.scope.courts": "Algunas pistas",
   "matchDay.code.day": "Día",
+  "matchDay.code.dayHint": "El código funciona de 00:00 a 24:00 de este día ({zone}) y muestra los partidos programados ese día.",
   "matchDay.code.approve": "Puede aprobar sorteos",
   "matchDay.code.call": "Convocar partidos a pista",
   "matchDay.code.mint": "Crear código",

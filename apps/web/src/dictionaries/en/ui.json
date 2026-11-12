@@ -8158,6 +8158,7 @@
   "matchDay.code.scope.venue": "One venue",
   "matchDay.code.scope.courts": "Some courts",
   "matchDay.code.day": "Day",
+  "matchDay.code.dayHint": "The code works from 00:00 to 24:00 on this day ({zone}) and lists the matches scheduled that day.",
   "matchDay.code.approve": "Can approve draws",
   "matchDay.code.call": "Call matches to courts",
   "matchDay.code.mint": "Make code",

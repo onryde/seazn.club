@@ -8158,6 +8158,7 @@
   "matchDay.code.scope.venue": "Eén locatie",
   "matchDay.code.scope.courts": "Enkele banen",
   "matchDay.code.day": "Dag",
+  "matchDay.code.dayHint": "De code werkt van 00:00 tot 24:00 op deze dag ({zone}) en toont de wedstrijden die die dag gepland staan.",
   "matchDay.code.approve": "Mag lotingen goedkeuren",
   "matchDay.code.call": "Wedstrijden naar een baan oproepen",
   "matchDay.code.mint": "Code maken",

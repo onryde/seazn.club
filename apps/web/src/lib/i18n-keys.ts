@@ -4119,6 +4119,7 @@ export type DictionaryKey =
   | "matchDay.code.calls"
   | "matchDay.code.close"
   | "matchDay.code.day"
+  | "matchDay.code.dayHint"
   | "matchDay.code.failed"
   | "matchDay.code.intro"
   | "matchDay.code.landing.body"
