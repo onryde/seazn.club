@@ -309,8 +309,9 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
     check("sp unarchive: the title sponsor too (200)", (await v1(admin, `${aBase}/${scopedId}/archive`, "DELETE")).status === 200);
     const back = await pageNames();
     check("sp unarchive: the public page carries both again, with the /s/ link", back.status === 200 && back.gold && back.goldLink && back.title);
-    const redirected = await pageRedirect(newSession(), `/s/${goldId}`);
-    check("sp unarchive: /s/<id> 302s to the sponsor again", redirected.status === 302 && (redirected.location ?? "").startsWith("https://goldco.example"));
+    // HEAD, not GET: a GET records a click, and the Overview rows below read the gold sponsor's click count as exactly the one above.
+    const redirected = await fetch(`${BASE}/s/${goldId}`, { method: "HEAD", redirect: "manual" });
+    check("sp unarchive: /s/<id> 302s to the sponsor again (HEAD: records no click)", redirected.status === 302 && (redirected.headers.get("location") ?? "").startsWith("https://goldco.example"));
     check("sp unarchive: the default list carries it again", (await listIds("")).includes(goldId));
   } finally {
     // Whatever threw above, both sponsors end unarchived: the rows that follow (stream tick, overview clicks) need them live. Idempotent.
