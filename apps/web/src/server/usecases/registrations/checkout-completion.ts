@@ -174,7 +174,7 @@ export async function handleRegistrationCheckoutCompleted(
   // event as "processed" while that one entry stays paid-for and unconfirmed
   // forever, with nothing left to retry it.
   for (const regId of regIds) {
-    await confirmPaidRegistration(regId, paymentIntent, chargedFeePercent);
+    await confirmPaidRegistration(regId, paymentIntent, chargedFeePercent, session.id);
   }
 }
 
@@ -244,7 +244,8 @@ type PayOutcome =
 async function confirmPaidRegistration(
   regId: string,
   paymentIntentId: string | null,
-  chargedFeePercent: number | null = null,
+  chargedFeePercent: number | null,
+  sessionId: string,
 ): Promise<void> {
   const outcome = (await sql.begin(async (tx) => {
     const [reg] = await tx<RegistrationWithGroupRow[]>`
@@ -386,6 +387,14 @@ async function confirmPaidRegistration(
                set payment_intent_id = coalesce(payment_intent_id, ${paymentIntentId}),
                    updated_at = now()
                where id = ${reg.group_id}`;
+      // Fix round 1 (F1): the late session stays `complete` + `paid` at Stripe forever, and both Pay buttons read a stored complete
+      // session that still pays as "a payment already on its way" (409). Left on either pointer, a re-promoted entry could never be
+      // paid again. Each pointer is cleared only while it still names THIS session (the async-failed handler's compare-and-clear),
+      // so a later session a button already moved to is never touched.
+      await tx`update registrations set pay_session_id = null, updated_at = now()
+               where id = ${regId} and pay_session_id = ${sessionId}`;
+      await tx`update registration_groups set checkout_session_id = null, updated_at = now()
+               where id = ${reg.group_id} and checkout_session_id = ${sessionId}`;
       if (!paymentIntentId && !reg.payment_intent_id) return null;
       return {
         kind: "late",

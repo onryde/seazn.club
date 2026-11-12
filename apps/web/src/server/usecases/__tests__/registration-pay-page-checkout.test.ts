@@ -99,6 +99,7 @@ import {
   handleRegistrationCheckoutAsyncPaymentFailed,
   markRegistrationPaidOffline,
   putRegistrationSettings,
+  promoteWaitlistedRow,
   payFromPayPage,
   reconcileRegistrationByPaySession,
   resumeRegistrationCheckout,
@@ -1082,5 +1083,96 @@ describe.skipIf(!HAS_DB)("an expire refused because the session just stopped bei
     const err = await rejection(payFromPayPage(token, ORIGIN, now));
     expect(err.status).toBe(502);
     expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Fix round 1 (gap-wave review), F1: a promotion that lapses, a late payment that is refunded, then a re-promotion. The late
+// session stays `complete` + `paid` at Stripe forever; if either pointer still names it, both Pay buttons read it as "a payment
+// already on its way" and refuse for good.
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+/** A waitlisted entry promoted for real (`promoteWaitlistedRow`): pending, with its own promotion window and fee. */
+async function promotedEntry() {
+  const r = await stripeRig({ feeCents: 1500 });
+  const seeded = await seedRegistration(r.competition.id, r.division.id, r.settings, { status: "waitlisted" });
+  const row = await sql.begin((tx) => promoteWaitlistedRow(tx, seeded.registration.id, seeded.registration.group_id, r.settings));
+  expect(row?.status, "premise: promoted to pending").toBe("pending");
+  return { rig: r, reg: row!, accessToken: seeded.access_token };
+}
+
+/** The sweep's lapse write for one entry (sweep.ts, the promotion-lapse pass), applied to this row alone: `sweepRegistrations`
+ *  is global, and the lapse pass touches neither pointer, so the pointers here are exactly what a real lapse leaves. */
+async function lapse(regId: string): Promise<void> {
+  await sql`update registrations
+            set status = 'waitlisted', waitlisted_at = now(), promoted_at = null, promotion_expires_at = null, updated_at = now()
+            where id = ${regId}`;
+}
+
+async function pointersOf(regId: string): Promise<{ pay: string | null; cart: string | null }> {
+  const row = await loadWithGroup(regId);
+  return { pay: await payPointer(regId), cart: row.checkout_session_id };
+}
+
+describe.skipIf(!HAS_DB)("a late payment refunded after a lapse leaves both Pay buttons usable on re-promotion (fix round 1, F1)", () => {
+  /** Promoted, pays from the page AFTER its promotion lapsed: refunded, and back on the waitlist. Returns the late session. */
+  async function lateAfterLapse() {
+    const w = await promotedEntry();
+    const token = await linkFor(w.reg);
+    await payFromPayPage(token, ORIGIN);
+    const late = (await payPointer(w.reg.id))!;
+    expect((await pointersOf(w.reg.id)).cart, "premise: the page's mint stamped the cart too").toBe(late);
+    await lapse(w.reg.id);
+    await handleRegistrationCheckoutCompleted(payInStripe(late));
+    const after = await loadWithGroup(w.reg.id);
+    expect(after.status, "premise: the late payment did not seat the entry").toBe("waitlisted");
+    expect(stripeMock.refundCreate, "premise: the late payment was refunded").toHaveBeenCalledTimes(1);
+    return { ...w, token, late };
+  }
+
+  async function repromote(w: Awaited<ReturnType<typeof lateAfterLapse>>) {
+    const row = await sql.begin((tx) => promoteWaitlistedRow(tx, w.reg.id, w.reg.group_id, w.rig.settings));
+    expect(row?.status, "premise: re-promoted").toBe("pending");
+  }
+
+  it("the late completion clears both pointers that named its session", async () => {
+    const w = await lateAfterLapse();
+    expect(await pointersOf(w.reg.id)).toEqual({ pay: null, cart: null });
+  });
+
+  it("re-promoted: the cart status page's Pay mints a fresh session (no 409)", async () => {
+    const w = await lateAfterLapse();
+    await repromote(w);
+    const creates = stripeMock.checkoutCreate.mock.calls.length;
+    const { checkout_url } = await resumeRegistrationCheckout(w.reg.id, w.accessToken, ORIGIN);
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(creates + 1);
+    const fresh = (await pointersOf(w.reg.id)).cart!;
+    expect(fresh).not.toBe(w.late);
+    expect(checkout_url).toBe(stripeMock.store.get(fresh)!.url);
+  });
+
+  it("re-promoted: the payment page's Pay mints a fresh session (no 409)", async () => {
+    const w = await lateAfterLapse();
+    await repromote(w);
+    const creates = stripeMock.checkoutCreate.mock.calls.length;
+    const url = await payFromPayPage(w.token, ORIGIN);
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(creates + 1);
+    const fresh = (await payPointer(w.reg.id))!;
+    expect(fresh).not.toBe(w.late);
+    expect(url).toBe(stripeMock.store.get(fresh)!.url);
+  });
+
+  it("a late completion whose session the pointers no longer name leaves both pointers alone", async () => {
+    const w = await promotedEntry();
+    const token = await linkFor(w.reg);
+    await payFromPayPage(token, ORIGIN);
+    const late = (await payPointer(w.reg.id))!;
+    // A later mint moved both pointers on (the session ids are what the guard compares; the newer session is not read).
+    await sql`update registrations set pay_session_id = 'cs_test_newer_f1' where id = ${w.reg.id}`;
+    await sql`update registration_groups set checkout_session_id = 'cs_test_newer_f1' where id = ${w.reg.group_id}`;
+    await lapse(w.reg.id);
+    await handleRegistrationCheckoutCompleted(payInStripe(late));
+    expect(stripeMock.refundCreate, "premise: the late branch ran").toHaveBeenCalledTimes(1);
+    expect(await pointersOf(w.reg.id)).toEqual({ pay: "cs_test_newer_f1", cart: "cs_test_newer_f1" });
   });
 });
