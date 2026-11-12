@@ -55,10 +55,9 @@ describe("sponsorSaveErrorKey - the envelope's code, to the dictionary", () => {
       sponsor_dispute_parked: "sponsors.error.disputeParked",
       sponsor_has_deal_history: "sponsors.error.hasDealHistory",
       sponsor_has_open_checkout: "sponsors.error.hasOpenCheckout",
-      // Archive a sponsor (archive plan Task 3): TEMPORARY words until Task 6 adds the archive copy and maps these to
-      // `sponsors.archive.blocked` and `sponsors.error.archived` (spec §10).
-      sponsor_has_current_deal: "sponsors.error.hasOpenDeal",
-      sponsor_archived: "sponsors.error.hasOpenDeal",
+      // Archive a sponsor (spec §10): the blocked words, and the archived-sponsor words.
+      sponsor_has_current_deal: "sponsors.archive.blocked",
+      sponsor_archived: "sponsors.error.archived",
       package_retired: "sponsors.error.packageRetired",
       scope_outside_package: "sponsors.error.scopeOutsidePackage",
       competition_finished: "sponsors.error.competitionFinished",

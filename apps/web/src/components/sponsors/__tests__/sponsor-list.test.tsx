@@ -1365,7 +1365,7 @@ describe("the three row actions call the deal routes (Tasks 6 and 7), then re-re
     m.click("Resend invoice: Ridge Gold Physiotherapy");
     await flush();
     expect(POSTS()).toEqual([`/api/v1/orgs/${ORG}/sponsor-deals/d2/send-invoice`]);
-    expect(calls.filter((c) => c.method === "GET").map((c) => c.url), "the list is re-read").toEqual([`/api/v1/orgs/${ORG}/sponsors`]);
+    expect(calls.filter((c) => c.method === "GET").map((c) => c.url), "the list is re-read").toEqual([`/api/v1/orgs/${ORG}/sponsors?archived=1`]);
     expect(m.text(), "the row changes nothing visible, so the page says it was sent").toContain("Invoice sent again for Ridge Gold Physiotherapy.");
   });
 
@@ -1684,7 +1684,7 @@ describe("Add deal on a row opens the Add deal sheet for that sponsor; the sheet
     m.click("Add deal: Northbank Print");
     await (propsOf(sheetsIn(m)[0]!).onCreate as (b: CreateDealBody) => Promise<void>)(BODY);
     expect(calls.filter((c) => c.method === "POST")).toEqual([{ url: `/api/v1/orgs/${ORG}/sponsors/s7/deals`, method: "POST", body: BODY }]);
-    expect(calls.filter((c) => c.method === "GET").map((c) => c.url).sort()).toEqual([`/api/v1/orgs/${ORG}/sponsor-deals`, `/api/v1/orgs/${ORG}/sponsors`]);
+    expect(calls.filter((c) => c.method === "GET").map((c) => c.url).sort()).toEqual([`/api/v1/orgs/${ORG}/sponsor-deals`, `/api/v1/orgs/${ORG}/sponsors?archived=1`]);
     expect(m.text()).toContain("Deal saved for Northbank Print.");
   });
 

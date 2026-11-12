@@ -557,6 +557,14 @@ export function OrgSponsors({
   const router = useRouter();
   const tz = useViewerTz();
   const [sponsors, setSponsors] = useState<SponsorItem[]>(initialSponsors);
+  // The Sponsors tab holds every row, archived ones too (archive spec §7.1): the list draws the live ones, and the archived ones only
+  // while its "Show archived (N)" switch is on. The switch is local (never in the URL) and is off whenever nothing is archived, so the
+  // last Unarchive resets it (a render-time state adjustment, never an effect) and the next Archive shows it off again.
+  const live = sponsors.filter((s) => s.archived_at === null);
+  const archived = sponsors.filter((s) => s.archived_at !== null);
+  const [archivedSwitch, setArchivedSwitch] = useState(false);
+  if (archivedSwitch && archived.length === 0) setArchivedSwitch(false);
+  const showArchived = archivedSwitch && archived.length > 0;
   // The org's deals, for the sponsor page and the confirms that name what a deal's end does to the others. The server's list is the
   // truth: a new arrival from the page (a navigation, a `router.refresh()`) replaces what a write here last read - compared by
   // identity, in render, never an effect.
@@ -653,7 +661,8 @@ export function OrgSponsors({
   }
 
   async function refresh() {
-    const rows = (await api("", { method: "GET" })) as SponsorItem[];
+    // `?archived=1`: the Sponsors tab keeps its archived rows (the default read would drop them from the list the switch counts).
+    const rows = (await api("?archived=1", { method: "GET" })) as SponsorItem[];
     setSponsors(rows);
   }
 
@@ -775,6 +784,30 @@ export function OrgSponsors({
       }
       setEditingId(null);
       leaveEditUrl();
+    });
+  }
+
+  /** Archive (spec §7.2): hides the sponsor everywhere and keeps its records. The answer is the row, archived; a 409 (a deal holds it:
+   *  the page thought it free) re-reads the rows and deals so the page shows the blocked line, and the row stays live. */
+  function archive(s: SponsorItem) {
+    void run(async () => {
+      try {
+        const row = (await api(`/${s.id}/archive`, { method: "POST" })) as SponsorItem;
+        setSponsors((prev) => prev.map((r) => (r.id === s.id ? row : r)));
+        setNotice(msg("sponsors.archive.done", { name: s.name }));
+      } catch (err) {
+        await Promise.all([refresh().catch(() => {}), refreshDeals().catch(() => {})]);
+        throw err;
+      }
+    });
+  }
+
+  /** Unarchive: the row comes back as it was (its tier, its place, its stream state: archive wrote none of them). */
+  function unarchive(s: SponsorItem) {
+    void run(async () => {
+      const row = (await api(`/${s.id}/archive`, { method: "DELETE" })) as SponsorItem;
+      setSponsors((prev) => prev.map((r) => (r.id === s.id ? row : r)));
+      setNotice(msg("sponsors.archive.unarchived", { name: s.name }));
     });
   }
 
@@ -952,7 +985,10 @@ export function OrgSponsors({
   function move(id: string, delta: -1 | 1) {
     const row = sponsors.find((s) => s.id === id);
     if (!row) return;
-    const group = hasTiers ? sponsors.filter((s) => groupTierOf(s) === groupTierOf(row)) : sponsors;
+    // An archived row has no place in the live order (the server's reorder skips it), so it is never a neighbour.
+    if (row.archived_at !== null) return;
+    const liveRows = sponsors.filter((s) => s.archived_at === null);
+    const group = hasTiers ? liveRows.filter((s) => groupTierOf(s) === groupTierOf(row)) : liveRows;
     const gi = group.findIndex((s) => s.id === id);
     const target = gi + delta;
     if (gi < 0 || target < 0 || target >= group.length) return;
@@ -984,7 +1020,8 @@ export function OrgSponsors({
   const openPayLink = payLink !== null && payLinkStillOpen(deals, payLink.deal) ? payLink : null;
   // The sponsor the Add deal sheet is open for - from either the list's row or the sponsor's page. A sponsor the list no longer holds
   // (deleted since) opens nothing.
-  const addDealSponsor = addDealFor === null ? undefined : sponsors.find((s) => s.id === addDealFor);
+  // An archived sponsor takes no new deal (409 sponsor_archived): the sheet never opens for one, whatever asked.
+  const addDealSponsor = addDealFor === null ? undefined : sponsors.find((s) => s.id === addDealFor && s.archived_at === null);
 
   return (
     <div className="space-y-5">
@@ -1036,7 +1073,9 @@ export function OrgSponsors({
             canEdit={canEdit}
             busy={busy}
             tz={tz}
+            orgTz={hub.orgTimezone ?? "UTC"}
             competitions={competitions}
+            // An archived sponsor's page is read-only (D24): the body draws no editor for it, whatever `?edit=1` asked.
             editing={editingId === selected.id}
             renderEditor={() => (
               <SponsorForm
@@ -1062,6 +1101,8 @@ export function OrgSponsors({
             onToggleStream={(next) => toggleStream(selected, next)}
             onShowAgain={() => showAgain(selected)}
             onAddDeal={() => setAddDealFor(selected.id)}
+            onArchive={() => archive(selected)}
+            onUnarchive={() => unarchive(selected)}
             onDealAction={(deal, action) => runDealAction(deal, selected.name, action)}
             error={error}
             notice={notice}
@@ -1109,7 +1150,10 @@ export function OrgSponsors({
         ) : null}
 
         <SponsorList
-          sponsors={sponsors}
+          sponsors={live}
+          archived={archived}
+          showArchived={showArchived}
+          onToggleArchived={() => setArchivedSwitch((on) => !on)}
           hasTiers={hasTiers}
           canEdit={canEdit}
           busy={busy}

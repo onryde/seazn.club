@@ -728,7 +728,7 @@ describe("Show on site again (now on the sponsor's page, Task 15): a hidden spon
     expect(patches.map((c) => c.url)).toEqual([`/api/v1/orgs/${ORG}/sponsors/a`]);
     expect(patches[0]!.body).toEqual({ status: "active" });
     expect(confirmMock).not.toHaveBeenCalled();
-    expect(calls.filter((c) => c.method === "GET").map((c) => c.url), "the list is re-read").toEqual([`/api/v1/orgs/${ORG}/sponsors`]);
+    expect(calls.filter((c) => c.method === "GET").map((c) => c.url), "the list is re-read").toEqual([`/api/v1/orgs/${ORG}/sponsors?archived=1`]);
     expect(m.has("sponsor-show-a"), "now active: nothing to show again").toBe(false);
   });
 
@@ -1428,7 +1428,7 @@ describe("the poster field through the island: a save, a removal, a refusal, and
     const patches = calls.filter((c) => c.method === "PATCH");
     expect(patches.map((c) => c.url)).toEqual([`/api/v1/orgs/${ORG}/sponsors/a`]);
     expect(patches[0]!.body, "the poster alone: no name, no link, no logo").toEqual({ poster_path: POSTER_NEW });
-    expect(calls.filter((c) => c.method === "GET").map((c) => c.url), "the list is re-read").toEqual([`/api/v1/orgs/${ORG}/sponsors`]);
+    expect(calls.filter((c) => c.method === "GET").map((c) => c.url), "the list is re-read").toEqual([`/api/v1/orgs/${ORG}/sponsors?archived=1`]);
     expect(m.has("sponsor-sheet-editor"), "saved: the editor closes").toBe(false);
     expect(propsOf(m.find("sponsor-sheet-poster-thumb")).src, "the read-only Details row shows what was saved").toBe(POSTER_NEW);
   });

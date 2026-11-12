@@ -24,6 +24,7 @@ import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict
 import { DealChip } from "@/components/sponsors/deal-chip";
 import { dealActionKey, priceLabel } from "@/components/sponsors/deal-copy";
 import { SponsorRowMore } from "@/components/sponsors/sponsor-row-more";
+import { slimSwitch } from "@/components/sponsors/slim-switch";
 import { TIER_BADGE, TIER_MSG } from "@/components/sponsors/tier-labels";
 import type { SponsorItem } from "@/components/org-sponsors";
 import { fmtPublicDate } from "@/lib/format";
@@ -88,8 +89,14 @@ export function dealTierWord(d: Pick<SponsorDeal, "tier" | "package_name">, hasT
 }
 
 export interface SponsorListProps {
-  /** In the order they were read (the server's tier-then-order list); the list groups them without reordering within a group. */
+  /** The LIVE sponsors, in the order they were read (the server's tier-then-order list); the list groups them without reordering
+   *  within a group. An archived sponsor is never in here (it has no place in the live order): it comes in `archived`. */
   sponsors: SponsorItem[];
+  /** The archived sponsors (archive spec §7.1). With none, the list draws no switch at all. Default: none. */
+  archived?: SponsorItem[];
+  /** The "Show archived (N)" switch is on: the archived rows trail the tier groups. Default off (they are not in the DOM). */
+  showArchived?: boolean;
+  onToggleArchived?: () => void;
   hasTiers: boolean;
   canEdit: boolean;
   /** A write is in flight: every control that would start another is disabled. */
@@ -107,6 +114,9 @@ export interface SponsorListProps {
   /** Add deal opens the Add deal sheet for this sponsor (Task 16); it writes nothing itself. */
   onAddDeal: (s: SponsorItem) => void;
 }
+
+/** An archived row's grey (archive spec D19): the same row, dimmed, so the list reads as history. Exported for the tests. */
+export const ARCHIVED_ROW = "opacity-60";
 
 const ACTION_MSG: Record<RowAction, MessageKey> = {
   add_deal: "sponsors.deal.action.addDeal",
@@ -169,16 +179,11 @@ const ICON_BUTTON =
 export function SponsorList(props: SponsorListProps) {
   const {
     sponsors, hasTiers, canEdit, busy, orgSlug, tz, competitions, moreOpenId, onToggleMore, onMove, onRemove, onAction, onAddDeal,
+    archived = [], showArchived = false, onToggleArchived,
   } = props;
   const msg = useMsg();
   const plural = useMsgPlural();
   const locale = useLocaleOrDefault();
-
-  if (sponsors.length === 0) {
-    return (
-      <p className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">{msg("sponsors.empty")}</p>
-    );
-  }
 
   /** The one action a row offers an editor, or nothing: a viewer sees no action, and the live rows need none. */
   function action(s: SponsorItem): ReactNode {
@@ -257,7 +262,23 @@ export function SponsorList(props: SponsorListProps) {
     );
   }
 
-  function row(s: SponsorItem, group: SponsorItem[], index: number): ReactNode {
+  /** The "Archived" chip on an archived row: beside the name, so the grey is not the only sign. */
+  function archivedChip(): ReactNode {
+    const words = msg("sponsors.archive.chip");
+    return (
+      <span
+        data-testid="sponsor-row-archived-chip"
+        title={words}
+        className="min-w-0 max-w-full truncate rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-600"
+      >
+        {words}
+      </span>
+    );
+  }
+
+  /** `isArchived`: a row of the trailing Archived group - greyed, no move buttons, no deal action, and the one way in opens the
+   *  READ-ONLY page (a pencil would promise an editor the page does not have). The trash stays, under the unchanged Delete rules. */
+  function row(s: SponsorItem, group: SponsorItem[], index: number, isArchived = false): ReactNode {
     const open = moreOpenId === s.id;
     const trayId = `sponsor-tools-${s.id}`;
     // The tray folds only where there is a ⋯ to open it: a viewer has no controls to fold, so the clicks stay put for them.
@@ -267,11 +288,17 @@ export function SponsorList(props: SponsorListProps) {
     const clicks = plural("sponsors.row.clicks", s.click_count);
     // The arrows swap a sponsor with its neighbour in the same group. A group of one has nobody to swap with, so there is nothing to
     // show - not a pair of dead buttons (owner, 2026-11-11). A group of two or more keeps both, the one at an edge disabled.
-    const canReorder = group.length > 1;
+    const canReorder = !isArchived && group.length > 1;
     const moveUp = msg("settings.org.sponsors.moveUp", { name: s.name });
     const moveDown = msg("settings.org.sponsors.moveDown", { name: s.name });
     return (
-      <li key={s.id} data-testid="sponsor-row" data-sponsor-id={s.id} className="px-3 py-2.5">
+      <li
+        key={s.id}
+        data-testid="sponsor-row"
+        data-sponsor-id={s.id}
+        data-archived={isArchived ? "true" : undefined}
+        className={`px-3 py-2.5${isArchived ? ` ${ARCHIVED_ROW}` : ""}`}
+      >
         <div
           data-testid="sponsor-row-grid"
           className="grid grid-cols-[2.25rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 max-[376px]:grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[2.25rem_minmax(0,1fr)_auto_auto_auto]"
@@ -295,8 +322,9 @@ export function SponsorList(props: SponsorListProps) {
               <span data-testid="sponsor-row-name-text" className="block min-w-0 max-w-full truncate max-[376px]:line-clamp-2 max-[376px]:whitespace-normal max-[376px]:break-words">
                 {s.name}
               </span>
+              {isArchived ? archivedChip() : null}
               {badge(s)}
-              {tierHint(s)}
+              {isArchived ? null : tierHint(s)}
             </p>
             <p data-testid="sponsor-row-sub" className="truncate text-xs text-slate-500 max-[376px]:line-clamp-2 max-[376px]:whitespace-normal max-[376px]:break-words">
               {subline(s, { msg, locale, tz, competitions, hasTiers })}
@@ -304,7 +332,7 @@ export function SponsorList(props: SponsorListProps) {
           </div>
           {/* The lead cell: the one way in, then (below md, editors only) the ⋯ that opens the rest. Never folded - see the header. */}
           <div data-testid="sponsor-row-lead" className="flex items-center">
-            {canEdit ? (
+            {canEdit && !isArchived ? (
               <Link href={sponsorEditHref(orgSlug, s.id)} data-testid="sponsor-row-edit" aria-label={msg("sponsors.edit", { name: s.name })} className={ICON_BUTTON}>
                 <Pencil className="h-3.5 w-3.5" />
               </Link>
@@ -323,7 +351,7 @@ export function SponsorList(props: SponsorListProps) {
             className="col-span-2 col-start-2 flex min-w-0 flex-wrap items-center justify-between gap-2 max-[376px]:col-start-1 md:col-span-1 md:col-start-auto md:w-52 lg:w-72"
           >
             <DealChip deal={s.deal} />
-            {action(s)}
+            {isArchived ? null : action(s)}
           </div>
           <div
             id={trayId}
@@ -390,29 +418,71 @@ export function SponsorList(props: SponsorListProps) {
     );
   }
 
-  const list = (rows: SponsorItem[]) => (
-    <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">{rows.map((s, i) => row(s, rows, i))}</ul>
+  const list = (rows: SponsorItem[], isArchived = false) => (
+    <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">{rows.map((s, i) => row(s, rows, i, isArchived))}</ul>
   );
 
-  if (!hasTiers) return <div className="space-y-5">{list(sponsors)}</div>;
+  // Only while something is archived: with none there is nothing to show, so no control (the empty case is no switch at all). The house
+  // slim switch, named for what it controls with the count in it; its words do not change with its state. A view filter, not an edit:
+  // a viewer has it. Placement and markup are the Packages tab's "Show retired (N)".
+  const switchRow =
+    archived.length > 0 ? (
+      <div data-testid="sponsors-archived-filter" data-archived-count={archived.length} className="flex min-w-0 items-center justify-end gap-1">
+        <label id="sponsors-archived-switch-label" htmlFor="sponsors-archived-switch" className="min-w-0 text-sm text-slate-700">
+          {msg("sponsors.archive.show", { count: archived.length })}
+        </label>
+        {slimSwitch({
+          id: "sponsors-archived-switch",
+          checked: showArchived,
+          onToggle: () => onToggleArchived?.(),
+          labelledBy: "sponsors-archived-switch-label",
+          testId: "sponsors-archived-switch",
+        })}
+      </div>
+    ) : null;
+
+  // The trailing group (D19): after every tier group, whether or not the plan has tiers. Its rows are not in the DOM while the switch is off.
+  const archivedGroup =
+    showArchived && archived.length > 0 ? (
+      <div data-testid="sponsor-group" data-tier="archived">
+        <p data-testid="sponsor-group-header" className="mb-1.5 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+          {msg("sponsors.archive.group")}
+          <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">{archived.length}</span>
+        </p>
+        {list(archived, true)}
+      </div>
+    ) : null;
 
   // Render in tier order; a group nobody is in is not drawn.
+  const liveGroups =
+    sponsors.length === 0 ? (
+      <p className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">{msg("sponsors.empty")}</p>
+    ) : !hasTiers ? (
+      list(sponsors)
+    ) : (
+      <>
+        {SPONSOR_TIERS.map((tier) => ({ tier, rows: sponsors.filter((s) => groupTierOf(s) === tier) }))
+          .filter(({ rows }) => rows.length > 0)
+          .map(({ tier, rows }) => (
+            <div key={tier} data-testid="sponsor-group" data-tier={tier}>
+              <p
+                data-testid="sponsor-group-header"
+                className="mb-1.5 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500"
+              >
+                {msg(TIER_MSG[tier])}
+                <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${TIER_BADGE[tier]}`}>{rows.length}</span>
+              </p>
+              {list(rows)}
+            </div>
+          ))}
+      </>
+    );
+
   return (
     <div className="space-y-5">
-      {SPONSOR_TIERS.map((tier) => ({ tier, rows: sponsors.filter((s) => groupTierOf(s) === tier) }))
-        .filter(({ rows }) => rows.length > 0)
-        .map(({ tier, rows }) => (
-          <div key={tier} data-testid="sponsor-group" data-tier={tier}>
-            <p
-              data-testid="sponsor-group-header"
-              className="mb-1.5 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500"
-            >
-              {msg(TIER_MSG[tier])}
-              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${TIER_BADGE[tier]}`}>{rows.length}</span>
-            </p>
-            {list(rows)}
-          </div>
-        ))}
+      {switchRow}
+      {liveGroups}
+      {archivedGroup}
     </div>
   );
 }
