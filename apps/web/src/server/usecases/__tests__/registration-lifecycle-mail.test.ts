@@ -6,6 +6,7 @@
 // Sport: not applicable. The mail does not vary by sport; the axes that vary are the payment method, the approval mode and the locale.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { formatMoneyExact } from "@/lib/currency";
 
 const stripeMock = vi.hoisted(() => {
   const refundCreate = vi.fn();
@@ -314,7 +315,9 @@ describe.skipIf(!HAS_DB)("payment received: the card webhook (real handleRegistr
     expect(rows.map((r) => [r.status, r.recipient.toLowerCase()]), "exactly one row, to the contact, still queued (a webhook leaves the attempt to the worker)").toEqual([["queued", contact]]);
     const b = await body("registration_paid", "registration", reg.registration.id, contact);
     expect(b.subject).toContain("Pago recibido");
-    expect(b.text).toContain("15.00");
+    // The contact's mail is Spanish, so the amount is written as the Spanish page writes it ("15,00 £"): P4 moved mail money off a fixed
+    // en-GB spelling onto the recipient's language. Expected from the page's own formatter, not from the mail under test.
+    expect(b.text).toContain(formatMoneyExact(1500, "gbp", "es"));
     expect(b.text).toContain("Open");
     expect(b.text, "the es confirmed wording").toContain("Tu plaza está confirmada");
     expect(words(b.html)).toContain(`Hola ${CONTACT}`);

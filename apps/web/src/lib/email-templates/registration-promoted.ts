@@ -41,7 +41,7 @@ export function registrationPromotedTemplate(
   locale = "en",
 ): { subject: string; html: string; text: string } {
   const paid = opts.feeCents > 0;
-  const amount = money(opts.feeCents, opts.currency);
+  const amount = money(opts.feeCents, opts.currency, locale);
   const deadline = opts.payDeadline ? formatDeadline(opts.payDeadline, locale, opts.timeZone) : null;
   const card = paid && opts.method === "card" && !!opts.payPageUrl;
   const detailsUrl = paid && !card ? (opts.payPageUrl ?? null) : null;

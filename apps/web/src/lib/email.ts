@@ -558,7 +558,7 @@ export async function soloSignUpAssignedEmail(args: SoloSignUpAssignedArgs, loca
  *  email outbox by `queueRefundReceipt` (usecases/registrations/refunds.ts), in the transaction that records the refund; nothing sends it directly. */
 export async function refundIssuedEmail(args: RefundIssuedArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return refundIssuedTemplate(args, dict);
+  return refundIssuedTemplate(args, dict, locale);
 }
 
 /** Polish wave P2: the registrant's lifecycle mails, RENDERED and not sent. Each is queued on the email outbox by a producer in
@@ -566,7 +566,7 @@ export async function refundIssuedEmail(args: RefundIssuedArgs, locale: Locale):
  *  `registration_withdrawn`, `registration_joined`); nothing sends them directly. `locale` is the language the mail is written in: the
  *  producer resolves it (`recipientLocale`). */
 export async function registrationPaidEmail(args: RegistrationPaidArgs, locale: Locale): Promise<EmailContent> {
-  return registrationPaidTemplate(args, await getDictionary(locale, "emails"));
+  return registrationPaidTemplate(args, await getDictionary(locale, "emails"), locale);
 }
 
 export async function registrationApprovedEmail(args: RegistrationApprovedArgs, locale: Locale): Promise<EmailContent> {

@@ -37,7 +37,7 @@ export function paymentReminderTemplate(
   /** The language the mail is written in: the deadline's own spelling follows it. */
   locale = "en",
 ): { subject: string; html: string; text: string } {
-  const amount = money(opts.feeCents, opts.currency);
+  const amount = money(opts.feeCents, opts.currency, locale);
   const deadline = opts.payDeadline ? formatDeadline(opts.payDeadline, locale, opts.timeZone) : null;
   const instructions = opts.paymentInstructions
     ? paymentInstructionsText(fillPaymentInstructions(opts.paymentInstructions, opts.refCode))

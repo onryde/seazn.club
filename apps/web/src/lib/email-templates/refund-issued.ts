@@ -20,8 +20,10 @@ export interface RefundIssuedArgs {
 export function refundIssuedTemplate(
   opts: RefundIssuedArgs,
   dict: Dict,
+  /** The language the mail is written in: the amount's own spelling follows it. */
+  locale = "en",
 ): { subject: string; html: string; text: string } {
-  const amount = money(opts.amountCents, opts.currency);
+  const amount = money(opts.amountCents, opts.currency, locale);
   const subject = t(dict, "refundIssued.subject", { competitionName: opts.competitionName });
   return {
     subject,

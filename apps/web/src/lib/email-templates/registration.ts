@@ -102,11 +102,11 @@ function entryStatusLabel(dict: Dict, e: RegistrationEmailEntry): string {
  *  HTML rendering escapes the WHOLE joined block once, in panel() (see
  *  registrationTemplate below) — escaping per-line here would double-escape
  *  a name like "A & B". */
-function entryLine(dict: Dict, e: RegistrationEmailEntry, currency: string): string {
+function entryLine(dict: Dict, e: RegistrationEmailEntry, currency: string, locale: string): string {
   const status = entryStatusLabel(dict, e);
   const names = { displayName: e.displayName, divisionName: e.divisionName };
   return e.feeCents > 0
-    ? t(dict, "registration.entryLineWithFee", { ...names, status, amount: money(e.feeCents, currency) })
+    ? t(dict, "registration.entryLineWithFee", { ...names, status, amount: money(e.feeCents, currency, locale) })
     : t(dict, "registration.entryLineNoFee", { ...names, status });
 }
 
@@ -146,7 +146,7 @@ export function registrationTemplate(
     0,
   );
   const paid = owedCents > 0;
-  const amount = money(owedCents, opts.currency);
+  const amount = money(owedCents, opts.currency, locale);
   // Markdown instructions → plain text for the panel, with the registrant's
   // reference substituted for {{reference}}.
   const instructions = opts.paymentInstructions
@@ -170,14 +170,14 @@ export function registrationTemplate(
     ? ""
     : panel(
         t(dict, "registration.entriesPanelTitle"),
-        opts.entries.map((e) => entryLine(dict, e, opts.currency)).join("\n"),
+        opts.entries.map((e) => entryLine(dict, e, opts.currency, locale)).join("\n"),
       );
   const entriesText = single
     ? ""
     : "\n\n" +
       t(dict, "registration.textEntriesHeading") +
       "\n" +
-      opts.entries.map((e) => entryLine(dict, e, opts.currency)).join("\n");
+      opts.entries.map((e) => entryLine(dict, e, opts.currency, locale)).join("\n");
 
   const card = paid && !!opts.payPageUrl;
   const deadline = opts.payDeadline ? formatDeadline(opts.payDeadline, locale, opts.timeZone) : null;

@@ -58,12 +58,17 @@ export interface RegistrationPaidArgs extends Omit<LifecycleBase, "divisionName"
 }
 
 /** The payment landed (card webhook, or the organiser marking an offline payment): the amount, the entry or entries, and the honest state. */
-export function registrationPaidTemplate(opts: RegistrationPaidArgs, dict: Dict): Content {
+export function registrationPaidTemplate(
+  opts: RegistrationPaidArgs,
+  dict: Dict,
+  /** The language the mail is written in: every amount's own spelling follows it. */
+  locale = "en",
+): Content {
   const ns = "registrationPaid";
   const cart = opts.entries.length > 1;
-  const total = money(opts.entries.reduce((sum, e) => sum + e.amountCents, 0), opts.currency);
+  const total = money(opts.entries.reduce((sum, e) => sum + e.amountCents, 0), opts.currency, locale);
   const subject = t(dict, `${ns}.subject`, { competitionName: opts.competitionName });
-  if (!cart) return singlePaidTemplate(opts, opts.entries[0], total, subject, dict);
+  if (!cart) return singlePaidTemplate(opts, opts.entries[0], total, subject, dict, locale);
 
   // A cart: one line per entry (its own amount and standing), the total, and a panel that matches the mix. The panel never claims more
   // than the lines do: all confirmed, all waiting, or (mixed) it points at the lines.
@@ -75,7 +80,7 @@ export function registrationPaidTemplate(opts: RegistrationPaidArgs, dict: Dict)
     t(dict, `${ns}.cartLine`, {
       displayName: esc(e.displayName),
       divisionName: esc(e.divisionName),
-      amount: money(e.amountCents, opts.currency),
+      amount: money(e.amountCents, opts.currency, locale),
       state: t(dict, e.confirmed ? `${ns}.lineConfirmed` : `${ns}.lineApproval`),
     });
   const count = String(opts.entries.length);
@@ -110,9 +115,9 @@ export function registrationPaidTemplate(opts: RegistrationPaidArgs, dict: Dict)
 }
 
 /** One entry paid: the single-entry mail (its amount, the entry, the division, and the honest state). */
-function singlePaidTemplate(opts: RegistrationPaidArgs, entry: RegistrationPaidEntry, _total: string, subject: string, dict: Dict): Content {
+function singlePaidTemplate(opts: RegistrationPaidArgs, entry: RegistrationPaidEntry, _total: string, subject: string, dict: Dict, locale: string): Content {
   const ns = "registrationPaid";
-  const amount = money(entry.amountCents, opts.currency);
+  const amount = money(entry.amountCents, opts.currency, locale);
   const stateTitle = t(dict, entry.confirmed ? `${ns}.confirmedTitle` : `${ns}.approvalTitle`);
   const stateBody = t(dict, entry.confirmed ? `${ns}.confirmedBody` : `${ns}.approvalBody`);
   return {
