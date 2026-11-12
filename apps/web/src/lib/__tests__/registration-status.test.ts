@@ -43,3 +43,41 @@ describe("SPOT_HOLDERS — single source of truth", () => {
     expect(page).not.toMatch(/const SPOT_HOLDERS\s*=/);
   });
 });
+
+// Polish wave P2: what an entry that is not yet confirmed is WAITING ON. One derivation for the mails (cart confirmation entry lines,
+// the joiner's confirmation) so "Pending" is never the whole answer. Every status x fee x approval cell is enumerated; the expected
+// answers are typed from the rules (a fee is owed only while pending; a manual-approval division always needs the organiser's yes),
+// never read back from the function.
+import { entryWaitingOn } from "@/lib/registration-status";
+
+describe("entryWaitingOn", () => {
+  const STATUSES = ["pending", "paid", "confirmed", "waitlisted", "withdrawn", "expired", "rejected"] as const;
+  const EXPECTED: Record<string, "payment" | "approval" | "payment_and_approval" | null> = {
+    "pending|fee|auto": "payment",
+    "pending|fee|manual": "payment_and_approval",
+    "pending|free|auto": null,
+    "pending|free|manual": "approval",
+    "paid|fee|auto": null,
+    "paid|fee|manual": "approval",
+    "paid|free|auto": null,
+    "paid|free|manual": "approval",
+  };
+
+  it("enumerates every status x fee x approval cell (anti-vacuity: 7 statuses x 2 x 2 = 28 cells checked)", () => {
+    let checked = 0;
+    for (const status of STATUSES) {
+      for (const [feeLabel, feeCents] of [["fee", 2500], ["free", 0]] as const) {
+        for (const approval of ["auto", "manual"] as const) {
+          const want = EXPECTED[`${status}|${feeLabel}|${approval}`] ?? null;
+          expect(entryWaitingOn(status, feeCents, approval), `${status} ${feeLabel} ${approval}`).toBe(want);
+          checked += 1;
+        }
+      }
+    }
+    expect(checked).toBe(28);
+  });
+
+  it("an unknown status waits on nothing (never throws on a value the column could grow)", () => {
+    expect(entryWaitingOn("something_new", 2500, "manual")).toBeNull();
+  });
+});

@@ -64,11 +64,11 @@ export async function buildCartMail(
   const [group] = await sql<
     Pick<
       RegistrationGroupRow,
-      | "contact_email" | "locale" | "ref_code" | "amount_cents" | "currency"
+      | "contact_name" | "contact_email" | "locale" | "ref_code" | "amount_cents" | "currency"
       | "expires_at" | "payment_method" | "competition_id" | "org_id" | "user_id"
     >[]
   >`
-    select contact_email, locale, ref_code, amount_cents, currency, expires_at,
+    select contact_name, contact_email, locale, ref_code, amount_cents, currency, expires_at,
            payment_method, competition_id, org_id, user_id
     from registration_groups where id = ${groupId}`;
   if (!group) {
@@ -83,12 +83,27 @@ export async function buildCartMail(
     return null;
   }
 
+  // Each entry with its division's name and review mode (polish wave W7): two entries for one person are otherwise the same line,
+  // and "Pending" alone does not say whether the entry waits on a payment, an approval or both (`entryWaitingOn`). A division
+  // with no settings row reviews nothing by hand, the same default the submit path uses.
   const entries = await sql<
-    { id: string; division_id: string; display_name: string; status: RegistrationRow["status"]; amount_cents: number }[]
+    {
+      id: string;
+      division_id: string;
+      display_name: string;
+      status: RegistrationRow["status"];
+      amount_cents: number;
+      division_name: string;
+      approval: "auto" | "manual";
+    }[]
   >`
-    select id, division_id, display_name, status, amount_cents
-    from registrations where group_id = ${groupId}
-    order by created_at, id`;
+    select r.id, r.division_id, r.display_name, r.status, r.amount_cents,
+           d.name as division_name, coalesce(rs.approval, 'auto') as approval
+    from registrations r
+    join divisions d on d.id = r.division_id
+    left join registration_settings rs on rs.division_id = r.division_id
+    where r.group_id = ${groupId}
+    order by r.created_at, r.id`;
   if (entries.length === 0) {
     // Same "should not happen, but must not be invisible if it does" as the
     // !group branch above — see this function's own doc comment on this
@@ -148,7 +163,14 @@ export async function buildCartMail(
     args: {
       orgName: ctx.org_name,
       competitionName: ctx.comp_name,
-      entries: entries.map((e) => ({ displayName: e.display_name, status: e.status, feeCents: e.amount_cents })),
+      contactName: group.contact_name,
+      entries: entries.map((e) => ({
+        displayName: e.display_name,
+        divisionName: e.division_name,
+        status: e.status,
+        feeCents: e.amount_cents,
+        approval: e.approval,
+      })),
       totalCents,
       currency: group.currency,
       paymentInstructions,
@@ -332,6 +354,18 @@ export async function resendRegistrationConfirmationPublic(
   return { sent };
 }
 
+/** The moment this entry's spot stops being held for payment, as a reminder should quote it: a promoted entry's OWN window
+ *  (`promotion_expires_at`), the cart's shared deadline otherwise - the split the sweep's two reminder passes already use. `null`
+ *  when there is none (an offline cart has no window) or it has already passed (the sweep has not expired the entry yet; "held
+ *  until <a past moment>" would be false), so the mail falls back to its undated wording. */
+export function payDeadlineOf(
+  reg: Pick<RegistrationWithGroupRow, "promoted_at" | "promotion_expires_at" | "expires_at">,
+  now: Date = new Date(),
+): Date | null {
+  const d = reg.promoted_at ? reg.promotion_expires_at : reg.expires_at;
+  return d && new Date(d).getTime() > now.getTime() ? new Date(d) : null;
+}
+
 /**
  * The outbox message of one payment reminder: ONE place decides its kind, ref, recipient, transactionality and language, so the sweep's
  * two passes and the organiser's manual reminder cannot drift apart. Every reminder links the entry's payment page (`payPageUrl`),
@@ -351,6 +385,8 @@ export async function paymentReminderMessage(
     method: "card" | "offline";
     /** This entry's payment page (`issuePayLink`), whose token the caller records in the queueing transaction. */
     payPageUrl: string;
+    /** The entry's pay-by moment, named in the card mail so the player knows how long the spot is held. The sweep passes the one it
+     *  keyed on; the organiser's manual reminder passes the entry's own (`payDeadlineOf`). */
     payDeadline?: Date | null;
     refCode?: string | null;
   },
@@ -367,6 +403,7 @@ export async function paymentReminderMessage(
         orgName: ctx.org_name,
         competitionName: ctx.comp_name,
         displayName: reg.display_name,
+        contactName: reg.contact_name,
         feeCents: o.feeCents,
         currency: reg.currency,
         paymentInstructions: o.paymentInstructions,

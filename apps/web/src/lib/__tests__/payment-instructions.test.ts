@@ -77,7 +77,8 @@ describe("payment instructions", () => {
       {
         orgName: "Riverside",
         competitionName: "Spring Open",
-        entries: [{ displayName: "Alex", status: "pending", feeCents: 2500 }],
+        contactName: "Alex",
+        entries: [{ displayName: "Alex", status: "pending", feeCents: 2500, divisionName: "Singles", approval: "auto" as const }],
         totalCents: 2500,
         currency: "gbp",
         paymentInstructions: "**Quote {{reference}}** on your transfer.",

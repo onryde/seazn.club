@@ -13,7 +13,7 @@ import { loadSettings, divisionCtx, orgReg, orgRegAfter } from "./lookups";
 import { inviteUnclaimedMembers } from "./people";
 import { materialise } from "./materialise";
 import { openRegistrationSeatGateFor } from "./waitlist";
-import { paymentReminderMessage } from "./mail";
+import { paymentReminderMessage, payDeadlineOf } from "./mail";
 import { issuePayLink, recordPayToken } from "./pay-token";
 import { stripeRefund, queueRefundReceipt } from "./refunds";
 import { withdrawCore } from "./withdraw";
@@ -194,6 +194,8 @@ export async function sendPaymentReminder(
     paymentInstructions: settings?.payment_instructions ?? ctx.payment_instructions,
     method,
     payPageUrl: link.url,
+    // The entry's own pay-by moment (polish wave W4): the sweep's reminder quotes one, so the organiser's must too.
+    payDeadline: payDeadlineOf(reg),
     refCode: reg.ref_code,
   });
   // The row, its link's token and the audit entry are ONE transaction: an audit that fails queues no mail and records no token, and

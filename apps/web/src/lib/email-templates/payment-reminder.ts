@@ -10,7 +10,10 @@ import {
 export interface PaymentReminderArgs {
   orgName: string;
   competitionName: string;
+  /** The entry the fee is for (named in the body, in brackets: a rep may hold several). */
   displayName: string;
+  /** The person the mail is for: the greeting names them, never the entry (polish wave W4). */
+  contactName: string;
   feeCents: number;
   currency: string;
   paymentInstructions: string | null;
@@ -63,6 +66,7 @@ export function paymentReminderTemplate(
       contentHtml:
         paragraph(
           t(dict, "paymentReminder.body", {
+            contactName: escapeHtml(opts.contactName),
             displayName: escapeHtml(opts.displayName),
             competitionName: escapeHtml(opts.competitionName),
             amount,

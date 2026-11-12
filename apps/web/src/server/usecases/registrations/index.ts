@@ -94,6 +94,7 @@ export {
   notifySubmitted,
   resendRegistrationConfirmation,
   resendRegistrationConfirmationPublic,
+  payDeadlineOf,
 } from "./mail";
 export { getRegistrationSettings, putRegistrationSettings, publicRegistrationInfo } from "./settings";
 export type { OrgPaymentDefaults, PublicDivisionInfo, PublicRegistrationInfoResult } from "./settings";

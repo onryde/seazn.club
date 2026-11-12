@@ -5,7 +5,10 @@ import { t, type Dict } from "@/lib/i18n";
 export interface RefundIssuedArgs {
   orgName: string;
   competitionName: string;
+  /** The entry refunded (named in the body, in brackets). */
   displayName: string;
+  /** The person the mail is for: the greeting names them, never the entry (polish wave W4). */
+  contactName: string;
   amountCents: number;
   currency: string;
   refCode?: string | null;
@@ -31,6 +34,7 @@ export function refundIssuedTemplate(
       contentHtml:
         paragraph(
           t(dict, "refundIssued.body", {
+            contactName: escapeHtml(opts.contactName),
             displayName: escapeHtml(opts.displayName),
             amount,
             competitionName: escapeHtml(opts.competitionName),

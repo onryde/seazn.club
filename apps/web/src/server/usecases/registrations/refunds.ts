@@ -80,6 +80,7 @@ export async function queueRefundReceipt(
           orgName: ctx.org_name,
           competitionName: ctx.comp_name,
           displayName: reg.display_name,
+          contactName: reg.contact_name,
           amountCents,
           currency: reg.currency,
           refCode: reg.ref_code,

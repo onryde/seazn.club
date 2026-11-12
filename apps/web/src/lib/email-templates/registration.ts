@@ -5,17 +5,22 @@ import {
   fillPaymentInstructions,
   paymentInstructionsText,
 } from "@/lib/payment-instructions";
+import { entryWaitingOn } from "@/lib/registration-status";
 
 /** One cart entry, as it renders in the confirmation email — its own
- *  display name, status and fee. `status` is the raw `registrations.status`
- *  word (`pending|paid|confirmed|waitlisted|withdrawn|expired|rejected`);
+ *  display name, division, status and fee. `status` is the raw
+ *  `registrations.status` word (`pending|paid|confirmed|waitlisted|withdrawn|expired|rejected`);
  *  an unrecognised value falls back to itself rather than throwing, the
  *  same defensiveness `formatDeadline` et al. already apply to caller
- *  input. */
+ *  input. `approval` is the entry's division's review mode: with the status and the
+ *  fee it decides what the line says the entry is WAITING ON (`entryWaitingOn`) instead of a bare "Pending". */
 export interface RegistrationEmailEntry {
   displayName: string;
+  /** The division this entry is in: two entries for one person are otherwise the same line (polish wave W7). */
+  divisionName: string;
   status: string;
   feeCents: number;
+  approval: "auto" | "manual";
 }
 
 /** RS005 W4 — cart-shaped (owner ruling 2026-08-25): one email per cart,
@@ -26,6 +31,9 @@ export interface RegistrationEmailEntry {
 export interface RegistrationEmailArgs {
   orgName: string;
   competitionName: string;
+  /** The person the mail is for (`registration_groups.contact_name`): the greeting names them, never the entry
+   *  (a team's name is not a person; polish wave W4). */
+  contactName: string;
   /** Always at least one entry. */
   entries: RegistrationEmailEntry[];
   /** The cart's payable subtotal (`registration_groups.amount_cents` —
@@ -68,9 +76,21 @@ const ENTRY_STATUS_KEYS: Record<string, string> = {
   rejected: "registration.entryStatusRejected",
 };
 
-function entryStatusLabel(dict: Dict, status: string): string {
-  const key = ENTRY_STATUS_KEYS[status];
-  return key ? t(dict, key) : status;
+/** What an entry that is waiting says it is waiting on, keyed by (waiting-on, status): a `paid` entry has already paid, so its
+ *  approval-only wait reads "Paid, awaiting approval", where a `pending` one reads "Awaiting approval". */
+const WAITING_KEYS = {
+  payment: "registration.entryStatusAwaitingPayment",
+  approval: "registration.entryStatusAwaitingApproval",
+  payment_and_approval: "registration.entryStatusAwaitingPaymentApproval",
+} as const;
+
+function entryStatusLabel(dict: Dict, e: RegistrationEmailEntry): string {
+  const waiting = entryWaitingOn(e.status, e.feeCents, e.approval);
+  if (waiting) {
+    return t(dict, e.status === "paid" && waiting === "approval" ? "registration.entryStatusPaidAwaitingApproval" : WAITING_KEYS[waiting]);
+  }
+  const key = ENTRY_STATUS_KEYS[e.status];
+  return key ? t(dict, key) : e.status;
 }
 
 /** One line of the entries panel/text list. Word order is entirely the
@@ -81,10 +101,11 @@ function entryStatusLabel(dict: Dict, status: string): string {
  *  registrationTemplate below) — escaping per-line here would double-escape
  *  a name like "A & B". */
 function entryLine(dict: Dict, e: RegistrationEmailEntry, currency: string): string {
-  const status = entryStatusLabel(dict, e.status);
+  const status = entryStatusLabel(dict, e);
+  const names = { displayName: e.displayName, divisionName: e.divisionName };
   return e.feeCents > 0
-    ? t(dict, "registration.entryLineWithFee", { displayName: e.displayName, status, amount: money(e.feeCents, currency) })
-    : t(dict, "registration.entryLineNoFee", { displayName: e.displayName, status });
+    ? t(dict, "registration.entryLineWithFee", { ...names, status, amount: money(e.feeCents, currency) })
+    : t(dict, "registration.entryLineNoFee", { ...names, status });
 }
 
 /** Registration confirmation — carries the offline (cash/bank) payment
@@ -131,7 +152,9 @@ export function registrationTemplate(
     ? waitlisted
       ? t(dict, "registration.introWaitlist", { competitionName: escapeHtml(opts.competitionName) })
       : t(dict, "registration.intro", {
+          contactName: escapeHtml(opts.contactName),
           displayName: escapeHtml(first.displayName),
+          divisionName: escapeHtml(first.divisionName),
           competitionName: escapeHtml(opts.competitionName),
         })
     : t(dict, "registration.introCart", { competitionName: escapeHtml(opts.competitionName) });

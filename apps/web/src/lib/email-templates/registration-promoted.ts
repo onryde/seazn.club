@@ -10,7 +10,10 @@ import {
 export interface RegistrationPromotedArgs {
   orgName: string;
   competitionName: string;
+  /** The entry that was promoted (named in the intro, in brackets). */
   displayName: string;
+  /** The person the mail is for: the greeting names them, never the entry (polish wave W4). */
+  contactName: string;
   feeCents: number;
   currency: string;
   /** How the entry pays: `card` (the page's Pay button) or `offline` (the instructions, and the page for the details). */
@@ -93,6 +96,7 @@ export function registrationPromotedTemplate(
       contentHtml:
         paragraph(
           t(dict, "registrationPromoted.intro", {
+            contactName: escapeHtml(opts.contactName),
             displayName: escapeHtml(opts.displayName),
             competitionName: escapeHtml(opts.competitionName),
           }),

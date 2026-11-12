@@ -35,3 +35,21 @@ export const TERMINAL_STATUSES = ["withdrawn", "rejected", "expired"] as const;
 export function isTerminalRegistrationStatus(status: string): boolean {
   return (TERMINAL_STATUSES as readonly string[]).includes(status);
 }
+
+/** What an entry that is not yet confirmed is still WAITING ON (polish wave P2; the mails' answer to a bare "Pending"):
+ *  `payment` (its fee is owed), `approval` (a manual-approval division needs the organiser's yes) or both. `null` = nothing to
+ *  name: the entry is confirmed, waitlisted, ended, or pending with neither a fee nor a manual review (a state a free auto-approval
+ *  division never rests in), so the caller falls back to the status word.
+ *
+ *  A fee is owed only while the entry is `pending`; a `paid` entry has paid, so it waits on approval alone, and only when the
+ *  division reviews entries by hand. `feeCents` is the entry's OWN fee (`registrations.amount_cents`), never the cart's. */
+export type EntryWaitingOn = "payment" | "approval" | "payment_and_approval";
+export function entryWaitingOn(status: string, feeCents: number, approval: "auto" | "manual"): EntryWaitingOn | null {
+  if (status !== "pending" && status !== "paid") return null;
+  const payment = status === "pending" && feeCents > 0;
+  const review = approval === "manual";
+  if (payment && review) return "payment_and_approval";
+  if (payment) return "payment";
+  if (review) return "approval";
+  return null;
+}

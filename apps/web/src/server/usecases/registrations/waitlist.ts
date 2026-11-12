@@ -356,6 +356,7 @@ export async function notifyPromoted(
         orgName: ctx.org_name,
         competitionName: ctx.comp_name,
         displayName: promoted.display_name,
+        contactName: promoted.contact_name,
         feeCents: promoted.amount_cents,
         currency: promoted.currency,
         method: method === "stripe" ? "card" : "offline",

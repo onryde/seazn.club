@@ -76,6 +76,7 @@ const registrationArgs = {
   orgName: "Riverside Racquets",
   competitionName: "Spring Open 2026",
   displayName: "Alex",
+  contactName: "Alex Contact",
   status: "pending",
   feeCents: 2500,
   currency: "gbp",
@@ -90,7 +91,8 @@ const registrationArgs = {
 const registrationCartArgs = {
   orgName: "Riverside Racquets",
   competitionName: "Spring Open 2026",
-  entries: [{ displayName: "Alex", status: "pending", feeCents: 2500 }],
+  contactName: "Alex Contact",
+  entries: [{ displayName: "Alex", status: "pending", feeCents: 2500, divisionName: "Singles", approval: "auto" as const }],
   totalCents: 2500,
   currency: "gbp",
   paymentInstructions: "Bank transfer\nRef: SPRING",
@@ -138,6 +140,7 @@ function makeBuilders(
           orgName: "Riverside Racquets",
           competitionName: "Spring Open 2026",
           displayName: "Alex",
+          contactName: "Alex Contact",
           amountCents: 2500,
           currency: "gbp",
           refCode: "SZ-ABCD-EFGH",
@@ -459,7 +462,7 @@ describe("email builders compose from the html templates", () => {
   it("refund email states the amount; dispute alert warns the organiser", () => {
     const refund = refundIssuedTemplate(
       {
-        orgName: "O", competitionName: "C", displayName: "D",
+        orgName: "O", competitionName: "C", displayName: "D", contactName: "Dee",
         amountCents: 1234, currency: "gbp", refCode: null,
       },
       emailsEn as Dict,
@@ -564,7 +567,7 @@ describe("email builders compose from the html templates", () => {
       {
         ...registrationCartArgs,
         competitionName: 'Spring <script>alert("x")</script>',
-        entries: [{ displayName: "A & B", status: "pending", feeCents: 2500 }],
+        entries: [{ displayName: "A & B", status: "pending", feeCents: 2500, divisionName: "Singles", approval: "auto" as const }],
       },
       emailsEn as Dict,
     );
@@ -600,7 +603,7 @@ describe("email builders compose from the html templates", () => {
 
   it("registration waitlist variant drops the fee panel", () => {
     const out = registrationTemplate(
-      { ...registrationCartArgs, entries: [{ displayName: "Alex", status: "waitlisted", feeCents: 0 }], totalCents: 0 },
+      { ...registrationCartArgs, entries: [{ displayName: "Alex", status: "waitlisted", feeCents: 0, divisionName: "Singles", approval: "auto" as const }], totalCents: 0 },
       emailsEn as Dict,
     );
     expect(out.html).toContain("on the waitlist");
@@ -626,8 +629,8 @@ describe("email builders compose from the html templates", () => {
       {
         ...registrationCartArgs,
         entries: [
-          { displayName: "Riverside A", status: "confirmed", feeCents: 0 },
-          { displayName: "Riverside B", status: "waitlisted", feeCents: 0 },
+          { displayName: "Riverside A", status: "confirmed", feeCents: 0, divisionName: "Singles", approval: "auto" as const },
+          { displayName: "Riverside B", status: "waitlisted", feeCents: 0, divisionName: "Singles", approval: "auto" as const },
         ],
         totalCents: 0,
       },
@@ -650,16 +653,18 @@ describe("email builders compose from the html templates", () => {
       {
         ...registrationCartArgs,
         entries: [
-          { displayName: "Team Paid", status: "pending", feeCents: 1500 },
-          { displayName: "Team Waitlisted", status: "waitlisted", feeCents: 0 },
+          { displayName: "Team Paid", status: "pending", feeCents: 1500, divisionName: "Singles", approval: "auto" as const },
+          { displayName: "Team Waitlisted", status: "waitlisted", feeCents: 0, divisionName: "Singles", approval: "auto" as const },
         ],
         totalCents: 1500,
       },
       emailsEn as Dict,
     );
-    expect(out.text).toContain("Team Paid — Pending (£15.00)");
-    expect(out.text).toContain("Team Waitlisted — Waitlisted");
-    expect(out.text).not.toContain("Team Waitlisted — Waitlisted (");
+    // Each line names its division and what the entry waits on (polish wave W7): a pending entry that owes a fee is "Awaiting
+    // payment", not a bare "Pending".
+    expect(out.text).toContain("Team Paid · Singles — Awaiting payment (£15.00)");
+    expect(out.text).toContain("Team Waitlisted · Singles — Waitlisted");
+    expect(out.text).not.toContain("Team Waitlisted · Singles — Waitlisted (");
   });
 
   // RS005 F1 finding 1: reusing this cart-shaped template for a RESEND (or a
@@ -669,7 +674,7 @@ describe("email builders compose from the html templates", () => {
   it("a settled (paid/confirmed) single entry gets no fee panel at all on resend/reconstruction", () => {
     for (const status of ["paid", "confirmed"] as const) {
       const out = registrationTemplate(
-        { ...registrationCartArgs, entries: [{ displayName: "Alex", status, feeCents: 2500 }] },
+        { ...registrationCartArgs, entries: [{ displayName: "Alex", status, feeCents: 2500, divisionName: "Singles", approval: "auto" as const }] },
         emailsEn as Dict,
       );
       expect(out.html, `status=${status}`).not.toContain("Entry fee");
@@ -685,7 +690,7 @@ describe("email builders compose from the html templates", () => {
   it("a withdrawn/rejected/expired single entry also gets no fee panel", () => {
     for (const status of ["withdrawn", "rejected", "expired"] as const) {
       const out = registrationTemplate(
-        { ...registrationCartArgs, entries: [{ displayName: "Alex", status, feeCents: 2500 }] },
+        { ...registrationCartArgs, entries: [{ displayName: "Alex", status, feeCents: 2500, divisionName: "Singles", approval: "auto" as const }] },
         emailsEn as Dict,
       );
       expect(out.html, `status=${status}`).not.toContain("Entry fee");
@@ -701,8 +706,8 @@ describe("email builders compose from the html templates", () => {
       {
         ...registrationCartArgs,
         entries: [
-          { displayName: "Already Paid", status: "confirmed", feeCents: 2500 },
-          { displayName: "Still Owing", status: "pending", feeCents: 1500 },
+          { displayName: "Already Paid", status: "confirmed", feeCents: 2500, divisionName: "Singles", approval: "auto" as const },
+          { displayName: "Still Owing", status: "pending", feeCents: 1500, divisionName: "Singles", approval: "auto" as const },
         ],
         // A caller might still pass the whole-cart historical subtotal here
         // (usecases/registrations/ folder's own `totalCents` field) — the template must
