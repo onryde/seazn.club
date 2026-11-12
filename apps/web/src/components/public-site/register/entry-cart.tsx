@@ -6,7 +6,7 @@
 // entries independently (singles + doubles at the same tournament is the
 // common racket-sports case); checking one does NOT uncheck another.
 import { useT } from "@/components/i18n/dict-provider";
-import { formatMinor, type Currency } from "@/lib/currency";
+import { formatMoneyExact } from "@/lib/currency";
 import { summarizeCart, type CartAction } from "./cart";
 import { INELIGIBLE_MESSAGE_KEY, selfEligibilityForDivision } from "./eligibility-presentation";
 import { BTN_TEXT } from "./styles";
@@ -214,7 +214,7 @@ export function EntryCart({
             {t("register.entries.cart.subtotal")}
           </span>
           <span className="font-display text-lg font-bold text-ink">
-            {subtotalCents === 0 || !currency ? t("register.entries.free") : formatMinor(subtotalCents, currency as Currency, locale)}
+            {subtotalCents === 0 || !currency ? t("register.entries.free") : formatMoneyExact(subtotalCents, currency, locale)}
           </span>
         </div>
       )}

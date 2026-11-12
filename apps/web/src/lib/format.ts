@@ -148,6 +148,22 @@ export function fmtPublicZoneAbbrev(
 }
 
 /**
+ * A pay-by or place-by deadline as a registration surface prints it: the public date-time in the page's locale and the ORG's zone, the
+ * zone's label after it ("14 Nov 2026, 11:15 UTC", "1 Jul 2026, 12:15 BST"). The ONE deadline spelling for the status page, the payment
+ * page and the registration mails (polish wave P3, walkthrough W4: two surfaces wrote the same instant two ways). `dateStyle` and
+ * `timeStyle` cannot be combined with `timeZoneName` in one `Intl.DateTimeFormat` (it throws), so the label is composed by hand.
+ * Empty for a missing or unparseable instant.
+ */
+export function fmtPublicDeadline(
+  locale: string,
+  tz: string,
+  value: string | number | Date | null | undefined,
+): string {
+  const d = toDate(value);
+  return d ? `${fmtPublicDateTime(locale, tz, d)} ${fmtPublicZoneAbbrev(locale, tz, d)}` : "";
+}
+
+/**
  * Numeric UTC offset at this instant — "GMT+4", "GMT+5:30", "GMT" for UTC.
  *
  * The picker shows this rather than fmtZoneAbbrev because an offset is what

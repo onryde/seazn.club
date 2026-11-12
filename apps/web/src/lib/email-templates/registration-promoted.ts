@@ -22,6 +22,8 @@ export interface RegistrationPromotedArgs {
   payPageUrl?: string | null;
   /** Card divisions: the new 48h deadline. */
   payDeadline?: Date | string | null;
+  /** The organiser's zone (`organizations.timezone` resolved): the deadline is written in it. UTC when absent. */
+  timeZone?: string | null;
   /** Offline divisions: resolved cash/bank instructions. */
   paymentInstructions?: string | null;
   refCode?: string | null;
@@ -35,10 +37,12 @@ export interface RegistrationPromotedArgs {
 export function registrationPromotedTemplate(
   opts: RegistrationPromotedArgs,
   dict: Dict,
+  /** The language the mail is written in: the deadline's own spelling follows it. */
+  locale = "en",
 ): { subject: string; html: string; text: string } {
   const paid = opts.feeCents > 0;
   const amount = money(opts.feeCents, opts.currency);
-  const deadline = opts.payDeadline ? formatDeadline(opts.payDeadline) : null;
+  const deadline = opts.payDeadline ? formatDeadline(opts.payDeadline, locale, opts.timeZone) : null;
   const card = paid && opts.method === "card" && !!opts.payPageUrl;
   const detailsUrl = paid && !card ? (opts.payPageUrl ?? null) : null;
   const instructions = opts.paymentInstructions

@@ -381,6 +381,15 @@ describe("#10/#13b — notifyPromoted (pure function, offline branch — no DB)"
     expect(args.payDeadline).toEqual(entryDeadline);
   });
 
+  it("names the ORG's zone so the mail writes the deadline the way the status page does; UTC when the org set none (polish wave P3, W4)", async () => {
+    const promoted = fakePromoted({ amount_cents: 500, promotion_expires_at: new Date("2099-09-01T12:00:00.000Z") });
+    await notifyPromoted(promoted, fakeCtx({ org_timezone: "Asia/Kolkata" }), fakeSettings(), "http://test.local", { firstAttempt: "worker" });
+    await notifyPromoted(promoted, fakeCtx({ org_timezone: null }), fakeSettings(), "http://test.local", { firstAttempt: "worker" });
+    expect(emailMock.promoted).toHaveBeenCalledTimes(2);
+    expect(emailMock.promoted.mock.calls[0]![0].timeZone).toBe("Asia/Kolkata");
+    expect(emailMock.promoted.mock.calls[1]![0].timeZone).toBe("UTC");
+  });
+
   it("an offline promotion with no stripe window (promotion_expires_at null) sends no deadline — not the cart's unrelated expires_at", async () => {
     const promoted = fakePromoted({
       amount_cents: 500,

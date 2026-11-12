@@ -522,7 +522,7 @@ export async function groupOrgLeftEmail(
  *  an argument here. `locale` is the language the mail is written in: the producer resolves it (`recipientLocale`, D4) and passes it. */
 export async function registrationEmail(args: RegistrationEmailArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return registrationTemplate(args, dict);
+  return registrationTemplate(args, dict, locale);
 }
 
 /** The payment reminder for an unpaid entry fee (offline nudge or card T-24h), RENDERED and not sent. The producers (the registration
@@ -532,7 +532,7 @@ export async function registrationEmail(args: RegistrationEmailArgs, locale: Loc
  *  content, so it is not an argument here. `locale` is the language the mail is written in: the producer resolves it (`recipientLocale`). */
 export async function paymentReminderEmail(args: PaymentReminderArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return paymentReminderTemplate(args, dict);
+  return paymentReminderTemplate(args, dict, locale);
 }
 
 /** The waitlist promotion (spec §2: a spot opened — pay window / instructions), RENDERED and not sent. The producer (`notifyPromoted` in
@@ -541,7 +541,7 @@ export async function paymentReminderEmail(args: PaymentReminderArgs, locale: Lo
  *  is not an argument here. `locale` is the language the mail is written in: the producer resolves it (`recipientLocale`). */
 export async function registrationPromotedEmail(args: RegistrationPromotedArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return registrationPromotedTemplate(args, dict);
+  return registrationPromotedTemplate(args, dict, locale);
 }
 
 /** RS009 — tells the person who entered alone that they are now on a team, RENDERED and not sent. The answer to the promise the public

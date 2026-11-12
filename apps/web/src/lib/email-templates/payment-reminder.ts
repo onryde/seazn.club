@@ -22,6 +22,8 @@ export interface PaymentReminderArgs {
   /** The player's payment page for this entry (`/r/pay/<token>`). Every reminder links it; never a Checkout url. */
   payPageUrl: string;
   payDeadline?: Date | string | null;
+  /** The organiser's zone (`organizations.timezone` resolved): the deadline is written in it. UTC when absent. */
+  timeZone?: string | null;
   /** Fills {{reference}} in the instructions. */
   refCode?: string | null;
 }
@@ -32,9 +34,11 @@ export interface PaymentReminderArgs {
 export function paymentReminderTemplate(
   opts: PaymentReminderArgs,
   dict: Dict,
+  /** The language the mail is written in: the deadline's own spelling follows it. */
+  locale = "en",
 ): { subject: string; html: string; text: string } {
   const amount = money(opts.feeCents, opts.currency);
-  const deadline = opts.payDeadline ? formatDeadline(opts.payDeadline) : null;
+  const deadline = opts.payDeadline ? formatDeadline(opts.payDeadline, locale, opts.timeZone) : null;
   const instructions = opts.paymentInstructions
     ? paymentInstructionsText(fillPaymentInstructions(opts.paymentInstructions, opts.refCode))
     : null;

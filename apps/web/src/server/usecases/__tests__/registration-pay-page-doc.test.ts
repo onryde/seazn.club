@@ -87,6 +87,17 @@ describe.skipIf(!HAS_DB)("payPageDocByToken (player payment page, Task 2)", () =
     expect(await payPageDocByToken("", new Date())).toBeNull();
   });
 
+  it("timezone is the organiser's own zone, UTC when none is set; read at view time, so a change shows on the next open (polish wave P3, W4)", async () => {
+    const { rig, reg } = await cardEntry();
+    await sql`update organizations set timezone = null where id = ${rig.orgId}`;
+    const link = await linkFor(reg);
+    expect((await payPageDocByToken(link, new Date()))?.timezone).toBe("UTC");
+    await sql`update organizations set timezone = ${"Asia/Kolkata"} where id = ${rig.orgId}`;
+    expect((await payPageDocByToken(link, new Date()))?.timezone).toBe("Asia/Kolkata");
+    await sql`update organizations set timezone = ${"Europe/London"} where id = ${rig.orgId}`;
+    expect((await payPageDocByToken(link, new Date()))?.timezone).toBe("Europe/London");
+  });
+
   it("unpaid card entry → pay; totalCents is what the Checkout params charge", async () => {
     const { rig, reg } = await cardEntry();
     const doc = await docOf(reg);

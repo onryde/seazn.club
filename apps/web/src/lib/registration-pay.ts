@@ -52,12 +52,3 @@ export function isPayConfirming(doc: { state: string; paySessionId: string | nul
   if (q.notice === PAY_RECORDING_NOTICE) return true;
   return q.checkout === "success" && !!doc.paySessionId && q.session_id === doc.paySessionId;
 }
-
-/** An amount as the page prints it: the currency's own minor unit always shown (`€25.00`). */
-export function payPageMoney(locale: string, cents: number, currency: string): string {
-  try {
-    return new Intl.NumberFormat(locale, { style: "currency", currency: currency.toUpperCase() }).format(cents / 100);
-  } catch {
-    return `${(cents / 100).toFixed(2)} ${currency.toUpperCase()}`;
-  }
-}

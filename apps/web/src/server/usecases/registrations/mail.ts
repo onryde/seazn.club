@@ -6,6 +6,7 @@ import { isTerminalRegistrationStatus } from "@/lib/registration-status";
 import { registrationEmail, paymentReminderEmail } from "@/lib/email";
 import type { RegistrationEmailArgs } from "@/lib/email-templates";
 import { routes } from "@/lib/routes";
+import { resolveVenueTz } from "@/lib/tz";
 import { type Locale } from "@/lib/i18n-constants";
 import { deferred } from "@/lib/deferred";
 import {
@@ -176,6 +177,8 @@ export async function buildCartMail(
       paymentInstructions,
       payPageUrl,
       payDeadline: group.expires_at,
+      // The deadline is written in the organiser's own zone, the status page's spelling (polish wave P3, W4).
+      timeZone: resolveVenueTz(null, ctx.org_timezone),
       statusUrl,
       refCode: group.ref_code,
       refStatusUrl: group.ref_code ? `${origin}/r/${group.ref_code}` : null,
@@ -410,6 +413,7 @@ export async function paymentReminderMessage(
         method: o.method,
         payPageUrl: o.payPageUrl,
         payDeadline: o.payDeadline,
+        timeZone: resolveVenueTz(null, ctx.org_timezone),
         refCode: o.refCode,
       },
       locale,

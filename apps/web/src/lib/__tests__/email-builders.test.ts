@@ -397,6 +397,56 @@ describe("email builders compose from the html templates", () => {
     expect(none.html).not.toContain("Pay now");
   });
 
+  // Polish wave P3 (W4): the status page wrote a deadline "14 Nov 2026, 11:15 UTC" and the mail "Fri, 14 Nov, 11:15 UTC". All three mails that
+  // name a pay-by moment write the status page's spelling, in the org's zone and the recipient's locale (UTC / English when the producer
+  // names neither: the earlier behaviour).
+  describe("the pay-by deadline is the status page's spelling in all three mails that name one (polish wave P3, W4)", () => {
+    const AT = "2026-12-01T18:30:00Z";
+    const cardCart = { ...registrationCartArgs, paymentInstructions: null, payPageUrl: "https://seazn.club/s", payDeadline: AT };
+    const cardOne = { ...registrationArgs, paymentInstructions: null, method: "card" as const, payPageUrl: PAY_PAGE, payDeadline: AT };
+    const MAILS: [string, (zone: string | null, locale?: string) => { html: string; text: string }][] = [
+      ["registration", (z, l) => registrationTemplate({ ...cardCart, timeZone: z }, emailsEn as Dict, l)],
+      ["payment-reminder", (z, l) => paymentReminderTemplate({ ...cardOne, timeZone: z }, emailsEn as Dict, l)],
+      ["registration-promoted", (z, l) => registrationPromotedTemplate({ ...cardOne, timeZone: z }, emailsEn as Dict, l)],
+    ];
+
+    it("UTC and English when the producer names neither zone nor locale", () => {
+      let checked = 0;
+      for (const [name, build] of MAILS) {
+        const out = build(null);
+        expect(out.html, name).toContain("1 Dec 2026, 18:30 UTC");
+        expect(out.text, name).toContain("1 Dec 2026, 18:30 UTC");
+        expect(out.html, name).not.toContain("Tue, 1 Dec"); // the mail's own old spelling (weekday, no year)
+        checked += 1;
+      }
+      expect(checked).toBe(MAILS.length);
+      expect(checked).toBeGreaterThan(0);
+    });
+
+    it("the org's zone moves the time and names itself", () => {
+      for (const [name, build] of MAILS) {
+        const out = build("Asia/Kolkata");
+        expect(out.html, name).toContain("2 Dec 2026, 00:00 IST");
+        expect(out.text, name).toContain("2 Dec 2026, 00:00 IST");
+        expect(out.html, name).not.toContain("18:30 UTC");
+      }
+    });
+
+    it("the recipient's locale writes the date", () => {
+      for (const [name, build] of MAILS) {
+        const out = build("Europe/Amsterdam", "nl");
+        expect(out.html, name).toContain("1 dec 2026, 19:30 CET");
+        expect(out.html, name).not.toContain("1 Dec 2026");
+      }
+    });
+
+    it("no deadline: the undated wording, no stray date (the empty case)", () => {
+      const none = registrationTemplate({ ...cardCart, payDeadline: null }, emailsEn as Dict);
+      expect(none.html).not.toContain("18:30");
+      expect(none.html).toContain("Your spot is held — complete payment to confirm it.");
+    });
+  });
+
   it("payment reminder: card has the Pay button to the payment page; offline keeps instructions and links the page's details", () => {
     const en = emailsEn as Record<string, string>;
     const card = paymentReminderTemplate(

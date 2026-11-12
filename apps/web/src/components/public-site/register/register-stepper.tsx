@@ -21,7 +21,7 @@ import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
 import { isTurnstileRefusal } from "@/lib/turnstile";
 import { withTurnstile } from "@/lib/turnstile-client";
 import { useHydrated } from "@/lib/use-client-snapshot";
-import { formatMinor, type Currency } from "@/lib/currency";
+import { formatMoneyExact } from "@/lib/currency";
 import {
   autoLinkObviousSelf,
   autoSeedSingleDivision,
@@ -350,7 +350,7 @@ export function RegisterStepper({
     reviewSummary.subtotalCents === 0 || !reviewSummary.currency
       ? t("register.submit.free")
       : t(reviewPayable?.payment_method === "stripe" ? "register.submit.card" : "register.submit.fee", {
-          fee: formatMinor(reviewSummary.subtotalCents, reviewSummary.currency as Currency, locale),
+          fee: formatMoneyExact(reviewSummary.subtotalCents, reviewSummary.currency, locale),
         });
 
   // Clamped to the LAST real step, never stepOrder.length — "review" is a

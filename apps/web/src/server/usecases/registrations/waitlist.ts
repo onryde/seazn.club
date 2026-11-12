@@ -3,6 +3,7 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { SPOT_HOLDERS } from "@/lib/registration-status";
+import { resolveVenueTz } from "@/lib/tz";
 import { registrationPromotedEmail } from "@/lib/email";
 import { deferred } from "@/lib/deferred";
 import { dispatchNow, enqueueEmailOnce, expiryWithin, recipientLocale } from "@/server/email-outbox";
@@ -370,6 +371,7 @@ export async function notifyPromoted(
         // actually do. Same column pass (1b)'s own reminder mail already
         // uses. Null on an offline/free promotion, exactly as before.
         payDeadline: promoted.promotion_expires_at,
+        timeZone: resolveVenueTz(null, ctx.org_timezone),
         paymentInstructions:
           method === "offline" && promoted.amount_cents > 0
             ? (settings?.payment_instructions ?? ctx.payment_instructions)

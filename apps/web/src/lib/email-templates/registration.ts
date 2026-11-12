@@ -1,5 +1,6 @@
 import { button, linkFallback, panel, paragraph, renderEmail } from "./compose";
 import { escapeHtml, money } from "./shared";
+import { fmtPublicDeadline } from "@/lib/format";
 import { t, type Dict } from "@/lib/i18n";
 import {
   fillPaymentInstructions,
@@ -47,17 +48,18 @@ export interface RegistrationEmailArgs {
    *  page, which pays the whole cart), never a Checkout url. Null: no Pay button. */
   payPageUrl?: string | null;
   payDeadline?: Date | string | null;
+  /** The organiser's zone (`organizations.timezone` resolved): the deadline is written in it. UTC when absent. */
+  timeZone?: string | null;
   statusUrl: string;
   /** Quotable reference (v3/05 §3) + its public status page. */
   refCode?: string | null;
   refStatusUrl?: string | null;
 }
 
-export function formatDeadline(d: Date | string): string {
-  return new Date(d).toLocaleString("en-GB", {
-    weekday: "short", day: "numeric", month: "short",
-    hour: "2-digit", minute: "2-digit", timeZone: "UTC", timeZoneName: "short",
-  });
+/** A pay-by moment as the mails write it: the status page's own spelling ("14 Nov 2026, 11:15 UTC", `fmtPublicDeadline`), in the org's
+ *  zone and the recipient's locale. A producer that names neither gets UTC and English, which is what the mails always wrote. */
+export function formatDeadline(d: Date | string, locale = "en", timeZone: string | null | undefined = null): string {
+  return fmtPublicDeadline(locale, timeZone ?? "UTC", d);
 }
 
 /** `registrations.status` → its i18n key. Every value the column can hold
@@ -114,6 +116,8 @@ function entryLine(dict: Dict, e: RegistrationEmailEntry, currency: string): str
 export function registrationTemplate(
   opts: RegistrationEmailArgs,
   dict: Dict,
+  /** The language the mail is written in: the deadline's own spelling follows it. */
+  locale = "en",
 ): { subject: string; html: string; text: string } {
   const single = opts.entries.length === 1;
   const first = opts.entries[0]!;
@@ -176,7 +180,7 @@ export function registrationTemplate(
       opts.entries.map((e) => entryLine(dict, e, opts.currency)).join("\n");
 
   const card = paid && !!opts.payPageUrl;
-  const deadline = opts.payDeadline ? formatDeadline(opts.payDeadline) : null;
+  const deadline = opts.payDeadline ? formatDeadline(opts.payDeadline, locale, opts.timeZone) : null;
 
   const paymentBlock = card
     ? panel(

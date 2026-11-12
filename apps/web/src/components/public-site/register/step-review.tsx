@@ -8,7 +8,7 @@
 // function — see summarizeCart's own doc comment for why forking it is the
 // specific thing the RS006 dispatch calls out not to do).
 import { useT } from "@/components/i18n/dict-provider";
-import { formatMinor, type Currency } from "@/lib/currency";
+import { formatMoneyExact } from "@/lib/currency";
 import { entryDisplayName, UNNAMED_KEY } from "./entry-cart";
 import { payableDivision, type CartSummary, lineFeeCents } from "./cart";
 
@@ -40,7 +40,7 @@ export function StepReview({ summary, locale }: { summary: CartSummary; locale: 
               ? null
               : lineFee === 0
                 ? t("register.entries.free")
-                : formatMinor(lineFee, division.currency as Currency, locale);
+                : formatMoneyExact(lineFee, division.currency, locale);
           return (
             <li key={entry.id} className="rounded-lg border border-zinc-200 bg-canvas p-3">
               <div className="flex flex-wrap items-start justify-between gap-2">
@@ -73,7 +73,7 @@ export function StepReview({ summary, locale }: { summary: CartSummary; locale: 
           <span className="font-display text-lg font-bold text-ink">
             {summary.subtotalCents === 0 || !summary.currency
               ? t("register.entries.free")
-              : formatMinor(summary.subtotalCents, summary.currency as Currency, locale)}
+              : formatMoneyExact(summary.subtotalCents, summary.currency, locale)}
           </span>
           {payable && (
             <span className="block font-sans text-xs font-normal text-ink-muted">

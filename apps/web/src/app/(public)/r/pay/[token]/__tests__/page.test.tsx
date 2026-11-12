@@ -67,6 +67,7 @@ import { getDictionary, t } from "@/lib/i18n";
 import type { Dict } from "@/lib/i18n-constants";
 import { PAY_NOTICE_PARAM, PAY_RECORDING_NOTICE, PAY_RETRY_NOTICE, isPayConfirming, registrationPayPath } from "@/lib/registration-pay";
 import { PAY_PAGE_STATES, type PayPageDoc, type PayPageState } from "@/server/usecases/registrations/pay-page";
+import { fmtPublicDeadline } from "@/lib/format";
 import { PayPageNotice, PayPageView } from "@/components/registrations/pay-page-view";
 import { CONFIRM_INTERVAL_MS, CONFIRM_MAX_REFRESHES, PayPageConfirming } from "@/components/registrations/pay-page-confirming";
 import { renderIsland, textOf } from "@/components/__tests__/_hook-harness";
@@ -101,6 +102,7 @@ function doc(over: Partial<PayPageDoc> = {}): PayPageDoc {
     totalCents: 2500,
     refundedCents: 0,
     deadline: new Date("2026-12-01T18:30:00Z"),
+    timezone: "UTC",
     refCode: "K7Q2M4",
     orgName: "Harbourside Badminton Club",
     paymentInstructions: null,
@@ -156,8 +158,28 @@ describe("every state renders its copy; the Pay form exists only in `pay` (count
       expect(has(markup, en, key), key).toBe(true);
     }
     for (const text of ["Mixed Doubles B", "Ada Okafor", "Nils Lindqvist", "K7Q2M4", "Harbourside Badminton Club", "€25.00"]) expect(markup).toContain(text);
-    expect(markup).toContain("Dec 5");
-    expect(markup).toContain("Dec 1, 2026");
+    expect(markup).toContain("5 Dec");
+    // Polish wave P3 (W4): the deadline is the status page's spelling - day-month, the org's zone, its label after it.
+    expect(markup).toContain("1 Dec 2026, 18:30 UTC");
+  });
+
+  it("the deadline is the status page's own string, in the org's zone (polish wave P3, W4: two spellings of one deadline)", () => {
+    // Literals, not a call to the helper under test: 18:30Z on 1 Dec is 00:00 on the 2nd in Kolkata, 18:30 GMT in London.
+    const kolkata = render(doc({ timezone: "Asia/Kolkata" }));
+    expect(kolkata).toContain("2 Dec 2026, 00:00 IST");
+    expect(kolkata).not.toContain("18:30 UTC");
+    expect(render(doc({ timezone: "Europe/London" }))).toContain("1 Dec 2026, 18:30 GMT");
+    // The pay page's old US spelling must be gone, in the page's own zone and in UTC.
+    expect(render(doc())).not.toContain("Dec 1, 2026");
+    expect(render(doc())).not.toContain("6:30 PM");
+    // The same instant through the shared helper the status page uses: one spelling on the two surfaces.
+    expect(render(doc({ timezone: "Asia/Kolkata" }))).toContain(html(fmtPublicDeadline("en", "Asia/Kolkata", "2026-12-01T18:30:00Z")));
+  });
+
+  it("an nl document writes the deadline in nl, in the org's zone", () => {
+    const markup = render(doc({ locale: "nl", timezone: "Europe/Amsterdam" }), nl);
+    expect(markup).toContain(html(fmtPublicDeadline("nl", "Europe/Amsterdam", "2026-12-01T18:30:00Z")));
+    expect(markup).toContain("19:30");
   });
 
   it("an individual entry (no roster) shows no players row; a free-text name with markup is escaped", () => {
@@ -178,7 +200,7 @@ describe("every state renders its copy; the Pay form exists only in `pay` (count
   it("offline: the deadline row shows too (final review, item 3); a paid entry still shows none", () => {
     const offline = render(doc(STATE_CASES.offline.doc));
     expect(has(offline, en, "regPay.deadline")).toBe(true);
-    expect(offline).toContain("Dec 1, 2026");
+    expect(offline).toContain("1 Dec 2026, 18:30 UTC");
     const noDeadline = render(doc({ ...STATE_CASES.offline.doc, deadline: null }));
     expect(has(noDeadline, en, "regPay.deadline")).toBe(false);
     const paid = render(doc({ state: "paid" }));
@@ -187,10 +209,10 @@ describe("every state renders its copy; the Pay form exists only in `pay` (count
 
   it("paid with a date reads 'Paid on <date>'; paid without a date reads 'Paid'", () => {
     const dated = render(doc({ state: "paid", paidAt: new Date("2026-11-20T09:00:00Z") }));
-    expect(has(dated, en, "regPay.state.paidOn", { date: "Nov 20, 2026" })).toBe(true);
+    expect(has(dated, en, "regPay.state.paidOn", { date: "20 Nov 2026" })).toBe(true);
     const undated = render(doc({ state: "paid", paidAt: null }));
     expect(has(undated, en, "regPay.state.paid")).toBe(true);
-    expect(undated).not.toContain("Nov 20");
+    expect(undated).not.toContain("20 Nov");
   });
 
   it("an nl document renders nl copy (and lang=nl); the same doc in en does not", () => {

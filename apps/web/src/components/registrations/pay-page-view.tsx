@@ -15,25 +15,19 @@
 import type { CSSProperties, ReactNode } from "react";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
-import { payPageMoney } from "@/lib/registration-pay";
+import { formatMoneyExact } from "@/lib/currency";
+import { fmtPublicDeadline } from "@/lib/format";
+import { intlLocaleFor } from "@/lib/public-date-locale";
 import { PayPageConfirming } from "@/components/registrations/pay-page-confirming";
 import type { PayPageDoc } from "@/server/usecases/registrations/pay-page";
 
 /** The root layout mounts Barlow Condensed as `--font-barlow`; the public theme's `font-display` reads `--ps-font-display`. */
 const DISPLAY_FACE = { "--ps-font-display": "var(--font-barlow)" } as CSSProperties;
 
+/** A date-only value (a competition's dates, the day a payment landed), in the page's locale: English is day-month on a public page
+ *  (owner ruling 2026-09-16), the same rule the status page and every other public date follows. */
 const day = (locale: string, iso: string) =>
-  new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeZone: "UTC" }).format(new Date(`${iso}T00:00:00.000Z`));
-const dateTime = (locale: string, d: Date) =>
-  new Intl.DateTimeFormat(locale, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: "UTC",
-    timeZoneName: "short",
-  }).format(d);
+  new Intl.DateTimeFormat(intlLocaleFor(locale), { dateStyle: "medium", timeZone: "UTC" }).format(new Date(`${iso}T00:00:00.000Z`));
 
 function Row({ label, testId, children }: { label: string; testId?: string; children: ReactNode }) {
   return (
@@ -75,7 +69,7 @@ export function PayPageView({
    *  live Pay form. */
   retryNotice?: boolean;
 }) {
-  const money = (cents: number) => payPageMoney(doc.locale, cents, doc.currency);
+  const money = (cents: number) => formatMoneyExact(cents, doc.currency, doc.locale);
   const total = money(doc.totalCents);
   const dates =
     doc.startsOn && doc.endsOn && doc.endsOn !== doc.startsOn
@@ -187,7 +181,7 @@ export function PayPageView({
             <span className="text-base font-semibold tabular-nums">{total}</span>
           </Row>
           {(doc.state === "pay" || doc.state === "offline") && doc.deadline ? (
-            <Row label={t(ui, "regPay.deadline")}>{dateTime(doc.locale, doc.deadline)}</Row>
+            <Row label={t(ui, "regPay.deadline")}>{fmtPublicDeadline(doc.locale, doc.timezone, doc.deadline)}</Row>
           ) : null}
           {doc.refCode ? <Row label={t(ui, "regPay.reference")}>{doc.refCode}</Row> : null}
         </dl>

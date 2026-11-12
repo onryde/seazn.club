@@ -6,6 +6,7 @@ import "server-only";
 import { sql } from "@/lib/db";
 import type { Locale } from "@/lib/i18n-constants";
 import { fillPaymentInstructions } from "@/lib/payment-instructions";
+import { resolveVenueTz } from "@/lib/tz";
 import { recipientLocale } from "@/server/email-outbox/locale";
 import type { RegistrationRow, RegistrationWithGroupRow } from "./types";
 import { regGroupCols, loadSettings, divisionCtx } from "./lookups";
@@ -36,6 +37,9 @@ export interface PayPageDoc {
   refundedCents: number;
   /** `promotion_expires_at ?? expires_at`: a promoted entry has its own window. */
   deadline: Date | null;
+  /** The organiser's own zone (`organizations.timezone`, UTC when unset): the deadline is written in it, the same zone and spelling
+   *  the status page writes it in (polish wave P3, W4). Always a valid IANA zone, never null. */
+  timezone: string;
   refCode: string | null;
   orgName: string;
   /** Offline only: the division's instructions, else the org's, with `{{reference}}` filled. */
@@ -165,6 +169,7 @@ export async function payPageDocByToken(token: string, now: Date): Promise<PayPa
     totalCents: lines.reduce((s, l) => s + l.amountCents, 0),
     refundedCents,
     deadline,
+    timezone: resolveVenueTz(null, ctx.org_timezone),
     refCode: reg.ref_code,
     orgName: ctx.org_name,
     paymentInstructions: state === "offline" && instructions ? fillPaymentInstructions(instructions, reg.ref_code) : null,
