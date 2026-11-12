@@ -52,7 +52,7 @@ export function PayPageNotice({ testId, title, body }: { testId: string; title: 
     <main data-testid={testId} style={DISPLAY_FACE} className="grid min-h-[70vh] place-items-center bg-canvas px-4 py-12 text-ink">
       <div className="w-full max-w-md min-w-0 rounded-2xl border border-accent-line bg-surface px-6 py-8 text-center">
         <h1 className="font-display text-2xl font-bold break-words text-ink">{title}</h1>
-        <p className="mt-2 text-sm text-ink-muted">{body}</p>
+        <p className="mt-2 min-w-0 text-sm break-words text-ink-muted">{body}</p>
       </div>
     </main>
   );

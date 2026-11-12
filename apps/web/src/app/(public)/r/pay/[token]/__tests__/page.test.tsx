@@ -67,7 +67,7 @@ import { getDictionary, t } from "@/lib/i18n";
 import type { Dict } from "@/lib/i18n-constants";
 import { PAY_NOTICE_PARAM, PAY_RECORDING_NOTICE, PAY_RETRY_NOTICE, isPayConfirming, registrationPayPath } from "@/lib/registration-pay";
 import { PAY_PAGE_STATES, type PayPageDoc, type PayPageState } from "@/server/usecases/registrations/pay-page";
-import { PayPageView } from "@/components/registrations/pay-page-view";
+import { PayPageNotice, PayPageView } from "@/components/registrations/pay-page-view";
 import { CONFIRM_INTERVAL_MS, CONFIRM_MAX_REFRESHES, PayPageConfirming } from "@/components/registrations/pay-page-confirming";
 import { renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import PayPage from "../page";
@@ -253,6 +253,28 @@ describe("card payments off: a notice in place of Pay (gap wave G4)", () => {
       checked++;
     }
     expect(checked).toBe(PAY_PAGE_STATES.length - 1);
+  });
+});
+
+// Gap wave G7 (ledger :51): the one-card screens (throttled, not-found) had a body `<p>` without `break-words min-w-0`, so a long
+// unbroken run - an organiser or club name in a translated body, a pasted reference - pushed the card wider than a 320 screen.
+// Every text element in the card must wrap: the title already did, the body now does too. Counted over both text elements.
+describe("PayPageNotice wraps its text (gap wave G7)", () => {
+  it("the title and the body both carry break-words (counted); the body also min-w-0", () => {
+    const long = "Harbourside-Badminton-and-Racket-Sports-Association-of-the-North-Shore-Peninsula-Incorporated";
+    const markup = renderToStaticMarkup(<PayPageNotice testId="pay-throttled" title={long} body={`${long} ${long}`} />);
+    const classesOf = (tag: string) => / class="([^"]*)"/.exec(tag)?.[1]?.split(/\s+/) ?? [];
+    const textTags = markup.match(/<(h1|p)\b[^>]*>/g) ?? [];
+    expect(textTags).toHaveLength(2);
+    let checked = 0;
+    for (const tag of textTags) {
+      expect(classesOf(tag), tag).toContain("break-words");
+      checked++;
+    }
+    expect(checked).toBe(2);
+    const body = textTags.find((tag) => tag.startsWith("<p"));
+    expect(body).toBeDefined();
+    expect(classesOf(body!)).toContain("min-w-0");
   });
 });
 
