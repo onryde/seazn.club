@@ -67,7 +67,7 @@ describe("captureServer and the quick match system org (D11)", () => {
       event: EVENTS.QUICK_MATCH_DELETED,
       distinctId: QUICK_MATCH_SYSTEM_USER_ID,
       orgId: QUICK_MATCH_SYSTEM_ORG_ID,
-      properties: { via: "expiry", sport_key: "badminton", kind: "pair" },
+      properties: { quick_match_id: randomUUID(), via: "expiry", sport_key: "badminton", kind: "pair" },
     });
     expect(capture).toHaveBeenCalledTimes(1);
     // The ruling's event name, typed here: a rename in analytics-events.ts reds this case.

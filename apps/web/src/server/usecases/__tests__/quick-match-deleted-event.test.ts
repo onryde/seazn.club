@@ -1,8 +1,9 @@
 // Quick match: `quick_match_deleted` (controller ruling 2026-11-12, for /admin/quick-matches). A hard delete leaves no row, so
 // the admin page cannot tell "deleted by its saver" from "expired"; this one PostHog event can. Fired by the two deletes of a
 // quick match a guest made: the saver's Delete (`deleteSavedQuickMatch`, via "saver") and the sweep's expiry
-// (`sweepQuickMatches`, via "expiry"). Carries { via, sport_key, kind } and nothing else: no token, no address, no user id
-// beyond the distinct id `captureServer` attaches.
+// (`sweepQuickMatches`, via "expiry"). Carries { quick_match_id, via, sport_key, kind } and nothing else: no token, no address,
+// no user id beyond the distinct id `captureServer` attaches. `quick_match_id` is the row's uuid, under the name
+// quick_match_created and quick_match_saved use (quick-match-create.ts, quick-match-save.ts), so PostHog joins the three.
 //
 // Each path fires it ONCE; a refused delete fires nothing: a second Delete, someone else's Delete, a sweep that keeps a match a
 // score revived, a second sweep, and the create's own compensation (a create that failed, which no guest ever had).
@@ -109,9 +110,15 @@ describe.skipIf(!HAS_DB)("quick_match_deleted: the saver's Delete", () => {
     await expect(deleteSavedQuickMatch(stranger, m.id)).rejects.toMatchObject({ status: 404, code: QUICK_MATCH_ERRORS.NOT_IN_ACCOUNT });
     expect(deletedEvents()).toEqual([]);
 
-    await deleteSavedQuickMatch(owner, m.id);
+    // The id as a client may spell it (the route takes any case): the event carries the row's OWN uuid, the one
+    // quick_match_created and quick_match_saved carry, so PostHog joins the three.
+    expect(m.id.toUpperCase(), "premise: the upper-case spelling differs").not.toBe(m.id);
+    await deleteSavedQuickMatch(owner, m.id.toUpperCase());
     expect(deletedEvents()).toEqual([
-      { event: EVENT, distinctId: owner, orgId: QUICK_MATCH_SYSTEM_ORG_ID, properties: { via: "saver", sport_key: sportKey, kind: m.kind } },
+      {
+        event: EVENT, distinctId: owner, orgId: QUICK_MATCH_SYSTEM_ORG_ID,
+        properties: { quick_match_id: m.id, via: "saver", sport_key: sportKey, kind: m.kind },
+      },
     ]);
 
     // The second Delete: refused, and still the one event.
@@ -130,7 +137,10 @@ describe.skipIf(!HAS_DB)("quick_match_deleted: the sweep's expiry", () => {
 
     expect(await sweepQuickMatches({ baseUrl: "https://qm-deleted.test", now, onlyIds: [m.id] })).toMatchObject({ expired: 1, failed: 0 });
     expect(deletedEvents()).toEqual([
-      { event: EVENT, distinctId: QUICK_MATCH_SYSTEM_USER_ID, orgId: QUICK_MATCH_SYSTEM_ORG_ID, properties: { via: "expiry", sport_key: sportKey, kind: m.kind } },
+      {
+        event: EVENT, distinctId: QUICK_MATCH_SYSTEM_USER_ID, orgId: QUICK_MATCH_SYSTEM_ORG_ID,
+        properties: { quick_match_id: m.id, via: "expiry", sport_key: sportKey, kind: m.kind },
+      },
     ]);
 
     expect(await sweepQuickMatches({ baseUrl: "https://qm-deleted.test", now, onlyIds: [m.id] })).toMatchObject({ expired: 0 });

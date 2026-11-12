@@ -184,7 +184,7 @@ export async function sweepQuickMatches(opts: SweepQuickMatchesOptions): Promise
       if (opts._failDeleteForTests?.(e.competition_id)) throw new Error("armed: this delete fails (test)");
       const deleted = await hardDeleteQuickMatchCompetition(e.competition_id, { expiredBefore: now });
       countDelete(deleted, "expired");
-      if (deleted.deleted) announceQuickMatchDeleted("expiry", e, QUICK_MATCH_SYSTEM_USER_ID);
+      if (deleted.deleted) announceQuickMatchDeleted("expiry", e.id, e, QUICK_MATCH_SYSTEM_USER_ID);
     } catch (err) {
       failed("expire", { quickMatchId: e.id, competitionId: e.competition_id }, err);
     }

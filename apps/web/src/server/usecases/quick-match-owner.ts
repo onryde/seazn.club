@@ -65,12 +65,13 @@ export async function renameSavedQuickMatch(userId: string, quickMatchId: string
 export async function deleteSavedQuickMatch(userId: string, quickMatchId: string): Promise<void> {
   if (!UUID.test(quickMatchId)) throw notInAccount();
   // Which competition the id names, whoever holds it: the saver is checked once, by the delete's own guard, under the lock.
-  // With the sport and kind `quick_match_deleted` carries, read before the delete removes them.
-  const [row] = await sql<({ competition_id: string } & QuickMatchDeletedFacts)[]>`
-    select q.competition_id, ${deletedFactsSql()}
+  // With what `quick_match_deleted` carries, read before the delete removes it: the row's OWN id (the uuid as stored, never the
+  // caller's spelling of it, which may differ in case), its sport and its kind.
+  const [row] = await sql<({ id: string; competition_id: string } & QuickMatchDeletedFacts)[]>`
+    select q.id, q.competition_id, ${deletedFactsSql()}
       from quick_matches q where q.id = ${quickMatchId} and q.org_id = ${QUICK_MATCH_SYSTEM_ORG_ID}`;
   if (!row) throw notInAccount();
   const { deleted } = await hardDeleteQuickMatchCompetition(row.competition_id, { savedBy: userId });
   if (!deleted) throw notInAccount();
-  announceQuickMatchDeleted("saver", row, userId);
+  announceQuickMatchDeleted("saver", row.id, row, userId);
 }

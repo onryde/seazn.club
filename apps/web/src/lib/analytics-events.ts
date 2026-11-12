@@ -98,7 +98,8 @@ export const EVENTS = {
   /** Quick match (controller ruling 2026-11-12, for /admin/quick-matches): a quick match was hard-deleted, which leaves no row,
    *  so this is the only record of it. One event per match deleted, by its saver's Delete (`via: "saver"`) or the sweep's
    *  expiry (`via: "expiry"`); never the create's compensation or an orphan. Sent for the system org beside
-   *  `QUICK_MATCH_CREATED`. Carries { via, sport_key, kind }; never the match's name, an address, a user id or the home token. */
+   *  `QUICK_MATCH_CREATED`. Carries { quick_match_id, via, sport_key, kind } (`quick_match_id` the row's uuid, the name the
+   *  created and saved events use, so the three join); never the match's name, an address, a user id or the home token. */
   QUICK_MATCH_DELETED: "quick_match_deleted",
 } as const;
 
