@@ -44,7 +44,9 @@ const SPEC_STATUSES = [
 // kinds, wave 2's ten in the table's row order, wave 3's eight in the table's row order, wave 4's nine in the table's row
 // order, then wave 5's seventeen (the funnel reminder and sixteen staff alerts) in the table's row order, then the one kind born on
 // the outbox after phase 3: sponsor deals Task 23's `sponsor_deal_paid` (plan 2026-11-07-sponsor-deals, D13; its delta is found by
-// suffix, `__email_outbox_sponsor_deal_paid.sql`). The vocabulary test compares constants.ts with it, and the live-CHECK read compares
+// suffix, `__email_outbox_sponsor_deal_paid.sql`), then the five registrant lifecycle kinds (polish wave P2) in
+// `__email_outbox_registration_lifecycle.sql`, which restates that list plus five and is therefore the LAST definer of the CHECK. The
+// vocabulary test compares constants.ts with it, and the live-CHECK read compares
 // the database's constraint with it as well.
 const SPEC_KINDS = [
   "magic_link", "chess_invite", "registration_confirmation", "payment_reminder", "registration_promoted",
@@ -265,7 +267,7 @@ describe.skipIf(!HAS_DB)("email_outbox (V470)", () => {
     expect(kinds.length).toBeGreaterThan(0);
     expect(statuses).toEqual([...OUTBOX_STATUSES].sort());
     expect(kinds).toEqual([...OUTBOX_KINDS].sort());
-    // And the database's list is the spec's own fifty-one plus sponsor_deal_paid, read against the typed list, not only against
+    // And the database's list is the spec's own fifty-one plus sponsor_deal_paid plus the five lifecycle kinds, read against the typed list, not only against
     // constants.ts.
     expect(kinds).toEqual([...SPEC_KINDS].sort());
   });

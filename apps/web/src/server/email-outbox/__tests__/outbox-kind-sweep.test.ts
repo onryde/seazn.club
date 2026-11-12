@@ -510,13 +510,13 @@ afterEach(() => {
 });
 
 describe("the spec's lists (no database)", () => {
-  it("the spec lists fifty-one kinds, sponsor deals adds one, and the code's registry is exactly them, in the spec's order", () => {
+  it("the spec lists fifty-one kinds, sponsor deals adds one and the registration lifecycle five more (57), and the code's registry is exactly them, in the spec's order", () => {
     expect([...OUTBOX_KINDS]).toEqual([...SPEC_KINDS]);
-    // The spec's Counts: "With `magic_link` and `chess_invite` that is 51." Sponsor deals Task 23 adds sponsor_deal_paid: 52.
+    // The spec's Counts: "With `magic_link` and `chess_invite` that is 51." Sponsor deals Task 23 adds sponsor_deal_paid: 52; the five registration lifecycle kinds: 57.
     expect(SPEC_KINDS).toHaveLength(57);
   });
 
-  it("the legend has 21 literal kinds, SIXTEEN account kinds (sponsor deals' sponsor_deal_paid the sixteenth) and SIXTEEN staff kinds; THIRTY-TWO are transactional", () => {
+  it("the legend has 25 literal kinds, SIXTEEN account kinds (sponsor deals' sponsor_deal_paid the sixteenth) and SIXTEEN staff kinds; THIRTY-TWO are transactional", () => {
     const by = (to: string): string[] => SPEC_KINDS.filter((k) => SPEC_FACTS[k][0] === to);
     expect(by("literal")).toEqual([
       "magic_link",
@@ -626,7 +626,7 @@ describe("the spec's lists (no database)", () => {
       "staff_extra_org_allowance",
     ]);
     // The spec's legend: "The 19 N kinds are the senders that pass no `transactional: true` today", so 51 - 19 = 32 are T. Sponsor deals'
-    // sponsor_deal_paid is N, and so is each of the 1 registration lifecycle kinds, so 53 - 26 = 32 still.
+    // sponsor_deal_paid is N, and so is each of the 5 registration lifecycle kinds: 19 + 1 + 5 = 25 N, so 57 - 25 = 32 are T still.
     expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toHaveLength(32);
   });
 
