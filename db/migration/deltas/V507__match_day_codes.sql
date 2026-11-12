@@ -1,4 +1,4 @@
--- V492 — Match Day codes (capture S4 design 2026-11-07 §3, §9; MD-1 Task 1): an organiser-minted, one-day QR that lets
+-- V507 — Match Day codes (capture S4 design 2026-11-07 §3, §9; MD-1 Task 1): an organiser-minted, one-day QR that lets
 -- the Seazn Club app list a competition's matches and open their scoring links, plus the log of what each code did.
 --
 -- The token: `md_` + 32 random bytes, base64url. Stored twice, like device_links: its sha256 (`tok_hash`, the lookup key
