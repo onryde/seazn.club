@@ -8466,5 +8466,6 @@
   "quickMatch.me.notInAccount": "This quick match is no longer in your account.",
   "quickMatch.me.renameImpersonating": "You're signed in as someone else (staff view), so this match wasn't renamed.",
   "quickMatch.me.deleteImpersonating": "You're signed in as someone else (staff view), so this match wasn't deleted.",
-  "quickMatch.me.signedOut": "You're signed out. Sign in again to change your quick matches."
+  "quickMatch.me.signedOut": "You're signed out. Sign in again to change your quick matches.",
+  "quickMatch.home.inAccount": "In your account"
 }

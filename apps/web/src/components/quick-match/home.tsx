@@ -22,7 +22,12 @@ import type { EntrantKind } from "@seazn/engine/sport";
 import type { Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
 import type { TKey } from "@/lib/i18n-runtime";
-import { QUICK_MATCH_ERRORS, QUICK_MATCH_EXPIRY_DAYS, QUICK_MATCH_MAX_ADHOC } from "@/lib/quick-match-constants";
+import {
+  QUICK_MATCH_ACCOUNT_SECTION_ID,
+  QUICK_MATCH_ERRORS,
+  QUICK_MATCH_EXPIRY_DAYS,
+  QUICK_MATCH_MAX_ADHOC,
+} from "@/lib/quick-match-constants";
 import { roundRoleFor } from "@/lib/round-role-label";
 import { routes } from "@/lib/routes";
 import { compactScore } from "@/lib/match-day/view";
@@ -418,13 +423,24 @@ export function QuickMatchHomeView({
     save === "offer" && slots.save ? (
       slots.save
     ) : save === "saved" ? (
-      <p
-        data-testid="qm-saved"
-        className="app-display inline-flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-lg bg-[rgb(163_230_53/0.1)] px-4 py-2 text-sm font-semibold text-[color:var(--mk-lime)]"
-      >
-        <Check aria-hidden="true" className="h-4 w-4 flex-none" strokeWidth={2.5} />
-        <span className="min-w-0">{t("quickMatch.home.saved")}</span>
-      </p>
+      // "Saved", and the way to where the saver renames or deletes it (plan 3 Task 6, controller ruling): the account's Quick
+      // matches. Its saver's only, as "Saved" is.
+      <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+        <p
+          data-testid="qm-saved"
+          className="app-display inline-flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-lg bg-[rgb(163_230_53/0.1)] px-4 py-2 text-sm font-semibold text-[color:var(--mk-lime)]"
+        >
+          <Check aria-hidden="true" className="h-4 w-4 flex-none" strokeWidth={2.5} />
+          <span className="min-w-0">{t("quickMatch.home.saved")}</span>
+        </p>
+        <a
+          data-testid="qm-in-account"
+          href={`${routes.me()}#${QUICK_MATCH_ACCOUNT_SECTION_ID}`}
+          className="inline-flex min-h-11 min-w-0 items-center text-sm font-medium text-[#b7aede] underline decoration-[rgb(183_174_222/0.5)] underline-offset-4 [overflow-wrap:anywhere] hover:text-cream hover:decoration-cream"
+        >
+          {t("quickMatch.home.inAccount")}
+        </a>
+      </div>
     ) : null;
   return (
     <div className="min-h-screen bg-night text-cream">

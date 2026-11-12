@@ -412,4 +412,40 @@ describe.skipIf(!HAS_DB)("the home's Save (the actions row plan 2 D13 left witho
     }
     expect(checked).toBe(2);
   });
+
+  it("saved: 'In your account' links its saver to the account's Quick matches (/me#quick-matches), a 44px target; never anyone else, signed in or not, and nobody on an unsaved match", async () => {
+    const saver = await account("home-link-saver");
+    const other = await account("home-link-other");
+    const qm = await createTypedMatch(null);
+    let checked = 0;
+    // Unsaved: no link for anyone, the saver-to-be included (the match is in nobody's account yet).
+    for (const session of [saver, null]) {
+      h.jar.clear();
+      if (session) await createSession(session);
+      const html = await homeOf(qm.token);
+      expect(has(html, "qm-name"), "the home rendered").toBe(true);
+      expect(has(html, "qm-in-account"), session ? "unsaved, signed in" : "unsaved, signed out").toBe(false);
+      checked++;
+    }
+    expect(await saveQuickMatchForUser(saver, qm.id)).toBe("saved");
+
+    await signIn(saver);
+    const mine = await homeOf(qm.token);
+    const link = tagOf(mine, "qm-in-account");
+    expect(link?.startsWith("<a "), "a plain link").toBe(true);
+    expect(attr(link, "href")).toBe("/me#quick-matches");
+    expect(attr(link, "class")?.split(/\s+/), "a 44px target").toContain("min-h-11");
+    expect(textOf(mine, "qm-in-account")).toBe(en_("quickMatch.home.inAccount"));
+    checked++;
+
+    for (const session of [other, null]) {
+      h.jar.clear();
+      if (session) await createSession(session);
+      const html = await homeOf(qm.token);
+      expect(has(html, "qm-name"), "the home rendered").toBe(true);
+      expect(has(html, "qm-in-account"), session ? "another account" : "signed out").toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
 });

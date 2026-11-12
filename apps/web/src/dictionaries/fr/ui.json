@@ -8466,5 +8466,6 @@
   "quickMatch.me.notInAccount": "Ce match rapide n'est plus dans votre compte.",
   "quickMatch.me.renameImpersonating": "Vous êtes connecté en tant qu'une autre personne (vue du personnel), ce match n'a donc pas été renommé.",
   "quickMatch.me.deleteImpersonating": "Vous êtes connecté en tant qu'une autre personne (vue du personnel), ce match n'a donc pas été supprimé.",
-  "quickMatch.me.signedOut": "Vous êtes déconnecté. Reconnectez-vous pour modifier vos matchs rapides."
+  "quickMatch.me.signedOut": "Vous êtes déconnecté. Reconnectez-vous pour modifier vos matchs rapides.",
+  "quickMatch.home.inAccount": "Dans votre compte"
 }

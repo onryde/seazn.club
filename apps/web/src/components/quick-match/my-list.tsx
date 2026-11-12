@@ -14,6 +14,7 @@
 //   QUICK_MATCH_NAME_MAX); Delete opens a confirmation in the row, whose own button deletes. Both send their request with `fetch`
 //   (my-list-requests.ts, `PATCH`/`DELETE /api/quick-match/<id>`), so they need the script; the server checks everything again.
 //   A refusal is printed in the row as its own line (role=alert); success updates the row at once and refreshes the page's read.
+// - The section's id is the anchor the saved home's "In your account" link lands on (`/me#quick-matches`, home.tsx).
 // - Every control is a 44px target (min-h-11), at 320 as at 1280; long names wrap, never push the page sideways.
 //
 // Copy comes from the page's `ui` dictionary (the /me page's DictProvider): the viewer's language, never the match's.
@@ -21,7 +22,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { usePlural, useT } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
-import { QUICK_MATCH_NAME_MAX, QUICK_MATCH_NON_BLANK_PATTERN } from "@/lib/quick-match-constants";
+import { QUICK_MATCH_ACCOUNT_SECTION_ID, QUICK_MATCH_NAME_MAX, QUICK_MATCH_NON_BLANK_PATTERN } from "@/lib/quick-match-constants";
 import { routes } from "@/lib/routes";
 import { deleteMyQuickMatch, renameMyQuickMatch } from "./my-list-requests";
 
@@ -55,7 +56,12 @@ export function QuickMatchMyList({ items }: { items: readonly MyQuickMatchItem[]
   const shown = items.filter((i) => !deleted.has(i.id)).map((i) => ({ ...i, name: renamed[i.id] ?? i.name }));
   if (shown.length === 0) return null;
   return (
-    <section data-testid="me-quick-matches" aria-labelledby={TITLE_ID} className="mb-8 min-w-0">
+    <section
+      id={QUICK_MATCH_ACCOUNT_SECTION_ID}
+      data-testid="me-quick-matches"
+      aria-labelledby={TITLE_ID}
+      className="mb-8 min-w-0 scroll-mt-4"
+    >
       <h2
         id={TITLE_ID}
         ref={heading}

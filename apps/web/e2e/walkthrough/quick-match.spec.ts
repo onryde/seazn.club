@@ -23,9 +23,9 @@
 //       → Save → the home reads "Saved" and no longer counts down; the record holds the saver and forgets the typed
 //       address. A second guest on the same link sees neither Save nor Saved; the save page says it is saved to an account
 //       and offers Sign in back to itself (review m2: a signed-out visitor may be the saver on another device).
-//       Then the account's Quick matches (plan 3 Task 6, spec §7.7): the saver opens /me → the match is its one row, its
-//       name a link to the home → Rename → the new name on the row, in the record (all four names, the slug kept) and on
-//       the home its link opens → Delete → the confirmation → "Delete for everyone" → the row and the section are gone,
+//       Then the account's Quick matches (plan 3 Task 6, spec §7.7): the saver taps the saved home's "In your account" →
+//       /me#quick-matches → the match is its one row, its name a link to the home → Rename → the new name on the row, in the record (all four names, the slug kept) and on
+//       the home its link opens → "In your account" again → Delete → the confirmation → "Delete for everyone" → the row and the section are gone,
 //       the record is gone, and the link is the dead screen for the second guest and the saver alike.
 //
 // ── WHAT IS A REACH AND WHAT IS THE TEST (README rule) ────────────────────────────────────────────────────────────
@@ -1084,10 +1084,11 @@ test("(C) the marketing page lists both quick matches, newest first, and a tap o
 /** Save's steps: the setup, the sign-in's two hops (the login page, the magic link), the save page, the home after the
  *  save, the second guest's home and save page; the Save taps, the fold, the reads of each page; the record twice. */
 const SAVE = { navs: 8, acts: 12, reads: 2 } as const;
-/** The account's Quick matches (plan 3 Task 6): /me, the home its link opens, /me again, its reload after the delete, and
- *  the dead link in each browser; the row's reads and 44px measures, Rename's form, fill and save, Delete's confirmation and
- *  its yes; the record before the rename, after it, and after the delete. */
-const ACCOUNT = { navs: 6, acts: 14, reads: 3 } as const;
+/** The account's Quick matches (plan 3 Task 6): "In your account" to /me, the home its link opens, "In your account" again,
+ *  the reload after the delete, and the dead link in each browser; the link's two taps and measure, the row's reads and 44px
+ *  measures, Rename's form, fill and save, Delete's confirmation and its yes; the record before the rename, after it, and
+ *  after the delete. */
+const ACCOUNT = { navs: 6, acts: 17, reads: 3 } as const;
 
 interface SaveRecord {
   email: string | null;
@@ -1188,6 +1189,7 @@ test("(D) Save: a guest who typed an address saves the league into another accou
     await expect(q.getByTestId("qm-name")).toHaveText(made.name, { timeout: STEP_MS });
     await expect(q.getByTestId("qm-save")).toHaveCount(0);
     await expect(q.getByTestId("qm-saved")).toHaveCount(0);
+    await expect(q.getByTestId("qm-in-account"), "the account link is the saver's only").toHaveCount(0);
     await q.goto(`${made.path}/save`);
     await expect(q.getByTestId("qm-save-saved")).toHaveText(ui("quickMatch.save.savedToAccount"), { timeout: STEP_MS });
     const signIn = q.getByTestId("qm-save-signin");
@@ -1199,10 +1201,14 @@ test("(D) Save: a guest who typed an address saves the league into another accou
     await expectNoHorizontalScroll(q);
 
     // ── The account's Quick matches (plan 3 Task 6, spec §7.7) ──
-    // The saver opens their account page. A navigation: nothing on the home links to /me.
+    // The saver, still on the saved home, taps "In your account": the account page, at its Quick matches.
     const before = await namesRecordOf(made);
     expect(before?.names, "the create's name in all four places").toEqual([made.name, made.name, made.name, made.name]);
-    await p.goto("/me");
+    const inAccount = p.getByTestId("qm-in-account");
+    await expect(inAccount).toHaveText(ui("quickMatch.home.inAccount"));
+    expect((await inAccount.boundingBox())?.height ?? 0, "In your account is a 44px target").toBeGreaterThanOrEqual(44);
+    await inAccount.click();
+    await p.waitForURL((u) => u.pathname === "/me" && u.hash === "#quick-matches", { timeout: STEP_MS });
     const list = p.getByTestId("me-quick-matches");
     await expect(list.getByRole("heading", { level: 2 })).toHaveText(ui("quickMatch.me.title"), { timeout: STEP_MS });
     await expect(list.locator("li[data-qm-id]"), "one row: the one match this account saved").toHaveCount(1);
@@ -1236,8 +1242,9 @@ test("(D) Save: a guest who typed an address saves the league into another accou
     await expect(p.getByTestId("qm-name")).toHaveText(renamed);
     await expect(p.getByTestId("qm-saved")).toHaveText(ui("quickMatch.home.saved"));
 
-    // Delete, for everyone: back on the account page (its own read, after the rename), Delete asks first.
-    await p.goto("/me");
+    // Delete, for everyone: back on the account page by the home's own link (its own read, after the rename); Delete asks first.
+    await p.getByTestId("qm-in-account").click();
+    await p.waitForURL((u) => u.pathname === "/me" && u.hash === "#quick-matches", { timeout: STEP_MS });
     await expect(nameLink).toHaveText(renamed, { timeout: STEP_MS });
     await row.getByTestId("me-qm-delete").click();
     await expect(row.getByTestId("me-qm-delete-question")).toHaveText(ui("quickMatch.me.deleteConfirm"));

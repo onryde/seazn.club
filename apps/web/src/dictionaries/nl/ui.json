@@ -8466,5 +8466,6 @@
   "quickMatch.me.notInAccount": "Deze snelle wedstrijd staat niet meer in je account.",
   "quickMatch.me.renameImpersonating": "Je bent ingelogd als iemand anders (personeelsweergave), dus de naam van deze wedstrijd is niet gewijzigd.",
   "quickMatch.me.deleteImpersonating": "Je bent ingelogd als iemand anders (personeelsweergave), dus deze wedstrijd is niet verwijderd.",
-  "quickMatch.me.signedOut": "Je bent uitgelogd. Log opnieuw in om je snelle wedstrijden te wijzigen."
+  "quickMatch.me.signedOut": "Je bent uitgelogd. Log opnieuw in om je snelle wedstrijden te wijzigen.",
+  "quickMatch.home.inAccount": "In je account"
 }

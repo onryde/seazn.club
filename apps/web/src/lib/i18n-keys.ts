@@ -5991,6 +5991,7 @@ export type DictionaryKey =
   | "quickMatch.home.draw"
   | "quickMatch.home.drawn"
   | "quickMatch.home.editResult"
+  | "quickMatch.home.inAccount"
   | "quickMatch.home.level"
   | "quickMatch.home.live"
   | "quickMatch.home.liveMatch"

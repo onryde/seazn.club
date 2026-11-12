@@ -28,6 +28,9 @@ export const QUICK_MATCH_SIDE_NAME_MAX = 60;
  *  so a leading or trailing space is fine and only an all-space name is refused; this lets the browser say so first
  *  (branch review A M2), where `required` alone passes "   ". */
 export const QUICK_MATCH_NON_BLANK_PATTERN = ".*\\S.*";
+/** The account page's Quick matches section id (plan 3 Task 6): the saved home's "In your account" link lands on
+ *  `/me#<this>` (controller ruling on T6), and the /me list carries it. */
+export const QUICK_MATCH_ACCOUNT_SECTION_ID = "quick-matches";
 /** The email input's `pattern`: zod 4's own `.email()` regex (what `CreateQuickMatch` checks), respelled to compile under the
  *  `v` flag HTML patterns use (zod's bare `-` in a class is a syntax error there), and anchored by the browser. The
  *  browser's own `type="email"` check passes `ravi@gmail`; this stops it, and the other addresses the schema refuses, before

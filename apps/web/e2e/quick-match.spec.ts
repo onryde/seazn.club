@@ -320,6 +320,11 @@ test("Save (plan 3 Task 5): the save page at 320, 768 and 1280; without the scri
     await page.setViewportSize({ width, height: 900 });
     await expect(page.getByTestId("qm-saved"), `${width}`).toHaveText("Saved");
     await expect(page.getByTestId("qm-save"), `${width}: no button once saved`).toHaveCount(0);
+    // Plan 3 Task 6: beside "Saved", the way to the account's Quick matches.
+    const inAccount = page.getByTestId("qm-in-account");
+    await expect(inAccount, `${width}`).toHaveText("In your account");
+    await expect(inAccount, `${width}`).toHaveAttribute("href", "/me#quick-matches");
+    expect((await inAccount.boundingBox())?.height ?? 0, `${width}: In your account is a 44px target`).toBeGreaterThanOrEqual(44);
     await expectNoHorizontalScroll(page);
     checked++;
   }

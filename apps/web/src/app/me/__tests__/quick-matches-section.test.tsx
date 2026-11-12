@@ -248,6 +248,8 @@ describe.skipIf(!HAS_DB)("/me: the account's Quick matches", () => {
 
     expect(section, "the section is there").not.toBeNull();
     expect(section).toContain(`>${en["quickMatch.me.title"]}<`);
+    // The anchor the home's "In your account" link lands on (controller ruling on T6: /me#quick-matches).
+    expect(section).toMatch(/^<section[^>]*\sid="quick-matches"/);
     const rows = rowsOf(section!);
     expect(rows.map((r) => r.id)).toEqual([knockout.id, pair.id, league.id]);
     const expected: Record<string, { qm: CreatedQuickMatch; played: number; total: number; format: string }> = {
