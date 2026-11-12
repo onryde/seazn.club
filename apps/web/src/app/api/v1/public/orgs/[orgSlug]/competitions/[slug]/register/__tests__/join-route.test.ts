@@ -98,6 +98,7 @@ function fakePreview(): JoinPreviewResult {
     registration_id: randomUUID(),
     display_name: "Joinable Team",
     entrant_kind: "team",
+    entry_confirmed: false,
     division_name: "Open",
     competition_name: "Join Cup",
     competition_slug: "join-cup",

@@ -117,6 +117,18 @@ describe.skipIf(!HAS_DB)("the join answers where the entry stands (polish wave P
 });
 
 describe.skipIf(!HAS_DB)("the join preview says what kind of entry the link joins (polish wave P3, W3)", () => {
+  // Final fix round G: the full page's check-in words key on this. Read live from the entry's status: pending and paid are not confirmed.
+  it("entry_confirmed is true only for a confirmed entry, read live (pending, paid, then confirmed)", async () => {
+    const e = await entry({ status: "pending", fee: 1500, approval: "manual", players: ["C One"] });
+    let checked = 0;
+    for (const [status, want] of [["pending", false], ["paid", false], ["confirmed", true]] as const) {
+      await sql`update registrations set status = ${status} where id = ${e.regId}`;
+      expect((await previewJoinEntry(e.joinCode)).entry_confirmed, status).toBe(want);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+  });
+
   it("a team link says team, a pair link says pair", async () => {
     const team = await entry({ kind: "team", players: ["A One"] });
     const pair = await entry({ kind: "pair", players: ["B One", "B Two"] });

@@ -64715,6 +64715,9 @@
                             "pair"
                           ]
                         },
+                        "entry_confirmed": {
+                          "type": "boolean"
+                        },
                         "unclaimed_slots": {
                           "type": "array",
                           "items": {
@@ -64770,6 +64773,7 @@
                         "org_slug",
                         "org_name",
                         "entrant_kind",
+                        "entry_confirmed",
                         "unclaimed_slots",
                         "allow_new_player",
                         "requires_dob",
@@ -64796,6 +64800,7 @@
                     "org_slug": "example",
                     "org_name": "example",
                     "entrant_kind": "team",
+                    "entry_confirmed": true,
                     "unclaimed_slots": [
                       {
                         "player_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",

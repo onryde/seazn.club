@@ -613,6 +613,8 @@ export const PublicJoinPreviewResponse = z.object({
   /** What kind of entry the link joins (polish wave P3, W3; `JoinPreviewResult.entrant_kind`, registration-submit.ts): the join page
    *  says "this pair is full" only for a pair. */
   entrant_kind: EntrantKind,
+  /** Whether the entry is confirmed (`JoinPreviewResult.entry_confirmed`): only then does a full entry's page use check-in words. */
+  entry_confirmed: z.boolean(),
   unclaimed_slots: z.array(PublicJoinPreviewSlot),
   allow_new_player: z.boolean(),
   /** RS007 join page — whether the WHO-equivalent step must collect a

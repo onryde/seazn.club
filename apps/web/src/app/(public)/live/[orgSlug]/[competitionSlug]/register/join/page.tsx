@@ -209,7 +209,8 @@ export default async function RegisterJoinPage({ params, searchParams }: Props) 
               {t(ui, fullKind === "pair" ? "register.join.full.pair.heading" : "register.join.full.heading")}
             </h2>
             <p className="mt-2 text-sm text-ink-muted">
-              {t(ui, fullKind === "pair" ? "register.join.full.pair.body" : "register.join.full.body")}
+              {/* Final fix round G (the V7 rule): "checked in" only for a confirmed entry; otherwise its places are just taken. */}
+              {t(ui, `${fullKind === "pair" ? "register.join.full.pair" : "register.join.full"}.${preview.entry_confirmed ? "body" : "bodyTaken"}`)}
             </p>
             <Link
               href={routes.publicHub(preview.org_slug, preview.competition_slug)}

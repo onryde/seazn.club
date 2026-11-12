@@ -230,6 +230,9 @@ export interface JoinPreviewResult {
   /** What kind of entry this link joins (polish wave P3, W3): lets the join page say "this PAIR is full" only for a pair, and the
    *  generic roster-full copy for a team. */
   entrant_kind: "team" | "individual" | "pair";
+  /** Whether the entry is confirmed (final fix round G, the V7 rule): a full entry's page says its players "checked in" only then;
+   *  an entry still waiting on payment or approval says its places are taken. */
+  entry_confirmed: boolean;
   unclaimed_slots: JoinPreviewSlot[];
   /** True only when this entry can still grow by adding someone NEW — never
    *  for a `pair` (fixed at two, claim-only) and never once the sport's
@@ -1185,6 +1188,7 @@ export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewRes
     org_slug: divCtx.org_slug,
     org_name: divCtx.org_name,
     entrant_kind: reg.entrant_kind,
+    entry_confirmed: reg.status === "confirmed",
     unclaimed_slots: unclaimedSlots,
     allow_new_player: allowNewPlayer,
     requires_dob: requiresDob({

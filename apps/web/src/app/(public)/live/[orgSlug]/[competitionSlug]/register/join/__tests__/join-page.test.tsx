@@ -48,6 +48,9 @@ beforeEach(() => {
 });
 
 import RegisterJoinPage from "../page";
+import uiEnJson from "@/dictionaries/en/ui.json";
+
+const uiEn = uiEnJson as Record<string, string>;
 
 const render = async (searchParams: Record<string, string>): Promise<string> =>
   renderToStaticMarkup(
@@ -74,6 +77,7 @@ const TEAM_PREVIEW = {
   requires_dob: false,
   requires_gender: false,
   total_players: 3,
+  entry_confirmed: true,
 };
 
 describe("register join page (RS007) — the URL entry-card.tsx already emits", () => {
@@ -168,6 +172,32 @@ describe("register join page (RS007) — the URL entry-card.tsx already emits", 
       expect(html).toContain("Both players have already checked in.");
       expect(html).not.toContain("This roster is already full");
       expect(html).not.toContain("Which one are you?");
+    });
+
+    // Final fix round G (the V7 rule on the join page): "Both players have already checked in" on a pair whose entry is still unpaid or
+    // unapproved claimed attendance at an entry nobody had confirmed. Only a CONFIRMED entry's full page uses check-in words; any other
+    // says the places are taken. Both kinds, both states (counted); the expected sentences are the dictionary's.
+    it("a full entry that is not confirmed says the places are TAKEN, never 'checked in'; a confirmed one keeps the check-in words (counted)", async () => {
+      let checked = 0;
+      for (const kind of ["pair", "team"] as const) {
+        for (const confirmed of [false, true]) {
+          usecaseMock.previewJoinEntry.mockResolvedValueOnce({
+            ...TEAM_PREVIEW,
+            entrant_kind: kind,
+            unclaimed_slots: [],
+            allow_new_player: false,
+            entry_confirmed: confirmed,
+          });
+          const html = await render({ join_code: `FULL${kind}${confirmed}` });
+          const base = kind === "pair" ? "register.join.full.pair" : "register.join.full";
+          const want = uiEn[confirmed ? `${base}.body` : `${base}.bodyTaken`]!;
+          expect(want, `premise: ${base} copy exists (${confirmed})`).toBeTruthy();
+          expect(html, `${kind} confirmed=${confirmed}`).toContain(want.replace(/'/g, "&#x27;"));
+          if (!confirmed) expect(html, `${kind} unconfirmed: no check-in words`).not.toMatch(/checked in/i);
+          checked += 1;
+        }
+      }
+      expect(checked).toBe(4);
     });
 
     it("a team at its cap keeps the team's roster-full copy (the pair words are not a global replacement)", async () => {
