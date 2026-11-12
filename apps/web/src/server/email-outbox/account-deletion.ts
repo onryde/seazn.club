@@ -27,7 +27,8 @@ import "server-only";
 //     organiser keeps a record of it (it is the system org's own mail about a guest's match) and the quick match spec §7.7 removes the
 //     address from every match that carries it, so the deletion ends it too (branch review B m4). This module knows no quick match (it must
 //     not import a usecase, no-import-cycle.test.ts claim 1): the quick match release (usecases/quick-match-save.ts) ends those rows on the
-//     same transaction, through `endQueuedForDeletedAccount` below, so they end exactly as the account's own do. Ended, not scrubbed.
+//     same transaction, through `endQueuedForDeletedAccount` below, so they end exactly as the account's own do, and then replaces the
+//     address with `deletedAccountPlaceholder` on every one of them, whatever its status, as step 3 does to the account's own.
 //
 // RESIDUAL (accepted): a pre-V472 invite queued to an address the account has SINCE CHANGED AWAY FROM is reached by neither arm. It names no
 // account (the account arm cannot find it) and no longer holds the account's current address (the legacy arm cannot find it), so that old

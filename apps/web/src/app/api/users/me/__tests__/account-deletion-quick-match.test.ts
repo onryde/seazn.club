@@ -23,6 +23,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 vi.stubEnv("DEVICE_LINK_KEK", kekBytes(32).toString("hex")); // every quick match create seals a home token
 vi.stubEnv("EMAIL_OUTBOX_KEK", kekBytes(32).toString("hex")); // a queued mail holds a sealed body, so "the end cleared it" can fail
+vi.stubEnv("RESEND_API_KEY", "re_test_account_deletion_qm"); // an attempt reaches the transport (the stand-in), never Resend
 
 vi.mock("@/lib/stripe", () => ({ getStripe: () => ({ subscriptions: { cancel: vi.fn(async () => ({})) } }) }));
 vi.mock("@/lib/rate-limit", async (importOriginal) => ({
@@ -39,7 +40,8 @@ vi.mock("next/headers", () => ({
   }),
 }));
 vi.mock("@/server/email-outbox/transport", () => ({
-  deliver: vi.fn(async () => ({ ok: true, providerId: "re_account_deletion_quick_match" })),
+  // One provider id per send: email_outbox_provider_idx is unique, so a fixed id records only the first send ever made.
+  deliver: vi.fn(async () => ({ ok: true, providerId: `re_adqm_${crypto.randomUUID()}` })),
 }));
 vi.mock("@/lib/posthog-server", async (orig) => ({
   ...(await orig<typeof import("@/lib/posthog-server")>()),
@@ -50,6 +52,7 @@ import { sql } from "@/lib/db";
 import { createSession } from "@/lib/auth";
 import { createLoginLink } from "@/lib/login-link";
 import { resolveOrCreateUser } from "@/lib/users";
+import { dispatchNow } from "@/server/email-outbox";
 import { POST as CONSUME } from "@/app/api/auth/magic-link/consume/route";
 import { resolveQuickMatchToken } from "@/server/usecases/quick-match-home";
 import { sweepQuickMatches, type QuickMatchSweepReport } from "@/server/usecases/quick-match-sweep";
@@ -221,6 +224,38 @@ describe.skipIf(!HAS_DB)("DELETE /api/users/me lets go of the account's quick ma
       { kind: "quick_match_link", ...ENDED_BY_DELETION },
     ]);
     expect(await mailOf(other.id), "another address's mail is not this deletion's").toEqual(othersBefore);
+  });
+
+  it("m4 residual: every quick match mail to the address loses it, whatever its status (as the account's own rows do); another address's keeps its own", async () => {
+    const email = addressFor("m4-scrub");
+    const leaver = await account(email);
+    const queued = await createTypedMatch(email.toUpperCase());
+    const sent = await createTypedMatch(email);
+    const other = await createTypedMatch(addressFor("m4-scrub-other"));
+    const linkOf = async (quickMatchId: string): Promise<string> => {
+      const [r] = await sql<{ id: string }[]>`
+        select id from email_outbox where ref_type = 'quick_match' and ref_id = ${quickMatchId} and kind = 'quick_match_link'`;
+      if (!r) throw new Error(`precondition: quick match ${quickMatchId} queued its link mail`);
+      return r.id;
+    };
+    // The create route's first attempt is `dispatchNow` (quick-match/route.ts); the rig creates without the route, so it is made here,
+    // the same way, through the transport stand-in.
+    const sentLink = await linkOf(sent.id);
+    const outcome = (await dispatchNow([sentLink])).get(sentLink);
+    const rowOf = async (id: string) =>
+      (await sql<{ status: string; recipient: string }[]>`select status, recipient from email_outbox where id = ${id}`)[0];
+    expect({ outcome, ...(await rowOf(sentLink)) }, "premise: sent, to the address").toEqual({ outcome: "sent", status: "sent", recipient: email });
+    const queuedLink = await linkOf(queued.id);
+    const otherLink = await linkOf(other.id);
+    const otherBefore = await rowOf(otherLink);
+
+    expect(await deleteAccount(leaver)).toBe(200);
+
+    // The placeholder is the rule's (`deleted-<id>@deleted.invalid`), typed here, as account-deletion-sweep.test.ts does.
+    const placeholder = `deleted-${leaver}@deleted.invalid`;
+    expect(await rowOf(sentLink), "a sent row keeps its status and loses the address").toEqual({ status: "sent", recipient: placeholder });
+    expect(await rowOf(queuedLink), "an ended row loses it too").toEqual({ status: "expired", recipient: placeholder });
+    expect(await rowOf(otherLink), "another address's row is untouched").toEqual(otherBefore);
   });
 
   it("m2, the lifecycle in one chain of REAL calls: the sweep reminds, the sign-in saves, the deletion releases, the sweeps judge again", async () => {

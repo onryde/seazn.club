@@ -23,7 +23,7 @@ import { deferred } from "@/lib/deferred";
 import { EVENTS } from "@/lib/analytics-events";
 import { captureServer } from "@/lib/posthog-server";
 import { QUICK_MATCH_EXPIRY_DAYS, QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
-import { endQueuedForDeletedAccount } from "@/server/email-outbox/account-deletion";
+import { deletedAccountPlaceholder, endQueuedForDeletedAccount } from "@/server/email-outbox/account-deletion";
 import { QUICK_MATCH_SAVED_REASON, cancelQueuedEmails } from "@/server/email-outbox/cancel";
 import type { OutboxKind } from "@/server/email-outbox/constants";
 import type { EndedRow } from "@/server/email-outbox/hooks";
@@ -144,6 +144,11 @@ export async function saveQuickMatchForUser(userId: string, quickMatchId: string
  * is case-folded as the rest of the release folds it. Index-served: the predicate is `email_outbox_replace_idx`'s (kind,
  * ref_type, lower(recipient)), partial on the live statuses that `status = 'queued'` implies. Returns the ended rows for
  * the route's `afterEndedBadly` (neither kind has a hook; the route hands every ended row on regardless).
+ *
+ * Then EVERY quick match mail to the address, whatever its status (sent, delayed, ended), loses it to the deleted account's
+ * placeholder, as the account deletion's step 3 scrubs the account's own rows (controller ruling 2026-11-12: the same policy,
+ * none of its own). After the end, which finds the queued rows by the address. A sent row keeps its status: the provider's
+ * later events find it by its provider id, never by recipient (provider-events.ts).
  */
 export async function releaseQuickMatchesOfDeletedAccount(tx: Tx, a: { userId: string; email: string }): Promise<EndedRow[]> {
   await tx`
@@ -155,9 +160,10 @@ export async function releaseQuickMatchesOfDeletedAccount(tx: Tx, a: { userId: s
   await tx`
     update quick_matches set email = null
      where email_lower = lower(${a.email}) and org_id = ${QUICK_MATCH_SYSTEM_ORG_ID}`;
-  return endQueuedForDeletedAccount(
-    tx,
+  const mailToAddress = () =>
     tx`(kind = any(${QUICK_MATCH_MAIL_KINDS as string[]}::text[]) and ref_type = ${QUICK_MATCH_OUTBOX_REF_TYPE}
-        and lower(recipient) = lower(${a.email}))`,
-  );
+        and lower(recipient) = lower(${a.email}))`;
+  const ended = await endQueuedForDeletedAccount(tx, mailToAddress());
+  await tx`update email_outbox set recipient = ${deletedAccountPlaceholder(a.userId)} where ${mailToAddress()}`;
+  return ended;
 }
