@@ -585,13 +585,16 @@ describe("the wire contract between the browser and the server", () => {
     expect(TURNSTILE_TOKEN_MAX_LENGTH, "Cloudflare: 'Maximum length: 2048 characters'").toBe(2048);
   });
 
-  it("the six declared actions are exactly these (seven routes: withdraw is shared), and every one is a legal Cloudflare action (A-Za-z0-9_-, 32 chars at most)", () => {
-    expect([...TURNSTILE_ACTIONS].sort()).toEqual(["join", "login", "register", "resend", "start", "withdraw"]);
+  it("the seven declared actions are exactly these (eight routes: withdraw is shared), and every one is a legal Cloudflare action (A-Za-z0-9_-, 32 chars at most)", () => {
+    expect([...TURNSTILE_ACTIONS].sort()).toEqual(["join", "login", "quickmatch", "register", "resend", "start", "withdraw"]);
     let checked = 0;
     for (const a of TURNSTILE_ACTIONS) {
       expect(a, a).toMatch(/^[A-Za-z0-9_-]{1,32}$/);
+      // turnstile-gate.test.ts finds a gated route by `requireTurnstile(req, "<action>")` with the action as [a-z]+, so a legal
+      // Cloudflare action with a digit, `_` or `-` would make its route read as ungated there.
+      expect(a, `${a}: lowercase letters only, or the route-tree sweep cannot see its gate`).toMatch(/^[a-z]+$/);
       checked++;
     }
-    expect(checked, "anti-vacuity").toBe(6);
+    expect(checked, "anti-vacuity").toBe(7);
   });
 });

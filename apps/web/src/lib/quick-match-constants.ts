@@ -91,4 +91,8 @@ export const QUICK_MATCH_ERRORS = {
   /** The form's only fault is its email address, which `CreateQuickMatch`'s zod `.email()` refused (branch review A I2). The
    *  setup screen shows `quickMatch.errors.emailInvalid`, keeping what was typed. */
   EMAIL_INVALID: "QUICK_MATCH_EMAIL_INVALID",
+  /** The create's Cloudflare Turnstile check refused (owner 2026-11-12: "yes we need turnstile"): no token (a post without the
+   *  script carries none), a token Cloudflare refuses, or Cloudflare unreachable, which fails closed. The guest's refusal,
+   *  never a fault: the setup screen shows `quickMatch.errors.botCheck`, keeping what was typed. */
+  TURNSTILE_FAILED: "QUICK_MATCH_TURNSTILE_FAILED",
 } as const;

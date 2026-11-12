@@ -14,6 +14,10 @@
 // In this order, each step answering before the next runs:
 //   1. the per-IP limit (QUICK_MATCH_CREATE_LIMIT, D2), before any database work (B3); only the form body is read first,
 //      for the locale a refusal returns to;
+//   1b. the bot check (Cloudflare Turnstile, action `quickmatch`; owner 2026-11-12), straight after that limit as on every
+//      guarded public POST (server/turnstile.ts `requireTurnstile`): the token rides the `cf-turnstile-response` header, which
+//      only the enhanced (scripted) submit sends, so a post without the script is refused here, like #1136's forms. A refusal
+//      is QUICK_MATCH_TURNSTILE_FAILED, before the schema, the visitor, any write or either mail bucket;
 //   2. the form, through plan 1's `CreateQuickMatch` schema (strict: a stray field is refused, not dropped);
 //   3. the visitor, from the REQUEST's cookie (B3a), minted when absent or malformed (`isVisitorKeyShaped`, B3b);
 //   4. plan 1's `createQuickMatch`: the seal, the per-visitor alive cap, the offer, then, with an email only and only once
@@ -47,9 +51,11 @@ import {
   rateLimit,
 } from "@/lib/rate-limit";
 import { routes } from "@/lib/routes";
+import { isTurnstileRefusal } from "@/lib/turnstile";
 import { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { dispatchNow } from "@/server/email-outbox";
 import { log } from "@/server/logger";
+import { requireTurnstile } from "@/server/turnstile";
 import { createQuickMatch, type MailRefusal } from "@/server/usecases/quick-match-create";
 import { QUICK_MATCH_VISITOR_COOKIE } from "@/server/usecases/quick-match-tokens";
 import { readOrMintVisitor, visitorCookieOptions } from "@/server/usecases/quick-match-visitor";
@@ -104,12 +110,15 @@ function refusalCode(err: unknown): string {
   if (err instanceof FormRefused && err.code !== undefined) return err.code;
   if (isQuickMatchCode(err)) return err.code!;
   if (isLimiter(err)) return QUICK_MATCH_ERRORS.RATE_LIMITED;
+  if (isTurnstileRefusal(err)) return QUICK_MATCH_ERRORS.TURNSTILE_FAILED;
   return QUICK_MATCH_ERRORS.CREATE_FAILED;
 }
 
-/** Everything that is not one of the guest's refusals (the form, a quick match code, the limiter) is a fault, a 402 from a
- *  plan cap included: logged and reported as `handler` reports one, then shown as CREATE_FAILED. */
-const isServerFault = (err: unknown) => !(err instanceof FormRefused || isQuickMatchCode(err) || isLimiter(err));
+/** Everything that is not one of the guest's refusals (the form, a quick match code, the limiter, the bot check) is a fault, a
+ *  402 from a plan cap included: logged and reported as `handler` reports one, then shown as CREATE_FAILED. The bot check logs
+ *  its own reason (server/turnstile.ts), so a refusal of it is not reported again here. */
+const isServerFault = (err: unknown) =>
+  !(err instanceof FormRefused || isQuickMatchCode(err) || isLimiter(err) || isTurnstileRefusal(err));
 
 /** The per-recipient bucket's key: the sha256 of the lower-cased address, so the limiter's store never holds an address. */
 const recipientKey = (email: string): string => createHash("sha256").update(email.toLowerCase()).digest("hex");
@@ -161,6 +170,7 @@ export async function POST(req: NextRequest) {
       // The first X-Forwarded-For hop, the funnel's idiom (api/funnel/start/route.ts).
       const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
       await rateLimit(`quick-match-create:${ip}`, QUICK_MATCH_CREATE_LIMIT);
+      await requireTurnstile(req, "quickmatch");
       if (!form) throw new FormRefused("the quick match create takes a form");
       const parsed = CreateQuickMatch.safeParse(formInput(form));
       if (!parsed.success) {

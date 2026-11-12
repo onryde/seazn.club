@@ -1,6 +1,7 @@
 // Quick match plan 2, Task 3: POST /api/quick-match, the guest's setup form. Driven through the REAL route, the real
-// `createQuickMatch` and real Postgres rows; the only stand-ins are PostHog (a mock, never the live project) and, in the
-// limiter cases, the limiter's own test counter (`__setRateLimitCounterForTests`, lib/rate-limit.ts).
+// `createQuickMatch` and real Postgres rows; the only stand-ins are PostHog (a mock, never the live project), in the
+// limiter cases the limiter's own test counter (`__setRateLimitCounterForTests`, lib/rate-limit.ts), and in the bot-check
+// cases a fake Cloudflare siteverify on global `fetch`.
 //
 // The contract (controller dispatch 2026-11-08, D2, D3, A6, B3): the form posts `application/x-www-form-urlencoded`; every
 // answer is a 303. A create lands on `/q/<token>` (`routes.quickMatch`), with the visitor cookie set when it was minted. A
@@ -16,7 +17,7 @@
 //
 // Real Postgres required; skipped without DATABASE_URL.
 import { randomBytes, randomUUID } from "node:crypto";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 
@@ -149,6 +150,9 @@ describe.skipIf(!HAS_DB)("POST /api/quick-match: the create", () => {
 
   it("in production the visitor cookie is also Secure", async () => {
     vi.stubEnv("NODE_ENV", "production");
+    // A production build on a harness server (e2e's), so the post needs no bot-check token: the cookie's Secure follows
+    // NODE_ENV alone. A named deployment with a token is the bot-check block's (below).
+    vi.stubEnv("ENV_NAME", "ci");
     const res = await post(form());
     landedToken(res);
     const attrs = visitorCookies(res)[0]!.split(";").map((a) => a.trim().toLowerCase());
@@ -436,5 +440,173 @@ describe.skipIf(!HAS_DB)("POST /api/quick-match: the per-IP limit (D2)", () => {
     const res = await post(form(), { ip: `${theirs}, 10.0.0.1, 10.0.0.2` });
     expect(res.headers.get("location")).toBe("/en/play?e=QUICK_MATCH_RATE_LIMITED");
     expect(seen.map((s) => s.key)).toEqual([`rl:quick-match-create:${theirs}`]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// The bot check (owner 2026-11-12: "yes we need turnstile"). The create asks Cloudflare Turnstile straight after its per-IP
+// limit (server/turnstile.ts `requireTurnstile`, action `quickmatch`), and a refusal is a 303 back to the setup page with
+// QUICK_MATCH_TURNSTILE_FAILED, as every refusal here is. turnstile-gate.test.ts proves the gate's placement and every token
+// case against a mocked create; THIS block proves it on real rows: a refused create writes nothing and spends no mail bucket,
+// and a passed one makes the match and does reach the mail bucket (the pair).
+//
+// Enforce mode is production on a named deployment with the secret and the allowed host set, the only mode that checks
+// (`turnstileMode`). Cloudflare is a fake on global fetch that accepts a token once, for the action it was minted for; every
+// other fetch passes through untouched. The wire strings are typed, not imported: the setup page and the widget agree on them.
+describe.skipIf(!HAS_DB)("POST /api/quick-match: the bot check (Cloudflare Turnstile)", () => {
+  const SECRET = "1x0000000000000000000000000000000AA"; // Cloudflare's published always-pass test secret
+  const HOST = "stg.seazn.test";
+  const SITEVERIFY = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
+  const HEADER = "cf-turnstile-response";
+  const BOT_CHECK = "QUICK_MATCH_TURNSTILE_FAILED";
+  const realFetch = globalThis.fetch;
+  const minted = new Map<string, { action: string; spent: boolean }>();
+  /** The tokens Cloudflare was asked about, in order. */
+  const asked: string[] = [];
+  let unreachable = false;
+
+  const mint = (action: string) => {
+    const token = `0.qm-${randomUUID()}`;
+    minted.set(token, { action, spent: false });
+    return token;
+  };
+  /** Production on a named deployment, with the secret and the allowed host: the only mode that checks. */
+  const enforce = () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("ENV_NAME", "stg");
+    vi.stubEnv("TURNSTILE_SECRET", SECRET);
+    vi.stubEnv("TURNSTILE_HOSTNAMES", HOST);
+  };
+  /** Every limiter bucket asked, through the limiter's own seam. The create's bucket allows; the per-IP MAIL bucket refuses, so
+   *  a create that gets past the gate makes its match with no mail queued, and the record shows that bucket WAS asked. */
+  const buckets = () => {
+    const keys: string[] = [];
+    __setRateLimitCounterForTests(async (key) => {
+      keys.push(key);
+      return { count: key.startsWith("rl:quick-match-email:") ? 1_000 : 1, ttlMs: 60_000 };
+    });
+    return keys;
+  };
+  const refusedTo = (res: Response, locale: string) => {
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe(`/${locale}/play?e=${BOT_CHECK}`);
+  };
+
+  beforeEach(() => {
+    minted.clear();
+    asked.length = 0;
+    unreachable = false;
+    vi.mocked(Sentry.captureException).mockClear();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        if (String(url) !== SITEVERIFY) return realFetch(url, init);
+        if (unreachable) throw new TypeError("fetch failed");
+        const body = new URLSearchParams(String(init?.body));
+        const token = body.get("response") ?? "";
+        asked.push(token);
+        const t = minted.get(token);
+        const reply = (b: unknown) => new Response(JSON.stringify(b), { status: 200 });
+        if (body.get("secret") !== SECRET || !t || t.spent) return reply({ success: false, "error-codes": ["invalid-input-response"] });
+        t.spent = true;
+        return reply({ success: true, action: t.action, hostname: HOST, "error-codes": [] });
+      }),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("no token, as a post without the script carries none: refused in the form's language, no row, no mail bucket, no fault", async () => {
+    enforce();
+    const keys = buckets();
+    const theirs = ip();
+    const key = mintVisitorKey();
+    const f = form({ locale: "fr", email: "guest@example.com" });
+    const res = await post(f, { ip: theirs, cookie: key });
+    refusedTo(res, "fr");
+    expect(asked, "no token: Cloudflare is never asked").toEqual([]);
+    expect(await rowsNamed(f.name as string)).toHaveLength(0);
+    expect(await rowsFor(hashVisitorKey(key))).toHaveLength(0);
+    expect(keys, "only the create's own limit: a refused create spends no mail bucket").toEqual([`rl:quick-match-create:${theirs}`]);
+    expect(reported(), "a bot-check refusal is the guest's, not a fault: never reported").toEqual([]);
+    expect(visitorCookies(res), "a refused create sets no visitor cookie").toEqual([]);
+  });
+
+  it("a token Cloudflare refuses (never minted; minted for the sign-in form): refused, nothing written, no mail bucket (counted)", async () => {
+    enforce();
+    let checked = 0;
+    for (const token of ["never-minted", mint("login")]) {
+      const keys = buckets();
+      const theirs = ip();
+      const f = form({ email: "guest@example.com" });
+      refusedTo(await post(f, { ip: theirs, headers: { [HEADER]: token } }), "en");
+      expect(asked.at(-1), "Cloudflare judged this request's own token").toBe(token);
+      expect(await rowsNamed(f.name as string), token).toHaveLength(0);
+      expect(keys, token).toEqual([`rl:quick-match-create:${theirs}`]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(reported()).toEqual([]);
+  });
+
+  it("a good token minted for `quickmatch` makes the match, after a refused try that changed nothing (sequence; the pair)", async () => {
+    enforce();
+    const key = mintVisitorKey();
+    const theirs = ip();
+    const keys = buckets();
+    const first = form({ email: "guest@example.com" });
+    refusedTo(await post(first, { ip: theirs, cookie: key }), "en");
+    // The guest taps Start again: the same visitor, the widget's token this time.
+    const second = form({ email: "guest@example.com" });
+    const token = mint("quickmatch");
+    const res = await post(second, { ip: theirs, cookie: key, headers: { [HEADER]: token } });
+    expect(res.status).toBe(303);
+    // The home, with the mail line: the mail bucket refused this create's mail (above), so the match was made without it.
+    expect(res.headers.get("location")).toMatch(/^\/q\/qm_[A-Za-z0-9_-]{43}\?e=QUICK_MATCH_EMAIL_LIMITED$/);
+    expect(await rowsFor(hashVisitorKey(key))).toEqual([expect.objectContaining({ name: second.name, email: null })]);
+    expect(await rowsNamed(first.name as string)).toHaveLength(0);
+    expect(asked).toEqual([token]);
+    // The positive pair of "no mail bucket": past the gate, the per-IP mail bucket IS asked.
+    expect(keys).toEqual([
+      `rl:quick-match-create:${theirs}`,
+      `rl:quick-match-create:${theirs}`,
+      `rl:quick-match-email:${theirs}`,
+    ]);
+  });
+
+  it("Turnstile unavailable fails CLOSED: Cloudflare unreachable, or a deployment that lost its secret, refuses a real token (counted)", async () => {
+    let checked = 0;
+    for (const outage of ["unreachable", "secret unset"] as const) {
+      enforce();
+      if (outage === "unreachable") unreachable = true;
+      else vi.stubEnv("TURNSTILE_SECRET", "");
+      const keys = buckets();
+      const theirs = ip();
+      const f = form({ email: "guest@example.com", locale: "nl" });
+      refusedTo(await post(f, { ip: theirs, headers: { [HEADER]: mint("quickmatch") } }), "nl");
+      expect(await rowsNamed(f.name as string), outage).toHaveLength(0);
+      expect(keys, outage).toEqual([`rl:quick-match-create:${theirs}`]);
+      expect(reported(), `${outage}: refused, not reported as a create fault`).toEqual([]);
+      unreachable = false;
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The pair: Cloudflare back and the secret set, a fresh token makes the match.
+    enforce();
+    buckets();
+    const f = form();
+    landedToken(await post(f, { headers: { [HEADER]: mint("quickmatch") } }));
+    expect(await rowsNamed(f.name as string)).toHaveLength(1);
+  });
+
+  it("a harness server (ENV_NAME ci, as e2e runs) skips the check: no token needed, Cloudflare never asked", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("ENV_NAME", "ci");
+    vi.stubEnv("TURNSTILE_SECRET", SECRET);
+    vi.stubEnv("TURNSTILE_HOSTNAMES", HOST);
+    buckets();
+    const f = form();
+    landedToken(await post(f));
+    expect(asked).toEqual([]);
+    expect(await rowsNamed(f.name as string)).toHaveLength(1);
   });
 });
