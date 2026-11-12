@@ -349,7 +349,7 @@ describe.skipIf(!HAS_DB)("open a match through a Match Day code", () => {
       });
       return { advance: (ms: number) => (now += ms), spent };
     }
-    const headers = (bearer: string, ip = IP) => ({ authorization: `Bearer ${bearer}`, "cf-connecting-ip": ip });
+    const headers = (bearer: string, ip = IP) => ({ authorization: `Bearer ${bearer}`, "x-forwarded-for": ip });
     const open = (bearer: string, fixtureId: string, ip = IP): Promise<Response> =>
       POST(new Request(`https://test.local/api/v1/match-day-code/fixtures/${fixtureId}/scoring-link`, { method: "POST", headers: headers(bearer, ip) }), {
         params: Promise.resolve({ id: fixtureId }),
