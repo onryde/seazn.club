@@ -411,3 +411,47 @@ test("the account's Quick matches (plan 3 Task 6): /me at 320, 768 and 1280 with
   await expect(page.locator("h1.page-title")).toBeVisible();
   await expect(page.getByTestId("me-quick-matches")).toHaveCount(0);
 });
+
+// T-ADM review m5: Delete with OTHER rows left. The list moves focus to its heading when rows remain and to its own root when
+// the last one goes (my-list.tsx `settle`); the case above loses the LAST row, so only this one sees the heading branch.
+test("the account's Quick matches (plan 3 Task 6, review m5): two saved, one deleted, the other stays and focus lands on the list's heading", async ({ guest: page }) => {
+  // Two setups, a magic-link sign-in and two saves: past the 60s default.
+  test.slow();
+  const names = [`e2e me two A ${TAG}`, `e2e me two B ${TAG}`];
+  const homes: string[] = [];
+  for (const [i, name] of names.entries()) {
+    await openSetup(page);
+    await form(page).getByLabel("Name", { exact: true }).fill(name);
+    await side(page, 1).fill("Ravi & Sam");
+    await side(page, 2).fill("Priya & Tom");
+    await start(page).click();
+    await expect(page).toHaveURL(/\/q\/qm_[^/?#]+$/);
+    const home = new URL(page.url()).pathname;
+    homes.push(home);
+    // The first save signs in by the real magic link, back on the save page; the second is already signed in.
+    if (i === 0) await loginUi(page, `delivered+e2e-qm-me-two-${TAG}-${Math.random().toString(36).slice(2, 7)}@resend.dev`, `${home}/save`);
+    else await page.goto(`${home}/save`);
+    await expect(page.getByTestId("qm-save-title")).toHaveText(`Keep ${name} in your account?`);
+    await page.getByTestId("qm-save").click();
+    await page.waitForURL((u) => u.pathname === home && u.search === "");
+  }
+  expect(homes).toHaveLength(2);
+
+  await page.goto("/me");
+  const rows = page.getByTestId("me-quick-matches").locator("li[data-qm-id]");
+  await expect(rows).toHaveCount(2);
+  const doomed = rows.filter({ hasText: names[0]! });
+  await doomed.getByTestId("me-qm-delete").click();
+  await doomed.getByTestId("me-qm-delete-yes").click();
+
+  await expect(rows, "the deleted row goes, the other stays").toHaveCount(1);
+  await expect(rows.getByTestId("me-qm-name")).toHaveText(names[1]!);
+  await expect(page.getByTestId("me-qm-status")).toHaveText(`${names[0]} was deleted.`);
+  await expect(page.locator("#me-quick-matches-title"), "rows remain: focus on the list's heading").toBeFocused();
+  await expect(page.getByTestId("me-qm-root"), "not the root (that is for the last row)").not.toBeFocused();
+  await expectNoHorizontalScroll(page);
+  // The page's own read agrees: one left, the one not deleted.
+  await page.reload();
+  await expect(page.getByTestId("me-quick-matches").locator("li[data-qm-id]")).toHaveCount(1);
+  await expect(page.getByTestId("me-quick-matches").getByTestId("me-qm-name")).toHaveText(names[1]!);
+});

@@ -387,7 +387,8 @@ describe.skipIf(!HAS_DB)("/me: the account's Quick matches", () => {
   });
 
   it("under a staff impersonation (the real impersonate page): each saved match is named, WITHOUT its link, and that is no fault; the person's own session then links each", async () => {
-    process.env.AUTH_SECRET ??= "auth-secret-for-quick-match-section-test-0123456789-0123456789";
+    // Stubbed, so afterAll's unstubAllEnvs puts the process's own value back (review m8); a secret already set is kept.
+    vi.stubEnv("AUTH_SECRET", process.env.AUTH_SECRET ?? "auth-secret-for-quick-match-section-test-0123456789-0123456789");
     const target = await account("imp-target");
     const staff = await account("imp-staff");
     const a = await create("league", 2);

@@ -129,8 +129,10 @@ vi.mock("../quick-match-home", async (orig) => {
 
 import { inspect } from "node:util";
 import { POST as eventsPost } from "@/app/api/v1/fixtures/[id]/events/route";
+import { EVENTS } from "@/lib/analytics-events";
 import { sql } from "@/lib/db";
 import type { Locale } from "@/lib/i18n-constants";
+import { captureServer } from "@/lib/posthog-server";
 import { QUICK_MATCH_SYSTEM_ORG_ID, QUICK_MATCH_SYSTEM_USER_ID } from "@/lib/quick-match-constants";
 import { requireFixtureActor, type AuthCtx } from "@/server/api-v1/auth";
 import type { AppendEventRequest, CreateQuickMatch } from "@/server/api-v1/schemas";
@@ -822,7 +824,7 @@ describe.skipIf(!HAS_DB)("the expiry sweep (DB)", () => {
     },
   );
 
-  it("a failing delete is counted and logged with its id and code (never a token or an address), and the other rows still go", async () => {
+  it("a failing delete is counted and logged with its id and code (never a token or an address), announces no deletion, and the other rows still go", async () => {
     const to = address("fail");
     const bad = await create({ email: to });
     await idleFor(bad.id, 8);
@@ -841,6 +843,12 @@ describe.skipIf(!HAS_DB)("the expiry sweep (DB)", () => {
     expect(text).toMatch(/code/);
     expect(text).not.toContain(bad.token);
     expect(text).not.toContain(to);
+    // quick_match_deleted is the record of a delete that HAPPENED: none for the row whose delete failed (it is still on record),
+    // and the positive pair, exactly one for the row that went.
+    const deletedFor = (id: string) =>
+      vi.mocked(captureServer).mock.calls.filter(([c]) => c.event === EVENTS.QUICK_MATCH_DELETED && c.properties?.quick_match_id === id);
+    expect(deletedFor(bad.id), "the failed delete").toHaveLength(0);
+    expect(deletedFor(good.id), "the delete that went").toHaveLength(1);
   });
 
   it.each([
