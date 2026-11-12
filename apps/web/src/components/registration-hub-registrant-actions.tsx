@@ -101,7 +101,7 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import { lichessRegistrantRefusalText } from "@/components/v2/entrants-lichess-refusal";
 import { registrantKindRefusalText } from "@/lib/entrant-kind-refusal";
 import { deriveRegistrantActionFlags } from "@/components/registration-hub-registrant-derive";
-import { REMINDER_CONFIRM_WITHIN_MS, REMINDER_LIMIT_CODE } from "@/lib/registration-reminder";
+import { REMINDER_CAP_PER_DAY, REMINDER_CONFIRM_WITHIN_MS, REMINDER_LIMIT_CODE } from "@/lib/registration-reminder";
 import type { MessageKey } from "@/lib/messages";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
 
@@ -438,7 +438,10 @@ export function RegistrationHubRegistrantActions({
     } catch (err) {
       setFeedback({
         tone: "error",
-        text: err instanceof ApiV1Error && err.code === REMINDER_LIMIT_CODE ? msg("reg.remind.limit") : failureText(err),
+        text:
+          err instanceof ApiV1Error && err.code === REMINDER_LIMIT_CODE
+            ? msg("reg.remind.limit", { count: REMINDER_CAP_PER_DAY })
+            : failureText(err),
       });
     } finally {
       setBusy(null);

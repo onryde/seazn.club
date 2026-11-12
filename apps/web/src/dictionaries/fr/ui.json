@@ -3053,7 +3053,7 @@
   "reg.remind.lastReminded": "Dernier rappel : {when}",
   "reg.remind.confirmRecent.title": "Envoyer un autre rappel ?",
   "reg.remind.confirmRecent.body": "Vous avez envoyé un rappel de paiement à cette personne il y a moins d'une heure. En envoyer un autre ?",
-  "reg.remind.limit": "Cette inscription a déjà reçu 5 rappels au cours des dernières 24 heures. Réessayez plus tard.",
+  "reg.remind.limit": "Cette inscription a déjà reçu {count} rappels au cours des dernières 24 heures. Réessayez plus tard.",
   "reg.stripeOffline.pre": "Les paiements par carte sont hors ligne — les inscrits ne peuvent pas payer tant que Stripe n'est pas reconnecté sous ",
   "reg.stripeOffline.link": "Paramètres → Connect",
   "reg.stripeOffline.post": ". La page publique affiche la division comme temporairement indisponible.",

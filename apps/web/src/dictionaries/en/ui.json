@@ -3053,7 +3053,7 @@
   "reg.remind.lastReminded": "Last reminded {when}",
   "reg.remind.confirmRecent.title": "Send another reminder?",
   "reg.remind.confirmRecent.body": "You sent this registrant a payment reminder less than an hour ago. Send another?",
-  "reg.remind.limit": "This entry has had 5 reminders in the last 24 hours. Try again later.",
+  "reg.remind.limit": "This entry has had {count} reminders in the last 24 hours. Try again later.",
   "reg.stripeOffline.pre": "Card payments are offline — registrants can't pay until Stripe is reconnected under ",
   "reg.stripeOffline.link": "Settings → Connect",
   "reg.stripeOffline.post": ". The public page shows the division as temporarily unavailable.",

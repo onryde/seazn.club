@@ -21,7 +21,7 @@ import uiEn from "@/dictionaries/en/ui.json";
 import uiEs from "@/dictionaries/es/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
 import uiNl from "@/dictionaries/nl/ui.json";
-import { REMINDER_CONFIRM_WITHIN_MS } from "@/lib/registration-reminder";
+import { REMINDER_CAP_PER_DAY, REMINDER_CONFIRM_WITHIN_MS } from "@/lib/registration-reminder";
 
 const nav = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({
@@ -778,12 +778,31 @@ describe("RegistrationHubRegistrantActions — send payment reminder", () => {
     const capped = mount(owed);
     await press(capped);
     expect(feedbackOf(capped)["data-tone"]).toBe("error");
-    expect(capped.text()).toContain(t(uiEn, "reg.remind.limit"));
+    expect(capped.text()).toContain(t(uiEn, "reg.remind.limit", { count: REMINDER_CAP_PER_DAY }));
+    // Gap wave G8: the number is the cap the server enforces, filled in - never a placeholder left showing.
+    expect(capped.text()).toMatch(new RegExp(`\\b${REMINDER_CAP_PER_DAY}\\b`));
+    expect(capped.text()).not.toContain("{count}");
     expect(capped.text()).not.toContain("SERVER ENGLISH WORDS");
 
     net.next.set("remind", Promise.reject(new ApiV1Error("Some other refusal", 422, "ERROR")));
     const other = mount(owed);
     await press(other);
     expect(other.text()).toContain("Some other refusal");
+  });
+
+  // Gap wave G8 (ledger :64): the limit copy hardcoded "5" in every locale, so a change to REMINDER_CAP_PER_DAY (the cap the server
+  // enforces, organiser-actions.ts) would leave four dictionaries naming the old number. Each locale now takes it as {count}.
+  it("the limit copy takes the cap as {count} in every locale and names no number of its own", () => {
+    const own = new RegExp(`\\b${REMINDER_CAP_PER_DAY}\\b`);
+    let checked = 0;
+    for (const [locale, dict] of [["en", uiEn], ["es", uiEs], ["fr", uiFr], ["nl", uiNl]] as const) {
+      const copy = (dict as Record<string, string>)["reg.remind.limit"];
+      expect(copy, `${locale}: the key exists`).toBeTruthy();
+      expect(copy!.split("{count}").length - 1, `${locale}: one {count}`).toBe(1);
+      expect(copy, `${locale}: no hardcoded cap`).not.toMatch(own);
+      expect(t(dict, "reg.remind.limit", { count: REMINDER_CAP_PER_DAY }), `${locale}: the cap is filled in`).toMatch(own);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every locale was read").toBe(4);
   });
 });

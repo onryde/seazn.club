@@ -3053,7 +3053,7 @@
   "reg.remind.lastReminded": "Laatste herinnering: {when}",
   "reg.remind.confirmRecent.title": "Nog een herinnering sturen?",
   "reg.remind.confirmRecent.body": "Je hebt deze persoon minder dan een uur geleden een betalingsherinnering gestuurd. Nog een sturen?",
-  "reg.remind.limit": "Deze inschrijving heeft de afgelopen 24 uur al 5 herinneringen gehad. Probeer het later opnieuw.",
+  "reg.remind.limit": "Deze inschrijving heeft de afgelopen 24 uur al {count} herinneringen gehad. Probeer het later opnieuw.",
   "reg.stripeOffline.pre": "Kaartbetalingen zijn offline — deelnemers kunnen niet betalen totdat Stripe opnieuw is verbonden onder ",
   "reg.stripeOffline.link": "Instellingen → Connect",
   "reg.stripeOffline.post": ". De openbare pagina toont de divisie als tijdelijk niet beschikbaar.",

@@ -3053,7 +3053,7 @@
   "reg.remind.lastReminded": "Último recordatorio: {when}",
   "reg.remind.confirmRecent.title": "¿Enviar otro recordatorio?",
   "reg.remind.confirmRecent.body": "Enviaste un recordatorio de pago a esta persona hace menos de una hora. ¿Enviar otro?",
-  "reg.remind.limit": "Esta inscripción ya ha recibido 5 recordatorios en las últimas 24 horas. Inténtalo más tarde.",
+  "reg.remind.limit": "Esta inscripción ya ha recibido {count} recordatorios en las últimas 24 horas. Inténtalo más tarde.",
   "reg.stripeOffline.pre": "Los pagos con tarjeta están desconectados: los inscritos no pueden pagar hasta que Stripe se reconecte en ",
   "reg.stripeOffline.link": "Configuración → Connect",
   "reg.stripeOffline.post": ". La página pública muestra la división como temporalmente no disponible.",
