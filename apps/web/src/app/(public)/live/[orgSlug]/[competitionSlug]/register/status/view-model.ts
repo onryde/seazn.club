@@ -5,7 +5,7 @@
 // organiser one) are provable without a render.
 import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 import { isTerminalRegistrationStatus } from "@/lib/registration-status";
-import { routes } from "@/lib/routes";
+import { joinLinkPath } from "@/lib/join-link";
 
 export type EntryStatus =
   | "pending"
@@ -337,9 +337,7 @@ export function claimHref(
   joinCode: string,
   playerId?: string,
 ): string {
-  const qs = new URLSearchParams({ join_code: joinCode });
-  if (playerId) qs.set("player_id", playerId);
-  return `${routes.publicRegisterJoin(orgSlug, competitionSlug)}?${qs.toString()}`;
+  return joinLinkPath(orgSlug, competitionSlug, joinCode, playerId);
 }
 
 /**
