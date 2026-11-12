@@ -897,13 +897,17 @@ test.describe("RS005 registrants tab", () => {
     ).toBeVisible();
   });
 
-  // --- 4. The recovery path ----------------------------------------------------
-  test("the recovery path: an unpaid pending fee entry offers no approve; marking it paid confirms it and creates the entrant", async ({
+  // --- 4. Approve and Mark paid are two decisions (polish wave P5, W12) -------
+  // On a MANUAL-approval division with a fee, the organiser's approval and the payment are separate facts, and the entry is confirmed
+  // (and its entrant created) only once BOTH are in, in either order. Approve first -> pending, "approved, payment due"; Mark paid
+  // first -> `paid`, awaiting approval. This replaced the pre-W12 rule (no Approve while unpaid; Mark paid was itself the approval),
+  // whose e2e twin still pinned it after the vitest twins were rewritten (final review I2).
+  test("W12: an unpaid manual fee entry offers Approve and Mark paid; either order needs both, and only then is the entrant created", async ({
     page,
     request,
   }) => {
     const org = await activeOrg(page);
-    const { competitionSlug, divisionId } = await seedDivision(request, { divisionName: "Recovery Path" });
+    const { competitionSlug, divisionId } = await seedDivision(request, { divisionName: "Two Decisions" });
     const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/registration-settings`, "PUT", {
       enabled: true,
       entrant_kind: "individual",
@@ -913,49 +917,73 @@ test.describe("RS005 registrants tab", () => {
     });
     expect(settings.status).toBeLessThan(300);
     const suffix = `${TAG}-${Math.random().toString(36).slice(2, 7)}`;
-    const displayName = `Recovery ${suffix}`;
-    const submitted = await apiJson<{ entries: { registration_id: string; status: string }[] }>(
-      request,
-      `/api/v1/public/orgs/${org.slug}/competitions/${competitionSlug}/register`,
-      "POST",
-      {
-        contact: { name: displayName, email: `delivered+recovery-${suffix}@resend.dev` },
-        privacy_consent: true,
-        entries: [
-          { division_id: divisionId, entrant_kind: "individual", players: [{ full_name: displayName }], answers: {} },
-        ],
-      },
-    );
-    expect(submitted.status, JSON.stringify(submitted.error)).toBe(201);
-    const entry = submitted.data!.entries[0]!;
-    expect(entry.status, "manual + fee + no payment on file -> pending").toBe("pending");
-    const regId = entry.registration_id;
+    // Two carts, one per order: A is approved first, B is marked paid first.
+    const submitOne = async (displayName: string, tag: string): Promise<string> => {
+      const submitted = await apiJson<{ entries: { registration_id: string; status: string }[] }>(
+        request,
+        `/api/v1/public/orgs/${org.slug}/competitions/${competitionSlug}/register`,
+        "POST",
+        {
+          contact: { name: displayName, email: `delivered+w12-${tag}-${suffix}@resend.dev` },
+          privacy_consent: true,
+          entries: [
+            { division_id: divisionId, entrant_kind: "individual", players: [{ full_name: displayName }], answers: {} },
+          ],
+        },
+      );
+      expect(submitted.status, JSON.stringify(submitted.error)).toBe(201);
+      const entry = submitted.data!.entries[0]!;
+      expect(entry.status, "manual + fee + no payment on file -> pending").toBe("pending");
+      return entry.registration_id;
+    };
+    const nameA = `Approve First ${suffix}`;
+    const nameB = `Paid First ${suffix}`;
+    const regA = await submitOne(nameA, "a");
+    const regB = await submitOne(nameB, "b");
+    const entrantNames = async (): Promise<string[]> => {
+      const entrants = await apiJson<{ display_name: string }[]>(page.request, `/api/v1/divisions/${divisionId}/entrants`);
+      expect(entrants.status).toBe(200);
+      return entrants.data!.map((e) => e.display_name);
+    };
+    const approveOf = (row: Locator) => row.locator('[data-registration-hub-registrant-action="approve"]');
+    const markPaidOf = (row: Locator) => row.locator('[data-registration-hub-registrant-action="mark-paid"]');
 
     await page.goto(registrantsPath(org.slug, competitionSlug), { waitUntil: "load" });
-    const row = await expandRow(page, regId);
-    await expect(
-      row.locator('[data-registration-hub-registrant-action="approve"]'),
-      "an unpaid manual+fee entry must NOT offer approve (the dead end RS005 R1 closed)",
-    ).toHaveCount(0);
-    const markPaid = row.locator('[data-registration-hub-registrant-action="mark-paid"]');
-    await expect(markPaid, "it must offer mark-paid instead").toBeVisible();
 
-    await markPaid.click();
-    await acceptConfirmDialog(page);
+    // A: both decisions are offered on the unpaid entry.
+    let rowA = await expandRow(page, regA);
+    await expect(approveOf(rowA), "an unpaid manual+fee entry offers Approve (W12)").toBeVisible();
+    await expect(markPaidOf(rowA), "and Mark paid beside it").toBeVisible();
+    // Approve first: approved, the fee still due - the entry stays pending and nobody is seated.
+    await approveOf(rowA).click();
     await expect(
-      statusLocator(row, "confirmed"),
-      "marking paid confirms the entry directly — materialise() sets status='confirmed' in the same transaction",
+      rowA.locator("[data-registration-hub-registrant-approved-awaiting-payment]"),
+      "Approve on an unpaid entry reads 'approved, payment due'",
     ).toBeVisible({ timeout: 20_000 });
+    await expect(statusLocator(rowA, "pending"), "the approval alone does not confirm it").toBeVisible({ timeout: 20_000 });
+    await expect(approveOf(rowA), "an approval is given once").toHaveCount(0, { timeout: 20_000 });
+    expect(await entrantNames(), "no entrant while the fee is due").not.toContain(nameA);
+    // Then its payment confirms it.
+    rowA = await expandRow(page, regA);
+    await markPaidOf(rowA).click();
+    await acceptConfirmDialog(page);
+    await expect(statusLocator(rowA, "confirmed"), "approved + paid -> confirmed").toBeVisible({ timeout: 20_000 });
+    await expect.poll(entrantNames, { timeout: 20_000, message: "confirming creates the entrant" }).toContain(nameA);
 
-    const entrants = await apiJson<{ display_name: string }[]>(
-      page.request,
-      `/api/v1/divisions/${divisionId}/entrants`,
-    );
-    expect(entrants.status).toBe(200);
-    expect(
-      entrants.data!.some((e) => e.display_name === displayName),
-      "marking paid must materialise a real entrant, not just flip the status",
-    ).toBe(true);
+    // B: Mark paid first - paid, still awaiting the organiser's approval, and still nobody seated.
+    let rowB = await expandRow(page, regB);
+    await expect(approveOf(rowB)).toBeVisible();
+    await markPaidOf(rowB).click();
+    await acceptConfirmDialog(page);
+    await expect(statusLocator(rowB, "paid"), "a payment on a manual division is not the approval").toBeVisible({ timeout: 20_000 });
+    await expect(markPaidOf(rowB), "nothing left to mark paid").toHaveCount(0, { timeout: 20_000 });
+    expect(await entrantNames(), "no entrant before the approval").not.toContain(nameB);
+    // Then the approval confirms it.
+    rowB = await expandRow(page, regB);
+    await expect(approveOf(rowB), "the paid entry still waits on Approve").toBeVisible();
+    await approveOf(rowB).click();
+    await expect(statusLocator(rowB, "confirmed"), "paid + approved -> confirmed").toBeVisible({ timeout: 20_000 });
+    await expect.poll(entrantNames, { timeout: 20_000, message: "confirming creates the entrant" }).toContain(nameB);
   });
 
   // --- 5. Reject is terminal ----------------------------------------------------
