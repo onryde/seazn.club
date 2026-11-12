@@ -7,10 +7,11 @@ import "server-only";
 // (no sealing key, a bad address, a render fault) never undoes the fact. A failure is logged and contained; it returns `null`.
 // `null` also means "already queued" (the once-key): nothing more to attempt. A request path then makes the first attempt after commit
 // (`deferred(() => dispatchNow(ids))`); a webhook or the sweep leaves it to the retry worker, as every other outbox mail does.
-import { registrationPaidEmail } from "@/lib/email";
+import { routes } from "@/lib/routes";
+import { registrationApprovedEmail, registrationPaidEmail } from "@/lib/email";
 import { enqueueEmailOnce, expiryWithin, recipientLocale } from "@/server/email-outbox";
 import { log } from "@/server/logger";
-import type { Tx, RegistrationWithGroupRow } from "./types";
+import type { Tx, RegistrationWithGroupRow, DivisionCtx } from "./types";
 import { divisionCtx, fallbackOrigin } from "./lookups";
 
 const divisionNameOf = async (db: Tx, divisionId: string): Promise<string> => {
@@ -18,6 +19,13 @@ const divisionNameOf = async (db: Tx, divisionId: string): Promise<string> => {
   if (!row) throw new Error(`lifecycle mail: division ${divisionId} not found`);
   return row.name;
 };
+
+/** The competition's public pages exist only for a public or unlisted competition (a private one is a 404): a mail never links one. */
+const hasPublicPages = (ctx: DivisionCtx): boolean => ctx.comp_visibility === "public" || ctx.comp_visibility === "unlisted";
+
+/** The competition's public hub page, for a recipient who holds no status token (a teammate) - or `null` for a private competition. */
+const competitionUrlOf = (origin: string, ctx: DivisionCtx): string | null =>
+  hasPublicPages(ctx) ? `${origin}${routes.publicHub(ctx.org_slug, ctx.comp_slug)}` : null;
 
 /** An entry's own status page, by reference code (`/r/<ref>`): token-less, so it is safe in any mail to the contact. */
 const statusUrlOf = (origin: string, reg: RegistrationWithGroupRow): string | null => (reg.ref_code ? `${origin}/r/${reg.ref_code}` : null);
@@ -82,4 +90,74 @@ export async function queueRegistrationPaidMail(
       dedupeKey: `${reg.id}:${a.paymentRef}`,
     });
   });
+}
+
+/**
+ * `registration_approved`: the organiser approved the entry (Approve, Confirm, or Confirm-and-waive-the-fee), so its place is confirmed.
+ * To the registration's contact AND to every teammate who has joined the entry and has an address (W2, W13); one mail per address (a
+ * teammate whose address is the contact's own is not mailed twice). Each in their own language: the contact's pick or account, a teammate's account or the club's.
+ *
+ * `reg` is the row AFTER the write. Only an entry that is `confirmed` there is told it is: an approval that left the entry anywhere else
+ * (the day Approve and Mark paid are split, an approved entry whose fee is still due) queues nothing here and says so in the log, because
+ * "you're confirmed" is a claim about the row, not about what the organiser pressed. That wording is the next wave's to write.
+ *
+ * Once per recipient per approval: the keys carry the row's `updated_at`, which the approving statement stamps, so a second Approve of an
+ * already-confirmed entry (it returns early, before this is reached) and a retried transaction queue nothing, while an entry withdrawn,
+ * reinstated and approved AGAIN is a new approval and is mailed again.
+ */
+export async function queueRegistrationApprovedMails(tx: Tx, a: { reg: RegistrationWithGroupRow; origin?: string }): Promise<string[]> {
+  const { reg } = a;
+  if (reg.status !== "confirmed") {
+    log.info({ registrationId: reg.id, status: reg.status }, "registration: approval did not confirm the entry; no approved email queued");
+    return [];
+  }
+  // Each step at its own savepoint: one teammate's bad address must not cost the contact their mail, and none of it may cost the approval.
+  const prep = await contained(tx, "registration_approved", reg.id, async (sp) => {
+    const ctx = await divisionCtx(sp, reg.division_id);
+    const mates = await sp<{ full_name: string; email: string; user_id: string | null }[]>`
+      select full_name, btrim(email) as email, user_id
+      from registration_players
+      where registration_id = ${reg.id}
+        and email is not null and btrim(email) <> ''
+        and consent_status in ('granted', 'guardian')
+      order by created_at, id`;
+    return { ctx, divisionName: await divisionNameOf(sp, reg.division_id), mates: [...mates] };
+  });
+  if (!prep) return [];
+  const origin = a.origin ?? fallbackOrigin();
+  const stamp = reg.updated_at.toISOString();
+  const base = {
+    orgName: prep.ctx.org_name,
+    competitionName: prep.ctx.comp_name,
+    divisionName: prep.divisionName,
+    displayName: reg.display_name,
+    competitionUrl: competitionUrlOf(origin, prep.ctx),
+  };
+  // The contact first, then every teammate who has joined (consented) and left an address. One mail per ADDRESS, whatever the case or how
+  // many rows carry it: the once-key below is that rule (a teammate who typed the contact's own address, or two rows for one person, queue
+  // nothing a second time).
+  const recipients = [
+    { to: reg.contact_email, name: reg.contact_name, refCode: reg.ref_code, pick: reg.locale, userId: reg.user_id },
+    ...prep.mates.map((m) => ({ to: m.email, name: m.full_name, refCode: null, pick: null, userId: m.user_id })),
+  ];
+  const queued: string[] = [];
+  for (const r of recipients) {
+    const id = await contained(tx, "registration_approved", reg.id, async (sp) => {
+      const locale = await recipientLocale(sp, { pick: r.pick, userId: r.userId, orgDefault: prep.ctx.default_locale });
+      const content = await registrationApprovedEmail({ ...base, recipientName: r.name, refCode: r.refCode }, locale);
+      return enqueueEmailOnce(sp, {
+        kind: "registration_approved",
+        refType: "registration",
+        refId: reg.id,
+        orgId: reg.org_id,
+        to: r.to,
+        ...content,
+        transactional: false,
+        expiresAt: expiryWithin(null),
+        dedupeKey: `${reg.id}:${r.to.toLowerCase()}:${stamp}`,
+      });
+    });
+    if (id) queued.push(id);
+  }
+  return queued;
 }

@@ -28,4 +28,4 @@ alter table email_outbox drop constraint email_outbox_kind_valid,
     'staff_connect_bank_changed', 'staff_stuck_events', 'staff_stream_pack_price_drift', 'staff_ai_run_cost',
     'staff_earn_grant_volume', 'staff_extra_org_allowance',
     'sponsor_deal_paid',
-    'registration_paid'));
+    'registration_paid', 'registration_approved'));

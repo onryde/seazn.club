@@ -41,6 +41,7 @@ import {
   queueRefundReceipt,
   maybeAlertRegistrationRefundFailed,
   inviteUnclaimedMembers,
+  queueRegistrationApprovedMails,
   type RegistrationWithGroupRow,
   type RegistrationSettingsRow,
 } from "./registrations";
@@ -117,9 +118,9 @@ export async function approveRegistration(
   const frozen = await frozenCompetitionIds(auth.orgId);
   // Approving seats the registrant: the seat gate, asked out here too (online-seat-gate.ts).
   const seatGate = await openRegistrationSeatGateFor(auth, regId);
-  const row = await withTenant(auth.orgId, async (tx) => {
+  const { row, mailIds } = await withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
-    if (reg.status === "confirmed") return reg; // idempotent success
+    if (reg.status === "confirmed") return { row: reg, mailIds: [] as string[] }; // idempotent success: no second mail
     if (reg.status === "rejected") {
       throw new HttpError(422, "This registration was rejected and cannot be approved");
     }
@@ -149,8 +150,13 @@ export async function approveRegistration(
       registration_id: regId,
       paid: reg.status === "paid",
     }, auth.userId);
-    return orgRegAfter(tx, regId);
+    const after = await orgRegAfter(tx, regId);
+    // Polish wave P2 (W2, W13): the registrant is told, in the transaction that approves them (the contact, and every joined teammate
+    // with an address). Only an entry that IS confirmed after the write is told so.
+    return { row: after, mailIds: await queueRegistrationApprovedMails(tx, { reg: after }) };
   }, seatGate?.tenant);
+  // A request: the first attempt is made after the response.
+  if (mailIds.length > 0) deferred(() => dispatchNow(mailIds));
   fireDivisionRevalidate(row.division_id);
   // RS008: fire-and-forget, strictly AFTER the transaction above has
   // committed — see registrations/organiser-actions.ts's confirmRegistration for the

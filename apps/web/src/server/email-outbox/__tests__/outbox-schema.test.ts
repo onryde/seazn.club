@@ -62,6 +62,7 @@ const SPEC_KINDS = [
   "staff_earn_grant_volume", "staff_extra_org_allowance",
   "sponsor_deal_paid",
   "registration_paid",
+  "registration_approved",
 ];
 
 describe("email outbox vocabularies (constants.ts)", () => {
@@ -73,7 +74,7 @@ describe("email outbox vocabularies (constants.ts)", () => {
   it("the kinds are the spec's fifty-one, in the spec's wave order, then sponsor deals' sponsor_deal_paid, then the registration lifecycle kinds", () => {
     // The spec's Counts: "wave 1 has 5 kinds, wave 2 has 10, wave 3 has 8, wave 4 has 9 and wave 5 has 17, which makes 49. With
     // `magic_link` and `chess_invite` that is 51." Sponsor deals Task 23 (D13) adds one: 52.
-    expect(SPEC_KINDS.length).toBe(53);
+    expect(SPEC_KINDS.length).toBe(54);
     expect([...OUTBOX_KINDS]).toEqual(SPEC_KINDS);
   });
 

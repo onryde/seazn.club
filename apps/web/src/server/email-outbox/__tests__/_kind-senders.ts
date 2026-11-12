@@ -34,7 +34,7 @@ export const KINDS_BEFORE_PHASE_3: readonly OutboxKind[] = ["magic_link", "chess
 /** Kinds BORN on the outbox after phase 3 closed: they never had a direct `send*` in lib/email.ts, so they are not among the spec's 49
  *  and take nothing from that count (without this list `allowlistLengthFor` would go negative). Not phase-1 kinds either, so they get a
  *  list of their own. Sponsor deals Task 23 (plan 2026-11-07-sponsor-deals, D13): the owner's "a sponsor has paid" notice. */
-export const KINDS_BORN_ON_THE_OUTBOX: readonly OutboxKind[] = ["sponsor_deal_paid", "registration_paid"];
+export const KINDS_BORN_ON_THE_OUTBOX: readonly OutboxKind[] = ["sponsor_deal_paid", "registration_paid", "registration_approved"];
 
 /** The `send*` exports of lib/email.ts still to move. The spec counted 49 at the start of phase 3 wave 1; each kind task took its own
  *  with it, and wave 5's last move emptied the list (T7 also deleted the private boolean sender and its typed form, so lib/email.ts
@@ -110,6 +110,7 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   // Born on the outbox (KINDS_BORN_ON_THE_OUTBOX): never had a direct sender.
   sponsor_deal_paid: null,
   registration_paid: null,
+  registration_approved: null,
 };
 
 /** How long the allowlist must be while `unmoved` kinds are still on their direct sender: the spec's 49, less one for every phase-3 kind

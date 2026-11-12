@@ -17,7 +17,7 @@ import { paymentReminderMessage, payDeadlineOf } from "./mail";
 import { issuePayLink, recordPayToken } from "./pay-token";
 import { stripeRefund, queueRefundReceipt } from "./refunds";
 import { withdrawCore } from "./withdraw";
-import { queueRegistrationPaidMail } from "./lifecycle-mail";
+import { queueRegistrationApprovedMails, queueRegistrationPaidMail } from "./lifecycle-mail";
 import { REMINDER_CAP_PER_DAY, REMINDER_LIMIT_CODE } from "@/lib/registration-reminder";
 
 /** Organiser approve (free regs and waitlist overrides). Paid-division regs
@@ -30,9 +30,9 @@ export async function confirmRegistration(auth: AuthCtx, regId: string): Promise
   const frozen = await frozenCompetitionIds(auth.orgId);
   // The seat gate, asked out here for the same reason (online-seat-gate.ts): confirming seats the registrant.
   const seatGate = await openRegistrationSeatGateFor(auth, regId);
-  const row = await withTenant(auth.orgId, async (tx) => {
+  const { row, mailIds } = await withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
-    if (reg.status === "confirmed") return reg;
+    if (reg.status === "confirmed") return { row: reg, mailIds: [] as string[] };
     // RULING A (RS002 W5 review, BLOCKER): rejected is terminal from EVERY
     // writer — an organiser explicitly confirming stays allowed on a manual
     // division (ruling B), but never on a REJECTED row regardless of mode.
@@ -57,8 +57,12 @@ export async function confirmRegistration(auth: AuthCtx, regId: string): Promise
       registration_id: regId,
       paid: reg.status === "paid",
     }, auth.userId);
-    return orgRegAfter(tx, regId);
+    const after = await orgRegAfter(tx, regId);
+    // Polish wave P2 (W2, W13): the organiser's confirm is an approval; the registrant is told in the same transaction.
+    return { row: after, mailIds: await queueRegistrationApprovedMails(tx, { reg: after }) };
   }, seatGate?.tenant);
+  // A request: the first attempt is made after the response.
+  if (mailIds.length > 0) deferred(() => dispatchNow(mailIds));
   fireDivisionRevalidate(row.division_id);
   // RS008: fire-and-forget, strictly AFTER the transaction above has
   // committed. `row.entrant_id` is null on an early-return before
@@ -150,9 +154,9 @@ export async function confirmRegistrationWaived(
   // needs no id the transaction has not read yet, and `assertNotFrozen` is pure.
   const frozen = await frozenCompetitionIds(auth.orgId);
   const seatGate = await openRegistrationSeatGateFor(auth, regId);
-  const row = await withTenant(auth.orgId, async (tx) => {
+  const { row, mailIds } = await withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
-    if (reg.status === "confirmed") return orgRegAfter(tx, regId);
+    if (reg.status === "confirmed") return { row: await orgRegAfter(tx, regId), mailIds: [] as string[] };
     // RULING A (RS002 W5 review, BLOCKER): rejected is terminal from every
     // writer. Already implied by the allowlist below (rejected is neither
     // pending nor waitlisted), but explicit and first for the same reason as
@@ -172,8 +176,12 @@ export async function confirmRegistrationWaived(
       registration_id: regId,
       fee_cents: settings?.fee_cents ?? 0,
     }, auth.userId);
-    return orgRegAfter(tx, regId);
+    const after = await orgRegAfter(tx, regId);
+    // Polish wave P2 (W2, W13): a comped entry is approved by the organiser; the registrant is told in the same transaction.
+    return { row: after, mailIds: await queueRegistrationApprovedMails(tx, { reg: after }) };
   }, seatGate?.tenant);
+  // A request: the first attempt is made after the response.
+  if (mailIds.length > 0) deferred(() => dispatchNow(mailIds));
   fireDivisionRevalidate(row.division_id);
   // RS008: fire-and-forget, strictly AFTER the transaction above has
   // committed — see confirmRegistration's identical wiring for why.
