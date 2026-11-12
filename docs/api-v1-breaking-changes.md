@@ -7,6 +7,28 @@ This file starts at the first breaking change the v1 contract has taken. It
 is not a full changelog: additive fields do not appear here, because a reader
 that ignores an unknown field is unaffected by one.
 
+## 2026-11-12 — the public registration writes take a bot-check token
+
+Five public writes are now checked by Cloudflare Turnstile on the hosted service (staging and production):
+
+- `POST /api/v1/public/orgs/{orgSlug}/competitions/{slug}/register`
+- `POST /api/v1/public/orgs/{orgSlug}/competitions/{slug}/register/join`
+- `POST /api/v1/public/registrations/{id}/withdraw`
+- `POST /api/v1/public/registrations/by-ref/{ref}/withdraw`
+- `POST /api/v1/public/registrations/groups/{id}/resend`
+
+(The sign-in and start-a-competition forms, `POST /api/auth/magic-link` and `POST /api/funnel/start`, are checked the same way; they are not part of `/api/v1`.)
+
+| Case | Before | Now |
+|---|---|---|
+| One of the five, with no `cf-turnstile-response` header | handled | `403 TURNSTILE_FAILED`, before the body is read |
+| One of the five, with a token Cloudflare refuses (spent, expired, minted for another action or another host) | handled | `403 TURNSTILE_FAILED` |
+| One of the five, with a good token for its own action | handled | handled; the token is spent |
+| `GET` on any public route, the join preview included | handled | unchanged: reads are not checked |
+| A server that does not run the check (local development, a test harness) | handled | unchanged: no header needed |
+
+The token travels in the `cf-turnstile-response` request header, never in the body, because several of these bodies are strict schemas. The check runs straight after the route's first per-IP rate limit, so a refused request still counts against that limit, and once the limit is spent the answer is 429 first. A token is single use and is minted for one action: `register`, `join`, `resend` or `withdraw` (both withdraw routes share `withdraw`).
+
 ## 2026-11-11 — a sponsor deal's send and create answer `invoice_url`, not `checkout_url`; a daily invoice-email cap
 
 `POST /api/v1/orgs/{id}/sponsors/{sponsorId}/deals` and `POST /api/v1/orgs/{id}/sponsor-deals/{dealId}/send-invoice` answered

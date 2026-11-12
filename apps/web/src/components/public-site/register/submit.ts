@@ -9,6 +9,7 @@ import { toGroupEntry } from "./cart";
 import { toGroupPlayers } from "./roster";
 import type { CartState, ConsentState, ContactState } from "./types";
 import { routes } from "@/lib/routes";
+import { TURNSTILE_ERROR_CODE } from "@/lib/turnstile";
 
 /** Mirrors `PublicRegisterGroupRequest`'s wire shape (api-v1/schemas/)
  *  field-for-field. `locale` is deliberately absent: the route resolves it
@@ -129,6 +130,8 @@ export function resolvePostSubmitNavigation(
  * with the EXACT same body would fail the exact same way either way, so
  * "try again" would be dishonest advice.
  *
+ * `"retry"` also covers the bot check's own refusal (403 + code TURNSTILE_FAILED): it is about the visit, never the content.
+ *
  * Any OTHER status (401/403/404/429/…) also falls to `"rejected"` — a
  * narrower "at minimum 409/5xx vs 400/422" was the brief; nothing about
  * this endpoint makes those specific codes reachable today, and "ask for
@@ -137,9 +140,12 @@ export function resolvePostSubmitNavigation(
  */
 export type SubmitFailureKind = "retry" | "rejected";
 
-export function classifySubmitFailure(status: number | undefined): SubmitFailureKind {
+export function classifySubmitFailure(status: number | undefined, code?: string): SubmitFailureKind {
   if (status === undefined) return "retry";
   if (status === 409 || status >= 500) return "retry";
+  // The bot check (Cloudflare Turnstile) refused the visit before the registration was read: nothing in it is wrong, so "check
+  // your details" would be the one dishonest sentence. "Please try again" is true, a fresh check is all that is missing.
+  if (status === 403 && code === TURNSTILE_ERROR_CODE) return "retry";
   return "rejected";
 }
 

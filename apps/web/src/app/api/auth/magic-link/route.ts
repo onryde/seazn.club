@@ -21,6 +21,7 @@ import { mayExposeDevLink } from "@/lib/dev-links";
 import { z } from "zod";
 import { NEXT_PATH_MAX_LENGTH } from "@/lib/types";
 import { rateLimit, EMAIL_LIMIT } from "@/lib/rate-limit";
+import { requireTurnstile } from "@/server/turnstile";
 import { headers } from "next/headers";
 import { clientIp } from "@/lib/client-ip";
 
@@ -55,6 +56,8 @@ export async function POST(req: Request) {
   return handler(async () => {
     const ip = clientIp(await headers());
     await rateLimit(`magic-link:${ip}`, EMAIL_LIMIT);
+    // Bot check (Cloudflare Turnstile): before the body is read or any account is looked at. 403 TURNSTILE_FAILED.
+    await requireTurnstile(req, "login");
 
     const body = schema.parse(await req.json());
     const { email } = body;

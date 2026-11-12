@@ -346,7 +346,7 @@ npm run sync:sports
 ```bash
 npm run dev        # Next.js dev server at http://localhost:3000
 npm run build      # production build
-npm run start      # serve production build
+ENV_NAME=local npm run start      # serve production build (a production server with no ENV_NAME refuses every public POST: bot check, fail closed)
 ```
 
 ---

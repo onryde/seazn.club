@@ -26,6 +26,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import { FAKE_DRIVER_ENV_NAMES } from "@/server/relay/config";
+import { bootSteps } from "./_ci-boot-steps";
 
 const ROOT = resolve(import.meta.dirname, "../../../../..");
 const WORKFLOWS = resolve(ROOT, ".github/workflows");
@@ -33,45 +34,6 @@ const WORKFLOWS = resolve(ROOT, ".github/workflows");
 const EXEMPT: Readonly<Record<string, string>> = {
   "bench.yml": "the scheduler bench drives placement and never starts a stream",
 };
-// `start` as a whole script name: `npm run start:placement` is some other script, not the web server.
-const BOOT = /\bnode\b.*\bserver\.js\b|\bnext start\b|\b(?:npm|pnpm)\s+(?:run\s+)?start(?![\w:-])/;
-/** A step's first line: a sequence item opening on one of a step's own keys. */
-const STEP_START = /^(\s*)- (?:name|run|uses|id|if|env|with|shell|working-directory|timeout-minutes|continue-on-error):/;
-const indentOf = (l: string): number => l.length - l.trimStart().length;
-const skippable = (l: string): boolean => l.trim() === "" || /^\s*#/.test(l);
-
-type BootStep = { line: number; env: Record<string, string> };
-
-/** For each production-server boot line: the env map of the step that owns it, read from THAT step's `env:` key. */
-function bootSteps(text: string): BootStep[] {
-  const lines = text.split("\n");
-  return lines.flatMap((l, i) => {
-    if (!BOOT.test(l) || /^\s*#/.test(l)) return [];
-    let start = i;
-    while (start >= 0 && !STEP_START.test(lines[start]!)) start--;
-    if (start < 0) return [{ line: i + 1, env: {} }];
-    // The step's keys sit two columns right of its `- `; it ends at the first real line left of them.
-    const keyIndent = indentOf(lines[start]!) + 2;
-    const body = [lines[start]!.replace(/^(\s*)- /, (_, s: string) => `${s}  `)];
-    for (let j = start + 1; j < lines.length && (skippable(lines[j]!) || indentOf(lines[j]!) >= keyIndent); j++) body.push(lines[j]!);
-    // Guard: the boot line must lie inside the step found for it, or the attribution is someone else's.
-    expect(start + body.length, `line ${i + 1} lies outside the step that starts at line ${start + 1}`).toBeGreaterThan(i);
-    const env: Record<string, string> = {};
-    const at = body.findIndex((b) => indentOf(b) === keyIndent && /^\s*env:\s*$/.test(b));
-    if (at >= 0) {
-      let childIndent: number | null = null;
-      for (const b of body.slice(at + 1)) {
-        if (skippable(b)) continue;
-        if (indentOf(b) <= keyIndent) break;
-        childIndent ??= indentOf(b);
-        const m = indentOf(b) === childIndent ? /^\s*([A-Za-z_][A-Za-z0-9_]*):\s*(.*?)\s*$/.exec(b) : null;
-        if (m) env[m[1]!] = m[2]!.replace(/^(["'])(.*)\1$/, "$2");
-      }
-    }
-    return [{ line: i + 1, env }];
-  });
-}
-
 describe("R5: every production server a streaming suite boots runs the fake relay drivers EXPLICITLY", () => {
   it("EVERY workflow: each production server boot's OWN step env carries RELAY_DRIVERS: fake and an ENV_NAME from FAKE_DRIVER_ENV_NAMES — bench.yml exempt by name", () => {
     const files = readdirSync(WORKFLOWS).filter((f) => /\.ya?ml$/.test(f)).sort();

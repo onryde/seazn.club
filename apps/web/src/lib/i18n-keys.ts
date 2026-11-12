@@ -9655,6 +9655,7 @@ export type DictionaryKey =
   | "trialEnding.text.charge"
   | "trialEnding.title.card"
   | "trialEnding.title.charge"
+  | "turnstile.error"
   | "upgrade.active.body"
   | "upgrade.active.title"
   | "upgrade.backToCompetition"

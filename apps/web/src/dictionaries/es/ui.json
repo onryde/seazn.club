@@ -2235,6 +2235,7 @@
   "registration.withdrawEntryFor": "Retirar inscripción de {division}",
   "auth.emailRequired": "Introduce tu correo para recibir un enlace de acceso.",
   "auth.error": "Algo salió mal",
+  "turnstile.error": "No pudimos confirmar que eres una persona. Recarga la página e inténtalo de nuevo. Si sigue fallando, desactiva el bloqueador de contenido para este sitio.",
   "auth.check.title": "Revisa tu correo",
   "auth.check.bodyPre": "Enviamos un enlace de acceso a",
   "auth.check.bodyPost": ". Ábrelo para iniciar sesión — caduca en 15 minutos.",

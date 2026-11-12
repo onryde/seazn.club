@@ -9,19 +9,39 @@
 // default is null) — mocked to the REAL English runtime translator, not an
 // identity stub, so assertions read actual copy.
 const apiV1Mock = vi.hoisted(() => ({
-  calls: [] as { url: string; method?: string; json?: unknown }[],
+  calls: [] as { url: string; method?: string; json?: unknown; headers?: Record<string, string> }[],
   queue: [] as ({ ok: true; data: unknown } | { ok: false; error: unknown })[],
 }));
 vi.mock("@/lib/client-v1", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/client-v1")>();
   return {
     ...actual,
-    apiV1: (url: string, options?: { method?: string; json?: unknown }) => {
-      apiV1Mock.calls.push({ url, method: options?.method, json: options?.json });
+    apiV1: (url: string, options?: { method?: string; json?: unknown; headers?: Record<string, string> }) => {
+      apiV1Mock.calls.push({ url, method: options?.method, json: options?.json, headers: options?.headers });
       const next = apiV1Mock.queue.shift();
       if (!next) return Promise.resolve(undefined);
       return next.ok ? Promise.resolve(next.data) : Promise.reject(next.error);
     },
+  };
+});
+
+// The Turnstile widget needs a browser; its controller is stood in for by a fake with the controller's own surface (token/reset),
+// so the join form's side of the seam is driven for real: the REAL `withTurnstile` hands the REAL `apiV1` call the header, and
+// resets the widget after. `turnstileFake.token` is what the "widget" holds; null = no widget / no token (no site key, dev, e2e).
+const turnstileFake = vi.hoisted(() => ({
+  token: null as string | null,
+  resets: 0,
+  controller: null as unknown as { token(): Promise<string | null>; reset(): void },
+  actions: [] as string[],
+}));
+vi.mock("@/components/turnstile-widget", () => {
+  turnstileFake.controller = {
+    token: () => Promise.resolve(turnstileFake.token),
+    reset: () => { turnstileFake.resets++; },
+  };
+  return {
+    useTurnstile: (action: string) => { turnstileFake.actions.push(action); return turnstileFake.controller; },
+    TurnstileWidget: function TurnstileWidgetStub() { return null; },
   };
 });
 
@@ -102,6 +122,9 @@ function mount(props: Partial<JoinFormProps> = {}) {
 beforeEach(() => {
   apiV1Mock.calls = [];
   apiV1Mock.queue = [];
+  turnstileFake.token = null;
+  turnstileFake.resets = 0;
+  turnstileFake.actions = [];
 });
 
 // ---------------------------------------------------------------------------
@@ -550,6 +573,66 @@ describe("submit — designed failure states, never a raw server string", () => 
     await submit(full);
     expect(byTestId(full, "reg-join-lichess-refusal")).toHaveLength(0);
     expect(full.pageText()).toContain(GENERIC());
+  });
+
+  // Turnstile (bot check). The join POST carries the widget's token in the `cf-turnstile-response` header (typed from the wire
+  // contract, not read from lib/turnstile.ts) and the widget is reset after, whatever came back: a token is single-use.
+  describe("Turnstile bot check", () => {
+    it("the form asks for the `join` action's widget and mounts exactly one, wired to the controller that sent the request", async () => {
+      const m = mount({ initialPlayerId: "p1" });
+      expect(turnstileFake.actions.every((a) => a === "join")).toBe(true);
+      expect(turnstileFake.actions.length, "anti-vacuity: the hook ran").toBeGreaterThan(0);
+      const widgets = m.island.tree().filter((e) => typeof e.type === "function" && e.type.name === "TurnstileWidgetStub");
+      expect(widgets, "one widget in the form").toHaveLength(1);
+      expect(propsOf(widgets[0]!).controller).toBe(turnstileFake.controller);
+    });
+
+    it("a held token travels in the header on the join POST, and the widget is reset afterwards", async () => {
+      turnstileFake.token = "tok-from-widget";
+      apiV1Mock.queue.push({ ok: true, data: undefined });
+      const m = mount({ initialPlayerId: "p1" });
+      fillMinimalValidForm(m);
+      await submit(m);
+      const posts = apiV1Mock.calls.filter((c) => c.method === "POST");
+      expect(posts, "anti-vacuity: the join was posted").toHaveLength(1);
+      expect(posts[0]!.headers).toEqual({ "cf-turnstile-response": "tok-from-widget" });
+      expect(turnstileFake.resets).toBe(1);
+      // Never in the body: the join body schema has no such field (and the token must not ride into the stored request).
+      expect(JSON.stringify(posts[0]!.json)).not.toContain("tok-from-widget");
+    });
+
+    it("no token (no site key, dev, e2e): the POST goes with NO header at all and is still reset", async () => {
+      apiV1Mock.queue.push({ ok: true, data: undefined });
+      const m = mount({ initialPlayerId: "p1" });
+      fillMinimalValidForm(m);
+      await submit(m);
+      const posts = apiV1Mock.calls.filter((c) => c.method === "POST");
+      expect(posts).toHaveLength(1);
+      expect(posts[0]!.headers).toEqual({});
+      expect(turnstileFake.resets).toBe(1);
+    });
+
+    it("403 TURNSTILE_FAILED says to reload and try again, in the dictionary's words, ALONE: never 'check your details', never the server's English", async () => {
+      turnstileFake.token = "tok-refused";
+      apiV1Mock.queue.push({ ok: false, error: new ApiV1Error("Verification failed. Reload the page and try again.", 403, "TURNSTILE_FAILED") });
+      const m = mount({ initialPlayerId: "p1" });
+      fillMinimalValidForm(m);
+      await submit(m);
+      expect(m.pageText()).toContain(String(EN_UI["turnstile.error"]));
+      expect(m.pageText(), "alone: no generic line").not.toContain(GENERIC());
+      expect(m.pageText(), "never the server's own English").not.toContain("Verification failed. Reload the page");
+      expect(m.pageText()).not.toContain(JOIN_CODE);
+      expect(turnstileFake.resets, "a refused token is spent too: the next attempt needs a fresh one").toBe(1);
+    });
+
+    it("a 403 with another code is the generic refusal, not the bot-check sentence (the pair)", async () => {
+      apiV1Mock.queue.push({ ok: false, error: new ApiV1Error("Forbidden", 403, "FORBIDDEN") });
+      const m = mount({ initialPlayerId: "p1" });
+      fillMinimalValidForm(m);
+      await submit(m);
+      expect(m.pageText()).toContain(GENERIC());
+      expect(m.pageText()).not.toContain(String(EN_UI["turnstile.error"]));
+    });
   });
 
   it("5xx / network failure shows the generic retry copy", async () => {

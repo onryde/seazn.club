@@ -18,6 +18,8 @@
 import { useState } from "react";
 import { useT } from "@/components/i18n/dict-provider";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
+import { withTurnstile } from "@/lib/turnstile-client";
 import { lichessLinkStartHref } from "@/lib/lichess-link";
 import { StepConsent } from "@/components/public-site/register/step-consent";
 import { StepWho } from "@/components/public-site/register/step-who";
@@ -100,6 +102,7 @@ export function JoinForm({
   const [refreshing, setRefreshing] = useState(false);
   const [failure, setFailure] = useState<JoinFailureKind | null>(null);
   const [meter, setMeter] = useState<{ claimed: number; total: number } | null>(null);
+  const turnstile = useTurnstile("join");
 
   const requirements = joinWhoRequirements(requiresDob, requiresGender);
   const contactValidation = validateContact(contact, requirements);
@@ -142,10 +145,13 @@ export function JoinForm({
     setSubmitting(true);
     setFailure(null);
     try {
-      await apiV1(joinSubmitUrl(orgSlug, competitionSlug), {
-        method: "POST",
-        json: buildJoinBody(joinCode, selected!, contact, consent),
-      });
+      await withTurnstile(turnstile, (headers) =>
+        apiV1(joinSubmitUrl(orgSlug, competitionSlug), {
+          method: "POST",
+          json: buildJoinBody(joinCode, selected!, contact, consent),
+          headers,
+        }),
+      );
       // RS007 review fix L4: read `total` (state, kept fresh by
       // refreshSlots), never the `totalPlayers` prop directly — both
       // numbers must come from the SAME snapshot, the freshest one
@@ -284,6 +290,8 @@ export function JoinForm({
         </div>
       )}
 
+      <TurnstileWidget controller={turnstile} />
+
       <div className="flex justify-end">
         <button
           type="button"
@@ -316,4 +324,5 @@ const FAILURE_KEY: Record<JoinFailureKind, string> = {
   rejected: "register.join.error.rejected",
   lichessLink: "register.lichessLinkRequired",
   lichessReconnect: "register.lichessReconnectRequired",
+  verification: "turnstile.error",
 };

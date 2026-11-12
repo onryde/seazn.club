@@ -166,9 +166,10 @@ fi
 
 if ! curl -fsS -o /dev/null "${BASE}/api/health"; then
   echo "realtime-gate: no server on ${PORT}. Start one with BOTH env files:" >&2
-  echo "  cd apps/web/.next/standalone/apps/web && PORT=${PORT} HOSTNAME=127.0.0.1 \\" >&2
+  echo "  cd apps/web/.next/standalone/apps/web && PORT=${PORT} HOSTNAME=127.0.0.1 ENV_NAME=local \\" >&2
   echo "    node --env-file=<repo>/.env.local --env-file=<repo>/apps/web/.env.local server.js" >&2
   echo "  Only apps/web/.env.local => HS256 => live Supabase refuses every join." >&2
+  echo "  ENV_NAME=local: a production server with no ENV_NAME refuses every login POST (bot check, fail closed)." >&2
   exit 2
 fi
 

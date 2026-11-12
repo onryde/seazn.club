@@ -7,6 +7,9 @@ import { useRouter } from "next/navigation";
 import { apiV1 } from "@/lib/client-v1";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
+import { isTurnstileRefusal } from "@/lib/turnstile";
+import { withTurnstile } from "@/lib/turnstile-client";
 
 export function RegistrationActions({
   registrationId,
@@ -26,6 +29,10 @@ export function RegistrationActions({
   const confirmDialog = useConfirm();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Withdraw is bot-checked (pay is not: it only mints a checkout for a token the caller already holds). Mounted by the click,
+  // before the confirm dialog, so the invisible check runs while the person reads it.
+  const turnstile = useTurnstile("withdraw");
+  const [armed, setArmed] = useState(false);
 
   async function pay() {
     setBusy(true);
@@ -43,6 +50,7 @@ export function RegistrationActions({
   }
 
   async function withdraw() {
+    setArmed(true);
     const ok = await confirmDialog({
       title: msg("confirm.withdrawOwnRegistration.title"),
       body: msg("confirm.withdrawOwnRegistration.body"),
@@ -53,13 +61,16 @@ export function RegistrationActions({
     setBusy(true);
     setError(null);
     try {
-      await apiV1(`/api/v1/public/registrations/${registrationId}/withdraw`, {
-        method: "POST",
-        json: { token },
-      });
+      await withTurnstile(turnstile, (headers) =>
+        apiV1(`/api/v1/public/registrations/${registrationId}/withdraw`, {
+          method: "POST",
+          json: { token },
+          headers,
+        }),
+      );
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Withdraw failed");
+      setError(isTurnstileRefusal(err) ? msg("turnstile.error") : err instanceof Error ? err.message : "Withdraw failed");
     } finally {
       setBusy(false);
     }
@@ -87,6 +98,7 @@ export function RegistrationActions({
       >
         {msg("registration.withdraw")}
       </button>
+      {armed && <TurnstileWidget controller={turnstile} className="basis-full" />}
       {error && <p className="w-full text-sm text-red-600">{error}</p>}
     </>
   );

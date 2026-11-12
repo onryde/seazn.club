@@ -6019,7 +6019,7 @@
             }
           },
           "403": {
-            "description": "Error",
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -7473,7 +7473,7 @@
             }
           },
           "403": {
-            "description": "Error",
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -38363,7 +38363,7 @@
             }
           },
           "403": {
-            "description": "Error",
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -41912,7 +41912,7 @@
             }
           },
           "403": {
-            "description": "Error",
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -42312,7 +42312,7 @@
             }
           },
           "403": {
-            "description": "Error",
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -43521,7 +43521,7 @@
             }
           },
           "403": {
-            "description": "Error",
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -63749,6 +63749,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "cf-turnstile-response",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "description": "Cloudflare Turnstile token from the page's invisible widget (action = the route's own: register, join, resend or withdraw), single use. Enforced where the bot check is on (staging and production): a missing, spent, expired, wrong-action or wrong-host token is 403 TURNSTILE_FAILED before the body is read. Checked straight after the route's first per-IP rate limit, so a refused request still counts against that limit and is answered 429 first once it is spent."
           }
         ],
         "requestBody": {
@@ -64169,6 +64179,50 @@
           },
           "400": {
             "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -64717,6 +64771,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "cf-turnstile-response",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "description": "Cloudflare Turnstile token from the page's invisible widget (action = the route's own: register, join, resend or withdraw), single use. Enforced where the bot check is on (staging and production): a missing, spent, expired, wrong-action or wrong-host token is 403 TURNSTILE_FAILED before the body is read. Checked straight after the route's first per-IP rate limit, so a refused request still counts against that limit and is answered 429 first once it is spent."
           }
         ],
         "requestBody": {
@@ -64919,6 +64983,50 @@
           },
           "400": {
             "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -65478,6 +65586,16 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "cf-turnstile-response",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "description": "Cloudflare Turnstile token from the page's invisible widget (action = the route's own: register, join, resend or withdraw), single use. Enforced where the bot check is on (staging and production): a missing, spent, expired, wrong-action or wrong-host token is 403 TURNSTILE_FAILED before the body is read. Checked straight after the route's first per-IP rate limit, so a refused request still counts against that limit and is answered 429 first once it is spent."
           }
         ],
         "requestBody": {
@@ -65675,6 +65793,50 @@
           },
           "400": {
             "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -66216,6 +66378,16 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "cf-turnstile-response",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "description": "Cloudflare Turnstile token from the page's invisible widget (action = the route's own: register, join, resend or withdraw), single use. Enforced where the bot check is on (staging and production): a missing, spent, expired, wrong-action or wrong-host token is 403 TURNSTILE_FAILED before the body is read. Checked straight after the route's first per-IP rate limit, so a refused request still counts against that limit and is answered 429 first once it is spent."
           }
         ],
         "requestBody": {
@@ -66275,6 +66447,50 @@
           },
           "400": {
             "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -66380,6 +66596,16 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "cf-turnstile-response",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "description": "Cloudflare Turnstile token from the page's invisible widget (action = the route's own: register, join, resend or withdraw), single use. Enforced where the bot check is on (staging and production): a missing, spent, expired, wrong-action or wrong-host token is 403 TURNSTILE_FAILED before the body is read. Checked straight after the route's first per-IP rate limit, so a refused request still counts against that limit and is answered 429 first once it is spent."
           }
         ],
         "requestBody": {
@@ -66452,6 +66678,50 @@
           },
           "400": {
             "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -76038,7 +76308,7 @@
             }
           },
           "403": {
-            "description": "Error",
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -81702,7 +81972,7 @@
             }
           },
           "403": {
-            "description": "Error",
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -83307,7 +83577,7 @@
             }
           },
           "403": {
-            "description": "Error",
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -84868,7 +85138,7 @@
             }
           },
           "403": {
-            "description": "Error",
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -86521,7 +86791,7 @@
             }
           },
           "403": {
-            "description": "Error",
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -87623,7 +87893,7 @@
             }
           },
           "403": {
-            "description": "Error",
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -88296,7 +88566,7 @@
             }
           },
           "403": {
-            "description": "Error",
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {

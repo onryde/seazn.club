@@ -17,6 +17,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useT } from "@/components/i18n/dict-provider";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
+import { isTurnstileRefusal } from "@/lib/turnstile";
+import { withTurnstile } from "@/lib/turnstile-client";
 import { useHydrated } from "@/lib/use-client-snapshot";
 import { formatMinor, type Currency } from "@/lib/currency";
 import {
@@ -176,6 +179,7 @@ export function RegisterStepper({
   // Step 5's submit — NOT persisted (a refresh mid-submit should retry, not
   // silently resume a stale "submitting" state).
   const [submitting, setSubmitting] = useState(false);
+  const turnstile = useTurnstile("register");
   // FIX 3 (RS006 fix wave) — was a bare `string | null` (whatever
   // `err.message` happened to be, rendered as-is, the ONLY thing the
   // registrant saw). `kind` (classifySubmitFailure, submit.ts) picks which
@@ -410,9 +414,12 @@ export function RegisterStepper({
     setSubmitting(true);
     setSubmitError(null);
     try {
-      const result = await apiV1<SubmitResultShape>(
-        `/api/v1/public/orgs/${orgSlug}/competitions/${competitionSlug}/register`,
-        { method: "POST", json: buildSubmitBody(contact, consent, cart, website) },
+      const result = await withTurnstile(turnstile, (headers) =>
+        apiV1<SubmitResultShape>(`/api/v1/public/orgs/${orgSlug}/competitions/${competitionSlug}/register`, {
+          method: "POST",
+          json: buildSubmitBody(contact, consent, cart, website),
+          headers,
+        }),
       );
       clearRegisterState(orgSlug, competitionSlug);
       const nav = resolvePostSubmitNavigation(result, orgSlug, competitionSlug);
@@ -420,8 +427,9 @@ export function RegisterStepper({
     } catch (err) {
       const status = err instanceof ApiV1Error ? err.status : undefined;
       setSubmitError({
-        kind: classifySubmitFailure(status),
-        detail: err instanceof Error ? err.message : String(err),
+        kind: classifySubmitFailure(status, err instanceof ApiV1Error ? err.code : undefined),
+        // A failed bot check is not the server's English (and not "check your details"): its own translated sentence.
+        detail: isTurnstileRefusal(err) ? t("turnstile.error") : err instanceof Error ? err.message : String(err),
         lichess: err instanceof ApiV1Error ? lichessRefusalReason(err.status, err.code) : null,
       });
       setSubmitting(false);
@@ -507,6 +515,8 @@ export function RegisterStepper({
       {currentStep === "review" && (
         <>
           <StepReview summary={reviewSummary} locale={locale} />
+          {/* Mounted on the step that submits, so the invisible check starts when it is needed and a token is fresh at the click. */}
+          <TurnstileWidget controller={turnstile} />
           {submitError &&
             (submitError.lichess !== null ? (
               // A Lichess reason says WHAT is wrong and WHAT to do, so it stands alone: the generic "check your details"

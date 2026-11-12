@@ -38,6 +38,15 @@ describe.each(["fly.toml", "fly.stg.toml"])("%s [build.args] reach the build", (
     expect(keys).toContain("NEXT_PUBLIC_POSTHOG_KEY");
   });
 
+  // Turnstile's widget reads its site key from the client bundle (components/turnstile-widget.tsx): a missing arg is no build error
+  // and no server symptom, only a widget that never renders while the server (which does not depend on the key) refuses every
+  // guarded POST that arrives without a token.
+  it("carries the Turnstile site key, and the Dockerfile declares and exports it", () => {
+    expect(keys).toContain("NEXT_PUBLIC_TURNSTILE_SITE_KEY");
+    expect(declaredArgs.has("NEXT_PUBLIC_TURNSTILE_SITE_KEY")).toBe(true);
+    expect(declaredEnv.has("NEXT_PUBLIC_TURNSTILE_SITE_KEY")).toBe(true);
+  });
+
   it("every build arg is declared as an ARG in the Dockerfile", () => {
     expect(keys.filter((k) => !declaredArgs.has(k))).toEqual([]);
   });

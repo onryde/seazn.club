@@ -2,6 +2,7 @@ import { z } from "zod";
 import { v1, parseBody, reply } from "@/server/api-v1/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/client-ip";
+import { requireTurnstile } from "@/server/turnstile";
 import { withdrawRegistrationByRef } from "@/server/usecases/registrations";
 
 type Ctx = { params: Promise<{ ref: string }> };
@@ -16,6 +17,8 @@ export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
     const ip = clientIp(req.headers);
     await rateLimit(`regwithdraw:${ip}`, { max: 10, windowSeconds: 60 });
+    // Bot check (Cloudflare Turnstile): before the body is read or anything is withdrawn. 403 TURNSTILE_FAILED.
+    await requireTurnstile(req, "withdraw");
     const { ref } = await params;
     const { token, registration_id } = await parseBody(req, Body);
     return reply(

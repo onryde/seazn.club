@@ -167,6 +167,10 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link writes the token and the out
     vi.stubEnv("RESEND_WEBHOOK_SECRET", WEBHOOK_SECRET);
     vi.stubEnv("OAUTH_BASE_URL", ORIGIN);
     vi.stubEnv("AUTH_DEV_LINKS", undefined);
+    // A harness, as the CI servers are: the tests below that stub NODE_ENV=production are about the mail's production shape and
+    // the dev link, and a production server ENFORCES the bot check unless ENV_NAME names CI (server/turnstile.ts turnstileMode).
+    // The check itself is proven through this route's real handler in server/__tests__/turnstile-gate.test.ts.
+    vi.stubEnv("ENV_NAME", "ci");
     calls.length = 0;
     seenAtSend.length = 0;
     messages.clear();

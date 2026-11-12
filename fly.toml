@@ -17,6 +17,9 @@ primary_region = "lhr"
     # Not set in fly.stg.toml: stg keeps the /ingest rewrite.
     NEXT_PUBLIC_POSTHOG_API_HOST       = "https://g.seazn.club"
     NEXT_PUBLIC_SENTRY_DSN          = "https://7ce8d8933b2291575f99fd0e7e1c6447@o4512107033198592.ingest.de.sentry.io/4512107042963536"  # uncomment when Sentry project created
+    # Cloudflare Turnstile widget site key: public by design (it is in every page that renders the widget). The SECRET and the
+    # hostname allow-list are runtime `fly secrets` (TURNSTILE_SECRET, TURNSTILE_HOSTNAMES), never here.
+    NEXT_PUBLIC_TURNSTILE_SITE_KEY  = "0x4AAAAAAF0vaX-2fN3egqBE"
 
 [http_service]
   internal_port        = 3000
