@@ -10,17 +10,21 @@ import { QUICK_MATCH_EXPIRY_DAYS, QUICK_MATCH_SYSTEM_ORG_ID } from "../../../app
  * 1. Create, score, Live (plan 2 T11). A guest with no account posts the setup form to `POST /api/quick-match` (a form post,
  *    303 to `/q/<token>`; the bot check skips on a harness server, ENV_NAME local or ci, server/turnstile.ts). The home reads
  *    "Up next" and "0 of 1 match played" and carries ONE match's Score form. Posting that form lands on `/score/dl_…` (the
- *    device link the pad uses); through that link the pad's own two writes go in (`core.start`, one `badminton.rally`), and
- *    the home then reads "Live". Every expected word is the English dictionary's, filled with the constants it names.
+ *    device link the pad uses); through that link the pad's own two writes go in (`core.start`, one `badminton.rally` won
+ *    by the home side). After the start alone the home reads "Live" with no point on its score; after the rally its score's
+ *    current level reads 1 to 0, home first (one rally won by the home side is one point to it). Every expected word is the
+ *    English dictionary's, filled with the constants it names.
  * 2. The sweep (plan 3 T7, extended past its amendment by the dispatch): two more matches, one aged past its expiry in SQL and
  *    one saved through the real Save post by a signed-in person and aged the same. `POST /api/cron/quick-match-expiry` with
  *    the cron secret answers a report with a number for every key, `failed` 0 and `expired` >= 1; then, per match: the
- *    expired unsaved one is gone (row, competition, and its home reads the dead screen), while the saved one and the match
+ *    expired unsaved one is gone (its row and its competition, each counted 1 before and 0 after), while the saved one and the match
  *    scored in step 1 are kept. The saved match is aged like the expired one so it is a real witness: a sweep that re-armed a
  *    LIVE saver's match would give it an expiry in the past and delete it in the same pass.
  *    Needs the cron secret the server was started with (CI's smoke job sets CRON_SECRET at job level); without it the leg
  *    skips with a passing line, as funnelReminder's does. The sweep has no scope (the route never reads one): it sweeps
- *    EVERY quick match on its target, so the leg refuses any target that is not this machine or staging (`sweepTargetAllowed`).
+ *    EVERY quick match on its target, and the leg back-dates rows through DATABASE_URL, so before either it refuses (a FAIL,
+ *    fail-closed) unless BOTH the server and the database are on this machine (`sweepTargetAllowed`): CI's job and a seazn-env
+ *    label, never staging or production (a staging server also enforces the bot check, which this post does not answer).
  *
  * One sport, badminton (plan 3 Amend T7 [E8]): smoke proves the routes are alive end to end; the cascade closure over two
  * sports is quick-match-sweep.test.ts's orphan test. No email is typed (Amend T7 [A8]), so no mail is queued.
@@ -43,6 +47,9 @@ const SPORT = "badminton";
 const TOKEN = /^\/q\/(qm_[A-Za-z0-9_-]{43})$/;
 const DL = /^\/score\/(dl_[A-Za-z0-9_-]+)$/;
 const REPORT_KEYS = ["checked", "rearmed", "reminded", "expired", "orphans", "failed", "deferred"] as const;
+/** The hero score's CURRENT level (its last part: "0–0 · 1–0" prints games won, then the open game's points, home first) after one
+ *  rally won by the home side: 1 to 0. Rejects a score with no point yet ("0–0 · 0–0", "0 — 0"). */
+const HOME_ONE_LEVEL = /\b1\D+0\s*$/;
 /** Hours an aged match's last activity is put back: one expiry and three hours, so a re-armed expiry is plainly past. */
 const AGED_HOURS = QUICK_MATCH_EXPIRY_DAYS * 24 + 3;
 
@@ -53,16 +60,22 @@ function words(key: string, vars: Record<string, string | number> = {}): string 
   return raw.replace(/\{(\w+)\}/g, (m, k: string) => (k in vars ? String(vars[k]) : m));
 }
 
-/** Where the sweep leg may run: this machine, or staging. Anything else (production above all) is refused, because the route
- *  sweeps every quick match on its target (plan 3 Amend T7 [A9]). */
-export function sweepTargetAllowed(base: string): boolean {
-  let host: string;
+const LOCAL_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
+/** The URL names this machine (an unparseable one, or a socket path with no host, does not). */
+function isLocal(url: string | undefined): boolean {
+  if (!url) return false;
   try {
-    host = new URL(base).hostname;
+    return LOCAL_HOSTS.has(new URL(url).hostname);
   } catch {
     return false;
   }
-  return host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "stg.seazn.club";
+}
+
+/** Where the sweep leg may run: a server AND a database on this machine (CI's smoke job, a seazn-env label). Everything else is
+ *  refused, production above all, because the route sweeps every quick match on its target (plan 3 Amend T7 [A9]) and the leg
+ *  back-dates rows through the database it is handed (review m2, m3). */
+export function sweepTargetAllowed(base: string, databaseUrl: string | undefined): boolean {
+  return isLocal(base) && isLocal(databaseUrl);
 }
 
 type Made = { status: number; token: string | null; where: string };
@@ -178,6 +191,15 @@ export async function quickMatchSuite(): Promise<void> {
       return `${res.status}${json.error?.code ? ` ${json.error.code}` : ""}`;
     };
     const start = await post(0, "core.start", {});
+    // The home between the start and the rally: already Live (the start alone puts the match in play), with a score that does
+    // not yet read the home side's point. The negative half of the rally check below (review I1).
+    const started = await page(homePath);
+    const scoreStarted = testidText(started.html, "qm-hero-score", "span");
+    check(
+      `quick match: after the start alone the home's hero reads "${liveKicker}" with no point scored yet (got ${started.status}, kicker ${JSON.stringify(testidText(started.html, "qm-hero-kicker"))}, score ${JSON.stringify(scoreStarted)})`,
+      started.status === 200 && testidText(started.html, "qm-hero-kicker") === liveKicker && scoreStarted !== null &&
+        scoreStarted.trim() !== "" && !HOME_ONE_LEVEL.test(scoreStarted),
+    );
     const rally = await post(1, `${SPORT}.rally`, { wonBy: homeEntrant });
     const ledgerRes = await fetch(`${BASE}/api/v1/fixtures/${fixtureId}/events?since_seq=0`, { headers: asPad });
     const ledger = ((await ledgerRes.json().catch(() => ({}))) as { data?: { type: string }[] }).data ?? [];
@@ -190,8 +212,8 @@ export async function quickMatchSuite(): Promise<void> {
     const kickerAfter = testidText(after.html, "qm-hero-kicker");
     const heroScore = testidText(after.html, "qm-hero-score", "span");
     check(
-      `quick match: the home's hero now reads "${liveKicker}" with a score, and the line still "${playedNone}" (got ${after.status}, kicker ${JSON.stringify(kickerAfter)}, score ${JSON.stringify(heroScore)}, played ${JSON.stringify(testidText(after.html, "qm-played"))})`,
-      after.status === 200 && kickerAfter === liveKicker && heroScore !== null && heroScore.trim() !== "" &&
+      `quick match: after the rally the home's hero reads "${liveKicker}" and its score's current level is the home side's point, 1 to 0, and the line still "${playedNone}" (got ${after.status}, kicker ${JSON.stringify(kickerAfter)}, score ${JSON.stringify(heroScore)}, played ${JSON.stringify(testidText(after.html, "qm-played"))})`,
+      after.status === 200 && kickerAfter === liveKicker && heroScore !== null && HOME_ONE_LEVEL.test(heroScore) &&
         testidText(after.html, "qm-played") === playedNone,
     );
 
@@ -201,8 +223,11 @@ export async function quickMatchSuite(): Promise<void> {
       check("quick match sweep: skipped (no CRON_SECRET in the smoke env, the cron route cannot be called); quick-match-sweep.test.ts covers it", true);
       return;
     }
-    if (!sweepTargetAllowed(BASE)) {
-      check(`quick match sweep: REFUSED, the target ${new URL(BASE).hostname} is not this machine or staging, and the sweep deletes every expired quick match there`, false);
+    if (!sweepTargetAllowed(BASE, process.env.DATABASE_URL)) {
+      check(
+        `quick match sweep: REFUSED, the server (${BASE}) or the database (${isLocal(process.env.DATABASE_URL) ? "local" : "not local"}) is not on this machine; the leg back-dates rows and the sweep deletes every expired quick match on its target`,
+        false,
+      );
       return;
     }
 
@@ -262,10 +287,9 @@ export async function quickMatchSuite(): Promise<void> {
     );
 
     const gone = await counts({ quickMatchId: expiring.id, competitionId: expiring.competition_id });
-    const dead = await page(`/q/${expiringMade.token}`);
     check(
-      `quick match sweep: the expired unsaved match is deleted (${gone.qm} quick_matches row and ${gone.comp} competition left, of 1 and 1), and its link reads the dead screen (got ${dead.status}, dead screen ${dead.html.includes('data-testid="qm-dead-link"') ? "shown" : "absent"})`,
-      gone.qm === 0 && gone.comp === 0 && dead.status === 200 && dead.html.includes('data-testid="qm-dead-link"'),
+      `quick match sweep: the expired unsaved match is deleted (${gone.qm} quick_matches row and ${gone.comp} competition left, of 1 and 1)`,
+      gone.qm === 0 && gone.comp === 0,
     );
 
     const [keptSaved] = await db<{ saved_by_user_id: string | null; expires_at: Date | null }[]>`
@@ -275,11 +299,12 @@ export async function quickMatchSuite(): Promise<void> {
     const savedHome = await page(`/q/${savedMade.token}`, cookieHeader(saver));
     const playedSaved = words("quickMatch.home.playedSaved.one", { played: 0, count: 1 });
     const savedWord = testidText(savedHome.html, "qm-saved");
+    const savedCopy = words("quickMatch.home.saved");
     check(
       `quick match sweep: the saved match, idle past an expiry, is kept and still saved (${savedLeft.qm} row and ${savedLeft.comp} competition of 1 and 1; saver ${keptSaved?.saved_by_user_id === saverRow?.id ? "kept" : "lost"}, expiry ${keptSaved?.expires_at === null ? "none" : "re-armed"}; its home ${savedHome.status} reads ${JSON.stringify(savedWord)} and ${JSON.stringify(testidText(savedHome.html, "qm-played"))})`,
       savedLeft.qm === 1 && savedLeft.comp === 1 && !!saverRow && keptSaved?.saved_by_user_id === saverRow.id &&
-        keptSaved.expires_at === null && savedHome.status === 200 && playedSaved !== "" &&
-        savedWord === words("quickMatch.home.saved") && testidText(savedHome.html, "qm-played") === playedSaved,
+        keptSaved.expires_at === null && savedHome.status === 200 && playedSaved !== "" && savedCopy !== "" &&
+        savedWord === savedCopy && testidText(savedHome.html, "qm-played") === playedSaved,
     );
 
     const liveLeft = await counts({ quickMatchId: live.id, competitionId: live.competition_id });
