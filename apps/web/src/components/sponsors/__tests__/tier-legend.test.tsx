@@ -29,9 +29,10 @@
 //   F3  weight    read the sentence's turns from silver's weight, not the partner's        -> "the turns follow the PARTNER weight"
 //   F4  link      draw the upgrade link for a viewer                                       -> "the upgrade link: editors on a plan without tiers only"
 //   F5  link      drop the link's href (billingHref)                                        -> "the upgrade link goes to billing"
-//   F6  fold      draw the legend without the phone fold                                    -> "folds below md"
+//   F6  fold      draw the legend without the fold                                          -> "folds at every width"
 //   F7  fold      let the fold start open on every list (startOpen ignored)                 -> "the fold starts open exactly when told to"
-//   F8  fold      hide the section's own heading on md and up too                           -> "the heading is the toggle on a phone and the h3 from md"
+//   F8  fold      draw the section's own h3 again (a duplicate of the summary)               -> "the summary IS the heading at every width"
+//   F9  fold      drop `allWidths` (the toggle is phone-only again: md:hidden)                -> "folds at every width"
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -126,7 +127,8 @@ describe("the legend: What each tier gets (owner, 2026-11-11)", () => {
     expect([...SPONSOR_TIERS], "premise: the rows are the declared tier list, in its rank order").toEqual([...ORDER]);
     expect(rows.map((r) => r.chip), "each row is headed by its tier's own name").toEqual(ORDER.map((tier) => CHIP_WORDS[tier]));
     expect(html).toMatch(/<section\b[^>]*data-testid="tier-legend"[^>]*aria-labelledby="tier-legend-heading"/);
-    expect(textOf(/<h3\b[^>]*id="tier-legend-heading"[^>]*>([\s\S]*?)<\/h3>/.exec(html)?.[1] ?? "")).toBe("What each tier gets");
+    // The summary (inside the fold's toggle) is the heading the section is labelled by.
+    expect(textOf(/<span\b[^>]*id="tier-legend-heading"[^>]*>([\s\S]*?)<\/span>/.exec(html)?.[1] ?? "")).toBe("What each tier gets");
     expect(rows.length, "anti-vacuity: the legend drew its rows").toBe(4);
   });
 
@@ -296,53 +298,78 @@ describe("the upgrade link on the plan line", () => {
   });
 });
 
-// --- fold below md (owner feedback: the legend is long on a phone) -----------------------------------------------------------------
+// --- the fold (owner feedback: the legend is long on a phone; 2026-11-11: and he wanted the same open / hide row on a desktop) ---------
 
-describe("the legend folds below md: one DOM, the toggle md:hidden, md and up unchanged", () => {
-  it("folds below md: one disclosure whose summary is the legend heading, its toggle phone-only, its body closed on first paint, the rows still in the one DOM (4 checked)", () => {
+describe("the legend folds at every width: one DOM, the toggle on the screen from md too, the summary is the heading (owner, 2026-11-11)", () => {
+  const toggleOf = (html: string) => /<button\b[^>]*data-role="phone-disclosure-toggle"[^>]*>/.exec(html)?.[0] ?? "";
+  /** The folded body's own opening tag: `hidden` in the class list only while folded. */
+  const bodyTagOf = (html: string) => new RegExp(`<div class="[^"]*" id="${/aria-controls="([^"]+)"/.exec(toggleOf(html))?.[1] ?? "none"}">`).exec(html)?.[0] ?? "";
+
+  it("folds at every width: one disclosure whose summary is the legend heading, its toggle drawn from md too, its body folded on first paint for a list with packages, the rows still in the one DOM (8 checked)", () => {
     const html = legend(false);
     expect(countById(html, "tier-legend-fold"), "one fold").toBe(1);
     expect((html.match(/data-role="phone-disclosure"/g) ?? []).length, "one disclosure").toBe(1);
-    const toggle = /<button\b[^>]*data-role="phone-disclosure-toggle"[^>]*>/.exec(html)?.[0] ?? "";
-    expect(toggle, "the toggle is phone-only: anchored, so max-md:hidden cannot satisfy it").toMatch(/class="[^"]*\smd:hidden"/);
+    const toggle = toggleOf(html);
+    expect(toggle, "premise: the toggle is drawn").toContain('data-role="phone-disclosure-toggle"');
+    // Anchored on the whole token: `max-md:hidden` contains `md:hidden`, so a loose check passes on its own inversion.
+    expect(toggle, "the toggle is not phone-only: no md:hidden").not.toMatch(/class="[^"]*\smd:hidden(?:\s|")/);
+    expect(toggle, "nor max-md:hidden").not.toContain("max-md:hidden");
     expect(toggle, "closed on first paint").toContain('aria-expanded="false"');
     expect(toggle, "named by the show label").toContain(`aria-label="${msg("sponsors.pkg.legend.show")}"`);
     expect(textOf(/<button\b[^>]*data-role="phone-disclosure-toggle"[^>]*>([\s\S]*?)<\/button>/.exec(html)?.[1] ?? "").startsWith("What each tier gets"), "the summary is the heading").toBe(true);
-    const controls = /aria-controls="([^"]+)"/.exec(toggle)?.[1];
-    expect(html, "the body it controls is folded below md").toMatch(new RegExp(`<div class="grid min-w-0 flex-1 grid-cols-\\[minmax\\(0,1fr\\)\\] max-md:hidden" id="${controls}">`));
+    expect(bodyTagOf(html), "the body it controls is folded at every width: `hidden`, not max-md:hidden").toBe('<div class="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)] hidden" id="' + /aria-controls="([^"]+)"/.exec(toggle)?.[1] + '">');
     expect(rowsOf(html), "one DOM: the four rows are in the markup, folded not removed").toHaveLength(4);
   });
 
-  it("the heading is the toggle on a phone and the h3 from md: the section's own h3 is max-md:hidden and nothing hides it at md", () => {
-    const html = legend(true);
-    const h3 = /<h3\b[^>]*id="tier-legend-heading"[^>]*>/.exec(html)?.[0] ?? "";
-    expect(h3).toMatch(/class="[^"]*\bmax-md:hidden\b/);
-    expect(h3, "nothing hides it at md and up").not.toMatch(/class="[^"]*(?:^|\s)(?:hidden|md:hidden|sr-only)(?:\s|")/);
-    expect(html).toMatch(/aria-labelledby="tier-legend-heading"/);
-    expect(textOf(/<h3\b[^>]*id="tier-legend-heading"[^>]*>([\s\S]*?)<\/h3>/.exec(html)?.[1] ?? ""), "still the heading").toBe("What each tier gets");
+  it("the summary IS the heading at every width: no h3 and no max-md:hidden anywhere, and the section's aria-labelledby resolves to the summary's own text (both start states, both plans: 4 checked)", () => {
+    let checked = 0;
+    for (const tiersOrgWide of [true, false]) {
+      for (const startOpen of [true, false]) {
+        const html = legend(tiersOrgWide, { startOpen });
+        const label = `tiersOrgWide=${tiersOrgWide} startOpen=${startOpen}`;
+        expect(html, `${label}: no section h3 to duplicate the summary`).not.toMatch(/<h3\b/);
+        expect(html, `${label}: nothing is hidden on a phone only`).not.toContain("max-md:hidden");
+        const id = /<section\b[^>]*aria-labelledby="([^"]+)"/.exec(html)?.[1];
+        expect(id, `${label}: the section is labelled by an id`).toBeTruthy();
+        expect((html.match(new RegExp(`id="${id}"`, "g")) ?? []).length, `${label}: and exactly one element carries it`).toBe(1);
+        const button = /<button\b[^>]*data-role="phone-disclosure-toggle"[^>]*>([\s\S]*?)<\/button>/.exec(html)?.[1] ?? "";
+        const named = new RegExp(`<[a-z]+\\b[^>]*id="${id}"[^>]*>([\\s\\S]*?)</[a-z]+>`).exec(button)?.[1];
+        expect(named, `${label}: that element is inside the toggle (the summary)`).toBeDefined();
+        expect(textOf(named ?? ""), `${label}: and reads as the heading`).toBe(msg("sponsors.pkg.legend.heading"));
+        checked++;
+      }
+    }
+    expect(checked, "2 plans x 2 start states").toBe(4);
   });
 
-  it("the fold starts open exactly when told to: the legend hands its startOpen to the disclosure (true and false, 2 checked), and that disclosure then opens after hydration only for true", () => {
+  it("the fold starts open exactly when told to, at every width: first paint, then after hydration at 320 and at 1280 - the legend's own props into the real disclosure (true and false x 2 widths, 4 checked)", () => {
     let checked = 0;
     for (const startOpen of [true, false]) {
       const tree = walk(expandWithHooks(TierLegend, legendProps(false, { startOpen })) as never);
       const fold = tree.find((el) => el.type === PhoneDisclosure);
       expect(fold, `startOpen=${startOpen}: the legend mounts a PhoneDisclosure`).toBeDefined();
       expect(propsOf(fold!).phoneStartOpen, `startOpen=${startOpen}`).toBe(startOpen);
+      expect(propsOf(fold!).allWidths, `startOpen=${startOpen}: a fold at every width`).toBe(true);
       expect(propsOf(fold!).showLabel).toBe(msg("sponsors.pkg.legend.show"));
       expect(propsOf(fold!).hideLabel).toBe(msg("sponsors.pkg.legend.hide"));
-      // The producer's own props into the real consumer, hydrated at a phone width: open exactly when told to.
-      vi.stubGlobal("window", { matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }) });
-      try {
-        const island = renderIsland(PhoneDisclosure, propsOf(fold!) as never, undefined, { hydrate: true });
-        const toggle = island.tree().find((el) => propsOf(el)["data-role"] === "phone-disclosure-toggle")!;
-        expect(propsOf(toggle)["aria-expanded"], `startOpen=${startOpen}: open after hydration at 320`).toBe(startOpen);
-      } finally {
-        vi.unstubAllGlobals();
+      // First paint (the server's markup): open exactly when told to - the same on the client's first render, so nothing mismatches.
+      const first = legend(false, { startOpen });
+      expect(toggleOf(first), `startOpen=${startOpen}: first paint`).toContain(`aria-expanded="${startOpen}"`);
+      expect(bodyTagOf(first).includes(" hidden\""), `startOpen=${startOpen}: the body is hidden on first paint exactly when folded`).toBe(!startOpen);
+      for (const width of [320, 1280]) {
+        // The producer's own props into the real consumer, hydrated at the width: open exactly when told to.
+        vi.stubGlobal("window", { matchMedia: () => ({ matches: width >= 768, addEventListener: () => {}, removeEventListener: () => {} }) });
+        try {
+          const island = renderIsland(PhoneDisclosure, propsOf(fold!) as never, undefined, { hydrate: true });
+          const toggle = island.tree().find((el) => propsOf(el)["data-role"] === "phone-disclosure-toggle")!;
+          expect(propsOf(toggle)["aria-expanded"], `startOpen=${startOpen}: open after hydration at ${width}`).toBe(startOpen);
+        } finally {
+          vi.unstubAllGlobals();
+        }
+        checked++;
       }
-      checked++;
     }
-    expect(checked).toBe(2);
+    expect(checked, "2 start states x 2 widths").toBe(4);
   });
 });
 

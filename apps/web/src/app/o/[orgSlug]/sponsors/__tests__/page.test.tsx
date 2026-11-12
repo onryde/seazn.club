@@ -392,6 +392,195 @@ describe("the Sponsors hub - the tab bar", () => {
   });
 });
 
+// The Sponsors hub's back link (owner, 2026-11-11: "we should have back button in sponsor page like in streaming page"). The Streaming
+// page renders `<BackLink href="/dashboard" label={t(ui, "common.dashboard")} />` above its heading; the hub renders the same. The
+// label is the existing `common.dashboard` key, so every expected string below is read from the dictionary files - never typed here.
+// The page has ONE return (`requireOrgPage` redirects or 404s before it), so there is no early-return branch to carry the link: "every
+// branch" is every tab, every reader and every locale, each counted.
+describe("the Sponsors hub - the back link to the dashboard (the Streaming page's)", () => {
+  /** Every anchor whose href is exactly `/dashboard` (anchored on `="`, so an omitted href cannot satisfy it), with its inner text. */
+  const dashboardLinks = (html: string): { tag: string; text: string; at: number }[] =>
+    [...html.matchAll(/<a\b([^>]*\bhref="\/dashboard"[^>]*)>([\s\S]*?)<\/a>/g)].map((m) => ({
+      tag: m[0].slice(0, m[0].indexOf(">") + 1),
+      text: m[2]!.replace(/<[^>]+>/g, "").trim(),
+      at: m.index ?? -1,
+    }));
+
+  it("every tab an editor can open has exactly ONE link to /dashboard, labelled from common.dashboard (counted)", async () => {
+    let checked = 0;
+    for (const tab of SPONSORS_TABS) {
+      const links = dashboardLinks(await render(tab));
+      expect(links, `?tab=${tab}: exactly one back link`).toHaveLength(1);
+      expect(links[0]!.text, `?tab=${tab}: its label`).toBe(uiEn["common.dashboard"]);
+      checked++;
+    }
+    expect(checked).toBe(SPONSORS_TABS.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("a viewer has it too - on the tabs they are offered AND on an editor-only tab that falls back to Overview (counted)", async () => {
+    asMember("viewer", false);
+    let checked = 0;
+    for (const tab of SPONSORS_TABS) {
+      const html = await render(tab);
+      expect(dashboardLinks(html), `viewer ?tab=${tab}`).toHaveLength(1);
+      checked++;
+    }
+    // The pair: the editor-only tabs really did fall back (so the loop reached the fall-back branch, not only the offered tabs).
+    expect(SPONSORS_EDITOR_ONLY_TABS.length, "anti-vacuity: the hub declares editor-only tabs").toBeGreaterThan(0);
+    expect(panels(await render(SPONSORS_EDITOR_ONLY_TABS[0]!)), "an editor-only tab falls back to Overview").toEqual(["overview"]);
+    expect(checked).toBe(SPONSORS_TABS.length);
+  });
+
+  it("every locale: the label is that locale's common.dashboard, and the locales do not all say the same word (counted)", async () => {
+    const seen = new Set<string>();
+    let checked = 0;
+    for (const locale of LOCALES) {
+      h.resolveLocale.mockResolvedValue(locale);
+      const want = UI_BY_LOCALE[locale]!["common.dashboard"];
+      expect(typeof want, `${locale}: the dictionary has the key`).toBe("string");
+      const links = dashboardLinks(await render());
+      expect(links, locale).toHaveLength(1);
+      expect(links[0]!.text, locale).toBe(want);
+      seen.add(want!);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+    expect(seen.size, "a hardcoded English label would collapse these to one").toBeGreaterThan(1);
+  });
+
+  it("it sits in <main>, above the h1, the tab bar and the panel - and is NOT one of the tab bar's links or inside the panel", async () => {
+    let checked = 0;
+    for (const tab of SPONSORS_TABS) {
+      const html = await render(tab);
+      expect(dashboardLinks(html), `?tab=${tab}: the back link is there`).toHaveLength(1);
+      const link = dashboardLinks(html)[0]!;
+      const main = html.indexOf("<main");
+      const h1 = html.indexOf("<h1");
+      const nav = html.indexOf('aria-label="Sponsors sections"');
+      const panel = html.indexOf(`data-testid="sponsors-tab-${tab}"`);
+      expect(main, `?tab=${tab}: <main> is in the markup`).toBeGreaterThanOrEqual(0);
+      expect([main, link.at, h1, nav, panel].every((n, i, a) => i === 0 || n > a[i - 1]!), `?tab=${tab}: main < back link < h1 < tab bar < panel`).toBe(true);
+      // The negative pair: the tab bar still holds exactly the declared tabs (the e2e counts its anchors), none of them /dashboard.
+      expect(tabLinks(html).map((l) => l.tab), `?tab=${tab}: the tab bar is unchanged`).toEqual([...SPONSORS_TABS]);
+      expect(tabLinks(html).filter((l) => l.href === "/dashboard"), `?tab=${tab}: the back link is not a tab`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(SPONSORS_TABS.length);
+  });
+
+  it("it is the Streaming page's quiet link, not a button, and it names its destination in words (no bare arrow)", async () => {
+    const links = dashboardLinks(await render());
+    expect(links, "the back link is there").toHaveLength(1);
+    const link = links[0]!;
+    expect(link.text.length, "the link says where it goes").toBeGreaterThan(0);
+    expect(link.tag, "quiet emphasis").toMatch(/class="[^"]*\btext-slate-500\b/);
+    expect(link.tag, "not the ghost-button chrome").not.toMatch(/class="[^"]*\bbtn\b/);
+  });
+
+  it("with a sponsor's page open it is still the ONE link to /dashboard, and the sheet keeps its own 'Back to sponsors'", async () => {
+    real.on = true;
+    try {
+      h.listSponsorRows.mockResolvedValue([
+        { id: "s1", name: "Harbour Print", competition_id: null, url: null, logo_path: null, tier: "gold", display_order: 0, status: "active", click_count: 0, on_stream: false, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false, last_billing_email: null },
+      ]);
+      h.listDeals.mockResolvedValue([]);
+      const html = await render("sponsors", undefined, undefined, { sponsor: "s1" });
+      expect(html, "premise: the sponsor's own page is what rendered").toContain('data-testid="sponsor-sheet"');
+      expect(dashboardLinks(html), "the page's back link").toHaveLength(1);
+      expect(html, "the sheet's own back control is untouched").toContain(`aria-label="${uiEn["sponsors.sheet.backLabel"]}"`);
+    } finally {
+      real.on = false;
+    }
+  });
+});
+
+// The page header matches Streaming's (owner, 2026-11-11: "we don't have lime board under sponsor", Streaming screenshot confirmed
+// "right"): the lime-bar eyebrow (`app-eyebrow`) above the title and a one-line description under it, then the tabs. Streaming's markup is
+// `<p class="app-eyebrow mb-1">` / `<h1 class="page-title">` / `<p class="mt-1 max-w-xl text-sm text-slate-500">`. Expected words come from the
+// dictionary files, never typed here; the HTML is entity-decoded first (`&` is `&amp;`, an apostrophe is `&#x27;`).
+describe("the Sponsors hub - the page header matches Streaming's: eyebrow, title, description, then the tabs", () => {
+  const decode = (s: string): string =>
+    s.replace(/<[^>]+>/g, "").replaceAll("&amp;", "&").replaceAll("&#x27;", "'").replaceAll("&quot;", '"').replaceAll("&lt;", "<").replaceAll("&gt;", ">").trim();
+  /** Every `<p>` whose class list holds `cls` (anchored on `class="`, so an omitted class cannot satisfy it), with its decoded text and position. */
+  const paragraphs = (html: string, cls: string): { tag: string; text: string; at: number }[] =>
+    [...html.matchAll(/<p\b([^>]*\bclass="([^"]*)"[^>]*)>([\s\S]*?)<\/p>/g)]
+      .filter((m) => m[2]!.split(/\s+/).includes(cls))
+      .map((m) => ({ tag: m[0].slice(0, m[0].indexOf(">") + 1), text: decode(m[3]!), at: m.index ?? -1 }));
+  const eyebrows = (html: string) => paragraphs(html, "app-eyebrow");
+  const descriptions = (html: string) => paragraphs(html, "max-w-xl");
+
+  it("every locale: the eyebrow and the description are that locale's sponsors.eyebrow and sponsors.desc, each exactly once (counted)", async () => {
+    const eyebrowWords = new Set<string>();
+    const descWords = new Set<string>();
+    let checked = 0;
+    for (const locale of LOCALES) {
+      h.resolveLocale.mockResolvedValue(locale);
+      const wantEyebrow = UI_BY_LOCALE[locale]!["sponsors.eyebrow"];
+      const wantDesc = UI_BY_LOCALE[locale]!["sponsors.desc"];
+      expect(typeof wantEyebrow, `${locale}: the dictionary has sponsors.eyebrow`).toBe("string");
+      expect(typeof wantDesc, `${locale}: the dictionary has sponsors.desc`).toBe("string");
+      const html = await render();
+      expect(eyebrows(html).map((p) => p.text), `${locale}: one eyebrow`).toEqual([wantEyebrow]);
+      expect(descriptions(html).map((p) => p.text), `${locale}: one description`).toEqual([wantDesc]);
+      eyebrowWords.add(wantEyebrow!);
+      descWords.add(wantDesc!);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+    expect(eyebrowWords.size, "hardcoded English would collapse the eyebrows to one").toBe(LOCALES.length);
+    expect(descWords.size, "hardcoded English would collapse the descriptions to one").toBe(LOCALES.length);
+  });
+
+  it("the eyebrow is the lime-bar one (`app-eyebrow`) at Streaming's `mb-1`; the description is Streaming's quiet line", async () => {
+    const html = await render();
+    const [eyebrow] = eyebrows(html);
+    const [desc] = descriptions(html);
+    expect(eyebrow, "the eyebrow is there").toBeDefined();
+    expect(desc, "the description is there").toBeDefined();
+    expect(eyebrow!.tag).toMatch(/class="app-eyebrow mb-1"/);
+    expect(desc!.tag).toMatch(/class="[^"]*\bmt-1\b[^"]*\bmax-w-xl\b[^"]*\btext-sm\b[^"]*\btext-slate-500\b/);
+  });
+
+  it("every tab, editor and viewer: back link -> eyebrow -> h1 -> description -> tab bar -> panel, in that order (counted)", async () => {
+    let checked = 0;
+    for (const canEdit of [true, false]) {
+      asMember(canEdit ? "owner" : "viewer", canEdit);
+      for (const tab of SPONSORS_TABS) {
+        const html = await render(tab);
+        const back = /<a\b[^>]*\bhref="\/dashboard"/.exec(html)?.index ?? -1;
+        const eyebrow = eyebrows(html)[0]?.at ?? -1;
+        const h1 = html.indexOf("<h1");
+        const desc = descriptions(html)[0]?.at ?? -1;
+        const nav = html.indexOf('aria-label="Sponsors sections"');
+        // The panel that opened: a viewer asking for an editor-only tab is shown Overview, so read WHICH panel rendered (exactly one).
+        const shown = panels(html);
+        expect(shown, `${canEdit ? "editor" : "viewer"} ?tab=${tab}: one panel`).toHaveLength(1);
+        const panel = html.indexOf(`data-testid="sponsors-tab-${shown[0]}"`);
+        const order = [back, eyebrow, h1, desc, nav, panel];
+        const who = `${canEdit ? "editor" : "viewer"} ?tab=${tab}`;
+        expect(order.every((n) => n >= 0), `${who}: all six parts are in the markup (${order.join(",")})`).toBe(true);
+        expect(order.every((n, i, a) => i === 0 || n > a[i - 1]!), `${who}: order is back, eyebrow, h1, description, tabs, panel (${order.join(",")})`).toBe(true);
+        checked++;
+      }
+    }
+    expect(checked).toBe(SPONSORS_TABS.length * 2);
+  });
+
+  it("the gap above the tab bar is unchanged: it sits BELOW the description on the header's wrapper, not on the h1 any more", async () => {
+    const html = await render();
+    const h1Tag = /<h1\b[^>]*>/.exec(html)?.[0] ?? "";
+    expect(h1Tag, "the title is still the page title").toMatch(/class="[^"]*\bpage-title\b/);
+    expect(h1Tag, "the title no longer carries the gap").not.toMatch(/\bmb-4\b|\bmd:mb-6\b/);
+    // The wrapper is the element holding the eyebrow, the title and the description.
+    const wrapper = /<div class="([^"]*)">\s*<p class="app-eyebrow/.exec(html)?.[1];
+    expect(wrapper, "eyebrow, title and description share one wrapper").toBeDefined();
+    expect(wrapper!.split(/\s+/), "the old h1 gap, intact").toEqual(expect.arrayContaining(["mb-4", "md:mb-6"]));
+    // And nothing sits between the wrapper and the tab bar's scroller: the gap is the only thing separating them.
+    expect(html, "the wrapper closes straight into the tab bar").toMatch(/<\/p><\/div><div data-active-tab-scroller/);
+  });
+});
+
 describe("the tab bar scrolls its active tab into view (the Settings and Directory precedent; at 320 the 4th tab is off-screen)", () => {
   it("the nav sits inside the active-tab scroller and the current tab is inside it too, for every tab (counted)", async () => {
     let checked = 0;

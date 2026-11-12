@@ -22,11 +22,18 @@ export interface PhoneDisclosureProps {
   desktopCollapsible?: boolean;
   /** The phone-only variant's own "start open" (default false: below `md` a fold is closed until tapped, spec §3.10). `startOpen` above
    *  is not it - that prop belongs to `desktopCollapsible` and is ignored without it. True opens the fold on the render after hydration
-   *  (the server and the hydration render stay closed), at any width; at `md` and up the body is always shown and the toggle hidden, so
+   *  (the server and the hydration render stay closed, unless `allWidths` is set: then the first render is open), at any width; at `md` and up the body is always shown and the toggle hidden, so
    *  only a phone sees the difference. Seeded once per change of the prop, never on a plain re-render: a reader's tap is theirs, and
    *  the prop going false does not fold what they have open (Sponsors hub, Packages: an empty price list opens its tier legend, and
    *  the first package created leaves it open). Ignored when `desktopCollapsible` is set. */
   phoneStartOpen?: boolean;
+  /** Default false. A fold that stays a fold at EVERY width (Sponsors hub, Packages: the tier legend folds on a desktop too, owner,
+   *  2026-11-11). Like `desktopCollapsible` the toggle row renders at `md` and up (no `md:hidden`) and the body is gated purely by `open`
+   *  at every width - but it is seeded like the phone-only variant, not from `startOpen` and the width: `phoneStartOpen` opens it, and the
+   *  prop going false does not fold what the reader has open. The FIRST render is already open then (the server and the client both read
+   *  the same prop - no width is involved - so nothing mismatches and an empty list's legend is not painted folded and then opened).
+   *  Ignored when `desktopCollapsible` is set: that variant seeds itself from `startOpen` and the width. */
+  allWidths?: boolean;
   /** Extra classes on the root (e.g. `max-md:hidden` to park an inactive card
    *  behind a phone-only switch — one DOM, never a second tree). */
   className?: string;
@@ -96,10 +103,14 @@ export function PhoneDisclosure({
   startOpen = true,
   desktopCollapsible = false,
   phoneStartOpen = false,
+  allWidths = false,
   className,
   testId,
 }: PhoneDisclosureProps) {
-  // Always starts closed on the server AND the hydration render — matches
+  // The toggle and the fold apply at every width for either variant; only how they are SEEDED differs (see `allWidths`).
+  const everyWidth = desktopCollapsible || allWidths;
+  // Except for `allWidths` + `phoneStartOpen` (the initial `useState` below opens it: its seed is a prop, not a width, so the server and
+  // the client agree), it always starts closed on the server AND the hydration render — matches
   // spec 2026-09-02-scorepad-v3-phone-composition §3.10's phone-narrow
   // default exactly, with no SSR/hydration mismatch. `desktopCollapsible`
   // widths (>= Tailwind's `md`, 768px) then open to `startOpen` on the render
@@ -120,7 +131,7 @@ export function PhoneDisclosure({
   // resizing the window does not fold or unfold a section by itself.
   const hydrated = useHydrated();
   const wide = useMediaQuery("(min-width: 768px)");
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(allWidths && !desktopCollapsible && phoneStartOpen);
   const seed = `${desktopCollapsible}|${startOpen}|${hydrated}|${phoneStartOpen}`;
   const [seededFor, setSeededFor] = useState(() => `${desktopCollapsible}|${startOpen}|false|${phoneStartOpen}`);
   if (seededFor !== seed) {
@@ -163,7 +174,7 @@ export function PhoneDisclosure({
         aria-label={open ? hideLabel : showLabel}
         aria-controls={bodyId}
         onClick={() => setOpen((v) => !v)}
-        className={`flex min-h-11 w-full shrink-0 items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-left transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400${desktopCollapsible ? "" : " md:hidden"}`}
+        className={`flex min-h-11 w-full shrink-0 items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-left transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400${everyWidth ? "" : " md:hidden"}`}
       >
         <span className="min-w-0 truncate text-sm font-semibold text-slate-900">{summary}</span>
         <span className="flex shrink-0 items-center gap-2 text-xs text-slate-600">
@@ -172,7 +183,7 @@ export function PhoneDisclosure({
         </span>
       </button>
       <div
-        className={`grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)]${open ? "" : desktopCollapsible ? " hidden" : " max-md:hidden"}`}
+        className={`grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)]${open ? "" : everyWidth ? " hidden" : " max-md:hidden"}`}
         id={bodyId}
       >
         {children}

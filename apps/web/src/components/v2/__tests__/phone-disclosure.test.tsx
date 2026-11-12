@@ -91,6 +91,42 @@ describe("PhoneDisclosure desktopCollapsible (fixture console: fold the lineup o
   });
 });
 
+describe("PhoneDisclosure allWidths (Sponsors hub: the tier legend folds on a desktop too, owner 2026-11-11)", () => {
+  const render = (props: { allWidths?: boolean; phoneStartOpen?: boolean }) =>
+    renderToStaticMarkup(
+      <PhoneDisclosure summary="What each tier gets" showLabel="Show" hideLabel="Hide" {...props}>
+        <p data-role="body">the legend</p>
+      </PhoneDisclosure>,
+    );
+  const toggleOf = (h: string) => /<button\b[^>]*data-role="phone-disclosure-toggle"[^>]*>/.exec(h)?.[0] ?? "";
+
+  it("renders the toggle WITHOUT md:hidden and a folded body that is `hidden` at every width (anchored: max-md:hidden satisfies neither)", () => {
+    const h = render({ allWidths: true });
+    expect(toggleOf(h), "premise: the toggle is drawn").toContain('data-role="phone-disclosure-toggle"');
+    expect(toggleOf(h)).not.toMatch(/class="[^"]*\smd:hidden(?:\s|")/);
+    expect(toggleOf(h)).not.toContain("max-md:hidden");
+    expect(toggleOf(h)).toContain('aria-expanded="false"');
+    expect(h).toMatch(/<div class="grid min-w-0 flex-1 grid-cols-\[minmax\(0,1fr\)\] hidden" id="[^"]+"><p data-role="body">the legend<\/p><\/div>/);
+  });
+
+  it("with phoneStartOpen it is open on the FIRST render (the server and the client read the same prop, no width), the body unhidden, the toggle on hide", () => {
+    const h = render({ allWidths: true, phoneStartOpen: true });
+    expect(toggleOf(h)).toContain('aria-expanded="true"');
+    expect(toggleOf(h)).toContain('aria-label="Hide"');
+    expect(h).toMatch(/data-open="true"/);
+    expect(h).toMatch(/<div class="grid min-w-0 flex-1 grid-cols-\[minmax\(0,1fr\)\]" id="[^"]+"><p data-role="body">the legend<\/p><\/div>/);
+  });
+
+  it("the default is unchanged for every other caller: no allWidths means the phone-only toggle, and phoneStartOpen alone still renders closed on first paint", () => {
+    const h = render({});
+    expect(toggleOf(h)).toMatch(/class="[^"]*\smd:hidden"/);
+    expect(h).toContain("max-md:hidden");
+    const seeded = render({ phoneStartOpen: true });
+    expect(toggleOf(seeded)).toContain('aria-expanded="false"');
+    expect(seeded).toMatch(/\] max-md:hidden" id=/);
+  });
+});
+
 describe("PhoneDisclosure phoneStartOpen", () => {
   it("renders CLOSED on first paint, like every other fold (the server and the hydration render never open it; the seed opens it after hydration)", () => {
     const h = renderToStaticMarkup(

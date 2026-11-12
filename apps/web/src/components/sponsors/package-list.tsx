@@ -20,6 +20,7 @@ import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { priceLabel } from "@/components/sponsors/deal-copy";
 import { sponsorSaveErrorKey } from "@/components/sponsors/save-error";
+import { slimSwitch } from "@/components/sponsors/slim-switch";
 import { TierLegend } from "@/components/sponsors/tier-legend";
 import { TIER_BADGE, TIER_MSG } from "@/components/sponsors/tier-labels";
 import { apiV1 } from "@/lib/client-v1";
@@ -324,6 +325,13 @@ export function PackageList({ orgId, initialPackages, competitions, tiersOrgWide
   const [sheetError, setSheetError] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Retired packages are records, not prices on the list: hidden unless the club asks (owner, 2026-11-11: "show retire switch? otherwise
+  // hide retired"). Active first, then retired, whatever order `packages` is in - a local retire leaves the card where it was until the
+  // re-read, and the server's own order must not be what keeps the retired ones last.
+  const [showRetired, setShowRetired] = useState(false);
+  const activePackages = packages.filter((p) => p.active);
+  const retiredPackages = packages.filter((p) => !p.active);
+  const shownPackages = showRetired ? [...activePackages, ...retiredPackages] : activePackages;
 
   const priceCents = parsePriceCents(draft.price);
   // The same placement answer the server enforces: a plan without tiers cannot save a package that needs them, however the draft got there.
@@ -422,14 +430,37 @@ export function PackageList({ orgId, initialPackages, competitions, tiersOrgWide
           {listError}
         </p>
       ) : null}
+      {/* Only while something is retired: with none there is nothing to show, so no control. The house slim switch (the On stream
+          tab's), named for what it controls with the count in it; its words do not change with its state (`aria-checked` says where it
+          is). The label toggles it too, so the words are part of the tap, not only the 44px track. A view filter, not an edit: a viewer has it. */}
+      {retiredPackages.length > 0 ? (
+        <div data-testid="package-retired-filter" data-retired-count={retiredPackages.length} className="flex min-w-0 items-center justify-end gap-1">
+          <label id="package-retired-switch-label" htmlFor="package-retired-switch" className="min-w-0 text-sm text-slate-700">
+            {msg("sponsors.pkg.showRetired", { count: retiredPackages.length })}
+          </label>
+          {slimSwitch({
+            id: "package-retired-switch",
+            checked: showRetired,
+            onToggle: () => setShowRetired((on) => !on),
+            labelledBy: "package-retired-switch-label",
+            testId: "package-retired-switch",
+          })}
+        </div>
+      ) : null}
       {packages.length === 0 ? (
         <p data-testid="package-empty" className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-500">
           {msg("sponsors.pkg.empty")}
         </p>
+      ) : shownPackages.length === 0 ? (
+        // Every package is retired and the switch is off: the list is not empty, so it must not say "no packages yet" - and the switch
+        // above is the way to them.
+        <p data-testid="package-all-retired" className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-500">
+          {msg("sponsors.pkg.allRetired")}
+        </p>
       ) : (
         // The cards sit directly in the grid: a wrapper between a grid and its card would end the equal-height stretch.
         <div className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {packages.map((pkg) => (
+          {shownPackages.map((pkg) => (
             <PackageCard
               key={pkg.id}
               pkg={pkg}
@@ -442,8 +473,8 @@ export function PackageList({ orgId, initialPackages, competitions, tiersOrgWide
           ))}
         </div>
       )}
-      {/* What a tier is, under the price list: it explains the cards above, and an empty list needs it most (owner, 2026-11-11). Folded
-          below md, open there only while the list is empty; an editor on a plan without tiers gets the billing link on its plan line. */}
+      {/* What a tier is, under the price list: it explains the cards above, and an empty list needs it most (owner, 2026-11-11). A fold at
+          every width, open only while the list is empty; an editor on a plan without tiers gets the billing link on its plan line. */}
       <TierLegend tiersOrgWide={tiersOrgWide} billingHref={billingHref} canEdit={canEdit} startOpen={packages.length === 0} />
       <p data-testid="package-online-note" className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs text-slate-500">
         {hasMonetize ? (

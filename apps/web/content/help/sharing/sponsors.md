@@ -28,9 +28,9 @@ Public sponsor logos link through a tracked redirect, so the click count in the 
 
 A **package** is a price on your list: a name, a price, a tier, where it applies (the whole organisation or one competition) and whether it includes your stream. Open **Sponsors → Packages** to create one or retire one. Packages are on every plan; a tier above Partner, or a package for one competition, needs Pro or an Event Pass.
 
-Each package shows how many sponsors hold a deal on it. **Retire** stops new deals using a package. Deals already on it carry on, and past deals keep its name and price.
+Each package shows how many sponsors hold a deal on it. **Retire** stops new deals using a package and hides its card until you turn on **Show retired (N)**, the switch above the list. Deals already on it carry on, and past deals keep its name and price.
 
-Under the price list, **What each tier gets** explains the four tiers in plain words: the Title sponsor is named under the competition name, Gold gets a large logo panel on the sponsor board and Silver a smaller one, and a Partner is listed by name in the Partners line. It also shows how many turns each tier takes in the stream rotation. It is there on every plan. On a plan without tiers it also says what that plan's own pages do (every sponsor in one strip, one turn each in the stream rotation, except on a competition with an Event Pass) and what to upgrade for, with a link to billing for an editor. On a phone the section folds under its heading, and it starts open while the list has no packages yet.
+Under the price list, **What each tier gets** explains the four tiers in plain words: the Title sponsor is named under the competition name, Gold gets a large logo panel on the sponsor board and Silver a smaller one, and a Partner is listed by name in the Partners line. It also shows how many turns each tier takes in the stream rotation. It is there on every plan. On a plan without tiers it also says what that plan's own pages do (every sponsor in one strip, one turn each in the stream rotation, except on a competition with an Event Pass) and what to upgrade for, with a link to billing for an editor. The section folds under its heading at every width, and it starts open while the list has no packages yet.
 
 ## Deals: putting a sponsor on a package
 

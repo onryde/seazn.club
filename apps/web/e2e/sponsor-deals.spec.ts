@@ -249,10 +249,16 @@ test("list at 320 and 375: the ⋯ fold holds clicks, move and delete and the pe
   expect(LONG.length, "premise: the name is the 43-character one").toBe(43);
   const SHORT = "Ridge Cycles";
   const gold = await newPackage(request, org.orgId, "gold");
+  // The move arrows exist only where a group has two or more sponsors (owner, 2026-11-11), so Gold holds a second live sponsor for
+  // Harbourside to swap with, and Ridge Cycles is left ALONE in Partner - the row that must have no arrows.
+  const MATE = "Pier Hardware";
   const longId = await newSponsor(request, org.orgId, LONG);
   const shortId = await newSponsor(request, org.orgId, SHORT);
+  const mateId = await newSponsor(request, org.orgId, MATE);
   const deal = await newDeal(request, org.orgId, longId, { package_id: gold, payment_method: "complimentary", go_live: "immediate" });
   expect(await dealStatus(request, org.orgId, deal), "premise: live").toBe("live");
+  const mateDeal = await newDeal(request, org.orgId, mateId, { package_id: gold, payment_method: "complimentary", go_live: "immediate" });
+  expect(await dealStatus(request, org.orgId, mateDeal), "premise: the second Gold sponsor is live too").toBe("live");
 
   // 375 is the widest phone that still gets the narrow layout (below 376), 768 the first width with no ⋯.
   const widths = [320, 375, 768, 1280];
@@ -263,8 +269,8 @@ test("list at 320 and 375: the ⋯ fold holds clicks, move and delete and the pe
     const long = rowOf(page, longId);
     await expect(long, `${width}: the long-named sponsor is listed`).toBeVisible();
 
-    // The group a row sits under is the tier its sponsor shows at NOW: the live gold deal made this partner-added sponsor a Gold; the other stays Partner.
-    await expect(page.locator('[data-testid="sponsor-group"][data-tier="gold"]').getByTestId("sponsor-row"), `${width}: the gold deal's sponsor is under Gold`).toHaveCount(1);
+    // The group a row sits under is the tier its sponsor shows at NOW: the live gold deals made these partner-added sponsors Golds; the other stays Partner.
+    await expect(page.locator('[data-testid="sponsor-group"][data-tier="gold"]').getByTestId("sponsor-row"), `${width}: the two gold deals' sponsors are under Gold`).toHaveCount(2);
     await expect(page.locator('[data-testid="sponsor-group"][data-tier="gold"]').locator(`[data-sponsor-id="${longId}"]`)).toHaveCount(1);
     await expect(page.locator('[data-testid="sponsor-group"][data-tier="partner"]').locator(`[data-sponsor-id="${shortId}"]`), `${width}: the other stays under Partner`).toHaveCount(1);
 
@@ -321,6 +327,9 @@ test("list at 320 and 375: the ⋯ fold holds clicks, move and delete and the pe
       // Compared against the row's own top, so a scroll between the two does not read as the pencil moving.
       expect({ x: Math.round(openBox.x), y: Math.round(openBox.y - openRowTop) }, `${width}: and it is where it was in its row`).toEqual({ x: Math.round(shutBox.x), y: Math.round(shutBox.y - rowTop) });
       await expect(clicks, `${width}: open, the clicks count is there`).toBeVisible();
+      // A new sponsor has no clicks: the words are the plural "0 clicks", and the title says what a click is.
+      await expect(clicks, `${width}: the count has its noun`).toHaveText(ui("sponsors.row.clicks.other", { count: "0" }));
+      await expect(clicks, `${width}: and its title`).toHaveAttribute("title", ui("sponsors.row.clicksHint"));
       for (const c of controls) {
         await expect(c, `${width}: open, every control is there`).toBeVisible();
         const box = await c.boundingBox();
@@ -336,6 +345,8 @@ test("list at 320 and 375: the ⋯ fold holds clicks, move and delete and the pe
       await expect(more, `${width}: no ⋯ from 768`).toBeHidden();
       await expect(tools, `${width}: the tools are inline`).toBeVisible();
       await expect(clicks).toBeVisible();
+      await expect(clicks, `${width}: the count has its noun`).toHaveText(ui("sponsors.row.clicks.other", { count: "0" }));
+      await expect(clicks, `${width}: and its title`).toHaveAttribute("title", ui("sponsors.row.clicksHint"));
       for (const c of [pencil, ...controls]) await expect(c, `${width}: every control is inline`).toBeVisible();
       await expect(long.getByRole("link", { name: ui("sponsors.edit", { name: LONG }) }), `${width}: one Edit, not two`).toHaveCount(1);
       // Where the pencil sits from md: after the name and before the deal cell, with nothing overlapping either side of it.
@@ -345,6 +356,33 @@ test("list at 320 and 375: the ⋯ fold holds clicks, move and delete and the pe
       expect(nameBox.x + nameBox.width, `${width}: the name ends before the pencil`).toBeLessThanOrEqual(pencilBox.x + 0.5);
       expect(pencilBox.x + pencilBox.width, `${width}: the pencil ends before the deal cell`).toBeLessThanOrEqual(dealBox.x + 0.5);
       await expect(long.getByTestId("sponsor-row-logo"), `${width}: the logo tile is on the row`).toBeVisible();
+      // Every row's tray is one width from md, so the same control stands in the same column on every row (owner, 2026-11-11): the two Gold
+      // rows have arrows, the lone Partner row has a spacer in their place, and their clicks read "0 clicks" alike. Left edges, in px.
+      const columns = await Promise.all(
+        [longId, mateId, shortId].map((id) =>
+          rowOf(page, id).evaluate((row) => {
+            const left = (el: Element | null): number => el!.getBoundingClientRect().left;
+            return {
+              pencil: left(row.querySelector('[data-testid="sponsor-row-edit"]')),
+              deal: left(row.querySelector('[data-testid="sponsor-row-deal"]')),
+              clicks: left(row.querySelector('[data-testid="sponsor-row-clicks"]')),
+              remove: left(row.querySelector('[data-testid="sponsor-row-tools"]')!.lastElementChild),
+            };
+          }),
+        ),
+      );
+      expect(columns, `${width}: three rows were measured`).toHaveLength(3);
+      if (width === 768) {
+        // The name keeps room at the narrowest width with inline controls (owner, 2026-11-11: 84px cut "Harboursid..."; the floor is 160px).
+        for (const id of [longId, mateId, shortId]) {
+          const main = (await rowOf(page, id).getByTestId("sponsor-row-main").boundingBox())!;
+          expect(main.width, `${width}: the name column keeps at least 160px`).toBeGreaterThanOrEqual(160);
+        }
+      }
+      for (const col of ["pencil", "deal", "clicks", "remove"] as const) {
+        const xs = columns.map((c) => c[col]);
+        expect(Math.max(...xs) - Math.min(...xs), `${width}: the ${col} is in one column on every row (left edges ${xs.join(", ")})`).toBeLessThanOrEqual(1);
+      }
     }
 
     // The 43-character name is cut with an ellipsis and stays inside the screen; it is clipped only where the row is that narrow.
@@ -378,6 +416,24 @@ test("list at 320 and 375: the ⋯ fold holds clicks, move and delete and the pe
       expect(subStyle, `${width}: and the sub-line is the one truncated line it was`).toEqual({ clamp: "none", whiteSpace: "nowrap" });
     }
     await expectNoHorizontalScroll(page);
+
+    // The move arrows, read with each row's tray OPEN - the way an owner reaches them. Below 768 the tray is folded behind the ⋯ (display:none),
+    // where `getByRole` sees nothing: a "no arrows" count taken shut passes for any row, and a "delete is there" count fails. Only ONE row's tray
+    // is open at a time, so each row is opened in turn; openSponsorRowTools opens the fold only where the ⋯ is on screen (768+ it is inline).
+    // A sponsor ALONE in its group has nothing to move past: no arrows, only its delete (owner, 2026-11-11). Its delete found in the same tray
+    // is the positive pair (the scan can see inside the tray), and Harbourside's own two arrows, visible just below, are the other.
+    const alone = await openSponsorRowTools(page, SHORT);
+    await expect(alone.getByTestId("sponsor-row-tools"), `${width}: ${SHORT}'s tray is open`).toBeVisible();
+    await expect(alone.getByRole("button", { name: ui("settings.org.sponsors.remove", { name: SHORT }), exact: true }), `${width}: its delete is there`).toHaveCount(1);
+    for (const key of ["settings.org.sponsors.moveUp", "settings.org.sponsors.moveDown"]) {
+      await expect(alone.getByRole("button", { name: ui(key, { name: SHORT }), exact: true }), `${width}: ${SHORT} is alone in Partner, so no ${key}`).toHaveCount(0);
+    }
+    // What the arrows say, to a pointer and to a screen reader: the same words, naming the sponsor and the board.
+    await openSponsorRowTools(page, LONG);
+    for (const [c, key] of [[controls[0]!, "settings.org.sponsors.moveUp"], [controls[1]!, "settings.org.sponsors.moveDown"]] as const) {
+      await expect(c, `${width}: ${LONG} has ${key} (two sponsors share Gold)`).toBeVisible();
+      await expect(c, `${width}: ${key} carries its words as a title`).toHaveAttribute("title", ui(key, { name: LONG }));
+    }
     checked++;
   }
   expect(checked, "every width was walked").toBe(widths.length);
@@ -1118,6 +1174,17 @@ test("packages: a package's used-by count follows its deals, and Retire takes it
     dialog.getByRole("button", { name: ui("sponsors.pkg.retireConfirm.label"), exact: true }).click(),
   ]);
   expect(retired.status(), `retire answered ${retired.status()}: ${await retired.text()}`).toBe(200);
+  // Retired packages are hidden by default (owner, 2026-11-11: "show retire switch? otherwise hide retired"): the card has left the
+  // list, and the switch - drawn now that one package is retired - says how many are hidden and brings them back.
+  const showRetired = page.getByTestId("package-retired-switch");
+  await expect(card, "the retired card leaves the list").toHaveCount(0);
+  await expect(showRetired, "the first retired package brings the switch").toBeVisible();
+  await expect(showRetired, "and it starts off").toHaveAttribute("aria-checked", "false");
+  await expect(page.getByTestId("package-retired-filter"), "naming how many it hides").toContainText(ui("sponsors.pkg.showRetired", { count: "1" }));
+  await expect(async () => {
+    if ((await showRetired.getAttribute("aria-checked")) !== "true") await showRetired.click();
+    await expect(showRetired, "a tap turns it on").toHaveAttribute("aria-checked", "true", { timeout: 1_500 });
+  }).toPass({ timeout: 15_000 });
   await expect(card.getByTestId("package-retired"), "the card reads Retired").toBeVisible();
   await expect(card.getByTestId("package-retire"), "and offers no second Retire").toHaveCount(0);
   await expect(usedBy, "the deal already on it carries on: still counted").toHaveText(ui("sponsors.pkg.usedBy.one", { count: "1" }));
@@ -1630,13 +1697,16 @@ test("T19 widths: list, sponsor page, Add deal sheet and deal page fit 320 / 768
   // subset on the phone. The expected members are named from the dictionary the page renders from, so an empty set cannot pass.
   const wide = sets.get(1280)!;
   const longControls = wide.get(longId)!;
-  for (const label of [
-    ui("sponsors.edit", { name: LONG }),
-    ui("settings.org.sponsors.moveUp", { name: LONG }),
-    ui("settings.org.sponsors.moveDown", { name: LONG }),
-    ui("settings.org.sponsors.remove", { name: LONG }),
-  ]) {
+  // Harbourside is ALONE in Gold, so it offers Edit and Delete and no arrows (owner, 2026-11-11); Quay and Ridge share Partner, so they
+  // offer both. Each side of that is asserted, so "no arrows anywhere" and "arrows everywhere" both fail.
+  for (const label of [ui("sponsors.edit", { name: LONG }), ui("settings.org.sponsors.remove", { name: LONG })]) {
     expect(longControls.some((c) => c.endsWith(`| ${label}`)), `1280: the long-named row offers ${label}`).toBe(true);
+  }
+  for (const key of ["settings.org.sponsors.moveUp", "settings.org.sponsors.moveDown"]) {
+    expect(longControls.some((c) => c.endsWith(`| ${ui(key, { name: LONG })}`)), `1280: alone in Gold, the long-named row offers no ${key}`).toBe(false);
+    for (const name of [QUAY, RIDGE]) {
+      expect(wide.get(name === QUAY ? quayId : ridgeId)!.some((c) => c.endsWith(`| ${ui(key, { name })}`)), `1280: ${name} shares Partner, so it offers ${key}`).toBe(true);
+    }
   }
   expect(wide.get(quayId)!.some((c) => c.startsWith("sponsor-row-action |")), "1280: the open deal's row offers its one next action").toBe(true);
   expect(wide.get(ridgeId)!.some((c) => c.startsWith("sponsor-row-action |")), "1280: the sponsor with no deal is offered Add deal").toBe(true);

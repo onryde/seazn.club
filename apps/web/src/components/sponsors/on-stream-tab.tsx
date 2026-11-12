@@ -24,6 +24,7 @@ import Link from "@/components/ui/console-link";
 import { TIER_BADGE, TIER_MSG } from "@/components/sponsors/tier-labels";
 import { breakMsgKey } from "@/components/sponsors/break-labels";
 import { sponsorSaveErrorKey } from "@/components/sponsors/save-error";
+import { slimSwitch } from "@/components/sponsors/slim-switch";
 import { apiV1 } from "@/lib/client-v1";
 import { sportLabel } from "@/lib/scoring-vocab";
 import type { MessageKey } from "@/lib/messages";
@@ -212,29 +213,14 @@ export function OnStreamTab(props: OnStreamTabProps) {
           <span id="on-stream-switch-label" className="min-w-0 text-sm text-slate-700">
             {msg("sponsors.onStream.switchLabel")}
           </span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={on}
-            aria-labelledby="on-stream-switch-label"
-            data-testid="on-stream-switch"
-            disabled={busy}
-            onClick={() => saveSettings({ enabled: !on, frequency })}
-            className="inline-flex h-11 w-14 shrink-0 items-center justify-center rounded-lg transition disabled:opacity-60"
-          >
-            {/* The button is only the 44px tap target and paints nothing; the slim switch (a 24 x 44 track, a 20px knob) is drawn
-                inside it. The track used to BE the button (44px tall), which read as a fat pill. */}
-            <span
-              aria-hidden="true"
-              data-testid="on-stream-switch-track"
-              className={`relative block h-6 w-11 rounded-full transition-colors motion-reduce:transition-none ${on ? "bg-purple-600" : "bg-slate-300"}`}
-            >
-              <span
-                data-testid="on-stream-switch-knob"
-                className={`absolute left-0.5 top-0.5 block h-5 w-5 rounded-full bg-white shadow transition-transform motion-reduce:transition-none ${on ? "translate-x-5" : "translate-x-0"}`}
-              />
-            </span>
-          </button>
+          {/* The slim switch (a 44px tap target holding a 24 x 44 track and a 20px knob) is `slimSwitch`, shared with the Packages tab. */}
+          {slimSwitch({
+            checked: on,
+            onToggle: () => saveSettings({ enabled: !on, frequency }),
+            labelledBy: "on-stream-switch-label",
+            testId: "on-stream-switch",
+            disabled: busy,
+          })}
         </div>
         {!on && (
           <p className="text-xs text-slate-500" data-testid="on-stream-off-note">

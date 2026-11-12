@@ -38,6 +38,11 @@
 //   L26 chip title     a chip loses its `title` (a cut "Disputed - parked" cannot be read)               -> "a truncated chip carries its full words as its title"
 //   L27 breakpoint     the narrow layout goes back to `max-[360px]` (a 360 / 375 phone is cramped)      -> "the narrow layout starts below 376"
 //   L28 sub-line       the sub-line loses `max-[376px]:line-clamp-2` (the price is cut mid-number)      -> "below 376 the sub-line takes two lines"
+//   L29 lone sponsor   the arrows are drawn for a group of one (`canReorder` -> true)                  -> "a sponsor alone in its group has no arrows"
+//   L30 clicks words   the clicks span goes back to the bare number                                    -> "the clicks read as a counted noun"
+//   L31 spacer         the group-of-one spacer is dropped                                             -> "a lone row keeps the arrows' room"
+//   L32 clicks width   the clicks span loses `md:min-w-[5rem]`                                         -> "every row's tray is the same width"
+//   L33 deal track     the deal cell goes back to `md:w-72` (the name is cut to 84px at 768)           -> "the deal column is 13rem from md and 18rem from lg"
 //   L16 live region    the notice renders only while it has text                                      -> "always mounted"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -71,6 +76,20 @@ import uiNl from "@/dictionaries/nl/ui.json";
 const en = uiEn as unknown as Dict;
 const msg = (key: MessageKey, vars?: Record<string, string | number>) => t(en, key, vars);
 const flat = (s: string) => s.replace(/\s+/g, " ").trim();
+const DICT_BY_LOCALE = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as const;
+/** One string out of a locale's own dictionary file, its `{name}` / `{count}` filled - typed from the file, never from the component. */
+function words(locale: (typeof LOCALES)[number], key: string, vars: Record<string, string | number> = {}): string {
+  const raw = (DICT_BY_LOCALE[locale] as Record<string, string>)[key];
+  if (raw === undefined) throw new Error(`${locale} has no "${key}"`);
+  return Object.entries(vars).reduce((acc, [k, v]) => acc.replaceAll(`{${k}}`, String(v)), raw);
+}
+/** What a locale calls n clicks: the plural FORM its CLDR rule picks (Intl.PluralRules is the rulebook; `one` and `other` are the only
+ *  two forms the row has, so any other category is a count this helper has no words for and fails loud). */
+function clicksWords(locale: (typeof LOCALES)[number], n: number): string {
+  const category = new Intl.PluralRules(locale).select(n);
+  if (category !== "one" && category !== "other") throw new Error(`${locale} puts ${n} in "${category}", which the row has no words for`);
+  return words(locale, `sponsors.row.clicks.${category}`, { count: n });
+}
 
 const ORG = "org-1";
 const SLUG = "harbour-vale";
@@ -216,7 +235,7 @@ describe("the eight mockup rows: each chip, sub-line and ONE next action (mockup
       expect(textOfMarkup(findOne(row, "sponsor-row-sub").outer), `${m.s.name}: sub-line`).toBe(m.sub);
       const hint = findAll(row, "sponsor-row-tier-hint");
       expect(hint.map((h) => textOfMarkup(h.outer)), `${m.s.name}: the tier hint`).toEqual(m.hint === null ? [] : [m.hint]);
-      expect(textOfMarkup(findOne(row, "sponsor-row-clicks").outer), `${m.s.name}: clicks`).toBe(String(MOCKUP_CLICKS[m.s.id]));
+      expect(textOfMarkup(findOne(row, "sponsor-row-clicks").outer), `${m.s.name}: clicks`).toBe(clicksWords("en", MOCKUP_CLICKS[m.s.id]!));
       const actions = findAll(row, "sponsor-row-action");
       if (m.action === null) {
         expect(actions, `${m.s.name}: no button`).toHaveLength(0);
@@ -497,11 +516,44 @@ describe("what a row says about itself", () => {
     expect(name("s16")).toBe("Paid One Paid");
   });
 
-  it("the clicks count keeps its words for a screen reader", () => {
-    const markup = listHtml(ROWS);
-    const clicks = findOne(rowOf(markup, "s1"), "sponsor-row-clicks");
-    expect(attrOf(clicks.open, "aria-label")).toBe("41 clicks");
-    expect(textOfMarkup(clicks.outer)).toBe("41");
+  it("the clicks read as a counted noun, and the title says what a click is (owner, 2026-11-11: a bare icon and number was not read as a count) - 4 locales x 0, 1, 2 and 41", () => {
+    // The premise that makes the sweep able to fail: a locale's one-form and other-form are different words, so a row that always used
+    // one of them would be caught, and a row that dropped the noun would be caught by the number-only check below.
+    let checked = 0;
+    for (const locale of LOCALES) {
+      expect(clicksWords(locale, 1), `${locale}: the singular is not the plural`).not.toBe(clicksWords(locale, 2));
+      for (const n of [0, 1, 2, 41]) {
+        const markup = renderToStaticMarkup(
+          <DictProvider dict={DICT_BY_LOCALE[locale] as unknown as Dict} locale={locale}>
+            <SponsorList {...listProps([sponsor({ id: "k", name: "Counted Sponsor", click_count: n })])} />
+          </DictProvider>,
+        );
+        const clicks = findOne(markup, "sponsor-row-clicks");
+        const shown = textOfMarkup(clicks.outer);
+        expect(shown, `${locale} ${n}: the locale's own words for the count`).toBe(clicksWords(locale, n));
+        expect(shown, `${locale} ${n}: more than the bare number`).not.toBe(String(n));
+        expect(attrOf(clicks.open, "title"), `${locale} ${n}: the title says what a click is`).toBe(words(locale, "sponsors.row.clicksHint"));
+        // The count is read out as its words: no aria-label on a span (it names nothing there) that would stand in for them.
+        expect(clicks.open, `${locale} ${n}: no aria-label replacing the count`).not.toContain("aria-label");
+        checked++;
+      }
+    }
+    expect(checked, "4 locales x 4 counts").toBe(16);
+  });
+
+  it("the English words, typed from the owner's wording: 0 clicks, 1 click, 2 clicks; Taps through to their website; and French counts 0 as singular (the plural rule is the locale's, not English's)", () => {
+    const html = (locale: (typeof LOCALES)[number], n: number) =>
+      renderToStaticMarkup(
+        <DictProvider dict={DICT_BY_LOCALE[locale] as unknown as Dict} locale={locale}>
+          <SponsorList {...listProps([sponsor({ id: "k", name: "Counted Sponsor", click_count: n })])} />
+        </DictProvider>,
+      );
+    const read = (locale: (typeof LOCALES)[number], n: number) => textOfMarkup(findOne(html(locale, n), "sponsor-row-clicks").outer);
+    expect([0, 1, 2].map((n) => read("en", n))).toEqual(["0 clicks", "1 click", "2 clicks"]);
+    expect(attrOf(findOne(html("en", 5), "sponsor-row-clicks").open, "title")).toBe("Taps through to their website");
+    expect([0, 1, 2].map((n) => read("fr", n)), "CLDR: French `one` covers 0 and 1").toEqual(["0 clic", "1 clic", "2 clics"]);
+    expect([0, 1, 2].map((n) => read("es", n))).toEqual(["0 clics", "1 clic", "2 clics"]);
+    expect([0, 1, 2].map((n) => read("nl", n))).toEqual(["0 klikken", "1 klik", "2 klikken"]);
   });
 });
 
@@ -681,24 +733,34 @@ describe("below md the clicks and the move and delete controls fold behind a 44p
     msg("settings.org.sponsors.moveDown", { name }),
     msg("settings.org.sponsors.remove", { name }),
   ];
+  /** A sponsor alone in its group has nothing to move past, so the tray folds only the delete (owner, 2026-11-11). */
+  const FOLDED_ALONE = (name: string) => [msg("settings.org.sponsors.remove", { name })];
+  const RIDGE = "Ridge Gold Physiotherapy";
 
-  it("each control exists ONCE in a row, the tray is hidden below md until opened, and shows when opened (closed and open both checked)", () => {
+  it("each control exists ONCE in a row, the tray is hidden below md until opened, and shows when opened (closed and open both checked; a lone Title row and a Partner row in a group of seven)", () => {
+    // Harbourside is alone in Title: no arrows to fold, only the delete. Ridge is in Partner with six others: all three.
+    const CASES: [string, string, string[]][] = [
+      ["s1", LONG_NAME, FOLDED_ALONE(LONG_NAME)],
+      ["s2", RIDGE, FOLDED(RIDGE)],
+    ];
     let checked = 0;
-    for (const open of [false, true]) {
-      const markup = listHtml(ROWS, { moreOpenId: open ? "s1" : null });
-      const row = rowOf(markup, "s1");
-      for (const label of [...FOLDED(LONG_NAME), msg("sponsors.edit", { name: LONG_NAME })]) {
-        expect(row.split(`aria-label="${label}"`).length - 1, `${label} (open=${open})`).toBe(1);
-        checked++;
+    for (const [id, name, folded] of CASES) {
+      for (const open of [false, true]) {
+        const markup = listHtml(ROWS, { moreOpenId: open ? id : null });
+        const row = rowOf(markup, id);
+        for (const label of [...folded, msg("sponsors.edit", { name })]) {
+          expect(row.split(`aria-label="${label}"`).length - 1, `${id} ${label} (open=${open})`).toBe(1);
+          checked++;
+        }
+        expect(row.split('data-testid="sponsor-row-clicks"').length - 1, `${id} clicks (open=${open})`).toBe(1);
+        const tray = findOne(row, "sponsor-row-tools");
+        expect(classTokens(tray.open).includes("max-md:hidden"), `${id}: the tray is hidden below md while closed (open=${open})`).toBe(!open);
+        // The folded controls are INSIDE the tray (that is what folding them means), so hiding the tray hides all of them.
+        for (const label of folded) expect(tray.outer, label).toContain(`aria-label="${label}"`);
+        expect(tray.outer).toContain('data-testid="sponsor-row-clicks"');
       }
-      expect(row.split('data-testid="sponsor-row-clicks"').length - 1, `clicks (open=${open})`).toBe(1);
-      const tray = findOne(row, "sponsor-row-tools");
-      expect(classTokens(tray.open).includes("max-md:hidden"), `the tray is hidden below md while closed (open=${open})`).toBe(!open);
-      // The folded controls are INSIDE the tray (that is what folding them means), so hiding the tray hides all of them.
-      for (const label of FOLDED(LONG_NAME)) expect(tray.outer, label).toContain(`aria-label="${label}"`);
-      expect(tray.outer).toContain('data-testid="sponsor-row-clicks"');
     }
-    expect(checked, "3 folded controls + the pencil, x 2 states").toBe(8);
+    expect(checked, "(1 folded control + the pencil) + (3 folded controls + the pencil), x 2 states").toBe(12);
   });
 
   it("the PENCIL is not in the tray: it sits beside the ⋯, on the row, and nothing about it is hidden below md - open or shut (owner, 2026-11-11: editors did not know where to tap)", () => {
@@ -759,17 +821,22 @@ describe("below md the clicks and the move and delete controls fold behind a 44p
     expect(toggled).toEqual(["s1"]);
   });
 
-  it("the tray's controls are 44px targets below md (the icon buttons grow on a phone)", () => {
-    const tray = findOne(rowOf(listHtml(ROWS, { moreOpenId: "s1" }), "s1"), "sponsor-row-tools");
-    const buttons = [...tray.outer.matchAll(/<button\b[^>]*>/g)].map((m) => m[0]);
-    expect(buttons.length, "up, down, delete").toBe(3);
-    // The pencil is a link and is NOT in the tray (it is beside the ⋯): the tray holds no link at all.
-    expect([...tray.outer.matchAll(/<a\b[^>]*>/g)].length, "no link in the tray").toBe(0);
-    for (const b of buttons) {
-      const tokens = classTokens(b);
-      expect(tokens, b).toContain("max-md:h-11");
-      expect(tokens, b).toContain("max-md:w-11");
+  it("the tray's controls are 44px targets below md (the icon buttons grow on a phone) - a row with arrows and a row without", () => {
+    let checked = 0;
+    for (const [id, expected] of [["s2", 3], ["s1", 1]] as const) {
+      const tray = findOne(rowOf(listHtml(ROWS, { moreOpenId: id }), id), "sponsor-row-tools");
+      const buttons = [...tray.outer.matchAll(/<button\b[^>]*>/g)].map((m) => m[0]);
+      expect(buttons.length, `${id}: ${expected === 3 ? "up, down, delete" : "only the delete: alone in its group"}`).toBe(expected);
+      // The pencil is a link and is NOT in the tray (it is beside the ⋯): the tray holds no link at all.
+      expect([...tray.outer.matchAll(/<a\b[^>]*>/g)].length, "no link in the tray").toBe(0);
+      for (const b of buttons) {
+        const tokens = classTokens(b);
+        expect(tokens, b).toContain("max-md:h-11");
+        expect(tokens, b).toContain("max-md:w-11");
+        checked++;
+      }
     }
+    expect(checked, "3 + 1 buttons").toBe(4);
   });
 
   it("the action button is a 44px target below md too", () => {
@@ -891,7 +958,7 @@ describe("the row's name is plain text; the pencil is the one way in (owner, 202
 });
 
 describe("Move: the first and last row of a GROUP cannot move further", () => {
-  it("up is disabled on the first row of a group and down on the last (Partner: Ridge is first, Tidewell last; Title: Harbourside is alone) - 8 checked", () => {
+  it("up is disabled on the first row of a group and down on the last (Partner: Ridge is first, Tidewell last, Marlow mid-group) - 6 checked", () => {
     const markup = listHtml(ROWS);
     const dis = (id: string, key: "moveUp" | "moveDown", name: string) => {
       const label = msg(`settings.org.sponsors.${key}`, { name });
@@ -904,8 +971,228 @@ describe("Move: the first and last row of a GROUP cannot move further", () => {
     expect(dis("s8", "moveDown", "Tidewell Garage"), "Tidewell down: last in Partner").toBe(true);
     expect(dis("s4", "moveUp", "Marlow & Daughters Bakery"), "Marlow up: mid group").toBe(false);
     expect(dis("s4", "moveDown", "Marlow & Daughters Bakery"), "Marlow down: mid group").toBe(false);
-    expect(dis("s1", "moveUp", LONG_NAME), "Harbourside up: alone in Title").toBe(true);
-    expect(dis("s1", "moveDown", LONG_NAME), "Harbourside down: alone in Title").toBe(true);
+  });
+
+  it("a sponsor ALONE in its group has no arrows at all - not a disabled pair (Harbourside is alone in Title); a group of two or more keeps both (owner, 2026-11-11)", () => {
+    const markup = listHtml(ROWS);
+    // The tray's buttons: the ⋯ toggle and a deal action live elsewhere on the row.
+    const trayButtons = (id: string) => [...findOne(rowOf(markup, id), "sponsor-row-tools").outer.matchAll(/<button\b[^>]*>/g)].map((m) => m[0]);
+    const buttonsOf = (id: string) => trayButtons(id).map((b) => attrOf(b, "aria-label"));
+    const up = (name: string) => msg("settings.org.sponsors.moveUp", { name });
+    const down = (name: string) => msg("settings.org.sponsors.moveDown", { name });
+    // The negative, then its positive pair: the same markup gives the lone row nothing and a Partner row both.
+    expect(buttonsOf("s1"), "Harbourside: only the delete").toEqual([msg("settings.org.sponsors.remove", { name: LONG_NAME })]);
+    expect(buttonsOf("s1"), "no up").not.toContain(up(LONG_NAME));
+    expect(buttonsOf("s1"), "no down").not.toContain(down(LONG_NAME));
+    // `disabled` as an ATTRIBUTE: the delete's class list carries `disabled:opacity-30` in every row, so a substring scan is always true.
+    expect(trayButtons("s1").map((b) => attrOf(b, "disabled")), "and nothing in its tray is a disabled button").toEqual([undefined]);
+    expect(buttonsOf("s2"), "Ridge (Partner of seven): up, down, delete, in that order").toEqual([
+      up("Ridge Gold Physiotherapy"), down("Ridge Gold Physiotherapy"), msg("settings.org.sponsors.remove", { name: "Ridge Gold Physiotherapy" }),
+    ]);
+    // Every row of every group: the arrows are there exactly where the group has two or more.
+    let checked = 0;
+    for (const m of MOCKUP) {
+      const size = MOCKUP.filter((o) => o.group === m.group).length;
+      const has = buttonsOf(m.s.id).includes(up(m.s.name));
+      expect(has, `${m.s.name} (group ${m.group} of ${size})`).toBe(size > 1);
+      expect(buttonsOf(m.s.id).includes(down(m.s.name)), `${m.s.name}: down goes with up`).toBe(size > 1);
+      checked++;
+    }
+    expect(checked, "all eight rows").toBe(8);
+  });
+
+  it("the sequence: a group that grows from one to two gains its arrows, and the new second row's edge is disabled; shrinking back takes them away (flat list too)", () => {
+    const solo = sponsor({ id: "g1", name: "Native Gold One", tier: "gold", display_order: 0 });
+    const mate = sponsor({ id: "g2", name: "Native Gold Two", tier: "gold", display_order: 1 });
+    const labels = (markup: string, id: string) => [...rowOf(markup, id).matchAll(/<button\b[^>]*>/g)].map((m) => attrOf(m[0], "aria-label"));
+    const up = (name: string) => msg("settings.org.sponsors.moveUp", { name });
+    const down = (name: string) => msg("settings.org.sponsors.moveDown", { name });
+    let checked = 0;
+    for (const hasTiers of [true, false]) {
+      const one = listHtml([solo], { hasTiers });
+      expect(labels(one, "g1"), `hasTiers=${hasTiers}: alone, no arrows`).not.toEqual(expect.arrayContaining([up(solo.name)]));
+      const two = listHtml([solo, mate], { hasTiers });
+      expect(labels(two, "g1"), `hasTiers=${hasTiers}: with a mate, the first row has both`).toEqual(expect.arrayContaining([up(solo.name), down(solo.name)]));
+      expect(labels(two, "g2"), `hasTiers=${hasTiers}: and so does the second`).toEqual(expect.arrayContaining([up(mate.name), down(mate.name)]));
+      const edge = (label: string) => attrOf([...rowOf(two, "g1").matchAll(/<button\b[^>]*>/g)].map((m) => m[0]).find((b) => attrOf(b, "aria-label") === label)!, "disabled");
+      expect(edge(up(solo.name)), `hasTiers=${hasTiers}: first row's up is the group's edge: present but disabled`).toBeDefined();
+      expect(edge(down(solo.name)), `hasTiers=${hasTiers}: its down swaps with the mate`).toBeUndefined();
+      checked++;
+    }
+    expect(checked, "tiered and flat").toBe(2);
+  });
+
+  it("the arrows carry the same words as their title and their accessible name: 'Move {name} up on your public board' - 4 locales x 2 arrows", () => {
+    const NAME = "Ridge Gold Physiotherapy";
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const markup = renderToStaticMarkup(
+        <DictProvider dict={DICT_BY_LOCALE[locale] as unknown as Dict} locale={locale}>
+          <SponsorList {...listProps(ROWS)} />
+        </DictProvider>,
+      );
+      const tags = [...rowOf(markup, "s2").matchAll(/<button\b[^>]*>/g)].map((m) => m[0]);
+      for (const [key, dir] of [["moveUp", "up"], ["moveDown", "down"]] as const) {
+        const label = words(locale, `settings.org.sponsors.${key}`, { name: NAME });
+        const tag = tags.find((b) => attrOf(b, "aria-label") === label);
+        expect(tag, `${locale} ${dir}: a button named ${label}`).toBeDefined();
+        expect(attrOf(tag!, "title"), `${locale} ${dir}: the title is the same words`).toBe(label);
+        expect(label.includes(NAME), `${locale} ${dir}: it names the sponsor`).toBe(true);
+        checked++;
+      }
+    }
+    expect(checked, "4 locales x up and down").toBe(8);
+    // English, typed from the owner's words.
+    const enMarkup = renderToStaticMarkup(<SponsorList {...listProps(ROWS)} />);
+    const labels = [...rowOf(enMarkup, "s2").matchAll(/<button\b[^>]*>/g)].map((m) => attrOf(m[0], "aria-label"));
+    expect(labels).toContain("Move Ridge Gold Physiotherapy up on your public board");
+    expect(labels).toContain("Move Ridge Gold Physiotherapy down on your public board");
+  });
+});
+
+describe("From md every row's tray is the same width, so the pencil, the deal and the controls stand in the same columns (owner, 2026-11-11)", () => {
+  // Each row is its own grid: the name takes what is left (`1fr`), so the pencil and the deal cell sit where the tray's width leaves them.
+  // The tray was as wide as its contents - "1 click" against "41 clicks", three buttons against one - and every row drifted. Now the
+  // clicks box has one least width and a row without arrows keeps their room in a spacer. What a browser then DRAWS is measured in
+  // `e2e/sponsor-deals.spec.ts` (x of the pencil, the deal cell, the clicks and the delete on every row); here, the markup that makes it so.
+  const REM = (token: string): number => {
+    const m = /^(?:md:)?(?:min-w|w)-\[(\d+(?:\.\d+)?)rem\]$/.exec(token) ?? /^(?:md:)?(?:min-w|w)-(\d+(?:\.\d+)?)$/.exec(token);
+    if (!m) throw new Error(`not a width token: ${token}`);
+    return token.includes("[") ? Number(m[1]) : Number(m[1]) * 0.25;
+  };
+  const trayOf = (markup: string, id: string) => findOne(rowOf(markup, id), "sponsor-row-tools");
+
+  it("the clicks box has a least width from md and its words stand to the right - and not below md, where the tray wraps (8 rows)", () => {
+    const markup = listHtml(ROWS);
+    let checked = 0;
+    for (const m of MOCKUP) {
+      const tokens = classTokens(findOne(rowOf(markup, m.s.id), "sponsor-row-clicks").open);
+      expect(tokens, `${m.s.name}: a least width from md`).toContain("md:min-w-[5rem]");
+      expect(tokens, `${m.s.name}: words to the right from md`).toContain("md:text-right");
+      // Whole tokens: an unprefixed `min-w-[5rem]` would hold a phone's tray open too.
+      expect(tokens, `${m.s.name}: no least width below md`).not.toContain("min-w-[5rem]");
+      expect(tokens, `${m.s.name}: nor right-aligned below md`).not.toContain("text-right");
+      checked++;
+    }
+    expect(checked).toBe(8);
+  });
+
+  it("a sponsor alone in its group keeps the arrows' room in an aria-hidden spacer with nothing in it; a group of two or more has none (8 rows, one spacer: Harbourside)", () => {
+    const markup = listHtml(ROWS);
+    let withSpacer: string[] = [];
+    let checked = 0;
+    for (const m of MOCKUP) {
+      const tray = trayOf(markup, m.s.id);
+      const spacers = findAll(tray.outer, "sponsor-row-move-spacer");
+      const size = MOCKUP.filter((o) => o.group === m.group).length;
+      expect(spacers.length, `${m.s.name} (group ${m.group} of ${size}): a spacer exactly when alone`).toBe(size === 1 ? 1 : 0);
+      if (spacers.length === 1) {
+        withSpacer = [...withSpacer, m.s.id];
+        const sp = spacers[0]!;
+        expect(attrOf(sp.open, "aria-hidden"), "hidden from the accessibility tree").toBe("true");
+        expect(sp.open.startsWith("<div "), "a plain block, not a control").toBe(true);
+        // Nothing to reach inside it: no button, link, field, tab stop, or any words.
+        expect(sp.outer, "it is empty").toBe(`${sp.open}</div>`);
+        expect(attrOf(sp.open, "tabindex"), "no tab stop").toBeUndefined();
+        expect(attrOf(sp.open, "role"), "no role").toBeUndefined();
+        const tokens = classTokens(sp.open);
+        expect(tokens, "gone below md").toContain("max-md:hidden");
+        expect(tokens, "does not shrink").toContain("shrink-0");
+      }
+      // The arrows stay ABSENT in the tray as a whole - the spacer is not hidden buttons.
+      if (size === 1) {
+        const labels = [...tray.outer.matchAll(/<button\b[^>]*>/g)].map((b) => attrOf(b[0], "aria-label"));
+        expect(labels, `${m.s.name}: only the delete`).toEqual([msg("settings.org.sponsors.remove", { name: m.s.name })]);
+      }
+      checked++;
+    }
+    expect(checked, "all eight rows").toBe(8);
+    expect(withSpacer, "premise: Harbourside is the only sponsor alone in its group").toEqual(["s1"]);
+  });
+
+  it("a viewer's tray has no spacer (it has no arrows to make room for), and its rows still match each other (8 rows)", () => {
+    const markup = listHtml(ROWS, { canEdit: false });
+    let checked = 0;
+    for (const m of MOCKUP) {
+      expect(findAll(rowOf(markup, m.s.id), "sponsor-row-move-spacer"), m.s.name).toHaveLength(0);
+      expect(classTokens(findOne(rowOf(markup, m.s.id), "sponsor-row-clicks").open), `${m.s.name}: the same least width`).toContain("md:min-w-[5rem]");
+      checked++;
+    }
+    expect(checked).toBe(8);
+  });
+
+  it("the spacer is the width of what it stands in for, and every editor row's tray adds up to the same width (clicks box + controls + gaps; 8 rows)", () => {
+    const markup = listHtml(ROWS);
+    // Read from the markup of the neighbours, not typed here: an arrow is `w-7`, the tray's gap is `gap-1`, the clicks box has its least width.
+    const arrowToken = classTokens(
+      [...trayOf(markup, "s2").outer.matchAll(/<button\b[^>]*>/g)].map((b) => b[0]).find((b) => attrOf(b, "aria-label") === msg("settings.org.sponsors.moveUp", { name: "Ridge Gold Physiotherapy" }))!,
+    ).find((t) => /^w-\d/.test(t));
+    expect(arrowToken, "premise: an arrow button has a width token").toBeDefined();
+    const arrow = REM(arrowToken!);
+    const gapToken = classTokens(trayOf(markup, "s2").open).find((t) => /^gap-\d/.test(t));
+    expect(gapToken, "premise: the tray has a gap token").toBeDefined();
+    const gap = Number(gapToken!.slice(4)) * 0.25;
+    const spacerToken = classTokens(findOne(rowOf(markup, "s1"), "sponsor-row-move-spacer").open).find((t) => t.startsWith("md:w-"));
+    expect(spacerToken, "premise: the spacer has a width from md").toBeDefined();
+    expect(REM(spacerToken!), "two arrows and the gap between them").toBeCloseTo(2 * arrow + gap, 5);
+
+    const totals = new Map<string, number>();
+    for (const m of MOCKUP) {
+      const tray = trayOf(markup, m.s.id);
+      const clicksBox = REM(classTokens(findOne(tray.outer, "sponsor-row-clicks").open).find((t) => t.startsWith("md:min-w-"))!);
+      const buttons = [...tray.outer.matchAll(/<button\b[^>]*>/g)].length;
+      const spacer = findAll(tray.outer, "sponsor-row-move-spacer").length;
+      const items = 1 + buttons + spacer;
+      totals.set(m.s.id, clicksBox + buttons * arrow + spacer * REM(spacerToken!) + (items - 1) * gap);
+    }
+    expect(totals.size, "all eight rows were summed").toBe(8);
+    expect([...new Set(totals.values())].map((v) => Number(v.toFixed(4))), "one width for every row").toHaveLength(1);
+    // Premise that makes the sum able to differ: the rows really are built differently (three buttons against one and a spacer).
+    expect(new Set(MOCKUP.map((m) => findAll(trayOf(markup, m.s.id).outer, "sponsor-row-move-spacer").length)).size, "both shapes are in the fixture").toBe(2);
+  });
+
+  it("the deal column is 13rem from md and 18rem from lg, on every row, so the name keeps 164px at 768 (the name was cut to 84px with 18rem) - 8 rows", () => {
+    // The track, not the name: a unit test cannot lay a row out. What was MEASURED on a build (768px viewport, real page chrome): the grid's
+    // content is 660px wide, the logo, pencil, tray (11rem) and four 12px gaps leave 660 - 36 - 28 - 176 - 48 = 372px for the name and the deal
+    // cell, so a 288px deal cell left the name 84px and a 208px one leaves it 164px (the owner's floor is 160). The width is a rem value read
+    // off the markup, and the arithmetic below is the check that it stays inside the floor.
+    const markup = listHtml(ROWS);
+    const REM_PER_STEP = 0.25; // Tailwind's spacing scale: w-N is N * 0.25rem
+    // What was measured at 768 (the numbers in the comment above): the grid, then what is not the name or the deal cell.
+    const GRID_PX = 660, LOGO_PX = 36, PENCIL_PX = 28, TRAY_PX = 11 * 16, GAPS_PX = 4 * 12;
+    const AVAILABLE_AT_768_PX = GRID_PX - LOGO_PX - PENCIL_PX - TRAY_PX - GAPS_PX;
+    const NAME_FLOOR_PX = 160; // the owner's floor
+    expect(AVAILABLE_AT_768_PX, "premise: the measured 372px for the name and the deal cell").toBe(372);
+    let checked = 0;
+    for (const m of MOCKUP) {
+      const tokens = classTokens(findOne(rowOf(markup, m.s.id), "sponsor-row-deal").open);
+      expect(tokens, `${m.s.name}: 13rem from md`).toContain("md:w-52");
+      expect(tokens, `${m.s.name}: 18rem from lg, as it was`).toContain("lg:w-72");
+      expect(tokens, `${m.s.name}: not 18rem at md any more`).not.toContain("md:w-72");
+      // The cell's width at md is the token the row RENDERS, parsed - not a number typed beside the assertion above, which would stay true
+      // whatever the row drew.
+      const mdTokens = tokens.filter((t) => /^md:w-\d+$/.test(t));
+      expect(mdTokens, `${m.s.name}: exactly one md width token`).toHaveLength(1);
+      const mdPx = Number(mdTokens[0]!.slice("md:w-".length)) * REM_PER_STEP * 16;
+      expect(AVAILABLE_AT_768_PX - mdPx, `${m.s.name}: the name column at 768 (${mdTokens[0]} = ${mdPx}px) stays at or above the owner's floor`).toBeGreaterThanOrEqual(NAME_FLOOR_PX);
+      checked++;
+    }
+    expect(checked, "all eight rows").toBe(8);
+  });
+
+  it("the sequence: a group that grows from one to two loses its spacer and gains its arrows; a flat list of one has the spacer too", () => {
+    const solo = sponsor({ id: "g1", name: "Native Gold One", tier: "gold", display_order: 0 });
+    const mate = sponsor({ id: "g2", name: "Native Gold Two", tier: "gold", display_order: 1 });
+    let checked = 0;
+    for (const hasTiers of [true, false]) {
+      const one = listHtml([solo], { hasTiers });
+      expect(findAll(one, "sponsor-row-move-spacer"), `hasTiers=${hasTiers}: alone, a spacer`).toHaveLength(1);
+      const two = listHtml([solo, mate], { hasTiers });
+      expect(findAll(two, "sponsor-row-move-spacer"), `hasTiers=${hasTiers}: with a mate, none`).toHaveLength(0);
+      expect([...two.matchAll(/<button\b[^>]*aria-label="Move /g)].length, `hasTiers=${hasTiers}: and four arrows`).toBe(4);
+      checked++;
+    }
+    expect(checked, "tiered and flat").toBe(2);
   });
 });
 
@@ -934,14 +1221,14 @@ describe("Move: neighbours swap only when they share a STORED tier (the server o
     expect(findAll(groups[1]!.outer, "sponsor-row").map((r) => attrOf(r.open, "data-sponsor-id"))).toEqual(["p1"]);
   });
 
-  it("with tiers: the two golds swap with each other and stop at the group's edges; P is alone in Partner (6 checked)", () => {
+  it("with tiers: the two golds swap with each other and stop at the group's edges; P is alone in Partner and has NO arrows (4 checked + 2 absent)", () => {
     const markup = listHtml(MIXED);
     expect(disabled(markup, "g1", "moveUp", G1.name), "G1 up: first in Gold").toBe(true);
     expect(disabled(markup, "g1", "moveDown", G1.name), "G1 down: its neighbour G2 shares the stored tier").toBe(false);
     expect(disabled(markup, "g2", "moveUp", G2.name), "G2 up: its neighbour G1 shares the stored tier").toBe(false);
     expect(disabled(markup, "g2", "moveDown", G2.name), "G2 down: last in Gold").toBe(true);
-    expect(disabled(markup, "p1", "moveUp", P.name), "P up: alone in Partner").toBe(true);
-    expect(disabled(markup, "p1", "moveDown", P.name), "P down: alone in Partner").toBe(true);
+    const pButtons = [...findOne(rowOf(markup, "p1"), "sponsor-row-tools").outer.matchAll(/<button\b[^>]*>/g)].map((m) => attrOf(m[0], "aria-label"));
+    expect(pButtons, "P: alone in Partner, so only the delete - no disabled pair").toEqual([msg("settings.org.sponsors.remove", { name: P.name })]);
   });
 
   it("without tiers (one flat list, the server's order) the arrows between a native gold and the partner are disabled; the arrows between two native golds are not (4 checked)", () => {
@@ -966,10 +1253,11 @@ describe("Move: neighbours swap only when they share a STORED tier (the server o
     expect(reorder[0]!.body).toEqual({ ids: ["g2", "g1", "p1"] });
   });
 
-  it("with tiers the same two clicks send nothing too (the edges of the group), and the golds' swap sends one", async () => {
+  it("with tiers the edge click sends nothing too (the group's last row), P has no arrow to click, and the golds' swap sends one", async () => {
     const m = mount(MIXED);
     m.click(msg("settings.org.sponsors.moveDown", { name: G2.name }));
-    m.click(msg("settings.org.sponsors.moveUp", { name: P.name }));
+    expect(() => m.byLabel(msg("settings.org.sponsors.moveUp", { name: P.name })), "P is alone in Partner: no up arrow in the tree").toThrow(/no control labelled/);
+    expect(() => m.byLabel(msg("settings.org.sponsors.moveDown", { name: P.name })), "and no down arrow").toThrow(/no control labelled/);
     await flush();
     expect(calls.filter((c) => c.url.endsWith("/sponsors/reorder"))).toHaveLength(0);
     m.click(msg("settings.org.sponsors.moveDown", { name: G1.name }));

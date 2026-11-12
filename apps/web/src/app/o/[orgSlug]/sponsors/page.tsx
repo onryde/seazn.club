@@ -22,6 +22,7 @@ import { listSponsorPackages, listSponsorRows } from "@/server/usecases/sponsors
 import { dealCreatorName, finishedPackageCompetitions, isDealCompetitionFinished, listDeals } from "@/server/usecases/sponsor-deals";
 import { loadOnStreamScope } from "@/server/sponsors/on-stream";
 import { listReportLinks, reportLinkDefaults, sponsorOverview } from "@/server/sponsors/report";
+import { BackLink } from "@/components/back-link";
 import { OrgSponsors } from "@/components/org-sponsors";
 import { OnStreamTab } from "@/components/sponsors/on-stream-tab";
 import { OverviewTab } from "@/components/sponsors/overview-tab";
@@ -261,9 +262,20 @@ export default async function SponsorsHubPage({
     );
   }
 
+  // The back link is the Streaming page's, verbatim (owner, 2026-11-11: "back button in sponsor page like in streaming page"): quiet
+  // emphasis, to /dashboard, labelled with the existing `common.dashboard`. This is the page's ONE return - `requireOrgPage` has
+  // already redirected or 404ed - so every tab, reader and locale reaches it here. The shell's breadcrumb apron also carries a back
+  // chevron (to the org home); the owner asked for the Streaming treatment regardless, so both stay.
   return (
     <main className="mx-auto max-w-4xl px-4 py-4 md:py-8">
-      <h1 className="page-title mb-4 min-w-0 md:mb-6">{t(dict, "sponsors.title")}</h1>
+      <BackLink href="/dashboard" label={t(dict, "common.dashboard")} />
+      {/* The header is the Streaming page's (owner, 2026-11-11: "we don't have lime board under sponsor"): the lime-bar eyebrow, the title,
+          a one-line description. The h1's old gap to the tab bar (`mb-4 md:mb-6`) now closes the whole header, so the bar's spacing is unchanged. */}
+      <div className="mb-4 min-w-0 md:mb-6">
+        <p className="app-eyebrow mb-1">{t(dict, "sponsors.eyebrow")}</p>
+        <h1 className="page-title">{t(dict, "sponsors.title")}</h1>
+        <p className="mt-1 max-w-xl text-sm text-slate-500">{t(dict, "sponsors.desc")}</p>
+      </div>
       <SponsorsHubTabs orgSlug={orgSlug} tabs={sponsorsTabsFor(canEdit)} active={tab} dict={dict} />
       {body}
     </main>

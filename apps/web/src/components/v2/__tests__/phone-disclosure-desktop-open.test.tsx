@@ -78,6 +78,41 @@ describe("PhoneDisclosure after hydration", () => {
 // The phone-only variant has no `startOpen` of its own (that prop belongs to `desktopCollapsible`), so a caller whose fold should
 // open on a phone says so with `phoneStartOpen` (Sponsors hub, Packages tab: an EMPTY price list opens its tier legend). Default off,
 // so every existing phone-only fold (stage points' More, tie-break rules, the match rules block) stays closed until tapped.
+// `allWidths`: a fold at every width seeded like the phone-only variant (Sponsors hub, Packages tab: the tier legend). The width plays no part.
+describe("PhoneDisclosure allWidths (after hydration, per width)", () => {
+  const widths = [320, 767, 768, 1280];
+  it("phoneStartOpen true: open at every width; absent: closed at every width (8 checked)", () => {
+    const on = widths.map((w) => isOpen(at(w, { allWidths: true, phoneStartOpen: true }).island.tree()));
+    const off = widths.map((w) => isOpen(at(w, { allWidths: true }).island.tree()));
+    expect(on).toEqual([true, true, true, true]);
+    expect(off).toEqual([false, false, false, false]);
+  });
+
+  it("a reader's tap is theirs at 1280: it hides what opened itself, a re-render keeps it hidden, and the prop going false does not fold an open one", () => {
+    const { island, base } = at(1280, { allWidths: true, phoneStartOpen: true });
+    expect(isOpen(island.tree())).toBe(true);
+    (propsOf(toggle(island.tree())).onClick as () => void)();
+    expect(isOpen(island.tree()), "the tap hides it").toBe(false);
+    island.rerender({ ...base });
+    expect(isOpen(island.tree()), "a plain re-render does not re-open it").toBe(false);
+    (propsOf(toggle(island.tree())).onClick as () => void)();
+    expect(isOpen(island.tree()), "the tap shows it").toBe(true);
+    island.rerender({ ...base, phoneStartOpen: false });
+    expect(isOpen(island.tree()), "the first package is created: the legend stays open").toBe(true);
+  });
+
+  it("a list that gets its start-open later (false then true) opens, at a desktop width too", () => {
+    const { island, base } = at(1280, { allWidths: true, phoneStartOpen: false });
+    expect(isOpen(island.tree())).toBe(false);
+    island.rerender({ ...base, phoneStartOpen: true });
+    expect(isOpen(island.tree())).toBe(true);
+  });
+
+  it("does not touch desktopCollapsible: startOpen false still folds it, whatever allWidths and phoneStartOpen say", () => {
+    expect(isOpen(at(1280, { desktopCollapsible: true, allWidths: true, startOpen: false, phoneStartOpen: true }).island.tree())).toBe(false);
+  });
+});
+
 describe("PhoneDisclosure phoneStartOpen (the phone-only variant, opened after hydration)", () => {
   it("opens on its own after hydration at every width - 1280, 768, 767 and 320 (4 checked); the default, with the prop absent, stays closed at all four", () => {
     const widths = [1280, 768, 767, 320];
