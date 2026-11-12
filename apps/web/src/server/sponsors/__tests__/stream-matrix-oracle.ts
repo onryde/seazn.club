@@ -13,7 +13,16 @@
 //     a live one changes nothing until it is promoted; an archived sponsor is hidden everywhere;
 //   - the weights:  `SPONSOR_TIER_WEIGHTS` (owner ruling D9), the tier authority;
 //   - flattening:  ruling R13 / D8 - an org (or pass) without `sponsors.tiers` on the competition the stream is in gets every card
-//     as `partner`, on the stream and on the public strip alike;
+//     as `partner`, on the stream and on the public strip alike. (No GENERATED cell ever decides this: a cell makes its sponsor
+//     after the plan is set, and a plan without `sponsors.tiers` refuses every placement that is not partner on the whole org, so
+//     `shownTier` below is the identity for every cell that gets here. The test file's downgrade sequences decide the flattening.);
+//   - the Overview listing:  archive spec D15 and the Overview's own contract (`sponsorOverview`'s doc, server/sponsors/report.ts):
+//     a sponsor is listed in a competition's Overview when its scope reaches the competition (the whole org, or that competition)
+//     and it is not archived - whatever its deal's state, so a sponsor hidden from the stream and the strip (a deal waiting, or
+//     ended) is still listed - and an ARCHIVED one only while it has airings or clicks in the period. The matrix writes neither,
+//     so that second arm is never met here (a KNOWN GAP, said in the test file's header). The scope the sponsor holds at the end
+//     of the script is the spec's: a LIVE deal's scope (§5.3), the whole org after every deal ended (D8's reset), the whole org
+//     while a deal waits or is queued (nothing of it reaches the sponsor yet, §8a);
 //   - write off:  spec §5.2 / archive spec D9 - only an OFFLINE invoice still due after its deal ran out (`expired`) is waived;
 //     a paid deal owes nothing (`deal_already_paid`), and a complimentary or cancelled one never owed (`deal_nothing_due`).
 import { SPONSOR_TIER_WEIGHTS, type SponsorTier } from "@/lib/sponsor-tiers";
@@ -60,6 +69,9 @@ export interface Expected {
   writeOff: WriteOffAnswer | null;
   /** Is the sponsor archived at the end of the script? */
   archived: boolean;
+  /** Is the cell's own sponsor listed in THIS competition's Overview (`sponsorOverview`, the period "this competition")? See the
+   *  header's listing rule. False when there is no sponsor at all (a refused hand-made one), or it is archived with no numbers. */
+  inReport: boolean;
 }
 
 /** States whose script creates the cell's own deal (the others create a manual sponsor, or nothing of the cell's own). */
@@ -89,19 +101,20 @@ export function expectedFor(cell: Cell, g: PlanGrants): Expected {
   const noDeal = { deal: null, writeOff: null, archived: false } as const;
   /** The sponsor the club made by hand and left as it was: active, partner, the whole org, OFF the stream. A refused deal leaves
    *  exactly this behind: a refusal writes nothing. */
-  const leftAlone: Pick<Expected, "airs" | "airedTier" | "weight" | "onPublicPage" | "publicTier"> = {
-    airs: false, airedTier: null, weight: null, onPublicPage: true, publicTier: "partner",
+  const leftAlone: Pick<Expected, "airs" | "airedTier" | "weight" | "onPublicPage" | "publicTier" | "inReport"> = {
+    airs: false, airedTier: null, weight: null, onPublicPage: true, publicTier: "partner", inReport: true,
   };
 
   if (state === "none") {
     // No deal: the sponsor the club typed in. Refused on a plan that cannot place it - and then there is no sponsor at all.
-    if (refusal !== null) return { refusal, ...hidden, ...noDeal };
+    if (refusal !== null) return { refusal, ...hidden, ...noDeal, inReport: false };
     const onStream = stream === "on" && scopeReachesThisStream;
     return {
       refusal: null,
       ...(onStream ? aired(tier) : { airs: false, airedTier: null, weight: null }),
       onPublicPage: scopeReachesThisStream,
       publicTier: scopeReachesThisStream ? shownTier(tier) : null,
+      inReport: scopeReachesThisStream,
       ...noDeal,
     };
   }
@@ -118,12 +131,13 @@ export function expectedFor(cell: Cell, g: PlanGrants): Expected {
       deal: refusal === null ? { status: "scheduled", paymentStatus: paymentStatusOf(payment) } : null,
       writeOff: null,
       archived: false,
+      inReport: true,
     };
   }
 
   if (refusal !== null) {
     // The deal was refused, so nothing was written; the sponsor is as the club left it. `archived` then archives THAT sponsor.
-    if (state === "archived") return { refusal, ...hidden, deal: null, writeOff: null, archived: true };
+    if (state === "archived") return { refusal, ...hidden, deal: null, writeOff: null, archived: true, inReport: false };
     return { refusal, ...leftAlone, ...noDeal };
   }
 
@@ -137,6 +151,7 @@ export function expectedFor(cell: Cell, g: PlanGrants): Expected {
         deal: { status: "live", paymentStatus: paymentStatusOf(payment) },
         writeOff: null,
         archived: false,
+        inReport: scopeReachesThisStream,
       };
     case "waiting":
       // Spec §8a / D8: a deal waiting to go live hides its sponsor until it is live.
@@ -146,6 +161,7 @@ export function expectedFor(cell: Cell, g: PlanGrants): Expected {
         deal: { status: payment === "awaiting" ? "awaiting_payment" : "awaiting_approval", paymentStatus: paymentStatusOf(payment) },
         writeOff: null,
         archived: false,
+        inReport: true,
       };
     case "ended":
     case "archived":
@@ -156,6 +172,7 @@ export function expectedFor(cell: Cell, g: PlanGrants): Expected {
         deal: { status: "ended", paymentStatus: paymentStatusOf(payment) },
         writeOff: null,
         archived: state === "archived",
+        inReport: state !== "archived",
       };
     case "written_off": {
       const owed = payment === "awaiting"; // an unpaid OFFLINE invoice (the awaiting payment's method) that ran out
@@ -171,6 +188,7 @@ export function expectedFor(cell: Cell, g: PlanGrants): Expected {
         deal: { status: "ended", paymentStatus: paymentStatusOf(payment) },
         writeOff,
         archived: false,
+        inReport: true,
       };
     }
     default: {

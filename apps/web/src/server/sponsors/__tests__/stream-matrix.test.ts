@@ -10,25 +10,42 @@
 // through the loader the overlay polls. Only the network seams are replaced: Stripe, the outbox transport, Sentry.
 //
 // WHAT A CELL IS. One cell is a combination of the axes in stream-matrix-cells.ts (plan x tier x deal state x payment x scope x
-// stream flag). The cell list is generated - pairwise, every single-axis edge, and two full interaction families (state x payment, and
-// plan x tier x scope for offline and online) - and the suite reports how many it checked.
+// stream flag). The cell list is generated - pairwise, every single-axis edge, and three full interaction families (state x payment;
+// plan x tier x scope for offline and online; and the same with the stream flag off) - and the suite reports how many it checked.
 // A combination the plan cannot make is NOT skipped: the plan REFUSES the deal (402 naming the feature) and the refusal is the
 // cell's checked answer - and what a refusal leaves behind (nothing) is checked with it.
 //
-// WHAT IS CHECKED PER CELL (all four from the oracle, stream-matrix-oracle.ts - never from the code under test):
+// WHAT IS CHECKED PER CELL (all five from the oracle, stream-matrix-oracle.ts - never from the code under test):
 //   airs        the sponsor is a ticked card in the overlay payload of a fixture of THIS competition (relay and public door alike)
 //   aired tier  the tier on that card, after the no-`sponsors.tiers` flattening to partner (ruling R13)
 //   weight      its share of the rotation: one poll over exactly 2 full cycles of majors hands it 2 x SPONSOR_TIER_WEIGHTS[tier]
 //               airings, and the control sponsor (a partner, on every cell) 2 x the partner weight - and every break got a card
 //   public page the sponsor is on the competition's public strip (`resolveSponsors` with the page's own `tiered` flag), with the
 //               tier the strip shows
+//   report      the sponsor is listed in the competition's Overview (`sponsorOverview`, archive spec D15): a DB-only reader, no
+//               deal state, no stream flag in it, so a sponsor hidden from the stream and the strip (a deal waiting, ended) is still
+//               listed, and an archived one is not
 // plus the premises that prove the script reached the cell it names: the deal's status and money (spec D2, §8a), the sponsor
 // row the deal wrote (§5.3), a refusal writing nothing, and the archive.
 //
 // THE SEQUENCES (G2, TEST-STRATEGY rule 1) follow the cells: a live deal ends; a queued deal is promoted; a sponsor is archived
 // and unarchived under a break that was already assigned; a deal is written off; the plan changes (a downgrade, an upgrade, a
-// pass); a frozen break whose sponsor is unticked after a downgrade; an `end_current` swap; the empty case; a second poll. "Another sport" is not applicable (sponsors read no sport key);
-// its substitute here is another PLAN, and every cell runs on all three.
+// pass); a frozen break whose sponsor is unticked after a downgrade; an `end_current` swap; the empty case; a second poll.
+// "Another sport" (TEST-STRATEGY) is NOT swept: sponsors read no sport key, but the PLANNER reads each break's declared size, and
+// `spin` hands it cricket's declared major kind (`naturalBreaks`) - a sport whose breaks are all minor would thin the rotation
+// (cooldown and dial rules), which this suite never meets. Its substitute here is another PLAN: every cell runs on all three.
+//
+// WHAT THIS SUITE DOES NOT READ (known, deliberate - say so rather than let a green read as more than it is):
+//   - `spin` HAND-BUILDS the break list (one BreakOpened per seq, of the sport's declared major kind) and calls `loadSponsorPlan`
+//     with it. The breaks the overlay's own fold would open are not derived here, and the overlay payload's `airings` are never
+//     read: cards come from the overlay (`overlayCards`), airings from `spin`. The real break source is L2's and the e2e's.
+//   - The Overview's second listing arm (an archived sponsor WITH airings or clicks in the period stays listed, archive spec D15):
+//     the matrix writes no airing and no click, so only "archived and no numbers => not listed" is met.
+// KNOWN GAPS (recorded, not built - rare paths; review round 1, m5 / m6):
+//   - a refund, a lost dispute, and a PARKED live deal (`parked_at` set: the sponsor goes `pending`, so the oracle's "a live deal
+//     airs" does not hold for it - the oracle models no parked deal);
+//   - the ONLINE-UNPAID arm: an online deal still waiting on its checkout. The matrix's `awaiting` payment is offline only (its
+//     `awaiting_payment` deal is an unpaid offline invoice); an online deal is only ever driven to paid.
 //
 // Real Postgres; skipped without DATABASE_URL (a skipped suite is a FAILURE to read: the run must show 0 pending).
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -66,6 +83,7 @@ import { createCompetition } from "@/server/usecases/competitions";
 import {
   archiveSponsor, createSponsor, createSponsorPackage, patchSponsor, resolveSponsors, unarchiveSponsor,
 } from "@/server/usecases/sponsors";
+import { sponsorOverview } from "@/server/sponsors/report";
 import { createDeal, endDealNow, markDealPaid, sweepSponsorDeals, writeOffDeal } from "@/server/usecases/sponsor-deals";
 import { stubOutboxEnv } from "@/server/usecases/__tests__/_invite-mail";
 import { seedOrg } from "@/server/usecases/__tests__/_seed";
@@ -338,6 +356,15 @@ async function overlayCards(rig: Rig, door: "relay" | "public") {
   return live.sponsorPlan?.cards ?? [];
 }
 
+/** Is `sponsorId` listed in THIS competition's Overview, read the way the report page reads it (`sponsorOverview`, the period "this
+ *  competition", archive spec D15)? The control (a partner, whole org, active, on every cell) must be listed too: it proves the reader
+ *  returned the org's rows, so "not listed" below means the sponsor was left out and not that the reader answered nothing. */
+async function listedInOverview(rig: Rig, sponsorId: string | null): Promise<boolean> {
+  const rows = await sponsorOverview(rig.auth, rig.orgId, { kind: "competition", competitionId: rig.competitionId }, new Date());
+  expect(rows.some((r) => r.sponsorId === rig.refId), "premise: the Overview lists the control (the reader answered)").toBe(true);
+  return sponsorId !== null && rows.some((r) => r.sponsorId === sponsorId);
+}
+
 const dealRow = async (dealId: string) =>
   (await sql<{ deal_status: string; status: string; ended_reason: string | null; written_off_at: Date | null }[]>`
     select deal_status, status, ended_reason, written_off_at from sponsor_orders where id = ${dealId}`)[0]!;
@@ -346,6 +373,8 @@ const sponsorRow = async (id: string) =>
     select status, tier, competition_id, on_stream, archived_at from sponsors where id = ${id}`)[0]!;
 const dealCount = async (orgId: string) =>
   (await sql<{ n: number }[]>`select count(*)::int as n from sponsor_orders where org_id = ${orgId}`)[0]!.n;
+const sponsorCount = async (orgId: string) =>
+  (await sql<{ n: number }[]>`select count(*)::int as n from sponsors where org_id = ${orgId}`)[0]!.n;
 const assignmentCount = async (fixtureId: string) =>
   (await sql<{ n: number }[]>`select count(*)::int as n from sponsor_assignments where fixture_id = ${fixtureId}`)[0]!.n;
 
@@ -409,7 +438,7 @@ describe("L1 cell generator - pairwise plus single-axis edges (pure; no database
     expect(edges, "single-axis edges checked").toBe(PLANS.length - 1 + (SPONSOR_TIERS.length - 1) + (STATES.length - 1) + (PAYMENTS.length - 1) + (SCOPES.length - 1) + (STREAMS.length - 1));
   });
 
-  it("the interaction families are all present: every state x payment on the accepting baseline, and every plan x tier x scope for offline and online (count reported)", () => {
+  it("the interaction families are all present: every state x payment on the accepting baseline, and every plan x tier x scope for offline and online, stream on and off (count reported)", () => {
     const ids = new Set(GEN.cells.map(cellId));
     let checked = 0;
     for (const state of STATES)
@@ -422,11 +451,14 @@ describe("L1 cell generator - pairwise plus single-axis edges (pure; no database
     for (const plan of PLANS)
       for (const tier of SPONSOR_TIERS)
         for (const scope of SCOPES)
-          for (const payment of ["offline_paid", "online_paid"] as const) {
-            expect(ids.has(cellId({ ...BASELINE, plan, tier, scope, payment })), `plan x tier x scope: ${plan} ${tier} ${scope} ${payment}`).toBe(true);
-            checked++;
-          }
-    expect(checked, "family cells checked: 7 x 4 + 3 x 4 x 3 x 2").toBe(STATES.length * PAYMENTS.length + PLANS.length * SPONSOR_TIERS.length * SCOPES.length * 2);
+          for (const payment of ["offline_paid", "online_paid"] as const)
+            for (const stream of STREAMS) {
+              expect(ids.has(cellId({ ...BASELINE, plan, tier, scope, payment, stream })), `plan x tier x scope: ${plan} ${tier} ${scope} ${payment} stream=${stream}`).toBe(true);
+              checked++;
+            }
+    expect(checked, "family cells checked: 7 x 4 + 3 x 4 x 3 x 2 x 2").toBe(
+      STATES.length * PAYMENTS.length + PLANS.length * SPONSOR_TIERS.length * SCOPES.length * 2 * STREAMS.length,
+    );
   });
 
   it("a cell with no deal has no payment: 'none' never pairs with a payment value", () => {
@@ -492,6 +524,9 @@ describe.skipIf(!HAS_DB)("L1 cells - every generated combination, driven through
       if (!created.ok) expect(created.err).toMatchObject({ status: exp.refusal.status, featureKey: exp.refusal.featureKey });
       // A refusal writes nothing: no deal of the cell's own exists (the scheduled cell keeps its baseline's one).
       expect(await dealCount(rig.orgId), "a refused deal wrote no row").toBe(cell.state === "scheduled" ? 1 : 0);
+      // ...and no sponsor either: a refused hand-made sponsor leaves only the control; a refused deal leaves the base sponsor the cell
+      // made first (no second one) - the count is what the refusal could have changed, so it cannot be trivially true.
+      expect(await sponsorCount(rig.orgId), "a refusal wrote no sponsor").toBe(cell.state === "none" ? 1 : 2);
     }
 
     // ---- the premises: the script reached the cell it names -----------------------------------------------------------------
@@ -558,6 +593,7 @@ describe.skipIf(!HAS_DB)("L1 cells - every generated combination, driven through
     const strip = await publicStrip(rig, sponsorId);
     expect(strip.onPage, "on the competition's public sponsor strip").toBe(exp.onPublicPage);
     expect(strip.tier, "the tier the strip shows").toBe(exp.publicTier);
+    expect(await listedInOverview(rig, sponsorId), "listed in the competition's Overview (archive spec D15)").toBe(exp.inReport);
 
     observed.set(cellId(cell), { expected: exp, cell });
   });
@@ -575,14 +611,25 @@ describe.skipIf(!HAS_DB)("L1 cells - every generated combination, driven through
     const onPage = all.filter((o) => o.expected.onPublicPage).length;
     const writtenOff = all.filter((o) => o.expected.writeOff?.accepted === true).length;
     const writeOffRefused = all.filter((o) => o.expected.writeOff?.accepted === false).length;
+    const reported = all.filter((o) => o.expected.inReport).length;
+    const unreported = all.filter((o) => !o.expected.inReport).length;
+    const refusedNone = all.filter((o) => o.cell.state === "none" && o.expected.refusal !== null).length;
+    const streamOffLive = all.filter((o) => o.cell.state === "live" && o.cell.stream === "off" && o.expected.refusal === null).length;
     // Every arm the oracle distinguishes is met at least once, or the cell list proves less than it claims.
-    for (const [label, n] of Object.entries({ refused, airing, silent, onPage, writtenOff, writeOffRefused })) {
+    // The stream-off arm is met for each way a mutant could ignore the flag: a scoped deal, a gold one, an online one.
+    const offAccepted = all.filter((o) => o.cell.state === "live" && o.cell.stream === "off" && o.expected.refusal === null);
+    for (const [label, hit] of Object.entries({
+      scoped: offAccepted.some((o) => o.cell.scope !== "org"),
+      gold: offAccepted.some((o) => o.cell.tier === "gold"),
+      online: offAccepted.some((o) => o.cell.payment === "online_paid"),
+    })) expect(hit, `an accepted live deal off the stream that is ${label}`).toBe(true);
+    for (const [label, n] of Object.entries({ refused, airing, silent, onPage, writtenOff, writeOffRefused, reported, unreported, refusedNone, streamOffLive })) {
       expect(n, `${label} cells`).toBeGreaterThan(0);
     }
     for (const plan of PLANS) expect(all.some((o) => o.cell.plan === plan && o.expected.airs), `an airing cell on ${plan}`).toBe(true);
     for (const plan of PLANS) expect(all.some((o) => o.cell.plan === plan && o.expected.refusal !== null), `a refused cell on ${plan}`).toBe(plan !== "pro");
     for (const tier of SPONSOR_TIERS) expect(all.some((o) => o.expected.airedTier === tier), `a cell aired as ${tier}`).toBe(true);
-    console.log(`[stream-matrix] checked ${checked}/${GEN.cells.length} cells: ${refused} refused, ${airing} airing, ${silent} not airing, ${onPage} on the public strip, ${writtenOff} written off, ${writeOffRefused} write-offs refused`);
+    console.log(`[stream-matrix] checked ${checked}/${GEN.cells.length} cells: ${refused} refused, ${airing} airing, ${silent} not airing, ${onPage} on the public strip, ${writtenOff} written off, ${writeOffRefused} write-offs refused, ${reported} listed in the Overview / ${unreported} not, ${streamOffLive} accepted live deals off the stream`);
   });
 });
 
@@ -659,8 +706,10 @@ describe.skipIf(!HAS_DB)("L1 sequences (G2) - a deal ends, a queued deal is prom
     expect(live.fresh.get(x), "live: gold weight").toBe(2 * SPONSOR_TIER_WEIGHTS.gold);
     const xBefore = live.all.get(x)!;
 
+    expect(await listedInOverview(rig, x), "live: listed in the competition's Overview").toBe(true);
     const archived = await archiveSponsor(rig.auth, x);
     expect(archived.archived_at, "archived").not.toBeNull();
+    expect(await listedInOverview(rig, x), "archived, no airings or clicks: not listed (archive spec D15)").toBe(false);
     const gone = await spin(rig, n1 + 1, windowFor(["partner"]));
     expect(gone.plan?.cards.some((c) => c.sponsorId === x), "archived: no card").toBe(false);
     expect(gone.all.get(x) ?? 0, "archived: its already-frozen breaks air nothing").toBe(0);
@@ -677,6 +726,7 @@ describe.skipIf(!HAS_DB)("L1 sequences (G2) - a deal ends, a queued deal is prom
     expect(back.plan?.cards.find((c) => c.sponsorId === x), "unarchived: its card is back, as it was (gold, ticked)").toMatchObject({ tier: "gold", onStream: true });
     expect(back.all.get(x), "unarchived: the frozen breaks air again, and the new window adds a full gold share").toBe(xBefore + 2 * SPONSOR_TIER_WEIGHTS.gold);
     expect((await publicStrip(rig, x)).onPage, "unarchived: back on the public strip").toBe(true);
+    expect(await listedInOverview(rig, x), "unarchived: listed again").toBe(true);
   });
 
   it("a sponsor a live deal holds cannot be archived and keeps airing; once the deal ends it can, and unarchiving it brings back an INACTIVE sponsor (not on the stream)", async () => {
@@ -689,9 +739,13 @@ describe.skipIf(!HAS_DB)("L1 sequences (G2) - a deal ends, a queued deal is prom
     expect((await sponsorRow(x)).archived_at, "the refusal wrote nothing").toBeNull();
     expect((await overlayCards(rig, "relay")).find((c) => c.sponsorId === x)?.tier, "still airing").toBe("silver");
 
+    expect(await listedInOverview(rig, x), "a live deal: listed").toBe(true);
     await endDealNow(rig.auth, dealId);
+    expect(await listedInOverview(rig, x), "its deal ended (hidden from the stream and the strip): still listed - the Overview reads no deal state").toBe(true);
     await archiveSponsor(rig.auth, x);
+    expect(await listedInOverview(rig, x), "archived: not listed").toBe(false);
     await unarchiveSponsor(rig.auth, x);
+    expect(await listedInOverview(rig, x), "unarchived, still inactive: listed again").toBe(true);
     expect(await sponsorRow(x), "unarchive writes archived_at only: the sponsor is as the ended deal left it").toMatchObject({ status: "inactive", archived_at: null });
     expect((await overlayCards(rig, "relay")).some((c) => c.sponsorId === x), "unarchived, but its deal ended: not on the stream").toBe(false);
     expect((await publicStrip(rig, x)).onPage).toBe(false);
@@ -786,7 +840,7 @@ describe.skipIf(!HAS_DB)("L1 sequences (G2) - a deal ends, a queued deal is prom
     expect(after.fresh.get(x) ?? 0, "no NEW break goes to an unticked sponsor").toBe(0);
   });
 
-  it("an Event Pass on ANOTHER competition: this stream's tiers stay flat, a deal for this competition is refused, a deal for the pass's own competition is made but is not on this stream", async () => {
+  it("an Event Pass on ANOTHER competition: a deal for this competition is refused, a deal for the pass's own competition is made but is not on this stream (the flat tiers are the plan-change sequence's last phase)", async () => {
     const rig = await buildRig();
     const goldPkg = await makePackage(rig, "gold", true);
     await addControl(rig);
@@ -826,6 +880,8 @@ describe.skipIf(!HAS_DB)("L1 sequences (G2) - a deal ends, a queued deal is prom
     expect(await sponsorRow(x)).toMatchObject({ status: "active", on_stream: false });
     expect(await overlayCards(rig, "relay"), "an off-stream sponsor is no card").toEqual([]);
     expect((await publicStrip(rig, x)).onPage, "but it is on the public strip").toBe(true);
+    // A poll over two majors is what could have assigned something: the count below is only meaningful after it ran.
+    expect((await spin(rig, 1, 2)).plan, "a poll with no ticked sponsor: still no plan").toBeNull();
     expect(await assignmentCount(rig.fixtureId), "nothing was assigned").toBe(0);
   });
 });

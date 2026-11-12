@@ -27,14 +27,22 @@
 //      (greedy cover over the whole cartesian product, deterministic);
 //   2. one-factor-at-a-time from a BASELINE cell: every non-baseline value of every axis appears in a cell that differs from the
 //      baseline in that axis only (the single-axis edges);
-//   3. TWO FULL INTERACTION FAMILIES, added because pairwise alone left a whole arm unreached (the first run of the closing test:
+//   3. THREE FULL INTERACTION FAMILIES, added because pairwise alone left a whole arm unreached (the first run of the closing test:
 //      no cell wrote an unpaid offline invoice off - every cell that held the pair written_off x awaiting was one the plan refuses,
 //      so the pair was "covered" and the behaviour never ran). A pair is not an arm; where the script or the gate differs per
 //      combination of more than two axes, the combinations are enumerated:
 //        STATE x PAYMENT   on the accepting baseline (a Pro org, partner, whole org, on the stream): the scripts differ per pair, so
 //                          each pair runs where the plan does not refuse it;
 //        PLAN x TIER x SCOPE for the two payments whose gates differ (offline: the placement gate only; online: the placement gate,
-//                          then `sponsors.monetize`), at the baseline state: the whole plan-gate and flattening table.
+//                          then `sponsors.monetize`), at the baseline state: the whole plan-gate table. NOT the flattening table: a
+//                          cell makes its sponsor AFTER the plan is set, and a plan without `sponsors.tiers` refuses every placement
+//                          that is not already partner on the whole org, so no cell ever shows a tier flattened. The flattening (ruling
+//                          R13) is decided by the downgrade sequences in the test file (a plan change under a live stream; a frozen
+//                          break unticked after a downgrade), never by a cell;
+//        the same PLAN x TIER x SCOPE x PAYMENT with the STREAM flag OFF (review round 1, I1): the flag is the one value that separates
+//                          "airs" from "is on the public page", and a deal writes it from its package alone, so the off arm is met for
+//                          every placement and payment a deal can be made with. One witness cell left the mutants that ignore the flag
+//                          for a scoped, a gold or an online deal alive (`on_stream: live.includes_on_stream || ...`).
 // A combination is never dropped as "unreachable": a plan that cannot buy a tier REFUSES the deal, and the refusal is the cell's
 // checked answer (a refused cell is a checked cell).
 import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
@@ -178,13 +186,14 @@ export function generateCells(): Generated {
 }
 
 /** Item 3 of the selection (header): the STATE x PAYMENT family on the accepting baseline, and the PLAN x TIER x SCOPE family for
- *  the offline and online payment paths at the baseline state. */
+ *  the offline and online payment paths at the baseline state, with the stream flag on AND off. */
 export function interactionFamilies(): Cell[] {
   const out: Cell[] = [];
   for (const state of STATES) for (const payment of PAYMENTS) out.push(canonical({ ...BASELINE, state, payment }));
   for (const plan of PLANS)
     for (const tier of SPONSOR_TIERS)
       for (const scope of SCOPES)
-        for (const payment of ["offline_paid", "online_paid"] as const) out.push(canonical({ ...BASELINE, plan, tier, scope, payment }));
+        for (const payment of ["offline_paid", "online_paid"] as const)
+          for (const stream of STREAMS) out.push(canonical({ ...BASELINE, plan, tier, scope, payment, stream }));
   return out;
 }
