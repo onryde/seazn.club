@@ -8,9 +8,12 @@ import { describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { registrationEmail } from "@/lib/email";
 import { fmtPublicDeadline } from "@/lib/format";
+import { openBody } from "@/server/email-outbox/seal";
 import { divisionCtx } from "../registrations/lookups";
 import { buildCartMail, paymentReminderMessage } from "../registrations/mail";
-import { stripeRig, seedRegistration } from "./_registration-fixtures";
+import { notifyPromoted, promoteWaitlistedRow } from "../registrations";
+import { stubOutboxEnv } from "./_invite-mail";
+import { stripeRig, seedRegistration, loadWithGroup } from "./_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -80,5 +83,41 @@ describe.skipIf(!HAS_DB)("registration mails write the pay-by deadline in the or
       checked += 1;
     }
     expect(checked).toBe(2);
+  });
+
+  // The third deadline mail. The template half is in email-builders.test.ts; this drives the REAL producer (`notifyPromoted`), reads the
+  // sealed outbox body it queued, and compares it with the instant the DATABASE holds for THIS entry's own pay window.
+  it("the promotion mail: notifyPromoted names the zone and the queued body prints it; two zones, two strings", async () => {
+    stubOutboxEnv();
+    let checked = 0;
+    const seen = new Set<string>();
+    for (const zone of ["Asia/Kolkata", "America/Los_Angeles", null]) {
+      const rig = await stripeRig({ capacity: 1, feeCents: 1500 });
+      await sql`update organizations set timezone = ${zone} where id = ${rig.orgId}`;
+      await seedRegistration(rig.competition.id, rig.division.id, rig.settings, { displayName: "Holder", contactEmail: "holder@test.local" });
+      const waiting = await seedRegistration(rig.competition.id, rig.division.id, rig.settings, {
+        displayName: "Wait Lister",
+        contactEmail: "wait@test.local",
+        status: "waitlisted",
+      });
+      const promoted = await sql.begin((tx) => promoteWaitlistedRow(tx, waiting.registration.id, waiting.registration.group_id, rig.settings));
+      const row = await loadWithGroup(promoted!.id);
+      if (!row.promotion_expires_at) throw new Error("premise: a fee-bearing promotion carries its own pay window");
+      const ctx = await divisionCtx(sql, rig.division.id);
+      await notifyPromoted(row, ctx, rig.settings, "https://test.local", { firstAttempt: "worker" });
+
+      const [outbox] = await sql<{ body_sealed: Uint8Array | null }[]>`
+        select body_sealed from email_outbox where kind = 'registration_promoted' and ref_id = ${row.id}`;
+      expect(outbox?.body_sealed, `${zone}: the promotion mail was queued with its body`).toBeTruthy();
+      const content = await openBody(outbox!.body_sealed!);
+      const want = fmtPublicDeadline("en", zone ?? "UTC", row.promotion_expires_at);
+      expect(want, "premise: the expected spelling is non-empty").not.toBe("");
+      expect(content.html, `${zone}`).toContain(want);
+      expect(content.text, `${zone}`).toContain(want);
+      seen.add(want.replace(/^.*, /, ""));
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+    expect(seen.size, "premise: the three zones print three different clock readings").toBe(3);
   });
 });
