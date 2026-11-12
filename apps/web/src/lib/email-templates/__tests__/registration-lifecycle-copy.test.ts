@@ -23,6 +23,12 @@ const REF = "RVR-4821";
 const LINK = "https://seazn.club/live/riverside-club/spring-open";
 
 const base = { orgName: ORG, competitionName: COMP, divisionName: DIVISION, displayName: ENTRY, refCode: REF };
+// The payment mail is CART-shaped (fix round 1): a list of entries, each with its own amount and standing.
+const ENTRY2 = "Second Squad";
+const DIVISION2 = "Masters Doubles";
+const entry1 = (confirmed: boolean, amountCents = 1500) => ({ displayName: ENTRY, divisionName: DIVISION, amountCents, confirmed });
+const entry2 = (confirmed: boolean, amountCents = 900) => ({ displayName: ENTRY2, divisionName: DIVISION2, amountCents, confirmed });
+const paidBase = { orgName: ORG, competitionName: COMP, refCode: REF, contactName: PERSON, currency: "gbp" };
 const dictOf = (locale: (typeof LOCALES)[number]) => getDictionary(locale, "emails");
 const words = (html: string): string => html.replace(/<style[\s\S]*?<\/style>/g, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 
@@ -31,8 +37,11 @@ const STATES: JoinedState[] = ["confirmed", "waitlisted", "payment", "approval",
 async function renderAll(locale: (typeof LOCALES)[number]) {
   const dict = await dictOf(locale);
   return {
-    paidConfirmed: registrationPaidTemplate({ ...base, contactName: PERSON, amountCents: 1500, currency: "gbp", confirmed: true, statusUrl: LINK }, dict),
-    paidApproval: registrationPaidTemplate({ ...base, contactName: PERSON, amountCents: 1500, currency: "gbp", confirmed: false, statusUrl: LINK }, dict),
+    paidConfirmed: registrationPaidTemplate({ ...paidBase, entries: [entry1(true)], statusUrl: LINK }, dict),
+    paidApproval: registrationPaidTemplate({ ...paidBase, entries: [entry1(false)], statusUrl: LINK }, dict),
+    paidCartConfirmed: registrationPaidTemplate({ ...paidBase, entries: [entry1(true), entry2(true)], statusUrl: LINK }, dict),
+    paidCartApproval: registrationPaidTemplate({ ...paidBase, entries: [entry1(false), entry2(false)], statusUrl: LINK }, dict),
+    paidCartMixed: registrationPaidTemplate({ ...paidBase, entries: [entry1(true), entry2(false)], statusUrl: LINK }, dict),
     approved: registrationApprovedTemplate({ ...base, recipientName: PERSON, competitionUrl: LINK }, dict),
     expired: registrationExpiredTemplate({ ...base, contactName: PERSON, registerUrl: LINK }, dict),
     withdrawn: registrationWithdrawnTemplate({ ...base, contactName: PERSON }, dict),
@@ -62,7 +71,7 @@ describe("every lifecycle mail, in every locale", () => {
       expect(out.subject, `${locale} ${name}: the subject is non-empty`).not.toBe("");
       checked += 1;
     }
-    expect(checked, "anti-vacuity: 5 kinds, joined in 5 states, paid in 2 = 10 renders").toBe(10);
+    expect(checked, "anti-vacuity: 5 kinds, joined in 5 states, paid in 5 (2 single + 3 cart) = 13 renders").toBe(13);
   });
 
   it("the subjects differ between locales (an untranslated key would repeat the English one)", async () => {
@@ -75,7 +84,7 @@ describe("every lifecycle mail, in every locale", () => {
         checked += 1;
       }
     }
-    expect(checked, "anti-vacuity: every render of every non-English locale").toBe(30);
+    expect(checked, "anti-vacuity: every render of every non-English locale").toBe(39);
   });
 });
 
@@ -95,6 +104,55 @@ describe("the state each mail states", () => {
     const out = (await renderAll(locale)).paidConfirmed;
     // money() is the house formatter; 1500 pence is 15.00 in every locale's text (symbol and separator vary, the digits do not).
     expect(out.text).toMatch(/15[.,]00/);
+  });
+
+  it.each(LOCALES)("%s: a CART payment lists every entry with its own amount and standing, the total, and a panel that matches the mix", async (locale) => {
+    const outs = await renderAll(locale);
+    const dict = await dictOf(locale);
+    const lineConfirmed = String(dict["registrationPaid.lineConfirmed"]);
+    const lineApproval = String(dict["registrationPaid.lineApproval"]);
+    expect(lineConfirmed.includes(lineApproval) || lineApproval.includes(lineConfirmed), `${locale}: premise: the two state words are not substrings of each other`).toBe(false);
+    const opposite = (w: string) => (w === lineConfirmed ? lineApproval : lineConfirmed);
+    let checked = 0;
+    for (const name of ["paidCartConfirmed", "paidCartApproval", "paidCartMixed"] as const) {
+      const out = outs[name]!;
+      // Both entries, each with its own division, its own amount (15.00 and 9.00, never a smeared total), and the total (24.00).
+      for (const part of [out.text, words(out.html)]) {
+        expect(part, `${locale} ${name}: first entry`).toContain(ENTRY);
+        expect(part, `${locale} ${name}: first division`).toContain(DIVISION);
+        expect(part, `${locale} ${name}: second entry`).toContain(ENTRY2);
+        expect(part, `${locale} ${name}: second division`).toContain(DIVISION2);
+        expect(part, `${locale} ${name}: first amount`).toMatch(/15[.,]00/);
+        expect(part, `${locale} ${name}: second amount`).toMatch(/9[.,]00/);
+        expect(part, `${locale} ${name}: the total`).toMatch(/24[.,]00/);
+      }
+      // One line per entry in the text, each carrying its OWN state word.
+      const lines = out.text.split("\n");
+      const l1 = lines.find((l) => l.includes(ENTRY) && l.includes(DIVISION))!;
+      const l2 = lines.find((l) => l.includes(ENTRY2) && l.includes(DIVISION2))!;
+      expect(l1, `${locale} ${name}: the first entry's own line`).toBeDefined();
+      expect(l2, `${locale} ${name}: the second entry's own line`).toBeDefined();
+      const want = { paidCartConfirmed: [lineConfirmed, lineConfirmed], paidCartApproval: [lineApproval, lineApproval], paidCartMixed: [lineConfirmed, lineApproval] }[name];
+      expect(l1, `${locale} ${name}: first state`).toContain(want[0]!);
+      expect(l1, `${locale} ${name}: first line carries no other state`).not.toContain(opposite(want[0]!));
+      expect(l2, `${locale} ${name}: second state`).toContain(want[1]!);
+      expect(l2, `${locale} ${name}: second line carries no other state`).not.toContain(opposite(want[1]!));
+      checked += 1;
+    }
+    const key = (k: string): string => String(dict[`registrationPaid.${k}`]);
+    expect(outs.paidCartConfirmed!.text).toContain(key("cartAllConfirmedTitle"));
+    expect(outs.paidCartApproval!.text).toContain(key("cartAllApprovalTitle"));
+    expect(outs.paidCartMixed!.text).toContain(key("cartMixedTitle"));
+    expect(outs.paidCartMixed!.text, "a mixed cart claims neither 'all confirmed' nor 'all awaiting'").not.toContain(key("cartAllConfirmedTitle"));
+    expect(outs.paidCartMixed!.text).not.toContain(key("cartAllApprovalTitle"));
+    expect(checked, "anti-vacuity: the three cart states").toBe(3);
+  });
+
+  it.each(LOCALES)("%s: a one-entry payment is the single-entry mail, not a one-line cart (no total, no list)", async (locale) => {
+    const dict = await dictOf(locale);
+    const out = (await renderAll(locale)).paidConfirmed;
+    expect(out.text).not.toContain(String(dict["registrationPaid.textTotal"]).split("{amount}")[0]!);
+    expect(out.text).toContain(String(dict["registrationPaid.confirmedTitle"]));
   });
 
   it.each(LOCALES)("%s: a joiner is told five different things for five entry states, and never 'confirmed' unless the entry is", async (locale) => {
@@ -143,7 +201,8 @@ describe("links and reference", () => {
   it("every link the producer passes is rendered, and none is invented when it passes none", async () => {
     const dict = await dictOf("en");
     const calls: Array<[string, { subject: string; html: string; text: string }, { subject: string; html: string; text: string }]> = [
-      ["paid", registrationPaidTemplate({ ...base, contactName: PERSON, amountCents: 100, currency: "gbp", confirmed: true, statusUrl: LINK }, dict), registrationPaidTemplate({ ...base, contactName: PERSON, amountCents: 100, currency: "gbp", confirmed: true }, dict)],
+      ["paid", registrationPaidTemplate({ ...paidBase, entries: [entry1(true, 100)], statusUrl: LINK }, dict), registrationPaidTemplate({ ...paidBase, entries: [entry1(true, 100)] }, dict)],
+      ["paid cart", registrationPaidTemplate({ ...paidBase, entries: [entry1(true), entry2(true)], statusUrl: LINK }, dict), registrationPaidTemplate({ ...paidBase, entries: [entry1(true), entry2(true)] }, dict)],
       ["approved", registrationApprovedTemplate({ ...base, recipientName: PERSON, competitionUrl: LINK }, dict), registrationApprovedTemplate({ ...base, recipientName: PERSON }, dict)],
       ["expired", registrationExpiredTemplate({ ...base, contactName: PERSON, registerUrl: LINK }, dict), registrationExpiredTemplate({ ...base, contactName: PERSON }, dict)],
       ["joined", registrationJoinedTemplate({ ...base, playerName: PERSON, state: "confirmed", competitionUrl: LINK }, dict), registrationJoinedTemplate({ ...base, playerName: PERSON, state: "confirmed" }, dict)],
@@ -156,7 +215,7 @@ describe("links and reference", () => {
       expect(bare.text, `${name} text without a link`).not.toContain("https://");
       checked += 1;
     }
-    expect(checked).toBe(4);
+    expect(checked).toBe(5);
   });
 
   it("names are escaped in the html and left raw in the text (a team called 'A & B <x>')", async () => {

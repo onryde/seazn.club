@@ -14,7 +14,7 @@ import { entryWaitingOn, isTerminalRegistrationStatus } from "@/lib/registration
 import { enqueueEmailOnce, expiryWithin, recipientLocale } from "@/server/email-outbox";
 import { log } from "@/server/logger";
 import type { Tx, RegistrationWithGroupRow, DivisionCtx } from "./types";
-import { divisionCtx, fallbackOrigin, loadSettings } from "./lookups";
+import { divisionCtx, fallbackOrigin, loadSettings, regGroupCols } from "./lookups";
 
 const divisionNameOf = async (db: Tx, divisionId: string): Promise<string> => {
   const [row] = await db<{ name: string }[]>`select name from divisions where id = ${divisionId}`;
@@ -48,54 +48,85 @@ async function contained<T>(tx: Tx, kind: string, regId: string, produce: (sp: T
 
 /**
  * `registration_paid`: the payment landed - the card webhook (or the status page's reconcile), or the organiser marking an offline
- * payment. To the registration's contact, in their language; names THIS entry's own amount (never the cart's total).
+ * payment. To the registration's contact, in their language: ONE mail per payment, listing every entry THAT payment paid with its own
+ * amount and standing (a card cart that pays three entries is one mail of three lines, never three mails; the cart-shaped ruling of the
+ * confirmation mail). A single entry reads as the single-entry mail.
  *
- * `confirmed` is what the entry IS after the write: `true` = confirmed, `false` = paid and waiting for the organiser's approval. The
- * caller reads it from the row (or the outcome of the very statement that wrote it), never from a rule it assumes: a division whose
- * approval is manual must not be told "you're confirmed".
+ * It is told WHICH entries to consider (`regIds`: the ones the payment names) and reads everything else from the books, in the caller's
+ * transaction: an entry is listed only if it is `paid` or `confirmed` NOW, has a fee, and (for a card payment) carries THIS payment's
+ * intent - so a late payment for a withdrawn sibling, a duplicate payment and an unpaid entry are never reported as received. What each
+ * entry IS (`confirmed`, or paid and waiting for the organiser) is the row's status after the write, never a rule assumed from the
+ * division: a manual-approval entry is not told "you're confirmed".
  *
- * Once per payment: `paymentRef` is the Stripe payment intent (or, for an offline payment, the mark's own timestamp), so a replayed
- * webhook queues nothing and a LATER payment of the same entry (a re-promotion that pays again) is a new mail. The ref is the
- * registration, so a payment mail still waiting in the queue is superseded by the newer one rather than both going out.
+ * Once per payment: `paymentRef` is the Stripe payment intent (or session; for an offline payment, the mark's own timestamp), so a
+ * replayed webhook queues nothing and a LATER payment of the same cart (a re-promotion that pays again) is a new mail. The mail is
+ * referenced by the cart's first listed entry, so a payment mail still waiting in the queue is superseded by a newer one for the same
+ * entry, never by a payment of a different one. Because it is derived from the books and once-keyed, a card payment that committed
+ * its entries and then crashed before this ran is healed by Stripe's re-delivery of the event.
+ *
+ * Returns the queued ids: none when nothing qualified or the mail was already queued.
  */
 export async function queueRegistrationPaidMail(
   tx: Tx,
-  a: { reg: RegistrationWithGroupRow; confirmed: boolean; paymentRef: string; origin?: string },
-): Promise<string | null> {
-  const { reg } = a;
-  // A payment mail reports money: an entry with no fee has none to report (and a zero-amount mail would read as a charge of nothing).
-  if (!(reg.amount_cents > 0)) return null;
-  return contained(tx, "registration_paid", reg.id, async (sp) => {
-    const origin = a.origin ?? fallbackOrigin();
-    const ctx = await divisionCtx(sp, reg.division_id);
-    const locale = await recipientLocale(sp, { pick: reg.locale, userId: reg.user_id, orgDefault: ctx.default_locale });
-    const content = await registrationPaidEmail(
-      {
-        orgName: ctx.org_name,
-        competitionName: ctx.comp_name,
-        divisionName: await divisionNameOf(sp, reg.division_id),
-        displayName: reg.display_name,
-        contactName: reg.contact_name,
-        refCode: reg.ref_code,
-        amountCents: reg.amount_cents,
-        currency: reg.currency,
-        confirmed: a.confirmed,
-        statusUrl: statusUrlOf(origin, reg),
-      },
-      locale,
-    );
-    return enqueueEmailOnce(sp, {
-      kind: "registration_paid",
-      refType: "registration",
-      refId: reg.id,
-      orgId: reg.org_id,
-      to: reg.contact_email,
-      ...content,
-      transactional: false,
-      expiresAt: expiryWithin(null),
-      dedupeKey: `${reg.id}:${a.paymentRef}`,
+  a: { regIds: string[]; paymentIntentId: string | null; paymentRef: string; origin?: string },
+): Promise<string[]> {
+  if (a.regIds.length === 0) return [];
+  const rows = await contained(tx, "registration_paid", a.regIds[0]!, async (sp) =>
+    sp<RegistrationWithGroupRow[]>`
+      select ${regGroupCols(sp)}
+        from registrations r join registration_groups g on g.id = r.group_id
+       where r.id = any(${a.regIds}::uuid[])
+         and r.status in ('paid', 'confirmed')
+         and r.amount_cents > 0
+         and (${a.paymentIntentId}::text is null or r.payment_intent_id = ${a.paymentIntentId})
+       order by r.created_at, r.id`,
+  );
+  if (!rows || rows.length === 0) return [];
+  // One mail per cart (a payment names one cart's entries; the grouping is the guard that makes it true).
+  const carts = new Map<string, RegistrationWithGroupRow[]>();
+  for (const r of rows) carts.set(r.group_id, [...(carts.get(r.group_id) ?? []), r]);
+  const queued: string[] = [];
+  for (const entries of carts.values()) {
+    const lead = entries[0]!;
+    const id = await contained(tx, "registration_paid", lead.id, async (sp) => {
+      const origin = a.origin ?? fallbackOrigin();
+      const ctx = await divisionCtx(sp, lead.division_id);
+      const locale = await recipientLocale(sp, { pick: lead.locale, userId: lead.user_id, orgDefault: ctx.default_locale });
+      const listed = await Promise.all(
+        entries.map(async (e) => ({
+          displayName: e.display_name,
+          divisionName: await divisionNameOf(sp, e.division_id),
+          amountCents: e.amount_cents,
+          confirmed: e.status === "confirmed",
+        })),
+      );
+      const content = await registrationPaidEmail(
+        {
+          orgName: ctx.org_name,
+          competitionName: ctx.comp_name,
+          contactName: lead.contact_name,
+          refCode: lead.ref_code,
+          currency: lead.currency,
+          entries: listed as [(typeof listed)[number], ...typeof listed],
+          statusUrl: statusUrlOf(origin, lead),
+        },
+        locale,
+      );
+      return enqueueEmailOnce(sp, {
+        kind: "registration_paid",
+        refType: "registration",
+        refId: lead.id,
+        orgId: lead.org_id,
+        to: lead.contact_email,
+        ...content,
+        transactional: false,
+        expiresAt: expiryWithin(null),
+        dedupeKey: `${lead.id}:${a.paymentRef}`,
+      });
     });
-  });
+    if (id) queued.push(id);
+  }
+  return queued;
 }
 
 /**

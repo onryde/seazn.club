@@ -190,6 +190,15 @@ export async function handleRegistrationCheckoutCompleted(
     await sql`update registration_groups set checkout_session_id = null, updated_at = now()
               where checkout_session_id = ${session.id}`;
   }
+  // Polish wave P2 (W1, W3) + fix round 1: "payment received" is ONE mail per payment, listing every entry THIS session paid (a cart that
+  // pays three entries is one mail of three lines), so it is queued once, here, after every named entry has been handled - not once per
+  // entry inside each entry's transaction. It reads what each entry IS from the books (confirmed, or paid and waiting for the organiser),
+  // and it is once-keyed on the payment: if the process died after the last entry committed and before this ran, Stripe re-delivers the
+  // event, every entry replays as a no-op, and this step queues the mail. A webhook has no response to defer behind, so the retry worker
+  // makes the first attempt.
+  await sql.begin((tx) =>
+    queueRegistrationPaidMail(tx, { regIds, paymentIntentId: paymentIntent, paymentRef: paymentIntent ?? session.id }),
+  );
 }
 
 /**
@@ -473,9 +482,6 @@ async function confirmPaidRegistration(
         registration_id: regId,
         amount_cents: reg.amount_cents,
       }, null);
-      // Polish wave P2 (W1, W3): "payment received", in the transaction that records the payment. The entry is WAITING for the organiser:
-      // the mail says so, never "you're confirmed". The webhook leaves the first attempt to the worker.
-      await queueRegistrationPaidMail(tx, { reg, confirmed: false, paymentRef: paymentIntentId ?? sessionId });
       return {
         kind: "paid_awaiting_approval",
         divisionId: reg.division_id,
@@ -493,9 +499,6 @@ async function confirmPaidRegistration(
       paid: true,
       amount_cents: reg.amount_cents,
     }, null);
-    // Polish wave P2: what the entry IS after `materialise` wrote it, read back from the row - not a rule assumed from the division.
-    const [after] = await tx<{ status: string }[]>`select status from registrations where id = ${regId}`;
-    await queueRegistrationPaidMail(tx, { reg, confirmed: after?.status === "confirmed", paymentRef: paymentIntentId ?? sessionId });
     return {
       kind: "confirmed",
       divisionId: reg.division_id,

@@ -20,7 +20,7 @@ export interface LifecycleBase {
   refCode?: string | null;
 }
 
-const shell = (dict: Dict, ns: string, base: LifecycleBase) => ({
+const shell = (dict: Dict, ns: string, base: Pick<LifecycleBase, "orgName" | "competitionName">) => ({
   mastheadTag: base.orgName,
   eyebrow: `${base.orgName} · ${base.competitionName}`,
   footerNote: t(dict, `${ns}.footer`, { competitionName: base.competitionName, orgName: base.orgName }),
@@ -35,26 +35,86 @@ const referenceText = (dict: Dict, ns: string, refCode: string | null | undefine
 // ------------------------------------------------------------------------------------------------------------------------------
 // registration_paid
 
-export interface RegistrationPaidArgs extends LifecycleBase {
-  /** The person the mail is for: the registration's contact. */
-  contactName: string;
-  /** THIS entry's own payment (never the cart's total). */
+/** One entry a payment paid: its OWN amount (never the cart's total) and what it IS now. */
+export interface RegistrationPaidEntry {
+  displayName: string;
+  /** Two entries of one person are otherwise the same line: the division says which one. */
+  divisionName: string;
   amountCents: number;
-  currency: string;
   /** What the entry IS now, read from the row after the write: `true` = confirmed; `false` = paid and waiting for the organiser's
    *  approval. Never a promise the producer made before the write. */
   confirmed: boolean;
-  /** The entry's own status page (`/r/<ref>`). */
+}
+
+export interface RegistrationPaidArgs extends Omit<LifecycleBase, "divisionName" | "displayName"> {
+  /** The person the mail is for: the registration's contact. */
+  contactName: string;
+  currency: string;
+  /** Every entry THIS payment paid, at least one. A card cart that pays several entries is ONE mail listing each (the cart-shaped ruling of
+   *  the confirmation mail); a single entry reads as the single-entry mail. */
+  entries: readonly [RegistrationPaidEntry, ...RegistrationPaidEntry[]];
+  /** The cart's status page (`/r/<ref>`). */
   statusUrl?: string | null;
 }
 
-/** The payment landed (card webhook, or the organiser marking an offline payment): the amount, the entry, and the honest state. */
+/** The payment landed (card webhook, or the organiser marking an offline payment): the amount, the entry or entries, and the honest state. */
 export function registrationPaidTemplate(opts: RegistrationPaidArgs, dict: Dict): Content {
   const ns = "registrationPaid";
-  const amount = money(opts.amountCents, opts.currency);
+  const cart = opts.entries.length > 1;
+  const total = money(opts.entries.reduce((sum, e) => sum + e.amountCents, 0), opts.currency);
   const subject = t(dict, `${ns}.subject`, { competitionName: opts.competitionName });
-  const stateTitle = t(dict, opts.confirmed ? `${ns}.confirmedTitle` : `${ns}.approvalTitle`);
-  const stateBody = t(dict, opts.confirmed ? `${ns}.confirmedBody` : `${ns}.approvalBody`);
+  if (!cart) return singlePaidTemplate(opts, opts.entries[0], total, subject, dict);
+
+  // A cart: one line per entry (its own amount and standing), the total, and a panel that matches the mix. The panel never claims more
+  // than the lines do: all confirmed, all waiting, or (mixed) it points at the lines.
+  const confirmedCount = opts.entries.filter((e) => e.confirmed).length;
+  const panelKey = confirmedCount === opts.entries.length ? "cartAllConfirmed" : confirmedCount === 0 ? "cartAllApproval" : "cartMixed";
+  const panelTitle = t(dict, `${ns}.${panelKey}Title`);
+  const panelBody = t(dict, `${ns}.${panelKey}Body`);
+  const line = (e: RegistrationPaidEntry, esc: (v: string) => string): string =>
+    t(dict, `${ns}.cartLine`, {
+      displayName: esc(e.displayName),
+      divisionName: esc(e.divisionName),
+      amount: money(e.amountCents, opts.currency),
+      state: t(dict, e.confirmed ? `${ns}.lineConfirmed` : `${ns}.lineApproval`),
+    });
+  const count = String(opts.entries.length);
+  const listHtml = `<ul style="margin:0 0 16px;padding-left:20px;font-size:15px;line-height:1.6;">${opts.entries.map((e) => `<li>${line(e, escapeHtml)}</li>`).join("")}</ul>`;
+  return {
+    subject,
+    html: renderEmail({
+      subject,
+      preheader: t(dict, `${ns}.cartPreheader`, { amount: total, count, competitionName: opts.competitionName }),
+      ...shell(dict, ns, opts),
+      title: t(dict, `${ns}.title`),
+      contentHtml:
+        paragraph(t(dict, `${ns}.cartIntro`, { contactName: escapeHtml(opts.contactName), amount: total, count, competitionName: escapeHtml(opts.competitionName) })) +
+        listHtml +
+        panel(panelTitle, panelBody) +
+        (opts.statusUrl ? button(t(dict, `${ns}.viewEntry`), opts.statusUrl) + linkFallback(opts.statusUrl) : "") +
+        referenceHtml(dict, ns, opts.refCode),
+    }),
+    text:
+      t(dict, `${ns}.text`, { competitionName: opts.competitionName, orgName: opts.orgName }) +
+      "\n" +
+      opts.entries.map((e) => line(e, (v) => v)).join("\n") +
+      "\n" +
+      t(dict, `${ns}.textTotal`, { amount: total }) +
+      "\n\n" +
+      panelTitle +
+      "\n" +
+      panelBody +
+      (opts.statusUrl ? "\n\n" + t(dict, `${ns}.textStatus`, { url: opts.statusUrl }) : "") +
+      referenceText(dict, ns, opts.refCode),
+  };
+}
+
+/** One entry paid: the single-entry mail (its amount, the entry, the division, and the honest state). */
+function singlePaidTemplate(opts: RegistrationPaidArgs, entry: RegistrationPaidEntry, _total: string, subject: string, dict: Dict): Content {
+  const ns = "registrationPaid";
+  const amount = money(entry.amountCents, opts.currency);
+  const stateTitle = t(dict, entry.confirmed ? `${ns}.confirmedTitle` : `${ns}.approvalTitle`);
+  const stateBody = t(dict, entry.confirmed ? `${ns}.confirmedBody` : `${ns}.approvalBody`);
   return {
     subject,
     html: renderEmail({
@@ -67,8 +127,8 @@ export function registrationPaidTemplate(opts: RegistrationPaidArgs, dict: Dict)
           t(dict, `${ns}.intro`, {
             contactName: escapeHtml(opts.contactName),
             amount,
-            displayName: escapeHtml(opts.displayName),
-            divisionName: escapeHtml(opts.divisionName),
+            displayName: escapeHtml(entry.displayName),
+            divisionName: escapeHtml(entry.divisionName),
             competitionName: escapeHtml(opts.competitionName),
           }),
         ) +
@@ -79,7 +139,7 @@ export function registrationPaidTemplate(opts: RegistrationPaidArgs, dict: Dict)
     text:
       t(dict, `${ns}.text`, { competitionName: opts.competitionName, orgName: opts.orgName }) +
       "\n" +
-      t(dict, `${ns}.textAmount`, { amount, displayName: opts.displayName, divisionName: opts.divisionName }) +
+      t(dict, `${ns}.textAmount`, { amount, displayName: entry.displayName, divisionName: entry.divisionName }) +
       "\n\n" +
       stateTitle +
       "\n" +

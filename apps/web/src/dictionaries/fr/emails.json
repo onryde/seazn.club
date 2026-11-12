@@ -491,5 +491,17 @@
   "registrationJoined.viewCompetition": "Voir la compétition",
   "registrationJoined.footer": "Vous recevez ce message car cette adresse figure sur une inscription à {competitionName} chez {orgName}.",
   "registrationJoined.text": "Vous avez rejoint {displayName} — {competitionName} ({orgName}).",
-  "registrationJoined.textDivision": "Division : {divisionName}"
+  "registrationJoined.textDivision": "Division : {divisionName}",
+  "registrationPaid.cartPreheader": "Nous avons bien reçu vos {amount} pour {count} inscriptions à {competitionName}.",
+  "registrationPaid.cartIntro": "Bonjour {contactName} — nous avons bien reçu votre paiement de <strong>{amount}</strong> pour {count} inscriptions à {competitionName} :",
+  "registrationPaid.cartLine": "{displayName} ({divisionName}) — {amount} — {state}",
+  "registrationPaid.lineConfirmed": "confirmée",
+  "registrationPaid.lineApproval": "en attente d'approbation de l'organisateur",
+  "registrationPaid.cartAllConfirmedTitle": "Vos places sont confirmées",
+  "registrationPaid.cartAllConfirmedBody": "Toutes vos places sont confirmées. Vous n'avez rien d'autre à faire.",
+  "registrationPaid.cartAllApprovalTitle": "En attente d'approbation de l'organisateur",
+  "registrationPaid.cartAllApprovalBody": "Votre paiement est bien reçu, mais l'organisateur doit encore approuver vos inscriptions. Nous vous écrirons dès que ce sera fait.",
+  "registrationPaid.cartMixedTitle": "Certaines inscriptions attendent une approbation",
+  "registrationPaid.cartMixedBody": "Votre paiement est bien reçu. Les inscriptions indiquées comme en attente d'approbation ont encore besoin de l'accord de l'organisateur ; nous vous écrirons dès qu'il l'aura donné.",
+  "registrationPaid.textTotal": "Total payé : {amount}"
 }

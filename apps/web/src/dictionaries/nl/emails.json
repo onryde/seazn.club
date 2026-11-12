@@ -491,5 +491,17 @@
   "registrationJoined.viewCompetition": "De competitie bekijken",
   "registrationJoined.footer": "Je ontvangt dit omdat dit adres op een inschrijving voor {competitionName} bij {orgName} staat.",
   "registrationJoined.text": "Je doet mee met {displayName} — {competitionName} ({orgName}).",
-  "registrationJoined.textDivision": "Divisie: {divisionName}"
+  "registrationJoined.textDivision": "Divisie: {divisionName}",
+  "registrationPaid.cartPreheader": "We hebben je {amount} voor {count} inschrijvingen bij {competitionName} ontvangen.",
+  "registrationPaid.cartIntro": "Hoi {contactName} — we hebben je betaling van <strong>{amount}</strong> voor {count} inschrijvingen bij {competitionName} ontvangen:",
+  "registrationPaid.cartLine": "{displayName} ({divisionName}) — {amount} — {state}",
+  "registrationPaid.lineConfirmed": "bevestigd",
+  "registrationPaid.lineApproval": "wacht op goedkeuring van de organisator",
+  "registrationPaid.cartAllConfirmedTitle": "Je plekken zijn bevestigd",
+  "registrationPaid.cartAllConfirmedBody": "Al je plekken zijn bevestigd. Je hoeft verder niets te doen.",
+  "registrationPaid.cartAllApprovalTitle": "Wacht op goedkeuring van de organisator",
+  "registrationPaid.cartAllApprovalBody": "Je betaling is binnen, maar de organisator moet je inschrijvingen nog goedkeuren. Zodra dat gebeurt, sturen we je een e-mail.",
+  "registrationPaid.cartMixedTitle": "Sommige inschrijvingen wachten op goedkeuring",
+  "registrationPaid.cartMixedBody": "Je betaling is binnen. De inschrijvingen die als wachtend op goedkeuring zijn aangemerkt, hebben nog het akkoord van de organisator nodig; we sturen je een e-mail zodra dat er is.",
+  "registrationPaid.textTotal": "Totaal betaald: {amount}"
 }

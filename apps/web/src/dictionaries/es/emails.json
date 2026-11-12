@@ -491,5 +491,17 @@
   "registrationJoined.viewCompetition": "Ver la competición",
   "registrationJoined.footer": "Recibiste esto porque esta dirección figura en una inscripción a {competitionName} en {orgName}.",
   "registrationJoined.text": "Te has unido a {displayName} — {competitionName} ({orgName}).",
-  "registrationJoined.textDivision": "División: {divisionName}"
+  "registrationJoined.textDivision": "División: {divisionName}",
+  "registrationPaid.cartPreheader": "Hemos recibido tus {amount} por {count} inscripciones en {competitionName}.",
+  "registrationPaid.cartIntro": "Hola {contactName}: hemos recibido tu pago de <strong>{amount}</strong> por {count} inscripciones en {competitionName}:",
+  "registrationPaid.cartLine": "{displayName} ({divisionName}) — {amount} — {state}",
+  "registrationPaid.lineConfirmed": "confirmada",
+  "registrationPaid.lineApproval": "pendiente de aprobación del organizador",
+  "registrationPaid.cartAllConfirmedTitle": "Tus plazas están confirmadas",
+  "registrationPaid.cartAllConfirmedBody": "Todas tus plazas están confirmadas. No tienes que hacer nada más.",
+  "registrationPaid.cartAllApprovalTitle": "Pendiente de aprobación del organizador",
+  "registrationPaid.cartAllApprovalBody": "Tu pago está recibido, pero el organizador aún tiene que aprobar tus inscripciones. Te escribiremos en cuanto lo haga.",
+  "registrationPaid.cartMixedTitle": "Algunas inscripciones están pendientes de aprobación",
+  "registrationPaid.cartMixedBody": "Tu pago está recibido. Las inscripciones marcadas como pendientes de aprobación aún necesitan el visto bueno del organizador; te escribiremos en cuanto lo dé.",
+  "registrationPaid.textTotal": "Total pagado: {amount}"
 }

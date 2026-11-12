@@ -491,5 +491,17 @@
   "registrationJoined.viewCompetition": "View the competition",
   "registrationJoined.footer": "You received this because this address is on an entry for {competitionName} at {orgName}.",
   "registrationJoined.text": "You've joined {displayName} — {competitionName} ({orgName}).",
-  "registrationJoined.textDivision": "Division: {divisionName}"
+  "registrationJoined.textDivision": "Division: {divisionName}",
+  "registrationPaid.cartPreheader": "We have your {amount} for {count} entries at {competitionName}.",
+  "registrationPaid.cartIntro": "Hi {contactName} — we have received your payment of <strong>{amount}</strong> for {count} entries at {competitionName}:",
+  "registrationPaid.cartLine": "{displayName} ({divisionName}) — {amount} — {state}",
+  "registrationPaid.lineConfirmed": "confirmed",
+  "registrationPaid.lineApproval": "awaiting organiser approval",
+  "registrationPaid.cartAllConfirmedTitle": "Your places are confirmed",
+  "registrationPaid.cartAllConfirmedBody": "All of your places are confirmed. There is nothing more you need to do.",
+  "registrationPaid.cartAllApprovalTitle": "Awaiting organiser approval",
+  "registrationPaid.cartAllApprovalBody": "Your payment is in, but the organiser still has to approve your entries. We will email you as soon as they do.",
+  "registrationPaid.cartMixedTitle": "Some entries are awaiting approval",
+  "registrationPaid.cartMixedBody": "Your payment is in. The entries marked as awaiting approval still need the organiser's yes; we will email you as soon as they give it.",
+  "registrationPaid.textTotal": "Total paid: {amount}"
 }
