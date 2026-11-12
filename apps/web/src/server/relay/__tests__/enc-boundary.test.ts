@@ -73,7 +73,7 @@ const YOUTUBE_OWNER = "server/youtube/token-store.ts";
  *    lives in exactly two files: the create that writes it, and the home read that returns it on
  *    `QuickMatchRow.tokenEnc` (plan 1 Task 7) — the one row every later reader rebuilds the link from (the pad's back
  *    link, the saved list), so none of them names the column. A third reader joins these owners or reads the row.
- *  - Match Day codes (V507, capture S4 design §3): the code's token at rest, so the desk can show the same QR again.
+ *  - Match Day codes (V509, capture S4 design §3): the code's token at rest, so the desk can show the same QR again.
  *    Not `tok_enc` — that name is the stream code's, and only server/relay/** may name it. */
 const TOKEN_ENC_COLUMNS = ["token_enc"];
 const QUICK_MATCH_OWNERS = ["server/usecases/quick-match-create.ts", "server/usecases/quick-match-home.ts"];

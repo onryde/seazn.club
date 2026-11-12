@@ -5,7 +5,7 @@ import "server-only";
 // an md_ bearer everywhere else).
 //
 // Modelled on device-links.ts (the token, its hash and its sealed envelope under DEVICE_LINK_KEK) and stream-codes.ts
-// (V430's RLS: the V507 tables are FORCE RLS with no policy, so every read and write here is on the non-tenant `sql`,
+// (V430's RLS: the V509 tables are FORCE RLS with no policy, so every read and write here is on the non-tenant `sql`,
 // with the org a WHERE the code writes — from the competition on a mint, from the code row on a resolve).
 //
 // The token never leaves this module except inside the URL a session editor is shown, and it is never logged.
