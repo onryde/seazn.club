@@ -141,9 +141,11 @@ test("Score (Task 6): the hero's Score lands in the pad on its match; Back, then
   await expect(page.getByTestId("quick-match-back-link")).toBeVisible();
   await page.goBack();
   await expect(page).toHaveURL(new RegExp(`${home}$`));
-  // The home is no-store (force-dynamic), so Back RELOADS it rather than restoring it from the back-forward cache: this proves
-  // the second post and the reopened link, not the island's bfcache unlock. That unlock is proven by its unit test
-  // (components/quick-match/__tests__/score-form.test.tsx, "back from the pad (bfcache)").
+  // Playwright launches Chromium with its back-forward cache OFF (`--disable-back-forward-cache`), so this Back always
+  // RELOADS the home: it proves the second post and the reopened link, not the island's bfcache unlock. (No-store alone would
+  // not stop a phone's browser restoring it.) That unlock is proven by its unit test
+  // (components/quick-match/__tests__/score-form.test.tsx, "back from the pad (bfcache)"); a restore on a Chromium WITH the
+  // cache is quick-match.spec.ts's review I-1 case.
   await page.getByTestId("qm-hero").getByTestId("qm-score").click();
   await expect(page).toHaveURL(/\/score\/dl_/);
   expect(new URL(page.url()).pathname, "the same link, reopened (not a second one)").toBe(pad);

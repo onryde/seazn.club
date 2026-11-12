@@ -4,7 +4,9 @@
 // `resolveQuickMatchToken`, which answers null for an unknown, malformed, expired or deleted one. Every null is the same
 // dead screen, so the page never says which.
 //
-// Never cached (`force-dynamic`, Review Focus 2): the home after a score must be the new table. Never indexed.
+// Never cached (`force-dynamic`, Review Focus 2): the home after a score must be the new table. Never indexed. No-store does
+// not keep a phone's browser from restoring the page from its back-forward cache on Back, so the live home also mounts
+// `QuickMatchRefreshOnRestore`, which reads it again on a restore (Task 10 review I-1).
 // The viewer's locale (D10): `resolveLocale()` with no org default, exactly as the pad resolves it, never the row's.
 //
 // The read's `row` carries the creator's email and the sealed token (A14). It goes to `QuickMatchHomeView`, a SERVER
@@ -43,6 +45,7 @@ import {
 import { QuickMatchAddMatch } from "@/components/quick-match/add-match";
 import { ClearFlashParam } from "@/components/quick-match/clear-flash-param";
 import { matchSidesId } from "@/components/quick-match/match-list";
+import { QuickMatchRefreshOnRestore } from "@/components/quick-match/refresh-on-restore";
 import { QuickMatchSaveForm } from "@/components/quick-match/save-form";
 import { QuickMatchScoreForm } from "@/components/quick-match/score-form";
 import { QuickMatchShare } from "@/components/quick-match/share";
@@ -166,6 +169,8 @@ export default async function QuickMatchHomePage({
       <HtmlLang lang={locale} />
       {/* The flash is printed: `?e=` is spent, so a reload or a shared link does not print it again (T6 review m2). */}
       <ClearFlashParam alsoSpent={ADD_PICK_PARAMS} />
+      {/* Back from the pad on a phone restores this page from the back-forward cache: read it again (T10 review I-1). */}
+      <QuickMatchRefreshOnRestore />
       <QuickMatchHomeView
         home={home}
         copy={copy}
