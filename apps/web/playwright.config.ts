@@ -180,9 +180,10 @@ const PARALLEL_SLICE = process.env.E2E_PARALLEL_SLICE;
 //
 // FIFTH LEG, 2026-11-12: "sponsor". sponsor-stream-matrix.spec.ts is serial, and four of its five tests take the WHOLE placement pool
 // for a composed stream, one test at a time. MEASURED on CI run 43242862358 (its first version, four tests): 6 passed incl. the two
-// setup tests in 2.8 min, job 5.0 min; review round 1 then added carousel laps and a fifth test, so the figure is to be re-measured.
-// It stays its own leg even though 5 min would fit a rest shard: one of its tests calls the GLOBAL sponsor-deal cron sweep (every org
-// in the database), so no other spec's deals may share its database. One file, so the
+// setup tests in 2.8 min, job 5.0 min; review round 1 then added carousel laps and a fifth test, MEASURED again on run 43249678949:
+// 7 passed incl. setup, tests 7.6 min, job 10.0 min. It stays its own leg: adding it to the slowest rest shard (13.5 min) would
+// break the 20 min cap, and one of its tests calls the GLOBAL sponsor-deal cron sweep (every org in the database), so no other
+// spec's deals may share its database. One file, so the
 // carve-out is one anchored filename (not a `sponsor` prefix: sponsors-journey.spec.ts and every other sponsor spec stay in "rest").
 // "rest" ignores it.
 // ANCHORED ON `e2e/` deliberately. Playwright matches `testMatch`/`testIgnore`

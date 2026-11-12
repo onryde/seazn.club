@@ -48,6 +48,12 @@
 //
 // NOT DRIVEN, named plainly: a real Stripe Checkout (no Connect on CI), a frame's storage (a stub on CI: sponsors-journey J4), and
 // the stg run (layer L3).
+//
+// THE POOL HOLD IS AN ARITHMETIC CLIFF, not a flake: the longest journey is declared at 325 s (POOL_HOLD below: one 55 s cycle plus
+// 270 s of streaming) against the pool's 330 s limit (POOL_HOLD_CYCLES = 6 cycles of 55 s at CI's 10 s connect delay), and
+// takeWholePool refuses a hold past the limit - so a journey that grows past 5 s of declared streaming fails EVERY run, not some.
+// If one grows, raise POOL_HOLD_CYCLES 6 -> 7 in e2e/helpers/stream-slot-pool.ts (385 s; it also lengthens every pool member's
+// slot wait, which is sized from the limit) - or split the journey, as J4 was split from J3.
 import { expect, test, type APIRequestContext, type Browser } from "@playwright/test";
 import { builtinModules } from "@seazn/engine/sports";
 import {
@@ -68,6 +74,7 @@ import {
   beatOk,
   composedSession,
   compositorPage,
+  contractHeartbeatAiringsMax,
   disposeStandInPhones,
   endStandInSessions,
   previewPlan,
@@ -132,8 +139,14 @@ const JOURNEY_TIMEOUT_MS = SEED_MS + POOL_SLOT_WAIT_MS + POOL_HOLD.holdMs + AFTE
  *  stream-overlay.spec.ts's "the break card on OBS" budget, from the same constants. */
 const OBS_MOMENT_CYCLE_MS = OVERLAY_MOMENT_FOLD_MS * 2 + OVERLAY_MOMENT_HOLD_MS;
 const OBS_CARD_MS = POLL_MS + 4 * OBS_MOMENT_CYCLE_MS + OVERLAY_MOMENT_FOLD_MS + 5_000;
-/** Items one heartbeat may carry: the contract's bound is 64; a chunk stays under it. */
-const AIRINGS_PER_BEAT = 60;
+/** What a chunk of airings stays under the contract's bound by (the bound is read off the vendored contract, not typed here). */
+const AIRINGS_HEADROOM = 4;
+/** Items one heartbeat may carry: the contract's own bound (`$defs/heartbeat` airings `maxItems`), less the headroom. */
+const airingsPerBeat = (): number => {
+  const perBeat = contractHeartbeatAiringsMax() - AIRINGS_HEADROOM;
+  if (perBeat <= 0) throw new Error(`the contract bounds a heartbeat's airings at ${perBeat + AIRINGS_HEADROOM}, no more than the ${AIRINGS_HEADROOM} items of headroom a chunk keeps`);
+  return perBeat;
+};
 
 /** The whole pool, taken before the phone pairs (a composed session reserves two matches of recording, R2004). */
 const reserve = async () => {
@@ -185,8 +198,12 @@ async function seedOrg(browser: Browser, prefix: string): Promise<StandInOrg> {
   return org;
 }
 
+/** The one sport and variant every journey streams (see the header for why one): the fixture is seeded on them and the break premise is read from them. */
+const STREAM_SPORT = "volleyball";
+const STREAM_VARIANT = "indoor";
+
 const volleyball = (org: StandInOrg, label: string): Promise<StandInFixture> =>
-  seedStandInFixture(org, { label: `${label} ${org.orgSlug}`, sportKey: "volleyball", variantKey: "indoor", home: `${label} Home VC`, away: `${label} Away VC` });
+  seedStandInFixture(org, { label: `${label} ${org.orgSlug}`, sportKey: STREAM_SPORT, variantKey: STREAM_VARIANT, home: `${label} Home VC`, away: `${label} Away VC` });
 
 /** Seeded on Pro (a division and a fixture are not this journey's subject), then moved to `community` through the billing group, the
  *  way setOrgPlanBySql does it, and the entitlement cache dropped so the next read is the new plan's. */
@@ -275,6 +292,33 @@ function declaredMajorBreak(sport: string): string {
   return kind;
 }
 
+/** The most set ends of `sport`'s `variant` that can each open a major break while the match is undecided, from the engine's own
+ *  declaration: the longest reachable result (`reachableSetScores`, "3-2" for a best-of-five) is decided by its LAST set, which opens no
+ *  break, so it is one fewer than the sets that result takes. */
+function maxMajorBreaks(sport: string, variant: string): number {
+  const mod = builtinModules.find((m) => m.key === sport);
+  if (mod?.reachableSetScores === undefined) throw new Error(`${sport} declares no reachable set scores`);
+  const overrides = mod.variants[variant];
+  if (overrides === undefined) throw new Error(`${sport} declares no variant ${variant}`);
+  const sets = mod.reachableSetScores(mod.configSchema.parse(overrides)).map((score) => score.split("-").reduce((sum, side) => sum + Number(side), 0));
+  if (sets.length === 0) throw new Error(`${sport} (${variant}) declares no reachable set score`);
+  return Math.max(...sets) - 1;
+}
+
+/** The premise of a journey that opens `needed` set-end breaks: the fixture can open that many. A fixture that cannot would fail on a
+ *  break that never comes, which reads as a rotation defect - so the arithmetic is refused here, by name. */
+function expectBreaksAvailable(needed: number, why: string): void {
+  const available = maxMajorBreaks(STREAM_SPORT, STREAM_VARIANT);
+  expect(needed, `premise: ${why} opens breaks (anti-vacuity)`).toBeGreaterThan(0);
+  expect(needed, `premise: ${why} needs ${needed} set-end breaks, but a ${STREAM_SPORT} (${STREAM_VARIANT}) match can open at most ${available} while it is undecided`).toBeLessThanOrEqual(available);
+}
+
+/** A FULL cycle of the rotation: as many consecutive breaks as the roster's tier weights sum to (SPONSOR_TIER_WEIGHTS, the declaration). */
+const breaksInCycle = (roster: Roster): number => Object.values(roster).reduce((sum, tier) => sum + SPONSOR_TIER_WEIGHTS[tier], 0);
+
+/** Who wins set `n` (0-based): the sides alternate, so a best-of-five stays undecided through its four set ends (2-2). */
+const winnerAt = (n: number): "home" | "away" => (n % 2 === 0 ? "home" : "away");
+
 type Roster = Record<string, SponsorTier>;
 
 /** The ticked cards a plan serves, by sponsor, with the tier each is served at. `plan.cards` also carries an unticked card an airing
@@ -304,6 +348,24 @@ interface Rig {
   cursor: number;
   /** The test's own tally of the start lines it has posted, by sponsor: what `sponsor_airings` and Times shown must read. */
   aired: Map<string, number>;
+  /** The sponsor behind each card id the stream's plans have carried (`plan.cards`: card.id -> card.sponsorId), as stream-matrix.test.ts
+   *  maps it: the page and an airing name CARDS, and a card id is not assumed to be its sponsor's id. */
+  sponsorOfCard: Map<string, string>;
+}
+
+function learnCards(rig: Rig, plan: SponsorPlan): void {
+  for (const card of plan?.cards ?? []) rig.sponsorOfCard.set(card.id, card.sponsorId);
+}
+
+/** The sponsors behind the card ids the page named. A card the rig has not met is looked up on the live plan once; one that no plan
+ *  carries is refused by name (an airing that cannot be attributed proves nothing). */
+async function sponsorsOfCards(rig: Rig, cardIds: readonly string[]): Promise<string[]> {
+  if (cardIds.some((id) => !rig.sponsorOfCard.has(id))) learnCards(rig, await relayPlan(rig.s));
+  return cardIds.map((id) => {
+    const sponsorId = rig.sponsorOfCard.get(id);
+    if (sponsorId === undefined) throw new Error(`the page named card ${id}, which no plan this stream served carries`);
+    return sponsorId;
+  });
 }
 
 /** A composed session on the fixture, the compositor's page on Starting soon (its carousel airs the ticked cards), and a beat that
@@ -314,7 +376,7 @@ async function withStream(browser: Browser, org: StandInOrg, fx: StandInFixture,
   const cef = await compositorPage(browser, s, "waiting");
   try {
     await beatOk(s, { state: "playing", programmePhase: "live" }, "the first beat, reporting live");
-    await body({ org, fx, s, cef, cursor: 0, aired: new Map() });
+    await body({ org, fx, s, cef, cursor: 0, aired: new Map(), sponsorOfCard: new Map() });
   } finally {
     await cef.context.close().catch(() => {});
   }
@@ -332,13 +394,13 @@ async function flush(rig: Rig, what: string): Promise<void> {
   const upto = rig.cef.mark();
   const lines = rig.cef.sponsorLines(rig.cursor).filter((l) => l.at < upto);
   rig.cursor = upto;
-  for (const l of lines) {
-    if (l.kind === "start") rig.aired.set(String(l.json.cardId), (rig.aired.get(String(l.json.cardId)) ?? 0) + 1);
-  }
+  const starts = lines.filter((l) => l.kind === "start");
+  for (const sponsorId of await sponsorsOfCards(rig, starts.map((l) => String(l.json.cardId)))) rig.aired.set(sponsorId, (rig.aired.get(sponsorId) ?? 0) + 1);
   const airings = lines.map((l) => l.airing);
   if (airings.length === 0) await beatOk(rig.s, { state: "playing", programmePhase: "live" }, `${what}: the heartbeat (nothing new on the page)`);
-  for (let i = 0; i < airings.length; i += AIRINGS_PER_BEAT) {
-    await beatOk(rig.s, { state: "playing", programmePhase: "live", airings: airings.slice(i, i + AIRINGS_PER_BEAT) }, `${what}: the heartbeat carrying the page's showings`);
+  const perBeat = airingsPerBeat();
+  for (let i = 0; i < airings.length; i += perBeat) {
+    await beatOk(rig.s, { state: "playing", programmePhase: "live", airings: airings.slice(i, i + perBeat) }, `${what}: the heartbeat carrying the page's showings`);
   }
   const want = Object.fromEntries([...rig.aired].filter(([, n]) => n > 0));
   expect(await airedInDb(rig.org.orgId), `${what}: sponsor_airings is exactly what the page showed and the heartbeats carried`).toEqual(want);
@@ -364,7 +426,7 @@ async function expectCarousel(rig: Rig, changedAt: number, onAir: readonly strin
   await expect
     .poll(() => sceneShowings(rig.cef, since).length, { message: `${message}: the page showed ${showings} carousel cards once it had caught up`, timeout: lapMs(showings) })
     .toBeGreaterThanOrEqual(showings);
-  const shown = new Set(sceneShowings(rig.cef, since).map((l) => String(l.json.cardId)));
+  const shown = new Set(await sponsorsOfCards(rig, sceneShowings(rig.cef, since).map((l) => String(l.json.cardId))));
   expect([...shown].filter((id) => !onAir.includes(id)), `${message}: carousel cards of sponsors that must not air`).toEqual([]);
   expect(onAir.filter((id) => !shown.has(id)), `${message}: sponsors on the roster that the carousel did not show in a lap`).toEqual([]);
 }
@@ -372,9 +434,9 @@ async function expectCarousel(rig: Rig, changedAt: number, onAir: readonly strin
 /** Before anything changes: every sponsor ticked onto the stream has had a carousel showing on the page, counted from the page's first
  *  showing. This is the positive pair of every later absence - a sponsor that leaves HAD aired - and the first lap of the rotation. */
 async function expectAiredOnPage(rig: Rig, ids: readonly string[], message: string): Promise<void> {
-  const shown = () => new Set(sceneShowings(rig.cef, 0).map((l) => String(l.json.cardId)));
+  const shown = async () => new Set(await sponsorsOfCards(rig, sceneShowings(rig.cef, 0).map((l) => String(l.json.cardId))));
   await expect
-    .poll(() => ids.filter((id) => !shown().has(id)), { message: `${message}: a carousel showing for every ticked sponsor`, timeout: lapMs(ids.length, true) })
+    .poll(async () => { const seen = await shown(); return ids.filter((id) => !seen.has(id)); }, { message: `${message}: a carousel showing for every ticked sponsor`, timeout: lapMs(ids.length, true) })
     .toEqual([]);
 }
 
@@ -399,12 +461,13 @@ async function openBreak(rig: Rig, winner: "home" | "away", message: string): Pr
         const airing = plan?.airings.find((a) => !known.has(a.momentId));
         if (plan === null || airing === undefined) return "no new airing yet";
         got.airing = airing;
+        learnCards(rig, plan);
         got.cards = plan.cards.filter((c) => c.onStream).map((c) => c.id);
         return airing.breakKind;
       },
       { message: `${message}: the plan carries the set's break card`, timeout: POLL_WAIT_MS },
     )
-    .toBe(declaredMajorBreak("volleyball"));
+    .toBe(declaredMajorBreak(STREAM_SPORT));
   const airing = got.airing!;
   const cards = got.cards!;
   expect(airing, `${message}: a major break airs a banner for its declared hold`).toMatchObject(SPONSOR_STYLE_BY_SIZE.major);
@@ -414,7 +477,8 @@ async function openBreak(rig: Rig, winner: "home" | "away", message: string): Pr
   expect(row!.source, `${message}: by the rotation`).toBe("rotation");
   expect(row!.position, `${message}: at a position`).not.toBeNull();
   expect(cards, `${message}: the card dealt is one of the ${cards.length} ticked cards`).toContain(airing.cardId);
-  return { momentId: airing.momentId, position: row!.position!, sponsorId: airing.cardId };
+  const [sponsorId] = await sponsorsOfCards(rig, [airing.cardId]);
+  return { momentId: airing.momentId, position: row!.position!, sponsorId: sponsorId! };
 }
 
 /** The positions the database wrote run consecutively from 0 (assign.ts: max + 1, none = 0) - only for an org whose first break this is,
@@ -427,7 +491,7 @@ function expectPositionsFromZero(picks: readonly BreakPick[], message: string): 
 /** A FULL cycle: as many consecutive breaks as the weights sum to, so every card holds exactly its weight - read off the declaration,
  *  with no rotation algorithm in the expectation. */
 function expectFullCycle(picks: readonly BreakPick[], roster: Roster, message: string): void {
-  const total = Object.values(roster).reduce((sum, tier) => sum + SPONSOR_TIER_WEIGHTS[tier], 0);
+  const total = breaksInCycle(roster);
   expect(picks.length, `${message}: one break per unit of weight`).toBe(total);
   expectPositionsFromZero(picks, message);
   const held = Object.fromEntries(Object.keys(roster).map((id) => [id, picks.filter((p) => p.sponsorId === id).length]));
@@ -544,9 +608,11 @@ test("J1 Free: partner-only deals reach the composed stream and air, a queued de
     // Before anything changes all three air: what Fell and Fox are shown to be when they leave below.
     await expectAiredOnPage(rig, all, "Free: before the changes");
 
-    // One whole cycle (weights 1+1+1): three breaks, one card each.
+    // One whole cycle (weights 1+1+1): as many breaks as the weights sum to, one card each - and the break after the changes below.
+    const cycle = breaksInCycle(three);
+    expectBreaksAvailable(cycle + 1, "Free: the cycle and the break after the changes");
     const picks: BreakPick[] = [];
-    for (const winner of ["home", "away", "home"] as const) picks.push(await openBreak(rig, winner, `Free: break ${picks.length + 1}`));
+    for (let n = 0; n < cycle; n++) picks.push(await openBreak(rig, winnerAt(n), `Free: break ${n + 1}`));
     expectFullCycle(picks, three, "Free: the first cycle");
     await flush(rig, "Free: after the first cycle");
 
@@ -566,14 +632,14 @@ test("J1 Free: partner-only deals reach the composed stream and air, a queued de
     await flush(rig, "Free: after Fell and Fox left");
     await expectCarousel(rig, left, [fa], "Free: after Fell ended and Fox was archived");
 
-    // Change 3: Fox comes back exactly as it was and airs again; the fourth break is dealt over the two cards now on the plan.
+    // Change 3: Fox comes back exactly as it was and airs again; the next break is dealt over the two cards now on the plan.
     await unarchive(api, o, fh, "Free: Fox unarchived");
     const back = await expectRoster(() => relayPlan(rig.s), { [fa]: "partner", [fh]: "partner" }, "Free: Fern and Fox are on the plan");
     await flush(rig, "Free: after Fox returned");
     await expectCarousel(rig, back, [fa, fh], "Free: after Fox returned - Fox is on the carousel again");
-    const fourth = await openBreak(rig, "away", "Free: the break after the changes");
-    expectPositionsFromZero([...picks, fourth], "Free: the fourth break carries the positions on");
-    await flush(rig, "Free: after the fourth break");
+    const afterChanges = await openBreak(rig, winnerAt(picks.length), "Free: the break after the changes");
+    expectPositionsFromZero([...picks, afterChanges], "Free: the break after the changes carries the positions on");
+    await flush(rig, "Free: after the break after the changes");
     await finish(rig, all, "Free");
     await endAndReadOverview(rig, all, "Free");
   });
@@ -626,9 +692,11 @@ test("J2 Pass: a gold deal scoped to the pass competition is served as gold on i
     // Before anything changes all three air on A's stream: what Pine and Plover are shown to be when they leave below.
     await expectAiredOnPage(rig, all, "Pass: before the changes");
 
-    // One whole cycle (weights 2+1+1): all four breaks a best-of-five can open, before the first change.
+    // One whole cycle (weights 2+1+1): as many breaks as the weights sum to, before the first change.
+    const cycle = breaksInCycle(onA);
+    expectBreaksAvailable(cycle, "Pass: the cycle");
     const picks: BreakPick[] = [];
-    for (const winner of ["home", "away", "home", "away"] as const) picks.push(await openBreak(rig, winner, `Pass: break ${picks.length + 1}`));
+    for (let n = 0; n < cycle; n++) picks.push(await openBreak(rig, winnerAt(n), `Pass: break ${n + 1}`));
     expectFullCycle(picks, onA, "Pass: the cycle");
     await flush(rig, "Pass: after the cycle");
 
