@@ -8430,7 +8430,7 @@ async function qmGuest(browser: import("@playwright/test").Browser) {
 }
 
 /** Nothing clipped inside `root` at this width; the count of boxes scanned (zero would pass anything, so it fails). */
-async function qmNotClipped(page: Page, root: string, label: string, exempt: (box: string) => boolean = () => false): Promise<number> {
+async function qmNotClipped(page: Page, root: string, label: string): Promise<number> {
   // A turning chevron mid-transition (Show QR's) reads as a clip for ~100 ms on a fast runner: settle every FINITE
   // animation under the root first (a live dot's pulse is infinite and would never settle, so it is left out).
   await page.locator(root).evaluate((el) =>
@@ -8444,7 +8444,7 @@ async function qmNotClipped(page: Page, root: string, label: string, exempt: (bo
   const boxes = await page.locator(root).locator(QM_SCAN).count();
   expect(boxes, `${label}: the scan had boxes to scan`).toBeGreaterThan(0);
   const { clipped, scrollable } = await overflowingIn(page, root, QM_SCAN, `${label} was not in the DOM`);
-  expect(clipped.filter((box) => !exempt(box)), `${label} clips content at ${projectTag()}`).toEqual([]);
+  expect(clipped, `${label} clips content at ${projectTag()}`).toEqual([]);
   for (const box of scrollable) expect(box, `${label}: a scrolling box is not keyboard-reachable`).toMatch(/tabindex=0$/);
   return boxes;
 }
@@ -8497,36 +8497,30 @@ test("quick match (guest): the setup form, the home with Share's QR and Add a ma
     await qmFillSetup(page, name, sides);
     await expectNoHorizontalScroll(page);
     // The one designed overhang: docked (below 640) the Start bar bleeds through its column's gutter to the column's edges
-    // (`-mx-4` under the column's `px-4`, setup-form.tsx), so the FORM's own box reports it. Exempt exactly that: one form
-    // line whose overhang (content − client) is the bar's measured overhang past the form's right edge (1rem, 16px), only
-    // while the bar is docked and spans its column; any other overhang on the form, and anything from 640, is a clip.
-    const bar = await page.evaluate(() => {
-      const form = document.querySelector<HTMLElement>('[data-testid="qm-setup-form"]');
-      const el = document.querySelector<HTMLElement>('[data-testid="qm-start-bar"]');
-      if (!form?.parentElement || !el) return null;
-      const [b, f, c] = [el.getBoundingClientRect(), form.getBoundingClientRect(), form.parentElement.getBoundingClientRect()];
-      return {
-        docked: getComputedStyle(el).position === "sticky",
-        left: Math.round(b.left - c.left),
-        right: Math.round(c.right - b.right),
-        overhang: Math.round(b.right - f.right),
-      };
+    // (`-mx-4 px-4` under the column's `px-4`, setup-form.tsx), and the form's own box would report it. Measured in place
+    // first (docked, the bar spans its column exactly). Then, for the clip scan only, the bleed is folded back: the bar's side
+    // margins AND side padding zeroed, so its content box keeps its width and nothing inside it moves, while the form's box can
+    // report ANY child poking into the gutter, by 1px or by 15 (review r1: an exemption sized to the bleed hid those). No
+    // exemption at any width. The bar's own style attribute is put back after the scan.
+    const startBar = page.getByTestId("qm-start-bar");
+    const bar = await startBar.evaluate((el) => {
+      const column = el.closest<HTMLElement>('[data-testid="qm-setup-form"]')?.parentElement;
+      if (!column) return null;
+      const [b, c] = [el.getBoundingClientRect(), column.getBoundingClientRect()];
+      return { docked: getComputedStyle(el).position === "sticky", left: Math.round(b.left - c.left), right: Math.round(c.right - b.right) };
     });
-    expect(bar, "the setup form and its Start bar are in the DOM").not.toBeNull();
-    if (bar!.docked) {
-      expect([bar!.left, bar!.right], "docked, the Start bar spans its column exactly").toEqual([0, 0]);
-      expect(bar!.overhang, "docked, the Start bar bleeds 1rem past the form's right edge (`-mx-4`)").toBe(16);
+    expect(bar, "the setup form, its column and its Start bar are in the DOM").not.toBeNull();
+    if (bar!.docked) expect([bar!.left, bar!.right], "docked, the Start bar spans its column exactly").toEqual([0, 0]);
+    const priorStyle = await startBar.evaluate((el) => {
+      const prior = el.getAttribute("style");
+      for (const side of ["margin-left", "margin-right", "padding-left", "padding-right"]) el.style.setProperty(side, "0px");
+      return prior;
+    });
+    try {
+      scanned += await qmNotClipped(page, '[data-testid="qm-setup-form"]', "the setup form (the Start bar's bleed folded back)");
+    } finally {
+      await startBar.evaluate((el, prior) => (prior === null ? el.removeAttribute("style") : el.setAttribute("style", prior)), priorStyle);
     }
-    let excused = 0;
-    scanned += await qmNotClipped(page, '[data-testid="qm-setup-form"]', "the setup form", (box) => {
-      const m = /^form (\d+)px content in (\d+)px$/.exec(box);
-      const bleed = bar!.docked && m !== null && Math.abs(Number(m[1]) - Number(m[2]) - bar!.overhang) <= 1;
-      if (bleed) excused += 1;
-      return bleed;
-    });
-    expect(excused, bar!.docked ? "docked: exactly the Start bar's one overhang line was excused" : "undocked: nothing was excused").toBe(
-      bar!.docked ? 1 : 0,
-    );
     await hitFloor(page.getByTestId("qm-start"), "Start", 44);
     const home = await qmStart(page);
 
