@@ -23,7 +23,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { apiJson, TAG, withDb } from "../helpers";
-import { fillHostedCheckout } from "../stripe-checkout-kit";
+import { fillHostedCheckout, hostedCheckoutTotalText, submitHostedCheckout } from "../stripe-checkout-kit";
 import { claimConnectAccount, centsFromRenderedAmount, releaseConnectAccount, type ConnectClaim } from "../rs007-money-kit";
 import { FEE, noHorizontalScroll, sweepAndOpenLink, tokensFor, WIDTHS, seedRig, type Rig } from "../pay-page-kit";
 
@@ -115,9 +115,7 @@ async function unpaidCardEntry(browser: Browser, claim: { current: ConnectClaim 
 
 /** The total on Stripe's hosted page, in cents - the source of truth for what the player is charged. */
 async function stripeTotalCents(page: Page): Promise<number> {
-  const total = page.getByTestId("product-summary-total-amount").first();
-  await expect(total).toBeVisible({ timeout: STRIPE_FORM_MS });
-  return centsFromRenderedAmount((await total.textContent()) ?? "");
+  return centsFromRenderedAmount(await hostedCheckoutTotalText(page, STRIPE_FORM_MS));
 }
 
 const sessionIdOf = (url: string) => /cs_(?:test|live)_[A-Za-z0-9]+/.exec(url)?.[0] ?? null;
@@ -177,7 +175,7 @@ test.describe("player payment page - card", () => {
 
       await fillHostedCheckout(visitor, c.who);
       await visitor.waitForTimeout(1000);
-      await visitor.locator(".SubmitButton, button[type=submit]").first().click();
+      await submitHostedCheckout(visitor);
       await visitor.waitForURL(/\/r\/pay\/[A-Za-z0-9_-]+/, { timeout: STRIPE_RETURN_MS, waitUntil: "commit" });
       expect(new URL(visitor.url()).pathname, "back on the same pay page").toBe(c.path);
 

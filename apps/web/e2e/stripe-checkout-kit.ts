@@ -77,8 +77,7 @@ async function waitForLayout(page: Page, timeoutMs: number): Promise<Layout> {
  * pinned currency and billing country so the page renders the same everywhere.
  *
  * Stops short of submitting: callers screenshot between filling and paying,
- * and they differ in what they do afterwards. The Pay button is
- * `button[type=submit]` in both layouts.
+ * and they differ in what they do afterwards. Pay with `submitHostedCheckout`.
  */
 export async function fillHostedCheckout(page: Page, cardholder: string): Promise<void> {
   // Stripe serves a skeleton first and hydrates the form after. Waiting for
@@ -87,6 +86,64 @@ export async function fillHostedCheckout(page: Page, cardholder: string): Promis
   const layout = await waitForLayout(page, 60_000);
   if (layout.kind === "legacy") await fillLegacy(page, cardholder);
   else await fillEmbedded(page, layout.form, cardholder);
+}
+
+// The Pay button, in either layout. PR #1197 CI (2026-11-12): in the embedded layout the button is NOT on the checkout page - it sits
+// in the Payment Element's iframe beside the card fields (js.stripe.com/v3/elements-inner-..., `button[type=submit]
+// [data-testid=payment-form-submit-button]`), so `page.locator(".SubmitButton, button[type=submit]").first()` on the main frame
+// matched nothing and timed out against a rendered, filled form with a visible "Pay". The legacy layout's is `.SubmitButton` /
+// `hosted-payment-submit-button` on the page itself.
+const PAY_BUTTON = '[data-testid="hosted-payment-submit-button"], [data-testid="payment-form-submit-button"], .SubmitButton';
+
+/**
+ * Press Pay on the hosted checkout page: the VISIBLE Pay button in whichever frame holds it (the page itself, or the Payment Element's
+ * iframe), polled until one shows, then clicked (Playwright's own actionability wait covers a button still enabling). A hidden or 0x0
+ * twin never wins, and a page with no Pay button says so by name instead of timing out on a selector.
+ */
+export async function submitHostedCheckout(page: Page, timeoutMs = 30_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    for (const frame of [page.mainFrame(), ...page.frames().filter((f) => f !== page.mainFrame())]) {
+      const pay = frame.locator(PAY_BUTTON).filter({ visible: true }).first();
+      try {
+        if (await pay.isVisible()) {
+          await pay.click({ timeout: 15_000 });
+          return;
+        }
+      } catch {
+        // A frame can detach while we look (Stripe re-renders on currency or country changes); the next poll sees the new one.
+      }
+    }
+    await page.waitForTimeout(250);
+  }
+  throw new Error(`Stripe hosted checkout: no visible Pay button (${PAY_BUTTON}) in any frame within ${timeoutMs}ms at ${page.url()}`);
+}
+
+/**
+ * The total Stripe's hosted page shows, as rendered text in the session's own currency (GBP here), in either layout:
+ *  - legacy: `product-summary-total-amount`;
+ *  - embedded with Adaptive Pricing (PR #1197 CI, 2026-11-12): there is no summary total; the currency picker's iframe offers
+ *    "$34.42" and "£25.00", and the line items show whichever is selected (USD by default on a US runner). The GBP option's own
+ *    label is the session's total in its own currency, so it is read there, never off a line item that may be in dollars;
+ *  - embedded without a currency choice: the single line item's amount (only when there is exactly one, so a cart is never
+ *    read as one of its lines).
+ * Polled until one shows; a page with none says so by name.
+ */
+export async function hostedCheckoutTotalText(page: Page, timeoutMs = 60_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const legacy = page.getByTestId("product-summary-total-amount").first();
+    if (await legacy.isVisible().catch(() => false)) return (await legacy.textContent()) ?? "";
+    const currency = page.frames().find((f) => f !== page.mainFrame() && f.url().includes("currency-selector"));
+    if (currency) {
+      const gbp = currency.locator('label[for="currency-gbp"]');
+      if (await gbp.isVisible().catch(() => false)) return (await gbp.textContent()) ?? "";
+    }
+    const lines = page.getByTestId("line-item-total-amount").filter({ visible: true });
+    if ((await lines.count().catch(() => 0)) === 1) return (await lines.first().textContent()) ?? "";
+    await page.waitForTimeout(250);
+  }
+  throw new Error(`Stripe hosted checkout: no total (summary, GBP currency option or single line item) within ${timeoutMs}ms at ${page.url()}`);
 }
 
 async function fillLegacy(page: Page, cardholder: string): Promise<void> {

@@ -24,7 +24,7 @@
 // successful charge.
 import { expect, test } from "@playwright/test";
 import { apiJson } from "../helpers";
-import { fillHostedCheckout } from "../stripe-checkout-kit";
+import { fillHostedCheckout, submitHostedCheckout } from "../stripe-checkout-kit";
 // The SHARED claim/release, not a private copy. This file used to define its
 // own `claimConnectAccount`/`releaseConnectAccount` that took NO advisory
 // lock, while rs007-money-kit's versions exist precisely to serialize access
@@ -288,7 +288,7 @@ test("RS006 — organiser settings, team entry, Stripe Connect payment", async (
     await anon.screenshot({ path: `${SHOTS}/8-card-filled.png`, fullPage: true });
     await anon.waitForTimeout(1000);
 
-    await anon.locator(".SubmitButton, button[type=submit]").first().click();
+    await submitHostedCheckout(anon);
 
     // ---- BEAT 8 — back on /r/<ref>, paid --------------------------------
     // NOT `/r/<ref>`: `createRegistrationCheckout`'s `returnBase` takes the
