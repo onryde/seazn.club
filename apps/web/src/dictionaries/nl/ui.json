@@ -1192,6 +1192,7 @@
   "reg.hub.registrants.detail.consent.pending": "Toestemming in behandeling",
   "reg.hub.registrants.detail.consent.granted": "Toestemming gegeven",
   "reg.hub.registrants.detail.consent.guardian": "Toestemming van ouder/voogd",
+  "reg.hub.registrants.detail.consent.pendingNote": "In behandeling betekent dat de speler zijn eigen plek in deze selectie nog niet heeft bevestigd (dat doet hij via zijn uitnodigingsmail of de deelnamelink van het team). Dit staat los van de privacytoestemming die in het inschrijfformulier is aangevinkt.",
   "reg.hub.registrants.detail.joinCode.label": "Deelnamecode",
   "reg.hub.registrants.detail.joinCode.hint": "Iedereen met deze code kan spelers toevoegen aan deze inschrijving — deel hem alleen met mensen die je vertrouwt.",
   "reg.hub.registrants.detail.joinCode.copy": "Kopiëren",

@@ -5,6 +5,8 @@
 // field row here is a plain host-element <div>/<dt>/<dd>, not a nested custom
 // component (see the file's own comment on why: opaque-nesting-free by
 // construction, so no manual-invoke step is needed anywhere in this file).
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { propsOf, textOf, walk } from "@/components/__tests__/_hook-harness";
 import {
@@ -334,6 +336,50 @@ describe("RegistrationHubRegistrantDetail — roster (task 2 + acceptance)", () 
       "pending",
       "guardian",
     ]);
+  });
+
+  // Polish wave P4 (walkthrough W2): "Consent pending" sat beside a registrant who had ticked the privacy consent on the form, with no
+  // word on what it meant. It is the player's OWN confirmation of their place on the roster - a different thing - so the panel says so.
+  describe("the pending chip is explained (W2)", () => {
+    const NOTE =
+      "Pending means the player hasn't confirmed their own place on this roster yet (they do that from their claim email or the team's join link). It is separate from the privacy consent ticked on the registration form.";
+    const noteEls = (roster: RegistrantRosterPlayer[]) =>
+      walk(RegistrationHubRegistrantDetail(baseProps({ roster }))).filter(
+        (e) => propsOf(e)["data-registration-hub-registrant-consent-note"] !== undefined,
+      );
+
+    it("a roster with a pending player carries the note, in words, below the list", () => {
+      const els = noteEls([PLAYER_A, PLAYER_B]);
+      expect(els).toHaveLength(1);
+      expect(textOf(els[0]!)).toBe(NOTE);
+      expect(t(dict, "reg.hub.registrants.detail.consent.pendingNote")).toBe(NOTE);
+    });
+
+    it("the note is also the pending chip's own tooltip, and only the pending chip carries one", () => {
+      const tree = walk(RegistrationHubRegistrantDetail(baseProps({ roster: [PLAYER_A, PLAYER_B] })));
+      const chips = tree.filter((e) => propsOf(e)["data-registration-hub-registrant-consent"] !== undefined);
+      expect(chips.map((c) => propsOf(c)["data-registration-hub-registrant-consent"])).toEqual(["granted", "pending"]);
+      expect(propsOf(chips[0]!).title, "a granted chip needs no explaining").toBeUndefined();
+      expect(propsOf(chips[1]!).title).toBe(NOTE);
+    });
+
+    it("no pending player, or no roster at all: no note (the empty case answers no)", () => {
+      expect(noteEls([{ ...PLAYER_A, consent_status: "granted" }, { ...PLAYER_B, consent_status: "guardian" }])).toHaveLength(0);
+      expect(noteEls([])).toHaveLength(0);
+    });
+
+    it("the note exists in every locale's own words (raw files: getDictionary fills English for a missing key)", () => {
+      const key = "reg.hub.registrants.detail.consent.pendingNote";
+      const en = JSON.parse(readFileSync(join(__dirname, "..", "..", "dictionaries", "en", "ui.json"), "utf8"))[key] as string;
+      let checked = 0;
+      for (const loc of ["es", "fr", "nl"]) {
+        const v = JSON.parse(readFileSync(join(__dirname, "..", "..", "dictionaries", loc, "ui.json"), "utf8"))[key] as string | undefined;
+        expect(typeof v === "string" && v.length > 0, `${loc} has the key`).toBe(true);
+        expect(v, `${loc} is not the English copy`).not.toBe(en);
+        checked += 1;
+      }
+      expect(checked).toBe(3);
+    });
   });
 
   it("shows the empty-roster message for a free agent / empty roster (degenerate case), not an empty list", () => {

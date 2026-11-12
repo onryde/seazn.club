@@ -216,6 +216,8 @@ export function RegistrationHubRegistrantDetail({
                 )}
                 <span
                   data-registration-hub-registrant-consent={p.consent_status}
+                  // The pending chip explains itself (P4, W2): the same sentence the note below the list says, for a pointer.
+                  title={p.consent_status === "pending" ? t(dict, "reg.hub.registrants.detail.consent.pendingNote") : undefined}
                   className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${CONSENT_STATUS_STYLE[p.consent_status]}`}
                 >
                   {t(dict, `reg.hub.registrants.detail.consent.${p.consent_status}`)}
@@ -223,6 +225,13 @@ export function RegistrationHubRegistrantDetail({
               </li>
             ))}
           </ul>
+        )}
+        {/* P4 (W2): "Consent pending" beside a registrant who had ticked the privacy consent on the form read as a contradiction. It is the
+            player's OWN confirmation of their roster place - a different thing - and a tooltip alone does not exist on a touch screen. */}
+        {roster.some((p) => p.consent_status === "pending") && (
+          <p data-registration-hub-registrant-consent-note className="mt-2 text-xs leading-relaxed text-slate-500">
+            {t(dict, "reg.hub.registrants.detail.consent.pendingNote")}
+          </p>
         )}
       </section>
 

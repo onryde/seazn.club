@@ -6154,6 +6154,7 @@ export type DictionaryKey =
   | "reg.hub.registrants.detail.consent.granted"
   | "reg.hub.registrants.detail.consent.guardian"
   | "reg.hub.registrants.detail.consent.pending"
+  | "reg.hub.registrants.detail.consent.pendingNote"
   | "reg.hub.registrants.detail.field.email"
   | "reg.hub.registrants.detail.field.entryName"
   | "reg.hub.registrants.detail.field.paymentMethod"

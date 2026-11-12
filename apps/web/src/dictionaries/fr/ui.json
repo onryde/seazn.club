@@ -1192,6 +1192,7 @@
   "reg.hub.registrants.detail.consent.pending": "Consentement en attente",
   "reg.hub.registrants.detail.consent.granted": "Consentement donné",
   "reg.hub.registrants.detail.consent.guardian": "Consentement du tuteur",
+  "reg.hub.registrants.detail.consent.pendingNote": "En attente signifie que le joueur n'a pas encore confirmé sa propre place dans cet effectif (il le fait depuis son e-mail d'invitation ou le lien d'adhésion de l'équipe). C'est distinct du consentement de confidentialité coché dans le formulaire d'inscription.",
   "reg.hub.registrants.detail.joinCode.label": "Code d'adhésion",
   "reg.hub.registrants.detail.joinCode.hint": "Toute personne disposant de ce code peut ajouter des joueurs à cette inscription — ne le partagez qu'avec des personnes de confiance.",
   "reg.hub.registrants.detail.joinCode.copy": "Copier",

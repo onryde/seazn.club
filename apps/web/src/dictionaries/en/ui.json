@@ -1192,6 +1192,7 @@
   "reg.hub.registrants.detail.consent.pending": "Consent pending",
   "reg.hub.registrants.detail.consent.granted": "Consented",
   "reg.hub.registrants.detail.consent.guardian": "Guardian consent",
+  "reg.hub.registrants.detail.consent.pendingNote": "Pending means the player hasn't confirmed their own place on this roster yet (they do that from their claim email or the team's join link). It is separate from the privacy consent ticked on the registration form.",
   "reg.hub.registrants.detail.joinCode.label": "Join code",
   "reg.hub.registrants.detail.joinCode.hint": "Anyone with this code can add players to this entry — share it only with people you trust.",
   "reg.hub.registrants.detail.joinCode.copy": "Copy",
