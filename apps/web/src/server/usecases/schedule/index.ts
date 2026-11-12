@@ -22,7 +22,7 @@ import "server-only";
 //   auto.ts           autoSchedule: the propose-only auto pass
 //   apply.ts          applySchedule (transactional persist) and lastAiApply
 //   move.ts           moveFixture: the single-fixture drag-and-drop move
-//   publish.ts        publishSchedule and startDivision: both take a division live
+//   publish.ts        publishSchedule and startDivision (its status transaction: startDivisionInTx): both take a division live
 export type { ScheduleSettingsOut, FixtureLite, RoundFields, RoundSequenceStages } from "./types";
 export { afterScheduleWrite, SCHEDULE_FIXTURE_PUSH_CAP } from "./after-write";
 export {
@@ -89,5 +89,6 @@ export {
   PUBLISH_ALREADY_LIVE,
   publishSchedule,
   startDivision,
+  startDivisionInTx,
 } from "./publish";
 export type { PublishScheduleOut, StartDivisionOut } from "./publish";

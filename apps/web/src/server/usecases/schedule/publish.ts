@@ -346,104 +346,9 @@ export async function startDivision(
   // transaction below (review I1), so a Start refused anywhere after it leaves no waiting mark and no seat change behind.
   const frozenDrift = pre.firstStage.n > 0 && pre.firstStage.roster_drift && pre.scheduleFrozen;
 
-  const out = await withTenant(auth.orgId, async (tx) => {
-    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
-    const [division] = await tx<{ status: string; competition_id: string }[]>`
-      select status, competition_id from divisions where id = ${divisionId}`;
-    // R10d n2: a start moves no single fixture (it may generate the first stage
-    // and write rolling times across it), so every public fixture document of
-    // the division drops with the hub key. Read under the lock, after generation.
-    const fixtureIds = (
-      await tx<{ id: string }[]>`select id from fixtures where division_id = ${divisionId}`
-    ).map((f) => f.id);
-    if (!division || division.status === "active") {
-      return { started: false, fixtureIds, competitionPromoted: false };
-    }
-
-    // Placing a newcomer is a schedule write the freeze binds, so Start MARKS them waiting instead (`entrants.knockout_waiting_stage_id`,
-    // as the late-entry path marks an arrival - the desk counts them and the organiser's tap places them once the board is open) and
-    // never refuses on their account. A departed entrant is reconciled as on any board (in place; a redraw-needing change is refused by
-    // name, KO_START_NEEDS_UPDATE_DRAW_FROZEN). Runs on `generateStageFixturesTx`, NOT `generateStageFixturesUnpublished`: that entry's
-    // pre-flight refuses a frozen division wholesale.
-    if (frozenDrift) {
-      await generateStageFixturesTx(tx, auth, pre.firstStage.id, { inPlaceOnly: true, waitNewcomers: true });
-    }
-
-    // Rolling quick-start times (doc 12 §1.A) — only for a straight
-    // setup→active start; a published timetable is left untouched.
-    const settings = await loadSettings(tx, divisionId);
-    if (division.status === "setup" && settings.config.roundMinutes) {
-      const startAt = settings.config.startAt
-        ? ms(settings.config.startAt)
-        : roundToMinute(Date.now());
-      const step = settings.config.roundMinutes * MS_PER_MIN;
-      // A bye line takes no rolling time: a bye is not played — a Swiss bye shell (W3 T3, X-SW-29) and a bracket's
-      // bye, which a plain knockout bakes `forfeited` at generation (W4 T3, K2, X-SD-5), alike (`byeLineSql`).
-      const rounds = await tx<{ round_no: number }[]>`
-        select distinct round_no from fixtures
-        where stage_id = ${pre.firstStage.id} and scheduled_at is null and not ${byeLineSql(tx, "fixtures")}
-        order by round_no`;
-      // The sweep below writes `scheduled_at` across the first stage, which is
-      // a schedule edit whatever door it came through — so a frozen board
-      // refuses it. Gated on `rounds.length`, not on reaching this branch: a
-      // frozen division whose fixtures are already slotted has NOTHING for
-      // this loop to write, and refusing it would break freeze-then-start for
-      // no gain. Re-read inside THIS transaction rather than trusting the
-      // pre-flight value, because this is where the write happens.
-      if (rounds.length > 0 && (await divisionLockState(tx, divisionId)).frozen) {
-        throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
-      }
-      for (const [i, r] of rounds.entries()) {
-        await tx`
-          update fixtures set scheduled_at = ${iso(startAt + i * step)}, schedule_source = 'auto'
-          where stage_id = ${pre.firstStage.id} and round_no = ${r.round_no}
-            and scheduled_at is null and not ${byeLineSql(tx, "fixtures")}`;
-      }
-    }
-
-    // THE GATE — the publish gate, reached by the other door. After the lock and
-    // after the rolling-times write above, so it judges the board this call is
-    // actually about to open scoring on.
-    const { conflicts } = await validateScheduleIn(tx, divisionId, division.competition_id);
-    const acknowledged = input.acknowledge_warnings === true;
-    assertPublishable(conflicts, acknowledged);
-
-    // Published on the way through, from `setup` only: this is the moment the
-    // timetable goes in front of players, and the event is the only record
-    // anywhere that it did (`history-panel.tsx` renders it).
-    if (division.status === "setup") {
-      await appendPublishedEvent(tx, divisionId, conflicts, acknowledged, input.reason);
-    }
-
-    await tx`update divisions set status = 'active' where id = ${divisionId}`;
-    const seq = await appendDivisionEvent(tx, divisionId, "division_started", {
-      from: division.status,
-    });
-    await tx`update divisions set seq = ${seq} where id = ${divisionId}`;
-
-    // Owner ruling 2026-09-20: play has started, so the parent competition is
-    // `live` — the column is not maintained by the competition PATCH alone.
-    //
-    // Upward-only and NARROW, and the narrowness is the point. `draft` is left
-    // alone: PUBLIC_DASHBOARD_STATUSES is ["published", "live"], so promoting
-    // a draft would PUBLISH a competition nobody published — a visibility
-    // change as a side effect of starting a division. `completed`/`archived`
-    // are left alone in the other direction: restarting a division inside a
-    // wrapped-up competition must not reopen it.
-    //
-    // The guard is the `where`, not a read-then-write in JS, so a concurrent
-    // PATCH cannot lose a race with it — the house idiom (stages/ folder's
-    // `update divisions set status = 'active' where id = … and status =
-    // 'completed'` reopen, and fillSlot's `… and home_entrant_id is null
-    // returning id`). `returning` reports whether THIS call made the
-    // transition, so the analytics event below fires on the transition only
-    // and never on the state.
-    const [promoted] = await tx<{ id: string }[]>`
-      update competitions set status = 'live'
-      where id = ${division.competition_id} and status = 'published'
-      returning id`;
-    return { started: true, fixtureIds, competitionPromoted: !!promoted };
-  });
+  const out = await withTenant(auth.orgId, (tx) =>
+    startDivisionInTx(tx, auth, divisionId, pre.firstStage.id, input, { frozenDrift }),
+  );
   afterScheduleWrite(divisionId, pre.competition_id, "start", out.fixtureIds);
   // Review m2: the unfrozen branch's Generate revalidates the stage; so does the frozen one, once its write has committed.
   if (frozenDrift && out.started) await fireStageRevalidate(auth.orgId, pre.firstStage.id);
@@ -465,4 +370,133 @@ export async function startDivision(
     }
   }
   return { division_id: divisionId, status: "active", started: out.started, generated };
+}
+
+/**
+ * `startDivision`'s status transaction, on the CALLER's transaction — so a
+ * caller that creates a division and starts it (the guest quick match, plan 1
+ * Task 5) commits both or neither. It writes nothing outside `tx`: a caller
+ * that throws after it rolls back the status, the `schedule_published` and
+ * `division_started` events, the rolling times and the competition promotion.
+ *
+ * What it does NOT do — the caller owns all of it, exactly as `startDivision`
+ * does around this call:
+ *  - the pre-flight: division exists, is not `completed`, its competition is
+ *    not frozen, a Swiss is not above its hard maximum, a first stage exists
+ *    (its id is `firstStageId`, the stage the rolling quick-start times are
+ *    written to), and that stage's fixtures are generated;
+ *  - deciding `frozenDrift` (W4 app B, Task 20): the pre-flight's frozen board
+ *    with a drifted root knockout, whose in-place reconcile runs here, inside
+ *    this transaction. Defaults to false: no reconcile;
+ *  - after commit: `afterScheduleWrite(…, "start", out.fixtureIds)`, the stage
+ *    revalidate after a `frozenDrift` reconcile, and the `competitionPromoted`
+ *    lifecycle event.
+ *
+ * Takes the division lock on `tx`; an already-active division returns
+ * `started: false` and writes nothing.
+ */
+export async function startDivisionInTx(
+  tx: Tx,
+  auth: AuthCtx,
+  divisionId: string,
+  firstStageId: string,
+  input: StartDivisionRequest = {},
+  { frozenDrift = false }: { frozenDrift?: boolean } = {},
+): Promise<{ started: boolean; fixtureIds: string[]; competitionPromoted: boolean }> {
+  await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
+  const [division] = await tx<{ status: string; competition_id: string }[]>`
+    select status, competition_id from divisions where id = ${divisionId}`;
+  // R10d n2: a start moves no single fixture (it may generate the first stage
+  // and write rolling times across it), so every public fixture document of
+  // the division drops with the hub key. Read under the lock, after generation.
+  const fixtureIds = (
+    await tx<{ id: string }[]>`select id from fixtures where division_id = ${divisionId}`
+  ).map((f) => f.id);
+  if (!division || division.status === "active") {
+    return { started: false, fixtureIds, competitionPromoted: false };
+  }
+
+  // Placing a newcomer is a schedule write the freeze binds, so Start MARKS them waiting instead (`entrants.knockout_waiting_stage_id`,
+  // as the late-entry path marks an arrival - the desk counts them and the organiser's tap places them once the board is open) and
+  // never refuses on their account. A departed entrant is reconciled as on any board (in place; a redraw-needing change is refused by
+  // name, KO_START_NEEDS_UPDATE_DRAW_FROZEN). Runs on `generateStageFixturesTx`, NOT `generateStageFixturesUnpublished`: that entry's
+  // pre-flight refuses a frozen division wholesale.
+  if (frozenDrift) {
+    await generateStageFixturesTx(tx, auth, firstStageId, { inPlaceOnly: true, waitNewcomers: true });
+  }
+
+  // Rolling quick-start times (doc 12 §1.A) — only for a straight
+  // setup→active start; a published timetable is left untouched.
+  const settings = await loadSettings(tx, divisionId);
+  if (division.status === "setup" && settings.config.roundMinutes) {
+    const startAt = settings.config.startAt
+      ? ms(settings.config.startAt)
+      : roundToMinute(Date.now());
+    const step = settings.config.roundMinutes * MS_PER_MIN;
+    // A bye line takes no rolling time: a bye is not played — a Swiss bye shell (W3 T3, X-SW-29) and a bracket's
+    // bye, which a plain knockout bakes `forfeited` at generation (W4 T3, K2, X-SD-5), alike (`byeLineSql`).
+    const rounds = await tx<{ round_no: number }[]>`
+      select distinct round_no from fixtures
+      where stage_id = ${firstStageId} and scheduled_at is null and not ${byeLineSql(tx, "fixtures")}
+      order by round_no`;
+    // The sweep below writes `scheduled_at` across the first stage, which is
+    // a schedule edit whatever door it came through — so a frozen board
+    // refuses it. Gated on `rounds.length`, not on reaching this branch: a
+    // frozen division whose fixtures are already slotted has NOTHING for
+    // this loop to write, and refusing it would break freeze-then-start for
+    // no gain. Re-read inside THIS transaction rather than trusting the
+    // pre-flight value, because this is where the write happens.
+    if (rounds.length > 0 && (await divisionLockState(tx, divisionId)).frozen) {
+      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+    }
+    for (const [i, r] of rounds.entries()) {
+      await tx`
+        update fixtures set scheduled_at = ${iso(startAt + i * step)}, schedule_source = 'auto'
+        where stage_id = ${firstStageId} and round_no = ${r.round_no}
+          and scheduled_at is null and not ${byeLineSql(tx, "fixtures")}`;
+    }
+  }
+
+  // THE GATE — the publish gate, reached by the other door. After the lock and
+  // after the rolling-times write above, so it judges the board this call is
+  // actually about to open scoring on.
+  const { conflicts } = await validateScheduleIn(tx, divisionId, division.competition_id);
+  const acknowledged = input.acknowledge_warnings === true;
+  assertPublishable(conflicts, acknowledged);
+
+  // Published on the way through, from `setup` only: this is the moment the
+  // timetable goes in front of players, and the event is the only record
+  // anywhere that it did (`history-panel.tsx` renders it).
+  if (division.status === "setup") {
+    await appendPublishedEvent(tx, divisionId, conflicts, acknowledged, input.reason);
+  }
+
+  await tx`update divisions set status = 'active' where id = ${divisionId}`;
+  const seq = await appendDivisionEvent(tx, divisionId, "division_started", {
+    from: division.status,
+  });
+  await tx`update divisions set seq = ${seq} where id = ${divisionId}`;
+
+  // Owner ruling 2026-09-20: play has started, so the parent competition is
+  // `live` — the column is not maintained by the competition PATCH alone.
+  //
+  // Upward-only and NARROW, and the narrowness is the point. `draft` is left
+  // alone: PUBLIC_DASHBOARD_STATUSES is ["published", "live"], so promoting
+  // a draft would PUBLISH a competition nobody published — a visibility
+  // change as a side effect of starting a division. `completed`/`archived`
+  // are left alone in the other direction: restarting a division inside a
+  // wrapped-up competition must not reopen it.
+  //
+  // The guard is the `where`, not a read-then-write in JS, so a concurrent
+  // PATCH cannot lose a race with it — the house idiom (stages/ folder's
+  // `update divisions set status = 'active' where id = … and status =
+  // 'completed'` reopen, and fillSlot's `… and home_entrant_id is null
+  // returning id`). `returning` reports whether THIS call made the
+  // transition, so the analytics event below fires on the transition only
+  // and never on the state.
+  const [promoted] = await tx<{ id: string }[]>`
+    update competitions set status = 'live'
+    where id = ${division.competition_id} and status = 'published'
+    returning id`;
+  return { started: true, fixtureIds, competitionPromoted: !!promoted };
 }
