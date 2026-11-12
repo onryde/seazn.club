@@ -268,7 +268,7 @@ export async function withdrawRegistrationOrganiser(
   regId: string,
 ): Promise<RegistrationWithGroupRow> {
   const reg = await withTenant(auth.orgId, async (tx) => orgReg(tx, regId));
-  await withdrawCore(reg, auth.userId);
+  await withdrawCore(reg, auth.userId, "organiser");
   return withTenant(auth.orgId, async (tx) => orgRegAfter(tx, regId));
 }
 

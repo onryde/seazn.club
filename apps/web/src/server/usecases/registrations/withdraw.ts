@@ -111,7 +111,11 @@ export async function releaseSoloSignUpPlacement(
   return releasedFrom;
 }
 
-export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | null): Promise<void> {
+/** WHO withdrew is an explicit fact, never inferred from `actorId`: an organiser acting through an API key has NO user id (api-v1/auth.ts),
+ *  and reading that as "the registrant" sent no mail and labelled the audit row wrongly. `actorId` is only the audit's actor column. */
+export type WithdrawnBy = "organiser" | "registrant";
+
+export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | null, by: WithdrawnBy): Promise<void> {
   if (reg.status === "withdrawn") return; // idempotent
   // RULING A (RS002 W5 review, MAJOR): rejected is terminal from every
   // writer — reachable here from BOTH withdrawRegistrationOrganiser and the
@@ -168,7 +172,7 @@ export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: strin
       : null;
     await audit(tx, ctx.competition_id, ctx.org_id, "registration.withdrawn", {
       registration_id: reg.id,
-      by: actorId ? "organiser" : "registrant",
+      by,
       promoted_registration_id: promoted?.id ?? null,
       released_from_registration_id: releasedFrom,
     }, actorId);
@@ -178,16 +182,16 @@ export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: strin
         from: "waitlist",
       }, actorId);
     }
-    // Polish wave P2 (W11): the ORGANISER's withdrawal is news to the registrant; their own is not (`actorId` null: the status page and the
-    // reference page, which refund and receipt on their own). Queued with the fact, so the two commit together.
-    const mailId = actorId !== null ? await queueRegistrationWithdrawnMail(tx, { reg: locked }) : null;
+    // Polish wave P2 (W11): the ORGANISER's withdrawal is news to the registrant; their own is not (the status page and the reference page,
+    // which refund and receipt on their own). Queued with the fact, so the two commit together.
+    const mailId = by === "organiser" ? await queueRegistrationWithdrawnMail(tx, { reg: locked }) : null;
     return { locked, promoted, mailId };
   })) as unknown as
     | { locked: RegistrationWithGroupRow; promoted: RegistrationWithGroupRow | null; mailId: string | null }
     | null;
   if (!outcome) return;
   log.info(
-    { registrationId: reg.id, orgId: ctx.org_id, by: actorId ? "organiser" : "registrant" },
+    { registrationId: reg.id, orgId: ctx.org_id, by },
     "registration: withdrawn",
   );
 

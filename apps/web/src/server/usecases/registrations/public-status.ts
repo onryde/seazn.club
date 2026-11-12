@@ -137,7 +137,7 @@ export async function withdrawRegistrationPublic(
   token: string,
 ): Promise<PublicStatusView> {
   const reg = await regByToken(regId, token);
-  await withdrawCore(reg, null);
+  await withdrawCore(reg, null, "registrant");
   return publicRegistrationStatus(regId, token);
 }
 
@@ -288,7 +288,7 @@ export async function withdrawRegistrationByRef(
   token: string,
 ): Promise<PublicCartView> {
   const reg = await regByRefAndToken(ref, entryId, token);
-  await withdrawCore(reg, null);
+  await withdrawCore(reg, null, "registrant");
   return publicCartByRef(ref, token);
 }
 

@@ -33,6 +33,7 @@ import { getDictionary } from "@/lib/i18n";
 import { log } from "@/server/logger";
 import * as emailModule from "@/lib/email";
 import { generateRefCode } from "@/lib/ref-code";
+import type { AuthCtx } from "@/server/api-v1/auth";
 import { openBody } from "@/server/email-outbox/seal";
 import { formatDeadline } from "@/lib/email-templates/registration";
 import {
@@ -696,6 +697,10 @@ describe.skipIf(!HAS_DB)("queueRegistrationExpiredMail's own guard", () => {
 const withdrawnRows = async (regId: string) =>
   sql<{ id: string; recipient: string; status: string; attempts: number }[]>`
     select id, recipient, status, attempts from email_outbox where kind = 'registration_withdrawn' and ref_type = 'registration' and ref_id = ${regId} order by created_at`;
+/** Who the withdrawal's audit row says withdrew the entry, and the actor it records (null for an API key and for a registrant). */
+const withdrawAudit = async (regId: string) =>
+  sql<{ by: string; actor_id: string | null }[]>`
+    select payload->>'by' as by, actor_id from competition_events where type = 'registration.withdrawn' and payload->>'registration_id' = ${regId}`;
 const statusOf = async (regId: string): Promise<string> => (await sql<{ status: string }[]>`select status from registrations where id = ${regId}`)[0]!.status;
 
 describe.skipIf(!HAS_DB)("withdrawn: the organiser withdraws an entry (real withdrawRegistrationOrganiser)", () => {
@@ -752,6 +757,18 @@ describe.skipIf(!HAS_DB)("withdrawn: the organiser withdraws an entry (real with
     expect(await withdrawnRows(reg.registration.id), "the second call is the idempotent no-op it always was").toHaveLength(1);
   });
 
+  it("an organiser withdrawing through an API KEY (no user id) is still the organiser: mailed, and audited as the organiser (fix round 1)", async () => {
+    const w = await offlineWorld(1500, "auto");
+    const to = address("wd-key");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: to });
+    const viaKey: AuthCtx = { orgId: w.orgId, via: "api_key", userId: null, role: null, keyId: randomUUID() };
+    expect(viaKey.userId, "premise: an API key carries no user id").toBeNull();
+    await withdrawRegistrationOrganiser(viaKey, reg.registration.id);
+    expect(await statusOf(reg.registration.id), "premise: the withdrawal ran").toBe("withdrawn");
+    expect((await withdrawnRows(reg.registration.id)).map((r) => r.recipient.toLowerCase())).toEqual([to]);
+    expect(await withdrawAudit(reg.registration.id)).toEqual([{ by: "organiser", actor_id: null }]);
+  });
+
   it("a registrant's OWN withdrawal mails nothing (they know), by the status page and by the reference page alike", async () => {
     const w = await offlineWorld(1500, "auto");
     const viaStatus = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("wd-self") });
@@ -763,6 +780,7 @@ describe.skipIf(!HAS_DB)("withdrawn: the organiser withdraws an entry (real with
     for (const r of [viaStatus, viaRef]) {
       expect(await statusOf(r.registration.id), "premise: the registrant withdrew it").toBe("withdrawn");
       expect(await withdrawnRows(r.registration.id)).toHaveLength(0);
+      expect(await withdrawAudit(r.registration.id), "and the audit still says the registrant").toEqual([{ by: "registrant", actor_id: null }]);
       checked += 1;
     }
     expect(checked).toBe(2);
