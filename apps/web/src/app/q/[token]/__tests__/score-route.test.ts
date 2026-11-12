@@ -28,18 +28,22 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 
 import { POST as postEvent } from "@/app/api/v1/fixtures/[id]/events/route";
 import en from "@/dictionaries/en/ui.json";
-import { sql } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
+import offerJson from "@/lib/quick-match-offer.generated.json";
 import { HttpError } from "@/lib/errors";
-import { QUICK_MATCH_ERRORS, QUICK_MATCH_SYSTEM_USER_ID } from "@/lib/quick-match-constants";
+import { QUICK_MATCH_ERRORS, QUICK_MATCH_SYSTEM_ORG_ID, QUICK_MATCH_SYSTEM_USER_ID } from "@/lib/quick-match-constants";
 import { systemAuth } from "@/lib/quick-match-auth";
 import { DEVICE_LINK_MINT_LIMIT, __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import { requireFixtureActor } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
 import type { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { ensureGuestDeviceLink, resolveDeviceLinkToken } from "@/server/usecases/device-links";
+import { resultCarriedForward } from "@/server/usecases/carried-forward";
 import { touchQuickMatchActivity } from "@/server/usecases/quick-match-activity";
 import { createQuickMatch, type CreatedQuickMatch } from "@/server/usecases/quick-match-create";
 import { hardDeleteQuickMatchCompetition } from "@/server/usecases/quick-match-delete";
+import { readQuickMatchHome, resolveQuickMatchToken } from "@/server/usecases/quick-match-home";
+import { offerFor } from "@/server/usecases/quick-match-sports";
 import { hashVisitorKey, mintVisitorKey } from "@/server/usecases/quick-match-tokens";
 import { scoreEvent } from "@/server/usecases/scoring";
 import { firstRallyFor, playToDecided } from "@/server/usecases/__tests__/_quick-match-probe";
@@ -107,7 +111,7 @@ const league = (over: Partial<CreateQuickMatch> = {}): CreateQuickMatch => ({
 });
 const created: string[] = [];
 async function create(input: CreateQuickMatch = league()): Promise<CreatedQuickMatch> {
-  const out = await createQuickMatch(input, { visitorHash: hashVisitorKey(mintVisitorKey()) });
+  const out = await createQuickMatch(input, { visitorHash: hashVisitorKey(mintVisitorKey()), mailAllowed: async () => true });
   created.push(out.competitionId);
   return out;
 }
@@ -129,6 +133,26 @@ async function fixturesOf(competitionId: string): Promise<Fx[]> {
   return rows;
 }
 const seated = (f: Fx) => f.home_entrant_id !== null && f.away_entrant_id !== null;
+
+/** Review m4: the home's `resultMovedOn` re-reads carried-forward.ts's facts over its loaded rows, a second authority for one
+ *  fact. Every fixture's answer is held against the pad's own SQL (`resultCarriedForward`) on the same rows; returns how
+ *  many read as moved on, so a caller can require both verdicts. Zero fixtures checked is a failure. */
+async function movedOnAgrees(token: string): Promise<number> {
+  const row = await resolveQuickMatchToken(token);
+  const home = row ? await readQuickMatchHome(row) : null;
+  expect(home, "premise: the home reads").not.toBeNull();
+  let checked = 0;
+  let movedOn = 0;
+  for (const f of home!.fixtures) {
+    const padSays = await withTenant(QUICK_MATCH_SYSTEM_ORG_ID, (tx) => resultCarriedForward(tx, f.id));
+    expect(f.resultMovedOn, `fixture ${f.roundNo}.${f.seqInRound}: the home and the pad agree`).toBe(padSays);
+    checked++;
+    if (padSays) movedOn++;
+  }
+  expect(checked, "anti-vacuity: fixtures held against the pad's SQL").toBe(home!.fixtures.length);
+  expect(checked).toBeGreaterThan(0);
+  return movedOn;
+}
 async function linksOn(fixtureId: string): Promise<number> {
   const [r] = await sql<{ n: number }[]>`select count(*)::int as n from device_links where fixture_id = ${fixtureId}`;
   return r!.n;
@@ -652,6 +676,45 @@ describe.skipIf(!HAS_DB)("the home offers Score on a playable match only, each f
     expect(after!.status, "reopened").not.toBe("decided");
   });
 
+  it("'Edit result' on a board game: one result event decides it, so the void it leads to undoes the whole result (review m8)", async () => {
+    // The case above decides badminton on the rally that closes its last game; a board game decides on ONE result event.
+    // Edit result's door is the generic `core.void` either way, so one sport of each decided shape is the sample, not a
+    // sweep: the other offered sports decide like one of these two (a closing point, or a whole result).
+    const variant = offerJson.offered.find((o) => o.sport_key === "boardgame")?.variant_key;
+    expect(variant, "premise: the catalog offers a board game").toBeDefined();
+    const offer = await offerFor("boardgame", variant!);
+    const out = await create(league({ sport_key: "boardgame", variant_key: variant!, kind: offer.kinds[0]!, sides: ["Ana Reyes", "Ben Osei"] }));
+    const [f0] = await fixturesOf(out.competitionId);
+    const auth = await requireFixtureActor(
+      new Request("http://test.local/api/v1", { headers: { authorization: `Bearer ${await padSecret(await tap(out.token, f0!.id))}` } }),
+      f0!.id,
+      "score",
+    );
+    const played = await playToDecided(auth, f0!.id);
+    if (played.kind !== "decided") throw new Error(`precondition: the game decided, got ${JSON.stringify(played)}`);
+    const live = await sql<{ type: string }[]>`
+      select type from score_events where fixture_id = ${f0!.id} and type not like 'core.%' order by seq`;
+    expect(live, "the decided shape this case exists for: one scoring event decided it").toHaveLength(1);
+    let forms = scoreForms(await homeAt(`/q/${out.token}`));
+    expect(forms.map((f) => [f.place, f.row, f.label])).toEqual([["edit", f0!.id, en["quickMatch.home.editResult"]]]);
+    const secret = await padSecret(await tap(out.token, forms[0]!.action.split("/").at(-1)!));
+    expect(await resolveDeviceLinkToken(secret)).toMatchObject({ fixture_id: f0!.id });
+    const res = await postEvent(
+      new Request(`http://test.local/api/v1/fixtures/${f0!.id}/events`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" },
+        body: JSON.stringify({ expected_seq: played.lastSeq, type: "core.void", payload: { event_id: played.lastEventId } }),
+      }),
+      { params: Promise.resolve({ id: f0!.id }) },
+    );
+    expect(res.status, await res.clone().text()).toBe(201);
+    const [after] = await sql<{ status: string }[]>`select status from fixtures where id = ${f0!.id}`;
+    expect(after!.status, "reopened").not.toBe("decided");
+    forms = scoreForms(await homeAt(`/q/${out.token}`));
+    expect(forms.some((f) => f.place === "edit"), "nothing settled: no Edit result").toBe(false);
+    expect(forms.filter((f) => f.row === f0!.id).map((f) => f.place), "the reopened game is scored again from its row").toEqual(["row"]);
+  });
+
   it("a knockout of 4: a decided semi-final whose winner is seated in the final offers no 'Edit result', and the pad refuses it; the decided final offers it (A-M6)", async () => {
     // Four sides, so the first semi-final's winner fills ONE seat of the final while the other waits: the seat read is the
     // one its feed edge names, never "any seat taken" (with three, the bye fills the other seat at the draw).
@@ -669,7 +732,9 @@ describe.skipIf(!HAS_DB)("the home offers Score on a playable match only, each f
     };
     const [semi1, semi2] = (await fixturesOf(out.competitionId)).filter((f) => f.round_no === 1);
     expect([seated(semi1!), seated(semi2!)], "premise: two seated semi-finals").toEqual([true, true]);
+    expect(await movedOnAgrees(out.token), "nothing decided: nothing moved on").toBe(0);
     const first = await decide(semi1!.id);
+    expect(await movedOnAgrees(out.token), "the first semi-final moved on; nothing else").toBe(1);
     const final = (await fixturesOf(out.competitionId)).find((f) => f.round_no === 2)!;
     expect([final.home_entrant_id !== null, final.away_entrant_id !== null].filter(Boolean), "premise: one final seat filled").toHaveLength(1);
     let forms = scoreForms(await homeAt(`/q/${out.token}`));
@@ -689,7 +754,9 @@ describe.skipIf(!HAS_DB)("the home offers Score on a playable match only, each f
 
     // Both semi-finals and the final decided: nothing waits on the final, so it is the one to edit.
     await decide(semi2!.id);
+    expect(await movedOnAgrees(out.token), "both semi-finals moved on").toBe(2);
     await decide(final.id);
+    expect(await movedOnAgrees(out.token), "the decided final feeds nothing: still two").toBe(2);
     forms = scoreForms(await homeAt(`/q/${out.token}`));
     expect(forms.map((f) => [f.place, f.row, f.label])).toEqual([["edit", final.id, en["quickMatch.home.editResult"]]]);
   });

@@ -272,6 +272,12 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
     if (stages.length !== 1) {
       throw new Error(`quick match ${row.id}: division ${division.id} holds ${stages.length} stages, not one`);
     }
+    // CreateQuickMatch's format is a league or a knockout, never Swiss: `resultMovedOn` below reads no Swiss pairing on
+    // that premise (branch-fix A review m3), so any other kind is refused rather than read half-right.
+    const kind = stages[0]!.kind;
+    if (kind !== "league" && kind !== "knockout") {
+      throw new Error(`quick match ${row.id}: stage ${stages[0]!.id} is a ${kind} stage, not a league or a knockout`);
+    }
     const entrants = await tx<{ id: string; display_name: string; kind: EntrantKind }[]>`
       select id, display_name, kind from entrants where division_id = ${division.id} order by seed nulls last, created_at, id`;
     return { division, stage: stages[0]!, entrants };
@@ -341,7 +347,7 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
           isCarriedForward({
             winnerFeedFilled: feedFilled(r.id, r.winner_to_fixture, r.winner_to_slot),
             loserFeedFilled: feedFilled(r.id, r.loser_to_fixture, r.loser_to_slot),
-            // A quick match is a league or a knockout (CreateQuickMatch's format), never Swiss: no next round to pair.
+            // A league or a knockout (refused otherwise, above): there is no Swiss round to pair.
             swissNextRoundSeated: false,
             stageComplete: stage.status === "complete",
           }),

@@ -86,7 +86,7 @@ const league4 = (over: Partial<CreateQuickMatch> = {}): CreateQuickMatch => ({
   locale: "en",
   ...over,
 });
-const create = (input: CreateQuickMatch = league4()) => createQuickMatch(input, { visitorHash: v() });
+const create = (input: CreateQuickMatch = league4()) => createQuickMatch(input, { visitorHash: v(), mailAllowed: async () => true });
 
 async function rowOf(out: CreatedQuickMatch): Promise<QuickMatchRow> {
   const row = await resolveQuickMatchToken(out.token);
@@ -425,6 +425,35 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
       await expect(readQuickMatchHome(await rowOf(twoKinds))).rejects.toThrow(/2 entrant kinds/);
     } finally {
       for (const m of corrupt) await hardDeleteQuickMatchCompetition(m.competitionId);   // no corrupt match outlives its case
+    }
+  });
+
+  it("refuses a stage that is neither a league nor a knockout: the moved-on read assumes no Swiss round to pair (review m3)", async () => {
+    const a = await create();
+    try {
+      expect((await homeOf(a)).fixtures.length, "the positive pair: the same match reads as a league").toBeGreaterThan(0);
+      await sql`update stages set kind = 'swiss' where id = ${a.stageId}`;   // a state no producer makes: the guard's own case
+      await expect(readQuickMatchHome(await rowOf(a))).rejects.toThrow(/is a swiss stage, not a league or a knockout/);
+    } finally {
+      await hardDeleteQuickMatchCompetition(a.competitionId);
+    }
+  });
+
+  it("refuses a settled fixture whose feed names a match outside its own division (review m4)", async () => {
+    // A knockout of 3: its bye is settled at the draw, so the moved-on read follows the bye's feed into the final.
+    const a = await create(league4({ format: "knockout", sides: SIDES.slice(0, 3) }));
+    const b = await create(league4({ format: "knockout", sides: SIDES.slice(0, 3) }));
+    try {
+      const bye = (await homeOf(a)).fixtures.find((f) => f.isBye);
+      expect(bye, "premise: a knockout of 3 draws one bye").toBeDefined();
+      const [fed] = await sql<{ winner_to_fixture: string | null }[]>`select winner_to_fixture from fixtures where id = ${bye!.id}`;
+      expect(fed!.winner_to_fixture, "premise: the bye feeds this match's own final").not.toBeNull();
+      const foreign = (await homeOf(b)).fixtures.find((f) => f.isFinal)!;
+      await sql`update fixtures set winner_to_fixture = ${foreign.id} where id = ${bye!.id}`;
+      await expect(readQuickMatchHome(await rowOf(a))).rejects.toThrow(/feeds .* outside its own division/);
+    } finally {
+      await hardDeleteQuickMatchCompetition(a.competitionId);
+      await hardDeleteQuickMatchCompetition(b.competitionId);
     }
   });
 
