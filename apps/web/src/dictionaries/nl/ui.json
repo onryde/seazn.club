@@ -806,6 +806,7 @@
   "sponsors.archive.show": "Gearchiveerde tonen ({count})",
   "sponsors.archive.group": "Gearchiveerd",
   "sponsors.archive.chip": "Gearchiveerd",
+  "sponsors.archive.allArchived": "Al je sponsors zijn gearchiveerd. Zet Gearchiveerde tonen aan om ze te zien.",
   "sponsors.error.archived": "Deze sponsor is gearchiveerd. Haal hem eerst uit het archief.",
   "sponsors.error.hasOpenCheckout": "Deze sponsor heeft een betaallink die niet kon worden gesloten, of die net is betaald. Probeer het zo meteen opnieuw.",
   "sponsors.error.dealChanged": "Deze deal is gewijzigd terwijl je eraan werkte. Laad de pagina opnieuw en probeer het nog eens.",

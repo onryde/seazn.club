@@ -806,6 +806,7 @@
   "sponsors.archive.show": "Mostrar archivados ({count})",
   "sponsors.archive.group": "Archivados",
   "sponsors.archive.chip": "Archivado",
+  "sponsors.archive.allArchived": "Todos tus patrocinadores están archivados. Activa Mostrar archivados para verlos.",
   "sponsors.error.archived": "Este patrocinador está archivado. Desarchívalo primero.",
   "sponsors.error.hasOpenCheckout": "Este patrocinador tiene un enlace de pago que no se pudo cerrar, o que acaba de pagarse. Inténtalo de nuevo en un momento.",
   "sponsors.error.dealChanged": "Este acuerdo cambió mientras trabajabas en él. Recarga la página e inténtalo de nuevo.",

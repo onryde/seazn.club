@@ -480,7 +480,19 @@ export function SponsorList(props: SponsorListProps) {
   // Render in tier order; a group nobody is in is not drawn.
   const liveGroups =
     sponsors.length === 0 ? (
-      <p className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">{msg("sponsors.empty")}</p>
+      // Nothing live. With nothing archived either it is the first-time empty state; with sponsors archived "no sponsors yet" is false, so
+      // the switch off says where they are (the Packages tab's "Every package is retired" line), and the switch on says nothing - the
+      // archived group right below is the answer.
+      archived.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">{msg("sponsors.empty")}</p>
+      ) : showArchived ? null : (
+        <p
+          data-testid="sponsors-all-archived"
+          className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-500"
+        >
+          {msg("sponsors.archive.allArchived")}
+        </p>
+      )
     ) : !hasTiers ? (
       list(sponsors)
     ) : (

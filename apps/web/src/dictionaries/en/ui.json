@@ -806,6 +806,7 @@
   "sponsors.archive.show": "Show archived ({count})",
   "sponsors.archive.group": "Archived",
   "sponsors.archive.chip": "Archived",
+  "sponsors.archive.allArchived": "All your sponsors are archived. Turn on Show archived to see them.",
   "sponsors.error.archived": "This sponsor is archived. Unarchive it first.",
   "sponsors.error.hasOpenCheckout": "This sponsor has a payment link that could not be closed, or was just paid. Try again in a moment.",
   "sponsors.error.dealChanged": "This deal changed while you were working on it. Reload the page and try again.",

@@ -789,14 +789,16 @@ export function OrgSponsors({
     });
   }
 
-  /** Archive (spec §7.2): hides the sponsor everywhere and keeps its records. The answer is the row, archived; a 409 (a deal holds it:
+  /** Archive (spec §7.2): hides the sponsor everywhere and keeps its records. The answer is the row, archived - MERGED over the list's
+   *  row, not put in its place: the write answers carry no `paid_order_id`, `dispute_lost` or `dispute_parked` (list reads only), and
+   *  replacing the row dropped them (the trash came back on an archived sponsor with history). A 409 (a deal holds it:
    *  the page thought it free) re-reads the rows and deals so the page shows the blocked line, and the row stays live. */
   function archive(s: SponsorItem) {
     void run(async () => {
       try {
         const row = (await api(`/${s.id}/archive`, { method: "POST" })) as SponsorItem;
         focusAfterFlip.current = FOCUS_AFTER_ARCHIVE.archive;
-        setSponsors((prev) => prev.map((r) => (r.id === s.id ? row : r)));
+        setSponsors((prev) => prev.map((r) => (r.id === s.id ? { ...r, ...row } : r)));
         setNotice(msg("sponsors.archive.done", { name: s.name }));
       } catch (err) {
         await Promise.all([refresh().catch(() => {}), refreshDeals().catch(() => {})]);
@@ -810,7 +812,7 @@ export function OrgSponsors({
     void run(async () => {
       const row = (await api(`/${s.id}/archive`, { method: "DELETE" })) as SponsorItem;
       focusAfterFlip.current = FOCUS_AFTER_ARCHIVE.unarchive;
-      setSponsors((prev) => prev.map((r) => (r.id === s.id ? row : r)));
+      setSponsors((prev) => prev.map((r) => (r.id === s.id ? { ...r, ...row } : r)));
       setNotice(msg("sponsors.archive.unarchived", { name: s.name }));
     });
   }

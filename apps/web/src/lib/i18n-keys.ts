@@ -7760,6 +7760,7 @@ export type DictionaryKey =
   | "sponsorReport.throttled.body"
   | "sponsorReport.throttled.title"
   | "sponsorReport.viewersNote"
+  | "sponsors.archive.allArchived"
   | "sponsors.archive.banner"
   | "sponsors.archive.blocked"
   | "sponsors.archive.button"

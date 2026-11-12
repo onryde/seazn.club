@@ -35,7 +35,7 @@ import { OverviewTab } from "@/components/sponsors/overview-tab";
 import { SAVE_ERROR_MSG } from "@/components/sponsors/save-error";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { expandSponsorTree } from "./_sponsor-tree";
-import { attrOf, classTokens, findAll } from "./_markup";
+import { attrOf, classTokens, findAll, textOfMarkup } from "./_markup";
 import { SPONSOR_TIERS } from "@/lib/sponsor-tiers";
 import { sponsorHref } from "@/lib/sponsors-hub";
 import type { SponsorDeal } from "@/lib/sponsor-deals";
@@ -179,6 +179,36 @@ describe("the list: Show archived (N), the trailing group", () => {
   });
 });
 
+describe("the list when every sponsor is archived (final review m3)", () => {
+  const empty = (html: string) => findAll(html, "sponsors-all-archived");
+
+  it("none live, N archived, switch off: the 'all archived' line - never 'No sponsors yet' - beside the switch", () => {
+    const html = listHtml([], { archived: [OLD, OLD2], showArchived: false });
+    expect(empty(html), "the all-archived line is drawn once").toHaveLength(1);
+    expect(flat(empty(html)[0]!.inner)).toBe(msg("sponsors.archive.allArchived"));
+    expect(msg("sponsors.archive.allArchived")).toBe("All your sponsors are archived. Turn on Show archived to see them.");
+    expect(textOfMarkup(html), "'yet' is false for a club that has sponsors").not.toContain(msg("sponsors.empty"));
+    expect(findAll(html, "sponsors-archived-switch"), "the way to them is there").toHaveLength(1);
+    expect(html).not.toContain(OLD.name);
+  });
+
+  it("none live, N archived, switch on: the archived group speaks for itself - neither line is drawn above it", () => {
+    const html = listHtml([], { archived: [OLD], showArchived: true });
+    expect(empty(html)).toHaveLength(0);
+    expect(textOfMarkup(html)).not.toContain(msg("sponsors.empty"));
+    expect(findAll(html, "sponsor-group").map((g) => attrOf(g.open, "data-tier"))).toEqual(["archived"]);
+  });
+
+  it("the pair: nothing archived keeps 'No sponsors yet'; a live sponsor draws neither line", () => {
+    const none = listHtml([], { archived: [], showArchived: false });
+    expect(textOfMarkup(none)).toContain(msg("sponsors.empty"));
+    expect(empty(none)).toHaveLength(0);
+    const some = listHtml([P1], { archived: [OLD], showArchived: false });
+    expect(empty(some)).toHaveLength(0);
+    expect(textOfMarkup(some)).not.toContain(msg("sponsors.empty"));
+  });
+});
+
 describe("the copy: four locales", () => {
   it("every archive key exists in all four locales with its placeholders intact (count reported)", () => {
     const need: [string, string[]][] = [
@@ -307,6 +337,42 @@ describe("the sequence: archive, show archived, unarchive, the row back in place
     await flush();
     expect(isOn(m), "re-archiving shows the switch off again").toBe(false);
     expect(m.rowIds()).toEqual(["g1", "p2"]);
+  });
+
+  it("archive / unarchive keep the list-only fields the write answer does not carry: no trash after Archive, the dispute badge stays (final review m1)", async () => {
+    // The write answer is built by the usecase without `paid_order_id`, `dispute_lost`, `dispute_parked` (list reads only), so splicing
+    // it in whole dropped them: an archived row whose only history is its paid order showed the trash again.
+    const paid = sponsor({ id: "h1", name: "Paid Order Co", paid_order_id: "o-1", dispute_lost: true });
+    const answerOf = (s: SponsorItem, archived: boolean): SponsorItem => {
+      const wire: SponsorItem = { ...s, archived_at: archived ? ARCHIVED_AT : null };
+      delete wire.paid_order_id;
+      delete wire.dispute_lost;
+      delete wire.dispute_parked;
+      return wire;
+    };
+    expect(Object.keys(answerOf(paid, true)), "premise: the answer carries none of the three").not.toEqual(
+      expect.arrayContaining(["paid_order_id"]),
+    );
+    const trashOf = (m: ReturnType<typeof mount>) =>
+      m.island.tree().filter((e) => propsOf(e)["aria-label"] === msg("settings.org.sponsors.remove", { name: paid.name })).length;
+    const m = mount([paid, P1], { hub: { sponsorId: "h1" } });
+    expect(trashOf(m), "premise: a live row with history draws its trash (the server refuses it)").toBe(1);
+    expect(m.text()).toContain(msg("sponsors.lostBadge"));
+
+    answer = (_u, method) => ({ status: 200, body: { data: method === "POST" ? answerOf(paid, true) : [] } });
+    m.click("sponsor-sheet-archive-button");
+    await flush();
+    m.click("sponsors-archived-switch");
+    expect(m.rowIds(), "premise: the archived row is shown").toEqual(["p1", "h1"]);
+    expect(trashOf(m), "archived with a paid order: no trash").toBe(0);
+    expect(m.text(), "the dispute badge stays").toContain(msg("sponsors.lostBadge"));
+
+    answer = (_u, method) => ({ status: 200, body: { data: method === "DELETE" ? answerOf(paid, false) : [] } });
+    m.click("sponsor-sheet-unarchive");
+    await flush();
+    expect(m.rowIds().sort(), "premise: the row is live again").toEqual(["h1", "p1"]);
+    expect(trashOf(m), "back live: the trash is back, as before").toBe(1);
+    expect(m.text(), "and the badge never left").toContain(msg("sponsors.lostBadge"));
   });
 
   it("a 409 sponsor_has_current_deal (the page thought it free) shows the blocked words, leaves the row live, and re-reads rows and deals", async () => {
