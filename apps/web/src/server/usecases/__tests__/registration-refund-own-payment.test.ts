@@ -253,11 +253,22 @@ describe.skipIf(!HAS_DB)("concurrent organiser refunds serialise on the entry (P
 // commit, outside any lock and with no idempotency key, while the manual Refund locks the entry. An organiser pressing Refund during a
 // withdrawal's or a rejection's Stripe call read the same untouched cap and refunded the same money again (on a shared-intent cart,
 // a sibling's). Rule under test: every refund of an entry's own payment is capped, moved and booked under the entry's lock, with ONE
-// key format `registration-refund:<id>:<refunded read>:<amount>`. The race is made deterministic: the FIRST Stripe call (the
-// automatic refund) starts the organiser's Refund and then takes 300 ms, so the manual press always lands inside it.
+// key format `registration-refund:<id>:<refunded read>:<amount>`. The race is deterministic (re-review N3: it used to sleep 300 ms and
+// hope the press landed inside): the FIRST Stripe call (the automatic refund, inside its locked transaction) starts the organiser's
+// Refund and does not return until that press is SEEN waiting on a row lock in Postgres (`pg_stat_activity.wait_event_type = 'Lock'`
+// on its `... for update` read) - or until the press finished without ever waiting, which is the defect, recorded and asserted.
 describe.skipIf(!HAS_DB)("an automatic refund and the organiser's Refund share the entry lock and the key (m6)", () => {
+  /** Backends of this database waiting on a lock in a `... registrations ... for update` read: the organiser's Refund held at the entry. */
+  const entryLockWaiters = async () =>
+    (await sql<{ n: number }[]>`
+      select count(*)::int as n from pg_stat_activity
+       where datname = current_database() and pid <> pg_backend_pid()
+         and wait_event_type = 'Lock' and query ilike '%registrations%for update%'`)[0]!.n;
+
   function manualPressDuringFirstStripeCall(owner: Parameters<typeof refundRegistration>[0], regId: string) {
-    let press: Promise<unknown> | null = null;
+    let press: Promise<{ ok: true; v: unknown } | { ok: false; e: unknown }> | null = null;
+    let settled = false;
+    let blocked = false;
     let n = 0;
     stripeMock.refundCreate.mockImplementation(async () => {
       n += 1;
@@ -266,11 +277,17 @@ describe.skipIf(!HAS_DB)("an automatic refund and the organiser's Refund share t
           (v) => ({ ok: true as const, v }),
           (e: unknown) => ({ ok: false as const, e }),
         );
-        await new Promise((r) => setTimeout(r, 300));
+        void press.then(() => (settled = true));
+        // Hold the automatic refund (and its lock) until the press is seen blocked on it, or has finished without blocking. The poll
+        // interval is not a timing assumption: neither exit is taken until Postgres or the press itself says so. 20 s is only a cap.
+        for (let i = 0; i < 800 && !blocked && !settled; i++) {
+          if ((await entryLockWaiters()) > 0) blocked = true;
+          else await new Promise((r) => setTimeout(r, 25));
+        }
       }
       return { id: `re_m6_${n}_${Date.now()}` };
     });
-    return { pressed: () => press as Promise<{ ok: true; v: unknown } | { ok: false; e: unknown }> | null };
+    return { pressed: () => press, blockedOnLock: () => blocked };
   }
 
   const shapes = [
@@ -304,6 +321,7 @@ describe.skipIf(!HAS_DB)("an automatic refund and the organiser's Refund share t
       await shape.act(rig, open.id);
       const press = race.pressed();
       expect(press, `${shape.name}: premise, the organiser pressed Refund during the automatic refund`).not.toBeNull();
+      expect(race.blockedOnLock(), `${shape.name}: the press waited on the entry lock while the automatic refund was inside Stripe`).toBe(true);
       const outcome = await press!;
 
       expect(stripeMock.refundCreate, `${shape.name}: one refund at Stripe`).toHaveBeenCalledTimes(1);
