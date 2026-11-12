@@ -781,6 +781,21 @@ describe("submitting (the form-post contract, enhanced: ledger CARRY to T4)", ()
     expect(propsOf(emailInput(i)).type).toBe("email");
   });
 
+  it("each patterned input's `title` is the app's own line, which the browser's bubble carries (review m5)", () => {
+    // The pattern now stops a bad address or an all-space name BEFORE the post, so the server's EMAIL_INVALID line is no
+    // longer what a typing guest meets: the browser's generic bubble is, and it appends the input's title.
+    const nameLine = enMarketing["quickMatch.errors.nameBlank"];
+    const emailLine = enMarketing["quickMatch.errors.emailInvalid"];
+    expect(nameLine, "premise: the dictionary holds the name line").toEqual(expect.any(String));
+    expect(emailLine).toEqual(expect.any(String));
+    const i = mount();
+    expect(propsOf(nameInput(i)).title).toBe(nameLine);
+    const sides = sideInputs(i);
+    expect(sides.length, "anti-vacuity: the side inputs on first paint").toBeGreaterThan(0);
+    expect(sides.map((el) => propsOf(el).title)).toEqual(sides.map(() => nameLine));
+    expect(propsOf(emailInput(i)).title).toBe(emailLine);
+  });
+
   it("each pattern, as the browser runs it (anchored, `v` flag), agrees with CreateQuickMatch on a counted table", () => {
     // The browser compiles a pattern as ^(?:p)$ with the `v` flag (HTML §4.10.5.3.6); a pattern that does not compile is
     // ignored, which would silently drop the check.

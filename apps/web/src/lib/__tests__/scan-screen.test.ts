@@ -5,7 +5,7 @@ import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { deadLinkKey, fixtureTimeLabel, scanScreen } from "../scan-screen";
+import { deadLinkKey, decidedKey, fixtureTimeLabel, scanScreen, VIEW_ONLY_COPY, viewOnlyKey, type ViewOnlyReason } from "../scan-screen";
 import { divisionScoringClosed } from "../division-phase";
 
 const ddl = readFileSync(
@@ -215,5 +215,52 @@ describe("the carried-forward View-only copy (owner ruling 2026-09-24)", () => {
       locale
     ]!;
     expect(text, "the translation names the next match").toContain(nextMatch);
+  });
+});
+
+// Quick match (branch-fix A review Q1/Q2, controller ruling 2026-11-12): a guest's pad has no organiser, so the two lines
+// that send a scorer to one say what a guest can do instead. Copy only: the screen each reason opens is the shared table's.
+describe("the quick match's pad copy: no organiser to ask (review Q1/Q2)", () => {
+  const load = (locale: string) =>
+    JSON.parse(readFileSync(resolve(import.meta.dirname, `../../dictionaries/${locale}/ui.json`), "utf8")) as Record<
+      string,
+      string
+    >;
+  const REASONS = Object.keys(VIEW_ONLY_COPY) as ViewOnlyReason[];
+  /** The organiser, in each language's own word (the strings the ordinary copy uses). */
+  const ORGANISER: Record<string, RegExp> = { en: /organi[sz]er/i, es: /organizador/i, fr: /organisateur/i, nl: /organisator/i };
+
+  it("the ruling's English, verbatim", () => {
+    expect(load("en")["device.quickMatch.resultSaved"]).toBe("Result saved. To correct it, undo the last point and play it again.");
+    expect(load("en")["device.quickMatch.resultLocked"]).toBe("This result can't change: the next round has already started.");
+  });
+
+  it("an ordinary pad keeps every reason's own copy and the organiser's decided line (the negative pair)", () => {
+    let checked = 0;
+    for (const reason of REASONS) {
+      expect(viewOnlyKey(reason, false), reason).toBe(VIEW_ONLY_COPY[reason]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every View-only reason").toBe(4);
+    expect(decidedKey(false)).toBe("device.resultRecorded");
+  });
+
+  it("a quick match's pad: carried forward reads as locked, and decided as saved; every other reason is unchanged", () => {
+    expect(viewOnlyKey("carried_forward", true)).toBe("device.quickMatch.resultLocked");
+    expect(decidedKey(true)).toBe("device.quickMatch.resultSaved");
+    const others = REASONS.filter((r) => r !== "carried_forward");
+    expect(others, "premise: three other reasons").toHaveLength(3);
+    for (const reason of others) expect(viewOnlyKey(reason, true), reason).toBe(VIEW_ONLY_COPY[reason]);
+  });
+
+  it.each(["en", "es", "fr", "nl"])("%s: the quick match's lines name no organiser, where the ordinary ones do", (locale) => {
+    const d = load(locale);
+    for (const key of ["device.quickMatch.resultSaved", "device.quickMatch.resultLocked"]) {
+      expect(d[key], `${locale} ${key}`).toBeTruthy();
+      expect(d[key], `${locale} ${key}`).not.toMatch(ORGANISER[locale]!);
+    }
+    // The positive pair: the word the check looks for IS in each language's ordinary copy, so the check can fail.
+    expect(d["device.resultRecorded"]).toMatch(ORGANISER[locale]!);
+    expect(d["device.scan.viewOnly.carried"]).toMatch(ORGANISER[locale]!);
   });
 });

@@ -67,6 +67,8 @@ const MARKETING_KEYS = [
   "quickMatch.errors.kindNotOffered",
   // Branch review A I2: the address is the form's only fault.
   "quickMatch.errors.emailInvalid",
+  // Review m5: the name inputs' `title`, which the browser's own bubble carries for an all-space name.
+  "quickMatch.errors.nameBlank",
   "quickMatch.errors.unavailable",
   "quickMatch.errors.generic",
 ] as const;
@@ -302,11 +304,12 @@ describe("quick match guest copy: plurals", () => {
     // A saved match (branch review A I3): the same count, no countdown.
     expect(plural(ui, "quickMatch.home.playedSaved", 6, "en", { played: 2 })).toBe("2 of 6 matches played");
     expect(plural(ui, "quickMatch.home.playedSaved", 1, "en", { played: 0 })).toBe("0 of 1 match played");
-    // The brief's words (controller ruling 2026-11-08), and the two new lines.
-    expect(ui["quickMatch.flash.emailLimited"]).toBe(
-      "We didn't email you the link — too many emails to that address today. Share or bookmark this page now.",
-    );
+    // Branch-fix A review m1 (controller ruling 2026-11-12): neutral. The address may be a friend's, and the cause may be the
+    // network's limit or the limiter being down, not that inbox, so the line names no cause and no "you".
+    expect(ui["quickMatch.flash.emailLimited"]).toBe("We didn't email the link this time. Share or bookmark this page now.");
     expect(m["quickMatch.errors.emailInvalid"]).toBe("Check the email address, or leave it blank.");
+    // Review m5: what the browser's own bubble carries for an all-space name (the input's `title`).
+    expect(m["quickMatch.errors.nameBlank"]).toBe("Type a name, not just spaces.");
     expect(ui["quickMatch.home.editResult"]).toBe("Edit result");
     // Task 1 review I2 and m1 (controller, 2026-11-08): the league line names no tie-break the standings do not use
     // (draws score points, so "most wins" was false), and the two offer refusals name nothing the guest did not choose.

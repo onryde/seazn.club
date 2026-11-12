@@ -322,6 +322,8 @@ export default async function ScorePadPage({
         initialViewOnly={screen.screen === "view_only" ? screen.reason : null}
         // W2c Task 15 (X-SR-7): the chrome's own writes send the version the pad was loaded with.
         rulesVersion={rulesVersion}
+        // Branch-fix A review Q1/Q2: a guest's pad (the system org, orphan or not) names no organiser. Copy only.
+        quickMatch={link.org_id === QUICK_MATCH_SYSTEM_ORG_ID}
         />,
         ),
       )}

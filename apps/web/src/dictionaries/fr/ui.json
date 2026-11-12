@@ -3717,7 +3717,9 @@
   "device.courtsideFooter": "Tablette {scorer} bord de terrain",
   "device.undoMine": "Annuler ma dernière entrée",
   "device.resultRecorded": "Résultat enregistré — l'organisateur le finalise. Vous repérez une erreur dans vos propres saisies ? Utilisez « Annuler ma dernière ».",
+  "device.quickMatch.resultSaved": "Résultat enregistré. Pour le corriger, annulez le dernier point et rejouez-le.",
   "device.scan.viewOnly.carried": "Match terminé — le résultat a déjà été pris en compte pour le match suivant. Demandez à l'organisateur de le corriger.",
+  "device.quickMatch.resultLocked": "Ce résultat ne peut plus changer : le tour suivant a déjà commencé.",
   "device.scan.viewOnly.finalized": "Match terminé — résultat validé. Demandez à l'organisateur de le corriger.",
   "device.scan.viewOnly.cancelled": "Ce match a été annulé.",
   "device.scan.viewOnly.noOpponent": "Il n'y a pas de match à noter ici — un côté n'a pas d'adversaire.",
@@ -8436,7 +8438,7 @@
   "quickMatch.flash.sameSide": "Choisissez deux participants différents.",
   "quickMatch.flash.notFound": "Ce match ou ce participant ne fait pas partie de ce match rapide.",
   "quickMatch.flash.generic": "Un problème est survenu. Réessayez.",
-  "quickMatch.flash.emailLimited": "Nous ne vous avons pas envoyé le lien par e-mail : trop d'e-mails vers cette adresse aujourd'hui. Partagez cette page ou ajoutez-la à vos favoris dès maintenant.",
+  "quickMatch.flash.emailLimited": "Nous n'avons pas envoyé le lien par e-mail cette fois. Partagez cette page ou ajoutez-la à vos favoris dès maintenant.",
   "quickMatch.dead.title": "Ce lien a expiré ou n'existe pas",
   "quickMatch.dead.hint": "Vérifiez que vous avez le lien complet. Les matchs rapides que personne n'enregistre sont supprimés {days} jours après le dernier point marqué.",
   "quickMatch.dead.startNew": "Lancer un nouveau match rapide"

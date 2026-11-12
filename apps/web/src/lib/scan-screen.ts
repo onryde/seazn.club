@@ -15,6 +15,19 @@ export const VIEW_ONLY_COPY: Readonly<Record<ViewOnlyReason, MessageKey>> = {
   no_opponent: "device.scan.viewOnly.noOpponent",
 };
 
+/** Quick match (branch-fix A review Q1/Q2, controller ruling 2026-11-12): a guest's pad has no organiser to ask, so the
+ *  carried-forward line says the result is locked instead of sending the guest to one. Copy only: which screen a reason
+ *  opens, and every control on it, stays the shared pad's. */
+export function viewOnlyKey(reason: ViewOnlyReason, quickMatch: boolean): MessageKey {
+  return quickMatch && reason === "carried_forward" ? "device.quickMatch.resultLocked" : VIEW_ONLY_COPY[reason];
+}
+
+/** The decided match's line under the pad: an organiser finalizes an ordinary match; a quick match has none, so its guest
+ *  reads how to correct the result themselves (the same ruling). */
+export function decidedKey(quickMatch: boolean): MessageKey {
+  return quickMatch ? "device.quickMatch.resultSaved" : "device.resultRecorded";
+}
+
 export type ScanScreen =
   | { screen: "view_only"; reason: ViewOnlyReason }
   | { screen: "division_not_started" }

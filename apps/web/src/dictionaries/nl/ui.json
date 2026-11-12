@@ -3664,7 +3664,9 @@
   "device.courtsideFooter": "Courtside {scorer} pad",
   "device.undoMine": "Mijn laatste invoer vernietigen",
   "device.resultRecorded": "Resultaat vastgelegd — de organisator maakt het definitief. Fout in je eigen invoer opgemerkt? Gebruik “Mijn laatste vernietigen”.",
+  "device.quickMatch.resultSaved": "Uitslag opgeslagen. Om die te corrigeren, maak je het laatste punt ongedaan en speel je het opnieuw.",
   "device.scan.viewOnly.carried": "Wedstrijd voorbij — de uitslag is al doorgeschoven naar de volgende wedstrijd. Vraag de organisator om het te corrigeren.",
+  "device.quickMatch.resultLocked": "Deze uitslag kan niet meer veranderen: de volgende ronde is al begonnen.",
   "device.scan.viewOnly.finalized": "Wedstrijd voorbij — uitslag definitief. Vraag de organisator om het te corrigeren.",
   "device.scan.viewOnly.cancelled": "Deze wedstrijd is geannuleerd.",
   "device.scan.viewOnly.noOpponent": "Hier valt geen wedstrijd te scoren — één kant heeft geen tegenstander.",
@@ -8436,7 +8438,7 @@
   "quickMatch.flash.sameSide": "Kies twee verschillende deelnemers.",
   "quickMatch.flash.notFound": "Die wedstrijd of deelnemer hoort niet bij deze snelle wedstrijd.",
   "quickMatch.flash.generic": "Er ging iets mis. Probeer het opnieuw.",
-  "quickMatch.flash.emailLimited": "We hebben je de link niet gemaild: te veel e-mails naar dat adres vandaag. Deel deze pagina of zet hem nu bij je bladwijzers.",
+  "quickMatch.flash.emailLimited": "We hebben de link deze keer niet gemaild. Deel deze pagina of zet hem nu bij je bladwijzers.",
   "quickMatch.dead.title": "Deze link is verlopen of bestaat niet",
   "quickMatch.dead.hint": "Controleer of je de volledige link hebt. Snelle wedstrijden die niemand bewaart, worden {days} dagen na de laatste score verwijderd.",
   "quickMatch.dead.startNew": "Start een nieuwe snelle wedstrijd"

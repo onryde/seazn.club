@@ -3664,7 +3664,9 @@
   "device.courtsideFooter": "Panel {scorer} junto a la cancha",
   "device.undoMine": "Anular mi última entrada",
   "device.resultRecorded": "Resultado registrado — el organizador lo finaliza. ¿Detectas un error en tus propias entradas? Usa «Anular mi última».",
+  "device.quickMatch.resultSaved": "Resultado guardado. Para corregirlo, deshaz el último punto y vuelve a jugarlo.",
   "device.scan.viewOnly.carried": "Partido terminado — el resultado ya cuenta para el siguiente partido. Pide al organizador que lo corrija.",
+  "device.quickMatch.resultLocked": "Este resultado ya no puede cambiar: la siguiente ronda ya ha empezado.",
   "device.scan.viewOnly.finalized": "Partido terminado — resultado cerrado. Pide al organizador que lo corrija.",
   "device.scan.viewOnly.cancelled": "Este partido se ha cancelado.",
   "device.scan.viewOnly.noOpponent": "Aquí no hay partido que puntuar — un lado no tiene rival.",
@@ -8436,7 +8438,7 @@
   "quickMatch.flash.sameSide": "Elige dos participantes distintos.",
   "quickMatch.flash.notFound": "Ese partido o participante no forma parte de este partido rápido.",
   "quickMatch.flash.generic": "Algo ha fallado. Vuelve a intentarlo.",
-  "quickMatch.flash.emailLimited": "No te hemos enviado el enlace por correo: demasiados correos a esa dirección hoy. Comparte esta página o guárdala en favoritos ahora.",
+  "quickMatch.flash.emailLimited": "Esta vez no hemos enviado el enlace por correo. Comparte esta página o guárdala en favoritos ahora.",
   "quickMatch.dead.title": "Este enlace ha caducado o no existe",
   "quickMatch.dead.hint": "Comprueba que tienes el enlace completo. Los partidos rápidos que nadie guarda se eliminan {days} días después de la última puntuación.",
   "quickMatch.dead.startNew": "Empezar un nuevo partido rápido"

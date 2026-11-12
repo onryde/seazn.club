@@ -830,3 +830,44 @@ describe("DeviceScorePad — the pad gets the stage kind and is never an organis
     expect(propsOf(pad!).canOrganise).toBe(false);
   });
 });
+
+// Quick match (branch-fix A review Q1/Q2, controller ruling 2026-11-12): a guest's pad names no organiser. The prop branches
+// the COPY only: the same screens, the same controls, the same refusals as every other pad (the cases above, with no prop,
+// are the ordinary pad's half of the pair and still read the organiser's lines).
+describe("DeviceScorePad — a quick match's pad names no organiser (review Q1/Q2)", () => {
+  const quick = (status: string, outcome: unknown) => ({ ...props(status, outcome), quickMatch: true });
+  /** The ordinary words this pad must never show, in the test's own dictionary. */
+  const ORGANISER = /organi[sz]er/i;
+
+  it("decided: the line says how to correct it, and the undo it names is the one on screen", () => {
+    const island = renderIsland(DeviceScorePad, quick("decided", { kind: "win" }));
+    const text = textOfTree(island.tree());
+    expect(text).toContain(dict["device.quickMatch.resultSaved"]);
+    expect(text, "never the organiser's line").not.toContain(dict["device.resultRecorded"]);
+    expect(text).not.toMatch(ORGANISER);
+    expect(byTestId(island.tree(), "device-void-mine"), "the same undo as every pad").toBeDefined();
+    // The negative pair, same state, no prop: the ordinary pad keeps its organiser line.
+    const ordinary = textOfTree(renderIsland(DeviceScorePad, props("decided", { kind: "win" })).tree());
+    expect(ordinary).toContain(dict["device.resultRecorded"]);
+    expect(ordinary).not.toContain(dict["device.quickMatch.resultSaved"]);
+  });
+
+  it("a carried-forward refusal on the guest's own void: View-only says the result is locked, not 'ask the organiser'", async () => {
+    api.postRefusal = { code: "RESULT_CARRIED_FORWARD", status: 403 };
+    const island = renderIsland(DeviceScorePad, quick("decided", { kind: "win" }));
+    (propsOf(byTestId(island.tree(), "device-void-mine")!).onClick as () => void)();
+    await flush();
+    const screen = byTestId(island.tree(), "scan-view-only");
+    expect(screen, "the same switch to View-only as every pad").toBeDefined();
+    expect(textOf(screen)).toBe(dict["device.quickMatch.resultLocked"]);
+    expect(textOfTree(island.tree())).not.toMatch(ORGANISER);
+    expect(byTestId(island.tree(), "device-void-mine"), "View-only offers no undo").toBeUndefined();
+  });
+
+  it("opened on View-only by the page: carried forward reads as locked; another reason keeps its own words", () => {
+    const carried = renderIsland(DeviceScorePad, { ...quick("decided", { kind: "win" }), initialViewOnly: "carried_forward" as const });
+    expect(textOf(byTestId(carried.tree(), "scan-view-only"))).toBe(dict["device.quickMatch.resultLocked"]);
+    const cancelled = renderIsland(DeviceScorePad, { ...quick("cancelled", null), initialViewOnly: "cancelled" as const });
+    expect(textOf(byTestId(cancelled.tree(), "scan-view-only"))).toBe(dict["device.scan.viewOnly.cancelled"]);
+  });
+});

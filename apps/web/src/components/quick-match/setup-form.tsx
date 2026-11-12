@@ -409,6 +409,8 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
           maxLength={QUICK_MATCH_NAME_MAX}
           required
           pattern={QUICK_MATCH_NON_BLANK_PATTERN}
+          // Review m5: the browser's own bubble for a pattern miss appends the title, so the guest reads the app's line.
+          title={msg("quickMatch.errors.nameBlank")}
           autoComplete="off"
           aria-describedby="qm-name-hint"
           onChange={(e) => setTypedName(e.target.value)}
@@ -498,6 +500,7 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
                 maxLength={QUICK_MATCH_SIDE_NAME_MAX}
                 required
                 pattern={QUICK_MATCH_NON_BLANK_PATTERN}
+                title={msg("quickMatch.errors.nameBlank")}
                 autoComplete="off"
                 aria-label={msg("quickMatch.setup.sideLabel", { n: k + 1 })}
                 onChange={(e) => renameSide(row.id, e.target.value)}
@@ -628,6 +631,7 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
             value={email}
             maxLength={254}
             pattern={QUICK_MATCH_EMAIL_PATTERN}
+            title={msg("quickMatch.errors.emailInvalid")}
             autoComplete="email"
             onChange={(e) => setEmail(e.target.value)}
             className="w-full rounded-lg border border-[#3b2a6e] bg-[#241650] px-3 py-2.5 text-sm text-[var(--mk-cream)] outline-none transition focus:border-[var(--mk-lime)]"

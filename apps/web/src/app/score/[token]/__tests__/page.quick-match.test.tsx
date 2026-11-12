@@ -94,7 +94,7 @@ const twoSides = (): CreateQuickMatch => ({
 
 /** A fresh quick match, its one fixture, and that fixture's pad link minted through the guest's door (Task 8). */
 async function quickMatchPad(): Promise<{ out: CreatedQuickMatch; fixtureId: string; secret: string }> {
-  const out = await createQuickMatch(twoSides(), { visitorHash: hashVisitorKey(mintVisitorKey()) });
+  const out = await createQuickMatch(twoSides(), { visitorHash: hashVisitorKey(mintVisitorKey()), mailAllowed: async () => true });
   const [fx] = await sql<{ id: string }[]>`
     select id from fixtures
     where division_id = ${out.divisionId} and home_entrant_id is not null and away_entrant_id is not null
@@ -182,6 +182,8 @@ describe.skipIf(!HAS_DB)("the pad's way back to the quick match (C12)", () => {
 
     expect(backLinkWarnings(), "an opened home token is not a warning").toHaveLength(0);
     expect(find(tree, DeviceScorePad), "precondition: the pad itself renders").not.toBeNull();
+    // Review Q1/Q2: the pad is told it is a quick match's, so its decided and locked lines name no organiser.
+    expect((find(tree, DeviceScorePad)!.props as { quickMatch?: boolean }).quickMatch, "the copy seam: a guest's pad").toBe(true);
     expect(out.token.startsWith("qm_"), "precondition: the creator was handed a home token").toBe(true);
     const a = backAnchor(html);
     expect(a, "the back link is painted").not.toBeNull();
@@ -220,6 +222,7 @@ describe.skipIf(!HAS_DB)("the pad's way back to the quick match (C12)", () => {
     expect(backLinkWarnings(), "an ordinary pad has nothing to warn about").toHaveLength(0);
 
     expect(find(tree, DeviceScorePad), "precondition: the pad renders").not.toBeNull();
+    expect((find(tree, DeviceScorePad)!.props as { quickMatch?: boolean }).quickMatch, "an ordinary pad keeps the organiser's copy").toBe(false);
     expect(find(tree, QuickMatchBackLink)).toBeNull();
     expect(html).not.toContain('href="/q/');
     expect(html).not.toContain(EN_LABEL);
@@ -259,6 +262,8 @@ describe.skipIf(!HAS_DB)("the pad's way back to the quick match (C12)", () => {
       lookup().mockClear();
       const { tree, html } = await render(secret);
       expect(find(tree, DeviceScorePad), "the pad still renders").not.toBeNull();
+      // The system org is what makes a pad a guest's: an orphan has no organiser either.
+      expect((find(tree, DeviceScorePad)!.props as { quickMatch?: boolean }).quickMatch).toBe(true);
       expect(lookup(), "precondition: the system org's pad did ask").toHaveBeenCalledTimes(1);
       expect(html).not.toContain('href="/q/');
       expect(html).not.toContain(out.token);

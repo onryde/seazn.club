@@ -506,6 +506,7 @@
   "quickMatch.errors.sportNotOffered": "Ces règles de match ne sont pas disponibles pour les matchs rapides.",
   "quickMatch.errors.kindNotOffered": "Ce choix entre simple, double ou équipe ne convient pas à ce sport. Choisissez à nouveau.",
   "quickMatch.errors.emailInvalid": "Vérifiez l'adresse e-mail, ou laissez-la vide.",
+  "quickMatch.errors.nameBlank": "Saisissez un nom, pas seulement des espaces.",
   "quickMatch.errors.unavailable": "Les matchs rapides ne sont pas disponibles pour le moment. Réessayez plus tard.",
   "quickMatch.errors.generic": "Impossible de lancer votre match rapide. Réessayez."
 }
