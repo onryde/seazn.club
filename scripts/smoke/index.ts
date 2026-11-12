@@ -9,6 +9,7 @@ import { selectSmokeSuites, type SmokeSelection } from "../smoke-select.ts";
 import {
   type Session, newSession, call, check, writeManifest, signIn, tag, insertEntitlementOverride, setPlan, cleanup,
   counts,
+  summary,
 } from "./harness.ts";
 import { main } from "./main.ts";
 import { bracketFinishSuite } from "./suites/bracketFinish.ts";
@@ -105,14 +106,14 @@ try {
 (selection.mode === "all" ? main() : runSubset(selection.names))
   .then(async () => {
     await cleanup(tag);
-    console.log(`${counts().pass} passed, ${counts().fail} failed`);
+    console.log(summary());
     writeManifest();
     process.exit(counts().fail === 0 ? 0 : 1);
   })
   .catch(async (e) => {
     console.error("ERROR:", e instanceof Error ? e.message : String(e));
     await cleanup(tag);
-    console.log(`${counts().pass} passed, ${counts().fail} failed`);
+    console.log(summary());
     writeManifest();
     process.exit(1);
   });

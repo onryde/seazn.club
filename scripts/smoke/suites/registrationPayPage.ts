@@ -1,7 +1,7 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP/DB helpers, tag): see the header of that file.
 import { readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { BASE, newSession, check, html, signIn, setPlan, smokeDb, tag, v1, v1data } from "../harness.ts";
+import { BASE, newSession, check, html, signIn, setPlan, skip, smokeDb, tag, v1, v1data } from "../harness.ts";
 import { latestOutboxBody, payLinkFrom } from "../../../apps/web/e2e/outbox-body-open.ts";
 
 /** Player payment page (plan 2026-11-11-player-payment-page, Task 4) - what only the served app can prove.
@@ -34,10 +34,10 @@ export async function registrationPayPageSuite() {
 }
 
 /** Task 5: the reminder smoke row and "Pay on a paid entry answers 409", with a token a real producer issued. */
-async function chaseMailsLinkThePage(): Promise<void> {
+export async function chaseMailsLinkThePage(): Promise<void> {
   const missing = ["DATABASE_URL", "CRON_SECRET", "EMAIL_OUTBOX_KEK"].filter((k) => !process.env[k]);
   if (missing.length > 0) {
-    check(`pay page smoke: chase-mail and paid-409 checks skipped (no ${missing.join(", ")} in the smoke env)`, true);
+    skip(`pay page smoke: chase-mail and paid-409 checks (no ${missing.join(", ")} in the smoke env)`);
     return;
   }
   const fee = 1500;

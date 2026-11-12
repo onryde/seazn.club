@@ -83,16 +83,26 @@ export async function call(s: Session, path: string, method = "GET", body?: unkn
 
 let pass = 0;
 let fail = 0;
+let skipped = 0;
 export const check = (label: string, cond: boolean) => {
   console.log(`${cond ? "PASS" : "FAIL"}  ${label}`);
   if (cond) pass++;
   else fail++;
 };
-/** The run's check totals so far. `pass` and `fail` are private to this module and only `check` moves them, so every
- *  module that imports the harness reads the same two numbers. */
-export function counts(): { pass: number; fail: number } {
-  return { pass, fail };
+/** A check that could not run in this environment (a key the smoke env lacks): printed SKIP and counted apart. Never a pass -
+ *  `check(label, true)` would report a check that never ran as proven - and never a fail: the run's verdict turns on `fail`
+ *  alone. Not a check either, so a suite's manifest count (`pass + fail`) does not move. */
+export const skip = (label: string) => {
+  console.log(`SKIP  ${label}`);
+  skipped++;
+};
+/** The run's totals so far. `pass`, `fail` and `skipped` are private to this module and only `check` / `skip` move them, so
+ *  every module that imports the harness reads the same numbers. */
+export function counts(): { pass: number; fail: number; skipped: number } {
+  return { pass, fail, skipped };
 }
+/** The run's closing line. */
+export const summary = (): string => `${pass} passed, ${fail} failed, ${skipped} skipped`;
 // Per-suite check counts (scripts/smoke-manifest.ts): main() runs each suite as `suite("name", () => nameSuite(...))`, and a
 // run with SMOKE_MANIFEST=<path> writes the counts there when it ends, so a refactor of this file can be diffed against a
 // baseline (scripts/smoke-manifest-diff.ts). A suite's name is its function's name without a trailing `Suite`.
