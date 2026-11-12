@@ -3,8 +3,9 @@
 // can all read them without a cycle.
 //
 // The same two lists are typed again as CHECK constraints: the statuses in db/migration/deltas/V470__email_outbox.sql, the kinds
-// (as last redefined) in polish wave P5's `V514__email_outbox_registration_rejected_lapsed.sql` (V511's registration lifecycle list, the
-// sponsor deals delta's V503 list plus five, plus two more; that is 59). They are two copies of one fact, so outbox-schema.test.ts reads the
+// (as last redefined) in the quick match delta `V507__quick_match_lifecycle.sql`: polish wave P5's
+// `V514__email_outbox_registration_rejected_lapsed.sql` list (V511's registration lifecycle list, the sponsor deals delta's
+// V503 list plus five, plus two more; that is 59), then the quick match's two (61). They are two copies of one fact, so outbox-schema.test.ts reads the
 // constraint definitions back from the catalogue and requires them to name exactly these members.
 
 export const OUTBOX_KINDS = [
@@ -74,6 +75,10 @@ export const OUTBOX_KINDS = [
   // Polish wave P5 (P2 carry): the organiser rejected the entry; a promoted entry's pay window lapsed. Literal, not transactional.
   "registration_rejected",
   "registration_promotion_lapsed",
+  // Quick match (docs/superpowers/specs/2026-11-03-quick-match-design.md §7.6, C2): the link mail at creation, then the one
+  // reminder before expiry. Born on the outbox: neither ever had a direct sender.
+  "quick_match_link",
+  "quick_match_reminder",
 ] as const;
 export type OutboxKind = (typeof OUTBOX_KINDS)[number];
 
@@ -86,6 +91,8 @@ export type OutboxKind = (typeof OUTBOX_KINDS)[number];
  *    mails, wave 4's two official notices, two suspension notices and match-report notice, and all seventeen of wave 5 (the funnel
  *    reminder and the sixteen staff alerts) are transactional; the registration, refund, dispute, sponsor and pass mails, the org
  *    invite (`sendInviteEmail` passed no flag) and wave 4's four billing-group mails (their senders passed none either) are not.
+ *    The quick match's two mails (its design, §7.6 and C2) go to the address the guest typed (a guest has no account) and are
+ *    transactional: the guest asked for the link, and the reminder is the one chance to keep the match.
  *
  * A declaration, like the lists above: pure data for the core, the writers and the tests to read.
  */
@@ -152,6 +159,8 @@ export const OUTBOX_KIND_FACTS: Readonly<Record<OutboxKind, { to: "account" | "l
   // Polish wave P5 (P2 carry): the organiser rejected the entry; a promoted entry's pay window lapsed. Literal, not transactional.
   registration_rejected: { to: "literal", transactional: false },
   registration_promotion_lapsed: { to: "literal", transactional: false },
+  quick_match_link: { to: "literal", transactional: true },
+  quick_match_reminder: { to: "literal", transactional: true },
 };
 
 /** Mail ABOUT an account that is addressed to a literal address (phase-3 D5, wave 3): its verification and its email change. These kinds

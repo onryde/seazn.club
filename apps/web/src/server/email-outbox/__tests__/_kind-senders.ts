@@ -6,7 +6,9 @@
 // and every KIND_DIRECT_SENDER entry is null: the spec's 49 direct senders less the 49 phase-3 kinds that took one each. lib/email.ts
 // exports no `send*` and keeps no private sender (no-second-path.test.ts); `checkSendable` and `deliver` stay, called only by the
 // outbox. The sweep asserts both lists empty and its count at the spec's 51. A later phase that registers a kind before its producer
-// moves follows the rule below; one that ADDS a direct sender has to change the spec's count first.
+// moves follows the rule below; one that ADDS a direct sender has to change the spec's count first. A kind that is born on the outbox
+// (never a direct sender: sponsor deals' paid notice, the quick match design's two, V507) joins KIND_DIRECT_SENDER as null and
+// KINDS_BORN_ON_THE_OUTBOX, and the count is untouched.
 //
 //  - SENDER_ALLOWLIST: the direct `send*` exports of lib/email.ts (no-second-path.test.ts checks it against the file, exactly).
 //  - NOT_YET_MOVED: the kinds whose producer still mails through one of those (outbox-kind-sweep.test.ts sweeps the others).
@@ -33,8 +35,9 @@ export const SENDERS_AT_START = 49;
 export const KINDS_BEFORE_PHASE_3: readonly OutboxKind[] = ["magic_link", "chess_invite"];
 /** Kinds BORN on the outbox after phase 3 closed: they never had a direct `send*` in lib/email.ts, so they are not among the spec's 49
  *  and take nothing from that count (without this list `allowlistLengthFor` would go negative). Not phase-1 kinds either, so they get a
- *  list of their own. Sponsor deals Task 23 (plan 2026-11-07-sponsor-deals, D13): the owner's "a sponsor has paid" notice. */
-export const KINDS_BORN_ON_THE_OUTBOX: readonly OutboxKind[] = ["sponsor_deal_paid", "registration_paid", "registration_approved", "registration_expired", "registration_withdrawn", "registration_joined", "registration_rejected", "registration_promotion_lapsed"];
+ *  list of their own. Sponsor deals Task 23 (plan 2026-11-07-sponsor-deals, D13): the owner's "a sponsor has paid" notice. The quick
+ *  match design (docs/superpowers/specs/2026-11-03-quick-match-design.md §7.6, C2): its link mail and its reminder. */
+export const KINDS_BORN_ON_THE_OUTBOX: readonly OutboxKind[] = ["sponsor_deal_paid", "registration_paid", "registration_approved", "registration_expired", "registration_withdrawn", "registration_joined", "registration_rejected", "registration_promotion_lapsed", "quick_match_link", "quick_match_reminder"];
 
 /** The `send*` exports of lib/email.ts still to move. The spec counted 49 at the start of phase 3 wave 1; each kind task took its own
  *  with it, and wave 5's last move emptied the list (T7 also deleted the private boolean sender and its typed form, so lib/email.ts
@@ -116,6 +119,8 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   registration_joined: null,
   registration_rejected: null,
   registration_promotion_lapsed: null,
+  quick_match_link: null,
+  quick_match_reminder: null,
 };
 
 /** How long the allowlist must be while `unmoved` kinds are still on their direct sender: the spec's 49, less one for every phase-3 kind

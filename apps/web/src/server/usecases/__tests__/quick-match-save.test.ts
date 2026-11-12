@@ -13,16 +13,22 @@
 //
 // One sport (see the rig's header): a save reads only the `quick_matches` row.
 //
-// THE REMINDER'S CANCEL (D9) is witnessed at its seam, not on an outbox row: the reminder kind (`quick_match_reminder`)
-// does not exist yet. Plan 3 Task 1 adds it to OUTBOX_KINDS and to the database's kind CHECK, which refuses the row until
-// then. So the cancel is wrapped below: every call is recorded with the tenant its handle runs as, and passed to the real
-// `cancelQueuedEmails`. The tripwire at the end reds the day Task 1 adds the kind, and then owes the outbox-row read.
+// THE REMINDER'S CANCEL (D9) is witnessed twice. At its seam: the cancel is wrapped below, every call recorded with the
+// tenant its handle runs as and passed to the real `cancelQueuedEmails`. And on the outbox row itself (plan 3 Task 1 added
+// `quick_match_reminder` to OUTBOX_KINDS and to the kind CHECK, V493): a queued reminder is written by the real writer, the
+// way the expiry sweep (plan 3 Task 2) will write it, the match is saved by each path, and the row is read back ended.
+//
+// THE BY-EMAIL LOOKUP'S INDEX (V493 `quick_matches_unsaved_email_idx`, plan 3 Amend T1 [B20]): the save runs on every
+// verified sign-in, site-wide. The planner is asked, inside the save's own transaction and for its own statement, to use the
+// index (sequential scans off), and the transaction's own index statistics say whether it did, and that it read the one
+// address rather than every unsaved one (under RLS, `lower(email) = $1` can only walk the index; V493's header says why).
 //
 // Real Postgres required; skipped without DATABASE_URL.
 import { randomBytes as kekBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.stubEnv("DEVICE_LINK_KEK", kekBytes(32).toString("hex")); // every create seals a home token
+vi.stubEnv("EMAIL_OUTBOX_KEK", kekBytes(32).toString("hex")); // a queued mail holds a sealed body, so "the cancel cleared it" can fail
 
 const ph = vi.hoisted(() => ({ capture: vi.fn<(args: unknown) => Promise<void>>(async () => {}) }));
 vi.mock("@/lib/posthog-server", async (orig) => ({
@@ -67,10 +73,52 @@ vi.mock("@/server/email-outbox/cancel", async (orig) => {
     },
   };
 });
+// The index probe: when armed, the save's own tenant transaction plans with sequential scans off, and reads back, on that same
+// transaction, how often it scanned the by-email index and how many index entries those scans returned; then, as the yardstick,
+// how many entries a lookup of the one address alone returns on that same transaction (an index holds an entry per row VERSION
+// until vacuum, so "one" is not a constant: the yardstick counts the address's own). Disarmed, `withTenant` is the real one.
+const plan = vi.hoisted(() => ({
+  armed: false,
+  address: "",
+  scans: null as number | null,
+  entries: null as number | null,
+  yardstick: null as number | null,
+}));
+vi.mock("@/lib/db", async (orig) => {
+  const actual = await orig<typeof import("@/lib/db")>();
+  const withTenant: typeof actual.withTenant = (orgId, fn, opts) =>
+    actual.withTenant(
+      orgId,
+      async (tx) => {
+        if (!plan.armed) return fn(tx);
+        await tx`set local enable_seqscan = off`;
+        const out = await fn(tx);
+        // This transaction's own use of the index (null when there is no such index): Postgres counts an index's scans and the
+        // entries they returned per transaction (pg_stat_get_xact_numscans / _tuples_returned), synchronously, so no other
+        // suite's work can reach the numbers.
+        const read = async () =>
+          (
+            await tx<{ n: number | null; e: number | null }[]>`
+              select pg_stat_get_xact_numscans(to_regclass('quick_matches_unsaved_email_idx'))::int as n,
+                     pg_stat_get_xact_tuples_returned(to_regclass('quick_matches_unsaved_email_idx'))::int as e`
+          )[0];
+        const r = await read();
+        plan.scans = r?.n ?? null;
+        plan.entries = r?.e ?? null;
+        await tx`select 1 from quick_matches where email_lower = lower(${plan.address}) and saved_by_user_id is null`;
+        const after = await read();
+        plan.yardstick = after?.e != null && r?.e != null ? after.e - r.e : null;
+        return out;
+      },
+      opts,
+    );
+  return { ...actual, withTenant };
+});
 
 import { sql } from "@/lib/db";
 import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
-import { OUTBOX_KINDS } from "@/server/email-outbox/constants";
+import { KIND_HOOKS } from "@/server/email-outbox/hooks";
+import { enqueueEmail, expiryWithin } from "@/server/email-outbox/enqueue";
 import { QUICK_MATCH_OUTBOX_REF_TYPE } from "../quick-match-delete";
 import { saveQuickMatchForUser, saveQuickMatchesForVerifiedUser } from "../quick-match-save";
 import { addressFor, createTypedMatch, deleteMadeMatches, saveStateOf } from "./_quick-match-save-rig";
@@ -384,11 +432,127 @@ describe.skipIf(!HAS_DB)("a save ends the match's queued reminder (D9), on the s
     expect(cancel.calls).toEqual([]);
   });
 
-  it("TRIPWIRE (owed to plan 3 Task 1): the reminder kind is not in the outbox vocabulary yet", () => {
-    // When this reds, Task 1 has added `quick_match_reminder`: replace this case with the outbox-row read the brief owes
-    // (enqueue a queued reminder for a match by its ref, save it by each path, read the row back `expired` with
-    // last_error = quick_match_saved), and drop the cast in quick-match-save.ts. task-4-report.md, carry C1.
-    expect((OUTBOX_KINDS as readonly string[]).includes(REMINDER_KIND)).toBe(false);
+  /** A queued reminder about `quickMatchId`, written by the real writer as the expiry sweep (plan 3 Task 2) writes it: the
+   *  privileged pool, the system org's row (the tenant insert policy refuses an org-less one), the ref by the match's id. */
+  async function queueReminder(quickMatchId: string, to: string): Promise<string> {
+    const [row] = await sql<{ expires_at: Date }[]>`select expires_at from quick_matches where id = ${quickMatchId}`;
+    return enqueueEmail(sql, {
+      kind: REMINDER_KIND,
+      refType: QUICK_MATCH_OUTBOX_REF_TYPE,
+      refId: quickMatchId,
+      orgId: QUICK_MATCH_SYSTEM_ORG_ID,
+      to,
+      subject: "QM save test reminder",
+      html: "<p>reminder</p>",
+      text: "reminder",
+      transactional: true,
+      expiresAt: expiryWithin(row!.expires_at),
+    });
+  }
+  type MailState = { kind: string; status: string; last_error: string | null; cleared: boolean };
+  const mailState = async (id: string): Promise<MailState> => {
+    const [r] = await sql<MailState[]>`
+      select kind, status, last_error, body_sealed is null as cleared from email_outbox where id = ${id}`;
+    if (!r) throw new Error(`precondition: outbox row ${id} exists`);
+    return r;
+  };
+  /** The link mail the create queued for this match (rig creates with an email queue one, plan 3 Task 1). */
+  const linkMailOf = async (quickMatchId: string): Promise<string> => {
+    const rows = await sql<{ id: string }[]>`
+      select id from email_outbox where ref_type = ${QUICK_MATCH_OUTBOX_REF_TYPE} and ref_id = ${quickMatchId} and kind = 'quick_match_link'`;
+    expect(rows, "premise: the create queued its one link mail").toHaveLength(1);
+    return rows[0]!.id;
+  };
+
+  it("on the outbox row: the by-email save ends each saved match's queued reminder with quick_match_saved; the link mail and another match's reminder stay queued", async () => {
+    const email = addressFor("row-email");
+    const a = await createTypedMatch(email);
+    const b = await createTypedMatch(email);
+    const other = await createTypedMatch(addressFor("row-other"));
+    const ra = await queueReminder(a.id, email);
+    const rb = await queueReminder(b.id, email);
+    const rOther = await queueReminder(other.id, addressFor("row-other-to"));
+    const link = await linkMailOf(a.id);
+    for (const id of [ra, rb, rOther, link]) {
+      expect(await mailState(id), "premise: queued, with a body").toMatchObject({ status: "queued", cleared: false });
+    }
+    const user = await account(email);
+
+    expect(await saveQuickMatchesForVerifiedUser(user)).toEqual({ savedByEmail: 2 });
+
+    const ended: MailState = { kind: REMINDER_KIND, status: "expired", last_error: SAVED_REASON, cleared: true };
+    expect(await mailState(ra)).toEqual(ended);
+    expect(await mailState(rb)).toEqual(ended);
+    expect((await mailState(rOther)).status, "another match's reminder is not this save's").toBe("queued");
+    expect((await mailState(link)).status, "only the reminder kind is ended: the link mail stays").toBe("queued");
+  });
+
+  it("on the outbox row: the button's save ends that match's queued reminder; a second press ends nothing more", async () => {
+    const typed = await createTypedMatch(addressFor("row-button"));
+    const reminder = await queueReminder(typed.id, addressFor("row-button-to"));
+    expect(await mailState(reminder), "premise: queued, with a body").toMatchObject({ status: "queued", cleared: false });
+    const user = await someone();
+
+    expect(await saveQuickMatchForUser(user, typed.id)).toBe("saved");
+    const after = await mailState(reminder);
+    expect(after).toEqual({ kind: REMINDER_KIND, status: "expired", last_error: SAVED_REASON, cleared: true });
+
+    expect(await saveQuickMatchForUser(user, typed.id)).toBe("already_yours");
+    expect(await mailState(reminder)).toEqual(after);
+  });
+
+  it("taken and gone end no reminder on the outbox row", async () => {
+    const typed = await createTypedMatch(null);
+    const saver = await someone();
+    expect(await saveQuickMatchForUser(saver, typed.id)).toBe("saved");
+    // A reminder queued after the save (the shape a race would leave): a refused press must not touch it.
+    const late = await queueReminder(typed.id, addressFor("row-late"));
+    expect(await saveQuickMatchForUser(await someone(), typed.id)).toBe("taken");
+
+    const expired = await createTypedMatch(null);
+    const reminder = await queueReminder(expired.id, addressFor("row-gone"));
+    await expire(expired.id);
+    expect(await saveQuickMatchForUser(saver, expired.id)).toBe("gone");
+
+    expect((await mailState(late)).status).toBe("queued");
+    expect((await mailState(reminder)).status).toBe("queued");
+  });
+
+  it("a reminder the save ends needs no hook run after it (the save drops cancelQueuedEmails' rows): the kind declares none", () => {
+    // cancelQueuedEmails returns the rows it ended so a caller can run `afterEndedBadly` after its commit (cancel.ts). The save
+    // drops them (quick-match-save.ts saveInTx) on this premise: nothing waits on a reminder's outcome, so the kind has no
+    // ended-badly hook and no re-drive. A kind that gains one must also gain the call after the save's commit.
+    expect(KIND_HOOKS[REMINDER_KIND], "the kind is registered").toBeDefined();
+    expect(KIND_HOOKS[REMINDER_KIND].onEndedBadly, "no ended-badly hook for the reminder").toBeUndefined();
+    expect(KIND_HOOKS[REMINDER_KIND].findUnapplied, "and no re-drive").toBeUndefined();
+  });
+});
+
+describe.skipIf(!HAS_DB)("the by-email lookup is indexed (V493 quick_matches_unsaved_email_idx, plan 3 Amend T1 [B20])", () => {
+  it("the save's own statement looks its address up in the index: that address's entries only, not a walk of every unsaved address", async () => {
+    // With sequential scans off, a WHERE that cannot be an index condition (under RLS, `lower(email) = $1`) still uses the partial
+    // index as a whole walk (its predicate holds), reading every unsaved address. A second unsaved address makes that walk read
+    // more entries than a lookup of the one address alone; the lookup on email_lower reads exactly as many.
+    const email = addressFor("index");
+    const typed = await createTypedMatch(email);
+    const bystander = await createTypedMatch(addressFor("index-bystander"));
+    const user = await account(email);
+    plan.scans = null;
+    plan.entries = null;
+    plan.yardstick = null;
+    plan.address = email;
+    plan.armed = true;
+    try {
+      expect(await saveQuickMatchesForVerifiedUser(user)).toEqual({ savedByEmail: 1 });
+    } finally {
+      plan.armed = false;
+    }
+    expect((await saveStateOf(typed.id)).saved_by_user_id, "premise: the probed save really saved").toBe(user);
+    expect((await saveStateOf(bystander.id)).saved_by_user_id, "premise: the bystander is still unsaved, so in the index").toBeNull();
+    expect(plan.scans, "the index exists and the save's WHERE can use it").not.toBeNull();
+    expect(plan.scans!, "the save's lookup went through the index").toBeGreaterThan(0);
+    expect(plan.yardstick!, "the yardstick lookup read the address's own entries").toBeGreaterThan(0);
+    expect(plan.entries, "and read the one address's entries, as a lookup of it alone does: no other address's").toBe(plan.yardstick);
   });
 });
 

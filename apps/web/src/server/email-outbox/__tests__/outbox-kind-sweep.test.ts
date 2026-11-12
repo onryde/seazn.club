@@ -164,6 +164,11 @@
 //   - staff_extra_org_allowance: the real `maybeAlertOrgAllowance` (its one site, `setExtraOrgs`, defers it after the Stripe mutation;
 //     extra-org-addon.test.ts drives a purchase to a row), for a `pro` group bought to 25 organisations, the same way. Its key is the
 //     group and the count (P-W5-16), and the plan's base is read from plan_entitlements, as the producer reads it.
+//   - quick_match_link (quick match plan 3 Task 1; spec 2026-11-03 §7.6): the route POST of app/api/quick-match/route.ts, the guest's
+//     setup form, by a French guest who typed an address: the real create, whose last transaction queues the link mail on the system
+//     org's tenant, and the real `dispatchNow` after it. A guest has no account, so the setup form's own language.
+//   - quick_match_reminder: plan 3 Task 2 (the expiry sweep's reminder). Until it lands the sweep fails by name, `no scenario for
+//     outbox kind quick_match_reminder`: Task 2's red, recorded (plan 3 pre-flight A2, G5).
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -242,6 +247,9 @@ import { POST as resendVerificationPost } from "@/app/api/admin/users/[id]/resen
 import { POST as funnelStartPost } from "@/app/api/funnel/start/route";
 import { POST as funnelRemindPost } from "@/app/api/funnel/remind/route";
 import { createFunnelDraft } from "@/lib/funnel";
+import { NextRequest } from "next/server";
+import { POST as quickMatchPost } from "@/app/api/quick-match/route";
+import { hardDeleteQuickMatchCompetition } from "@/server/usecases/quick-match-delete";
 import { POST as changeEmailPost } from "@/app/api/auth/change-email/route";
 import { DELETE as deleteAccount } from "@/app/api/users/me/route";
 import { POST as orgInvitePost } from "@/app/api/orgs/[id]/invites/route";
@@ -387,6 +395,11 @@ const SPEC_KINDS = [
   "registration_joined",
   "registration_rejected",
   "registration_promotion_lapsed",
+  // After the phase-3 spec's fifty-one and sponsor deals' one: the quick match design's two
+  // (docs/superpowers/specs/2026-11-03-quick-match-design.md §7.6, C2), typed from that design: the link mail at creation and the one
+  // reminder before expiry.
+  "quick_match_link",
+  "quick_match_reminder",
 ] as const satisfies readonly OutboxKind[];
 
 /** The legend: [to, transactional]. A = an account, resolved at send; L = a literal address; S = the staff address. T = transactional. */
@@ -455,6 +468,10 @@ const SPEC_FACTS: KindFacts = {
   registration_joined: ["literal", false],
   registration_rejected: ["literal", false],
   registration_promotion_lapsed: ["literal", false],
+  // Quick match (§7.6, C2): both to the address the guest typed (L; a guest has no account), both T (the guest asked for the link,
+  // and the reminder is the one chance to keep the match).
+  quick_match_link: ["literal", true],
+  quick_match_reminder: ["literal", true],
 };
 
 /** What the real producers create beyond the rows the hand-made scenarios name: the seeded round's people and organisation. (The
@@ -466,6 +483,11 @@ const made = { userIds: [] as string[], orgIds: [] as string[] };
  *  by account too), the seeded organisation (cascades its competition, fixtures and seats), then the accounts (login links cascade). */
 async function cleanUp(): Promise<void> {
   const like = `${RUN}-%`;
+  // The quick match's own delete (plan 1): its outbox rows by their reference, its `quick_matches` row, its competition. Found by the
+  // name the scenario gave it, so a run that threw after the create still leaves nothing in the shared system org.
+  const quickMatches = await sql<{ competition_id: string }[]>`
+    select competition_id from quick_matches where name = ${QUICK_MATCH_SWEEP_NAME}`;
+  for (const q of quickMatches) await hardDeleteQuickMatchCompetition(q.competition_id);
   await sql`
     delete from email_outbox
      where ref_id like ${like} or lower(recipient) like ${like} or recipient_user_id = any(${made.userIds}::uuid[])
@@ -520,13 +542,14 @@ afterEach(() => {
 });
 
 describe("the spec's lists (no database)", () => {
-  it("the spec lists fifty-one kinds, sponsor deals adds one and the registration lifecycle five more (57), and the code's registry is exactly them, in the spec's order", () => {
+  it("the spec lists fifty-one kinds, sponsor deals adds one, the registrant lifecycle seven more (59), the quick match design two more (61), and the code's registry is exactly them, in that order", () => {
     expect([...OUTBOX_KINDS]).toEqual([...SPEC_KINDS]);
-    // The spec's Counts: "With `magic_link` and `chess_invite` that is 51." Sponsor deals Task 23 adds sponsor_deal_paid: 52; the five registration lifecycle kinds: 57.
-    expect(SPEC_KINDS).toHaveLength(59);
+    // The spec's Counts: "With `magic_link` and `chess_invite` that is 51." Sponsor deals Task 23 adds sponsor_deal_paid: 52; the seven
+    // registrant lifecycle kinds (P2's five, P5's two): 59. Then the quick match design's two (§7.6, C2): 61.
+    expect(SPEC_KINDS).toHaveLength(61);
   });
 
-  it("the legend has 27 literal kinds, SIXTEEN account kinds (sponsor deals' sponsor_deal_paid the sixteenth) and SIXTEEN staff kinds; THIRTY-TWO are transactional", () => {
+  it("the legend has 29 literal kinds, SIXTEEN account kinds (sponsor deals' sponsor_deal_paid the sixteenth) and SIXTEEN staff kinds; THIRTY-FOUR are transactional", () => {
     const by = (to: string): string[] => SPEC_KINDS.filter((k) => SPEC_FACTS[k][0] === to);
     expect(by("literal")).toEqual([
       "magic_link",
@@ -559,6 +582,9 @@ describe("the spec's lists (no database)", () => {
       "registration_joined",
       "registration_rejected",
       "registration_promotion_lapsed",
+      // Quick match: both go to the address the guest typed.
+      "quick_match_link",
+      "quick_match_reminder",
     ]);
     expect(by("account")).toEqual([
       "chess_invite",
@@ -636,11 +662,14 @@ describe("the spec's lists (no database)", () => {
       "staff_ai_run_cost",
       "staff_earn_grant_volume",
       "staff_extra_org_allowance",
+      // Quick match: both (the guest asked for the link; the reminder is the one chance to keep the match).
+      "quick_match_link",
+      "quick_match_reminder",
     ]);
     // The spec's legend: "The 19 N kinds are the senders that pass no `transactional: true` today", so 51 - 19 = 32 are T. Sponsor deals'
     // sponsor_deal_paid is N, and so is each of the 7 registration lifecycle kinds (P2's five, P5's two): 19 + 1 + 7 = 27 N, so
-    // 59 - 27 = 32 are T still.
-    expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toHaveLength(32);
+    // 59 - 27 = 32 are T still; with the quick match design's two T kinds, 61 - 27 = 34.
+    expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toHaveLength(34);
   });
 
   it("the not-yet-moved list names only spec kinds, once each, in the registry's order, none of waves 1 to 4, and leaves at least one kind to sweep", () => {
@@ -1482,6 +1511,41 @@ function funnelReminderScenario(): KindScenario {
       await sql`update funnel_drafts set created_at = now() - interval '25 hours' where id = ${draft.id}`;
       const res = await funnelRemindPost(new Request("https://sweep.test/api/funnel/remind", { method: "POST" }));
       expect(res.status, "premise: the real cron route answered 200").toBe(200);
+    },
+  };
+}
+
+/** The quick match the sweep creates: one name per run, so the clean-up finds it whatever happened to the scenario. */
+const QUICK_MATCH_SWEEP_NAME = `Sweep QM ${RUN}`;
+
+/** The real create of a quick match (POST /api/quick-match, the guest's setup form; plan 3 Task 1) by a French guest who typed an address:
+ *  a guest has no account and the match is the system org's, so the setup form's own language; the request makes the first attempt. The
+ *  address is the plan's smoke shape (plan 3 Amend T1 [A8]), with RUN in it. */
+async function quickMatchLinkScenario(): Promise<KindScenario> {
+  const recipient = `delivered+qm_${RUN}-${randomUUID().slice(0, 8)}@resend.dev`;
+  const name = QUICK_MATCH_SWEEP_NAME;
+  // Read from the catalog, never typed (as the quick match suites do).
+  const [variant] = await sql<{ key: string }[]>`
+    select key from sport_variants where sport_key = 'badminton' and is_system and org_id is null order by key limit 1`;
+  if (!variant) throw new Error("no system badminton variant: run `npm run sync:sports` against this database");
+  return {
+    locale: "fr",
+    subjectKey: "quickMatchLink.subject",
+    subjectVars: { name },
+    recipient,
+    firstAttempt: "request",
+    run: async () => {
+      vi.stubEnv("DEVICE_LINK_KEK", KEK); // the create seals the home token before anything else
+      const body = new URLSearchParams({ name, sport_key: "badminton", variant_key: variant.key, kind: "pair", format: "league" });
+      for (const side of ["Ravi & Sam", "Priya & Tom"]) body.append("sides", side);
+      body.append("plays", "1");
+      body.append("email", recipient);
+      body.append("locale", "fr");
+      const res = await quickMatchPost(
+        new NextRequest("https://sweep.test/api/quick-match", { method: "POST", body, headers: { "x-forwarded-for": "203.0.113.79" } }),
+      );
+      expect(res.status, "premise: the real route answered its 303").toBe(303);
+      expect(res.headers.get("location"), "premise: the create landed on its home, not on a refusal").toMatch(/^\/q\/qm_/);
     },
   };
 }
@@ -2424,6 +2488,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", funnelReminder.subjectKey, funnelReminder.subjectVars),
     );
 
+    const quickMatchLink = await quickMatchLinkScenario();
+    expect(dictionarySubject("fr", quickMatchLink.subjectKey, quickMatchLink.subjectVars)).not.toBe(
+      dictionarySubject("en", quickMatchLink.subjectKey, quickMatchLink.subjectVars),
+    );
+
     // The staff alert's language is the platform's, never the org's: the French subject is a different sentence, so a producer that
     // took the org's locale would fail the English one below.
     const dealPaid = await sponsorDealPaidScenario();
@@ -2532,14 +2601,16 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         registration_joined: registrationJoined,
         registration_rejected: registrationRejected,
         registration_promotion_lapsed: registrationLapsed,
+        quick_match_link: quickMatchLink,
+        // quick_match_reminder: plan 3 Task 2 adds its scenario (the expiry sweep's reminder).
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
 
     const moved = SPEC_KINDS.filter((k) => !NOT_YET_MOVED.includes(k));
     // The spec's count, typed: "With `magic_link` and `chess_invite` that is 51." Every kind has moved, so every one was swept; sponsor
-    // deals Task 23's sponsor_deal_paid makes 52.
-    expect(out.checked, "anti-vacuity: every kind the spec lists was swept").toBe(59);
+    // deals Task 23's sponsor_deal_paid makes 52, the seven registrant lifecycle kinds 59, and the quick match design's two (§7.6, C2) 61.
+    expect(out.checked, "anti-vacuity: every kind the spec lists was swept").toBe(61);
     expect(out.checked).toBeGreaterThan(0);
     expect(out.kinds, "and they are exactly the spec's moved kinds, in the spec's order").toEqual(moved);
   }, 60_000);

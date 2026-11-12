@@ -53,4 +53,8 @@ export const QUICK_MATCH_ERRORS = {
   SIDES_UNKNOWN: "QUICK_MATCH_SIDES_UNKNOWN",
   /** "Add a match" past `QUICK_MATCH_MAX_ADHOC` extra matches (plan 2 Task 8, pre-flight D4). */
   ADHOC_LIMIT: "QUICK_MATCH_ADHOC_LIMIT",
+  /** A programmer error, never a guest's refusal (500): a create given an email but no base URL to build the link mail's
+   *  link from (`createQuickMatch`, plan 3 Amend T1 [B2]). The create route always passes one, and reports a 5xx as a fault
+   *  whatever its code. */
+  BASE_URL_MISSING: "QUICK_MATCH_BASE_URL_MISSING",
 } as const;

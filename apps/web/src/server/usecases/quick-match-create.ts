@@ -21,8 +21,14 @@ import "server-only";
 // hard-deletes it (`hardDeleteQuickMatchCompetition`) before rethrowing, so a caller sees the whole match or nothing; a
 // process crash between the commits leaves a private, unlisted competition with no `quick_matches` row, which plan 3's
 // sweep removes (pre-flight D1).
+//
+// The link mail (plan 3 Task 1; spec §7.6, C19): a create with an email queues one `quick_match_link` mail in that LAST
+// transaction, so the row and its mail commit together or not at all, and returns the row's id for the route to make the
+// first attempt after the commit. Its link is `<baseUrl>/q/<token>`: the mail body is the one place besides the address bar
+// the token goes, never a log line, an event or `meta`.
 import { sql, withTenant, type Tx } from "@/lib/db";
 import { EVENTS } from "@/lib/analytics-events";
+import { quickMatchLinkEmail } from "@/lib/email";
 import { HttpError } from "@/lib/errors";
 import { captureServer } from "@/lib/posthog-server";
 import { systemAuth } from "@/lib/quick-match-auth";
@@ -34,13 +40,15 @@ import {
   QUICK_MATCH_SYSTEM_ORG_ID,
   QUICK_MATCH_SYSTEM_USER_ID,
 } from "@/lib/quick-match-constants";
+import { routes } from "@/lib/routes";
 import type { CreateQuickMatch } from "@/server/api-v1/schemas";
+import { enqueueEmail, expiryWithin, recipientLocale } from "@/server/email-outbox";
 import { log } from "@/server/logger";
 import type { EntrantKind } from "@seazn/engine/sport";
 import { createCompetition } from "./competitions";
 import { createDivision } from "./divisions";
 import { createEntrants } from "./entrants";
-import { hardDeleteQuickMatchCompetition } from "./quick-match-delete";
+import { hardDeleteQuickMatchCompetition, QUICK_MATCH_OUTBOX_REF_TYPE } from "./quick-match-delete";
 import { quickMatchPreview, quickMatchStageInput } from "./quick-match-preview";
 import { offerFor } from "./quick-match-sports";
 import { hashHomeToken, mintHomeToken, sealHomeToken } from "./quick-match-tokens";
@@ -58,6 +66,9 @@ export interface CreatedQuickMatch {
   /** The number the Start button showed (C17): `quickMatchPreview(...).matchCount`, the generated non-bye fixtures. */
   matchCount: number;
   expiresAt: Date;
+  /** The link mail's outbox row (plan 3 Task 1), queued in the create's last transaction when the guest typed an email;
+   *  null without one. The route makes its first attempt after the commit (`dispatchNow`). */
+  outboxRowId: string | null;
 }
 
 /** Every refusal's code. Defined in the import-free lib/quick-match-constants.ts, so device links can throw one without
@@ -106,6 +117,16 @@ function tooManyAlive(): HttpError {
 
 const isoDate = (d: Date): string => d.toISOString().slice(0, 10);
 
+/** An email with no base URL to build its link from (plan 3 Amend T1 [B2]): a programmer error, never a silent create
+ *  that mails nothing. Thrown before anything is minted or written. */
+function baseUrlMissing(): HttpError {
+  return new HttpError(
+    500,
+    "a quick match create with an email needs a baseUrl for the link mail",
+    QUICK_MATCH_ERRORS.BASE_URL_MISSING,
+  );
+}
+
 /**
  * Build one quick match: UNGUARDED (pre-flight A9) — no offer, kind or format check, and no early per-visitor count;
  * the locked recount in the last transaction is the only cap it applies (the race guard, B5f). Callers: the offer probe
@@ -114,8 +135,9 @@ const isoDate = (d: Date): string => d.toISOString().slice(0, 10);
 export async function createQuickMatchTree(
   input: Omit<CreateQuickMatch, "kind">,
   kind: EntrantKind,
-  ctx: { visitorHash: string; home: SealedHomeToken; now?: Date; _failBeforeGenerateForTests?: () => void },
+  ctx: { visitorHash: string; home: SealedHomeToken; baseUrl?: string; now?: Date; _failBeforeGenerateForTests?: () => void },
 ): Promise<CreatedQuickMatch> {
+  if (input.email !== null && !ctx.baseUrl) throw baseUrlMissing();
   const auth = systemAuth();
   const now = ctx.now ?? new Date();
   const { name, sport_key, variant_key, format, sides, plays } = input;
@@ -168,7 +190,25 @@ export async function createQuickMatchTree(
         values (${auth.orgId}, ${competition.id}, ${name}, ${format}, ${ctx.home.hash}, ${ctx.home.enc}, ${ctx.visitorHash},
                 ${input.email}, ${input.locale}, ${now}, ${expiresAt})
         returning id`;
-      return { id: row!.id, write, started, expiresAt };
+      // The link mail (§7.6), in this transaction: the system org's own row (the tenant insert policy refuses an org-less
+      // one), in the setup form's language, worthless once the outbox's bound or the match's expiry has passed.
+      const outboxRowId =
+        input.email === null
+          ? null
+          : await enqueueEmail(tx, {
+              kind: "quick_match_link",
+              refType: QUICK_MATCH_OUTBOX_REF_TYPE,
+              refId: row!.id,
+              orgId: auth.orgId,
+              to: input.email,
+              transactional: true,
+              expiresAt: expiryWithin(expiresAt),
+              ...(await quickMatchLinkEmail(
+                { name, link: `${ctx.baseUrl}${routes.quickMatch(ctx.home.token)}`, expiresAt },
+                await recipientLocale(tx, { pick: input.locale, userId: null, orgDefault: null }),
+              )),
+            });
+      return { id: row!.id, write, started, expiresAt, outboxRowId };
     });
 
     // After the commit: the work `generateStageFixtures` and `startDivision` each do for themselves. The organizer
@@ -187,6 +227,7 @@ export async function createQuickMatchTree(
       token: ctx.home.token,
       matchCount,
       expiresAt: committed.expiresAt,
+      outboxRowId: committed.outboxRowId,
     };
   } catch (err) {
     // 5. Or nothing. A compensation that fails itself must not replace the refusal the caller is owed: it is logged,
@@ -200,7 +241,8 @@ export async function createQuickMatchTree(
 
 /**
  * Create a guest's quick match: what plan 2's route calls. In this order, each step answering before the next runs
- * (a `visitorHash` that is not a visitor key's sha256 hex is refused 400 QUICK_MATCH_VISITOR_INVALID before any of them):
+ * (a `visitorHash` that is not a visitor key's sha256 hex is refused 400 QUICK_MATCH_VISITOR_INVALID before any of them, and
+ * an email with no `baseUrl` throws 500 QUICK_MATCH_BASE_URL_MISSING, a programmer error, plan 3 Amend T1 [B2]):
  *   0. the home token is minted, hashed and sealed BEFORE any read or write: a server without DEVICE_LINK_KEK refuses
  *      503 DEVICE_LINK_KEK_MISSING having touched nothing, as device links seal before any write (E2, A4);
  *   1. the early per-visitor count: QUICK_MATCH_MAX_ALIVE_PER_VISITOR alive already → 429 QUICK_MATCH_TOO_MANY_ALIVE,
@@ -210,16 +252,17 @@ export async function createQuickMatchTree(
  *      422 FORMAT_NOT_OFFERED. C23 as amended (owner ruling 2026-11-07): a knockout is offered only where a bracket match
  *      cannot end level, decided by the engine's `bracketMayEndLevel` on the variant's cfg ⊕ the knockout stage's
  *      defaults (`offer.knockoutAllowed`, quick-match-sports.ts); the probe checks the same question on real fixtures;
- *   3. the tree (`createQuickMatchTree`), which builds the whole match or nothing;
+ *   3. the tree (`createQuickMatchTree`), which builds the whole match or nothing, and with an email queues its link mail;
  *   4. one `quick_match_created` event, carrying no name, email or token (D11).
  */
 export async function createQuickMatch(
   input: CreateQuickMatch,
-  ctx: { visitorHash: string; now?: Date; _failBeforeGenerateForTests?: () => void },
+  ctx: { visitorHash: string; baseUrl?: string; now?: Date; _failBeforeGenerateForTests?: () => void },
 ): Promise<CreatedQuickMatch> {
   if (!VISITOR_HASH_SHAPE.test(ctx.visitorHash)) {
     throw new HttpError(400, "visitorHash must be a visitor key's sha256 hex", QUICK_MATCH_ERRORS.VISITOR_INVALID);
   }
+  if (input.email !== null && !ctx.baseUrl) throw baseUrlMissing();
   const home = sealNewHomeToken();
   const now = ctx.now ?? new Date();
 
@@ -248,6 +291,7 @@ export async function createQuickMatch(
   const out = await createQuickMatchTree(rest, kind, {
     visitorHash: ctx.visitorHash,
     home,
+    baseUrl: ctx.baseUrl,
     now,
     _failBeforeGenerateForTests: ctx._failBeforeGenerateForTests,
   });

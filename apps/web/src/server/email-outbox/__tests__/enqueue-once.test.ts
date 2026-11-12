@@ -109,6 +109,11 @@ const SPEC_LEGEND: Record<string, [to: "account" | "literal" | "staff", transact
   registration_joined: ["literal", false],
   registration_rejected: ["literal", false],
   registration_promotion_lapsed: ["literal", false],
+  // Quick match (docs/superpowers/specs/2026-11-03-quick-match-design.md §7.6, C2): the link mail at creation and the one reminder
+  // before expiry, both to the address the guest typed (literal; there is no account), both transactional: the guest asked for the
+  // link, and the reminder is the only chance to keep the match.
+  quick_match_link: ["literal", true],
+  quick_match_reminder: ["literal", true],
 };
 
 /** A `db` that records the statements it is handed and answers like postgres.js does for an insert: a row list carrying the
@@ -169,8 +174,9 @@ describe("the kind facts guard (no database)", () => {
       expect(OUTBOX_KIND_FACTS[kind as OutboxKind], kind).toEqual({ to, transactional });
       checked++;
     }
-    // The spec's Counts: "With `magic_link` and `chess_invite` that is 51." Sponsor deals Task 23 adds sponsor_deal_paid: 52.
-    expect(checked, "every kind of the legend was compared").toBe(59);
+    // The spec's Counts: "With `magic_link` and `chess_invite` that is 51." Sponsor deals Task 23 adds sponsor_deal_paid: 52. Polish
+    // waves P2 and P5 add the seven registrant lifecycle mails: 59. And the quick match design's two (§7.6, C2): 61.
+    expect(checked, "every kind of the legend was compared").toBe(61);
     // The other direction: the code declares no kind the legend does not.
     expect(Object.keys(OUTBOX_KIND_FACTS).sort()).toEqual(Object.keys(SPEC_LEGEND).sort());
   });
@@ -189,9 +195,11 @@ describe("the kind facts guard (no database)", () => {
         checked++;
       }
     }
-    // (27 literal + 16 staff) x 2 writers = 86: the spec's legend has 20 L kinds (magic_link, the five wave-1 kinds, wave 2's three
-    // sponsor mails, wave 3's eight, wave 4's two official notices and wave 5's funnel reminder) and 16 S kinds (wave 5's staff alerts).
-    expect(checked, "43 kinds not addressed to an account x 2 writers").toBe(86);
+    // (29 literal + 16 staff) x 2 writers = 90: the spec's legend has 20 L kinds (magic_link, the five wave-1 kinds, wave 2's three
+    // sponsor mails, wave 3's eight, wave 4's two official notices and wave 5's funnel reminder), polish waves P2 and P5's seven
+    // registrant lifecycle mails, the quick match design's two (its link mail and reminder go to the address the guest typed) and
+    // 16 S kinds (wave 5's staff alerts).
+    expect(checked, "45 kinds not addressed to an account x 2 writers").toBe(90);
   });
 
   it("the refusal names the kind and ref type and carries neither the address, the user id nor the body", async () => {

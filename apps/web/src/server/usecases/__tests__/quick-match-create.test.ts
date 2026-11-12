@@ -371,7 +371,7 @@ describe.skipIf(!HAS_DB)("createQuickMatch (Part B: the guarded wrapper)", () =>
     const cap = vi.mocked(captureServer);
     cap.mockClear();
     const b = { ...base(), email: "guest@example.com" };
-    const out = await createQuickMatch(b, { visitorHash: v() });
+    const out = await createQuickMatch(b, { visitorHash: v(), baseUrl: "https://qm-create.test" });
     const ours = cap.mock.calls.map(([a]) => a).filter((a) => a.event === EVENTS.QUICK_MATCH_CREATED);
     expect(ours).toHaveLength(1);
     expect(ours[0]).toMatchObject({

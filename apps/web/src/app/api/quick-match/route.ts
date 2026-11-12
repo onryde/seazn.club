@@ -11,8 +11,12 @@
 //   1. the per-IP limit (QUICK_MATCH_CREATE_LIMIT, D2), before any database work (B3); only the form body is read first,
 //      for the locale a refusal returns to;
 //   2. the form, through plan 1's `CreateQuickMatch` schema (strict: a stray field is refused, not dropped);
-//   3. the visitor, from the REQUEST's cookie (B3a), minted when absent or malformed (`isVisitorKeyShaped`, B3b);
-//   4. plan 1's `createQuickMatch`: the seal, the per-visitor alive cap, the offer, the tree, or nothing.
+//   3. with an email only, a second, separate per-IP bucket for mail to an address a stranger typed (EMAIL_LIMIT, fail-closed
+//      as every mail-sending endpoint is; quick match plan 3 Amend T1 [B4]), still before any database work;
+//   4. the visitor, from the REQUEST's cookie (B3a), minted when absent or malformed (`isVisitorKeyShaped`, B3b);
+//   5. plan 1's `createQuickMatch`: the seal, the per-visitor alive cap, the offer, the tree, or nothing. With an email it
+//      queues the link mail in its last transaction (plan 3 Task 1), and this route makes the mail's first attempt after
+//      the commit (`dispatchNow`, which never throws), as api/funnel/start does.
 //
 // Cross-site posts are refused before this runs, as for every public mutating /api route: proxy.ts answers 403 to a POST whose
 // Origin names another host. The visitor cookie is SameSite=Lax, so a cross-site post never carries it either.
@@ -26,9 +30,11 @@ import { explicitLocale } from "@/lib/explicit-locale";
 import { handler, HttpError, redirectLocal } from "@/lib/http";
 import { DEFAULT_LOCALE, hasLocale, type Locale } from "@/lib/i18n-constants";
 import { QUICK_MATCH_ERRORS } from "@/lib/quick-match-constants";
-import { QUICK_MATCH_CREATE_LIMIT, rateLimit } from "@/lib/rate-limit";
+import { baseUrl } from "@/lib/oauth";
+import { EMAIL_LIMIT, QUICK_MATCH_CREATE_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { routes } from "@/lib/routes";
 import { CreateQuickMatch } from "@/server/api-v1/schemas";
+import { dispatchNow } from "@/server/email-outbox";
 import { log } from "@/server/logger";
 import { createQuickMatch } from "@/server/usecases/quick-match-create";
 import { QUICK_MATCH_VISITOR_COOKIE } from "@/server/usecases/quick-match-tokens";
@@ -63,9 +69,10 @@ function formInput(form: FormData): Record<string, unknown> {
 }
 
 /** What `?e=` names for a refusal: the thrower's own code when it is a quick match code; the limiter's code-less 429 as
- *  RATE_LIMITED; anything else as CREATE_FAILED. */
+ *  RATE_LIMITED; anything else as CREATE_FAILED. A quick match code on a 5xx (BASE_URL_MISSING, a programmer error) is
+ *  no refusal: it is a fault, reported, and shown as CREATE_FAILED. */
 const isQuickMatchCode = (err: unknown): err is HttpError =>
-  err instanceof HttpError && err.code !== undefined && CODES.has(err.code);
+  err instanceof HttpError && err.status < 500 && err.code !== undefined && CODES.has(err.code);
 /** The per-IP limiter's 429 (lib/rate-limit.ts): it carries no code, only Retry-After. */
 const isLimiter = (err: unknown): err is HttpError => err instanceof HttpError && err.status === 429 && err.code === undefined;
 
@@ -102,8 +109,10 @@ export async function POST(req: NextRequest) {
       const parsed = CreateQuickMatch.safeParse(formInput(form));
       if (!parsed.success) throw new FormRefused("the setup form failed the schema", { cause: parsed.error });
       const input = parsed.data;
+      if (input.email !== null) await rateLimit(`quick-match-email:${ip}`, EMAIL_LIMIT);
       const visitor = readOrMintVisitor(req.cookies);
-      const created = await createQuickMatch(input, { visitorHash: visitor.hash });
+      const created = await createQuickMatch(input, { visitorHash: visitor.hash, baseUrl: baseUrl(req) });
+      if (created.outboxRowId !== null) await dispatchNow([created.outboxRowId]);
       const res = redirectLocal(routes.quickMatch(created.token), 303);
       if (visitor.minted) res.cookies.set(QUICK_MATCH_VISITOR_COOKIE, visitor.key, visitorCookieOptions());
       return res;

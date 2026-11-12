@@ -21,7 +21,8 @@ import { NextRequest } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 
 import { sql } from "@/lib/db";
-import { PaymentRequiredError } from "@/lib/errors";
+import { HttpError, PaymentRequiredError } from "@/lib/errors";
+import { QUICK_MATCH_ERRORS } from "@/lib/quick-match-constants";
 import { __setRateLimitCounterForTests, QUICK_MATCH_CREATE_LIMIT } from "@/lib/rate-limit";
 import { createCompetition } from "@/server/usecases/competitions";
 import { listDivisionFixtures } from "@/server/usecases/fixtures";
@@ -271,6 +272,19 @@ describe.skipIf(!HAS_DB)("POST /api/quick-match: every refusal is a 303 back to 
     refusedTo(await post(f), "en", "QUICK_MATCH_CREATE_FAILED");
     expect(vi.mocked(createCompetition)).toHaveBeenCalled();   // the stub was reached through the real createQuickMatch
     expect(reported()).toEqual([cap]);
+    expect(await rowsNamed(f.name as string)).toHaveLength(0);
+  });
+
+  it("a quick match code on a 5xx is a fault, not a refusal: BASE_URL_MISSING is reported once, shown as CREATE_FAILED", async () => {
+    // The route always passes a base URL (plan 3 Task 1), so no real create throws it; the competition create answers one
+    // call with it, and every step before and after it is real. A refusal names its own code; a programmer error must not.
+    const fault = new HttpError(500, "a quick match create with an email needs a baseUrl", QUICK_MATCH_ERRORS.BASE_URL_MISSING);
+    vi.mocked(createCompetition).mockRejectedValueOnce(fault);
+    const f = form();
+    vi.mocked(Sentry.captureException).mockClear();
+    refusedTo(await post(f), "en", "QUICK_MATCH_CREATE_FAILED");
+    expect(vi.mocked(createCompetition)).toHaveBeenCalled();
+    expect(reported()).toEqual([fault]);
     expect(await rowsNamed(f.name as string)).toHaveLength(0);
   });
 
