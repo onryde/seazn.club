@@ -48,6 +48,7 @@ export function Modal({
   size = "md",
   bleed = false,
   placement = "center",
+  closeSize = "md",
 }: {
   title: string;
   children?: React.ReactNode;
@@ -61,6 +62,9 @@ export function Modal({
   /** `center` (the default) is the centered modal over `sm`, a bottom sheet under it. `side` is the same bottom sheet under `md`
    *  and, from `md`, a full-height panel on the right edge: a page that opens over its list (the sponsor page). */
   placement?: "center" | "side";
+  /** `md` (the default) is the small close every dialog has had. `lg` is the sponsor console's (owner, 2026-11-12: "close icon is very
+   *  small"): a 40px button, 44px below `md`, with a drawn 20px X in a darker grey. Opt-in, so the other callers do not move. */
+  closeSize?: "md" | "lg";
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   // Read the LATEST onClose via a ref so the mount effect below can stay
@@ -131,6 +135,10 @@ export function Modal({
   const bleedInset = bleed ? " max-md:px-4" : "";
   const bleedClose = bleed ? " max-md:h-11 max-md:w-11" : "";
   const side = placement === "side";
+  const closeClass =
+    closeSize === "lg"
+      ? "grid h-10 w-10 shrink-0 place-items-center rounded-full text-slate-500 hover:bg-purple-50 hover:text-purple-700 max-md:h-11 max-md:w-11"
+      : `grid h-7 w-7 place-items-center rounded-full text-slate-400 hover:bg-purple-50 hover:text-purple-700${bleedClose}`;
 
   return (
     <div className={`modal-overlay${side ? ` ${SIDE_OVERLAY_CLASSES}` : ""}`} onClick={onClose}>
@@ -151,9 +159,15 @@ export function Modal({
           <button
             onClick={onClose}
             aria-label="Close"
-            className={`grid h-7 w-7 place-items-center rounded-full text-slate-400 hover:bg-purple-50 hover:text-purple-700${bleedClose}`}
+            className={closeClass}
           >
-            ×
+            {closeSize === "lg" ? (
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" data-testid="modal-close-x">
+                <path d="M6 6l12 12M18 6L6 18" />
+              </svg>
+            ) : (
+              "×"
+            )}
           </button>
         </div>
         {children && (

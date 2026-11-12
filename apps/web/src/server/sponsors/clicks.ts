@@ -51,8 +51,9 @@ export interface SponsorLink {
 
 /**
  * The redirect for `/s/[key]`, or null (the route's 404). One read for either shape, none for a key of neither:
- *   • uuid → the active sponsor with that id; the tag is the link's own query (parseClickTag);
- *   • code → the code's sponsor, which must be active AND the code's own org's (the mint checks that; a row written
+ *   • uuid → the active, unarchived sponsor with that id (archive spec D27: one visibility rule, `status = 'active' and
+ *     archived_at is null`, at every site; archive-reader-sweep.test.ts pins the set); the tag is the link's own query (parseClickTag);
+ *   • code → the code's sponsor, which must be active, unarchived AND the code's own org's (the mint checks that; a row written
  *     any other way is refused here); the tag is the code's fixture, `stream`.
  */
 export async function resolveSponsorLink(key: string, query: URLSearchParams): Promise<SponsorLink | null> {
@@ -60,7 +61,7 @@ export async function resolveSponsorLink(key: string, query: URLSearchParams): P
   if (shape === null) return null;
   if (shape.kind === "sponsor") {
     const [row] = await sql<{ url: string | null }[]>`
-      select url from sponsors where id = ${shape.sponsorId} and status = 'active'`;
+      select url from sponsors where id = ${shape.sponsorId} and status = 'active' and archived_at is null`;
     const url = redirectTarget(row?.url ?? null);
     return url === null ? null : { sponsorId: shape.sponsorId, key: shape.sponsorId.toLowerCase(), url, tag: parseClickTag(query) };
   }
@@ -68,6 +69,7 @@ export async function resolveSponsorLink(key: string, query: URLSearchParams): P
     select c.sponsor_id, c.fixture_id, sp.url
       from sponsor_short_codes c
       join sponsors sp on sp.id = c.sponsor_id and sp.org_id = c.org_id and sp.status = 'active'
+                       and sp.archived_at is null
      where c.code = ${shape.code}`;
   if (row === undefined) return null;
   const url = redirectTarget(row.url);
@@ -76,7 +78,7 @@ export async function resolveSponsorLink(key: string, query: URLSearchParams): P
 
 /**
  * One click: `click_count + 1` and its `sponsor_clicks` row, in one statement. Writes nothing for a sponsor that is no
- * longer active (deactivated between the redirect and this tail write). A fixture the sponsor could not have been shown
+ * longer active or is archived (between the redirect and this tail write). A fixture the sponsor could not have been shown
  * on — another org's, another competition's when the sponsor is scoped to one, or no fixture at all — is recorded as
  * fixture null, source `unknown`. No fixture named keeps the source. A code's fixture goes through the same check: S5
  * mints only for fixtures the sponsor was resolved for, so a code it minted always passes it.
@@ -85,7 +87,7 @@ export async function recordClick(sponsorId: string, tag: ClickTag): Promise<voi
   await sql`
     with bumped as (
       update sponsors set click_count = click_count + 1
-       where id = ${sponsorId} and status = 'active'
+       where id = ${sponsorId} and status = 'active' and archived_at is null
       returning id, org_id, competition_id
     )
     insert into sponsor_clicks (org_id, sponsor_id, fixture_id, source)

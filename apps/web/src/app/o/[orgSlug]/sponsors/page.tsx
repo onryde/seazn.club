@@ -105,7 +105,9 @@ export default async function SponsorsHubPage({
     // is the three cheap ones, the two plan questions and the Stripe flag, which only the Add deal sheet's affordances need. The count
     // is of reads this page starts: a read that fans out inside its usecase is one here.
     const [sponsorRows, deals, packages, competitions, finishedCompetitionIds] = await Promise.all([
-      listSponsorRows(active.id),
+      // Archived rows too (archive spec §6.2): the list's "Show archived (N)" switch needs N and the rows, and `?sponsor=` must
+      // open an archived sponsor's page (D24). The On stream tab below reads the default, which leaves them out.
+      listSponsorRows(active.id, { includeArchived: true }),
       listDeals(page.auth),
       listSponsorPackages(page.auth),
       orgCompetitions(active.id),

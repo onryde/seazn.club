@@ -482,7 +482,7 @@ describe("the Sponsors hub - the back link to the dashboard (the Streaming page'
     real.on = true;
     try {
       h.listSponsorRows.mockResolvedValue([
-        { id: "s1", name: "Harbour Print", competition_id: null, url: null, logo_path: null, tier: "gold", display_order: 0, status: "active", click_count: 0, on_stream: false, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false, last_billing_email: null },
+        { id: "s1", name: "Harbour Print", competition_id: null, url: null, logo_path: null, tier: "gold", display_order: 0, status: "active", click_count: 0, on_stream: false, archived_at: null, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false, last_billing_email: null },
       ]);
       h.listDeals.mockResolvedValue([]);
       const html = await render("sponsors", undefined, undefined, { sponsor: "s1" });
@@ -645,7 +645,15 @@ describe("the Sponsors tab keeps Settings' gates: sponsors.tiers, granted AND de
     const html = await render("sponsors");
     expect(attr(html, "org-sponsors", "data-has-tiers")).toBe("false");
     expect(attr(html, "org-sponsors", "data-sponsors")).toBe("2");
-    expect(h.listSponsorRows).toHaveBeenCalledWith(ORG.id);
+    expect(h.listSponsorRows).toHaveBeenCalledWith(ORG.id, { includeArchived: true });
+  });
+
+  it("archive spec §6.2: the Sponsors tab reads archived rows too (its switch needs N and the rows); the On stream tab reads none", async () => {
+    await render("sponsors");
+    expect(h.listSponsorRows.mock.calls, "the Sponsors tab").toEqual([[ORG.id, { includeArchived: true }]]);
+    h.listSponsorRows.mockClear();
+    await render("on_stream");
+    expect(h.listSponsorRows.mock.calls, "the On stream tab: the default, archived rows left out").toEqual([[ORG.id]]);
   });
 
   it("hands the composer the org's competitions as its picker, and the billing URL for the upsell", async () => {
@@ -1134,7 +1142,7 @@ describe("?sponsor= and ?deal= on the Sponsors tab: this org's, else the list (T
 describe("?sponsor=<own> draws the sponsor's own page (Task 15 - F23, moved here from Task 13), and the Report link's opening dates ride with it", () => {
   const SPONSOR = {
     id: "s1", name: "Harbour Print", competition_id: null, url: "https://harbour-print.example/", logo_path: null, poster_path: null, tier: "gold", display_order: 0,
-    status: "active", click_count: 4, on_stream: false, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false, last_billing_email: null,
+    status: "active", click_count: 4, on_stream: false, archived_at: null, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false, last_billing_email: null,
   };
   const DEAL = {
     id: "d1", sponsor_id: "s1", package_id: "p1", deal_status: "awaiting_payment", payment_status: "pending", payment_method: "offline",
@@ -1291,7 +1299,7 @@ describe("?sponsor=<own> draws the sponsor's own page (Task 15 - F23, moved here
 describe("?deal=<own> draws the deal's own page (Task 17), and the timeline's two server reads ride with it", () => {
   const SPONSOR = {
     id: "s1", name: "Harbour Print", competition_id: null, url: null, logo_path: null, poster_path: null, tier: "gold", display_order: 0,
-    status: "active", click_count: 4, on_stream: false, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false, last_billing_email: null,
+    status: "active", click_count: 4, on_stream: false, archived_at: null, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false, last_billing_email: null,
   };
   const DEAL = {
     id: "d1", sponsor_id: "s1", package_id: "p1", deal_status: "awaiting_payment", payment_status: "pending", payment_method: "offline",

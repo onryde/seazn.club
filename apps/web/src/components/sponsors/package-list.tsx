@@ -173,6 +173,7 @@ export function PackageCreateSheet({ draft, onChange, onSubmit, onClose, competi
   return (
     <Modal
       title={msg("sponsors.pkg.create")}
+      closeSize="lg"
       onClose={onClose}
       footer={
         <>

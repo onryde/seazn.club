@@ -14,6 +14,10 @@ export const SPONSOR_REFUSAL_CODES = [
   "sponsor_dispute_parked",
   "sponsor_has_deal_history",
   "sponsor_has_open_checkout",
+  // Archive a sponsor (docs/superpowers/specs/2026-11-11-sponsor-archive-design.md D4, D9-D11; server/usecases/sponsors.ts): a
+  // deal still holds it (Archive), and an archived sponsor refuses an edit and a new deal until it is unarchived.
+  "sponsor_has_current_deal",
+  "sponsor_archived",
   // Add deal (server/usecases/sponsor-deals.ts `createDeal`), in its declared order.
   "package_retired",
   "scope_outside_package",

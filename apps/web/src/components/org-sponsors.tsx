@@ -21,7 +21,7 @@ import { ImagePlus } from "lucide-react";
 import { useViewerTz } from "@/components/client-time";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
-import { SponsorList, dealPrice, groupTierOf, sameOrderBand, type DealWrite } from "@/components/sponsors/sponsor-list";
+import { SponsorList, dealPrice, deleteIsRefusedForHistory, groupTierOf, sameOrderBand, type DealWrite } from "@/components/sponsors/sponsor-list";
 import { AddDealSheet, type CreateDealBody } from "@/components/sponsors/add-deal-sheet";
 import { SMALL_BTN, SponsorSheet, SponsorSheetBody, sponsorDealGroups } from "@/components/sponsors/sponsor-sheet";
 import { DealPageBody } from "@/components/sponsors/deal-page";
@@ -81,6 +81,9 @@ export interface SponsorItem {
   click_count: number;
   /** The sponsor is in the stream's rotation (the On stream tab's tick; the sponsor page's toggle). A live deal sets it (D9). */
   on_stream: boolean;
+  /** When the club archived this sponsor (archive spec D8), or null: hidden from every public surface and the stream, its records
+   *  kept. Only the Sponsors tab reads archived rows (its "Show archived" switch). */
+  archived_at: string | null;
   /** The paid package order that activated this placement, if any. */
   paid_order_id?: string | null;
   /** The deal the row shows (sponsor deals D8: `pickRowDeal` over the sponsor's deals), or null when the sponsor has none - the
@@ -242,18 +245,18 @@ const DEAL_ROUTE: Record<DealAction, string> = {
   end_now: "end",
 };
 
-/** Is a delete certain to be refused? History on any of a sponsor's deals - money paid or refunded, or an invoice number (every
- *  online and offline deal gets one when it is made, paid or not: sponsor invoices, Task 20) - is a 409 `sponsor_has_deal_history`
- *  (server/usecases/sponsors.ts `dealHoldsHistory`). What the row can see of it is its paid order and the deal it shows; a pre-deals
- *  order or a history on an older deal is only known to the server, whose refusal is shown the same way. So this only decides
- *  whether to ASK first - it refuses nothing. */
-function deleteIsRefusedForHistory(s: SponsorItem): boolean {
-  return (
-    Boolean(s.paid_order_id) ||
-    s.deal?.payment_status === "paid" ||
-    s.deal?.payment_status === "refunded" ||
-    s.deal?.invoice_number != null
-  );
+/** Where keyboard focus goes when the sponsor page swaps its Archive card for the archived banner and back (batch B review I2): the
+ *  button that just ran is gone, so focus would fall to <body>. After Archive it lands on the banner's Unarchive; after Unarchive on the
+ *  card's Archive button. Test ids, so the e2e and the unit test name the same targets. */
+export const FOCUS_AFTER_ARCHIVE = { archive: "sponsor-sheet-unarchive", unarchive: "sponsor-sheet-archive-button" } as const;
+
+/** Focus the VISIBLE control with this test id (the sponsor page can be in the DOM twice - the phone body and the side panel - and
+ *  only one is laid out). Returns whether something took focus. */
+export function focusVisibleTestId(testId: string, doc: Pick<Document, "querySelectorAll"> = document): boolean {
+  const el = Array.from(doc.querySelectorAll<HTMLElement>(`[data-testid="${testId}"]`)).find((e) => e.getClientRects().length > 0);
+  if (!el) return false;
+  el.focus();
+  return true;
 }
 
 /** The dictionary key for a refused logo upload grant, from the route's STATUS (batch H review m6): the picker offers PNG, JPG and WebP,
@@ -554,6 +557,16 @@ export function OrgSponsors({
   const router = useRouter();
   const tz = useViewerTz();
   const [sponsors, setSponsors] = useState<SponsorItem[]>(initialSponsors);
+  // The Sponsors tab holds every row, archived ones too (archive spec §7.1): the list draws the live ones, and the archived ones only
+  // while its "Show archived (N)" switch is on. The switch is local (never in the URL) and is off whenever nothing is archived, so the
+  // last Unarchive resets it (a render-time state adjustment, never an effect) and the next Archive shows it off again.
+  const live = sponsors.filter((s) => s.archived_at === null);
+  const archived = sponsors.filter((s) => s.archived_at !== null);
+  const [archivedSwitch, setArchivedSwitch] = useState(false);
+  // The control to focus once the page has flipped between its Archive card and its archived banner (`FOCUS_AFTER_ARCHIVE`).
+  const focusAfterFlip = useRef<string | null>(null);
+  if (archivedSwitch && archived.length === 0) setArchivedSwitch(false);
+  const showArchived = archivedSwitch && archived.length > 0;
   // The org's deals, for the sponsor page and the confirms that name what a deal's end does to the others. The server's list is the
   // truth: a new arrival from the page (a navigation, a `router.refresh()`) replaces what a write here last read - compared by
   // identity, in render, never an effect.
@@ -650,7 +663,8 @@ export function OrgSponsors({
   }
 
   async function refresh() {
-    const rows = (await api("", { method: "GET" })) as SponsorItem[];
+    // `?archived=1`: the Sponsors tab keeps its archived rows (the default read would drop them from the list the switch counts).
+    const rows = (await api("?archived=1", { method: "GET" })) as SponsorItem[];
     setSponsors(rows);
   }
 
@@ -772,6 +786,34 @@ export function OrgSponsors({
       }
       setEditingId(null);
       leaveEditUrl();
+    });
+  }
+
+  /** Archive (spec §7.2): hides the sponsor everywhere and keeps its records. The answer is the row, archived - MERGED over the list's
+   *  row, not put in its place: the write answers carry no `paid_order_id`, `dispute_lost` or `dispute_parked` (list reads only), and
+   *  replacing the row dropped them (the trash came back on an archived sponsor with history). A 409 (a deal holds it:
+   *  the page thought it free) re-reads the rows and deals so the page shows the blocked line, and the row stays live. */
+  function archive(s: SponsorItem) {
+    void run(async () => {
+      try {
+        const row = (await api(`/${s.id}/archive`, { method: "POST" })) as SponsorItem;
+        focusAfterFlip.current = FOCUS_AFTER_ARCHIVE.archive;
+        setSponsors((prev) => prev.map((r) => (r.id === s.id ? { ...r, ...row } : r)));
+        setNotice(msg("sponsors.archive.done", { name: s.name }));
+      } catch (err) {
+        await Promise.all([refresh().catch(() => {}), refreshDeals().catch(() => {})]);
+        throw err;
+      }
+    });
+  }
+
+  /** Unarchive: the row comes back as it was (its tier, its place, its stream state: archive wrote none of them). */
+  function unarchive(s: SponsorItem) {
+    void run(async () => {
+      const row = (await api(`/${s.id}/archive`, { method: "DELETE" })) as SponsorItem;
+      focusAfterFlip.current = FOCUS_AFTER_ARCHIVE.unarchive;
+      setSponsors((prev) => prev.map((r) => (r.id === s.id ? { ...r, ...row } : r)));
+      setNotice(msg("sponsors.archive.unarchived", { name: s.name }));
     });
   }
 
@@ -949,7 +991,10 @@ export function OrgSponsors({
   function move(id: string, delta: -1 | 1) {
     const row = sponsors.find((s) => s.id === id);
     if (!row) return;
-    const group = hasTiers ? sponsors.filter((s) => groupTierOf(s) === groupTierOf(row)) : sponsors;
+    // An archived row has no place in the live order (the server's reorder skips it), so it is never a neighbour.
+    if (row.archived_at !== null) return;
+    const liveRows = sponsors.filter((s) => s.archived_at === null);
+    const group = hasTiers ? liveRows.filter((s) => groupTierOf(s) === groupTierOf(row)) : liveRows;
     const gi = group.findIndex((s) => s.id === id);
     const target = gi + delta;
     if (gi < 0 || target < 0 || target >= group.length) return;
@@ -977,11 +1022,20 @@ export function OrgSponsors({
   const selectedDeal =
     selected === undefined || hub.dealId === null ? undefined : deals.find((d) => d.id === hub.dealId && d.sponsor_id === selected.id);
   const sheetOpen = selected !== undefined;
+  const selectedArchived = selected !== undefined && selected.archived_at !== null;
+  // Keyed on the flip, so only an Archive or Unarchive the person just ran moves focus (never a re-read, never page arrival).
+  useEffect(() => {
+    const target = focusAfterFlip.current;
+    if (target === null) return;
+    focusAfterFlip.current = null;
+    focusVisibleTestId(target);
+  }, [selectedArchived]);
   // The pay link, only while its deal can still be paid; each page shows the one that is its own.
   const openPayLink = payLink !== null && payLinkStillOpen(deals, payLink.deal) ? payLink : null;
   // The sponsor the Add deal sheet is open for - from either the list's row or the sponsor's page. A sponsor the list no longer holds
   // (deleted since) opens nothing.
-  const addDealSponsor = addDealFor === null ? undefined : sponsors.find((s) => s.id === addDealFor);
+  // An archived sponsor takes no new deal (409 sponsor_archived): the sheet never opens for one, whatever asked.
+  const addDealSponsor = addDealFor === null ? undefined : sponsors.find((s) => s.id === addDealFor && s.archived_at === null);
 
   return (
     <div className="space-y-5">
@@ -1033,7 +1087,9 @@ export function OrgSponsors({
             canEdit={canEdit}
             busy={busy}
             tz={tz}
+            orgTz={hub.orgTimezone ?? "UTC"}
             competitions={competitions}
+            // An archived sponsor's page is read-only (D24): the body draws no editor for it, whatever `?edit=1` asked.
             editing={editingId === selected.id}
             renderEditor={() => (
               <SponsorForm
@@ -1059,6 +1115,8 @@ export function OrgSponsors({
             onToggleStream={(next) => toggleStream(selected, next)}
             onShowAgain={() => showAgain(selected)}
             onAddDeal={() => setAddDealFor(selected.id)}
+            onArchive={() => archive(selected)}
+            onUnarchive={() => unarchive(selected)}
             onDealAction={(deal, action) => runDealAction(deal, selected.name, action)}
             error={error}
             notice={notice}
@@ -1106,7 +1164,10 @@ export function OrgSponsors({
         ) : null}
 
         <SponsorList
-          sponsors={sponsors}
+          sponsors={live}
+          archived={archived}
+          showArchived={showArchived}
+          onToggleArchived={() => setArchivedSwitch((on) => !on)}
           hasTiers={hasTiers}
           canEdit={canEdit}
           busy={busy}

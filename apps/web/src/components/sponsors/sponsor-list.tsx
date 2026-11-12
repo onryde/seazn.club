@@ -24,6 +24,7 @@ import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict
 import { DealChip } from "@/components/sponsors/deal-chip";
 import { dealActionKey, priceLabel } from "@/components/sponsors/deal-copy";
 import { SponsorRowMore } from "@/components/sponsors/sponsor-row-more";
+import { slimSwitch } from "@/components/sponsors/slim-switch";
 import { TIER_BADGE, TIER_MSG } from "@/components/sponsors/tier-labels";
 import type { SponsorItem } from "@/components/org-sponsors";
 import { fmtPublicDate } from "@/lib/format";
@@ -88,8 +89,14 @@ export function dealTierWord(d: Pick<SponsorDeal, "tier" | "package_name">, hasT
 }
 
 export interface SponsorListProps {
-  /** In the order they were read (the server's tier-then-order list); the list groups them without reordering within a group. */
+  /** The LIVE sponsors, in the order they were read (the server's tier-then-order list); the list groups them without reordering
+   *  within a group. An archived sponsor is never in here (it has no place in the live order): it comes in `archived`. */
   sponsors: SponsorItem[];
+  /** The archived sponsors (archive spec §7.1). With none, the list draws no switch at all. Default: none. */
+  archived?: SponsorItem[];
+  /** The "Show archived (N)" switch is on: the archived rows trail the tier groups. Default off (they are not in the DOM). */
+  showArchived?: boolean;
+  onToggleArchived?: () => void;
   hasTiers: boolean;
   canEdit: boolean;
   /** A write is in flight: every control that would start another is disabled. */
@@ -106,6 +113,26 @@ export interface SponsorListProps {
   onAction: (s: SponsorItem, action: DealWrite) => void;
   /** Add deal opens the Add deal sheet for this sponsor (Task 16); it writes nothing itself. */
   onAddDeal: (s: SponsorItem) => void;
+}
+
+/** An archived row's look (archive spec D19): a pale grey ground and quieter (but still AA) text, so the list reads as history. NOT
+ *  `opacity`: a faded row drops its text and chips under 4.5:1 (batch B review M1). Every text colour on an archived row is slate-600
+ *  or darker on slate-50 / white / slate-200 (7.2 / 7.6 / 6.2 : 1). Exported for the tests. */
+export const ARCHIVED_ROW = "bg-slate-50";
+
+/** Is a delete certain to be refused? History on any of a sponsor's deals - money paid or refunded, or an invoice number (every
+ *  online and offline deal gets one when it is made, paid or not: sponsor invoices, Task 20) - is a 409 `sponsor_has_deal_history`
+ *  (server/usecases/sponsors.ts `dealHoldsHistory`). What the row can see of it is its paid order and the deal it shows; a pre-deals
+ *  order or a history on an older deal is only known to the server, whose refusal is shown the same way. So this decides whether to ASK
+ *  first, and - on an ARCHIVED row only - whether to draw the trash at all (its refusal would say "Archive it instead" to a sponsor that
+ *  already is). On a live row it refuses nothing. */
+export function deleteIsRefusedForHistory(s: SponsorItem): boolean {
+  return (
+    Boolean(s.paid_order_id) ||
+    s.deal?.payment_status === "paid" ||
+    s.deal?.payment_status === "refunded" ||
+    s.deal?.invoice_number != null
+  );
 }
 
 const ACTION_MSG: Record<RowAction, MessageKey> = {
@@ -169,16 +196,11 @@ const ICON_BUTTON =
 export function SponsorList(props: SponsorListProps) {
   const {
     sponsors, hasTiers, canEdit, busy, orgSlug, tz, competitions, moreOpenId, onToggleMore, onMove, onRemove, onAction, onAddDeal,
+    archived = [], showArchived = false, onToggleArchived,
   } = props;
   const msg = useMsg();
   const plural = useMsgPlural();
   const locale = useLocaleOrDefault();
-
-  if (sponsors.length === 0) {
-    return (
-      <p className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">{msg("sponsors.empty")}</p>
-    );
-  }
 
   /** The one action a row offers an editor, or nothing: a viewer sees no action, and the live rows need none. */
   function action(s: SponsorItem): ReactNode {
@@ -257,7 +279,23 @@ export function SponsorList(props: SponsorListProps) {
     );
   }
 
-  function row(s: SponsorItem, group: SponsorItem[], index: number): ReactNode {
+  /** The "Archived" chip on an archived row: beside the name, so the grey is not the only sign. */
+  function archivedChip(): ReactNode {
+    const words = msg("sponsors.archive.chip");
+    return (
+      <span
+        data-testid="sponsor-row-archived-chip"
+        title={words}
+        className="min-w-0 max-w-full truncate rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-700"
+      >
+        {words}
+      </span>
+    );
+  }
+
+  /** `isArchived`: a row of the trailing Archived group - greyed, no move buttons, no deal action, and the one way in opens the
+   *  READ-ONLY page (a pencil would promise an editor the page does not have). The trash stays, under the unchanged Delete rules. */
+  function row(s: SponsorItem, group: SponsorItem[], index: number, isArchived = false): ReactNode {
     const open = moreOpenId === s.id;
     const trayId = `sponsor-tools-${s.id}`;
     // The tray folds only where there is a ⋯ to open it: a viewer has no controls to fold, so the clicks stay put for them.
@@ -267,11 +305,17 @@ export function SponsorList(props: SponsorListProps) {
     const clicks = plural("sponsors.row.clicks", s.click_count);
     // The arrows swap a sponsor with its neighbour in the same group. A group of one has nobody to swap with, so there is nothing to
     // show - not a pair of dead buttons (owner, 2026-11-11). A group of two or more keeps both, the one at an edge disabled.
-    const canReorder = group.length > 1;
+    const canReorder = !isArchived && group.length > 1;
     const moveUp = msg("settings.org.sponsors.moveUp", { name: s.name });
     const moveDown = msg("settings.org.sponsors.moveDown", { name: s.name });
     return (
-      <li key={s.id} data-testid="sponsor-row" data-sponsor-id={s.id} className="px-3 py-2.5">
+      <li
+        key={s.id}
+        data-testid="sponsor-row"
+        data-sponsor-id={s.id}
+        data-archived={isArchived ? "true" : undefined}
+        className={`px-3 py-2.5${isArchived ? ` ${ARCHIVED_ROW}` : ""}`}
+      >
         <div
           data-testid="sponsor-row-grid"
           className="grid grid-cols-[2.25rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 max-[376px]:grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[2.25rem_minmax(0,1fr)_auto_auto_auto]"
@@ -284,27 +328,28 @@ export function SponsorList(props: SponsorListProps) {
             // eslint-disable-next-line @next/next/no-img-element
             <img src={s.logo_path} alt="" data-testid="sponsor-row-logo" className="h-9 w-9 rounded object-contain ring-1 ring-slate-200 max-[376px]:hidden" />
           ) : (
-            <span data-testid="sponsor-row-logo" className="grid h-9 w-9 place-items-center rounded bg-slate-100 text-xs font-semibold text-slate-500 max-[376px]:hidden">
+            <span data-testid="sponsor-row-logo" className={`grid h-9 w-9 place-items-center rounded bg-slate-100 text-xs font-semibold ${isArchived ? "text-slate-600" : "text-slate-500"} max-[376px]:hidden`}>
               {s.name.charAt(0).toUpperCase()}
             </span>
           )}
           <div data-testid="sponsor-row-main" className="min-w-0">
             {/* A badge (Disputed - parked, Paid ...) wraps under the name instead of squeezing it to "O..." in a 160px column. */}
-            <p data-testid="sponsor-row-name" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-sm font-medium text-slate-800">
+            <p data-testid="sponsor-row-name" className={`flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-sm font-medium ${isArchived ? "text-slate-600" : "text-slate-800"}`}>
               {/* Plain text: the pencil is the one way into the sponsor (a name that looked like a link was the thing people did not find). */}
               <span data-testid="sponsor-row-name-text" className="block min-w-0 max-w-full truncate max-[376px]:line-clamp-2 max-[376px]:whitespace-normal max-[376px]:break-words">
                 {s.name}
               </span>
+              {isArchived ? archivedChip() : null}
               {badge(s)}
-              {tierHint(s)}
+              {isArchived ? null : tierHint(s)}
             </p>
-            <p data-testid="sponsor-row-sub" className="truncate text-xs text-slate-500 max-[376px]:line-clamp-2 max-[376px]:whitespace-normal max-[376px]:break-words">
+            <p data-testid="sponsor-row-sub" className={`truncate text-xs ${isArchived ? "text-slate-600" : "text-slate-500"} max-[376px]:line-clamp-2 max-[376px]:whitespace-normal max-[376px]:break-words`}>
               {subline(s, { msg, locale, tz, competitions, hasTiers })}
             </p>
           </div>
           {/* The lead cell: the one way in, then (below md, editors only) the ⋯ that opens the rest. Never folded - see the header. */}
           <div data-testid="sponsor-row-lead" className="flex items-center">
-            {canEdit ? (
+            {canEdit && !isArchived ? (
               <Link href={sponsorEditHref(orgSlug, s.id)} data-testid="sponsor-row-edit" aria-label={msg("sponsors.edit", { name: s.name })} className={ICON_BUTTON}>
                 <Pencil className="h-3.5 w-3.5" />
               </Link>
@@ -323,7 +368,7 @@ export function SponsorList(props: SponsorListProps) {
             className="col-span-2 col-start-2 flex min-w-0 flex-wrap items-center justify-between gap-2 max-[376px]:col-start-1 md:col-span-1 md:col-start-auto md:w-52 lg:w-72"
           >
             <DealChip deal={s.deal} />
-            {action(s)}
+            {isArchived ? null : action(s)}
           </div>
           <div
             id={trayId}
@@ -337,7 +382,7 @@ export function SponsorList(props: SponsorListProps) {
                 place on every row. 5rem holds "999 klikken" (the longest of the four languages) with room to spare. */}
             <span
               data-testid="sponsor-row-clicks"
-              className="shrink-0 whitespace-nowrap pr-2 text-xs tabular-nums text-slate-500 md:min-w-[5rem] md:text-right"
+              className={`shrink-0 whitespace-nowrap pr-2 text-xs tabular-nums ${isArchived ? "text-slate-600" : "text-slate-500"} md:min-w-[5rem] md:text-right`}
               title={msg("sponsors.row.clicksHint")}
             >
               {clicks}
@@ -373,15 +418,22 @@ export function SponsorList(props: SponsorListProps) {
                   // control: aria-hidden, nothing focusable in it, and gone below md (a phone's tray wraps and has no columns to keep).
                   <div data-testid="sponsor-row-move-spacer" aria-hidden="true" className="shrink-0 max-md:hidden md:w-[3.75rem]" />
                 )}
-                <button
-                  type="button"
-                  aria-label={msg("settings.org.sponsors.remove", { name: s.name })}
-                  disabled={busy}
-                  onClick={() => onRemove(s)}
-                  className="grid h-7 w-7 place-items-center rounded text-red-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-30 max-md:h-11 max-md:w-11"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
+                {isArchived && deleteIsRefusedForHistory(s) ? (
+                  // An archived sponsor with history cannot be deleted (409) and the refusal would say "Archive it instead": no trash. The
+                  // room it would take stays from md (one 28px button) so the tray is as wide as its neighbours'; gone below md, where the
+                  // tray wraps. Archived with no KNOWN history keeps the trash: the server stays the authority there.
+                  <div data-testid="sponsor-row-trash-spacer" aria-hidden="true" className="shrink-0 max-md:hidden md:w-7" />
+                ) : (
+                  <button
+                    type="button"
+                    aria-label={msg("settings.org.sponsors.remove", { name: s.name })}
+                    disabled={busy}
+                    onClick={() => onRemove(s)}
+                    className="grid h-7 w-7 place-items-center rounded text-red-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-30 max-md:h-11 max-md:w-11"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                )}
               </>
             ) : null}
           </div>
@@ -390,29 +442,83 @@ export function SponsorList(props: SponsorListProps) {
     );
   }
 
-  const list = (rows: SponsorItem[]) => (
-    <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">{rows.map((s, i) => row(s, rows, i))}</ul>
+  const list = (rows: SponsorItem[], isArchived = false) => (
+    <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">{rows.map((s, i) => row(s, rows, i, isArchived))}</ul>
   );
 
-  if (!hasTiers) return <div className="space-y-5">{list(sponsors)}</div>;
+  // Only while something is archived: with none there is nothing to show, so no control (the empty case is no switch at all). The house
+  // slim switch, named for what it controls with the count in it; its words do not change with its state. A view filter, not an edit:
+  // a viewer has it. Placement and markup are the Packages tab's "Show retired (N)".
+  const switchRow =
+    archived.length > 0 ? (
+      <div data-testid="sponsors-archived-filter" data-archived-count={archived.length} className="flex min-w-0 items-center justify-end gap-1">
+        <label id="sponsors-archived-switch-label" htmlFor="sponsors-archived-switch" className="min-w-0 text-sm text-slate-700">
+          {msg("sponsors.archive.show", { count: archived.length })}
+        </label>
+        {slimSwitch({
+          id: "sponsors-archived-switch",
+          checked: showArchived,
+          onToggle: () => onToggleArchived?.(),
+          labelledBy: "sponsors-archived-switch-label",
+          testId: "sponsors-archived-switch",
+        })}
+      </div>
+    ) : null;
+
+  // The trailing group (D19): after every tier group, whether or not the plan has tiers. Its rows are not in the DOM while the switch is off.
+  const archivedGroup =
+    showArchived && archived.length > 0 ? (
+      <div data-testid="sponsor-group" data-tier="archived">
+        <p data-testid="sponsor-group-header" className="mb-1.5 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+          {msg("sponsors.archive.group")}
+          <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">{archived.length}</span>
+        </p>
+        {list(archived, true)}
+      </div>
+    ) : null;
 
   // Render in tier order; a group nobody is in is not drawn.
+  const liveGroups =
+    sponsors.length === 0 ? (
+      // Nothing live. With nothing archived either it is the first-time empty state; with sponsors archived "no sponsors yet" is false, so
+      // the switch off says where they are (the Packages tab's "Every package is retired" line), and the switch on says nothing - the
+      // archived group right below is the answer.
+      archived.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">{msg("sponsors.empty")}</p>
+      ) : showArchived ? null : (
+        <p
+          data-testid="sponsors-all-archived"
+          className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-500"
+        >
+          {msg("sponsors.archive.allArchived")}
+        </p>
+      )
+    ) : !hasTiers ? (
+      list(sponsors)
+    ) : (
+      <>
+        {SPONSOR_TIERS.map((tier) => ({ tier, rows: sponsors.filter((s) => groupTierOf(s) === tier) }))
+          .filter(({ rows }) => rows.length > 0)
+          .map(({ tier, rows }) => (
+            <div key={tier} data-testid="sponsor-group" data-tier={tier}>
+              <p
+                data-testid="sponsor-group-header"
+                className="mb-1.5 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500"
+              >
+                {msg(TIER_MSG[tier])}
+                <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${TIER_BADGE[tier]}`}>{rows.length}</span>
+              </p>
+              {list(rows)}
+            </div>
+          ))}
+      </>
+    );
+
   return (
     <div className="space-y-5">
-      {SPONSOR_TIERS.map((tier) => ({ tier, rows: sponsors.filter((s) => groupTierOf(s) === tier) }))
-        .filter(({ rows }) => rows.length > 0)
-        .map(({ tier, rows }) => (
-          <div key={tier} data-testid="sponsor-group" data-tier={tier}>
-            <p
-              data-testid="sponsor-group-header"
-              className="mb-1.5 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500"
-            >
-              {msg(TIER_MSG[tier])}
-              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${TIER_BADGE[tier]}`}>{rows.length}</span>
-            </p>
-            {list(rows)}
-          </div>
-        ))}
+      {switchRow}
+      {liveGroups}
+      {archivedGroup}
     </div>
   );
 }

@@ -60,6 +60,7 @@ import {
   queueSponsorInvoice,
   refundSponsorOrder,
   retireDealSession,
+  sponsorArchived,
   type DealCheckoutOrg,
 } from "./sponsors";
 import { competitionPhase, getCompetitionDesk } from "./competition-desk";
@@ -222,7 +223,8 @@ interface PackageRow {
 
 /**
  * Add a deal to a sponsor (spec §5.1, §5.2). Today's checkout order: every refusal comes before any row — the package (404;
- * retired 422), the scope inside the package's (422; the competition the org's, 404), the plan (the placement gate, and
+ * retired 422), the sponsor (404; archived 409 `sponsor_archived`, archive spec D10, re-checked under the lock), the scope
+ * inside the package's (422; the competition the org's, 404), the plan (the placement gate, and
  * `sponsors.monetize` plus Connect for online), the billing email for online (422), the rule (complimentary cannot go live
  * on payment, 422), the end date (today or later in the org's timezone, 422). Then ONE transaction: lock the sponsor and its
  * deals, end the live one when `end_current` asks, insert the deal with the package's snapshot (D4) in its first status
@@ -246,8 +248,11 @@ export async function createDeal(
           from sponsor_packages where id = ${input.package_id}`;
       if (!row) throw new HttpError(404, "package not found");
       if (!row.active) throw sponsorRefusal(422, "This package is no longer on sale", "package_retired");
-      const [sp] = await tx`select 1 from sponsors where id = ${sponsorId}`;
+      const [sp] = await tx<{ archived_at: Date | null }[]>`select archived_at from sponsors where id = ${sponsorId}`;
       if (!sp) throw new HttpError(404, "sponsor not found");
+      // Archive spec D10: an archived sponsor takes no new deal - refused here, early, before the scope, plan, Connect and outbox
+      // checks and any Stripe call; and again under the sponsor lock below, before an invoice number is used.
+      if (sp.archived_at !== null) throw sponsorArchived();
       return row;
     });
 
@@ -309,6 +314,9 @@ export async function createDeal(
     const deal = await withTenant(auth.orgId, async (tx) => {
       const locked = await lockSponsorAndDeals(tx, sponsorId);
       if (!locked) throw new HttpError(404, "sponsor not found");
+      // Archive spec D10, re-checked under the lock Archive takes too: an archive that committed while this create waited (or
+      // since the early read above) is seen here, before the live deal is ended and before an invoice number is allocated.
+      if (locked.sponsor.archived_at !== null) throw sponsorArchived();
       const now = new Date();
       let endedDealId: string | null = null;
       const live = locked.deals.find((d) => !isLegacyDeal(d) && d.deal_status === "live") ?? null;

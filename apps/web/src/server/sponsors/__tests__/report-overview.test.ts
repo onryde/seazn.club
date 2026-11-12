@@ -286,7 +286,8 @@ describe.skipIf(!HAS_DB)("S13: the Overview's numbers", () => {
     const goneRow = rows.find((r) => r.sponsorId === null);
     expect(goneRow, "the deleted sponsor still has a row").toBeDefined();
     expect(goneRow).toEqual({
-      sponsorId: null, name: "Gone Bakery", viewerImpressions: null, peakViewers: null, linkClicks: null,
+      // A deleted sponsor is not an ARCHIVED one (archive spec D15): its row says archived: false.
+      sponsorId: null, name: "Gone Bakery", archived: false, viewerImpressions: null, peakViewers: null, linkClicks: null,
       ...(({ timesShown, onScreenMs }) => ({ timesShown, onScreenMs }))(expectedFor(goneAirings, [], inWindow(L30_FROM, L30_TO))),
     });
     expect(byId(rows, kept)).toMatchObject({ name: "Kept Motors", timesShown: 1, onScreenMs: 15_000, linkClicks: 0 });
@@ -422,7 +423,7 @@ describe.skipIf(!HAS_DB)("S13: the Overview's numbers", () => {
       // Tier-ranked, then display order - the order every sponsor list here uses (listSponsorRows).
       expect(rows.map((r) => r.sponsorId), p.kind).toEqual([s2, s3, s1]);
       for (const r of rows) {
-        expect(r, `${p.kind} ${r.name}`).toEqual({ sponsorId: r.sponsorId, name: r.name, timesShown: 0, onScreenMs: 0, viewerImpressions: null, peakViewers: null, linkClicks: 0 });
+        expect(r, `${p.kind} ${r.name}`).toEqual({ sponsorId: r.sponsorId, name: r.name, archived: false, timesShown: 0, onScreenMs: 0, viewerImpressions: null, peakViewers: null, linkClicks: 0 });
         checked++;
       }
       expect(await sponsorOverview(auth, auth.orgId, p, NOW), `${p.kind}: a second call`).toEqual(rows);

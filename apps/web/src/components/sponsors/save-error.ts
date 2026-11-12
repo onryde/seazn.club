@@ -29,6 +29,9 @@ export const SAVE_ERROR_MSG: Readonly<Record<EnvelopeCode | SponsorRefusalCode, 
   // Delete: money history (paid, refunded, or a pre-deals order) blocks it; so does a payment link nobody could close (F3).
   sponsor_has_deal_history: "sponsors.error.hasDealHistory",
   sponsor_has_open_checkout: "sponsors.error.hasOpenCheckout",
+  // Archive a sponsor: its deal still holds it (End or settle it first), and an archived sponsor takes no edit or new deal.
+  sponsor_has_current_deal: "sponsors.archive.blocked",
+  sponsor_archived: "sponsors.error.archived",
   // Add deal.
   package_retired: "sponsors.error.packageRetired",
   scope_outside_package: "sponsors.error.scopeOutsidePackage",

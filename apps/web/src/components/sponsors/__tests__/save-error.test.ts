@@ -55,6 +55,9 @@ describe("sponsorSaveErrorKey - the envelope's code, to the dictionary", () => {
       sponsor_dispute_parked: "sponsors.error.disputeParked",
       sponsor_has_deal_history: "sponsors.error.hasDealHistory",
       sponsor_has_open_checkout: "sponsors.error.hasOpenCheckout",
+      // Archive a sponsor (spec §10): the blocked words, and the archived-sponsor words.
+      sponsor_has_current_deal: "sponsors.archive.blocked",
+      sponsor_archived: "sponsors.error.archived",
       package_retired: "sponsors.error.packageRetired",
       scope_outside_package: "sponsors.error.scopeOutsidePackage",
       competition_finished: "sponsors.error.competitionFinished",

@@ -73,6 +73,7 @@ const row = (over: Partial<SponsorItem> & { id: string }): SponsorItem => ({
   status: "active",
   click_count: 0,
   on_stream: false,
+  archived_at: null,
   paid_order_id: null,
   deal: null,
   locked_by_deal: false,
@@ -556,7 +557,7 @@ describe("Delete: the confirm says what the server will really do, and a refusal
   });
 
   it("a sponsor with a PAID deal is not asked to confirm a delete the server refuses: the server's refusal is shown in the dictionary's words and the row stays", async () => {
-    const SERVER = "this sponsor has deal history (money paid or refunded, or a pre-deals order) — end its deals instead";
+    const SERVER = "this sponsor has deal history (money paid or refunded, or a pre-deals order) — archive it instead";
     answer = (_url, method) =>
       method === "DELETE"
         ? { status: 409, body: { ok: false, error: { code: "sponsor_has_deal_history", message: SERVER } } }
@@ -599,7 +600,7 @@ describe("Delete: the confirm says what the server will really do, and a refusal
   it("a sponsor whose shown deal is NUMBERED but unpaid (an invoice: sponsor invoices F10) is not asked to confirm either; the 409 reads the dictionary's words, and its unnumbered twin still asks (both checked)", async () => {
     // The server's rule (server/usecases/sponsors.ts `dealHoldsHistory`, Task 20): a numbered deal is history, paid or not, so the
     // delete is a 409 `sponsor_has_deal_history`. An online and an offline deal, each numbered and awaiting payment - no money.
-    const SERVER = "this sponsor has deal history (money paid or refunded, a numbered invoice, or a pre-deals order) — end its deals instead";
+    const SERVER = "this sponsor has deal history (money paid or refunded, a numbered invoice, or a pre-deals order) — archive it instead";
     const NUMBERED: [string, SponsorDeal][] = [
       ["offline", dealOf("d1", "pending", { deal_status: "awaiting_payment", payment_method: "offline", invoice_number: 3 })],
       ["online", dealOf("d1", "pending", { deal_status: "awaiting_payment", payment_method: "online", invoice_number: 1 })],
@@ -727,7 +728,7 @@ describe("Show on site again (now on the sponsor's page, Task 15): a hidden spon
     expect(patches.map((c) => c.url)).toEqual([`/api/v1/orgs/${ORG}/sponsors/a`]);
     expect(patches[0]!.body).toEqual({ status: "active" });
     expect(confirmMock).not.toHaveBeenCalled();
-    expect(calls.filter((c) => c.method === "GET").map((c) => c.url), "the list is re-read").toEqual([`/api/v1/orgs/${ORG}/sponsors`]);
+    expect(calls.filter((c) => c.method === "GET").map((c) => c.url), "the list is re-read").toEqual([`/api/v1/orgs/${ORG}/sponsors?archived=1`]);
     expect(m.has("sponsor-show-a"), "now active: nothing to show again").toBe(false);
   });
 
@@ -1427,7 +1428,7 @@ describe("the poster field through the island: a save, a removal, a refusal, and
     const patches = calls.filter((c) => c.method === "PATCH");
     expect(patches.map((c) => c.url)).toEqual([`/api/v1/orgs/${ORG}/sponsors/a`]);
     expect(patches[0]!.body, "the poster alone: no name, no link, no logo").toEqual({ poster_path: POSTER_NEW });
-    expect(calls.filter((c) => c.method === "GET").map((c) => c.url), "the list is re-read").toEqual([`/api/v1/orgs/${ORG}/sponsors`]);
+    expect(calls.filter((c) => c.method === "GET").map((c) => c.url), "the list is re-read").toEqual([`/api/v1/orgs/${ORG}/sponsors?archived=1`]);
     expect(m.has("sponsor-sheet-editor"), "saved: the editor closes").toBe(false);
     expect(propsOf(m.find("sponsor-sheet-poster-thumb")).src, "the read-only Details row shows what was saved").toBe(POSTER_NEW);
   });

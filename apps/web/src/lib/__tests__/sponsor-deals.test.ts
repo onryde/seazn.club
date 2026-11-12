@@ -28,6 +28,7 @@ import {
   PAYMENT_METHODS,
   PAYMENT_STATUSES,
   allowedActions,
+  blocksArchive,
   dealChip,
   endedStillDue,
   goLiveRulesFor,
@@ -63,6 +64,10 @@ const SPEC_PAYMENT_STATUSES = ["pending", "paid", "failed", "refunded", "none"];
 const SPEC_END_REASONS = [
   "refunded", "dispute_lost", "ended_now", "expired", "competition_finished", "legacy", "duplicate_payment", "written_off",
 ];
+/** The end reasons after which an offline deal that went live and ended unpaid is still DUE: the sweep's two (its term ran out,
+ *  its competition finished). Task 23 carries 1 and 4, and archive spec §8 row 7. Every other reason, `written_off` included
+ *  (archive preflight P2), is settled or was never a deal. */
+const SPEC_STILL_DUE_REASONS: ReadonlySet<string> = new Set(["expired", "competition_finished"]);
 /** The order allowedActions answers in: Write off sits beside Mark as paid, the other answer to an invoice still due. */
 const SPEC_DEAL_ACTIONS = ["send_invoice", "resend_invoice", "mark_paid", "write_off", "approve", "refund", "end_now"];
 
@@ -872,14 +877,13 @@ describe("an ENDED deal still due (Task 23 carries 1 and 4): late Mark as paid, 
   });
 
   it("every end reason × an offline unpaid deal that went live: only the sweep's two leave it due (8 reasons × pending/failed × email or none = 32 checked)", () => {
-    const DUE_AFTER = new Set(["expired", "competition_finished"]);
     let checked = 0;
     let due = 0;
     for (const reason of SPEC_END_REASONS as EndReason[]) {
       for (const p of ["pending", "failed"] as PaymentStatus[]) {
         for (const email of ["accounts@harbourside.example", null]) {
           const d = ended({ ended_reason: reason, payment_status: p, sponsor_email: email });
-          const isDue = DUE_AFTER.has(reason);
+          const isDue = SPEC_STILL_DUE_REASONS.has(reason);
           const label = `${reason}/${p}/${email ? "email" : "no email"}`;
           expect(endedStillDue(d), label).toBe(isDue);
           expect(allowedActions(d), label).toEqual(isDue ? (email ? [RI, MP, WO] : [MP, WO]) : []);
@@ -1176,5 +1180,173 @@ describe("dealChip (spec §5.2 chips, D2: Paid is derived)", () => {
     expect(dealChip(deal({ deal_status: "live", payment_status: "pending", parked_at: T0 }))).toEqual({ kind: "live", awaitingPayment: true, onHold: true, endedDue: false });
     // The negative's positive pair: the same live deal unparked is not on hold.
     expect(dealChip(deal({ deal_status: "live", payment_status: "paid" })).onHold).toBe(false);
+  });
+});
+
+// ---- Archive a sponsor, Task 2: blocksArchive, the one rule for what holds a sponsor ----------------------------------------
+// Spec docs/superpowers/specs/2026-11-11-sponsor-archive-design.md D9, D17 and §8 (the blocking table, transcribed below), plus
+// preflight P2: `written_off` is an end reason outside the still-due pair, so a written-off deal is settled and does not block.
+// Sport-agnostic: no sport sweep. A deal's hold on its sponsor carries no sport.
+// Expected values come from §8 and the declared value sets (DEAL_STATUSES, END_REASONS, PAYMENT_STATUSES, PAYMENT_METHODS),
+// never from blocksArchive or the predicates it composes.
+describe("blocksArchive — what holds a sponsor from Archive (archive spec D9, D17, §8; preflight P2)", () => {
+  /** An ended deal: the caller names the reason and the money. */
+  const endedDeal = (over: Partial<SponsorDeal>): SponsorDeal => deal({ deal_status: "ended", ended_at: T0, ...over });
+  /** §8 row 7's shape: offline, went live, unpaid. Only its end reason decides. */
+  const offlineWentLiveUnpaid = (reason: EndReason, p: PaymentStatus = "pending"): SponsorDeal =>
+    endedDeal({ payment_method: "offline", payment_status: p, live_at: T0, ended_reason: reason });
+
+  /** Spec §8, row by row (§9's complimentary sequence adds the last "no"). */
+  const ROWS: { label: string; deal: SponsorDeal; blocks: boolean }[] = [
+    { label: "draft", deal: deal({ deal_status: "draft" }), blocks: true },
+    { label: "awaiting_payment, online", deal: deal({ deal_status: "awaiting_payment", invoice_sent_at: T0 }), blocks: true },
+    { label: "awaiting_payment, offline", deal: deal({ deal_status: "awaiting_payment", payment_method: "offline" }), blocks: true },
+    { label: "awaiting_approval, paid", deal: deal({ deal_status: "awaiting_approval", go_live: "on_approval", payment_status: "paid", paid_at: T0 }), blocks: true },
+    { label: "scheduled, paid", deal: deal({ deal_status: "scheduled", payment_status: "paid", paid_at: T0 }), blocks: true },
+    { label: "scheduled, unpaid", deal: deal({ deal_status: "scheduled", payment_method: "offline", go_live: "immediate" }), blocks: true },
+    { label: "live, paid", deal: deal({ deal_status: "live", payment_status: "paid", paid_at: T0, live_at: T0 }), blocks: true },
+    {
+      label: "live, parked by a dispute",
+      deal: deal({ deal_status: "live", payment_status: "paid", paid_at: T0, live_at: T0, parked_at: T0, disputed_at: T0, dispute_id: "dp_1" }),
+      blocks: true,
+    },
+    { label: "ended still due: offline, went live, unpaid, expired", deal: offlineWentLiveUnpaid("expired"), blocks: true },
+    { label: "ended still due: offline, went live, failed, competition_finished", deal: offlineWentLiveUnpaid("competition_finished", "failed"), blocks: true },
+    { label: "ended_now (the club cancelled)", deal: offlineWentLiveUnpaid("ended_now"), blocks: false },
+    { label: "refunded", deal: endedDeal({ payment_status: "refunded", paid_at: T0, live_at: T0, ended_reason: "refunded" }), blocks: false },
+    {
+      label: "written_off (P2: settled)",
+      deal: { ...offlineWentLiveUnpaid("written_off"), written_off_at: T0, written_off_by: "user-1" },
+      blocks: false,
+    },
+    {
+      label: "dispute_lost",
+      deal: endedDeal({ payment_status: "refunded", paid_at: T0, live_at: T0, disputed_at: T0, dispute_id: "dp_2", ended_reason: "dispute_lost" }),
+      blocks: false,
+    },
+    { label: "paid, expired", deal: endedDeal({ payment_method: "offline", payment_status: "paid", paid_at: T0, live_at: T0, ended_reason: "expired" }), blocks: false },
+    { label: "offline, unpaid, never went live, expired", deal: { ...offlineWentLiveUnpaid("expired"), live_at: null }, blocks: false },
+    { label: "online, unpaid, expired (its link is gone)", deal: { ...offlineWentLiveUnpaid("expired"), payment_method: "online" }, blocks: false },
+    {
+      label: "paid, open dispute (D17)",
+      deal: endedDeal({ payment_status: "paid", paid_at: T0, live_at: T0, disputed_at: T0, dispute_id: "dp_3", ended_reason: "expired" }),
+      blocks: false,
+    },
+    { label: "legacy order", deal: endedDeal({ payment_status: "paid", paid_at: T0, ended_reason: "legacy", invoice_number: null }), blocks: false },
+    {
+      label: "complimentary, ended (§9)",
+      deal: endedDeal({ payment_method: "complimentary", payment_status: "none", go_live: "immediate", live_at: T0, ended_reason: "expired", invoice_number: null }),
+      blocks: false,
+    },
+  ];
+
+  it("the empty case first: a sponsor with no deals is not held; the same list with one live deal is", () => {
+    const none: SponsorDeal[] = [];
+    expect(none.some(blocksArchive)).toBe(false);
+    // The positive pair: one live deal is enough.
+    expect([deal({ deal_status: "live", payment_status: "paid", live_at: T0 })].some(blocksArchive)).toBe(true);
+  });
+
+  it("the §8 table: every row answers as the spec says, and every deal_status of DEAL_STATUSES appears (rows and statuses checked reported)", () => {
+    const seenStatuses = new Set<DealStatus>();
+    let checked = 0;
+    for (const row of ROWS) {
+      expect(blocksArchive(row.deal), row.label).toBe(row.blocks);
+      seenStatuses.add(row.deal.deal_status);
+      checked++;
+    }
+    expect(checked, "rows checked").toBe(ROWS.length);
+    expect(ROWS.length, "rows in the table").toBeGreaterThanOrEqual(14);
+    expect(seenStatuses.size, "deal statuses seen").toBe(DEAL_STATUSES.length);
+    // Both answers are present, so neither `() => true` nor `() => false` can pass the table.
+    expect(ROWS.filter((r) => r.blocks).length, "blocking rows").toBe(10);
+    expect(ROWS.filter((r) => !r.blocks).length, "non-blocking rows").toBe(10);
+  });
+
+  it("every deal that is not ended holds its sponsor, whatever its money or method (DEAL_STATUSES × PAYMENT_STATUSES × PAYMENT_METHODS, count reported)", () => {
+    let checked = 0;
+    for (const s of DEAL_STATUSES) {
+      if (s === "ended") continue;
+      for (const p of PAYMENT_STATUSES) {
+        for (const m of PAYMENT_METHODS) {
+          expect(blocksArchive(deal({ deal_status: s, payment_status: p, payment_method: m })), `${s}/${p}/${m}`).toBe(true);
+          checked++;
+        }
+      }
+    }
+    expect(checked, "combinations checked").toBe((DEAL_STATUSES.length - 1) * PAYMENT_STATUSES.length * PAYMENT_METHODS.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("an ended offline deal that went live unpaid: only the two still-due reasons hold it; written_off and legacy do not (END_REASONS × pending/failed, count reported)", () => {
+    let checked = 0;
+    let held = 0;
+    for (const reason of END_REASONS) {
+      for (const p of ["pending", "failed"] as PaymentStatus[]) {
+        const expected = SPEC_STILL_DUE_REASONS.has(reason);
+        expect(blocksArchive(offlineWentLiveUnpaid(reason, p)), `${reason}/${p}`).toBe(expected);
+        if (expected) held++;
+        checked++;
+      }
+    }
+    expect(checked, "rows checked").toBe(END_REASONS.length * 2);
+    expect(held, "rows held").toBe(SPEC_STILL_DUE_REASONS.size * 2);
+    expect(held).toBeGreaterThan(0);
+    expect(checked - held).toBeGreaterThan(0);
+  });
+
+  it("the differential pairs: expired and competition_finished each hold only when the offline deal went live; online claims nothing; a write-off releases it (P2)", () => {
+    let checked = 0;
+    for (const reason of ["expired", "competition_finished"] as EndReason[]) {
+      const due = offlineWentLiveUnpaid(reason);
+      expect(blocksArchive(due), `${reason}: offline, went live, unpaid`).toBe(true);
+      // The same deal, never live: nothing to pay for.
+      expect(blocksArchive({ ...due, live_at: null }), `${reason}: never went live`).toBe(false);
+      // The same deal, online: its card link is gone and it claims nothing.
+      expect(blocksArchive({ ...due, payment_method: "online" }), `${reason}: online`).toBe(false);
+      // The same deal, paid late (Mark as paid keeps it ended): settled.
+      const paidLate: SponsorDeal = { ...due, payment_status: "paid", paid_at: T0 };
+      expect(blocksArchive(paidLate), `${reason}: paid late`).toBe(false);
+      // The same deal, written off (the reason becomes written_off): settled, the club gave up the money (P2).
+      const writtenOff: SponsorDeal = { ...due, ended_reason: "written_off", written_off_at: T0, written_off_by: "user-1" };
+      expect(blocksArchive(writtenOff), `${reason}: written off`).toBe(false);
+      checked++;
+    }
+    expect(checked, "still-due reasons checked").toBe(SPEC_STILL_DUE_REASONS.size);
+  });
+
+  it("legacy: an ended legacy order never holds its sponsor, in any money state; its twin differing only in reason holds whenever unpaid (PAYMENT_STATUSES, count reported)", () => {
+    /** The file header's rule: "unpaid" is payment `pending` or `failed`. */
+    const SPEC_UNPAID: ReadonlySet<string> = new Set(["pending", "failed"]);
+    let checked = 0;
+    let discriminating = 0;
+    for (const p of PAYMENT_STATUSES) {
+      // The still-due shape (offline, went live, ended), so the endedStillDue arm CAN answer true: only the reason differs.
+      const legacy = endedDeal({ payment_method: "offline", payment_status: p, live_at: T0, ended_reason: "legacy", invoice_number: null });
+      const twin: SponsorDeal = { ...legacy, ended_reason: "expired" };
+      expect(blocksArchive(legacy), `legacy/${p}`).toBe(false);
+      expect(blocksArchive(twin), `expired twin/${p}`).toBe(SPEC_UNPAID.has(p));
+      if (SPEC_UNPAID.has(p)) discriminating++;
+      checked++;
+    }
+    expect(checked, "money states checked").toBe(PAYMENT_STATUSES.length);
+    expect(discriminating, "rows whose twin holds").toBe([...PAYMENT_STATUSES].filter((p) => SPEC_UNPAID.has(p)).length);
+    expect(discriminating).toBeGreaterThan(0);
+  });
+
+  it("legacy, the second barrier: a legacy reason on a deal that is not ended never holds (rows the DB refuses by sponsor_orders_ended_shape; not-ended DEAL_STATUSES, count reported)", () => {
+    // Impossible rows on purpose: they pin the deliberate redundant `!== "legacy"` conjunct (sponsor-deals.ts blocksArchive), so
+    // dropping it is caught here rather than only by the CHECK (deals-migration.test.ts refuses these rows).
+    let checked = 0;
+    for (const s of DEAL_STATUSES) {
+      if (s === "ended") continue;
+      const legacy: SponsorDeal = { ...deal({ deal_status: s }), ended_reason: "legacy" };
+      expect(blocksArchive(legacy), `${s} + legacy`).toBe(false);
+      // The positive twin: the same deal without the reason holds (it is live or open).
+      expect(blocksArchive({ ...legacy, ended_reason: null }), `${s}, no reason`).toBe(true);
+      checked++;
+    }
+    expect(checked, "not-ended statuses checked").toBe(DEAL_STATUSES.length - 1);
+    expect(checked).toBeGreaterThan(0);
   });
 });

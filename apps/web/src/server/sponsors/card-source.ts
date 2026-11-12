@@ -52,8 +52,8 @@ export function sponsorTiersOn(orgId: string, competitionId: string | null): Pro
   return hasFeature(orgId, "sponsors.tiers", competitionId ?? undefined);
 }
 
-/** The current card of each listed sponsor of this org, ticked or not, ACTIVE only: a pending (parked), inactive or
- *  deleted sponsor has none, so its assigned break airs nothing (controller ruling: such a sponsor never airs, not even
+/** The current card of each listed sponsor of this org, ticked or not, ACTIVE and unarchived only: a pending (parked), inactive,
+ *  archived or deleted sponsor has none, so its assigned break airs nothing (controller ruling: such a sponsor never airs, not even
  *  on a frozen break). Order is not meaningful. */
 export async function activeSponsorCards(
   exec: Tx | typeof sql,
@@ -64,7 +64,8 @@ export async function activeSponsorCards(
   if (sponsorIds.length === 0) return [];
   const rows = await exec<SponsorCardRow[]>`
     select id, name, logo_path, tier, on_stream from sponsors
-     where org_id = ${orgId} and id = any(${sponsorIds as string[]}::uuid[]) and status = 'active'`;
+     where org_id = ${orgId} and id = any(${sponsorIds as string[]}::uuid[]) and status = 'active'
+       and archived_at is null`;
   return rows.map((r) => sponsorCardOf(r, tiered));
 }
 

@@ -46,7 +46,7 @@ import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
 import { placementNeedsTiers } from "@/lib/sponsor-deal-policy";
 import { assertPlacementAllowed } from "@/server/sponsors/deal-gates";
 import { ensureOrgStreamSettings } from "@/server/sponsors/stream-settings";
-import { DealRuleError, statusAfterPaid, type DealStatus, type PaymentStatus, type SponsorDeal } from "@/lib/sponsor-deals";
+import { blocksArchive, DealRuleError, statusAfterPaid, type DealStatus, type PaymentStatus, type SponsorDeal } from "@/lib/sponsor-deals";
 import { captureError } from "@/lib/sentry";
 import {
   applyDealsToSponsor,
@@ -84,6 +84,9 @@ export interface SponsorRow extends SponsorDealSummary {
   created_at: string;
   /** Ticked onto the stream's rotation (V492; R4 S12). Written only by PATCH; a created sponsor starts false. */
   on_stream: boolean;
+  /** When the club archived this sponsor (V505, archive spec D8), or null. Orthogonal to `status`: an archived sponsor is hidden
+   *  everywhere and keeps every record. Written ONLY by `archiveSponsor` / `unarchiveSponsor`, never by a PATCH (D11). */
+  archived_at: string | null;
   /** The paid order that activated this placement, when it was bought
    *  through a package (list reads only — write paths return it unset). */
   paid_order_id?: string | null;
@@ -101,7 +104,7 @@ export interface SponsorRow extends SponsorDealSummary {
 
 const COLS = [
   "id", "competition_id", "name", "url", "logo_path", "poster_path",
-  "tier", "display_order", "status", "click_count", "created_at", "on_stream",
+  "tier", "display_order", "status", "click_count", "created_at", "on_stream", "archived_at",
 ] as const;
 
 export const CreateSponsorInput = z.object({
@@ -198,10 +201,17 @@ function bustPublicSponsors(orgId: string): void {
   });
 }
 
+/** What a sponsor list reads beyond the org's live rows. `includeArchived` (archive spec §6.2, D12): archived rows too, each with
+ *  its `archived_at` - the console's Sponsors tab (its "Show archived (N)" switch needs N and the rows) and `GET /sponsors?archived=1`.
+ *  By default an archived row is left out (the On stream tab, the plain `GET /sponsors`). */
+export interface ListSponsorsOptions {
+  includeArchived?: boolean;
+}
+
 /** Plain read for server pages (settings) — same rows as listSponsors.
  *  paid_order_id links a placement back to the package order that bought
  *  it, so the manager can mark it and guard its deletion. */
-export async function listSponsorRows(orgId: string): Promise<SponsorRow[]> {
+export async function listSponsorRows(orgId: string, opts: ListSponsorsOptions = {}): Promise<SponsorRow[]> {
   return withTenant(orgId, async (tx) => {
     const rows = await tx<Omit<SponsorRow, keyof SponsorDealSummary>[]>`
     select ${tx(COLS)},
@@ -216,6 +226,7 @@ export async function listSponsorRows(orgId: string): Promise<SponsorRow[]> {
                   where o.sponsor_id = sponsors.id and o.status = 'refunded'
                     and o.dispute_id is not null) as dispute_lost
     from sponsors
+    ${opts.includeArchived === true ? tx`` : tx`where archived_at is null`}
     order by array_position(${[...SPONSOR_TIERS]}::text[], tier),
              display_order, created_at, id`;
     // The deal summary is computed in TS from the deals themselves (pickRowDeal), never a SQL copy of the selection.
@@ -229,8 +240,8 @@ export async function listSponsorRows(orgId: string): Promise<SponsorRow[]> {
   });
 }
 
-export async function listSponsors(auth: AuthCtx): Promise<SponsorRow[]> {
-  return listSponsorRows(auth.orgId);
+export async function listSponsors(auth: AuthCtx, opts: ListSponsorsOptions = {}): Promise<SponsorRow[]> {
+  return listSponsorRows(auth.orgId, opts);
 }
 
 export async function createSponsor(
@@ -302,6 +313,9 @@ export async function patchSponsor(
     // current — a deal another transaction made live while this PATCH waited is seen, and locks the patch below.
     const locked = await lockSponsorAndDeals(tx, id);
     if (!locked) throw new HttpError(404, "sponsor not found");
+    // Archive spec D11: an archived sponsor's page is read-only, so ANY patch is refused - one rule, not a per-field list. Read
+    // under the lock, so an archive committed while this PATCH waited is seen.
+    if (locked.sponsor.archived_at !== null) throw sponsorArchived();
     // A placement parked by an open dispute (its paid order is flagged and
     // the handler took it down to 'pending') stays down until the dispute
     // closes — reactivating it by hand would put a charged-back sponsor
@@ -357,7 +371,7 @@ function dealHoldsHistory(d: ServerDeal): boolean {
 const holdsHistory = () =>
   sponsorRefusal(
     409,
-    "this sponsor has deal history (money paid or refunded, a numbered invoice, or a pre-deals order) — end its deals instead",
+    "this sponsor has deal history (money paid or refunded, a numbered invoice, or a pre-deals order) — archive it instead",
     "sponsor_has_deal_history",
   );
 const holdsOpenCheckout = () =>
@@ -417,9 +431,75 @@ export async function deleteSponsor(auth: AuthCtx, id: string): Promise<void> {
   }).then(() => expirePublicSponsors(auth.orgId, "sponsor.delete"));
 }
 
+/** Archive spec D4, D9: a deal still holds the sponsor (`blocksArchive`: live, open, or ended with money still due). */
+const holdsCurrentDeal = () =>
+  sponsorRefusal(409, "this sponsor has a deal that is live, waiting to go live or still due — end or settle it first", "sponsor_has_current_deal");
+
+/** Archive spec D10, D11: an archived sponsor takes no edit and no new deal until it is unarchived. Exported for `createDeal`
+ *  (usecases/sponsor-deals.ts), which refuses it twice: early, and again under the sponsor lock. */
+export const sponsorArchived = () =>
+  sponsorRefusal(409, "this sponsor is archived — unarchive it first", "sponsor_archived");
+
+/**
+ * Archive a sponsor (archive spec §6.2, D8, D9): it is hidden from the console list, every public surface, the stream and the `/s/`
+ * redirect, and every record stays (deals, invoice numbers, payments, click counts). ONE transaction in the one lock order (F2):
+ * the sponsor, then its deals - so a deal another writer is moving is seen, and `createDeal`'s own re-check under the same lock
+ * sees this archive. Then:
+ *  1. not there (or another org's, under the tenant) - 404;
+ *  2. already archived - the row as it is: idempotent, the FIRST `archived_at` kept;
+ *  3. a deal holds it (`blocksArchive`, the one rule the console's Archive card reads too) - 409 `sponsor_has_current_deal`;
+ *  4. `archived_at = now()`, and nothing else: status, tier, scope, stream tick, order, logo and poster stay, so Unarchive is
+ *     exact by construction.
+ * Ungated (D25): every plan. The public pages expire before it resolves (D22).
+ */
+export async function archiveSponsor(auth: AuthCtx, id: string): Promise<SponsorRow> {
+  const row = await withTenant(auth.orgId, async (tx) => {
+    const locked = await lockSponsorAndDeals(tx, id);
+    if (!locked) throw new HttpError(404, "sponsor not found");
+    if (locked.sponsor.archived_at !== null) return readSponsorRow(tx, id, locked.deals);
+    if (locked.deals.some((d) => blocksArchive(d))) throw holdsCurrentDeal();
+    const [updated] = await tx<Omit<SponsorRow, keyof SponsorDealSummary>[]>`
+      update sponsors set archived_at = now() where id = ${id} returning ${tx(COLS)}`;
+    return { ...updated!, ...sponsorDealSummary(locked.deals) };
+  });
+  await expirePublicSponsors(auth.orgId, "sponsor.archive");
+  log.info({ orgId: auth.orgId, sponsorId: id }, "sponsor_archived");
+  return row;
+}
+
+/** Unarchive (archive spec §6.2, D6): the sponsor comes back exactly as it was - `archived_at` is the only column Archive wrote.
+ *  The lock order of every sponsor write (F2); 404 as Archive; a sponsor that is not archived answers as it is (idempotent).
+ *  A later new deal works normally. */
+export async function unarchiveSponsor(auth: AuthCtx, id: string): Promise<SponsorRow> {
+  const row = await withTenant(auth.orgId, async (tx) => {
+    const locked = await lockSponsorAndDeals(tx, id);
+    if (!locked) throw new HttpError(404, "sponsor not found");
+    if (locked.sponsor.archived_at === null) return readSponsorRow(tx, id, locked.deals);
+    const [updated] = await tx<Omit<SponsorRow, keyof SponsorDealSummary>[]>`
+      update sponsors set archived_at = null where id = ${id} returning ${tx(COLS)}`;
+    return { ...updated!, ...sponsorDealSummary(locked.deals) };
+  });
+  await expirePublicSponsors(auth.orgId, "sponsor.unarchive");
+  log.info({ orgId: auth.orgId, sponsorId: id }, "sponsor_unarchived");
+  return row;
+}
+
+/** A sponsor row as the writes answer it, with its deal summary, read inside the caller's transaction (which holds the lock). */
+async function readSponsorRow(tx: Tx, id: string, deals: ServerDeal[]): Promise<SponsorRow> {
+  const [row] = await tx<Omit<SponsorRow, keyof SponsorDealSummary>[]>`select ${tx(COLS)} from sponsors where id = ${id}`;
+  if (!row) throw new Error(`sponsor ${id} vanished while this transaction held its lock`);
+  return { ...row, ...sponsorDealSummary(deals) };
+}
+
 /** Persist a new display order: `ids` in the order they should render.
  *  Order is scoped per (scope, tier) group by the reads, so indices are
- *  simply assigned in sequence — groups keep their relative order. */
+ *  simply assigned in sequence — groups keep their relative order.
+ *
+ *  An ARCHIVED id is skipped, not refused: the console sends every id of the
+ *  list it shows, archived rows included, and an archived row keeps its order
+ *  so that unarchive is exact (archive spec §9). The skip is the update's own
+ *  `archived_at is null`, so an archive that commits first is re-checked on
+ *  the row itself; it is not counted in `reordered`. An unknown id is 422. */
 export async function reorderSponsors(
   auth: AuthCtx,
   input: ReorderSponsorsInput,
@@ -427,11 +507,16 @@ export async function reorderSponsors(
   return withTenant(auth.orgId, async (tx) => {
     let reordered = 0;
     for (let i = 0; i < input.ids.length; i++) {
+      const id = input.ids[i]!;
       const [row] = await tx<{ id: string }[]>`
         update sponsors set display_order = ${i}
-        where id = ${input.ids[i]!} returning id`;
-      if (!row) throw new HttpError(422, "reorder references an unknown sponsor");
-      reordered++;
+        where id = ${id} and archived_at is null returning id`;
+      if (row) {
+        reordered++;
+        continue;
+      }
+      const [held] = await tx`select 1 from sponsors where id = ${id}`;
+      if (!held) throw new HttpError(422, "reorder references an unknown sponsor");
     }
     return { reordered };
   }).then(async (res) => {
@@ -463,6 +548,8 @@ export interface ResolvedSponsor {
  * `sponsors` table is the only source: no rows means no sponsors (R4 fix
  * batch 3, m9 — the branding-blob shim brought deleted sponsors back).
  * Runs on the privileged connection: public pages have no tenant context.
+ * An archived row is left out IN SQL, before the dedupe (archive spec D28):
+ * a new row is never hidden behind an archived one of the same name.
  * Orgs without `sponsors.tiers` get the un-tiered free strip — every row
  * collapses to `partner` so tier grouping stays a Pro-visible feature.
  *
@@ -481,7 +568,7 @@ export async function resolveSponsors(
     (Pick<SponsorRow, "id" | "name" | "url" | "tier"> & { logo_path: string | null; poster_path: string | null })[]
   >`
     select id, name, url, logo_path, poster_path, tier from sponsors
-    where org_id = ${orgId} and status = 'active'
+    where org_id = ${orgId} and status = 'active' and archived_at is null
       and (competition_id is null or competition_id = ${competitionId ?? null})
       ${onStream ? sql`and on_stream` : sql``}
     order by (competition_id is null),

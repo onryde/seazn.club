@@ -9,7 +9,9 @@ export async function GET(req: Request, { params }: Ctx) {
     const { id } = await params;
     assertUuid(id, "organization");
     const auth = await requireOrgAuth(req, id, "read");
-    return listSponsors(auth);
+    // Archive spec D12: archived rows are left out unless `?archived=1` (the house "1"/"0" convention); any other value excludes.
+    const includeArchived = new URL(req.url).searchParams.get("archived") === "1";
+    return listSponsors(auth, { includeArchived });
   });
 }
 

@@ -95,7 +95,7 @@ const deal = (over: Partial<SponsorDeal>): SponsorDeal => ({
 
 const sponsor = (over: Partial<SponsorItem> = {}): SponsorItem => ({
   id: "a", name: "Ridge Gold Physiotherapy", competition_id: null, url: "https://ridgegoldphysio.co.uk/", logo_path: null, poster_path: null,
-  tier: "partner", display_order: 0, status: "active", click_count: 12, on_stream: false, paid_order_id: null, deal: null,
+  tier: "partner", display_order: 0, status: "active", click_count: 12, on_stream: false, archived_at: null, paid_order_id: null, deal: null,
   locked_by_deal: false, has_open_deal: false, last_billing_email: null, ...over,
 });
 
@@ -110,7 +110,7 @@ function bodyProps(over: Partial<SponsorSheetBodyProps> = {}): SponsorSheetBodyP
   return {
     sponsor: sponsor(), deals: [], orgId: ORG, orgSlug: SLUG, hasTiers: true, canEdit: true, busy: false, tz: "UTC", competitions: COMPS,
     editing: false, renderEditor: () => <p data-testid="editor-stub">editor</p>, onEdit: noop, onToggleStream: noop, onShowAgain: noop,
-    onAddDeal: noop, onDealAction: noop, error: null, notice: null, payLink: null, reportLinks: [], reportDefaults: DEFAULTS, ...over,
+    onAddDeal: noop, onArchive: noop, onUnarchive: noop, onDealAction: noop, error: null, notice: null, payLink: null, reportLinks: [], reportDefaults: DEFAULTS, ...over,
   };
 }
 const bodyHtml = (over: Partial<SponsorSheetBodyProps> = {}) => renderToStaticMarkup(<SponsorSheetBody {...bodyProps(over)} />);
@@ -1069,7 +1069,7 @@ describe("the On stream toggle (the On stream tab's PATCH)", () => {
     const patches = calls.filter((c) => c.method === "PATCH");
     expect(patches.map((c) => c.url)).toEqual([`${API}/sponsors/a`]);
     expect(patches[0]!.body).toEqual({ on_stream: true });
-    expect(GETS()).toEqual([`${API}/sponsors`]);
+    expect(GETS()).toEqual([`${API}/sponsors?archived=1`]);
     expect(propsOf(m.all("sponsor-sheet-stream")[0]!).checked, "the re-read row").toBe(true);
   });
 
@@ -1109,7 +1109,7 @@ describe("the deal buttons write through the deal routes, ask where the money or
     expect(opts.title, "the AMOUNT of the deal tapped (£300), not the row's (£600)").toBe(`Record £300 from ${LONG_NAME} as received?`);
     expect(opts.confirmLabel).toBe("Mark as paid");
     expect(POSTS(), "the deal tapped, not the row's").toEqual([`${API}/sponsor-deals/d-queued/mark-paid`]);
-    expect(GETS().sort(), "the list and the deals are re-read").toEqual([`${API}/sponsor-deals`, `${API}/sponsors`]);
+    expect(GETS().sort(), "the list and the deals are re-read").toEqual([`${API}/sponsor-deals`, `${API}/sponsors?archived=1`]);
   });
 
   it("declining Mark as paid sends nothing", async () => {

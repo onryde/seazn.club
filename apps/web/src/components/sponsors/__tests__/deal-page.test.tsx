@@ -896,7 +896,7 @@ const POSTS = () => calls.filter((c) => c.method === "POST").map((c) => c.url);
 
 const sponsor = (over: Partial<SponsorItem> = {}): SponsorItem => ({
   id: "a", name: "Quay Fisheries", competition_id: null, url: null, logo_path: null, poster_path: null, tier: "partner", display_order: 0, status: "active",
-  click_count: 0, on_stream: false, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false, last_billing_email: null, ...over,
+  click_count: 0, on_stream: false, archived_at: null, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false, last_billing_email: null, ...over,
 });
 function hubOf(over: Partial<SponsorsHubData> = {}): SponsorsHubData {
   return {

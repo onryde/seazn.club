@@ -33,3 +33,12 @@ An owner or admin sees a **Share report** button beside each sponsor on Overview
 1. Choose **From** and **To**, then **Create link**.
 2. Copy the link straight away: it is shown only once. If it is lost, revoke it and create another.
 3. **Active links** lists the sponsor's links that still open. **Revoke** stops a link opening at once.
+
+## Archive a sponsor
+
+A sponsor with deals, invoices or payments on record can't be deleted. Archive it instead. Open the sponsor's page on the **Sponsors** tab and choose **Archive**.
+
+- **What it hides.** An archived sponsor leaves your Sponsors list, your public pages, the TV slideshow, the stream and its tracked link. Its deals, invoices, payments and link clicks are kept.
+- **What stops it.** A sponsor with a deal that is still running or still due can't be archived. End or settle that deal first, then archive.
+- **Seeing archived sponsors.** Once you have any, **Show archived (N)** appears above the list. Turn it on to list them after your other sponsors.
+- **Bringing one back.** Open the archived sponsor and choose **Unarchive**. It returns as it was, with its tier, place and stream setting.

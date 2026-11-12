@@ -408,6 +408,7 @@ export function AddDealSheet({
       title={msg("sponsors.dealSheet.title", { name: sponsor.name })}
       size="lg"
       onClose={requestClose}
+      closeSize="lg"
       footer={
         <>
           <button type="button" data-testid="add-deal-cancel" onClick={requestClose} className="btn btn-ghost max-md:min-h-11">

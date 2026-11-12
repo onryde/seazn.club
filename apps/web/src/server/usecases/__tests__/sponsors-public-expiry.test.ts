@@ -44,12 +44,14 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { orgTag } from "@/server/public-site/cache-tags";
 import { stubOutboxEnv } from "./_invite-mail";
 import {
+  archiveSponsor,
   createSponsor,
   createSponsorPackage,
   deleteSponsor,
   handleSponsorPaymentSucceeded,
   patchSponsor,
   reorderSponsors,
+  unarchiveSponsor,
 } from "../sponsors";
 import { approveDeal, createDeal, endDealNow, markDealPaid, refundDeal, sendDealInvoice } from "../sponsor-deals";
 
@@ -65,7 +67,7 @@ describe.skipIf(!HAS_DB)("an organiser's sponsor write expires the public pages 
     h.tags.length = 0;
   });
 
-  it("create, edit, reorder, delete - each has fired the org tag ({ expire: 0 }) by the time it resolves, a free org's partner row (4 writes)", async () => {
+  it("create, edit, reorder, archive, unarchive, delete - each has fired the org tag ({ expire: 0 }) by the time it resolves, a free org's partner row (6 writes)", async () => {
     slug = `spx-${randomUUID().slice(0, 8)}`;
     const [{ id: orgId }] = await sql<{ id: string }[]>`insert into organizations (name, slug) values (${`Spx ${slug}`}, ${slug}) returning id`;
     await invalidateOrgEntitlements(orgId);
@@ -81,6 +83,9 @@ describe.skipIf(!HAS_DB)("an organiser's sponsor write expires the public pages 
       h.tags.length = 0;
       return reorderSponsors(auth, { ids: [secondId, firstId] });
     }]);
+    // Archive a sponsor (archive spec D22): the archived sponsor leaves the public page at once, and Unarchive brings it back.
+    writes.push(["archive", () => archiveSponsor(auth, firstId)]);
+    writes.push(["unarchive", () => unarchiveSponsor(auth, firstId)]);
     writes.push(["delete", () => deleteSponsor(auth, secondId)]);
 
     let checked = 0;
@@ -91,7 +96,7 @@ describe.skipIf(!HAS_DB)("an organiser's sponsor write expires the public pages 
       expect(h.tags, `${what}: the org's public tag expired before the write resolved, not left to after()`).toContainEqual(want);
       checked++;
     }
-    expect(checked, "anti-vacuity: every organiser write was checked").toBe(4);
+    expect(checked, "anti-vacuity: every organiser write was checked").toBe(6);
   });
 
   // Sponsor deals Task 7/8 (F8): the checkout is an online deal on an existing sponsor, refunded through refundDeal (a charge
