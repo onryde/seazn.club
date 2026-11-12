@@ -21,7 +21,12 @@ const at = (iso: string) => new Date(iso);
 const ENVS: readonly EnvName[] = ["stg", "prod"];
 const ids = (d: Date, cron = TRIGGER_CRON, env: string = "prod", jobs: readonly Job[] = JOBS) =>
   dueJobs(d, cron, env, jobs).map((j) => j.id);
-const HOURLY = ["registrations", "billing-events", "funnel-remind", "sponsor-deals"];
+/** The every-firing rows of the hourly trigger, in table order. Quick match spec §7.8 (plan 3 Task 3) added the expiry sweep
+ *  after `sponsor-deals`. Typed from the specs, never read from JOBS. */
+const HOURLY = ["registrations", "billing-events", "funnel-remind", "sponsor-deals", "quick-match-expiry"];
+/** Quick match spec C2: the reminder is queued once a match is within this many hours of its expiry (apps/web's
+ *  QUICK_MATCH_REMINDER_HOURS_BEFORE; this workspace imports nothing from apps/web, so it is typed from the spec). */
+const QUICK_MATCH_REMINDER_WINDOW_H = 24;
 /** Capture QR v2 §6.11 (W22): the stream-tick trigger, every 5 minutes. Typed from the spec, never read from JOBS. */
 const EVERY_5 = "*/5 * * * *";
 /** The 2026-10-20 owner ruling: prod's fast trigger is the minute one (the email outbox's worker runs every minute there). */
@@ -77,12 +82,54 @@ describe("dueJobs on the hourly trigger", () => {
       "billing-events": 168,
       "funnel-remind": 168,
       "sponsor-deals": 168,
+      "quick-match-expiry": 168,
       "ai-previews": 7,
       "relay-sweep": 7,
       "billing-quantity": 7,
       "billing-grant": 7,
       "news-digest": 1,
     });
+  });
+});
+
+// Quick match spec §7.8, C1, C2 (plan 3 Task 3 as amended 2026-11-08): the expiry sweep. Typed from the spec and the plan,
+// never read from JOBS.
+describe("the quick-match-expiry row", () => {
+  it("is in the table exactly once, on the hourly trigger, due on EVERY firing, retried, with `failed` as its counter", () => {
+    expect(JOBS.filter((j) => j.id === "quick-match-expiry")).toEqual([
+      {
+        id: "quick-match-expiry",
+        path: "/api/cron/quick-match-expiry",
+        trigger: "17 * * * *",
+        due: { kind: "every" },
+        // Safe to re-send after a 502/503/504: the sweep's claims are skip-locked, every delete re-reads its guard, and
+        // the reminder is enqueued once per expiry.
+        retry: true,
+        manual: true,
+        // QuickMatchSweepReport.failed. `deferred` (rows past a step's 200-row limit) is NOT a failure.
+        failureCounts: ["data.failed"],
+      },
+    ]);
+  });
+
+  it("runs once an hour in both envs: the longest gap between two sweeps leaves at least 23 of the reminder window's 24 hours", () => {
+    let checked = 0;
+    for (const env of ENVS) {
+      const start = Date.parse("2026-09-28T00:00:00Z"); // Monday: daily and weekly rows due too, which must not matter
+      const runs: number[] = [];
+      for (let m = 0; m < 2 * 24 * 60; m++) {
+        const scheduled = new Date(start + m * 60_000);
+        for (const cron of triggersOf(env)) {
+          if (firesAt(cron, scheduled.getUTCMinutes()) && ids(scheduled, cron, env).includes("quick-match-expiry")) runs.push(m);
+        }
+      }
+      expect(runs.length, `${env} sweeps over two days`).toBe(48);
+      const gaps = runs.slice(1).map((m, i) => m - runs[i]!);
+      expect(Math.max(...gaps), `${env} longest gap, minutes`).toBe(60);
+      expect(QUICK_MATCH_REMINDER_WINDOW_H * 60 - Math.max(...gaps), `${env} reminder lead left, minutes`).toBeGreaterThanOrEqual(23 * 60);
+      checked++;
+    }
+    expect(checked, "envs checked").toBe(ENVS.length);
   });
 });
 
@@ -405,6 +452,9 @@ describe("JOBS table", () => {
       "billing-events": ["data.failed", "data.alerted"],
       "billing-quantity": ["data.failed", "data.orphanGroups.failed", "data.addonPrices.mismatched"],
       "billing-grant": ["data.failed"],
+      // Quick match plan 3 Task 3: the expiry sweep's QuickMatchSweepReport.failed (a row whose step threw: logged by id and
+      // code, the other rows still run). `deferred` is NOT a failure (rows past a step's 200-row limit; the next hour reaches them).
+      "quick-match-expiry": ["data.failed"],
       // T17: the relay-sweep route's daily YouTube pass - YoutubeDailyResult.failed (a connection or leg that threw, a refresh batch
       // YouTube could not answer, a broadcast the end step can never settle), at data.youtube.failed. `reconnectNeeded` is NOT a failure.
       "relay-sweep": ["data.youtube.failed"],
