@@ -67,10 +67,16 @@ const LICHESS_OWNER = "server/usecases/external-accounts.ts";
 const YOUTUBE_COLUMNS = ["refresh_token_enc"];
 const YOUTUBE_OWNER = "server/youtube/token-store.ts";
 
+/** Quick match (V492, spec 2026-11-03 §7.1, C19): the home-page token's sealed envelope on `quick_matches`, under
+ *  DEVICE_LINK_KEK. SQL over it lives in exactly one file, the create that writes it. A later reader (the link rebuilt
+ *  from the envelope) joins this owner or moves the column's SQL into one file both use. */
+const QUICK_MATCH_COLUMNS = ["token_enc"];
+const QUICK_MATCH_OWNER = "server/usecases/quick-match-create.ts";
+
 describe("*_enc columns never leave their owners", () => {
   it("every declared *_enc column is owned — a new one cannot walk past this test", () => {
     expect(ENC_COLUMNS).toEqual(
-      [...STREAM_COLUMNS, ...DEVICE_LINK_COLUMNS, ...LICHESS_COLUMNS, ...YOUTUBE_COLUMNS].sort(),
+      [...STREAM_COLUMNS, ...DEVICE_LINK_COLUMNS, ...LICHESS_COLUMNS, ...YOUTUBE_COLUMNS, ...QUICK_MATCH_COLUMNS].sort(),
     );
   });
 
@@ -120,6 +126,15 @@ describe("*_enc columns never leave their owners", () => {
     expect(naming).toContain(YOUTUBE_OWNER);
     const offenders = naming.filter((f) => f !== YOUTUBE_OWNER);
     expect(offenders).toEqual([]);
+  });
+
+  it("outside __tests__, only quick-match-create.ts names token_enc — and it does", () => {
+    const pattern = new RegExp(`\\b(${QUICK_MATCH_COLUMNS.join("|")})\\b`);
+    const naming = walk(SRC)
+      .map((f) => relative(SRC, f))
+      .filter((f) => !f.split("/").includes("__tests__"))
+      .filter((f) => pattern.test(readFileSync(join(SRC, f), "utf8")));
+    expect(naming).toEqual([QUICK_MATCH_OWNER]);
   });
 });
 
