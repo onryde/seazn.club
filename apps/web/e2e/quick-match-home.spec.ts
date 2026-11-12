@@ -349,3 +349,104 @@ test("Edit result (review I1): a French home at 320 with a settled row: 'Modifie
   await expectTappable(edit, "320, fr: Edit result");
   await expectNoHorizontalScroll(page);
 });
+
+// ── Task 8: Add a match ─────────────────────────────────────────────────────────────────────────────────────────────
+//
+// "+ Add a match" is a native disclosure holding a plain form post (`POST /q/<token>/add-match`) answered with a 303 back to
+// the home, the new match on it, or with a flash (app/q/[token]/add-match/route.ts). The route's DB test proves every answer
+// and the island's unit test its wiring; this is what only a browser shows: the disclosure opening, the selects' real width
+// with a 43-character side in them, the 44px targets at the three widths, a refused post landing on its flash, and a
+// knockout with no control at all. The walkthrough (walkthrough/quick-match.spec.ts, step 7) adds one to a finished league
+// and plays it.
+
+test("Add a match (Task 8): a league of 4 at 320, 768 and 1280: closed on first paint, opens to two selects at the table's top two, 44px targets; Add lands the new match on the home", async ({ guest: page }) => {
+  const sides = [LONG, "Priya & Tom", "Lee & Ana", "Jo & Max"];
+  await createThroughSetup(page, sides, "League");
+  const home = new URL(page.url()).pathname;
+  const open = page.getByTestId("qm-add-match-open");
+  const addForm = page.getByTestId("qm-add-match-form");
+  const selects = [addForm.locator('select[name="home"]'), addForm.locator('select[name="away"]')] as const;
+  await atEachWidth(page, async (width) => {
+    await expect(open, `${width}`).toHaveText("+ Add a match");
+    await expect(addForm, `${width}: closed on first paint`).toBeHidden();
+    await expectTappable(open, `${width}: + Add a match`);
+    await open.click();
+    await expect(addForm, `${width}`).toBeVisible();
+    // Every side in each select, as typed; they open at the table's top two (a fresh table: its stored order).
+    const top = await page.getByTestId("qm-standings-row").getByRole("rowheader").allTextContents();
+    expect(top.map((t) => t.trim()).sort(), `${width}: the table lists every side`).toEqual([...sides].sort());
+    for (const select of selects) await expect(select.locator("option"), `${width}`).toHaveText(sides);
+    await expect(selects[0].locator("option:checked"), `${width}`).toHaveText(top[0]!.trim());
+    await expect(selects[1].locator("option:checked"), `${width}`).toHaveText(top[1]!.trim());
+    await expectTappable(selects[0], `${width}: the first select`);
+    await expectTappable(selects[1], `${width}: the second select`);
+    await expectTappable(addForm.getByTestId("qm-add-match-submit"), `${width}: Add the match`);
+    // Open, with the 43-character side among both selects' options: atEachWidth measures the page straight after this.
+  });
+  // The add itself: two sides picked explicitly, posted, and the 303 followed to the bare home.
+  await selects[0].selectOption({ label: "Jo & Max" });
+  await selects[1].selectOption({ label: "Priya & Tom" });
+  await addForm.getByTestId("qm-add-match-submit").click();
+  await page.waitForURL((url) => url.pathname === home && url.search === "");
+  await expect(page.getByTestId("qm-flash")).toHaveCount(0);
+  // A round robin of 4 plays 6 (n(n-1)/2); the added match is the 7th, listed last, seated as picked.
+  await expect(page.getByTestId("qm-match")).toHaveCount(7);
+  await expect(page.getByTestId("qm-played")).toHaveText("0 of 7 matches played · kept 7 days after the last score");
+  await expect(page.getByTestId("qm-match").last().getByTestId("qm-match-sides")).toHaveText("Jo & Max v Priya & Tom");
+  await expect(page.getByTestId("qm-hero"), "the hero is still the first match").toContainText("Up next · match 1 of 7");
+  await expectNoHorizontalScroll(page);
+});
+
+test("Add a match (Task 8): the same side twice lands back on the home with 'Pick two different sides.', nothing added, at 320, 768 and 1280", async ({ guest: page }) => {
+  await createThroughSetup(page, ["Ravi & Sam", "Priya & Tom", "Lee & Ana"], "League");
+  const home = new URL(page.url()).pathname;
+  await page.getByTestId("qm-add-match-open").click();
+  const addForm = page.getByTestId("qm-add-match-form");
+  await addForm.locator('select[name="home"]').selectOption({ label: "Lee & Ana" });
+  await addForm.locator('select[name="away"]').selectOption({ label: "Lee & Ana" });
+  // The refusal is caught as the redirected GET: the URL holds `?e=` only until the home's ClearFlashParam takes it out.
+  const refusal = `${home}?e=QUICK_MATCH_SAME_SIDE`;
+  const landed = page.waitForRequest((r) => r.method() === "GET" && r.url().endsWith(refusal));
+  await addForm.getByTestId("qm-add-match-submit").click();
+  expect((await landed).redirectedFrom()?.method(), "the post's 303 landed on the refusal").toBe("POST");
+  await expect(page).toHaveURL(new RegExp(`${home}$`));
+  await atEachWidth(
+    page,
+    async (width) => {
+      const flash = page.getByTestId("qm-flash");
+      await expect(flash, `${width}`).toHaveText("Pick two different sides.");
+      await expect(flash, `${width}`).toHaveAttribute("role", "alert");
+      await expect(flash, `${width}: in view at the top`).toBeInViewport();
+      // Nothing added: a round robin of 3 still plays 3.
+      await expect(page.getByTestId("qm-match"), `${width}`).toHaveCount(3);
+    },
+    { reload: false },
+  );
+});
+
+test("Add a match (Task 8): a knockout has no '+ Add a match'; a stale or crafted post lands on 'Only a league can take an extra match.'", async ({ guest: page }) => {
+  await createThroughSetup(page, ["Ravi & Sam", "Priya & Tom", "Lee & Ana"], "Knockout");
+  const home = new URL(page.url()).pathname;
+  await expect(page.getByTestId("qm-draw")).toBeVisible();
+  await expect(page.getByTestId("qm-add-match"), "a knockout has a winner by construction (C5)").toHaveCount(0);
+  // What a league's form posts, two side ids: the league check answers before the sides are even looked at.
+  const refusal = `${home}?e=QUICK_MATCH_LEAGUE_ONLY`;
+  const landed = page.waitForRequest((r) => r.method() === "GET" && r.url().endsWith(refusal));
+  await page.evaluate((action) => {
+    const form = document.createElement("form");
+    form.method = "post";
+    form.action = action;
+    for (const name of ["home", "away"]) {
+      const input = document.createElement("input");
+      input.name = name;
+      input.value = "00000000-0000-4000-8000-000000000000";
+      form.append(input);
+    }
+    document.body.append(form);
+    form.submit();
+  }, `${home}/add-match`);
+  expect((await landed).redirectedFrom()?.method(), "the post's 303 landed on the refusal").toBe("POST");
+  await expect(page.getByTestId("qm-flash")).toHaveText("Only a league can take an extra match.");
+  await expect(page.getByTestId("qm-match"), "nothing added: a knockout of 3 plays 2").toHaveCount(2);
+  await expectNoHorizontalScroll(page);
+});

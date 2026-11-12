@@ -12,6 +12,9 @@
 //       the pad's decided screen (the quick match's own line, review Q2) → "Void my last entry" → the match reopens one
 //       rally short → every rally tapped for the OTHER side until it has the match → Back → the corrected result and table.
 //       At the end: three results, a table derived by hand from the rallies tapped, and the record agreeing.
+//       Then Add a match (plan 2 T8, C5): "+ Add a match" on the finished home → its two selects open at the table's top
+//       two → "Add the match" → the winner card gives way to the new match as Up next (4 of 4) → it is played like the
+//       others → the table, the winner and the record read back with four results, the fourth stored as an ad-hoc match.
 //   (B) a badminton KNOCKOUT of three: the lone "Semi-final" (unnumbered) and the bye, the semi tapped, "Winner of the
 //       semi-final" resolving to its winner's name, the final tapped, the champion on the draw.
 //   (C) the marketing page's "Your recent quick matches": both matches, newest first; tapping one opens its home.
@@ -34,8 +37,8 @@
 //
 // ── EXTENSION POINTS ──────────────────────────────────────────────────────────────────────────────────────────────
 // Share (plan 2 T7), Add a match (plan 2 T8) and Save (plan 3) EXTEND this file, each at a marked `EXTENSION POINT`
-// below, at the place in the journey where it belongs, naming the state the page is in there. Share is filled in (step
-// 3b); Add a match and Save are not yet.
+// below, at the place in the journey where it belongs, naming the state the page is in there. Share (step 3b) and Add a
+// match (step 7) are filled in; Save is not yet.
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -190,6 +193,10 @@ const PER_MATCH = { navs: 3, acts: 4, reads: 2 } as const;
 /** Share (step 3b): the QR drawn (its encoder and logo load on the tap) and the second browser's page load; Copy, the
  *  clipboard read, Show QR and its close. */
 const SHARE = { navs: 2, acts: 4 } as const;
+/** Add a match (step 7): the post's 303 back to the home; the disclosure opened, the two selects read, their targets
+ *  measured, the submit, and the home read back; the ad-hoc row and the stored table read from the record. Its match is
+ *  one more plan, counted with the others. */
+const ADD = { navs: 1, acts: 6, reads: 2 } as const;
 
 function budgetFor(c: { navs: number; acts: number; reads: number; plans: readonly (readonly Game[])[] }): number {
   const taps = c.plans.reduce((n, p) => n + tapsOf(p), 0);
@@ -684,9 +691,20 @@ test("(A) a guest plays a badminton league of three from the marketing page to i
   ];
   expect(plans, "one plan per match a round robin of three plays").toHaveLength(total);
   plans.forEach((g, i) => checkPlan(rules, g, `league match ${i + 1}`));
+  // The decider Add a match puts on the finished table (step 7): the long side, already top, takes it, so the table stays
+  // strict (3, 1, 0) and its winner stays the long side. Checked against the rules like the others.
+  const decider: readonly Game[] = [[rules.setTo, 1], [rules.setTo, 3]];
+  checkPlan(rules, decider, "the added match");
   // The correction (step 5b) costs one more plan of its own rallies: the largest any of these plans could need.
   const correctionTaps = Math.max(...plans.map((g) => correctionOf(rules, g).taps));
-  setBudget(budgetFor({ navs: 3 + SHARE.navs, acts: 16 + SHARE.acts, reads: 2, plans: [...plans, [[correctionTaps, 0]]] }));
+  setBudget(
+    budgetFor({
+      navs: 3 + SHARE.navs + ADD.navs,
+      acts: 16 + SHARE.acts + ADD.acts,
+      reads: 2 + ADD.reads,
+      plans: [...plans, [[correctionTaps, 0]], decider],
+    }),
+  );
 
   // ---- 1. The marketing page's Quick match, to the setup page ----
   await page.goto("/en");
@@ -833,18 +851,86 @@ test("(A) a guest plays a badminton league of three from the marketing page to i
     "the stored table is the one the rallies made",
   ).toEqual(table.map((t, i) => ({ name: t.name, played: t.played, won: t.won, points: t.points, rank: i + 1 })));
 
-  // ── EXTENSION POINT: Add a match (plan 2 T8) ────────────────────────────────────────────────────────────────────
-  // The league is finished: three results in `results`, the table in `table`, the winner card up. Add a match goes
-  // HERE (league only, C5): add it through the home's control, play it with `playHeroMatch` (it becomes the hero), push
-  // it onto `results`, and re-run `expectTable(page, tableOf(sides, results, rules))` and `expectRecorded`. The winner
-  // card and the "n of 3" line move with it; re-derive them, never copy them off the page.
+  // ── EXTENSION POINT: Add a match (plan 2 T8), filled ────────────────────────────────────────────────────────────
+  // The league is finished: three results in `results`, the table in `table`, the winner card up.
+
+  // ---- 7. Add a match (C5): the decider, through the home's own control, opening at the table's top two ----
+  const add = page.getByTestId("qm-add-match-open");
+  await expect(add).toHaveText(ui("quickMatch.home.addMatch"));
+  const addForm = page.getByTestId("qm-add-match-form");
+  await expect(addForm, "closed until the guest opens it").toBeHidden();
+  await add.click();
+  await expect(addForm).toBeVisible();
+  const [first, second] = [addForm.locator('select[name="home"]'), addForm.locator('select[name="away"]')];
+  // Every side, as typed, in each select; each opens at the tally's top two (the stored table's order, read above).
+  for (const select of [first, second]) await expect(select.locator("option")).toHaveText(sides);
+  await expect(first.locator("option:checked"), "the first select opens at the table's top").toHaveText(table[0]!.name);
+  await expect(second.locator("option:checked"), "the second at its runner-up").toHaveText(table[1]!.name);
+  const submit = addForm.getByTestId("qm-add-match-submit");
+  await expect(submit).toHaveText(ui("quickMatch.addMatch.submit"));
+  for (const [what, target] of [["+ Add a match", add], ["the first select", first], ["the second select", second], ["Add the match", submit]] as const) {
+    const box = await target.boundingBox();
+    expect(box?.height ?? 0, `${what} is a 44px target`).toBeGreaterThanOrEqual(44);
+  }
+  await expectNoHorizontalScroll(page);
+  await submit.click();
+  // The post's 303 lands on the bare home: no refusal in the URL, none on screen.
+  await page.waitForURL((url) => url.pathname === made.path && url.search === "", { timeout: STEP_MS });
+  await expect(page.getByTestId("qm-flash")).toHaveCount(0);
+  const withAdded = total + 1;
+  await expect(page.getByTestId("qm-match")).toHaveCount(withAdded);
+  await expect(page.getByTestId("qm-played")).toHaveText(
+    plural(ui, "quickMatch.home.played", withAdded, { played: total, days: QUICK_MATCH_EXPIRY_DAYS }),
+  );
+  // Something to play again: the winner card gives way to the new match, Up next, the last of four, seated as picked.
+  await expect(page.getByTestId("qm-winner"), "no winner while a match is left").toHaveCount(0);
+  await expect(page.getByTestId("qm-hero-kicker")).toHaveText(ui("quickMatch.home.upNext", { n: withAdded, total: withAdded }));
+  await expect(page.getByTestId("qm-hero-home")).toHaveText(table[0]!.name);
+  await expect(page.getByTestId("qm-hero-away")).toHaveText(table[1]!.name);
+  await expectNoHorizontalScroll(page);
+
+  // ---- 7b. The added match, played like the others; the long side takes it ----
+  const added = await playHeroMatch(page, made, decider, () => LONG, "after-result");
+  results.push(added);
+  const final = tableOf(sides, results, rules);
+  expect(final.map((t) => t.won), "still strict: no tie-break is needed to place it").toEqual([3, 1, 0]);
+  await expect(page.getByTestId("qm-played")).toHaveText(
+    plural(ui, "quickMatch.home.played", withAdded, { played: withAdded, days: QUICK_MATCH_EXPIRY_DAYS }),
+  );
+  await expect(page.getByTestId("qm-hero"), "nothing left to play again").toHaveCount(0);
+  await expect(page.getByTestId("qm-winner-name")).toHaveText([final[0]!.name]);
+  await expect(page.getByTestId("qm-standings-row").getByRole("rowheader")).toHaveText(final.map((t) => t.name));
+  await expectTable(page, final);
+  await expectNoHorizontalScroll(page);
+  expect(await expectRecorded(made, results)).toBe(withAdded);
+  // The record: the added match is the stage's one ad-hoc row (C5: `adhoc-<n>`), and the stored table counts it.
+  const adhoc = await withDb(
+    (sql) => sql<{ id: string }[]>`
+      select f.id from quick_matches q
+      join divisions d on d.competition_id = q.competition_id
+      join fixtures f on f.division_id = d.id
+      where q.token_hash = ${tokenHash(made.token)} and f.ext_key like 'adhoc-%'`,
+  );
+  expect(adhoc.map((f) => f.id), "the added match is the one ad-hoc row").toEqual([added.fixtureId]);
+  const restored = await withDb(
+    (sql) => sql<{ rows: { entrantId: string; played: number; won: number; points: number; rank: number }[] }[]>`
+      select s.rows from quick_matches q
+      join divisions d on d.competition_id = q.competition_id
+      join stages st on st.division_id = d.id
+      join standings_snapshots s on s.stage_id = st.id and s.pool_id is null
+      where q.token_hash = ${tokenHash(made.token)}`,
+  );
+  expect(
+    restored[0]!.rows.map((r) => ({ name: nameOf.get(r.entrantId), played: r.played, won: r.won, points: r.points, rank: r.rank })),
+    "the stored table counts the added match",
+  ).toEqual(final.map((t, i) => ({ name: t.name, played: t.played, won: t.won, points: t.points, rank: i + 1 })));
 
   // ── EXTENSION POINT: Save (plan 3) ──────────────────────────────────────────────────────────────────────────────
   // A finished league the guest may want to keep. Save goes HERE: Save on the home, its email, the played line's
   // "kept n days" wording once saved, and the stored row's expiry (quick_matches.expires_at by `tokenHash`). (C) below
   // reads this match in the recent strip: a saved match must still be listed, newest first.
 
-  league = { ...made, results, table };
+  league = { ...made, results, table: tableOf(sides, results, rules) };
 });
 
 test("(B) a guest plays a badminton knockout of three: the bye, the semi-final, and the final, every rally tapped", async () => {
@@ -871,6 +957,7 @@ test("(B) a guest plays a badminton knockout of three: the bye, the semi-final, 
   await expect(page.getByTestId("qm-name")).toHaveText(made.name);
   await expect(page.getByTestId("qm-eyebrow")).toContainText(ui("quickMatch.format.knockout"));
   await expect(page.getByTestId("qm-standings"), "a knockout has no table").toHaveCount(0);
+  await expect(page.getByTestId("qm-add-match"), "a knockout takes no extra match (C5)").toHaveCount(0);
   await expect(page.getByTestId("qm-played")).toHaveText(
     plural(ui, "quickMatch.home.played", total, { played: 0, days: QUICK_MATCH_EXPIRY_DAYS }),
   );
