@@ -15,6 +15,8 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import {
   CaptureBeat, CaptureBeatAnswer, CaptureDescriptor, CaptureRefusal, CaptureScoringLinkOk, CaptureStartBody, CaptureStartOk,
+  CaptureMatchdayDay, CaptureMatchdayRefusal, CaptureMatchdayOpen,
+  CaptureMatchdayApprovalReview, CaptureMatchdayApprovalRequest, CaptureMatchdayApprovalOk,
 } from "../apps/web/src/server/api-v1/capture-schemas.ts";
 import { CaptureQrV2 } from "../apps/web/src/lib/capture-qr.ts";
 
@@ -36,6 +38,19 @@ interface Contract {
 
 const PINNED_BY = "Vendored into the capture repo; its sha256, parity with its zod twin and its fixtures are pinned by apps/web/src/server/api-v1/__tests__/capture-contract.test.ts.";
 const SPEC = "capture QR v2 spec 2026-10-01";
+const MD_SPEC = "capture S4 Match Day design 2026-11-07";
+/** One match as the Match Day list shows it: the same prose wherever a row sits. */
+const MD_ROW: Record<string, string> = {
+  fixture_id: "The match.",
+  sport_key: "The match's sport: it decides which pad the phone opens.",
+  division_name: "The match's division.",
+  round_label: "The round as the web's board codes it (R2, QF, SF, F, …).",
+  home: "The first side's name; null while the seat has no entrant.",
+  away: "The second side's name; null while the seat has no entrant.",
+  status: "upcoming (not started), in_play, or finished (decided, finalized, held, abandoned, forfeited or cancelled).",
+  scheduled_at: "The match's planned start as a UTC instant; null when it has none.",
+  summary: "The short score as the Match Day desk shows it in a row: a set sport's sets won, then the games and live points of the set in play (\"1–1 · 14–9\"; tennis \"1–0 · 3–2 · 40–30\", \"TB 3–2\"), the sport's own headline otherwise; the same form once finished (\"2–0\"). Never the full headline with every set's score. null before any.",
+};
 
 // ---------------------------------------------------------------------------------------------------------------
 // Shared prose. Every description cites the spec section it comes from.
@@ -223,6 +238,123 @@ const contracts: Contract[] = [
       },
     },
   },
+  {
+    file: "capture-matchday-day.v1.json",
+    title: "Seazn Match Day code day read, v1: GET /api/v1/match-day-code",
+    root: {
+      twin: CaptureMatchdayDay,
+      description: `What a phone holding a Match Day code lists (${MD_SPEC} §5, §9.3; MD-1 Task 3), authenticated by Authorization: Bearer md_… only. The answer is \`data\` in the v1 envelope {ok: true, data, requestId}; $defs.refusal is \`error\` in {ok: false, error, requestId}. It never carries the code's token or any scoring link. ${PINNED_BY}`,
+      props: {
+        competition: "The competition the code was minted for: its id and name.",
+        scope: "The code's scope: kind competition (every court, and the matches with no court), venue (that venue's courts) or courts (exactly those courts). label is what the header shows: the competition's name, the venue's name, or the courts' names joined with \", \" in the board's order.",
+        day: "The day the code is good for, YYYY-MM-DD, in tz.",
+        tz: "The IANA zone the day is in: the competition's organisation's zone (one zone per code).",
+        opens_at: "00:00 of day in tz, as a UTC instant. Before it the code answers 403 MD_NOT_OPEN.",
+        expires_at: "24:00 of day in tz, as a UTC instant. From it the code answers 410 MD_ENDED.",
+        can_approve: "Whether the code was minted with \"can approve draws\": without it the phone shows an approval's banner with no button.",
+        courts: "One card per court in scope, in the order the web gives (the organisation's venue order, then its court order): the board's courts — every live division's candidate courts and every court holding one of the competition's matches today.",
+        "courts.court_name": "The court's name as the web's board names it.",
+        "courts.venue_name": "The court's venue's name.",
+        "courts.state": "playing (one of the competition's matches is in play on it), called (one is called onto it), free, or in_use_elsewhere (another competition holds it).",
+        "courts.now": "The match playing or called on the court, if it is the competition's and in the code's scope; null otherwise.",
+        "courts.next": "The court's queue: the competition's matches planned on it today, not started and not called, in planned order.",
+        "courts.finished": "The competition's matches finished on the court today (not cancelled), newest first.",
+        no_court: "A whole-competition code only (empty otherwise): the matches in play on no court, then the ready matches with no court planned no later than today, in the desk's order.",
+        online: "Online chess boards, read-only. Always empty until the web's all-in-one read model lists them.",
+        approvals: "The approvals waiting in the code's scope, listed whether or not can_approve: a knockout whose draw (the seed proposal) is owed, or a Swiss stage whose previous round is complete and whose next round is unpaired. A narrowed code lists a stage only when one of its matches today is on its courts. A division whose schedule is locked lists none: the web desk's.",
+        "approvals.kind": "draw (the seed proposal from groups into a knockout) or swiss (the next Swiss round).",
+        "approvals.stage_id": "The stage to review and approve.",
+        "approvals.label": "The stage's name.",
+        "approvals.round": "swiss only: the round awaiting pairing (the phone's \"Round 4 pairings are ready\"); null for a draw.",
+        ...Object.fromEntries(
+          ["courts.now", "courts.next", "courts.finished", "no_court", "online"].flatMap((at) =>
+            Object.entries(MD_ROW).map(([field, text]) => [`${at}.${field}`, text]),
+          ),
+        ),
+      },
+    },
+    defs: {
+      refusal: {
+        twin: CaptureMatchdayRefusal,
+        description: "Every refusal, the envelope's error: 401 MD_UNKNOWN (no such code, or no md_ bearer), 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with opens_at). The open and the approvals answer MD_OUT_OF_SCOPE, MD_NO_APPROVE, MD_STALE, MD_ALREADY and MD_TIES too. A 429 RATE_LIMITED (with Retry-After) is the v1 envelope's own answer, outside this shape.",
+        props: {
+          code: "The machine word the phone keys its copy on: one of the plan's MD_ words, a closed list. The v1 envelope's own answers (429 RATE_LIMITED, 404 NOT_FOUND, 500 INTERNAL) are not md_ refusals and are outside this shape; the phone reads them by status.",
+          message: "A plain English developer string; the phone never shows it.",
+          opens_at: "MD_NOT_OPEN only: when the code's day starts, as a UTC instant.",
+        },
+      },
+    },
+  },
+  {
+    file: "capture-matchday-open.v1.json",
+    title: "Seazn Match Day code open, v1: POST /api/v1/match-day-code/fixtures/{id}/scoring-link",
+    root: {
+      twin: CaptureMatchdayOpen,
+      description: `What a phone holding a Match Day code gets when it opens a match (${MD_SPEC} §6, §9.4; MD-1 Task 4), authenticated by Authorization: Bearer md_… only, with no body. The answer is \`data\` in the v1 envelope {ok: true, data, requestId}; $defs.refusal is \`error\` in {ok: false, error, requestId}. ${PINNED_BY}`,
+      props: {
+        kind: "link (the match's scoring link) or finished (the match is finalized or cancelled: there is nothing to score, and nothing was written).",
+        url: "link only: the match's own Remote scoring link, https://{host}/score/dl_{43 base64url}, the printed QR's when the match has one. Re-shown on every open, never a second link beside a live one, and nothing is revoked. A credential: the phone hands it to its scoring pad and stores it as a scan of that QR would be.",
+        sport_key: "link only: the match's sport: it decides which pad the phone opens.",
+      },
+    },
+    defs: {
+      refusal: {
+        twin: CaptureMatchdayRefusal,
+        description: "Every refusal, the envelope's error: 401 MD_UNKNOWN (no such code, or no md_ bearer), 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with opens_at), 403 MD_OUT_OF_SCOPE (the match is not in the code's competition, venue or courts, or not on its day, or its division is archived, at the moment of asking). A 404 NOT_FOUND (no such match) and a 429 RATE_LIMITED (with Retry-After) are the v1 envelope's own answers, outside this shape.",
+        props: {
+          code: "The machine word the phone keys its copy on: one of the plan's MD_ words, a closed list. The v1 envelope's own answers (429 RATE_LIMITED, 404 NOT_FOUND, 500 INTERNAL) are not md_ refusals and are outside this shape; the phone reads them by status.",
+          message: "A plain English developer string; the phone never shows it.",
+          opens_at: "MD_NOT_OPEN only: when the code's day starts, as a UTC instant.",
+        },
+      },
+    },
+  },
+  {
+    file: "capture-matchday-approval.v1.json",
+    title: "Seazn Match Day code approval, v1: GET|POST /api/v1/match-day-code/approvals/{kind}/{stageId}",
+    root: {
+      twin: CaptureMatchdayApprovalReview,
+      description: `An approval as a phone holding a Match Day code reviews it (${MD_SPEC} §7, §9.5; MD-1 Task 6): GET /api/v1/match-day-code/approvals/{kind}/{stageId}, kind swiss or draw, authenticated by Authorization: Bearer md_… only, and only for a code minted with "can approve draws". The root is the review, \`data\` in the v1 envelope {ok: true, data, requestId}. POST to the same path with $defs.request approves it and answers $defs.ok; $defs.refusal is \`error\` in {ok: false, error, requestId}. Nothing in it is a credential. ${PINNED_BY}`,
+      props: {
+        kind: "swiss (the next round of a Swiss stage) or draw (the seed proposal from groups into a knockout).",
+        stage_id: "The stage the approval acts on: the day read's approvals.stage_id.",
+        division_name: "The stage's division.",
+        round: "swiss: the round awaiting pairing, the day read's approvals.round; the approve hands it back. draw: null.",
+        rows: "What the server computed, read-only, in order: swiss, one row per board of the round, the bye last with away null; draw, one row per knockout match a qualifier is drawn into, in round then match order. To change a slot, the organiser uses the web desk.",
+        "rows.label": "The row's place: the round as the web's board codes it (R4, QF, SF, F, …), then its number in the round when the round holds more than one (R4 1, QF 2).",
+        "rows.home": "The first side's name.",
+        "rows.away": "The second side's name; null on a bye, or in a knockout match whose other seat is fed from elsewhere.",
+        hash: "What the approve hands back, unchanged: swiss, a hash of the round's inputs (results, field, stage settings and lots); draw, the proposal's id. An approve whose hash is no longer the server's is refused MD_STALE.",
+        ties: "draw only (swiss: false): the draw has a tie only the web desk can resolve. The phone shows it and does not approve it; an approve is refused MD_TIES.",
+      },
+    },
+    defs: {
+      request: {
+        twin: CaptureMatchdayApprovalRequest,
+        description: "The approve's body, POST /api/v1/match-day-code/approvals/{kind}/{stageId}: the review's hash, and for swiss its round.",
+        props: {
+          hash: "The review's hash, unchanged.",
+          round: "swiss: the review's round (required: an approve without it is a 422). draw: omitted, or null.",
+        },
+      },
+      ok: {
+        twin: CaptureMatchdayApprovalOk,
+        description: "The approve's 200: this request approved it. The new matches are on the server at once; the phone refreshes its day read. A second phone's approve is the refusal MD_ALREADY, never this.",
+        props: {
+          ok: "Always true.",
+        },
+      },
+      refusal: {
+        twin: CaptureMatchdayRefusal,
+        description: "Every refusal, the envelope's error: 401 MD_UNKNOWN (no such code, or no md_ bearer), 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with opens_at), 403 MD_NO_APPROVE (the code was minted without \"can approve draws\", or the division's schedule is locked — the desk's, and the day read lists none of its approvals: the review AND the approve), 403 MD_OUT_OF_SCOPE (the stage is not in the code's competition, or for a venue or courts code none of its matches is on those courts on the code's day), 409 MD_STALE (the hash is no longer the server's — a result, the field, a seat or the proposal changed — or the approval is not ready: the round before is still in play, the groups are not complete, or nobody is left to seed; review again; or a Swiss round 1, which only the web desk pairs), 409 MD_ALREADY (approved already: another phone or the desk was first), 409 MD_TIES (draw: a tie the web desk must resolve). Every 409 is one of these words. A 404 NOT_FOUND (no such stage, kind or proposal), a 422 (a swiss approve without a whole round, or a kind the stage has not: a swiss approval of a stage that is not a Swiss, a draw of a Swiss stage), any other 4xx refusal (by its status, with no word of its own), a 429 RATE_LIMITED (with Retry-After) and a 500 INTERNAL (a fault on the server) are the v1 envelope's own answers, outside this shape.",
+        props: {
+          code: "The machine word the phone keys its copy on: one of the plan's MD_ words, a closed list. The v1 envelope's own answers (429 RATE_LIMITED, 404 NOT_FOUND, 422, 500 INTERNAL) are not md_ refusals and are outside this shape; the phone reads them by status.",
+          message: "A plain English developer string; the phone never shows it.",
+          opens_at: "MD_NOT_OPEN only: when the code's day starts, as a UTC instant.",
+        },
+      },
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -242,8 +374,10 @@ function nodesAt(node: unknown, path: string[]): Json[] {
   const n = node as Json;
   if (path.length === 0) return [n];
   const viaUnions = [...((n.anyOf as Json[] | undefined) ?? []), ...((n.oneOf as Json[] | undefined) ?? [])].flatMap((b) => nodesAt(b, path));
+  // An array's members (MD-1, the Match Day lists): a path walks through `items` as through a union branch.
+  const viaItems = n.items === undefined ? [] : nodesAt(n.items, path);
   const next = (n.properties as Json | undefined)?.[path[0]];
-  return [...viaUnions, ...(next === undefined ? [] : nodesAt(next, path.slice(1)))];
+  return [...viaUnions, ...viaItems, ...(next === undefined ? [] : nodesAt(next, path.slice(1)))];
 }
 
 function render(shape: Shape, where: string): Json {

@@ -55,6 +55,12 @@ const SHA256: Record<string, string> = {
   "capture-start.v1.json": "012d6e3851e84d0ce659ad23449fa91b61f0d20cfac1e58f2ccbc7cbb0742bae",
   "capture-scoring-link.v1.json": "f0f1188655f3ca83b3e42ce7fedd6f6210a3a141b0bcf02fa250eb2448b1c85f",
   "capture-record.v1.json": "213f766043b7682f198cc98da13e93995b6602e46533ecf60c78bf562aebd6f8",
+  // MD-1 Task 3 (capture S4 Match Day design §5, §9.3): a Match Day code's day read.
+  "capture-matchday-day.v1.json": "31b411690974b0c32ef98265edce74b6b0c586bb6d5e638c3dbf2f329fdcdc65",
+  // MD-1 Task 4 (capture S4 Match Day design §6, §9.4): a Match Day code's open.
+  "capture-matchday-open.v1.json": "760028bf99e5cf74ee033f5613fa43477677cef318ecdf739c0b62e2fc21c0c0",
+  // MD-1 Task 6 (capture S4 Match Day design §7, §9.5): a Match Day code's approval review, its approve and its answers.
+  "capture-matchday-approval.v1.json": "279ff1488a1108b3667f9e2f11f559579382f83b238d91da65440c810189f69c",
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -243,11 +249,21 @@ const SCORING = "capture-scoring-link.v1.json";
 // capture-record.v1 — design approved 2026-10-12 (spec 2026-10-12-capture-record-upload-design.md), twinned by the
 // implementing PR: the line, the 201, its own refusal (Q2) and the secret-shaped rules S2–S5.
 const RECORD = "capture-record.v1.json", RECORD_DIR = "capture-record.v1";
+// capture-matchday-day.v1 (MD-1 Task 3): the root is the day read (the v1 envelope's `data`), $defs.refusal its `error`.
+const MD_DAY = "capture-matchday-day.v1.json", MD_DAY_DIR = "capture-matchday-day.v1";
+// capture-matchday-open.v1 (MD-1 Task 4): the root is the open's answer (the envelope's `data`), $defs.refusal its `error`.
+const MD_OPEN = "capture-matchday-open.v1.json", MD_OPEN_DIR = "capture-matchday-open.v1";
+// capture-matchday-approval.v1 (MD-1 Task 6): the root is the review (the envelope's `data`); $defs.request the approve's
+// body, $defs.ok its 200's `data`, $defs.refusal the `error`.
+const MD_APPROVAL = "capture-matchday-approval.v1.json", MD_APPROVAL_DIR = "capture-matchday-approval.v1";
 /** The record file's `$defs`, exactly: the two answers and the secret-shaped rules S2–S5 the server runs. */
 const RECORD_DEFS = ["ok", "refusal", "secretS2", "secretS3", "secretS4", "secretS5", "secretShaped"];
 /** Each file's `$defs`, exactly. */
 const DEFS: Record<string, string[]> = {
   [QR]: [], [DESCRIPTOR]: ["refusal"], [BEAT]: ["answer"], [START]: ["ok", "refusal"], [SCORING]: ["ok", "refusal"], [RECORD]: RECORD_DEFS,
+  [MD_DAY]: ["refusal"],
+  [MD_OPEN]: ["refusal"],
+  [MD_APPROVAL]: ["ok", "refusal", "request"],
 };
 /** The record's twins, by the shape they mirror: the parity test compares each, and the tripwire holds every
  *  record-named zod export of capture-schemas.ts to exactly this list. `secretShaped` is the union of S2–S5 by `$ref`,
@@ -264,7 +280,7 @@ const RECORD_TWINS: [pointer: string, twin: Twin, exportName: string][] = [
 
 /** Per directory: its contract file; [file prefix, twin, the shape's pointer in that file], first match wins; and the
  *  exact fixture count (never 0). */
-type Route = [prefix: string, twin: Twin, pointer: "" | "#/$defs/refusal" | "#/$defs/answer" | "#/$defs/ok"];
+type Route = [prefix: string, twin: Twin, pointer: "" | "#/$defs/refusal" | "#/$defs/answer" | "#/$defs/ok" | "#/$defs/request"];
 const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
   "capture-qr.v2": { file: QR, routes: [["", CaptureQrV2, ""]], count: 12 },
   "capture-descriptor.v1": { file: DESCRIPTOR, routes: [["refusal-", S.CaptureRefusal, "#/$defs/refusal"], ["", S.CaptureDescriptor, ""]], count: 52 },
@@ -272,6 +288,18 @@ const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
   "capture-start.v1": { file: START, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureStartOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 18 },
   "capture-scoring-link.v1": { file: SCORING, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureScoringLinkOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 17 },
   [RECORD_DIR]: { file: RECORD, routes: [["line-", S.CaptureRecordLine, ""], ["ok-", S.CaptureRecordOk, "#/$defs/ok"], ["", S.CaptureRecordRefusal, "#/$defs/refusal"]], count: 63 },
+  [MD_DAY_DIR]: { file: MD_DAY, routes: [["refusal-", S.CaptureMatchdayRefusal, "#/$defs/refusal"], ["", S.CaptureMatchdayDay, ""]], count: 12 },
+  [MD_OPEN_DIR]: { file: MD_OPEN, routes: [["refusal-", S.CaptureMatchdayRefusal, "#/$defs/refusal"], ["", S.CaptureMatchdayOpen, ""]], count: 10 },
+  [MD_APPROVAL_DIR]: {
+    file: MD_APPROVAL,
+    routes: [
+      ["request-", S.CaptureMatchdayApprovalRequest, "#/$defs/request"],
+      ["ok-", S.CaptureMatchdayApprovalOk, "#/$defs/ok"],
+      ["refusal-", S.CaptureMatchdayRefusal, "#/$defs/refusal"],
+      ["", S.CaptureMatchdayApprovalReview, ""],
+    ],
+    count: 17,
+  },
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -362,6 +390,13 @@ const CAPTURE_SCHEMAS_EXPORTS = [
   "CAPTURE_RECORD_MAX_BYTES", "CAPTURE_RECORD_MAX_LINES", "CAPTURE_RECORD_REF_RE", "CaptureRecordLine", "CaptureRecordOk",
   "CaptureRecordRefusal", "CaptureRecordRefusalCode", "CaptureRecordSecretS2", "CaptureRecordSecretS3",
   "CaptureRecordSecretS4", "CaptureRecordSecretS5",
+  // capture-matchday-day.v1 (MD-1 Task 3): the day read, its row, court and approval, its refusal and the MD_ words.
+  "CaptureMatchdayRefusalCode", "CaptureMatchdayRow", "CaptureMatchdayApproval", "CaptureMatchdayCourt", "CaptureMatchdayDay",
+  "CaptureMatchdayRefusal",
+  // capture-matchday-open.v1 (MD-1 Task 4): the open's answer.
+  "CaptureMatchdayOpen",
+  // capture-matchday-approval.v1 (MD-1 Task 6): the review, the approve's body and its 200.
+  "CaptureMatchdayApprovalReview", "CaptureMatchdayApprovalRequest", "CaptureMatchdayApprovalOk",
 ];
 
 /** The published bytes as a validator sees them: ajv 2020-12, strict, formats ASSERTED (uuid, uri, date-time) — the
@@ -378,13 +413,13 @@ function fileValidator(): (file: string, pointer: string, value: unknown) => boo
 }
 
 describe("capture contracts (docs/contracts/capture-*.json)", () => {
-  it("each of the six contracts is checksummed (the cross-repo drift gate)", () => {
+  it("each of the nine contracts is checksummed (the cross-repo drift gate)", () => {
     let checked = 0;
     for (const [file, sha] of Object.entries(SHA256)) {
       expect(createHash("sha256").update(contractText(file)).digest("hex"), file).toBe(sha);
       checked++;
     }
-    expect(checked).toBe(6);
+    expect(checked).toBe(9);
   });
 
   it("v1 is gone, and every published capture contract is twinned — the record included since its route landed (W4, §6.13; W27; 2026-10-12)", () => {
@@ -397,7 +432,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     // Every contract has its fixture directory in DIRS, the record's among them: no contract is left without a twin.
     expect(Object.values(DIRS).map((d) => d.file)).toContain(RECORD);
     expect(Object.keys(SHA256).filter((f) => !Object.values(DIRS).some((d) => d.file === f))).toEqual([]);
-    expect(Object.keys(DIRS)).toHaveLength(6);
+    expect(Object.keys(DIRS)).toHaveLength(9);
   });
 
   it("schemas.ts re-exports every twin by identity, never a re-typed copy", () => {
@@ -424,15 +459,15 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
 
   it("parity: each file (and each $def) equals z.toJSONSchema of its twin, as output AND as input, unions compared branch by branch on `state`", () => {
     const qr = contract(QR), desc = contract(DESCRIPTOR), beat = contract(BEAT), start = contract(START), scoring = contract(SCORING);
-    const record = contract(RECORD);
+    const record = contract(RECORD), mdDay = contract(MD_DAY), mdOpen = contract(MD_OPEN), mdApproval = contract(MD_APPROVAL);
     let defsChecked = 0;
-    for (const [file, json] of [[QR, qr], [DESCRIPTOR, desc], [BEAT, beat], [START, start], [SCORING, scoring], [RECORD, record]] as const) {
+    for (const [file, json] of [[QR, qr], [DESCRIPTOR, desc], [BEAT, beat], [START, start], [SCORING, scoring], [RECORD, record], [MD_DAY, mdDay], [MD_OPEN, mdOpen], [MD_APPROVAL, mdApproval]] as const) {
       expect(Object.keys((json.$defs as Json | undefined) ?? {}).sort(), `${file} $defs`).toEqual([...DEFS[file]!].sort());
       expect(json.$id, `${file} $id`).toBe(`https://seazn.club/contracts/${file}`);
       expect(json.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
       defsChecked++;
     }
-    expect(defsChecked).toBe(6);
+    expect(defsChecked).toBe(9);
 
     const whole: [string, Json, Twin][] = [
       [QR, rootOf(qr), CaptureQrV2],
@@ -447,6 +482,17 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       // capture-record.v1: the line (the root), the 201, its own refusal and the four secret-shaped rules.
       ...RECORD_TWINS.map(([pointer, twin]): [string, Json, Twin] =>
         [`${RECORD}${pointer}`, pointer === "" ? rootOf(record) : defOf(record, pointer.slice("#/$defs/".length)), twin]),
+      // capture-matchday-day.v1 (MD-1 Task 3): the day read and its refusal.
+      [MD_DAY, rootOf(mdDay), S.CaptureMatchdayDay],
+      [`${MD_DAY}#/$defs/refusal`, defOf(mdDay, "refusal"), S.CaptureMatchdayRefusal],
+      // capture-matchday-open.v1 (MD-1 Task 4): the open's answer and its refusal.
+      [MD_OPEN, rootOf(mdOpen), S.CaptureMatchdayOpen],
+      [`${MD_OPEN}#/$defs/refusal`, defOf(mdOpen, "refusal"), S.CaptureMatchdayRefusal],
+      // capture-matchday-approval.v1 (MD-1 Task 6): the review, the approve's body, its 200 and the refusal.
+      [MD_APPROVAL, rootOf(mdApproval), S.CaptureMatchdayApprovalReview],
+      [`${MD_APPROVAL}#/$defs/request`, defOf(mdApproval, "request"), S.CaptureMatchdayApprovalRequest],
+      [`${MD_APPROVAL}#/$defs/ok`, defOf(mdApproval, "ok"), S.CaptureMatchdayApprovalOk],
+      [`${MD_APPROVAL}#/$defs/refusal`, defOf(mdApproval, "refusal"), S.CaptureMatchdayRefusal],
     ];
     let wholeChecked = 0;
     for (const io of IO) {
@@ -456,7 +502,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       }
     }
     expect(RECORD_TWINS).toHaveLength(7);
-    expect(wholeChecked).toBe((9 + 7) * 2);
+    expect(wholeChecked).toBe((9 + 7 + 2 + 2 + 4) * 2);
     // secretShaped is the union of S2–S5 by $ref, each once, in order — so "secret-shaped" is exactly the four twins.
     const shaped = defOf(record, "secretShaped");
     expect(shaped.type).toBe("string");
@@ -532,7 +578,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(checked, `${dir}: fixtures checked`).toBe(count);
       total += checked;
     }
-    expect(total).toBe(12 + 52 + 40 + 18 + 17 + 63);
+    expect(total).toBe(12 + 52 + 40 + 18 + 17 + 63 + 12 + 10 + 17);
     expect(byFile, "fixtures checked against the published bytes").toBe(total);
     // Every ZOD_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(zodOnlySeen, "ZOD_ONLY fixtures swept").toBe(Object.keys(ZOD_ONLY).length);
@@ -820,7 +866,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(contractText(file), `${file}: a retired custom ingest host`).not.toMatch(RETIRED);
       contracts++;
     }
-    expect(contracts).toBe(6);
+    expect(contracts).toBe(9);
   });
 
   it("QR v2 `exp` (capture's A1, §1.2): optional, an integer ≥ 0 of epoch SECONDS; admitted when present, never sent by this server", () => {
@@ -1488,7 +1534,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(names.length, "premise: capture-schemas.ts exports").toBeGreaterThan(0);
     // The full list, not a name pattern (review fix 8): a twin named, say, CaptureLogLine trips it too.
     expect([...names].sort()).toEqual([...CAPTURE_SCHEMAS_EXPORTS].sort());
-    expect(CAPTURE_SCHEMAS_EXPORTS).toHaveLength(23 + 11);
+    expect(CAPTURE_SCHEMAS_EXPORTS).toHaveLength(23 + 11 + 6 + 1 + 3);
     // Every record-named export that is a SHAPE (a zod object or string) is a twin the parity test compares, by
     // identity — an enum is checked by its options instead, a constant by the contract's prose.
     const twins = new Map(RECORD_TWINS.map(([pointer, twin, name]) => [name, { pointer, twin }]));
@@ -1513,6 +1559,88 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     const closing = /runs through the next ((?:`[a-z-]+`(?:, | or )?)+) line/.exec(prose)?.[1] ?? "";
     expect([...closing.matchAll(/`([a-z-]+)`/g)].map((m) => m[1]).sort()).toEqual(["ended", "pair-refused", "reset", "unpaired"]);
     expect(CS.CAPTURE_RECORD_REF_RE.source).toBe((defOf(contract(RECORD), "ok").properties as Record<string, Json>).ref!.pattern);
+  });
+
+  it("the answer validates against capture-matchday-day.v1.json: the plan's words, the row's three statuses, and no credential in any valid answer (MD-1 Task 3)", () => {
+    const fileAdmits = fileValidator();
+    const file = contract(MD_DAY);
+    // The plan's Global Constraints, word for word: the md_ routes' refusal words.
+    const PLAN_MD_WORDS = ["MD_UNKNOWN", "MD_WITHDRAWN", "MD_ENDED", "MD_NOT_OPEN", "MD_OUT_OF_SCOPE", "MD_NO_APPROVE", "MD_STALE", "MD_ALREADY", "MD_TIES"];
+    expect([...CS.CaptureMatchdayRefusalCode.options].sort()).toEqual([...PLAN_MD_WORDS].sort());
+    // Task 3's Row.status, the brief's literal list, on every row node of the file (now, next, finished, no_court, online).
+    // nodesAt walks properties and unions; the day read's lists are arrays, so this walk also steps into `items`.
+    const walk = (node: unknown, path: string[]): Json[] => {
+      if (node === null || typeof node !== "object") return [];
+      const n = node as Json;
+      if (path.length === 0) return [n];
+      const into = [...((n.anyOf as Json[] | undefined) ?? []), ...(n.items === undefined ? [] : [n.items as Json])].flatMap((b) => walk(b, path));
+      const next = (n.properties as Json | undefined)?.[path[0]!];
+      return [...into, ...(next === undefined ? [] : walk(next, path.slice(1)))];
+    };
+    const rowStatus = (["courts.now", "courts.next", "courts.finished", "no_court", "online"] as const).flatMap((at) =>
+      walk(rootOf(file), [...at.split("."), "status"]).map(enumOf));
+    expect(rowStatus).toHaveLength(5);
+    for (const values of rowStatus) expect(values).toEqual(["finished", "in_play", "upcoming"]);
+    // Every valid answer the directory holds is admitted by the published bytes, and none carries a credential.
+    const valids = readdirSync(resolve(FIXTURES, MD_DAY_DIR)).filter((f) => /^valid-/.test(f)).map((f) => f.slice(0, -5));
+    expect(valids.sort()).toEqual(["valid-approvals", "valid-competition", "valid-courts"]);
+    for (const name of valids) {
+      expect(fileAdmits(MD_DAY, "", fixture(MD_DAY_DIR, name)), name).toBe(true);
+      const text = rawFixture(MD_DAY_DIR, name);
+      for (const secret of ["/score/", "dl_", "md_", "/day/"]) expect(text, `${name}: ${secret}`).not.toContain(secret);
+    }
+    // A row carrying a scoring link is refused: rows are strict, so a link cannot ride along unnoticed.
+    expect(fileAdmits(MD_DAY, "", fixture(MD_DAY_DIR, "invalid-row-carries-url"))).toBe(false);
+    // MD_NOT_OPEN carries opens_at, a UTC instant; a local time without a zone is refused.
+    expect(fixture(MD_DAY_DIR, "refusal-valid-not-open")).toMatchObject({ code: "MD_NOT_OPEN", opens_at: "2026-11-07T23:00:00.000Z" });
+    expect(fileAdmits(MD_DAY, "#/$defs/refusal", fixture(MD_DAY_DIR, "refusal-invalid-opens-at-local"))).toBe(false);
+    // Fix M1: an approval carries its round — the Swiss round awaiting pairing, null for a draw — and may not omit it.
+    const approvals = fixture(MD_DAY_DIR, "valid-approvals").approvals as Json[];
+    expect(approvals.map((a) => [a.kind, a.round])).toEqual([["draw", null], ["swiss", 4]]);
+    expect(fileAdmits(MD_DAY, "", fixture(MD_DAY_DIR, "invalid-approval-no-round"))).toBe(false);
+    // Fix M5: the refusal's code is the plan's closed list in both files; an envelope word is not an md_ refusal.
+    for (const [file, dir, name] of [[MD_DAY, MD_DAY_DIR, "refusal-invalid-envelope-word"], [MD_OPEN, MD_OPEN_DIR, "refusal-invalid-not-found"]] as const) {
+      const code = (defOf(contract(file), "refusal").properties as Record<string, Json>).code!;
+      expect(enumOf(code), file).toEqual([...PLAN_MD_WORDS].sort());
+      expect(fileAdmits(file, "#/$defs/refusal", fixture(dir, name)), name).toBe(false);
+    }
+  });
+
+  it("the open's answer validates against capture-matchday-open.v1.json: a link on the scoring pad's pattern, finished bare, and a refusal never a 200 (MD-1 Task 4)", () => {
+    const fileAdmits = fileValidator();
+    const link = fixture(MD_OPEN_DIR, "valid-link");
+    // The url is the capture phone's own scoring-link pattern: the twin reuses CAPTURE_SCORING_LINK_URL_RE.
+    expect(CS.CAPTURE_SCORING_LINK_URL_RE.test(String(link.url))).toBe(true);
+    expect(fileAdmits(MD_OPEN, "", link)).toBe(true);
+    expect(fileAdmits(MD_OPEN, "", fixture(MD_OPEN_DIR, "valid-finished"))).toBe(true);
+    // finished carries nothing else; an http link and a link with no sport are refused; MD_OUT_OF_SCOPE is never data.
+    for (const name of ["invalid-finished-with-url", "invalid-link-http", "invalid-link-no-sport", "invalid-refused-as-answer"]) {
+      expect(fileAdmits(MD_OPEN, "", fixture(MD_OPEN_DIR, name)), name).toBe(false);
+      expect(parses(S.CaptureMatchdayOpen, fixture(MD_OPEN_DIR, name)), name).toBe(false);
+    }
+    expect(fileAdmits(MD_OPEN, "#/$defs/refusal", fixture(MD_OPEN_DIR, "refusal-valid-out-of-scope"))).toBe(true);
+  });
+
+  it("the approval validates against capture-matchday-approval.v1.json: the review carries no credential, the approve sends no tie picks, and a refusal is an md_ word (MD-1 Task 6)", () => {
+    const fileAdmits = fileValidator();
+    // Every valid review is admitted by the published bytes, and none carries a credential.
+    const valids = readdirSync(resolve(FIXTURES, MD_APPROVAL_DIR)).filter((f) => /^valid-/.test(f)).map((f) => f.slice(0, -5));
+    expect(valids.sort()).toEqual(["valid-draw", "valid-draw-ties", "valid-swiss"]);
+    for (const name of valids) {
+      expect(fileAdmits(MD_APPROVAL, "", fixture(MD_APPROVAL_DIR, name)), name).toBe(true);
+      for (const secret of ["/score/", "dl_", "md_", "/day/"]) expect(rawFixture(MD_APPROVAL_DIR, name), `${name}: ${secret}`).not.toContain(secret);
+    }
+    // A Swiss review names its round; a draw's round is null (the day read's approvals.round, MD-1 fix M1).
+    expect([fixture(MD_APPROVAL_DIR, "valid-swiss").round, fixture(MD_APPROVAL_DIR, "valid-draw").round]).toEqual([4, null]);
+    // Rows are strict (a link cannot ride along); the approve's body is strict (the phone cannot pick ties or edit a slot).
+    expect(fileAdmits(MD_APPROVAL, "", fixture(MD_APPROVAL_DIR, "invalid-row-carries-url"))).toBe(false);
+    expect(fileAdmits(MD_APPROVAL, "#/$defs/request", fixture(MD_APPROVAL_DIR, "request-invalid-tie-picks"))).toBe(false);
+    expect(parses(S.CaptureMatchdayApprovalRequest, fixture(MD_APPROVAL_DIR, "request-invalid-tie-picks"))).toBe(false);
+    // The refusal's code is the plan's closed list: a stage usecase's own word is not an md_ refusal.
+    const code = (defOf(contract(MD_APPROVAL), "refusal").properties as Record<string, Json>).code!;
+    expect(enumOf(code)).toEqual([...CS.CaptureMatchdayRefusalCode.options].sort());
+    expect(fileAdmits(MD_APPROVAL, "#/$defs/refusal", fixture(MD_APPROVAL_DIR, "refusal-invalid-seeding-word"))).toBe(false);
+    expect(fileAdmits(MD_APPROVAL, "#/$defs/refusal", fixture(MD_APPROVAL_DIR, "refusal-valid-ties"))).toBe(true);
   });
 });
 

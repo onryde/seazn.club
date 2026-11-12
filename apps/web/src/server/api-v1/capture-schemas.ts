@@ -306,3 +306,119 @@ export const CaptureRefusal = z.union([
   z.strictObject({ code: CaptureRefusalCode.exclude(["already_live"]), message: z.string() }),
 ]);
 export type CaptureRefusal = z.infer<typeof CaptureRefusal>;
+
+// ---------------------------------------------------------------------------------------------------------------
+// capture-matchday-day.v1 (capture S4 Match Day design 2026-11-07 §5, §9; MD-1 Task 3): a Match Day code's day read,
+// `GET /match-day-code`. The md_ routes ride the v1 envelope: an answer is `data` in `{ok: true, data, requestId}`, a refusal is `error`
+// in `{ok: false, error, requestId}`.
+// ---------------------------------------------------------------------------------------------------------------
+
+/** Every refusal word the md_ routes answer (the plan's Global Constraints), with its status. */
+export const CaptureMatchdayRefusalCode = z.enum([
+  "MD_UNKNOWN", "MD_WITHDRAWN", "MD_ENDED", "MD_NOT_OPEN", "MD_OUT_OF_SCOPE", "MD_NO_APPROVE", "MD_STALE", "MD_ALREADY",
+  "MD_TIES",
+]);
+export type CaptureMatchdayRefusalCode = z.infer<typeof CaptureMatchdayRefusalCode>;
+/** An instant the server writes with `toISOString()`: UTC, milliseconds, `Z`. */
+const MdInstant = z.iso.datetime();
+/** One match as the list shows it. */
+export const CaptureMatchdayRow = z.strictObject({
+  fixture_id: z.uuid(),
+  sport_key: z.string().min(1),
+  division_name: z.string(),
+  round_label: z.string().min(1).nullable(),
+  home: z.string().nullable(),
+  away: z.string().nullable(),
+  status: z.enum(["upcoming", "in_play", "finished"]),
+  scheduled_at: MdInstant.nullable(),
+  /** The short score as the Match Day desk shows it in a row (`compactScore`, lib/match-day/view.ts): "1–1 · 14–9" while a set
+   *  sport plays, "2–0" once finished, the sport's own headline otherwise. Never the engine's full headline. */
+  summary: z.string().nullable(),
+});
+export const CaptureMatchdayApproval = z.strictObject({
+  kind: z.enum(["swiss", "draw"]),
+  stage_id: z.uuid(),
+  division_name: z.string(),
+  label: z.string(),
+  /** Swiss: the round awaiting pairing; a draw: null (MD-1 fix M1, the controller's ruling). */
+  round: z.number().int().min(1).nullable(),
+});
+export const CaptureMatchdayCourt = z.strictObject({
+  court_id: z.uuid(),
+  court_name: z.string(),
+  venue_name: z.string(),
+  state: z.enum(["playing", "called", "free", "in_use_elsewhere"]),
+  now: CaptureMatchdayRow.nullable(),
+  next: z.array(CaptureMatchdayRow),
+  finished: z.array(CaptureMatchdayRow),
+});
+export const CaptureMatchdayDay = z.strictObject({
+  competition: z.strictObject({ id: z.uuid(), name: z.string() }),
+  scope: z.strictObject({ kind: z.enum(["competition", "venue", "courts"]), label: z.string() }),
+  day: z.iso.date(),
+  tz: z.string().min(1),
+  opens_at: MdInstant,
+  expires_at: MdInstant,
+  can_approve: z.boolean(),
+  courts: z.array(CaptureMatchdayCourt),
+  no_court: z.array(CaptureMatchdayRow),
+  online: z.array(CaptureMatchdayRow),
+  approvals: z.array(CaptureMatchdayApproval),
+});
+export type CaptureMatchdayDay = z.infer<typeof CaptureMatchdayDay>;
+/** Every md_ refusal, the envelope's `error`: one of the plan's MD_ words, a closed list (MD-1 fix M5). `opens_at` rides
+ *  MD_NOT_OPEN only. The v1 envelope's own answers (429 RATE_LIMITED, 404 NOT_FOUND, 500 INTERNAL) are not md_ refusals
+ *  and are outside this shape: the phone reads them by status, as on every v1 route. */
+export const CaptureMatchdayRefusal = z.strictObject({
+  code: CaptureMatchdayRefusalCode,
+  message: z.string(),
+  opens_at: MdInstant.optional(),
+});
+export type CaptureMatchdayRefusal = z.infer<typeof CaptureMatchdayRefusal>;
+
+// ---------------------------------------------------------------------------------------------------------------
+// capture-matchday-open.v1 (capture S4 Match Day design §6, §9.4; MD-1 Task 4): POST /match-day-code/fixtures/{id}/scoring-link
+// ---------------------------------------------------------------------------------------------------------------
+
+/** The open's 200: the match's own scoring link (the capture phone's pattern, `CAPTURE_SCORING_LINK_URL_RE`) and the
+ *  sport whose pad it opens, or "the match is over" (finalized or cancelled), with nothing else. A match outside the
+ *  code's scope is the refusal 403 MD_OUT_OF_SCOPE, never a 200. */
+export const CaptureMatchdayOpen = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("link"), url: z.string().regex(CAPTURE_SCORING_LINK_URL_RE), sport_key: z.string().min(1) }),
+  z.strictObject({ kind: z.literal("finished") }),
+]);
+export type CaptureMatchdayOpen = z.infer<typeof CaptureMatchdayOpen>;
+
+// ---------------------------------------------------------------------------------------------------------------
+// capture-matchday-approval.v1 (capture S4 Match Day design §7, §9.5; MD-1 Task 6):
+// GET|POST /match-day-code/approvals/{kind}/{stageId}
+// ---------------------------------------------------------------------------------------------------------------
+
+/** One pairing or drawn match as the review shows it: its place, and its sides' names (`away` null on a bye, or a
+ *  knockout match whose other seat is fed from elsewhere). */
+const CaptureMatchdayApprovalRow = z.strictObject({
+  label: z.string().min(1),
+  home: z.string(),
+  away: z.string().nullable(),
+});
+/** The review (GET): what the server computed, read-only, and the `hash` (and, for a Swiss round, the `round`) the approve
+ *  hands back. `ties`: a draw with a tie only the web desk can resolve, which the phone cannot approve. */
+export const CaptureMatchdayApprovalReview = z.strictObject({
+  kind: z.enum(["swiss", "draw"]),
+  stage_id: z.uuid(),
+  division_name: z.string(),
+  round: z.number().int().min(1).nullable(),
+  rows: z.array(CaptureMatchdayApprovalRow),
+  hash: z.string().min(1).max(128),
+  ties: z.boolean(),
+});
+export type CaptureMatchdayApprovalReview = z.infer<typeof CaptureMatchdayApprovalReview>;
+/** The approve's body (POST): the review's `hash`, and for a Swiss round its `round` (a draw sends none, or null). */
+export const CaptureMatchdayApprovalRequest = z.strictObject({
+  hash: z.string().min(1).max(128),
+  round: z.number().int().min(1).nullable().optional(),
+});
+export type CaptureMatchdayApprovalRequest = z.infer<typeof CaptureMatchdayApprovalRequest>;
+/** The approve's 200: approved, by this request. A second phone's approve is the refusal MD_ALREADY, never this. */
+export const CaptureMatchdayApprovalOk = z.strictObject({ ok: z.literal(true) });
+export type CaptureMatchdayApprovalOk = z.infer<typeof CaptureMatchdayApprovalOk>;

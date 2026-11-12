@@ -114,8 +114,14 @@ export {
   generateStageFixturesUnpublished,
   afterGenerateCommit,
   rebuildStageFixtures,
+  // MD-1 Task 5: the Match Day Swiss approval (preview, pair, and the refusal codes it answers).
+  MD_STALE_CODE,
+  MD_ALREADY_CODE,
+  swissInputHash,
+  previewSwissNextRound,
+  pairSwissNextRound,
 } from "./generate";
-export type { RebuildOutcome } from "./generate";
+export type { RebuildOutcome, SwissPreviewPairing, SwissRoundPreview } from "./generate";
 export { computeSeedProposal, getSeedProposal, confirmSeedProposal } from "./seed-proposal";
 export type { SeedProposalOut, ConfirmSeedProposalOut } from "./seed-proposal";
 export {

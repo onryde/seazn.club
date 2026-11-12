@@ -61,6 +61,17 @@ const KNOWN_SITES = [
   "app/api/auth/verify-email/route.ts",
 ];
 
+/** `next` properties that are NOT a return path, named and counted (a new one, or a moved one, reds until it is named).
+ *  Each must be an ARRAY schema (`next: z.array(`): a string `next` is a path whatever file it is in, so it is never
+ *  exempt. */
+const NOT_A_RETURN_PATH: Record<string, { count: number; why: string }> = {
+  "server/api-v1/capture-schemas.ts": {
+    count: 1,
+    why: "MD-1 capture-matchday-day.v1: CaptureMatchdayCourt.next, a court's queue of matches (the board's Now / Next), not a URL",
+  },
+};
+const isArraySchema = (text: string): boolean => /^\s*next\??\s*:\s*z\s*\.array\(/.test(text.replace(/^[\s{,]/, ""));
+
 describe("every zod `next` is bounded by NEXT_PATH_MAX_LENGTH and nothing else", () => {
   it("scans the whole source tree: each known site is found, and every schema found is bounded by the constant alone", () => {
     const files = sourceFiles(SRC);
@@ -78,7 +89,13 @@ describe("every zod `next` is bounded by NEXT_PATH_MAX_LENGTH and nothing else",
     const sites = new Set(checked.map((c) => c.file));
     for (const site of KNOWN_SITES) expect(sites.has(site), `${site} carries a next schema (${summary})`).toBe(true);
 
+    // The named non-paths: each found exactly as often as named, each an array schema; the rest are paths.
+    const exempt = (c: { file: string; text: string }) => Object.hasOwn(NOT_A_RETURN_PATH, c.file) && isArraySchema(c.text);
+    for (const [file, { count }] of Object.entries(NOT_A_RETURN_PATH)) {
+      expect(checked.filter((c) => c.file === file && exempt(c)).length, `${file}: named non-path next schemas (${summary})`).toBe(count);
+    }
     const problems = checked
+      .filter((c) => !exempt(c))
       .map((c) => ({ where: `${c.file}:${c.line}`, problem: boundProblem(c.text) }))
       .filter((p) => p.problem !== null);
     expect(problems, summary).toEqual([]);

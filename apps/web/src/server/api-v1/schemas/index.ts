@@ -47,6 +47,13 @@ export {
   CAPTURE_RECORD_MAX_LINES, CAPTURE_RECORD_MAX_BYTES, CAPTURE_RECORD_REF_RE, CaptureRecordLine, CaptureRecordOk,
   CaptureRecordRefusalCode, CaptureRecordRefusal, CaptureRecordSecretS2, CaptureRecordSecretS3, CaptureRecordSecretS4,
   CaptureRecordSecretS5,
+  // capture-matchday-day.v1 (capture S4 Match Day design §5, §9; MD-1 Task 3).
+  CaptureMatchdayRefusalCode, CaptureMatchdayRow, CaptureMatchdayApproval, CaptureMatchdayCourt, CaptureMatchdayDay,
+  CaptureMatchdayRefusal,
+  // capture-matchday-open.v1 (MD-1 Task 4).
+  CaptureMatchdayOpen,
+  // capture-matchday-approval.v1 (MD-1 Task 6).
+  CaptureMatchdayApprovalReview, CaptureMatchdayApprovalRequest, CaptureMatchdayApprovalOk,
 } from "../capture-schemas.ts";
 export {
   Uuid, CourtId, RequiredCourtTags, VenueId, Slug, Visibility, CompetitionStatus, DivisionStatus, StageKind,
@@ -114,7 +121,7 @@ export {
   SlotLabelRef, Fixture, DeskInPlayFixture, DeskNextFixture, CompetitionDesk, LineupSlotInput, PutLineup,
   AppendEventRequest, EventImportRequest, EventImportReport, ScoreEvent, AppendEventResponse, FixtureState,
   StandingsRowOut, CreateApiKey, ApiKey, CreatedApiKey, CreateDeviceLink, DeviceLink, CreatedDeviceLink,
-  ScorerSheetsRequest,
+  ScorerSheetsRequest, MatchDayCodeScope, CreateMatchDayCode, MatchDayCode,
 } from "./scoring.ts";
 export {
   SwissReshapeResult, SwissRoundsJudgementResult, GenerateResult, GenerateStageInput, RebuildResult, UnpairResult,

@@ -36,6 +36,13 @@ The owner agreed that this is the third of three homes (2026-10-31):
   link (owner: "No, scorer always scan the link").
 - The public never sees Match Day.
 
+Reversed for the Match Day code (capture S4 design, 2026-11-07): one code per day lists the day's
+matches and opens each match's own link; the link stays the printed QR's. The organiser mints the
+code on this desk, for the whole competition or narrowed to a venue or courts, and can withdraw it;
+it ends with the division's day. A code holder (umpire, arbiter, volunteer) scores through each
+match's own link and never finalizes, calls, moves or streams. A code minted with approvals can
+review and approve the next Swiss round and a knockout draw as the server computes them.
+
 ## 3. Goals
 
 - G1. One screen answers: what is on each court now, what is next, which court is free.

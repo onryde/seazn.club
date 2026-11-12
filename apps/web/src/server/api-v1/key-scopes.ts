@@ -374,6 +374,12 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "GET /fixtures/:id/device-links",
   "DELETE /fixtures/:id/device-links/:linkId",
   "POST /fixtures/:id/device-links/reissue",
+  // Match Day codes (capture S4 design §3; MD-1): minting one hands out a credential that lists a day's matches and opens
+  // their scoring links — the device-links reasoning. The desk's doors are editor-session only (requireResourceAuth
+  // competition `write`, and the use-case refuses any non-session actor); never key-reachable.
+  "POST /competitions/:id/match-day-codes",
+  "GET /competitions/:id/match-day-codes",
+  "POST /match-day-codes/:id/revoke",
   // Streaming R1: a session consumes money and a target carries a stream key —
   // both structural bans, the device-links reasoning.
   "POST /fixtures/:id/stream-sessions",
@@ -396,6 +402,12 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   // S2-1 (capture design §7.1): the phone's Remote Scoring bootstrap. Its Bearer is a device link `dl_…` that the route resolves itself —
   // never a key, and a key is refused by it (LINK_INVALID); the one v1 route a `dl_` token opens beyond the fixture surface.
   "GET /device-link",
+  // MD-1 (capture S4 Match Day design §9): the Match Day code's own routes. Their Bearer is an md_ code the route resolves
+  // itself — a credential that lists a day and opens scoring links; never a key.
+  "GET /match-day-code",
+  "POST /match-day-code/fixtures/:id/scoring-link",
+  "GET /match-day-code/approvals/:kind/:stageId",
+  "POST /match-day-code/approvals/:kind/:stageId",
   // Chess in-page board (2026-10-09 design §6): the room read names a player's
   // seat, the POSTs seat them, submit moves with that player's own stored
   // Lichess OAuth token, report their clock at zero, and stamp a camera gap

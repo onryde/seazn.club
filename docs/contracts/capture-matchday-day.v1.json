@@ -1,0 +1,741 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seazn.club/contracts/capture-matchday-day.v1.json",
+  "title": "Seazn Match Day code day read, v1: GET /api/v1/match-day-code",
+  "description": "What a phone holding a Match Day code lists (capture S4 Match Day design 2026-11-07 §5, §9.3; MD-1 Task 3), authenticated by Authorization: Bearer md_… only. The answer is `data` in the v1 envelope {ok: true, data, requestId}; $defs.refusal is `error` in {ok: false, error, requestId}. It never carries the code's token or any scoring link. Vendored into the capture repo; its sha256, parity with its zod twin and its fixtures are pinned by apps/web/src/server/api-v1/__tests__/capture-contract.test.ts.",
+  "type": "object",
+  "properties": {
+    "competition": {
+      "description": "The competition the code was minted for: its id and name.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "scope": {
+      "description": "The code's scope: kind competition (every court, and the matches with no court), venue (that venue's courts) or courts (exactly those courts). label is what the header shows: the competition's name, the venue's name, or the courts' names joined with \", \" in the board's order.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "competition",
+            "venue",
+            "courts"
+          ]
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "label"
+      ],
+      "additionalProperties": false
+    },
+    "day": {
+      "description": "The day the code is good for, YYYY-MM-DD, in tz.",
+      "type": "string",
+      "format": "date",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+    },
+    "tz": {
+      "description": "The IANA zone the day is in: the competition's organisation's zone (one zone per code).",
+      "type": "string",
+      "minLength": 1
+    },
+    "opens_at": {
+      "description": "00:00 of day in tz, as a UTC instant. Before it the code answers 403 MD_NOT_OPEN.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+    },
+    "expires_at": {
+      "description": "24:00 of day in tz, as a UTC instant. From it the code answers 410 MD_ENDED.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+    },
+    "can_approve": {
+      "description": "Whether the code was minted with \"can approve draws\": without it the phone shows an approval's banner with no button.",
+      "type": "boolean"
+    },
+    "courts": {
+      "description": "One card per court in scope, in the order the web gives (the organisation's venue order, then its court order): the board's courts — every live division's candidate courts and every court holding one of the competition's matches today.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "court_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "court_name": {
+            "description": "The court's name as the web's board names it.",
+            "type": "string"
+          },
+          "venue_name": {
+            "description": "The court's venue's name.",
+            "type": "string"
+          },
+          "state": {
+            "description": "playing (one of the competition's matches is in play on it), called (one is called onto it), free, or in_use_elsewhere (another competition holds it).",
+            "type": "string",
+            "enum": [
+              "playing",
+              "called",
+              "free",
+              "in_use_elsewhere"
+            ]
+          },
+          "now": {
+            "description": "The match playing or called on the court, if it is the competition's and in the code's scope; null otherwise.",
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "fixture_id": {
+                    "description": "The match.",
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "sport_key": {
+                    "description": "The match's sport: it decides which pad the phone opens.",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "division_name": {
+                    "description": "The match's division.",
+                    "type": "string"
+                  },
+                  "round_label": {
+                    "description": "The round as the web's board codes it (R2, QF, SF, F, …).",
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "home": {
+                    "description": "The first side's name; null while the seat has no entrant.",
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "away": {
+                    "description": "The second side's name; null while the seat has no entrant.",
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "status": {
+                    "description": "upcoming (not started), in_play, or finished (decided, finalized, held, abandoned, forfeited or cancelled).",
+                    "type": "string",
+                    "enum": [
+                      "upcoming",
+                      "in_play",
+                      "finished"
+                    ]
+                  },
+                  "scheduled_at": {
+                    "description": "The match's planned start as a UTC instant; null when it has none.",
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "summary": {
+                    "description": "The short score as the Match Day desk shows it in a row: a set sport's sets won, then the games and live points of the set in play (\"1–1 · 14–9\"; tennis \"1–0 · 3–2 · 40–30\", \"TB 3–2\"), the sport's own headline otherwise; the same form once finished (\"2–0\"). Never the full headline with every set's score. null before any.",
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "fixture_id",
+                  "sport_key",
+                  "division_name",
+                  "round_label",
+                  "home",
+                  "away",
+                  "status",
+                  "scheduled_at",
+                  "summary"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next": {
+            "description": "The court's queue: the competition's matches planned on it today, not started and not called, in planned order.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "fixture_id": {
+                  "description": "The match.",
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                },
+                "sport_key": {
+                  "description": "The match's sport: it decides which pad the phone opens.",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "division_name": {
+                  "description": "The match's division.",
+                  "type": "string"
+                },
+                "round_label": {
+                  "description": "The round as the web's board codes it (R2, QF, SF, F, …).",
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "home": {
+                  "description": "The first side's name; null while the seat has no entrant.",
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "away": {
+                  "description": "The second side's name; null while the seat has no entrant.",
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "description": "upcoming (not started), in_play, or finished (decided, finalized, held, abandoned, forfeited or cancelled).",
+                  "type": "string",
+                  "enum": [
+                    "upcoming",
+                    "in_play",
+                    "finished"
+                  ]
+                },
+                "scheduled_at": {
+                  "description": "The match's planned start as a UTC instant; null when it has none.",
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "summary": {
+                  "description": "The short score as the Match Day desk shows it in a row: a set sport's sets won, then the games and live points of the set in play (\"1–1 · 14–9\"; tennis \"1–0 · 3–2 · 40–30\", \"TB 3–2\"), the sport's own headline otherwise; the same form once finished (\"2–0\"). Never the full headline with every set's score. null before any.",
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "fixture_id",
+                "sport_key",
+                "division_name",
+                "round_label",
+                "home",
+                "away",
+                "status",
+                "scheduled_at",
+                "summary"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "finished": {
+            "description": "The competition's matches finished on the court today (not cancelled), newest first.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "fixture_id": {
+                  "description": "The match.",
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                },
+                "sport_key": {
+                  "description": "The match's sport: it decides which pad the phone opens.",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "division_name": {
+                  "description": "The match's division.",
+                  "type": "string"
+                },
+                "round_label": {
+                  "description": "The round as the web's board codes it (R2, QF, SF, F, …).",
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "home": {
+                  "description": "The first side's name; null while the seat has no entrant.",
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "away": {
+                  "description": "The second side's name; null while the seat has no entrant.",
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "description": "upcoming (not started), in_play, or finished (decided, finalized, held, abandoned, forfeited or cancelled).",
+                  "type": "string",
+                  "enum": [
+                    "upcoming",
+                    "in_play",
+                    "finished"
+                  ]
+                },
+                "scheduled_at": {
+                  "description": "The match's planned start as a UTC instant; null when it has none.",
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "summary": {
+                  "description": "The short score as the Match Day desk shows it in a row: a set sport's sets won, then the games and live points of the set in play (\"1–1 · 14–9\"; tennis \"1–0 · 3–2 · 40–30\", \"TB 3–2\"), the sport's own headline otherwise; the same form once finished (\"2–0\"). Never the full headline with every set's score. null before any.",
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "fixture_id",
+                "sport_key",
+                "division_name",
+                "round_label",
+                "home",
+                "away",
+                "status",
+                "scheduled_at",
+                "summary"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "court_id",
+          "court_name",
+          "venue_name",
+          "state",
+          "now",
+          "next",
+          "finished"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "no_court": {
+      "description": "A whole-competition code only (empty otherwise): the matches in play on no court, then the ready matches with no court planned no later than today, in the desk's order.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "fixture_id": {
+            "description": "The match.",
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "sport_key": {
+            "description": "The match's sport: it decides which pad the phone opens.",
+            "type": "string",
+            "minLength": 1
+          },
+          "division_name": {
+            "description": "The match's division.",
+            "type": "string"
+          },
+          "round_label": {
+            "description": "The round as the web's board codes it (R2, QF, SF, F, …).",
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "home": {
+            "description": "The first side's name; null while the seat has no entrant.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "away": {
+            "description": "The second side's name; null while the seat has no entrant.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "description": "upcoming (not started), in_play, or finished (decided, finalized, held, abandoned, forfeited or cancelled).",
+            "type": "string",
+            "enum": [
+              "upcoming",
+              "in_play",
+              "finished"
+            ]
+          },
+          "scheduled_at": {
+            "description": "The match's planned start as a UTC instant; null when it has none.",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "description": "The short score as the Match Day desk shows it in a row: a set sport's sets won, then the games and live points of the set in play (\"1–1 · 14–9\"; tennis \"1–0 · 3–2 · 40–30\", \"TB 3–2\"), the sport's own headline otherwise; the same form once finished (\"2–0\"). Never the full headline with every set's score. null before any.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "fixture_id",
+          "sport_key",
+          "division_name",
+          "round_label",
+          "home",
+          "away",
+          "status",
+          "scheduled_at",
+          "summary"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "online": {
+      "description": "Online chess boards, read-only. Always empty until the web's all-in-one read model lists them.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "fixture_id": {
+            "description": "The match.",
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "sport_key": {
+            "description": "The match's sport: it decides which pad the phone opens.",
+            "type": "string",
+            "minLength": 1
+          },
+          "division_name": {
+            "description": "The match's division.",
+            "type": "string"
+          },
+          "round_label": {
+            "description": "The round as the web's board codes it (R2, QF, SF, F, …).",
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "home": {
+            "description": "The first side's name; null while the seat has no entrant.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "away": {
+            "description": "The second side's name; null while the seat has no entrant.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "description": "upcoming (not started), in_play, or finished (decided, finalized, held, abandoned, forfeited or cancelled).",
+            "type": "string",
+            "enum": [
+              "upcoming",
+              "in_play",
+              "finished"
+            ]
+          },
+          "scheduled_at": {
+            "description": "The match's planned start as a UTC instant; null when it has none.",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "description": "The short score as the Match Day desk shows it in a row: a set sport's sets won, then the games and live points of the set in play (\"1–1 · 14–9\"; tennis \"1–0 · 3–2 · 40–30\", \"TB 3–2\"), the sport's own headline otherwise; the same form once finished (\"2–0\"). Never the full headline with every set's score. null before any.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "fixture_id",
+          "sport_key",
+          "division_name",
+          "round_label",
+          "home",
+          "away",
+          "status",
+          "scheduled_at",
+          "summary"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "approvals": {
+      "description": "The approvals waiting in the code's scope, listed whether or not can_approve: a knockout whose draw (the seed proposal) is owed, or a Swiss stage whose previous round is complete and whose next round is unpaired. A narrowed code lists a stage only when one of its matches today is on its courts. A division whose schedule is locked lists none: the web desk's.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "description": "draw (the seed proposal from groups into a knockout) or swiss (the next Swiss round).",
+            "type": "string",
+            "enum": [
+              "swiss",
+              "draw"
+            ]
+          },
+          "stage_id": {
+            "description": "The stage to review and approve.",
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "division_name": {
+            "type": "string"
+          },
+          "label": {
+            "description": "The stage's name.",
+            "type": "string"
+          },
+          "round": {
+            "description": "swiss only: the round awaiting pairing (the phone's \"Round 4 pairings are ready\"); null for a draw.",
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "stage_id",
+          "division_name",
+          "label",
+          "round"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "competition",
+    "scope",
+    "day",
+    "tz",
+    "opens_at",
+    "expires_at",
+    "can_approve",
+    "courts",
+    "no_court",
+    "online",
+    "approvals"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "refusal": {
+      "description": "Every refusal, the envelope's error: 401 MD_UNKNOWN (no such code, or no md_ bearer), 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with opens_at). The open and the approvals answer MD_OUT_OF_SCOPE, MD_NO_APPROVE, MD_STALE, MD_ALREADY and MD_TIES too. A 429 RATE_LIMITED (with Retry-After) is the v1 envelope's own answer, outside this shape.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "The machine word the phone keys its copy on: one of the plan's MD_ words, a closed list. The v1 envelope's own answers (429 RATE_LIMITED, 404 NOT_FOUND, 500 INTERNAL) are not md_ refusals and are outside this shape; the phone reads them by status.",
+          "type": "string",
+          "enum": [
+            "MD_UNKNOWN",
+            "MD_WITHDRAWN",
+            "MD_ENDED",
+            "MD_NOT_OPEN",
+            "MD_OUT_OF_SCOPE",
+            "MD_NO_APPROVE",
+            "MD_STALE",
+            "MD_ALREADY",
+            "MD_TIES"
+          ]
+        },
+        "message": {
+          "description": "A plain English developer string; the phone never shows it.",
+          "type": "string"
+        },
+        "opens_at": {
+          "description": "MD_NOT_OPEN only: when the code's day starts, as a UTC instant.",
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

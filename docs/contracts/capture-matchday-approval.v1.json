@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seazn.club/contracts/capture-matchday-approval.v1.json",
+  "title": "Seazn Match Day code approval, v1: GET|POST /api/v1/match-day-code/approvals/{kind}/{stageId}",
+  "description": "An approval as a phone holding a Match Day code reviews it (capture S4 Match Day design 2026-11-07 §7, §9.5; MD-1 Task 6): GET /api/v1/match-day-code/approvals/{kind}/{stageId}, kind swiss or draw, authenticated by Authorization: Bearer md_… only, and only for a code minted with \"can approve draws\". The root is the review, `data` in the v1 envelope {ok: true, data, requestId}. POST to the same path with $defs.request approves it and answers $defs.ok; $defs.refusal is `error` in {ok: false, error, requestId}. Nothing in it is a credential. Vendored into the capture repo; its sha256, parity with its zod twin and its fixtures are pinned by apps/web/src/server/api-v1/__tests__/capture-contract.test.ts.",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "description": "swiss (the next round of a Swiss stage) or draw (the seed proposal from groups into a knockout).",
+      "type": "string",
+      "enum": [
+        "swiss",
+        "draw"
+      ]
+    },
+    "stage_id": {
+      "description": "The stage the approval acts on: the day read's approvals.stage_id.",
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+    },
+    "division_name": {
+      "description": "The stage's division.",
+      "type": "string"
+    },
+    "round": {
+      "description": "swiss: the round awaiting pairing, the day read's approvals.round; the approve hands it back. draw: null.",
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "rows": {
+      "description": "What the server computed, read-only, in order: swiss, one row per board of the round, the bye last with away null; draw, one row per knockout match a qualifier is drawn into, in round then match order. To change a slot, the organiser uses the web desk.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "description": "The row's place: the round as the web's board codes it (R4, QF, SF, F, …), then its number in the round when the round holds more than one (R4 1, QF 2).",
+            "type": "string",
+            "minLength": 1
+          },
+          "home": {
+            "description": "The first side's name.",
+            "type": "string"
+          },
+          "away": {
+            "description": "The second side's name; null on a bye, or in a knockout match whose other seat is fed from elsewhere.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "home",
+          "away"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "hash": {
+      "description": "What the approve hands back, unchanged: swiss, a hash of the round's inputs (results, field, stage settings and lots); draw, the proposal's id. An approve whose hash is no longer the server's is refused MD_STALE.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ties": {
+      "description": "draw only (swiss: false): the draw has a tie only the web desk can resolve. The phone shows it and does not approve it; an approve is refused MD_TIES.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "kind",
+    "stage_id",
+    "division_name",
+    "round",
+    "rows",
+    "hash",
+    "ties"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "request": {
+      "description": "The approve's body, POST /api/v1/match-day-code/approvals/{kind}/{stageId}: the review's hash, and for swiss its round.",
+      "type": "object",
+      "properties": {
+        "hash": {
+          "description": "The review's hash, unchanged.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "round": {
+          "description": "swiss: the review's round (required: an approve without it is a 422). draw: omitted, or null.",
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "hash"
+      ],
+      "additionalProperties": false
+    },
+    "ok": {
+      "description": "The approve's 200: this request approved it. The new matches are on the server at once; the phone refreshes its day read. A second phone's approve is the refusal MD_ALREADY, never this.",
+      "type": "object",
+      "properties": {
+        "ok": {
+          "description": "Always true.",
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "ok"
+      ],
+      "additionalProperties": false
+    },
+    "refusal": {
+      "description": "Every refusal, the envelope's error: 401 MD_UNKNOWN (no such code, or no md_ bearer), 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with opens_at), 403 MD_NO_APPROVE (the code was minted without \"can approve draws\", or the division's schedule is locked — the desk's, and the day read lists none of its approvals: the review AND the approve), 403 MD_OUT_OF_SCOPE (the stage is not in the code's competition, or for a venue or courts code none of its matches is on those courts on the code's day), 409 MD_STALE (the hash is no longer the server's — a result, the field, a seat or the proposal changed — or the approval is not ready: the round before is still in play, the groups are not complete, or nobody is left to seed; review again; or a Swiss round 1, which only the web desk pairs), 409 MD_ALREADY (approved already: another phone or the desk was first), 409 MD_TIES (draw: a tie the web desk must resolve). Every 409 is one of these words. A 404 NOT_FOUND (no such stage, kind or proposal), a 422 (a swiss approve without a whole round, or a kind the stage has not: a swiss approval of a stage that is not a Swiss, a draw of a Swiss stage), any other 4xx refusal (by its status, with no word of its own), a 429 RATE_LIMITED (with Retry-After) and a 500 INTERNAL (a fault on the server) are the v1 envelope's own answers, outside this shape.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "The machine word the phone keys its copy on: one of the plan's MD_ words, a closed list. The v1 envelope's own answers (429 RATE_LIMITED, 404 NOT_FOUND, 422, 500 INTERNAL) are not md_ refusals and are outside this shape; the phone reads them by status.",
+          "type": "string",
+          "enum": [
+            "MD_UNKNOWN",
+            "MD_WITHDRAWN",
+            "MD_ENDED",
+            "MD_NOT_OPEN",
+            "MD_OUT_OF_SCOPE",
+            "MD_NO_APPROVE",
+            "MD_STALE",
+            "MD_ALREADY",
+            "MD_TIES"
+          ]
+        },
+        "message": {
+          "description": "A plain English developer string; the phone never shows it.",
+          "type": "string"
+        },
+        "opens_at": {
+          "description": "MD_NOT_OPEN only: when the code's day starts, as a UTC instant.",
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

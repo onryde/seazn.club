@@ -682,8 +682,15 @@ function stageOwesWork(s: PhaseStage, fixtures: readonly PhaseFixture[]): boolea
  * the start-locks tip until UI5 removed it, 2026-11-03) can answer it
  * identically without a viewer-gated read. Two authorities disagreeing about one division is this
  * wave's other recurring defect.
+ *
+ * Exported (MD-1 Task 3) for the Match Day code's day read, which lists a stage whose draw a phone holding a code may
+ * approve (capture S4 design §7) — the same door, so the same predicate, never a copy. It reads three fields of the
+ * stage and two of each fixture, which is all the narrowed types ask a caller for.
  */
-function stageOwesDraw(stage: PhaseStage, fixtures: readonly PhaseFixture[]): boolean {
+export function stageOwesDraw(
+  stage: Pick<PhaseStage, "id" | "timing" | "sourceReady">,
+  fixtures: readonly Pick<PhaseFixture, "stageId" | "awaitsSeedDraw">[],
+): boolean {
   return (
     stage.timing === "setup" &&
     stage.sourceReady &&

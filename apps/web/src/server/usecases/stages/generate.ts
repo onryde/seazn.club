@@ -2,14 +2,16 @@ import "server-only";
 // The public generate/rebuild doors: write, commit-and-revalidate, Unpublished,
 // and the roster-driven rebuild.
 
-import { withTenant } from "@/lib/db";
+import { createHash } from "node:crypto";
+import { withTenant, type Tx } from "@/lib/db";
+import { isSwissBoardSeated, nextUnseatedSwissRound } from "@/lib/swiss-shell";
 import { HttpError } from "@/lib/errors";
 import { ROSTER_DRIFT_INELIGIBLE_KINDS } from "@/lib/roster-drift-eligibility";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { EngineError } from "@seazn/engine/core";
 import type { ProgressionSpec } from "@seazn/engine/competition";
-import { SWISS_PAIRING_NOT_SWISS_CODE, SWISS_PAIRING_NOT_SWISS_MESSAGE } from "@/lib/swiss-pairing";
+import { SWISS_PAIRING_NOT_SWISS_CODE, SWISS_PAIRING_NOT_SWISS_MESSAGE, effectiveSwissPairing, storedSwissPairing } from "@/lib/swiss-pairing";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
 import { afterScheduleWrite, divisionLockState } from "../schedule";
@@ -17,13 +19,15 @@ import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lo
 import {
   STAGE_COLS,
   type StageRow,
+  type SwissExistingFixture,
   type GenerateOutcome,
   type GenerateWrite,
   type GenerateOptions,
   type SealedSetupCounts,
 } from "./types";
 import { fireStageRevalidate, refoldStageTable } from "./helpers";
-import { refuseFormatTooSmall } from "./swiss-gen";
+import { refuseFormatTooSmall, swissActiveEntrants, swissPairRanksTable } from "./swiss-gen";
+import { rankedStageStandings } from "@/server/engine-db/competition";
 import { sealedStageSetupCounts } from "./roster-drift";
 import { generateProgressionSetupFixtures } from "./setup-fixtures";
 import { generateStageFixturesTx, regenerateStageInTx } from "./generate-tx";
@@ -321,3 +325,194 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
   }
   return { ...outcome, removed: write.removedIds.length, slots: write.slots };
 }
+// ---------------------------------------------------------------------------
+// MD-1 Task 5 (Match Day spec §7, Review Focus 4): the next Swiss round, previewed for an approval on the phone and then
+// paired against a stale check. The preview IS the desk's Pair next (`generateStageFixturesTx`), run in a transaction
+// that is rolled back; the pair is the same Generate, run for real, once the inputs the preview saw are still the inputs.
+
+/** The refusal codes the approval answers (globals: `{error: {code}}`, both 409). */
+export const MD_STALE_CODE = "MD_STALE";
+export const MD_ALREADY_CODE = "MD_ALREADY";
+
+/** One pairing of a previewed round: `away` is null on the bye. `board` is the board's place in its round. */
+export interface SwissPreviewPairing {
+  home: string;
+  away: string | null;
+  board: number;
+}
+
+export interface SwissRoundPreview {
+  round: number;
+  pairings: SwissPreviewPairing[];
+  /** `swissInputHash` of the state the preview was drawn from: the token the approve hands back. */
+  inputHash: string;
+}
+
+/** The rollback a preview ends in, carrying its answer out of the transaction (the `FormatChangeDryRun` pattern). */
+class SwissPreviewRollback extends Error {
+  constructor(readonly preview: SwissRoundPreview) {
+    super("swiss preview rollback");
+  }
+}
+
+/**
+ * The INPUTS of the next Swiss round, as one sha256 (hex) over (v: 2):
+ *  - the stage's fixtures in id order, each by id, status and result version (its score ledger's head `seq`, and its
+ *    stored outcome, which a bye award or a decision written off the ledger moves);
+ *  - the division's active entrants as the Swiss reads them (`swissActiveEntrants`: id, seed and first round), in id
+ *    order;
+ *  - the stage's `config` (pairing mode, rank overrides, carries, tie-breaks, points, rounds, a progression's
+ *    `qualified`) and its pinned table rules, and the division's `config` (the bye's frozen cfg, the points paid);
+ *  - the stage's live lots draws (`stage_lots_draws`, not superseded), which order a tie the rank-adjacent pairing reads.
+ *
+ * It NEVER hashes the drawn pairings (Review Focus 4), nor any seat. A lots draw the pairing needs is committed before
+ * the preview hashes (`previewSwissNextRound`), so it is an input both sides read, never one the pair draws afresh. Read
+ * it under the division lock, so it describes the state the Generate after it pairs.
+ */
+export async function swissInputHash(tx: Tx, stageId: string): Promise<string> {
+  const [stage] = await tx<{ division_id: string; config: string; table_rules_pinned: string | null; division_config: string | null }[]>`
+    select s.division_id, s.config::text as config, s.table_rules_pinned::text as table_rules_pinned,
+           d.config::text as division_config
+      from stages s join divisions d on d.id = s.division_id
+     where s.id = ${stageId}`;
+  if (!stage) throw new HttpError(404, "stage not found");
+  const fixtures = await tx<{ id: string; status: string; ledger_head: number; outcome: string | null }[]>`
+    select f.id, f.status,
+           coalesce((select max(se.seq) from score_events se where se.fixture_id = f.id), 0)::int as ledger_head,
+           f.outcome::text as outcome
+      from fixtures f
+     where f.stage_id = ${stageId}
+     order by f.id`;
+  const lots = await tx<{ pool_id: string | null; members_key: string; drawn_order: string[] }[]>`
+    select pool_id, members_key, drawn_order::text[] as drawn_order
+      from stage_lots_draws
+     where stage_id = ${stageId} and superseded_at is null
+     order by pool_id nulls first, members_key`;
+  const entrants = [...(await swissActiveEntrants(tx, stage.division_id, stageId))].sort((a, b) =>
+    a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+  );
+  const material = {
+    v: 2,
+    stage: [stage.config, stage.table_rules_pinned, stage.division_config],
+    fixtures: fixtures.map((f) => [f.id, f.status, f.ledger_head, f.outcome]),
+    entrants: entrants.map((e) => [e.id, e.seed, e.swiss_first_round]),
+    lots: lots.map((l) => [l.pool_id, l.members_key, l.drawn_order]),
+  };
+  return createHash("sha256").update(JSON.stringify(material)).digest("hex");
+}
+
+/**
+ * The Swiss stage an approval acts on, read and locked in the caller's transaction: 404 for a missing stage (RLS makes
+ * another org's one missing), 422 for a stage that is not a Swiss, and the generate pre-flight's own refusals that apply
+ * to a next round — a frozen schedule (422 SCHEDULE_LOCKED) and a stage not generated yet, or still waiting for its
+ * qualifiers (STAGE_NOT_READY). Takes the division lock: everything after it reads the state the Generate pairs.
+ */
+async function lockSwissStageForApproval(tx: Tx, stageId: string): Promise<{ stage: StageRow; rows: SwissExistingFixture[] }> {
+  const [stage] = await tx<StageRow[]>`select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
+  if (!stage) throw new HttpError(404, "stage not found");
+  if (stage.kind !== "swiss") throw new HttpError(422, "only a Swiss stage has a next round to pair");
+  await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+  if ((await divisionLockState(tx, stage.division_id)).frozen) {
+    throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+  }
+  if (stage.progression && !Array.isArray(stage.config.qualified)) {
+    throw new EngineError("STAGE_NOT_READY", "this Swiss stage is waiting for its qualifiers", { stageId });
+  }
+  const rows = await tx<SwissExistingFixture[]>`
+    select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome,
+           scheduled_at, court_id, venue_id, schedule_locked
+      from fixtures where stage_id = ${stageId}
+     order by round_no, seq_in_round`;
+  if (rows.length === 0) {
+    throw new EngineError("STAGE_NOT_READY", "generate this Swiss stage before pairing a round", { stageId });
+  }
+  return { stage, rows };
+}
+
+/** The round the next Pair seats. MD_ALREADY (409) only when every round is seated: a seated round still in play, with
+ *  or without a result, is left to the Generate's own refusal (STAGE_NOT_READY, "current swiss round has undecided
+ *  fixtures"), so one state answers one word. */
+function nextSwissRoundToPair(rows: readonly SwissExistingFixture[]): number {
+  const target = nextUnseatedSwissRound(rows);
+  if (target === null) throw new HttpError(409, "every round of this Swiss is already paired", MD_ALREADY_CODE);
+  return target;
+}
+
+/**
+ * I1 (task 5 review): commit the lots draw the round's pairing will read, under the division lock, in its own
+ * transaction — before the preview's rolled-back Pair. A rank-adjacent round ranks the stage's table
+ * (`rankedStageStandings`), and a tie it cannot break otherwise is broken by a drawing of lots that is stored (first
+ * writer wins, `persistLotsDraws`). Drawn inside the rolled-back preview, the pair would draw again, and the approve could
+ * seat pairings the operator never saw. Committed here, the preview and the pair read the same stored draw (and the hash
+ * covers it). It is the draw the table's own refold stores anyway; nothing else is written.
+ */
+async function commitSwissPairingLots(auth: AuthCtx, stageId: string): Promise<void> {
+  await withTenant(auth.orgId, async (tx) => {
+    const { stage, rows } = await lockSwissStageForApproval(tx, stageId);
+    const round = nextSwissRoundToPair(rows);
+    const pairing = effectiveSwissPairing({ stored: storedSwissPairing(stage.config), round });
+    if (swissPairRanksTable(pairing, rows)) await rankedStageStandings(tx, stageId);
+  });
+}
+
+/**
+ * Preview the next Swiss round (Match Day spec §7). First the round's lots draw, if it needs one, is committed
+ * (`commitSwissPairingLots`). Then the desk's Pair next (`generateStageFixturesTx`) runs inside a transaction, the round
+ * it seated is read, and everything is rolled back — the seats, the ledger row, the stage status. Answers the pairings in
+ * board order (the bye, if any, with `away: null`) and the `inputHash` the approve must hand back with `round`. Every
+ * refusal the Pair would raise (the round before not decided, no legal pairing, …) is raised here too.
+ */
+export async function previewSwissNextRound(auth: AuthCtx, stageId: string): Promise<SwissRoundPreview> {
+  await commitSwissPairingLots(auth, stageId);
+  try {
+    await withTenant(auth.orgId, async (tx) => {
+      const { rows } = await lockSwissStageForApproval(tx, stageId);
+      const round = nextSwissRoundToPair(rows);
+      const inputHash = await swissInputHash(tx, stageId);
+      await generateStageFixturesTx(tx, auth, stageId, {});
+      const seated = await tx<{ seq_in_round: number; home_entrant_id: string | null; away_entrant_id: string | null; outcome: unknown }[]>`
+        select seq_in_round, home_entrant_id, away_entrant_id, outcome
+          from fixtures where stage_id = ${stageId} and round_no = ${round}
+         order by seq_in_round`;
+      const pairings = seated
+        .filter((f) => f.home_entrant_id !== null && isSwissBoardSeated(f))
+        .map((f) => ({ home: f.home_entrant_id!, away: f.away_entrant_id, board: f.seq_in_round }));
+      throw new SwissPreviewRollback({ round, pairings, inputHash });
+    });
+  } catch (e) {
+    if (e instanceof SwissPreviewRollback) return e.preview;
+    throw e;
+  }
+  throw new Error("swiss preview: the transaction committed instead of rolling back");
+}
+
+/**
+ * Pair the Swiss round `round` that `previewSwissNextRound` proposed, with its `inputHash`. Under the division lock:
+ *  - MD_ALREADY (409) when that round is already seated (the next round to pair is past it, or none is left);
+ *  - MD_STALE (409) when the next round to pair is an earlier one (a round was unpaired since), or `swissInputHash` no
+ *    longer matches (a result, the field, the stage's config or its lots draws changed since the preview);
+ *  - else the desk's Generate, committed and published exactly as `generateStageFixtures` does. Its inputs are the
+ *    preview's, lots draw included, and the pairing is a function of them, so it seats the pairings the preview showed.
+ * A `round` that is not a positive integer is refused 422 before anything is read.
+ */
+export async function pairSwissNextRound(
+  auth: AuthCtx,
+  stageId: string,
+  inputHash: string,
+  round: number,
+): Promise<{ round: number }> {
+  if (!Number.isInteger(round) || round < 1) throw new HttpError(422, "round must be a positive whole number");
+  const write = await withTenant(auth.orgId, async (tx) => {
+    const { rows } = await lockSwissStageForApproval(tx, stageId);
+    const next = nextUnseatedSwissRound(rows);
+    if (next === null || next > round) throw new HttpError(409, "this Swiss round is already paired", MD_ALREADY_CODE);
+    if (next < round || (await swissInputHash(tx, stageId)) !== inputHash) {
+      throw new HttpError(409, "the draw changed since it was previewed; review it again", MD_STALE_CODE);
+    }
+    return generateStageFixturesTx(tx, auth, stageId, {});
+  });
+  await afterGenerateCommit(auth, stageId, write);
+  if (write.outcome.created > 0) afterScheduleWrite(write.divisionId, write.competitionId, "schedule", []);
+  return { round };
+}
+

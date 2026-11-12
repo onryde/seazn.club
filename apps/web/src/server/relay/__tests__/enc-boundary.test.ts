@@ -67,17 +67,23 @@ const LICHESS_OWNER = "server/usecases/external-accounts.ts";
 const YOUTUBE_COLUMNS = ["refresh_token_enc"];
 const YOUTUBE_OWNER = "server/youtube/token-store.ts";
 
-/** Quick match (V506, spec 2026-11-03 §7.1, C19): the home-page token's sealed envelope on `quick_matches`, under
- *  DEVICE_LINK_KEK. SQL over it lives in exactly two files: the create that writes it, and the home read that returns it
- *  on `QuickMatchRow.tokenEnc` (plan 1 Task 7) — the one row every later reader rebuilds the link from (the pad's back
- *  link, the saved list), so none of them names the column. A third reader joins these owners or reads the row. */
-const QUICK_MATCH_COLUMNS = ["token_enc"];
+/** `token_enc` is named by TWO tables, each sealing its own token under DEVICE_LINK_KEK, so the column is one entry and
+ *  its owners are the union (a scan by column name cannot tell the tables apart):
+ *  - Quick match (V506, spec 2026-11-03 §7.1, C19): the home-page token's sealed envelope on `quick_matches`. SQL over it
+ *    lives in exactly two files: the create that writes it, and the home read that returns it on
+ *    `QuickMatchRow.tokenEnc` (plan 1 Task 7) — the one row every later reader rebuilds the link from (the pad's back
+ *    link, the saved list), so none of them names the column. A third reader joins these owners or reads the row.
+ *  - Match Day codes (V509, capture S4 design §3): the code's token at rest, so the desk can show the same QR again.
+ *    Not `tok_enc` — that name is the stream code's, and only server/relay/** may name it. */
+const TOKEN_ENC_COLUMNS = ["token_enc"];
 const QUICK_MATCH_OWNERS = ["server/usecases/quick-match-create.ts", "server/usecases/quick-match-home.ts"];
+const MATCH_DAY_OWNER = "server/usecases/match-day-codes.ts";
+const TOKEN_ENC_OWNERS = [...QUICK_MATCH_OWNERS, MATCH_DAY_OWNER];
 
 describe("*_enc columns never leave their owners", () => {
   it("every declared *_enc column is owned — a new one cannot walk past this test", () => {
     expect(ENC_COLUMNS).toEqual(
-      [...STREAM_COLUMNS, ...DEVICE_LINK_COLUMNS, ...LICHESS_COLUMNS, ...YOUTUBE_COLUMNS, ...QUICK_MATCH_COLUMNS].sort(),
+      [...STREAM_COLUMNS, ...DEVICE_LINK_COLUMNS, ...LICHESS_COLUMNS, ...YOUTUBE_COLUMNS, ...TOKEN_ENC_COLUMNS].sort(),
     );
   });
 
@@ -129,13 +135,26 @@ describe("*_enc columns never leave their owners", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("outside __tests__, only quick-match-create.ts and quick-match-home.ts name token_enc — and both do", () => {
-    const pattern = new RegExp(`\\b(${QUICK_MATCH_COLUMNS.join("|")})\\b`);
+  it("outside __tests__, only quick-match-create.ts, quick-match-home.ts and match-day-codes.ts name token_enc — and all three do", () => {
+    const pattern = new RegExp(`\\b(${TOKEN_ENC_COLUMNS.join("|")})\\b`);
     const naming = walk(SRC)
       .map((f) => relative(SRC, f))
       .filter((f) => !f.split("/").includes("__tests__"))
       .filter((f) => pattern.test(readFileSync(join(SRC, f), "utf8")));
-    expect([...naming].sort()).toEqual([...QUICK_MATCH_OWNERS].sort());
+    expect([...naming].sort()).toEqual([...TOKEN_ENC_OWNERS].sort());
+  });
+
+  it("each token_enc owner names only its own table: quick_matches for the two quick-match files, match_day_codes for match-day-codes.ts", () => {
+    // The scan above is by column name, so it cannot tell the two tables apart; this one can. An owner naming the OTHER
+    // table's name is a cross-read of a sealed token.
+    const table = { quick: /\bquick_matches\b/, day: /\bmatch_day_codes\b/ };
+    const src = (f: string): string => readFileSync(join(SRC, f), "utf8");
+    for (const f of QUICK_MATCH_OWNERS) {
+      expect(table.quick.test(src(f)), `${f} names quick_matches`).toBe(true);
+      expect(table.day.test(src(f)), `${f} must not name match_day_codes`).toBe(false);
+    }
+    expect(table.day.test(src(MATCH_DAY_OWNER)), `${MATCH_DAY_OWNER} names match_day_codes`).toBe(true);
+    expect(table.quick.test(src(MATCH_DAY_OWNER)), `${MATCH_DAY_OWNER} must not name quick_matches`).toBe(false);
   });
 });
 

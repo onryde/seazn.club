@@ -253,8 +253,9 @@ interface DivisionRow {
   tz: string | null;
 }
 
-/** One of this competition's matches, as the board reads it. */
-interface FixtureRow {
+/** One of this competition's matches, as the board reads it. Exported for the Match Day code's day read
+ *  (match-day-code-view.ts, MD-1 Task 3), which lists the same rows. */
+export interface FixtureRow {
   id: string;
   division_id: string;
   division_name: string;
@@ -281,6 +282,8 @@ interface FixtureRow {
   started_at: Date | null;
   /** Its call's time while the call holds; null otherwise. */
   called_at: Date | null;
+  /** `fixtures.finished_at` (V430/V432: stamped when the match enters the finished set, cleared when it leaves it). */
+  finished_at: Date | null;
 }
 
 /** What holds a court now, from any competition: a match playing (rank 0) or a call that holds (rank 1). */
@@ -308,7 +311,7 @@ interface BoardQueued {
   estimated_at: Date;
 }
 
-interface BoardCourt {
+export interface BoardCourt {
   court_id: string;
   court_name: string;
   venue_id: string;
@@ -325,7 +328,7 @@ interface BoardCourt {
   closure: CourtClosure | null;
 }
 
-interface Board {
+export interface Board {
   comp: CompRow;
   tz: string;
   day: string;
@@ -336,7 +339,12 @@ interface Board {
   noCourt: FixtureRow[];
   /** This competition's matches in play on no court, in its live divisions, in kick-off order (`playingNoCourtOf`). */
   playingNoCourt: FixtureRow[];
+  /** This competition's matches on a court that finished within their division's day, newest first; read only when asked
+   *  for (the Match Day code's day read lists them under their court, capture S4 design §5). */
+  finished: FixtureRow[];
   courtNames: Map<string, string>;
+  /** The competition's live (not archived) divisions: the ones the desk's no-court lists draw from (MD-1 fix I1). */
+  liveDivisions: ReadonlySet<string>;
 }
 
 /** Test-only (task F2): runs inside `readBoard`'s transaction right after the named read, so a test can put a concurrent write
@@ -364,8 +372,14 @@ function playingNoCourtOf(rows: readonly FixtureRow[], liveDivisions: ReadonlySe
     .sort((a, b) => kickoffKey(a) - kickoffKey(b) || a.fixture_no - b.fixture_no || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
-/** The board: everything the view and the candidates read, in one tenant transaction. */
-async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCourt: boolean }): Promise<Board> {
+/** The board: everything the view and the candidates read, in one tenant transaction. Exported for the Match Day code's
+ *  day read (match-day-code-view.ts), the one other surface that lists a competition's day by court. */
+export async function readBoard(
+  tx: Tx,
+  competitionId: string,
+  now: Date,
+  opts: { noCourt: boolean; finished?: boolean },
+): Promise<Board> {
   const [comp] = await tx<CompRow[]>`
     select c.id, c.name, c.slug, o.slug as org_slug, o.timezone as org_tz
       from competitions c join organizations o on o.id = c.org_id
@@ -412,7 +426,8 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
            h.display_name as home, a.display_name as away, f.round_no, f.fixture_no,
            ms.summary->>'headline' as headline, ms.summary,
            null::timestamptz as started_at,
-           ${liveCallOf(tx`f.id`)} as called_at
+           ${liveCallOf(tx`f.id`)} as called_at,
+           f.finished_at
       from fixtures f
       join divisions d on d.id = f.division_id
       join stages s on s.id = f.stage_id
@@ -594,7 +609,29 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
     }),
   );
   const venuesToday = [...new Set(orgCourts.map((c) => c.venue_id))].filter((id) => withMatchToday.has(id));
-  return { comp, tz, day, courts, venuesToday, noCourt, playingNoCourt: playingNoCourtOf(rows, liveDivisions), courtNames };
+  // Finished today (asked for by the Match Day code's read only): a match of a live division (the day table holds live
+  // divisions only, so an archived one's `w` is null and the range is false) that finished on a court within its own
+  // division's day. A cancelled match was never played (`CANCELLED`). Newest first, then by id.
+  const finishedToday = opts.finished
+    ? (await readRows(tx`
+        f.court_id is not null and f.finished_at is not null and f.status <> ${CANCELLED}
+          and f.finished_at >= w.day_from and f.finished_at < w.day_to`)).sort(
+        (a, b) =>
+          new Date(b.finished_at!).getTime() - new Date(a.finished_at!).getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      )
+    : [];
+  return {
+    comp,
+    tz,
+    day,
+    courts,
+    venuesToday,
+    noCourt,
+    playingNoCourt: playingNoCourtOf(rows, liveDivisions),
+    finished: finishedToday,
+    courtNames,
+    liveDivisions,
+  };
 }
 
 /**

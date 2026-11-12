@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seazn.club/contracts/capture-matchday-open.v1.json",
+  "title": "Seazn Match Day code open, v1: POST /api/v1/match-day-code/fixtures/{id}/scoring-link",
+  "description": "What a phone holding a Match Day code gets when it opens a match (capture S4 Match Day design 2026-11-07 §6, §9.4; MD-1 Task 4), authenticated by Authorization: Bearer md_… only, with no body. The answer is `data` in the v1 envelope {ok: true, data, requestId}; $defs.refusal is `error` in {ok: false, error, requestId}. Vendored into the capture repo; its sha256, parity with its zod twin and its fixtures are pinned by apps/web/src/server/api-v1/__tests__/capture-contract.test.ts.",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "link (the match's scoring link) or finished (the match is finalized or cancelled: there is nothing to score, and nothing was written).",
+          "type": "string",
+          "const": "link"
+        },
+        "url": {
+          "description": "link only: the match's own Remote scoring link, https://{host}/score/dl_{43 base64url}, the printed QR's when the match has one. Re-shown on every open, never a second link beside a live one, and nothing is revoked. A credential: the phone hands it to its scoring pad and stores it as a scan of that QR would be.",
+          "type": "string",
+          "pattern": "^https:\\/\\/[^/]+\\/score\\/dl_[A-Za-z0-9_-]{43}$"
+        },
+        "sport_key": {
+          "description": "link only: the match's sport: it decides which pad the phone opens.",
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "kind",
+        "url",
+        "sport_key"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "link (the match's scoring link) or finished (the match is finalized or cancelled: there is nothing to score, and nothing was written).",
+          "type": "string",
+          "const": "finished"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "refusal": {
+      "description": "Every refusal, the envelope's error: 401 MD_UNKNOWN (no such code, or no md_ bearer), 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with opens_at), 403 MD_OUT_OF_SCOPE (the match is not in the code's competition, venue or courts, or not on its day, or its division is archived, at the moment of asking). A 404 NOT_FOUND (no such match) and a 429 RATE_LIMITED (with Retry-After) are the v1 envelope's own answers, outside this shape.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "The machine word the phone keys its copy on: one of the plan's MD_ words, a closed list. The v1 envelope's own answers (429 RATE_LIMITED, 404 NOT_FOUND, 500 INTERNAL) are not md_ refusals and are outside this shape; the phone reads them by status.",
+          "type": "string",
+          "enum": [
+            "MD_UNKNOWN",
+            "MD_WITHDRAWN",
+            "MD_ENDED",
+            "MD_NOT_OPEN",
+            "MD_OUT_OF_SCOPE",
+            "MD_NO_APPROVE",
+            "MD_STALE",
+            "MD_ALREADY",
+            "MD_TIES"
+          ]
+        },
+        "message": {
+          "description": "A plain English developer string; the phone never shows it.",
+          "type": "string"
+        },
+        "opens_at": {
+          "description": "MD_NOT_OPEN only: when the code's day starts, as a UTC instant.",
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

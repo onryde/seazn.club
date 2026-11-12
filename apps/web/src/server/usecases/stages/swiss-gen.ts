@@ -370,6 +370,14 @@ export async function swissPairsInColour(
   return roundOnePair?.coloured === true;
 }
 
+/** Whether a Pair in `pairing` mode ranks the stage's table (`rankedStageStandings`), which stores any lots draw a tie in
+ *  that table needs: a rank-adjacent round once a seated board is decided. The ONE authority, read by `swissGen` and by
+ *  the Match Day preview (`previewSwissNextRound`), which commits that draw before its rolled-back Pair so the approve
+ *  pairs over the very draw the preview showed. */
+export function swissPairRanksTable(pairing: SwissPairingMode, existing: readonly SwissExistingFixture[]): boolean {
+  return pairing === "rank_adjacent" && existing.some((f) => isSwissBoardSeated(f) && DECIDED.has(f.status));
+}
+
 // Swiss shell fixtures (2026-09-18 programme): first Generate mints empty rows for
 // every round the organiser declared in `config.rounds`; Pair next (a later
 // Generate when shells already exist) seats one round at a time onto those
@@ -542,7 +550,7 @@ export async function swissGen(
   const score = new Map(field.map((e) => [e.id, points.get(e.id) ?? 0]));
 
   const cascadeRank = new Map<string, number>();
-  if (rankAdjacent && existing.some((f) => isSwissBoardSeated(f) && DECIDED.has(f.status))) {
+  if (swissPairRanksTable(pairing, existing)) {
     const rows = await rankedStageStandings(tx, stageId);
     for (const [i, row] of rows.entries()) {
       cascadeRank.set(row.entrantId, row.rank ?? i + 1);

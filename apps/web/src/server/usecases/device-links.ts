@@ -363,37 +363,48 @@ export type PhoneScoringLink =
  */
 export async function provideDeviceLinkForPhone(code: HolderVerifiedCode): Promise<PhoneScoringLink> {
   const { orgId, fixtureId, issuedBy } = code;
-  return withTenant(orgId, async (tx) => {
-    await lockFixtureLinks(tx, fixtureId);
-    const status = await linkableStatus(tx, fixtureId);
-    if (isFinishedFixtureStatus(status)) return { kind: "finished", status };
-    const live = await newestLiveLink(tx, fixtureId);
-    if (live && live.secret_enc) {
-      let secret: string | null = null;
-      try {
-        secret = openSecret(live.secret_enc);
-      } catch (e) {
-        if (e instanceof HttpError) throw e; // the KEK is missing: a configuration gap, fail closed
-        log.warn({ linkId: live.id, fixtureId }, "device link (capture phone): sealed secret will not open; passed over, left as it is, a new link issued");
-      }
-      if (secret !== null) {
-        if (hashDeviceLinkToken(secret) === live.token_hash) return { kind: "link", secret, linkId: live.id, minted: false };
-        log.warn({ linkId: live.id, fixtureId }, "device link (capture phone): sealed secret does not match the row's token hash; passed over, left as it is, a new link issued");
-      }
+  return withTenant(orgId, (tx) => provideSealedLink(tx, fixtureId, issuedBy));
+}
+
+/**
+ * The no-revoke core both phone doors share (W27's above; a Match Day code's open, capture S4 Match Day design §6, MD-1
+ * Task 4): in the caller's tenant transaction, under the fixture's link lock, the match's newest live sealed link if it
+ * opens and hashes to its row, otherwise a new sealed link beside whatever is there, `issued_by` the given issuer. A
+ * finalized or cancelled match is `{kind: "finished"}`, nothing written. It NEVER revokes, never calls `mintInTx` or
+ * `ensureLocked` (which do). A fixture this tenant cannot see is the 404 `linkableStatus` throws. The new row's `org_id`
+ * is the fixture's own, read under the same RLS. The secret is the caller's to put on the wire: it is never logged here.
+ */
+export async function provideSealedLink(tx: Tx, fixtureId: string, issuer: string): Promise<PhoneScoringLink> {
+  await lockFixtureLinks(tx, fixtureId);
+  const status = await linkableStatus(tx, fixtureId);
+  if (isFinishedFixtureStatus(status)) return { kind: "finished", status };
+  const live = await newestLiveLink(tx, fixtureId);
+  if (live && live.secret_enc) {
+    let secret: string | null = null;
+    try {
+      secret = openSecret(live.secret_enc);
+    } catch (e) {
+      if (e instanceof HttpError) throw e; // the KEK is missing: a configuration gap, fail closed
+      log.warn({ linkId: live.id, fixtureId }, "device link (capture phone): sealed secret will not open; passed over, left as it is, a new link issued");
     }
-    const secret = mintDeviceLinkSecret();
-    const sealed = sealSecret(secret); // before the insert: a missing KEK writes nothing
-    // Stamped past every link the fixture has, in SQL (a JS Date would drop the microseconds and could land BEFORE the
-    // row it must follow; `greatest` ignores the null of "no link yet"): `now()` is this transaction's start, and a row
-    // written under a clock that has since stepped back would otherwise stay the newest — and the console's ensure would
-    // revoke the phone's link to replace it.
-    const [created] = await tx<{ id: string }[]>`
-      insert into device_links (org_id, fixture_id, token_hash, secret_enc, label, issued_by, expires_at, created_at)
-      values (${orgId}, ${fixtureId}, ${hashDeviceLinkToken(secret)}, ${sealed}, null, ${issuedBy}, null,
-              greatest(now(), (select max(created_at) + interval '1 microsecond' from device_links where fixture_id = ${fixtureId})))
-      returning id`;
-    return { kind: "link", secret, linkId: created.id, minted: true };
-  });
+    if (secret !== null) {
+      if (hashDeviceLinkToken(secret) === live.token_hash) return { kind: "link", secret, linkId: live.id, minted: false };
+      log.warn({ linkId: live.id, fixtureId }, "device link (capture phone): sealed secret does not match the row's token hash; passed over, left as it is, a new link issued");
+    }
+  }
+  const secret = mintDeviceLinkSecret();
+  const sealed = sealSecret(secret); // before the insert: a missing KEK writes nothing
+  // Stamped past every link the fixture has, in SQL (a JS Date would drop the microseconds and could land BEFORE the
+  // row it must follow; `greatest` ignores the null of "no link yet"): `now()` is this transaction's start, and a row
+  // written under a clock that has since stepped back would otherwise stay the newest — and the console's ensure would
+  // revoke the phone's link to replace it.
+  const [created] = await tx<{ id: string }[]>`
+    insert into device_links (org_id, fixture_id, token_hash, secret_enc, label, issued_by, expires_at, created_at)
+    values ((select org_id from fixtures where id = ${fixtureId}), ${fixtureId}, ${hashDeviceLinkToken(secret)}, ${sealed},
+            null, ${issuer}, null,
+            greatest(now(), (select max(created_at) + interval '1 microsecond' from device_links where fixture_id = ${fixtureId})))
+    returning id`;
+  return { kind: "link", secret, linkId: created.id, minted: true };
 }
 
 /** Revoke one link (immediate 401 for the holder). */

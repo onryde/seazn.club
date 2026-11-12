@@ -346,6 +346,39 @@ export const CreatedDeviceLink = DeviceLink.extend({
   secret: z.string(),
 });
 
+/** A Match Day code's scope (capture S4 design §3; MD-1): the whole competition (matches with no court included), one
+ *  venue's courts, or exactly these courts. */
+export const MatchDayCodeScope = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("competition") }),
+  z.object({ kind: z.literal("venue"), venue_id: Uuid }),
+  z.object({ kind: z.literal("courts"), court_ids: z.array(Uuid).min(1).max(200) }),
+]);
+export type MatchDayCodeScope = z.infer<typeof MatchDayCodeScope>;
+
+/** POST /competitions/{id}/match-day-codes: mint a Match Day code (editor session only). */
+export const CreateMatchDayCode = z.object({
+  scope: MatchDayCodeScope,
+  /** `YYYY-MM-DD`, the day the code opens, on the competition's clock. Omitted = today there. */
+  day: z.iso.date().optional(),
+  /** "Can approve draws": off unless ticked. */
+  can_approve: z.boolean().default(false),
+});
+export type CreateMatchDayCode = z.infer<typeof CreateMatchDayCode>;
+
+/** A Match Day code on the desk. `url` is the QR's payload, `{origin}/day/md_…`: a credential, shown to the editor who
+ *  manages it and to nobody else; null in the list for a code whose sealed copy will not open (no QR to show again, and
+ *  still withdrawable: its printed QR keeps working until it is withdrawn). `opens_at` / `expires_at` are 00:00 and 24:00 of `day` in the competition's zone. */
+export const MatchDayCode = z.object({
+  id: Uuid,
+  url: z.string().nullable(),
+  scope: MatchDayCodeScope,
+  day: z.iso.date(),
+  opens_at: z.string(),
+  expires_at: z.string(),
+  can_approve: z.boolean(),
+});
+export type MatchDayCode = z.infer<typeof MatchDayCode>;
+
 /** POST /competitions/{id}/exports/scorer-sheets (scorer sheets §4.4). */
 export const ScorerSheetsRequest = z
   .object({
