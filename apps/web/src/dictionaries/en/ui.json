@@ -8438,6 +8438,7 @@
   "quickMatch.flash.adhocLimit": "This quick match already has {max} extra matches, the most it can take.",
   "quickMatch.flash.notReady": "That match can't be scored yet: it waits for earlier results.",
   "quickMatch.flash.sameSide": "Pick two different sides.",
+  "quickMatch.flash.leagueOnly": "Only a league can take an extra match.",
   "quickMatch.flash.notFound": "That match or side isn't part of this quick match.",
   "quickMatch.flash.generic": "Something went wrong. Try again.",
   "quickMatch.flash.emailLimited": "We didn't email the link this time. Share or bookmark this page now.",

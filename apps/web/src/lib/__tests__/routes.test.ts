@@ -153,6 +153,12 @@ describe("routes", () => {
     // The same home the token's own builder names, so the two never drift apart.
     expect(routes.quickMatchScore("qm_abc", "f")).toBe(`${routes.quickMatch("qm_abc")}/score/f`);
   });
+
+  it("builds a quick match home's 'Add a match' post: the home token in the path, under the home (plan 2 Task 8)", () => {
+    expect(routes.quickMatchAddMatch("qm_abc")).toBe("/q/qm_abc/add-match");
+    // The same home the token's own builder names, so the two never drift apart.
+    expect(routes.quickMatchAddMatch("qm_abc")).toBe(`${routes.quickMatch("qm_abc")}/add-match`);
+  });
 });
 
 describe("routes.orgSponsors (R4 S11: the Sponsors hub is top-level, not a Settings tab)", () => {

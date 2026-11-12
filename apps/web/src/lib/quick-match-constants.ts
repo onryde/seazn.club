@@ -77,8 +77,14 @@ export const QUICK_MATCH_ERRORS = {
   /** A home action refused or failed with no code of its own to show: a finalized or cancelled match (the device link's
    *  code-less 422), a server without DEVICE_LINK_KEK, an unexpected error (plan 2 T6). The home shows its generic line. */
   ACTION_FAILED: "QUICK_MATCH_ACTION_FAILED",
-  /** "Add a match" past `QUICK_MATCH_MAX_ADHOC` extra matches (plan 2 Task 8, pre-flight D4). */
+  /** "Add a match" past `QUICK_MATCH_MAX_ADHOC` extra matches (plan 2 Task 8, pre-flight D4). The home shows
+   *  `quickMatch.flash.adhocLimit` with the cap as `{max}`. */
   ADHOC_LIMIT: "QUICK_MATCH_ADHOC_LIMIT",
+  /** "Add a match" naming the same side twice (plan 2 Task 8): the home shows `quickMatch.flash.sameSide`. */
+  SAME_SIDE: "QUICK_MATCH_SAME_SIDE",
+  /** "Add a match" posted for a knockout (spec C5: a knockout has a winner by construction and takes no extra match; plan 2
+   *  Task 8). The home never draws the control there, so only a crafted post meets it: `quickMatch.flash.leagueOnly`. */
+  LEAGUE_ONLY: "QUICK_MATCH_LEAGUE_ONLY",
   /** A programmer error, never a guest's refusal (500): a create given an email but no base URL to build the link mail's
    *  link from (`createQuickMatch`, plan 3 Amend T1 [B2]). The create route always passes one, and reports a 5xx as a fault
    *  whatever its code. */

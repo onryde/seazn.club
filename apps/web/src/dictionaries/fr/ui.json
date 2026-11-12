@@ -8438,6 +8438,7 @@
   "quickMatch.flash.adhocLimit": "Ce match rapide compte déjà {max} matchs supplémentaires, le maximum possible.",
   "quickMatch.flash.notReady": "Ce match ne peut pas encore être marqué : il attend des résultats précédents.",
   "quickMatch.flash.sameSide": "Choisissez deux participants différents.",
+  "quickMatch.flash.leagueOnly": "Seul un championnat peut recevoir des matchs supplémentaires.",
   "quickMatch.flash.notFound": "Ce match ou ce participant ne fait pas partie de ce match rapide.",
   "quickMatch.flash.generic": "Un problème est survenu. Réessayez.",
   "quickMatch.flash.emailLimited": "Nous n'avons pas envoyé le lien par e-mail cette fois. Partagez cette page ou ajoutez-la à vos favoris dès maintenant.",

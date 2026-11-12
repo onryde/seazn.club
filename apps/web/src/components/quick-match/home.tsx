@@ -20,7 +20,7 @@ import type { EntrantKind } from "@seazn/engine/sport";
 import type { Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
 import type { TKey } from "@/lib/i18n-runtime";
-import { QUICK_MATCH_ERRORS, QUICK_MATCH_EXPIRY_DAYS } from "@/lib/quick-match-constants";
+import { QUICK_MATCH_ERRORS, QUICK_MATCH_EXPIRY_DAYS, QUICK_MATCH_MAX_ADHOC } from "@/lib/quick-match-constants";
 import { roundRoleFor } from "@/lib/round-role-label";
 import { routes } from "@/lib/routes";
 import { compactScore } from "@/lib/match-day/view";
@@ -44,13 +44,22 @@ export interface QuickMatchCopy {
   pub: (key: TKey, vars?: Vars) => string;
 }
 
+/** What "Add a match" offers (Task 8, spec C5): every side, in the order the guest typed them, and the two its selects open
+ *  at: the table's top two (the decider a level top asks for), or the first two sides when there is no table yet. */
+export interface AddMatchView {
+  sides: { id: string; name: string }[];
+  home: string;
+  away: string;
+}
+export type AddMatchSlot = (view: AddMatchView) => ReactNode;
+
 /** What Tasks 6, 7 and 8 put on the home. Each is optional: an empty slot renders nothing. */
 export interface QuickMatchSlots {
   /** The Score control of a playable match: in the hero, and on its list row. Never offered for a waiting seat (C18). */
   score?: ScoreSlot;
   share?: ReactNode;
-  /** League only (C5): a knockout never shows it. */
-  addMatch?: ReactNode;
+  /** League only (C5): a knockout never asks for it. */
+  addMatch?: AddMatchSlot;
 }
 
 const KIND_KEY = {
@@ -67,7 +76,8 @@ const FORMAT_KEY = {
 /**
  * The home's flash (pre-flight D3): a home action's refusal lands back here as `?e=<code>` (QUICK_MATCH_ERRORS), and each
  * code reads as its own `quickMatch.flash.*` line in the viewer's language. The codes are the Score route's
- * (app/q/[token]/score/[fixtureId]/route.ts); Task 8 adds Add-a-match's. An expiry has none: the home is then the dead
+ * (app/q/[token]/score/[fixtureId]/route.ts) and Add-a-match's (app/q/[token]/add-match/route.ts: the cap, whose line names
+ * QUICK_MATCH_MAX_ADHOC as `{max}`, the same side twice, and a knockout). An expiry has none: the home is then the dead
  * screen, which ignores `?e=` (D16; T6 review m1). A repeated `?e=` reads its first, a blank one is
  * no flash, and anything else (a crafted value, a code of another page) is the generic line: the raw value never reaches
  * the page.
@@ -80,6 +90,8 @@ export type HomeFlashTone = "refusal" | "info";
 export interface HomeFlash {
   key: MessageKey;
   tone: HomeFlashTone;
+  /** The line's placeholders, from the constants (never typed into the copy). */
+  vars?: Vars;
 }
 const FLASH: Readonly<Record<string, HomeFlash>> = {
   [QUICK_MATCH_ERRORS.LINK_LIMITED]: { key: "quickMatch.flash.linkLimit", tone: "refusal" },
@@ -87,6 +99,9 @@ const FLASH: Readonly<Record<string, HomeFlash>> = {
   [QUICK_MATCH_ERRORS.SIDES_UNKNOWN]: { key: "quickMatch.flash.notReady", tone: "refusal" },
   [QUICK_MATCH_ERRORS.ACTION_FAILED]: { key: "quickMatch.flash.generic", tone: "refusal" },
   [QUICK_MATCH_ERRORS.EMAIL_LIMITED]: { key: "quickMatch.flash.emailLimited", tone: "info" },
+  [QUICK_MATCH_ERRORS.ADHOC_LIMIT]: { key: "quickMatch.flash.adhocLimit", tone: "refusal", vars: { max: QUICK_MATCH_MAX_ADHOC } },
+  [QUICK_MATCH_ERRORS.SAME_SIDE]: { key: "quickMatch.flash.sameSide", tone: "refusal" },
+  [QUICK_MATCH_ERRORS.LEAGUE_ONLY]: { key: "quickMatch.flash.leagueOnly", tone: "refusal" },
 };
 const GENERIC_FLASH: HomeFlash = { key: "quickMatch.flash.generic", tone: "refusal" };
 export function homeFlash(e: string | string[] | undefined): HomeFlash | null {
@@ -113,6 +128,8 @@ interface Built {
   standings: StandingsView | null;
   draw: DrawRound[] | null;
   matches: MatchView[];
+  /** A league's "Add a match" (C5); null for a knockout, and for a quick match with fewer than two sides to pick. */
+  addMatch: AddMatchView | null;
 }
 
 /** Each side's own line from the engine's summary (`ScoreSummary.perSide[{entrantId, line}]`), by entrant: null unless it
@@ -329,6 +346,15 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy): Built
     draw = [...byRound.entries()].sort(([a], [b]) => a - b).map(([roundNo, cards]) => ({ roundNo, cards }));
   }
 
+  // "Add a match" (C5, Task 8): the decider a level top asks for, so its selects open at the table's top two, in the
+  // stored table's own order (the producer ranks it); before there is a table, at the first two sides as typed.
+  let addMatch: Built["addMatch"] = null;
+  if (!knockout && home.sides.length >= 2) {
+    const ranked = ((home.standings?.rows ?? []) as { entrantId: string }[]).map((r) => r.entrantId);
+    const [first, second] = ranked.length >= 2 ? ranked : home.sides.map((s) => s.entrantId);
+    addMatch = { sides: home.sides.map((s) => ({ id: s.entrantId, name: s.name })), home: first!, away: second! };
+  }
+
   return {
     // The kind only where the guest chose it (the setup page shows its kind switch only then): "Chess · League".
     eyebrow: [t(home.sport.labelKey), ...(home.kindChosen ? [t(KIND_KEY[home.kind])] : []), t(FORMAT_KEY[home.row.format])].join(
@@ -344,6 +370,7 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy): Built
     standings,
     draw,
     matches,
+    addMatch,
   };
 }
 
@@ -424,7 +451,7 @@ export function QuickMatchHomeView({
                 score={slots.score}
               />
             ) : null}
-            {home.row.format === "league" && slots.addMatch ? <div className="min-w-0">{slots.addMatch}</div> : null}
+            {v.addMatch && slots.addMatch ? <div className="min-w-0">{slots.addMatch(v.addMatch)}</div> : null}
             <p data-testid="qm-anyone" className="text-xs text-[#8d7fc0]">
               {t("quickMatch.home.anyoneCanScore")}
             </p>

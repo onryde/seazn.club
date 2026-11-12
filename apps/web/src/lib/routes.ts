@@ -154,6 +154,9 @@ export const routes = {
   /** A quick match home's Score post for one match (plan 2 Task 6; "Edit result" posts it too): the home token and the
    *  fixture both ride the path, never a query string, under the same scrubbed `/q/` root. */
   quickMatchScore: (token: string, fixtureId: string) => `/q/${token}/score/${fixtureId}`,
+  /** A quick match home's "Add a match" post (plan 2 Task 8, spec C5): the home token in the path, the two sides in the
+   *  form body, under the same scrubbed `/q/` root. */
+  quickMatchAddMatch: (token: string) => `/q/${token}/add-match`,
   /** The quick match setup screen, `/<lang>/play` (plan 2 Task 4). Only the locale-PREFIXED path resolves (proxy.ts rewrites
    *  an unprefixed marketing path only when it is listed). A value that names no shipped locale builds the default's page,
    *  so this never builds a root path (`/join/play`) out of whatever it was handed. */

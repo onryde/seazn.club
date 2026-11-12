@@ -19,6 +19,9 @@
 // here: the island puts it on the page's own origin, so no forwarded host is trusted (B7). Its two shared children
 // (`ShareButton`, `SeaznQrImage`) read their own words through `useMsg`, so the island sits in a `DictProvider` holding
 // just those keys (`share.*`, `qr.*`) in the viewer's language: never the whole ui dictionary in the flight payload.
+//
+// Task 8: the Add-a-match slot (a league's decider, C5): `QuickMatchAddMatch` takes its action
+// (`routes.quickMatchAddMatch(token)`), the sides as ids and names, the two the view picked, and its words; nothing of the read.
 import type { Metadata } from "next";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { HtmlLang } from "@/components/i18n/html-lang";
@@ -29,6 +32,7 @@ import {
   type QuickMatchCopy,
   type QuickMatchSlots,
 } from "@/components/quick-match/home";
+import { QuickMatchAddMatch } from "@/components/quick-match/add-match";
 import { ClearFlashParam } from "@/components/quick-match/clear-flash-param";
 import { matchSidesId } from "@/components/quick-match/match-list";
 import { QuickMatchScoreForm } from "@/components/quick-match/score-form";
@@ -117,6 +121,21 @@ export default async function QuickMatchHomePage({
         />
       </DictProvider>
     ),
+    // League only (the view asks for it only there, C5): the two selects open at the view's pick, the table's top two.
+    addMatch: (view) => (
+      <QuickMatchAddMatch
+        action={routes.quickMatchAddMatch(token)}
+        sides={view.sides}
+        home={view.home}
+        away={view.away}
+        labels={{
+          open: copy.t("quickMatch.home.addMatch"),
+          home: copy.t("quickMatch.addMatch.home"),
+          away: copy.t("quickMatch.addMatch.away"),
+          submit: copy.t("quickMatch.addMatch.submit"),
+        }}
+      />
+    ),
   };
   return (
     <>
@@ -127,7 +146,7 @@ export default async function QuickMatchHomePage({
         home={home}
         copy={copy}
         slots={slots}
-        flash={flash ? { text: copy.t(flash.key), tone: flash.tone } : null}
+        flash={flash ? { text: copy.t(flash.key, flash.vars), tone: flash.tone } : null}
       />
     </>
   );

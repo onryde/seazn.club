@@ -42,7 +42,7 @@ import * as homeModule from "@/components/quick-match/home";
 import * as standingsModule from "@/components/quick-match/standings";
 import * as drawModule from "@/components/quick-match/draw";
 import * as listModule from "@/components/quick-match/match-list";
-import { QuickMatchHomeShapeError, QuickMatchHomeView, type QuickMatchCopy } from "@/components/quick-match/home";
+import { QuickMatchHomeShapeError, QuickMatchHomeView, type AddMatchView, type QuickMatchCopy } from "@/components/quick-match/home";
 import { QuickMatchShare } from "@/components/quick-match/share";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import en from "@/dictionaries/en/ui.json";
@@ -248,7 +248,10 @@ const stubSlots = () => ({
     <span data-testid="slot-score" data-fixture-id={f.id} data-live={String(f.live)} data-place={place} />
   )),
   share: <span data-testid="slot-share" />,
-  addMatch: <span data-testid="slot-add-match" />,
+  // Task 8: handed what "Add a match" offers (every side, and the two its selects open at).
+  addMatch: vi.fn((v: AddMatchView) => (
+    <span data-testid="slot-add-match" data-home={v.home} data-away={v.away} data-sides={v.sides.map((s) => s.id).join(",")} />
+  )),
 });
 async function renderView(home: QuickMatchHome, slots = stubSlots()) {
   const tree = await expand(<QuickMatchHomeView home={home} copy={enCopy()} slots={slots} />);
@@ -384,6 +387,36 @@ describe("the empty case: a quick match with no match left", () => {
     // The empty case: nothing settled, nothing to edit.
     const none = await renderView({ ...empty, fixtures: [fixtures[3]!], next: fixtures[3]!, played: 0, total: 1 });
     expect(none.slots.score.mock.calls.filter(([, place]) => place === "edit")).toEqual([]);
+  });
+
+  // Task 8 (C5): "Add a match" is the decider a level top asks for, so it opens at the stored table's top two, in the
+  // table's own order (the producer ranks it), never the typed order; before there is a table, at the first two typed.
+  it("'Add a match' opens at the table's top two in the table's order, else the first two sides typed; one side gets none", async () => {
+    const row0 = empty.standings!.rows[0] as object;
+    const ranked = (ids: string[]) => ids.map((entrantId, i) => ({ ...row0, entrantId, rank: i + 1 }));
+    const typed = [{ entrantId: "e-2", name: "Two" }, { entrantId: "e-3", name: "Three" }, { entrantId: "e-1", name: "One" }];
+    const cases: [string, QuickMatchHome, { home: string; away: string }][] = [
+      // The table's top two differ from the first two typed: the witness that the table, not the typing, decides.
+      ["a table", { ...empty, sides: typed, standings: { ...empty.standings!, rows: ranked(["e-1", "e-3", "e-2"]) } }, { home: "e-1", away: "e-3" }],
+      ["no table yet", { ...empty, sides: typed, standings: null }, { home: "e-2", away: "e-3" }],
+    ];
+    let checked = 0;
+    for (const [name, home, pick] of cases) {
+      const { tree, slots } = await renderView(home);
+      expect(slots.addMatch, name).toHaveBeenCalledTimes(1);
+      expect(slots.addMatch.mock.calls[0]![0], name).toEqual({
+        sides: [{ id: "e-2", name: "Two" }, { id: "e-3", name: "Three" }, { id: "e-1", name: "One" }],
+        ...pick,
+      });
+      expect(byTestId(tree, "slot-add-match"), name).toHaveLength(1);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // A lone side has no match to add (a state no create makes; the guard still holds): the slot is never asked.
+    const lone: QuickMatchHome = { ...empty, sides: [empty.sides[0]!], standings: { ...empty.standings!, rows: ranked(["e-1"]) } };
+    const { tree, slots } = await renderView(lone);
+    expect(slots.addMatch).not.toHaveBeenCalled();
+    expect(byTestId(tree, "slot-add-match")).toHaveLength(0);
   });
 
   // Assumptions are guards: two states plan 1's read never produces are named refusals, never a blank or a code.
@@ -722,8 +755,9 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
     const placed = slots.score.mock.calls.map(([f, place]) => `${place}:${f.id}:${f.live}`).sort();
     expect(placed).toEqual([`hero:${semi.id}:false`, `row:${semi.id}:false`].sort());
     expect(byTestId(finalRow, "slot-score")).toHaveLength(0);
-    // A knockout has no "Add a match" (C5), even when the slot is offered.
+    // A knockout has no "Add a match" (C5), even when the slot is offered: the slot is never even asked.
     expect(byTestId(tree, "slot-add-match")).toHaveLength(0);
+    expect(slots.addMatch).not.toHaveBeenCalled();
     expect(byTestId(tree, "slot-share")).toHaveLength(1);
     await hardDeleteQuickMatchCompetition(out.competitionId);
   });
@@ -1022,6 +1056,14 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
     expect(slots.score.mock.calls.map(([f, place]) => `${place}:${f.live}`).sort()).toEqual(["hero:true", "row:true"]);
     expect(byTestId(tree, "slot-share")).toHaveLength(1);
     expect(byTestId(tree, "slot-add-match"), "a league takes a decider (C5)").toHaveLength(1);
+    // Handed both sides as typed, opening at the stored table's top two (the producer's own order).
+    expect(slots.addMatch).toHaveBeenCalledTimes(1);
+    const top = (h.standings!.rows as { entrantId: string }[]).map((r) => r.entrantId);
+    expect(slots.addMatch.mock.calls[0]![0]).toEqual({
+      sides: h.sides.map((s) => ({ id: s.entrantId, name: s.name })),
+      home: top[0],
+      away: top[1],
+    });
     await hardDeleteQuickMatchCompetition(out.competitionId);
   });
 });

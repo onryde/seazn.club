@@ -8438,6 +8438,7 @@
   "quickMatch.flash.adhocLimit": "Deze snelle wedstrijd heeft al {max} extra wedstrijden, het maximum.",
   "quickMatch.flash.notReady": "Die wedstrijd kan nog niet gescoord worden: hij wacht op eerdere uitslagen.",
   "quickMatch.flash.sameSide": "Kies twee verschillende deelnemers.",
+  "quickMatch.flash.leagueOnly": "Alleen een competitie kan extra wedstrijden krijgen.",
   "quickMatch.flash.notFound": "Die wedstrijd of deelnemer hoort niet bij deze snelle wedstrijd.",
   "quickMatch.flash.generic": "Er ging iets mis. Probeer het opnieuw.",
   "quickMatch.flash.emailLimited": "We hebben de link deze keer niet gemaild. Deel deze pagina of zet hem nu bij je bladwijzers.",

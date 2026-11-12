@@ -518,15 +518,18 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string | stri
     verdict: "writes the claim's `/claim/<token>` path into AuthForm's `next` prop inline and paints it nowhere itself",
     handoff: "components/auth-form.tsx",
   },
-  // The quick match home (plan 2 Tasks 6, 7): builds `routes.quickMatchScore(token, fixture)` inline into the Score form's `action`,
-  // and `routes.quickMatch(token)` into the Share island's `path`.
+  // The quick match home (plan 2 Tasks 6, 7, 8): builds `routes.quickMatchScore(token, fixture)` inline into the Score form's
+  // `action`, `routes.quickMatch(token)` into the Share island's `path`, and `routes.quickMatchAddMatch(token)` into the
+  // "Add a match" form's `action`.
   "app/q/[token]/page.tsx": {
     verdict:
-      "builds the home's own `/q/<token>` paths inline into its islands' props (the Score form's action, the Share island's path) and paints them nowhere itself",
-    handoff: ["components/quick-match/score-form.tsx", "components/quick-match/share.tsx"],
+      "builds the home's own `/q/<token>` paths inline into its islands' props (the Score form's action, the Share island's path, the Add a match form's action) and paints them nowhere itself",
+    handoff: ["components/quick-match/score-form.tsx", "components/quick-match/share.tsx", "components/quick-match/add-match.tsx"],
   },
   // The home's Share (plan 2 Task 7): the home link in its read-only field, handed to the share sheet; the QR is `sensitive`.
   "components/quick-match/share.tsx": { verdict: true },
+  // The home's "Add a match" (plan 2 Task 8): its form's action is `/q/<home token>/add-match`.
+  "components/quick-match/add-match.tsx": { verdict: true },
 };
 
 /** The files that paint a quick match's home URL, `/q/<token>`: every one must be FOUND by the scan, not just listed, or a
@@ -539,6 +542,7 @@ const QUICK_MATCH_PAINTERS = [
   // The home itself: it writes `routes.quickMatch(token)` inline into its islands' props (ledger CARRY to T7).
   "app/q/[token]/page.tsx",
   "components/quick-match/share.tsx",
+  "components/quick-match/add-match.tsx",
 ];
 
 describe("every element that paints a scrubbed secret carries ph-no-capture, or its file says why not", () => {
@@ -555,8 +559,9 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
     expect(all.length).toBeGreaterThan(500);
     // The builders and segments come from the app, not from this test.
     // quickMatch: the guest's home, `/q/<token>` (quick match plan 2, A6); quickMatchSave: its save page, `/q/<token>/save`
-    // (plan 3 Task 2, the reminder mail's link); quickMatchScore: its Score post, `/q/<token>/score/<fixture>` (branch fix A).
-    expect(secretBuilderNames().sort()).toEqual(["checkin", "claim", "quickMatch", "quickMatchSave", "quickMatchScore"]);
+    // (plan 3 Task 2, the reminder mail's link); quickMatchScore: its Score post, `/q/<token>/score/<fixture>` (branch fix A);
+    // quickMatchAddMatch: its "Add a match" post, `/q/<token>/add-match` (plan 2 Task 8).
+    expect(secretBuilderNames().sort()).toEqual(["checkin", "claim", "quickMatch", "quickMatchAddMatch", "quickMatchSave", "quickMatchScore"]);
     expect(oneTimeLinkPaths().length).toBeGreaterThanOrEqual(5);
     expect(secretSegments().sort()).toEqual(expect.arrayContaining(["checkin", "claim", "join", "score"]));
     // The names the producers really use.
@@ -628,6 +633,19 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
     expect(share.filter((site) => site.tag === "ShareButton").map((site) => [site.how, site.component])).toEqual([["attribute url", true]]);
     expect(known.props).toEqual(expect.arrayContaining([{ component: "ShareButton", prop: "url", from: "components/quick-match/share.tsx" }]));
     expect(painters.has("components/share-button.tsx")).toBe(false);
+  });
+
+  it("the home's Add a match (Task 8): the page hands its action to QuickMatchAddMatch inline; the island's host <form> carries the class", () => {
+    // The hop: `action={routes.quickMatchAddMatch(token)}`, written inline, so only the inline rule finds the page's site.
+    expect(known.props).toEqual(
+      expect.arrayContaining([{ component: "QuickMatchAddMatch", prop: "action", from: "app/q/[token]/page.tsx" }]),
+    );
+    const page = painters.get("app/q/[token]/page.tsx") ?? [];
+    expect(page.filter((site) => site.tag === "QuickMatchAddMatch").map((site) => [site.how, site.component])).toEqual([
+      ["attribute action", true],
+    ]);
+    const form = painters.get("components/quick-match/add-match.tsx") ?? [];
+    expect(form.filter((site) => site.how === "attribute action" && site.tag === "form").map((site) => site.blocked)).toEqual([true]);
   });
 
   it("the painter files and the verdict table are the same set", () => {

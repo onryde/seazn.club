@@ -119,6 +119,8 @@ const UI_KEYS = [
   "quickMatch.flash.sameSide",
   "quickMatch.flash.notFound",
   "quickMatch.flash.generic",
+  // Plan 2 Task 8: "Add a match" posted against a knockout (C5: only a league takes an extra match).
+  "quickMatch.flash.leagueOnly",
   // Branch review B m3: a create the mail limit spared lands on its home with this line, as information.
   "quickMatch.flash.emailLimited",
   // Branch review A I3 (a saved match's played line, no countdown) and M6 (a settled row's secondary action).

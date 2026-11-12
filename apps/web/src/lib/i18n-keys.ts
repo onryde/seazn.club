@@ -5974,6 +5974,7 @@ export type DictionaryKey =
   | "quickMatch.flash.adhocLimit"
   | "quickMatch.flash.emailLimited"
   | "quickMatch.flash.generic"
+  | "quickMatch.flash.leagueOnly"
   | "quickMatch.flash.linkLimit"
   | "quickMatch.flash.notFound"
   | "quickMatch.flash.notReady"

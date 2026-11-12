@@ -8438,6 +8438,7 @@
   "quickMatch.flash.adhocLimit": "Este partido rápido ya tiene {max} partidos extra, el máximo posible.",
   "quickMatch.flash.notReady": "Ese partido aún no se puede puntuar: faltan resultados anteriores.",
   "quickMatch.flash.sameSide": "Elige dos participantes distintos.",
+  "quickMatch.flash.leagueOnly": "Solo una liga admite partidos extra.",
   "quickMatch.flash.notFound": "Ese partido o participante no forma parte de este partido rápido.",
   "quickMatch.flash.generic": "Algo ha fallado. Vuelve a intentarlo.",
   "quickMatch.flash.emailLimited": "Esta vez no hemos enviado el enlace por correo. Comparte esta página o guárdala en favoritos ahora.",
