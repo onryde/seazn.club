@@ -191,6 +191,21 @@ describe.skipIf(!HAS_DB)("payPageDocByToken (player payment page, Task 2)", () =
     expect(doc!.paymentInstructions).toBe("Cash on the day");
   });
 
+  // Gap wave G5 (ledger: "cart payment_method fallback (division method null) untested"). `registration_settings.payment_method` is
+  // NOT NULL, so the division's method is null only when the division has no settings row: then the cart's own method decides.
+  it("division with no settings row → the cart's method decides: an offline cart reads offline, a card cart reads pay", async () => {
+    const outcomes: string[] = [];
+    for (const cart of ["offline", "stripe"] as const) {
+      const { rig, reg } = await cardEntry();
+      await sql`update registration_groups set payment_method = ${cart} where id = ${reg.group_id}`;
+      await sql`delete from registration_settings where division_id = ${rig.division.id}`;
+      const [left] = await sql<{ n: string }[]>`select count(*)::text as n from registration_settings where division_id = ${rig.division.id}`;
+      expect(left!.n, `${cart}: premise, no settings row`).toBe("0");
+      outcomes.push(`${cart}:${(await docOf(reg))?.state}`);
+    }
+    expect(outcomes).toEqual(["offline:offline", "stripe:pay"]);
+  });
+
   it("confirmed card entry → paid, paidAt = the registration.confirmed row's created_at", async () => {
     const { rig, reg } = await cardEntry({ status: "confirmed" });
     const at = new Date("2026-10-01T10:00:00Z");

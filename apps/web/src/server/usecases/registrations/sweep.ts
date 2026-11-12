@@ -94,10 +94,17 @@ export async function sweepRegistrations(
   // OWN mark, so a still-pending sibling's own, unrelated reminder can never
   // be silenced by this one firing. See the V383 migration's own doc comment
   // for why this is named `submit_*`, not a bare `reminded_at`.
+  //
+  // Gap wave G5: the method is the DIVISION's (`registration_settings`, NOT NULL), the cart's snapshot only when the division has
+  // no settings row - the page's own resolution (`settings?.payment_method ?? reg.payment_method`, pay-page.ts). An organiser who
+  // switches a division to offline after a card entry was submitted leaves that cart saying `stripe`; asking the cart sent a card
+  // reminder to a page that then shows offline instructions.
   const due = await sql<RegistrationWithGroupRow[]>`
     select ${regGroupCols(sql)}
     from registrations r join registration_groups g on g.id = r.group_id
-    where r.status = 'pending' and r.promoted_at is null and g.payment_method = 'stripe'
+    left join registration_settings rs on rs.division_id = r.division_id
+    where r.status = 'pending' and r.promoted_at is null
+      and coalesce(rs.payment_method, g.payment_method) = 'stripe'
       and g.expires_at is not null
       and g.expires_at < now() + interval '24 hours'
       and g.expires_at > now()
