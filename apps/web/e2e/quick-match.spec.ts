@@ -507,26 +507,59 @@ async function ralliesOn(fixtureId: string): Promise<number> {
   return row!.n;
 }
 
+/** Badminton's live score reads as its levels in seat order (`compactScore`, lib/match-day/view.ts): the games won, then the
+ *  game's points ("0–0 · 1–0"). One rally to the home side is a point and no game, so the games stay 0–0 and the points read
+ *  1–0. Before that rally the last level reads 0–0, which this does not match. */
+const AFTER_ONE_HOME_RALLY = /^\s*0\D+0\D+1\D+0\s*$/;
+
 /** The hero as a person reads it: live, match 1 of `total`, and the score after ONE rally to the home side (seat order). */
 async function expectHeroAfterOneHomeRally(page: Page, total: number, why: string) {
   const hero = page.getByTestId("qm-hero");
   await expect(hero.getByTestId("qm-hero-kicker"), why).toHaveText(ui("quickMatch.home.liveMatch", { n: 1, total }));
-  await expect(hero.getByTestId("qm-hero-score"), `${why}: one point to the home side, none to the away side`).toHaveText(/^\s*1\D+0\s*$/);
+  await expect(hero.getByTestId("qm-hero-score"), `${why}: no game yet; one point to the home side, none to the away side`).toHaveText(
+    AFTER_ONE_HOME_RALLY,
+  );
 }
 
-test("the league flow (Task 10, Review Focus 2): Score → Start → one rally; the browser's Back reads the home FRESH (live, the rally's score); Forward, then 'Back to the quick match', reads it too", async ({ guest: page }) => {
-  // Seven page loads or redirects, the rally's hold before it is sent, and the record read back: derived, never a flat literal.
-  test.setTimeout(7 * NAV_MS + HOLD_MS + NAV_MS);
+/** The hero's match is the list's next one (by its sides, the names a person reads), and the list names exactly one. */
+async function nextMatchIsTheHeros(page: Page): Promise<string> {
+  const hero = page.getByTestId("qm-hero");
+  const next = page.locator('[data-testid="qm-match"][data-next="true"]');
+  await expect(next).toHaveCount(1);
+  const sides = next.getByTestId("qm-match-sides");
+  for (const who of ["qm-hero-home", "qm-hero-away"]) {
+    const name = (await hero.getByTestId(who).textContent())?.trim() ?? "";
+    expect(name, `the hero names its ${who === "qm-hero-home" ? "home" : "away"} side`).not.toBe("");
+    await expect(sides, "the list's next match is the hero's").toContainText(name);
+  }
+  return (await next.getAttribute("data-fixture-id"))!;
+}
+
+/** The record holds `n` rallies and keeps holding them for longer than the pad's hold: a rally queued on the way out and
+ *  sent late would land inside the window. Returns how many reads it took (anti-vacuity: never zero). */
+async function ralliesStayAt(fixtureId: string, n: number, why: string): Promise<number> {
+  const until = Date.now() + HOLD_MS + 1_000;
+  let reads = 0;
+  do {
+    expect(await ralliesOn(fixtureId), `${why} (read ${reads + 1})`).toBe(n);
+    reads += 1;
+    await new Promise((r) => setTimeout(r, 250));
+  } while (Date.now() < until);
+  expect(reads, "the record was read across the whole window").toBeGreaterThan(1);
+  return reads;
+}
+
+test("the league flow (Task 10, Review Focus 2): Score → Start → one rally; Back re-requests the home and is not served stale from the HTTP cache (live, the rally's score); Forward, then 'Back to the quick match', reads it too", async ({ guest: page }) => {
+  // Seven page loads or redirects, the rally's hold before it is sent, the record read back, and the late-send window after:
+  // derived, never a flat literal.
+  test.setTimeout(7 * NAV_MS + HOLD_MS + NAV_MS + (HOLD_MS + 1_000 + NAV_MS));
   const home = await createFromSetup(page, `e2e flow ${TAG}`, ["Ravi & Sam", "Priya & Tom"], "league");
   // Fresh, before anything is scored: up next, no score. The negative pair of what Back must read below.
   const hero = page.getByTestId("qm-hero");
   await expect(hero.getByTestId("qm-hero-kicker")).toHaveText(ui("quickMatch.home.upNext", { n: 1, total: 1 }));
   await expect(hero.getByTestId("qm-hero-score"), "nothing scored yet: no score on the hero").toHaveCount(0);
   await expectNoHorizontalScroll(page);
-  const next = page.locator('[data-testid="qm-match"][data-next="true"]');
-  await expect(next).toHaveCount(1);
-  const fixtureId = (await next.getAttribute("data-fixture-id"))!;
-  expect(fixtureId).toMatch(/^[0-9a-f-]{36}$/);
+  const fixtureId = await nextMatchIsTheHeros(page);
 
   // Score → the pad's Confirm card → Start match → one rally to the home side, in the record before anything leaves the pad.
   await hero.getByTestId("qm-score").click();
@@ -539,7 +572,9 @@ test("the league flow (Task 10, Review Focus 2): Score → Start → one rally; 
   // The pad soft-commits: the rally is sent only after the hold (queue.ts), so the record is polled past it.
   await expect.poll(() => ralliesOn(fixtureId), { timeout: HOLD_MS + NAV_MS, message: "the rally never reached the ledger" }).toBe(1);
 
-  // The browser's own Back: the home is no-store, so it is read again, not restored stale from the back-forward cache.
+  // The browser's own Back. Playwright's Chromium runs with its back-forward cache OFF (`--disable-back-forward-cache`), so
+  // this Back is always a request: what it proves is that the HTTP cache does not hand the home back stale (no-store). A
+  // restore from the back-forward cache, what a phone does, is the review I-1 case below.
   await page.goBack();
   await page.waitForURL((u) => u.pathname === home, { timeout: NAV_MS });
   await expectHeroAfterOneHomeRally(page, 1, "after the browser's Back");
@@ -551,7 +586,84 @@ test("the league flow (Task 10, Review Focus 2): Score → Start → one rally; 
   await page.getByTestId("quick-match-back-link").click();
   await page.waitForURL((u) => u.pathname === home && u.search === "", { timeout: NAV_MS });
   await expectHeroAfterOneHomeRally(page, 1, "after 'Back to the quick match'");
-  expect(await ralliesOn(fixtureId), "nothing more was sent on the way").toBe(1);
+  await ralliesStayAt(fixtureId, 1, "nothing more was sent on the way, nor late");
+});
+
+// Review I-1. A phone's browser (iOS Safari above all) keeps the home whole in its back-forward cache when the guest taps
+// Score, and Back shows that copy without asking the server; no-store does not stop it. `QuickMatchRefreshOnRestore`
+// reloads the page on the restore's `pageshow` (persisted). This case launches a Chromium of its own WITH the cache (the
+// project's carries `--disable-back-forward-cache`) and records every pageshow of the tab in sessionStorage, which outlives
+// both a restore and a reload: Back that RESTORES reads [persisted, then the island's reload], one that reloads reads
+// [a plain load]. On the restore path the hero can read the rally only because the island reloaded (remove it and the
+// restored page is the "Up next" home the guest left). When this Chromium declines to keep the page, the annotation says so,
+// with the browser's own reasons, and the handler's proof is its unit test (refresh-on-restore.test.tsx).
+test("Back from the pad on a browser WITH a back-forward cache (review I-1): the restored home reads the rally, not the page it left", async ({ playwright }, info) => {
+  test.setTimeout(8 * NAV_MS + HOLD_MS + NAV_MS);
+  const browser = await playwright.chromium.launch({ ignoreDefaultArgs: ["--disable-back-forward-cache"] });
+  try {
+    const ctx = await guestContext(browser, info);
+    const page = await ctx.newPage();
+    await page.addInitScript(() => {
+      window.addEventListener("pageshow", (e) => {
+        const seen = JSON.parse(sessionStorage.getItem("qm-e2e-shows") ?? "[]") as boolean[];
+        sessionStorage.setItem("qm-e2e-shows", JSON.stringify([...seen, e.persisted]));
+      });
+    });
+    const home = await createFromSetup(page, `e2e bfcache ${TAG}`, ["Ravi & Sam", "Priya & Tom"], "league");
+    const hero = page.getByTestId("qm-hero");
+    await expect(hero.getByTestId("qm-hero-kicker"), "the page Back would restore: up next").toHaveText(
+      ui("quickMatch.home.upNext", { n: 1, total: 1 }),
+    );
+    await expect(hero.getByTestId("qm-hero-score"), "and no score").toHaveCount(0);
+    const fixtureId = await nextMatchIsTheHeros(page);
+
+    await hero.getByTestId("qm-score").click();
+    await page.waitForURL(/\/score\/dl_[A-Za-z0-9_-]+$/, { timeout: NAV_MS });
+    await page.getByTestId("score-start-match").click();
+    const homeHalf = page.locator('[data-role="pad-v3"] button[data-role="v3-scorebug-half"][data-side="home"]');
+    await expect(homeHalf, "Start opens the pad, its halves tappable").toBeVisible({ timeout: NAV_MS });
+    await homeHalf.click();
+    await expect.poll(() => ralliesOn(fixtureId), { timeout: HOLD_MS + NAV_MS, message: "the rally never reached the ledger" }).toBe(1);
+
+    // From here, only Back's pageshows are recorded.
+    await page.evaluate(() => sessionStorage.removeItem("qm-e2e-shows"));
+    // A restore fires no load event: Back waits for the commit only.
+    await page.goBack({ waitUntil: "commit", timeout: NAV_MS });
+    await page.waitForURL((u) => u.pathname === home, { timeout: NAV_MS, waitUntil: "commit" });
+    await expectHeroAfterOneHomeRally(page, 1, "after Back on a browser with a back-forward cache");
+
+    // `pageshow` follows the load event, which can trail the hero's text: poll the record until it settles. (A read during
+    // the island's reload meets a torn-down context and is simply read again.)
+    const readShows = () => page.evaluate(() => JSON.parse(sessionStorage.getItem("qm-e2e-shows") ?? "[]") as boolean[]);
+    await expect.poll(async () => (await readShows()).length, { timeout: NAV_MS, message: "Back's pageshow was never recorded" }).toBeGreaterThan(0);
+    const restored = (await readShows())[0] === true;
+    await expect
+      .poll(readShows, { timeout: NAV_MS, message: restored ? "restored, then the island's reload: one plain load" : "not restored: one plain load" })
+      .toEqual(restored ? [true, false] : [false]);
+    // Why Chromium did not keep the page, in its own words only: the entries also carry the page's URL, which is its token.
+    const reasons = restored
+      ? []
+      : await page.evaluate(() => {
+          const out: string[] = [];
+          const walk = (node: unknown) => {
+            const n = node as { reasons?: { reason?: unknown }[] | null; children?: unknown[] | null } | null;
+            for (const r of n?.reasons ?? []) if (typeof r?.reason === "string") out.push(r.reason);
+            for (const c of n?.children ?? []) walk(c);
+          };
+          const nav = performance.getEntriesByType("navigation")[0] as (PerformanceEntry & { notRestoredReasons?: unknown }) | undefined;
+          walk(nav?.notRestoredReasons ?? null);
+          return out;
+        });
+    info.annotations.push({
+      type: "bfcache",
+      description: restored
+        ? "restored from the back-forward cache (pageshow.persisted); the island reloaded it and the hero read the rally"
+        : `not restored: Back loaded the home afresh; Chromium's reasons: ${reasons.join(", ") || "none given"}`,
+    });
+    await ctx.close();
+  } finally {
+    await browser.close();
+  }
 });
 
 test("the URL forms (Task 10, Review Focus 3): the home opens from its link with a trailing slash and with a ?utm suffix", async ({ guest: page }) => {
@@ -560,11 +672,17 @@ test("the URL forms (Task 10, Review Focus 3): the home opens from its link with
   // The positive pair first: the bare link reads the home.
   await expect(page.getByTestId("qm-name")).toHaveText(name);
   // `skipTrailingSlashRedirect` (next.config.js) serves both forms as written, so each must read the token from the path alone.
-  for (const url of [`${home}/`, `${home}?utm_source=whatsapp`, `${home}/?utm_source=whatsapp&utm_medium=social`]) {
+  // Each form is named in a message by its label, never by its URL: the URL is the home's token (O3).
+  const forms: [string, string][] = [
+    ["trailing slash", `${home}/`],
+    ["utm", `${home}?utm_source=whatsapp`],
+    ["both", `${home}/?utm_source=whatsapp&utm_medium=social`],
+  ];
+  for (const [label, url] of forms) {
     await page.goto(url);
-    await expect(page.getByTestId("qm-dead-link"), `${url}: not the dead screen`).toHaveCount(0);
-    await expect(page.getByTestId("qm-name"), `${url}: the same home`).toHaveText(name);
-    await expect(page.getByTestId("qm-hero").getByTestId("qm-hero-kicker"), url).toHaveText(ui("quickMatch.home.upNext", { n: 1, total: 1 }));
+    await expect(page.getByTestId("qm-dead-link"), `${label}: not the dead screen`).toHaveCount(0);
+    await expect(page.getByTestId("qm-name"), `${label}: the same home`).toHaveText(name);
+    await expect(page.getByTestId("qm-hero").getByTestId("qm-hero-kicker"), label).toHaveText(ui("quickMatch.home.upNext", { n: 1, total: 1 }));
   }
 });
 
