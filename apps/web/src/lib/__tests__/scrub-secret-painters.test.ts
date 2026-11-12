@@ -393,7 +393,12 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string }> = {
     handoff: "components/public-site/register/register-lichess-card.tsx",
   },
   "components/public-site/register/register-stepper.tsx": { verdict: true },
-  "app/(public)/live/[orgSlug]/[competitionSlug]/register/status/entry-card.tsx": { verdict: true },
+  // Polish wave P6: the captain's invite links are built and painted by InviteTeammates (each row is ph-no-capture); the card hands it the code.
+  "app/(public)/live/[orgSlug]/[competitionSlug]/register/status/entry-card.tsx": {
+    verdict: "passes the team's join code to InviteTeammates as a prop and paints nothing itself",
+    handoff: "app/(public)/live/[orgSlug]/[competitionSlug]/register/status/invite-teammates.tsx",
+  },
+  "app/(public)/live/[orgSlug]/[competitionSlug]/register/status/invite-teammates.tsx": { verdict: true },
   "components/registration-hub-registrant-detail.tsx": {
     verdict: "passes the team's join code to RegistrationHubRegistrantJoinCode as a prop and paints nothing itself",
     handoff: "components/registration-hub-registrant-join-code.tsx",

@@ -13,6 +13,7 @@ import {
   effectivePayDeadline,
   entryCountsTowardTotal,
   entryDisplayName,
+  inviteLinks,
   poolPlaceByDate,
   publicCheckoutPath,
   publicResendPath,
@@ -529,6 +530,65 @@ describe("claimHref", () => {
     expect(claimHref("riverside", "summer-smash", "JOIN123", "p1")).toBe(
       "/live/riverside/summer-smash/register/join?join_code=JOIN123&player_id=p1",
     );
+  });
+});
+
+// Polish wave P6: the captain's "Invite your teammates" block. WHICH links it offers is a rule of its own (the old inline condition
+// in entry-card.tsx), so it is pinned here, over every status and both entrant kinds, with a count. The URLs themselves are built by
+// the block (`joinLinkPath`, lib/join-link.ts), not here.
+describe("inviteLinks", () => {
+  const ALL_STATUSES: EntryStatus[] = ["pending", "paid", "confirmed", "waitlisted", "withdrawn", "expired", "rejected"];
+  const LIVE: EntryStatus[] = ["pending", "paid", "confirmed", "waitlisted"];
+  const players = [
+    { id: "p1", consent_status: "granted" as const },
+    { id: "p2", consent_status: "pending" as const },
+    { id: "p3", consent_status: "pending" as const },
+    { id: "p4", consent_status: "guardian" as const },
+  ];
+  const entry = (over: Partial<Parameters<typeof inviteLinks>[0]> = {}) => ({
+    status: "pending" as EntryStatus,
+    join_code: "JOIN123",
+    allows_new_joiner: true,
+    players,
+    ...over,
+  });
+
+  it("a team on a live entry: one slot per UNCLAIMED player (granted and guardian are claimed), in roster order, and the general link", () => {
+    expect(inviteLinks(entry())).toEqual({ joinCode: "JOIN123", slots: [{ id: "p2" }, { id: "p3" }], generic: true });
+  });
+
+  it("a pair (allows_new_joiner false): the partner's slot and NO general link", () => {
+    expect(inviteLinks(entry({ allows_new_joiner: false, players: players.slice(0, 2) }))).toEqual({ joinCode: "JOIN123", slots: [{ id: "p2" }], generic: false });
+  });
+
+  it("every dead status offers nothing, however much else is still true; every live status offers links (counted, both directions)", () => {
+    let dead = 0;
+    let live = 0;
+    for (const status of ALL_STATUSES) {
+      const links = inviteLinks(entry({ status }));
+      if (LIVE.includes(status)) {
+        expect(links, status).not.toBeNull();
+        live++;
+      } else {
+        expect(links, status).toBeNull();
+        dead++;
+      }
+    }
+    expect([live, dead]).toEqual([4, 3]);
+  });
+
+  it("no join code (a free agent, a legacy row): nothing, even with unclaimed slots", () => {
+    expect(inviteLinks(entry({ join_code: null }))).toBeNull();
+  });
+
+  it("empty case: a team with every slot claimed still offers the general link; a pair with every slot claimed offers nothing", () => {
+    const claimed = players.map((p) => ({ ...p, consent_status: "granted" as const }));
+    expect(inviteLinks(entry({ players: claimed }))).toEqual({ joinCode: "JOIN123", slots: [], generic: true });
+    expect(inviteLinks(entry({ players: claimed, allows_new_joiner: false }))).toBeNull();
+  });
+
+  it("empty roster: a team with no players at all still offers the general link", () => {
+    expect(inviteLinks(entry({ players: [] }))).toEqual({ joinCode: "JOIN123", slots: [], generic: true });
   });
 });
 

@@ -55,6 +55,13 @@ const render = async (searchParams: Record<string, string>): Promise<string> =>
 // Mirrors view-model.test.ts's own FUTURE/PAST convention.
 const FUTURE = "2099-01-01T00:00:00.000Z";
 
+/** The invite block's words, read from the English dictionary (never typed here), for the page's own locale. */
+const invite = (key: string, vars: Record<string, string> = {}): string =>
+  Object.entries(vars).reduce(
+    (text, [k, v]) => text.replaceAll(`{${k}}`, v),
+    (uiEn as Record<string, string>)[`register.status.invite.${key}`]!,
+  );
+
 const BASE_ENTRY = {
   id: "reg-1",
   division_id: "div-1",
@@ -578,9 +585,33 @@ describe("register status page (RS007 rebuild)", () => {
       expect(html).toContain("join_code=JOIN123&amp;player_id=p2");
       // The generic link carries no player_id.
       expect(html).toMatch(/href="\/live\/riverside\/summer-smash\/register\/join\?join_code=JOIN123"/);
-      // join_code itself never appears bare in a way that leaks beyond the
-      // href it belongs in — spot-check it isn't duplicated as plain text.
-      expect(html.match(/JOIN123/g)?.length).toBe(2); // the two hrefs only
+      // The code is painted ONLY by the invite block's own rows: each link is an href and the link text itself (the URL the captain
+      // copies), so two links give four, and none of it outside the block (polish wave P6; it was the two hrefs alone before).
+      const block = html.slice(html.indexOf('data-testid="reg-invite"'));
+      expect(html.match(/JOIN123/g)?.length).toBe(4);
+      expect(block.match(/JOIN123/g)?.length).toBe(4);
+      // The block names its slot and the general link in words, and offers a Copy link per row (one slot + the generic link).
+      expect(html).toContain(invite("heading"));
+      expect(html).toContain(invite("slotLabel", { name: "Jordan Player" }));
+      expect(html).toContain(invite("genericLabel"));
+      expect(html.match(/data-testid="reg-invite-copy"/g)?.length).toBe(2);
+      // Every link's row is under ph-no-capture (the join code is a capability): as many blocked rows as links.
+      expect(html.match(/<div data-invite-slot="true" class="ph-no-capture /g)?.length).toBe(2);
+      expect(html.match(/data-invite-slot/g)?.length).toBe(2);
+    });
+
+    // Polish wave P6 (the empty case the old inline gate hid): a team registered with NO roster has no roster box, and its captain
+    // still needs the general link to bring people in.
+    it("a team with no players at all still offers the general link, in its own block", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        entries: [{ ...BASE_ENTRY, join_code: "EMPTY01", players: [] }],
+      });
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html).toContain(invite("heading"));
+      expect(html).toContain(invite("genericLabel"));
+      expect(html).toMatch(/href="\/live\/riverside\/summer-smash\/register\/join\?join_code=EMPTY01"/);
+      expect(html).not.toContain("player_id=");
     });
 
     // RS008: a roster row backed by a person who opted out via /me
@@ -621,6 +652,30 @@ describe("register status page (RS007 rebuild)", () => {
       // (consent: null is not an opt-out) — masking is per-person, not
       // blanket once any row on the entry has opted out.
       expect(html).toContain("Dev Patel");
+    });
+
+    // Polish wave P6: the invite rows name the SAME unclaimed person the roster does, so they mask the same way: by the linked person's
+    // own opt-out, and by a youth division's policy. Neither opted-out nor youth is the control: its row stays in full.
+    it("the invite row names an unclaimed player as masked as the roster row does (a person's opt-out, and a youth division), and a plain one stays in full", async () => {
+      const players = [
+        { id: "p1", full_name: "Priya Nair", consent_status: "pending" as const, consent: { public_name: false } },
+        { id: "p2", full_name: "Dev Patel", consent_status: "pending" as const, consent: null },
+      ];
+      usecaseMock.groupById.mockResolvedValueOnce({ ...BASE_VIEW, entries: [{ ...BASE_ENTRY, join_code: "MASK01", players }] });
+      const opted = await render({ rid: "g1", token: "tok" });
+      expect(opted).not.toContain("Priya Nair");
+      expect(opted).toContain(invite("slotLabel", { name: "Priya N." }));
+      expect(opted).toContain(invite("slotLabel", { name: "Dev Patel" }));
+
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        entries: [{ ...BASE_ENTRY, join_code: "MASK02", division_youth: true, players }],
+      });
+      const youth = await render({ rid: "g1", token: "tok" });
+      expect(youth).not.toContain("Priya Nair");
+      expect(youth).not.toContain("Dev Patel");
+      expect(youth).toContain(invite("slotLabel", { name: "Priya N." }));
+      expect(youth).toContain(invite("slotLabel", { name: "Dev P." }));
     });
 
     // RS008 review fix #1 (Critical): the entry-card HEADING (entry.display_name)
@@ -720,6 +775,7 @@ describe("register status page (RS007 rebuild)", () => {
           {
             ...BASE_ENTRY,
             join_code: "PAIR456",
+            entrant_kind: "pair" as const,
             allows_new_joiner: false,
             players: [
               { id: "p1", full_name: "Sam Player", consent_status: "granted" as const, consent: null },
@@ -731,6 +787,10 @@ describe("register status page (RS007 rebuild)", () => {
       const html = await render({ rid: "g1", token: "tok" });
       expect(html).toContain("join_code=PAIR456&amp;player_id=p2");
       expect(html).not.toMatch(/href="\/live\/riverside\/summer-smash\/register\/join\?join_code=PAIR456"/);
+      // ... and it is worded for a pair: a partner, not teammates, and no "anyone else joining" row.
+      expect(html).toContain(invite("headingPair"));
+      expect(html).not.toContain(invite("heading"));
+      expect(html).not.toContain(invite("genericLabel"));
     });
 
     // Bug (2026-08-27 review, FIX 2): the claim block gated on
@@ -758,8 +818,10 @@ describe("register status page (RS007 rebuild)", () => {
         });
         const html = await render({ rid: "g1", token: "tok" });
         expect(html).not.toContain("join_code=DEAD789");
-        expect(html).not.toContain("Send Jordan Player their claim link");
-        expect(html).not.toContain("Invite someone new to this entry");
+        expect(html).not.toContain('data-testid="reg-invite"');
+        expect(html).not.toContain(invite("heading"));
+        expect(html).not.toContain(invite("slotLabel", { name: "Jordan Player" }));
+        expect(html).not.toContain(invite("genericLabel"));
       },
     );
   });

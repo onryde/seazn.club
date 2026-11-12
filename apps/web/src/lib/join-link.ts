@@ -14,9 +14,9 @@ import { routes } from "@/lib/routes";
 /** The join page's site-relative URL for one entry: the generic link when no `playerId` is given (a team's "anyone joining" link;
  *  a pair's picker of its unclaimed slots), else the link that opens with that slot already chosen. */
 export function joinLinkPath(orgSlug: string, competitionSlug: string, joinCode: string, playerId?: string): string {
-  const qs = new URLSearchParams({ join_code: joinCode });
-  if (playerId) qs.set("player_id", playerId);
-  return `${routes.publicRegisterJoin(orgSlug, competitionSlug)}?${qs.toString()}`;
+  // A template with the `?join_code=` text in it, deliberately: the painter scan (scrub-secret-painters.test.ts) learns which
+  // functions build a credential URL by that text, so every component that paints what this returns is held to `ph-no-capture`.
+  return `${routes.publicRegisterJoin(orgSlug, competitionSlug)}?join_code=${encodeURIComponent(joinCode)}${playerId ? `&player_id=${encodeURIComponent(playerId)}` : ""}`;
 }
 
 /** Where the public "Have a join code?" field sends a typed code, or null for a blank entry. The code is read the way a person

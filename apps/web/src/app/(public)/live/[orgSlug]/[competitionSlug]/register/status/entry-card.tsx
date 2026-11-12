@@ -1,6 +1,6 @@
 // One cart entry, rendered as a self-contained "docket": status, money (pay
 // control / resolved instructions / nothing owed), roster fill meter with
-// per-player consent chips and claim links, and a cancel control.
+// per-player consent chips, the captain's "Invite your teammates" links, and a cancel control.
 //
 // Deliberately a PLAIN (non-async) function component, even though it
 // composes client islands (PayButton/CancelEntry): the page renders a LIST
@@ -18,14 +18,14 @@ import { entryWaitingOn } from "@/lib/registration-status";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { PayButton } from "./pay-button";
 import { CancelEntry } from "./cancel-entry";
+import { InviteTeammates } from "./invite-teammates";
 import {
   assignedTeamName,
   awaitingTeamAssignment,
   canCancelEntry,
-  canJoinEntry,
-  claimHref,
   entryCountsTowardTotal,
   entryDisplayName,
+  inviteLinks,
   poolPlaceByDate,
   resolveMoneyState,
   rosterCounts,
@@ -165,10 +165,9 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
   // window-closed message below is the true and more actionable statement, and "waiting for payment" beside it would read as
   // an invitation to pay a window that no longer accepts payment.
   const waitingOn = money.kind === "window_closed" ? null : entryWaitingOn(entry.status, entry.amount_cents, entry.approval, entry.approved);
-  const unclaimed = entry.players.filter((p) => p.consent_status === "pending");
   // RS008: every roster row's name, masked by division youth policy OR the
   // linked person's own consent opt-out. Resolved ONCE, by id, so the
-  // roster list below and the claim-link text (which names the SAME person
+  // roster list below and the invite rows (which name the SAME person
   // to the captain deciding who to invite) can never show two different
   // spellings of "masked" for one player. A plain for-of over the roster,
   // not a `.map` call, so the literal source text this file's own layout
@@ -226,6 +225,8 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
   // `poolPlaceByDate(entry)` a second time inside the JSX below, which used
   // to force a redundant `as string` cast on the second call.
   const poolPlaceBy = poolPlaceByDate(entry);
+
+  const invites = inviteLinks(entry);
 
   let moneyNode: ReactNode = null;
   if (money.kind === "stripe_due") {
@@ -389,48 +390,27 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
                 </li>
               ))}
             </ul>
-            {/* FIX 2 (RS007 status-page review): this used to gate on
-                join_code + roster shape alone, with NO status check —
-                withdrawCore never clears join_code, so a cancelled entry
-                kept offering claim/invite links that
-                joinTeamEntry/previewJoinEntry's own dead-entry gate 404s
-                every time (canJoinEntry, view-model.ts). */}
-            {canJoinEntry(entry.status) && entry.join_code && (unclaimed.length > 0 || entry.allows_new_joiner) && (
-              <ul className="mt-2 space-y-1 border-t border-zinc-200 pt-2">
-                {unclaimed.map((p) => (
-                  <li key={p.id}>
-                    <a
-                      href={claimHref(orgSlug, competitionSlug, entry.join_code!, p.id)}
-                      className="ph-no-capture text-xs font-medium text-accent-strong underline underline-offset-2"
-                    >
-                      {/* Code-review fix (2026-08-30, item 6): this used to
-                          fall back to the RAW p.full_name on a miss — the
-                          roster-name span above never has (it renders
-                          blank), so a map lookup that should structurally
-                          never miss (built from this same entry.players
-                          array, just above) leaked the unmasked name instead
-                          of failing the same safe way. Both now agree: blank
-                          on a miss, never p.full_name. */}
-                      {t(ui, "register.status.roster.claimLink", { name: displayNameById.get(p.id) ?? "" })}
-                    </a>
-                  </li>
-                ))}
-                {/* The generic (no player_id) link only ever works for a
-                    team — a pair's roster is fixed at two, and joinTeamEntry
-                    422s its insert-a-new-person path. */}
-                {entry.allows_new_joiner && (
-                  <li>
-                    <a
-                      href={claimHref(orgSlug, competitionSlug, entry.join_code)}
-                      className="ph-no-capture text-xs font-medium text-accent-strong underline underline-offset-2"
-                    >
-                      {t(ui, "register.status.roster.genericClaimLink")}
-                    </a>
-                  </li>
-                )}
-              </ul>
-            )}
           </div>
+        )}
+
+        {/* Polish wave P6: the captain's invite links, as their own block (a team registered with no roster still needs the generic
+            link, so it does not hang off the roster box). The gate is `inviteLinks` (view-model.ts), the rule this card used to hold
+            inline: a join code, a status that can still be joined (RS007 status-page review FIX 2: withdrawCore never clears the
+            code, so a cancelled entry kept offering links that joinTeamEntry/previewJoinEntry 404 every time), and either an
+            unclaimed slot or a team that may still grow. A pair has no generic link: its roster is fixed at two (joinTeamEntry 422s
+            the insert-a-new-person path). Names are the roster's own masked ones (displayNameById; code-review fix 2026-08-30 item 6:
+            blank on a miss, never the raw full_name). */}
+        {invites && (
+          <InviteTeammates
+            kind={entry.entrant_kind === "pair" ? "pair" : "team"}
+            entryName={headingName}
+            divisionName={entry.division_name}
+            orgSlug={orgSlug}
+            competitionSlug={competitionSlug}
+            joinCode={invites.joinCode}
+            slots={invites.slots.map((slot) => ({ id: slot.id, name: displayNameById.get(slot.id) ?? "" }))}
+            generic={invites.generic}
+          />
         )}
 
         {canCancelEntry(entry.status) && (

@@ -340,6 +340,35 @@ export function claimHref(
   return joinLinkPath(orgSlug, competitionSlug, joinCode, playerId);
 }
 
+/** What a captain can hand out to bring people onto an entry (polish wave P6): one link per UNCLAIMED roster slot (opens the join page
+ *  with that slot already chosen) and, for a team, the general link anyone joining can use. A pair has no general link (its roster is
+ *  fixed at two: `joinTeamEntry` 422s the insert-a-new-person path), so only its partner's slot link is real. The URLs are written by
+ *  the block that shows them (`joinLinkPath`, lib/join-link.ts); this says WHICH exist. */
+export interface InviteLinks {
+  /** The code the links are built from, narrowed to non-null by the gate below. */
+  joinCode: string;
+  slots: { id: string }[];
+  generic: boolean;
+}
+
+/**
+ * Which invite links this entry offers, or null when it offers none. The gate the card used to hold inline: a join code to build from
+ * (a free agent never mints one), a status that can still be joined (`canJoinEntry`), and something to offer (an unclaimed slot, or
+ * a team that may still grow). A link to an entry `joinTeamEntry` would refuse is a dead link, so a withdrawn, rejected or expired
+ * entry offers nothing even though its join code is never cleared.
+ */
+export function inviteLinks(entry: {
+  status: EntryStatus;
+  join_code: string | null;
+  allows_new_joiner: boolean;
+  players: { id: string; consent_status: "pending" | "granted" | "guardian" }[];
+}): InviteLinks | null {
+  if (!entry.join_code || !canJoinEntry(entry.status)) return null;
+  const slots = entry.players.filter((p) => p.consent_status === "pending").map((p) => ({ id: p.id }));
+  if (slots.length === 0 && !entry.allows_new_joiner) return null;
+  return { joinCode: entry.join_code, slots, generic: entry.allows_new_joiner };
+}
+
 /**
  * Classifies a write-action failure (cancel/pay/resend) by HTTP status alone
  * — never the raw server string — the same "map from HTTP status" contract

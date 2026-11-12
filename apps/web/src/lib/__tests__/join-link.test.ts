@@ -26,7 +26,7 @@ describe("joinLinkPath", () => {
 
   it("encodes a code that is not URL-safe, so it can never end the query early or add a parameter", () => {
     const url = joinLinkPath(ORG, COMP, "a&player_id=x b#c");
-    expect(url).toBe(`/live/${ORG}/${COMP}/register/join?join_code=a%26player_id%3Dx+b%23c`);
+    expect(url).toBe(`/live/${ORG}/${COMP}/register/join?join_code=a%26player_id%3Dx%20b%23c`);
     expect(new URL(url, "https://x.test").searchParams.get("join_code")).toBe("a&player_id=x b#c");
     expect(new URL(url, "https://x.test").searchParams.has("player_id")).toBe(false);
   });
