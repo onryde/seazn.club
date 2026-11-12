@@ -3,7 +3,9 @@
 //
 // The form posts `application/x-www-form-urlencoded` and every answer is a 303 (controller dispatch 2026-11-08, D3):
 //   - a create lands on its home, `routes.quickMatch(token)` (A6): the home token rides the PATH, never a query string;
-//     the visitor cookie is set on that answer when this request had no usable key;
+//     the visitor cookie is set on that answer when this request had no usable key, and so is the language switcher's
+//     `seazn_locale` cookie, to the form's locale, when the visitor had made no pick of their own (branch review A M8): the
+//     home reads the viewer's locale (D10), so a guest who set up on /fr/play lands on a French home;
 //   - a create whose link mail a mail limit refused lands on its home all the same, with `?e=QUICK_MATCH_EMAIL_LIMITED` (branch
 //     review B m3, controller ruling 2026-11-08): the mail is what a limit costs, never the match;
 //   - a refusal lands back on the setup page, `/<locale>/play?e=<code>`, with a code from QUICK_MATCH_ERRORS, never on JSON.
@@ -120,21 +122,29 @@ async function mailAllowed(ip: string, email: string): Promise<boolean> {
   }
 }
 
-/** The visitor's explicit pick, else English. A forged cookie that does not decode (`seazn_locale=%E0`) makes
- *  `explicitLocale`'s decodeURIComponent throw: English then, never a 500. */
-function cookieLocale(req: Request): Locale {
+/** The visitor's explicit pick, or null: none, one naming no shipped locale, or a forged one that does not decode
+ *  (`seazn_locale=%E0` makes `explicitLocale`'s decodeURIComponent throw), never a 500. */
+function pickedLocale(req: Request): Locale | null {
   try {
-    return explicitLocale(req) ?? DEFAULT_LOCALE;
+    return explicitLocale(req);
   } catch {
-    return DEFAULT_LOCALE;
+    return null;
   }
 }
+/** The visitor's explicit pick, else English. */
+const cookieLocale = (req: Request): Locale => pickedLocale(req) ?? DEFAULT_LOCALE;
+
+/** The language switcher's own cookie, as it writes it (components/i18n/locale-switcher.tsx): the whole site, a year, Lax,
+ *  and readable by the switcher's script (so not HttpOnly). */
+const LOCALE_COOKIE = "seazn_locale";
+const LOCALE_COOKIE_OPTIONS = { path: "/", maxAge: 31_536_000, sameSite: "lax" } as const;
 
 export async function POST(req: NextRequest) {
   return handler(async () => {
     const form = await req.formData().catch(() => null);
     const posted = form?.get("locale");
-    const locale: Locale = typeof posted === "string" && hasLocale(posted) ? posted : cookieLocale(req);
+    const postedLocale: Locale | null = typeof posted === "string" && hasLocale(posted) ? posted : null;
+    const locale: Locale = postedLocale ?? cookieLocale(req);
     try {
       // The first X-Forwarded-For hop, the funnel's idiom (api/funnel/start/route.ts).
       const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
@@ -161,6 +171,7 @@ export async function POST(req: NextRequest) {
       const home = routes.quickMatch(created.token);
       const res = redirectLocal(created.emailLimited ? `${home}?e=${QUICK_MATCH_ERRORS.EMAIL_LIMITED}` : home, 303);
       if (visitor.minted) res.cookies.set(QUICK_MATCH_VISITOR_COOKIE, visitor.key, visitorCookieOptions());
+      if (postedLocale !== null && pickedLocale(req) === null) res.cookies.set(LOCALE_COOKIE, postedLocale, LOCALE_COOKIE_OPTIONS);
       return res;
     } catch (err) {
       if (isServerFault(err)) {

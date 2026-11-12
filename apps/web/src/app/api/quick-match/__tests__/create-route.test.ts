@@ -22,6 +22,8 @@ import * as Sentry from "@sentry/nextjs";
 
 import { sql } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
+import { explicitLocale } from "@/lib/explicit-locale";
+import { LOCALES } from "@/lib/i18n-constants";
 import { QUICK_MATCH_ERRORS } from "@/lib/quick-match-constants";
 import { __setRateLimitCounterForTests, QUICK_MATCH_CREATE_LIMIT } from "@/lib/rate-limit";
 import { createCompetition } from "@/server/usecases/competitions";
@@ -199,6 +201,56 @@ describe.skipIf(!HAS_DB)("POST /api/quick-match: the create", () => {
   it("a knockout of 4 lands on its home too (the format field reaches the create)", async () => {
     const token = landedToken(await post(form({ format: "knockout" })));
     expect(await resolveQuickMatchToken(token)).toMatchObject({ format: "knockout" });
+  });
+});
+
+describe.skipIf(!HAS_DB)("POST /api/quick-match: the visitor's language (A-M8: /fr/play lands on a French home)", () => {
+  /** The Set-Cookie lines for the language switcher's cookie, as the response really carries them. */
+  const localeCookies = (res: Response) => res.headers.getSetCookie().filter((c) => c.startsWith("seazn_locale="));
+  /** A cookie line's attributes, lower-cased names, for an order-free comparison. */
+  const attrs = (line: string) =>
+    new Set(line.split(";").slice(1).map((a) => a.trim().toLowerCase()).filter((a) => a !== ""));
+
+  it("no pick of their own: the create sets the switcher's cookie to the form's locale, as the switcher writes it, for every shipped locale (counted)", async () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const res = await post(form({ locale }));
+      landedToken(res);
+      const lines = localeCookies(res);
+      expect(lines, locale).toHaveLength(1);
+      expect(lines[0]!.split(";")[0], locale).toBe(`seazn_locale=${locale}`);
+      // components/i18n/locale-switcher.tsx: `path=/; max-age=31536000; samesite=lax`, and readable by its script (no
+      // HttpOnly, no Secure). Next adds the Expires a max-age implies; it is pinned too, a year out, never left unread.
+      const set = attrs(lines[0]!);
+      const expires = [...set].filter((a) => a.startsWith("expires="));
+      expect(expires, locale).toHaveLength(1);
+      const yearOut = Date.parse(expires[0]!.slice("expires=".length)) - Date.now();
+      expect(Math.abs(yearOut - 31_536_000_000), `${locale}: Expires is the max-age's year`).toBeLessThan(60_000);
+      expect(new Set([...set].filter((a) => !a.startsWith("expires="))), locale).toEqual(
+        new Set(["path=/", "max-age=31536000", "samesite=lax"]),
+      );
+      // What the home's locale reader then sees on the next request: the form's language.
+      const next = new Request("http://localhost/q/x", { headers: { cookie: lines[0]!.split(";")[0]! } });
+      expect(explicitLocale(next), locale).toBe(locale);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(LOCALES.length);
+  });
+
+  it("a pick of their own is never overwritten; a forged one that does not decode is replaced; a refusal sets none", async () => {
+    const kept = await post(form({ locale: "fr" }), { headers: { cookie: "seazn_locale=nl" } });
+    landedToken(kept);
+    expect(localeCookies(kept), "the visitor chose Dutch: kept").toEqual([]);
+    const forged = await post(form({ locale: "fr" }), { headers: { cookie: "seazn_locale=%E0" } });
+    landedToken(forged);
+    expect(localeCookies(forged).map((l) => l.split(";")[0])).toEqual(["seazn_locale=fr"]);
+    const unknown = await post(form({ locale: "es" }), { headers: { cookie: "seazn_locale=xx" } });
+    landedToken(unknown);
+    expect(localeCookies(unknown).map((l) => l.split(";")[0]), "a pick naming no shipped locale is none").toEqual(["seazn_locale=es"]);
+    // A refusal stays on the setup page, already in the form's language: nothing to set.
+    const refused = await post(form({ locale: "fr", sides: ["Solo"] }));
+    expect(refused.headers.get("location")).toBe("/fr/play?e=QUICK_MATCH_CREATE_FAILED");
+    expect(localeCookies(refused)).toEqual([]);
   });
 });
 
