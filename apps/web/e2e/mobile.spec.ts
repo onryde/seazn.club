@@ -8369,3 +8369,260 @@ test("sponsor archive: the blocked page, the archived page and the list with the
   }
   expect(checked, "anti-vacuity: painted boxes were counted across both locales").toBeGreaterThan(20);
 });
+
+// ---------------------------------------------------------------------------
+// Quick match (plan 2 Task 10; spec 2026-11-03-quick-match-design.md §5, §8) — a guest's surfaces at every width
+// ---------------------------------------------------------------------------
+//
+// The quick match's own specs measure its pages at 320, 768 and 1280 (quick-match.spec.ts, quick-match-home.spec.ts,
+// quick-match-pad-back-link.spec.ts) and the walkthrough plays it at 390; these are the seven-width cases the plan owes.
+// Nothing is seeded: each quick match is made through the setup form, the pad is opened by the home's own Score, and the
+// rally is a tap. A guest with no account (a context of its own: a bare `newContext()` here inherits the signed-in Pro
+// state), the cookie banner already answered, at this project's viewport. At every surface: no sideways scroll
+// (`expectNoHorizontalScroll` lifts the global clip before it reads) and nothing clipped inside it (`overflowingIn`: a box
+// whose extra content can neither be reached nor says it was shortened is a defect; one that scrolls must be a tab stop,
+// AGENTS.md class 23). The setup page had never been measured at 320 before this case: every other case resizes AFTER the
+// form is posted.
+//
+// LAST in this serial file on purpose (AGENTS.md class 21): a red here skips nothing after it. Side names are realistic
+// and long (43 and 37 characters, and of any first match among three sides at least one of them plays, so the pad's
+// scorebug carries one); badminton is clicked explicitly (the spec's own example).
+
+const QM_MK = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../src/dictionaries/en/marketing.json", import.meta.url)), "utf8"),
+) as Record<string, string>;
+/** An en line with its `{name}` slots filled; a missing key or slot throws rather than reading "undefined". */
+function qmWords(dict: Record<string, string>, key: string, vars: Record<string, string | number> = {}): string {
+  const text = dict[key];
+  if (typeof text !== "string") throw new Error(`the en dictionary has no "${key}"`);
+  return text.replace(/\{(\w+)\}/g, (_, slot: string) => {
+    if (!Object.hasOwn(vars, slot)) throw new Error(`"${key}" needs {${slot}}`);
+    return String(vars[slot]);
+  });
+}
+const qmUi = (key: string, vars?: Record<string, string | number>) => qmWords(uiEn, key, vars);
+const qmMk = (key: string, vars?: Record<string, string | number>) => qmWords(QM_MK, key, vars);
+const QM_PLURAL = new Intl.PluralRules("en");
+
+const QM_LONG = "The Extraordinarily Long-Named Doubles Pair";
+const QM_LONG_TOO = "Priya Raghunathan & Tomasz Wisniewski";
+/** A page load or a redirect followed: the budgets below are built from it and the pad's hold (AGENTS.md class 20). */
+const QM_NAV_MS = 20_000;
+/** A click, a fill or a measurement. */
+const QM_ACT_MS = 2_000;
+/** The boxes a person reads inside a surface (never an `<input>`/`<select>`: a field scrolls its own text by design). */
+const QM_SCAN = "div,span,p,a,button,label,li,ol,ul,h1,h2,th,td,table,section,summary,legend,small";
+
+/** A guest's own browser at this project's viewport: no session, the cookie banner already answered. */
+async function qmGuest(browser: import("@playwright/test").Browser) {
+  const viewport = projectViewport();
+  expect(viewport, "premise: this project declares a viewport").not.toBeNull();
+  return browser.newContext({
+    viewport: viewport!,
+    storageState: await consentedAnonymousState(),
+    baseURL: test.info().project.use.baseURL,
+  });
+}
+
+/** Nothing clipped inside `root` at this width; the count of boxes scanned (zero would pass anything, so it fails). */
+async function qmNotClipped(page: Page, root: string, label: string, exempt: (box: string) => boolean = () => false): Promise<number> {
+  const boxes = await page.locator(root).locator(QM_SCAN).count();
+  expect(boxes, `${label}: the scan had boxes to scan`).toBeGreaterThan(0);
+  const { clipped, scrollable } = await overflowingIn(page, root, QM_SCAN, `${label} was not in the DOM`);
+  expect(clipped.filter((box) => !exempt(box)), `${label} clips content at ${projectTag()}`).toEqual([]);
+  for (const box of scrollable) expect(box, `${label}: a scrolling box is not keyboard-reachable`).toMatch(/tabindex=0$/);
+  return boxes;
+}
+
+/** The setup form filled the way a guest fills it: badminton, the name, the sides, League when there are three or more. */
+async function qmFillSetup(page: Page, name: string, sides: readonly string[]): Promise<void> {
+  await page.goto("/en/play", { waitUntil: "load" });
+  const form = page.getByTestId("qm-setup-form");
+  await expect(form).toBeVisible({ timeout: QM_NAV_MS });
+  // The island is live once blank rows hold Start disabled (the server's no-script Start is enabled): typing before then races
+  // React taking the inputs over.
+  await expect(page.getByTestId("qm-start")).toBeDisabled();
+  await form.getByText(qmUi("sport.badminton"), { exact: true }).click();
+  await expect(form.getByRole("radio", { name: qmUi("sport.badminton"), exact: true })).toBeChecked();
+  await form.getByLabel(qmMk("quickMatch.setup.nameLabel"), { exact: true }).fill(name);
+  for (let n = 3; n <= sides.length; n += 1) await form.getByRole("button", { name: qmMk("quickMatch.setup.addSide") }).click();
+  for (const [i, s] of sides.entries()) await form.getByLabel(qmMk("quickMatch.setup.sideLabel", { n: i + 1 }), { exact: true }).fill(s);
+  if (sides.length > 2) {
+    await form.getByText(qmUi("quickMatch.format.league"), { exact: true }).click();
+    await expect(form.getByRole("radio", { name: qmUi("quickMatch.format.league"), exact: true })).toBeChecked();
+  }
+  // A single round robin of n sides plays n(n-1)/2 matches.
+  const matches = (sides.length * (sides.length - 1)) / 2;
+  await expect(page.getByTestId("qm-start-count")).toHaveText(
+    qmMk(`quickMatch.setup.startCount.${QM_PLURAL.select(matches)}`, { count: matches }),
+  );
+}
+
+/** Start, followed to the home; returns the home's path. */
+async function qmStart(page: Page): Promise<string> {
+  await page.getByTestId("qm-start").click();
+  await page.waitForURL(/\/q\/qm_[^/?#]+$/, { timeout: QM_NAV_MS });
+  return new URL(page.url()).pathname;
+}
+
+test("quick match (guest): the setup form, the home with Share's QR and Add a match open, the pad after one rally and its way back, and the save page hold at this width; the home reads the rally", async ({
+  browser,
+}) => {
+  // Six page loads or redirects, the rally's hold before it is sent and the record read back, and ~30 local acts.
+  test.setTimeout(6 * QM_NAV_MS + HOLD_MS + QM_NAV_MS + 30 * QM_ACT_MS);
+  const ctx = await qmGuest(browser);
+  let scanned = 0;
+  try {
+    const page = await ctx.newPage();
+    const name = `Mobile quick match ${TAG}-${projectTag()}`;
+    const sides = [QM_LONG, QM_LONG_TOO, "Lee & Ana"] as const;
+
+    // ── 1. The setup form, filled, before Start ──
+    await qmFillSetup(page, name, sides);
+    await expectNoHorizontalScroll(page);
+    // The one designed overhang: docked (below 640) the Start bar bleeds through its column's gutter to the column's edges
+    // (`-mx-4` under the column's `px-4`, setup-form.tsx), so the FORM's own box reports it. Exempt that one line, and only
+    // while the bar is docked and spans its column exactly; from 640 nothing is exempt.
+    const bar = await page.evaluate(() => {
+      const form = document.querySelector<HTMLElement>('[data-testid="qm-setup-form"]');
+      const el = document.querySelector<HTMLElement>('[data-testid="qm-start-bar"]');
+      if (!form?.parentElement || !el) return null;
+      const [b, c] = [el.getBoundingClientRect(), form.parentElement.getBoundingClientRect()];
+      return { docked: getComputedStyle(el).position === "sticky", left: Math.round(b.left - c.left), right: Math.round(c.right - b.right) };
+    });
+    expect(bar, "the setup form and its Start bar are in the DOM").not.toBeNull();
+    if (bar!.docked) expect([bar!.left, bar!.right], "docked, the Start bar spans its column exactly").toEqual([0, 0]);
+    scanned += await qmNotClipped(page, '[data-testid="qm-setup-form"]', "the setup form", (box) => bar!.docked && /^form \d+px content in \d+px$/.test(box));
+    await hitFloor(page.getByTestId("qm-start"), "Start", 44);
+    const home = await qmStart(page);
+
+    // ── 2. The home: hero, Share (its QR drawn) and Add a match, opened ──
+    const hero = page.getByTestId("qm-hero");
+    await expect(hero.getByTestId("qm-hero-kicker")).toHaveText(qmUi("quickMatch.home.upNext", { n: 1, total: 3 }));
+    const heroNames = [(await hero.getByTestId("qm-hero-home").textContent())!.trim(), (await hero.getByTestId("qm-hero-away").textContent())!.trim()];
+    expect(sides, "the hero names two of the typed sides").toEqual(expect.arrayContaining(heroNames));
+    expect(heroNames.some((n) => n === QM_LONG || n === QM_LONG_TOO), "premise: a long name plays the first match (so the pad carries one)").toBe(true);
+    const fixtureId = (await page.locator('[data-testid="qm-match"][data-next="true"]').getAttribute("data-fixture-id"))!;
+    expect(fixtureId, "the row marked next is the hero's match").toMatch(/^[0-9a-f-]{36}$/);
+    await hitFloor(hero.getByTestId("qm-score"), "the hero's Score", 44);
+    await expect(page.getByTestId("qm-share-copy"), "Copy is on first paint").toBeVisible();
+    await hitFloor(page.getByTestId("qm-share-copy"), "Copy link", 44);
+    await hitFloor(page.getByTestId("qm-share-toggle"), "Show QR", 44);
+    await page.getByTestId("qm-share-toggle").click();
+    await expect(page.getByTestId("qm-share-qr"), "Show QR draws the code").toBeVisible({ timeout: QM_NAV_MS });
+    await hitFloor(page.getByTestId("qm-add-match-open"), "+ Add a match", 44);
+    await page.getByTestId("qm-add-match-open").click();
+    await expect(page.getByTestId("qm-add-match-form")).toBeVisible();
+    await hitFloor(page.getByTestId("qm-add-match-submit"), "Add the match", 44);
+    await expectNoHorizontalScroll(page);
+    scanned += await qmNotClipped(page, '[data-testid="qm-home"]', "the home, Share and Add a match open");
+
+    // ── 3. The pad: Score → the Confirm card → Start match → one rally to the home side ──
+    await hero.getByTestId("qm-score").click();
+    await page.waitForURL(/\/score\/dl_[A-Za-z0-9_-]+$/, { timeout: QM_NAV_MS });
+    await expect(page.getByTestId("scan-confirm")).toBeVisible({ timeout: QM_NAV_MS });
+    await expectNoHorizontalScroll(page);
+    await page.getByTestId("score-start-match").click();
+    const half = (s: "home" | "away") => page.locator(`[data-role="pad-v3"] button[data-role="v3-scorebug-half"][data-side="${s}"]`);
+    await expect(half("home"), "Start opens the pad, its halves tappable").toBeVisible({ timeout: QM_NAV_MS });
+    await assertTouchFloor(half("home"), "the home half");
+    await assertTouchFloor(half("away"), "the away half");
+    await half("home").click();
+    await expectScorebugNotClipped(page, "the quick match pad, a long name on it");
+    await expectNoHorizontalScroll(page);
+    // The pad soft-commits: the rally is sent after the hold (queue.ts), so the record is polled past it before leaving.
+    await expect
+      .poll(
+        async () => {
+          const [row] = await withDb(
+            (sql) => sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${fixtureId} and type = 'badminton.rally'`,
+          );
+          return row!.n;
+        },
+        { timeout: HOLD_MS + QM_NAV_MS, message: "the rally never reached the ledger" },
+      )
+      .toBe(1);
+    // The way back: on screen at this width (under the pad on a phone, above it from md), a real 44px target.
+    const back = page.getByTestId("quick-match-back-link");
+    await expect(back).toHaveAccessibleName(qmUi("quickMatch.backToMatch"));
+    scanned += await paintedInsideViewport(back, "Back to the quick match");
+    await hitFloor(back, "Back to the quick match", 44);
+    await back.click();
+    await page.waitForURL((u) => u.pathname === home && u.search === "", { timeout: QM_NAV_MS });
+
+    // ── 4. The home again: live, with the rally's point (one to the home side, none to the away side), still fitting ──
+    await expect(hero.getByTestId("qm-hero-kicker")).toHaveText(qmUi("quickMatch.home.liveMatch", { n: 1, total: 3 }));
+    await expect(hero.getByTestId("qm-hero-score"), "the home reads the rally, not a stale page").toHaveText(/^\s*1\D+0\s*$/);
+    await expectNoHorizontalScroll(page);
+    scanned += await qmNotClipped(page, '[data-testid="qm-home"]', "the home with a live match");
+
+    // ── 5. The save page, signed out ──
+    await page.goto(`${home}/save`, { waitUntil: "load" });
+    await expect(page.getByTestId("qm-save-title")).toHaveText(qmUi("quickMatch.save.title", { name }));
+    await hitFloor(page.getByTestId("qm-save"), "Save this match", 44);
+    await hitFloor(page.getByTestId("qm-save-back"), "Back to the match", 44);
+    await expectNoHorizontalScroll(page);
+    scanned += await qmNotClipped(page, '[data-testid="qm-save-page"]', "the save page");
+  } finally {
+    await ctx.close();
+  }
+  expect(scanned, "anti-vacuity: every surface had boxes to scan").toBeGreaterThan(40);
+});
+
+test("quick match (saver): signed in, Save; the home's Saved and In your account; /me's Quick matches with Rename and Delete opened, then Delete for everyone, hold at this width", async ({
+  browser,
+}) => {
+  // Four page loads or redirects, a magic-link sign-in (two more), and ~25 local acts.
+  test.setTimeout(6 * QM_NAV_MS + 25 * QM_ACT_MS);
+  const ctx = await qmGuest(browser);
+  let scanned = 0;
+  try {
+    const page = await ctx.newPage();
+    // The longest name the create allows, its tail one unbroken word: the hardest to fit (the 3-width /me case's own name).
+    const name = `Mobile me ${TAG}-${projectTag()} ${"Longwordwithoutanybreak".repeat(4)}`.slice(0, 80);
+    await qmFillSetup(page, name, [QM_LONG, "Lee & Ana"]);
+    const home = await qmStart(page);
+    await loginUi(page, `delivered+e2e-qm-mobile-${TAG}-${projectTag()}-${Math.random().toString(36).slice(2, 7)}@resend.dev`, `${home}/save`);
+    await expect(page.getByTestId("qm-save-title")).toHaveText(qmUi("quickMatch.save.title", { name }));
+    await page.getByTestId("qm-save").click();
+    await page.waitForURL((u) => u.pathname === home && u.search === "", { timeout: QM_NAV_MS });
+
+    // The home, saved: "Saved" and the way to the account's list, a 44px target.
+    await expect(page.getByTestId("qm-saved")).toHaveText(qmUi("quickMatch.home.saved"));
+    await expect(page.getByTestId("qm-save"), "no Save once saved (the positive pair: it was there to press)").toHaveCount(0);
+    await hitFloor(page.getByTestId("qm-in-account"), "In your account", 44);
+    await expectNoHorizontalScroll(page);
+    scanned += await qmNotClipped(page, '[data-testid="qm-home"]', "the saved home");
+
+    // /me: the one row, then Rename's form, then Delete's confirmation, each measured open.
+    await page.goto("/me", { waitUntil: "load" });
+    const list = '[data-testid="me-quick-matches"]';
+    const row = page.locator(list).locator("li[data-qm-id]");
+    await expect(row).toHaveCount(1, { timeout: QM_NAV_MS });
+    await expect(row.getByTestId("me-qm-name")).toHaveText(name);
+    for (const id of ["me-qm-name", "me-qm-rename", "me-qm-delete"]) await hitFloor(row.getByTestId(id), id, 44);
+    await expectNoHorizontalScroll(page);
+    scanned += await qmNotClipped(page, list, "the Quick matches list");
+
+    await row.getByTestId("me-qm-rename").click();
+    await expect(row.getByTestId("me-qm-rename-input")).toHaveValue(name);
+    for (const id of ["me-qm-rename-input", "me-qm-rename-save", "me-qm-rename-cancel"]) await hitFloor(row.getByTestId(id), id, 44);
+    await expectNoHorizontalScroll(page);
+    scanned += await qmNotClipped(page, list, "the Quick matches list, Rename open");
+    await row.getByTestId("me-qm-rename-cancel").click();
+    await expect(row.getByTestId("me-qm-rename-form"), "Cancel closes the form").toHaveCount(0);
+
+    await row.getByTestId("me-qm-delete").click();
+    await expect(row.getByTestId("me-qm-delete-question")).toHaveText(qmUi("quickMatch.me.deleteConfirm"));
+    for (const id of ["me-qm-delete-yes", "me-qm-delete-cancel"]) await hitFloor(row.getByTestId(id), id, 44);
+    await expectNoHorizontalScroll(page);
+    scanned += await qmNotClipped(page, list, "the Quick matches list, Delete's confirmation open");
+    await row.getByTestId("me-qm-delete-yes").click();
+    await expect(page.locator(list), "the last row deleted, the section goes").toHaveCount(0);
+    await expect(page.getByTestId("me-qm-status")).toHaveText(qmUi("quickMatch.me.deleted", { name }));
+    await expectNoHorizontalScroll(page);
+  } finally {
+    await ctx.close();
+  }
+  expect(scanned, "anti-vacuity: every surface had boxes to scan").toBeGreaterThan(20);
+});
