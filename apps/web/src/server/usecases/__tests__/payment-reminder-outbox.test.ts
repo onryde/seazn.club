@@ -327,6 +327,10 @@ describe.skipIf(!HAS_DB)("the organiser's manual payment reminder rides the outb
     });
     expect(row!.subject).toBe(dictionarySubject("nl", "paymentReminder.subject", { competitionName: w.competition.name }));
     expect(callsFor(row!.id)).toHaveLength(1);
+    // Polish wave sign-off V5: the producer names the entry's REAL division (read from the row, not a fixture on both ends).
+    const [{ name: divisionName }] = await sql<{ name: string }[]>`select name from divisions where id = ${w.division.id}`;
+    expect(divisionName.length, "premise: the division has a name").toBeGreaterThan(0);
+    expect(callsFor(row!.id)[0]!.text, "the reminder names the division").toContain(divisionName);
     expect(await audited(), "the audit entry was written with the row").toHaveLength(1);
 
     // The second press: a deliberate second mail. The first has been sent, so the trigger marks it replaced and both went out.

@@ -5595,6 +5595,7 @@ export type DictionaryKey =
   | "paymentReminder.subject"
   | "paymentReminder.textAlreadyPaid"
   | "paymentReminder.textContactOrg"
+  | "paymentReminder.textEntry"
   | "paymentReminder.textFee"
   | "paymentReminder.textHeld"
   | "paymentReminder.textHeldUntil"

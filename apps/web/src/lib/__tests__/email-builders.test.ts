@@ -76,6 +76,7 @@ const registrationArgs = {
   orgName: "Riverside Racquets",
   competitionName: "Spring Open 2026",
   displayName: "Alex",
+  divisionName: "Open Singles",
   contactName: "Alex Contact",
   status: "pending",
   feeCents: 2500,

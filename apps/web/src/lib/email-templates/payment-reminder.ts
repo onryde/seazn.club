@@ -12,6 +12,8 @@ export interface PaymentReminderArgs {
   competitionName: string;
   /** The entry the fee is for (named in the body, in brackets: a rep may hold several). */
   displayName: string;
+  /** The entry's division, named beside it: two entries for one person are otherwise the same name (polish wave sign-off V5). */
+  divisionName: string;
   /** The person the mail is for: the greeting names them, never the entry (polish wave W4). */
   contactName: string;
   feeCents: number;
@@ -72,6 +74,7 @@ export function paymentReminderTemplate(
           t(dict, "paymentReminder.body", {
             contactName: escapeHtml(opts.contactName),
             displayName: escapeHtml(opts.displayName),
+            divisionName: escapeHtml(opts.divisionName),
             competitionName: escapeHtml(opts.competitionName),
             amount,
           }),
@@ -83,6 +86,8 @@ export function paymentReminderTemplate(
         competitionName: opts.competitionName,
         orgName: opts.orgName,
       }) +
+      "\n" +
+      t(dict, "paymentReminder.textEntry", { displayName: opts.displayName, divisionName: opts.divisionName }) +
       "\n" +
       t(dict, "paymentReminder.textFee", { amount }) +
       (card

@@ -447,6 +447,8 @@ export async function paymentReminderMessage(
   },
 ): Promise<OutboxMessage> {
   const locale = await recipientLocale(sql, { pick: reg.locale, userId: reg.user_id, orgDefault: ctx.default_locale });
+  // Polish wave sign-off V5: the reminder names the entry's division (two entries for one person are otherwise the same name).
+  const [division] = await sql<{ name: string }[]>`select name from divisions where id = ${reg.division_id}`;
   return {
     kind: "payment_reminder",
     refType: "registration",
@@ -458,6 +460,7 @@ export async function paymentReminderMessage(
         orgName: ctx.org_name,
         competitionName: ctx.comp_name,
         displayName: reg.display_name,
+        divisionName: division?.name ?? "",
         contactName: reg.contact_name,
         feeCents: o.feeCents,
         currency: reg.currency,

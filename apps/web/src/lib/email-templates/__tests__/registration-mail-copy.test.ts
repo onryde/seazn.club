@@ -26,7 +26,7 @@ const words = (html: string): string => html.replace(/<style[\s\S]*?<\/style>/g,
 describe("a registrant mail greets the person, not the entry", () => {
   it.each(LOCALES)("%s: cart confirmation, reminder, promotion and refund name the contact BEFORE the entry", async (locale) => {
     const dict = await dictOf(locale);
-    const base = { orgName: "Riverside Club", competitionName: "Spring Open", displayName: TEAM, contactName: CONTACT, currency: "gbp" };
+    const base = { orgName: "Riverside Club", competitionName: "Spring Open", displayName: TEAM, divisionName: DIVISION, contactName: CONTACT, currency: "gbp" };
     const outs = {
       confirmation: registrationTemplate(
         {
@@ -219,5 +219,26 @@ describe("a single-entry confirmation says what the entry is waiting on (V2)", (
     expect(out.text).toContain("Status: Awaiting approval");
     expect(unescape(out.html)).toContain("Your entry for Spring Open is waiting for the organiser's approval.");
     expect(out.text).toContain("We'll email you as soon as it's approved.");
+  });
+});
+
+// Polish wave sign-off V5: the payment reminder named the entry ("Maya") but not its division, so a registrant holding two entries
+// for one person (singles and doubles) could not tell which one owed. It now names the division, html and text, like every line of
+// the cart confirmation (W7).
+describe("the payment reminder names the entry's division (V5)", () => {
+  it.each(LOCALES)("%s: html and text both carry the division beside the entry, for a card and an offline reminder", async (locale) => {
+    const dict = await dictOf(locale);
+    const args = { orgName: "Riverside Club", competitionName: "Spring Open", displayName: "Maya", divisionName: "Masters Singles", contactName: CONTACT, feeCents: 1500, currency: "gbp", paymentInstructions: "Pay at the desk", payPageUrl: PAY_PAGE };
+    let checked = 0;
+    for (const method of ["card", "offline"] as const) {
+      const out = paymentReminderTemplate({ ...args, method }, dict, locale);
+      for (const [part, body] of [["html", words(out.html)], ["text", out.text]] as const) {
+        expect(body, `${locale} ${method} ${part}: names the division`).toContain("Masters Singles");
+        expect(body, `${locale} ${method} ${part}: still names the entry`).toContain("Maya");
+        checked += 1;
+      }
+      expect(out.html, `${locale} ${method}: no unfilled placeholder`).not.toMatch(/\{[a-zA-Z]+\}/);
+    }
+    expect(checked, "anti-vacuity: two methods x two parts").toBe(4);
   });
 });
