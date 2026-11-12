@@ -70,7 +70,17 @@ export default async function ScorePadPage({
     // link was a guest's (controller ruling 2026-11-12: no organiser to ask). Looked up only for a refusal the resolver
     // coded: anything else (the database itself failing) keeps the screen it always had, never a second query's throw.
     const code = err instanceof HttpError ? (err.code ?? null) : null;
-    const quickMatch = code !== null && (await deviceLinkOrgId(token)) === QUICK_MATCH_SYSTEM_ORG_ID;
+    let quickMatch = false;
+    if (code !== null) {
+      try {
+        quickMatch = (await deviceLinkOrgId(token)) === QUICK_MATCH_SYSTEM_ORG_ID;
+      } catch {
+        // The lookup only refines the hint: its failure (the database, after the resolver answered) never costs the dead
+        // screen, which keeps its code's message and the ordinary hint (final review A m-1). No error object is logged: a
+        // driver error can carry the statement's parameters.
+        log.warn({ code }, "dead link: the org lookup for its hint failed; the ordinary hint is shown");
+      }
+    }
     return <DeadLink message={t(deadLinkKey(code))} hint={t(askFreshLinkKey(quickMatch))} />;
   }
 

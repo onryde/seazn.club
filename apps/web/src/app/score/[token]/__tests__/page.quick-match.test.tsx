@@ -499,6 +499,23 @@ describe.skipIf(!HAS_DB)("the dead link's hint names no organiser on a quick mat
     }
   });
 
+  it("a coded refusal whose org lookup then fails (the database, after the resolver): the plain dead screen, never a 500 (final review A m-1)", async () => {
+    const { fixtureId, secret } = await quickMatchPad();
+    await revoke(fixtureId);
+    const realOrgId = vi.mocked(deviceLinkOrgId).getMockImplementation()!;
+    vi.mocked(deviceLinkOrgId).mockClear();
+    vi.mocked(deviceLinkOrgId).mockRejectedValueOnce(new Error("connection terminated"));
+    try {
+      const { html } = await render(secret);
+      expect(vi.mocked(deviceLinkOrgId), "precondition: the coded refusal asked for the org, and that ask failed").toHaveBeenCalledTimes(1);
+      expect(html, "the revoked screen still draws, for its own code").toContain(en["device.dead.revoked"]);
+      expect(html, "with the hint a failed lookup cannot refine: the ordinary one").toContain(ORGANISER_HINT);
+      expect(html).not.toContain(QM_HINT);
+    } finally {
+      vi.mocked(deviceLinkOrgId).mockReset().mockImplementation(realOrgId);
+    }
+  });
+
   it.each([
     { who: "a quick match", pad: quickMatchPad, hint: QM_HINT, not: ORGANISER_HINT },
     { who: "an ordinary org", pad: ordinaryPad, hint: ORGANISER_HINT, not: QM_HINT },
