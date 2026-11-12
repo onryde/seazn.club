@@ -1642,6 +1642,72 @@ describe.skipIf(!HAS_DB)("the status page's Pay hands an open session out again 
     expect(payableFor(reg.id)).toHaveLength(1);
   });
 
+  // Polish wave final fix m8: the cart's own session inside the margin was retired only by the mint's supersede step - AFTER the
+  // create, and best-effort - so a Stripe hiccup there left two payable sessions for the entry. It is now expired BEFORE the mint,
+  // fail-closed, exactly as the payment page's own session (the describe below).
+  describe("the cart's own session inside the margin is retired before the mint, fail-closed (m8)", () => {
+    async function shortSignUp() {
+      const signed = await signedUp();
+      const now = new Date();
+      stripeMock.store.get(signed.s0)!.expires_at = Math.floor(now.getTime() / 1000) + 9 * 60;
+      return { ...signed, now };
+    }
+
+    it("expired BEFORE the new session is created", async () => {
+      const { reg, accessToken, s0, now } = await shortSignUp();
+
+      await resumeRegistrationCheckout(reg.id, accessToken, ORIGIN, now);
+
+      expect(stripeMock.checkoutExpire).toHaveBeenCalledWith(s0);
+      const expireOrder = stripeMock.checkoutExpire.mock.invocationCallOrder[0]!;
+      const createOrder = stripeMock.checkoutCreate.mock.invocationCallOrder.at(-1)!;
+      expect(expireOrder, "the old one is retired before the new one exists").toBeLessThan(createOrder);
+      expect(payableFor(reg.id)).toEqual([(await cartPointer(reg.id))!]);
+    });
+
+    it("an expire that fails while it is still open → 502, zero create, the old session still the only payable one", async () => {
+      const { reg, accessToken, s0, now } = await shortSignUp();
+      stripeMock.checkoutExpire.mockRejectedValueOnce(new Error("stripe down"));
+      const creates = stripeMock.checkoutCreate.mock.calls.length;
+
+      const err = await rejection(resumeRegistrationCheckout(reg.id, accessToken, ORIGIN, now));
+
+      expect(err.status).toBe(502);
+      expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(creates);
+      expect(payableFor(reg.id)).toEqual([s0]);
+      expect(await cartPointer(reg.id)).toBe(s0);
+    });
+
+    it("paid in another tab between the read and the expire → 409 PAID_ONLINE, zero create", async () => {
+      const { reg, accessToken, now } = await shortSignUp();
+      stripeMock.checkoutExpire.mockImplementationOnce(async (id: string) => {
+        payInStripe(id);
+        throw Object.assign(new Error('Only Checkout Sessions with a status in ["open"] can be expired.'), { statusCode: 400 });
+      });
+      const creates = stripeMock.checkoutCreate.mock.calls.length;
+
+      const err = await rejection(resumeRegistrationCheckout(reg.id, accessToken, ORIGIN, now));
+
+      expect(err.status).toBe(409);
+      expect(err.code).toBe("REGISTRATION_PAID_ONLINE");
+      expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(creates);
+    });
+
+    it("a session that also covers a SIBLING is not this entry's to expire: left alone, as the supersede rule leaves it", async () => {
+      const { rig, reg: a, accessToken } = await cardEntry({ displayName: "Entry A" });
+      await seedSecondEntry(a.group_id, rig.division.id, 1500, "Entry B");
+      await mintGroupCheckout(a.group_id, rig.division.id, ORIGIN, accessToken);
+      const sAB = (await cartPointer(a.id))!;
+      const now = new Date();
+      stripeMock.store.get(sAB)!.expires_at = Math.floor(now.getTime() / 1000) + 9 * 60;
+
+      await resumeRegistrationCheckout(a.id, accessToken, ORIGIN, now);
+
+      expect(stripeMock.checkoutExpire).not.toHaveBeenCalledWith(sAB);
+      expect(stripeMock.store.get(sAB)!.status).toBe("open");
+    });
+  });
+
   it("a sign-up session covering [A,B] is not handed to A's Pay (it would charge B too); A's own session then is, on the next press", async () => {
     const { rig, reg: a, accessToken } = await cardEntry({ displayName: "Entry A" });
     const b = await seedSecondEntry(a.group_id, rig.division.id, 1500, "Entry B");

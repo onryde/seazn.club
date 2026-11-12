@@ -238,9 +238,12 @@ describe.skipIf(!HAS_DB)(
         return { id };
       });
 
-      await resumeRegistrationCheckout(first.registration.id, first.access_token, "http://test.local");
+      // Re-minted through mintGroupCheckout, which reaches this step directly. A status-page resume no longer does for a session that
+      // is the entry's own: it expires that one BEFORE minting, fail-closed (polish wave final fix m8,
+      // registration-pay-page-checkout.test.ts), so the supersede step finds it already expired.
+      await mintGroupCheckout(first.registration.group_id, division.id, "http://test.local", first.access_token);
 
-      expect(stripeMock.checkoutRetrieve).toHaveBeenCalledTimes(2); // the G1 guard's read, then the supersede step's
+      expect(stripeMock.checkoutRetrieve).toHaveBeenCalledTimes(1); // the supersede step's read
       expect(stripeMock.checkoutExpire).toHaveBeenCalledWith(firstSessionId);
       // The NEW session was already durably on record when expire() ran —
       // never the old one being expired, which would mean a reader could

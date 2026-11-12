@@ -668,7 +668,7 @@ export async function resumeRegistrationCheckout(
   // Fix round 1 (F2): the payment page's session too, when the cart pointer has moved past it (a sibling's mint).
   const [own] = await sql<{ pay_session_id: string | null }[]>`select pay_session_id from registrations where id = ${reg.id}`;
   const pageId = own?.pay_session_id && own.pay_session_id !== reg.checkout_session_id ? own.pay_session_id : null;
-  let page = await refuseWhileSessionPays(pageId, reg.id);
+  const page = await refuseWhileSessionPays(pageId, reg.id);
   // Polish wave W5 (walkthrough S05: sign-up, decline, Pay now, Pay now opened three sessions): hand an open session for this
   // entry out again rather than mint. Checked after the deadline and Connect refusals above, so a closed window or a disabled
   // account hands out nothing.
@@ -676,12 +676,24 @@ export async function resumeRegistrationCheckout(
     const reuse = stored ? reusableSessionUrl(stored, reg.id, now) : null;
     if (reuse) return { checkout_url: reuse };
   }
-  // The mint below supersedes only the CART pointer's session. The payment page's own session, when the cart pointer has moved
-  // past it, would stay payable beside the new one: expire it first (fail-closed, as the payment page expires its own). It is this
-  // entry's own pointer - only ever minted for this entry alone (`mintEntryPayPageCheckout`) - so no coverage check is owed.
-  if (pageId && page?.status === "open") {
-    page = await expireStoredSession(pageId, reg.id);
-    if (page.status === "complete" && (await completedSessionStillPays(page, reg.id))) {
+  // The payment page's own session, when the cart pointer has moved past it, would stay payable beside the new one: expire it first
+  // (fail-closed, as the payment page expires its own). It is this entry's own pointer - only ever minted for this entry alone
+  // (`mintEntryPayPageCheckout`) - so no coverage check is owed.
+  //
+  // Polish wave final fix m8: the CART pointer's session too, when it is still open (inside the reuse margin, so not handed out
+  // above) and covers this entry alone. The mint's own supersede step (`expireSupersededCheckoutSession`) runs after the create and
+  // is best-effort, so a Stripe hiccup there left two payable sessions for the entry. A session that also covers a sibling is not
+  // this entry's to expire - the supersede's own subsumption rule leaves it too.
+  const cartIds = cart?.status === "open" ? checkoutRegistrationIds(cart) : [];
+  const cartIsOwn = cartIds.length > 0 && cartIds.every((id) => id === reg.id);
+  const beforeMint: [string | null, Stripe.Checkout.Session | null][] = [
+    [pageId, page],
+    [cartIsOwn ? reg.checkout_session_id : null, cart],
+  ];
+  for (const [id, stored] of beforeMint) {
+    if (!id || stored?.status !== "open") continue;
+    const settled = await expireStoredSession(id, reg.id);
+    if (settled.status === "complete" && (await completedSessionStillPays(settled, reg.id))) {
       throw new HttpError(409, "A payment for this entry is already on its way", "REGISTRATION_PAID_ONLINE");
     }
   }
