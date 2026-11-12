@@ -396,11 +396,14 @@ async function confirmPaidRegistration(
       await tx`update registration_groups set checkout_session_id = null, updated_at = now()
                where id = ${reg.group_id} and checkout_session_id = ${sessionId}`;
       if (!paymentIntentId && !reg.payment_intent_id) return null;
+      // Fix round 1 (F3): the money to send back is THIS payment's. The cart's column is first-writer-wins: it can hold a
+      // sibling's payment, or this entry's EARLIER late payment (already refunded) after a re-promotion - refunding that one again
+      // would leave this payment kept.
       return {
         kind: "late",
         reg,
         competitionId: div.competition_id,
-        intent: (reg.payment_intent_id ?? paymentIntentId) as string,
+        intent: (paymentIntentId ?? reg.payment_intent_id) as string,
       };
     }
     const settings = await loadSettings(tx, reg.division_id);
@@ -528,7 +531,11 @@ async function confirmPaidRegistration(
     // no-op rather than a second real Stripe refund (nothing enforced that
     // before; relying on Stripe to reject an over-refund is not guaranteed
     // once a partial refund or dispute has left headroom on the intent).
-    if (outcome.kind === "late" && outcome.reg.refunded_cents >= outcome.reg.amount_cents) {
+    //
+    // Fix round 1 (F3): the question is per PAYMENT (`lateRefundAlreadyMade`), not the entry's running total. A re-promotion
+    // resets the fee and keeps `refunded_cents` (refund history), so the running total read a second late payment as already
+    // refunded and kept it.
+    if (outcome.kind === "late" && (await lateRefundAlreadyMade(outcome.reg, outcome.competitionId, outcome.intent))) {
       return;
     }
     // Read BEFORE the money moves: a failure here lands in `refund_failed` with nothing refunded, which is true, where the same failure
@@ -558,13 +565,16 @@ async function confirmPaidRegistration(
           where id = ${outcome.reg.group_id}`;
       }
       await queueRefundReceipt(tx, { reg: outcome.reg, ctx: ctxRefund, amountCents: entryRefundCents, refundId: refund.id });
+      // In the totals' transaction (fix round 1, F3): this row is what `lateRefundAlreadyMade` reads, so it and the totals commit
+      // together. `payment_intent_id` names the payment it sent back.
+      await audit(tx, outcome.competitionId, outcome.reg.org_id, "registration.refunded", {
+        registration_id: regId,
+        amount_cents: outcome.reg.amount_cents,
+        mode: outcome.kind === "late" ? "late_payment" : "duplicate",
+        stripe_refund_id: refund.id,
+        payment_intent_id: outcome.intent,
+      }, null);
     });
-    await audit(sql, outcome.competitionId, outcome.reg.org_id, "registration.refunded", {
-      registration_id: regId,
-      amount_cents: outcome.reg.amount_cents,
-      mode: outcome.kind === "late" ? "late_payment" : "duplicate",
-      stripe_refund_id: refund.id,
-    }, null);
   } catch (err) {
     await audit(sql, outcome.competitionId, outcome.reg.org_id, "registration.refund_failed", {
       registration_id: regId,
@@ -581,6 +591,22 @@ async function confirmPaidRegistration(
       mode: outcome.kind,
     });
   }
+}
+
+/**
+ * Fix round 1 (F3): whether THIS payment (`intent`) was already sent back as a late payment for this entry - a redelivered or
+ * re-reconciled session is then a no-op. Read from the entry's `registration.refunded` / `late_payment` rows, which name the
+ * payment they refunded. A row written before the payment was named on it cannot say which payment it was: for an entry with one,
+ * the old whole-entry rule stands (`refunded_cents >= amount_cents`), so a redelivery of that older session never refunds twice.
+ */
+async function lateRefundAlreadyMade(reg: RegistrationWithGroupRow, competitionId: string, intent: string): Promise<boolean> {
+  const rows = await sql<{ intent: string | null }[]>`
+    select payload->>'payment_intent_id' as intent from competition_events
+    where competition_id = ${competitionId} and type = 'registration.refunded'
+      and payload->>'registration_id' = ${reg.id} and payload->>'mode' = 'late_payment'`;
+  if (rows.some((r) => r.intent === intent)) return true;
+  if (rows.some((r) => r.intent === null)) return reg.refunded_cents >= reg.amount_cents;
+  return false;
 }
 
 /**

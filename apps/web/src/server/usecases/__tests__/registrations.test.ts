@@ -3158,11 +3158,16 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
     // A goes stale/withdrawn, then its OWN abandoned checkout completes late.
     await sql`update registrations set status = 'withdrawn', withdrawn_at = now() where id = ${a.id}`;
     stripeMock.refundCreate.mockClear();
+    const late = fakeSession(a.id, a.amount_cents);
 
-    await handleRegistrationCheckoutCompleted(fakeSession(a.id, a.amount_cents));
+    await handleRegistrationCheckoutCompleted(late);
 
+    // Fix round 1 (F3): the late money is sent back on the payment that brought it (the late session's own intent), never the
+    // cart's first intent - which paid for A AND B, and refunding it would keep the late payment.
+    expect(late.payment_intent, "premise: the late payment is not the cart's").not.toBe(intent);
+    expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
     expect(stripeMock.refundCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ payment_intent: intent, amount: a.amount_cents }),
+      expect.objectContaining({ payment_intent: late.payment_intent, amount: a.amount_cents }),
     );
     const bAfter = await loadWithGroup(b.id);
     expect(bAfter.refunded_cents).toBe(0); // B's own money never moved

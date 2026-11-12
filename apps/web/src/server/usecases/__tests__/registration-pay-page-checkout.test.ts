@@ -1176,3 +1176,90 @@ describe.skipIf(!HAS_DB)("a late payment refunded after a lapse leaves both Pay 
     expect(await pointersOf(w.reg.id)).toEqual({ pay: "cs_test_newer_f1", cart: "cs_test_newer_f1" });
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Fix round 1 (gap-wave review), F3: "already refunded" is a question about ONE payment, not the entry's running total. A
+// re-promotion resets the fee but never `refunded_cents` (refund history is kept), so the running-total guard kept a second late
+// payment, and the page read a re-promoted entry that paid in time as "refunded".
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("a late refund is decided per payment, and the page's refunded state is the current payment's (fix round 1, F3)", () => {
+  const refundedIntents = () =>
+    stripeMock.refundCreate.mock.calls.map((c) => (c[0] as Stripe.RefundCreateParams).payment_intent as string);
+
+  /** Promoted, pays from the page after the promotion lapsed: one late refund. Returns the token, the session and its intent. */
+  async function oneLateRefund() {
+    const w = await promotedEntry();
+    const token = await linkFor(w.reg);
+    await payFromPayPage(token, ORIGIN);
+    const cs = (await payPointer(w.reg.id))!;
+    await lapse(w.reg.id);
+    const paid = payInStripe(cs);
+    await handleRegistrationCheckoutCompleted(paid);
+    expect(refundedIntents(), "premise: the first late payment was refunded on its own intent").toEqual([paid.payment_intent]);
+    return { ...w, token, first: paid };
+  }
+
+  async function repromote(w: { rig: StripeRigResult; reg: { id: string; group_id: string } }) {
+    const row = await sql.begin((tx) => promoteWaitlistedRow(tx, w.reg.id, w.reg.group_id, w.rig.settings));
+    expect(row?.status, "premise: re-promoted").toBe("pending");
+  }
+
+  it("lapse → late refund → re-promote → late again: the second payment is refunded on ITS intent; a redelivery refunds nothing more", async () => {
+    const w = await oneLateRefund();
+    await repromote(w);
+    await payFromPayPage(w.token, ORIGIN);
+    const cs2 = (await payPointer(w.reg.id))!;
+    await lapse(w.reg.id);
+    const second = payInStripe(cs2);
+    expect(second.payment_intent, "premise: two different payments").not.toBe(w.first.payment_intent);
+
+    await handleRegistrationCheckoutCompleted(second);
+
+    expect(refundedIntents()).toEqual([w.first.payment_intent, second.payment_intent]);
+    const row = await loadWithGroup(w.reg.id);
+    expect(row.status).toBe("waitlisted");
+    expect(row.refunded_cents, "history kept: both refunds counted").toBe(2 * 1500);
+
+    // The sequence: Stripe delivers at least once. The same session again, and the first one again, move no more money.
+    await handleRegistrationCheckoutCompleted(second);
+    await handleRegistrationCheckoutCompleted(w.first);
+    expect(refundedIntents()).toHaveLength(2);
+    expect((await loadWithGroup(w.reg.id)).refunded_cents).toBe(2 * 1500);
+  });
+
+  it("lapse → late refund → re-promote → pays in time: the page reads paid (not refunded), refundedCents 0", async () => {
+    const w = await oneLateRefund();
+    await repromote(w);
+    await payFromPayPage(w.token, ORIGIN);
+    const cs2 = (await payPointer(w.reg.id))!;
+    await handleRegistrationCheckoutCompleted(payInStripe(cs2));
+    const row = await loadWithGroup(w.reg.id);
+    expect(["paid", "confirmed"], "premise: the in-time payment seated the entry").toContain(row.status);
+    expect(row.refunded_cents, "premise: the earlier late refund is still on the books").toBe(1500);
+
+    const doc = await payPageDocByToken(w.token, new Date());
+    expect(doc?.state).toBe("paid");
+    expect(doc!.refundedCents).toBe(0);
+
+    // The positive pair: a refund of THIS payment (the organiser's, on the books like any other) reads refunded, for that amount.
+    await sql`update registrations set refunded_cents = refunded_cents + 700 where id = ${w.reg.id}`;
+    const after = await payPageDocByToken(w.token, new Date());
+    expect(after?.state).toBe("refunded");
+    expect(after!.refundedCents).toBe(700);
+  });
+
+  it("a late refund recorded before the payment was named on it keeps the old whole-entry rule (no second refund on a redelivery)", async () => {
+    const w = await oneLateRefund();
+    // A row written before this change carries no payment_intent_id.
+    const stripped = await sql`
+      update competition_events set payload = payload - 'payment_intent_id'
+      where type = 'registration.refunded' and payload->>'registration_id' = ${w.reg.id}`;
+    expect(stripped.count, "premise: one late-refund row to strip").toBe(1);
+
+    await handleRegistrationCheckoutCompleted(w.first);
+
+    expect(refundedIntents()).toHaveLength(1);
+    expect((await loadWithGroup(w.reg.id)).refunded_cents).toBe(1500);
+  });
+});

@@ -114,10 +114,18 @@ export async function payPageDocByToken(token: string, now: Date): Promise<PayPa
   const settings = await loadSettings(sql, reg.division_id);
   const deadline = reg.promotion_expires_at ?? reg.expires_at;
   const method = settings?.payment_method ?? reg.payment_method;
-  const state = payPageState({ status: reg.status, refundedCents: reg.refunded_cents, deadline, method }, now);
+  const ctx = await divisionCtx(sql, reg.division_id);
+  // Fix round 1 (F3): "refunded" is about the payment the entry holds NOW. `refunded_cents` keeps the whole history, including a
+  // late payment sent back while the entry was off the list (lapsed, expired): that money was never this payment, so a re-promoted
+  // entry that then paid in time is paid, not refunded. Late refunds are the entry's `registration.refunded` / `late_payment` rows.
+  const [late] = await sql<{ cents: string }[]>`
+    select coalesce(sum((payload->>'amount_cents')::int), 0)::text as cents from competition_events
+    where competition_id = ${ctx.competition_id} and type = 'registration.refunded'
+      and payload->>'registration_id' = ${reg.id} and payload->>'mode' = 'late_payment'`;
+  const refundedCents = Math.max(0, reg.refunded_cents - Number(late?.cents ?? 0));
+  const state = payPageState({ status: reg.status, refundedCents, deadline, method }, now);
   if (state === null) return null;
 
-  const ctx = await divisionCtx(sql, reg.division_id);
   const locale = await recipientLocale(sql, { pick: reg.locale, userId: reg.user_id, orgDefault: ctx.default_locale });
   const lines = registrationLineItems([reg], ctx.comp_name).map((li) => ({
     label: li.price_data.product_data.name,
@@ -155,7 +163,7 @@ export async function payPageDocByToken(token: string, now: Date): Promise<PayPa
     currency: reg.currency,
     lines,
     totalCents: lines.reduce((s, l) => s + l.amountCents, 0),
-    refundedCents: reg.refunded_cents,
+    refundedCents,
     deadline,
     refCode: reg.ref_code,
     orgName: ctx.org_name,
