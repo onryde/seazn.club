@@ -8107,6 +8107,7 @@
   "matchDay.code.scope.venue": "Un site",
   "matchDay.code.scope.courts": "Certains terrains",
   "matchDay.code.day": "Jour",
+  "matchDay.code.dayHint": "Le code fonctionne de 00:00 à 24:00 ce jour-là ({zone}) et affiche les matchs programmés ce jour-là.",
   "matchDay.code.approve": "Peut approuver les tirages",
   "matchDay.code.mint": "Créer le code",
   "matchDay.code.minting": "Création…",

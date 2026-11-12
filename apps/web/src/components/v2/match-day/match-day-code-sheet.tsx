@@ -26,6 +26,8 @@ export interface MatchDayCodeSheetProps {
   locale: Locale;
   /** The organisation's day (`MatchDayView.date`, YYYY-MM-DD): the default, and the earliest a code may be for. */
   today: string;
+  /** The organisation's zone (`MatchDayView.tz`): the zone the code's day runs in, named in the Day hint. */
+  zone: string;
   /** Every court on the board, for the venue and court pickers. */
   courts: readonly MatchDayCourt[];
   /** The venues with a match today (`MatchDayView.venues_today`): offered first; every venue on the board when empty. */
@@ -56,7 +58,7 @@ export function scopeBody(kind: ScopeKind, venueId: string | null, courtIds: Rea
   return courtIds.size === 0 ? null : { kind, court_ids: [...courtIds] };
 }
 
-export function MatchDayCodeSheet({ competitionId, dict, locale, today, courts, venuesToday, onClose }: MatchDayCodeSheetProps) {
+export function MatchDayCodeSheet({ competitionId, dict, locale, today, zone, courts, venuesToday, onClose }: MatchDayCodeSheetProps) {
   const venues = codeVenues(courts, venuesToday);
   const [kind, setKind] = useState<ScopeKind>("competition");
   const [venueId, setVenueId] = useState<string | null>(venues[0]?.id ?? null);
@@ -161,8 +163,12 @@ export function MatchDayCodeSheet({ competitionId, dict, locale, today, courts, 
             className="input min-h-11"
             value={day}
             min={today}
+            aria-describedby="md-code-day-hint"
             onChange={(e) => setDay(e.target.value || today)}
           />
+          <span id="md-code-day-hint" data-testid="md-code-day-hint" className="text-xs text-slate-600">
+            {t(dict, "matchDay.code.dayHint", { zone })}
+          </span>
         </label>
         <label className="flex min-h-11 items-center gap-2 text-sm">
           <input type="checkbox" data-testid="md-code-approve" checked={canApprove} onChange={(e) => setCanApprove(e.target.checked)} />
