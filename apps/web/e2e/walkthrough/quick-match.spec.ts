@@ -452,7 +452,7 @@ async function playHeroMatch(
 
   // ---- Back to the quick match ----
   if (leave === "after-result") {
-    await expect(p.getByText(ui("device.resultRecorded")), "the device page says the match is decided").toBeVisible({
+    await expect(p.getByText(ui("device.quickMatch.resultSaved")), "the device page says the match is decided").toBeVisible({
       timeout: DECIDE_MS,
     });
     await expect(pad(p), "a decided match unmounts the pad").toHaveCount(0);
