@@ -1,6 +1,9 @@
 import { test as base, expect, type Browser, type BrowserContextOptions, type Page, type TestInfo } from "@playwright/test";
-import { expectNoHorizontalScroll, loginUi, TAG } from "./helpers";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { expectNoHorizontalScroll, loginUi, TAG, withDb } from "./helpers";
 import { consentedAnonymousState } from "./scorepad-a11y-kit";
+import { HOLD_MS } from "../src/components/v2/scorepad/queue";
 
 // Quick match plan 2 (spec docs/superpowers/specs/2026-11-03-quick-match-design.md §5): the guest's surfaces in a real
 // browser, at 1280 (the `parallel` project). Task 4 writes the setup screen's cases; Task 10 extends this file with the
@@ -454,4 +457,150 @@ test("the account's Quick matches (plan 3 Task 6, review m5): two saved, one del
   await page.reload();
   await expect(page.getByTestId("me-quick-matches").locator("li[data-qm-id]")).toHaveCount(1);
   await expect(page.getByTestId("me-quick-matches").getByTestId("me-qm-name")).toHaveText(names[1]!);
+});
+
+// ── Task 10: the league flow, the URL forms, a knockout of 4 ───────────────────────────────────────────────────────
+//
+// The plan's own Task 10 cases, at 1280 (pre-flight amendment B10/D7). What they add over the cases above, the home spec
+// (quick-match-home.spec.ts) and the walkthrough (walkthrough/quick-match.spec.ts, which plays whole matches at 390 and
+// always leaves the pad by its own link): the BROWSER's Back from the pad after a rally reads the home fresh, the home
+// opens from the link forms a guest really pastes, and a knockout of four lays out two numbered semi-finals and a final
+// that waits. The seven widths are mobile.spec.ts's quick match cases.
+//
+// Every line the home is expected to read is the en dictionary's (never retyped); the score after one rally is the
+// rulebook's (rally-point scoring: the side that wins a rally adds one point); the match counts are the format's (a round
+// robin of n plays n(n-1)/2, a single knockout of n plays n-1).
+
+type Words = Record<string, string>;
+const readWords = (rel: string): Words => JSON.parse(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8")) as Words;
+const UI = readWords("../src/dictionaries/en/ui.json");
+/** An en ui line with its `{name}` slots filled; a missing key or slot throws rather than reading "undefined". */
+function ui(key: string, vars: Record<string, string | number> = {}): string {
+  const text = UI[key];
+  if (typeof text !== "string") throw new Error(`the en ui dictionary has no "${key}"`);
+  return text.replace(/\{(\w+)\}/g, (_, slot: string) => {
+    if (!Object.hasOwn(vars, slot)) throw new Error(`"${key}" needs {${slot}}`);
+    return String(vars[slot]);
+  });
+}
+
+/** A page load or a redirect followed (the flow's budget is built from it and the hold, AGENTS.md class 20). */
+const NAV_MS = 20_000;
+
+/** Make a quick match through the setup form (badminton, clicked) and land on its home; returns the home's path. */
+async function createFromSetup(page: Page, name: string, sides: readonly string[], format: "league" | "knockout") {
+  await openSetup(page);
+  await form(page).getByLabel("Name", { exact: true }).fill(name);
+  for (let n = 3; n <= sides.length; n += 1) await form(page).getByRole("button", { name: "+ Add a side" }).click();
+  for (const [i, s] of sides.entries()) await side(page, i + 1).fill(s);
+  if (sides.length > 2) await choice(page, ui(`quickMatch.format.${format}`)).click();
+  await start(page).click();
+  await page.waitForURL(/\/q\/qm_[^/?#]+$/, { timeout: NAV_MS });
+  return new URL(page.url()).pathname;
+}
+
+/** The ledger's rallies on one fixture: the record, never the pad's own fold. */
+async function ralliesOn(fixtureId: string): Promise<number> {
+  const [row] = await withDb(
+    (sql) => sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${fixtureId} and type = 'badminton.rally'`,
+  );
+  return row!.n;
+}
+
+/** The hero as a person reads it: live, match 1 of `total`, and the score after ONE rally to the home side (seat order). */
+async function expectHeroAfterOneHomeRally(page: Page, total: number, why: string) {
+  const hero = page.getByTestId("qm-hero");
+  await expect(hero.getByTestId("qm-hero-kicker"), why).toHaveText(ui("quickMatch.home.liveMatch", { n: 1, total }));
+  await expect(hero.getByTestId("qm-hero-score"), `${why}: one point to the home side, none to the away side`).toHaveText(/^\s*1\D+0\s*$/);
+}
+
+test("the league flow (Task 10, Review Focus 2): Score → Start → one rally; the browser's Back reads the home FRESH (live, the rally's score); Forward, then 'Back to the quick match', reads it too", async ({ guest: page }) => {
+  // Seven page loads or redirects, the rally's hold before it is sent, and the record read back: derived, never a flat literal.
+  test.setTimeout(7 * NAV_MS + HOLD_MS + NAV_MS);
+  const home = await createFromSetup(page, `e2e flow ${TAG}`, ["Ravi & Sam", "Priya & Tom"], "league");
+  // Fresh, before anything is scored: up next, no score. The negative pair of what Back must read below.
+  const hero = page.getByTestId("qm-hero");
+  await expect(hero.getByTestId("qm-hero-kicker")).toHaveText(ui("quickMatch.home.upNext", { n: 1, total: 1 }));
+  await expect(hero.getByTestId("qm-hero-score"), "nothing scored yet: no score on the hero").toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+  const next = page.locator('[data-testid="qm-match"][data-next="true"]');
+  await expect(next).toHaveCount(1);
+  const fixtureId = (await next.getAttribute("data-fixture-id"))!;
+  expect(fixtureId).toMatch(/^[0-9a-f-]{36}$/);
+
+  // Score → the pad's Confirm card → Start match → one rally to the home side, in the record before anything leaves the pad.
+  await hero.getByTestId("qm-score").click();
+  await page.waitForURL(/\/score\/dl_[A-Za-z0-9_-]+$/, { timeout: NAV_MS });
+  const pad = new URL(page.url()).pathname;
+  await page.getByTestId("score-start-match").click();
+  const homeHalf = page.locator('[data-role="pad-v3"] button[data-role="v3-scorebug-half"][data-side="home"]');
+  await expect(homeHalf, "Start opens the pad, its halves tappable").toBeVisible({ timeout: NAV_MS });
+  await homeHalf.click();
+  // The pad soft-commits: the rally is sent only after the hold (queue.ts), so the record is polled past it.
+  await expect.poll(() => ralliesOn(fixtureId), { timeout: HOLD_MS + NAV_MS, message: "the rally never reached the ledger" }).toBe(1);
+
+  // The browser's own Back: the home is no-store, so it is read again, not restored stale from the back-forward cache.
+  await page.goBack();
+  await page.waitForURL((u) => u.pathname === home, { timeout: NAV_MS });
+  await expectHeroAfterOneHomeRally(page, 1, "after the browser's Back");
+  await expectNoHorizontalScroll(page);
+
+  // Forward to the pad again, then its own way back.
+  await page.goForward();
+  await page.waitForURL((u) => u.pathname === pad, { timeout: NAV_MS });
+  await page.getByTestId("quick-match-back-link").click();
+  await page.waitForURL((u) => u.pathname === home && u.search === "", { timeout: NAV_MS });
+  await expectHeroAfterOneHomeRally(page, 1, "after 'Back to the quick match'");
+  expect(await ralliesOn(fixtureId), "nothing more was sent on the way").toBe(1);
+});
+
+test("the URL forms (Task 10, Review Focus 3): the home opens from its link with a trailing slash and with a ?utm suffix", async ({ guest: page }) => {
+  const name = `e2e url forms ${TAG}`;
+  const home = await createFromSetup(page, name, ["Ravi & Sam", "Priya & Tom"], "league");
+  // The positive pair first: the bare link reads the home.
+  await expect(page.getByTestId("qm-name")).toHaveText(name);
+  // `skipTrailingSlashRedirect` (next.config.js) serves both forms as written, so each must read the token from the path alone.
+  for (const url of [`${home}/`, `${home}?utm_source=whatsapp`, `${home}/?utm_source=whatsapp&utm_medium=social`]) {
+    await page.goto(url);
+    await expect(page.getByTestId("qm-dead-link"), `${url}: not the dead screen`).toHaveCount(0);
+    await expect(page.getByTestId("qm-name"), `${url}: the same home`).toHaveText(name);
+    await expect(page.getByTestId("qm-hero").getByTestId("qm-hero-kicker"), url).toHaveText(ui("quickMatch.home.upNext", { n: 1, total: 1 }));
+  }
+});
+
+test("a knockout of 4 (Task 10, D7): the draw is two numbered semi-finals and a final that waits for both winners, with no Score on it", async ({ guest: page }) => {
+  const sides = ["Ravi & Sam", "Priya & Tom", "Lee & Ana", "Jo & Max"];
+  await createFromSetup(page, `e2e knockout ${TAG}`, sides, "knockout");
+  const draw = page.getByTestId("qm-draw");
+  await expect(draw.getByTestId("qm-draw-title")).toHaveText(ui("quickMatch.home.draw"));
+  await expect(page.getByTestId("qm-standings"), "a knockout has a draw, not a table").toHaveCount(0);
+  // A single knockout of 4 plays 3: two semi-finals (two non-bye matches in the round, so numbered) and the final.
+  await expect(draw.getByTestId("qm-draw-card")).toHaveCount(sides.length - 1);
+  await expect(draw.locator('[data-bye="true"]'), "four sides fill the bracket: no bye").toHaveCount(0);
+  await expect(draw.getByTestId("qm-draw-round")).toHaveText([
+    ui("quickMatch.home.semiFinal", { n: 1 }),
+    ui("quickMatch.home.semiFinal", { n: 2 }),
+    ui("bracket.round.final"),
+  ]);
+  // The draw is server-rendered: on the page at load, so its seats are read once.
+  const seatsOf = async (card: number) =>
+    (await draw.getByTestId("qm-draw-card").nth(card).getByTestId("qm-draw-name").allTextContents()).map((s) => s.trim()).sort();
+  // Seed i meets seed N+1−i (spec C22): 1 v 4 and 2 v 3, in whichever order the generator lists the two semi-finals.
+  const semis = [(await seatsOf(0)).join(" | "), (await seatsOf(1)).join(" | ")].sort();
+  expect(semis, "the semi-finals pair seed 1 with 4 and seed 2 with 3").toEqual(
+    [[sides[0]!, sides[3]!].sort().join(" | "), [sides[1]!, sides[2]!].sort().join(" | ")].sort(),
+  );
+  // The final names each seat by the semi-final that fills it, never a round code.
+  expect(await seatsOf(2), "the final waits for both semi-finals' winners").toEqual(
+    [ui("quickMatch.home.winnerOfSemi", { n: 1 }), ui("quickMatch.home.winnerOfSemi", { n: 2 })].sort(),
+  );
+  // The list: the final waits and offers no Score (C18); both semi-finals do.
+  const waiting = page.locator('[data-testid="qm-match"][data-state="waiting"]');
+  await expect(waiting).toHaveCount(1);
+  await expect(waiting.getByTestId("qm-score"), "no Score on a match whose sides are not known").toHaveCount(0);
+  await expect(page.locator('[data-testid="qm-match"][data-state="ready"]').getByTestId("qm-score")).toHaveCount(2);
+  await expect(page.getByTestId("qm-hero").getByTestId("qm-hero-kicker")).toHaveText(
+    ui("quickMatch.home.upNextRound", { round: ui("quickMatch.home.semiFinal", { n: 1 }) }),
+  );
+  await expectNoHorizontalScroll(page);
 });
