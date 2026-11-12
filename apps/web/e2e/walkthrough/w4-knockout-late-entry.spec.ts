@@ -136,11 +136,13 @@ test.describe("W4 late entry: an organiser adds a pair, then taps in a single ma
     });
     expect(sent.status, JSON.stringify(sent.error)).toBe(201);
     const lateId = (await apiJson<{ id: string; display_name: string }[]>(request, `/api/v1/divisions/${singles.divisionId}/entrants`)).data!.find((e) => e.display_name === late)!.id;
-    // Marked paid: the card's "paid" wording reads the webhook's rows, and a test has no Stripe, so they are written here.
+    // Marked paid: the card's "paid" wording reads the webhook's rows, and a test has no Stripe, so they are written here - as the
+    // completion handler writes them: the intent on the cart AND on the entry it paid (the desk reads the entry's own, V387).
     await withDb(async (sql) => {
       const [reg] = await sql<{ id: string; group_id: string }[]>`select id, group_id from registrations where entrant_id = ${lateId}`;
-      await sql`update registration_groups set payment_intent_id = ${`pi_walk_${reg!.id.slice(0, 8)}`} where id = ${reg!.group_id}`;
-      await sql`update registrations set amount_cents = 1500 where id = ${reg!.id}`;
+      const intent = `pi_walk_${reg!.id.slice(0, 8)}`;
+      await sql`update registration_groups set payment_intent_id = ${intent} where id = ${reg!.group_id}`;
+      await sql`update registrations set amount_cents = 1500, payment_intent_id = ${intent} where id = ${reg!.id}`;
     });
 
     await page.setViewportSize({ width: 390, height: 844 });

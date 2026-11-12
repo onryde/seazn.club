@@ -49,6 +49,7 @@ import {
   withdrawRegistrationOrganiser,
 } from "../registrations";
 import { rejectRegistration } from "../registration-approval";
+import { deleteCompetition } from "../competitions";
 import { stripeRefusedDefinitively } from "../registrations/refunds";
 import { SETTINGS_BASE, fakeSession, loadWithGroup, seedRegistration, seedSecondEntry, stripeRig } from "./_registration-fixtures";
 import { POST as refundRoute } from "@/app/api/v1/registrations/[id]/refund/route";
@@ -338,6 +339,41 @@ describe.skipIf(!HAS_DB)("an automatic refund and the organiser's Refund share t
       checked += 1;
     }
     expect(checked, "anti-vacuity: both automatic refund paths").toBe(shapes.length);
+  });
+});
+
+// PR #1197 e2e (payments-hardening T1, W4 late entry): the per-entry readers (both delete guards, the knockout desk) read the ENTRY's own
+// intent, and three e2e fakes wrote a "paid" cart with the intent on the CART only. Which one is wrong is decided by what the product
+// writes. Seam under test: the REAL completion handler, for a session naming both entries of a cart (the cart Checkout) and for a
+// session naming one (the pay page's per-entry session), stamps the paying intent on EVERY entry it names, and on no other. The
+// expected intent is the session's own; the competition delete guard then refuses on the entry's money.
+describe.skipIf(!HAS_DB)("a real card payment stamps its intent on every entry it paid (the shape every per-entry reader relies on)", () => {
+  const entryIntent = async (id: string) =>
+    (await sql<{ payment_intent_id: string | null }[]>`select payment_intent_id from registrations where id = ${id}`)[0]!.payment_intent_id;
+
+  it("a cart session paying BOTH entries: both carry its intent; the competition cannot be deleted (card payments)", async () => {
+    const { rig, open, masters } = await twoEntryCart();
+    expect([await entryIntent(open.id), await entryIntent(masters.id)], "the empty case: nothing paid, no intent on either").toEqual([null, null]);
+    const paid = paidSession([open.id, masters.id], 2500, "pe2");
+    await handleRegistrationCheckoutCompleted(paid);
+    let checked = 0;
+    for (const id of [open.id, masters.id]) {
+      const row = await loadWithGroup(id);
+      expect(row.entry_payment_intent_id, `entry ${id}: its own intent`).toBe(paid.payment_intent);
+      expect(row.payment_intent_id, "the cart's too").toBe(paid.payment_intent);
+      expect(row.status).toBe("confirmed");
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+    await expect(deleteCompetition(rig.owner, rig.competition.id)).rejects.toMatchObject({ status: 409, message: expect.stringContaining("card payments") });
+  });
+
+  it("a per-entry session (the pay page) paying ONE entry: that entry carries its intent, the unpaid sibling none", async () => {
+    const { open, masters } = await twoEntryCart();
+    const paid = paidSession([masters.id], 1000, "pe1");
+    await handleRegistrationCheckoutCompleted(paid);
+    expect(await entryIntent(masters.id)).toBe(paid.payment_intent);
+    expect(await entryIntent(open.id), "the sibling did not pay").toBeNull();
   });
 });
 
