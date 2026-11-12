@@ -224,6 +224,24 @@ describe("EntryDetails — a solo sign-up's card collects the player", () => {
     expect(table.length, "both division shapes checked").toBe(2);
   });
 
+  // Polish wave sign-off V3: the note read "Nothing else needed for a solo sign-up" directly above the player row the card now asks
+  // for (P5 H-1), and said "assign YOU" for a player who may be someone else (final fix m4). It now says only what happens next.
+  it("the solo note never says nothing else is needed, and names the player, not the registrant (4 locales)", async () => {
+    const dicts = {
+      en: (await import("@/dictionaries/en/ui.json")).default,
+      es: (await import("@/dictionaries/es/ui.json")).default,
+      fr: (await import("@/dictionaries/fr/ui.json")).default,
+      nl: (await import("@/dictionaries/nl/ui.json")).default,
+    } as Record<string, Record<string, string>>;
+    const notes = Object.entries(dicts).map(([locale, d]) => [locale, d["register.details.freeAgent.note"]] as const);
+    for (const [locale, note] of notes) {
+      expect(typeof note, `${locale}: the note exists`).toBe("string");
+      expect(note, `${locale}: never "nothing else needed" above a field that asks for more`).not.toMatch(/nothing else|nada más|rien d'autre|verder niets/i);
+    }
+    expect(notes.length, "anti-vacuity").toBe(4);
+    expect(dicts.en!["register.details.freeAgent.note"]).toBe("The organiser will place this player on a team once one has space.");
+  });
+
   it("typing the player's name lands on the solo's one row (folded through the real reducer)", () => {
     const actions: CartAction[] = [];
     const { entry, roster } = renderSolo(DIVISION, (a) => actions.push(a));

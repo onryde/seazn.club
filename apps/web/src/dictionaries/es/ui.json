@@ -6602,7 +6602,7 @@
   "register.nav.details": "Detalles",
   "register.details.heading": "Datos de los jugadores",
   "register.details.subtitle": "Añade quién juega en cada inscripción y responde lo que necesite el organizador.",
-  "register.details.freeAgent.note": "No se necesita nada más para una inscripción en solitario — el organizador te asignará a un equipo en cuanto haya sitio.",
+  "register.details.freeAgent.note": "El organizador asignará a este jugador a un equipo en cuanto haya sitio.",
   "register.details.roster.team.hint": "Añade tu equipo ahora, o déjalo en blanco — el organizador podrá completarlo más tarde.",
   "register.details.roster.addPlayer": "+ Añadir jugador",
   "register.details.roster.import.summary": "Pegar una lista en su lugar",

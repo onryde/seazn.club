@@ -6602,7 +6602,7 @@
   "register.nav.details": "Details",
   "register.details.heading": "Spelersgegevens",
   "register.details.subtitle": "Voeg toe wie er bij elke inschrijving speelt en beantwoord wat de organisator nodig heeft.",
-  "register.details.freeAgent.note": "Voor een solo-inschrijving is verder niets nodig — de organisator wijst je aan een team toe zodra er plek is.",
+  "register.details.freeAgent.note": "De organisator plaatst deze speler in een team zodra er plek is.",
   "register.details.roster.team.hint": "Voeg nu je team toe, of laat het leeg — de organisator kan het later aanvullen.",
   "register.details.roster.addPlayer": "+ Speler toevoegen",
   "register.details.roster.import.summary": "Plak in plaats daarvan een lijst",
