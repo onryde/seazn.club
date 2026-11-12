@@ -856,6 +856,12 @@ describe("the logo has its own label: a real <label> for its file input, and a h
       expect(attr(tile, "aria-label"), "the tile is named by the label's word").toBe(label.text);
       // The label heads the logo, above the sponsor's name: it is not a label for the fields under it.
       expect(html.indexOf(`for="${inputId}"`), "the label comes before the Name field").toBeLessThan(html.indexOf(msg("settings.org.sponsors.name")));
+      // One DOM for every width: the label is seen at 320 and at 1280 alike. Read as whole class tokens, so `max-md:hidden` and
+      // `md:hidden` are each caught (a bare /\bmd:hidden\b/ also matches inside `max-md:hidden`, AGENTS.md).
+      const labelTag = new RegExp(`<label\\b[^>]*\\sfor="${inputId}"[^>]*>`).exec(html)![0];
+      const labelCls = classTokens(attr(labelTag, "class") ?? "");
+      expect(labelCls, "premise: the label's classes were read").toContain("label");
+      for (const token of labelCls) expect(token, "nothing hides the Logo label at a width").not.toMatch(/(^|:)hidden$/);
       checked++;
     }
     expect(checked, "form, compact form, and beside an open poster").toBe(3);

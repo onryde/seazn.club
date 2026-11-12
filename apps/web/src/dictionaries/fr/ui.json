@@ -587,7 +587,7 @@
   "sponsors.sheet.placementNote": "Un accord définit le niveau et l'endroit où ce sponsor apparaît.",
   "sponsors.poster.label": "Affiche Titre (facultatif)",
   "sponsors.poster.add": "+ Ajouter une affiche Titre",
-  "sponsors.poster.addHint": "Pour quand ce sponsor est votre sponsor Titre",
+  "sponsors.poster.addHint": "Pour le jour où ce sponsor sera votre sponsor Titre",
   "sponsors.poster.hint": "S'affiche à côté du nom de la compétition tant que ce sponsor est Titre. {formats}, jusqu'à {mb} Mo. Idéal en {width} × {height} (4:5, portrait Instagram).",
   "sponsors.poster.remove": "Retirer l'affiche",
   "sponsors.poster.tooBig": "Les affiches peuvent atteindre {mb} Mo.",
