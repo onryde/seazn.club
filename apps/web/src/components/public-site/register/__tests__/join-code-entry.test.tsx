@@ -7,6 +7,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { t } from "@/lib/i18n-runtime";
 import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
+import { normalizeRefCode } from "@/lib/ref-code";
 import { JoinCodeEntry } from "../join-code-entry";
 
 const nav = vi.hoisted(() => ({ push: vi.fn<(href: string) => void>() }));
@@ -23,6 +27,11 @@ const submit = (island: Island) => {
   const prevented = vi.fn();
   (propsOf(el(island, "form")).onSubmit as (e: { preventDefault: () => void }) => void)({ preventDefault: prevented });
   return prevented;
+};
+/** Whether an element of `type` sits anywhere under `root` (the harness renders one level deep; these are host elements). */
+const walkHas = (root: ReturnType<Island["tree"]>[number], type: string): boolean => {
+  const kids = ([] as unknown[]).concat((propsOf(root).children as unknown) ?? []).flat(Infinity);
+  return kids.some((k) => typeof k === "object" && k !== null && "type" in k && ((k as { type: unknown }).type === type || walkHas(k as never, type)));
 };
 const joinPage = (code: string) => `/live/riverside/summer-smash/register/join?join_code=${code}`;
 
@@ -43,6 +52,38 @@ describe("JoinCodeEntry - what is on screen", () => {
   it("a typed join code is a capability, so the input is `ph-no-capture` (the recorder drops what is typed)", () => {
     const cls = String(propsOf(el(mount(), "input")).className);
     expect(cls).toMatch(/(^|\s)ph-no-capture(\s|$)/);
+  });
+});
+
+describe("JoinCodeEntry - collapsed to one line (polish wave H)", () => {
+  it("is a native disclosure, closed by default: one summary line naming the door, the form behind it", () => {
+    const tree = mount().tree();
+    const details = tree.filter((e) => e.type === "details");
+    expect(details, "one disclosure").toHaveLength(1);
+    expect(propsOf(details[0]!).open, "closed until the person asks for it").toBeFalsy();
+    const summaries = tree.filter((e) => e.type === "summary");
+    expect(summaries).toHaveLength(1);
+    expect(textOf(summaries[0]!), "the collapsed line is the question and nothing else").toBe(t(uiEn, "register.joinCode.heading"));
+    // The form and its input live INSIDE the disclosure, so a closed one shows only the summary line.
+    const inner = textOf(details[0]!);
+    expect(inner).toContain(t(uiEn, "register.joinCode.hint"));
+    expect(walkHas(details[0]!, "form"), "the form is inside the disclosure").toBe(true);
+    expect(walkHas(details[0]!, "input"), "the input is inside the disclosure").toBe(true);
+    expect(propsOf(details[0]!)["data-testid"]).toBe("register-join-code");
+  });
+
+  it("the placeholder does not look like a registrant reference in any locale (join codes and refs share the SZ-XXXX-XXXX shape)", () => {
+    const refShape = /^SZ-[A-Z0-9]{4}-[A-Z0-9]{4}$/;
+    const dicts = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl };
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(dicts)) {
+      const placeholder = t(dict, "register.joinCode.placeholder");
+      expect(placeholder, `${locale}: a real string`).not.toBe("register.joinCode.placeholder");
+      expect(refShape.test(normalizeRefCode(placeholder)), `${locale}: "${placeholder}" reads as a reference`).toBe(false);
+      expect(placeholder, locale).not.toMatch(/XXXX/);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every locale").toBe(4);
   });
 });
 

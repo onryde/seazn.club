@@ -1753,7 +1753,7 @@
   "register.joinCode.heading": "Vous avez un code d'adhésion ?",
   "register.joinCode.hint": "Votre capitaine peut vous donner un code pour rejoindre son équipe ou sa paire. Saisissez-le ici.",
   "register.joinCode.label": "Code d'adhésion",
-  "register.joinCode.placeholder": "SZ-XXXX-XXXX",
+  "register.joinCode.placeholder": "Saisissez ou collez le code",
   "register.joinCode.submit": "Continuer",
   "register.organiserNote": "De la part de l'organisateur : {note}",
   "status.breadcrumb": "Inscription",

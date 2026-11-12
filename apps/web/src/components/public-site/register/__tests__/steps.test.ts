@@ -4,7 +4,7 @@
 // buildStepOrder with NO change to nextStepIndex/prevStepIndex, exactly as
 // the older "hypothetical" case below predicted.
 import { describe, expect, it } from "vitest";
-import { buildStepOrder, nextStepIndex, prevStepIndex, shouldCollapseEntries, stepFocusTransition } from "../steps";
+import { buildStepOrder, nextStepIndex, offersJoinCode, prevStepIndex, shouldCollapseEntries, stepFocusTransition } from "../steps";
 
 describe("shouldCollapseEntries", () => {
   it("collapses only when exactly one OPEN division exists AND it needs nothing typed", () => {
@@ -114,5 +114,18 @@ describe("stepFocusTransition — pure step-change focus decision, no DOM", () =
     expect(state).toEqual({ focus: true, armed: true });
     state = stepFocusTransition(true, state.armed); // goBack
     expect(state).toEqual({ focus: true, armed: true });
+  });
+});
+
+describe("offersJoinCode (polish wave H)", () => {
+  it("the empty case: no divisions offer no door", () => {
+    expect(offersJoinCode([])).toBe(false);
+  });
+
+  it("one open team or pair division among individual ones is enough; closed ones never count", () => {
+    const ind = { open: true, entrant_kind: "individual" as const };
+    expect(offersJoinCode([ind, { open: true, entrant_kind: "pair" }])).toBe(true);
+    expect(offersJoinCode([{ open: true, entrant_kind: "team" }, ind])).toBe(true);
+    expect(offersJoinCode([ind, { open: false, entrant_kind: "team" }, { open: false, entrant_kind: "pair" }])).toBe(false);
   });
 });

@@ -16,7 +16,6 @@ import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { RegisterStepper } from "@/components/public-site/register/register-stepper";
-import { JoinCodeEntry } from "@/components/public-site/register/join-code-entry";
 import type { RegisterLichessState } from "@/components/public-site/register/register-lichess-card";
 import { getCurrentUser } from "@/lib/auth";
 import { lichessFlashCode } from "@/lib/lichess-link";
@@ -116,8 +115,6 @@ export default async function RegisterPage({ params, searchParams }: Props) {
         <h1 className="mt-1 mb-4 font-display text-4xl font-bold uppercase tracking-tight text-ink">
           {t(ui, "register.title")}
         </h1>
-        {/* A teammate handed a CODE (not a link) has no other door; the join page decides everything past the typed code. */}
-        <JoinCodeEntry orgSlug={orgSlug} competitionSlug={competitionSlug} />
         <RegisterStepper
           orgSlug={orgSlug}
           competitionSlug={competitionSlug}

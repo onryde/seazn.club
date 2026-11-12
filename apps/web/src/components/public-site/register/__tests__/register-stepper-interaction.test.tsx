@@ -70,6 +70,7 @@ import { DivisionCard } from "../division-card";
 import { EntryCart } from "../entry-cart";
 import { EntryDetails } from "../entry-details";
 import { FormFields } from "../form-fields";
+import { JoinCodeEntry } from "../join-code-entry";
 import { RegisterStepper, type RegisterInfo } from "../register-stepper";
 import { RosterTable } from "../roster-table";
 import { StepConsent } from "../step-consent";
@@ -80,6 +81,7 @@ import { StepReview } from "../step-review";
 import { StepWho } from "../step-who";
 import { REGISTER_STATE_VERSION } from "../storage";
 import { EMPTY_CONTACT, type CartState, type DivisionLike, type FormFieldDef } from "../types";
+import { EntrantKind } from "@/server/api-v1/schemas/common";
 
 const EN_UI: Dict = JSON.parse(
   readFileSync(join(__dirname, "..", "..", "..", "..", "dictionaries", "en", "ui.json"), "utf8"),
@@ -2654,5 +2656,86 @@ describe("P4 - the REVIEW step labels each entry with its own payment method (W9
     expect(charged).toContain("pay by card at sign-up");
     expect(waitlisted).not.toContain("pay by card at sign-up");
     expect(waitlisted).not.toContain("pay the organiser");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Polish wave H — the "Have a join code?" door. It used to sit above the stepper on EVERY step (~220px at 320 wide), and on
+// competitions where no entry has a code to hand out. Owner ruling: first step only, collapsed, and only when at least one OPEN
+// division is a team or pair (the kinds whose entries carry a join code a captain hands to teammates).
+// ---------------------------------------------------------------------------
+
+/** The owner's rule, stated as the set it names — not read back from the code under test. */
+const KINDS_WITH_A_JOIN_CODE = new Set(["team", "pair"]);
+const joinDoors = (island: ReturnType<typeof mount>["island"]) => island.tree().filter((e) => e.type === JoinCodeEntry);
+
+describe("H — the join-code door shows on the first step only, and only where a join code can lead somewhere", () => {
+  it("an individual-only competition never offers it", () => {
+    const m = mount([DIV_OPEN, DIV_WOMENS]);
+    m.stepWho(); // on the first step
+    expect(joinDoors(m.island)).toHaveLength(0);
+  });
+
+  it("every entrant kind, one open division each: offered exactly for the kinds whose entries hand out a code", () => {
+    let checked = 0;
+    let offered = 0;
+    for (const kind of EntrantKind.options) {
+      const m = mount([{ ...DIV_OPEN, division_id: `div-${kind}`, entrant_kind: kind }]);
+      m.stepWho();
+      const doors = joinDoors(m.island);
+      expect(doors, kind).toHaveLength(KINDS_WITH_A_JOIN_CODE.has(kind) ? 1 : 0);
+      if (doors.length) {
+        offered += 1;
+        expect(propsOf(doors[0]!), `${kind}: the door names this competition`).toMatchObject({
+          orgSlug: ORG_SLUG,
+          competitionSlug: COMPETITION_SLUG,
+        });
+      }
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every entrant kind").toBe(EntrantKind.options.length);
+    expect(offered, "anti-vacuity: some kind offers it").toBe(KINDS_WITH_A_JOIN_CODE.size);
+  });
+
+  it("a CLOSED team or pair division does not count — an individual comp with a closed team division stays without it", () => {
+    let checked = 0;
+    for (const kind of ["team", "pair"] as const) {
+      const m = mount([DIV_OPEN, { ...DIV_TEAM, entrant_kind: kind, open: false, closed_reason: "window" }]);
+      m.stepWho();
+      expect(joinDoors(m.island), kind).toHaveLength(0);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("with an open pair division: on step 1, gone on every later step, and back when the person returns to step 1", () => {
+    const PAIR: DivisionLike = { ...DIV_TEAM, division_id: "div-pair", name: "Open Pairs", entrant_kind: "pair" };
+    const m = mount([DIV_OPEN, PAIR]);
+    m.stepWho();
+    expect(joinDoors(m.island), "WHO").toHaveLength(1);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Rep", email: "rep@example.com" });
+    m.clickByText("Next"); // -> ENTRIES
+    expect(m.island.tree().some((e) => e.type === StepWho), "left the first step").toBe(false);
+    const later: string[] = [];
+    expect(joinDoors(m.island), "ENTRIES").toHaveLength(0);
+    later.push("entries");
+    (propsOf(m.divisionCard("div-open")).onAddIndividual as () => void)();
+    m.clickByText("Next"); // -> DETAILS
+    expect(joinDoors(m.island), "DETAILS").toHaveLength(0);
+    later.push("details");
+    const names = allByAriaLabel(m.island, "Player 1 — Your name");
+    (propsOf(names[0]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "One" } });
+    m.clickByText("Next"); // -> CONSENT
+    expect(joinDoors(m.island), "CONSENT").toHaveLength(0);
+    later.push("consent");
+    (propsOf(byId(m.island, "reg-consent-privacy")).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: true } });
+    m.clickByText("Next"); // -> REVIEW
+    expect(m.island.tree().some((e) => e.type === StepReview), "reached REVIEW").toBe(true);
+    expect(joinDoors(m.island), "REVIEW").toHaveLength(0);
+    later.push("review");
+    expect(later, "anti-vacuity: every later step was visited").toEqual(["entries", "details", "consent", "review"]);
+    for (let i = 0; i < 4; i++) m.clickByText("Back");
+    m.stepWho();
+    expect(joinDoors(m.island), "back on WHO").toHaveLength(1);
   });
 });

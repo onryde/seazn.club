@@ -11,8 +11,9 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
-// Polish wave P6: the page now mounts the "Have a join code?" field, which reads the App Router for its one navigation. No router is
-// mounted under a bare renderToStaticMarkup, so it is replaced by an inert one (the field's own behaviour is join-code-entry.test.tsx).
+// Polish wave P6: the page mounts the "Have a join code?" field (inside the stepper's first step since wave H, because this comp has an
+// open team division), which reads the App Router for its one navigation. No router is mounted under a bare renderToStaticMarkup, so
+// it is replaced by an inert one (the field's own behaviour is join-code-entry.test.tsx).
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {} }) }));
 vi.mock("@/server/usecases/registrations", () => ({
   publicRegistrationInfo: async () => ({

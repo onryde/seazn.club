@@ -1753,7 +1753,7 @@
   "register.joinCode.heading": "Have a join code?",
   "register.joinCode.hint": "Your captain can give you a code to join their team or pair. Enter it here.",
   "register.joinCode.label": "Join code",
-  "register.joinCode.placeholder": "SZ-XXXX-XXXX",
+  "register.joinCode.placeholder": "Type or paste the code",
   "register.joinCode.submit": "Continue",
   "register.organiserNote": "From the organiser: {note}",
   "status.breadcrumb": "Registration",

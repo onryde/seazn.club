@@ -1753,7 +1753,7 @@
   "register.joinCode.heading": "Heb je een deelnamecode?",
   "register.joinCode.hint": "Je aanvoerder kan je een code geven om je bij zijn of haar team of koppel aan te sluiten. Vul hem hier in.",
   "register.joinCode.label": "Deelnamecode",
-  "register.joinCode.placeholder": "SZ-XXXX-XXXX",
+  "register.joinCode.placeholder": "Typ of plak de code",
   "register.joinCode.submit": "Doorgaan",
   "register.organiserNote": "Van de organisator: {note}",
   "status.breadcrumb": "Inschrijving",

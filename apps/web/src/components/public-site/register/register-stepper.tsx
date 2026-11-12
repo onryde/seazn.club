@@ -51,7 +51,8 @@ import { StepEntries } from "./step-entries";
 import { StepNav } from "./step-nav";
 import { StepReview } from "./step-review";
 import { StepWho } from "./step-who";
-import { buildStepOrder, nextStepIndex, prevStepIndex, shouldCollapseEntries, stepFocusTransition } from "./steps";
+import { buildStepOrder, nextStepIndex, offersJoinCode, prevStepIndex, shouldCollapseEntries, stepFocusTransition } from "./steps";
+import { JoinCodeEntry } from "./join-code-entry";
 import { BTN_GHOST, BTN_PRIMARY } from "./styles";
 import {
   EMPTY_CART,
@@ -136,6 +137,8 @@ export function RegisterStepper({
   // and a seeded-but-unnameable team entry could disagree.
   const collapseEntries = shouldCollapseEntries(openDivisions.length, openDivisions[0]?.entrant_kind);
   const stepOrder = buildStepOrder(openDivisions.length, openDivisions[0]?.entrant_kind);
+  // Polish wave H: the "Have a join code?" door — first step only (below), and only where an open team/pair division exists.
+  const joinCodeDoor = offersJoinCode(info.divisions);
   const seasonStartYear = seasonStartYearFrom(info.competition.starts_on);
 
   // `false` on the server and in the hydration render, `true` from the render after (and on the first render of a
@@ -449,6 +452,9 @@ export function RegisterStepper({
           them, and its recorder blocks only this class on the element that carries the value, which here would be the
           whole registration form. `hidden`, so it takes no space. */}
       {joinCode ? <span hidden className="ph-no-capture" data-join-code={joinCode} /> : null}
+      {/* A teammate handed a CODE (not a link) has no other door; the join page decides everything past the typed code. First step
+          only: past it the person is building their own entry, and the door is a collapsed line, not a card. */}
+      {joinCodeDoor && clampedIndex === 0 ? <JoinCodeEntry orgSlug={orgSlug} competitionSlug={competitionSlug} /> : null}
       <StepNav order={stepOrder} currentIndex={clampedIndex} />
 
       {currentStep === "who" && (

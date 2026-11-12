@@ -11,6 +11,10 @@
 //
 // The typed code is a capability (whoever holds it can join the entry), so the input is `ph-no-capture` like every element that
 // shows one.
+//
+// Polish wave H: it is one collapsed line ("Have a join code?") that opens on a tap, mounted by the register stepper on its FIRST step
+// only and only where an open team or pair division exists (`offersJoinCode` in ./steps). A native <details>: it opens without
+// JavaScript, the browser announces its state, and a closed one takes a single line on a 320px phone instead of a whole card.
 import { useId, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMsg } from "@/components/i18n/dict-provider";
@@ -31,35 +35,35 @@ export function JoinCodeEntry({ orgSlug, competitionSlug }: { orgSlug: string; c
   }
 
   return (
-    <form
-      data-testid="register-join-code"
-      onSubmit={submit}
-      className="mb-5 max-w-xl rounded-xl border border-zinc-200 bg-white p-4 shadow-sm"
-    >
-      <h2 className="font-display text-sm font-semibold uppercase tracking-wide text-ink">{m("register.joinCode.heading")}</h2>
-      <p className="mt-1 text-xs text-ink-muted">{m("register.joinCode.hint")}</p>
-      <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
-        <div className="min-w-0 flex-1">
-          <label htmlFor={inputId} className={FIELD_LABEL}>
-            {m("register.joinCode.label")}
-          </label>
-          <input
-            id={inputId}
-            type="text"
-            value={typed}
-            onChange={(e) => setTyped(e.target.value)}
-            placeholder={m("register.joinCode.placeholder")}
-            autoComplete="off"
-            autoCapitalize="characters"
-            autoCorrect="off"
-            spellCheck={false}
-            className={`ph-no-capture ${FIELD} font-mono`}
-          />
+    <details data-testid="register-join-code" className="max-w-xl">
+      <summary className="inline-flex min-h-11 cursor-pointer list-none items-center text-sm font-medium text-accent-strong underline underline-offset-2 hover:text-ink [&::-webkit-details-marker]:hidden">
+        {m("register.joinCode.heading")}
+      </summary>
+      <form onSubmit={submit} className="mt-1 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
+        <p className="text-xs text-ink-muted">{m("register.joinCode.hint")}</p>
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
+          <div className="min-w-0 flex-1">
+            <label htmlFor={inputId} className={FIELD_LABEL}>
+              {m("register.joinCode.label")}
+            </label>
+            <input
+              id={inputId}
+              type="text"
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              placeholder={m("register.joinCode.placeholder")}
+              autoComplete="off"
+              autoCapitalize="characters"
+              autoCorrect="off"
+              spellCheck={false}
+              className={`ph-no-capture ${FIELD} font-mono`}
+            />
+          </div>
+          <button type="submit" className={BTN_PRIMARY}>
+            {m("register.joinCode.submit")}
+          </button>
         </div>
-        <button type="submit" className={BTN_PRIMARY}>
-          {m("register.joinCode.submit")}
-        </button>
-      </div>
-    </form>
+      </form>
+    </details>
   );
 }

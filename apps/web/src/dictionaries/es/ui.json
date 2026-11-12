@@ -1753,7 +1753,7 @@
   "register.joinCode.heading": "¿Tienes un código de unión?",
   "register.joinCode.hint": "Tu capitán puede darte un código para unirte a su equipo o pareja. Introdúcelo aquí.",
   "register.joinCode.label": "Código de unión",
-  "register.joinCode.placeholder": "SZ-XXXX-XXXX",
+  "register.joinCode.placeholder": "Escribe o pega el código",
   "register.joinCode.submit": "Continuar",
   "register.organiserNote": "Del equipo organizador: {note}",
   "status.breadcrumb": "Inscripción",
