@@ -179,6 +179,35 @@ export function registrationTemplate(
         })
     : t(dict, "registration.introCart", { competitionName: escapeHtml(opts.competitionName) });
 
+  // Polish wave sign-off V2: a single entry states what it is WAITING ON, in the same word its cart line would use (entryStatusLabel).
+  // It never lists itself (below), so a manual-approval entry used to read "received" and, in the preheader, "is in" while the
+  // organiser had not decided. A wait on the organiser also says they decide, and that the approval mail follows.
+  const singleWaiting = single && !waitlisted ? entryWaitingOn(first.status, first.feeCents, first.approval, first.approved ?? false) : null;
+  const singleStatus = singleWaiting ? entryStatusLabel(dict, first) : null;
+  const reviewWait = singleWaiting === "approval" || singleWaiting === "payment_and_approval";
+  const statusBlock = singleStatus
+    ? paragraph(
+        t(dict, "registration.singleStatus", { status: escapeHtml(singleStatus) }) +
+          (reviewWait ? " " + t(dict, "registration.approvalNote") : ""),
+      )
+    : "";
+  const statusText = singleStatus
+    ? "\n" + t(dict, "registration.textSingleStatus", { status: singleStatus }) + (reviewWait ? " " + t(dict, "registration.approvalNote") : "")
+    : "";
+  const preheader = waitlisted
+    ? t(dict, "registration.preheaderWaitlist", { competitionName: opts.competitionName })
+    : singleWaiting === "approval"
+      ? t(
+          dict,
+          first.status === "paid" ? "registration.preheaderPaidAwaitingApproval" : "registration.preheaderAwaitingApproval",
+          { competitionName: opts.competitionName },
+        )
+      : singleWaiting === "payment_and_approval"
+        ? t(dict, "registration.preheaderAwaitingPaymentApproval", { competitionName: opts.competitionName })
+        : paid
+          ? t(dict, "registration.preheaderPaid", { competitionName: opts.competitionName })
+          : t(dict, "registration.preheaderFree", { competitionName: opts.competitionName });
+
   // Entries panel — only for a genuine cart. A single entry already says
   // its own name/status in the intro line above; listing it again would
   // read like a list of one, which the owner ruling explicitly rejects.
@@ -248,11 +277,7 @@ export function registrationTemplate(
     subject,
     html: renderEmail({
       subject,
-      preheader: waitlisted
-        ? t(dict, "registration.preheaderWaitlist", { competitionName: opts.competitionName })
-        : paid
-          ? t(dict, "registration.preheaderPaid", { competitionName: opts.competitionName })
-          : t(dict, "registration.preheaderFree", { competitionName: opts.competitionName }),
+      preheader,
       mastheadTag: opts.orgName,
       eyebrow: `${opts.orgName} · ${opts.competitionName}`,
       title: waitlisted
@@ -260,6 +285,7 @@ export function registrationTemplate(
         : t(dict, "registration.title"),
       contentHtml:
         paragraph(intro) +
+        statusBlock +
         entriesPanel +
         (opts.refCode
           ? panel(
@@ -293,6 +319,7 @@ export function registrationTemplate(
               competitionName: opts.competitionName,
               orgName: opts.orgName,
             })) +
+      statusText +
       entriesText +
       (opts.refCode
         ? "\n\n" +

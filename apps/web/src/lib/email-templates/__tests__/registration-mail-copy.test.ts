@@ -137,3 +137,87 @@ describe("the cart confirmation's entry lines", () => {
     expect(line("Veterans Singles")).toContain("Confirmed");
   });
 });
+
+// Polish wave sign-off V2 (2026-11-12): the confirmation for ONE entry in a manual-approval division said "Registration received" and,
+// in its preheader, "Your entry ... is in" - while the entry waited on the organiser. A cart's lines already named each entry's wait
+// (above); a single entry never lists itself, so it named nothing. It now carries the SAME word its cart line would, and the preheader
+// follows the wait. Expected words come from the dictionaries (the product's declared labels), never from this template's output.
+describe("a single-entry confirmation says what the entry is waiting on (V2)", () => {
+  type Entry = { status: string; feeCents: number; approval: "auto" | "manual"; approved?: boolean };
+  const raw = (dict: Awaited<ReturnType<typeof dictOf>>, key: string): string => {
+    const value = (dict as unknown as Record<string, unknown>)[key];
+    expect(typeof value, `premise: ${key} is a dictionary string`).toBe("string");
+    return value as string;
+  };
+  const unescape = (s: string) => s.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  const fill = (s: string) => s.replace("{competitionName}", "Spring Open");
+  const one = (entry: Entry, dict: Awaited<ReturnType<typeof dictOf>>) =>
+    registrationTemplate(
+      {
+        orgName: "Riverside Club",
+        competitionName: "Spring Open",
+        contactName: CONTACT,
+        entries: [{ displayName: "Maya", divisionName: "Masters Singles", ...entry }],
+        totalCents: entry.feeCents,
+        currency: "gbp",
+        paymentInstructions: null,
+        statusUrl: "https://seazn.club/s",
+      },
+      dict,
+    );
+  const WAITING: { name: string; entry: Entry; label: string; preheader: string; reviewed: boolean }[] = [
+    { name: "free, manual", entry: { status: "pending", feeCents: 0, approval: "manual" }, label: "registration.entryStatusAwaitingApproval", preheader: "registration.preheaderAwaitingApproval", reviewed: true },
+    { name: "fee owed, manual", entry: { status: "pending", feeCents: 1500, approval: "manual" }, label: "registration.entryStatusAwaitingPaymentApproval", preheader: "registration.preheaderAwaitingPaymentApproval", reviewed: true },
+    { name: "paid, manual", entry: { status: "paid", feeCents: 1500, approval: "manual" }, label: "registration.entryStatusPaidAwaitingApproval", preheader: "registration.preheaderPaidAwaitingApproval", reviewed: true },
+    { name: "fee owed, auto", entry: { status: "pending", feeCents: 1500, approval: "auto" }, label: "registration.entryStatusAwaitingPayment", preheader: "registration.preheaderPaid", reviewed: false },
+    { name: "approved ahead of payment", entry: { status: "pending", feeCents: 1500, approval: "manual", approved: true }, label: "registration.entryStatusAwaitingPayment", preheader: "registration.preheaderPaid", reviewed: false },
+  ];
+
+  it.each(LOCALES)("%s: each waiting state names its wait in the html, the text and the preheader; a review wait says the organiser decides", async (locale) => {
+    const dict = await dictOf(locale);
+    const isIn = [fill(raw(dict, "registration.preheaderFree")), fill(raw(dict, "registration.preheaderPaid"))];
+    const note = raw(dict, "registration.approvalNote");
+    let checked = 0;
+    for (const c of WAITING) {
+      const out = one(c.entry, dict);
+      const html = unescape(out.html);
+      const label = raw(dict, c.label);
+      expect(unescape(words(out.html)), `${locale} ${c.name}: html names the wait`).toContain(label);
+      expect(out.text, `${locale} ${c.name}: text names the wait`).toContain(label);
+      expect(html, `${locale} ${c.name}: preheader`).toContain(fill(raw(dict, c.preheader)));
+      if (c.reviewed) {
+        for (const claim of isIn) expect(html, `${locale} ${c.name}: never "is in" while the organiser decides`).not.toContain(claim);
+        expect(html, `${locale} ${c.name}: html says the organiser decides`).toContain(note);
+        expect(out.text, `${locale} ${c.name}: text says the organiser decides`).toContain(note);
+      } else {
+        expect(html, `${locale} ${c.name}: no review note when nobody reviews`).not.toContain(note);
+      }
+      expect(out.html, `${locale} ${c.name}: no raw key`).not.toMatch(/\bregistration\.[a-zA-Z]+\b/);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: five waiting states judged").toBe(5);
+  });
+
+  it.each(LOCALES)("%s: nothing waiting - a confirmed entry, a waitlisted one - carries no status line and no review note", async (locale) => {
+    const dict = await dictOf(locale);
+    const statusPrefix = raw(dict, "registration.textSingleStatus").split("{status}")[0]!.trim();
+    expect(statusPrefix.length, "premise: the status line has a lead-in word").toBeGreaterThan(0);
+    const settled: Entry[] = [
+      { status: "confirmed", feeCents: 1500, approval: "manual" },
+      { status: "waitlisted", feeCents: 1500, approval: "manual" },
+    ];
+    for (const entry of settled) {
+      const out = one(entry, dict);
+      expect(out.text, `${locale} ${entry.status}: no status line`).not.toContain(statusPrefix);
+      expect(unescape(out.html), `${locale} ${entry.status}: no review note`).not.toContain(raw(dict, "registration.approvalNote"));
+    }
+  });
+
+  it("English wording (typed, so a dictionary drift is seen)", async () => {
+    const dict = await dictOf("en");
+    const out = one({ status: "pending", feeCents: 0, approval: "manual" }, dict);
+    expect(out.text).toContain("Status: Awaiting approval");
+    expect(unescape(out.html)).toContain("Your entry for Spring Open is waiting for the organiser's approval.");
+    expect(out.text).toContain("We'll email you as soon as it's approved.");
+  });
+});
