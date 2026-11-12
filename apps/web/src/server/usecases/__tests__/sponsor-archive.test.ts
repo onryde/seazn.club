@@ -122,6 +122,15 @@ async function refusal(fn: () => Promise<unknown>): Promise<{ status: number | u
   }
   return { status: undefined, code: "no_refusal" };
 }
+/** The words a call refused with (reaches the v1 envelope's `message` and the logs); null when it did not refuse. */
+async function refusalMessage(fn: () => Promise<unknown>): Promise<string | null> {
+  try {
+    await fn();
+  } catch (err) {
+    return (err as Error).message;
+  }
+  return null;
+}
 const NO_REFUSAL = { status: undefined, code: "no_refusal" };
 const HAS_CURRENT_DEAL = { status: 409, code: "sponsor_has_current_deal" };
 const ARCHIVED = { status: 409, code: "sponsor_archived" };
@@ -396,6 +405,13 @@ describe.skipIf(!HAS_DB)("records stay: invoices, delete rules (spec §9, D3, D7
     });
     expect(await archivedAt(s.id), "the sponsor stays, still archived").not.toBeNull();
     expect(await dealCount(s.id)).toBe(1);
+
+    // Final review m2: the refusal's own words give the dictionaries' and OpenAPI's advice. Ending a deal never made a sponsor with
+    // history deletable, so "end its deals instead" sent the reader down a dead end.
+    const said = await refusalMessage(() => deleteSponsor(o.auth, s.id));
+    expect(said, "premise: the delete refused with a message").not.toBeNull();
+    expect(said).toMatch(/archive it instead$/);
+    expect(said).not.toMatch(/end its deals/);
   });
 
   it("without invoices: a sponsor with only an ended complimentary deal archives, and can still be deleted", async () => {

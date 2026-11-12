@@ -371,7 +371,7 @@ function dealHoldsHistory(d: ServerDeal): boolean {
 const holdsHistory = () =>
   sponsorRefusal(
     409,
-    "this sponsor has deal history (money paid or refunded, a numbered invoice, or a pre-deals order) — end its deals instead",
+    "this sponsor has deal history (money paid or refunded, a numbered invoice, or a pre-deals order) — archive it instead",
     "sponsor_has_deal_history",
   );
 const holdsOpenCheckout = () =>

@@ -557,7 +557,7 @@ describe("Delete: the confirm says what the server will really do, and a refusal
   });
 
   it("a sponsor with a PAID deal is not asked to confirm a delete the server refuses: the server's refusal is shown in the dictionary's words and the row stays", async () => {
-    const SERVER = "this sponsor has deal history (money paid or refunded, or a pre-deals order) — end its deals instead";
+    const SERVER = "this sponsor has deal history (money paid or refunded, or a pre-deals order) — archive it instead";
     answer = (_url, method) =>
       method === "DELETE"
         ? { status: 409, body: { ok: false, error: { code: "sponsor_has_deal_history", message: SERVER } } }
@@ -600,7 +600,7 @@ describe("Delete: the confirm says what the server will really do, and a refusal
   it("a sponsor whose shown deal is NUMBERED but unpaid (an invoice: sponsor invoices F10) is not asked to confirm either; the 409 reads the dictionary's words, and its unnumbered twin still asks (both checked)", async () => {
     // The server's rule (server/usecases/sponsors.ts `dealHoldsHistory`, Task 20): a numbered deal is history, paid or not, so the
     // delete is a 409 `sponsor_has_deal_history`. An online and an offline deal, each numbered and awaiting payment - no money.
-    const SERVER = "this sponsor has deal history (money paid or refunded, a numbered invoice, or a pre-deals order) — end its deals instead";
+    const SERVER = "this sponsor has deal history (money paid or refunded, a numbered invoice, or a pre-deals order) — archive it instead";
     const NUMBERED: [string, SponsorDeal][] = [
       ["offline", dealOf("d1", "pending", { deal_status: "awaiting_payment", payment_method: "offline", invoice_number: 3 })],
       ["online", dealOf("d1", "pending", { deal_status: "awaiting_payment", payment_method: "online", invoice_number: 1 })],
