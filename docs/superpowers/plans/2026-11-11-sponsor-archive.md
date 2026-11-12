@@ -11,7 +11,7 @@
 The list gains a slim "Show archived (N)" switch.
 
 **Architecture:**
-- **Storage:** one nullable column, `sponsors.archived_at` (V505, provisional), orthogonal to `status`.
+- **Storage:** one nullable column, `sponsors.archived_at` (V508; authored as V505, renumbered before merge), orthogonal to `status`.
 - **Server:**
   - two usecases, `archiveSponsor` and `unarchiveSponsor`, under the F2 sponsor lock;
   - one deal predicate, `blocksArchive`, in `lib/sponsor-deals.ts`;
@@ -37,7 +37,7 @@ The list gains a slim "Show archived (N)" switch.
   - Never `git stash` and never `git checkout <file>`. Restore a mutant from a `cp` backup.
   - In zsh, write a revision variable as `"${R}:path"`, never `"$R:path"` (`:a` is a modifier).
 - **Order:** start only after #1176 (`feat/sponsor-deals-invoices`) has merged to main. Rebase this branch onto main first, then **re-pin every line number** this plan cites (they were read at PR 3 `db49811d45`).
-- **Migration:** authored as **`V505__sponsor_archive.sql`** (main holds V501 title poster and V502-V504 sponsor invoices; V505 is the next free number). Its first line self-names `-- V505 — …`.
+- **Migration:** authored as **`V505__sponsor_archive.sql`** (main held V501 title poster and V502-V504 sponsor invoices; V505 was the next free number), then **renumbered to `V508__sponsor_archive.sql`** before merge (staging already had V506 `quick_matches` applied; V507 is claimed by two unmerged branches). Its first line self-names `-- V508 — …`.
   - Tests find it **by suffix** (`/^V\d+__sponsor_archive\.sql$/`).
   - At merge, renumber to the next free number on main: `git mv` plus a line-1 edit. `migration-header-truth.test.ts` checks line 1.
 - **One rule each:**
@@ -88,7 +88,7 @@ The five failure modes most likely to hurt a real person, each pinned by a named
 
 | File | Responsibility | Task |
 |---|---|---|
-| `db/migration/deltas/V505__sponsor_archive.sql` (new) | Column | 1 |
+| `db/migration/deltas/V508__sponsor_archive.sql` (new; authored as V505) | Column | 1 |
 | `apps/web/src/server/sponsors/__tests__/archive-migration.test.ts` (new) | Column shape, found by suffix | 1 |
 | `apps/web/src/lib/sponsor-deals.ts` | `blocksArchive` | 2 |
 | `apps/web/src/lib/__tests__/sponsor-deals.test.ts` | §8 table | 2 |
@@ -113,10 +113,10 @@ The five failure modes most likely to hurt a real person, each pinned by a named
 
 ---
 
-### Task 1 [DB]: Migration `V505__sponsor_archive.sql`
+### Task 1 [DB]: Migration `V508__sponsor_archive.sql` (authored as V505)
 
 **Files:**
-- Create: `db/migration/deltas/V505__sponsor_archive.sql`
+- Create: `db/migration/deltas/V508__sponsor_archive.sql` (authored as V505)
 - Test: `apps/web/src/server/sponsors/__tests__/archive-migration.test.ts`
 
 **Interfaces:**
@@ -500,7 +500,7 @@ The last test checks that every file exists, is a PNG, and that no two are byte-
 - [ ] **Step 4:** Run the mutant dispatches owed by Tasks 8 and 9, each on a throwaway commit. Record each killer and run ID.
 - [ ] **Step 5:** Build the sign-off page under `~/seazn-artifacts/2026-11-1X_sponsor-archive-signoff_<hex>/`: one panel per state, 320/768/1280 side by side, a line saying what to look at, and `Verdict: ____`. Use the shared `:8765` server.
 - [ ] **Step 6:** Get the owner's verdict for **each screen** (AGENTS.md class 11), including the open questions of spec §13. Route any "fix" back to Tasks 6 and 7, then re-capture.
-- [ ] **Step 7, before merge:** renumber V505 to the next free number on main. That is `git mv` plus line 1 (`-- V<n> — …`). Re-run `archive-migration.test.ts` and `migration-header-truth.test.ts`. The merge waits for the owner's explicit go.
+- [ ] **Step 7, before merge:** renumber V505 to the next free number on main (done: V508, because staging already had V506 and V507 is claimed by two unmerged branches). That is `git mv` plus line 1 (`-- V<n> — …`). Re-run `archive-migration.test.ts` and `migration-header-truth.test.ts`. The merge waits for the owner's explicit go.
 
 ---
 
