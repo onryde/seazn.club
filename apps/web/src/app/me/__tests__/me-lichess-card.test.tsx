@@ -42,6 +42,8 @@ vi.mock("@/server/usecases/me-officiating", () => ({
   listPendingOfficiatingClaims: async () => [],
 }));
 vi.mock("@/server/usecases/official-marks", () => ({ myMarksAverage: async () => null }));
+// /me lists the saved quick matches (quick match plan 3 T6); none here.
+vi.mock("@/server/usecases/quick-match-home", () => ({ listMyQuickMatches: async () => [] }));
 vi.mock("@/components/me/rsvp-control", () => ({ RsvpControl: () => <div /> }));
 vi.mock("@/components/me/officiating-lane", () => ({ OfficiatingLane: () => <div /> }));
 vi.mock("@/components/me/suspensions-lane", () => ({ SuspensionsLane: () => <div /> }));

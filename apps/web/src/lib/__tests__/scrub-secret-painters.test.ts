@@ -539,6 +539,9 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string | stri
   "components/quick-match/save-form.tsx": { verdict: true },
   // The save page (plan 3 Task 5): its back link to the home, and the Save form's action (a component site, checked there).
   "app/q/[token]/save/page.tsx": { verdict: true },
+  // The account's Quick matches on /me (plan 3 Task 6): each row's name links to its home, `routes.quickMatch(token)`, built in
+  // the island from the token the page read, so the page hands over no URL and this file is the painter.
+  "components/quick-match/my-list.tsx": { verdict: true },
 };
 
 /** The files that paint a quick match's home URL, `/q/<token>`: every one must be FOUND by the scan, not just listed, or a
@@ -555,6 +558,8 @@ const QUICK_MATCH_PAINTERS = [
   // Plan 3 Task 5: the Save form, and the save page (its back link, and the form's action it builds).
   "components/quick-match/save-form.tsx",
   "app/q/[token]/save/page.tsx",
+  // Plan 3 Task 6: the account's list of saved quick matches, each name a link to its home.
+  "components/quick-match/my-list.tsx",
 ];
 
 describe("every element that paints a scrubbed secret carries ph-no-capture, or its file says why not", () => {
@@ -687,6 +692,14 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
     // as its `next` (review m2, signed out on a saved match), and the way back to the home.
     const page = painters.get("app/q/[token]/save/page.tsx") ?? [];
     expect(page.filter((site) => site.how === "attribute href" && site.tag === "a").map((site) => site.blocked)).toEqual([true, true]);
+  });
+
+  it("the account's Quick matches (plan 3 Task 6): each row's name is a host <a> to its home, carrying the class; the /me page paints no home URL", () => {
+    const list = painters.get("components/quick-match/my-list.tsx") ?? [];
+    // One <a>, the row's name link: a host element, so its class is checked here and not handed off.
+    expect(list.filter((site) => site.how === "attribute href" && site.tag === "a").map((site) => site.blocked)).toEqual([true]);
+    // The page hands the island the rows (tokens, not URLs): it builds no home URL, so it is no painter of one.
+    expect(painters.has("app/me/page.tsx")).toBe(false);
   });
 
   it("the painter files and the verdict table are the same set", () => {

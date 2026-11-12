@@ -24,6 +24,8 @@ import { RsvpControl } from "@/components/me/rsvp-control";
 import { OfficiatingLane } from "@/components/me/officiating-lane";
 import { SuspensionsLane } from "@/components/me/suspensions-lane";
 import { ConsentCard } from "@/components/me/consent-card";
+import { QuickMatchMyList } from "@/components/quick-match/my-list";
+import { listMyQuickMatches } from "@/server/usecases/quick-match-home";
 import { LichessLinkCard } from "@/components/lichess-link-card";
 import { lichessConfigured } from "@/lib/oauth";
 import { myLichessLink } from "@/server/usecases/me-lichess";
@@ -63,6 +65,7 @@ export default async function MePage({
     mySuspensions,
     myAverage,
     lichessCard,
+    quickMatches,
   ] = await Promise.all([
       listMyFixtures(user.id),
       getMyOfficiating(user.id),
@@ -86,6 +89,8 @@ export default async function MePage({
       // T16 (T20 m1): the Lichess card — linked, and the club a link starts at (one offered online chess that this
       // player is entered in online; never just the club they administer).
       myLichessLink(user.id),
+      // Quick match plan 3 T6: the quick matches this person saved (spec §7.7), in the platform's system org, never theirs (C9).
+      listMyQuickMatches(user.id),
     ]);
   const activeOrg = orgs.find((o) => o.id === activeOrgId) ?? orgs[0] ?? null;
   const { claimed, lichess } = await searchParams;
@@ -160,6 +165,8 @@ export default async function MePage({
 
         {!officiating.is_official &&
           pendingOfficiatingClaims.length === 0 &&
+          // A saved quick match is something here: the page is not empty (quick match plan 3 T6, B26).
+          quickMatches.length === 0 &&
           meEmptyState(upcoming.length, results.length, teams.length) === "unrostered" && (
             <p className="card flex min-h-[40vh] items-center justify-center p-6 text-center text-sm text-slate-500">
               {t(ui, "me.empty")}
@@ -455,6 +462,9 @@ export default async function MePage({
             </ul>
           </section>
         )}
+
+        {/* The empty case first (B26): with no saved quick match the list renders nothing, no section and no heading. */}
+        <QuickMatchMyList items={quickMatches} />
 
         {persons.length > 0 && <ConsentCard persons={persons} />}
 

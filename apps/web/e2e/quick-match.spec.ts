@@ -325,3 +325,79 @@ test("Save (plan 3 Task 5): the save page at 320, 768 and 1280; without the scri
   }
   expect(checked).toBe(SAVE_WIDTHS.length);
 });
+
+// The account's Quick matches on /me (quick match plan 3 Task 6): the list's every answer is proven in
+// app/me/__tests__/quick-matches-section.test.tsx and the requests' in app/api/quick-match/__tests__/owner-routes.test.ts;
+// this is what only a browser shows: the row with the longest name the create allows at 320, 768 and 1280, Rename's form
+// and Delete's confirmation opened at each, every control a 44px target, nothing sideways; and a refusal printed in the
+// row when the match was deleted from another tab while this one's form was open. The full journey (the rename read back
+// on the home, the delete for everyone, the dead link) is the walkthrough's (D).
+test("the account's Quick matches (plan 3 Task 6): /me at 320, 768 and 1280 with an 80-character name; Rename's form and Delete's confirmation; a match deleted in another tab refuses the rename in the row", async ({ guest: page }) => {
+  // A setup, a magic-link sign-in and a save before three widths of two opened panels and a second tab: past the 60s default.
+  test.slow();
+  // The longest name the create allows, its tail one unbroken word: the hardest to fit at 320.
+  const name = `e2e me ${TAG} ${"Longwordwithoutanybreak".repeat(4)}`.slice(0, 80);
+  await openSetup(page);
+  await form(page).getByLabel("Name", { exact: true }).fill(name);
+  await side(page, 1).fill("Ravi & Sam");
+  await side(page, 2).fill("Priya & Tom");
+  await start(page).click();
+  await expect(page).toHaveURL(/\/q\/qm_[^/?#]+$/);
+  const home = new URL(page.url()).pathname;
+  await loginUi(page, `delivered+e2e-qm-me-${TAG}-${Math.random().toString(36).slice(2, 7)}@resend.dev`, `${home}/save`);
+  await page.getByTestId("qm-save").click();
+  await page.waitForURL((u) => u.pathname === home && u.search === "");
+
+  await page.goto("/me");
+  const row = page.getByTestId("me-quick-matches").locator("li[data-qm-id]");
+  await expect(row).toHaveCount(1);
+  const tall = async (id: string, width: number) => {
+    const box = await row.getByTestId(id).boundingBox();
+    expect(box?.height ?? 0, `${width}: ${id} is a 44px target`).toBeGreaterThanOrEqual(44);
+  };
+  let checked = 0;
+  for (const width of SAVE_WIDTHS) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(row.getByTestId("me-qm-name"), `${width}`).toHaveText(name);
+    await expect(row.getByTestId("me-qm-name"), `${width}`).toHaveAttribute("href", home);
+    for (const id of ["me-qm-name", "me-qm-rename", "me-qm-delete"]) await tall(id, width);
+    await expectNoHorizontalScroll(page);
+
+    await row.getByTestId("me-qm-rename").click();
+    await expect(row.getByTestId("me-qm-rename-input"), `${width}`).toHaveValue(name);
+    for (const id of ["me-qm-rename-input", "me-qm-rename-save", "me-qm-rename-cancel"]) await tall(id, width);
+    await expectNoHorizontalScroll(page);
+    await row.getByTestId("me-qm-rename-cancel").click();
+    await expect(row.getByTestId("me-qm-rename-form"), `${width}: Cancel closes the form`).toHaveCount(0);
+
+    await row.getByTestId("me-qm-delete").click();
+    await expect(row.getByTestId("me-qm-delete-question"), `${width}`).toHaveText("Delete this quick match for everyone? The link stops working.");
+    for (const id of ["me-qm-delete-yes", "me-qm-delete-cancel"]) await tall(id, width);
+    await expectNoHorizontalScroll(page);
+    await row.getByTestId("me-qm-delete-cancel").click();
+    await expect(row.getByTestId("me-qm-delete-confirm"), `${width}: Cancel keeps the match`).toHaveCount(0);
+    checked++;
+  }
+  expect(checked).toBe(SAVE_WIDTHS.length);
+
+  // A second tab of the same account deletes the match while this tab's Rename form is open: Save name is refused, in the row.
+  await row.getByTestId("me-qm-rename").click();
+  const other = await page.context().newPage();
+  try {
+    await other.goto("/me");
+    const there = other.getByTestId("me-quick-matches").locator("li[data-qm-id]");
+    await there.getByTestId("me-qm-delete").click();
+    await there.getByTestId("me-qm-delete-yes").click();
+    await expect(other.getByTestId("me-quick-matches"), "the other tab's list is empty, so gone").toHaveCount(0);
+  } finally {
+    await other.close();
+  }
+  await row.getByTestId("me-qm-rename-input").fill(`Too late ${TAG}`);
+  await row.getByTestId("me-qm-rename-save").click();
+  await expect(row.getByTestId("me-qm-error")).toHaveText("This quick match is no longer in your account.");
+  await expectNoHorizontalScroll(page);
+  // The page's own read: no Quick matches left.
+  await page.reload();
+  await expect(page.locator("h1.page-title")).toBeVisible();
+  await expect(page.getByTestId("me-quick-matches")).toHaveCount(0);
+});

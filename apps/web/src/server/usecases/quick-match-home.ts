@@ -17,7 +17,7 @@ import { toLocale, type Locale } from "@/lib/i18n-constants";
 import { messages, type MessageKey } from "@/lib/messages";
 import { systemAuth } from "@/lib/quick-match-auth";
 import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
-import { isBye } from "@/lib/run-sheet-groups";
+import { isBye, type MatchLineRow } from "@/lib/run-sheet-groups";
 import type { EntrantKind } from "@seazn/engine/sport";
 import { PLAIN_LAYOUT, type TableLayout } from "@seazn/engine/competition";
 import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
@@ -136,6 +136,73 @@ export async function listRecentQuickMatches(visitorHash: string, limit = 5): Pr
     log.warn({ skipped }, "quick match recent strip: rows skipped, their home token could not be opened");
   }
   return out;
+}
+
+/** One row of the account's "Quick matches" (spec §7.7, C9, C13, C19; plan 3 Task 6, Amend T6 [B26, B29]). Client-safe on
+ *  purpose, as the strip's row is: no email, no envelope. */
+export interface MyQuickMatch {
+  id: string;
+  name: string;
+  /** The home token in the clear, opened from the row's envelope (the list's link is `routes.quickMatch(token)`), or null when it
+   *  would not open (B29): the row is then listed without a link, never dropped. */
+  token: string | null;
+  format: QuickMatchFormat;
+  /** `playedOf`, the home's own count: the list never says a different "played" from the match's home. */
+  played: number;
+  total: number;
+}
+
+/**
+ * The quick matches `userId` has saved, the most recently active first (spec §7.7: read from `quick_matches` by
+ * `saved_by_user_id`). Never the account's own competitions (C9): every row is the system org's. A saved row carries no expiry,
+ * so there is nothing to filter on aliveness. One read of the rows and one of all their fixtures, both as the system org.
+ *
+ * Each row's home token is opened with the NON-throwing `tryOpenHomeToken` (B29; controller ruling 2026-11-08): a row that does
+ * not open (no usable DEVICE_LINK_KEK, a damaged envelope) is listed with `token: null`, so the account page never fails for
+ * every saver at once, with ONE warning for the read naming each such row's id and reason, never a token or an envelope.
+ */
+export async function listMyQuickMatches(userId: string): Promise<MyQuickMatch[]> {
+  const { matches, fixtures } = await withTenant(SYSTEM_ORG, async (tx) => {
+    const matches = await tx<{ id: string; competition_id: string; name: string; format: QuickMatchFormat; token_enc: Uint8Array }[]>`
+      select id, competition_id, name, format, token_enc
+        from quick_matches
+       where saved_by_user_id = ${userId}
+       order by last_activity_at desc, created_at desc, id desc`;
+    if (matches.length === 0) return { matches, fixtures: [] };
+    const fixtures = await tx<(MatchLineRow & { competition_id: string })[]>`
+      select d.competition_id, f.status, f.outcome, f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
+             f.ext_key
+        from fixtures f
+        join divisions d on d.id = f.division_id
+       where d.competition_id = any(${matches.map((m) => m.competition_id)}::uuid[])`;
+    return { matches, fixtures };
+  });
+  const byCompetition = new Map<string, MatchLineRow[]>();
+  for (const f of fixtures) byCompetition.set(f.competition_id, [...(byCompetition.get(f.competition_id) ?? []), f]);
+  const unopened: { id: string; reason: HomeTokenOpenRefusal }[] = [];
+  const out = matches.map((m): MyQuickMatch => {
+    const opened = tryOpenHomeToken(m.token_enc);
+    if (!opened.ok) unopened.push({ id: m.id, reason: opened.reason });
+    return {
+      id: m.id,
+      name: m.name,
+      token: opened.ok ? opened.token : null,
+      format: m.format,
+      ...playedOf(byCompetition.get(m.competition_id) ?? []),
+    };
+  });
+  if (unopened.length > 0) {
+    log.warn({ unopened }, "quick match account list: rows listed without a link, their home token could not be opened");
+  }
+  return out;
+}
+
+/** A quick match's "{played} of {count}" (plan 2 Task 5, B7d): its matches are its non-bye fixtures (`isBye`, the shared
+ *  predicate, never re-derived), and the played ones are those whose status is settled (SETTLED_FIXTURE_STATUSES). The home
+ *  and the account list read this one count. */
+export function playedOf(rows: readonly MatchLineRow[]): { played: number; total: number } {
+  const matches = rows.filter((r) => !isBye(r));
+  return { played: matches.filter((r) => SETTLED_FIXTURE_STATUSES.has(r.status)).length, total: matches.length };
 }
 
 /**
@@ -355,9 +422,7 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
     })
     .sort(byRoundThenNumber);
 
-  const matches = fixtures.filter((f) => !f.isBye);
-  const total = matches.length;
-  const played = matches.filter((f) => SETTLED_FIXTURE_STATUSES.has(f.status)).length;
+  const { played, total } = playedOf(rows);
   const standings = stage.kind === "league" ? await getStandings(auth, stage.id) : null;
   const pointsUnit =
     stage.kind === "league"
