@@ -79,6 +79,7 @@ import { i18nSuite } from "./suites/i18n.ts";
 import { marketingSuite } from "./suites/marketing.ts";
 import { funnelSuite } from "./suites/funnel.ts";
 import { funnelReminderSuite } from "./suites/funnelReminder.ts";
+import { quickMatchSuite } from "./suites/quickMatch.ts";
 import { sponsorsSuite } from "./suites/sponsors.ts";
 import { sponsorDealsSuite } from "./suites/sponsorDeals.ts";
 import { venuesSuite } from "./suites/venues.ts";
@@ -913,6 +914,10 @@ export async function main() {
   // queued funnel_reminder from the real cron route, and a second run none.
   // No session; needs CRON_SECRET and skips cleanly without it.
   await suite("funnelReminder", () => funnelReminderSuite());
+  // Quick match (plan 2 T11 + plan 3 T7): a guest creates a match, scores a rally through the pad's link and sees it
+  // Live; then the real expiry sweep deletes an expired unsaved match and keeps a saved one. The system org's rows, its
+  // own saver; needs CRON_SECRET for the sweep leg and skips that leg cleanly without it.
+  await suite("quickMatch", () => quickMatchSuite());
 
   // --- PROMPT-40 marketing redesign (design/v3/12).
   await suite("marketing", () => marketingSuite());
