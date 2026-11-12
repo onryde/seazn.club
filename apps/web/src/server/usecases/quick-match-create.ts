@@ -72,6 +72,11 @@ export interface CreatedQuickMatch {
   outboxRowId: string | null;
 }
 
+/** Which mail limit said no to a create's link mail (branch-fix A review m9, controller ruling 2026-11-12): the per-IP
+ *  bucket, the per-inbox one, or the limiter's fail-closed outage (either bucket's). Logged, never shown: the guest reads
+ *  the one neutral line whichever it was. */
+export type MailRefusal = "ip" | "inbox" | "outage";
+
 /** What `createQuickMatch` answers: the match, and whether its link mail was dropped because `mailAllowed` said no. */
 export interface CreatedGuestQuickMatch extends CreatedQuickMatch {
   /** True when the guest typed an email and `ctx.mailAllowed` refused it (branch review B m3): the match was made with NO
@@ -263,13 +268,15 @@ export async function createQuickMatchTree(
  *      cannot end level, decided by the engine's `bracketMayEndLevel` on the variant's cfg ⊕ the knockout stage's
  *      defaults (`offer.knockoutAllowed`, quick-match-sports.ts); the probe checks the same question on real fixtures;
  *   3. with an email only, `ctx.mailAllowed(email)` (the route's mail limits): asked only once every refusal above has
- *      passed, so a refused create spends no mail bucket. A no costs the MAIL, never the match (branch review B m3,
+ *      passed, so a refused create spends no mail bucket. It answers `true`, or the `MailRefusal` that said no. A no
+ *      costs the MAIL, never the match (branch review B m3,
  *      controller ruling 2026-11-08): the tree is built with no email, so no address is stored and no mail queued, and the
  *      answer says `emailLimited`. Anything it throws is the create's failure. REQUIRED (branch-fix A review m6): an
  *      optional gate defaulted to "every mail allowed", so a caller that forgot it mailed with no limit at all;
  *   4. the tree (`createQuickMatchTree`), which builds the whole match or nothing, and with an email queues its link mail;
  *   5. one `quick_match_created` event, carrying no name, email or token (D11); and, when step 3 said no, one info line
- *      naming the match (review m9: how often a guest loses the link mail is countable), with no address and no token.
+ *      naming the match and the limit that refused (review m9: how often a guest loses the link mail, and to which
+ *      limit, is countable), with no address and no token.
  *
  * Known gap (recorded): the tree's locked recount (the race guard, B5f) can still refuse TOO_MANY_ALIVE after step 3 spent
  * the mail buckets, when two creates for one visitor race past the early count. Rare, and bounded by the alive cap.
@@ -280,7 +287,7 @@ export async function createQuickMatch(
     visitorHash: string;
     baseUrl?: string;
     now?: Date;
-    mailAllowed: (email: string) => Promise<boolean>;
+    mailAllowed: (email: string) => Promise<true | MailRefusal>;
     _failBeforeGenerateForTests?: () => void;
   },
 ): Promise<CreatedGuestQuickMatch> {
@@ -313,7 +320,8 @@ export async function createQuickMatch(
     );
   }
 
-  const emailLimited = rest.email !== null && !(await ctx.mailAllowed(rest.email));
+  const mailRefusal = rest.email === null ? null : await ctx.mailAllowed(rest.email);
+  const emailLimited = mailRefusal !== null && mailRefusal !== true;
   const out = await createQuickMatchTree(emailLimited ? { ...rest, email: null } : rest, kind, {
     visitorHash: ctx.visitorHash,
     home,
@@ -336,9 +344,9 @@ export async function createQuickMatch(
       plays: input.plays,
     },
   });
-  if (emailLimited) {
+  if (mailRefusal !== null && mailRefusal !== true) {
     log.info(
-      { event: "quick_match_mail_skipped", quick_match_id: out.id, sport_key: input.sport_key },
+      { event: "quick_match_mail_skipped", quick_match_id: out.id, sport_key: input.sport_key, refused_by: mailRefusal },
       "quick match created without its link mail: a mail limit said no",
     );
   }

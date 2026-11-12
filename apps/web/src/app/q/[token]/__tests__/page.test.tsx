@@ -223,7 +223,7 @@ const league = (over: Partial<CreateQuickMatch> = {}): CreateQuickMatch => ({
 });
 const create = (input: CreateQuickMatch) => {
   // An email's link mail needs the origin (plan 3's create); held in a variable so the call fits either signature.
-  const ctx = { visitorHash: hashVisitorKey(mintVisitorKey()), baseUrl: "https://seazn.example", mailAllowed: async () => true };
+  const ctx = { visitorHash: hashVisitorKey(mintVisitorKey()), baseUrl: "https://seazn.example", mailAllowed: async () => true as const };
   return createQuickMatch(input, ctx);
 };
 async function homeOf(out: CreatedQuickMatch): Promise<QuickMatchHome> {

@@ -57,6 +57,16 @@ export function retryAfterSeconds(ttlMs: number, windowSeconds: number): number 
 const tooMany = (retryAfter: number): HttpError =>
   new HttpError(429, TOO_MANY, undefined, undefined, { "Retry-After": String(retryAfter) });
 
+/** The fail-closed OUTAGE's 429s (Redis configured, no count), kept apart from a limit hit's for a caller's own log
+ *  (branch-fix A review m9: which limit refused a quick match's mail). Off the wire: on it the two stay the same code-less
+ *  429, so no caller that reads one changes. */
+const outages = new WeakSet<HttpError>();
+
+/** True only for the 429 `rateLimit` threw because the limiter could not count (an outage), never for a limit hit. */
+export function isRateLimitOutage(err: unknown): boolean {
+  return err instanceof HttpError && outages.has(err);
+}
+
 export async function rateLimit(
   key: string,
   { max, windowSeconds, failClosed = false }: RateLimitConfig,
@@ -71,7 +81,11 @@ export async function rateLimit(
     //    even for failClosed limits, so auth flows work without a Redis.
     //  - Redis configured but unreachable (a real outage): apply failClosed.
     //    There is no window to read, so Retry-After is the full window (R4).
-    if (failClosed && cacheEnabled()) throw tooMany(windowSeconds);
+    if (failClosed && cacheEnabled()) {
+      const outage = tooMany(windowSeconds);
+      outages.add(outage);
+      throw outage;
+    }
     return;
   }
 

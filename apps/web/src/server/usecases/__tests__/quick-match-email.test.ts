@@ -192,17 +192,23 @@ function landedWithoutMail(res: Response): string {
 }
 
 /** The match a mail limit spared: made, holding no address, with no mail queued for it. What reached the inbox is each
- *  case's own count (an inbox at its limit was mailed before). */
-async function madeWithoutMail(name: string, email: string): Promise<void> {
+ *  case's own count (an inbox at its limit was mailed before). `refusedBy` is the limit the case set up to refuse, typed
+ *  from the controller's ruling (2026-11-12: per-inbox, IP or outage), never read back from the create. */
+async function madeWithoutMail(name: string, email: string, refusedBy: "ip" | "inbox" | "outage"): Promise<void> {
   const row = await rowNamed(name);
   expect(row, "the match was made").toBeDefined();
   expect(row!.email, "no address stored").toBeNull();
   expect(await mailsAbout(row!.id), "no mail queued").toEqual([]);
-  // Review m9: one structured info line says the mail was skipped, by the match's id, so how often guests lose the link
-  // mail can be counted. It carries no address and no token.
+  // Review m9: one structured info line says the mail was skipped, by the match's id, and which limit refused it, so how
+  // often guests lose the link mail, and to what, can be counted. It carries no address and no token.
   const skipped = mailSkippedLines().filter(([fields]) => (fields as { quick_match_id?: unknown }).quick_match_id === row!.id);
   expect(skipped, "one info line for this match's skipped mail").toHaveLength(1);
-  expect(skipped[0]![0]).toEqual({ event: "quick_match_mail_skipped", quick_match_id: row!.id, sport_key: "badminton" });
+  expect(skipped[0]![0]).toEqual({
+    event: "quick_match_mail_skipped",
+    quick_match_id: row!.id,
+    sport_key: "badminton",
+    refused_by: refusedBy,
+  });
   const said = inspect(skipped[0], { depth: 20 });
   expect(said.toLowerCase().includes(email.toLowerCase()), "the line holds no address").toBe(false);
   expect(said.includes("@"), "nor any part of one").toBe(false);
@@ -479,7 +485,7 @@ describe.skipIf(!HAS_DB)("the email send limit (plan 3 Amend T1 [B4]): EMAIL_LIM
     const spared = form({ email: sixth, locale: "nl" });
     const res = await post(spared, theirs);
     landedWithoutMail(res);
-    await madeWithoutMail(spared.name as string, sixth);
+    await madeWithoutMail(spared.name as string, sixth, "ip");
     expect(await mailsTo(sixth), "no mail to that address at all").toEqual([]);
     expect(sentTo(sixth), "and none sent").toEqual([]);
     expect(vi.mocked(Sentry.captureException), "a mail limit is not a fault").not.toHaveBeenCalled();
@@ -529,7 +535,7 @@ describe.skipIf(!HAS_DB)("the per-recipient limit (T1 review I1): 3 link mails a
     const fourth = form({ email: inbox, locale: "fr" });
     const res = await post(fourth, ip());
     landedWithoutMail(res);
-    await madeWithoutMail(fourth.name as string, inbox);
+    await madeWithoutMail(fourth.name as string, inbox, "inbox");
     expect(await mailsTo(inbox), "and queued no fourth mail").toHaveLength(RECIPIENT_MAX);
     expect(toInbox()).toHaveLength(RECIPIENT_MAX);
     expect(vi.mocked(Sentry.captureException), "a mail limit is not a fault").not.toHaveBeenCalled();
@@ -566,7 +572,7 @@ describe.skipIf(!HAS_DB)("a mail limiter outage (Redis configured but unreachabl
     const f = form({ email });
     const res = await post(f, theirs);
     landedWithoutMail(res);
-    await madeWithoutMail(f.name as string, email);
+    await madeWithoutMail(f.name as string, email, "outage");
     expect(sentTo(email), "nothing sent").toEqual([]);
     expect(vi.mocked(Sentry.captureException), "an outage that costs only the mail is not a fault").not.toHaveBeenCalled();
     expect(await flashOnHome(res.headers.get("location")!)).toEqual({ text: enUi["quickMatch.flash.emailLimited"], role: "status" });

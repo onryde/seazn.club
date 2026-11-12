@@ -39,12 +39,18 @@ import { handler, HttpError, redirectLocal } from "@/lib/http";
 import { DEFAULT_LOCALE, hasLocale, type Locale } from "@/lib/i18n-constants";
 import { QUICK_MATCH_ERRORS } from "@/lib/quick-match-constants";
 import { baseUrl } from "@/lib/oauth";
-import { EMAIL_LIMIT, QUICK_MATCH_CREATE_LIMIT, QUICK_MATCH_RECIPIENT_LIMIT, rateLimit } from "@/lib/rate-limit";
+import {
+  EMAIL_LIMIT,
+  isRateLimitOutage,
+  QUICK_MATCH_CREATE_LIMIT,
+  QUICK_MATCH_RECIPIENT_LIMIT,
+  rateLimit,
+} from "@/lib/rate-limit";
 import { routes } from "@/lib/routes";
 import { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { dispatchNow } from "@/server/email-outbox";
 import { log } from "@/server/logger";
-import { createQuickMatch } from "@/server/usecases/quick-match-create";
+import { createQuickMatch, type MailRefusal } from "@/server/usecases/quick-match-create";
 import { QUICK_MATCH_VISITOR_COOKIE } from "@/server/usecases/quick-match-tokens";
 import { readOrMintVisitor, visitorCookieOptions } from "@/server/usecases/quick-match-visitor";
 
@@ -110,16 +116,22 @@ const recipientKey = (email: string): string => createHash("sha256").update(emai
 
 /** The two mail buckets, per IP then per recipient (the recipient's is not spent when the IP's refuses). A refusal from
  *  either, or the limiter's fail-closed outage (the same code-less 429), answers no: the create then makes the match without
- *  the email (branch review B m3). Anything else the limiter throws is the create's failure. */
-async function mailAllowed(ip: string, email: string): Promise<boolean> {
-  try {
-    await rateLimit(`quick-match-email:${ip}`, EMAIL_LIMIT);
-    await rateLimit(`quick-match-recipient:${recipientKey(email)}`, QUICK_MATCH_RECIPIENT_LIMIT);
-    return true;
-  } catch (err) {
-    if (isLimiter(err)) return false;
-    throw err;
+ *  the email (branch review B m3). The no names its limit for the create's log (review m9): the bucket's own, or "outage"
+ *  when the limiter could not count. Anything else the limiter throws is the create's failure. */
+async function mailAllowed(ip: string, email: string): Promise<true | MailRefusal> {
+  const buckets = [
+    ["ip", `quick-match-email:${ip}`, EMAIL_LIMIT],
+    ["inbox", `quick-match-recipient:${recipientKey(email)}`, QUICK_MATCH_RECIPIENT_LIMIT],
+  ] as const;
+  for (const [refusal, key, limit] of buckets) {
+    try {
+      await rateLimit(key, limit);
+    } catch (err) {
+      if (!isLimiter(err)) throw err;
+      return isRateLimitOutage(err) ? "outage" : refusal;
+    }
   }
+  return true;
 }
 
 /** The visitor's explicit pick, or null: none, one naming no shipped locale, or a forged one that does not decode
