@@ -36,8 +36,9 @@ export const QUICK_MATCH_ACCOUNT_SECTION_ID = "quick-matches";
  *  browser's own `type="email"` check passes `ravi@gmail`; this stops it, and the other addresses the schema refuses, before
  *  the post (branch review A I2). The setup form's test proves it agrees with the schema on a counted table. */
 export const QUICK_MATCH_EMAIL_PATTERN = "(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+\\-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}";
-/** League plays per pair (legs), at most. */
-export const QUICK_MATCH_MAX_PLAYS = 4;
+/** League plays per pair (legs), at most: "Each pair plays" is Once | Twice (owner 2026-11-12). The create's schema and
+ *  the preview refuse more, so the setup screen and the server agree. */
+export const QUICK_MATCH_MAX_PLAYS = 2;
 /** Alive (unexpired, unsaved) quick matches one visitor key may hold. */
 export const QUICK_MATCH_MAX_ALIVE_PER_VISITOR = 5;
 /** Days without activity before an unsaved quick match expires. */

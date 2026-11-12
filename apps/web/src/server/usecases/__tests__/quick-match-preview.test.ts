@@ -26,12 +26,12 @@ describe("quickMatchPreview — counts", () => {
   // [3,1,3] and [5,2,20] are odd fields: where a round-robin phantom bye could leak into the count (pre-flight B4)
   it.each([
     [2, 1, 1],
-    [2, 3, 3],
+    [2, 2, 2],
     [3, 1, 3],
     [4, 1, 6],
     [4, 2, 12],
     [5, 2, 20],
-    [6, 4, 60],
+    [6, 2, 30],
   ])("league %i sides × %i plays = %i matches", (sides, plays, n) => {
     expect(quickMatchPreview({ format: "league", sides, plays }).matchCount).toBe(n);
   });
@@ -110,7 +110,7 @@ describe("quickMatchPreview — the draw (C22)", () => {
     let checked = 0;
     for (const format of ["league", "knockout"] as const)
       for (let sides = 2; sides <= 6; sides++)
-        for (const plays of format === "league" ? [1, 2, 3, 4] : [1]) {
+        for (const plays of format === "league" ? [1, 2] : [1]) {
           const label = `${format} ${sides}×${plays}`;
           const sections = previewDivisionFixtures([quickMatchStageInput({ format, plays, name: "x" })], sides)[0]!.sections;
           const lines = sections.flatMap((s) => s.matches);
@@ -126,7 +126,7 @@ describe("quickMatchPreview — the draw (C22)", () => {
           ).toEqual(sections.map((s) => s.title));
           checked++;
         }
-    expect(checked).toBe(25); // 5 side counts × (4 plays + 1): anti-vacuity
+    expect(checked).toBe(15); // 5 side counts × (2 plays + 1): anti-vacuity
   });
 
   it("every seat a quick match knockout feeds is a WINNER feed — the only kind the preview's feeder can name", () => {
@@ -165,7 +165,7 @@ describe("quickMatchStageInput — ONE stage input for the preview and the creat
   });
 });
 
-describe("quickMatchPreview — inputs the create would refuse (CreateQuickMatch: 2..6 sides, 1..4 plays)", () => {
+describe("quickMatchPreview — inputs the create would refuse (CreateQuickMatch: 2..6 sides, 1..2 plays)", () => {
   // The empty case. The generator's preview clamps a field below two up to two, so without this refusal one side
   // would preview as "1 match" — a count for a draw the create refuses (CreateQuickMatch.sides .min(2)).
   it.each([
@@ -173,6 +173,8 @@ describe("quickMatchPreview — inputs the create would refuse (CreateQuickMatch
     ["seven sides", { format: "knockout", sides: 7, plays: 1 }],
     ["a fractional side count", { format: "league", sides: 2.5, plays: 1 }],
     ["zero plays", { format: "league", sides: 4, plays: 0 }],
+    // Owner 2026-11-12: "Each pair plays" is Once | Twice only, so three is the first refused value.
+    ["three plays", { format: "league", sides: 4, plays: 3 }],
     ["five plays", { format: "knockout", sides: 4, plays: 5 }],
   ] as const)("refuses %s", (_label, input) => {
     expect(() => quickMatchPreview(input)).toThrow(RangeError);
@@ -180,7 +182,7 @@ describe("quickMatchPreview — inputs the create would refuse (CreateQuickMatch
 
   it("accepts both ends of the range", () => {
     expect(quickMatchPreview({ format: "league", sides: 2, plays: 1 }).matchCount).toBe(1);
-    expect(quickMatchPreview({ format: "league", sides: 6, plays: 4 }).matchCount).toBe(60);
+    expect(quickMatchPreview({ format: "league", sides: 6, plays: 2 }).matchCount).toBe(30); // 2 × 6·5/2
   });
 });
 

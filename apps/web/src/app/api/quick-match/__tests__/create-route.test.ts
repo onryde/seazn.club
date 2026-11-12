@@ -350,6 +350,8 @@ describe.skipIf(!HAS_DB)("POST /api/quick-match: every refusal is a 303 back to 
     ["a blank side", { sides: ["Ravi", "   "] }],
     ["a stray field", { seeds: "1" }],
     ["a repeated name", { name: ["One", "Two"] }],
+    // Owner 2026-11-12: "Each pair plays" is Once | Twice only; three is refused at the server too, not just unoffered.
+    ["plays 3, past the owner's Twice", { plays: "3" }],
     ["plays out of range", { plays: "5" }],
     ["plays not a number", { plays: "twice" }],
     // An email fault BESIDE another one is still the form's: only an email-only failure names the address (A-I2).

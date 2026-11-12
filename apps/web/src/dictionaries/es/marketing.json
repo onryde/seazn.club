@@ -489,8 +489,6 @@
   "quickMatch.setup.plays": "Cada enfrentamiento se juega",
   "quickMatch.setup.plays.1": "Una vez",
   "quickMatch.setup.plays.2": "Dos veces",
-  "quickMatch.setup.plays.3": "3 veces",
-  "quickMatch.setup.plays.4": "4 veces",
   "quickMatch.setup.rules": "Reglas del partido",
   "quickMatch.setup.email": "Envíame el enlace por correo (opcional)",
   "quickMatch.setup.emailLabel": "Correo electrónico",

@@ -489,8 +489,6 @@
   "quickMatch.setup.plays": "Chaque duel se joue",
   "quickMatch.setup.plays.1": "Une fois",
   "quickMatch.setup.plays.2": "Deux fois",
-  "quickMatch.setup.plays.3": "3 fois",
-  "quickMatch.setup.plays.4": "4 fois",
   "quickMatch.setup.rules": "Règles du match",
   "quickMatch.setup.email": "M'envoyer le lien par e-mail (facultatif)",
   "quickMatch.setup.emailLabel": "E-mail",

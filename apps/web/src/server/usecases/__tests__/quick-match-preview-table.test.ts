@@ -24,8 +24,9 @@ import {
   type QuickMatchPreviewTable,
 } from "../quick-match-preview";
 
-/** The rulebook's ranges (CreateQuickMatch: 2..6 sides, 1..4 plays; C16: two sides is always a league). */
-const LEAGUE_KEYS = [2, 3, 4, 5, 6].flatMap((n) => [1, 2, 3, 4].map((p) => `league:${n}:${p}`));
+/** The rulebook's ranges (CreateQuickMatch: 2..6 sides, 1..2 plays — Once | Twice, owner 2026-11-12; C16: two sides is
+ *  always a league). */
+const LEAGUE_KEYS = [2, 3, 4, 5, 6].flatMap((n) => [1, 2].map((p) => `league:${n}:${p}`));
 const KNOCKOUT_KEYS = [3, 4, 5, 6].map((n) => `knockout:${n}:1`);
 
 const knockout = (t: QuickMatchPreviewTable, n: number): QuickMatchKnockoutCell => {
@@ -45,9 +46,9 @@ const pairWords = (cell: QuickMatchKnockoutCell, pair: [QuickMatchDrawSeat, Quic
   pair.map((s) => seatWords(cell, s)).sort().join("v");
 
 describe("quickMatchPreviewTable — the cells", () => {
-  it("holds exactly the 20 league cells (2..6 sides × 1..4 plays) and the 4 knockout cells (3..6 sides)", () => {
+  it("holds exactly the 10 league cells (2..6 sides × 1..2 plays) and the 4 knockout cells (3..6 sides)", () => {
     const keys = Object.keys(quickMatchPreviewTable());
-    expect(keys.length).toBe(24); // anti-vacuity: an empty table is a failure, not a pass
+    expect(keys.length).toBe(14); // anti-vacuity: an empty table is a failure, not a pass
     expect(new Set(keys)).toEqual(new Set([...LEAGUE_KEYS, ...KNOCKOUT_KEYS]));
   });
 
@@ -55,11 +56,11 @@ describe("quickMatchPreviewTable — the cells", () => {
     const t = quickMatchPreviewTable();
     let checked = 0;
     for (let n = 2; n <= 6; n++)
-      for (let plays = 1; plays <= 4; plays++) {
+      for (let plays = 1; plays <= 2; plays++) {
         expect(t[`league:${n}:${plays}`]?.matchCount, `league ${n}×${plays}`).toBe((plays * n * (n - 1)) / 2);
         checked++;
       }
-    expect(checked).toBe(20);
+    expect(checked).toBe(10);
   });
 
   it("every knockout cell counts n − 1 matches, and the top seeds sit out round one (spec §7.3 step 3)", () => {
@@ -164,7 +165,7 @@ describe("quickMatchPreviewTable — the exhaustive differential against the dir
       }
       expect(cell.rounds.flatMap((r) => r.pairs), key).toHaveLength(raw.filter((x) => !x.bye).length);
     }
-    expect(cells).toBe(24); // anti-vacuity
+    expect(cells).toBe(14); // anti-vacuity
     expect(seats).toBe(28); // 2 × (2 + 3 + 4 + 5)
   });
 });
@@ -179,21 +180,21 @@ describe("quickMatchPreviewTable — ONE table for every sport, and small enough
     expectTypeOf<Parameters<typeof quickMatchStageInput>[0]>().toEqualTypeOf<{ format: QuickMatchFormat; plays: number; name: string }>();
   });
 
-  it("serializes inside a 2 KiB budget, and its shape holds exactly 124 keys", () => {
+  it("serializes inside a 2 KiB budget, and its shape holds exactly 104 keys", () => {
     // The table rides in every /play page payload: the budget is the requirement.
     const t = quickMatchPreviewTable();
     expect(JSON.stringify(t).length).toBeLessThanOrEqual(2048);
     // The shape's tripwire: every object key in the table, NOT descending into `role` (the engine's RoundRole may grow
-    // a field without the table changing shape). Hand count: 24 cell keys + 20 league `matchCount` + 4 knockout cells ×
+    // a field without the table changing shape). Hand count: 14 cell keys + 10 league `matchCount` + 4 knockout cells ×
     // 3 (matchCount, byes, rounds) + 10 rounds (2 + 2 + 3 + 3) × 2 (role, pairs) + 28 seats × 1 (seed | winnerOf) +
-    // 10 winnerOf seats (every match but the final feeds one: n − 2 for n = 3..6) × 2 (round, pair) = 124.
+    // 10 winnerOf seats (every match but the final feeds one: n − 2 for n = 3..6) × 2 (round, pair) = 104.
     const keysIn = (v: unknown): number =>
       Array.isArray(v)
         ? v.reduce((n: number, x) => n + keysIn(x), 0)
         : v !== null && typeof v === "object"
           ? Object.entries(v).reduce((n, [k, x]) => n + 1 + (k === "role" ? 0 : keysIn(x)), 0)
           : 0;
-    expect(keysIn(t)).toBe(124);
+    expect(keysIn(t)).toBe(104);
   });
 });
 

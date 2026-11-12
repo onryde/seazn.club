@@ -489,8 +489,6 @@
   "quickMatch.setup.plays": "Elk duel wordt gespeeld",
   "quickMatch.setup.plays.1": "Eén keer",
   "quickMatch.setup.plays.2": "Twee keer",
-  "quickMatch.setup.plays.3": "3 keer",
-  "quickMatch.setup.plays.4": "4 keer",
   "quickMatch.setup.rules": "Wedstrijdregels",
   "quickMatch.setup.email": "Mail me de link (optioneel)",
   "quickMatch.setup.emailLabel": "E-mail",

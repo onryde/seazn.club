@@ -232,7 +232,7 @@ afterEach(() => {
 // ---- the pure rules -----------------------------------------------------------------------------------------------
 
 describe("matchCountOf: the Start button's number is a lookup in the server's table", () => {
-  it("every league is plays × n(n−1)/2 and every knockout n − 1 (rulebook); 24 cells checked", () => {
+  it("every league is plays × n(n−1)/2 and every knockout n − 1 (rulebook); 14 cells checked", () => {
     let checked = 0;
     for (let n = 2; n <= QUICK_MATCH_MAX_SIDES; n++) {
       for (let plays = 1; plays <= QUICK_MATCH_MAX_PLAYS; plays++) {
@@ -242,10 +242,11 @@ describe("matchCountOf: the Start button's number is a lookup in the server's ta
     }
     for (let n = 3; n <= QUICK_MATCH_MAX_SIDES; n++) {
       // A knockout has no plays: any plays value reads the same cell.
-      expect(matchCountOf(TABLE, "knockout", n, 3), `knockout of ${n}`).toBe(n - 1);
+      expect(matchCountOf(TABLE, "knockout", n, 2), `knockout of ${n}`).toBe(n - 1);
       checked++;
     }
-    expect(checked).toBe(24);
+    // 5 side counts (2..6) × 2 plays (Once, Twice) + 4 knockouts (3..6 sides).
+    expect(checked).toBe(14);
   });
 
   it("a key outside the table is undefined, never a number (a knockout of two, seven sides)", () => {
@@ -465,7 +466,7 @@ describe("setupBody: the form's fields, exactly (C3 under the form-post contract
   });
 
   it("a knockout sends plays 1, whatever was picked before it", () => {
-    expect(setupBody({ ...base, format: "knockout", plays: 3 }).get("plays")).toBe("1");
+    expect(setupBody({ ...base, format: "knockout", plays: 2 }).get("plays")).toBe("1");
   });
 });
 
@@ -478,7 +479,7 @@ describe("QuickMatchSetupForm: the screen as the mockup orders it", () => {
     expect(radio(i, "format", "league"), "no format choice at two sides").toBeUndefined();
     expect(radio(i, "format", "knockout")).toBeUndefined();
     expect(propsOf(hidden(i, "format")!).value).toBe("league");
-    expect([1, 2, 3, 4].map((n) => radio(i, "plays", String(n)) !== undefined)).toEqual([true, true, true, true]);
+    expect([1, 2, 3].map((n) => radio(i, "plays", String(n)) !== undefined), "Once and Twice only (owner 2026-11-12)").toEqual([true, true, false]);
     expect(i.text()).toContain("2 of 6");
     expect(i.text()).toContain("Each pair plays");
   });
@@ -555,10 +556,32 @@ describe("QuickMatchSetupForm: the screen as the mockup orders it", () => {
     const i = mount();
     fillSides(i, ["A", "B"]);
     expect(startText(i)).toBe("Start playing · 1 match");
-    type(radio(i, "plays", "3"), "3");
-    expect(startText(i)).toBe("Start playing · 3 matches");
+    type(radio(i, "plays", "2"), "2");
+    expect(startText(i)).toBe("Start playing · 2 matches");
     fillSides(i, ["A", "B", "C", "D"]);
-    expect(startText(i)).toBe("Start playing · 18 matches"); // 3 × 4·3/2
+    expect(startText(i)).toBe("Start playing · 12 matches"); // 2 × 4·3/2
+  });
+
+  it("'Each pair plays' offers Once and Twice, nothing more (owner 2026-11-12), at two sides and at six", () => {
+    // The owner's ruling, typed here on purpose: never read from QUICK_MATCH_MAX_PLAYS, which is what it pins.
+    const OWNER = [
+      ["1", "Once"],
+      ["2", "Twice"],
+    ];
+    let checked = 0;
+    for (const names of [["A", "B"], ["A", "B", "C", "D", "E", "F"]]) {
+      const i = mount();
+      fillSides(i, names);
+      const offered = all(i)
+        .filter((el) => el.type === "label" && walk(el).some((c) => c.type === "input" && propsOf(c).name === "plays"))
+        .map((el) => {
+          const input = walk(el).find((c) => c.type === "input" && propsOf(c).name === "plays")!;
+          return [String(propsOf(input).value), textOf(el).trim()];
+        });
+      expect(offered, `${names.length} sides`).toEqual(OWNER);
+      checked += offered.length;
+    }
+    expect(checked, "anti-vacuity").toBe(4);
   });
 
   it("once the script runs, Start is disabled while any row is blank or the name is cleared, enabled once every row is filled", () => {
@@ -1190,7 +1213,7 @@ describe("what a screen reader hears, what a thumb can hit, where the Start bar 
     expect(textOf(legend!)).toBe("Who plays");
   });
 
-  it("every tap target has a 44px floor of its own, and no element carries two text sizes or two vertical paddings; 19 checked", () => {
+  it("every tap target has a 44px floor of its own, and no element carries two text sizes or two vertical paddings; 17 checked", () => {
     const i = mount({}, { hydrate: true });
     fillSides(i, ["A", "B", "C"]); // a × and the Format row
     const faces = (name: string) =>
@@ -1215,8 +1238,8 @@ describe("what a screen reader hears, what a thumb can hit, where the Start bar 
       expect(cls.filter((c) => /^text-(xs|sm|base|lg|xl)$/.test(c)).length, `${what}: one text size`).toBeLessThanOrEqual(1);
       expect(cls.filter((c) => /^py-/.test(c)).length, `${what}: one vertical padding`).toBeLessThanOrEqual(1);
     }
-    // 4 chips, 2 kinds, 4 plays, 2 formats, 3 sides, ×, Add, rules, email.
-    expect(targets).toHaveLength(19);
+    // 4 chips, 2 kinds, 2 plays, 2 formats, 3 sides, ×, Add, rules, email.
+    expect(targets).toHaveLength(17);
   });
 
   it("the Start bar sticks inside the form below 640px, never as a fixed bar with a spacer, and un-docks while the cookie banner is open", () => {

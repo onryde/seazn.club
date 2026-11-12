@@ -64,7 +64,7 @@ function seatOf(seed: number | null, from: PreviewDrawFeed | null, where: string
 
 export function quickMatchPreview(input: { format: QuickMatchFormat; sides: number; plays: number }): QuickMatchPreview {
   const { format, sides, plays } = input;
-  // The create's own bounds (CreateQuickMatch: 2..6 sides, 1..4 plays). Below two sides the generator's preview
+  // The create's own bounds (CreateQuickMatch: 2..6 sides, 1..2 plays). Below two sides the generator's preview
   // clamps the field up to two, so an unguarded "1 side" would preview a match the create refuses.
   if (!Number.isInteger(sides) || sides < QUICK_MATCH_MIN_SIDES || sides > QUICK_MATCH_MAX_SIDES) {
     throw new RangeError(`quick match sides must be ${QUICK_MATCH_MIN_SIDES} to ${QUICK_MATCH_MAX_SIDES}, got ${sides}`);

@@ -489,8 +489,6 @@
   "quickMatch.setup.plays": "Each pair plays",
   "quickMatch.setup.plays.1": "Once",
   "quickMatch.setup.plays.2": "Twice",
-  "quickMatch.setup.plays.3": "3 times",
-  "quickMatch.setup.plays.4": "4 times",
   "quickMatch.setup.rules": "Match rules",
   "quickMatch.setup.email": "Email me the link (optional)",
   "quickMatch.setup.emailLabel": "Email",
