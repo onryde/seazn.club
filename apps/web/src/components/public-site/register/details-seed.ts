@@ -30,10 +30,16 @@ function seedEntry(entry: CartEntry, contact: ContactState, division: SeedDivisi
     const same = entry.players.length === 1 && seeded.full_name === row.full_name && seeded.dob === row.dob && seeded.gender === row.gender;
     return same ? entry : { ...entry, players: [seeded] };
   }
-  // A TEAM roster starts EMPTY by design (cart.ts's blankPlayers) and the captain builds it with "+ Add player"; seeding a row there
-  // would leave a trailing blank row for every captain who then adds their own (a blank row blocks Next). A solo (free agent) sign-up is
-  // a team-kind entry handled above (P5 H-1: it carries its one row).
-  if (entry.entrant_kind === "team") return entry;
+  // A TEAM roster starts EMPTY by design (cart.ts's blankPlayers) and the captain builds it with "+ Add player"; a BLANK seeded row
+  // would trail behind every captain who then adds their own (a blank row blocks Next). But a captain who is playing is Player 1
+  // (polish wave sign-off V1): an empty roster on a self-linked team starts with the contact's own row, named and picked as theirs,
+  // so it neither blocks Next nor asks them to type themselves in. A roster that already has rows is the captain's own work and is left
+  // alone. A solo (free agent) sign-up is a team-kind entry handled above (P5 H-1: it carries its one row).
+  if (entry.entrant_kind === "team") {
+    const name = contact.name.trim();
+    if (!entry.registering_self || !name || entry.players.length > 0) return entry;
+    return { ...entry, players: [selfRow({ ...EMPTY_ROSTER_PLAYER }, contact, division)], self_player_index: 0 };
+  }
   const name = contact.name.trim();
   const partner = entry.partner_name?.trim() ?? "";
   let players = entry.players;

@@ -116,13 +116,18 @@ test("a captain enters a team, and a team-mate claims their spot from the link t
 
     // --------------------------------------------------- step 3: DETAILS
     // The captain plus two team-mates entered on their behalf.
+    // Since polish wave V1 the playing captain's roster OPENS with their own
+    // row (named, and picked as "which player are you"), so a name already on
+    // the roster is not added again — that would enter the captain twice.
     const roster = [`Journey Captain ${TAG}`, ...MATES];
+    // Each row carries TWO text inputs — "Your name" AND "Squad #" — so
+    // taking "the last text input" puts the name in the squad number, the
+    // roster stays nameless, and Next silently refuses to advance.
+    const boxes = anon.getByLabel(/Player \d+ — Your name/);
     for (const name of roster) {
+      const onRoster = await boxes.evaluateAll((els) => els.map((el) => (el as HTMLInputElement).value.trim()));
+      if (onRoster.includes(name)) continue;
       await anon.getByRole("button", { name: /\+ add player/i }).click();
-      // Each row carries TWO text inputs — "Your name" AND "Squad #" — so
-      // taking "the last text input" puts the name in the squad number, the
-      // roster stays nameless, and Next silently refuses to advance.
-      const boxes = anon.getByLabel(/Player \d+ — Your name/);
       await boxes.nth((await boxes.count()) - 1).fill(name);
     }
     await anon.locator('select[id^="reg-self-index"]').first().selectOption({ label: roster[0]! });

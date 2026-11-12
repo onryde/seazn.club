@@ -651,12 +651,61 @@ describe("autoLinkObviousSelf — links the ONE cart entry to 'I'm playing' when
     expect(next).toBe(alreadyLinked);
   });
 
-  it("does nothing when the cart is empty or has 2+ entries — ambiguous, the rep must choose", () => {
+  it("does nothing when the cart is empty", () => {
     expect(autoLinkObviousSelf(EMPTY_CART, true)).toBe(EMPTY_CART);
-    const two: CartState = {
-      entries: [...oneEntry.entries, entry({ id: "e2", division_id: "d2", entrant_kind: "individual" })],
+  });
+
+  // Polish wave sign-off V1 (2026-11-12): a playing registrant is the player on EVERY entry they add. The old rule linked a cart of
+  // exactly one entry and "never guessed across 2+", so the second division's entry of a singles+doubles registrant came out with
+  // nobody linked: her own row typed again, stored consent-pending, and the panel showed her as "Consent pending" on her own entry.
+  it("links EVERY entry of a playing registrant across divisions — individual, pair and team alike", () => {
+    const three: CartState = {
+      entries: [
+        entry({ id: "e1", division_id: "d1", entrant_kind: "individual" }),
+        entry({ id: "e2", division_id: "d2", entrant_kind: "pair" }),
+        entry({ id: "e3", division_id: "d3", entrant_kind: "team" }),
+      ],
     };
-    expect(autoLinkObviousSelf(two, true)).toBe(two);
+    const next = autoLinkObviousSelf(three, true);
+    expect(next.entries.map((e) => e.registering_self)).toEqual([true, true, true]);
+    // Linking never records a decline, and never pre-picks a row (details-seed.ts does that from the contact).
+    expect(next.entries.map((e) => [e.self_link_declined, e.self_player_index])).toEqual([
+      [false, null],
+      [false, null],
+      [false, null],
+    ]);
+    // Second pass over the linked cart: nothing left to do, the same reference.
+    expect(autoLinkObviousSelf(next, true)).toBe(next);
+  });
+
+  it("links only the FIRST of two entries in one division — twice in one draw is the same person entered twice", () => {
+    const sameDivision: CartState = {
+      entries: [
+        entry({ id: "e1", division_id: "d1", entrant_kind: "individual" }),
+        entry({ id: "e2", division_id: "d1", entrant_kind: "individual" }),
+        entry({ id: "e3", division_id: "d2", entrant_kind: "individual" }),
+      ],
+    };
+    expect(autoLinkObviousSelf(sameDivision, true).entries.map((e) => e.registering_self)).toEqual([true, false, true]);
+    // A division that ALREADY has the registrant (the second entry, linked by hand) keeps that choice; the first is not added.
+    const handPicked: CartState = {
+      entries: [sameDivision.entries[0]!, { ...sameDivision.entries[1]!, registering_self: true }, sameDivision.entries[2]!],
+    };
+    expect(autoLinkObviousSelf(handPicked, true).entries.map((e) => e.registering_self)).toEqual([false, true, true]);
+  });
+
+  it("keeps an explicit 'not me' on one entry of a multi-entry cart, skips a solo entry, and still links the others", () => {
+    const mixed: CartState = {
+      entries: [
+        entry({ id: "e1", division_id: "d1", entrant_kind: "individual", self_link_declined: true }),
+        entry({ id: "e2", division_id: "d2", entrant_kind: "individual" }),
+        entry({ id: "fa", division_id: "d3", entrant_kind: "team", free_agent: true }),
+      ],
+    };
+    const next = autoLinkObviousSelf(mixed, true);
+    expect(next.entries.map((e) => e.registering_self)).toEqual([false, true, false]);
+    expect(next.entries[0]).toBe(mixed.entries[0]);
+    expect(next.entries[2]).toBe(mixed.entries[2]);
   });
 
   it("re-links automatically when the rep un-links then re-toggles imPlaying (still exactly one entry, still no explicit choice)", () => {

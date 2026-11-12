@@ -347,37 +347,35 @@ export function autoSeedSingleDivision(division: DivisionLike, id: string): Cart
   ];
 }
 
-/** Reactive convenience for the WHO step's "I'm playing" toggle: when there is
- *  exactly ONE cart entry and it isn't self-linked yet, that entry is the only
- *  possible answer to "which entry is you", so link it automatically instead
- *  of making the rep re-state the obvious. Never overrides an EXPLICIT choice
- *  and never guesses across 2+ entries — that ambiguity is the rep's call
- *  (cart.ts's SET_ENTRY_SELF, driven by the ENTRIES step's per-entry "This is
- *  me" control). Returns the SAME reference when there is nothing to do,
- *  matching every other function here.
+/** Reactive convenience for the WHO step's "I'm playing" toggle: a registrant who is playing is the player on EVERY entry they add
+ *  (polish wave sign-off V1, 2026-11-12), unless they said otherwise on that entry. It used to link only a cart of exactly ONE entry
+ *  and "never guess across 2+": so a two-division cart marked "This is me" on the first entry only, the second entry's player was
+ *  typed again, stored with consent pending, and the panel showed the registrant as "Consent pending" on her own second entry.
  *
- *  RS006 fix wave — this is called from an EFFECT keyed on
- *  `cart.entries.length` (register-stepper.tsx), which re-fires on ANY
- *  cart-shape change, not just the one that made it relevant. Before the
- *  `self_link_declined` check below, "not currently linked" was the ONLY
- *  signal available, which is indistinguishable from "explicitly declined,
- *  then an unrelated entry was added and removed" — a length round-trip
- *  (1 -> 2 -> 1) silently re-linked an entry the registrant had just said
- *  was not them. `self_link_declined` (set by SET_ENTRY_SELF) is what
- *  "never overrides an EXPLICIT choice" above actually means now. */
+ *  Each entry is linked once, in cart order: an individual entry IS the registrant; a pair or team entry gets the registrant as Player
+ *  1 (`details-seed.ts` seeds the row and the pick). Never:
+ *  - an entry already linked, or one the registrant EXPLICITLY declined (`self_link_declined`, set by SET_ENTRY_SELF's "not me") -
+ *    so un-ticking "This is me" on an entry for someone else sticks;
+ *  - a second entry in a division that already has the registrant: self-linking is exclusive within one division (SET_ENTRY_SELF),
+ *    and twice in one draw is the same person entered twice;
+ *  - a solo (free-agent) entry: its one row is the registrant's by the server's own rule (registration-submit.ts), and SET_ENTRY_SELF
+ *    refuses it.
+ *  Returns the SAME reference when there is nothing to do, matching every other function here.
+ *
+ *  RS006 fix wave — this is called from an EFFECT keyed on `cart.entries.length` (register-stepper.tsx), which re-fires on ANY
+ *  cart-shape change; `self_link_declined` is what keeps a length round-trip from re-linking an entry the registrant just said was
+ *  not them. */
 export function autoLinkObviousSelf(cart: CartState, imPlaying: boolean): CartState {
   if (!imPlaying) return cart;
-  if (cart.entries.length !== 1) return cart;
-  const only = cart.entries[0]!;
-  if (only.registering_self) return cart;
-  if (only.self_link_declined) return cart;
-  // RS006 §D (known gap) — a free-agent entry has no roster UI to ever
-  // resolve self_player_index (see SET_ENTRY_SELF's own doc comment above,
-  // which the reducer call below would hit anyway — this early return just
-  // makes the refusal explicit at THIS call site too, rather than relying
-  // solely on the reducer's silent no-op).
-  if (only.free_agent) return cart;
-  return cartReducer(cart, { type: "SET_ENTRY_SELF", id: only.id, isSelf: true });
+  const divisionsWithSelf = new Set(cart.entries.filter((e) => e.registering_self).map((e) => e.division_id));
+  let next = cart;
+  for (const entry of cart.entries) {
+    if (entry.registering_self || entry.self_link_declined || entry.free_agent) continue;
+    if (divisionsWithSelf.has(entry.division_id)) continue;
+    next = cartReducer(next, { type: "SET_ENTRY_SELF", id: entry.id, isSelf: true });
+    divisionsWithSelf.add(entry.division_id);
+  }
+  return next;
 }
 
 /** Inverse of `autoLinkObviousSelf` (fix wave finding #2): once "I'm playing"
@@ -445,8 +443,8 @@ export function toGroupEntry(entry: CartEntry): {
 /** Mirrors `registration-submit.ts`'s own cart-wide `registeringSelfAnywhere`
  *  flag (the guardian-consent gate's trigger, ~line 429) — computed off the
  *  CART's actual links, not the WHO step's `imPlaying` toggle: `imPlaying`
- *  can be true with ZERO entries actually linked (2+ entries is ambiguous,
- *  the rep must explicitly choose one), so gating the guardian block on
+ *  can be true with ZERO entries actually linked (every entry declined with
+ *  "This is me" unticked, or only solo entries), so gating the guardian block on
  *  `imPlaying` alone would over-trigger it. Step 4 (CONSENT) uses this to
  *  decide both whether to SHOW the guardian block and whether to REQUIRE it
  *  before "Next" — see validation.ts's `guardianRequired`. */

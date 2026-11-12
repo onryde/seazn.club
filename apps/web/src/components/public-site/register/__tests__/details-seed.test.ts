@@ -149,16 +149,32 @@ describe("seedDetailsRows: a pair", () => {
   });
 });
 
-describe("seedDetailsRows: a team is never seeded", () => {
-  // A team roster starts empty by design and the captain adds rows with "+ Add player": a seeded row would leave a trailing blank row
-  // (which blocks Next) for every captain who then adds their own, which is every captain.
-  it("a captain who plays still starts with an empty roster, picked or not", () => {
-    const empty = cartOf(entry("team", { registering_self: true, team_name: "Riverside" }));
-    expect(seedDetailsRows(empty, contact(), [DIV])).toBe(empty);
+describe("seedDetailsRows: a team starts with its playing captain as Player 1, and nothing blank", () => {
+  // A team roster starts empty by design and the captain adds rows with "+ Add player": a BLANK seeded row would trail behind every
+  // captain who then adds their own (a blank row blocks Next). Polish wave sign-off V1: a captain who plays IS Player 1, so an empty
+  // self-linked roster starts with the contact's own row, named and picked - never blank.
+  it("a playing captain's empty roster gets one row: the contact, picked as theirs, with dob/gender when the division asks", () => {
+    const division = { ...DIV, requires_dob: true, requires_gender: true };
+    const who = contact({ dob: "1994-02-03", gender: "f" });
+    const out = seedDetailsRows(cartOf(entry("team", { registering_self: true, team_name: "Riverside" })), who, [division]);
+    expect(out.entries[0]!.players).toEqual([{ ...EMPTY_ROSTER_PLAYER, full_name: "Mia Cole", dob: "1994-02-03", gender: "f" }]);
+    expect(out.entries[0]!.self_player_index).toBe(0);
+    // Second call: nothing left to seed, the same reference.
+    expect(seedDetailsRows(out, who, [division])).toBe(out);
+    // A division that does not ask carries the name only.
+    const plain = seedDetailsRows(cartOf(entry("team", { registering_self: true })), who, [DIV]);
+    expect(plain.entries[0]!.players).toEqual([{ ...EMPTY_ROSTER_PLAYER, full_name: "Mia Cole" }]);
+  });
+
+  it("a roster the captain already built is left alone, picked or not; a team nobody plays on, or a blank contact, stays empty", () => {
     const built = entry("team", { registering_self: true, self_player_index: 1, team_name: "Riverside" });
     built.players = [{ ...EMPTY_ROSTER_PLAYER, full_name: "Jo" }, { ...EMPTY_ROSTER_PLAYER }];
     const cart = cartOf(built);
     expect(seedDetailsRows(cart, contact(), [DIV])).toBe(cart);
+    const notPlaying = cartOf(entry("team", { team_name: "Riverside" }));
+    expect(seedDetailsRows(notPlaying, contact(), [DIV])).toBe(notPlaying);
+    const blankName = cartOf(entry("team", { registering_self: true }));
+    expect(seedDetailsRows(blankName, contact({ name: "  " }), [DIV])).toBe(blankName);
   });
 });
 
@@ -200,8 +216,8 @@ describe("seedDetailsRows: the empty and the exempt cases", () => {
     );
     const out = seedDetailsRows(cart, contact(), [DIV]);
     const seeded = out.entries.map(names);
-    expect(seeded).toEqual([["Mia Cole"], ["", "Sam Reid"], []]);
-    expect(seeded.flat().filter(Boolean).length, "premise: two names were written (the contact once, the partner once)").toBe(2);
+    expect(seeded).toEqual([["Mia Cole"], ["", "Sam Reid"], ["Mia Cole"]]);
+    expect(seeded.flat().filter(Boolean).length, "premise: three names were written (the contact twice, the partner once)").toBe(3);
   });
 
   it("the input cart is never mutated", () => {

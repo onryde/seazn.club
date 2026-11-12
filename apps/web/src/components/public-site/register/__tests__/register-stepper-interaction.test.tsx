@@ -514,17 +514,23 @@ describe("RS006 — a registrant may self-link more than one cart entry", () => 
 
     clickByText("Back"); // -> WHO
     (propsOf(stepWho()).onImPlayingChange as (v: boolean) => void)(true);
-    clickByText("Next"); // -> ENTRIES — 2 entries present, autoLinkObviousSelf is a no-op (ambiguous, the rep must choose)
+    clickByText("Next"); // -> ENTRIES — polish wave V1: a playing registrant is linked to EVERY entry, one per division
 
     const boxes = selfCheckboxes();
     expect(boxes, "two entries, two checkboxes").toHaveLength(2);
     expect(
-      boxes.every((b) => propsOf(b).checked === false),
-      "neither pre-checked — 2 entries is ambiguous for auto-link",
+      boxes.every((b) => propsOf(b).checked === true),
+      "both pre-checked — a playing registrant is the player on every entry until they say otherwise (V1)",
     ).toBe(true);
 
+    // Untick both ("not me" on each), then tick them back one at a time: the second tick must not undo the first.
+    for (let i = 0; i < 2; i++) {
+      (propsOf(selfCheckboxes()[i]!).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: false } });
+    }
+    expect(entryCartCart().entries.map((e) => e.registering_self), "both unticked by hand").toEqual([false, false]);
+
     // Check the FIRST box.
-    (propsOf(boxes[0]!).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: true } });
+    (propsOf(selfCheckboxes()[0]!).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: true } });
     expect(entryCartCart().entries.map((e) => e.registering_self)).toEqual([true, false]);
 
     // Check the SECOND box too — must NOT uncheck the first.
@@ -669,15 +675,15 @@ describe('FIX 1 — an explicit "not me" survives an unrelated add-then-remove',
     (propsOf(box).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: false } });
     expect(entryCartCart().entries.map((e) => e.registering_self), "explicit uncheck sticks").toEqual([false]);
 
-    // Add a SECOND, unrelated entry — two entries now, so autoLinkObviousSelf
-    // is a no-op (ambiguous), same as every other "2 entries" case in this
-    // file. The point of this step is purely to re-fire the
-    // cart.entries.length-keyed effect via 1 -> 2.
+    // Add a SECOND, unrelated entry: it re-fires the cart.entries.length-keyed
+    // pass via 1 -> 2. Since polish wave V1 a playing registrant is linked to
+    // every NEW entry, so the second one is linked — and the declined first
+    // one must not be, in the same pass.
     (propsOf(divisionCard("div-open-2")).onAddIndividual as () => void)();
     expect(
       entryCartCart().entries.map((e) => e.registering_self),
-      "still unlinked — the second entry was never linked either",
-    ).toEqual([false, false]);
+      "the declined entry stays unlinked; the new one is linked (V1)",
+    ).toEqual([false, true]);
 
     // Remove that second entry — back to exactly ONE entry: the SAME entry
     // that was explicitly declined above. This re-fires the effect a SECOND
@@ -744,7 +750,7 @@ describe("finding #3 — a self-linked ineligible entry blocks progression and s
   });
 
   it("an ineligible division does NOT block when it is not the self-linked one (design: stays pickable for team entries)", () => {
-    const { stepWho, divisionCard, clickByText, pageText } = mount([DIV_OPEN, DIV_WOMENS]);
+    const { stepWho, divisionCard, clickByText, pageText, selfCheckboxes, entryCartCart } = mount([DIV_OPEN, DIV_WOMENS]);
 
     (propsOf(stepWho()).onChange as (p: object) => void)({
       name: "Alex Test",
@@ -763,10 +769,17 @@ describe("finding #3 — a self-linked ineligible entry blocks progression and s
     (propsOf(stepWho()).onImPlayingChange as (v: boolean) => void)(true);
     clickByText("Next"); // -> ENTRIES
 
-    // autoLinkObviousSelf only fires for exactly ONE cart entry — with two
-    // entries present it never auto-links, so no verdict/self checkbox
-    // should be pinned to the womens entry, and Next must succeed.
-    expect(pageText()).not.toContain("Resolve the eligibility issue on your entry before continuing");
+    // Polish wave V1: a playing registrant is linked to EVERY entry, the
+    // womens one included, so the cart's own eligibility gate asks first —
+    // the registrant answers it by saying that entry is not them.
+    clickByText("Next");
+    expect(pageText(), "the auto-linked womens entry is gated like any self entry").toContain(
+      "Resolve the eligibility issue on your entry before continuing",
+    );
+    (propsOf(selfCheckboxes()[0]!).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: false } });
+    expect(entryCartCart().entries.map((e) => e.registering_self), "womens entry unlinked, open entry kept").toEqual([false, true]);
+
+    // No longer the self-linked one: no verdict pins it, and Next must succeed.
     clickByText("Next"); // -> DETAILS (step 3)
     expect(pageText()).toContain("Player details");
   });
@@ -2442,6 +2455,47 @@ describe("P4 — the Details step is seeded from the contact (W1) and the pair p
     expect(rosterNames(m.island)).toEqual(["Mia Cole", "Sam Reid"]);
     m.clickByText("Next"); // -> CONSENT: only reachable when validateDetails accepted the seeded roster and pick
     expect(m.pageText(), "reached the consent step").toContain("Privacy");
+  });
+
+  // Polish wave sign-off V1 (2026-11-12): a playing registrant who adds entries in several divisions is the player on EVERY one -
+  // individual entries are the registrant, a pair or team has them as Player 1. Before, only a ONE-entry cart was linked: the second
+  // division's Player 1 was typed again and stored with consent pending, showing the registrant "Consent pending" on her own entry.
+  it("V1: a playing registrant's individual, pair and team entries all start with the contact as Player 1, and Next reaches consent", () => {
+    const m = mount([DIV_SINGLES, DIV_PAIR, DIV_TEAM]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Mia Cole", email: "mia@example.com", dob: "1990-04-02" });
+    (propsOf(m.stepWho()).onImPlayingChange as (v: boolean) => void)(true);
+    m.clickByText("Next"); // -> ENTRIES
+    (propsOf(m.divisionCard("div-open")).onAddIndividual as () => void)();
+    (propsOf(m.divisionCard("div-pair")).onAddPair as () => void)();
+    (propsOf(m.divisionCard("div-team")).onAddTeam as () => void)();
+    expect(m.entryCartCart().entries.map((e) => [e.division_id, e.registering_self])).toEqual([
+      ["div-open", true],
+      ["div-pair", true],
+      ["div-team", true],
+    ]);
+    setByAriaLabel(m.island, "Team name", "Riverside"); // a team must be named to leave ENTRIES (RS007)
+    setByAriaLabel(m.island, "Partner's name (optional for now)", "Sam Reid");
+    m.clickByText("Next"); // -> DETAILS
+    // rosterNames orders by row index (stable across entries): the three Player 1 rows in cart order, then the pair's Player 2.
+    expect(rosterNames(m.island), "the contact on each entry's Player 1; the partner on the pair's Player 2").toEqual([
+      "Mia Cole",
+      "Mia Cole",
+      "Mia Cole",
+      "Sam Reid",
+    ]);
+    // Next reaches CONSENT on the seeded rows and picks alone: nothing typed on Details itself.
+    m.clickByText("Next");
+    expect(m.pageText(), "reached the consent step").toContain("Privacy");
+    m.clickByText("Back"); // -> DETAILS
+    m.clickByText("Back"); // -> ENTRIES, where the cart is inspectable
+    expect(
+      m.entryCartCart().entries.map((e) => [e.registering_self, e.self_player_index]),
+      "every entry still the registrant's; the pair's and team's pick is the contact's row (an individual's is implied row 0)",
+    ).toEqual([
+      [true, null],
+      [true, 0],
+      [true, 0],
+    ]);
   });
 });
 

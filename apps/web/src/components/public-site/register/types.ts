@@ -232,8 +232,9 @@ export interface CartEntry {
    *  entry" apart from "the registrant said no, and an UNRELATED
    *  cart-shape change (adding then removing a DIFFERENT entry, which
    *  re-fires that same effect) must not silently undo that." Without
-   *  this, the effect re-observes "exactly one, unlinked, unambiguous"
-   *  after the shape change and re-links it — submitting
+   *  this, the effect re-observes "unlinked" (polish wave V1: every
+   *  unlinked entry of a playing registrant is linked) after the shape
+   *  change and re-links it — submitting
    *  `registering_self:true` (and the guardian-consent gate that comes
    *  with it) for an entry the registrant explicitly said was not them.
    *  Deliberately NOT touched by `clearSelfLinkWhenNotPlaying`'s cart-wide

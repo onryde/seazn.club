@@ -228,16 +228,19 @@ test("RS006 — organiser settings, team entry, Stripe Connect payment", async (
     await expect(anon.getByRole("heading", { name: "Player details", exact: true })).toBeVisible({ timeout: 20_000 });
 
     // A team roster starts EMPTY (blankPlayers: individual=1, pair=2, team=0)
-    // and grows one row at a time. Each row's name input is reachable by its
-    // aria-label, "Player <n> — Your name" (roster-table.tsx).
+    // and grows one row at a time — except that since polish wave V1 a
+    // PLAYING captain's roster opens with their own row (named, and picked as
+    // "which player are you"), so a name already on it is not added again.
+    // Each row's name input is reachable by its aria-label,
+    // "Player <n> — Your name" (roster-table.tsx).
     const roster = ["Priya Raman", "Arun Menon", "Sofia Alves"];
-    for (let i = 0; i < roster.length; i++) {
+    const nameBoxes = anon.getByRole("textbox", { name: /Player \d+ — Your name/ });
+    for (const name of roster) {
+      const onRoster = await nameBoxes.evaluateAll((els) => els.map((el) => (el as HTMLInputElement).value.trim()));
+      if (onRoster.includes(name)) continue;
       await anon.getByRole("button", { name: "+ Add player", exact: true }).first().click();
       await anon.waitForTimeout(450);
-      await anon
-        .getByRole("textbox", { name: new RegExp(`Player ${i + 1}\\b`) })
-        .first()
-        .fill(roster[i]!);
+      await nameBoxes.last().fill(name);
       await anon.waitForTimeout(350);
     }
     // "I'm playing" at step 1 self-links the entry, and a self-linked TEAM

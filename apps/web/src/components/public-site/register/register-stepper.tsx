@@ -276,8 +276,8 @@ export function RegisterStepper({
     });
   }, [hydrated, orgSlug, competitionSlug, contact, imPlaying, cart, consent, stepIndex]);
 
-  // See cart.ts's autoLinkObviousSelf doc comment: links the one cart entry to
-  // "I'm playing" only when there is no ambiguity, never overriding an explicit
+  // See cart.ts's autoLinkObviousSelf doc comment: links every cart entry to
+  // "I'm playing" (one per division, polish wave V1), never overriding an explicit
   // choice. clearSelfLinkWhenNotPlaying is the inverse direction (fix wave
   // finding #2): un-toggling "I'm playing" must clear ANY self-link, auto- or
   // explicitly-made, or a stale registering_self:true with no dob collected
