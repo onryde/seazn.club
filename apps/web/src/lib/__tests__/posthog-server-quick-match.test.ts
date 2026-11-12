@@ -59,6 +59,21 @@ describe("captureServer and the quick match system org (D11)", () => {
     expect(capture.mock.calls[0]![0]).toMatchObject({ event: "quick_match_saved", distinctId: saver });
   });
 
+  it("passes quick_match_deleted too (controller ruling 2026-11-12), and still drops an organizer event beside it", async () => {
+    const { captureServer } = await import("@/lib/posthog-server");
+    const { EVENTS } = await import("@/lib/analytics-events");
+    await captureServer({ event: EVENTS.COMPETITION_CREATED, distinctId: QUICK_MATCH_SYSTEM_USER_ID, orgId: QUICK_MATCH_SYSTEM_ORG_ID });
+    await captureServer({
+      event: EVENTS.QUICK_MATCH_DELETED,
+      distinctId: QUICK_MATCH_SYSTEM_USER_ID,
+      orgId: QUICK_MATCH_SYSTEM_ORG_ID,
+      properties: { via: "expiry", sport_key: "badminton", kind: "pair" },
+    });
+    expect(capture).toHaveBeenCalledTimes(1);
+    // The ruling's event name, typed here: a rename in analytics-events.ts reds this case.
+    expect(capture.mock.calls[0]![0]).toMatchObject({ event: "quick_match_deleted" });
+  });
+
   it("passes the same organizer event for any other org (the negative pair)", async () => {
     const { captureServer } = await import("@/lib/posthog-server");
     const { EVENTS } = await import("@/lib/analytics-events");

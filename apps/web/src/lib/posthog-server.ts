@@ -25,8 +25,13 @@ function getClient(): PostHog | null {
   return client;
 }
 
-/** The quick match's own events: the only ones the quick match system org sends (pre-flight D11; plan 3 D10). */
-const QUICK_MATCH_EVENTS: ReadonlySet<AnalyticsEvent> = new Set([EVENTS.QUICK_MATCH_CREATED, EVENTS.QUICK_MATCH_SAVED]);
+/** The quick match's own events: the only ones the quick match system org sends (pre-flight D11; plan 3 D10; the deleted
+ *  event, controller ruling 2026-11-12). */
+const QUICK_MATCH_EVENTS: ReadonlySet<AnalyticsEvent> = new Set([
+  EVENTS.QUICK_MATCH_CREATED,
+  EVENTS.QUICK_MATCH_SAVED,
+  EVENTS.QUICK_MATCH_DELETED,
+]);
 
 export interface CaptureArgs {
   event: AnalyticsEvent;

@@ -19,9 +19,10 @@ import "server-only";
 //   - finished: every one of its matches decided (and it has at least one).
 //   - saved: `saved_by_user_id` is set.
 //   - expired, awaiting the sweep: unsaved and past `expires_at`. The hourly sweep (quick-match-sweep.ts) then HARD-deletes it
-//     with its competition and its outbox rows, and records the deletion nowhere durable (its report goes to the cron Worker;
-//     PostHog's `quick_match_created` is the only lasting trace of a create). So a swept match is in no count: every count is
-//     of the matches still on record, and the page says so.
+//     with its competition and its outbox rows, as the saver's Delete does, and neither leaves a row: the only record of a
+//     deletion is PostHog's `quick_match_deleted` (via "expiry" or "saver"), as `quick_match_created` is of a create. So a
+//     deleted match is in no count here: every count is of the matches still on record, and the page says so, pointing its
+//     Deleted row at that event instead of a number.
 //
 // The counts are a cohort: of the matches CREATED in the window (`created_at >= now - window`, inclusive), how many are in
 // each state now. Set-based: one read of the cohort (30 days, the widest window) and one of all its fixtures; the state of a

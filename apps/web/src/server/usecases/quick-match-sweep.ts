@@ -13,7 +13,8 @@ import "server-only";
 //      leaving a row with neither saver nor expiry) becomes unsaved again, expiring 7 days after its last activity. Its
 //      address goes too: with the account gone it can no longer be compared with anyone's.
 //   2. expire: an unsaved match whose expiry is strictly past is hard-deleted (quick-match-delete.ts), each in its own
-//      transaction that re-reads the expiry under the row's lock, so a score that landed since the read keeps it.
+//      transaction that re-reads the expiry under the row's lock, so a score that landed since the read keeps it. A delete
+//      that happened sends `quick_match_deleted` (via "expiry", quick-match-deleted-event.ts): the row leaves no other trace.
 //   3. remind (C2): an unsaved match with an address, not yet reminded, whose expiry is within
 //      QUICK_MATCH_REMINDER_HOURS_BEFORE, is CLAIMED (`reminder_sent_at` stamped only where it is still null, every other
 //      condition re-checked by the same UPDATE) and its reminder queued on the email outbox in the same transaction, so of
@@ -35,11 +36,13 @@ import {
   QUICK_MATCH_EXPIRY_DAYS,
   QUICK_MATCH_REMINDER_HOURS_BEFORE,
   QUICK_MATCH_SYSTEM_ORG_ID,
+  QUICK_MATCH_SYSTEM_USER_ID,
 } from "@/lib/quick-match-constants";
 import { routes } from "@/lib/routes";
 import { enqueueEmailOnce, expiryWithin, onceKey, recipientLocale } from "@/server/email-outbox";
 import { log } from "@/server/logger";
 import { hardDeleteQuickMatchCompetition, QUICK_MATCH_OUTBOX_REF_TYPE, type QuickMatchDeleteResult } from "./quick-match-delete";
+import { announceQuickMatchDeleted, deletedFactsSql, type QuickMatchDeletedFacts } from "./quick-match-deleted-event";
 import { findQuickMatchByCompetition } from "./quick-match-home";
 import { tryOpenHomeToken } from "./quick-match-tokens";
 
@@ -167,9 +170,9 @@ export async function sweepQuickMatches(opts: SweepQuickMatchesOptions): Promise
     report.deferred += Math.max(0, pendingRearm - QUICK_MATCH_SWEEP_LIMIT);
   }
 
-  // 2. Expire.
-  const expired = await sql<{ id: string; competition_id: string; total: number }[]>`
-    select q.id, q.competition_id, count(*) over ()::int as total
+  // 2. Expire. With the sport and kind `quick_match_deleted` carries, read before the delete removes them.
+  const expired = await sql<({ id: string; competition_id: string; total: number } & QuickMatchDeletedFacts)[]>`
+    select q.id, q.competition_id, count(*) over ()::int as total, ${deletedFactsSql()}
       from quick_matches q
      where q.org_id = ${SYSTEM_ORG} and q.saved_by_user_id is null and q.expires_at < ${now}
        ${matchInScope()}
@@ -179,7 +182,9 @@ export async function sweepQuickMatches(opts: SweepQuickMatchesOptions): Promise
   for (const e of expired) {
     try {
       if (opts._failDeleteForTests?.(e.competition_id)) throw new Error("armed: this delete fails (test)");
-      countDelete(await hardDeleteQuickMatchCompetition(e.competition_id, { expiredBefore: now }), "expired");
+      const deleted = await hardDeleteQuickMatchCompetition(e.competition_id, { expiredBefore: now });
+      countDelete(deleted, "expired");
+      if (deleted.deleted) announceQuickMatchDeleted("expiry", e, QUICK_MATCH_SYSTEM_USER_ID);
     } catch (err) {
       failed("expire", { quickMatchId: e.id, competitionId: e.competition_id }, err);
     }

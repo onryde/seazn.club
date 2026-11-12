@@ -243,8 +243,15 @@ describe.skipIf(!HAS_DB)("/admin/quick-matches renders what is there, and nothin
       }
     }
     expect(checked).toBe(15);
-    // The page says what it cannot count.
+    // The page says what it cannot count: a deleted match leaves no row, so its row points at PostHog's event (controller
+    // ruling 2026-11-12, the name typed here) instead of a number, in every window.
     expect(html).toContain('data-testid="qm-counts-note"');
+    let pointed = 0;
+    for (const w of ["24h", "7d", "30d"]) {
+      expect(cell(html, "deleted", w), `deleted ${w}`).toBe("see PostHog: quick_match_deleted");
+      pointed++;
+    }
+    expect(pointed).toBe(3);
   });
 
   it("the filter: played shows the played one, saved the saved one, never played the saved one; an unknown or repeated value is all", async () => {

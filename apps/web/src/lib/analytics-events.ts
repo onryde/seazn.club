@@ -95,6 +95,11 @@ export const EVENTS = {
    *  system org beside `QUICK_MATCH_CREATED`, so the two make the funnel. Carries { quick_match_id, via: "button" |
    *  "email" }; never the match's name, an address or the home token. */
   QUICK_MATCH_SAVED: "quick_match_saved",
+  /** Quick match (controller ruling 2026-11-12, for /admin/quick-matches): a quick match was hard-deleted, which leaves no row,
+   *  so this is the only record of it. One event per match deleted, by its saver's Delete (`via: "saver"`) or the sweep's
+   *  expiry (`via: "expiry"`); never the create's compensation or an orphan. Sent for the system org beside
+   *  `QUICK_MATCH_CREATED`. Carries { via, sport_key, kind }; never the match's name, an address, a user id or the home token. */
+  QUICK_MATCH_DELETED: "quick_match_deleted",
 } as const;
 
 export type AnalyticsEvent = (typeof EVENTS)[keyof typeof EVENTS];

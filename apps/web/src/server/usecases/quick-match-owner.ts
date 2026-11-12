@@ -20,6 +20,7 @@ import { HttpError } from "@/lib/errors";
 import { QUICK_MATCH_ERRORS, QUICK_MATCH_NAME_MAX, QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 import { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { hardDeleteQuickMatchCompetition } from "./quick-match-delete";
+import { announceQuickMatchDeleted, deletedFactsSql, type QuickMatchDeletedFacts } from "./quick-match-deleted-event";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -64,9 +65,12 @@ export async function renameSavedQuickMatch(userId: string, quickMatchId: string
 export async function deleteSavedQuickMatch(userId: string, quickMatchId: string): Promise<void> {
   if (!UUID.test(quickMatchId)) throw notInAccount();
   // Which competition the id names, whoever holds it: the saver is checked once, by the delete's own guard, under the lock.
-  const [row] = await sql<{ competition_id: string }[]>`
-    select competition_id from quick_matches where id = ${quickMatchId} and org_id = ${QUICK_MATCH_SYSTEM_ORG_ID}`;
+  // With the sport and kind `quick_match_deleted` carries, read before the delete removes them.
+  const [row] = await sql<({ competition_id: string } & QuickMatchDeletedFacts)[]>`
+    select q.competition_id, ${deletedFactsSql()}
+      from quick_matches q where q.id = ${quickMatchId} and q.org_id = ${QUICK_MATCH_SYSTEM_ORG_ID}`;
   if (!row) throw notInAccount();
   const { deleted } = await hardDeleteQuickMatchCompetition(row.competition_id, { savedBy: userId });
   if (!deleted) throw notInAccount();
+  announceQuickMatchDeleted("saver", row, userId);
 }

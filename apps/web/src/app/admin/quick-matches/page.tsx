@@ -1,5 +1,6 @@
 import Link from "@/components/ui/console-link";
 import { requireStaff } from "@/lib/admin";
+import { EVENTS } from "@/lib/analytics-events";
 import { QUICK_MATCH_EXPIRY_DAYS } from "@/lib/quick-match-constants";
 import {
   QUICK_MATCH_ADMIN_FILTERS,
@@ -98,13 +99,26 @@ export default async function AdminQuickMatchesPage({
                   ))}
                 </tr>
               ))}
+              {/* A deleted match leaves no row, so the database cannot count it (controller ruling 2026-11-12): PostHog can. */}
+              <tr>
+                <td className="px-3 py-2">
+                  <span className="text-slate-200">Deleted</span>
+                  <span className="ml-2 text-xs text-slate-500">by its saver, or by the sweep after expiry</span>
+                </td>
+                {QUICK_MATCH_ADMIN_WINDOWS.map((w) => (
+                  <td key={w.key} className="px-3 py-2 text-right text-xs text-slate-400" data-testid={`qm-count-deleted-${w.key}`}>
+                    {`see PostHog: ${EVENTS.QUICK_MATCH_DELETED}`}
+                  </td>
+                ))}
+              </tr>
             </tbody>
           </table>
         </div>
         <p className="max-w-3xl text-xs text-slate-500" data-testid="qm-counts-note">
-          Counts cover matches still on record. An unsaved match is deleted {QUICK_MATCH_EXPIRY_DAYS} days after its last
-          activity, and the deletion is not recorded anywhere this page can read, so a deleted match is in no count here
-          (Created over 7 and 30 days counts the survivors). Every create is also sent to PostHog as quick_match_created.
+          Counts cover matches still on record. A match deleted by its saver, or by the sweep {QUICK_MATCH_EXPIRY_DAYS} days
+          after its last activity, leaves no row this page can read, so it is in no count here (Created over 7 and 30 days
+          counts the survivors). PostHog has every deletion as {EVENTS.QUICK_MATCH_DELETED}, by how it went, and every create
+          as {EVENTS.QUICK_MATCH_CREATED}.
         </p>
       </section>
 
