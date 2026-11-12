@@ -209,14 +209,22 @@ describe("every state renders its copy; the Pay form exists only in `pay` (count
 // the backstop. "Payment received - confirming" still outranks it (money already moved), and an offline entry is untouched.
 describe("card payments off: a notice in place of Pay (gap wave G4)", () => {
   const notice = (markup: string) => /data-testid="pay-unavailable"/.test(markup);
-  it("the copy resolves in every locale (no fallback to the key)", async () => {
+  it("the copy is in every locale's own file, translated (no fallback to English or the key)", () => {
+    // Fix round 1 (F5): the raw files, not getDictionary — it fills English under every locale, so a missing es/fr/nl key read
+    // through it resolves to the English copy and this case could not fail.
+    const raw = (loc: string) =>
+      JSON.parse(readFileSync(resolve(__dirname, `../../../../../../dictionaries/${loc}/ui.json`), "utf8")) as Record<string, string>;
+    const english = raw("en")["regPay.unavailable"];
+    expect(english, "en: present").toBeTruthy();
     let checked = 0;
-    for (const loc of ["en", "es", "fr", "nl"] as const) {
-      const d = await getDictionary(loc, "ui");
-      expect(t(d, "regPay.unavailable" as never), loc).not.toBe("regPay.unavailable");
+    for (const loc of ["es", "fr", "nl"] as const) {
+      const copy = raw(loc)["regPay.unavailable"];
+      expect(typeof copy, `${loc}: present in its own file`).toBe("string");
+      expect(copy!.length, `${loc}: non-empty`).toBeGreaterThan(0);
+      expect(copy, `${loc}: translated, not the English copy`).not.toBe(english);
       checked++;
     }
-    expect(checked).toBe(4);
+    expect(checked, "anti-vacuity: es, fr and nl each checked").toBe(3);
   });
 
   it("pay + cardPaymentsOn false → the notice, no form, no Pay hint; the details still lead", () => {
