@@ -495,7 +495,7 @@
   "quickMatch.setup.email": "Email me the link (optional)",
   "quickMatch.setup.emailLabel": "Email",
   "quickMatch.setup.start": "Start playing",
-  "quickMatch.setup.tickCheck": "Tick the check above, then tap Start.",
+  "quickMatch.setup.tickCheck": "Tick the check above, then tap Start playing.",
   "quickMatch.setup.needsScript": "Starting a quick match needs JavaScript.",
   "quickMatch.setup.startCount.one": "· {count} match",
   "quickMatch.setup.startCount.other": "· {count} matches",

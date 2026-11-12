@@ -51,6 +51,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import enMarketing from "@/dictionaries/en/marketing.json";
 import enUi from "@/dictionaries/en/ui.json";
+import esMarketing from "@/dictionaries/es/marketing.json";
+import esUi from "@/dictionaries/es/ui.json";
+import frMarketing from "@/dictionaries/fr/marketing.json";
+import frUi from "@/dictionaries/fr/ui.json";
+import nlMarketing from "@/dictionaries/nl/marketing.json";
+import nlUi from "@/dictionaries/nl/ui.json";
+import { LOCALES } from "@/lib/i18n-constants";
 import {
   QUICK_MATCH_EMAIL_PATTERN,
   QUICK_MATCH_ERRORS,
@@ -923,8 +930,8 @@ describe("submitting (the form-post contract, enhanced: ledger CARRY to T4)", ()
     });
 
     it("Start tapped while a challenge waits on the guest: no post and no 20s wait; the box is shown and a line says so at once; the next tap posts (ruling 2026-11-12)", async () => {
-      /** The controller's ruling, typed: the copy is the contract. */
-      const TICK_LINE = "Tick the check above, then tap Start.";
+      /** The controller's ruling, typed: the copy is the contract. It names the button as rendered (final review A m-3). */
+      const TICK_LINE = "Tick the check above, then tap Start playing.";
       turnstileFake.awaiting = true;
       const { calls, assign } = stubFetch([{ url: "http://localhost:3000/q/qm_tick", status: 200 }]);
       const i = mount({ initialError: "QUICK_MATCH_RATE_LIMITED" }, { hydrate: true });
@@ -959,6 +966,40 @@ describe("submitting (the form-post contract, enhanced: ledger CARRY to T4)", ()
       expect(textOf(prompt()!).trim(), "the line clears once the post goes").toBe("");
       expect(turnstileFake.reveals, "not shown again on a tap that posts").toBe(2);
       expect(assign).toHaveBeenCalledWith("/q/qm_tick");
+    });
+
+    it("in every locale, the tick line names the Start button exactly as the button renders its label (final review A m-3)", async () => {
+      // The label is read off the rendered button (its text without the live match count), never typed, so a renamed button
+      // reds here until the line follows it. Controller ruling: the line names the button as rendered, in all four locales.
+      const DICTS: Record<(typeof LOCALES)[number], [Record<string, string>, Record<string, string>]> = {
+        en: [enMarketing, enUi],
+        es: [esMarketing, esUi],
+        fr: [frMarketing, frUi],
+        nl: [nlMarketing, nlUi],
+      };
+      const checked: string[] = [];
+      for (const l of LOCALES) {
+        const [marketing, ui] = DICTS[l];
+        turnstileFake.awaiting = true;
+        stubFetch([{ url: "http://localhost:3000/q/qm_tick", status: 200 }]);
+        const i = mount(
+          { lang: l, copy: setupCopy(marketing, ui), sports: setupSports(OFFER, ui) as SetupFormProps["sports"] },
+          { hydrate: true },
+        );
+        type(nameInput(i), "Sunday doubles");
+        fillSides(i, ["Ravi & Sam", "Priya & Tom"]);
+        await submit(i);
+        const button = start(i);
+        const count = walk(button).find((el) => propsOf(el)["data-testid"] === "qm-start-count");
+        expect(count, `${l}: the count is its own node, so it can be set aside`).toBeDefined();
+        const label = textOf(button).replace(textOf(count!), "").replace(/\s+/g, " ").trim();
+        expect(label, `${l}: the button renders a label`).not.toBe("");
+        const line = textOf(byTestId(i, "qm-check-prompt")!).trim();
+        expect(line, `${l}: the tick line is showing`).not.toBe("");
+        expect(line, `${l}: it names the button as rendered ("${label}")`).toContain(label);
+        checked.push(l);
+      }
+      expect(checked, "anti-vacuity: every locale checked").toEqual([...LOCALES]);
     });
 
     it("the tick line sits in the Start bar beside Start: from 768px after the widget and before Start (one live region)", () => {

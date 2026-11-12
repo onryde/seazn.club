@@ -330,8 +330,9 @@ describe("quick match guest copy: plurals", () => {
     expect(m["quickMatch.errors.emailInvalid"]).toBe("Check the email address, or leave it blank.");
     // Review m5: what the browser's own bubble carries for an all-space name (the input's `title`).
     expect(m["quickMatch.errors.nameBlank"]).toBe("Type a name, not just spaces.");
-    // The bot check (2026-11-12): the box still to tick (controller ruling), and the no-script line (review m3).
-    expect(m["quickMatch.setup.tickCheck"]).toBe("Tick the check above, then tap Start.");
+    // The bot check (2026-11-12): the box still to tick (controller ruling; it names the button as rendered, final review A
+    // m-3), and the no-script line (review m3).
+    expect(m["quickMatch.setup.tickCheck"]).toBe("Tick the check above, then tap Start playing.");
     expect(m["quickMatch.setup.needsScript"]).toBe("Starting a quick match needs JavaScript.");
     expect(ui["quickMatch.home.editResult"]).toBe("Edit result");
     // Task 1 review I2 and m1 (controller, 2026-11-08): the league line names no tie-break the standings do not use
