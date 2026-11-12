@@ -116,8 +116,10 @@ export const QUICK_MATCH_CREATE_LIMIT: RateLimitConfig = { max: 20, windowSecond
 /**
  * A quick match create's link mail, per RECIPIENT: one inbox is mailed at most 3 times a day, however many IPs the sender
  * rotates through (quick match plan 3 T1 review I1, controller ruling 2026-11-08). The key is the sha256 of the lower-cased
- * address, never the address itself. Fail-closed, as every mail-sending limit is: a Redis outage refuses emailed creates only.
- * Taken after EMAIL_LIMIT (per IP), before any database work.
+ * address, never the address itself. Fail-closed, as every mail-sending limit is: an outage answers no, and since branch
+ * review B m3 a no costs the MAIL, never the match (the create is made without the email; the home says so). Taken after
+ * EMAIL_LIMIT (per IP), and only once the create's own refusals have passed (the alive count, the offer, the format): the
+ * route hands both buckets to `createQuickMatch` as its `mailAllowed` gate.
  */
 export const QUICK_MATCH_RECIPIENT_LIMIT: RateLimitConfig = { max: 3, windowSeconds: 24 * 3600, failClosed: true };
 

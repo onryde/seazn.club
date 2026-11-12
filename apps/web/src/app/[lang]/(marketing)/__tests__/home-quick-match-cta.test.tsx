@@ -260,7 +260,7 @@ describe.skipIf(!HAS_DB)("the recent strip's rows (real createQuickMatch, real r
         email: null,
         locale: "en",
       },
-      { visitorHash, baseUrl: "https://seazn.example" },
+      { visitorHash, baseUrl: "https://seazn.example", mailAllowed: async () => true },
     );
     made.push(out);
     return out;

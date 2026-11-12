@@ -92,7 +92,7 @@ const league = (over: Partial<CreateQuickMatch> = {}): CreateQuickMatch => ({
 /** Every competition a case created, hard-deleted in afterAll (the shared DB stays lean). */
 const created: string[] = [];
 async function create(input: CreateQuickMatch = league()): Promise<{ out: CreatedQuickMatch; row: QuickMatchRow }> {
-  const out = await createQuickMatch(input, { visitorHash: visitor() });
+  const out = await createQuickMatch(input, { visitorHash: visitor(), mailAllowed: async () => true });
   created.push(out.competitionId);
   const row = await resolveQuickMatchToken(out.token);
   if (!row) throw new Error(`precondition: quick match ${out.id} does not resolve`);

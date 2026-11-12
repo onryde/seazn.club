@@ -44,6 +44,7 @@ export async function createTypedMatch(email: string | null): Promise<CreatedQui
   const out = await createQuickMatch(input, {
     visitorHash: hashVisitorKey(mintVisitorKey()),
     baseUrl: "https://qm-save.test", // an emailed create queues its link mail (plan 3 Task 1), whose link needs a base
+    mailAllowed: async () => true,
   });
   made.push(out.competitionId);
   return out;

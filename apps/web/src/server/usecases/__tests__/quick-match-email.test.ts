@@ -44,9 +44,15 @@ vi.mock("@sentry/nextjs", async (orig) => ({
 const logs = vi.hoisted(() => {
   const lines: unknown[][] = [];
   const rec = (...args: unknown[]) => void lines.push(args);
-  const log: Record<string, unknown> = { error: rec, warn: rec, info: rec, debug: rec, fatal: rec, trace: rec };
+  /** The info lines alone (review m9: the skipped mail's line is an info, never a warn or an error). */
+  const infos: unknown[][] = [];
+  const info = (...args: unknown[]) => {
+    rec(...args);
+    infos.push(args);
+  };
+  const log: Record<string, unknown> = { error: rec, warn: rec, info, debug: rec, fatal: rec, trace: rec };
   log.child = () => log;
-  return { lines, log };
+  return { lines, infos, log };
 });
 vi.mock("@/server/logger", () => ({ log: logs.log }));
 // Every home token minted in this file, recorded as it is minted (a call-through spy).
@@ -187,12 +193,25 @@ function landedWithoutMail(res: Response): string {
 
 /** The match a mail limit spared: made, holding no address, with no mail queued for it. What reached the inbox is each
  *  case's own count (an inbox at its limit was mailed before). */
-async function madeWithoutMail(name: string): Promise<void> {
+async function madeWithoutMail(name: string, email: string): Promise<void> {
   const row = await rowNamed(name);
   expect(row, "the match was made").toBeDefined();
   expect(row!.email, "no address stored").toBeNull();
   expect(await mailsAbout(row!.id), "no mail queued").toEqual([]);
+  // Review m9: one structured info line says the mail was skipped, by the match's id, so how often guests lose the link
+  // mail can be counted. It carries no address and no token.
+  const skipped = mailSkippedLines().filter(([fields]) => (fields as { quick_match_id?: unknown }).quick_match_id === row!.id);
+  expect(skipped, "one info line for this match's skipped mail").toHaveLength(1);
+  expect(skipped[0]![0]).toEqual({ event: "quick_match_mail_skipped", quick_match_id: row!.id, sport_key: "badminton" });
+  const said = inspect(skipped[0], { depth: 20 });
+  expect(said.toLowerCase().includes(email.toLowerCase()), "the line holds no address").toBe(false);
+  expect(said.includes("@"), "nor any part of one").toBe(false);
+  expect(said.includes("qm_"), "nor a home token").toBe(false);
 }
+
+/** The info lines that report a skipped link mail (review m9), by their `event` field. */
+const mailSkippedLines = () =>
+  logs.infos.filter(([fields]) => (fields as { event?: unknown } | null)?.event === "quick_match_mail_skipped");
 
 /** The flash the landed home prints: its words and its role. */
 async function flashOnHome(location: string): Promise<{ text: string; role: string } | null> {
@@ -290,6 +309,7 @@ beforeEach(() => {
   vi.mocked(Sentry.captureException).mockClear();
   vi.mocked(Sentry.captureMessage).mockClear();
   logs.lines.length = 0;
+  logs.infos.length = 0;
   for (const s of consoleSpies) s.mockClear();
   minted.tokens.length = 0;
   failAfterCommit.armed = false;
@@ -410,7 +430,8 @@ describe.skipIf(!HAS_DB)("the link mail at creation (POST /api/quick-match, the 
     expect(await rowNamed(f.name as string), "the compensation deleted the match").toBeUndefined();
     expect(await mailsTo(email), "and its mail, by its reference").toEqual([]);
     expect(sentTo(email), "nothing was sent for a match that does not exist").toEqual([]);
-    // Review B m7: the first attempt is never even asked for a compensated create, so no lease can race the delete.
+    // Review B m7: dispatchNow is never asked for a compensated create. The background outbox worker's lease window
+    // between the last commit and the compensation's delete remains (rare); this pins only the ordering the ruling asked for.
     expect(order.hooksDone, "premise: the hook never finished").toEqual([]);
     expect(order.dispatched, "dispatchNow was never asked").toEqual([]);
   });
@@ -458,7 +479,7 @@ describe.skipIf(!HAS_DB)("the email send limit (plan 3 Amend T1 [B4]): EMAIL_LIM
     const spared = form({ email: sixth, locale: "nl" });
     const res = await post(spared, theirs);
     landedWithoutMail(res);
-    await madeWithoutMail(spared.name as string);
+    await madeWithoutMail(spared.name as string, sixth);
     expect(await mailsTo(sixth), "no mail to that address at all").toEqual([]);
     expect(sentTo(sixth), "and none sent").toEqual([]);
     expect(vi.mocked(Sentry.captureException), "a mail limit is not a fault").not.toHaveBeenCalled();
@@ -468,6 +489,8 @@ describe.skipIf(!HAS_DB)("the email send limit (plan 3 Amend T1 [B4]): EMAIL_LIM
     const quiet = form();
     landedToken(await post(quiet, theirs));
     expect(await rowNamed(quiet.name as string), "an emailless create is not held by the email bucket").toBeDefined();
+    // Review m9, the negative pair: the five mailed creates and the emailless one log no skipped mail; only the spared one.
+    expect(mailSkippedLines(), "one skipped-mail line in seven creates").toHaveLength(1);
 
     // The bucket is its own key, with EMAIL_LIMIT's window, and only an emailed create takes it.
     const emailKey = `rl:quick-match-email:${theirs}`;
@@ -506,7 +529,7 @@ describe.skipIf(!HAS_DB)("the per-recipient limit (T1 review I1): 3 link mails a
     const fourth = form({ email: inbox, locale: "fr" });
     const res = await post(fourth, ip());
     landedWithoutMail(res);
-    await madeWithoutMail(fourth.name as string);
+    await madeWithoutMail(fourth.name as string, inbox);
     expect(await mailsTo(inbox), "and queued no fourth mail").toHaveLength(RECIPIENT_MAX);
     expect(toInbox()).toHaveLength(RECIPIENT_MAX);
     expect(vi.mocked(Sentry.captureException), "a mail limit is not a fault").not.toHaveBeenCalled();
@@ -543,7 +566,7 @@ describe.skipIf(!HAS_DB)("a mail limiter outage (Redis configured but unreachabl
     const f = form({ email });
     const res = await post(f, theirs);
     landedWithoutMail(res);
-    await madeWithoutMail(f.name as string);
+    await madeWithoutMail(f.name as string, email);
     expect(sentTo(email), "nothing sent").toEqual([]);
     expect(vi.mocked(Sentry.captureException), "an outage that costs only the mail is not a fault").not.toHaveBeenCalled();
     expect(await flashOnHome(res.headers.get("location")!)).toEqual({ text: enUi["quickMatch.flash.emailLimited"], role: "status" });
@@ -640,7 +663,7 @@ describe.skipIf(!HAS_DB)("createQuickMatch: the link mail's own guards (plan 3 A
   it("an email with no baseUrl is a programmer error: 500 QUICK_MATCH_BASE_URL_MISSING before anything is minted or written", async () => {
     const reached = vi.fn();
     const i = input({ email: address("nobase") });
-    await expect(createQuickMatch(i, { visitorHash: visitor(), _failBeforeGenerateForTests: reached })).rejects.toMatchObject({
+    await expect(createQuickMatch(i, { visitorHash: visitor(), mailAllowed: async () => true, _failBeforeGenerateForTests: reached })).rejects.toMatchObject({
       status: 500,
       code: "QUICK_MATCH_BASE_URL_MISSING",
     });
@@ -661,13 +684,13 @@ describe.skipIf(!HAS_DB)("createQuickMatch: the link mail's own guards (plan 3 A
 
   it("the outbox row id comes back for the route to dispatch: the mail's id with an email, null without (and no baseUrl is needed then)", async () => {
     const email = address("rowid");
-    const withMail = await createQuickMatch(input({ email }), { visitorHash: visitor(), baseUrl: BASE });
+    const withMail = await createQuickMatch(input({ email }), { visitorHash: visitor(), baseUrl: BASE, mailAllowed: async () => true });
     const [m] = await mailsAbout(withMail.id);
     expect(withMail.outboxRowId).toBe(m!.id);
     expect(m!.status, "createQuickMatch itself sends nothing: the route dispatches after it returns").toBe("queued");
     expect(sentTo(email)).toEqual([]);
 
-    const without = await createQuickMatch(input(), { visitorHash: visitor() });
+    const without = await createQuickMatch(input(), { visitorHash: visitor(), mailAllowed: async () => true });
     expect(without.outboxRowId).toBeNull();
     expect(await mailsAbout(without.id)).toEqual([]);
   });
@@ -746,7 +769,7 @@ describe.skipIf(!HAS_DB)("quick_matches.locale is one of the shipped locales (V5
   it("the CHECK refuses a locale the app does not ship and accepts each one it does; the database's set is LOCALES", async () => {
     const made = await createQuickMatch(
       { name: uniq(), sport_key: "badminton", variant_key: BADMINTON_V, kind: "pair", format: "league", sides, plays: 1, email: null, locale: "en" },
-      { visitorHash: hashVisitorKey(mintVisitorKey()) },
+      { visitorHash: hashVisitorKey(mintVisitorKey()), mailAllowed: async () => true },
     );
     let refused = 0;
     for (const bad of ["xx", "EN", "en-XA", "", "de"]) {

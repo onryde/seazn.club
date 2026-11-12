@@ -187,7 +187,7 @@ async function create(over: Partial<CreateQuickMatch> = {}): Promise<CreatedQuic
     locale: "en",
     ...over,
   };
-  const out = await createQuickMatch(input, { visitorHash: hashVisitorKey(mintVisitorKey()), baseUrl: BASE });
+  const out = await createQuickMatch(input, { visitorHash: hashVisitorKey(mintVisitorKey()), baseUrl: BASE, mailAllowed: async () => true });
   competitions.push(out.competitionId);
   return out;
 }

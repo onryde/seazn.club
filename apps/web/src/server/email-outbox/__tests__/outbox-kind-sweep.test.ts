@@ -1601,7 +1601,7 @@ async function quickMatchReminderScenario(): Promise<KindScenario> {
           email: recipient,
           locale: "es",
         },
-        { visitorHash: hashVisitorKey(mintVisitorKey()), baseUrl: "https://sweep.test" },
+        { visitorHash: hashVisitorKey(mintVisitorKey()), baseUrl: "https://sweep.test", mailAllowed: async () => true },
       );
       // The clock: 23 hours to expiry, the last activity the 7 days (C1) before it.
       await sql`update quick_matches set expires_at = now() + interval '23 hours',
