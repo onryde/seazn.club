@@ -272,45 +272,51 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
   const before = await pageNames();
   check("sp archive: premise: the public page names the gold sponsor, its /s/ link and the title sponsor", before.status === 200 && before.gold && before.goldLink && before.title);
 
-  const archived = await v1(admin, `${aBase}/${goldId}/archive`, "POST");
-  const archivedRow = archived.status === 200 ? v1data<{ archived_at: string | null }>(archived) : null;
-  check("sp archive: POST /archive answers 200 with archived_at", archived.status === 200 && typeof archivedRow?.archived_at === "string");
-  const archivedTitle = await v1(admin, `${aBase}/${scopedId}/archive`, "POST");
-  check("sp archive: the competition's title sponsor archives too (200)", archivedTitle.status === 200);
-  const hidden = await pageNames();
-  check(
-    "sp archive: the public page (board, hero, /s/ link) no longer carries either sponsor",
-    hidden.status === 200 && !hidden.gold && !hidden.goldLink && !hidden.title,
-  );
-  const gone = await pageRedirect(newSession(), `/s/${goldId}`);
-  check("sp archive: /s/<id> answers 404, not a 302 to the sponsor", gone.status === 404 && gone.location === null);
-  check(
-    "sp archive: the default list omits it, ?archived=1 lists it",
-    !(await listIds("")).includes(goldId) && (await listIds("?archived=1")).includes(goldId),
-  );
-  const again = await v1(admin, `${aBase}/${goldId}/archive`, "POST");
-  check(
-    "sp archive: a second POST is 200 and keeps the first archived_at",
-    again.status === 200 && v1data<{ archived_at: string | null }>(again).archived_at === archivedRow?.archived_at,
-  );
-  const patched = await v1(admin, `${aBase}/${goldId}`, "PATCH", { name: `Goldco renamed ${tag}` });
-  check("sp archive: a PATCH is 409 sponsor_archived", patched.status === 409 && errCode(patched) === "sponsor_archived");
-  const archivedPkg = v1data<{ id: string }>(
-    await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-packages`, "POST", { name: `Archive Gold ${tag}`, price_cents: 1_000, currency: "gbp", tier: "gold" }),
-  );
-  const dealOnArchived = await v1(admin, `${aBase}/${goldId}/deals`, "POST", {
-    package_id: archivedPkg.id, competition_id: null, payment_method: "complimentary", go_live: "immediate",
-  });
-  check("sp archive: a new deal on an archived sponsor is 409 sponsor_archived", dealOnArchived.status === 409 && errCode(dealOnArchived) === "sponsor_archived");
+  try {
+    const archived = await v1(admin, `${aBase}/${goldId}/archive`, "POST");
+    const archivedRow = archived.status === 200 ? v1data<{ archived_at: string | null }>(archived) : null;
+    check("sp archive: POST /archive answers 200 with archived_at", archived.status === 200 && typeof archivedRow?.archived_at === "string");
+    const archivedTitle = await v1(admin, `${aBase}/${scopedId}/archive`, "POST");
+    check("sp archive: the competition's title sponsor archives too (200)", archivedTitle.status === 200);
+    const hidden = await pageNames();
+    check(
+      "sp archive: the public page (board, hero, /s/ link) no longer carries either sponsor",
+      hidden.status === 200 && !hidden.gold && !hidden.goldLink && !hidden.title,
+    );
+    const gone = await pageRedirect(newSession(), `/s/${goldId}`);
+    check("sp archive: /s/<id> answers 404, not a 302 to the sponsor", gone.status === 404 && gone.location === null);
+    check(
+      "sp archive: the default list omits it, ?archived=1 lists it",
+      !(await listIds("")).includes(goldId) && (await listIds("?archived=1")).includes(goldId),
+    );
+    const again = await v1(admin, `${aBase}/${goldId}/archive`, "POST");
+    check(
+      "sp archive: a second POST is 200 and keeps the first archived_at",
+      again.status === 200 && v1data<{ archived_at: string | null }>(again).archived_at === archivedRow?.archived_at,
+    );
+    const patched = await v1(admin, `${aBase}/${goldId}`, "PATCH", { name: `Goldco renamed ${tag}` });
+    check("sp archive: a PATCH is 409 sponsor_archived", patched.status === 409 && errCode(patched) === "sponsor_archived");
+    const archivedPkg = v1data<{ id: string }>(
+      await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-packages`, "POST", { name: `Archive Gold ${tag}`, price_cents: 1_000, currency: "gbp", tier: "gold" }),
+    );
+    const dealOnArchived = await v1(admin, `${aBase}/${goldId}/deals`, "POST", {
+      package_id: archivedPkg.id, competition_id: null, payment_method: "complimentary", go_live: "immediate",
+    });
+    check("sp archive: a new deal on an archived sponsor is 409 sponsor_archived", dealOnArchived.status === 409 && errCode(dealOnArchived) === "sponsor_archived");
 
-  const unarchived = await v1(admin, `${aBase}/${goldId}/archive`, "DELETE");
-  check("sp unarchive: DELETE /archive answers 200 with archived_at null", unarchived.status === 200 && v1data<{ archived_at: string | null }>(unarchived).archived_at === null);
-  check("sp unarchive: the title sponsor too (200)", (await v1(admin, `${aBase}/${scopedId}/archive`, "DELETE")).status === 200);
-  const back = await pageNames();
-  check("sp unarchive: the public page carries both again, with the /s/ link", back.status === 200 && back.gold && back.goldLink && back.title);
-  const redirected = await pageRedirect(newSession(), `/s/${goldId}`);
-  check("sp unarchive: /s/<id> 302s to the sponsor again", redirected.status === 302 && (redirected.location ?? "").startsWith("https://goldco.example"));
-  check("sp unarchive: the default list carries it again", (await listIds("")).includes(goldId));
+    const unarchived = await v1(admin, `${aBase}/${goldId}/archive`, "DELETE");
+    check("sp unarchive: DELETE /archive answers 200 with archived_at null", unarchived.status === 200 && v1data<{ archived_at: string | null }>(unarchived).archived_at === null);
+    check("sp unarchive: the title sponsor too (200)", (await v1(admin, `${aBase}/${scopedId}/archive`, "DELETE")).status === 200);
+    const back = await pageNames();
+    check("sp unarchive: the public page carries both again, with the /s/ link", back.status === 200 && back.gold && back.goldLink && back.title);
+    const redirected = await pageRedirect(newSession(), `/s/${goldId}`);
+    check("sp unarchive: /s/<id> 302s to the sponsor again", redirected.status === 302 && (redirected.location ?? "").startsWith("https://goldco.example"));
+    check("sp unarchive: the default list carries it again", (await listIds("")).includes(goldId));
+  } finally {
+    // Whatever threw above, both sponsors end unarchived: the rows that follow (stream tick, overview clicks) need them live. Idempotent.
+    await v1(admin, `${aBase}/${goldId}/archive`, "DELETE").catch(() => undefined);
+    await v1(admin, `${aBase}/${scopedId}/archive`, "DELETE").catch(() => undefined);
+  }
 
   // A sponsor that a deal still holds is refused (and archives once the deal ends): the positive pair of the 409.
   const holdPkg = v1data<{ id: string }>(
@@ -604,16 +610,17 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
   );
   // Archive on a free org (the strip is flat, not tiered): the row drops off the public strip and returns on unarchive.
   const cornerId = v1data<{ id: string }>(partner).id;
-  const stripHas = async (): Promise<boolean> => {
+  const stripHas = async (): Promise<{ status: number; has: boolean }> => {
     const p = await html(newSession(), `/live/${freeOrg.slug}/${freeComp.slug}`);
-    return p.status === 200 && p.body.includes(`Corner Shop ${tag}`);
+    return { status: p.status, has: p.body.includes(`Corner Shop ${tag}`) };
   };
   const freeArchived = await v1(free, `/api/v1/orgs/${freeOrg.id}/sponsors/${cornerId}/archive`, "POST");
-  const droppedFromStrip = !(await stripHas());
+  const dropped = await stripHas();
   const freeBack = await v1(free, `/api/v1/orgs/${freeOrg.id}/sponsors/${cornerId}/archive`, "DELETE");
+  const regained = await stripHas();
   check(
     "sp free: archive and unarchive work, and the free strip drops and regains the row",
-    freeArchived.status === 200 && droppedFromStrip && freeBack.status === 200 && (await stripHas()),
+    freeArchived.status === 200 && dropped.status === 200 && !dropped.has && freeBack.status === 200 && regained.status === 200 && regained.has,
   );
   // The lapsed row is ON the page (the witness: the page saw a Title row), as a flat chip, and none of the placement is drawn.
   check(

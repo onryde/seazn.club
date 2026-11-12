@@ -171,7 +171,7 @@ test("A1 golden path: archive from the page, the list drops it, the public page 
     let checked = await expectPublic(anon, pro, proComp, { present: [gold, control], absent: [] }, "premise: the public page names the gold sponsor and the control");
     const premise = await anon.request.get(`/s/${gold.id}`, { maxRedirects: 0 });
     expect(premise.status(), "premise: /s/<id> redirects to the sponsor while it is live").toBe(302);
-    expect(await archivedCount(request, pro.orgId), "premise: nothing is archived yet").toBe(0);
+    const baseline = await archivedCount(request, pro.orgId);
 
     await openSponsor(page, pro.slug, gold.id);
     await expect(vis(page, "sponsor-sheet-archive-button"), "its only deal is settled: Archive is offered and enabled").toBeEnabled();
@@ -185,8 +185,8 @@ test("A1 golden path: archive from the page, the list drops it, the public page 
     await expect(page.getByTestId("sponsors-list-view")).toBeVisible();
     await expect(page.getByTestId("sponsor-row").filter({ hasText: control.name }), "the control sponsor's row is on the list").toHaveCount(1);
     await expect(page.getByTestId("sponsor-row").filter({ hasText: name }), "the archived sponsor's row is gone").toHaveCount(0);
-    expect(await archivedCount(request, pro.orgId)).toBe(1);
-    await expect(page.locator('[data-testid="sponsors-archived-filter"] label'), "Show archived (1)").toHaveText(ui("sponsors.archive.show", { count: "1" }));
+    expect(await archivedCount(request, pro.orgId), "this sponsor is the one more archived").toBe(baseline + 1);
+    await expect(page.locator('[data-testid="sponsors-archived-filter"] label'), "Show archived (N)").toHaveText(ui("sponsors.archive.show", { count: String(baseline + 1) }));
     await showArchived(page);
     const archivedRow = groupRow(page, "archived", name);
     await expect(archivedRow, "the switch puts the row in the Archived group").toHaveCount(1);
@@ -253,6 +253,7 @@ test("A3 the sequence: archive, unarchive from the switch, focus both ways, clic
     expect((await anon.request.get(`/s/${sponsor.id}`, { maxRedirects: 0 })).status(), "premise: the live /s/ link redirects").toBe(302);
     await expect.poll(() => clickCount(request, pro.orgId, sponsor.id), { message: "premise: the click was counted", timeout: 20_000 }).toBe(1);
     await expectPublic(anon, pro, proComp, { present: [sponsor, control], absent: [] }, "premise: public before");
+    const baseline = await archivedCount(request, pro.orgId);
 
     await openSponsor(page, pro.slug, sponsor.id);
     await tapArchive(page);
@@ -282,7 +283,7 @@ test("A3 the sequence: archive, unarchive from the switch, focus both ways, clic
     await openSponsor(page, pro.slug, sponsor.id);
     await tapArchive(page);
     await tapUnarchive(page);
-    expect(await archivedCount(request, pro.orgId), "archived and unarchived again: nothing of this sponsor is left archived").toBe(0);
+    expect(await archivedCount(request, pro.orgId), "archived and unarchived again: the org's archived count is back at its baseline").toBe(baseline);
     await tapUntil(vis(page, "sponsor-sheet-add-deal"), page.getByTestId("add-deal-sheet"), "Add deal opens the sheet");
     await page.getByTestId(`add-deal-package-card-${goldPackageId}`).click();
     await page.getByTestId("add-deal-payment-complimentary-card").click();

@@ -8328,8 +8328,9 @@ test("sponsor archive: the blocked page, the archived page and the list with the
     const banner = visible("sponsor-sheet-archived");
     await expect(banner, `${tag}: the banner`).toBeVisible();
     const [head, tail] = word("sponsors.archive.banner").split("{date}") as [string, string];
-    await expect(banner, `${tag}: the banner reads in ${locale}`).toContainText(head.trim());
-    await expect(banner).toContainText(tail.trim());
+    const parts = [head.trim(), tail.trim()].filter((t) => t.length > 0);
+    expect(parts.length, `${tag}: anti-vacuity: the banner sentence has text around its date`).toBeGreaterThan(0);
+    for (const part of parts) await expect(banner, `${tag}: the banner reads in ${locale}`).toContainText(part);
     await expect(visible("sponsor-sheet-archive"), `${tag}: no Archive card on an archived page`).toHaveCount(0);
     const unarchive = visible("sponsor-sheet-unarchive");
     await expect(unarchive, `${tag}: Unarchive`).toContainText(word("sponsors.archive.unarchive"));
