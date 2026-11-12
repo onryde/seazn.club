@@ -568,7 +568,8 @@ describe.skipIf(!HAS_DB)("an unknown, changed or expired token lands on its own 
 
 // ── where the home offers Score ───────────────────────────────────────────────────────────────────────────────────────
 
-/** Every Score form on the page: its action, the fixture its row names (the hero's has none), and its button's words. */
+/** Every Score form on the page: its action, the fixture its row names (the hero's has none), and its button's words. A form
+ *  that posts anywhere but a match's Score route (a league's "Add a match", Task 8) is not one. */
 function scoreForms(html: string): { action: string; place: string; row: string | null; label: string }[] {
   const out: { action: string; place: string; row: string | null; label: string }[] = [];
   // A list row carries its fixture id; the form inside it is that row's.
@@ -580,6 +581,7 @@ function scoreForms(html: string): { action: string; place: string; row: string 
   };
   for (const m of html.matchAll(/<form([^>]*)>([\s\S]*?)<\/form>/g)) {
     const attrs = m[1]!;
+    if (!/\baction="[^"]*\/score\/[^"]*"/.test(attrs)) continue;
     out.push({
       action: /\baction="([^"]+)"/.exec(attrs)?.[1] ?? "",
       place: /\bdata-place="([^"]+)"/.exec(attrs)?.[1] ?? "",
@@ -609,8 +611,12 @@ describe.skipIf(!HAS_DB)("the home offers Score on a playable match only, each f
     }
     expect(checked).toBe(fixtures.length);
     // A real form post (works with no script), and blocked from session replay: its action carries the home token (O3).
+    // Every form on the page: the 7 Score forms, and the league's one "Add a match" (Task 8), which posts elsewhere.
     const tags = [...html.matchAll(/<form[^>]*>/g)].map((m) => m[0]);
-    expect(tags).toHaveLength(7);
+    expect(tags.filter((t) => /\baction="[^"]*\/score\//.test(t))).toHaveLength(7);
+    expect(tags.filter((t) => !/\baction="[^"]*\/score\//.test(t)).map((t) => /\baction="([^"]+)"/.exec(t)?.[1])).toEqual([
+      `/q/${out.token}/add-match`,
+    ]);
     for (const tag of tags) {
       expect(tag).toContain('method="post"');
       expect(tag).toMatch(/class="[^"]*\bph-no-capture\b/);
@@ -785,7 +791,8 @@ describe.skipIf(!HAS_DB)("the seam: the home's Score form names this route, and 
     const out = await create();
     const html = await homeAt(`/q/${out.token}`);
     const actions = [...html.matchAll(/<form[^>]*\baction="([^"]+)"/g)].map((m) => m[1]!);
-    expect(actions.length, "a fresh league offers Score on the hero and on every match").toBe(1 + 6);
+    expect(actions.filter((a) => a.includes("/score/")).length, "a fresh league offers Score on the hero and on every match").toBe(1 + 6);
+    expect(actions.filter((a) => !a.includes("/score/")), "and Add a match (Task 8), posting elsewhere").toEqual([`/q/${out.token}/add-match`]);
     const hero = /data-testid="qm-hero"[\s\S]*?<form[^>]*\baction="([^"]+)"/.exec(html)?.[1];
     expect(hero).toBeDefined();
     const m = /^\/q\/([^/]+)\/score\/([^/]+)$/.exec(hero!);
