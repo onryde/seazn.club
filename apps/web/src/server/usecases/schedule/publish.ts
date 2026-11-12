@@ -246,7 +246,8 @@ export interface StartDivisionOut {
  * on `active`, and the same broken timetable went live with nothing in the
  * ledger to say a publish had ever happened.
  *
- * Two orderings inside are load-bearing:
+ * Two orderings inside are load-bearing — both live in `startDivisionInTx`,
+ * the status transaction this function wraps:
  *
  *  - the check runs AFTER the quick-start rolling-times write, in the same
  *    transaction. Before it, the board being judged does not exist yet — and a
@@ -379,21 +380,24 @@ export async function startDivision(
  * that throws after it rolls back the status, the `schedule_published` and
  * `division_started` events, the rolling times and the competition promotion.
  *
- * What it does NOT do — the caller owns all of it, exactly as `startDivision`
- * does around this call:
- *  - the pre-flight: division exists, is not `completed`, its competition is
- *    not frozen, a Swiss is not above its hard maximum, a first stage exists
- *    (its id is `firstStageId`, the stage the rolling quick-start times are
- *    written to), and that stage's fixtures are generated;
+ * Refuses, under the division lock, what it cannot start: a division `tx`
+ * cannot see (404), a `completed` one (422 — it would otherwise reopen it), and
+ * a `firstStageId` that is not the division's first stage (422
+ * START_STAGE_MISMATCH — the rolling quick-start times are written to it). An
+ * already-active division returns `started: false` and writes nothing.
+ *
+ * What it does NOT do — the caller owns it, exactly as `startDivision` does
+ * around this call:
+ *  - the frozen-competition refusal: its lookup reads the POOLED `sql`
+ *    (`frozenCompetitionIds`), which must not run inside a `withTenant`;
+ *  - the Swiss-above-maximum refusal, judged on the field BEFORE generation;
+ *  - generating the first stage's fixtures (this never generates);
  *  - deciding `frozenDrift` (W4 app B, Task 20): the pre-flight's frozen board
  *    with a drifted root knockout, whose in-place reconcile runs here, inside
  *    this transaction. Defaults to false: no reconcile;
  *  - after commit: `afterScheduleWrite(…, "start", out.fixtureIds)`, the stage
  *    revalidate after a `frozenDrift` reconcile, and the `competitionPromoted`
  *    lifecycle event.
- *
- * Takes the division lock on `tx`; an already-active division returns
- * `started: false` and writes nothing.
  */
 export async function startDivisionInTx(
   tx: Tx,
@@ -406,14 +410,29 @@ export async function startDivisionInTx(
   await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
   const [division] = await tx<{ status: string; competition_id: string }[]>`
     select status, competition_id from divisions where id = ${divisionId}`;
+  // Its own preconditions, not the caller's word for them (a guest quick match
+  // has no `startDivision` pre-flight in front of it). Same status and message
+  // as that pre-flight, which refuses both before this is reached — so through
+  // `startDivision` these fire only if the division changed between the two
+  // transactions.
+  if (!division) throw new HttpError(404, "division not found");
   // R10d n2: a start moves no single fixture (it may generate the first stage
   // and write rolling times across it), so every public fixture document of
   // the division drops with the hub key. Read under the lock, after generation.
   const fixtureIds = (
     await tx<{ id: string }[]>`select id from fixtures where division_id = ${divisionId}`
   ).map((f) => f.id);
-  if (!division || division.status === "active") {
+  if (division.status === "active") {
     return { started: false, fixtureIds, competitionPromoted: false };
+  }
+  if (division.status === "completed") throw new HttpError(422, "division is completed");
+  // `firstStageId` decides which stage the rolling times below are written to:
+  // it must be the stage the pre-flight would pick (lowest `seq`). A division
+  // with no stage has no first stage, so any id is refused the same way.
+  const [firstStage] = await tx<{ id: string }[]>`
+    select id from stages where division_id = ${divisionId} order by seq limit 1`;
+  if (firstStage?.id !== firstStageId) {
+    throw new HttpError(422, "stage is not the division's first stage", "START_STAGE_MISMATCH");
   }
 
   // Placing a newcomer is a schedule write the freeze binds, so Start MARKS them waiting instead (`entrants.knockout_waiting_stage_id`,

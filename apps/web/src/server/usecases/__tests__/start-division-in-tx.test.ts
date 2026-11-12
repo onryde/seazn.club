@@ -9,7 +9,11 @@
 //     the status, the `division_started` / `schedule_published` events and the
 //     competition promotion together (pre-flight B3);
 //   * a second call on an already-active division is the no-op it always was;
-//   * `firstStageId` is the stage the rolling quick-start times are written to.
+//   * `firstStageId` is the stage the rolling quick-start times are written to,
+//     and no other stage is;
+//   * it refuses its own preconditions (house rule: assumptions are guards) —
+//     an invisible division (404), a completed one (422), a `firstStageId` that
+//     is not the division's first stage (422 START_STAGE_MISMATCH).
 //
 // Generic sport only: the transaction body has no sport branch (sport rules live
 // in the generator and the engine, both upstream of this function).
@@ -73,6 +77,30 @@ async function seedLeagueDivision(
   });
   await generateStageFixtures(auth, stage!.id);
   return { id: division.id, stageId: stage!.id, competitionId: comp.id };
+}
+
+/** A SECOND stage of the division with two unscheduled fixtures, in rounds 1
+ *  and 2 — the same round numbers as the first stage's, so a rolling-times write
+ *  keyed on the division (not the stage) would reach them. Inserted directly: a
+ *  generated second stage would need the first one played out. */
+async function addSecondStage(auth: AuthCtx, divisionId: string): Promise<string> {
+  const [stage] = await createStages(auth, divisionId, {
+    seq: 2,
+    kind: "league",
+    name: "Second",
+    config: {},
+    progression: null,
+  });
+  const entrants = await sql<{ id: string }[]>`
+    select id from entrants where division_id = ${divisionId} order by seed`;
+  for (const round of [1, 2]) {
+    await sql`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key,
+                            status, home_entrant_id, away_entrant_id)
+      values (${stage!.id}, ${divisionId}, ${auth.orgId}, ${round}, 0, ${"s2-r" + round},
+              'scheduled', ${entrants[0]!.id}, ${entrants[1]!.id})`;
+  }
+  return stage!.id;
 }
 
 async function divisionStatus(auth: AuthCtx, divisionId: string): Promise<string> {
@@ -167,9 +195,10 @@ describe.skipIf(!HAS_DB)("startDivisionInTx", () => {
     expect(await divisionStatus(auth, div.id)).toBe("active");
   });
 
-  it("writes the rolling quick-start times to the stage named by firstStageId (doc 12 §1.A)", async () => {
+  it("writes the rolling quick-start times to the stage named by firstStageId (doc 12 §1.A), and to no other stage", async () => {
     const { auth } = await seedOrg();
     const div = await seedLeagueDivision(auth, 3);
+    const secondStageId = await addSecondStage(auth, div.id);
     const [court] = await seedCourts(auth.orgId, 1);
     const T0 = "2026-08-01T09:00:00.000Z";
     const ROUND_MINUTES = 60;
@@ -197,5 +226,63 @@ describe.skipIf(!HAS_DB)("startDivisionInTx", () => {
         new Date(Date.parse(T0) + (r.round_no - 1) * ROUND_MINUTES * 60_000).toISOString(),
       );
     }
+    // The second stage is not the first stage: its rounds 1 and 2 share round
+    // numbers with the slotted ones and must still be unscheduled.
+    const second = await sql<{ round_no: number; scheduled_at: Date | null }[]>`
+      select round_no, scheduled_at from fixtures where stage_id = ${secondStageId} order by round_no`;
+    expect(second.map((r) => r.round_no)).toEqual([1, 2]);
+    for (const r of second) expect(r.scheduled_at).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Its own preconditions (house rule: assumptions are guards). `startDivision`'s
+  // pre-flight refuses the first two before this function is reached; these pin
+  // the refusals for a caller that has no such pre-flight (the quick match).
+  // ---------------------------------------------------------------------------
+
+  it("refuses a division the caller cannot see (another org's) with 404, and leaves it untouched", async () => {
+    const { auth: owner } = await seedOrg();
+    const div = await seedLeagueDivision(owner, 3);
+    const { auth: stranger } = await seedOrg();
+
+    await expect(
+      withTenant(stranger.orgId, (tx) => startDivisionInTx(tx, stranger, div.id, div.stageId, {})),
+    ).rejects.toMatchObject({ status: 404, message: "division not found" });
+
+    expect(await divisionStatus(owner, div.id)).toBe("setup");
+    expect(await eventCount(owner, div.id, "division_started")).toBe(0);
+  });
+
+  it("refuses a completed division with 422, and does not reopen it", async () => {
+    const { auth } = await seedOrg();
+    const div = await seedLeagueDivision(auth, 3);
+    await sql`update divisions set status = 'completed' where id = ${div.id}`;
+
+    await expect(
+      withTenant(auth.orgId, (tx) => startDivisionInTx(tx, auth, div.id, div.stageId, {})),
+    ).rejects.toMatchObject({ status: 422, message: "division is completed" });
+
+    expect(await divisionStatus(auth, div.id)).toBe("completed");
+    expect(await eventCount(auth, div.id, "division_started")).toBe(0);
+    expect(await eventCount(auth, div.id, "schedule_published")).toBe(0);
+  });
+
+  it("refuses a firstStageId that is not the division's first stage (422 START_STAGE_MISMATCH)", async () => {
+    const { auth } = await seedOrg();
+    const div = await seedLeagueDivision(auth, 3);
+    const secondStageId = await addSecondStage(auth, div.id);
+    const other = await seedLeagueDivision(auth, 3);
+    // Its own second stage, and another division's first stage.
+    const wrong = [secondStageId, other.stageId];
+
+    for (const stageId of wrong) {
+      await expect(
+        withTenant(auth.orgId, (tx) => startDivisionInTx(tx, auth, div.id, stageId, {})),
+      ).rejects.toMatchObject({ status: 422, code: "START_STAGE_MISMATCH" });
+    }
+    expect(wrong).toHaveLength(2);
+    expect(await divisionStatus(auth, div.id)).toBe("setup");
+    expect(await eventCount(auth, div.id, "division_started")).toBe(0);
+    expect(await eventCount(auth, div.id, "schedule_published")).toBe(0);
   });
 });
