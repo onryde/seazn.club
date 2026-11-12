@@ -55,7 +55,7 @@ const DASH = "—";
 const LONG_NAME = "Harbourside Building Supplies and Timber Co";
 const COMPETITIONS = [{ id: "11111111-1111-4111-8111-111111111111", name: "Spring Cup" }, { id: "22222222-2222-4222-8222-222222222222", name: "Autumn Cup" }];
 const row = (over: Partial<SponsorOverviewRow> & { sponsorId: string | null; name: string }): SponsorOverviewRow => ({
-  timesShown: 0, onScreenMs: 0, viewerImpressions: null, peakViewers: null, linkClicks: 0, ...over,
+  archived: false, timesShown: 0, onScreenMs: 0, viewerImpressions: null, peakViewers: null, linkClicks: 0, ...over,
 });
 const ROWS: SponsorOverviewRow[] = [
   row({ sponsorId: "s1", name: LONG_NAME, timesShown: 12, onScreenMs: 252_000, linkClicks: 7 }),

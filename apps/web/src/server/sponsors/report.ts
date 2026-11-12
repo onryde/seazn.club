@@ -82,7 +82,9 @@ async function assertCompetition(tx: Tx, orgId: string, competitionId: string): 
 
 /**
  * One row per sponsor of the org (in a competition period: the org-wide sponsors and that competition's own), tier-ranked as
- * every sponsor list here is, then one row per DELETED sponsor that aired in the period, by name. Every member may read it
+ * every sponsor list here is, an ARCHIVED one only while it has airings or clicks in the period (archive spec D15: its numbers
+ * are history and must still add up; an empty row each period is clutter), then one row per DELETED sponsor that aired in the
+ * period, by name. Every member may read it
  * (R19: read-only for viewers). `now` places the time windows; nothing here reads the clock.
  */
 export async function sponsorOverview(auth: AuthCtx, orgId: string, p: SponsorPeriod, now: Date): Promise<SponsorOverviewRow[]> {
@@ -98,7 +100,7 @@ export async function sponsorOverview(auth: AuthCtx, orgId: string, p: SponsorPe
         ? tx`${time} >= ${window.from} and ${time} < ${window.to}`
         : tx`${competition} = ${competitionId}`;
     const listed = competitionId === null ? tx`true` : tx`(s.competition_id is null or s.competition_id = ${competitionId})`;
-    const rows = await tx<{ sponsor_id: string | null; name: string; shown: number; on_ms: number; clicks: number | null }[]>`
+    const rows = await tx<{ sponsor_id: string | null; name: string; archived: boolean; shown: number; on_ms: number; clicks: number | null }[]>`
       with air as (
         select a.sponsor_id,
                case when a.sponsor_id is null then a.sponsor_name end as gone_name,
@@ -113,8 +115,9 @@ export async function sponsorOverview(auth: AuthCtx, orgId: string, p: SponsorPe
          where c.org_id = ${orgId} and ${inPeriod(tx`c.at`, tx`c.competition_id`)}
          group by 1
       )
-      select sponsor_id, name, shown, on_ms, clicks from (
-        select s.id as sponsor_id, s.name, coalesce(air.shown, 0)::int as shown, coalesce(air.on_ms, 0)::float8 as on_ms,
+      select sponsor_id, name, archived, shown, on_ms, clicks from (
+        select s.id as sponsor_id, s.name, s.archived_at is not null as archived,
+               coalesce(air.shown, 0)::int as shown, coalesce(air.on_ms, 0)::float8 as on_ms,
                coalesce(clk.clicks, 0)::int as clicks,
                0 as gone, array_position(${[...SPONSOR_TIERS]}::text[], s.tier) as rank, s.display_order,
                s.created_at
@@ -122,8 +125,9 @@ export async function sponsorOverview(auth: AuthCtx, orgId: string, p: SponsorPe
           left join air on air.sponsor_id = s.id
           left join clk on clk.sponsor_id = s.id
          where s.org_id = ${orgId} and ${listed}
+           and (s.archived_at is null or air.sponsor_id is not null or clk.sponsor_id is not null)
         union all
-        select null::uuid, air.gone_name, air.shown, air.on_ms, null::int, 1, null::int, null::int, null::timestamptz
+        select null::uuid, air.gone_name, false, air.shown, air.on_ms, null::int, 1, null::int, null::int, null::timestamptz
           from air
          where air.sponsor_id is null
       ) t
@@ -131,6 +135,7 @@ export async function sponsorOverview(auth: AuthCtx, orgId: string, p: SponsorPe
     return rows.map((r) => ({
       sponsorId: r.sponsor_id,
       name: r.name,
+      archived: r.archived,
       timesShown: r.shown,
       onScreenMs: Math.round(r.on_ms),
       viewerImpressions: null,

@@ -21,6 +21,9 @@ export interface SponsorOverviewRow {
   /** Null for a DELETED sponsor: its airings survive on their name snapshot, and nothing can link to it any more. */
   sponsorId: string | null;
   name: string;
+  /** The sponsor is archived (archive spec D15: listed only while it has airings or clicks in the period; the row shows the
+   *  "Archived" chip). False for a DELETED sponsor's row: deleted is not archived. */
+  archived: boolean;
   timesShown: number;
   onScreenMs: number;
   /** Null: viewer counts (PR B) are deferred (owner ruling 2026-11-01). Shown as "Coming soon", never a dash or 0. */

@@ -18,8 +18,9 @@
 // Expected values come from the spec's tables (§8 blocking, §9 sequences), typed here, never from `blocksArchive`. Every case
 // reads the STORED row back with the privileged connection, never only the usecase's answer.
 //
-// The public surfaces dropping an archived sponsor (resolveSponsors and the four other SQL readers) are Task 4's: this file only
-// proves the row comes BACK onto the free strip and the competition page after an unarchive.
+// The public surfaces dropping an archived sponsor (resolveSponsors and the four other SQL readers) are Task 4's
+// (server/sponsors/__tests__/archive-readers.test.ts): this file proves the row comes BACK onto the free strip and the competition
+// page after an unarchive, and, for a Free org, that the archive takes it off the free strip.
 //
 // Sport-agnostic: no sport sweep (a sponsor's archive reads no sport).
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -492,7 +493,7 @@ describe.skipIf(!HAS_DB)("an archived sponsor refuses writes (spec D10, D11)", (
 });
 
 describe.skipIf(!HAS_DB)("every plan, and only the org's own sponsors (spec D25, §9)", () => {
-  it("Free org (no sponsors.tiers): archive and unarchive work; after the unarchive the free strip carries the row again, a leftover Title row as partner", async () => {
+  it("Free org (no sponsors.tiers): archive and unarchive work; the archive takes the row off the free strip, the unarchive puts it back, a leftover Title row as partner", async () => {
     const o = await rigOrg({ plan: "community" });
     const partner = await createSponsor(o.auth, { name: `Corner Shop ${uniq()}`, tier: "partner", status: "active" });
     const [{ id: titleId }] = await sql<{ id: string }[]>`
@@ -501,6 +502,9 @@ describe.skipIf(!HAS_DB)("every plan, and only the org's own sponsors (spec D25,
     for (const id of [partner.id, titleId]) {
       expect(await refusal(() => archiveSponsor(o.auth, id)), "archive is ungated").toEqual(NO_REFUSAL);
       expect(await archivedAt(id)).not.toBeNull();
+      const archivedStrip = (await resolveSponsors(o.orgId, undefined, { tiered: false })).map((r) => r.id);
+      expect(archivedStrip, "archived: off the free strip (Task 4's filter)").not.toContain(id);
+      expect(archivedStrip.length, "premise: the other row is still on it").toBe(1);
       expect(await refusal(() => unarchiveSponsor(o.auth, id)), "and so is unarchive").toEqual(NO_REFUSAL);
       expect(await archivedAt(id)).toBeNull();
       checked++;

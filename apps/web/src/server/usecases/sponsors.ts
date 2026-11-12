@@ -537,6 +537,8 @@ export interface ResolvedSponsor {
  * `sponsors` table is the only source: no rows means no sponsors (R4 fix
  * batch 3, m9 — the branding-blob shim brought deleted sponsors back).
  * Runs on the privileged connection: public pages have no tenant context.
+ * An archived row is left out IN SQL, before the dedupe (archive spec D28):
+ * a new row is never hidden behind an archived one of the same name.
  * Orgs without `sponsors.tiers` get the un-tiered free strip — every row
  * collapses to `partner` so tier grouping stays a Pro-visible feature.
  *
@@ -555,7 +557,7 @@ export async function resolveSponsors(
     (Pick<SponsorRow, "id" | "name" | "url" | "tier"> & { logo_path: string | null; poster_path: string | null })[]
   >`
     select id, name, url, logo_path, poster_path, tier from sponsors
-    where org_id = ${orgId} and status = 'active'
+    where org_id = ${orgId} and status = 'active' and archived_at is null
       and (competition_id is null or competition_id = ${competitionId ?? null})
       ${onStream ? sql`and on_stream` : sql``}
     order by (competition_id is null),
