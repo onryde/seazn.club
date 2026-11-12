@@ -9,7 +9,7 @@ import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import type { RecentEvent } from "@/lib/overlay-recent-types";
 import type { ProgrammePhaseWire } from "@/lib/relay-phase";
 import type { SponsorPlan } from "@/lib/sponsor-plan";
-import type { OverlayCarromToss } from "@/lib/overlay-toss";
+import type { OverlayCarromToss, OverlayTennisToss } from "@/lib/overlay-toss";
 import type { OverlayClosedOver, OverlayCricketLive, OverlayCricketToss, OverlayHighlights } from "@/lib/overlay-cricket";
 import type { MatchTimeCfg } from "@/components/v2/scorepad/v3/skins/football-match-time";
 import { offsetSampleOf, type ServerOffset } from "@/components/v2/scorepad/server-offset";
@@ -114,6 +114,8 @@ export interface OverlayLiveData extends LiveFixtureData {
   /** R2005 change 11 — carrom's toss: the side that breaks first. Absent (or null) = no toss taken. Its own shape:
    *  carrom's toss has no winner and no election, so it never rides `cricketToss`. */
   carromToss?: OverlayCarromToss | null;
+  /** S2-7 (TN-TS-1) — tennis's toss: the side that serves first. Absent (or null) = no toss taken. */
+  tennisToss?: OverlayTennisToss | null;
   /** End-of-over card — most recently completed over in the active innings. */
   lastClosedOver?: OverlayClosedOver | null;
   /** True once any scoring (ball / over) has been recorded. */

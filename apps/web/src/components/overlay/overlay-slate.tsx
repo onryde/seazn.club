@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { OverlayCricketToss } from "@/lib/overlay-cricket";
 import { warmingLine } from "@/lib/overlay-openers";
-import { overlayTossOf, type OverlayCarromToss } from "@/lib/overlay-toss";
+import { overlayTossOf, type OverlayCarromToss, type OverlayTennisToss } from "@/lib/overlay-toss";
 import type { OverlayHighlight, OverlayModel, OverlaySide } from "@/lib/overlay-model";
 import type { OverlayThemeProps } from "./template-registry";
 import type { SceneCard } from "./overlay-scene";
@@ -81,6 +81,7 @@ export function OverlayMatchCard({
   sportKey,
   cricketToss,
   carromToss,
+  tennisToss,
   card,
 }: Pick<OverlayThemeProps, "model" | "msg"> & {
   /** Whose warming line this is: only a sport that declares a toss shows one (review d, PR #974). */
@@ -88,6 +89,8 @@ export function OverlayMatchCard({
   cricketToss?: OverlayCricketToss | null;
   /** R2005 change 11: carrom's toss (who breaks first), beside cricket's. */
   carromToss?: OverlayCarromToss | null;
+  /** S2-7 (TN-TS-1): tennis's toss (who serves first). */
+  tennisToss?: OverlayTennisToss | null;
   /** R2005: the card the active SCENE picked (`sceneFor`). Absent: the slate state's own card, exactly as before. */
   card?: SceneCard | null;
 }) {
@@ -121,7 +124,7 @@ export function OverlayMatchCard({
   const away = model.sides[1];
   const warming =
     cardState === "warming"
-      ? warmingLine({ sportKey, toss: overlayTossOf({ cricketToss, carromToss }), sideNames: [home.name, away.name], startContext: model.header.context, msg })
+      ? warmingLine({ sportKey, toss: overlayTossOf({ cricketToss, carromToss, tennisToss }), sideNames: [home.name, away.name], startContext: model.header.context, msg })
       : "";
 
   return (

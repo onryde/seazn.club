@@ -7,7 +7,7 @@ import type { FoldedFixture } from "@/server/engine-db/fold";
 import type { LiveFixtureData, OverlayLiveData } from "@/components/public-site/live-score-data";
 import type { RecentEvent } from "@/lib/overlay-recent-types";
 import type { OverlayClosedOver, OverlayCricketLive, OverlayCricketToss, OverlayHighlights } from "@/lib/overlay-cricket";
-import { carromTossOf } from "@/lib/overlay-toss";
+import { carromTossOf, tennisTossOf } from "@/lib/overlay-toss";
 import { latestClockAnchor } from "@/components/v2/scorepad/v3/clock";
 import { clockPeriodsOf, type MatchTimeCfg } from "@/components/v2/scorepad/v3/skins/football-match-time";
 import { matchTimeCfgOf } from "@/components/v2/scorepad/v3/skins/football-match-time-cfg";
@@ -265,5 +265,8 @@ export function projectOverlayLiveData(input: {
   // cricket's. Absent until a toss is taken — and again once one is voided, because the fold no longer holds it.
   const carromToss = carromTossOf(folded.state);
   if (carromToss) out.carromToss = carromToss;
+  // S2-7 (TN-TS-1): tennis's toss, the side the fold seated to serve first — only while a `tennis.toss` survives.
+  const tennisToss = tennisTossOf(folded.state, folded.active);
+  if (tennisToss) out.tennisToss = tennisToss;
   return out;
 }

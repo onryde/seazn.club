@@ -423,6 +423,7 @@ export function OverlayStage(props: OverlayStageProps) {
             sportKey={props.sportKey}
             cricketToss={data.cricketToss}
             carromToss={data.carromToss}
+            tennisToss={data.tennisToss}
             {...(decision.scene !== null ? { card: decision.card } : {})}
           />
         ) : null}

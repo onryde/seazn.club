@@ -741,6 +741,7 @@
   "overlay.scene.reconnecting.line": "Camera maakt opnieuw verbinding, zo terug",
   "overlay.scene.ended.title": "Uitzending beëindigd",
   "overlay.toss.breaksFirst": "{team} breekt eerst",
+  "overlay.toss.servesFirst": "{team} serveert eerst",
   "overlay.endOfOver.title": "Einde over {over}",
   "overlay.endOfOver.runsScore": "{runs} runs · {score}",
   "overlay.moment.six": "SIX",

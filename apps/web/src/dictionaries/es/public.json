@@ -741,6 +741,7 @@
   "overlay.scene.reconnecting.line": "Reconectando la cámara, volvemos enseguida",
   "overlay.scene.ended.title": "Transmisión finalizada",
   "overlay.toss.breaksFirst": "{team} rompe primero",
+  "overlay.toss.servesFirst": "{team} saca primero",
   "overlay.endOfOver.title": "Fin del over {over}",
   "overlay.endOfOver.runsScore": "{runs} carreras · {score}",
   "overlay.moment.six": "SIX",

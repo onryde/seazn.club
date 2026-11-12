@@ -4770,6 +4770,7 @@ export type DictionaryKey =
   | "overlay.toss.bat"
   | "overlay.toss.bowl"
   | "overlay.toss.breaksFirst"
+  | "overlay.toss.servesFirst"
   | "overlay.toss.wonAndElected"
   | "overlay.watchLive"
   | "pad.activity.empty"
