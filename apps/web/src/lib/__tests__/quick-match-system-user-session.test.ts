@@ -1,4 +1,4 @@
-// Quick match (spec 2026-11-03 §7.1): the platform system user (V492, QUICK_MATCH_SYSTEM_USER_ID) "can never sign in". This
+// Quick match (spec 2026-11-03 §7.1): the platform system user (V506, QUICK_MATCH_SYSTEM_USER_ID) "can never sign in". This
 // file is the SESSION half; the sign-in-link half is app/api/auth/magic-link/__tests__/system-user-refused.test.ts.
 //
 // Every door that signs a person in ends in `createSession` (grep of its call sites, 2026-11-07): magic-link consume,
@@ -6,7 +6,7 @@
 // impersonation. `createSession` is the only place a session cookie is signed (the `seazn-session` audience appears
 // nowhere else), so its refusal covers every door at once, including a door added later. Two doors get more than that:
 //  - the email-invite claim is reachable by ANY org editor: invite the system address, read the invite's token back from
-//    GET /api/orgs/[id]/invites, POST the claim signed out. The system user is unverified (V492), which is exactly the
+//    GET /api/orgs/[id]/invites, POST the claim signed out. The system user is unverified (V506), which is exactly the
 //    case that claim auto-signs-in. `claimEmailInvite` therefore treats it as it treats a verified account (`needs_signin`,
 //    nothing written), so the system user is not joined to the editor's org or marked verified on the way to the refusal.
 //  - staff impersonation is refused where it starts (`createImpersonationToken`), so no token for the system user exists
@@ -122,7 +122,7 @@ describe.skipIf(!HAS_DB)("the doors that mint a session refuse the system user (
     // Premise, not a comment: the system user exists under its address. Without the row, the invite claim would create an
     // ordinary account for the address and the refusal below would pass for the wrong reason.
     const rows = await sql<{ id: string }[]>`select id from users where email = ${QUICK_MATCH_SYSTEM_USER_EMAIL} and deleted_at is null`;
-    expect(rows.map((r) => r.id), "premise: V492 seeded the system user under its address").toEqual([QUICK_MATCH_SYSTEM_USER_ID]);
+    expect(rows.map((r) => r.id), "premise: V506 seeded the system user under its address").toEqual([QUICK_MATCH_SYSTEM_USER_ID]);
   });
   afterAll(async () => {
     if (users.length > 0) {
@@ -140,7 +140,7 @@ describe.skipIf(!HAS_DB)("the doors that mint a session refuse the system user (
     const { orgId, ownerId } = await seedOrg();
     // Premise: the seed state, the case the claim would auto-sign-in. Were it verified, the refusal would be the old
     // verified-account branch and prove nothing about the guard.
-    expect(await systemRow(), "premise: the system user is at its V492 seed").toEqual({ email_verified: false, terms_accepted_at: null });
+    expect(await systemRow(), "premise: the system user is at its V506 seed").toEqual({ email_verified: false, terms_accepted_at: null });
     const invite = await createInvite(orgId, ownerId, { role: "admin", max_uses: 1, email: QUICK_MATCH_SYSTEM_USER_EMAIL });
 
     const res = await claimInvite(invite.token);

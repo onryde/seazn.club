@@ -68,7 +68,7 @@ export async function POST(req: Request) {
     const keyProblem = outboxKeyProblem();
     if (keyProblem) return refused(new OutboxKeyUnavailableError(keyProblem));
 
-    // The quick-match system user (V492) holds an address but is never a person, and can never sign in (quick-match spec
+    // The quick-match system user (V506) holds an address but is never a person, and can never sign in (quick-match spec
     // §7.1). Its address is answered as no account: the branch an address held by a deleted account takes, so the reply is
     // the ordinary 200 with no token and no email. Decided HERE, before `if (userId)`, so the system user is never stamped
     // as having accepted the terms either. (`issueLoginLink` refuses the id as well; that is the backstop.)

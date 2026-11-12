@@ -46,7 +46,7 @@ interface QuickMatchDbRow {
   id: string;
   competition_id: string;
   name: string;
-  format: QuickMatchFormat;   // V492's check constraint: 'league' | 'knockout'
+  format: QuickMatchFormat;   // V506's check constraint: 'league' | 'knockout'
   email: string | null;
   locale: string;
   last_activity_at: Date;

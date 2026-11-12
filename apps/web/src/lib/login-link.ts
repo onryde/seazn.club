@@ -16,7 +16,7 @@ export const LOGIN_LINK_TTL_MS = TTL_MINUTES * 60_000;
  * (the outbox row for the email expires at exactly that instant).
  */
 export async function issueLoginLink(userId: string, db: Tx | typeof sql): Promise<{ token: string; expiresAt: Date }> {
-  // The quick-match system user (V492) is the actor for guest-created rows and can never sign in (quick-match spec §7.1).
+  // The quick-match system user (V506) is the actor for guest-created rows and can never sign in (quick-match spec §7.1).
   // Refused here, before anything is written, because both callers come through here: `createLoginLink` and the sign-in
   // route (which answers its address as no account before it gets this far, so this is the backstop, not the answer).
   if (userId === QUICK_MATCH_SYSTEM_USER_ID) throw new HttpError(403, "system user");

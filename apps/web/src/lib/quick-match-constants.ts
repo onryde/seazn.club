@@ -3,7 +3,7 @@
 //
 // Import-free on purpose: `server/api-v1/schemas.ts` imports this file relatively, so nothing here may pull in a module.
 // The ids, the slug and the email are written verbatim into the migration that seeds the rows,
-// db/migration/deltas/V492__quick_matches.sql (its number is reassigned at merge if main has moved past it); change one
+// db/migration/deltas/V506__quick_matches.sql (its number is reassigned at merge if main has moved past it); change one
 // and you change both. quick-match-migration.test.ts compares the seeded rows with these values.
 
 /** The system org that holds every quick match. Private, no human members. */

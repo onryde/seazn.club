@@ -112,7 +112,7 @@ export async function createImpersonationToken(
   actorId: string,
   targetId: string,
 ): Promise<string> {
-  // The quick-match system user (V492) can never sign in (quick-match spec §7.1), and an impersonation IS a sign-in.
+  // The quick-match system user (V506) can never sign in (quick-match spec §7.1), and an impersonation IS a sign-in.
   // Refused here, before the token row and the audit entry, rather than when the page opens it (createSession refuses
   // there too, but only after the token is spent).
   if (targetId === QUICK_MATCH_SYSTEM_USER_ID) throw new HttpError(403, "Cannot impersonate the system user");

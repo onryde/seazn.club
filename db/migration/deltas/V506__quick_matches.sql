@@ -1,9 +1,9 @@
 -- V506 — Quick match: the `quick_matches` table, and the one system org and system user that hold every guest quick match.
 -- (Spec docs/superpowers/specs/2026-11-03-quick-match-design.md §7.1-7.2, owner-approved 2026-11-06.)
 -- Flyway runs with outOfOrder=false, so the version number must rise in MERGE order: it is assigned at merge (main's max + 1
--- if needed). A renumber moves three things: this file's name, the `V492` on line 1 (migration-header-truth.test.ts fails
--- a header that disagrees with its file name), and the comments and test premise messages that cite V492 by number
--- (`git grep -n V492 -- apps`). No code or test finds this file by its name.
+-- if needed). A renumber moves three things: this file's name, the `V506` on line 1 (migration-header-truth.test.ts fails
+-- a header that disagrees with its file name), and the comments and test premise messages that cite V506 by number
+-- (`git grep -n V506 -- apps`). No code or test finds this file by its name.
 --
 -- ── The system org and its user ──
 -- A guest has no account, so every quick match is a private competition in ONE platform org, "Seazn quick matches", and every

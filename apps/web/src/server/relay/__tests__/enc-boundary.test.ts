@@ -67,7 +67,7 @@ const LICHESS_OWNER = "server/usecases/external-accounts.ts";
 const YOUTUBE_COLUMNS = ["refresh_token_enc"];
 const YOUTUBE_OWNER = "server/youtube/token-store.ts";
 
-/** Quick match (V492, spec 2026-11-03 §7.1, C19): the home-page token's sealed envelope on `quick_matches`, under
+/** Quick match (V506, spec 2026-11-03 §7.1, C19): the home-page token's sealed envelope on `quick_matches`, under
  *  DEVICE_LINK_KEK. SQL over it lives in exactly two files: the create that writes it, and the home read that returns it
  *  on `QuickMatchRow.tokenEnc` (plan 1 Task 7) — the one row every later reader rebuilds the link from (the pad's back
  *  link, the saved list), so none of them names the column. A third reader joins these owners or reads the row. */

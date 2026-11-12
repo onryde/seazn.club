@@ -1,4 +1,4 @@
-// Quick match (spec 2026-11-03 §7.1): the platform system user (V492, QUICK_MATCH_SYSTEM_USER_ID) is the actor for every
+// Quick match (spec 2026-11-03 §7.1): the platform system user (V506, QUICK_MATCH_SYSTEM_USER_ID) is the actor for every
 // guest-created row and "can never sign in". This file is the sign-in-LINK half of that: the request route and the token
 // minter both refuse it. The session half (createSession itself, and the doors that mint one) is
 // lib/__tests__/quick-match-system-user-session.test.ts.
@@ -82,7 +82,7 @@ describe.skipIf(!HAS_DB)("the quick-match system user never gets a sign-in link 
     // Premise, not a comment: the system user exists, under its address, so the route's lookup really resolves to it.
     // Without the row the address is an unknown one and the route would create an ordinary account for it.
     const rows = await sql<{ id: string }[]>`select id from users where email = ${QUICK_MATCH_SYSTEM_USER_EMAIL} and deleted_at is null`;
-    expect(rows.map((r) => r.id), "premise: V492 seeded the system user under its address").toEqual([QUICK_MATCH_SYSTEM_USER_ID]);
+    expect(rows.map((r) => r.id), "premise: V506 seeded the system user under its address").toEqual([QUICK_MATCH_SYSTEM_USER_ID]);
   });
   afterAll(async () => {
     if (emails.length > 0) {
@@ -105,8 +105,8 @@ describe.skipIf(!HAS_DB)("the quick-match system user never gets a sign-in link 
 
   it("the system address gets the ordinary 200 and nothing else: no token, no email row, no terms stamp", async () => {
     const before = { outbox: await outboxCount(QUICK_MATCH_SYSTEM_USER_EMAIL), row: await systemRow() };
-    // Premise: the V492 seed. A stamp already there would hide B10; a link already there would hide the minter's refusal.
-    expect(before.row, "premise: the system user is at its V492 seed").toEqual({ email_verified: false, terms_accepted_at: null, terms_version: null });
+    // Premise: the V506 seed. A stamp already there would hide B10; a link already there would hide the minter's refusal.
+    expect(before.row, "premise: the system user is at its V506 seed").toEqual({ email_verified: false, terms_accepted_at: null, terms_version: null });
     expect(await linkCount(QUICK_MATCH_SYSTEM_USER_ID), "premise: the system user holds no sign-in link").toBe(0);
 
     const res = await post(QUICK_MATCH_SYSTEM_USER_EMAIL);

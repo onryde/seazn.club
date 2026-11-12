@@ -67,7 +67,7 @@ function secretKey(): Uint8Array {
 
 /** Issue a signed session cookie for the given user id. */
 export async function createSession(userId: string): Promise<void> {
-  // The quick-match system user (V492) can never sign in (quick-match spec §7.1). Every door that signs a person in
+  // The quick-match system user (V506) can never sign in (quick-match spec §7.1). Every door that signs a person in
   // (magic-link consume, verify-email, Google, the claim and invite accepts, the funnel claim, staff impersonation) ends
   // here, and this is the only place a session is signed, so one refusal covers them all, a door added later included.
   if (userId === QUICK_MATCH_SYSTEM_USER_ID) throw new HttpError(403, "system user");
