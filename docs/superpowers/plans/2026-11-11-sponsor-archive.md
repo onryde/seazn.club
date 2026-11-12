@@ -37,7 +37,7 @@ The list gains a slim "Show archived (N)" switch.
   - Never `git stash` and never `git checkout <file>`. Restore a mutant from a `cp` backup.
   - In zsh, write a revision variable as `"${R}:path"`, never `"$R:path"` (`:a` is a modifier).
 - **Order:** start only after #1176 (`feat/sponsor-deals-invoices`) has merged to main. Rebase this branch onto main first, then **re-pin every line number** this plan cites (they were read at PR 3 `db49811d45`).
-- **Migration:** authored as **`V505__sponsor_archive.sql`** (PR 3 holds V501 to V503; the title poster takes V504 after its own renumber). Its first line self-names `-- V505 — …`.
+- **Migration:** authored as **`V505__sponsor_archive.sql`** (main holds V501 title poster and V502-V504 sponsor invoices; V505 is the next free number). Its first line self-names `-- V505 — …`.
   - Tests find it **by suffix** (`/^V\d+__sponsor_archive\.sql$/`).
   - At merge, renumber to the next free number on main: `git mv` plus a line-1 edit. `migration-header-truth.test.ts` checks line 1.
 - **One rule each:**
