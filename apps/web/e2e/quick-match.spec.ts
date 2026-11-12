@@ -595,8 +595,11 @@ test("the league flow (Task 10, Review Focus 2): Score → Start → one rally; 
 // project's carries `--disable-back-forward-cache`) and records every pageshow of the tab in sessionStorage, which outlives
 // both a restore and a reload: Back that RESTORES reads [persisted, then the island's reload], one that reloads reads
 // [a plain load]. On the restore path the hero can read the rally only because the island reloaded (remove it and the
-// restored page is the "Up next" home the guest left). When this Chromium declines to keep the page, the annotation says so,
-// with the browser's own reasons, and the handler's proof is its unit test (refresh-on-restore.test.tsx).
+// restored page is the "Up next" home the guest left). When this Chromium declines to keep the page (a no-store page enters
+// its cache only behind a feature switch), Back is the league case's plain load again and proves nothing about the island:
+// the case SKIPS, with Chromium's reasons, so the skip count says the restore never ran (review I-3), and the handler's proof
+// is its unit test (refresh-on-restore.test.tsx). Only the restore path passes. A goBack that hangs under a real cache times
+// out at NAV_MS: read that as the harness (Playwright disables the cache partly for this), not the product (review m7).
 test("Back from the pad on a browser WITH a back-forward cache (review I-1): the restored home reads the rally, not the page it left", async ({ playwright }, info) => {
   test.setTimeout(8 * NAV_MS + HOLD_MS + NAV_MS);
   const browser = await playwright.chromium.launch({ ignoreDefaultArgs: ["--disable-back-forward-cache"] });
@@ -636,29 +639,27 @@ test("Back from the pad on a browser WITH a back-forward cache (review I-1): the
     // the island's reload meets a torn-down context and is simply read again.)
     const readShows = () => page.evaluate(() => JSON.parse(sessionStorage.getItem("qm-e2e-shows") ?? "[]") as boolean[]);
     await expect.poll(async () => (await readShows()).length, { timeout: NAV_MS, message: "Back's pageshow was never recorded" }).toBeGreaterThan(0);
-    const restored = (await readShows())[0] === true;
-    await expect
-      .poll(readShows, { timeout: NAV_MS, message: restored ? "restored, then the island's reload: one plain load" : "not restored: one plain load" })
-      .toEqual(restored ? [true, false] : [false]);
-    // Why Chromium did not keep the page, in its own words only: the entries also carry the page's URL, which is its token.
-    const reasons = restored
-      ? []
-      : await page.evaluate(() => {
-          const out: string[] = [];
-          const walk = (node: unknown) => {
-            const n = node as { reasons?: { reason?: unknown }[] | null; children?: unknown[] | null } | null;
-            for (const r of n?.reasons ?? []) if (typeof r?.reason === "string") out.push(r.reason);
-            for (const c of n?.children ?? []) walk(c);
-          };
-          const nav = performance.getEntriesByType("navigation")[0] as (PerformanceEntry & { notRestoredReasons?: unknown }) | undefined;
-          walk(nav?.notRestoredReasons ?? null);
-          return out;
-        });
+    if ((await readShows())[0] !== true) {
+      await expect.poll(readShows, { timeout: NAV_MS, message: "not restored: one plain load" }).toEqual([false]);
+      // Why Chromium did not keep the page, in its own words only: the entries also carry the page's URL, which is its token.
+      const reasons = await page.evaluate(() => {
+        const out: string[] = [];
+        const walk = (node: unknown) => {
+          const n = node as { reasons?: { reason?: unknown }[] | null; children?: unknown[] | null } | null;
+          for (const r of n?.reasons ?? []) if (typeof r?.reason === "string") out.push(r.reason);
+          for (const c of n?.children ?? []) walk(c);
+        };
+        const nav = performance.getEntriesByType("navigation")[0] as (PerformanceEntry & { notRestoredReasons?: unknown }) | undefined;
+        walk(nav?.notRestoredReasons ?? null);
+        return out;
+      });
+      test.skip(true, `Chromium did not restore the home from its back-forward cache: ${reasons.join(", ") || "no reason given"}`);
+    }
+    // Restored: then the island's reload, whose own pageshow is a plain load (and no loop after it).
+    await expect.poll(readShows, { timeout: NAV_MS, message: "restored, then the island's reload: one plain load" }).toEqual([true, false]);
     info.annotations.push({
       type: "bfcache",
-      description: restored
-        ? "restored from the back-forward cache (pageshow.persisted); the island reloaded it and the hero read the rally"
-        : `not restored: Back loaded the home afresh; Chromium's reasons: ${reasons.join(", ") || "none given"}`,
+      description: "restored from the back-forward cache (pageshow.persisted); the island reloaded it and the hero read the rally",
     });
     await ctx.close();
   } finally {
