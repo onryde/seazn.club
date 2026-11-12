@@ -106,6 +106,7 @@ function doc(over: Partial<PayPageDoc> = {}): PayPageDoc {
     paymentInstructions: null,
     paidAt: null,
     paySessionId: null,
+    cardPaymentsOn: true,
     ...over,
   };
 }
@@ -200,6 +201,58 @@ describe("every state renders its copy; the Pay form exists only in `pay` (count
     expect(markup).toContain('lang="nl"');
     expect(t(nl, "regPay.heading")).not.toBe(t(en, "regPay.heading")); // anti-vacuity: the dictionaries differ
     expect(has(render(d, en), nl, "regPay.heading")).toBe(false);
+  });
+});
+
+// Gap wave G4 (ledger :57 Q7): with the organiser's card payments off (Connect charges disabled), a `pay` entry used to show Pay and
+// the press landed on a bare 503. The page now shows a calm notice in the panel instead of the button; the route keeps its 503 as
+// the backstop. "Payment received - confirming" still outranks it (money already moved), and an offline entry is untouched.
+describe("card payments off: a notice in place of Pay (gap wave G4)", () => {
+  const notice = (markup: string) => /data-testid="pay-unavailable"/.test(markup);
+  it("the copy resolves in every locale (no fallback to the key)", async () => {
+    let checked = 0;
+    for (const loc of ["en", "es", "fr", "nl"] as const) {
+      const d = await getDictionary(loc, "ui");
+      expect(t(d, "regPay.unavailable" as never), loc).not.toBe("regPay.unavailable");
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("pay + cardPaymentsOn false → the notice, no form, no Pay hint; the details still lead", () => {
+    const markup = render(doc({ cardPaymentsOn: false }));
+    expect(notice(markup)).toBe(true);
+    expect(has(markup, en, "regPay.unavailable")).toBe(true);
+    expect(hasForm(markup)).toBe(false);
+    expect(markup).not.toContain(html(t(en, "regPay.payHint")));
+    expect(markup).not.toContain(TOKEN); // nothing carries the token without the form
+    expect(has(markup, en, "regPay.total")).toBe(true);
+    expect(markup).toContain("Harbourside Badminton Club"); // the organiser the notice tells them to contact
+  });
+
+  it("positive pair: the same doc with card payments on shows Pay and no notice", () => {
+    const markup = render(doc({ cardPaymentsOn: true }));
+    expect(hasForm(markup)).toBe(true);
+    expect(notice(markup)).toBe(false);
+  });
+
+  it("confirming outranks it: a payment already made reads as confirming, not as unavailable", () => {
+    const markup = render(doc({ cardPaymentsOn: false, paySessionId: SESSION }), en, true);
+    expect(has(markup, en, "regPay.confirming.title")).toBe(true);
+    expect(notice(markup)).toBe(false);
+  });
+
+  it("every non-pay state ignores the flag (counted)", () => {
+    let checked = 0;
+    for (const state of PAY_PAGE_STATES) {
+      if (state === "pay") continue;
+      const on = render(doc({ ...STATE_CASES[state].doc, cardPaymentsOn: true }));
+      const off = render(doc({ ...STATE_CASES[state].doc, cardPaymentsOn: false }));
+      expect(off, state).toBe(on);
+      expect(notice(off), state).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(PAY_PAGE_STATES.length - 1);
   });
 });
 
@@ -395,7 +448,7 @@ describe("the copy is in the dictionaries the page reads", () => {
   it("every regPay key the brief names exists in all four locales, non-empty (counted)", () => {
     const keys = JSON.parse(readFileSync(resolve(__dirname, "../../../../../../dictionaries/en/ui.json"), "utf8")) as Record<string, string>;
     const regPay = Object.keys(keys).filter((k) => k.startsWith("regPay."));
-    expect(regPay.length).toBe(31);
+    expect(regPay.length).toBe(32); // 31 at Task 4, + regPay.unavailable (gap wave G4)
     let checked = 0;
     for (const loc of ["en", "es", "fr", "nl"] as const) {
       const d = JSON.parse(readFileSync(resolve(__dirname, `../../../../../../dictionaries/${loc}/ui.json`), "utf8")) as Record<string, string>;

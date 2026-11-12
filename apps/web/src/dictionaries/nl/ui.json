@@ -8326,6 +8326,7 @@
   "regPay.organiser": "Organisator",
   "regPay.pay": "Betaal {amount}",
   "regPay.payHint": "Je betaalt veilig met je kaart op de betaalpagina van Stripe.",
+  "regPay.unavailable": "Kaartbetalingen zijn op dit moment niet beschikbaar — neem contact op met de organisator.",
   "regPay.offline.title": "Zo betaal je",
   "regPay.state.paid": "Betaald",
   "regPay.state.paidOn": "Betaald op {date}",

@@ -6381,6 +6381,7 @@ export type DictionaryKey =
   | "regPay.throttled.body"
   | "regPay.throttled.title"
   | "regPay.total"
+  | "regPay.unavailable"
   | "register.camera.optional"
   | "register.camera.required"
   | "register.capacity.taken"

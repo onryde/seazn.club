@@ -2165,7 +2165,8 @@
     "reg.remind.confirmRecent.title": "67f17391a046366f",
     "reg.remind.confirmRecent.body": "9c0e7933d23cd8b1",
     "reg.remind.limit": "3c361a15a60a76d7",
-    "register.status.pay.error.paidOnline": "eb2584718beb474a"
+    "register.status.pay.error.paidOnline": "eb2584718beb474a",
+    "regPay.unavailable": "272d81bd2d5e43e3"
   },
   "fr": {
     "app.name": "fb56d648fbb9ae92",
@@ -4333,7 +4334,8 @@
     "reg.remind.confirmRecent.title": "67f17391a046366f",
     "reg.remind.confirmRecent.body": "9c0e7933d23cd8b1",
     "reg.remind.limit": "3c361a15a60a76d7",
-    "register.status.pay.error.paidOnline": "eb2584718beb474a"
+    "register.status.pay.error.paidOnline": "eb2584718beb474a",
+    "regPay.unavailable": "272d81bd2d5e43e3"
   },
   "nl": {
     "app.name": "fb56d648fbb9ae92",
@@ -6501,6 +6503,7 @@
     "reg.remind.confirmRecent.title": "67f17391a046366f",
     "reg.remind.confirmRecent.body": "9c0e7933d23cd8b1",
     "reg.remind.limit": "3c361a15a60a76d7",
-    "register.status.pay.error.paidOnline": "eb2584718beb474a"
+    "register.status.pay.error.paidOnline": "eb2584718beb474a",
+    "regPay.unavailable": "272d81bd2d5e43e3"
   }
 }

@@ -93,6 +93,14 @@ export function PayPageView({
         <PayPageConfirming slowText={t(ui, "regPay.confirming.slow")} />
       </div>
     );
+  } else if (doc.state === "pay" && !doc.cardPaymentsOn) {
+    // Gap wave G4: the organiser's card payments are off (Connect charges disabled), so Pay could only answer 503. Say so and send
+    // the player to the organiser (named in the header) instead of offering a button that cannot work.
+    panel = (
+      <p data-testid="pay-unavailable" role="status" className="min-w-0 text-base font-semibold break-words text-ink">
+        {t(ui, "regPay.unavailable")}
+      </p>
+    );
   } else if (doc.state === "pay") {
     panel = (
       <form method="post" action={payAction} data-testid="pay-form" className="ph-no-capture min-w-0">

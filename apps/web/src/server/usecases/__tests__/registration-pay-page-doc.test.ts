@@ -126,6 +126,25 @@ describe.skipIf(!HAS_DB)("payPageDocByToken (player payment page, Task 2)", () =
     expect(doc!.orgName).toBe(org!.name);
   });
 
+  // Gap wave G4 (ledger :57 Q7): the page tells the view whether the organiser can take a card RIGHT NOW, read from the org row at
+  // view time. The state stays `pay` (the entry still owes the money, and the Pay route keeps its 503 as the backstop); the view
+  // shows a notice in place of the button. Both sides, on the same entry, so the flag is not a constant.
+  it("Connect charges off → still `pay`, cardPaymentsOn false; back on → true (read at view time)", async () => {
+    const { rig, reg } = await cardEntry();
+    const token = await linkFor(reg);
+    const on = await payPageDocByToken(token, new Date());
+    expect(on?.state).toBe("pay");
+    expect(on?.cardPaymentsOn).toBe(true);
+
+    await sql`update organizations set stripe_charges_enabled = false where id = ${rig.orgId}`;
+    const off = await payPageDocByToken(token, new Date());
+    expect(off?.state).toBe("pay");
+    expect(off?.cardPaymentsOn).toBe(false);
+
+    await sql`update organizations set stripe_charges_enabled = true where id = ${rig.orgId}`;
+    expect((await payPageDocByToken(token, new Date()))?.cardPaymentsOn).toBe(true);
+  });
+
   it("offline entry → offline; instructions filled with the ref_code, no pay", async () => {
     const r = await stripeRig({ feeCents: 800 });
     const settings = await putRegistrationSettings(r.owner, r.division.id, {

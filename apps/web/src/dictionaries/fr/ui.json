@@ -8326,6 +8326,7 @@
   "regPay.organiser": "Organisateur",
   "regPay.pay": "Payer {amount}",
   "regPay.payHint": "Vous paierez en toute sécurité par carte sur la page de paiement de Stripe.",
+  "regPay.unavailable": "Les paiements par carte sont indisponibles pour le moment — contactez l'organisateur.",
   "regPay.offline.title": "Comment payer",
   "regPay.state.paid": "Payé",
   "regPay.state.paidOn": "Payé le {date}",

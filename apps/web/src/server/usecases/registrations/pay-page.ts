@@ -43,6 +43,10 @@ export interface PayPageDoc {
   /** Paid/refunded only: the first confirming audit row's time, or null when there is none. */
   paidAt: Date | null;
   paySessionId: string | null;
+  /** Whether the organiser can take a card payment right now (`organizations.stripe_charges_enabled`, read at view time). Gap wave
+   *  G4: a `pay` entry with this false shows a notice in place of the Pay button; the state stays `pay` (the entry still owes the
+   *  money) and the Pay route keeps its 503 as the backstop. */
+  cardPaymentsOn: boolean;
 }
 
 /** The facts the rule table decides on. */
@@ -157,5 +161,6 @@ export async function payPageDocByToken(token: string, now: Date): Promise<PayPa
     paymentInstructions: state === "offline" && instructions ? fillPaymentInstructions(instructions, reg.ref_code) : null,
     paidAt,
     paySessionId: reg.pay_session_id,
+    cardPaymentsOn: ctx.charges_enabled,
   };
 }
