@@ -73978,7 +73978,7 @@
             }
           },
           "403": {
-            "description": "Error",
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -74286,7 +74286,7 @@
             }
           },
           "403": {
-            "description": "Error",
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
@@ -74545,7 +74545,7 @@
             }
           },
           "403": {
-            "description": "Error",
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {

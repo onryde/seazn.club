@@ -5,6 +5,7 @@ import "server-only";
 // Two questions, kept apart so each can be tested alone:
 //   * `turnstileMode`  — must THIS process check at all? (one small predicate, below; it also honours the `TURNSTILE=off` break-glass)
 //   * `verifyTurnstile` — is THIS token good for THIS action on THIS host? (strict; it never skips)
+import { clientIp } from "@/lib/client-ip";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
 import { FAKE_DRIVER_ENV_NAMES } from "@/server/relay/config";
@@ -105,7 +106,8 @@ function errorCodesOf(value: unknown): string[] {
  * for another action, a token minted on another host. A token is single-use on Cloudflare's side, so a replayed one comes
  * back `success: false` (`timeout-or-duplicate`) and this function does not remember anything of its own.
  *
- * `ip` is the visitor's, passed along as `remoteip` when known (Cloudflare treats it as optional).
+ * `ip` is the visitor's, passed along as `remoteip` when known (Cloudflare treats it as optional); `requireTurnstile` reads it with
+ * the shared `lib/client-ip.ts`, so behind Cloudflare it is the visitor and not the shared edge Fly saw. "unknown" sends none.
  */
 export async function verifyTurnstile(input: {
   token: unknown;
@@ -151,11 +153,6 @@ export async function verifyTurnstile(input: {
   return { ok: true };
 }
 
-/** The visitor's address, by the chain the other public routes use (`server/usecases/public.ts`'s `publicClientIp`). */
-function clientIp(req: Request): string | null {
-  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || null;
-}
-
 const REFUSAL_MESSAGE = "Verification failed. Reload the page and try again.";
 
 /**
@@ -169,7 +166,7 @@ export async function requireTurnstile(req: Request, action: TurnstileAction): P
     if (turnstileSwitchedOff(process.env) && !isHarness(process.env)) warnSwitchedOff(process.env);
     return;
   }
-  const verdict = await verifyTurnstile({ token: req.headers.get(TURNSTILE_HEADER), action, ip: clientIp(req) });
+  const verdict = await verifyTurnstile({ token: req.headers.get(TURNSTILE_HEADER), action, ip: clientIp(req.headers) });
   if (verdict.ok) return;
   const misconfigured = verdict.reason === "secret_unset" || verdict.reason === "hostnames_unset";
   (misconfigured ? log.error : log.warn).call(

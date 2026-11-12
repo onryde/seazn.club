@@ -514,16 +514,54 @@ describe("requireTurnstile: the gate a route calls", () => {
     expect(everything).not.toContain(SECRET_PASS);
   });
 
-  it("passes the visitor's address by the public routes' chain: first x-forwarded-for hop, else x-real-ip, else none", async () => {
+  // The visitor's address is the shared reader's (`lib/client-ip.ts`, the one every per-IP limiter keys on), not a copy of its
+  // chain: behind Cloudflare the TCP peer Fly sees is a shared edge, and siteverify's `remoteip` must be the visitor.
+  const seenIp = async (headers: Record<string, string>) => {
+    await requireTurnstile(req({ ...headers, [TURNSTILE_HEADER]: cf.mint("login") }), "login");
+    return cf.calls.at(-1)!.form.get("remoteip");
+  };
+  // 173.245.48.0/20 is the first range on https://www.cloudflare.com/ips-v4 (a Cloudflare edge); 203.0.113.0/24 is TEST-NET-3.
+  const CF_EDGE = "173.245.48.7";
+  const VISITOR = "203.0.113.50";
+
+  it("outside Fly (local, CI): first x-forwarded-for hop, else x-real-ip, else no remoteip", async () => {
     prod();
-    const seen = async (headers: Record<string, string>) => {
-      await requireTurnstile(req({ ...headers, [TURNSTILE_HEADER]: cf.mint("login") }), "login");
-      return cf.calls.at(-1)!.form.get("remoteip");
-    };
-    expect(await seen({ "x-forwarded-for": "203.0.113.5, 10.0.0.1", "x-real-ip": "198.51.100.1" })).toBe("203.0.113.5");
-    expect(await seen({ "x-real-ip": "198.51.100.1" })).toBe("198.51.100.1");
-    expect(await seen({})).toBeNull();
-    expect(await seen({ "x-forwarded-for": "" })).toBeNull();
+    expect(await seenIp({ "x-forwarded-for": "203.0.113.5, 10.0.0.1", "x-real-ip": "198.51.100.1" })).toBe("203.0.113.5");
+    expect(await seenIp({ "x-real-ip": "198.51.100.1" })).toBe("198.51.100.1");
+    expect(await seenIp({})).toBeNull();
+    expect(await seenIp({ "x-forwarded-for": "" })).toBeNull();
+  });
+
+  it("behind Cloudflare and Fly: remoteip is the VISITOR (CF-Connecting-IP), not the shared Cloudflare edge Fly saw", async () => {
+    prod();
+    vi.stubEnv("CF_ORIGIN_SECRET", "");
+    expect(await seenIp({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR })).toBe(VISITOR);
+    // the old chain read x-forwarded-for first; Fly APPENDS to it, so a forged first hop must not win over the vouched header
+    expect(await seenIp({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR, "x-forwarded-for": "198.51.100.99" })).toBe(VISITOR);
+  });
+
+  it("reaching Fly directly: a forged CF-Connecting-IP or x-forwarded-for is not believed, Fly's own peer is sent", async () => {
+    prod();
+    vi.stubEnv("CF_ORIGIN_SECRET", "");
+    const DIRECT = "198.51.100.23"; // TEST-NET-2: not a Cloudflare range
+    expect(await seenIp({ "fly-client-ip": DIRECT, "cf-connecting-ip": "203.0.113.200", "x-forwarded-for": "203.0.113.201" })).toBe(DIRECT);
+  });
+
+  it("a Cloudflare Worker's subrequest (cf-worker) is not believed either: the edge itself is sent", async () => {
+    prod();
+    vi.stubEnv("CF_ORIGIN_SECRET", "");
+    expect(await seenIp({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR, "cf-worker": "evil.example" })).toBe(CF_EDGE);
+  });
+
+  it("with the origin secret set, a Cloudflare peer without our stamp is not believed; with it, the visitor is", async () => {
+    prod();
+    const SECRET_STAMP = "stamp-secret-not-a-real-one-0123456789abcdef";
+    vi.stubEnv("CF_ORIGIN_SECRET", SECRET_STAMP);
+    expect(await seenIp({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR })).toBe(CF_EDGE);
+    expect(await seenIp({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR, "x-seazn-origin-secret": SECRET_STAMP })).toBe(VISITOR);
+    // the stamp is a secret: it never reaches siteverify, and the mismatch report (a log line) never carries it
+    expect(String(cf.calls.at(-1)!.init.body)).not.toContain(SECRET_STAMP);
+    expect(JSON.stringify(logMock.warn.mock.calls)).not.toContain(SECRET_STAMP);
   });
 });
 

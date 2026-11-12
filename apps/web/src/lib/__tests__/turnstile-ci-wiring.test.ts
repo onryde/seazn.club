@@ -204,6 +204,8 @@ const PROSE_ONLY = [
   "apps/web/e2e/public-cache-headers.spec.ts",
   "apps/web/e2e/walkthrough/stream-credits.spec.ts",
   "apps/web/e2e/walkthrough/stream-relay.spec.ts",
+  // A skip-message string ("Set E2E_PROD_TARGET=1 and run against `next start`"): it points at the boot recipes above, it is not one.
+  "apps/web/e2e/walkthrough/title-sponsor-poster.spec.ts",
   "apps/web/playwright.config.ts",
 ];
 const RECIPE_ROOTS = ["README.md", "docs/runbooks", "scripts", "apps/web/e2e", "apps/web/playwright.config.ts", "apps/web/playwright.load.config.ts"];
