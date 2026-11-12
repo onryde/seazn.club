@@ -29,15 +29,11 @@ export function MarketingMobileNav({
   links,
   openLabel,
   closeLabel,
-  night,
   auth = [],
 }: {
   links: MobileNavLink[];
   openLabel: string;
   closeLabel: string;
-  /** Matches the header's night/light chrome so the button and panel read as
-   *  part of the same bar instead of a foreign overlay. */
-  night: boolean;
   /** Rendered below a divider, and ONLY below `sm` — from `sm` up these same
    *  actions are in the bar itself, so showing them twice would put two
    *  "Start free" controls on one screen. */
@@ -81,11 +77,10 @@ export function MarketingMobileNav({
         aria-expanded={open}
         aria-label={open ? closeLabel : openLabel}
         onClick={() => setOpen((v) => !v)}
-        className={`grid h-9 w-9 place-items-center rounded-lg transition ${
-          night
-            ? "text-cream/85 hover:bg-cream/10 hover:text-cream"
-            : "text-slate-600 hover:bg-purple-50 hover:text-purple-700"
-        }`}
+        // `mk-nav-menu`: the colour comes from the header's LIVE chrome class (globals.css §mk-nav), which
+        // NavScrollFlip flips from night to solid as the hero scrolls away. A colour picked here at render stayed
+        // cream on the white bar once scrolled (sign-off 2026-11-12, /play and the home at 320).
+        className="mk-nav-menu grid h-9 w-9 place-items-center rounded-lg transition"
       >
         {open ? <X className="h-5 w-5" strokeWidth={2} /> : <Menu className="h-5 w-5" strokeWidth={2} />}
       </button>

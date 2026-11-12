@@ -768,6 +768,11 @@ body {
 .mk-nav-night .mk-nav-link:hover { opacity: 1; background: rgb(245 240 232 / 0.08); }
 .mk-nav-night .mk-nav-link.btn-ghost { background: transparent; border-color: #3b2a6e; color: var(--mk-cream); }
 .mk-nav-night .mk-nav-cta { background: var(--mk-lime); color: var(--mk-night); }
+/* The phone menu button follows the same live class as the links: cream over the hero, ink once the bar turns solid. */
+.mk-nav-solid .mk-nav-menu { color: #475069; }
+.mk-nav-solid .mk-nav-menu:hover { background: #faf5ff; color: #7e22ce; }
+.mk-nav-night .mk-nav-menu { color: rgb(245 240 232 / 0.85); }
+.mk-nav-night .mk-nav-menu:hover { background: rgb(245 240 232 / 0.1); color: var(--mk-cream); }
 /* Logo swap: light navs show the night-ink mark, the night hero shows the
    cream mark (lime pitch line + red ball). Exactly one renders at a time. */
 .mk-nav-logo-img-night { display: none; }
