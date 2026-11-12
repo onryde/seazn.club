@@ -1002,3 +1002,85 @@ describe.skipIf(!HAS_DB)("lock order: the entry row before the cart row (gap wav
     expect((await loadWithGroup(reg.id)).checkout_session_id).toBe(s1);
   });
 });
+
+// Gap wave G3 (2026-11-12, ledger :44): a stored session that is `open` but not reusable (too little of it left, or not this entry
+// alone) is expired before the mint. If it stops being open between the read and the expire - it timed out, or the player paid
+// in another tab - Stripe refuses the expire (400 "Only Checkout Sessions with a status in [\"open\"] can be expired"). That used
+// to answer a transient 502. Now the session is read again and the decision is made on what Stripe says it IS (never on the error
+// text): expired → mint; complete → the payment page's liveness rule; still open → a real expire failure, 502.
+describe.skipIf(!HAS_DB)("an expire refused because the session just stopped being open (gap wave G3)", () => {
+  const STRIPE_NOT_OPEN = 'Only Checkout Sessions with a status in ["open"] can be expired.';
+  /** A pressed entry whose stored session is open with only 5 minutes left (inside the reuse margin, so Pay expires it). */
+  async function shortSession() {
+    const { reg } = await cardEntry();
+    const token = await linkFor(reg);
+    await payFromPayPage(token, ORIGIN);
+    const s1 = (await payPointer(reg.id))!;
+    const now = new Date();
+    stripeMock.store.get(s1)!.expires_at = Math.floor(now.getTime() / 1000) + 5 * 60;
+    stripeMock.checkoutRetrieve.mockClear();
+    return { reg, token, s1, now };
+  }
+  /** The next expire finds the session already moved on by `change`, and Stripe refuses it. */
+  function expireRefusedAfter(change: (s: FakeSession) => void) {
+    stripeMock.checkoutExpire.mockImplementationOnce(async (id: string) => {
+      change(stripeMock.store.get(id)!);
+      throw Object.assign(new Error(STRIPE_NOT_OPEN), { type: "StripeInvalidRequestError", statusCode: 400 });
+    });
+  }
+
+  it("expired on its own between the read and the expire → read again, a fresh session (no 502)", async () => {
+    const { reg, token, s1, now } = await shortSession();
+    expireRefusedAfter((s) => (s.status = "expired"));
+
+    const url = await payFromPayPage(token, ORIGIN, now);
+
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(2);
+    // Before the mint: the read, then the re-read after the refused expire. (The mint's own supersede step reads the cart's prior
+    // session once more afterwards - not this rule's business.)
+    const mintedAt = stripeMock.checkoutCreate.mock.invocationCallOrder[1]!;
+    expect(stripeMock.checkoutRetrieve.mock.invocationCallOrder.filter((o) => o < mintedAt)).toHaveLength(2);
+    const s2 = (await payPointer(reg.id))!;
+    expect(s2).not.toBe(s1);
+    expect(url).toBe(stripeMock.store.get(s2)!.url);
+    expect(payableFor(reg.id)).toEqual([s2]);
+  });
+
+  it("paid in another tab between the read and the expire → 409 PAID_ONLINE (recording), no mint", async () => {
+    const { reg, token, s1, now } = await shortSession();
+    expireRefusedAfter((s) => {
+      s.status = "complete";
+      s.payment_status = "paid";
+      s.payment_intent = "pi_test_g3_" + randomUUID().slice(0, 6);
+    });
+
+    const err = await rejection(payFromPayPage(token, ORIGIN, now));
+    expect(err.status).toBe(409);
+    expect(err.code).toBe("REGISTRATION_PAID_ONLINE");
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1); // the first press only
+    expect(await payPointer(reg.id)).toBe(s1);
+  });
+
+  it("an expire that fails while the session is STILL open → 502, zero create (a real failure stays fail-closed)", async () => {
+    const { reg, token, s1, now } = await shortSession();
+    expireRefusedAfter(() => undefined); // Stripe down: nothing changed, the session is still open
+
+    const err = await rejection(payFromPayPage(token, ORIGIN, now));
+    expect(err.status).toBe(502);
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1);
+    expect(stripeMock.store.get(s1)!.status).toBe("open");
+    expect(await payPointer(reg.id)).toBe(s1);
+  });
+
+  it("a re-read that itself fails → 502, zero create", async () => {
+    const { token, now } = await shortSession();
+    expireRefusedAfter((s) => (s.status = "expired"));
+    stripeMock.checkoutRetrieve
+      .mockImplementationOnce(async (id: string) => ({ ...stripeMock.store.get(id)! })) // the first read succeeds
+      .mockRejectedValueOnce(new Error("stripe down")); // the re-read does not
+
+    const err = await rejection(payFromPayPage(token, ORIGIN, now));
+    expect(err.status).toBe(502);
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1);
+  });
+});
