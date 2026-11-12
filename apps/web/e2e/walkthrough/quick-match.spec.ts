@@ -8,6 +8,9 @@
 //       is decided → "Back to the quick match" → the home read back (the winner-first result, the table, the next match).
 //       Before the first match, Share (plan 2 T7): Copy puts the home's link on the clipboard, Show QR draws its QR,
 //       and the copied link opens the same home in a second browser with no cookie.
+//       The match between the two short-named sides is then CORRECTED (branch-fix A review I1): Edit result on its row →
+//       the pad's decided screen (the quick match's own line, review Q2) → "Void my last entry" → the match reopens one
+//       rally short → every rally tapped for the OTHER side until it has the match → Back → the corrected result and table.
 //       At the end: three results, a table derived by hand from the rallies tapped, and the record agreeing.
 //   (B) a badminton KNOCKOUT of three: the lone "Semi-final" (unnumbered) and the bye, the semi tapped, "Winner of the
 //       semi-final" resolving to its winner's name, the final tapped, the champion on the draw.
@@ -130,6 +133,40 @@ function checkPlan(rules: SetRules, games: readonly Game[], what: string): void 
 const winnerFirst = (games: readonly Game[]) => new RegExp(`^\\D*${games.map(([w, l]) => `${w}\\D+${l}`).join("\\D+")}\\D*$`);
 const tapsOf = (games: readonly Game[]) => games.reduce((n, [w, l]) => n + w + l, 0);
 
+/** A correction made through Edit result (review I1), derived from the rules, never typed. "Void my last entry" undoes the
+ *  deciding rally, which leaves the last game one short of its target for the match's winner (`held`); the OTHER side then
+ *  takes every rally until it has the match. The reopened game closes at the first score that is past the target AND
+ *  `winBy` clear of `held` (or at the cap); each game the other side still needs is taken to nothing. `corrected` is the
+ *  match from the NEW winner's side, game by game, as the home must read it. */
+interface Correction {
+  held: number;
+  from: number;
+  closesAt: number;
+  extra: readonly number[];
+  corrected: readonly Game[];
+  taps: number;
+}
+function correctionOf(rules: SetRules, games: readonly Game[]): Correction {
+  const need = Math.ceil(rules.bestOf / 2);
+  const targetOf = (i: number) => (i === rules.bestOf - 1 ? rules.finalSetTo : rules.setTo);
+  const last = games.length - 1;
+  const [w, from] = games[last]!;
+  const held = w - 1;
+  const closesAt = Math.min(rules.cap, Math.max(targetOf(last), held + rules.winBy));
+  expect(closesAt, "the reopened game closes on the other side's rally, past the old winner").toBeGreaterThan(held);
+  expect(closesAt - held >= rules.winBy || closesAt === rules.cap, "…clear by winBy, or at the cap").toBe(true);
+  const corrected: Game[] = [...games.slice(0, last).map(([a, b]): Game => [b, a]), [closesAt, held]];
+  const extra: number[] = [];
+  while (corrected.filter(([a, b]) => a > b).length < need) {
+    const target = targetOf(corrected.length);
+    corrected.push([target, 0]);
+    extra.push(target);
+  }
+  expect(corrected.length, "the corrected match fits the rules' best-of").toBeLessThanOrEqual(rules.bestOf);
+  expect(corrected.filter(([a, b]) => b > a).length, "the old winner never has the match back").toBeLessThan(need);
+  return { held, from, closesAt, extra, corrected, taps: closesAt - from + extra.reduce((n, t) => n + t, 0) };
+}
+
 // ── the budget (AGENTS.md #20): derived, never a flat literal ───────────────────────────────────────────────────
 
 /** A page load, a redirect followed, or the record read back. */
@@ -148,6 +185,8 @@ const LEG_CAP_MS = 20 * 60_000;
 /** Per match: Score → the pad, Back → the home, one reload of the home; Score, Start match, Back and a confirm; the
  *  ledger caught up before the deciding rally and the record read after it. */
 const PER_MATCH = { navs: 3, acts: 4, reads: 2 } as const;
+/** A correction (review I1) costs what a match does: Edit result → the pad, Back → the home, a reload; Edit result, Void,
+ *  Back and a check; the void and the ledger read back. So the budget counts it as one more plan of its own rallies. */
 /** Share (step 3b): the QR drawn (its encoder and logo load on the tap) and the second browser's page load; Copy, the
  *  clipboard read, Show QR and its close. */
 const SHARE = { navs: 2, acts: 4 } as const;
@@ -295,6 +334,16 @@ async function ralliesRecorded(fixtureId: string): Promise<number> {
   return row!.n;
 }
 
+/** The ledger's voids for one fixture, each with the type of the event it voided: the record of "Void my last entry". */
+async function voidsRecorded(fixtureId: string): Promise<{ voided: string | null; byLink: boolean }[]> {
+  return withDb(
+    (sql) => sql<{ voided: string | null; byLink: boolean }[]>`
+      select t.type as voided, (v.device_link_id is not null and v.device_link_id = t.device_link_id) as "byLink"
+      from score_events v left join score_events t on t.id = v.voids_event_id
+      where v.fixture_id = ${fixtureId} and v.type = 'core.void' order by v.seq`,
+  );
+}
+
 interface Played {
   fixtureId: string;
   home: string;
@@ -419,6 +468,92 @@ async function playHeroMatch(
   return { fixtureId, home, away, winner, loser, winnerSide, games, taps: rallies.tapped };
 }
 
+/**
+ * Edit result, by hand (branch-fix A review I1): the decided row's "Edit result" → the pad's decided screen, which says how
+ * to correct it in the quick match's own words and names no organiser (review Q2) → "Void my last entry" → the match
+ * reopens one rally short for its old winner → every rally of the correction tapped for the OTHER side → Back → the home
+ * reads the corrected result, winner first. Returns the match as it now stands; its `taps` count every rally row the
+ * ledger holds (the voided one stays a row: a void is an event of its own).
+ */
+async function correctResult(p: Page, made: Made, played: Played, rules: SetRules): Promise<Played> {
+  const fix = correctionOf(rules, played.games);
+  const was = played.winnerSide;
+  const now = otherSide(was);
+
+  // ---- Edit result: on the settled row, a real 44px target ----
+  const edit = matchRow(p, played.fixtureId).getByTestId("qm-edit-result");
+  await expect(edit).toHaveText(ui("quickMatch.home.editResult"));
+  const box = await edit.boundingBox();
+  expect(box?.height ?? 0, "Edit result is a 44px target").toBeGreaterThanOrEqual(44);
+  await edit.click();
+  await p.waitForURL(/\/score\/dl_[A-Za-z0-9_-]+$/, { timeout: STEP_MS });
+
+  // ---- The decided screen: the quick match's line, the undo it names on screen ----
+  await expect(p.getByText(ui("device.quickMatch.resultSaved")), "the pad says how to correct it").toBeVisible({ timeout: STEP_MS });
+  await expect(p.getByText(ui("device.resultRecorded")), "never the organiser's line").toHaveCount(0);
+  await expect(pad(p), "a decided match has no pad").toHaveCount(0);
+  await expectNoHorizontalScroll(p);
+  const undo = p.getByTestId("device-void-mine");
+  await expect(undo).toHaveAccessibleName(ui("device.undoMine"));
+  await undo.click();
+
+  // ---- Reopened: the void in the ledger, the pad back, the last game one short for the old winner ----
+  await expect
+    .poll(async () => (await voidsRecorded(played.fixtureId)).length, { timeout: STEP_MS, message: "the void never reached the ledger" })
+    .toBe(1);
+  expect(await voidsRecorded(played.fixtureId), "it voided a rally, through the guest's own link").toEqual([{ voided: RALLY, byLink: true }]);
+  await expect(tapTarget(p, now), "the pad is back, tappable").toBeVisible({ timeout: STEP_MS });
+  await expect(points(p, was), "the deciding rally is gone").toHaveText(String(fix.held));
+  await expect(points(p, now)).toHaveText(String(fix.from));
+  await expect(p.getByText(ui("device.quickMatch.resultSaved")), "undecided: no decided line").toHaveCount(0);
+
+  // ---- The correction: the other side takes every rally until it has the match ----
+  const rallies = new Rallies(p);
+  const ledgerBefore = played.taps;
+  const closeGame = async (from: number, closesAt: number, other: number, last: boolean) => {
+    for (let k = from; k < closesAt - 1; k += 1) await rallies.tap(now);
+    await expect(points(p, now), "one short of closing the game").toHaveText(String(closesAt - 1));
+    await expect(points(p, was)).toHaveText(String(other));
+    if (last) {
+      await expect
+        .poll(() => ralliesRecorded(played.fixtureId), {
+          timeout: HOLD_MS + STEP_MS + rallies.tapped * SEND_MS,
+          message: "the correction's rallies before the deciding one never all reached the ledger",
+        })
+        .toBe(ledgerBefore + rallies.tapped);
+      await expect(pad(p).locator('[data-role="v3-rejection"]'), "no tap was refused").toHaveCount(0);
+    }
+    await rallies.tap(now);
+  };
+  await closeGame(fix.from, fix.closesAt, fix.held, fix.extra.length === 0);
+  for (const [i, target] of fix.extra.entries()) {
+    await expect(points(p, "home"), "the next game opens at nothing").toHaveText("0");
+    await expect(points(p, "away")).toHaveText("0");
+    await closeGame(0, target, 0, i === fix.extra.length - 1);
+  }
+  expect(rallies.tapped, "every rally of the correction was tapped").toBe(fix.taps);
+
+  // ---- Decided again, then Back ----
+  await expect(p.getByText(ui("device.quickMatch.resultSaved")), "decided for the other side").toBeVisible({ timeout: DECIDE_MS });
+  await expect(pad(p)).toHaveCount(0);
+  await p.getByTestId("quick-match-back-link").click();
+  await p.waitForURL((url) => url.pathname === made.path, { timeout: STEP_MS });
+  await expectSettledOnHome(p, played.fixtureId);
+  const row = matchRow(p, played.fixtureId);
+  await expect(row.getByTestId("qm-match-sides"), "the corrected result").toHaveText(
+    ui("quickMatch.home.result", { winner: played.loser, loser: played.winner }),
+  );
+  await expect(row.getByTestId("qm-match-score"), "the corrected games, the new winner first").toHaveText(winnerFirst(fix.corrected));
+  return {
+    ...played,
+    winner: played.loser,
+    loser: played.winner,
+    winnerSide: now,
+    games: fix.corrected,
+    taps: played.taps + fix.taps,
+  };
+}
+
 // ── the record ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 const tokenHash = (token: string) => createHash("sha256").update(token, "utf8").digest("hex");
@@ -540,7 +675,8 @@ test("(A) a guest plays a badminton league of three from the marketing page to i
   // One score plan per match, in play order (the hero's order; which sides meet first is the generator's). The winner is
   // decided by NAME: the long side wins both its matches, and the match without it goes to its AWAY side, so at least
   // one result is read with the winner seated away (where winner-first and home-first differ). One plan runs to three
-  // games, one of them lost by the match's winner.
+  // games, one of them lost by the match's winner. That match without the long side is then corrected through Edit result
+  // (step 5b) to its HOME side: the table stays strict (2, 1, 0), with its second and third places swapped.
   const plans: readonly (readonly Game[])[] = [
     [[rules.setTo, 3], [rules.setTo, 5]],
     [[rules.setTo, 0], [rules.setTo, 2]],
@@ -548,7 +684,9 @@ test("(A) a guest plays a badminton league of three from the marketing page to i
   ];
   expect(plans, "one plan per match a round robin of three plays").toHaveLength(total);
   plans.forEach((g, i) => checkPlan(rules, g, `league match ${i + 1}`));
-  setBudget(budgetFor({ navs: 3 + SHARE.navs, acts: 16 + SHARE.acts, reads: 2, plans }));
+  // The correction (step 5b) costs one more plan of its own rallies: the largest any of these plans could need.
+  const correctionTaps = Math.max(...plans.map((g) => correctionOf(rules, g).taps));
+  setBudget(budgetFor({ navs: 3 + SHARE.navs, acts: 16 + SHARE.acts, reads: 2, plans: [...plans, [[correctionTaps, 0]]] }));
 
   // ---- 1. The marketing page's Quick match, to the setup page ----
   await page.goto("/en");
@@ -622,11 +760,15 @@ test("(A) a guest plays a badminton league of three from the marketing page to i
 
   // ---- 4 and 5. Each match: Score, every rally, Back, and the home read back ----
   const results: Played[] = [];
+  /** Every result as the home read it, the ones a correction replaced included (the winner-first witness reads them all). */
+  const read: Played[] = [];
+  let corrections = 0;
   for (const [k, games] of plans.entries()) {
     // The last match leaves at once, holding its deciding rally: the only browser proof that Back sends it first.
     const leave = k === plans.length - 1 ? "at-once" : "after-result";
     const played = await playHeroMatch(page, made, games, (h, a) => (h === LONG || a === LONG ? LONG : a), leave);
     results.push(played);
+    read.push(played);
     const after = results.length;
     await expect(page.getByTestId("qm-played")).toHaveText(
       plural(ui, "quickMatch.home.played", total, { played: after, days: QUICK_MATCH_EXPIRY_DAYS }),
@@ -639,10 +781,25 @@ test("(A) a guest plays a badminton league of three from the marketing page to i
       await expect(page.locator('[data-testid="qm-match"][data-next="true"]')).toHaveAttribute("data-state", "ready");
     }
     expect(await expectRecorded(made, [played])).toBe(1);
+
+    // ---- 5b. Edit result (branch-fix A review I1): the match without the long side, corrected to its other side ----
+    if (played.home !== LONG && played.away !== LONG) {
+      const corrected = await correctResult(page, made, played, rules);
+      results[results.length - 1] = corrected;
+      read.push(corrected);
+      corrections += 1;
+      // The count of matches played does not move; the table does, re-derived from the corrected rallies.
+      await expect(page.getByTestId("qm-played")).toHaveText(
+        plural(ui, "quickMatch.home.played", total, { played: after, days: QUICK_MATCH_EXPIRY_DAYS }),
+      );
+      await expectTable(page, tableOf(sides, results, rules));
+      expect(await expectRecorded(made, [corrected]), "the record holds the corrected result").toBe(1);
+    }
   }
   expect(results, "anti-vacuity: every league match was played").toHaveLength(total);
+  expect(corrections, "anti-vacuity: exactly one match was corrected through Edit result").toBe(1);
   expect(
-    results.filter((r) => r.winnerSide === "away").length,
+    read.filter((r) => r.winnerSide === "away").length,
     "anti-vacuity: at least one result was read with its winner seated away (winner-first is witnessed)",
   ).toBeGreaterThan(0);
 

@@ -1,7 +1,13 @@
 import { test as base, expect, type Locator, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { stageDefaultsFor } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
 import { expectNoHorizontalScroll, TAG } from "./helpers";
 import { expectQrDecodesAsPainted, expectQrEnlarges, expectWholeModuleScale } from "./helpers/qr-enlarge";
 import { consentedAnonymousState } from "./scorepad-a11y-kit";
+import { HOLD_MS } from "../src/components/v2/scorepad/queue";
+import { HUMAN_FASTEST_REPEAT_MS } from "../src/components/v2/scorepad/use-pad-pipeline";
 
 // Quick match plan 2 Task 5 (spec docs/superpowers/specs/2026-11-03-quick-match-design.md §5 step 3, §8): the guest's home
 // at `/q/<token>` in a real browser, at the three widths the task is verified at (320, 768, 1280), for a league, a knockout
@@ -269,4 +275,77 @@ test("home (Task 5): an unknown link is the dead screen at 320, 768 and 1280, an
     await expect(page.getByTestId("qm-dead-start"), `${width}`).toHaveAttribute("href", "/en/play");
     await expect(page.getByTestId("qm-home"), `${width}`).toHaveCount(0);
   });
+});
+
+// ── Edit result (branch-fix A review I1) ─────────────────────────────────────────────────────────────────────────────
+// A French guest: the setup page at /fr/play, whose create sets the locale cookie (A-M8), so the home and the pad read
+// French. One match is played on the pad and decided, and its row's "Edit result" ("Modifier le résultat", the longest of
+// the four) is measured at 320 beside the score, the 43-character side name in the row. The walkthrough
+// (walkthrough/quick-match.spec.ts) taps the correction itself; this case is the row's width check.
+
+type Dict = Record<string, string>;
+const readDict = (rel: string): Dict => JSON.parse(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8")) as Dict;
+const FR_UI = readDict("../src/dictionaries/fr/ui.json");
+const FR_MK = readDict("../src/dictionaries/fr/marketing.json");
+const fr = (dict: Dict, key: string, vars: Record<string, string | number> = {}) => {
+  const text = dict[key];
+  if (typeof text !== "string") throw new Error(`the fr dictionary has no "${key}"`);
+  return text.replace(/\{(\w+)\}/g, (_, name: string) => String(vars[name]));
+};
+
+test("Edit result (review I1): a French home at 320 with a settled row: 'Modifier le résultat' shows, 44px, tappable, no sideways scroll", async ({ guest: page }) => {
+  // The rules, from the engine: badminton's "short" variant as a league plays it; the home side takes every game to nothing.
+  const mod = builtinModules.find((m) => m.key === "badminton");
+  expect(mod, "premise: the engine ships badminton").toBeDefined();
+  const rules = mod!.configSchema.parse({ ...mod!.variants["short"], ...stageDefaultsFor(mod!, "league", "short") }) as {
+    bestOf: number;
+    setTo: number;
+    finalSetTo: number;
+  };
+  const games = Math.ceil(rules.bestOf / 2);
+  const taps = Array.from({ length: games }, (_, i) => (i === rules.bestOf - 1 ? rules.finalSetTo : rules.setTo)).reduce((n, t) => n + t, 0);
+  // Derived, never flat (AGENTS.md #20): five page loads, every rally at the human floor, the deciding rally's hold.
+  test.setTimeout(5 * 20_000 + taps * (HUMAN_FASTEST_REPEAT_MS + 900) + HOLD_MS + 20_000);
+
+  await page.setViewportSize({ width: 320, height: 900 });
+  await page.goto("/fr/play");
+  await expect(form(page)).toBeVisible();
+  await expect(page.getByTestId("qm-start"), "the island is live (blank sides hold Start)").toBeDisabled();
+  await form(page).getByText(fr(FR_UI, "sport.badminton"), { exact: true }).click();
+  await form(page).getByLabel(fr(FR_MK, "quickMatch.setup.nameLabel"), { exact: true }).fill(`e2e modifier ${TAG}`);
+  await form(page).getByLabel(fr(FR_MK, "quickMatch.setup.sideLabel", { n: 1 }), { exact: true }).fill(LONG);
+  await form(page).getByLabel(fr(FR_MK, "quickMatch.setup.sideLabel", { n: 2 }), { exact: true }).fill("Priya & Tom");
+  await form(page).locator('select[name="variant_key"]').selectOption("short");
+  await page.getByTestId("qm-start").click();
+  await expect(page).toHaveURL(/\/q\/qm_[^/?#]+$/);
+  const home = new URL(page.url()).pathname;
+  expect(home, "the home has no locale segment: its language is the cookie the create set").not.toMatch(/^\/fr\//);
+
+  // ---- The match, played on the pad until it is decided ----
+  await page.getByTestId("qm-hero").getByTestId("qm-score").click();
+  await expect(page).toHaveURL(/\/score\/dl_/);
+  await page.getByTestId("score-start-match").click();
+  const homeHalf = page.locator('[data-role="pad-v3"] button[data-role="v3-scorebug-half"][data-side="home"]');
+  await expect(homeHalf).toBeVisible({ timeout: 20_000 });
+  let last = Number.NEGATIVE_INFINITY;
+  for (let k = 0; k < taps; k++) {
+    const wait = HUMAN_FASTEST_REPEAT_MS - (Date.now() - last);
+    if (wait > 0) await page.waitForTimeout(wait);
+    await homeHalf.click();
+    last = Date.now();
+  }
+  await expect(page.getByText(fr(FR_UI, "device.quickMatch.resultSaved")), "the pad's decided line, in French").toBeVisible({
+    timeout: HOLD_MS + 20_000,
+  });
+  await page.getByTestId("quick-match-back-link").click();
+  await expect(page).toHaveURL(new RegExp(`${home}$`));
+
+  // ---- The settled row at 320 ----
+  const settled = page.locator('[data-testid="qm-match"][data-state="settled"]');
+  await expect(settled, "the one match reads settled").toHaveCount(1, { timeout: 20_000 });
+  const edit = settled.getByTestId("qm-edit-result");
+  await expect(edit).toHaveText(fr(FR_UI, "quickMatch.home.editResult"));
+  await expect(settled.getByTestId("qm-match-score"), "the score sits beside it").toBeVisible();
+  await expectTappable(edit, "320, fr: Edit result");
+  await expectNoHorizontalScroll(page);
 });
