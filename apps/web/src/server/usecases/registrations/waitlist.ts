@@ -246,15 +246,20 @@ export async function promoteWaitlistedRow(
   if (promotionSeats(settings) && !seatGate) {
     throw new HttpError(409, "Registration settings changed while this was being processed - try again");
   }
-  const feeCents = settings?.fee_cents ?? 0;
+  // What THIS entry costs (final review m3): a solo sign-up promoted off the waitlist owes its own price, never the team's - the rule
+  // submit priced it by and every organiser money gate reads (`entryPriceCents`, polish wave P5 H-2: `free_agent_fee_cents` for a solo
+  // when the organiser set one, else `fee_cents`). Written in the UPDATE itself (the row's own `free_agent`), so the promotion stays
+  // three statements (the envelope-atomicity pin in registration-approval.test.ts); the price it set comes back with `returning`.
+  const teamFee = settings?.fee_cents ?? 0;
+  const soloFee = settings?.free_agent_fee_cents ?? null;
   const method = settings?.payment_method ?? "offline";
-  const stripeWindow = method === "stripe" && feeCents > 0;
-  await tx`
+  const price = tx`(case when free_agent then coalesce(${soloFee}::int, ${teamFee}::int) else ${teamFee}::int end)`;
+  const [priced] = await tx<{ amount_cents: number }[]>`
     update registrations
     set status = 'pending', promoted_at = now(), updated_at = now(),
-        amount_cents = ${feeCents},
+        amount_cents = ${price},
         promotion_expires_at = case
-          when ${stripeWindow} then now() + interval '48 hours'
+          when ${method === "stripe"} and ${price} > 0 then now() + interval '48 hours'
           else null
         end,
         -- REVIEW FIX (money-path defect #12): every promotion opens a FRESH
@@ -264,7 +269,9 @@ export async function promoteWaitlistedRow(
         -- has this null, so the write is a no-op there.
         promotion_reminded_at = null,
         promotion_reminder_claimed_at = null
-    where id = ${regId}`;
+    where id = ${regId}
+    returning amount_cents`;
+  const stripeWindow = method === "stripe" && (priced?.amount_cents ?? 0) > 0;
   await tx`
     update registration_groups
     set payment_method = case

@@ -25,12 +25,14 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import {
   confirmRegistration,
+  groupById,
   listRegistrations,
   markRegistrationPaidOffline,
   putRegistrationSettings,
   sendPaymentReminder,
+  waitlistRegistration,
 } from "../registrations";
-import { approveRegistration } from "../registration-approval";
+import { approveRegistration, promoteFromWaitlist } from "../registration-approval";
 import { submitRegistrationGroup } from "../registration-submit";
 import { stubOutboxEnv } from "./_invite-mail";
 import { seedOrg } from "./_seed";
@@ -85,7 +87,7 @@ async function rig(o: { teamFee: number; soloFee: number | null; approval: "auto
 }
 
 /** One entry through the REAL submit: a solo sign-up, or a team. Returns its id and what submit charged it. */
-async function submit(r: Rig, freeAgent: boolean): Promise<{ id: string; amount: number; status: string }> {
+async function submit(r: Rig, freeAgent: boolean): Promise<{ id: string; amount: number; status: string; groupId: string; token: string }> {
   const res = await submitRegistrationGroup(r.ctx, {
     contact: { name: "Contact " + randomUUID().slice(0, 5), email: `sp-${randomUUID().slice(0, 8)}@test.local` },
     privacy_consent: true,
@@ -102,7 +104,7 @@ async function submit(r: Rig, freeAgent: boolean): Promise<{ id: string; amount:
   } as never);
   const id = res.entries[0]!.registration_id;
   const [row] = await sql<{ amount_cents: number; status: string }[]>`select amount_cents, status from registrations where id = ${id}`;
-  return { id, amount: row!.amount_cents, status: row!.status };
+  return { id, amount: row!.amount_cents, status: row!.status, groupId: res.group_id, token: res.access_token };
 }
 
 const reminderRows = async (regId: string) =>
@@ -189,5 +191,27 @@ describe.skipIf(!HAS_DB)("a solo sign-up's money controls read the SOLO's own pr
     const freeTeam = await submit(freeTeams, false);
     await expect(markRegistrationPaidOffline(freeTeams.auth, freeTeam.id)).rejects.toMatchObject({ status: 422 });
     expect((await approveRegistration(freeTeams.auth, freeTeam.id)).status).toBe("confirmed");
+  });
+
+  // Final review m3: the promotion writer was the one money reader the H-2 sweep missed. `promoteWaitlistedRow` set the promoted entry's
+  // fee from the TEAM price, and the status page quoted a waitlisted solo the team's fee as "what a promotion would charge". Reachable:
+  // the organiser waitlists a pending solo (`waitlistRegistration` takes any pending entry), then promotes it.
+  it("a waitlisted solo is quoted and promoted at its OWN price; a team in the same division at the team's (m3)", async () => {
+    const r = await rig({ teamFee: 6000, soloFee: 500, approval: "manual" });
+    const solo = await submit(r, true);
+    const team = await submit(r, false);
+    expect(solo.amount, "premise: submit charged the solo its own price").toBe(500);
+    let checked = 0;
+    for (const [entry, price] of [[solo, 500], [team, 6000]] as const) {
+      await waitlistRegistration(r.auth, entry.id);
+      const view = await groupById(entry.groupId, entry.token);
+      expect(view.entries[0]!.fee_if_promoted_cents, `quoted on the status page (${price})`).toBe(price);
+      const promoted = await promoteFromWaitlist(r.auth, r.divisionId, { registrationId: entry.id });
+      expect(promoted?.id).toBe(entry.id);
+      expect(promoted!.amount_cents, `charged on promotion (${price})`).toBe(price);
+      expect(promoted!.status).toBe("pending");
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: solo and team").toBe(2);
   });
 });

@@ -2,7 +2,7 @@ import "server-only";
 // The group (cart) read model behind the /r/[ref] status page (see ./index.ts).
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { isTerminalRegistrationStatus, ownPaymentRefundedCents } from "@/lib/registration-status";
+import { entryPriceCents, isTerminalRegistrationStatus, ownPaymentRefundedCents } from "@/lib/registration-status";
 import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
 import { resolveVenueTz } from "@/lib/tz";
 import type { RegistrationSettingsRow, RegistrationRow, RegistrationGroupRow } from "./types";
@@ -293,9 +293,11 @@ async function buildGroupStatusView(
             closes_at: Date | null;
             approval: RegistrationSettingsRow["approval"];
             fee_cents: number;
+            free_agent_fee_cents: number | null;
           }[]
         >`
-          select division_id, refund_lock_at, entrant_kind, payment_method, place_by_at, closes_at, approval, fee_cents
+          select division_id, refund_lock_at, entrant_kind, payment_method, place_by_at, closes_at, approval, fee_cents,
+                 free_agent_fee_cents
           from registration_settings
           where division_id in ${sql(divisionIds)}`
       : [];
@@ -335,7 +337,7 @@ async function buildGroupStatusView(
   const paymentMethodByDivision = new Map(settingsRows.map((s) => [s.division_id, s.payment_method]));
   // Polish wave P3: the DIVISION's review mode and fee, per entry, for the same reason as the method above: a cart can span divisions.
   const approvalByDivision = new Map(settingsRows.map((s) => [s.division_id, s.approval]));
-  const feeByDivision = new Map(settingsRows.map((s) => [s.division_id, s.fee_cents]));
+  const priceByDivision = new Map(settingsRows.map((s) => [s.division_id, s]));
 
   // RS007: the resolved offline payment instructions — mirrors
   // buildCartMail's own "first entry that still carries a fee is
@@ -431,9 +433,9 @@ async function buildGroupStatusView(
       entrant_kind: e.free_agent ? "individual" : (entrantKindByDivision.get(e.division_id) ?? "individual"),
       payment_method: paymentMethodByDivision.get(e.division_id) ?? "offline",
       approval: approvalByDivision.get(e.division_id) ?? "auto",
-      // A waitlisted entry only: a promotion sets the entry's fee to the division's (`promoteWaitlistedRow`). Unknown (no settings row)
-      // reads as no fee to quote.
-      fee_if_promoted_cents: e.status === "waitlisted" ? (feeByDivision.get(e.division_id) ?? 0) : null,
+      // A waitlisted entry only: a promotion sets the entry's fee to what IT costs on its division (`promoteWaitlistedRow`, a solo
+      // sign-up's own price - final review m3). Unknown (no settings row) reads as no fee to quote.
+      fee_if_promoted_cents: e.status === "waitlisted" ? entryPriceCents(priceByDivision.get(e.division_id), e.free_agent) : null,
       // RS012 stage 3b, widened by a later `/code-review high` finding:
       // awaitingTeamAssignment (view-model.ts) ALSO requires the entry not
       // be in a terminal status (withdrawn/rejected/expired) — added there
