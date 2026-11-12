@@ -8,7 +8,7 @@ import { getStripe } from "@/lib/stripe";
 import { registrationPayPath } from "@/lib/registration-pay";
 import { log } from "@/server/logger";
 import { divisionCtx } from "./lookups";
-import { checkoutRegistrationIds, completedSessionStillPays, mintEntryPayPageCheckout } from "./checkout";
+import { checkoutRegistrationIds, completedSessionStillPays, mintEntryPayPageCheckout, refuseWhileSessionPays } from "./checkout";
 import { payPageDocByToken } from "./pay-page";
 
 /** A stored session is handed out again only while more than this is left of it (the sponsor rule's value, sponsors.ts). */
@@ -41,7 +41,10 @@ export async function payFromPayPage(token: string, origin: string, now: Date = 
 
   // Connect live BEFORE any session is handed out (Review Focus 5, controller ruling): with charges off, Pay answers 503 and
   // neither reuses a stored session nor mints.
-  const [row] = await sql<{ division_id: string }[]>`select division_id from registrations where id = ${doc.registrationId}`;
+  const [row] = await sql<{ division_id: string; cart_session_id: string | null }[]>`
+    select r.division_id, g.checkout_session_id as cart_session_id
+    from registrations r join registration_groups g on g.id = r.group_id
+    where r.id = ${doc.registrationId}`;
   if (!row) throw new HttpError(404, "Not found"); // deleted between the document read and here
   const ctx = await divisionCtx(sql, row.division_id);
   if (!ctx.charges_enabled) {
@@ -49,6 +52,11 @@ export async function payFromPayPage(token: string, origin: string, now: Date = 
   }
 
   const read = doc.paySessionId;
+  // Fix round 1 (F2): the cart status page's session, when it is not this page's own - a SEPA debit still processing there must
+  // stop this page minting (or handing out) a second payment. The same rule the status page applies (`refuseWhileSessionPays`).
+  if (row.cart_session_id && row.cart_session_id !== read) {
+    await refuseWhileSessionPays(row.cart_session_id, doc.registrationId);
+  }
   if (read) {
     let stored = await readStored(read, doc.registrationId);
     if (stored.status === "open") {

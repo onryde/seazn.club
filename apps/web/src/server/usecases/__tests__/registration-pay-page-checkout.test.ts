@@ -1263,3 +1263,96 @@ describe.skipIf(!HAS_DB)("a late refund is decided per payment, and the page's r
     expect((await loadWithGroup(w.reg.id)).refunded_cents).toBe(1500);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Fix round 1 (gap-wave review), F2: one entry, two Pay buttons, two pointers. Each button used to judge only its OWN pointer's
+// session, so a payment still landing through the OTHER button (a SEPA debit processing) let it mint a second payable session -
+// a double charge. Each now also judges the other pointer's session, when that session names this entry, by the same rule.
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("each Pay button also refuses while the OTHER button's session can still pay for this entry (fix round 1, F2)", () => {
+  async function cartPointer(regId: string): Promise<string | null> {
+    return (await loadWithGroup(regId)).checkout_session_id;
+  }
+
+  describe("the payment page, after a status-page session", () => {
+    async function statusPageSession() {
+      const { reg, accessToken } = await cardEntry();
+      await resumeRegistrationCheckout(reg.id, accessToken, ORIGIN);
+      const cs = (await cartPointer(reg.id))!;
+      const token = await linkFor(reg);
+      expect(await payPointer(reg.id), "premise: the page has no session of its own").toBeNull();
+      return { reg, cs, token };
+    }
+
+    it("still processing (a SEPA debit) → 409 PAID_ONLINE, no mint", async () => {
+      const { cs, token } = await statusPageSession();
+      completeDelayed(cs, "processing");
+      const err = await rejection(payFromPayPage(token, ORIGIN));
+      expect(err.status).toBe(409);
+      expect(err.code).toBe("REGISTRATION_PAID_ONLINE");
+      expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1); // the status page's only
+    });
+
+    it("complete + paid (webhook not landed) → 409 PAID_ONLINE, no mint", async () => {
+      const { cs, token } = await statusPageSession();
+      payInStripe(cs);
+      const err = await rejection(payFromPayPage(token, ORIGIN));
+      expect(err.code).toBe("REGISTRATION_PAID_ONLINE");
+      expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it("the debit FAILED (dead session) → the page mints", async () => {
+      const { reg, cs, token } = await statusPageSession();
+      completeDelayed(cs, "requires_payment_method");
+      await payFromPayPage(token, ORIGIN);
+      expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(2);
+      expect(await payPointer(reg.id)).not.toBe(cs);
+    });
+
+    it("a sibling's processing session on the cart pointer does not block this entry's page (the rule is per entry)", async () => {
+      const { rig, reg: a, accessToken } = await cardEntry({ displayName: "Entry A" });
+      const b = await seedSecondEntry(a.group_id, rig.division.id, 1500, "Entry B");
+      await resumeRegistrationCheckout(b.id, accessToken, ORIGIN);
+      completeDelayed((await cartPointer(a.id))!, "processing");
+      await payFromPayPage(await linkFor(a), ORIGIN);
+      expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(2);
+      expect(createdParams(1).metadata?.registration_ids).toBe(a.id);
+    });
+  });
+
+  describe("the status page, after a payment-page session the cart pointer has moved past", () => {
+    /** A pays from its page (both pointers = csA); then B's status-page Pay moves the cart pointer to B's own session. */
+    async function pageSessionThenSibling() {
+      const { rig, reg: a, accessToken } = await cardEntry({ displayName: "Entry A" });
+      const b = await seedSecondEntry(a.group_id, rig.division.id, 1500, "Entry B");
+      await payFromPayPage(await linkFor(a), ORIGIN);
+      const csA = (await payPointer(a.id))!;
+      return { a, b, accessToken, csA };
+    }
+
+    it("still processing → 409 PAID_ONLINE, no mint", async () => {
+      const { a, b, accessToken, csA } = await pageSessionThenSibling();
+      completeDelayed(csA, "processing");
+      await resumeRegistrationCheckout(b.id, accessToken, ORIGIN);
+      expect(await cartPointer(a.id), "premise: the cart pointer moved to the sibling's session").not.toBe(csA);
+      const creates = stripeMock.checkoutCreate.mock.calls.length;
+
+      const err = await rejection(resumeRegistrationCheckout(a.id, accessToken, ORIGIN));
+      expect(err.status).toBe(409);
+      expect(err.code).toBe("REGISTRATION_PAID_ONLINE");
+      expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(creates);
+    });
+
+    it("the debit FAILED (dead session) → the status page mints", async () => {
+      const { a, b, accessToken, csA } = await pageSessionThenSibling();
+      completeDelayed(csA, "requires_payment_method");
+      await resumeRegistrationCheckout(b.id, accessToken, ORIGIN);
+      const creates = stripeMock.checkoutCreate.mock.calls.length;
+
+      await resumeRegistrationCheckout(a.id, accessToken, ORIGIN);
+      expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(creates + 1);
+      expect(createdParams(creates).metadata?.registration_ids).toBe(a.id);
+    });
+  });
+});

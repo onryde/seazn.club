@@ -533,19 +533,23 @@ function intentCanStillCollect(status: Stripe.PaymentIntent.Status): boolean {
 }
 
 /**
- * Gap wave G1 (2026-11-12): the cart status page's Pay refuses while the cart's stored session names this entry and can still
- * land money (`completedSessionStillPays`) - a delayed debit still `processing`, a voucher waiting at `requires_action`, or a paid
- * session whose webhook has not landed. Minting beside it would be a second payable session for the entry. Any other stored
- * session - open (superseded after the mint, `expireSupersededCheckoutSession`), expired, a dead `complete` one, or a sibling's -
- * is minted past. A read failure refuses (502) rather than mint beside a session that may still pay.
+ * Refuses (409 `REGISTRATION_PAID_ONLINE`) while a stored session names this entry and can still land money
+ * (`completedSessionStillPays`) - a delayed debit still `processing`, a voucher waiting at `requires_action`, or a paid session
+ * whose webhook has not landed. Minting beside it would be a second payable session for the entry. Any other stored session -
+ * open (superseded after the mint, `expireSupersededCheckoutSession`), expired, a dead `complete` one, or a sibling's - is minted
+ * past. A read failure refuses (502) rather than mint beside a session that may still pay.
+ *
+ * Gap wave G1 (2026-11-12): the cart status page's Pay, on the cart's pointer. Fix round 1 (F2): each Pay button also puts the
+ * OTHER button's pointer through it - the status page the entry's `pay_session_id`, the payment page the cart's
+ * `checkout_session_id` - so a payment still landing through one button stops the other from minting a second.
  */
-async function refuseWhileCartSessionPays(sessionId: string | null, registrationId: string): Promise<void> {
+export async function refuseWhileSessionPays(sessionId: string | null, registrationId: string): Promise<void> {
   if (!sessionId) return;
   let stored: Stripe.Checkout.Session;
   try {
     stored = await getStripe().checkout.sessions.retrieve(sessionId);
   } catch (err) {
-    log.error({ err, registrationId }, "registration: could not read the cart's stored checkout session");
+    log.error({ err, registrationId }, "registration: could not read a stored checkout session");
     throw storedSessionUnreadable();
   }
   if (stored.status !== "complete" || !checkoutRegistrationIds(stored).includes(registrationId)) return;
@@ -602,7 +606,12 @@ export async function resumeRegistrationCheckout(
   if (!ctx.charges_enabled) {
     throw new HttpError(503, "Payments are not set up for this organiser yet");
   }
-  await refuseWhileCartSessionPays(reg.checkout_session_id, reg.id);
+  await refuseWhileSessionPays(reg.checkout_session_id, reg.id);
+  // Fix round 1 (F2): the payment page's session too, when the cart pointer has moved past it (a sibling's mint).
+  const [own] = await sql<{ pay_session_id: string | null }[]>`select pay_session_id from registrations where id = ${reg.id}`;
+  if (own?.pay_session_id && own.pay_session_id !== reg.checkout_session_id) {
+    await refuseWhileSessionPays(own.pay_session_id, reg.id);
+  }
   const url = await createRegistrationCheckout(reg.group_id, [reg.id], ctx, origin, token);
   return { checkout_url: url };
 }
