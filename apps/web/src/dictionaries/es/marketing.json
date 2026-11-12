@@ -495,6 +495,8 @@
   "quickMatch.setup.email": "Envíame el enlace por correo (opcional)",
   "quickMatch.setup.emailLabel": "Correo electrónico",
   "quickMatch.setup.start": "Empezar a jugar",
+  "quickMatch.setup.tickCheck": "Marca la casilla de arriba y luego pulsa Empezar a jugar.",
+  "quickMatch.setup.needsScript": "Para empezar un partido rápido hace falta JavaScript.",
   "quickMatch.setup.startCount.one": "· {count} partido",
   "quickMatch.setup.startCount.other": "· {count} partidos",
   "quickMatch.setup.sitsOut": "{name} descansa en la primera ronda",
@@ -506,7 +508,6 @@
   "quickMatch.errors.sportNotOffered": "Esas reglas de partido no están disponibles para partidos rápidos.",
   "quickMatch.errors.kindNotOffered": "Esa opción de individual, dobles o equipo no encaja con este deporte. Vuelve a elegir.",
   "quickMatch.errors.emailInvalid": "Revisa la dirección de correo electrónico o déjala en blanco.",
-  "quickMatch.errors.botCheck": "No hemos podido confirmar que no eres un bot. Vuelve a intentarlo.",
   "quickMatch.errors.nameBlank": "Escribe un nombre, no solo espacios.",
   "quickMatch.errors.unavailable": "Los partidos rápidos no están disponibles en este momento. Vuelve a intentarlo más tarde.",
   "quickMatch.errors.generic": "No hemos podido empezar tu partido rápido. Vuelve a intentarlo."

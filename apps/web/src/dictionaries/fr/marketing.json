@@ -495,6 +495,8 @@
   "quickMatch.setup.email": "M'envoyer le lien par e-mail (facultatif)",
   "quickMatch.setup.emailLabel": "E-mail",
   "quickMatch.setup.start": "Commencer à jouer",
+  "quickMatch.setup.tickCheck": "Cochez la case ci-dessus, puis touchez Commencer à jouer.",
+  "quickMatch.setup.needsScript": "Lancer un match rapide nécessite JavaScript.",
   "quickMatch.setup.startCount.one": "· {count} match",
   "quickMatch.setup.startCount.other": "· {count} matchs",
   "quickMatch.setup.sitsOut": "{name} ne joue pas le premier tour",
@@ -506,7 +508,6 @@
   "quickMatch.errors.sportNotOffered": "Ces règles de match ne sont pas disponibles pour les matchs rapides.",
   "quickMatch.errors.kindNotOffered": "Ce choix entre simple, double ou équipe ne convient pas à ce sport. Choisissez à nouveau.",
   "quickMatch.errors.emailInvalid": "Vérifiez l'adresse e-mail, ou laissez-la vide.",
-  "quickMatch.errors.botCheck": "Impossible de confirmer que vous n'êtes pas un robot. Réessayez.",
   "quickMatch.errors.nameBlank": "Saisissez un nom, pas seulement des espaces.",
   "quickMatch.errors.unavailable": "Les matchs rapides ne sont pas disponibles pour le moment. Réessayez plus tard.",
   "quickMatch.errors.generic": "Impossible de lancer votre match rapide. Réessayez."

@@ -105,7 +105,8 @@ const ERROR_KEYS: Readonly<Record<string, string>> = {
   [QUICK_MATCH_ERRORS.KIND_NOT_OFFERED]: "quickMatch.errors.kindNotOffered",
   [QUICK_MATCH_ERRORS.FORMAT_NOT_OFFERED]: "quickMatch.errors.formatNotOffered",
   [QUICK_MATCH_ERRORS.EMAIL_INVALID]: "quickMatch.errors.emailInvalid",
-  [QUICK_MATCH_ERRORS.TURNSTILE_FAILED]: "quickMatch.errors.botCheck",
+  // #1136's shared sentence (reload, content blocker), as every guarded form shows a refused bot check (review m2).
+  [QUICK_MATCH_ERRORS.TURNSTILE_FAILED]: "turnstile.error",
 };
 export function setupErrorKey(code: string): string {
   return Object.hasOwn(ERROR_KEYS, code) ? ERROR_KEYS[code]! : "quickMatch.errors.generic";
@@ -268,6 +269,8 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
   // guest's to open or close.
   const [emailOpen, setEmailOpen] = useState(initialError === QUICK_MATCH_ERRORS.EMAIL_INVALID);
   const [submitting, setSubmitting] = useState(false);
+  /** Start was tapped while the bot check shows a box to tick and holds no token (controller ruling 2026-11-12). */
+  const [checkPrompt, setCheckPrompt] = useState(false);
   const locked = useRef(false);
   /** False in the server's HTML and until the script runs: that page must work as a plain form post (I1). */
   const hydrated = useHydrated();
@@ -333,6 +336,17 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
   async function onSubmit(e: FormEvent<HTMLFormElement> | { preventDefault(): void }) {
     e.preventDefault();
     if (locked.current || !canStart) return;
+    // Cloudflare shows a box to tick and there is no token yet (controller ruling 2026-11-12). Posting now would only wait out
+    // TOKEN_WAIT_MS and come back refused, so the box is brought into view and a line says so at once. Nothing is locked or
+    // spent, and nothing is sent when the token arrives: the guest taps Start again. The invisible check (no box) is not
+    // this case, so its short wait on the token stays.
+    if (turnstile.awaitingVisitor()) {
+      turnstile.reveal();
+      setError(null);
+      setCheckPrompt(true);
+      return;
+    }
+    setCheckPrompt(false);
     locked.current = true;
     setSubmitting(true);
     setError(null);
@@ -681,6 +695,19 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
               {errorLine}
             </p>
           ) : null}
+          {/* The box still to tick: always mounted, so the line is announced when it fills, and off screen while idle. From
+              md it is order 1, so it follows the widget (also 1, earlier in the DOM: "the check above") and precedes Start. */}
+          <p
+            role="status"
+            data-testid="qm-check-prompt"
+            className={
+              checkPrompt
+                ? "mb-2.5 rounded-lg border border-[#3b2a6e] bg-[#241650] px-3 py-2 text-sm text-[var(--mk-cream)] md:order-1 md:mt-2.5"
+                : "sr-only md:order-1"
+            }
+          >
+            {checkPrompt ? msg("quickMatch.setup.tickCheck") : null}
+          </p>
           <button
             type="submit"
             data-testid="qm-start"
@@ -694,6 +721,11 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
               {matches !== undefined ? count("quickMatch.setup.startCount", matches) : null}
             </small>
           </button>
+          {/* Review m3: a browser without the script cannot pass the bot check, so the server's HTML says so beside Start.
+              From md the bar is `display: contents`, so this is a flex item of the zone: last, after Start (order 2). */}
+          <noscript className="mt-2 block text-center text-sm text-[#b7aede] md:order-3">
+            {msg("quickMatch.setup.needsScript")}
+          </noscript>
         </div>
       </div>
     </form>

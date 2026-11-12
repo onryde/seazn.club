@@ -99,6 +99,6 @@ export const QUICK_MATCH_ERRORS = {
   EMAIL_INVALID: "QUICK_MATCH_EMAIL_INVALID",
   /** The create's Cloudflare Turnstile check refused (owner 2026-11-12: "yes we need turnstile"): no token (a post without the
    *  script carries none), a token Cloudflare refuses, or Cloudflare unreachable, which fails closed. The guest's refusal,
-   *  never a fault: the setup screen shows `quickMatch.errors.botCheck`, keeping what was typed. */
+   *  never a fault: the setup screen shows #1136's shared `turnstile.error`, keeping what was typed. */
   TURNSTILE_FAILED: "QUICK_MATCH_TURNSTILE_FAILED",
 } as const;

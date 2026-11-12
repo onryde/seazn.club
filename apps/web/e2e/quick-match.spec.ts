@@ -66,6 +66,8 @@ test("setup (C16, C17): two sides and no format row; Start waits for both names 
   await side(page, 2).fill("Priya & Tom");
   await expect(start(page)).toBeEnabled();
   await expect(page.getByRole("button", { name: "Start playing · 1 match", exact: true })).toBeVisible();
+  // The pair of the no-script test's line (review m3): with the script on, the <noscript> line never shows.
+  await expect(page.getByText("Starting a quick match needs JavaScript.", { exact: true })).toBeHidden();
   await expectNoHorizontalScroll(page);
 });
 
@@ -181,6 +183,15 @@ test("without the script the page still works: Start is live, only the chosen sp
     const page = await ctx.newPage();
     await page.goto("/en/play");
     await expect(form(page)).toBeVisible();
+    // Review m3: the server's HTML says, in the Start bar, that a quick match needs the script, since a deployed server refuses
+    // this plain post. Asserted on the element's DOM text, not on its visibility: Playwright's per-context JS-off still parses
+    // <noscript> as raw text in Chromium and WebKit (and its text matchers skip a noscript's contents), while Blink's own
+    // scripting switch, which does render the line, also stops Playwright's locators. The rendered line was checked by eye
+    // with that switch (task-TS report, round 3).
+    await expect(page.getByTestId("qm-start-bar").locator("noscript")).toHaveJSProperty(
+      "textContent",
+      "Starting a quick match needs JavaScript.",
+    );
     await expect(start(page)).toBeEnabled();
     await expect(form(page).getByRole("radio", { name: "Badminton", exact: true })).toBeChecked();
     await expect(form(page).getByRole("radio", { name: "Tennis", exact: true })).toBeDisabled();

@@ -71,8 +71,11 @@ const MARKETING_KEYS = [
   "quickMatch.errors.nameBlank",
   "quickMatch.errors.unavailable",
   "quickMatch.errors.generic",
-  // The create's bot check refused (Cloudflare Turnstile, owner 2026-11-12).
-  "quickMatch.errors.botCheck",
+  // The bot check (Cloudflare Turnstile, owner 2026-11-12). A refusal reads #1136's shared `turnstile.error` (review m2), so
+  // the quick match carries only its own two lines: the box still to tick (controller ruling 2026-11-12), and the line the
+  // server's HTML shows a browser without the script (review m3).
+  "quickMatch.setup.tickCheck",
+  "quickMatch.setup.needsScript",
 ] as const;
 
 const UI_KEYS = [
@@ -214,6 +217,19 @@ describe("quick match guest copy: every key in all four locales", () => {
   });
 });
 
+describe("quick match guest copy: the bot check reads #1136's shared sentence (review m2)", () => {
+  it("no locale keeps a quick-match copy of it, and every locale has the shared one (counted)", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      expect(DICTS[locale].marketing["quickMatch.errors.botCheck"], `${locale}: no dead quick-match copy`).toBeUndefined();
+      expect(DICTS[locale].ui["turnstile.error"], `${locale}: the shared sentence`).toEqual(expect.stringMatching(/\S/));
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+});
+
 describe("quick match guest copy: plurals", () => {
   const FAMILIES = [
     ["marketing", "quickMatch.setup.startCount"],
@@ -314,8 +330,9 @@ describe("quick match guest copy: plurals", () => {
     expect(m["quickMatch.errors.emailInvalid"]).toBe("Check the email address, or leave it blank.");
     // Review m5: what the browser's own bubble carries for an all-space name (the input's `title`).
     expect(m["quickMatch.errors.nameBlank"]).toBe("Type a name, not just spaces.");
-    // The bot check's refusal, in the owner's words (2026-11-12).
-    expect(m["quickMatch.errors.botCheck"]).toBe("We couldn't confirm you're not a bot. Try again.");
+    // The bot check (2026-11-12): the box still to tick (controller ruling), and the no-script line (review m3).
+    expect(m["quickMatch.setup.tickCheck"]).toBe("Tick the check above, then tap Start.");
+    expect(m["quickMatch.setup.needsScript"]).toBe("Starting a quick match needs JavaScript.");
     expect(ui["quickMatch.home.editResult"]).toBe("Edit result");
     // Task 1 review I2 and m1 (controller, 2026-11-08): the league line names no tie-break the standings do not use
     // (draws score points, so "most wins" was false), and the two offer refusals name nothing the guest did not choose.

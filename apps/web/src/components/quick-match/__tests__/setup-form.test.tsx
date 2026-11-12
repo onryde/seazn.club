@@ -20,13 +20,20 @@ const turnstileFake = vi.hoisted(() => ({
   token: null as string | null,
   resets: 0,
   actions: [] as string[],
-  controller: null as unknown as { token(): Promise<string | null>; reset(): void },
+  /** The controller's `awaitingVisitor()`: an interactive challenge is on screen with no token yet. */
+  awaiting: false,
+  reveals: 0,
+  controller: null as unknown as { token(): Promise<string | null>; reset(): void; awaitingVisitor(): boolean; reveal(): void },
 }));
 vi.mock("@/components/turnstile-widget", () => {
   turnstileFake.controller = {
     token: () => Promise.resolve(turnstileFake.token),
     reset: () => {
       turnstileFake.resets++;
+    },
+    awaitingVisitor: () => turnstileFake.awaiting,
+    reveal: () => {
+      turnstileFake.reveals++;
     },
   };
   return {
@@ -207,6 +214,8 @@ beforeEach(() => {
   turnstileFake.token = null;
   turnstileFake.resets = 0;
   turnstileFake.actions = [];
+  turnstileFake.awaiting = false;
+  turnstileFake.reveals = 0;
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -263,7 +272,8 @@ describe("setupErrorKey: every refusal the create route can name has copy (T3's 
     QUICK_MATCH_KIND_NOT_OFFERED: "quickMatch.errors.kindNotOffered",
     QUICK_MATCH_FORMAT_NOT_OFFERED: "quickMatch.errors.formatNotOffered",
     QUICK_MATCH_EMAIL_INVALID: "quickMatch.errors.emailInvalid",
-    QUICK_MATCH_TURNSTILE_FAILED: "quickMatch.errors.botCheck",
+    // Review m2: #1136's shared sentence (reload, content blocker), not a quick-match copy of it.
+    QUICK_MATCH_TURNSTILE_FAILED: "turnstile.error",
   };
 
   it("maps every QUICK_MATCH_ERRORS code; the count is every code there is", () => {
@@ -812,8 +822,9 @@ describe("submitting (the form-post contract, enhanced: ledger CARRY to T4)", ()
   });
 
   describe("the bot check (Cloudflare Turnstile, owner 2026-11-12)", () => {
-    /** The owner's sentence for a refused bot check (brief 2026-11-12), typed: the copy is the contract, not the lookup. */
-    const BOT_LINE = "We couldn't confirm you're not a bot. Try again.";
+    /** #1136's sentence for a refused bot check (review m2), typed: the copy is the contract, not the lookup. */
+    const BOT_LINE =
+      "We couldn't confirm you're a person. Reload the page and try again. If it keeps failing, turn off any content blocker for this site.";
 
     it("asks for the `quickmatch` widget and mounts exactly one, in the form, wired to the controller that sends", () => {
       const i = mount({}, { hydrate: true });
@@ -909,6 +920,70 @@ describe("submitting (the form-post contract, enhanced: ledger CARRY to T4)", ()
       expect(calls.map((c) => (c.init.headers as Record<string, string>)["cf-turnstile-response"])).toEqual(["tok-1", "tok-2"]);
       expect(turnstileFake.resets).toBe(2);
       expect(assign).toHaveBeenCalledWith("/q/qm_two");
+    });
+
+    it("Start tapped while a challenge waits on the guest: no post and no 20s wait; the box is shown and a line says so at once; the next tap posts (ruling 2026-11-12)", async () => {
+      /** The controller's ruling, typed: the copy is the contract. */
+      const TICK_LINE = "Tick the check above, then tap Start.";
+      turnstileFake.awaiting = true;
+      const { calls, assign } = stubFetch([{ url: "http://localhost:3000/q/qm_tick", status: 200 }]);
+      const i = mount({ initialError: "QUICK_MATCH_RATE_LIMITED" }, { hydrate: true });
+      type(nameInput(i), "Sunday doubles");
+      fillSides(i, ["Ravi & Sam", "Priya & Tom"]);
+      const prompt = () => byTestId(i, "qm-check-prompt");
+      const cls = () => String(propsOf(prompt()!).className ?? "").split(/\s+/);
+      // Idle: the live region is mounted (so the line is announced when it fills), empty and off screen.
+      expect(prompt(), "the status line is always mounted").toBeDefined();
+      expect(propsOf(prompt()!).role).toBe("status");
+      expect(textOf(prompt()!).trim()).toBe("");
+      expect(cls()).toContain("sr-only");
+      await submit(i);
+      expect(calls, "nothing posted while the box is unticked").toHaveLength(0);
+      expect(turnstileFake.reveals, "the box was brought into view").toBe(1);
+      expect(turnstileFake.resets, "no token was asked for or spent").toBe(0);
+      expect(textOf(prompt()!)).toBe(TICK_LINE);
+      expect(cls()).not.toContain("sr-only");
+      expect(byTestId(i, "qm-setup-error"), "the old error gives way to the prompt").toBeUndefined();
+      expect(propsOf(start(i)).disabled, "never locked: the guest taps Start again").toBe(false);
+      expect(propsOf(nameInput(i)).value, "every name kept").toBe("Sunday doubles");
+      // A second tap, still unticked: shown again, still nothing posted (sequence).
+      await submit(i);
+      expect(calls).toHaveLength(0);
+      expect(turnstileFake.reveals).toBe(2);
+      // The guest ticks the box (the widget now holds a token) and taps Start: the post goes, with that token.
+      turnstileFake.awaiting = false;
+      turnstileFake.token = "tok-ticked";
+      await submit(i);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.init.headers).toEqual({ "cf-turnstile-response": "tok-ticked" });
+      expect(textOf(prompt()!).trim(), "the line clears once the post goes").toBe("");
+      expect(turnstileFake.reveals, "not shown again on a tap that posts").toBe(2);
+      expect(assign).toHaveBeenCalledWith("/q/qm_tick");
+    });
+
+    it("the tick line sits in the Start bar beside Start: from 768px after the widget and before Start (one live region)", () => {
+      const i = mount({}, { hydrate: true });
+      const bar = byTestId(i, "qm-start-bar")!;
+      const prompts = all(i).filter((el) => propsOf(el)["data-testid"] === "qm-check-prompt");
+      expect(prompts, "exactly one").toHaveLength(1);
+      const inBar = walk(bar);
+      expect(inBar.includes(prompts[0]!), "in the Start bar").toBe(true);
+      expect(inBar.indexOf(start(i)) > inBar.indexOf(prompts[0]!), "before Start").toBe(true);
+      // From md the bar is `display: contents`: the widget is order 1 and comes first in the DOM, so a line also at order 1
+      // sits after it ("the check above") and before Start (order 2).
+      expect(String(propsOf(prompts[0]!).className).split(/\s+/)).toContain("md:order-1");
+    });
+
+    it("without the script, a line beside Start says a quick match needs JavaScript (review m3)", () => {
+      const i = mount(); // the server's HTML: no script yet
+      const bar = byTestId(i, "qm-start-bar")!;
+      const inBar = walk(bar);
+      const lines = inBar.filter((el) => el.type === "noscript");
+      expect(lines, "one noscript line, in the Start bar").toHaveLength(1);
+      expect(textOf(lines[0]!).trim()).toBe("Starting a quick match needs JavaScript.");
+      expect(inBar.indexOf(lines[0]!) > inBar.indexOf(start(i)), "after Start").toBe(true);
+      // From md the bar is `display: contents`, so the line is a flex item of the zone: last, after Start (order 2).
+      expect(String(propsOf(lines[0]!).className).split(/\s+/)).toContain("md:order-3");
     });
 
     it("the no-JS path: a post without the script carries no token and comes back ?e=QUICK_MATCH_TURNSTILE_FAILED, which renders its line", () => {

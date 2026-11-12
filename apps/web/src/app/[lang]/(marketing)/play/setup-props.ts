@@ -25,6 +25,8 @@ const UI_PREFIXES = [
   "bracket.round.",
   // The kind switch's legend (screen readers only): "Who plays", the division builder's own word for the same choice.
   "divBuilder.step.who",
+  // A refused bot check: #1136's shared sentence (reload, content blocker), as every guarded form shows it (review m2).
+  "turnstile.error",
 ];
 
 function pick(dict: Dict, prefixes: readonly string[]): Record<string, string> {

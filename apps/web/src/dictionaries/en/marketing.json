@@ -495,6 +495,8 @@
   "quickMatch.setup.email": "Email me the link (optional)",
   "quickMatch.setup.emailLabel": "Email",
   "quickMatch.setup.start": "Start playing",
+  "quickMatch.setup.tickCheck": "Tick the check above, then tap Start.",
+  "quickMatch.setup.needsScript": "Starting a quick match needs JavaScript.",
   "quickMatch.setup.startCount.one": "· {count} match",
   "quickMatch.setup.startCount.other": "· {count} matches",
   "quickMatch.setup.sitsOut": "{name} sits out the first round",
@@ -506,7 +508,6 @@
   "quickMatch.errors.sportNotOffered": "Those match rules aren't available for quick matches.",
   "quickMatch.errors.kindNotOffered": "That choice of singles, doubles or team doesn't fit this sport. Choose again.",
   "quickMatch.errors.emailInvalid": "Check the email address, or leave it blank.",
-  "quickMatch.errors.botCheck": "We couldn't confirm you're not a bot. Try again.",
   "quickMatch.errors.nameBlank": "Type a name, not just spaces.",
   "quickMatch.errors.unavailable": "Quick matches aren't available right now. Try again later.",
   "quickMatch.errors.generic": "We couldn't start your quick match. Try again."

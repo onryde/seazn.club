@@ -495,6 +495,8 @@
   "quickMatch.setup.email": "Mail me de link (optioneel)",
   "quickMatch.setup.emailLabel": "E-mail",
   "quickMatch.setup.start": "Begin met spelen",
+  "quickMatch.setup.tickCheck": "Vink het vakje hierboven aan en tik dan op Begin met spelen.",
+  "quickMatch.setup.needsScript": "Voor een snelle wedstrijd heb je JavaScript nodig.",
   "quickMatch.setup.startCount.one": "· {count} wedstrijd",
   "quickMatch.setup.startCount.other": "· {count} wedstrijden",
   "quickMatch.setup.sitsOut": "{name} slaat de eerste ronde over",
@@ -506,7 +508,6 @@
   "quickMatch.errors.sportNotOffered": "Die wedstrijdregels zijn niet beschikbaar voor snelle wedstrijden.",
   "quickMatch.errors.kindNotOffered": "Die keuze uit enkelspel, dubbelspel of team past niet bij deze sport. Kies opnieuw.",
   "quickMatch.errors.emailInvalid": "Controleer het e-mailadres, of laat het leeg.",
-  "quickMatch.errors.botCheck": "We konden niet bevestigen dat je geen bot bent. Probeer het opnieuw.",
   "quickMatch.errors.nameBlank": "Typ een naam, niet alleen spaties.",
   "quickMatch.errors.unavailable": "Snelle wedstrijden zijn nu niet beschikbaar. Probeer het later opnieuw.",
   "quickMatch.errors.generic": "We konden je snelle wedstrijd niet starten. Probeer het opnieuw."
