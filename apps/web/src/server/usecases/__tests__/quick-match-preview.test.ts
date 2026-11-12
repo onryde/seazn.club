@@ -1,5 +1,5 @@
 // Quick match plan 1, Task 4: the setup screen's match count and knockout draw (spec C17, C22), read from the real
-// generator's STRUCTURE through `previewStageDraw` (stages.ts) — seeds, feeders, the bye flag and the engine's typed
+// generator's STRUCTURE through `previewStageDraw` (stages/preview.ts) — seeds, feeders, the bye flag and the engine's typed
 // round role — never from previewDivisionFixtures' English text (pre-flight C2, C10).
 //
 // No DB. Sport-independent by construction: the preview takes no sport (the draw is the stage kind's, not the

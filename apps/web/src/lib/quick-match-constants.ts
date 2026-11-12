@@ -1,7 +1,7 @@
 // Quick match (spec docs/superpowers/specs/2026-11-03-quick-match-design.md §7.1-7.2): the fixed ids of the one platform
 // system org and system user that hold every guest-created quick match, and the limits the create path enforces itself.
 //
-// Import-free on purpose: `server/api-v1/schemas.ts` imports this file relatively, so nothing here may pull in a module.
+// Import-free on purpose: `server/api-v1/schemas/quick-match.ts` imports this file relatively, so nothing here may pull in a module.
 // The ids, the slug and the email are written verbatim into the migration that seeds the rows,
 // db/migration/deltas/V506__quick_matches.sql (its number is reassigned at merge if main has moved past it); change one
 // and you change both. quick-match-migration.test.ts compares the seeded rows with these values.

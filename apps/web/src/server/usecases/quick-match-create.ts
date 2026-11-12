@@ -151,7 +151,7 @@ export async function createQuickMatchTree(
     const committed = await withTenant(auth.orgId, async (tx) => {
       ctx._failBeforeGenerateForTests?.();
       // The race guard (B5f): two creates for one visitor both pass the early count; the lock serializes their last
-      // transactions, so the second recount sees the first's row. The idiom of schedule.ts's division lock.
+      // transactions, so the second recount sees the first's row. The idiom of schedule/'s division lock.
       await tx`select pg_advisory_xact_lock(hashtext(${"qm-visitor:" + ctx.visitorHash}))`;
       if ((await alive(tx, ctx.visitorHash, now)) >= QUICK_MATCH_MAX_ALIVE_PER_VISITOR) throw tooManyAlive();
       const write = await generateStageFixturesTx(tx, auth, stage.id, {}, "record");

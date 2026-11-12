@@ -1,5 +1,5 @@
 // Quick match (spec docs/superpowers/specs/2026-11-03-quick-match-design.md C17, C22): the setup screen's match count
-// and knockout draw, folded from the real generator's structure (`previewStageDraw`, stages.ts) — the same generate()
+// and knockout draw, folded from the real generator's structure (`previewStageDraw`, stages/preview.ts) — the same generate()
 // the create runs, over the same stage input (`quickMatchStageInput`), so the number on the Start button cannot drift
 // from the fixtures generated (pre-flight A8) and there is never a second bracket algorithm (§4).
 //
@@ -76,7 +76,7 @@ export function quickMatchPreview(input: { format: QuickMatchFormat; sides: numb
   let byeCount = 0;
   for (const f of [...draw].sort((a, b) => a.roundNo - b.roundNo || a.seqInRound - b.seqInRound)) {
     const where = `R${f.roundNo}·${f.seqInRound}`;
-    // The engine always lands a bye's award on home (stages.ts bracketToGen), so its away seat is empty. A bye with
+    // The engine always lands a bye's award on home (stages/generators.ts bracketToGen), so its away seat is empty. A bye with
     // someone in that seat would be a match shown as a walk-through: refuse it rather than blank the side.
     if (f.bye && (f.awaySeed !== null || f.awayFrom !== null)) {
       throw new Error(`quickMatchPreview cannot name ${where}: a bye with its away seat filled`);
