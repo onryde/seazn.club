@@ -16,6 +16,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Locator, type Page, type Response } from "@playwright/test";
 import { apiJson, expectNoHorizontalScroll, setBoolEntitlementOverrideSql, setOrgConnectSql, withDb } from "./helpers";
+import { newDeal, newPackage, newSponsor, dealStatus, type Deal } from "./helpers/sponsor-deals";
 import {
   dealUrl, openSponsorRowTools, releaseSettingsOrg, seedCompetition, seedMemberIdentity, seedSettingsOrg, sponsorEditUrl, sponsorsUrl, sponsorUrl, tapUntil,
   type SeededOrg,
@@ -30,40 +31,10 @@ function ui(key: string, vars: Record<string, string> = {}): string {
   return Object.entries(vars).reduce((out, [k, v]) => out.replaceAll(`{${k}}`, v), raw);
 }
 
-type Deal = { id: string; deal_status: string; payment_status: string; sponsor_id: string };
-
 const seeded: SeededOrg[] = [];
 test.afterAll(async ({ request }) => {
   for (const org of seeded) await releaseSettingsOrg(request, org);
 });
-
-async function newSponsor(request: APIRequestContext, orgId: string, name: string): Promise<string> {
-  const res = await apiJson<{ id: string }>(request, `/api/v1/orgs/${orgId}/sponsors`, "POST", { name, tier: "partner", url: "https://sponsor.example/" });
-  expect(res.status, JSON.stringify(res.error)).toBe(201);
-  return res.data!.id;
-}
-
-async function newPackage(request: APIRequestContext, orgId: string, tier: string): Promise<string> {
-  const res = await apiJson<{ id: string }>(request, `/api/v1/orgs/${orgId}/sponsor-packages`, "POST", {
-    name: `${tier} board`, price_cents: 25_000, currency: "gbp", tier,
-  });
-  expect(res.status, JSON.stringify(res.error)).toBe(201);
-  return res.data!.id;
-}
-
-async function newDeal(request: APIRequestContext, orgId: string, sponsorId: string, over: Record<string, unknown>): Promise<string> {
-  const res = await apiJson<{ deal: Deal }>(request, `/api/v1/orgs/${orgId}/sponsors/${sponsorId}/deals`, "POST", {
-    competition_id: null, payment_method: "offline", go_live: "on_payment", ...over,
-  });
-  expect(res.status, JSON.stringify(res.error)).toBe(201);
-  return res.data!.deal.id;
-}
-
-async function dealStatus(request: APIRequestContext, orgId: string, dealId: string): Promise<string> {
-  const res = await apiJson<Deal>(request, `/api/v1/orgs/${orgId}/sponsor-deals/${dealId}`);
-  expect(res.status, JSON.stringify(res.error)).toBe(200);
-  return res.data!.deal_status;
-}
 
 const rowOf = (page: Page, sponsorId: string): Locator => page.locator(`[data-testid="sponsor-row"][data-sponsor-id="${sponsorId}"]`);
 
