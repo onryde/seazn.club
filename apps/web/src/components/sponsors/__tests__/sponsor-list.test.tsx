@@ -120,7 +120,7 @@ const deal = (over: Partial<SponsorDeal>): SponsorDeal => ({
 
 const sponsor = (over: Partial<SponsorItem> & { id: string; name: string }): SponsorItem => ({
   competition_id: null, url: null, logo_path: null, poster_path: null, tier: "partner", display_order: 0, status: "active", click_count: 0,
-  on_stream: false, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false, last_billing_email: null, ...over,
+  on_stream: false, archived_at: null, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false, last_billing_email: null, ...over,
 });
 
 /** The mockup's eight rows (screen 1), in the mockup's order. `chip` / `action` are the words in the picture. Two things are the OWNER'S

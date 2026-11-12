@@ -46,6 +46,9 @@ export interface LockedSponsor {
   /** Placement provenance (ruling (g), V495): the deal whose snapshot `tier`, `competition_id` and `on_stream` carry, set by
    *  the live write; null when the club set them by hand (or a hand PATCH of any of them has since taken them over). */
   placement_from_deal_id: string | null;
+  /** Archived (V505, archive spec D8): hidden everywhere, every record kept. Read under the lock by Archive (idempotent), by
+   *  `patchSponsor` and by `createDeal` (both refuse an archived sponsor, 409 `sponsor_archived`). */
+  archived_at: string | null;
 }
 
 /** The sponsor_orders columns a deal is read from. The money column `status` is the API's `payment_status` (D1). */
@@ -134,7 +137,7 @@ export async function lockSponsorAndDeals(
   sponsorId: string,
 ): Promise<{ sponsor: LockedSponsor; deals: ServerDeal[] } | null> {
   const [sponsor] = await tx<LockedSponsor[]>`
-    select id, org_id, status, tier, competition_id, on_stream, placement_from_deal_id
+    select id, org_id, status, tier, competition_id, on_stream, placement_from_deal_id, archived_at
       from sponsors where id = ${sponsorId} for update`;
   if (!sponsor) return null;
   const rows = await tx<DealRow[]>`

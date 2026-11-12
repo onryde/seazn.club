@@ -109,6 +109,10 @@ export const Sponsor = z.object({
   created_at: z.string(),
   /** R4 sponsors on stream (V492): ticked onto the stream's rotation. Written only through PATCH; a new sponsor starts false. */
   on_stream: z.boolean(),
+  /** When the sponsor was archived (`POST …/archive`), or null. An archived sponsor is hidden from every public surface and the
+   *  stream, keeps every record, and is listed only with `GET …/sponsors?archived=1`. Written only by the archive routes, never
+   *  by a PATCH. */
+  archived_at: z.string().nullable(),
   /** Set on list reads when a paid package order activated this placement. */
   paid_order_id: z.string().nullable().optional(),
   /** List reads: true while a payment dispute has the placement parked — that

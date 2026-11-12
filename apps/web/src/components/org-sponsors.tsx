@@ -81,6 +81,9 @@ export interface SponsorItem {
   click_count: number;
   /** The sponsor is in the stream's rotation (the On stream tab's tick; the sponsor page's toggle). A live deal sets it (D9). */
   on_stream: boolean;
+  /** When the club archived this sponsor (archive spec D8), or null: hidden from every public surface and the stream, its records
+   *  kept. Only the Sponsors tab reads archived rows (its "Show archived" switch). */
+  archived_at: string | null;
   /** The paid package order that activated this placement, if any. */
   paid_order_id?: string | null;
   /** The deal the row shows (sponsor deals D8: `pickRowDeal` over the sponsor's deals), or null when the sponsor has none - the

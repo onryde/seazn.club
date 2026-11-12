@@ -72,7 +72,7 @@ const SLUG = "harbour-vale";
 
 const sponsor = (over: Partial<SponsorItem> = {}): SponsorItem => ({
   id: "s1", name: "Ridge Gold Physiotherapy", competition_id: null, url: null, logo_path: null, poster_path: null, tier: "partner", display_order: 0,
-  status: "inactive", click_count: 0, on_stream: false, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false,
+  status: "inactive", click_count: 0, on_stream: false, archived_at: null, paid_order_id: null, deal: null, locked_by_deal: false, has_open_deal: false,
   last_billing_email: "accounts@ridgegoldphysio.co.uk", ...over,
 });
 const pkg = (over: Partial<SponsorPackageRow> & { id: string; name: string }): SponsorPackageRow => ({

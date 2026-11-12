@@ -155,3 +155,22 @@ describe("m5: each sponsor PATCH is its create's patchOf twin, plus on_stream", 
     expect(checked).toBe(PAIRS.length * Object.keys(PROBES).length * 2);
   });
 });
+
+// Archive a sponsor (spec D11, §6.3): `archived_at` is written ONLY by the archive routes. It is in no write schema, so a PATCH
+// naming it is stripped at parse - `{ archived_at: null }` reaches patchSponsor as an empty patch (400) and can never unarchive,
+// and a create cannot be born archived. The key order above stays the create's own (the m5 case pins it).
+describe("archived_at is in no write schema (archive spec D11)", () => {
+  it("every create and patch schema lacks it, and strips it at parse (count reported)", () => {
+    let checked = 0;
+    for (const [name, schema] of SCHEMAS) {
+      expect("archived_at" in schema.shape, `${name}: no archived_at field`).toBe(false);
+      const isPatch = name.includes("Patch");
+      const body = isPatch ? { archived_at: null } : { name: "Acme", archived_at: "2026-11-12T10:00:00.000Z" };
+      const parsed = schema.parse(body) as Record<string, unknown>;
+      expect("archived_at" in parsed, `${name}: stripped`).toBe(false);
+      if (isPatch) expect(parsed, `${name}: nothing else is left, so the patch is empty`).toEqual({});
+      checked++;
+    }
+    expect(checked, "anti-vacuity: the two create and two patch schemas").toBe(4);
+  });
+});

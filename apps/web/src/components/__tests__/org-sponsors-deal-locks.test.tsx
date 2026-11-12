@@ -73,6 +73,7 @@ const row = (over: Partial<SponsorItem> & { id: string }): SponsorItem => ({
   status: "active",
   click_count: 0,
   on_stream: false,
+  archived_at: null,
   paid_order_id: null,
   deal: null,
   locked_by_deal: false,

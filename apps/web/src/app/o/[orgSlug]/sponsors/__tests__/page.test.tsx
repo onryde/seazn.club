@@ -645,7 +645,15 @@ describe("the Sponsors tab keeps Settings' gates: sponsors.tiers, granted AND de
     const html = await render("sponsors");
     expect(attr(html, "org-sponsors", "data-has-tiers")).toBe("false");
     expect(attr(html, "org-sponsors", "data-sponsors")).toBe("2");
-    expect(h.listSponsorRows).toHaveBeenCalledWith(ORG.id);
+    expect(h.listSponsorRows).toHaveBeenCalledWith(ORG.id, { includeArchived: true });
+  });
+
+  it("archive spec §6.2: the Sponsors tab reads archived rows too (its switch needs N and the rows); the On stream tab reads none", async () => {
+    await render("sponsors");
+    expect(h.listSponsorRows.mock.calls, "the Sponsors tab").toEqual([[ORG.id, { includeArchived: true }]]);
+    h.listSponsorRows.mockClear();
+    await render("on_stream");
+    expect(h.listSponsorRows.mock.calls, "the On stream tab: the default, archived rows left out").toEqual([[ORG.id]]);
   });
 
   it("hands the composer the org's competitions as its picker, and the billing URL for the upsell", async () => {
