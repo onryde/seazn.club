@@ -407,7 +407,7 @@ export interface DetailsValidation {
 export function validateDetails(
   cart: CartState,
   divisions: readonly DivisionLike[],
-  contact: Pick<ContactState, "dob" | "gender">,
+  contact: Pick<ContactState, "dob" | "gender"> & { name?: string },
   seasonStartYear: number,
 ): DetailsValidation {
   const byId = new Map(divisions.map((d) => [d.division_id, d]));

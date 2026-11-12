@@ -410,6 +410,12 @@ function entryDisplayName(
   return players[0]?.full_name?.trim() || contact.name;
 }
 
+/** Two typed person names are the same name: trimmed, inner whitespace collapsed, case-insensitive. Blank is never a match. */
+function sameName(a: string | null | undefined, b: string | null | undefined): boolean {
+  const norm = (v: string | null | undefined) => (v ?? "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  return norm(a) !== "" && norm(a) === norm(b);
+}
+
 // ---------------------------------------------------------------------------
 // submitRegistrationGroup
 // ---------------------------------------------------------------------------
@@ -418,7 +424,11 @@ interface PreparedEntry {
   input: SubmitGroupEntryInput;
   settings: SubmitSettingsRow;
   players: SubmitGroupPlayerInput[];
+  /** The row whose consent this submit gives (the registrant's own, or a solo sign-up's one row - P5 ruling). */
   selfIndex: number | null;
+  /** The row that IS the registrant (final review m4): it alone takes the contact's dob/gender/email and the signed-in account.
+   *  Equal to `selfIndex` except on a solo sign-up entered for someone else. */
+  ownRowIndex: number | null;
   displayName: string;
   answers: Record<string, unknown>;
 }
@@ -542,17 +552,26 @@ export async function submitRegistrationGroup(
     }
 
     let selfIndex: number | null = null;
+    let ownRowIndex: number | null = null;
     if (entry.free_agent) {
-      // A solo sign-up is the registrant looking for a team: its one row is their OWN (consent given at this submit, the contact's
-      // dob/gender/email as fallbacks, a minor needs a guardian) - `assignSoloSignUp` carries that consent onto the team's roster.
+      // A solo sign-up is the registrant looking for a team: its one row's consent is given at this submit (a minor needs a guardian) -
+      // `assignSoloSignUp` carries that consent onto the team's roster (P5 ruling).
       selfIndex = 0;
       registeringSelfAnywhere = true;
+      // Final review m4: but the row is the REGISTRANT only when it is theirs - the API said so (`registering_self`), no row was sent
+      // (it is made from the contact, above), or it carries the contact's own name (the form seeds the solo's row from the contact;
+      // a different name is somebody else, e.g. a secretary entering a player). Only then does it take the contact's dob, gender and
+      // email and the signed-in account: copying them onto "Sam" gave Sam the secretary's dob, email and account.
+      const sentNoRow = (entry.players ?? []).length === 0;
+      const contactsName = sameName(rawPlayers[0]?.full_name, input.contact.name);
+      ownRowIndex = entry.registering_self || sentNoRow || contactsName ? 0 : null;
     } else if (entry.registering_self) {
       const idx =
         entry.self_player_index ??
         (entry.entrant_kind === "individual" && rawPlayers.length === 1 ? 0 : undefined);
       if (idx !== undefined && rawPlayers[idx]) {
         selfIndex = idx;
+        ownRowIndex = idx;
         registeringSelfAnywhere = true;
       }
     }
@@ -564,7 +583,7 @@ export async function submitRegistrationGroup(
     // identity signal that lets a LATER registration for the same captain
     // dedupe instead of minting a fresh person every time they self-link.
     const players = rawPlayers.map((p, i) =>
-      i === selfIndex
+      i === ownRowIndex
         ? {
             ...p,
             dob: p.dob ?? input.contact.dob ?? null,
@@ -606,7 +625,7 @@ export async function submitRegistrationGroup(
 
     const answers = validateAnswers(settings.form_fields ?? [], entry.answers ?? {});
     const displayName = entryDisplayName(entry, players, input.contact);
-    prepared.push({ input: entry, settings, players, selfIndex, displayName, answers });
+    prepared.push({ input: entry, settings, players, selfIndex, ownRowIndex, displayName, answers });
   }
 
   // Guardian consent — the EFFECTIVE self dob decides minority, not
@@ -858,6 +877,8 @@ export async function submitRegistrationGroup(
       for (let i = 0; i < p.players.length; i++) {
         const player = p.players[i]!;
         const isSelf = i === p.selfIndex;
+        // The signed-in account links to the row that IS the registrant only (final review m4), never to a solo entered for someone else.
+        const isOwnRow = i === p.ownRowIndex;
         // The RESOLVED self row's own dob (review MINOR 6) — not
         // `input.contact.dob` directly. They usually agree (the self row
         // falls back to the contact's cart-level dob when it carries none of
@@ -865,7 +886,7 @@ export async function submitRegistrationGroup(
         // while `contact.dob` is null must still link: reading
         // `input.contact.dob` here silently failed to link an eligible adult
         // in that case, the #402/#404 dedupe producer going dormant.
-        const playerUserId = isSelf
+        const playerUserId = isOwnRow
           ? deriveLinkUserId(
               ctx.sessionUserId ?? null,
               {

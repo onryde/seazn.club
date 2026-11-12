@@ -130,6 +130,13 @@ export function resolveSelfPlayerIndex(
   return entry.self_player_index ?? (entry.entrant_kind === "individual" && entry.players.length === 1 ? 0 : null);
 }
 
+/** A solo sign-up's row is the contact's own while it carries their name (trimmed, spacing and case aside) or no name yet - the form
+ *  seeds it from the contact. Mirrors `sameName` in registration-submit.ts. */
+export function soloRowIsContact(rowName: string, contactName: string): boolean {
+  const norm = (v: string) => v.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  return norm(rowName) === "" || norm(rowName) === norm(contactName);
+}
+
 /**
  * Mirrors `registration-submit.ts`'s own self-row fallback (~line 405-411)
  * for PRESENTATION: "The self row's dob/gender fall back to the contact's
@@ -154,11 +161,14 @@ export function resolveSelfPlayerIndex(
  */
 export function effectiveSelfPlayers(
   entry: Pick<CartEntry, "players" | "self_player_index" | "entrant_kind"> & { free_agent?: boolean },
-  contact: Pick<ContactState, "dob" | "gender">,
+  contact: Pick<ContactState, "dob" | "gender"> & { name?: string },
 ): readonly RosterPlayerState[] {
   const { players } = entry;
   const selfIndex = resolveSelfPlayerIndex(entry);
   if (selfIndex === null || !players[selfIndex]) return players;
+  // Final review m4, the server's rule (registration-submit.ts): a solo sign-up's row takes the contact's dob/gender only while it IS the
+  // contact - their own name, or not named yet. A solo entered for someone else is that person's own row.
+  if (entry.free_agent && contact.name !== undefined && !soloRowIsContact(players[selfIndex]!.full_name, contact.name)) return players;
   return players.map((p, i) => (i === selfIndex ? { ...p, dob: p.dob ?? contact.dob, gender: p.gender ?? contact.gender } : p));
 }
 

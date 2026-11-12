@@ -4,8 +4,9 @@
 //
 // The rules under test:
 // - submit writes ONE `registration_players` row for a solo sign-up: the row the form sends, or, when none is sent (an older cart,
-//   an API caller), one built from the contact. It is the registrant's OWN row (a solo sign-up is the person looking for a team):
-//   consent given at submit, the contact's dob/gender/email as fallbacks, a minor needs a guardian like any self-registration;
+//   an API caller), one built from the contact. Its consent is given at submit and a minor needs a guardian like any
+//   self-registration; it takes the contact's dob/gender/email and the signed-in account only when it IS the registrant - the
+//   contact's own name, no row sent, or `registering_self` (final review m4: a solo entered for someone else takes none of them);
 // - only the person's own eligibility applies to it - a team's composition (a mixed roster) is the team's, never one solo player's;
 // - a solo sign-up made before this change (no player row) is placed as its registrant contact - the name the panel already shows;
 // - the chain the feature exists for: solo sign-up -> assign -> on the team's roster -> the team's confirm SEATS them.
@@ -109,6 +110,18 @@ async function pendingTeam(r: Rig, name: string): Promise<string> {
   return reg!.id;
 }
 
+async function makeUser(name: string): Promise<string> {
+  const [{ id }] = await sql<{ id: string }[]>`
+    insert into users (email, display_name, email_verified)
+    values (${`${name}-${randomUUID().slice(0, 8)}@test.local`}, ${name}, true)
+    returning id`;
+  return id;
+}
+
+async function userIdsOf(regId: string): Promise<(string | null)[]> {
+  return (await sql<{ user_id: string | null }[]>`select user_id from registration_players where registration_id = ${regId}`).map((x) => x.user_id);
+}
+
 async function seatedNames(regId: string): Promise<string[]> {
   const rows = await sql<{ full_name: string }[]>`
     select p.full_name from registrations r
@@ -119,13 +132,48 @@ async function seatedNames(regId: string): Promise<string[]> {
 }
 
 describe.skipIf(!HAS_DB)("a solo sign-up carries ONE player row: the registrant's own (H-1)", () => {
-  it("the row the form sends is written once, as the registrant's own: consent given, the contact's email as its fallback", async () => {
+  it("the row the form sends is written once, as the registrant's own (the contact's name): consent given, the contact's email as its fallback", async () => {
     const r = await rig();
-    const contact = contactOf("Priya Contact");
-    const regId = await submitSolo(r, contact, [{ full_name: "Priya Raman", gender: "f" }]);
+    const contact = contactOf("Priya Raman");
+    // The form seeds the solo's row from the contact; spacing and case are not a different person.
+    const regId = await submitSolo(r, contact, [{ full_name: "  priya  RAMAN ", gender: "f" }]);
     const rows = await playersOf(regId);
     expect(rows.length, "exactly one player row").toBe(1);
-    expect(rows[0]).toMatchObject({ full_name: "Priya Raman", gender: "f", email: contact.email, consent_status: "granted" });
+    expect(rows[0]).toMatchObject({ gender: "f", email: contact.email, consent_status: "granted" });
+  });
+
+  // Final review m4: the solo's row was the registrant's own for EVERY solo, so a secretary entering a player solo gave that player
+  // the secretary's dob, email and signed-in account. The row is the registrant only when it is theirs: the contact's own name, no row
+  // sent, or `registering_self` from the API. Consent stays given either way (P5 ruling: the person entering them gives it).
+  it("a solo entered for SOMEONE ELSE (another name): consent given, but no contact dob/gender/email and no signed-in account (m4)", async () => {
+    const r = await rig();
+    const sessionUserId = await makeUser("secretary");
+    const contact = contactOf("Sue Secretary", { dob: "1980-02-03", gender: "f" });
+    const res = await submitRegistrationGroup({ ...r.ctx, sessionUserId }, {
+      contact,
+      privacy_consent: true,
+      // Sam's own adult dob, so the account link is refused for WHO the row is, not for a missing dob.
+      entries: [{ division_id: r.divisionId, entrant_kind: "team", free_agent: true, players: [{ full_name: "Sam Player", dob: "1991-01-01" }], answers: {} }],
+    } as never);
+    const regId = res.entries[0]!.registration_id;
+    const rows = await playersOf(regId);
+    expect(rows.length).toBe(1);
+    expect(rows[0]).toMatchObject({ full_name: "Sam Player", dob: "1991-01-01", gender: null, email: null, consent_status: "granted" });
+    expect(await userIdsOf(regId), "the secretary's account is not linked to Sam").toEqual([null]);
+  });
+
+  it("the positive pair: the registrant's OWN solo (their name), signed in, takes the contact's dob/gender/email and the account (m4)", async () => {
+    const r = await rig();
+    const sessionUserId = await makeUser("player");
+    const contact = contactOf("Dana Player", { dob: "1985-06-07", gender: "f" });
+    const res = await submitRegistrationGroup({ ...r.ctx, sessionUserId }, {
+      contact,
+      privacy_consent: true,
+      entries: [{ division_id: r.divisionId, entrant_kind: "team", free_agent: true, players: [{ full_name: "Dana Player" }], answers: {} }],
+    } as never);
+    const regId = res.entries[0]!.registration_id;
+    expect((await playersOf(regId))[0]).toMatchObject({ dob: "1985-06-07", gender: "f", email: contact.email, consent_status: "granted" });
+    expect(await userIdsOf(regId)).toEqual([sessionUserId]);
   });
 
   it("no row sent (an older cart, an API caller): one row is made from the contact, dob and gender included", async () => {

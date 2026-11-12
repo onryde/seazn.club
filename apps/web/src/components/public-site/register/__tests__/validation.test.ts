@@ -588,6 +588,20 @@ describe("validateDetails — step 3's Next gate", () => {
     ).toEqual({ valid: false, error: "incomplete" });
   });
 
+  // Final review m4 (the server's rule, registration-submit.ts): a solo's row falls back to the contact's dob/gender only while it IS
+  // the contact (their name, or no name yet). A solo entered for someone else answers for itself - the server refuses it otherwise,
+  // so the form must not let it through on the contact's answers.
+  it("a solo row named for SOMEONE ELSE does not borrow the contact's gender; the contact's own solo row does (m4)", () => {
+    const womens: DivisionLike = { ...BASE_DIVISION, division_id: "d-w", entrant_kind: "team", category: "womens", allow_free_agents: true };
+    const cartOf = (name: string): CartState => ({
+      ...EMPTY_CART,
+      entries: [entry({ id: "e1", division_id: "d-w", entrant_kind: "team", free_agent: true, players: [{ ...EMPTY_ROSTER_PLAYER, full_name: name }] })],
+    });
+    const contact: ContactState = { ...EMPTY_CONTACT, name: "Sue Secretary", gender: "f" };
+    expect(validateDetails(cartOf("Sam Player"), [womens], contact, SEASON_START_YEAR).valid, "someone else: their own gender is owed").toBe(false);
+    expect(validateDetails(cartOf(" sue  SECRETARY"), [womens], contact, SEASON_START_YEAR).valid, "the contact's own row: the fallback holds").toBe(true);
+  });
+
   it("uses the CONTACT's dob/gender as a fallback for the self row — does not false-positive block on a blank self row (design: 'collected once')", () => {
     const genderNeeded: DivisionLike = { ...BASE_DIVISION, division_id: "d-womens", category: "womens" };
     const cart: CartState = {
