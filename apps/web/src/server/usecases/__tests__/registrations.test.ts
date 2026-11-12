@@ -2784,6 +2784,66 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     expect(row.group_refunded_cents).toBe(300);
   });
 
+  // Polish wave final fix m5: the per-entry readers (the delete guards, the knockout desk, the panel's Refund) read the ENTRY's own
+  // refunded_cents, which a dashboard refund never reached - after a full dashboard refund the panel still offered Refund (Stripe
+  // then refused it) and the delete guards never cleared. When the payment is ONE entry's alone, its own total now follows too.
+  describe("charge.refunded mirrors onto the entry whose payment it is (m5)", () => {
+    const sync = (intent: string, amount_refunded: number) =>
+      syncRegistrationRefund({ payment_intent: intent, amount_refunded } as unknown as Stripe.Charge);
+
+    it("a single entry's own total follows the dashboard: partial, then never regresses, then full; never past its price", async () => {
+      const { competition, division, settings } = await stripeRig();
+      const res = await seedRegistration(competition.id, division.id, settings, { amountCents: 500 });
+      await handleRegistrationCheckoutCompleted(fakeSession(res.registration.id, 500));
+      const intent = (await loadWithGroup(res.registration.id)).entry_payment_intent_id!;
+      expect(intent, "premise: the entry carries its own payment").toBeTruthy();
+      const own = async () => (await loadWithGroup(res.registration.id)).refunded_cents;
+      expect(await own(), "premise: nothing refunded yet").toBe(0);
+
+      const steps: [number, number, string][] = [
+        [300, 300, "partial"],
+        [100, 300, "never regresses"],
+        [500, 500, "full"],
+        [900, 500, "never past the entry's own price"],
+      ];
+      for (const [refunded, expected, label] of steps) {
+        await sync(intent, refunded);
+        expect(await own(), label).toBe(expected);
+      }
+      expect(steps.length, "anti-vacuity").toBe(4);
+    });
+
+    it("a refund of a LATE payment already on the entry is kept apart: the current payment's refund is added on top of it", async () => {
+      const { competition, division, settings } = await stripeRig();
+      const res = await seedRegistration(competition.id, division.id, settings, { amountCents: 500 });
+      await handleRegistrationCheckoutCompleted(fakeSession(res.registration.id, 500));
+      const intent = (await loadWithGroup(res.registration.id)).entry_payment_intent_id!;
+      // An earlier, late payment of 500 was sent back (V510): history 500, all of it late.
+      await sql`update registrations set refunded_cents = 500, late_refunded_cents = 500 where id = ${res.registration.id}`;
+
+      await sync(intent, 200);
+
+      const row = await loadWithGroup(res.registration.id);
+      expect(row.refunded_cents).toBe(700);
+      expect(row.late_refunded_cents).toBe(500);
+    });
+
+    it("a payment shared by two entries of one cart is left to the cart: neither entry's own total is guessed", async () => {
+      const { competition, division, settings } = await stripeRig();
+      const a = await seedRegistration(competition.id, division.id, settings, { amountCents: 500 });
+      const b = await seedSecondEntry(a.registration.group_id, division.id, 700, "Entry B");
+      await handleRegistrationCheckoutCompleted(fakeSession([a.registration.id, b.id], 1200));
+      const intent = (await loadWithGroup(a.registration.id)).entry_payment_intent_id!;
+      expect((await loadWithGroup(b.id)).entry_payment_intent_id, "premise: one payment for both entries").toBe(intent);
+
+      await sync(intent, 600);
+
+      expect((await loadWithGroup(a.registration.id)).refunded_cents).toBe(0);
+      expect((await loadWithGroup(b.id)).refunded_cents).toBe(0);
+      expect((await loadWithGroup(a.registration.id)).group_refunded_cents, "the cart mirror is unchanged").toBe(600);
+    });
+  });
+
   // "waitlisted card submits take no window and no payment" DELETED (RS001
   // demolition): purely pinned submitRegistration's own
   // capacity-overflow → waitlisted decision at submit time (no checkout

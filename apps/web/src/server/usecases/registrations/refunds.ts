@@ -28,6 +28,19 @@ export async function syncRegistrationRefund(charge: Stripe.Charge): Promise<voi
     set refunded_cents = greatest(refunded_cents, ${charge.amount_refunded}),
         refunded_at = coalesce(refunded_at, now()), updated_at = now()
     where payment_intent_id = ${intent}`;
+  // Polish wave final fix m5: the ENTRY's own total too, when the payment is one entry's alone (its own `payment_intent_id`, V387).
+  // The per-entry readers - the delete guards, the knockout desk, the panel's Refund - read it, and a dashboard refund never reached
+  // it: a fully refunded entry was still offered Refund (Stripe then refused) and never cleared a delete guard. What was sent back of
+  // THIS payment is `amount_refunded`, capped at the entry's price; a refunded LATE payment already in its history
+  // (`late_refunded_cents`, V510) is another payment's and stays on top. Monotonic like the cart's. A payment shared by several entries
+  // of a cart is not split by guessing: the cart mirror above is all it gets. An in-app refund holds the entry row across its Stripe
+  // call (`refundEntryUnderLock`, `refundRegistration`), so this waits for its booking and then finds nothing left to raise.
+  await sql`
+    update registrations
+    set refunded_cents = greatest(refunded_cents, late_refunded_cents + least(${charge.amount_refunded}::int, amount_cents)),
+        updated_at = now()
+    where payment_intent_id = ${intent}
+      and (select count(*) from registrations same where same.payment_intent_id = ${intent}) = 1`;
 }
 
 // ---------------------------------------------------------------------------
