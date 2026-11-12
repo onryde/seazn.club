@@ -74,6 +74,7 @@ import {
   listSponsorRows,
   listSponsors,
   patchSponsor,
+  reorderSponsors,
   resolveSponsors,
   unarchiveSponsor,
 } from "../sponsors";
@@ -464,6 +465,35 @@ describe.skipIf(!HAS_DB)("an archived sponsor refuses writes (spec D10, D11)", (
     await unarchiveSponsor(o.auth, s.id);
     await expect(patchSponsor(o.auth, s.id, { name: "Renamed Ltd" })).resolves.toMatchObject({ name: "Renamed Ltd" });
     expect((await stored(s.id))!.name).toBe("Renamed Ltd");
+  });
+
+  // Review M1. The console's reorder sends EVERY id of the list it shows, and the Sponsors tab lists archived rows too, so a
+  // reorder naming an archived sponsor is the ordinary case, not an attack: it must succeed and leave that row where it was
+  // (unarchive is exact, spec §9), while the active rows it names still move. An unknown id stays a 422 (sponsors.test.ts).
+  it("reorder: an archived row named in a reorder keeps its display_order (and every other column); the active rows still move; unarchived, it moves too", async () => {
+    const o = await rigOrg();
+    const a = await rigSponsor(o, `Alder ${uniq()}`);
+    const b = await rigSponsor(o, `Birch ${uniq()}`);
+    const x = await rigSponsor(o, `Xylem ${uniq()}`);
+    await sql`update sponsors set display_order = 7 where id = ${x.id}`;
+    const without = (row: Record<string, unknown> | null): Record<string, unknown> =>
+      Object.fromEntries(Object.entries(row ?? {}).filter(([k]) => k !== "archived_at"));
+    const order = async (id: string): Promise<number> =>
+      (await sql<{ display_order: number }[]>`select display_order from sponsors where id = ${id}`)[0]!.display_order;
+    const snapshot = without(await stored(x.id));
+    expect(snapshot.display_order, "premise: off the default").toBe(7);
+
+    await archiveSponsor(o.auth, x.id);
+    const archivedBytes = await rowBytes(x.id);
+    expect(await refusal(() => reorderSponsors(o.auth, { ids: [b.id, x.id, a.id] })), "the reorder succeeds").toEqual(NO_REFUSAL);
+    expect(await rowBytes(x.id), "the archived row is not written at all").toBe(archivedBytes);
+    expect([await order(b.id), await order(a.id)], "the active rows take their positions (0 and 2)").toEqual([0, 2]);
+
+    await unarchiveSponsor(o.auth, x.id);
+    expect(without(await stored(x.id)), "unarchive is exact: display_order 7 and every other column as before").toEqual(snapshot);
+
+    await reorderSponsors(o.auth, { ids: [x.id, a.id, b.id] });
+    expect([await order(x.id), await order(a.id), await order(b.id)], "unarchived, the same row moves like any other").toEqual([0, 1, 2]);
   });
 
   it("PATCH {archived_at: null} is 400 empty patch, and the sponsor stays archived (no back door)", async () => {

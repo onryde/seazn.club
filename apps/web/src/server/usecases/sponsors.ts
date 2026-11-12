@@ -493,7 +493,13 @@ async function readSponsorRow(tx: Tx, id: string, deals: ServerDeal[]): Promise<
 
 /** Persist a new display order: `ids` in the order they should render.
  *  Order is scoped per (scope, tier) group by the reads, so indices are
- *  simply assigned in sequence — groups keep their relative order. */
+ *  simply assigned in sequence — groups keep their relative order.
+ *
+ *  An ARCHIVED id is skipped, not refused: the console sends every id of the
+ *  list it shows, archived rows included, and an archived row keeps its order
+ *  so that unarchive is exact (archive spec §9). The skip is the update's own
+ *  `archived_at is null`, so an archive that commits first is re-checked on
+ *  the row itself; it is not counted in `reordered`. An unknown id is 422. */
 export async function reorderSponsors(
   auth: AuthCtx,
   input: ReorderSponsorsInput,
@@ -501,11 +507,16 @@ export async function reorderSponsors(
   return withTenant(auth.orgId, async (tx) => {
     let reordered = 0;
     for (let i = 0; i < input.ids.length; i++) {
+      const id = input.ids[i]!;
       const [row] = await tx<{ id: string }[]>`
         update sponsors set display_order = ${i}
-        where id = ${input.ids[i]!} returning id`;
-      if (!row) throw new HttpError(422, "reorder references an unknown sponsor");
-      reordered++;
+        where id = ${id} and archived_at is null returning id`;
+      if (row) {
+        reordered++;
+        continue;
+      }
+      const [held] = await tx`select 1 from sponsors where id = ${id}`;
+      if (!held) throw new HttpError(422, "reorder references an unknown sponsor");
     }
     return { reordered };
   }).then(async (res) => {
