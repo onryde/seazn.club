@@ -77,6 +77,9 @@ name: E2E
 # cap (walkthrough 1/3 18.6-19.1 min, 3/3 17.5-18). It is now FOUR legs, cut by
 # file rather than by count; see the walkthrough block in e2e-parallel's matrix.
 #
+# 2026-11-12: a FIFTH walkthrough leg, `walkthrough sponsor`, carries the sponsor
+# x stream matrix (sponsor-stream-matrix.spec.ts) alone; "rest" ignores that file.
+#
 # Each job independently migrates its own fresh Postgres and mints its own
 # `setup`-project org — GitHub Actions `services:` are job-scoped, so there
 # is no live database or server to share across jobs (see ci.yml's
@@ -434,7 +437,8 @@ jobs:
           # THE CUT: those two groups each get a leg, and the remaining 299
           # tests are sharded two ways. `walkthrough_slice` (E2E_WALKTHROUGH_
           # SLICE in apps/web/playwright.config.ts) is "capture", "stream" or
-          # "rest"; "rest" is a CATCH-ALL that ignores the two carve-outs and
+          # "rest" (since 2026-11-12 also "sponsor", a fifth leg: see its entry
+          # below); "rest" is a CATCH-ALL that ignores the carve-outs and
           # nothing else, so a new walkthrough file joins it without anyone
           # editing a list. Replayed Playwright step on a three-worker
           # first-free scheduler (it reproduced 960 / 228 / 900 as 920 / 215 /
@@ -587,6 +591,33 @@ jobs:
             slice: ""
             walkthrough_slice: rest
             args: --workers=3 --shard=2/2
+          # FIFTH WALKTHROUGH LEG, 2026-11-12: sponsor-stream-matrix.spec.ts
+          # (the L2 sponsor x stream matrix). Serial, and four of its five
+          # tests take the WHOLE placement pool for a composed stream, so it
+          # holds the pool one test at a time for the length of the file.
+          # MEASURED on run 43242862358 (its first version, four tests): 6
+          # passed incl. the two setup tests in 2.8 min, job 5.0 min (O1 20 s,
+          # J1 46 s, J2 49 s, J3 ~49 s). Review round 1 then added carousel
+          # laps and a fifth test (J4, the plan change mid-stream), so the
+          # figure is to be re-measured from the next run. It stays its own
+          # leg even though 5 min would fit a rest shard: J3 calls the GLOBAL
+          # sponsor-deal cron sweep (every org in the database), so no other
+          # spec's deals may share its database. Its pool holds are declared up
+          # to 325 s of the pool's 330 s limit at the 10 s connect delay set
+          # below (a local run at the default delay is refused by name).
+          # It runs whole (no --shard): one file, and a `rest` shard cannot be
+          # cut around it. `walkthrough_slice: sponsor` selects exactly that
+          # file in apps/web/playwright.config.ts and "rest" ignores it;
+          # e2e-ci-wiring.test.ts pins both. Like every walkthrough leg it also
+          # runs the Event Pass money-path check (keyed on event-pass.spec.ts,
+          # so it prints the notice here) and the Connect steps, which skip
+          # when their secrets are absent.
+          - group: walkthrough sponsor
+            slug: walkthrough-sponsor
+            project: walkthrough
+            slice: ""
+            walkthrough_slice: sponsor
+            args: --workers=3
 
     services:
       postgres:
