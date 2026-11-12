@@ -4,7 +4,7 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 import { withTenant, type Tx } from "@/lib/db";
-import { isSwissBoardSeated, latestSwissRoundWithAnySeat, nextUnseatedSwissRound, swissRoundHasPlayedResult } from "@/lib/swiss-shell";
+import { isSwissBoardSeated, nextUnseatedSwissRound } from "@/lib/swiss-shell";
 import { HttpError } from "@/lib/errors";
 import { ROSTER_DRIFT_INELIGIBLE_KINDS } from "@/lib/roster-drift-eligibility";
 import { captureServer } from "@/lib/posthog-server";
