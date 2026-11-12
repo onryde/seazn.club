@@ -13,26 +13,33 @@ const names = {
 };
 const base = { orgName: "Acme Sports", names };
 
-describe("buildCrumbs - the Sponsors hub (R4 S11, a new top-level console route)", () => {
-  it("gets its own crumb under the org - and the back chevron's parent is the org home - on every tab", () => {
+describe("buildCrumbs - the Sponsors hub is a top-nav page with no breadcrumb bar (owner, 2026-11-12: like Streaming and Directory)", () => {
+  it("returns no crumbs at all for /o/<club>/sponsors, so Breadcrumbs renders nothing", () => {
     let checked = 0;
-    for (const pathname of ["/o/acme/sponsors"]) {
-      expect(buildCrumbs({ ...base, pathname })).toEqual([
-        { label: "Acme Sports", href: "/o/acme" },
-        { label: "Sponsors", href: "/o/acme/sponsors" },
-      ]);
+    // The query string is not part of a pathname, so `?tab=` pages share the one path; the trailing-slash spelling is the same page.
+    for (const pathname of ["/o/acme/sponsors", "/o/acme/sponsors/"]) {
+      expect(buildCrumbs({ ...base, pathname }), pathname).toEqual([]);
       checked++;
     }
-    // The query string is not part of a pathname, so `?tab=` pages share the one crumb (the crumb points at the landing tab).
-    expect(checked).toBe(1);
+    expect(checked).toBe(2);
   });
 
-  it("the crumb is translated through the same catalog as Settings' (the label is the hub's own title)", () => {
-    const tr: BreadcrumbT = (key) => `<${key}>`;
-    expect(buildCrumbs({ ...base, pathname: "/o/acme/sponsors", t: tr })[1]).toEqual({
-      label: "<sponsors.title>",
-      href: "/o/acme/sponsors",
-    });
+  it("is not blanket: every other /o/<club> page keeps its trail (the positive pair that makes the empty result mean something)", () => {
+    const withCrumbs: Array<[string, number]> = [
+      ["/o/acme", 1],
+      ["/o/acme/settings", 2],
+      ["/o/acme/settings/billing", 3],
+      ["/o/acme/c/summer-smash", 2],
+      ["/o/acme/c/summer-smash/d/u16-boys", 3],
+    ];
+    let checked = 0;
+    for (const [pathname, length] of withCrumbs) {
+      const crumbs = buildCrumbs({ ...base, pathname });
+      expect(crumbs, pathname).toHaveLength(length);
+      expect(crumbs[0], pathname).toEqual({ label: "Acme Sports", href: "/o/acme" });
+      checked++;
+    }
+    expect(checked).toBe(withCrumbs.length);
   });
 
   it("does not swallow other org-level paths: an unknown segment still stops at the org", () => {

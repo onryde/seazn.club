@@ -144,6 +144,29 @@ test("an unknown tab falls back to Overview, and the page does not scroll sidewa
   await expectNoHorizontalScroll(page);
 });
 
+test("the hub carries no breadcrumb bar on any tab (owner, 2026-11-12: like Streaming and Directory); Settings still does", async ({ page }) => {
+  const trail = page.getByRole("navigation", { name: "Breadcrumb" });
+  // The positive pair first: the same console shell, one page over, renders the trail - so a zero on the hub means the bar is
+  // gone from THAT page, not that the selector matches nothing anywhere (the bar's desktop <nav> is `sm:flex`; the default viewport is wide).
+  await page.goto(`/o/${org.slug}/settings`);
+  await expect(trail, "premise: Settings keeps its breadcrumb trail").toBeVisible();
+  await expect(page.locator(".app-crumbs"), "premise: ...inside the night apron").toHaveCount(1);
+
+  let checked = 0;
+  for (const tab of SPONSORS_TABS) {
+    await page.goto(sponsorsUrl(org.slug, tab));
+    await expect(page.getByTestId(`sponsors-tab-${tab}`), `${tab}: the hub rendered`).toBeVisible();
+    await expect(trail, `${tab}: no breadcrumb trail`).toHaveCount(0);
+    await expect(page.locator(".app-crumbs"), `${tab}: no night apron under the gantry`).toHaveCount(0);
+    // The page's own return is the one back affordance left: the Streaming page's "<- Dashboard" link.
+    // Scoped to <main>: the gantry's own "Dashboard" link (to the org home) shares the name, so a page-wide match is two elements.
+    await expect(page.locator("main").getByRole("link", { name: UI["common.dashboard"] ?? "", exact: true }), `${tab}: the Dashboard back link`).toHaveAttribute("href", "/dashboard");
+    checked++;
+  }
+  expect(checked, "every declared tab was checked").toBe(SPONSORS_TABS.length);
+  expect(SPONSORS_TABS.length, "anti-vacuity: the hub declares tabs").toBeGreaterThan(0);
+});
+
 test("settings?tab=sponsors lands on the hub's Sponsors tab, keeps a second param, and Settings drops the tab", async ({ page }) => {
   // The org-scoped page, with a second param that must survive the redirect.
   await page.goto(`${settingsUrl(org.slug, "sponsors")}&x=1`);
