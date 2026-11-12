@@ -4,7 +4,8 @@
 
 /** The request header the browser sends the widget's token in. A header and not a body field because the eight guarded routes
  *  have different bodies, several of them `.strict()` (a stray key is a 400): the gate runs BEFORE any body is parsed (the
- *  quick match create reads its form first, only for the locale a refusal lands on), so the handler's own parsing is untouched and no request schema (or the OpenAPI document built from them) has to grow a field.
+ *  quick match create reads its form first, only for the locale a refusal lands on), so the handler's own parsing is
+ *  untouched and no request schema (or the OpenAPI document built from them) has to grow a field.
  *  The name is the one Cloudflare's own form integration uses for the same value. */
 export const TURNSTILE_HEADER = "cf-turnstile-response";
 

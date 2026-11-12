@@ -424,7 +424,8 @@ describe.skipIf(!HAS_DB)("POST /api/quick-match: the per-IP limit (D2)", () => {
     expect(reported(), "the limiter's refusal is not a fault").toEqual([]);
     expect(await rowsFor(hashVisitorKey(key))).toHaveLength(0);
     expect(await rowsNamed(f.name as string)).toHaveLength(0);
-    // Keyed on the first X-Forwarded-For hop (the funnel's idiom), over the declared window.
+    // Keyed on the client's IP from the repo's one reader (lib/client-ip.ts `clientIp`; no Fly header here, so its local
+    // fallback, the first X-Forwarded-For hop), over the declared window.
     expect(seen).toEqual([{ key: `rl:quick-match-create:${theirs}`, windowSeconds: 600 }]);
   });
 
@@ -434,10 +435,22 @@ describe.skipIf(!HAS_DB)("POST /api/quick-match: the per-IP limit (D2)", () => {
     landedToken(await post(form(), { ip: theirs }));
   });
 
-  it("only the first X-Forwarded-For hop names the bucket", async () => {
+  it("with no Fly header, only the first X-Forwarded-For hop names the bucket (clientIp's local fallback)", async () => {
     const theirs = ip();
     const seen = countFor(theirs, 21);
     const res = await post(form(), { ip: `${theirs}, 10.0.0.1, 10.0.0.2` });
+    expect(res.headers.get("location")).toBe("/en/play?e=QUICK_MATCH_RATE_LIMITED");
+    expect(seen.map((s) => s.key)).toEqual([`rl:quick-match-create:${theirs}`]);
+  });
+
+  it("behind Fly, the bucket is Fly's own client IP, never the X-Forwarded-For hop a guest can forge (review I-1)", async () => {
+    // lib/client-ip.ts's declared order: Fly's `fly-client-ip` (the TCP peer Fly saw) wins over any X-Forwarded-For, whose
+    // first hop the client writes itself. A forged hop must neither dodge this guest's bucket nor spend a stranger's.
+    const theirs = ip(); // 203.0.x.y
+    const forged = "198.51.100.7"; // another range, so the two readers can never name the same bucket
+    const seen = countFor(theirs, 21);
+    const res = await post(form(), { ip: `${forged}, 10.0.0.1`, headers: { "fly-client-ip": theirs } });
+    expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/en/play?e=QUICK_MATCH_RATE_LIMITED");
     expect(seen.map((s) => s.key)).toEqual([`rl:quick-match-create:${theirs}`]);
   });
@@ -571,6 +584,33 @@ describe.skipIf(!HAS_DB)("POST /api/quick-match: the bot check (Cloudflare Turns
       `rl:quick-match-create:${theirs}`,
       `rl:quick-match-email:${theirs}`,
     ]);
+  });
+
+  it("the gate runs BEFORE the schema: a form it refuses, posted with no token, is the bot check's refusal (m1; counted)", async () => {
+    // Two shapes from the schema table above. With no token each is the bot check's refusal, never CREATE_FAILED, so a post
+    // without the script learns nothing about the form. The pair proves each form IS one the schema refuses: with a good
+    // `quickmatch` token it gets past the gate and the schema answers CREATE_FAILED, so the no-token answer can only come from a
+    // gate that ran first.
+    const cases: [string, Fields][] = [["one side", { sides: ["Solo"] }], ["a stray field", { seeds: "1" }]];
+    let checked = 0;
+    for (const [what, over] of cases) {
+      enforce();
+      buckets();
+      asked.length = 0;
+      const f = form({ locale: "es", ...over });
+      refusedTo(await post(f), "es");
+      expect(asked, `${what}: no token, so Cloudflare is never asked`).toEqual([]);
+      const token = mint("quickmatch");
+      const past = await post(f, { headers: { [HEADER]: token } });
+      expect(past.status, what).toBe(303);
+      const schemaRefused = "/es/play?e=QUICK_MATCH_CREATE_FAILED";
+      expect(past.headers.get("location"), `${what}: past the gate, the schema refuses it`).toBe(schemaRefused);
+      expect(asked, `${what}: the gate asked about the good token`).toEqual([token]);
+      expect(await rowsNamed(f.name as string), what).toHaveLength(0);
+      expect(reported(), `${what}: both are the guest's refusals, never reported`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
   });
 
   it("Turnstile unavailable fails CLOSED: Cloudflare unreachable, or a deployment that lost its secret, refuses a real token (counted)", async () => {

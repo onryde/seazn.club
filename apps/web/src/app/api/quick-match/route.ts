@@ -38,6 +38,7 @@
 import { createHash } from "node:crypto";
 import * as Sentry from "@sentry/nextjs";
 import type { NextRequest } from "next/server";
+import { clientIp } from "@/lib/client-ip";
 import { explicitLocale } from "@/lib/explicit-locale";
 import { handler, HttpError, redirectLocal } from "@/lib/http";
 import { DEFAULT_LOCALE, hasLocale, type Locale } from "@/lib/i18n-constants";
@@ -167,8 +168,9 @@ export async function POST(req: NextRequest) {
     const postedLocale: Locale | null = typeof posted === "string" && hasLocale(posted) ? posted : null;
     const locale: Locale = postedLocale ?? cookieLocale(req);
     try {
-      // The first X-Forwarded-For hop, the funnel's idiom (api/funnel/start/route.ts).
-      const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+      // The client's IP through the repo's one reader (lib/client-ip.ts), as api/funnel/start does: it keys this limit and
+      // the mail's per-IP bucket below.
+      const ip = clientIp(req.headers);
       await rateLimit(`quick-match-create:${ip}`, QUICK_MATCH_CREATE_LIMIT);
       await requireTurnstile(req, "quickmatch");
       if (!form) throw new FormRefused("the quick match create takes a form");
