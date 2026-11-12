@@ -1029,7 +1029,7 @@ describe("a refusal stays on the sheet, in the dictionary's words", () => {
             <SponsorSheetBody
               sponsor={sponsor({ locked_by_deal: true, status: "active" })} deals={[saved]} orgId="org-1" orgSlug={SLUG} hasTiers canEdit busy={false}
               tz="UTC" competitions={COMPETITIONS} editing={false} renderEditor={() => null} onEdit={() => {}} onToggleStream={() => {}}
-              onShowAgain={() => {}} onAddDeal={() => {}} onDealAction={() => {}} error={null} notice={null} payLink={null} reportLinks={[]}
+              onShowAgain={() => {}} onAddDeal={() => {}} onArchive={() => {}} onUnarchive={() => {}} onDealAction={() => {}} error={null} notice={null} payLink={null} reportLinks={[]}
               reportDefaults={null}
             />
           </DictProvider>,

@@ -16,7 +16,7 @@
 // can run; there is no client copy of the rules it reads.
 import { useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Eye, FileDown, Pencil } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowLeft, Eye, FileDown, Pencil } from "lucide-react";
 import Link from "@/components/ui/console-link";
 import { Modal } from "@/components/modal";
 import { useMdUp } from "@/components/ui/use-md-up";
@@ -30,7 +30,7 @@ import { canShowAgain, comingDeal, dealPrice, dealTierWord } from "@/components/
 import type { SponsorItem } from "@/components/org-sponsors";
 import { fmtPublicDate } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
-import { allowedActions, DEAL_ACTIONS, formatInvoiceNumber, isLiveDeal, isOpenDeal, type DealAction, type SponsorDeal } from "@/lib/sponsor-deals";
+import { allowedActions, blocksArchive, DEAL_ACTIONS, formatInvoiceNumber, isLiveDeal, isOpenDeal, type DealAction, type SponsorDeal } from "@/lib/sponsor-deals";
 import { consoleInvoicePdfPath } from "@/lib/sponsor-invoice";
 import type { ReportLinkDefaults, ReportLinkSummary } from "@/lib/sponsor-report";
 import { dealHref } from "@/lib/sponsors-hub";
@@ -149,6 +149,8 @@ export interface SponsorSheetBodyProps {
   busy: boolean;
   /** The zone dates are read in (the viewer's). */
   tz: string;
+  /** The org's zone: the archived banner reads its date in it (archive spec §7.3), as the deal page reads its own. Omitted: the viewer's. */
+  orgTz?: string;
   competitions: { id: string; name: string }[];
   /** The Details editor is open: `renderEditor()` replaces the read-only rows. */
   editing: boolean;
@@ -157,6 +159,9 @@ export interface SponsorSheetBodyProps {
   onToggleStream: (next: boolean) => void;
   onShowAgain: () => void;
   onAddDeal: () => void;
+  /** Archive and Unarchive (archive spec §7): an editor's, on a live and on an archived sponsor respectively. */
+  onArchive: () => void;
+  onUnarchive: () => void;
   onDealAction: (deal: SponsorDeal, action: SheetDealAction) => void;
   /** The last refusal and the last "it was sent" - the page-level ones sit behind a side panel's backdrop, so the body shows them. */
   error: string | null;
@@ -171,13 +176,20 @@ export interface SponsorSheetBodyProps {
 export function SponsorSheetBody(props: SponsorSheetBodyProps) {
   const {
     sponsor, deals, orgId, orgSlug, hasTiers, canEdit, busy, tz, competitions, editing, renderEditor, onEdit, onToggleStream,
-    onShowAgain, onAddDeal, onDealAction, error, notice, payLink, reportLinks, reportDefaults,
+    onShowAgain, onAddDeal, onArchive, onUnarchive, onDealAction, error, notice, payLink, reportLinks, reportDefaults, orgTz,
   } = props;
   const msg = useMsg();
   const plural = useMsgPlural();
   const locale = useLocaleOrDefault();
 
   const { current, past } = sponsorDealGroups(deals, sponsor.id);
+  // An archived sponsor's page is read-only (archive spec §7.3): no Edit, no editor, no stream tick, no Show again, no Add deal. Its
+  // deals stay actionable (settling a deal, a refund and the evidence pack must not need an unarchive, D16), so `canEdit` still rules those.
+  const archived = sponsor.archived_at !== null;
+  const canWrite = canEdit && !archived;
+  // The ONE blocking rule (`blocksArchive`), the server's: a button the server would refuse is drawn disabled with the reason beside it.
+  const archiveBlocked = deals.filter((d) => d.sponsor_id === sponsor.id).some(blocksArchive);
+  const archiveBlockedId = `sponsor-sheet-archive-blocked-${sponsor.id}`;
   const day = (iso: string | null) => fmtPublicDate(locale, tz, iso, { day: "numeric", month: "short" });
   const scopeName = (competitionId: string | null) =>
     competitionId ? (competitions.find((c) => c.id === competitionId)?.name ?? msg("sponsors.dealSheet.scopeUnknown")) : msg("sponsors.scopeAll");
@@ -286,7 +298,7 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
     );
   }
 
-  const addDeal = canEdit ? (
+  const addDeal = canWrite ? (
     <button type="button" data-testid="sponsor-sheet-add-deal" disabled={busy} onClick={onAddDeal} className={`${SMALL_BTN} shrink-0`}>
       {msg("sponsors.deal.action.addDeal")}
     </button>
@@ -302,6 +314,29 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
         {notice}
       </p>
       {payLink !== null ? <PayLinkBanner url={payLink} /> : null}
+
+      {archived ? (
+        <div data-testid="sponsor-sheet-archived" className="grid min-w-0 gap-2 rounded-xl bg-slate-100 p-3 text-sm text-slate-700">
+          <p className="min-w-0 break-words">
+            {msg("sponsors.archive.banner", {
+              date: fmtPublicDate(locale, orgTz ?? tz, sponsor.archived_at, { day: "numeric", month: "long", year: "numeric" }),
+            })}
+          </p>
+          {canEdit ? (
+            <button
+              type="button"
+              data-testid="sponsor-sheet-unarchive"
+              aria-label={msg("sponsors.archive.unarchiveLabel", { name: sponsor.name })}
+              disabled={busy}
+              onClick={onUnarchive}
+              className={`${SMALL_BTN} w-fit bg-white`}
+            >
+              <ArchiveRestore className="h-3.5 w-3.5" aria-hidden />
+              {msg("sponsors.archive.unarchive")}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       <header className="flex min-w-0 items-center gap-3">
         {sponsor.logo_path ? (
@@ -329,7 +364,7 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
       <div data-testid="sponsor-sheet-details" className={CARD}>
         <div className="flex min-w-0 items-center justify-between gap-3">
           <h3 className={SECTION_TITLE}>{msg("sponsors.sheet.details")}</h3>
-          {canEdit && !editing ? (
+          {canWrite && !editing ? (
             <button
               type="button"
               data-testid="sponsor-sheet-edit"
@@ -343,7 +378,7 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
             </button>
           ) : null}
         </div>
-        {editing ? (
+        {editing && !archived ? (
           <div data-testid="sponsor-sheet-editor" className="mt-3 min-w-0">
             {renderEditor()}
           </div>
@@ -406,7 +441,7 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
               ) : null}
               <dt className="text-slate-500">{msg("sponsors.sheet.onStream")}</dt>
               <dd className="min-w-0 text-slate-800">
-                {canEdit ? (
+                {canWrite ? (
                   <label className="inline-flex min-h-11 items-center gap-2 md:min-h-0">
                     <input
                       type="checkbox"
@@ -436,7 +471,7 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
                 {msg("sponsors.sheet.placementNote")}
               </p>
             ) : null}
-            {canEdit && canShowAgain(sponsor) ? (
+            {canWrite && canShowAgain(sponsor) ? (
               // Off the public pages with nothing holding it there: its last deal ended (or it never had one). Spec §10.3.
               <button
                 type="button"
@@ -485,6 +520,32 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
 
       {canEdit && reportDefaults !== null ? (
         <ReportLinkSection orgId={orgId} sponsor={{ id: sponsor.id, name: sponsor.name }} links={reportLinks} defaults={reportDefaults} />
+      ) : null}
+
+      {canEdit && !archived ? (
+        <div data-testid="sponsor-sheet-archive" className={CARD}>
+          <h3 className={SECTION_TITLE}>{msg("sponsors.archive.title")}</h3>
+          <p className="mt-1 min-w-0 break-words text-xs text-slate-500">{msg("sponsors.archive.hint")}</p>
+          <div className="mt-3 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+            <button
+              type="button"
+              data-testid="sponsor-sheet-archive-button"
+              aria-label={msg("sponsors.archive.buttonLabel", { name: sponsor.name })}
+              aria-describedby={archiveBlocked ? archiveBlockedId : undefined}
+              disabled={busy || archiveBlocked}
+              onClick={onArchive}
+              className={`${SMALL_BTN} shrink-0 disabled:opacity-50`}
+            >
+              <Archive className="h-3.5 w-3.5" aria-hidden />
+              {msg("sponsors.archive.button")}
+            </button>
+            {archiveBlocked ? (
+              <p id={archiveBlockedId} data-testid="sponsor-sheet-archive-blocked" className="min-w-0 break-words text-xs text-slate-600">
+                {msg("sponsors.archive.blocked")}
+              </p>
+            ) : null}
+          </div>
+        </div>
       ) : null}
     </section>
   );

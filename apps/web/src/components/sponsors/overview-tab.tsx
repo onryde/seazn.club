@@ -179,6 +179,11 @@ export function OverviewTab(props: OverviewTabProps) {
                       <span className="min-w-0 truncate font-medium text-slate-800" title={r.name} data-testid="sponsor-overview-name">
                         {r.name}
                       </span>
+                      {r.archived && (
+                        <span data-testid="sponsor-overview-archived" className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
+                          {msg("sponsors.archive.chip")}
+                        </span>
+                      )}
                       {r.sponsorId === null && (
                         <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">{msg("sponsors.overview.deleted")}</span>
                       )}
